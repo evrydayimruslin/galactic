@@ -21,6 +21,9 @@ STRIPE_WEBHOOK_SECRET=
 # BYOK provider keys are saved per user and encrypted in Supabase.
 OPENROUTER_API_KEY=
 
+# DeepSeek platform key for Ultralight Light-debit DeepSeek model routing.
+DEEPSEEK_API_KEY=
+
 # Encryption key for user BYOK provider API keys.
 BYOK_ENCRYPTION_KEY=
 

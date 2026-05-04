@@ -30,6 +30,7 @@ export interface Env {
   STRIPE_PUBLISHABLE_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   OPENROUTER_API_KEY: string;
+  DEEPSEEK_API_KEY: string;
   BYOK_ENCRYPTION_KEY: string;
   RUNPOD_API_KEY: string;
   RUNPOD_TEMPLATE_ID: string;

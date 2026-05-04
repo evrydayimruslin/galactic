@@ -56,6 +56,7 @@
         "SetAppCategoryPayload",
         "SetAppFeaturedPayload",
         "TopUpBalancePayload",
+        "UpdateBillingConfigPayload",
         "UpdateGapPayload"
       ]
     },
@@ -66,6 +67,15 @@
       "file": "services/ai.ts",
       "types": [
         "AIServiceConfig"
+      ]
+    },
+    {
+      "exports": [
+        "bytesToHex"
+      ],
+      "file": "services/analytics-identity.ts",
+      "types": [
+        "AnalyticsIdentity"
       ]
     },
     {
@@ -90,7 +100,8 @@
       "types": [
         "AppSupabaseConfigState",
         "MissingAppSecretsErrorDetails",
-        "ResolvedAppRuntimeEnv"
+        "ResolvedAppRuntimeEnv",
+        "StrictRuntimePermissionResolution"
       ]
     },
     {
@@ -106,6 +117,13 @@
       "file": "services/apps.ts",
       "types": [
         "SupabaseConfig"
+      ]
+    },
+    {
+      "file": "services/artifact-store.ts",
+      "types": [
+        "StoreCaptureArtifactInput",
+        "StoredCaptureArtifact"
       ]
     },
     {
@@ -166,6 +184,14 @@
       ]
     },
     {
+      "exports": [
+        "DEFAULT_PAYOUT_POLICY_COPY",
+        "formatLightPerUsd",
+        "LIGHT_ECONOMY_POLICY_COPY"
+      ],
+      "file": "services/billing-config.ts"
+    },
+    {
       "file": "services/bundler.ts",
       "types": [
         "BundleResult",
@@ -173,10 +199,42 @@
       ]
     },
     {
+      "file": "services/capture-inspection.ts",
+      "types": [
+        "CaptureArtifactLinkRow",
+        "CaptureArtifactRow",
+        "CaptureEventRow",
+        "CaptureExportBundle",
+        "CaptureIntegrityReport",
+        "CaptureMessageRow",
+        "CaptureThreadRow",
+        "ExecutionFailureRow",
+        "LlmContextSnapshotRow",
+        "LlmInvocationRow",
+        "ToolInvocationRow",
+        "TrainingAnnotationRow"
+      ]
+    },
+    {
       "exports": [
         "CHAT_MIN_BALANCE_LIGHT"
       ],
-      "file": "services/chat-billing.ts"
+      "file": "services/chat-billing.ts",
+      "types": [
+        "ChatBillingMetadata"
+      ]
+    },
+    {
+      "exports": [
+        "ChatStreamCaptureSession",
+        "OrchestrateCaptureSession"
+      ],
+      "file": "services/chat-capture.ts",
+      "types": [
+        "ChatCaptureFile",
+        "ChatStreamCaptureInit",
+        "OrchestrateCaptureInit"
+      ]
     },
     {
       "exports": [
@@ -327,6 +385,12 @@
       "file": "services/envvars.ts"
     },
     {
+      "file": "services/esbuild-wasm-deno-check-stub.ts",
+      "files": [
+        "services/esbuild-wasm-deno-check-stub.ts"
+      ]
+    },
+    {
       "file": "services/execution-settlement.ts",
       "types": [
         "ExecutionTelemetry",
@@ -339,6 +403,7 @@
     {
       "file": "services/flash-broker.ts",
       "types": [
+        "FlashEvent",
         "ScopeConfig"
       ]
     },
@@ -348,6 +413,12 @@
         "startGpuBuildProcessorJob"
       ],
       "file": "services/gpu/benchmark.ts"
+    },
+    {
+      "file": "services/gpu/billing.test.ts",
+      "files": [
+        "services/gpu/billing.test.ts"
+      ]
     },
     {
       "exports": [
@@ -394,6 +465,12 @@
       "file": "services/gpu/index.ts",
       "files": [
         "services/gpu/index.ts"
+      ]
+    },
+    {
+      "file": "services/gpu/pricing-config.ts",
+      "types": [
+        "GpuPricingValidationResult"
       ]
     },
     {
@@ -500,6 +577,19 @@
     },
     {
       "exports": [
+        "LlmInvocationTelemetrySession",
+        "recordExecutionFailure"
+      ],
+      "file": "services/invocation-telemetry.ts",
+      "types": [
+        "ExecutionFailureInput",
+        "LlmInvocationFinishInput",
+        "LlmInvocationTelemetryInit",
+        "ToolInvocationTelemetryInput"
+      ]
+    },
+    {
+      "exports": [
         "generateLibraryEntry"
       ],
       "file": "services/library.ts",
@@ -511,6 +601,12 @@
       "file": "services/logging.ts",
       "types": [
         "LogLevel"
+      ]
+    },
+    {
+      "file": "services/marketplace-maintenance.ts",
+      "types": [
+        "ExpireMarketplaceBidsResult"
       ]
     },
     {
@@ -530,7 +626,13 @@
         "BidResult",
         "ListingDetails",
         "ListingResult",
+        "MarketplaceOwnerAdminCheck",
+        "MarketplaceOwnerAdminSummary",
+        "MarketplaceOwnerAdminUserRow",
+        "MarketplaceReceipt",
         "OffersSummary",
+        "PublicAcquisitionParty",
+        "PublicAcquisitionReceipt",
         "SaleHistory",
         "SaleResult"
       ]
@@ -587,11 +689,19 @@
       ]
     },
     {
+      "file": "services/payout-policy.ts",
+      "types": [
+        "PayoutSchedule",
+        "PayoutScheduleOptions"
+      ]
+    },
+    {
       "exports": [
         "startPayoutProcessorJob"
       ],
       "file": "services/payout-processor.ts",
       "types": [
+        "PayoutProcessorOptions",
         "PayoutProcessorResult"
       ]
     },
@@ -641,6 +751,20 @@
       ]
     },
     {
+      "file": "services/platform-inference-models.ts",
+      "types": [
+        "DeepSeekDirectPricingSnapshot",
+        "PlatformInferenceCostBreakdown",
+        "PlatformInferenceKeySource",
+        "PlatformInferenceModel",
+        "PlatformInferencePricingPolicy",
+        "PlatformInferenceProvider",
+        "PlatformInferenceRequestDefaults",
+        "PlatformInferenceTokenUsage",
+        "PlatformInferenceUpstreamProvider"
+      ]
+    },
+    {
       "file": "services/platform-request-validation.ts",
       "types": [
         "UploadOptionInput",
@@ -650,6 +774,8 @@
         "ValidatedSupabaseOauthConnectPayload",
         "ValidatedUploadFormMetadata",
         "ValidatedUploadOptions",
+        "ValidatedWalletFundingPayload",
+        "ValidatedWireFundingPayload",
         "ValidatedWithdrawalPayload"
       ]
     },
@@ -724,24 +850,20 @@
     },
     {
       "exports": [
-        "reclaimAppStorage",
-        "reclaimVersionStorage"
+        "reclaimVersionStorage",
+        "setAppStorageBytes"
       ],
       "file": "services/storage-quota.ts",
       "types": [
+        "AppStorageAccountingResult",
         "StorageQuotaResult"
       ]
     },
     {
       "exports": [
-        "R2Service"
-      ],
-      "file": "services/storage.ts"
-    },
-    {
-      "exports": [
         "CROSS_BORDER_FX_PERCENT",
         "getConnectedBalance",
+        "lightToUsdCents",
         "PAYOUT_FEE_FIXED_CENTS",
         "PAYOUT_FEE_PERCENT"
       ],
@@ -750,7 +872,36 @@
         "ConnectAccountStatus",
         "PayoutEstimate",
         "PayoutResult",
+        "StripeBalanceSummary",
+        "StripeRequestOptions",
         "TransferResult"
+      ]
+    },
+    {
+      "file": "services/stripe-deposits.ts",
+      "types": [
+        "DepositFailureInput",
+        "DepositFinalizationInput",
+        "DepositPendingInput",
+        "DepositReversalInput",
+        "DepositRpcResult",
+        "StripeEventClaim"
+      ]
+    },
+    {
+      "file": "services/stripe-wallet-funding.ts",
+      "types": [
+        "WalletExpressPaymentIntentParams",
+        "WalletExpressPaymentIntentResult"
+      ]
+    },
+    {
+      "file": "services/stripe-wire-funding.ts",
+      "types": [
+        "StripeFinancialAddress",
+        "WireTransferInstructions",
+        "WireTransferPaymentIntentParams",
+        "WireTransferPaymentIntentResult"
       ]
     },
     {
@@ -783,6 +934,19 @@
       "types": [
         "ToolMakerStageStatus",
         "ToolMakerTelemetryInput"
+      ]
+    },
+    {
+      "exports": [
+        "canonicalJson",
+        "getLatestVersionTrust",
+        "getManifestEntrypoints",
+        "sha256Hex"
+      ],
+      "file": "services/trust.ts",
+      "types": [
+        "ManifestDiff",
+        "TrustArtifactFile"
       ]
     },
     {
