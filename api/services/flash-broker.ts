@@ -20,6 +20,10 @@ import { getD1DatabaseId } from './d1-provisioning.ts';
 import { createAppsService } from './apps.ts';
 import { createEmbeddingService } from './embedding.ts';
 import { fetchInferenceChatCompletion, selectInferenceModel } from './inference-client.ts';
+import {
+  ULTRALIGHT_DEEPSEEK_V4_FLASH_MODEL,
+  ULTRALIGHT_DEEPSEEK_V4_PRO_MODEL,
+} from './platform-inference-models.ts';
 import { resolveInferenceRoute, type ResolvedInferenceRoute } from './inference-route.ts';
 import type { App } from '../../shared/types/index.ts';
 import { buildJsonSchemaDescriptors, type AppForCodemode } from './codemode-tools.ts';
@@ -107,9 +111,10 @@ export type FlashEvent =
 
 // ── Models ──
 
-const DEFAULT_FLASH_MODEL = 'google/gemini-3.1-flash-lite-preview:nitro';
-const DEFAULT_HEAVY_FLASH = 'google/gemini-3.1-flash-lite-preview:nitro';
-const DEFAULT_HEAVY_SONNET = 'deepseek/deepseek-v4-pro';
+const DEFAULT_FLASH_MODEL = ULTRALIGHT_DEEPSEEK_V4_FLASH_MODEL;
+const DEFAULT_HEAVY_MODEL = ULTRALIGHT_DEEPSEEK_V4_PRO_MODEL;
+const DEFAULT_HEAVY_FLASH = ULTRALIGHT_DEEPSEEK_V4_FLASH_MODEL;
+const DEFAULT_HEAVY_SONNET = ULTRALIGHT_DEEPSEEK_V4_PRO_MODEL;
 
 // ── Flash System Prompts ──
 
@@ -313,7 +318,7 @@ export async function* runFlashBroker(
   }
 
   const flashModel = selectInferenceModel(route, interpreterModel || DEFAULT_FLASH_MODEL);
-  const defaultHeavyModel = selectInferenceModel(route, heavyModel || DEFAULT_HEAVY_FLASH);
+  const defaultHeavyModel = selectInferenceModel(route, heavyModel || DEFAULT_HEAVY_MODEL);
 
   yield { type: 'analyzing', text: 'Analyzing your request...' };
 

@@ -221,6 +221,7 @@
       ],
       "file": "services/chat-billing.ts",
       "types": [
+        "ChatBillingCostOptions",
         "ChatBillingMetadata"
       ]
     },
@@ -755,13 +756,9 @@
       "types": [
         "DeepSeekDirectPricingSnapshot",
         "PlatformInferenceCostBreakdown",
-        "PlatformInferenceKeySource",
         "PlatformInferenceModel",
         "PlatformInferencePricingPolicy",
-        "PlatformInferenceProvider",
-        "PlatformInferenceRequestDefaults",
-        "PlatformInferenceTokenUsage",
-        "PlatformInferenceUpstreamProvider"
+        "PlatformInferenceTokenUsage"
       ]
     },
     {

@@ -31,8 +31,13 @@ interface DynamicWorkerEntrypointExports {
       userId: string;
       apiKey: string | null;
       provider: string | null;
+      upstreamProvider: string | null;
       baseUrl: string | null;
       defaultModel: string | null;
+      canonicalModelId: string | null;
+      billingModelId: string | null;
+      billingSource: string | null;
+      requestDefaults: Record<string, unknown> | null;
       shouldDebitLight: boolean;
     };
   }): unknown;
@@ -247,8 +252,13 @@ export default {
           userId: config.userId,
           apiKey: config.aiRoute?.apiKey || config.userApiKey,
           provider: config.aiRoute?.provider || null,
+          upstreamProvider: config.aiRoute?.upstreamProvider || config.aiRoute?.provider || null,
           baseUrl: config.aiRoute?.baseUrl || null,
           defaultModel: config.aiRoute?.model || null,
+          canonicalModelId: config.aiRoute?.canonicalModelId || null,
+          billingModelId: config.aiRoute?.billingModelId || null,
+          billingSource: config.aiRoute?.billingSource || null,
+          requestDefaults: config.aiRoute?.requestDefaults || null,
           shouldDebitLight: !!config.aiRoute?.shouldDebitLight,
         },
       });

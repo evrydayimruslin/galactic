@@ -63,9 +63,14 @@ export interface RuntimeConfig {
 
 export interface RuntimeAIRoute {
   provider: string;
+  upstreamProvider?: string;
   baseUrl: string;
   apiKey: string;
   model: string;
+  canonicalModelId?: string;
+  billingModelId?: string;
+  billingSource?: string;
+  requestDefaults?: Record<string, unknown>;
   shouldDebitLight: boolean;
 }
 

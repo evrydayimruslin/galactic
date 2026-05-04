@@ -41,6 +41,8 @@ export interface AIUsage {
   input_tokens: number;
   output_tokens: number;
   cost_light: number;
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
 }
 
 export interface AIResponse {
@@ -98,6 +100,8 @@ export interface ChatUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
 }
 
 export interface ChatBillingResult {

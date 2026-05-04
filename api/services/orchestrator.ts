@@ -20,6 +20,7 @@ import { createAppsService } from './apps.ts';
 import { registerExecutionPlanGate } from './plan-gate.ts';
 import { fetchInferenceChatCompletion, selectInferenceModel } from './inference-client.ts';
 import { resolveInferenceRoute, type ResolvedInferenceRoute } from './inference-route.ts';
+import type { ChatUsage } from '../../shared/contracts/ai.ts';
 import { getCallPriceLight, type AppPricingConfig } from '../../shared/types/index.ts';
 import { calculateCostLight } from './chat-billing.ts';
 import { scheduleCaptureTask } from './chat-capture.ts';
@@ -631,7 +632,11 @@ async function callHeavyModel(
         status: 'success',
         finishReason: result.finishReason,
         usage: result.usage || {},
-        costLight: chatUsage ? calculateCostLight(chatUsage, modelId, usageTotalCost(result.usage)) : null,
+        costLight: chatUsage
+          ? calculateCostLight(chatUsage, modelId, usageTotalCost(result.usage), {
+            billingSource: route.billingSource,
+          })
+          : null,
         metadata: {
           provider: route.provider,
           model: modelId,
@@ -773,11 +778,13 @@ async function streamHeavyModel(
   return { textDeltas, fullText, toolCall, usage, finishReason };
 }
 
-function usageAsChatUsage(usage: object | null): { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null {
+function usageAsChatUsage(usage: object | null): ChatUsage | null {
   const candidate = usage as {
     prompt_tokens?: unknown;
     completion_tokens?: unknown;
     total_tokens?: unknown;
+    prompt_cache_hit_tokens?: unknown;
+    prompt_cache_miss_tokens?: unknown;
   } | null;
   if (!candidate) return null;
   const promptTokens = typeof candidate.prompt_tokens === 'number' ? candidate.prompt_tokens : 0;
@@ -788,6 +795,12 @@ function usageAsChatUsage(usage: object | null): { prompt_tokens: number; comple
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
     total_tokens: totalTokens,
+    ...(typeof candidate.prompt_cache_hit_tokens === 'number'
+      ? { prompt_cache_hit_tokens: candidate.prompt_cache_hit_tokens }
+      : {}),
+    ...(typeof candidate.prompt_cache_miss_tokens === 'number'
+      ? { prompt_cache_miss_tokens: candidate.prompt_cache_miss_tokens }
+      : {}),
   };
 }
 

@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import { CHAT_PLATFORM_MARKUP } from "../../shared/contracts/ai.ts";
 import { calculateCostLight, deductChatCost } from "./chat-billing.ts";
+import { ULTRALIGHT_DEEPSEEK_V4_PRO_MODEL } from "./platform-inference-models.ts";
 
 Deno.test("chat billing: OpenRouter total_cost is debited at pass-through Light rate", () => {
   assertEquals(CHAT_PLATFORM_MARKUP, 1.0);
@@ -12,6 +13,26 @@ Deno.test("chat billing: OpenRouter total_cost is debited at pass-through Light 
   );
 
   assertEquals(costLight, 12.34);
+});
+
+Deno.test("chat billing: direct DeepSeek pricing uses cache hit, cache miss, and output tokens", () => {
+  const costLight = calculateCostLight(
+    {
+      prompt_tokens: 1_000,
+      prompt_cache_hit_tokens: 400,
+      prompt_cache_miss_tokens: 600,
+      completion_tokens: 1_000,
+      total_tokens: 2_000,
+    },
+    ULTRALIGHT_DEEPSEEK_V4_PRO_MODEL,
+    undefined,
+    {
+      billingSource: "platform_deepseek_direct",
+      now: new Date("2026-05-04T12:00:00Z"),
+    },
+  );
+
+  assertEquals(costLight, 0.1132);
 });
 
 Deno.test('chat billing: trace metadata is written to billing transaction', async () => {

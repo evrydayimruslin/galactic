@@ -1,6 +1,6 @@
 // Chat Stream Handler
 // Authenticated streaming proxy to OpenAI-compatible providers.
-// Light mode uses per-user OpenRouter keys; BYOK mode uses the user's provider key.
+// Light mode uses Ultralight platform keys; BYOK mode uses the user's provider key.
 //
 // Architecture: Client-side tool dispatch — the Tauri app
 // handles the tool-use loop. This endpoint is a billing/auth proxy that
@@ -189,9 +189,11 @@ export async function handleChatStream(request: Request): Promise<Response> {
     chatLogger.info('Resolved chat inference route', {
       user_id: user.id,
       provider: route.provider,
+      upstream_provider: route.upstreamProvider,
       billing_mode: route.billingMode,
       key_source: route.keySource,
       model: route.model,
+      canonical_model_id: route.canonicalModelId,
       require_balance: route.shouldRequireBalance,
       debit_light: route.shouldDebitLight,
     });
@@ -290,6 +292,7 @@ export async function handleChatStream(request: Request): Promise<Response> {
   chatLogger.info('Forwarding chat request to AI provider', {
     user_id: user.id,
     provider: route.provider,
+    upstream_provider: route.upstreamProvider,
     billing_mode: route.billingMode,
     model: route.model,
     message_count: body.messages.length,
@@ -408,6 +411,7 @@ export async function handleChatStream(request: Request): Promise<Response> {
   let capturedFinishReason: string | null = null;
   const userId = user.id;
   const model = route.model;
+  const billingModel = route.billingModelId ?? route.model;
   const provider = route.provider;
   const shouldDebitLight = route.shouldDebitLight;
   const decoder = new TextDecoder();
@@ -423,15 +427,21 @@ export async function handleChatStream(request: Request): Promise<Response> {
           prompt_tokens?: number;
           completion_tokens?: number;
           total_tokens?: number;
+          prompt_cache_hit_tokens?: number;
+          prompt_cache_miss_tokens?: number;
           total_cost?: number;
         };
       };
       captureSession?.observeProviderChunk(parsed);
       if (parsed.usage) {
+        const promptTokens = parsed.usage.prompt_tokens || 0;
+        const completionTokens = parsed.usage.completion_tokens || 0;
         capturedUsage = {
-          prompt_tokens: parsed.usage.prompt_tokens || 0,
-          completion_tokens: parsed.usage.completion_tokens || 0,
-          total_tokens: parsed.usage.total_tokens || 0,
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: parsed.usage.total_tokens || promptTokens + completionTokens,
+          prompt_cache_hit_tokens: parsed.usage.prompt_cache_hit_tokens,
+          prompt_cache_miss_tokens: parsed.usage.prompt_cache_miss_tokens,
         };
         if (parsed.usage.total_cost !== undefined) {
           capturedTotalCost = parsed.usage.total_cost;
@@ -475,18 +485,32 @@ export async function handleChatStream(request: Request): Promise<Response> {
       }
 
       if (capturedUsage && capturedUsage.total_tokens > 0 && shouldDebitLight) {
-        deductChatCost(userId, capturedUsage, model, capturedTotalCost, {
-          traceId: captureTraceId,
-          conversationId: captureConversationId,
-          messageId: captureAssistantMessageId,
-          source: captureSource,
-        })
+        deductChatCost(
+          userId,
+          capturedUsage,
+          billingModel,
+          capturedTotalCost,
+          {
+            traceId: captureTraceId,
+            conversationId: captureConversationId,
+            messageId: captureAssistantMessageId,
+            source: captureSource,
+            provider,
+            upstream_provider: route.upstreamProvider,
+            upstream_model: model,
+            canonical_model_id: route.canonicalModelId ?? null,
+          },
+          { billingSource: route.billingSource },
+        )
           .then((result) => {
             chatLogger.info('Post-stream chat billing succeeded', {
               user_id: userId,
-              model,
+              model: billingModel,
+              upstream_model: model,
               cost_light: result.cost_light,
               prompt_tokens: capturedUsage!.prompt_tokens,
+              prompt_cache_hit_tokens: capturedUsage!.prompt_cache_hit_tokens,
+              prompt_cache_miss_tokens: capturedUsage!.prompt_cache_miss_tokens,
               completion_tokens: capturedUsage!.completion_tokens,
               total_tokens: capturedUsage!.total_tokens,
               balance_depleted: result.was_depleted,
@@ -528,11 +552,16 @@ export async function handleChatStream(request: Request): Promise<Response> {
             }
             : {},
           costLight: capturedUsage
-            ? calculateCostLight(capturedUsage, model, capturedTotalCost)
+            ? calculateCostLight(capturedUsage, billingModel, capturedTotalCost, {
+              billingSource: route.billingSource,
+            })
             : null,
           metadata: {
             provider,
+            upstream_provider: route.upstreamProvider,
             model,
+            billing_model: billingModel,
+            canonical_model_id: route.canonicalModelId ?? null,
             should_debit_light: shouldDebitLight,
             assistant_message_id: captureAssistantMessageId,
           },
@@ -938,9 +967,11 @@ export async function handleOrchestrate(request: Request): Promise<Response> {
     chatLogger.info('Resolved orchestration inference route', {
       user_id: user.id,
       provider: route.provider,
+      upstream_provider: route.upstreamProvider,
       billing_mode: route.billingMode,
       key_source: route.keySource,
       model: route.model,
+      canonical_model_id: route.canonicalModelId,
       require_balance: route.shouldRequireBalance,
       debit_light: route.shouldDebitLight,
     });

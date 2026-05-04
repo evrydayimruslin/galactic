@@ -1,4 +1,5 @@
 import type { ResolvedInferenceRoute } from "./inference-route.ts";
+import { resolvePlatformInferenceModel } from "./platform-inference-models.ts";
 
 const DEFAULT_REFERER = "https://ultralight-api.rgn4jz429m.workers.dev";
 
@@ -15,7 +16,26 @@ export function selectInferenceModel(
     return route.model;
   }
 
-  return requestedModel?.trim() || route.model;
+  const requested = requestedModel?.trim();
+  if (!requested) return route.model;
+
+  if (route.provider === "ultralight") {
+    const platformModel = resolvePlatformInferenceModel(requested);
+    if (platformModel && platformModel.upstreamProvider === route.upstreamProvider) {
+      return platformModel.upstreamModel;
+    }
+
+    if (route.upstreamProvider === "openrouter") {
+      if (platformModel) {
+        return platformModel.aliases.find((alias) => alias.includes("/")) ?? requested;
+      }
+      return requested;
+    }
+
+    return route.model;
+  }
+
+  return requested;
 }
 
 export function getInferenceChatCompletionsUrl(route: ResolvedInferenceRoute): string {
@@ -34,6 +54,19 @@ export function buildInferenceHeaders(
   };
 }
 
+export function buildInferenceRequestBody(
+  route: ResolvedInferenceRoute,
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  const requestedModel = typeof body.model === "string" ? body.model : null;
+  const model = selectInferenceModel(route, requestedModel);
+  return {
+    ...body,
+    model,
+    ...(route.requestDefaults ?? {}),
+  };
+}
+
 export function fetchInferenceChatCompletion(
   route: ResolvedInferenceRoute,
   body: Record<string, unknown>,
@@ -42,6 +75,6 @@ export function fetchInferenceChatCompletion(
   return fetch(getInferenceChatCompletionsUrl(route), {
     method: "POST",
     headers: buildInferenceHeaders(route, options),
-    body: JSON.stringify(body),
+    body: JSON.stringify(buildInferenceRequestBody(route, body)),
   });
 }

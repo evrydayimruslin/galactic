@@ -15,6 +15,7 @@ import { getEntityIndex, type EntityIndex } from './entity-index.ts';
 import { deductChatCost } from './chat-billing.ts';
 import { fetchInferenceChatCompletion, selectInferenceModel } from './inference-client.ts';
 import { resolveInferenceRoute, type ResolvedInferenceRoute } from './inference-route.ts';
+import { ULTRALIGHT_DEEPSEEK_V4_FLASH_MODEL } from './platform-inference-models.ts';
 
 // ── Types ──
 
@@ -178,7 +179,7 @@ async function callFlashBroker(
   const userMessage = conversationHistory
     ? `## Conversation History (condensed)\n${conversationHistory}\n\n## Current Message\n${prompt}\n\n## Available Functions & Entities\n${catalog}`
     : `## User Message\n${prompt}\n\n## Available Functions & Entities\n${catalog}`;
-  const model = selectInferenceModel(route, 'google/gemini-3.1-flash-lite-preview:nitro');
+  const model = selectInferenceModel(route, ULTRALIGHT_DEEPSEEK_V4_FLASH_MODEL);
 
   try {
     const response = await fetchInferenceChatCompletion(
@@ -211,6 +212,8 @@ async function callFlashBroker(
         prompt_tokens?: number;
         completion_tokens?: number;
         total_tokens?: number;
+        prompt_cache_hit_tokens?: number;
+        prompt_cache_miss_tokens?: number;
         total_cost?: number;
       };
     };
@@ -226,9 +229,19 @@ async function callFlashBroker(
           completion_tokens: data.usage.completion_tokens || 0,
           total_tokens: data.usage.total_tokens ||
             (data.usage.prompt_tokens || 0) + (data.usage.completion_tokens || 0),
+          prompt_cache_hit_tokens: data.usage.prompt_cache_hit_tokens,
+          prompt_cache_miss_tokens: data.usage.prompt_cache_miss_tokens,
         },
-        data.model || model,
+        route.billingModelId ?? data.model ?? model,
         data.usage.total_cost,
+        {
+          provider: route.provider,
+          upstream_provider: route.upstreamProvider,
+          upstream_model: data.model || model,
+          canonical_model_id: route.canonicalModelId ?? null,
+          source: 'context_resolver',
+        },
+        { billingSource: route.billingSource },
       ).catch((err) => console.error('[CONTEXT] Light debit failed:', err));
     }
 

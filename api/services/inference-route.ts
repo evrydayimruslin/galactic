@@ -4,10 +4,22 @@ import type {
   InferenceBillingMode,
   InferenceRoutePreference,
 } from "../../shared/contracts/ai.ts";
+import { getEnv } from "../lib/env.ts";
 import { getOrCreateOpenRouterKey } from "./openrouter-keys.ts";
+import {
+  ULTRALIGHT_DEEPSEEK_V4_FLASH_MODEL,
+  type PlatformInferenceProvider,
+  type PlatformInferenceRequestDefaults,
+  type PlatformInferenceUpstreamProvider,
+  type PlatformInferenceKeySource,
+  resolvePlatformInferenceModel,
+} from "./platform-inference-models.ts";
 import { createUserService, type UserProfile, type UserService } from "./user.ts";
 
-export type InferenceKeySource = "user_byok" | "platform_openrouter";
+export type InferenceProvider = ActiveBYOKProvider | PlatformInferenceProvider;
+export type InferenceUpstreamProvider = ActiveBYOKProvider | PlatformInferenceUpstreamProvider;
+export type InferenceKeySource = "user_byok" | "platform_openrouter" | PlatformInferenceKeySource;
+export type InferenceBillingSource = "none" | "openrouter" | "platform_deepseek_direct";
 export type InferenceRouteErrorCode =
   | "user_not_found"
   | "invalid_route_selection"
@@ -17,11 +29,16 @@ export type InferenceRouteErrorCode =
 
 export interface ResolvedInferenceRoute {
   billingMode: InferenceBillingMode;
-  provider: ActiveBYOKProvider;
+  provider: InferenceProvider;
+  upstreamProvider: InferenceUpstreamProvider;
   baseUrl: string;
   apiKey: string;
   model: string;
+  canonicalModelId?: string;
+  billingModelId?: string;
   keySource: InferenceKeySource;
+  billingSource: InferenceBillingSource;
+  requestDefaults?: PlatformInferenceRequestDefaults;
   shouldRequireBalance: boolean;
   shouldDebitLight: boolean;
 }
@@ -33,6 +50,7 @@ export interface ResolveInferenceRouteParams {
   selection?: InferenceRoutePreference | null;
   userService?: Pick<UserService, "getUser" | "getDecryptedApiKey">;
   getOrCreateOpenRouterKey?: typeof getOrCreateOpenRouterKey;
+  getPlatformApiKey?: (envName: "DEEPSEEK_API_KEY") => string | Promise<string>;
 }
 
 export class InferenceRouteError extends Error {
@@ -89,6 +107,30 @@ function getSelectionProvider(
   );
 }
 
+function getRequestedLightModel(params: ResolveInferenceRouteParams): string | null {
+  return params.selection?.model?.trim() ||
+    params.requestedModel?.trim() ||
+    null;
+}
+
+async function readPlatformApiKey(
+  params: ResolveInferenceRouteParams,
+  envName: "DEEPSEEK_API_KEY",
+): Promise<string> {
+  const value = await (params.getPlatformApiKey
+    ? params.getPlatformApiKey(envName)
+    : getEnv(envName));
+  const apiKey = value.trim();
+  if (!apiKey) {
+    throw new InferenceRouteError(
+      "platform_key_unavailable",
+      `${envName} is not configured for Ultralight platform inference`,
+      503,
+    );
+  }
+  return apiKey;
+}
+
 function isConfiguredByokProvider(
   user: UserProfile,
   provider: ActiveBYOKProvider,
@@ -128,10 +170,12 @@ async function buildByokRoute(
   return {
     billingMode: "byok",
     provider,
+    upstreamProvider: provider,
     baseUrl: providerInfo.baseUrl,
     apiKey,
     model: requestedOrDefault(requestedModel, configuredModel, provider),
     keySource: "user_byok",
+    billingSource: "none",
     shouldRequireBalance: false,
     shouldDebitLight: false,
   };
@@ -144,9 +188,33 @@ async function buildLightRoute(
   if (selectedProvider && selectedProvider !== "openrouter") {
     throw new InferenceRouteError(
       "invalid_route_selection",
-      "Light-debit inference is currently routed through OpenRouter only",
+      "Light-debit inference provider selection must be omitted or openrouter; model IDs choose the Ultralight upstream",
       400,
     );
+  }
+
+  const requestedModel = getRequestedLightModel(params);
+  const platformModel = resolvePlatformInferenceModel(
+    requestedModel ?? ULTRALIGHT_DEEPSEEK_V4_FLASH_MODEL,
+  );
+
+  if (platformModel?.upstreamProvider === "deepseek" && platformModel.apiKeyEnv) {
+    const apiKey = await readPlatformApiKey(params, platformModel.apiKeyEnv);
+    return {
+      billingMode: "light",
+      provider: "ultralight",
+      upstreamProvider: platformModel.upstreamProvider,
+      baseUrl: platformModel.baseUrl,
+      apiKey,
+      model: platformModel.upstreamModel,
+      canonicalModelId: platformModel.id,
+      billingModelId: platformModel.id,
+      keySource: platformModel.keySource,
+      billingSource: "platform_deepseek_direct",
+      requestDefaults: platformModel.requestDefaults,
+      shouldRequireBalance: true,
+      shouldDebitLight: true,
+    };
   }
 
   try {
@@ -158,11 +226,13 @@ async function buildLightRoute(
 
     return {
       billingMode: "light",
-      provider: "openrouter",
+      provider: "ultralight",
+      upstreamProvider: "openrouter",
       baseUrl: providerInfo.baseUrl,
       apiKey,
       model: requestedOrDefault(params.selection?.model ?? params.requestedModel, undefined, "openrouter"),
       keySource: "platform_openrouter",
+      billingSource: "openrouter",
       shouldRequireBalance: true,
       shouldDebitLight: true,
     };

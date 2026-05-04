@@ -21,6 +21,12 @@ export interface User {
     ai_credit_balance: number;
     ai_credit_resets_at: string | null;
     balance_light: number;
+    deposit_balance_light: number;
+    earned_balance_light: number;
+    escrow_light: number;
+    escrow_deposit_light: number;
+    escrow_earned_light: number;
+    total_earned_light: number;
     hosting_last_billed_at: string | null;
     stripe_customer_id: string | null;
     auto_topup_enabled: boolean;
@@ -45,6 +51,29 @@ export interface VersionMetadata {
     version: string;
     size_bytes: number;
     created_at: string;
+    trust?: VersionTrustMetadata;
+}
+export interface VersionTrustSignature {
+    algorithm: 'HMAC-SHA256';
+    signer: string;
+    signed_at: string;
+    signature: string;
+    key_hint?: string;
+}
+export interface VersionTrustMetadata {
+    schema_version: 1;
+    app_id: string;
+    version: string;
+    runtime: 'deno' | 'gpu' | string;
+    manifest_hash: string | null;
+    artifact_hash: string;
+    artifact_hashes: Record<string, string>;
+    storage_key?: string;
+    permissions: string[];
+    entrypoints: string[];
+    required_secrets: string[];
+    per_user_secrets: string[];
+    signature: VersionTrustSignature;
 }
 export type AppGpuStatus = 'building' | 'benchmarking' | 'live' | 'build_failed' | 'benchmark_failed' | 'build_config_invalid';
 export interface App {
@@ -324,6 +353,7 @@ export interface RunResponse {
     result: unknown;
     logs: LogEntry[];
     duration_ms: number;
+    receipt_id?: string;
     ai_usage?: {
         model: string;
         input_tokens: number;
@@ -513,13 +543,19 @@ export interface MemoryShare {
 export type Tier = 'free' | 'fun' | 'pro' | 'scale' | 'enterprise';
 /** Light symbol character for display. */
 export declare const LIGHT_SYMBOL = "\u2726";
-/** Exchange rate: Light credited per $1 USD when purchasing on web. */
+/** Canonical Light/$ reference for internal USD-denominated costs and copy. */
+export declare const LIGHT_PER_DOLLAR_CANONICAL = 100;
+/** Exchange rate: Light credited per $1 USD through Apple Pay / Google Pay. */
+export declare const LIGHT_PER_DOLLAR_WALLET = 95;
+/** Exchange rate: Light credited per $1 USD through Stripe wire/bank transfer. */
+export declare const LIGHT_PER_DOLLAR_WIRE = 99;
+/** Legacy alias retained while old web checkout surfaces are migrated. */
 export declare const LIGHT_PER_DOLLAR_WEB = 95;
-/** Exchange rate: Light credited per $1 USD when purchasing on desktop app. */
+/** Legacy alias retained for internal cost conversion at the canonical rate. */
 export declare const LIGHT_PER_DOLLAR_DESKTOP = 100;
 /** Exchange rate: $1 USD per this many Light when publishers withdraw. */
 export declare const LIGHT_PER_DOLLAR_PAYOUT = 100;
-/** Platform fee rate applied on every transfer_balance (10%). */
+/** Platform fee rate applied on internal earning transfers (10%). */
 export declare const PLATFORM_FEE_RATE = 0.1;
 /** Minimum Light balance required to publish an app. */
 export declare const MIN_PUBLISH_DEPOSIT_LIGHT = 500;
@@ -531,11 +567,11 @@ export declare const HOSTING_RATE_LIGHT_PER_MB_PER_HOUR = 2.25;
 export declare const DATA_RATE_LIGHT_PER_MB_PER_HOUR = 0.045;
 /** Combined storage soft cap (source code + user data). 100MB. */
 export declare const COMBINED_FREE_TIER_BYTES = 104857600;
-/** Default auto top-up threshold (Light). When balance drops below this, auto-charge triggers. */
+/** Legacy auto top-up threshold (Light). Auto top-up is currently disabled. */
 export declare const AUTO_TOPUP_DEFAULT_THRESHOLD_LIGHT = 100;
-/** Default auto top-up charge amount (Light). */
+/** Legacy auto top-up charge amount (Light). Auto top-up is currently disabled. */
 export declare const AUTO_TOPUP_DEFAULT_AMOUNT_LIGHT = 1000;
-/** Minimum auto top-up amount (Light). */
+/** Legacy minimum auto top-up amount (Light). Auto top-up is currently disabled. */
 export declare const AUTO_TOPUP_MIN_AMOUNT_LIGHT = 500;
 /** Minimum withdrawal amount (Light). */
 export declare const MIN_WITHDRAWAL_LIGHT = 5000;
@@ -977,7 +1013,7 @@ export declare function validateManifest(input: unknown): ManifestValidationResu
 /**
  * Convert manifest functions to MCP tools format
  */
-export declare function manifestToMCPTools(manifest: AppManifest, appId: string, appSlug: string): MCPTool[];
+export declare function manifestToMCPTools(manifest: AppManifest, _appId: string, appSlug: string): MCPTool[];
 /** Request body for POST /chat/stream */
 export interface ChatStreamRequest {
     model: string;
@@ -986,6 +1022,13 @@ export interface ChatStreamRequest {
     temperature?: number;
     max_tokens?: number;
     stream?: boolean;
+    trace?: ChatTraceContext;
+}
+export interface ChatTraceContext {
+    traceId?: string;
+    conversationId?: string;
+    messageId?: string;
+    source?: string;
 }
 /** OpenAI-compatible message format */
 export interface ChatMessage {
@@ -1060,6 +1103,30 @@ export interface ChatBillingResult {
     cost_light: number;
     balance_after: number;
     was_depleted: boolean;
+}
+/** Request body for POST /chat/tool-invocation */
+export interface ToolInvocationTelemetryRequest {
+    invocationId: string;
+    traceId?: string;
+    conversationId?: string;
+    parentLlmInvocationId?: string;
+    source: string;
+    toolCallId?: string;
+    toolName: string;
+    toolKind?: string;
+    appId?: string;
+    mcpId?: string;
+    functionName?: string;
+    schemaSnapshot?: unknown;
+    args?: unknown;
+    result?: unknown;
+    startedAt?: string;
+    completedAt?: string;
+    durationMs?: number;
+    status: 'success' | 'error' | 'aborted' | 'timeout';
+    errorType?: string;
+    errorMessage?: string;
+    metadata?: Record<string, unknown>;
 }
 /** Minimum balance in Light required to start a chat stream */
 export declare const CHAT_MIN_BALANCE_LIGHT = 50;

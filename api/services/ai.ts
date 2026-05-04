@@ -13,6 +13,7 @@ export interface AIServiceConfig {
   provider: BYOKProvider;
   apiKey: string;
   defaultModel?: string;
+  requestDefaults?: Record<string, unknown>;
 }
 
 interface ProviderConfig {
@@ -135,7 +136,12 @@ const parseOpenAICompatibleResponse = (data: unknown): AIResponse => {
   const d = data as {
     choices?: Array<{ message?: { content?: string } }>;
     model?: string;
-    usage?: { prompt_tokens?: number; completion_tokens?: number };
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      prompt_cache_hit_tokens?: number;
+      prompt_cache_miss_tokens?: number;
+    };
   };
   return {
     content: d.choices?.[0]?.message?.content || '',
@@ -144,6 +150,8 @@ const parseOpenAICompatibleResponse = (data: unknown): AIResponse => {
       input_tokens: d.usage?.prompt_tokens || 0,
       output_tokens: d.usage?.completion_tokens || 0,
       cost_light: 0,
+      prompt_cache_hit_tokens: d.usage?.prompt_cache_hit_tokens,
+      prompt_cache_miss_tokens: d.usage?.prompt_cache_miss_tokens,
     },
   };
 };
@@ -191,6 +199,7 @@ export class AIService {
   private provider: BYOKProvider;
   private apiKey: string;
   private defaultModel: string;
+  private requestDefaults: Record<string, unknown>;
 
   constructor(config: AIServiceConfig) {
     this.provider = config.provider;
@@ -199,6 +208,7 @@ export class AIService {
       (isActiveBYOKProvider(config.provider)
         ? BYOK_PROVIDERS[config.provider].defaultModel
         : OPENROUTER_CONFIG.defaultModel);
+    this.requestDefaults = config.requestDefaults ?? {};
   }
 
   /**
@@ -210,7 +220,10 @@ export class AIService {
 
     const url = `${providerConfig.baseUrl.replace(/\/$/, '')}${providerConfig.endpoint}`;
     const headers = providerConfig.formatHeaders(this.apiKey);
-    const body = providerConfig.formatRequest(request, model);
+    const formattedBody = providerConfig.formatRequest(request, model);
+    const body = typeof formattedBody === 'object' && formattedBody !== null
+      ? { ...(formattedBody as Record<string, unknown>), ...this.requestDefaults }
+      : formattedBody;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -259,11 +272,17 @@ export class AIService {
  * Create an AI service for a specific provider with an API key.
  * Active providers route through their configured OpenAI-compatible base URL.
  */
-export function createAIService(provider: BYOKProvider = 'openrouter', apiKey: string = '', defaultModel?: string): AIService {
+export function createAIService(
+  provider: BYOKProvider = 'openrouter',
+  apiKey: string = '',
+  defaultModel?: string,
+  requestDefaults?: Record<string, unknown>,
+): AIService {
   return new AIService({
     provider,
     apiKey,
     defaultModel,
+    requestDefaults,
   });
 }
 

@@ -43,9 +43,14 @@ export function createUnavailableAIService(errorMessage: string): RuntimeAIServi
 function toRuntimeAIRoute(route: ResolvedInferenceRoute): RuntimeAIRoute {
   return {
     provider: route.provider,
+    upstreamProvider: route.upstreamProvider,
     baseUrl: route.baseUrl,
     apiKey: route.apiKey,
     model: route.model,
+    canonicalModelId: route.canonicalModelId,
+    billingModelId: route.billingModelId,
+    billingSource: route.billingSource,
+    requestDefaults: route.requestDefaults,
     shouldDebitLight: route.shouldDebitLight,
   };
 }
@@ -57,6 +62,8 @@ function toChatUsage(response: AIResponse): ChatUsage {
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
     total_tokens: promptTokens + completionTokens,
+    prompt_cache_hit_tokens: response.usage.prompt_cache_hit_tokens,
+    prompt_cache_miss_tokens: response.usage.prompt_cache_miss_tokens,
   };
 }
 
@@ -64,7 +71,12 @@ export function createRoutedRuntimeAIService(
   route: ResolvedInferenceRoute,
   userId: string,
 ): RuntimeAIService {
-  const service = createAIService(route.provider, route.apiKey, route.model);
+  const service = createAIService(
+    route.upstreamProvider,
+    route.apiKey,
+    route.model,
+    route.requestDefaults,
+  );
 
   return {
     call: async (request: AIRequest): Promise<AIResponse> => {
@@ -74,7 +86,23 @@ export function createRoutedRuntimeAIService(
 
       if (route.shouldDebitLight && usage.total_tokens > 0) {
         try {
-          const billing = await deductChatCost(userId, usage, response.model || model);
+          const billingModel = route.billingSource === 'platform_deepseek_direct'
+            ? response.model || model
+            : route.billingModelId ?? response.model ?? model;
+          const billing = await deductChatCost(
+            userId,
+            usage,
+            billingModel,
+            undefined,
+            {
+              provider: route.provider,
+              upstream_provider: route.upstreamProvider,
+              upstream_model: response.model || model,
+              canonical_model_id: route.canonicalModelId ?? null,
+              source: 'runtime_ai',
+            },
+            { billingSource: route.billingSource },
+          );
           response.usage.cost_light = billing.cost_light;
         } catch (err) {
           console.error("[RUNTIME-AI] Failed to debit Light for AI call:", err);

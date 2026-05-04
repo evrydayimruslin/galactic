@@ -7,6 +7,10 @@ import { getEnv } from '../lib/env.ts';
 import type { ChatUsage, ChatBillingResult } from '../../shared/contracts/ai.ts';
 import { CHAT_MIN_BALANCE_LIGHT, CHAT_PLATFORM_MARKUP } from '../../shared/contracts/ai.ts';
 import { LIGHT_PER_DOLLAR_DESKTOP, formatLight } from '../../shared/types/index.ts';
+import {
+  calculatePlatformInferenceCost,
+  resolvePlatformInferenceModel,
+} from './platform-inference-models.ts';
 
 export interface ChatBillingMetadata {
   traceId?: string;
@@ -14,6 +18,12 @@ export interface ChatBillingMetadata {
   messageId?: string;
   source?: string;
   [key: string]: unknown;
+}
+
+export interface ChatBillingCostOptions {
+  billingSource?: "none" | "openrouter" | "platform_deepseek_direct";
+  now?: Date;
+  lightPerDollar?: number;
 }
 
 function dbHeaders(): Record<string, string> {
@@ -78,8 +88,29 @@ export function calculateCostLight(
   usage: ChatUsage,
   model: string,
   openRouterTotalCostUsd?: number,
+  options: ChatBillingCostOptions = {},
 ): number {
   let baseCostLight: number;
+
+  if (options.billingSource === "platform_deepseek_direct") {
+    const platformModel = resolvePlatformInferenceModel(model);
+    if (!platformModel) {
+      throw new Error(`Unsupported Ultralight platform model for direct billing: ${model}`);
+    }
+    return calculatePlatformInferenceCost(
+      platformModel.id,
+      {
+        promptTokens: usage.prompt_tokens,
+        completionTokens: usage.completion_tokens,
+        promptCacheHitTokens: usage.prompt_cache_hit_tokens,
+        promptCacheMissTokens: usage.prompt_cache_miss_tokens,
+      },
+      {
+        now: options.now,
+        lightPerDollar: options.lightPerDollar,
+      },
+    ).totalLight;
+  }
 
   if (openRouterTotalCostUsd !== undefined && openRouterTotalCostUsd > 0) {
     // OpenRouter reports cost in USD; convert to Light
@@ -115,8 +146,9 @@ export async function deductChatCost(
   model: string,
   openRouterTotalCostUsd?: number,
   metadata: ChatBillingMetadata = {},
+  options: ChatBillingCostOptions = {},
 ): Promise<ChatBillingResult> {
-  const costLight = calculateCostLight(usage, model, openRouterTotalCostUsd);
+  const costLight = calculateCostLight(usage, model, openRouterTotalCostUsd, options);
 
   // Skip deduction for zero-cost (e.g., empty response)
   if (costLight <= 0) {
@@ -141,7 +173,10 @@ export async function deductChatCost(
           message_id: metadata.messageId,
           source: metadata.source,
           model,
+          billing_source: options.billingSource ?? null,
           prompt_tokens: usage.prompt_tokens,
+          prompt_cache_hit_tokens: usage.prompt_cache_hit_tokens ?? null,
+          prompt_cache_miss_tokens: usage.prompt_cache_miss_tokens ?? null,
           completion_tokens: usage.completion_tokens,
           total_tokens: usage.total_tokens,
         },
@@ -171,7 +206,7 @@ export async function deductChatCost(
   const actualCostLight = typeof amount_debited === 'number' ? amount_debited : costLight;
 
   // Log transaction (fire-and-forget — never break billing for logging)
-  logChatTransaction(userId, actualCostLight, new_balance, usage, model, metadata).catch(() => {});
+  logChatTransaction(userId, actualCostLight, new_balance, usage, model, metadata, options).catch(() => {});
 
   return {
     cost_light: actualCostLight,
@@ -192,6 +227,7 @@ async function logChatTransaction(
   usage: ChatUsage,
   model: string,
   metadata: ChatBillingMetadata = {},
+  options: ChatBillingCostOptions = {},
 ): Promise<void> {
   await fetch(`${getEnv('SUPABASE_URL')}/rest/v1/billing_transactions`, {
     method: 'POST',
@@ -206,9 +242,12 @@ async function logChatTransaction(
       metadata: {
         model,
         prompt_tokens: usage.prompt_tokens,
+        prompt_cache_hit_tokens: usage.prompt_cache_hit_tokens ?? null,
+        prompt_cache_miss_tokens: usage.prompt_cache_miss_tokens ?? null,
         completion_tokens: usage.completion_tokens,
         total_tokens: usage.total_tokens,
         cost_light: costLight,
+        billing_source: options.billingSource ?? null,
         markup: CHAT_PLATFORM_MARKUP,
         trace_id: metadata.traceId || null,
         conversation_id: metadata.conversationId || null,

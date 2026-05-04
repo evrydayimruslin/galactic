@@ -4,6 +4,7 @@
 
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { deductChatCost } from '../../services/chat-billing.ts';
+import { resolvePlatformInferenceModel } from '../../services/platform-inference-models.ts';
 
 // ============================================
 // TYPES
@@ -13,8 +14,13 @@ interface AIBindingProps {
   userId: string;
   apiKey: string | null;
   provider: string | null;
+  upstreamProvider: string | null;
   baseUrl: string | null;
   defaultModel: string | null;
+  canonicalModelId: string | null;
+  billingModelId: string | null;
+  billingSource: string | null;
+  requestDefaults: Record<string, unknown> | null;
   shouldDebitLight: boolean;
 }
 
@@ -70,7 +76,19 @@ function translateParts(parts: ContentPart[]): unknown[] {
 export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
 
   async call(request: AIRequest) {
-    const { apiKey, provider, baseUrl, defaultModel, shouldDebitLight, userId } = this.ctx.props;
+    const {
+      apiKey,
+      provider,
+      upstreamProvider,
+      baseUrl,
+      defaultModel,
+      canonicalModelId,
+      billingModelId,
+      billingSource,
+      requestDefaults,
+      shouldDebitLight,
+      userId,
+    } = this.ctx.props;
 
     if (!apiKey || !provider || !baseUrl) {
       return {
@@ -88,7 +106,17 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       return { role: msg.role, content: msg.content };
     });
 
-    const model = request.model || defaultModel || 'openai/gpt-4o-mini';
+    const requestedModel = request.model || defaultModel || 'openai/gpt-4o-mini';
+    const platformModel = provider === 'ultralight'
+      ? resolvePlatformInferenceModel(requestedModel)
+      : null;
+    const model = platformModel && platformModel.upstreamProvider === upstreamProvider
+      ? platformModel.upstreamModel
+      : provider === 'ultralight' && upstreamProvider === 'openrouter' && platformModel
+      ? platformModel.aliases.find((alias) => alias.includes('/')) || requestedModel
+      : provider === 'ultralight' && upstreamProvider !== 'openrouter'
+      ? defaultModel || requestedModel
+      : requestedModel;
     const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -102,6 +130,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
         messages,
         max_tokens: request.max_tokens || 4096,
         temperature: request.temperature ?? 0.7,
+        ...(requestDefaults ?? {}),
       }),
     });
 
@@ -118,23 +147,50 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     const data = await response.json() as {
       choices: Array<{ message: { content: string } }>;
       model: string;
-      usage: { prompt_tokens: number; completion_tokens: number };
+      usage: {
+        prompt_tokens: number;
+        completion_tokens: number;
+        prompt_cache_hit_tokens?: number;
+        prompt_cache_miss_tokens?: number;
+      };
     };
     const promptTokens = data.usage?.prompt_tokens || 0;
     const completionTokens = data.usage?.completion_tokens || 0;
+    const promptCacheHitTokens = data.usage?.prompt_cache_hit_tokens;
+    const promptCacheMissTokens = data.usage?.prompt_cache_miss_tokens;
     const responseModel = data.model || model;
     let costLight = 0;
 
     if (shouldDebitLight && promptTokens + completionTokens > 0) {
       try {
+        const modelForBilling = billingSource === 'platform_deepseek_direct'
+          ? responseModel
+          : billingModelId || canonicalModelId || responseModel;
         const billing = await deductChatCost(
           userId,
           {
             prompt_tokens: promptTokens,
             completion_tokens: completionTokens,
             total_tokens: promptTokens + completionTokens,
+            prompt_cache_hit_tokens: promptCacheHitTokens,
+            prompt_cache_miss_tokens: promptCacheMissTokens,
           },
-          responseModel,
+          modelForBilling,
+          undefined,
+          {
+            provider,
+            upstream_provider: upstreamProvider,
+            upstream_model: responseModel,
+            canonical_model_id: canonicalModelId,
+            source: 'runtime_ai_binding',
+          },
+          {
+            billingSource: billingSource === 'platform_deepseek_direct'
+              ? 'platform_deepseek_direct'
+              : billingSource === 'openrouter'
+              ? 'openrouter'
+              : 'none',
+          },
         );
         costLight = billing.cost_light;
       } catch (err) {
@@ -149,6 +205,8 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
         input_tokens: promptTokens,
         output_tokens: completionTokens,
         cost_light: costLight,
+        prompt_cache_hit_tokens: promptCacheHitTokens,
+        prompt_cache_miss_tokens: promptCacheMissTokens,
       },
     };
   }

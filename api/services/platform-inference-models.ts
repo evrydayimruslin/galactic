@@ -7,7 +7,7 @@ export type PlatformInferencePricingPolicy =
   | "deepseek_v4_flash_direct"
   | "deepseek_v4_pro_direct";
 
-export interface PlatformInferenceRequestDefaults {
+export interface PlatformInferenceRequestDefaults extends Record<string, unknown> {
   /** DeepSeek V4 thinking mode is disabled until our tool loop preserves reasoning_content. */
   thinking?: { type: "disabled" };
 }

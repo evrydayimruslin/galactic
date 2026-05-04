@@ -32,6 +32,8 @@ export interface AIUsage {
     input_tokens: number;
     output_tokens: number;
     cost_light: number;
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
 }
 export interface AIResponse {
     content: string;
@@ -47,6 +49,13 @@ export interface ChatStreamRequest {
     max_tokens?: number;
     stream?: boolean;
     inference?: InferenceRoutePreference;
+    trace?: ChatTraceContext;
+}
+export interface ChatTraceContext {
+    traceId?: string;
+    conversationId?: string;
+    messageId?: string;
+    source?: string;
 }
 export interface ChatMessage {
     role: 'system' | 'user' | 'assistant' | 'tool';
@@ -75,11 +84,36 @@ export interface ChatUsage {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
 }
 export interface ChatBillingResult {
     cost_light: number;
     balance_after: number;
     was_depleted: boolean;
+}
+export interface ToolInvocationTelemetryRequest {
+    invocationId: string;
+    traceId?: string;
+    conversationId?: string;
+    parentLlmInvocationId?: string;
+    source: string;
+    toolCallId?: string;
+    toolName: string;
+    toolKind?: string;
+    appId?: string;
+    mcpId?: string;
+    functionName?: string;
+    schemaSnapshot?: unknown;
+    args?: unknown;
+    result?: unknown;
+    startedAt?: string;
+    completedAt?: string;
+    durationMs?: number;
+    status: 'success' | 'error' | 'aborted' | 'timeout';
+    errorType?: string;
+    errorMessage?: string;
+    metadata?: Record<string, unknown>;
 }
 export type InferenceBillingMode = 'light' | 'byok';
 export interface InferenceRoutePreference {

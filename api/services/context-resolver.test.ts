@@ -6,10 +6,12 @@ function makeRoute(overrides: Partial<ResolvedInferenceRoute> = {}): ResolvedInf
   return {
     billingMode: "byok",
     provider: "deepseek",
+    upstreamProvider: "deepseek",
     baseUrl: "https://api.deepseek.test",
     apiKey: "ds-key",
     model: "deepseek-v4-pro",
     keySource: "user_byok",
+    billingSource: "none",
     shouldRequireBalance: false,
     shouldDebitLight: false,
     ...overrides,
