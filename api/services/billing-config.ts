@@ -1,10 +1,16 @@
 import {
+  COMBINED_FREE_TIER_BYTES,
+  DATA_RATE_LIGHT_PER_MB_PER_HOUR,
+  HOSTING_RATE_LIGHT_PER_MB_PER_HOUR,
   LIGHT_PER_DOLLAR_CANONICAL,
   LIGHT_PER_DOLLAR_PAYOUT,
   LIGHT_PER_DOLLAR_WALLET,
   LIGHT_PER_DOLLAR_WIRE,
+  LIGHT_SYMBOL,
+  MIN_PUBLISH_DEPOSIT_LIGHT,
   MIN_WITHDRAWAL_LIGHT,
   PLATFORM_FEE_RATE,
+  formatLight,
 } from "../../shared/types/index.ts";
 import { getEnv } from "../lib/env.ts";
 
@@ -131,6 +137,12 @@ export function formatLightPerUsd(rate: number): string {
   return `${rate.toLocaleString("en-US")} Light / $1`;
 }
 
+function formatLightRate(rate: number): string {
+  return `${LIGHT_SYMBOL}${rate.toLocaleString("en-US", {
+    maximumFractionDigits: 6,
+  })}`;
+}
+
 export function toPublicBillingConfig(config: BillingConfig) {
   return {
     version: config.version,
@@ -140,6 +152,10 @@ export function toPublicBillingConfig(config: BillingConfig) {
     payout_light_per_usd: config.payoutLightPerUsd,
     platform_fee_rate: config.platformFeeRate,
     min_withdrawal_light: config.minWithdrawalLight,
+    min_publish_deposit_light: MIN_PUBLISH_DEPOSIT_LIGHT,
+    hosting_rate_light_per_mb_hour: HOSTING_RATE_LIGHT_PER_MB_PER_HOUR,
+    data_rate_light_per_mb_hour: DATA_RATE_LIGHT_PER_MB_PER_HOUR,
+    storage_soft_cap_bytes: COMBINED_FREE_TIER_BYTES,
     payout_policy_copy: config.payoutPolicyCopy,
     labels: {
       canonical_rate: formatLightPerUsd(config.canonicalLightPerUsd),
@@ -148,6 +164,9 @@ export function toPublicBillingConfig(config: BillingConfig) {
       payout_rate: `${
         config.payoutLightPerUsd.toLocaleString("en-US")
       } Light = $1`,
+      publish_deposit: formatLight(MIN_PUBLISH_DEPOSIT_LIGHT),
+      hosting_rate: `${formatLightRate(HOSTING_RATE_LIGHT_PER_MB_PER_HOUR)}/MB/hr`,
+      data_rate: `${formatLightRate(DATA_RATE_LIGHT_PER_MB_PER_HOUR)}/MB/hr`,
     },
     policy_copy: LIGHT_ECONOMY_POLICY_COPY,
   };

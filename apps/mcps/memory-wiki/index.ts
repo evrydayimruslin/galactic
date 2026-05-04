@@ -860,22 +860,30 @@ export async function widget_wiki_browser_data(args: {
   view?: string; page_id?: string; search?: string;
 }): Promise<unknown> {
   const wikiId = await ensureDefaultWiki();
+  const unsyncedResult: CountRow | null = await ultralight.db.first(
+    'SELECT COUNT(*) as count FROM sources WHERE wiki_id = ? AND user_id = ? AND synced_at IS NULL',
+    [wikiId, uid()]
+  );
+  const meta = { title: 'Knowledge Wiki', icon: '📚', badge_count: unsyncedResult?.count || 0 };
 
   if (args.view === 'raw') {
     const sources: Pick<WikiSourceRow, 'id' | 'title' | 'source_type' | 'classification' | 'created_at'>[] = await ultralight.db.all(
       'SELECT id, title, source_type, classification, created_at FROM sources WHERE wiki_id = ? AND user_id = ? AND synced_at IS NULL ORDER BY created_at DESC LIMIT 30',
       [wikiId, uid()]
     );
-    return { sources: sources };
+    return { meta, sources: sources };
   }
 
   if (args.page_id) {
-    return browse({ page_id: args.page_id });
+    const result = await browse({ page_id: args.page_id });
+    return { ...(result as Record<string, unknown>), meta };
   }
 
   if (args.search) {
-    return search({ query: args.search });
+    const result = await search({ query: args.search });
+    return { ...(result as Record<string, unknown>), meta };
   }
 
-  return browse({});
+  const result = await browse({});
+  return { ...(result as Record<string, unknown>), meta };
 }

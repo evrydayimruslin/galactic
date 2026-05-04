@@ -4,7 +4,7 @@
 import { json, error, toResponseBody } from './response.ts';
 import { authenticate } from './auth.ts';
 import { createAppsService } from '../services/apps.ts';
-import { createR2Service } from '../services/storage.ts';
+import { createR2Service, type R2Service } from '../services/storage.ts';
 import { getCodeCache } from '../services/codecache.ts';
 import { bundleCode } from '../services/bundler.ts';
 import { parseTypeScript, toSkillsParsed } from '../services/parser.ts';
@@ -46,6 +46,12 @@ import {
   checkPublishDeposit,
   getUserTier,
 } from '../services/tier-enforcement.ts';
+import {
+  getVersionStorageBytes,
+  reclaimAppStorage,
+  recordUploadStorage,
+} from '../services/storage-quota.ts';
+import { validateGpuPricingConfig } from '../services/gpu/pricing-config.ts';
 import { getEnv } from '../lib/env.ts';
 import { withSensitiveRouteRateLimit } from '../services/sensitive-route-rate-limit.ts';
 import { RequestValidationError } from '../services/request-validation.ts';
@@ -136,6 +142,70 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
   const body = await request.json();
   return isObjectRecord(body) ? body : {};
+}
+
+async function resolveStoredVersionStorageBytes(
+  app: App,
+  version: string,
+  storageKey: string,
+  r2Service: R2Service,
+): Promise<number> {
+  const metadataBytes = getVersionStorageBytes(app.version_metadata, version);
+  if (metadataBytes !== null) {
+    return metadataBytes;
+  }
+
+  const files = await r2Service.listFiles(storageKey);
+  let totalBytes = 0;
+  for (const fileKey of files) {
+    const content = await r2Service.fetchFile(fileKey);
+    totalBytes += content.byteLength;
+  }
+  return totalBytes;
+}
+
+async function resolveStoredVersionExports(
+  storageKey: string,
+  r2Service: R2Service,
+  manifestJson: string | null,
+): Promise<string[] | null> {
+  if (manifestJson) {
+    try {
+      const manifest = JSON.parse(manifestJson);
+      if (manifest && typeof manifest === 'object' && !Array.isArray(manifest)) {
+        const functions = (manifest as Record<string, unknown>).functions;
+        if (functions && typeof functions === 'object' && !Array.isArray(functions)) {
+          return Object.keys(functions);
+        }
+      }
+    } catch {
+      // Fall back to source inspection below.
+    }
+  }
+
+  const entryNames = [
+    '_source_index.ts',
+    '_source_index.tsx',
+    'index.ts',
+    'index.tsx',
+    'index.js',
+  ];
+  for (const entry of entryNames) {
+    try {
+      const code = await r2Service.fetchTextFile(`${storageKey}${entry}`);
+      const exportRegex = /export\s+(?:async\s+)?function\s+(\w+)/g;
+      const constRegex = /export\s+(?:const|let|var)\s+(\w+)\s*=/g;
+      const exports: string[] = [];
+      let match;
+      while ((match = exportRegex.exec(code)) !== null) exports.push(match[1]);
+      while ((match = constRegex.exec(code)) !== null) exports.push(match[1]);
+      return exports.length > 0 ? exports : null;
+    } catch {
+      // Try next candidate.
+    }
+  }
+
+  return null;
 }
 
 function toDocgenPricingConfig(
@@ -1577,8 +1647,10 @@ async function handleUpdateApp(request: Request, appId: string): Promise<Respons
       const updates = await readJsonObject(request);
 
       // Whitelist allowed updates
-      const allowedFields = ['name', 'description', 'visibility', 'icon_url', 'tags', 'category', 'download_access', 'pricing_config', 'long_description'];
+      const allowedFields = ['name', 'description', 'visibility', 'icon_url', 'tags', 'category', 'download_access', 'pricing_config', 'gpu_pricing_config', 'long_description'];
       const filteredUpdates: Record<string, unknown> = {};
+      let liveVersionStorageBytes: number | null = null;
+      let requestedLiveVersion: string | null = null;
 
       for (const field of allowedFields) {
         if (field in updates) {
@@ -1594,6 +1666,49 @@ async function handleUpdateApp(request: Request, appId: string): Promise<Respons
         }
         if (typeof ld === 'string' && ld.length > 50000) {
           return error('long_description exceeds 50KB limit', 400);
+        }
+      }
+
+      if ('current_version' in updates) {
+        if (typeof updates.current_version !== 'string' || updates.current_version.trim().length === 0) {
+          return error('current_version must be a non-empty string', 400);
+        }
+
+        requestedLiveVersion = updates.current_version.trim();
+        if (requestedLiveVersion !== app.current_version) {
+          if (!app.versions?.includes(requestedLiveVersion)) {
+            return error(`Version "${requestedLiveVersion}" not found`, 404);
+          }
+
+          const r2Service = createR2Service();
+          const versionStorageKey = `apps/${appId}/${requestedLiveVersion}/`;
+          let manifestJson: string | null = null;
+          try {
+            manifestJson = await r2Service.fetchTextFile(`${versionStorageKey}manifest.json`);
+            const manifest = JSON.parse(manifestJson);
+            filteredUpdates.manifest = manifestJson;
+            filteredUpdates.env_schema = resolveManifestEnvSchema(manifest);
+          } catch {
+            manifestJson = null;
+          }
+
+          const versionExports = await resolveStoredVersionExports(
+            versionStorageKey,
+            r2Service,
+            manifestJson,
+          );
+          if (versionExports) {
+            filteredUpdates.exports = versionExports;
+          }
+
+          liveVersionStorageBytes = await resolveStoredVersionStorageBytes(
+            app,
+            requestedLiveVersion,
+            versionStorageKey,
+            r2Service,
+          );
+          filteredUpdates.current_version = requestedLiveVersion;
+          filteredUpdates.storage_key = versionStorageKey;
         }
       }
 
@@ -1677,7 +1792,21 @@ async function handleUpdateApp(request: Request, appId: string): Promise<Respons
         }
       }
 
+      if ('gpu_pricing_config' in filteredUpdates) {
+        if (app.runtime !== 'gpu') {
+          return error('gpu_pricing_config can only be set on GPU apps', 400);
+        }
+        const validation = validateGpuPricingConfig(filteredUpdates.gpu_pricing_config);
+        if (!validation.valid) {
+          return error(validation.error || 'Invalid gpu_pricing_config', 400);
+        }
+        filteredUpdates.gpu_pricing_config = validation.config;
+      }
+
       const updatedApp = await appsService.update(appId, filteredUpdates);
+      if (requestedLiveVersion && liveVersionStorageBytes !== null) {
+        await recordUploadStorage(user.id, appId, requestedLiveVersion, liveVersionStorageBytes);
+      }
 
       return json(updatedApp);
     });
@@ -1709,6 +1838,8 @@ async function handleDeleteApp(request: Request, appId: string): Promise<Respons
       return error('Unauthorized', 403);
     }
 
+    await reclaimAppStorage(user.id, appId);
+
     // Soft delete - set deleted_at timestamp
     await appsService.update(appId, {
       deleted_at: new Date().toISOString(),
@@ -1731,7 +1862,7 @@ async function handleDeleteApp(request: Request, appId: string): Promise<Respons
  * Delete a specific app version
  * DELETE /api/apps/:appId/versions/:version
  *
- * Removes version files from R2 and reclaims storage quota.
+ * Removes non-live version files from R2 and version metadata.
  * Cannot delete the current (active) version.
  */
 async function handleDeleteVersion(request: Request, appId: string, version: string): Promise<Response> {
@@ -1771,8 +1902,15 @@ async function handleDeleteVersion(request: Request, appId: string, version: str
       console.log(`[DELETE_VERSION] Cleaned up ${versionFiles.length} files for ${appId}/${version}`);
     } catch (cleanupErr) {
       console.error(`[DELETE_VERSION] R2 cleanup failed for ${appId}/${version}:`, cleanupErr);
-      // Non-fatal. Quota is already reclaimed even if R2 cleanup fails.
+      // Non-fatal. Non-live versions do not change live storage billing.
     }
+
+    await appsService.update(appId, {
+      versions: (app.versions || []).filter((entry) => entry !== version),
+      version_metadata: Array.isArray(app.version_metadata)
+        ? app.version_metadata.filter((entry) => entry?.version !== version)
+        : [],
+    });
 
     return json({
       success: true,
@@ -2729,6 +2867,7 @@ async function handlePublishDraft(request: Request, appId: string): Promise<Resp
       );
     }
     await appsService.update(appId, updateFields);
+    await recordUploadStorage(user.id, appId, newVersion, publishedSizeBytes);
 
     // Invalidate code cache so next request fetches new version
     getCodeCache().invalidate(appId);

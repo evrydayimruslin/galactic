@@ -8,7 +8,7 @@
 //   POST  /api/admin/assess/:id         — Trigger/record assessment for a gap submission
 //   POST  /api/admin/approve/:id        — Approve an assessment (writes points)
 //   POST  /api/admin/reject/:id         — Reject an assessment
-//   POST  /api/admin/balance/:userId    — Top up a user's hosting balance
+//   POST  /api/admin/balance/:userId    — Top up a user's Light balance
 //   POST  /api/admin/cleanup-provisionals — Delete expired provisional users
 //   GET   /api/admin/billing-config — Read Light economics config
 //   PATCH /api/admin/billing-config — Update Light economics config
@@ -247,7 +247,7 @@ export async function handleAdmin(request: Request): Promise<Response> {
     );
   }
 
-  // POST /api/admin/balance/:userId — Top up hosting balance
+  // POST /api/admin/balance/:userId — Top up Light balance
   const balanceMatch = path.match(/^\/api\/admin\/balance\/([0-9a-f-]+)$/);
   if (balanceMatch && method === 'POST') {
     return withAdminSensitiveRouteRateLimit(

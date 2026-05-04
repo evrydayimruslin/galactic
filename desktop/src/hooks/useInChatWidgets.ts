@@ -13,6 +13,7 @@ import { loadWidgetHtml } from '../lib/widgetRuntime';
 export interface WidgetMapping {
   appUuid: string;
   appSlug: string;
+  appVersion?: string | null;
   widgetName: string;
   uiFunction: string;
   mappedFunctions: string[];
@@ -41,6 +42,20 @@ export const InChatWidgetContext = createContext<InChatWidgetContextValue>({
 });
 
 const inChatWidgetsLogger = createDesktopLogger('InChatWidgets');
+
+async function fetchConnectedAppVersion(appUuid: string, token: string): Promise<string | null> {
+  try {
+    const res = await fetchFromApi(`/api/apps/${appUuid}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const version = data?.current_version;
+    return typeof version === 'string' || typeof version === 'number' ? String(version) : null;
+  } catch {
+    return null;
+  }
+}
 
 export function useInChatWidgetContext() {
   return useContext(InChatWidgetContext);
@@ -72,6 +87,7 @@ export function useInChatWidgets(connectedAppIds: string[]) {
       });
       const data = await res.json();
       const tools: WidgetToolDescriptor[] = data?.result?.tools || [];
+      const appVersion = await fetchConnectedAppVersion(appUuid, token);
 
       type ParsedUiTool = {
         tool: WidgetToolDescriptor;
@@ -130,7 +146,7 @@ export function useInChatWidgets(connectedAppIds: string[]) {
 
         if (mappedFunctions.length > 0) {
           mappings.push({
-            appUuid, appSlug: slug, widgetName,
+            appUuid, appSlug: slug, appVersion, widgetName,
             uiFunction: `widget_${widgetName}_ui`,
             mappedFunctions,
           });

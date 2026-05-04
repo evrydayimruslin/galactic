@@ -103,12 +103,18 @@ export function formatGpuPricing(app: App): GpuPricingDisplay {
 
     case 'per_duration': {
       const markup = pricingConfig.duration_markup_light ?? 0;
-      const totalEstimate = estimatedComputeLight + markup;
+      const perSecond = pricingConfig.duration_rate_light_per_second ?? 0;
+      const estimatedSeconds = meanMs !== null ? Math.ceil(meanMs / 1000) : null;
+      const developerEstimate = (estimatedSeconds ?? 0) * perSecond + markup;
+      const totalEstimate = estimatedComputeLight + developerEstimate;
+      const developerParts = [];
+      if (perSecond > 0) developerParts.push(`${formatLight(perSecond)} per billed second`);
+      if (markup > 0) developerParts.push(`${formatLight(markup)} per call`);
       return {
         mode_label: 'Per Duration',
-        developer_fee: markup > 0
-          ? `Compute pass-through + ${formatLight(markup)}`
-          : 'Compute pass-through',
+        developer_fee: developerParts.length > 0
+          ? developerParts.join(' + ')
+          : 'No developer fee',
         estimated_compute: computeDisplay,
         total_estimate: totalEstimate > 0
           ? `~${formatLight(totalEstimate)} per call (est.)`

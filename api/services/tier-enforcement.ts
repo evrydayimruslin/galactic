@@ -1,6 +1,6 @@
 // Tier Enforcement Service
 // Shared utility for checking tier-based restrictions.
-// Enforces: visibility checks, storage quotas, publish deposit gate.
+// Enforces visibility checks, publish deposit gate, and app-count guardrails.
 
 import {
   formatLight,
@@ -25,7 +25,7 @@ export function checkVisibilityAllowed(
 }
 
 /**
- * Check whether a user has sufficient hosting balance to publish.
+ * Check whether a user has sufficient Light balance to publish.
  * Publishing (visibility = 'public' or 'unlisted') requires a minimum deposit.
  * Returns null if allowed, or an error message string if blocked.
  */

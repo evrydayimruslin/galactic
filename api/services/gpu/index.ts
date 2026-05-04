@@ -27,9 +27,12 @@ export type {
 export {
   GPU_RATE_TABLE,
   GPU_TYPES,
+  GPU_BILLING_INCREMENT_MS,
+  GPU_COLD_START_BUFFER_MS,
   isValidGpuType,
   getGpuRate,
   getGpuVram,
+  computeGpuBillableDurationMs,
   computeGpuCostLight,
   classifyFailure,
 } from './types.ts';

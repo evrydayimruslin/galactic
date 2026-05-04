@@ -28,6 +28,9 @@ Deno.test("payments launch QA: public config states closed-loop Light economics"
   assertEquals(config.wallet_light_per_usd, 95);
   assertEquals(config.wire_light_per_usd, 99);
   assertEquals(config.payout_light_per_usd, 100);
+  assertEquals(config.min_publish_deposit_light, 500);
+  assertEquals(config.labels.hosting_rate, "✦2.25/MB/hr");
+  assertEquals(config.labels.data_rate, "✦0.045/MB/hr");
   assertEquals(config.labels.payout_rate, "100 Light = $1");
   assert(
     config.payout_policy_copy.includes("Purchased Light cannot be cashed out"),

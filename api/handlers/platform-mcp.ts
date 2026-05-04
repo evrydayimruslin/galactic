@@ -9,7 +9,7 @@ import { error, json } from './response.ts';
 import { authenticate } from './auth.ts';
 import { isApiToken, validateToken } from '../services/tokens.ts';
 import { createAppsService } from '../services/apps.ts';
-import { createR2Service } from '../services/storage.ts';
+import { createR2Service, type R2Service } from '../services/storage.ts';
 import { checkInMemoryLimit, checkRateLimit } from '../services/ratelimit.ts';
 import { checkAndIncrementWeeklyCalls } from '../services/weekly-calls.ts';
 import { isProvisionalUser, mergeProvisionalUser } from '../services/provisional.ts';
@@ -19,7 +19,10 @@ import {
   type AppPricingConfig,
   type AppRateLimitConfig,
   formatLight,
+  DATA_RATE_LIGHT_PER_MB_PER_HOUR,
+  HOSTING_RATE_LIGHT_PER_MB_PER_HOUR,
   type FunctionPricing,
+  LIGHT_SYMBOL,
   LIGHT_PER_DOLLAR_PAYOUT,
   MIN_WITHDRAWAL_LIGHT,
   type PermissionRow,
@@ -28,10 +31,15 @@ import {
   type TimeWindow,
 } from '../../shared/types/index.ts';
 import { checkPublishDeposit } from '../services/tier-enforcement.ts';
+import {
+  getVersionStorageBytes,
+  recordUploadStorage as recordLiveAppStorage,
+} from '../services/storage-quota.ts';
 import { handleUploadFiles, type UploadFile } from './upload.ts';
 import { validateAndParseSkillsMd } from '../services/docgen.ts';
 import { createEmbeddingService } from '../services/embedding.ts';
 import { getBillingConfig } from '../services/billing-config.ts';
+import { validateGpuPricingConfig } from '../services/gpu/pricing-config.ts';
 import {
   appendUserMemory,
   generateSkillsForVersion,
@@ -127,7 +135,6 @@ const platformLogger = createServerLogger('PLATFORM-MCP');
 const codemodeLogger = createServerLogger('CODEMODE');
 const platformUploadLogger = createServerLogger('UPLOAD');
 const platformGpuBuildLogger = createServerLogger('GPU-BUILD');
-const platformStorageLogger = createServerLogger('STORAGE');
 const platformTelemetryLogger = createServerLogger('TELEMETRY');
 
 type AppSearchResult = App & { similarity: number };
@@ -1570,6 +1577,10 @@ const PLATFORM_TOOLS: MCPTool[] = [
           description:
             'Per-function prices: { "fn": light } or { "fn": { price_light: light, free_calls?: N } }. null = remove.',
         },
+        gpu_pricing_config: {
+          description:
+            'GPU developer fee config for GPU apps. null = no developer fee. Examples: { mode: "per_call", flat_fee_light: 10 }, { mode: "per_duration", duration_rate_light_per_second: 1, duration_markup_light: 5 }. GPU compute is always charged separately.',
+        },
         search_hints: {
           type: 'array',
           items: { type: 'string' },
@@ -1958,7 +1969,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
     name: 'ul.marketplace',
     description:
       'Acquire and sell Ultralight apps. Place bids, set ask prices, accept offers, view history. ' +
-      'All bids are escrowed from your hosting balance. Platform takes 10% on sale. ' +
+      'All bids are escrowed from your Light balance. Platform takes 10% on sale. ' +
       'action="bid": place a bid. action="ask": set/update ask price. action="accept": accept a bid. ' +
       'action="reject": reject a bid. action="cancel": cancel your own bid. action="acquire": instant acquisition. ' +
       'Legacy action="buy_now" remains supported. ' +
@@ -2381,13 +2392,14 @@ Test code in sandbox without deploying.
 - Returns: \`{ success, result?, error?, duration_ms, exports, logs?, lint? }\`.
 - Always test before \`ul.upload\`.
 
-### ul.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_light?, default_free_calls?, free_calls_scope?, function_prices?, search_hints?, show_metrics? })
+### ul.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_light?, default_free_calls?, free_calls_scope?, function_prices?, gpu_pricing_config?, search_hints?, show_metrics? })
 Batch configure app settings. Each field is optional — only provided fields are updated.
 - \`version\`: set which version is live
 - \`visibility\`: "private" | "unlisted" | "published" (published = app store)
 - \`supabase_server\`: assign Bring Your Own Supabase server (or null to unassign)
 - Rate limits: \`calls_per_minute\`, \`calls_per_day\` (null = platform defaults)
 - Pricing: \`default_price_light\`, \`function_prices: { "fn_name": light }\` or \`{ "fn_name": { price_light, free_calls? } }\`
+- GPU pricing: \`gpu_pricing_config\` adds the developer fee only. GPU compute pass-through is always charged separately.
 - Free preview: \`default_free_calls\` (number of free calls per user before charging), \`free_calls_scope\`: "function" (each function counted separately) or "app" (shared counter across all functions)
 - \`search_hints\`: array of keywords for better semantic search discovery. Regenerates embedding.
 - \`show_metrics\`: true/false — show usage metrics (calls, revenue, unique callers) on marketplace listing to bidders.
@@ -2496,10 +2508,10 @@ max_duration_ms: 30000     # Optional: execution timeout
 - **Concurrency limited** — Default 5 concurrent executions per endpoint.
 
 ### GPU Pricing Modes
-Set via app settings (not yet in \`ul.set\` — use dashboard):
+Set via \`ul.set({ gpu_pricing_config })\` or app settings:
 - **per_call** — Flat fee per invocation (e.g., 10✦/call)
 - **per_unit** — Fee per output unit extracted from result (e.g., 5✦/image)
-- **per_duration** — Compute pass-through + markup
+- **per_duration** — Developer fee per billed second and/or flat markup; compute pass-through is separate
 
 ## Agent Guidance
 
@@ -2769,7 +2781,7 @@ function buildInstructions(deskSection: string, libraryHint: string): string {
 
 MCP-first app hosting. TypeScript functions → MCP servers. 10 platform tools + unlimited app tools via ul.call.
 
-**Flat-rate hosting: $0.025/MB/hour.** Your app goes viral? Your bill stays the same. No usage spikes, no surprise bills, no cost anxiety as you grow. You pay only for storage size — never for traffic, calls, or popularity.
+**Published hosting: ${formatLight(HOSTING_RATE_LIGHT_PER_MB_PER_HOUR)}/MB/hr from the first byte.** Your app goes viral? Your bill stays tied to published storage size, not traffic, calls, or popularity.
 
 ${deskSection}
 
@@ -3195,6 +3207,13 @@ async function handleToolsCall(
             functions: toolArgs.function_prices,
             default_free_calls: toolArgs.default_free_calls,
             free_calls_scope: toolArgs.free_calls_scope,
+          });
+          setCount++;
+        }
+        if (toolArgs.gpu_pricing_config !== undefined) {
+          setResults.gpu_pricing = await executeSetGpuPricing(userId, {
+            app_id: toolArgs.app_id,
+            gpu_pricing_config: toolArgs.gpu_pricing_config,
           });
           setCount++;
         }
@@ -3945,7 +3964,7 @@ async function handleToolsCall(
                 limit_mb: toMb(limitBytes) + ' MB',
                 used_percent: limitBytes > 0 ? Math.round((combinedBytes / limitBytes) * 100) : 0,
                 overage_bytes: Math.max(0, combinedBytes - limitBytes),
-                overage_rate: '$0.0005/MB/hr (~$0.36/MB/month)',
+                overage_rate: `${LIGHT_SYMBOL}${DATA_RATE_LIGHT_PER_MB_PER_HOUR}/MB/hr after the storage soft cap`,
               },
               connect: {
                 connected: !!wUserData?.stripe_connect_account_id,
@@ -4869,6 +4888,10 @@ async function executeUpload(
           contentType: 'application/json',
         },
       ];
+      const uploadedSizeBytes = filesToUpload.reduce(
+        (sum, file) => sum + file.content.byteLength,
+        0,
+      );
       await r2Service.uploadFiles(storageKey, filesToUpload);
 
       // Update app: add version, optionally update GPU config
@@ -4882,15 +4905,11 @@ async function executeUpload(
         files: filesToUpload,
         storageKey,
       });
-      const totalUploadBytes = filesToUpload.reduce(
-        (sum, file) => sum + file.content.byteLength,
-        0,
-      );
       const updatePayload: Record<string, unknown> = {
         versions,
         version_metadata: appendVersionTrustMetadata(
           app.version_metadata,
-          buildVersionMetadataEntry(newVersion, totalUploadBytes, versionTrust),
+          buildVersionMetadataEntry(newVersion, uploadedSizeBytes, versionTrust),
         ),
       };
       if (gpuConfig) {
@@ -5051,6 +5070,9 @@ async function executeUpload(
     }
     updatePayload.exports = pipeline.exports;
     await appsService.update(app.id, updatePayload as Partial<App>);
+    if (autoLive) {
+      await recordLiveAppStorage(userId, app.id, newVersion, uploadedSizeBytes);
+    }
 
     // Update KV CODE_CACHE with ESM bundle for Dynamic Workers.
     // The runtime at api/runtime/dynamic-sandbox.ts:34 loads app code from
@@ -5552,12 +5574,12 @@ async function executeUpload(
         if (quotaCheck.reason === 'service_unavailable') {
           throw new ToolError(
             INTERNAL_ERROR,
-            'Storage quota service unavailable. Please try again shortly.',
+            'Storage usage service unavailable. Please try again shortly.',
           );
         }
         throw new ToolError(
           VALIDATION_ERROR,
-          `Storage limit exceeded. This upload requires ${totalUploadBytes} bytes but only ${quotaCheck.remaining_bytes} remaining.`,
+          `Storage soft-cap check failed. This upload requires ${totalUploadBytes} bytes.`,
         );
       }
 
@@ -5580,6 +5602,10 @@ async function executeUpload(
           contentType: 'application/json',
         },
       ];
+      const uploadedSizeBytes = filesToUpload.reduce(
+        (sum, file) => sum + file.content.byteLength,
+        0,
+      );
       await r2Service.uploadFiles(storageKey, filesToUpload);
 
       // Create app record with GPU fields
@@ -5612,14 +5638,12 @@ async function executeUpload(
         version_metadata: [
           buildVersionMetadataEntry(
             version,
-            filesToUpload.reduce(
-              (sum, file) => sum + file.content.byteLength,
-              0,
-            ),
+            uploadedSizeBytes,
             versionTrust,
           ),
         ],
       });
+      await recordUploadStorage(userId, appId, version, uploadedSizeBytes);
 
       // Fire-and-forget: trigger GPU build
       import('../services/gpu/builder.ts').then(({ triggerGpuBuild }) => {
@@ -5643,20 +5667,6 @@ async function executeUpload(
           app_id: appId,
           error: err,
         })
-      );
-
-      // Record storage usage (fire-and-forget)
-      recordUploadStorage(userId, appId, version, totalUploadBytes).catch(
-        (err) =>
-          platformStorageLogger.error(
-            'recordUploadStorage failed after platform upload',
-            {
-              user_id: userId,
-              app_id: appId,
-              version,
-              error: err,
-            },
-          ),
       );
 
       // Rebuild library for new app
@@ -5747,13 +5757,13 @@ async function executeUpload(
           INTERNAL_ERROR,
           err instanceof Error
             ? err.message
-            : 'Storage quota service unavailable. Please try again shortly.',
+            : 'Storage usage service unavailable. Please try again shortly.',
         );
       }
       if (status === 413) {
         throw new ToolError(
           VALIDATION_ERROR,
-          err instanceof Error ? err.message : 'Storage limit exceeded.',
+          err instanceof Error ? err.message : 'Upload request is too large.',
         );
       }
       throw err;
@@ -7235,6 +7245,26 @@ function tsTypeToJsonSchemaType(tsType: string): string {
 
 // ── ul.set.version ───────────────────────────────
 
+async function resolveVersionStorageBytesForLiveSwitch(
+  app: App,
+  version: string,
+  storageKey: string,
+  r2Service: R2Service,
+): Promise<number> {
+  const metadataBytes = getVersionStorageBytes(app.version_metadata, version);
+  if (metadataBytes !== null) {
+    return metadataBytes;
+  }
+
+  const files = await r2Service.listFiles(storageKey);
+  let totalBytes = 0;
+  for (const fileKey of files) {
+    const content = await r2Service.fetchFile(fileKey);
+    totalBytes += content.byteLength;
+  }
+  return totalBytes;
+}
+
 async function executeSetVersion(
   userId: string,
   args: Record<string, unknown>,
@@ -7293,6 +7323,13 @@ async function executeSetVersion(
     }
   } catch { /* keep existing exports */ }
 
+  const liveStorageBytes = await resolveVersionStorageBytesForLiveSwitch(
+    app,
+    version,
+    newStorageKey,
+    r2Service,
+  );
+
   // Update app
   const appsService = createAppsService();
   await appsService.update(app.id, {
@@ -7301,6 +7338,7 @@ async function executeSetVersion(
     exports,
     ...(manifestJson ? { manifest: manifestJson, env_schema: envSchema || {} } : {}),
   });
+  await recordLiveAppStorage(userId, app.id, version, liveStorageBytes);
 
   // Load skills from this version's R2 artifacts
   try {
@@ -8405,8 +8443,55 @@ async function executeSetPricing(
     app_id: app.id,
     pricing_config: config,
     message: parts.length > 0
-      ? `Pricing set: ${parts.join(', ')}. Callers will be charged from their hosting balance.`
+      ? `Pricing set: ${parts.join(', ')}. Callers will be charged in Light.`
       : 'Pricing set but all prices are 0 (free).',
+  };
+}
+
+async function executeSetGpuPricing(
+  userId: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const appIdOrSlug = args.app_id as string;
+  if (!appIdOrSlug) throw new ToolError(INVALID_PARAMS, 'app_id is required');
+
+  const app = await resolveApp(userId, appIdOrSlug);
+  if (app.runtime !== 'gpu') {
+    throw new ToolError(INVALID_PARAMS, 'gpu_pricing_config can only be set on GPU apps');
+  }
+
+  const validation = validateGpuPricingConfig(args.gpu_pricing_config);
+  if (!validation.valid) {
+    throw new ToolError(INVALID_PARAMS, validation.error || 'Invalid gpu_pricing_config');
+  }
+
+  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = getSupabaseEnv();
+  const patchRes = await fetch(`${SUPABASE_URL}/rest/v1/apps?id=eq.${app.id}`, {
+    method: 'PATCH',
+    headers: {
+      'apikey': SUPABASE_SERVICE_ROLE_KEY,
+      'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      gpu_pricing_config: validation.config,
+      updated_at: new Date().toISOString(),
+    }),
+  });
+
+  if (!patchRes.ok) {
+    throw new ToolError(
+      INTERNAL_ERROR,
+      `Failed to update GPU pricing: ${await patchRes.text()}`,
+    );
+  }
+
+  return {
+    app_id: app.id,
+    gpu_pricing_config: validation.config,
+    message: validation.config
+      ? 'GPU developer fee pricing updated. Callers will pay GPU compute pass-through plus this developer fee.'
+      : 'GPU developer fee pricing removed. Callers still pay GPU compute pass-through.',
   };
 }
 

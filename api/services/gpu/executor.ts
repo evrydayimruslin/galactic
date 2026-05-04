@@ -4,7 +4,11 @@
 // Pure execution — no billing, no concurrency. Those are handled by callers.
 
 import type { GpuType, GpuExitCode, GpuExecutionResult } from './types.ts';
-import { computeGpuCostLight, isValidGpuType } from './types.ts';
+import {
+  computeGpuCostLight,
+  GPU_BILLING_INCREMENT_MS,
+  isValidGpuType,
+} from './types.ts';
 import { getGPUProvider } from './provider-singleton.ts';
 import { buildGpuNotReadyMessage } from './status.ts';
 import type { App } from '../../../shared/types/index.ts';
@@ -46,6 +50,14 @@ export interface GpuExecuteResult {
   logs: string[];
   /** Wall-clock execution time in milliseconds. */
   durationMs: number;
+  /** Provider-reported execution time, excluding queue/cold-start delay. */
+  executionDurationMs: number;
+  /** Provider-reported queue/cold-start delay charged through when present. */
+  delayTimeMs: number;
+  /** Provider-aligned billable duration used for compute cost. */
+  billableDurationMs: number;
+  /** Billing increment used to round billable duration. */
+  billingIncrementMs: number;
 
   // ── GPU-specific fields (for billing + telemetry) ──
   /** Container harness exit code. Determines failure chargeability. */
@@ -146,6 +158,10 @@ export async function executeGpuFunction(
       },
       logs: [],
       durationMs: wallDuration,
+      executionDurationMs: 0,
+      delayTimeMs: 0,
+      billableDurationMs: 0,
+      billingIncrementMs: GPU_BILLING_INCREMENT_MS,
       exitCode: 'infra_error',
       peakVramGb: 0,
       gpuType,
@@ -154,17 +170,23 @@ export async function executeGpuFunction(
   }
 
   const wallDuration = Date.now() - wallStart;
+  const billableDurationMs = providerResult.billable_duration_ms ??
+    providerResult.duration_ms;
+  const delayTimeMs = providerResult.delay_time_ms ?? 0;
+  const billingIncrementMs = providerResult.billing_increment_ms ??
+    GPU_BILLING_INCREMENT_MS;
 
   // ── Map provider result → handler-compatible shape ──
   const gpuCostLight = providerResult.success
-    ? computeGpuCostLight(gpuType, providerResult.duration_ms)
+    ? computeGpuCostLight(gpuType, billableDurationMs)
     : providerResult.exit_code !== 'infra_error'
-      ? computeGpuCostLight(gpuType, providerResult.duration_ms)
+      ? computeGpuCostLight(gpuType, billableDurationMs)
       : 0;
 
   console.log(
     `[GPU-EXEC] ${executionId} ${app.id}.${functionName}: ` +
-      `${providerResult.exit_code} ${providerResult.duration_ms.toFixed(1)}ms ` +
+      `${providerResult.exit_code} exec=${providerResult.duration_ms.toFixed(1)}ms ` +
+      `delay=${delayTimeMs.toFixed(1)}ms billable=${billableDurationMs.toFixed(1)}ms ` +
       `gpu=${gpuType} cost=${gpuCostLight.toFixed(4)}✦ vram=${providerResult.peak_vram_gb}GB`,
   );
 
@@ -174,6 +196,10 @@ export async function executeGpuFunction(
     error: providerResult.error,
     logs: providerResult.logs,
     durationMs: wallDuration,
+    executionDurationMs: providerResult.duration_ms,
+    delayTimeMs,
+    billableDurationMs,
+    billingIncrementMs,
     exitCode: providerResult.exit_code,
     peakVramGb: providerResult.peak_vram_gb,
     gpuType,
@@ -204,6 +230,10 @@ function makeError(
     error: { type: errorType, message },
     logs: [],
     durationMs: 0,
+    executionDurationMs: 0,
+    delayTimeMs: 0,
+    billableDurationMs: 0,
+    billingIncrementMs: GPU_BILLING_INCREMENT_MS,
     exitCode,
     peakVramGb: 0,
     gpuType,

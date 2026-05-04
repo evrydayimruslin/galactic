@@ -9,6 +9,7 @@ export interface WidgetAppSource {
   appUuid: string;
   appName: string;
   appSlug: string;
+  appVersion?: string | null;
   widgetName: string;
   uiFunction: string;
   dataFunction: string;
@@ -18,12 +19,17 @@ export interface WidgetHtmlCacheEntry {
   html: string;
   version: string;
   cachedAt: number;
+  meta?: WidgetMeta | null;
 }
 
 export interface WidgetUiPayload {
   raw: Record<string, unknown>;
   appHtml: string | null;
   version: string;
+}
+
+export interface WidgetDataPayload {
+  raw: Record<string, unknown>;
 }
 
 export interface WidgetHtmlLoadResult {
@@ -37,19 +43,57 @@ function hasLocalStorage(): boolean {
   return typeof globalThis !== 'undefined' && 'localStorage' in globalThis;
 }
 
-export function getWidgetCacheKey(appUuid: string, widgetName: string): string {
-  return `${WIDGET_CACHE_PREFIX}${appUuid}:${widgetName}`;
+interface ParsedWidgetCacheKey {
+  appUuid: string;
+  appVersion: string | null;
+  widgetName: string;
 }
 
-export function readWidgetHtmlCache(
+function normalizeAppVersion(appVersion?: string | null): string | null {
+  if (typeof appVersion !== 'string') return null;
+  const trimmed = appVersion.trim();
+  return trimmed || null;
+}
+
+export function getWidgetCacheKey(
   appUuid: string,
   widgetName: string,
-): WidgetHtmlCacheEntry | null {
-  if (!hasLocalStorage()) return null;
+  appVersion?: string | null,
+): string {
+  const normalizedVersion = normalizeAppVersion(appVersion);
+  if (!normalizedVersion) {
+    return `${WIDGET_CACHE_PREFIX}${appUuid}:${widgetName}`;
+  }
+  return `${WIDGET_CACHE_PREFIX}${appUuid}:${normalizedVersion}:${widgetName}`;
+}
+
+function parseWidgetCacheKey(key: string): ParsedWidgetCacheKey | null {
+  if (!key.startsWith(WIDGET_CACHE_PREFIX)) return null;
+
+  const parts = key.slice(WIDGET_CACHE_PREFIX.length).split(':');
+  if (parts.length === 2) {
+    return {
+      appUuid: parts[0],
+      appVersion: null,
+      widgetName: parts[1],
+    };
+  }
+
+  if (parts.length === 3) {
+    return {
+      appUuid: parts[0],
+      appVersion: parts[1],
+      widgetName: parts[2],
+    };
+  }
+
+  return null;
+}
+
+function parseWidgetHtmlCacheEntry(raw: string | null): WidgetHtmlCacheEntry | null {
+  if (!raw) return null;
 
   try {
-    const raw = globalThis.localStorage.getItem(getWidgetCacheKey(appUuid, widgetName));
-    if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<WidgetHtmlCacheEntry>;
     if (!parsed || typeof parsed !== 'object') return null;
     if (typeof parsed.html !== 'string' || !parsed.html) return null;
@@ -58,10 +102,62 @@ export function readWidgetHtmlCache(
       html: parsed.html,
       version: typeof parsed.version === 'string' ? parsed.version : '1',
       cachedAt: typeof parsed.cachedAt === 'number' ? parsed.cachedAt : Date.now(),
+      meta: parsed.meta && typeof parsed.meta === 'object' && !Array.isArray(parsed.meta)
+        ? parsed.meta as WidgetMeta
+        : null,
     };
   } catch {
     return null;
   }
+}
+
+function findLatestWidgetHtmlCache(
+  appUuid: string,
+  widgetName: string,
+): WidgetHtmlCacheEntry | null {
+  if (!hasLocalStorage()) return null;
+
+  let latest: WidgetHtmlCacheEntry | null = null;
+  for (let i = globalThis.localStorage.length - 1; i >= 0; i--) {
+    const key = globalThis.localStorage.key(i);
+    if (!key) continue;
+    const parsedKey = parseWidgetCacheKey(key);
+    if (!parsedKey || parsedKey.appUuid !== appUuid || parsedKey.widgetName !== widgetName) continue;
+    const entry = parseWidgetHtmlCacheEntry(globalThis.localStorage.getItem(key));
+    if (!entry) continue;
+    if (!latest || entry.cachedAt > latest.cachedAt) {
+      latest = entry;
+    }
+  }
+
+  return latest;
+}
+
+export function readWidgetHtmlCache(
+  appUuid: string,
+  widgetName: string,
+  appVersion?: string | null,
+): WidgetHtmlCacheEntry | null {
+  if (!hasLocalStorage()) return null;
+
+  const normalizedVersion = normalizeAppVersion(appVersion);
+  if (normalizedVersion) {
+    const exact = parseWidgetHtmlCacheEntry(
+      globalThis.localStorage.getItem(getWidgetCacheKey(appUuid, widgetName, normalizedVersion)),
+    );
+    if (exact?.version === normalizedVersion) return exact;
+
+    const legacy = parseWidgetHtmlCacheEntry(
+      globalThis.localStorage.getItem(getWidgetCacheKey(appUuid, widgetName)),
+    );
+    if (legacy?.version === normalizedVersion) return legacy;
+    return null;
+  }
+
+  const legacy = parseWidgetHtmlCacheEntry(
+    globalThis.localStorage.getItem(getWidgetCacheKey(appUuid, widgetName)),
+  );
+  return legacy ?? findLatestWidgetHtmlCache(appUuid, widgetName);
 }
 
 export function writeWidgetHtmlCache(
@@ -70,30 +166,41 @@ export function writeWidgetHtmlCache(
   html: string,
   version = '1',
   cachedAt = Date.now(),
+  meta?: WidgetMeta | null,
 ): WidgetHtmlCacheEntry {
-  const entry: WidgetHtmlCacheEntry = { html, version, cachedAt };
+  const entry: WidgetHtmlCacheEntry = { html, version, cachedAt, meta: meta ?? null };
 
   if (hasLocalStorage()) {
     globalThis.localStorage.setItem(
-      getWidgetCacheKey(appUuid, widgetName),
+      getWidgetCacheKey(appUuid, widgetName, version),
       JSON.stringify(entry),
     );
+    globalThis.localStorage.removeItem(getWidgetCacheKey(appUuid, widgetName));
   }
 
   return entry;
 }
 
 export function pruneStaleWidgetCaches(
-  sources: Array<Pick<WidgetAppSource, 'appUuid' | 'widgetName'>>,
+  sources: Array<Pick<WidgetAppSource, 'appUuid' | 'widgetName' | 'appVersion'>>,
 ): string[] {
   if (!hasLocalStorage()) return [];
 
-  const freshKeys = new Set(sources.map((source) => getWidgetCacheKey(source.appUuid, source.widgetName)));
   const removed: string[] = [];
 
   for (let i = globalThis.localStorage.length - 1; i >= 0; i--) {
     const key = globalThis.localStorage.key(i);
-    if (!key?.startsWith(WIDGET_CACHE_PREFIX) || freshKeys.has(key)) continue;
+    if (!key?.startsWith(WIDGET_CACHE_PREFIX)) continue;
+    const parsedKey = parseWidgetCacheKey(key);
+    if (!parsedKey) continue;
+
+    const matchingSource = sources.find((source) => {
+      if (source.appUuid !== parsedKey.appUuid || source.widgetName !== parsedKey.widgetName) return false;
+      const sourceVersion = normalizeAppVersion(source.appVersion);
+      return !sourceVersion || sourceVersion === parsedKey.appVersion;
+    });
+    if (matchingSource) continue;
+
     removed.push(key);
     globalThis.localStorage.removeItem(key);
   }
@@ -105,24 +212,30 @@ function buildWidgetToolName(appSlug: string, functionName: string): string {
   return appSlug ? `${appSlug}_${functionName}` : functionName;
 }
 
-function parseWidgetUiPayload(text: string): WidgetUiPayload | null {
+function parseJsonPayload(text: string, label: string): Record<string, unknown> | null {
   if (!text) return null;
 
   try {
     const parsed = JSON.parse(text);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const raw = parsed as Record<string, unknown>;
-    return {
-      raw,
-      appHtml: typeof raw.app_html === 'string' ? raw.app_html : null,
-      version: typeof raw.version === 'string' || typeof raw.version === 'number'
-        ? String(raw.version)
-        : '1',
-    };
+    return parsed as Record<string, unknown>;
   } catch (error) {
-    widgetRuntimeLogger.warn('Failed to parse widget UI payload', { error });
+    widgetRuntimeLogger.warn(`Failed to parse widget ${label} payload`, { error });
     return null;
   }
+}
+
+function parseWidgetUiPayload(text: string): WidgetUiPayload | null {
+  const raw = parseJsonPayload(text, 'UI');
+  if (!raw) return null;
+
+  return {
+    raw,
+    appHtml: typeof raw.app_html === 'string' ? raw.app_html : null,
+    version: typeof raw.version === 'string' || typeof raw.version === 'number'
+      ? String(raw.version)
+      : '1',
+  };
 }
 
 export async function fetchWidgetUiPayload(
@@ -138,15 +251,49 @@ export async function fetchWidgetUiPayload(
   return parseWidgetUiPayload(result.content?.[0]?.text || '');
 }
 
+export async function fetchWidgetDataPayload(
+  source: Pick<WidgetAppSource, 'appUuid' | 'appSlug' | 'dataFunction'>,
+  executor: typeof executeAppMcpTool = executeAppMcpTool,
+): Promise<WidgetDataPayload | null> {
+  const result = await executor(
+    source.appUuid,
+    buildWidgetToolName(source.appSlug, source.dataFunction),
+    {},
+  );
+  if (result.isError) return null;
+
+  const raw = parseJsonPayload(result.content?.[0]?.text || '', 'data');
+  return raw ? { raw } : null;
+}
+
+export function updateWidgetHtmlCacheMeta(
+  appUuid: string,
+  widgetName: string,
+  appVersion: string | null | undefined,
+  meta: WidgetMeta,
+): WidgetHtmlCacheEntry | null {
+  const cached = readWidgetHtmlCache(appUuid, widgetName, appVersion);
+  if (!cached) return null;
+  return writeWidgetHtmlCache(
+    appUuid,
+    widgetName,
+    cached.html,
+    cached.version,
+    cached.cachedAt,
+    meta,
+  );
+}
+
 export async function loadWidgetHtml(
-  source: Pick<WidgetAppSource, 'appUuid' | 'appSlug' | 'widgetName' | 'uiFunction'>,
+  source: Pick<WidgetAppSource, 'appUuid' | 'appSlug' | 'widgetName' | 'uiFunction'>
+    & Partial<Pick<WidgetAppSource, 'appName' | 'appVersion'>>,
   options: {
     bustCache?: boolean;
     executor?: typeof executeAppMcpTool;
   } = {},
 ): Promise<WidgetHtmlLoadResult | null> {
   if (!options.bustCache) {
-    const cached = readWidgetHtmlCache(source.appUuid, source.widgetName);
+    const cached = readWidgetHtmlCache(source.appUuid, source.widgetName, source.appVersion);
     if (cached?.html) {
       return {
         html: cached.html,
@@ -160,7 +307,8 @@ export async function loadWidgetHtml(
   if (!payload) return null;
 
   if (payload.appHtml) {
-    writeWidgetHtmlCache(source.appUuid, source.widgetName, payload.appHtml, payload.version);
+    const meta = coerceWidgetMetaFromPayload(payload.raw, source.appName || source.widgetName);
+    writeWidgetHtmlCache(source.appUuid, source.widgetName, payload.appHtml, payload.version, Date.now(), meta);
   }
 
   return {
@@ -189,6 +337,49 @@ export function coerceWidgetMeta(raw: unknown, fallbackTitle: string): WidgetMet
   };
 }
 
+function firstNumericValue(values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+export function coerceWidgetMetaFromPayload(
+  raw: unknown,
+  fallbackTitle: string,
+  cachedMeta?: WidgetMeta | null,
+): WidgetMeta | null {
+  const direct = coerceWidgetMeta(
+    raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>).meta ?? raw
+      : raw,
+    fallbackTitle,
+  );
+  if (direct) return direct;
+
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return cachedMeta ?? null;
+  const candidate = raw as Record<string, unknown>;
+  const counts = candidate.counts && typeof candidate.counts === 'object' && !Array.isArray(candidate.counts)
+    ? candidate.counts as Record<string, unknown>
+    : null;
+  const inferredBadgeCount = firstNumericValue([
+    candidate.badge_count,
+    counts?.active,
+    counts?.pending,
+    counts?.total,
+    Array.isArray(candidate.items) ? candidate.items.length : null,
+    Array.isArray(candidate.sources) ? candidate.sources.length : null,
+  ]);
+
+  if (inferredBadgeCount === null) return cachedMeta ?? null;
+
+  return {
+    title: cachedMeta?.title || fallbackTitle,
+    icon: cachedMeta?.icon || '📦',
+    badge_count: inferredBadgeCount,
+  };
+}
+
 export function buildWidgetNavigationTarget(
   source: WidgetAppSource,
   widgetName: string,
@@ -210,6 +401,7 @@ export function buildWidgetWindowSearchParams(
     appUuid: source.appUuid,
     appSlug: source.appSlug,
     appName: source.appName,
+    appVersion: source.appVersion || '',
     widgetName: source.widgetName,
     uiFunction: source.uiFunction,
     dataFunction: source.dataFunction,
@@ -230,6 +422,7 @@ export function parseWidgetSourceFromSearch(search: string): WidgetAppSource {
     appUuid: params.get('appUuid') || '',
     appSlug: params.get('appSlug') || '',
     appName: params.get('appName') || '',
+    appVersion: params.get('appVersion') || null,
     widgetName: params.get('widgetName') || '',
     uiFunction: params.get('uiFunction') || '',
     dataFunction: params.get('dataFunction') || '',

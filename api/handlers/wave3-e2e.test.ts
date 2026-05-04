@@ -57,6 +57,8 @@ type FakeAppRow = JsonRecord & {
   runtime?: string | null;
   current_version?: string | null;
   versions?: string[] | null;
+  storage_bytes?: number | null;
+  version_metadata?: Array<{ version?: string; size_bytes?: number }> | null;
   d1_database_id?: string | null;
   d1_status?: string | null;
   http_enabled?: boolean | null;
@@ -672,13 +674,43 @@ class Wave3Harness {
         this.weeklyCalls.set(key, next);
         return Response.json([{ current_count: next }]);
       }
-      case "/rest/v1/rpc/record_upload_storage": {
+      case "/rest/v1/rpc/record_upload_storage":
+      case "/rest/v1/rpc/set_app_storage_bytes": {
         const user = this.users.find((row) => row.id === body.p_user_id);
-        if (user) {
-          user.storage_used_bytes = (user.storage_used_bytes || 0) +
-            Number(body.p_size_bytes || 0);
+        const app = this.apps.find((row) => row.id === body.p_app_id);
+        const previousBytes = Number(app?.storage_bytes || 0);
+        const newBytes = Math.max(0, Number(body.p_size_bytes || 0));
+        const deltaBytes = newBytes - previousBytes;
+        if (app) {
+          app.storage_bytes = newBytes;
         }
-        return Response.json([{ ok: true }]);
+        if (user) {
+          user.storage_used_bytes = Math.max(
+            0,
+            Number(user.storage_used_bytes || 0) + deltaBytes,
+          );
+        }
+        return Response.json([{
+          previous_bytes: previousBytes,
+          new_bytes: newBytes,
+          delta_bytes: deltaBytes,
+          user_storage_used_bytes: Number(user?.storage_used_bytes || 0),
+        }]);
+      }
+      case "/rest/v1/rpc/reclaim_app_storage": {
+        const user = this.users.find((row) => row.id === body.p_user_id);
+        const app = this.apps.find((row) => row.id === body.p_app_id);
+        const reclaimedBytes = Number(app?.storage_bytes || 0);
+        if (app) {
+          app.storage_bytes = 0;
+        }
+        if (user) {
+          user.storage_used_bytes = Math.max(
+            0,
+            Number(user.storage_used_bytes || 0) - reclaimedBytes,
+          );
+        }
+        return Response.json(reclaimedBytes);
       }
       case "/rest/v1/rpc/transfer_balance":
       case "/rest/v1/rpc/transfer_light":

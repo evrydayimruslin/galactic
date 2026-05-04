@@ -1,6 +1,6 @@
 # Widget Contracts
 
-Last reviewed: `2026-04-21`
+Last reviewed: `2026-05-04`
 
 This document is the canonical contract for desktop/home-screen widgets in
 Ultralight. The goal is to keep widget discovery predictable and make Wave 4
@@ -22,6 +22,12 @@ For a widget with id `email_inbox`, the canonical contract is:
 - exported data function:
   - `widget_email_inbox_data`
   - returns the widget-owned JSON payload used by the UI
+  - includes `meta.title`, `meta.icon`, and `meta.badge_count` so desktop can
+    poll badge state without re-fetching the HTML shell
+
+`app_html` belongs only in the UI function response. Desktop caches that HTML
+locally by app version after first load; recurring widget refresh should use
+the data function and avoid returning static shell bytes.
 
 Desktop discovery should treat `_widget_*_ui` / `_widget_*_data` as the only
 canonical contract for new work.

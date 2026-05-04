@@ -74,7 +74,6 @@ interface DraftUploadResponse {
 }
 
 const uploadLogger = createServerLogger('UPLOAD');
-const storageLogger = createServerLogger('STORAGE');
 const integrityLogger = createServerLogger('INTEGRITY');
 const gpuBuildLogger = createServerLogger('GPU-BUILD');
 const skillsLogger = createServerLogger('SKILLS');
@@ -130,12 +129,12 @@ function assertUploadQuota(quotaCheck: {
   }
 
   if (quotaCheck.reason === 'service_unavailable') {
-    throw createHttpError('Storage quota service unavailable. Please try again shortly.', 503);
+    throw createHttpError('Storage usage service unavailable. Please try again shortly.', 503);
   }
 
   throw createHttpError(
-    `Storage limit exceeded. Using ${formatBytes(quotaCheck.used_bytes)} of ${formatBytes(quotaCheck.limit_bytes)}. ` +
-      `This upload requires ${formatBytes(totalUploadBytes)}, but only ${formatBytes(quotaCheck.remaining_bytes)} remaining.`,
+    `Storage soft-cap check failed. Using ${formatBytes(quotaCheck.used_bytes)} of ${formatBytes(quotaCheck.limit_bytes)}. ` +
+      `This upload requires ${formatBytes(totalUploadBytes)}.`,
     413,
   );
 }
@@ -401,7 +400,7 @@ export async function handleUpload(request: Request): Promise<Response> {
         throw new Error(appLimitErr);
       }
 
-      // Check storage quota
+      // Read storage soft-cap status before upload; product storage caps do not block.
       const totalUploadBytes = filesToUpload.reduce((sum, f) => sum + f.content.byteLength, 0);
       const quotaCheck = await checkStorageQuota(userId, totalUploadBytes, {
         mode: 'fail_closed',
@@ -427,6 +426,14 @@ export async function handleUpload(request: Request): Promise<Response> {
       log('success', 'Upload complete');
 
       // Create app record with GPU fields
+      const versionTrust = await buildVersionTrustMetadata({
+        appId,
+        version,
+        runtime: 'gpu',
+        manifest,
+        files: filesToUpload,
+        storageKey,
+      });
       log('info', 'Creating app record...');
       await appsService.create({
         id: appId,
@@ -446,8 +453,12 @@ export async function handleUpload(request: Request): Promise<Response> {
         gpu_config: gpuConfig as unknown as Record<string, unknown>,
         gpu_max_duration_ms: gpuConfig.max_duration_ms || null,
         gpu_concurrency_limit: 5,
+        version_metadata: [
+          buildVersionMetadataEntry(version, totalUploadBytes, versionTrust),
+        ],
       });
       log('success', 'App record created with gpu_status: building');
+      await recordUploadStorage(userId, appId, version, totalUploadBytes);
 
       // Fire-and-forget: trigger async container build
       import('../services/gpu/builder.ts').then(({ triggerGpuBuild }) => {
@@ -458,16 +469,6 @@ export async function handleUpload(request: Request): Promise<Response> {
           gpuBuildLogger.error('GPU build trigger failed', { app_id: appId, version, error: err })
         );
       }).catch(err => gpuBuildLogger.error('GPU builder import failed', { app_id: appId, error: err }));
-
-      // Record storage usage (fire-and-forget)
-      recordUploadStorage(userId, appId, version, totalUploadBytes).catch(err =>
-        storageLogger.error('recordUploadStorage failed after GPU upload', {
-          user_id: userId,
-          app_id: appId,
-          version,
-          error: err,
-        })
-      );
 
       log('success', 'GPU build triggered in background');
 
@@ -618,10 +619,24 @@ export async function handleUpload(request: Request): Promise<Response> {
         content: new TextEncoder().encode(f.content),
         contentType: getContentType(f.name),
       }));
+      const totalUploadBytes = filesToUpload.reduce((sum, f) => sum + f.content.byteLength, 0);
+      const quotaCheck = await checkStorageQuota(userId, totalUploadBytes, {
+        mode: 'fail_closed',
+        resource: 'skill upload',
+      });
+      assertUploadQuota(quotaCheck, totalUploadBytes);
       await r2Service.uploadFiles(storageKey, filesToUpload);
       log('success', 'Skill files uploaded to R2');
 
       // Create app record
+      const versionTrust = await buildVersionTrustMetadata({
+        appId,
+        version,
+        runtime: 'skill',
+        manifest: null,
+        files: filesToUpload,
+        storageKey,
+      });
       await appsService.create({
         id: appId,
         owner_id: userId,
@@ -632,8 +647,12 @@ export async function handleUpload(request: Request): Promise<Response> {
         exports: [],
         manifest: null,
         app_type: 'skill',
+        version_metadata: [
+          buildVersionMetadataEntry(version, totalUploadBytes, versionTrust),
+        ],
       });
       log('success', `Skill app created: ${appName}`);
+      await recordUploadStorage(userId, appId, version, totalUploadBytes);
 
       // Rebuild function index to include the new skill
       import('../services/function-index.ts').then(m => m.rebuildFunctionIndex(userId))
@@ -782,7 +801,7 @@ export async function handleUpload(request: Request): Promise<Response> {
       throw new Error(appLimitErr);
     }
 
-    // Check storage quota before uploading (25MB platform limit)
+    // Read storage soft-cap status before uploading; request-size limits still apply.
     const totalUploadBytes = filesToUpload.reduce((sum, f) => sum + f.content.byteLength, 0);
     const quotaCheck = await checkStorageQuota(userId, totalUploadBytes, {
       mode: 'fail_closed',
@@ -835,16 +854,9 @@ export async function handleUpload(request: Request): Promise<Response> {
     });
     log('success', 'App record created');
 
-    // Record storage usage for billing (fire-and-forget)
+    // Record live storage usage for billing.
     const totalSizeBytes = filesToUpload.reduce((sum, f) => sum + f.content.byteLength, 0);
-    recordUploadStorage(userId, appId, version, totalSizeBytes).catch(err =>
-      storageLogger.error('recordUploadStorage failed after upload', {
-        user_id: userId,
-        app_id: appId,
-        version,
-        error: err,
-      })
-    );
+    await recordUploadStorage(userId, appId, version, totalSizeBytes);
 
     // D1 provisioning — SYNCHRONOUS, eager (not fire-and-forget)
     if (parsedMigrations.length > 0) {
@@ -1361,7 +1373,7 @@ export async function handleUploadFiles(
   const appCountErr = await checkAppLimit(userId);
   if (appCountErr) throw new Error(appCountErr);
 
-  // Check storage quota
+  // Read storage soft-cap status before upload; product storage caps do not block.
   const totalUploadSizeBytes = pipeline.filesToUpload.reduce((sum, f) => sum + f.content.byteLength, 0);
   const uploadQuotaCheck = await checkStorageQuota(userId, totalUploadSizeBytes, {
     mode: 'fail_closed',
@@ -1471,14 +1483,7 @@ export async function handleUploadFiles(
     error: err,
   }));
 
-  recordUploadStorage(userId, appId, version, totalUploadSizeBytes).catch(err =>
-    storageLogger.error('recordUploadStorage failed after programmatic upload', {
-      user_id: userId,
-      app_id: appId,
-      version,
-      error: err,
-    })
-  );
+  await recordUploadStorage(userId, appId, version, totalUploadSizeBytes);
 
   const appsForSkills = await appsService.findById(appId);
   if (appsForSkills) {

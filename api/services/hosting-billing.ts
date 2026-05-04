@@ -1,10 +1,10 @@
 // Hosting Billing Service
 // Per-app billing: each published app/page has its own billing clock (hosting_last_billed_at).
 // Charges ✦2.25/MB/hour for each published app/page from the moment it was published.
-// Charges ✦0.045/MB/hour for user data storage exceeding the 100MB free tier (user-level clock).
+// Charges ✦0.045/MB/hour for user data storage exceeding the 100MB soft cap (user-level clock).
 // Both charges debit from the same bucketed spendable Light balance.
 // No free tier for hosting — every published MB costs from the first byte.
-// 100MB free tier for user data — overage billed hourly.
+// 100MB soft cap for combined source/user data — overage billed hourly.
 // Users hold a balance_light that drains continuously.
 // Balance → 0 = published content goes offline (hosting_suspended = true).
 // Runs hourly via setInterval (same pattern as subscription-expiry.ts).

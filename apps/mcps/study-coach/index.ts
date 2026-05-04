@@ -1424,6 +1424,18 @@ export async function widget_quiz_ui(args: {}): Promise<unknown> {
 
 export async function widget_quiz_data(args: { action?: string; session_id?: string; answer_id?: string; user_answer?: string; subject_id?: string; count?: number; topic?: string; file_content?: string; file_name?: string; time_seconds?: number }): Promise<unknown> {
   const { action } = args;
+  let badge = 0;
+  try {
+    const needsReview: CntRow | null = await ultralight.db.first(
+      'SELECT COUNT(*) as cnt FROM concepts WHERE user_id = ?', [uid()]
+    );
+    badge = needsReview?.cnt || 0;
+  } catch { /* tables may not exist yet */ }
+  const meta = { title: 'Quiz', icon: '🎯', badge_count: badge };
+
+  if (!action) {
+    return { meta };
+  }
 
   if (action === 'subjects') {
     const subjects: Array<SubjectRow & { concept_count: number }> = await ultralight.db.all('SELECT sub.*, (SELECT COUNT(*) FROM concepts WHERE subject_id = sub.id AND user_id = ?) as concept_count FROM subjects sub WHERE user_id = ?', [uid(), uid()]);
@@ -1437,7 +1449,7 @@ export async function widget_quiz_data(args: { action?: string; session_id?: str
       [uid(), 'unread']
     );
     const lastSubject: Pick<ConventionRow, 'value'> | null = await ultralight.db.first('SELECT value FROM conventions WHERE user_id = ? AND key = ?', [uid(), 'last_quiz_subject']);
-    return { subjects, pending_quizzes: pendingQuizzes, unread_lessons: unreadLessons, last_subject_id: lastSubject?.value || null, _code_version: '7.0.0', _model: AI_MODEL };
+    return { meta, subjects, pending_quizzes: pendingQuizzes, unread_lessons: unreadLessons, last_subject_id: lastSubject?.value || null, _code_version: '7.0.0', _model: AI_MODEL };
   }
 
   if (action === 'quick_start') {
@@ -1465,7 +1477,7 @@ export async function widget_quiz_data(args: { action?: string; session_id?: str
       'SELECT qs.*, s.name as subject_name FROM quiz_sessions qs LEFT JOIN subjects s ON qs.subject_id = s.id WHERE qs.user_id = ? AND qs.status = ? ORDER BY qs.generated_at DESC',
       [uid(), 'pending']
     );
-    return { pending };
+    return { meta, pending };
   }
 
   return { error: 'Unknown action' };
@@ -1909,8 +1921,20 @@ export async function widget_progress_data(args: { action?: string; topic?: stri
     'SELECT l.id, l.subject_id, l.title, l.created_at, s.name as subject_name FROM lessons l LEFT JOIN subjects s ON l.subject_id = s.id WHERE l.user_id = ? AND (l.status = ? OR l.status IS NULL) ORDER BY l.created_at DESC LIMIT 5',
     [uid(), 'unread']
   );
+  let badge = 0;
+  try {
+    const quizCount: CntRow | null = await ultralight.db.first(
+      'SELECT COUNT(*) as cnt FROM quiz_sessions WHERE user_id = ? AND status = ?', [uid(), 'completed']
+    );
+    badge = quizCount?.cnt || 0;
+  } catch { /* tables may not exist yet */ }
 
-  return { ...(statusData as Record<string, unknown>), pending_quizzes: pendingQuizzes, unread_lessons: unreadLessons } as WidgetProgressData;
+  return {
+    ...(statusData as Record<string, unknown>),
+    meta: { title: 'Study Progress', icon: '📊', badge_count: badge },
+    pending_quizzes: pendingQuizzes,
+    unread_lessons: unreadLessons,
+  } as WidgetProgressData;
 }
 
 const PROGRESS_WIDGET_HTML = `<!DOCTYPE html>
@@ -2125,7 +2149,14 @@ export async function widget_lessons_data(args: { action?: string; lesson_id?: s
     'SELECT l.id, l.title, l.subject_id, l.quiz_session_id, l.weak_concepts, l.created_at, s.name as subject_name FROM lessons l LEFT JOIN subjects s ON l.subject_id = s.id WHERE l.user_id = ? ORDER BY l.created_at DESC LIMIT ?',
     [uid(), args.limit || 10]
   );
-  return { lessons };
+  let badge = 0;
+  try {
+    const lessonCount: CntRow | null = await ultralight.db.first(
+      'SELECT COUNT(*) as cnt FROM lessons WHERE user_id = ?', [uid()]
+    );
+    badge = lessonCount?.cnt || 0;
+  } catch { /* tables may not exist yet */ }
+  return { meta: { title: 'Lessons', icon: '📖', badge_count: badge }, lessons };
 }
 
 const LESSONS_WIDGET_HTML = `<!DOCTYPE html>

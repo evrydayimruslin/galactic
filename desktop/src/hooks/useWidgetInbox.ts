@@ -11,11 +11,14 @@ import {
 } from '../lib/widgetContracts';
 import { createDesktopLogger } from '../lib/logging';
 import {
-  coerceWidgetMeta,
+  coerceWidgetMetaFromPayload,
+  fetchWidgetDataPayload,
   loadWidgetHtml,
   pruneStaleWidgetCaches,
+  readWidgetHtmlCache,
   type WidgetAppSource,
   fetchWidgetUiPayload,
+  updateWidgetHtmlCacheMeta,
   writeWidgetHtmlCache,
 } from '../lib/widgetRuntime';
 
@@ -30,6 +33,20 @@ export interface WidgetInboxState {
 }
 
 const widgetInboxLogger = createDesktopLogger('WidgetInbox');
+
+async function fetchAppVersion(appUuid: string, token: string): Promise<string | null> {
+  try {
+    const res = await fetchFromApi(`/api/apps/${appUuid}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const version = data?.current_version;
+    return typeof version === 'string' || typeof version === 'number' ? String(version) : null;
+  } catch {
+    return null;
+  }
+}
 
 export function useWidgetInbox() {
   const [state, setState] = useState<WidgetInboxState>({
@@ -77,6 +94,7 @@ export function useWidgetInbox() {
           tools = data?.result?.tools || [];
         } catch { continue; }
 
+        const appVersion = await fetchAppVersion(appUuid, token);
         const discovery = discoverWidgetSources({
           appUuid,
           appName: name,
@@ -89,7 +107,7 @@ export function useWidgetInbox() {
             legacyContracts: discovery.legacyObservations.map((observation) => observation.legacyFunction),
           });
         }
-        sources.push(...discovery.sources);
+        sources.push(...discovery.sources.map((source) => ({ ...source, appVersion })));
       }
 
       // If multiple apps expose the same widget, keep the most recently discovered one.
@@ -112,13 +130,30 @@ export function useWidgetInbox() {
 
   const pollMeta = useCallback(async (source: WidgetAppSource): Promise<WidgetMeta | null> => {
     try {
-      const payload = await fetchWidgetUiPayload(source, executeAppMcpTool);
-      if (!payload) return null;
-      if (payload.appHtml) {
-        writeWidgetHtmlCache(source.appUuid, source.widgetName, payload.appHtml, payload.version);
+      const cached = readWidgetHtmlCache(source.appUuid, source.widgetName, source.appVersion);
+      const cachedMeta = cached?.meta ?? null;
+
+      if (source.dataFunction && source.dataFunction !== source.uiFunction) {
+        const dataPayload = await fetchWidgetDataPayload(source, executeAppMcpTool);
+        const dataMeta = coerceWidgetMetaFromPayload(dataPayload?.raw, source.appName, cachedMeta);
+        if (dataMeta) {
+          if (cached) {
+            updateWidgetHtmlCacheMeta(source.appUuid, source.widgetName, source.appVersion, dataMeta);
+          }
+          return dataMeta;
+        }
       }
 
-      return coerceWidgetMeta(payload.raw.meta ?? payload.raw, source.appName);
+      if (cachedMeta) return cachedMeta;
+
+      const payload = await fetchWidgetUiPayload(source, executeAppMcpTool);
+      if (!payload) return null;
+      const uiMeta = coerceWidgetMetaFromPayload(payload.raw, source.appName, cachedMeta);
+      if (payload.appHtml) {
+        writeWidgetHtmlCache(source.appUuid, source.widgetName, payload.appHtml, payload.version, Date.now(), uiMeta);
+      }
+
+      return uiMeta;
     } catch {
       return null;
     }

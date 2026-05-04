@@ -4780,7 +4780,7 @@ async function handlePublishedPage(
     // Check hosting suspension before access control
     if (contentRow.hosting_suspended) {
       return new Response(
-        `<!DOCTYPE html><html><head><title>Page Suspended</title><style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8f9fa}div{text-align:center;max-width:480px;padding:2rem}.icon{font-size:3rem;margin-bottom:1rem}h1{margin:0 0 .5rem;font-size:1.5rem}p{color:#666;line-height:1.6}</style></head><body><div><div class="icon">&#9888;</div><h1>Page Suspended</h1><p>This page has been taken offline because the owner's hosting balance has been depleted. The owner can restore it by topping up their hosting balance.</p></div></body></html>`,
+        `<!DOCTYPE html><html><head><title>Page Suspended</title><style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8f9fa}div{text-align:center;max-width:480px;padding:2rem}.icon{font-size:3rem;margin-bottom:1rem}h1{margin:0 0 .5rem;font-size:1.5rem}p{color:#666;line-height:1.6}</style></head><body><div><div class="icon">&#9888;</div><h1>Page Suspended</h1><p>This page has been taken offline because the owner's Light balance has been depleted. The owner can restore it by adding Light.</p></div></body></html>`,
         { status: 402, headers: { 'Content-Type': 'text/html' } },
       );
     }
@@ -4794,7 +4794,7 @@ async function handlePublishedPage(
       } catch {
         // Not authenticated — show a paywall message
         return new Response(
-          `<!DOCTYPE html><html><head><title>Paid Content</title><style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8f9fa}div{text-align:center;max-width:480px;padding:2rem}.icon{font-size:3rem;margin-bottom:1rem}h1{margin:0 0 .5rem;font-size:1.5rem}p{color:#666;line-height:1.6}.price{font-size:1.25rem;font-weight:600;color:#333;margin:1rem 0}</style></head><body><div><div class="icon">&#128176;</div><h1>Paid Page</h1><p class="price">✦${contentRow.price_light} per view</p><p>Sign in and have a hosting balance to view this page. The fee is transferred directly to the page owner.</p></div></body></html>`,
+          `<!DOCTYPE html><html><head><title>Paid Content</title><style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8f9fa}div{text-align:center;max-width:480px;padding:2rem}.icon{font-size:3rem;margin-bottom:1rem}h1{margin:0 0 .5rem;font-size:1.5rem}p{color:#666;line-height:1.6}.price{font-size:1.25rem;font-weight:600;color:#333;margin:1rem 0}</style></head><body><div><div class="icon">&#128176;</div><h1>Paid Page</h1><p class="price">✦${contentRow.price_light} per view</p><p>Sign in and have enough Light to view this page. The fee is transferred directly to the page owner.</p></div></body></html>`,
           { status: 402, headers: { 'Content-Type': 'text/html' } },
         );
       }

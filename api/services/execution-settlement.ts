@@ -270,10 +270,10 @@ export async function settleAndLogGpuExecution(
     callChargeLight: chargedLight,
     gpuType: params.gpuResult.gpuType,
     gpuExitCode: params.gpuResult.exitCode,
-    gpuDurationMs: params.gpuResult.durationMs,
+    gpuDurationMs: params.gpuResult.billableDurationMs ?? params.gpuResult.durationMs,
     gpuCostLight: params.gpuResult.gpuCostLight,
     gpuPeakVramGb: params.gpuResult.peakVramGb,
-    gpuDeveloperFeeLight: settlement?.breakdown.developerFeeLight || 0,
+    gpuDeveloperFeeLight: settlement?.developerFeeChargedLight || 0,
     gpuFailurePolicy: settlement?.failurePolicy,
   }, deps);
 

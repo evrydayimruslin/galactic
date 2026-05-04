@@ -243,9 +243,9 @@ async function testCostBreakdown(): Promise<void> {
 function testMaxCostEstimation(): void {
   section('Test 6: Max Cost Estimation');
 
-  // Free app: max cost = max compute for A40 @ 60s
+  // Free app: max cost = max compute for A40 @ 60s + 30s cold-start buffer
   const maxCost = estimateMaxGpuCost(fakeApp, 'hello', {});
-  const expectedMax = computeGpuCostLight('A40', 60000);
+  const expectedMax = computeGpuCostLight('A40', 90000);
   assert(
     Math.abs(maxCost - expectedMax) < 0.01,
     `Free app max cost: ${maxCost.toFixed(4)} Light (expected ${expectedMax.toFixed(4)})`,
@@ -309,6 +309,10 @@ async function testSettlementInfraError(): Promise<void> {
     error: { type: 'InfraError', message: 'Simulated infra failure' },
     logs: [],
     durationMs: 0,
+    executionDurationMs: 0,
+    delayTimeMs: 0,
+    billableDurationMs: 0,
+    billingIncrementMs: 1000,
     exitCode: 'infra_error' as const,
     peakVramGb: 0,
     gpuType: 'A40' as const,

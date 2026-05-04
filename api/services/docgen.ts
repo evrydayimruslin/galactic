@@ -124,7 +124,7 @@ export function generateSkillsMd(
       }
     }
     lines.push('');
-    lines.push('*All transfers are feeless internal ledger operations. Callers need a hosting balance to use paid functions.*');
+    lines.push('*All transfers are feeless internal ledger operations. Callers need enough Light to use paid functions.*');
     lines.push('');
   }
 

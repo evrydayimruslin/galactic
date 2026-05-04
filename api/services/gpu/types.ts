@@ -27,7 +27,7 @@ export interface GpuRateEntry {
 }
 
 /**
- * Platform rate table. All-in per-ms rate in Light (cold starts, egress, VRAM absorbed).
+ * Platform rate table. All-in per-ms rate in Light.
  * Derived from RunPod community cloud rates with consistent 10-13x markup, at 100 Light/$1.
  */
 export const GPU_RATE_TABLE: Record<GpuType, GpuRateEntry> = {
@@ -45,6 +45,12 @@ export const GPU_RATE_TABLE: Record<GpuType, GpuRateEntry> = {
 
 /** All valid GPU type strings. */
 export const GPU_TYPES = Object.keys(GPU_RATE_TABLE) as GpuType[];
+
+/** RunPod Serverless timeout buffer used for cold-start and queue overhead. */
+export const GPU_COLD_START_BUFFER_MS = 30_000;
+
+/** Bill GPU time in provider-aligned whole-second increments. */
+export const GPU_BILLING_INCREMENT_MS = 1_000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -67,8 +73,15 @@ export function getGpuVram(gpuType: GpuType): number {
 
 /** Compute GPU cost in Light for a given GPU type and duration. */
 export function computeGpuCostLight(gpuType: GpuType, durationMs: number): number {
-  // rate_per_ms is already in Light
-  return getGpuRate(gpuType) * durationMs;
+  // rate_per_ms is already in Light. Duration is rounded up to the provider
+  // billing increment so short calls and cold starts do not get undercharged.
+  return getGpuRate(gpuType) * computeGpuBillableDurationMs(durationMs);
+}
+
+/** Round a raw provider duration up to the configured billing increment. */
+export function computeGpuBillableDurationMs(durationMs: number): number {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return 0;
+  return Math.ceil(durationMs / GPU_BILLING_INCREMENT_MS) * GPU_BILLING_INCREMENT_MS;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +134,12 @@ export interface GpuExecutionResult {
   result: unknown;
   /** Actual GPU execution time in milliseconds (excludes cold start). */
   duration_ms: number;
+  /** Provider-reported queue/cold-start delay in milliseconds. */
+  delay_time_ms?: number;
+  /** Provider duration charged to the caller, rounded to billing increments. */
+  billable_duration_ms?: number;
+  /** Billing increment used to round billable duration. */
+  billing_increment_ms?: number;
   /** Peak GPU memory usage in gigabytes. 0 if not measurable (no torch). */
   peak_vram_gb: number;
   /** Stdout/stderr log lines from the container. */
@@ -198,6 +217,8 @@ export interface GpuPricingConfig {
   unit_label?: string;
   /** Optional markup in Light added on top of compute cost. Used in per_duration mode. */
   duration_markup_light?: number;
+  /** Developer fee in Light per billable second. Used in per_duration mode. */
+  duration_rate_light_per_second?: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,12 @@
 // Same pattern as chat-billing.ts for the burn, and mcp.ts for the transfer.
 
 import type { GpuPricingConfig, GpuPricingMode, GpuType } from './types.ts';
-import { classifyFailure, computeGpuCostLight } from './types.ts';
+import {
+  classifyFailure,
+  computeGpuBillableDurationMs,
+  computeGpuCostLight,
+  GPU_COLD_START_BUFFER_MS,
+} from './types.ts';
 import type { GpuExecuteResult } from './executor.ts';
 import type { App } from '../../../shared/types/index.ts';
 import { formatLight } from '../../../shared/types/index.ts';
@@ -26,6 +31,12 @@ export interface GpuCostBreakdown {
   totalCostLight: number;
   /** Revenue transferred to owner in Light (developer fee minus 10% platform fee). */
   ownerRevenueLight: number;
+  /** Provider execution time excluding queue/cold-start delay. */
+  executionDurationMs: number;
+  /** Provider queue/cold-start delay charged through when present. */
+  delayTimeMs: number;
+  /** Provider-aligned billable duration for compute pass-through. */
+  billableDurationMs: number;
 }
 
 /** Result from settling a GPU execution's billing. */
@@ -42,6 +53,14 @@ export interface GpuSettlementResult {
   insufficientBalance?: boolean;
   /** Pre-formatted error message for the handler to return to caller. */
   insufficientBalanceMessage?: string;
+  /** Actual compute cost debited from caller as platform revenue. */
+  computeChargedLight: number;
+  /** Actual developer fee transferred from caller to app owner. */
+  developerFeeChargedLight: number;
+}
+
+interface GpuSettlementDeps {
+  fetchFn?: typeof fetch;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,14 +86,8 @@ export function computeGpuCallCost(
   args: Record<string, unknown>,
   gpuResult: GpuExecuteResult,
 ): GpuCostBreakdown {
-  const pricingConfig = app.gpu_pricing_config as GpuPricingConfig | null;
   const developerFeeLight = computeDeveloperFee(app, functionName, args, gpuResult);
-
-  // For per_duration mode, compute cost is embedded in the developer fee
-  // (the developer passes through compute to the caller as their fee).
-  // For per_call/per_unit, compute is a separate platform cost.
-  const isPassThrough = pricingConfig?.mode === 'per_duration';
-  const computeCostLight = isPassThrough ? 0 : gpuResult.gpuCostLight;
+  const computeCostLight = gpuResult.gpuCostLight;
   const totalCostLight = computeCostLight + developerFeeLight;
 
   return {
@@ -82,6 +95,9 @@ export function computeGpuCallCost(
     developerFeeLight,
     totalCostLight,
     ownerRevenueLight: developerFeeLight * 0.9, // 10% platform fee on transfer
+    executionDurationMs: gpuResult.executionDurationMs ?? gpuResult.durationMs,
+    delayTimeMs: gpuResult.delayTimeMs ?? 0,
+    billableDurationMs: gpuResult.billableDurationMs ?? gpuResult.durationMs,
   };
 }
 
@@ -98,11 +114,14 @@ export function estimateMaxGpuCost(
 ): number {
   const gpuTypeRaw = app.gpu_type ?? '';
   const maxDurationMs = app.gpu_max_duration_ms ?? DEFAULT_MAX_DURATION_MS;
+  const maxBillableDurationMs = computeGpuBillableDurationMs(
+    maxDurationMs + GPU_COLD_START_BUFFER_MS,
+  );
 
   // Worst-case compute cost
   let maxComputeLight = 0;
   try {
-    maxComputeLight = computeGpuCostLight(gpuTypeRaw as GpuType, maxDurationMs);
+    maxComputeLight = computeGpuCostLight(gpuTypeRaw as GpuType, maxBillableDurationMs);
   } catch {
     // Invalid gpu_type — skip
   }
@@ -123,8 +142,8 @@ export function estimateMaxGpuCost(
         break;
       }
       case 'per_duration':
-        maxDevFee = maxComputeLight + (pricingConfig.duration_markup_light ?? 0);
-        return maxDevFee;
+        maxDevFee = computeDurationDeveloperFee(pricingConfig, maxBillableDurationMs);
+        break;
     }
   }
 
@@ -151,6 +170,7 @@ export async function settleGpuExecution(
   functionName: string,
   args: Record<string, unknown>,
   gpuResult: GpuExecuteResult,
+  deps?: GpuSettlementDeps,
 ): Promise<GpuSettlementResult> {
   // Compute full breakdown
   const breakdown = computeGpuCallCost(app, functionName, args, gpuResult);
@@ -192,6 +212,8 @@ export async function settleGpuExecution(
       chargedLight: 0,
       breakdown,
       failurePolicy,
+      computeChargedLight: 0,
+      developerFeeChargedLight: 0,
     };
   }
 
@@ -203,6 +225,8 @@ export async function settleGpuExecution(
       chargedLight: 0,
       breakdown,
       failurePolicy,
+      computeChargedLight: 0,
+      developerFeeChargedLight: 0,
     };
   }
 
@@ -217,6 +241,8 @@ export async function settleGpuExecution(
       chargedLight: 0,
       breakdown,
       failurePolicy,
+      computeChargedLight: 0,
+      developerFeeChargedLight: 0,
     };
   }
 
@@ -227,68 +253,29 @@ export async function settleGpuExecution(
   };
 
   try {
+    const fetchFn = deps?.fetchFn ?? fetch;
     let actualDevFeeCharged = 0;
     let actualComputeCharged = 0;
 
-    // ── Step 1: Transfer developer fee to owner (if any) ──
-    // transfer_light includes 10% platform fee (owner receives 90%).
-    if (devFeeToTransfer > 0) {
-      const transferRes = await fetch(
-        `${supabaseUrl}/rest/v1/rpc/transfer_light`,
-        {
-          method: 'POST',
-          headers: rpcHeaders,
-          body: JSON.stringify({
-            p_from_user: userId,
-            p_to_user: app.owner_id,
-            p_amount_light: devFeeToTransfer,
-            p_reason: 'gpu_call',
-            p_app_id: app.id,
-            p_function_name: functionName,
-            p_metadata: {
-              gpu_type: gpuResult.gpuType,
-              duration_ms: gpuResult.durationMs,
-              exit_code: gpuResult.exitCode,
-              failure_policy: failurePolicy,
-            },
-          }),
-        },
-      );
-
-      if (transferRes.ok) {
-        const rows = await transferRes.json() as Array<{
-          from_new_balance: number;
-          to_new_balance: number;
-          platform_fee: number;
-        }>;
-
-        if (!rows || rows.length === 0) {
-          return {
-            charged: false,
-            chargedLight: 0,
-            breakdown,
-            failurePolicy,
-            insufficientBalance: true,
-            insufficientBalanceMessage:
-              `Insufficient balance. This GPU function costs ~${
-                formatLight(totalCharge)
-              } per call. ` +
-              `Add Light from the wallet at https://ultralight-api.rgn4jz429m.workers.dev/wallet.`,
-          };
-        }
-
-        actualDevFeeCharged = devFeeToTransfer;
-      } else {
-        console.error(
-          `[GPU-BILLING] Transfer failed for ${userId} → ${app.owner_id}:`,
-          await transferRes.text(),
-        );
-      }
+    const currentBalance = await fetchUserBalanceLight(supabaseUrl, rpcHeaders, userId, fetchFn);
+    if (currentBalance !== null && currentBalance < totalCharge) {
+      return {
+        charged: false,
+        chargedLight: 0,
+        breakdown,
+        failurePolicy,
+        insufficientBalance: true,
+        insufficientBalanceMessage: buildGpuInsufficientBalanceMessage(totalCharge),
+        computeChargedLight: 0,
+        developerFeeChargedLight: 0,
+      };
     }
 
-    // ── Step 2: Debit compute cost from caller (platform revenue) ──
+    // ── Step 1: Debit compute cost from caller (platform revenue) ──
+    // Compute is collected before developer fee so provider spend is covered
+    // even if a later transfer fails or the caller balance changes mid-flight.
     if (computeToDebit > 0) {
-      const debitRes = await fetch(
+      const debitRes = await fetchFn(
         `${supabaseUrl}/rest/v1/rpc/debit_light`,
         {
           method: 'POST',
@@ -298,14 +285,19 @@ export async function settleGpuExecution(
             p_amount_light: computeToDebit,
             p_reason: 'gpu_compute',
             p_update_billed_at: false,
-            p_allow_partial: true,
+            p_allow_partial: false,
             p_app_id: app.id,
             p_function_name: functionName,
             p_metadata: {
               gpu_type: gpuResult.gpuType,
-              duration_ms: gpuResult.durationMs,
+              execution_duration_ms: breakdown.executionDurationMs,
+              delay_time_ms: breakdown.delayTimeMs,
+              billable_duration_ms: breakdown.billableDurationMs,
+              billing_increment_ms: gpuResult.billingIncrementMs,
               exit_code: gpuResult.exitCode,
               compute_cost_light: computeToDebit,
+              developer_fee_light: devFeeToTransfer,
+              total_cost_light: totalCharge,
               failure_policy: failurePolicy,
             },
           }),
@@ -320,40 +312,139 @@ export async function settleGpuExecution(
           amount_debited?: number;
         }>;
 
-        if (debitResult && debitResult.length > 0) {
-          actualComputeCharged = typeof debitResult[0].amount_debited === 'number'
-            ? debitResult[0].amount_debited
-            : computeToDebit;
+        if (!debitResult || debitResult.length === 0) {
+          return {
+            charged: false,
+            chargedLight: 0,
+            breakdown,
+            failurePolicy,
+            insufficientBalance: true,
+            insufficientBalanceMessage: buildGpuInsufficientBalanceMessage(totalCharge),
+            computeChargedLight: 0,
+            developerFeeChargedLight: 0,
+          };
+        }
 
-          // Log compute deduction to billing_transactions (fire-and-forget)
-          fetch(`${supabaseUrl}/rest/v1/billing_transactions`, {
-            method: 'POST',
-            headers: { ...rpcHeaders, 'Prefer': 'return=minimal' },
-            body: JSON.stringify({
-              user_id: userId,
-              type: 'charge',
-              category: 'gpu_compute',
-              description: `GPU: ${app.gpu_type || 'unknown'} ${gpuResult.durationMs}ms — ${
-                app.name || app.slug
-              }.${functionName}`,
-              amount_light: -actualComputeCharged,
-              balance_after_light: debitResult[0].new_balance,
-              metadata: {
-                app_id: app.id,
-                function_name: functionName,
-                gpu_type: gpuResult.gpuType,
-                duration_ms: gpuResult.durationMs,
-                exit_code: gpuResult.exitCode,
-                compute_cost_light: computeToDebit,
-                failure_policy: failurePolicy,
-              },
-            }),
-          }).catch(() => {});
+        actualComputeCharged = typeof debitResult[0].amount_debited === 'number'
+          ? debitResult[0].amount_debited
+          : computeToDebit;
+
+        // Log compute deduction to billing_transactions (fire-and-forget)
+        fetchFn(`${supabaseUrl}/rest/v1/billing_transactions`, {
+          method: 'POST',
+          headers: { ...rpcHeaders, 'Prefer': 'return=minimal' },
+          body: JSON.stringify({
+            user_id: userId,
+            type: 'charge',
+            category: 'gpu_compute',
+            description: `GPU: ${app.gpu_type || 'unknown'} ${breakdown.billableDurationMs}ms billed — ${
+              app.name || app.slug
+            }.${functionName}`,
+            amount_light: -actualComputeCharged,
+            balance_after_light: debitResult[0].new_balance,
+            metadata: {
+              app_id: app.id,
+              function_name: functionName,
+              gpu_type: gpuResult.gpuType,
+              execution_duration_ms: breakdown.executionDurationMs,
+              delay_time_ms: breakdown.delayTimeMs,
+              billable_duration_ms: breakdown.billableDurationMs,
+              billing_increment_ms: gpuResult.billingIncrementMs,
+              exit_code: gpuResult.exitCode,
+              compute_cost_light: computeToDebit,
+              developer_fee_light: devFeeToTransfer,
+              total_cost_light: totalCharge,
+              failure_policy: failurePolicy,
+            },
+          }),
+        }).catch(() => {});
+      } else {
+        const errorText = await debitRes.text();
+        console.error(`[GPU-BILLING] Compute debit failed for ${userId}:`, errorText);
+        if (/insufficient/i.test(errorText)) {
+          return {
+            charged: false,
+            chargedLight: 0,
+            breakdown,
+            failurePolicy,
+            insufficientBalance: true,
+            insufficientBalanceMessage: buildGpuInsufficientBalanceMessage(totalCharge),
+            computeChargedLight: 0,
+            developerFeeChargedLight: 0,
+          };
+        }
+        return {
+          charged: false,
+          chargedLight: 0,
+          breakdown,
+          failurePolicy,
+          computeChargedLight: 0,
+          developerFeeChargedLight: 0,
+        };
+      }
+    }
+
+    // ── Step 2: Transfer developer fee to owner (if any) ──
+    // transfer_light includes 10% platform fee (owner receives 90%).
+    if (devFeeToTransfer > 0) {
+      const transferRes = await fetchFn(
+        `${supabaseUrl}/rest/v1/rpc/transfer_light`,
+        {
+          method: 'POST',
+          headers: rpcHeaders,
+          body: JSON.stringify({
+            p_from_user: userId,
+            p_to_user: app.owner_id,
+            p_amount_light: devFeeToTransfer,
+            p_reason: 'gpu_call',
+            p_app_id: app.id,
+            p_function_name: functionName,
+            p_metadata: {
+              gpu_type: gpuResult.gpuType,
+              execution_duration_ms: breakdown.executionDurationMs,
+              delay_time_ms: breakdown.delayTimeMs,
+              billable_duration_ms: breakdown.billableDurationMs,
+              billing_increment_ms: gpuResult.billingIncrementMs,
+              exit_code: gpuResult.exitCode,
+              compute_cost_light: computeToDebit,
+              developer_fee_light: devFeeToTransfer,
+              total_cost_light: totalCharge,
+              failure_policy: failurePolicy,
+            },
+          }),
+        },
+      );
+
+      if (transferRes.ok) {
+        const rows = await transferRes.json() as Array<{
+          from_new_balance: number;
+          to_new_balance: number;
+          platform_fee: number;
+        }>;
+
+        if (!rows || rows.length === 0) {
+          if (actualComputeCharged <= 0) {
+            return {
+              charged: false,
+              chargedLight: 0,
+              breakdown,
+              failurePolicy,
+              insufficientBalance: true,
+              insufficientBalanceMessage: buildGpuInsufficientBalanceMessage(totalCharge),
+              computeChargedLight: 0,
+              developerFeeChargedLight: 0,
+            };
+          }
+          console.error(
+            `[GPU-BILLING] Developer fee transfer returned no rows after compute debit for ${userId} → ${app.owner_id}`,
+          );
+        } else {
+          actualDevFeeCharged = devFeeToTransfer;
         }
       } else {
         console.error(
-          `[GPU-BILLING] Compute debit failed for ${userId}:`,
-          await debitRes.text(),
+          `[GPU-BILLING] Transfer failed for ${userId} → ${app.owner_id}:`,
+          await transferRes.text(),
         );
       }
     }
@@ -371,6 +462,8 @@ export async function settleGpuExecution(
       chargedLight: totalCharged,
       breakdown,
       failurePolicy,
+      computeChargedLight: actualComputeCharged,
+      developerFeeChargedLight: actualDevFeeCharged,
     };
   } catch (err) {
     console.error('[GPU-BILLING] Settlement error:', err);
@@ -379,6 +472,8 @@ export async function settleGpuExecution(
       chargedLight: 0,
       breakdown,
       failurePolicy,
+      computeChargedLight: 0,
+      developerFeeChargedLight: 0,
     };
   }
 }
@@ -429,6 +524,47 @@ export function extractUnitCount(
 // Internal
 // ---------------------------------------------------------------------------
 
+function buildGpuInsufficientBalanceMessage(totalCharge: number): string {
+  return `Insufficient balance. This GPU function costs ~${
+    formatLight(totalCharge)
+  } per call. ` +
+    `Add Light from the wallet at https://ultralight-api.rgn4jz429m.workers.dev/wallet.`;
+}
+
+async function fetchUserBalanceLight(
+  supabaseUrl: string,
+  headers: Record<string, string>,
+  userId: string,
+  fetchFn: typeof fetch,
+): Promise<number | null> {
+  try {
+    const res = await fetchFn(
+      `${supabaseUrl}/rest/v1/users?id=eq.${encodeURIComponent(userId)}&select=balance_light`,
+      { method: 'GET', headers },
+    );
+    if (!res.ok) return null;
+    const rows = await res.json() as Array<{ balance_light?: unknown }>;
+    const balance = rows?.[0]?.balance_light;
+    return typeof balance === 'number' && Number.isFinite(balance) ? balance : null;
+  } catch {
+    return null;
+  }
+}
+
+function computeDurationDeveloperFee(
+  pricingConfig: GpuPricingConfig,
+  billableDurationMs: number,
+): number {
+  const seconds = computeGpuBillableDurationMs(billableDurationMs) / 1000;
+  const perSecond = typeof pricingConfig.duration_rate_light_per_second === 'number'
+    ? pricingConfig.duration_rate_light_per_second
+    : 0;
+  const flatMarkup = typeof pricingConfig.duration_markup_light === 'number'
+    ? pricingConfig.duration_markup_light
+    : 0;
+  return (perSecond * seconds) + flatMarkup;
+}
+
 /**
  * Compute the developer fee based on the app's gpu_pricing_config.
  * Returns 0 if no pricing is configured.
@@ -454,7 +590,10 @@ function computeDeveloperFee(
     }
 
     case 'per_duration':
-      return gpuResult.gpuCostLight + (pricingConfig.duration_markup_light ?? 0);
+      return computeDurationDeveloperFee(
+        pricingConfig,
+        gpuResult.billableDurationMs ?? gpuResult.durationMs,
+      );
 
     default:
       return 0;

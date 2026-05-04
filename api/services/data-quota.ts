@@ -1,6 +1,6 @@
-// Data Storage Quota Service
+// Data Storage Soft-Cap Service
 // Tracks user-generated data storage (via ultralight.store/batchStore) per user.
-// Combined with storage_used_bytes (app source code) to enforce a 100MB free tier.
+// Combined with storage_used_bytes (app source code) to report a 100MB soft cap.
 // Overage billed at DATA_RATE_LIGHT_PER_MB_PER_HOUR from balance_light.
 
 import { getEnv } from '../lib/env.ts';
@@ -19,6 +19,7 @@ export interface DataQuotaResult {
   limit_bytes: number;
   remaining_bytes: number;
   has_hosting_balance: boolean;
+  over_soft_cap?: boolean;
   reason?: 'quota_exceeded' | 'service_unavailable';
 }
 
@@ -34,24 +35,22 @@ function unavailableDataQuotaResult(
   options?: EnforcementOptions,
   detail?: unknown,
 ): DataQuotaResult {
-  const enforcement = resolveEnforcementOptions(options, 'data quota check');
-  const suffix = enforcement.mode === 'fail_closed'
-    ? 'blocking write (fail-closed)'
-    : 'allowing write (fail-open)';
+  const enforcement = resolveEnforcementOptions(options, 'data soft-cap check');
 
   console.error(
-    `[DATA-QUOTA] Backend unavailable for ${enforcement.resource}, ${suffix}. Additional bytes=${additionalBytes}:`,
+    `[DATA-QUOTA] Soft-cap backend unavailable for ${enforcement.resource}; allowing write. Additional bytes=${additionalBytes}:`,
     detail,
   );
 
   return {
-    allowed: enforcement.mode !== 'fail_closed',
+    allowed: true,
     source_used_bytes: 0,
     data_used_bytes: 0,
     combined_used_bytes: 0,
     limit_bytes: COMBINED_FREE_TIER_BYTES,
-    remaining_bytes: enforcement.mode === 'fail_closed' ? 0 : COMBINED_FREE_TIER_BYTES,
+    remaining_bytes: COMBINED_FREE_TIER_BYTES,
     has_hosting_balance: false,
+    over_soft_cap: false,
     reason: 'service_unavailable',
   };
 }
@@ -61,9 +60,9 @@ function unavailableDataQuotaResult(
 // ============================================
 
 /**
- * Check whether a user has enough data storage quota.
- * Combined budget: storage_used_bytes (source code) + data_storage_used_bytes (user data) <= 100MB.
- * Allowed if under limit OR user has hosting balance to cover overage.
+ * Read a user's data storage soft-cap status.
+ * Combined budget: storage_used_bytes (source code) + data_storage_used_bytes
+ * (user data). Writes are always allowed; overage is billed from Light.
  */
 export async function checkDataQuota(
   userId: string,
@@ -101,9 +100,12 @@ export async function checkDataQuota(
     }
 
     const row = rows[0];
+    const projectedBytes = row.combined_used_bytes + additionalBytes;
     return {
       ...row,
-      reason: row.allowed ? undefined : 'quota_exceeded',
+      allowed: true,
+      over_soft_cap: projectedBytes > row.limit_bytes,
+      reason: undefined,
     };
   } catch (err) {
     return unavailableDataQuotaResult(additionalBytes, options, err);

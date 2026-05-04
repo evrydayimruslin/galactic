@@ -267,8 +267,9 @@ export interface WidgetItem {
     actions: WidgetAction[];
 }
 export interface WidgetData {
-    badge_count: number;
-    items: WidgetItem[];
+    meta?: WidgetMeta;
+    badge_count?: number;
+    items?: WidgetItem[];
 }
 export interface WidgetMeta {
     title: string;
@@ -521,14 +522,14 @@ export declare const LIGHT_PER_DOLLAR_PAYOUT = 100;
 /** Platform fee rate applied on every transfer_balance (10%). */
 export declare const PLATFORM_FEE_RATE = 0.1;
 /** Minimum Light balance required to publish an app. */
-export declare const MIN_PUBLISH_DEPOSIT_LIGHT = 50;
+export declare const MIN_PUBLISH_DEPOSIT_LIGHT = 500;
 /** Hosting rate for published content in Light per MB per hour (publisher pays). */
 export declare const HOSTING_RATE_LIGHT_PER_MB_PER_HOUR = 2.25;
-/** Data storage overage rate in Light per MB per hour (user pays).
- *  Charged hourly for combined storage exceeding the free tier (100MB).
+/** Data storage soft-cap overage rate in Light per MB per hour (user pays).
+ *  Charged hourly for combined storage exceeding the 100MB soft cap.
  *  ✦0.045/MB/hr — 50x cheaper than publisher hosting rate. */
 export declare const DATA_RATE_LIGHT_PER_MB_PER_HOUR = 0.045;
-/** Combined free tier storage limit (source code + user data). 100MB. */
+/** Combined storage soft cap (source code + user data). 100MB. */
 export declare const COMBINED_FREE_TIER_BYTES = 104857600;
 /** Default auto top-up threshold (Light). When balance drops below this, auto-charge triggers. */
 export declare const AUTO_TOPUP_DEFAULT_THRESHOLD_LIGHT = 100;

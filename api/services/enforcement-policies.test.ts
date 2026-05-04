@@ -95,7 +95,7 @@ Deno.test("Rate limit enforcement: in-memory buckets still report real limit exh
   assertEquals(second.reason, "limit_exceeded");
 });
 
-Deno.test("Storage quota enforcement: backend failures can fail open or fail closed", async () => {
+Deno.test("Storage soft caps: backend failures do not block uploads", async () => {
   await runSerial(async () => {
     await withMockedEnvAndFetch(
       async () => new Response("db unavailable", { status: 503 }),
@@ -111,14 +111,39 @@ Deno.test("Storage quota enforcement: backend failures can fail open or fail clo
 
         assertEquals(openResult.allowed, true);
         assertEquals(openResult.reason, "service_unavailable");
-        assertEquals(closedResult.allowed, false);
+        assertEquals(closedResult.allowed, true);
         assertEquals(closedResult.reason, "service_unavailable");
       },
     );
   });
 });
 
-Deno.test("Data quota enforcement: quota errors and backend failures are distinguished", async () => {
+Deno.test("Storage soft caps: projected overages are reported without blocking", async () => {
+  await runSerial(async () => {
+    await withMockedEnvAndFetch(
+      async () =>
+        new Response(JSON.stringify([{
+          storage_used_bytes: 104_857_590,
+          data_storage_used_bytes: 20,
+        }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      async () => {
+        const result = await checkStorageQuota("user-1", 15, {
+          mode: "fail_closed",
+          resource: "strict upload",
+        });
+
+        assertEquals(result.allowed, true);
+        assertEquals(result.over_soft_cap, true);
+        assertEquals(result.reason, undefined);
+      },
+    );
+  });
+});
+
+Deno.test("Data soft caps: overages and backend failures do not block writes", async () => {
   await runSerial(async () => {
     let callCount = 0;
     await withMockedEnvAndFetch(
@@ -151,9 +176,10 @@ Deno.test("Data quota enforcement: quota errors and backend failures are disting
           resource: "test write",
         });
 
-        assertEquals(denied.allowed, false);
-        assertEquals(denied.reason, "quota_exceeded");
-        assertEquals(unavailable.allowed, false);
+        assertEquals(denied.allowed, true);
+        assertEquals(denied.over_soft_cap, true);
+        assertEquals(denied.reason, undefined);
+        assertEquals(unavailable.allowed, true);
         assertEquals(unavailable.reason, "service_unavailable");
       },
     );
@@ -179,7 +205,7 @@ Deno.test("Weekly call enforcement: high-cost paths can fail closed when the bac
   });
 });
 
-Deno.test("Storage quota enforcement: missing quota rows fail closed on strict paths", async () => {
+Deno.test("Storage soft caps: missing usage rows do not block strict upload paths", async () => {
   await runSerial(async () => {
     await withMockedEnvAndFetch(
       async () =>
@@ -193,9 +219,9 @@ Deno.test("Storage quota enforcement: missing quota rows fail closed on strict p
           resource: "strict upload",
         });
 
-        assertEquals(result.allowed, false);
+        assertEquals(result.allowed, true);
         assertEquals(result.reason, "service_unavailable");
-        assert(result.remaining_bytes === 0);
+        assert(result.remaining_bytes > 0);
       },
     );
   });

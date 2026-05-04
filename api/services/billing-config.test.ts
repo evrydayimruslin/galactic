@@ -48,6 +48,10 @@ Deno.test("billing config: public shape includes human-readable labels", () => {
   assertEquals(publicConfig.labels.wallet_rate, "95 Light / $1");
   assertEquals(publicConfig.labels.wire_rate, "99 Light / $1");
   assertEquals(publicConfig.labels.payout_rate, "100 Light = $1");
+  assertEquals(publicConfig.min_publish_deposit_light, 500);
+  assertEquals(publicConfig.labels.publish_deposit, "✦500");
+  assertEquals(publicConfig.labels.hosting_rate, "✦2.25/MB/hr");
+  assertEquals(publicConfig.labels.data_rate, "✦0.045/MB/hr");
   assertEquals(publicConfig.policy_copy.termsUrl, "/terms");
   assertEquals(
     publicConfig.policy_copy.purchasedLight.includes("cannot be cashed out"),

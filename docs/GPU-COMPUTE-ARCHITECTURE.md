@@ -38,7 +38,7 @@ Ultralight is a marketplace where developers deploy functions as callable MCP to
 
 ### Upload & Packaging
 
-- Small code packages within existing file size limits (50MB upload, 10MB per file, 100MB storage quota).
+- Small code packages within existing file/request size guardrails (50MB upload, 10MB per file); storage thresholds are soft billing caps.
 - Developer uploads: `main.py` + `requirements.txt` + `ultralight.gpu.yaml` + `test_fixture.json`.
 - No weight hosting. Pure code. AI model weights stored externally by developer if needed (minority case).
 
@@ -80,15 +80,16 @@ max_duration_ms: 2000
 
 1. **Per-call flat fee:** Developer sets price, caller knows cost upfront. Self-metering (platform measures).
 2. **Per-unit pricing:** Developer sets price per unit, platform counts units via `unit_count_from` JSONPath on input payload.
-3. **Per-duration (pass-through):** Caller pays proportional to actual GPU-ms. Requires `max_duration_ms` ceiling.
+3. **Per-duration developer fee:** Developer sets an optional fee per billed second and/or flat markup. Requires `max_duration_ms` ceiling.
 
 ### Billing & Settlement
 
 - Caller pays: GPU compute cost + developer fee = total.
+- GPU compute is always charged as platform pass-through: provider execution time plus provider-reported queue/cold-start delay, rounded to the billing increment.
 - Developer earns: developer fee x 0.90 (10% platform fee).
 - Platform earns: developer fee x 0.10 + GPU compute margin.
-- Balance locked before execution (estimated max cost). Settled to actual after execution.
-- Cold starts absorbed by platform. Egress absorbed for MVP.
+- Before settlement, caller balance is checked against the full actual charge. Compute is debited before developer fee transfer so Ultralight does not pay provider GPU costs without collecting the pass-through.
+- Egress absorbed for MVP.
 
 ### Failure Policy
 

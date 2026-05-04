@@ -2536,9 +2536,11 @@ export async function handleUser(request: Request): Promise<Response> {
         current_rate: {
           hosting_mb: Math.round(hostingMb * 100) / 100,
           hosting_apps: appCount,
+          hosting_rate_light_per_mb_hour: HOSTING_RATE_LIGHT_PER_MB_PER_HOUR,
           hosting_light_per_hour: Math.round(hostingLightPerHour * 10000) /
             10000,
           data_overage_mb: Math.round(dataOverageMb * 100) / 100,
+          data_rate_light_per_mb_hour: DATA_RATE_LIGHT_PER_MB_PER_HOUR,
           data_overage_light_per_hour:
             Math.round(dataOverageLightPerHour * 10000) / 10000,
           estimated_daily_light: Math.round(
@@ -2559,7 +2561,7 @@ export async function handleUser(request: Request): Promise<Response> {
   // HOSTING BALANCE
   // ============================================
 
-  // GET /api/user/hosting — get hosting balance, usage, and auto-topup settings
+  // GET /api/user/hosting — get Light balance, usage, and auto-topup settings
   if (path === "/api/user/hosting" && method === "GET") {
     try {
       const user = await authenticate(request);

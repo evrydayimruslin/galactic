@@ -4741,6 +4741,11 @@ export function getLayoutHTML(options: {
       return sign + '\\u2726' + formatted;
     }
 
+    function formatLightRate(amount) {
+      var n = Number(amount || 0);
+      return '\\u2726' + n.toLocaleString(undefined, { maximumFractionDigits: 6 });
+    }
+
     // Load platform ticker stats
     function loadPlatformStats() {
       var tickerEl = document.getElementById('marketTicker');
@@ -5917,6 +5922,10 @@ export function getLayoutHTML(options: {
       wire_light_per_usd: 99,
       payout_light_per_usd: 100,
       min_withdrawal_light: 5000,
+      min_publish_deposit_light: 500,
+      hosting_rate_light_per_mb_hour: 2.25,
+      data_rate_light_per_mb_hour: 0.045,
+      storage_soft_cap_bytes: 104857600,
       payout_policy_copy: 'Payouts are processed on the first business day of each month. Requests must be submitted at least 21 days before that payout date to be included. Purchased Light cannot be cashed out; only creator earnings are eligible for payout.',
       policy_copy: {
         purchasedLight: 'Purchased Light is spend-only platform credit. It cannot be cashed out, redeemed for money, or transferred directly between arbitrary accounts.',
@@ -5945,6 +5954,18 @@ export function getLayoutHTML(options: {
 
     function getMinWithdrawalLight() {
       return billingConfig.min_withdrawal_light || 5000;
+    }
+
+    function getMinPublishDepositLight() {
+      return billingConfig.min_publish_deposit_light || 500;
+    }
+
+    function getHostingRateLightPerMbHour() {
+      return billingConfig.hosting_rate_light_per_mb_hour || 2.25;
+    }
+
+    function getDataRateLightPerMbHour() {
+      return billingConfig.data_rate_light_per_mb_hour || 0.045;
     }
 
     function getPolicyCopy() {
@@ -9611,8 +9632,8 @@ export function getLayoutHTML(options: {
             + '<div><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px;">Est. Monthly</div><div style="font-weight:600;">' + formatLight(monthlyLight) + '</div></div>'
             + '</div>'
             + '<div style="font-size:11px;color:var(--text-muted);margin-top:var(--space-3);">'
-            + (rate.hosting_apps || 0) + ' published app(s) \\u00B7 ' + (rate.hosting_mb || 0).toFixed(2) + ' MB \\u00B7 \\u272618/MB/hr'
-            + (rate.data_overage_mb > 0 ? ' \\u00B7 ' + rate.data_overage_mb.toFixed(2) + ' MB data overage' : '')
+            + (rate.hosting_apps || 0) + ' published app(s) \\u00B7 ' + (rate.hosting_mb || 0).toFixed(2) + ' MB \\u00B7 ' + formatLightRate(rate.hosting_rate_light_per_mb_hour || getHostingRateLightPerMbHour()) + '/MB/hr'
+            + (rate.data_overage_mb > 0 ? ' \\u00B7 ' + rate.data_overage_mb.toFixed(2) + ' MB storage soft-cap overage at ' + formatLightRate(rate.data_rate_light_per_mb_hour || getDataRateLightPerMbHour()) + '/MB/hr' : '')
             + '</div>'
             + storageHtml
             + '</div>';

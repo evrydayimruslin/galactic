@@ -24,8 +24,9 @@ export interface WidgetItem {
     actions: WidgetAction[];
 }
 export interface WidgetData {
-    badge_count: number;
-    items: WidgetItem[];
+    meta?: WidgetMeta;
+    badge_count?: number;
+    items?: WidgetItem[];
 }
 export interface WidgetMeta {
     title: string;

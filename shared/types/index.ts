@@ -450,8 +450,9 @@ export interface WidgetItem {
 }
 
 export interface WidgetData {
-  badge_count: number;
-  items: WidgetItem[];
+  meta?: WidgetMeta;
+  badge_count?: number;
+  items?: WidgetItem[];
 }
 
 // ── Widget App System (MCP-owned full HTML apps) ──
@@ -802,8 +803,9 @@ export interface MemoryShare {
 // Platform Limits & Billing Constants
 //
 // No tiers. Everyone gets the same generous limits for development.
-// Publishing (going live) requires ✦50 deposit, then pay-as-you-go.
+// Publishing (going live) requires 500 Light deposit, then pay-as-you-go.
 // All published content costs ✦2.25/MB/hr from the first byte.
+// Storage thresholds are soft billing thresholds, not product hard quotas.
 // The Tier type is retained for backward compatibility with the DB column
 // but all values map to the same PLATFORM_LIMITS.
 //
@@ -846,17 +848,17 @@ export const PLATFORM_FEE_RATE = 0.10;
 // ── Billing Constants (in Light) ──
 
 /** Minimum Light balance required to publish an app. */
-export const MIN_PUBLISH_DEPOSIT_LIGHT = 50; // ✦50
+export const MIN_PUBLISH_DEPOSIT_LIGHT = 500; // ✦500
 
 /** Hosting rate for published content in Light per MB per hour (publisher pays). */
 export const HOSTING_RATE_LIGHT_PER_MB_PER_HOUR = 2.25; // ✦2.25/MB/hr
 
-/** Data storage overage rate in Light per MB per hour (user pays).
- *  Charged hourly for combined storage exceeding the free tier (100MB).
+/** Data storage soft-cap overage rate in Light per MB per hour (user pays).
+ *  Charged hourly for combined storage exceeding the 100MB soft cap.
  *  ✦0.045/MB/hr — 50x cheaper than publisher hosting rate. */
 export const DATA_RATE_LIGHT_PER_MB_PER_HOUR = 0.045;
 
-/** Combined free tier storage limit (source code + user data). 100MB. */
+/** Combined storage soft cap (source code + user data). 100MB. */
 export const COMBINED_FREE_TIER_BYTES = 104_857_600;
 
 /** Legacy auto top-up threshold (Light). Auto top-up is currently disabled. */
@@ -917,7 +919,7 @@ const PLATFORM_LIMITS = {
   monthly_ai_credit_light: 48_000, // ✦48,000 (was $60.00 × 800)
   max_file_size_mb: 10,
   max_files_per_app: 50,
-  max_storage_bytes: 104_857_600, // 100 MB (combined: source code + user data)
+  max_storage_bytes: 104_857_600, // 100 MB soft cap (source code + user data)
   execution_timeout_ms: 120_000, // 2min
   log_retention_days: 90,
   allowed_visibility: ['private', 'unlisted', 'public'] as const,

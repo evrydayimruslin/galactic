@@ -1770,6 +1770,7 @@ export async function widget_email_inbox_data(args: { view?: string }): Promise<
   const discardedCnt = await ultralight.db.first("SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'discarded'", [uid()]) as CountRow | null;
 
   return {
+    meta: { title: 'Email Approvals', icon: '📧', badge_count: activeCnt?.cnt || 0 },
     items,
     counts: { active: activeCnt?.cnt || 0, resolved: resolvedCnt?.cnt || 0, discarded: discardedCnt?.cnt || 0 },
   };
@@ -1821,7 +1822,12 @@ export async function widget_email_faqs_data(args: {}): Promise<unknown> {
     categories[cat].push(c);
   }
 
-  return { categories, gaps, total: conventions.length };
+  return {
+    meta: { title: 'Email FAQs', icon: '📋', badge_count: conventions.length },
+    categories,
+    gaps,
+    total: conventions.length,
+  };
 }
 
 // ============================================

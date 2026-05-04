@@ -85,11 +85,11 @@ handleUpload(request) or handleDraftUpload(request, appId)
   ├── validate files (existing)
   ├── calculate totalSize (existing, ~line 94)
   │
-  ├── NEW: Fetch user storage quota
+  ├── NEW: Fetch user storage soft-cap status
   │   │  SELECT storage_used_bytes, storage_limit_bytes FROM users WHERE id = $userId
   │   │
   │   └── IF storage_used_bytes + totalSize > storage_limit_bytes
-  │       └── Return 413: "Storage limit exceeded. Using X of Y. This upload requires Z."
+  │       └── Allow upload; hourly Light billing handles storage soft-cap overage.
   │
   ├── ... bundle, upload to R2 (existing) ...
   │

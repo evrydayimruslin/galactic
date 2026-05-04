@@ -1,7 +1,7 @@
 // Metered App Data Service
 // Decorator that wraps any AppDataService to track user data storage usage.
 // Intercepts store(), remove(), batchStore(), batchRemove() to:
-//   1. Check quota before writes (combined source code + user data <= 100MB, or has balance)
+//   1. Read soft-cap status before writes (combined source code + user data)
 //   2. Adjust data_storage_used_bytes after writes/deletes (atomic via Supabase RPC)
 //
 // Read operations (load, list, query, batchLoad) pass through unchanged.
@@ -9,7 +9,6 @@
 
 import type { AppDataService, QueryOptions, QueryResult } from './appdata.ts';
 import { checkDataQuota, adjustDataStorage } from './data-quota.ts';
-import { formatBytes } from './storage-quota.ts';
 
 // ============================================
 // HELPERS
@@ -53,7 +52,7 @@ function extractSizeBytes(loaded: unknown): number {
 
 /**
  * Create a metered wrapper around an AppDataService.
- * Tracks data storage usage per user and enforces combined quota (100MB free tier).
+ * Tracks data storage usage per user and reports combined soft-cap status.
  *
  * @param inner - The underlying AppDataService (R2-backed or Worker-backed)
  * @param userId - The calling user's ID (from MCP auth)
@@ -64,28 +63,17 @@ export function createMeteredAppDataService(
 ): AppDataService {
   return {
     // ==========================================
-    // STORE — quota check + write + adjust delta
+    // STORE — soft-cap check + write + adjust delta
     // ==========================================
     async store(key: string, value: unknown): Promise<void> {
       const newSize = computeStoreSize(key, value);
 
-      // Pre-flight quota check
-      const quota = await checkDataQuota(userId, newSize, {
-        mode: 'fail_closed',
+      // Pre-flight soft-cap check for billing visibility. Product storage caps
+      // do not block writes; Light billing handles overage after usage sync.
+      await checkDataQuota(userId, newSize, {
+        mode: 'fail_open',
         resource: 'app data write',
       });
-      if (!quota.allowed) {
-        if (quota.reason === 'service_unavailable') {
-          throw new Error('Storage quota service unavailable. Please try again shortly.');
-        }
-        const usedMb = (quota.combined_used_bytes / (1024 * 1024)).toFixed(1);
-        const limitMb = (quota.limit_bytes / (1024 * 1024)).toFixed(0);
-        throw new Error(
-          `Storage limit exceeded (using ${usedMb} MB of ${limitMb} MB). ` +
-          `Add hosting balance to continue storing data ` +
-          `(overage rate: $0.0005/MB/hr ≈ $0.36/MB/month).`
-        );
-      }
 
       // Get old size for delta calculation (cache-first via inner.load)
       let oldSize = 0;
@@ -137,7 +125,7 @@ export function createMeteredAppDataService(
     },
 
     // ==========================================
-    // BATCH STORE — quota check + delegate + adjust
+    // BATCH STORE — soft-cap check + delegate + adjust
     // ==========================================
     async batchStore(items: Array<{ key: string; value: unknown }>): Promise<void> {
       if (items.length === 0) return;
@@ -147,23 +135,11 @@ export function createMeteredAppDataService(
         (sum, item) => sum + computeStoreSize(item.key, item.value), 0
       );
 
-      // Pre-flight quota check for the full batch
-      const quota = await checkDataQuota(userId, totalNewBytes, {
-        mode: 'fail_closed',
+      // Pre-flight soft-cap check for the full batch. This never blocks writes.
+      await checkDataQuota(userId, totalNewBytes, {
+        mode: 'fail_open',
         resource: 'app data batch write',
       });
-      if (!quota.allowed) {
-        if (quota.reason === 'service_unavailable') {
-          throw new Error('Storage quota service unavailable. Please try again shortly.');
-        }
-        const usedMb = (quota.combined_used_bytes / (1024 * 1024)).toFixed(1);
-        const limitMb = (quota.limit_bytes / (1024 * 1024)).toFixed(0);
-        throw new Error(
-          `Storage limit exceeded (using ${usedMb} MB of ${limitMb} MB, ` +
-          `batch would add ${formatBytes(totalNewBytes)}). ` +
-          `Add hosting balance to continue storing data.`
-        );
-      }
 
       // Delegate to inner service
       await inner.batchStore(items);

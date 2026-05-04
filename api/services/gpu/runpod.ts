@@ -4,7 +4,12 @@
 // and RunPod Serverless API (api.runpod.ai) for job execution.
 
 import type { GpuExecutionResult, GpuExitCode, GpuType } from "./types.ts";
-import { GPU_TYPES } from "./types.ts";
+import {
+  computeGpuBillableDurationMs,
+  GPU_BILLING_INCREMENT_MS,
+  GPU_COLD_START_BUFFER_MS,
+  GPU_TYPES,
+} from "./types.ts";
 import type {
   BuildContainerParams,
   BuildContainerResult,
@@ -26,9 +31,6 @@ const RUNPOD_GRAPHQL_BASE = "https://api.runpod.io/graphql";
 
 /** RunPod Serverless API for job execution. */
 const RUNPOD_API_BASE = "https://api.runpod.ai/v2";
-
-/** Buffer added to maxDurationMs for cold start + network overhead. */
-const COLD_START_BUFFER_MS = 30_000;
 
 /** Max retries on 5xx from RunPod. */
 const MAX_RETRIES = 1;
@@ -211,6 +213,32 @@ interface RunPodGraphQLResponse<T> {
   errors?: RunPodGraphQLError[];
 }
 
+interface RunPodTiming {
+  executionDurationMs: number;
+  delayTimeMs: number;
+  billableDurationMs: number;
+}
+
+function positiveMs(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : 0;
+}
+
+function getRunPodTiming(
+  response: RunPodSyncResponse,
+  harnessDurationMs?: number,
+): RunPodTiming {
+  const executionDurationMs = positiveMs(harnessDurationMs) ||
+    positiveMs(response.executionTime);
+  const delayTimeMs = positiveMs(response.delayTime);
+  return {
+    executionDurationMs,
+    delayTimeMs,
+    billableDurationMs: computeGpuBillableDurationMs(delayTimeMs + executionDurationMs),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // RunPod Provider Implementation
 // ---------------------------------------------------------------------------
@@ -270,7 +298,7 @@ export class RunPodProvider implements GPUProvider {
       workersMax: 5, // Default concurrency, configurable later
       idleTimeout: 5,
       executionTimeoutMs: (config.max_duration_ms || 60_000) +
-        COLD_START_BUFFER_MS,
+        GPU_COLD_START_BUFFER_MS,
     });
 
     buildLogs.push(`[build] RunPod endpoint created: ${endpoint.id}`);
@@ -290,7 +318,7 @@ export class RunPodProvider implements GPUProvider {
     const { endpointId, functionName, args, maxDurationMs } = params;
 
     const url = `${RUNPOD_API_BASE}/${endpointId}/runsync`;
-    const timeoutMs = maxDurationMs + COLD_START_BUFFER_MS;
+    const timeoutMs = maxDurationMs + GPU_COLD_START_BUFFER_MS;
 
     const body = {
       input: {
@@ -560,9 +588,9 @@ export class RunPodProvider implements GPUProvider {
   /**
    * Map a RunPod /runsync response to our GpuExecutionResult.
    *
-   * Key distinction: we use executionTime (actual GPU work) for billing,
-   * NOT delayTime (cold start / queue wait). Cold starts are absorbed
-   * by the platform.
+   * RunPod reports delayTime (queue/cold-start) and executionTime separately.
+   * We pass both through to billing and round delay + execution to the provider
+   * billing increment so cold starts do not become platform losses.
    */
   private mapRunPodResponse(response: RunPodSyncResponse): GpuExecutionResult {
     // If harness output is present and structured, use it directly
@@ -571,13 +599,15 @@ export class RunPodProvider implements GPUProvider {
       "exit_code" in response.output
     ) {
       const harness = response.output as RunPodHarnessOutput;
+      const timing = getRunPodTiming(response, harness.duration_ms);
       return {
         success: harness.success,
         exit_code: harness.exit_code,
         result: harness.result,
-        // Prefer harness-reported duration (excludes overhead),
-        // fall back to RunPod's executionTime
-        duration_ms: harness.duration_ms || response.executionTime || 0,
+        duration_ms: timing.executionDurationMs,
+        delay_time_ms: timing.delayTimeMs,
+        billable_duration_ms: timing.billableDurationMs,
+        billing_increment_ms: GPU_BILLING_INCREMENT_MS,
         peak_vram_gb: harness.peak_vram_gb || 0,
         logs: harness.logs || [],
         error: harness.error,
@@ -587,44 +617,60 @@ export class RunPodProvider implements GPUProvider {
     // No harness output — map RunPod status to our exit codes
     switch (response.status) {
       case "COMPLETED":
-        return {
-          success: true,
-          exit_code: "success",
-          result: response.output,
-          duration_ms: response.executionTime || 0,
-          peak_vram_gb: 0,
-          logs: [],
-        };
+        {
+          const timing = getRunPodTiming(response);
+          return {
+            success: true,
+            exit_code: "success",
+            result: response.output,
+            duration_ms: timing.executionDurationMs,
+            delay_time_ms: timing.delayTimeMs,
+            billable_duration_ms: timing.billableDurationMs,
+            billing_increment_ms: GPU_BILLING_INCREMENT_MS,
+            peak_vram_gb: 0,
+            logs: [],
+          };
+        }
 
       case "TIMED_OUT":
-        return {
-          success: false,
-          exit_code: "timeout",
-          result: null,
-          duration_ms: response.executionTime || 0,
-          peak_vram_gb: 0,
-          logs: [],
-          error: {
-            type: "TimeoutError",
-            message: `Execution timed out after ${
-              response.executionTime || 0
-            }ms`,
-          },
-        };
+        {
+          const timing = getRunPodTiming(response);
+          return {
+            success: false,
+            exit_code: "timeout",
+            result: null,
+            duration_ms: timing.executionDurationMs,
+            delay_time_ms: timing.delayTimeMs,
+            billable_duration_ms: timing.billableDurationMs,
+            billing_increment_ms: GPU_BILLING_INCREMENT_MS,
+            peak_vram_gb: 0,
+            logs: [],
+            error: {
+              type: "TimeoutError",
+              message: `Execution timed out after ${timing.executionDurationMs}ms`,
+            },
+          };
+        }
 
       case "FAILED":
-        return {
-          success: false,
-          exit_code: this.classifyRunPodError(response.error),
-          result: null,
-          duration_ms: response.executionTime || 0,
-          peak_vram_gb: 0,
-          logs: [],
-          error: {
-            type: "RunPodError",
-            message: response.error || "Unknown RunPod execution error",
-          },
-        };
+        {
+          const timing = getRunPodTiming(response);
+          return {
+            success: false,
+            exit_code: this.classifyRunPodError(response.error),
+            result: null,
+            duration_ms: timing.executionDurationMs,
+            delay_time_ms: timing.delayTimeMs,
+            billable_duration_ms: timing.billableDurationMs,
+            billing_increment_ms: GPU_BILLING_INCREMENT_MS,
+            peak_vram_gb: 0,
+            logs: [],
+            error: {
+              type: "RunPodError",
+              message: response.error || "Unknown RunPod execution error",
+            },
+          };
+        }
 
       case "CANCELLED":
         return {
@@ -632,6 +678,9 @@ export class RunPodProvider implements GPUProvider {
           exit_code: "infra_error",
           result: null,
           duration_ms: 0,
+          delay_time_ms: positiveMs(response.delayTime),
+          billable_duration_ms: 0,
+          billing_increment_ms: GPU_BILLING_INCREMENT_MS,
           peak_vram_gb: 0,
           logs: [],
           error: {
@@ -648,6 +697,9 @@ export class RunPodProvider implements GPUProvider {
           exit_code: "infra_error",
           result: null,
           duration_ms: 0,
+          delay_time_ms: positiveMs(response.delayTime),
+          billable_duration_ms: 0,
+          billing_increment_ms: GPU_BILLING_INCREMENT_MS,
           peak_vram_gb: 0,
           logs: [],
           error: {

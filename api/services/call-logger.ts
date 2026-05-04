@@ -38,6 +38,7 @@ export interface McpCallLogEntry {
   // GPU metering fields — populated for gpu runtime calls
   gpuType?: string;
   gpuExitCode?: string;
+  /** Provider-aligned billable GPU duration, including queue/cold-start delay when reported. */
   gpuDurationMs?: number;
   gpuCostLight?: number;
   gpuPeakVramGb?: number;
