@@ -90,22 +90,22 @@ flowchart LR
 
 | Surface | Staging | Production | Notes |
 | --- | --- | --- | --- |
-| Public API hostname | `https://staging-api.ultralight.dev` | `https://api.ultralight.dev` | configured in [api/wrangler.toml](../api/wrangler.toml) |
+| Public API hostname | `https://ultralight-api-staging.rgn4jz429m.workers.dev` | `https://ultralight-api.rgn4jz429m.workers.dev` | configured in [api/wrangler.toml](../api/wrangler.toml); replace with an owned custom domain only after DNS/control-plane ownership is confirmed |
 | Main API Worker script | `ultralight-api-staging` | `ultralight-api` | staging uses Wrangler `env.staging`; production uses top-level config |
 | Main API entrypoint | [api/src/worker-entry.ts](../api/src/worker-entry.ts) | [api/src/worker-entry.ts](../api/src/worker-entry.ts) | same code path, different deployment target |
 | Supabase project | GitHub secret `SUPABASE_STAGING_PROJECT_ID` | GitHub secret `SUPABASE_PRODUCTION_PROJECT_ID` | schema deploys are split correctly by workflow |
 | Schema source | [supabase/migrations](../supabase/migrations) | [supabase/migrations](../supabase/migrations) | canonical migration source for both envs |
 | Desktop channel | `staging` | `production` | set by `ULTRALIGHT_DESKTOP_BUILD_CHANNEL` in desktop workflows |
-| Desktop pinned API base | `https://staging-api.ultralight.dev` | `https://api.ultralight.dev` | enforced in [desktop/src/lib/environment.ts](../desktop/src/lib/environment.ts) |
+| Desktop pinned API base | `https://ultralight-api-staging.rgn4jz429m.workers.dev` | `https://ultralight-api.rgn4jz429m.workers.dev` | enforced in [desktop/src/lib/environment.ts](../desktop/src/lib/environment.ts) |
 | Desktop updater endpoint | none in standard staging builds | [latest.json](https://github.com/evrydayimruslin/ultralight/releases/latest/download/latest.json) | updater is production-only in the tag workflow |
-| Web product origin | `https://ultralight.dev` as allowed prod origin only | `https://ultralight.dev` | current public site origin; staging smoke still checks production-site CORS expectations separately |
+| Web product origin | none configured | none configured | no project-owned public web origin is currently committed; add an owned origin to CORS only when it exists |
 
 ## Supporting And Non-Standard Surfaces
 
 | Surface | Classification | Current role | Standard release path? | Notes |
 | --- | --- | --- | --- | --- |
 | [worker/src/index.ts](../worker/src/index.ts) with [worker/wrangler.toml](../worker/wrangler.toml) | Secondary runtime | optional internal data-layer worker | No | active only where `WORKER_DATA_URL` and `WORKER_SECRET` are configured; not deployed by the main API release workflows |
-| `https://ultralight-api.rgn4jz429m.workers.dev` | Diagnostic / fallback origin | direct Worker origin used by desktop fallback logic and CSP allowlists | No | not the canonical public release hostname; used for local/dev or edge-misroute resilience |
+| `https://api.ultralight.dev` | Legacy / external hostname | currently resolves outside the project and returned CloudFront 403 in smoke | No | do not use as a release target unless the project acquires and configures the domain |
 | [archive/legacy-runtime/](../archive/legacy-runtime) | Archived historical path | old DigitalOcean + Deno runtime | No | historical reference only |
 
 ## Promotion Dependencies
@@ -186,9 +186,9 @@ disposition for each one now live in
 - the secondary data worker in
   [worker/src/index.ts](../worker/src/index.ts)
   is a production-only operational surface until staging parity exists
-- the direct Worker origin
-  `https://ultralight-api.rgn4jz429m.workers.dev` is diagnostic only and should
-  never substitute for canonical staging or production smoke
+- `https://api.ultralight.dev` and `https://staging-api.ultralight.dev` are
+  legacy/external hostnames until domain ownership changes; do not use them for
+  canonical release smoke
 
 Those surfaces are also tracked in
 [docs/ENVIRONMENT_ISOLATION_MATRIX.md](ENVIRONMENT_ISOLATION_MATRIX.md)

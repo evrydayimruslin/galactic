@@ -1,7 +1,7 @@
 // Desktop storage wrapper for auth token and preferences.
 // Long-lived auth tokens live in the OS keychain; non-secret prefs stay in localStorage.
-// The primary API base is build-pinned via src/lib/environment.ts, but desktop can
-// fail over to a validated Worker origin if the vanity domain is temporarily broken.
+// The primary API base is build-pinned via src/lib/environment.ts. Legacy builds
+// can still fail over when the old vanity domain is misrouted at the edge.
 
 import { invoke } from '@tauri-apps/api/core';
 import type { InferenceRoutePreference } from '../../../shared/contracts/ai.ts';

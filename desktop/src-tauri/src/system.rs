@@ -1,9 +1,8 @@
 use url::Url;
 
 const ALLOWED_AUTH_HOSTS: &[&str] = &[
-    "api.ultralight.dev",
-    "staging-api.ultralight.dev",
     "ultralight-api.rgn4jz429m.workers.dev",
+    "ultralight-api-staging.rgn4jz429m.workers.dev",
     "localhost",
     "127.0.0.1",
 ];

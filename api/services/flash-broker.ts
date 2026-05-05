@@ -1170,7 +1170,7 @@ async function callFlash(
       },
       {
         title: 'Ultralight Flash Broker',
-        referer: 'https://ultralight.dev',
+        referer: 'https://ultralight-api.rgn4jz429m.workers.dev',
       },
     );
 
@@ -1220,7 +1220,7 @@ export async function callFlashText(
       },
       {
         title: 'Ultralight Flash Broker',
-        referer: 'https://ultralight.dev',
+        referer: 'https://ultralight-api.rgn4jz429m.workers.dev',
       },
     );
 

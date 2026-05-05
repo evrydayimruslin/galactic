@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' https://api.ultralight.dev https://staging-api.ultralight.dev https://ultralight-api.rgn4jz429m.workers.dev https://openrouter.ai https://fonts.googleapis.com https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-src 'self' https://api.ultralight.dev https://staging-api.ultralight.dev https://ultralight-api.rgn4jz429m.workers.dev"
+      "csp": "default-src 'self'; connect-src 'self' https://ultralight-api.rgn4jz429m.workers.dev https://ultralight-api-staging.rgn4jz429m.workers.dev https://openrouter.ai https://fonts.googleapis.com https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-src 'self' https://ultralight-api.rgn4jz429m.workers.dev https://ultralight-api-staging.rgn4jz429m.workers.dev"
     }
   },
   "bundle": {

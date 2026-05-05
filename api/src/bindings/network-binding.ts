@@ -279,7 +279,7 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
       if (!greeting.startsWith('220')) throw new Error('SMTP greeting failed: ' + greeting);
 
       // EHLO
-      let ehloResp = await send('EHLO ultralight.dev');
+      let ehloResp = await send('EHLO ultralight-api.rgn4jz429m.workers.dev');
       while (!ehloResp.startsWith('250 ')) { ehloResp = await lr.readLine(); }
 
       // AUTH LOGIN
@@ -298,7 +298,7 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
       if (!dataResp.startsWith('354')) throw new Error('SMTP DATA rejected');
 
       // Compose message
-      const msgId = '<' + crypto.randomUUID() + '@ultralight.dev>';
+      const msgId = '<' + crypto.randomUUID() + '@ultralight-api.rgn4jz429m.workers.dev>';
       let headers = 'From: ' + fromName + ' <' + from + '>\r\n';
       headers += 'To: ' + to + '\r\n';
       headers += 'Subject: ' + subject + '\r\n';

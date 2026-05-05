@@ -48,8 +48,8 @@ if (!['staging', 'production'].includes(target)) {
 }
 
 const defaultApiBase = target === 'production'
-  ? 'https://api.ultralight.dev'
-  : 'https://staging-api.ultralight.dev';
+  ? 'https://ultralight-api.rgn4jz429m.workers.dev'
+  : 'https://ultralight-api-staging.rgn4jz429m.workers.dev';
 const defaultSupabaseUrl = target === 'production'
   ? 'https://uavjzycsltdnwblwutmb.supabase.co'
   : 'https://vonlzcnwxbwaxlbngjre.supabase.co';

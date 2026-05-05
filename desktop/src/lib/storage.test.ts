@@ -36,7 +36,7 @@ describe('secure desktop storage', () => {
 
   it('hydrates from secure storage and clears any legacy token copy', async () => {
     localStorage.setItem('ul_token', 'legacy-token');
-    localStorage.setItem('ul_api_base', 'https://staging-api.ultralight.dev');
+    localStorage.setItem('ul_api_base', 'https://ultralight-api-staging.rgn4jz429m.workers.dev');
     invokeMock.mockResolvedValueOnce('secure-token');
 
     const storage = await import('./storage');

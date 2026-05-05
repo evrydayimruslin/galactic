@@ -7,7 +7,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 vi.mock('./environment', () => ({
-  DESKTOP_API_BASE: 'https://api.ultralight.dev',
+  DESKTOP_API_BASE: 'https://ultralight-api.rgn4jz429m.workers.dev',
 }));
 
 function createLocalStorageMock(): Storage {
@@ -38,16 +38,8 @@ describe('desktop api base failover', () => {
     vi.stubGlobal('localStorage', createLocalStorageMock());
   });
 
-  it('switches to the worker fallback when the production vanity domain fails health checks', async () => {
+  it('keeps the direct worker base when health checks pass', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response('blocked', {
-        status: 403,
-        headers: {
-          server: 'CloudFront',
-          'x-cache': 'Error from cloudfront',
-          'content-type': 'text/html',
-        },
-      }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'ok' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -59,48 +51,19 @@ describe('desktop api base failover', () => {
 
     expect(base).toBe('https://ultralight-api.rgn4jz429m.workers.dev');
     expect(storage.getApiBase()).toBe('https://ultralight-api.rgn4jz429m.workers.dev');
-    expect(localStorage.getItem('ul_runtime_api_base')).toBe('https://ultralight-api.rgn4jz429m.workers.dev');
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.ultralight.dev/health',
-      expect.objectContaining({ cache: 'no-store' }),
-    );
+    expect(localStorage.getItem('ul_runtime_api_base')).toBeNull();
     expect(fetchMock).toHaveBeenCalledWith(
       'https://ultralight-api.rgn4jz429m.workers.dev/health',
       expect.objectContaining({ cache: 'no-store' }),
     );
   });
 
-  it('retries requests through the fallback origin after a CloudFront edge failure', async () => {
+  it('does not retry requests when the direct worker origin succeeds', async () => {
     const fetchMock = vi.fn()
-      // Initial startup probe keeps the vanity domain active.
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'ok' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }))
-      // Real request fails at the edge.
-      .mockResolvedValueOnce(new Response('blocked', {
-        status: 403,
-        headers: {
-          server: 'CloudFront',
-          'x-cache': 'Error from cloudfront',
-          'content-type': 'text/html',
-        },
-      }))
-      // Forced reprobe sees the vanity domain is unhealthy.
-      .mockResolvedValueOnce(new Response('blocked', {
-        status: 403,
-        headers: {
-          server: 'CloudFront',
-          'x-cache': 'Error from cloudfront',
-          'content-type': 'text/html',
-        },
-      }))
-      // Fallback health succeeds.
-      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'ok' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }))
-      // Retried request succeeds against the worker origin.
       .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -117,11 +80,6 @@ describe('desktop api base failover', () => {
     expect(storage.getApiBase()).toBe('https://ultralight-api.rgn4jz429m.workers.dev');
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      'https://api.ultralight.dev/chat/models',
-      expect.objectContaining({ headers: { Accept: 'application/json' } }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      5,
       'https://ultralight-api.rgn4jz429m.workers.dev/chat/models',
       expect.objectContaining({ headers: { Accept: 'application/json' } }),
     );

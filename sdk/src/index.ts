@@ -24,7 +24,7 @@
  */
 
 export interface UltralightConfig {
-  /** API base URL (default: https://api.ultralight.dev) */
+  /** API base URL (default: https://ultralight-api.rgn4jz429m.workers.dev) */
   apiUrl?: string;
   /** Authentication token (JWT or API key) */
   token: string;
@@ -121,7 +121,7 @@ export interface McpTool {
   inputSchema: unknown;
 }
 
-const DEFAULT_API_URL = 'https://api.ultralight.dev';
+const DEFAULT_API_URL = 'https://ultralight-api.rgn4jz429m.workers.dev';
 
 function normalizeToolArgs(args: unknown): Record<string, unknown> {
   if (!args) return {};

@@ -476,7 +476,7 @@ async function sendViaSMTP(to: string, subject: string, body: string, inReplyTo?
     if (!greeting.startsWith('220')) throw new Error('SMTP greeting failed: ' + greeting);
 
     // EHLO
-    let resp = await send('EHLO ultralight.dev');
+    let resp = await send('EHLO ultralight-api.rgn4jz429m.workers.dev');
     // Read multi-line EHLO response
     while (resp.charAt(3) === '-') { resp = await lr.readLine(); }
 
@@ -501,7 +501,7 @@ async function sendViaSMTP(to: string, subject: string, body: string, inReplyTo?
     if (!resp.startsWith('354')) throw new Error('DATA failed: ' + resp);
 
     // Build email
-    const domain = fromAddr.split('@')[1] || 'ultralight.dev';
+    const domain = fromAddr.split('@')[1] || 'ultralight-api.rgn4jz429m.workers.dev';
     const messageId = '<' + crypto.randomUUID() + '@' + domain + '>';
     const boundary = '----=_Part_' + crypto.randomUUID().replace(/-/g, '');
     const htmlBody = body.replace(/\n/g, '<br>');

@@ -12,12 +12,12 @@ describe('desktop auth helpers', () => {
 
   it('builds the desktop OAuth login URL with the polling parameters', () => {
     const url = new URL(buildDesktopLoginUrl(
-      'https://api.ultralight.dev',
+      'https://ultralight-api.rgn4jz429m.workers.dev',
       'session-123',
       'secret-hash',
     ));
 
-    expect(url.origin).toBe('https://api.ultralight.dev');
+    expect(url.origin).toBe('https://ultralight-api.rgn4jz429m.workers.dev');
     expect(url.pathname).toBe('/auth/login');
     expect(url.searchParams.get('desktop_session')).toBe('session-123');
     expect(url.searchParams.get('desktop_poll_secret_hash')).toBe('secret-hash');
@@ -26,25 +26,25 @@ describe('desktop auth helpers', () => {
 
   it('requests account selection for the switch-account flow', () => {
     const url = new URL(buildDesktopLoginUrl(
-      'https://staging-api.ultralight.dev',
+      'https://ultralight-api-staging.rgn4jz429m.workers.dev',
       'session-abc',
       'hash-xyz',
       { forceAccountSelection: true },
     ));
 
-    expect(url.origin).toBe('https://staging-api.ultralight.dev');
+    expect(url.origin).toBe('https://ultralight-api-staging.rgn4jz429m.workers.dev');
     expect(url.searchParams.get('prompt')).toBe('select_account');
   });
 
   it('builds desktop embed URLs with a bridge token fragment', () => {
     const url = new URL(buildDesktopEmbedUrl(
-      'https://api.ultralight.dev',
+      'https://ultralight-api.rgn4jz429m.workers.dev',
       '/settings',
       'ul_embed_abc123',
       42,
     ));
 
-    expect(url.origin).toBe('https://api.ultralight.dev');
+    expect(url.origin).toBe('https://ultralight-api.rgn4jz429m.workers.dev');
     expect(url.pathname).toBe('/settings');
     expect(url.searchParams.get('embed')).toBe('1');
     expect(url.searchParams.get('_v')).toBe('42');
@@ -63,7 +63,7 @@ describe('desktop auth helpers', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const session = await requestDesktopEmbedBridgeToken(
-      'https://api.ultralight.dev',
+      'https://ultralight-api.rgn4jz429m.workers.dev',
       'jwt-token',
     );
 
@@ -72,7 +72,7 @@ describe('desktop auth helpers', () => {
       expiresIn: 60,
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      new URL('/auth/embed/bridge', 'https://api.ultralight.dev'),
+      new URL('/auth/embed/bridge', 'https://ultralight-api.rgn4jz429m.workers.dev'),
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({

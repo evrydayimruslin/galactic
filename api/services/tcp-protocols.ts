@@ -344,7 +344,7 @@ export async function smtpSend(
     const greeting = await lr.readLine();
     if (!greeting.startsWith('220')) throw new Error('SMTP greeting failed: ' + greeting);
 
-    let ehloResp = await send('EHLO ultralight.dev');
+    let ehloResp = await send('EHLO ultralight-api.rgn4jz429m.workers.dev');
     while (!ehloResp.startsWith('250 ')) { ehloResp = await lr.readLine(); }
 
     const authResp = await send('AUTH LOGIN');
@@ -359,7 +359,7 @@ export async function smtpSend(
     const dataResp = await send('DATA');
     if (!dataResp.startsWith('354')) throw new Error('SMTP DATA rejected');
 
-    const msgId = '<' + crypto.randomUUID() + '@ultralight.dev>';
+    const msgId = '<' + crypto.randomUUID() + '@ultralight-api.rgn4jz429m.workers.dev>';
     let headers = 'From: ' + fromName + ' <' + from + '>\r\n';
     headers += 'To: ' + to + '\r\n';
     headers += 'Subject: ' + subject + '\r\n';

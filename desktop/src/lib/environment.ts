@@ -11,8 +11,8 @@ export interface DesktopEnvSource {
 const DEVELOPMENT_FALLBACK_API_BASE = 'https://ultralight-api.rgn4jz429m.workers.dev';
 
 const PINNED_API_BASES: Record<Exclude<DesktopEnvironment, 'development'>, string> = {
-  production: 'https://api.ultralight.dev',
-  staging: 'https://staging-api.ultralight.dev',
+  production: 'https://ultralight-api.rgn4jz429m.workers.dev',
+  staging: 'https://ultralight-api-staging.rgn4jz429m.workers.dev',
 };
 
 function normalizeEnvironment(raw: string | undefined): DesktopEnvironment | null {

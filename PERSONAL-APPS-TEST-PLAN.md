@@ -303,7 +303,7 @@ ultralight run <app-id> healthCheck
 #!/bin/bash
 # Run: ULTRALIGHT_TOKEN=your-token ./scripts/smoke-test.sh
 
-API_URL="${ULTRALIGHT_API_URL:-https://ultralight.dev}"
+API_URL="${ULTRALIGHT_API_URL:-https://ultralight-api.rgn4jz429m.workers.dev}"
 TOKEN="${ULTRALIGHT_TOKEN}"
 
 mcp_call() {

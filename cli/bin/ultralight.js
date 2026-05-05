@@ -17,7 +17,7 @@ import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const API_URL = process.env.ULTRALIGHT_API_URL || 'https://api.ultralight.dev';
+const API_URL = process.env.ULTRALIGHT_API_URL || 'https://ultralight-api.rgn4jz429m.workers.dev';
 const DENO_INSTALL_URL = 'https://raw.githubusercontent.com/evrydayimruslin/ultralight/main/cli/mod.ts';
 const DENO_BIN_NAME = platform() === 'win32' ? 'deno.exe' : 'deno';
 
@@ -78,8 +78,8 @@ const PLUGIN_JSON = {
   name: 'ultralight',
   description: 'Ultralight — serverless MCP platform. Discover, build, test, and deploy AI agent tools.',
   version: '1.0.0',
-  author: { name: 'Ultralight', url: 'https://ultralight.dev' },
-  homepage: 'https://ultralight.dev',
+  author: { name: 'Ultralight', url: 'https://ultralight-api.rgn4jz429m.workers.dev' },
+  homepage: 'https://ultralight-api.rgn4jz429m.workers.dev',
   license: 'MIT',
   keywords: ['ultralight', 'mcp', 'serverless', 'ai', 'tools', 'agent'],
 };
@@ -392,7 +392,7 @@ function registerPlugin(token, apiUrl) {
               description: 'Ultralight — serverless MCP platform. Discover, build, test, and deploy AI agent tools instantly.',
               category: 'development',
               source: './external_plugins/ultralight',
-              homepage: 'https://ultralight.dev',
+              homepage: 'https://ultralight-api.rgn4jz429m.workers.dev',
             });
             writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
           }

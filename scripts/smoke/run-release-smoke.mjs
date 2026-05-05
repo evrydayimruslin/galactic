@@ -20,7 +20,7 @@ Options:
   --token <token>                 Bearer token for authenticated API smoke
   --model <model>                 Chat model for --exercise-chat
   --output-dir <path>             Evidence output directory (defaults to UL_LAUNCH_EVIDENCE_DIR)
-  --allowed-origin <origin>       Allowed CORS origin (default: https://ultralight.dev)
+  --allowed-origin <origin>       Allowed CORS origin (default: selected API origin)
   --disallowed-origin <origin>    Disallowed CORS origin (default: https://evil.example)
   --exercise-chat                 Include the real chat send
   --skip-guardrails               Skip launch guardrails
@@ -39,7 +39,9 @@ if (!['staging', 'production'].includes(target)) {
 }
 
 const defaultApiBase =
-  target === 'production' ? 'https://api.ultralight.dev' : 'https://staging-api.ultralight.dev';
+  target === 'production'
+    ? 'https://ultralight-api.rgn4jz429m.workers.dev'
+    : 'https://ultralight-api-staging.rgn4jz429m.workers.dev';
 const defaultSupabaseUrl =
   target === 'production'
     ? 'https://uavjzycsltdnwblwutmb.supabase.co'
@@ -52,7 +54,7 @@ const token = String(args.get('--token') || process.env.ULTRALIGHT_TOKEN || '').
 const chatModel = String(
   args.get('--model') || process.env.ULTRALIGHT_CHAT_MODEL || 'ultralight/deepseek-v4-flash',
 );
-const allowedOrigin = String(args.get('--allowed-origin') || 'https://ultralight.dev').trim();
+const allowedOrigin = String(args.get('--allowed-origin') || apiBase).trim();
 const disallowedOrigin = String(args.get('--disallowed-origin') || 'https://evil.example').trim();
 const outputDir = String(args.get('--output-dir') || process.env.UL_LAUNCH_EVIDENCE_DIR || '').trim();
 const exerciseChat = Boolean(args.has('--exercise-chat'));

@@ -5,14 +5,14 @@ describe('resolveDesktopEnvironment', () => {
   it('defaults production builds to the production API base', () => {
     expect(resolveDesktopEnvironment({ PROD: true })).toEqual({
       environment: 'production',
-      apiBase: 'https://api.ultralight.dev',
+      apiBase: 'https://ultralight-api.rgn4jz429m.workers.dev',
     });
   });
 
   it('uses the staging API base for staging builds', () => {
     expect(resolveDesktopEnvironment({ PROD: true, VITE_UL_ENVIRONMENT: 'staging' })).toEqual({
       environment: 'staging',
-      apiBase: 'https://staging-api.ultralight.dev',
+      apiBase: 'https://ultralight-api-staging.rgn4jz429m.workers.dev',
     });
   });
 
@@ -47,7 +47,7 @@ describe('resolveDesktopEnvironment', () => {
     expect(() => resolveDesktopEnvironment({
       PROD: true,
       VITE_UL_ENVIRONMENT: 'production',
-      VITE_UL_API_BASE: 'https://staging-api.ultralight.dev',
-    })).toThrow(/production builds must use https:\/\/api\.ultralight\.dev/);
+      VITE_UL_API_BASE: 'https://ultralight-api-staging.rgn4jz429m.workers.dev',
+    })).toThrow(/production builds must use https:\/\/ultralight-api\.rgn4jz429m\.workers\.dev/);
   });
 });

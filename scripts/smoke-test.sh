@@ -3,7 +3,7 @@
 # Verifies the deployed API surface and, optionally, a real authenticated chat.
 #
 # Examples:
-#   ./scripts/smoke-test.sh --url https://staging-api.ultralight.dev
+#   ./scripts/smoke-test.sh --url https://ultralight-api-staging.rgn4jz429m.workers.dev
 #   ULTRALIGHT_TOKEN=... ./scripts/smoke-test.sh --exercise-chat
 
 set -euo pipefail
@@ -13,7 +13,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-API_URL="${ULTRALIGHT_API_URL:-https://api.ultralight.dev}"
+API_URL="${ULTRALIGHT_API_URL:-https://ultralight-api.rgn4jz429m.workers.dev}"
 FALLBACK_URL="${ULTRALIGHT_FALLBACK_URL:-}"
 TOKEN="${ULTRALIGHT_TOKEN:-}"
 CHAT_MODEL="${ULTRALIGHT_CHAT_MODEL:-ultralight/deepseek-v4-flash}"
@@ -31,7 +31,7 @@ while [[ $# -gt 0 ]]; do
 Usage: ./scripts/smoke-test.sh [options]
 
 Options:
-  --url URL            API base URL to test (default: https://api.ultralight.dev)
+  --url URL            API base URL to test (default: https://ultralight-api.rgn4jz429m.workers.dev)
   --fallback-url URL   Optional direct worker URL to compare when the public URL fails
   --token TOKEN        Bearer token for authenticated checks
   --model MODEL        Chat model to use for --exercise-chat

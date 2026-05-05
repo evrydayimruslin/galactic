@@ -1384,7 +1384,7 @@ async function apps(args: string[], client: ApiClient, _config: Config) {
 
       // No direct delete tool — guide user to web UI
       console.log(colors.yellow('App deletion is available via the web dashboard.'));
-      console.log(`Visit your app settings to delete: ${colors.cyan(`https://ultralight.dev/app/${appId}/settings`)}`);
+      console.log('Configure an owned web dashboard origin before using this CLI handoff.');
       break;
     }
 

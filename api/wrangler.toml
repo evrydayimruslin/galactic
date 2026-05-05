@@ -37,9 +37,9 @@ binding = "SELF"
 service = "ultralight-api"
 
 [vars]
-BASE_URL = "https://api.ultralight.dev"
+BASE_URL = "https://ultralight-api.rgn4jz429m.workers.dev"
 ENVIRONMENT = "production"
-CORS_ALLOWED_ORIGINS = "https://api.ultralight.dev,https://ultralight.dev,tauri://localhost,https://tauri.localhost,http://tauri.localhost"
+CORS_ALLOWED_ORIGINS = "https://ultralight-api.rgn4jz429m.workers.dev,tauri://localhost,https://tauri.localhost,http://tauri.localhost"
 # Optional rollout knob for Wave 4 alias retirement:
 # PLATFORM_MCP_DISABLED_ALIASES = "removable"
 # or a comma-separated subset such as "ul.execute,ul.lint"
@@ -72,9 +72,9 @@ binding = "SELF"
 service = "ultralight-api-staging"
 
 [env.staging.vars]
-BASE_URL = "https://staging-api.ultralight.dev"
+BASE_URL = "https://ultralight-api-staging.rgn4jz429m.workers.dev"
 ENVIRONMENT = "staging"
-CORS_ALLOWED_ORIGINS = "https://staging-api.ultralight.dev,http://localhost:5173,http://127.0.0.1:5173,http://localhost:1420,http://127.0.0.1:1420,tauri://localhost,https://tauri.localhost,http://tauri.localhost"
+CORS_ALLOWED_ORIGINS = "https://ultralight-api-staging.rgn4jz429m.workers.dev,http://localhost:5173,http://127.0.0.1:5173,http://localhost:1420,http://127.0.0.1:1420,tauri://localhost,https://tauri.localhost,http://tauri.localhost"
 # Optional rollout knob for Wave 4 alias retirement:
 # PLATFORM_MCP_DISABLED_ALIASES = "removable"
 

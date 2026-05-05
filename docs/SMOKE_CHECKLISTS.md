@@ -39,7 +39,7 @@ mkdir -p "$UL_LAUNCH_EVIDENCE_DIR"/{audits,smoke,manual}
 source ~/.nvm/nvm.sh && nvm use
 ULTRALIGHT_TOKEN=... node scripts/smoke/run-release-smoke.mjs \
   --target staging \
-  --url https://staging-api.ultralight.dev \
+  --url https://ultralight-api-staging.rgn4jz429m.workers.dev \
   --supabase-url https://vonlzcnwxbwaxlbngjre.supabase.co \
   --exercise-chat
 ```
@@ -59,11 +59,11 @@ into `release-packet.md` for the candidate.
 
 ### Automated checks
 
-Run the auth redirect smoke once staging DNS and the staging worker are live:
+Run the auth redirect smoke once the staging Worker origin is live:
 
 ```bash
 ./scripts/smoke/auth-redirect-smoke.sh \
-  --url https://staging-api.ultralight.dev \
+  --url https://ultralight-api-staging.rgn4jz429m.workers.dev \
   --supabase-url https://vonlzcnwxbwaxlbngjre.supabase.co
 ```
 
@@ -71,7 +71,7 @@ Run the broader API smoke with a staging bearer token:
 
 ```bash
 ULTRALIGHT_TOKEN=... ./scripts/smoke-test.sh \
-  --url https://staging-api.ultralight.dev \
+  --url https://ultralight-api-staging.rgn4jz429m.workers.dev \
   --exercise-chat
 ```
 
@@ -96,11 +96,11 @@ conversation.
 Run a quick CORS sanity check from one allowed and one disallowed origin:
 
 ```bash
-curl -i -X OPTIONS https://staging-api.ultralight.dev/http/test/ping \
-  -H 'Origin: https://ultralight.dev' \
+curl -i -X OPTIONS https://ultralight-api-staging.rgn4jz429m.workers.dev/http/test/ping \
+  -H 'Origin: https://ultralight-api-staging.rgn4jz429m.workers.dev' \
   -H 'Access-Control-Request-Method: POST'
 
-curl -i -X OPTIONS https://staging-api.ultralight.dev/http/test/ping \
+curl -i -X OPTIONS https://ultralight-api-staging.rgn4jz429m.workers.dev/http/test/ping \
   -H 'Origin: https://evil.example' \
   -H 'Access-Control-Request-Method: POST'
 ```
@@ -159,7 +159,7 @@ mkdir -p "$UL_LAUNCH_EVIDENCE_DIR"/{audits,smoke,manual}
 source ~/.nvm/nvm.sh && nvm use
 ULTRALIGHT_TOKEN=... node scripts/smoke/run-release-smoke.mjs \
   --target production \
-  --url https://api.ultralight.dev \
+  --url https://ultralight-api.rgn4jz429m.workers.dev \
   --supabase-url https://uavjzycsltdnwblwutmb.supabase.co \
   --exercise-chat
 ```
@@ -170,7 +170,7 @@ Run the auth redirect smoke:
 
 ```bash
 ./scripts/smoke/auth-redirect-smoke.sh \
-  --url https://api.ultralight.dev \
+  --url https://ultralight-api.rgn4jz429m.workers.dev \
   --supabase-url https://uavjzycsltdnwblwutmb.supabase.co
 ```
 
@@ -178,7 +178,7 @@ Run the broader API smoke with a production bearer token:
 
 ```bash
 ULTRALIGHT_TOKEN=... ./scripts/smoke-test.sh \
-  --url https://api.ultralight.dev \
+  --url https://ultralight-api.rgn4jz429m.workers.dev \
   --exercise-chat
 ```
 
@@ -195,18 +195,18 @@ node scripts/smoke/chat-capture-smoke.mjs \
   --write-json "$UL_LAUNCH_EVIDENCE_DIR/smoke/chat-capture.json"
 ```
 
-If the public production domain ever drifts away from the Worker deployment,
-the smoke script now compares it against the direct Worker origin and fails with
-an explicit DNS/custom-domain warning instead of a generic `/health` failure.
+If a future owned public production domain drifts away from the Worker
+deployment, pass it explicitly with `--url` and compare it against the
+Workers.dev origin before promoting it as canonical.
 
 Run the same CORS sanity check against production before announcing the release:
 
 ```bash
-curl -i -X OPTIONS https://api.ultralight.dev/http/test/ping \
-  -H 'Origin: https://ultralight.dev' \
+curl -i -X OPTIONS https://ultralight-api.rgn4jz429m.workers.dev/http/test/ping \
+  -H 'Origin: https://ultralight-api.rgn4jz429m.workers.dev' \
   -H 'Access-Control-Request-Method: POST'
 
-curl -i -X OPTIONS https://api.ultralight.dev/http/test/ping \
+curl -i -X OPTIONS https://ultralight-api.rgn4jz429m.workers.dev/http/test/ping \
   -H 'Origin: https://evil.example' \
   -H 'Access-Control-Request-Method: POST'
 ```

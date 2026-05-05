@@ -4,9 +4,9 @@ vi.mock('./storage', () => ({
   DEFAULT_CHAT_MODEL: 'deepseek/deepseek-v4-flash',
   DEFAULT_INTERPRETER_MODEL: 'deepseek/deepseek-v4-flash',
   DEFAULT_HEAVY_MODEL: 'deepseek/deepseek-v4-pro',
-  getApiBase: () => 'https://api.ultralight.dev',
+  getApiBase: () => 'https://ultralight-api.rgn4jz429m.workers.dev',
   getToken: () => 'desktop-test-token',
-  fetchFromApi: (path: string, init?: RequestInit) => fetch(`https://api.ultralight.dev${path}`, init),
+  fetchFromApi: (path: string, init?: RequestInit) => fetch(`https://ultralight-api.rgn4jz429m.workers.dev${path}`, init),
 }));
 
 describe('execution plan API helpers', () => {
@@ -22,7 +22,7 @@ describe('execution plan API helpers', () => {
     await confirmExecutionPlan('plan-123');
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.ultralight.dev/chat/plan/plan-123/confirm',
+      'https://ultralight-api.rgn4jz429m.workers.dev/chat/plan/plan-123/confirm',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({

@@ -6,12 +6,12 @@ of launch-relevant follow-ups discovered during implementation.
 
 ## Deferred After PR1
 
-- Platform-wide canonical domain cleanup:
-  backend still contains a number of `ultralight-api.rgn4jz429m.workers.dev`
-  hardcodes outside the desktop app surface. These should be moved to
-  `BASE_URL` / canonical helpers in a later PR so docs, share links, MCP
-  config, marketing surfaces, and HTTP referers all agree on
-  `https://api.ultralight.dev`.
+- Owned-domain cleanup:
+  active API clients now use the direct Workers.dev origins because
+  `ultralight.dev` is not controlled by the project. Choose an owned custom
+  domain later, configure it as a Cloudflare Worker custom domain, then move
+  `BASE_URL`, clients, docs, share links, MCP config, marketing surfaces, and
+  HTTP referers to that owned hostname.
 - Keep the newly restored desktop validation gates green:
   `corepack pnpm run analyze`, `corepack pnpm test`, `corepack pnpm run
   build:production`, `corepack pnpm audit --audit-level high`, and
@@ -34,8 +34,9 @@ of launch-relevant follow-ups discovered during implementation.
   other dashboard-managed settings that migrations do not cover.
 - Stage the remaining Cloudflare-side runtime setup:
   staging now has committed `wrangler` config and deploy workflow support, but
-  the runtime still needs staging secrets in Cloudflare plus a real
-  `staging-api.ultralight.dev` hostname before end-to-end auth smoke can pass.
+  the runtime still needs staging secrets in Cloudflare plus a first successful
+  `ultralight-api-staging.rgn4jz429m.workers.dev` deployment before end-to-end
+  auth smoke can pass.
 - Decide whether to provision dedicated Cloudflare R2/KV resources for staging:
   the committed `wrangler` staging environment currently shares the production
   R2 bucket and KV namespaces as an intentional interim step. This is workable

@@ -8,8 +8,9 @@ releases after the Wave 0 / Wave 1 launch-hardening work.
 Before running this flow, make sure:
 
 - staging and production Supabase projects are configured
-- `staging-api.ultralight.dev` and `api.ultralight.dev` both point at the right
-  Worker deployments
+- the staging and production Workers.dev origins point at the right Worker
+  deployments; if replacing them with custom domains, confirm the domains are
+  project-owned first
 - GitHub environment secrets are configured for:
   - staging database deploy
   - production database deploy
@@ -263,7 +264,7 @@ scorecard should move only after a real restore has been executed and validated.
    source ~/.nvm/nvm.sh && nvm use
    ULTRALIGHT_TOKEN=... node scripts/smoke/run-release-smoke.mjs \
      --target staging \
-     --url https://staging-api.ultralight.dev \
+     --url https://ultralight-api-staging.rgn4jz429m.workers.dev \
      --supabase-url https://vonlzcnwxbwaxlbngjre.supabase.co \
      --exercise-chat
    ```
@@ -304,7 +305,7 @@ scorecard should move only after a real restore has been executed and validated.
    source ~/.nvm/nvm.sh && nvm use
    ULTRALIGHT_TOKEN=... node scripts/smoke/run-release-smoke.mjs \
      --target production \
-     --url https://api.ultralight.dev \
+     --url https://ultralight-api.rgn4jz429m.workers.dev \
      --supabase-url https://uavjzycsltdnwblwutmb.supabase.co \
      --exercise-chat
    ```

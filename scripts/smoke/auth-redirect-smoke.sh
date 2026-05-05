@@ -10,7 +10,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-BASE_URL="${ULTRALIGHT_API_URL:-https://staging-api.ultralight.dev}"
+BASE_URL="${ULTRALIGHT_API_URL:-https://ultralight-api-staging.rgn4jz429m.workers.dev}"
 EXPECTED_SUPABASE_URL="${ULTRALIGHT_SUPABASE_URL:-}"
 
 while [[ $# -gt 0 ]]; do
@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
 Usage: ./scripts/smoke/auth-redirect-smoke.sh [options]
 
 Options:
-  --url URL               API base URL to test (default: https://staging-api.ultralight.dev)
+  --url URL               API base URL to test (default: https://ultralight-api-staging.rgn4jz429m.workers.dev)
   --supabase-url URL      Expected Supabase project origin for the OAuth redirect
   --help                  Show this help
 EOF

@@ -19,7 +19,7 @@
  * Environment:
  *   UL_TOKEN       — API token for authenticated tests (optional, tests skip if not set)
  *   UL_TEST_APP    — A known public app ID for per-app tests (optional)
- *   UL_API_URL     — Override API URL (default: https://api.ultralight.dev)
+ *   UL_API_URL     — Override API URL (default: https://ultralight-api.rgn4jz429m.workers.dev)
  *   UL_LIVE_API_TESTS=1 — Run live API specs against UL_API_URL
  */
 
@@ -30,7 +30,7 @@ import {
   assertStringIncludes,
 } from 'https://deno.land/std@0.224.0/assert/mod.ts';
 
-const API = Deno.env.get('UL_API_URL') || 'https://api.ultralight.dev';
+const API = Deno.env.get('UL_API_URL') || 'https://ultralight-api.rgn4jz429m.workers.dev';
 const TOKEN = Deno.env.get('UL_TOKEN');
 const TEST_APP = Deno.env.get('UL_TEST_APP') || 'cd118f84-fbca-4cb3-a680-3974585bc319';
 const LIVE_API_TESTS = Deno.env.get('UL_LIVE_API_TESTS') === '1';

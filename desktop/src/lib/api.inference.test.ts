@@ -10,7 +10,7 @@ vi.mock('./storage', () => ({
   DEFAULT_CHAT_MODEL: 'deepseek/deepseek-v4-flash',
   DEFAULT_INTERPRETER_MODEL: 'deepseek/deepseek-v4-flash',
   DEFAULT_HEAVY_MODEL: 'deepseek/deepseek-v4-pro',
-  getApiBase: () => 'https://api.ultralight.dev',
+  getApiBase: () => 'https://ultralight-api.rgn4jz429m.workers.dev',
   getToken: () => storageMock.token,
   fetchFromApi: storageMock.fetchFromApi,
 }));

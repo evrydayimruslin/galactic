@@ -131,7 +131,9 @@ export async function handleChatStream(request: Request): Promise<Response> {
   // Block provisional users (no balance, no billing)
   if (user.provisional) {
     chatLogger.info('Blocked provisional user from chat', { user_id: user.id });
-    return json({ error: 'Chat requires a full account. Sign in at ultralight.dev' }, 403);
+    return json({
+      error: 'Chat requires a full account. Sign in at ultralight-api.rgn4jz429m.workers.dev',
+    }, 403);
   }
 
   // ── 2. Parse & validate request body ──

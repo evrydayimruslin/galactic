@@ -29,7 +29,8 @@ Backlog:
 
 - Run a remote read-only smoke check against the deployed Supabase project/API once service credentials are available in the release environment.
 - Confirm migration ordering against any production migrations added after `2026-05-05`.
-- Investigate current production custom-domain smoke: `https://api.ultralight.dev` returned 403 for unauthenticated smoke checks while the direct Worker fallback passed. This appears to be deployed routing/domain configuration, not this branch.
+- Active API clients, package homepages, and smoke defaults now use `https://ultralight-api.rgn4jz429m.workers.dev` because `ultralight.dev` is not project-owned and `https://api.ultralight.dev` currently resolves to an external CloudFront distribution. Remaining `ultralight.dev` references in legacy docs/design copy are deferred until an owned custom domain is chosen.
+- Staging API defaults now point at `https://ultralight-api-staging.rgn4jz429m.workers.dev`, but that Workers.dev hostname returned Cloudflare 1042 before the first staging Worker deploy. Re-smoke after the staging deploy workflow provisions it.
 - Repo-wide `deno lint` is not yet a usable gate; it currently reports existing lint debt across old API/SDK/CLI files. Continue using the documented `deno task verify` path until lint debt is retired.
 
 ## PR15-25 Caveats
