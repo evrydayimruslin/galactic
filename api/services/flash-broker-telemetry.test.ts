@@ -3,6 +3,8 @@ import type { ResolvedInferenceRoute } from "./inference-route.ts";
 import {
   buildFlashCallTelemetryContext,
   callFlashText,
+  runFlashBroker,
+  shouldSkipHeavyPromptForPureSystemAgentDelegation,
 } from "./flash-broker.ts";
 
 function makeRoute(): ResolvedInferenceRoute {
@@ -77,6 +79,210 @@ Deno.test("flash broker telemetry: request conversation id and default source ar
       source: "orchestrate",
     },
   );
+});
+
+Deno.test("flash broker routing: pure system-agent delegations skip Heavy prompt construction", () => {
+  assertEquals(
+    shouldSkipHeavyPromptForPureSystemAgentDelegation({
+      mode: "write",
+      relevantApps: [],
+      actionFunctions: [],
+      systemAgentDelegations: [{
+        agentType: "tool_builder",
+        task: "Build a weather MCP.",
+      }],
+    }),
+    true,
+  );
+  assertEquals(
+    shouldSkipHeavyPromptForPureSystemAgentDelegation({
+      mode: "read",
+      systemAgentDelegations: [{
+        agentType: "platform_manager",
+        task: "Explain API key setup.",
+      }],
+    }),
+    true,
+  );
+});
+
+Deno.test("flash broker routing: mixed system-agent delegations still use normal prompt path", () => {
+  assertEquals(
+    shouldSkipHeavyPromptForPureSystemAgentDelegation({
+      mode: "write",
+      relevantApps: [{ slug: "app-email", scope: "draft approval" }],
+      actionFunctions: [],
+      systemAgentDelegations: [{
+        agentType: "tool_builder",
+        task: "Also consider building a helper.",
+      }],
+    }),
+    false,
+  );
+  assertEquals(
+    shouldSkipHeavyPromptForPureSystemAgentDelegation({
+      mode: "write",
+      relevantApps: [],
+      actionFunctions: ["app_email_send"],
+      systemAgentDelegations: [{
+        agentType: "tool_marketer",
+        task: "Search for email tools.",
+      }],
+    }),
+    false,
+  );
+  assertEquals(
+    shouldSkipHeavyPromptForPureSystemAgentDelegation({
+      mode: "write",
+      relevantApps: [],
+      actionFunctions: [],
+      conversationSearch: "previous auth work",
+      systemAgentDelegations: [{
+        agentType: "tool_marketer",
+        task: "Search for auth tools.",
+      }],
+    }),
+    false,
+  );
+  assertEquals(
+    shouldSkipHeavyPromptForPureSystemAgentDelegation({
+      mode: "write",
+      relevantApps: [],
+      actionFunctions: [],
+      systemAgentDelegations: [{
+        agentType: "tool_builder",
+        task: "Build a helper.",
+      }, {
+        agentType: "unknown_agent",
+        task: "Do something outside known system-agent routing.",
+      }],
+    }),
+    false,
+  );
+});
+
+Deno.test("flash broker routing: pure system-agent delegations avoid Stage 2 and prompt builder calls", async () => {
+  const previousEnv = globalThis.__env;
+  const previousFetch = globalThis.fetch;
+  const providerRequests: Array<Record<string, unknown>> = [];
+
+  const functionIndex = {
+    functions: {
+      weather_read: {
+        appId: "app-weather",
+        appSlug: "weather",
+        fnName: "read",
+        description: "[Weather] Read saved weather data",
+        params: {},
+        returns: "weather rows",
+        conventions: [],
+        dependsOn: [],
+      },
+    },
+    widgets: [],
+    types: "",
+    updatedAt: "2026-05-06T12:00:00.000Z",
+  };
+
+  globalThis.__env = {
+    CHAT_CAPTURE_ENABLED: "false",
+    FN_INDEX: {
+      get: (key: string) =>
+        Promise.resolve(key === "user:user-1" ? functionIndex : null),
+      put: () => Promise.resolve(undefined),
+    },
+  } as unknown as typeof globalThis.__env;
+
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" || input instanceof URL
+      ? String(input)
+      : input.url;
+
+    if (url === "https://api.deepseek.test/chat/completions") {
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      providerRequests.push(body);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [{
+              finish_reason: "stop",
+              message: {
+                content: JSON.stringify({
+                  mode: "write",
+                  directResponse: "",
+                  relevantApps: [],
+                  actionFunctions: [],
+                  systemAgentDelegations: [{
+                    agentType: "tool_builder",
+                    task: "Build a weather MCP.",
+                  }],
+                  conversationSearch: "",
+                  contextQuery: "",
+                  updatedSummary:
+                    "User wants a new weather MCP built by the tool builder.",
+                  reasoning:
+                    "No installed function handles MCP construction, so delegate.",
+                }),
+              },
+            }],
+            usage: {
+              prompt_tokens: 24,
+              completion_tokens: 12,
+              total_tokens: 36,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+
+    return Promise.resolve(new Response("unexpected fetch", { status: 500 }));
+  }) as typeof fetch;
+
+  try {
+    const events = [];
+    for await (
+      const event of runFlashBroker(
+        "Build me a weather MCP",
+        "user-1",
+        "flash@example.com",
+        [],
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        { weather: { access: "all" } },
+        [],
+        undefined,
+        undefined,
+        "conversation-1",
+        undefined,
+        makeRoute(),
+      )
+    ) {
+      events.push(event);
+    }
+
+    assertEquals(providerRequests.length, 1);
+    assertEquals(events.some((event) => event.type === "magnifying"), false);
+    assertEquals(events.some((event) => event.type === "constructing"), false);
+    assertEquals(events.some((event) => event.type === "prompt_ready"), false);
+
+    const done = events.find((event) => event.type === "done");
+    if (!done || done.type !== "done") {
+      throw new Error("Expected Flash broker to emit a done event");
+    }
+
+    assertEquals(done.result.needsTool, false);
+    assertEquals(done.result.directResponse, "");
+    assertEquals(done.result.prompt, "");
+    assertEquals(done.result.systemAgentDelegations, [{
+      agentType: "tool_builder",
+      task: "Build a weather MCP.",
+      originalPrompt: "Build me a weather MCP",
+    }]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.__env = previousEnv;
+  }
 });
 
 Deno.test("flash broker telemetry: callFlashText records Flash invocation snapshots", async () => {

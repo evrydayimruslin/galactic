@@ -343,6 +343,70 @@ function countFunctionConventions(functions: FunctionIndex['functions']): number
   return Object.values(functions).reduce((total, fn) => total + (fn.conventions?.length || 0), 0);
 }
 
+export interface PureSystemAgentDelegationInput {
+  mode?: unknown;
+  relevantApps?: unknown;
+  actionFunctions?: unknown;
+  systemAgentDelegations?: unknown;
+  conversationSearch?: unknown;
+  contextQuery?: unknown;
+}
+
+const PURE_SYSTEM_AGENT_TYPES = new Set([
+  'tool_builder',
+  'tool_marketer',
+  'platform_manager',
+]);
+
+export function shouldSkipHeavyPromptForPureSystemAgentDelegation(
+  input: PureSystemAgentDelegationInput,
+): boolean {
+  const mode = typeof input.mode === 'string' ? input.mode : 'write';
+  if (mode === 'direct') return false;
+  if (nonEmptyString(input.conversationSearch) || nonEmptyString(input.contextQuery)) return false;
+  if (hasRelevantAppSelections(input.relevantApps)) return false;
+  if (hasStringSelections(input.actionFunctions)) return false;
+  return hasPureSystemAgentDelegations(input.systemAgentDelegations);
+}
+
+function hasPureSystemAgentDelegations(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  let count = 0;
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') return false;
+    const record = entry as Record<string, unknown>;
+    if (
+      typeof record.task !== 'string' ||
+      record.task.trim().length === 0 ||
+      typeof record.agentType !== 'string' ||
+      !PURE_SYSTEM_AGENT_TYPES.has(record.agentType)
+    ) {
+      return false;
+    }
+    count += 1;
+  }
+  return count > 0;
+}
+
+function hasRelevantAppSelections(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  return value.some((entry) => {
+    if (typeof entry === 'string') return entry.trim().length > 0;
+    if (!entry || typeof entry !== 'object') return false;
+    const slug = (entry as Record<string, unknown>).slug;
+    return typeof slug === 'string' && slug.trim().length > 0;
+  });
+}
+
+function hasStringSelections(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  return value.some((entry) => typeof entry === 'string' && entry.trim().length > 0);
+}
+
+function nonEmptyString(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
 export async function* runFlashBroker(
   message: string,
   userId: string,
@@ -563,6 +627,8 @@ export async function* runFlashBroker(
 
   // Determine mode (support both old needsTool and new mode field)
   const mode = analyzeResult.mode || (analyzeResult.needsTool === false ? 'direct' : 'write');
+  const rawRelevantApps = analyzeResult.relevantApps || [];
+  const actionFunctions = analyzeResult.actionFunctions || [];
 
   // Capture system agent delegations from Flash analysis
   const systemAgentDelegations: Array<{ agentType: string; task: string; originalPrompt: string }> =
@@ -612,10 +678,36 @@ export async function* runFlashBroker(
     return;
   }
 
+  // Pure system-agent routes do not need data magnification or Heavy prompt construction.
+  // Mixed cases with selected apps/functions still fall through to the normal write/read path.
+  if (shouldSkipHeavyPromptForPureSystemAgentDelegation({
+    mode,
+    relevantApps: rawRelevantApps,
+    actionFunctions,
+    systemAgentDelegations,
+    conversationSearch,
+    contextQuery,
+  })) {
+    const result: FlashBrokerResult = {
+      needsTool: false,
+      directResponse: '',
+      model: defaultHeavyModel,
+      prompt: '',
+      functions: '',
+      entities: [],
+      conventions: [],
+      involvedAppIds: [],
+      toolMap: {},
+      usage: analyzeResult._usage,
+      systemAgentDelegations,
+    };
+    yield { type: 'done', result };
+    return;
+  }
+
   // ── Stage 2: MAGNIFICATION — pull live data from identified apps ──
 
   // Determine which apps to magnify
-  const rawRelevantApps = analyzeResult.relevantApps || [];
   const relevantAppSlugs: string[] = [];
   const appScopeHints: Record<string, string> = {};
   for (const entry of rawRelevantApps) {
@@ -626,7 +718,6 @@ export async function* runFlashBroker(
       if (entry.scope) appScopeHints[entry.slug] = entry.scope;
     }
   }
-  const actionFunctions = analyzeResult.actionFunctions || [];
   const provisionalFunctions = buildProvisionalFunctionEntries(marketplaceCandidates);
   const combinedFunctions: FunctionIndex['functions'] = {
     ...fnIndex.functions,

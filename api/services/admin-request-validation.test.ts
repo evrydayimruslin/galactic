@@ -4,6 +4,7 @@ import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejec
 import {
   validateApproveAssessmentRequest,
   validateCreateGapRequest,
+  validateFlashTrainingExportUrl,
   validateRecordAssessmentRequest,
   validateSetAppCategoryRequest,
   validateSetAppFeaturedRequest,
@@ -12,6 +13,73 @@ import {
   validateUpdateGapRequest,
 } from "./admin-request-validation.ts";
 import { RequestValidationError } from "./request-validation.ts";
+
+Deno.test("admin request validation: flash training export normalizes query filters", () => {
+  const payload = validateFlashTrainingExportUrl(
+    new URL(
+      "https://example.com/api/admin/flash-training/export?format=ndjson&datasetFormat=openai_messages&filterMode=human_accepted&componentId=flash_broker.analyze&componentIds=flash_broker.read_response,flash_broker.analyze&schemaId=flash_broker.analyze.v1&capability=escalation_selection&includeTools=true&includeIncomplete=false&conversationId=conv-1&since=2026-05-01T00:00:00Z&until=2026-05-06T00:00:00Z&limit=250",
+    ),
+  );
+
+  assertEquals(payload, {
+    captureFilters: {
+      conversationId: "conv-1",
+      anonUserId: undefined,
+      source: undefined,
+      since: "2026-05-01T00:00:00Z",
+      until: "2026-05-06T00:00:00Z",
+      limit: 250,
+    },
+    datasetOptions: {
+      filterMode: "human_accepted",
+      componentIds: ["flash_broker.analyze", "flash_broker.read_response"],
+      schemaIds: ["flash_broker.analyze.v1"],
+      capabilities: ["escalation_selection"],
+      includeIncomplete: false,
+    },
+    responseFormat: "jsonl",
+    datasetFormat: "openai_messages",
+    includeTools: true,
+  });
+});
+
+Deno.test("admin request validation: flash training export rejects invalid query params", async () => {
+  await assertRejects(
+    async () => {
+      validateFlashTrainingExportUrl(
+        new URL(
+          "https://example.com/api/admin/flash-training/export?format=csv",
+        ),
+      );
+    },
+    RequestValidationError,
+    "format must be one of",
+  );
+
+  await assertRejects(
+    async () => {
+      validateFlashTrainingExportUrl(
+        new URL(
+          "https://example.com/api/admin/flash-training/export?limit=1001",
+        ),
+      );
+    },
+    RequestValidationError,
+    "limit must be 1000 or less",
+  );
+
+  await assertRejects(
+    async () => {
+      validateFlashTrainingExportUrl(
+        new URL(
+          "https://example.com/api/admin/flash-training/export?unknown=1",
+        ),
+      );
+    },
+    RequestValidationError,
+    "Unsupported query parameter",
+  );
+});
 
 Deno.test("admin request validation: create gap normalizes severity and source ids", async () => {
   const payload = await validateCreateGapRequest(

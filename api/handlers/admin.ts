@@ -19,6 +19,7 @@
 //   GET   /api/admin/capture/overview   — Capture health and aggregate inspection
 //   GET   /api/admin/capture/conversation/:id — Inspect one captured conversation
 //   GET   /api/admin/capture/export     — Export captured threads/messages/events/artifacts
+//   GET   /api/admin/flash-training/export — Export Flash fine-tuning dataset rows
 
 import { error, json } from './response.ts';
 import { unsuspendContent } from '../services/hosting-billing.ts';
@@ -41,10 +42,15 @@ import {
   validateRecordAssessmentRequest,
   validateSetAppCategoryRequest,
   validateSetAppFeaturedRequest,
+  validateFlashTrainingExportUrl,
   validateTopUpBalanceRequest,
   validateUpdateBillingConfigRequest,
   validateUpdateGapRequest,
 } from '../services/admin-request-validation.ts';
+import {
+  buildFlashTrainingDatasetFromBundle,
+  flashTrainingDatasetToJsonl,
+} from '../services/flash-training-dataset.ts';
 import {
   getBillingConfig,
   normalizeBillingConfigRow,
@@ -381,6 +387,11 @@ export async function handleAdmin(request: Request): Promise<Response> {
     return handleCaptureExport(url);
   }
 
+  // GET /api/admin/flash-training/export — Flash fine-tune dataset export
+  if (path === '/api/admin/flash-training/export' && method === 'GET') {
+    return handleFlashTrainingExport(url);
+  }
+
   // GET /api/admin/capture/conversation/:id — full conversation inspection
   const captureConversationPrefix = '/api/admin/capture/conversation/';
   if (path.startsWith(captureConversationPrefix) && method === 'GET') {
@@ -455,6 +466,65 @@ async function handleCaptureExport(url: URL): Promise<Response> {
   } catch (err) {
     console.error('[ADMIN] capture export failed:', err);
     return error('Capture export failed', 500);
+  }
+}
+
+async function handleFlashTrainingExport(url: URL): Promise<Response> {
+  try {
+    const params = validateFlashTrainingExportUrl(url);
+    const bundle = await buildCaptureExport(params.captureFilters);
+    const dataset = buildFlashTrainingDatasetFromBundle(bundle, {
+      ...params.datasetOptions,
+      generatedAt: bundle.export_meta.generated_at,
+    });
+    const exportSummary = {
+      response_format: params.responseFormat,
+      dataset_format: params.datasetFormat,
+      include_tools: params.includeTools,
+      preview_only: true,
+      capture_filters: params.captureFilters,
+      filter: dataset.filter,
+      capture_meta: bundle.export_meta,
+    };
+
+    if (params.responseFormat === 'jsonl') {
+      const label = sanitizeFilenamePart(
+        params.datasetOptions.componentIds?.[0] ||
+          params.captureFilters.conversationId ||
+          params.captureFilters.anonUserId ||
+          params.captureFilters.source ||
+          'flash-training',
+      );
+      return new Response(
+        flashTrainingDatasetToJsonl(dataset, {
+          format: params.datasetFormat,
+          includeTools: params.includeTools,
+        }),
+        {
+          headers: {
+            'Content-Type': 'application/x-ndjson; charset=utf-8',
+            'Content-Disposition':
+              `attachment; filename="${label}-${params.datasetFormat}.jsonl"`,
+            'X-Ultralight-Flash-Examples': String(dataset.example_count),
+            'X-Ultralight-Flash-Filtered-Out': String(
+              dataset.filtered_out_example_count,
+            ),
+          },
+        },
+      );
+    }
+
+    return json({
+      success: true,
+      export: exportSummary,
+      flash_training: dataset,
+    });
+  } catch (err) {
+    if (err instanceof RequestValidationError) {
+      return error(err.message, err.status);
+    }
+    console.error('[ADMIN] Flash training export failed:', err);
+    return error('Flash training export failed', 500);
   }
 }
 

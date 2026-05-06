@@ -3,6 +3,12 @@ import {
   readJsonObject,
   RequestValidationError,
 } from "./request-validation.ts";
+import type { CaptureInspectionFilters } from "./capture-inspection.ts";
+import type {
+  BuildFlashTrainingDatasetOptions,
+  FlashTrainingDatasetFilterMode,
+  FlashTrainingJsonlFormat,
+} from "./flash-training-dataset.ts";
 
 const GAP_SEVERITIES = new Set<CreateGapPayload["severity"]>([
   "low",
@@ -29,6 +35,46 @@ const MAX_POINTS_VALUE = 1_000_000;
 const MAX_TOP_UP_LIGHT = 100_000_000;
 const MAX_FUNDING_MINIMUM_CENTS = 500_000;
 const MAX_STORAGE_FREE_BYTES = 10 * 1024 * 1024 * 1024;
+const MAX_FLASH_TRAINING_EXPORT_LIMIT = 1000;
+
+const FLASH_TRAINING_RESPONSE_FORMATS = new Set<
+  FlashTrainingExportResponseFormat | "ndjson"
+>([
+  "json",
+  "jsonl",
+  "ndjson",
+]);
+const FLASH_TRAINING_JSONL_FORMATS = new Set<FlashTrainingJsonlFormat>([
+  "ultralight",
+  "openai_messages",
+]);
+const FLASH_TRAINING_FILTER_MODES = new Set<
+  FlashTrainingDatasetFilterMode
+>([
+  "training_ready",
+  "human_accepted",
+  "needs_review",
+  "all",
+]);
+const FLASH_TRAINING_EXPORT_QUERY_KEYS = new Set([
+  "conversationId",
+  "anonUserId",
+  "source",
+  "since",
+  "until",
+  "limit",
+  "format",
+  "datasetFormat",
+  "filterMode",
+  "componentId",
+  "componentIds",
+  "schemaId",
+  "schemaIds",
+  "capability",
+  "capabilities",
+  "includeTools",
+  "includeIncomplete",
+]);
 
 export interface CreateGapPayload {
   title: string;
@@ -99,6 +145,16 @@ export interface UpdateBillingConfigPayload {
   payout_policy_copy?: string;
 }
 
+export type FlashTrainingExportResponseFormat = "json" | "jsonl";
+
+export interface FlashTrainingExportQuery {
+  captureFilters: CaptureInspectionFilters;
+  datasetOptions: BuildFlashTrainingDatasetOptions;
+  responseFormat: FlashTrainingExportResponseFormat;
+  datasetFormat: FlashTrainingJsonlFormat;
+  includeTools: boolean;
+}
+
 function normalizeRequiredString(
   value: unknown,
   field: string,
@@ -109,6 +165,125 @@ function normalizeRequiredString(
     throw new RequestValidationError(`Missing ${field}`);
   }
   return normalized;
+}
+
+function normalizeQueryString(
+  params: URLSearchParams,
+  field: string,
+  maxLength = 128,
+): string | undefined {
+  const values = params.getAll(field).filter((value) => value.trim());
+  if (values.length === 0) return undefined;
+  if (values.length > 1) {
+    throw new RequestValidationError(`${field} may only be provided once`);
+  }
+  const normalized = values[0].trim();
+  if (normalized.length > maxLength) {
+    throw new RequestValidationError(
+      `${field} must be ${maxLength} characters or less`,
+    );
+  }
+  return normalized;
+}
+
+function normalizeQueryEnum<T extends string>(
+  params: URLSearchParams,
+  field: string,
+  allowed: Set<T>,
+): T | undefined {
+  const normalized = normalizeQueryString(params, field, 64);
+  if (!normalized) return undefined;
+  if (!allowed.has(normalized as T)) {
+    throw new RequestValidationError(
+      `${field} must be one of: ${Array.from(allowed).join(", ")}`,
+    );
+  }
+  return normalized as T;
+}
+
+function normalizeQueryBoolean(
+  params: URLSearchParams,
+  field: string,
+): boolean | undefined {
+  const normalized = normalizeQueryString(params, field, 16);
+  if (!normalized) return undefined;
+  if (["true", "1", "yes"].includes(normalized)) return true;
+  if (["false", "0", "no"].includes(normalized)) return false;
+  throw new RequestValidationError(`${field} must be a boolean`);
+}
+
+function normalizeQueryInteger(
+  params: URLSearchParams,
+  field: string,
+  {
+    min,
+    max,
+  }: {
+    min: number;
+    max: number;
+  },
+): number | undefined {
+  const normalized = normalizeQueryString(params, field, 16);
+  if (!normalized) return undefined;
+  const parsed = Number(normalized);
+  if (!Number.isInteger(parsed)) {
+    throw new RequestValidationError(`${field} must be an integer`);
+  }
+  if (parsed < min) {
+    throw new RequestValidationError(`${field} must be at least ${min}`);
+  }
+  if (parsed > max) {
+    throw new RequestValidationError(`${field} must be ${max} or less`);
+  }
+  return parsed;
+}
+
+function normalizeQueryIsoTime(
+  params: URLSearchParams,
+  field: string,
+): string | undefined {
+  const normalized = normalizeQueryString(params, field, 128);
+  if (!normalized) return undefined;
+  if (!Number.isFinite(Date.parse(normalized))) {
+    throw new RequestValidationError(`${field} must be a valid timestamp`);
+  }
+  return normalized;
+}
+
+function normalizeQueryList(
+  params: URLSearchParams,
+  fields: string[],
+): string[] {
+  const values: string[] = [];
+  for (const field of fields) {
+    for (const raw of params.getAll(field)) {
+      for (const part of raw.split(",")) {
+        const normalized = part.trim();
+        if (!normalized) continue;
+        if (normalized.length > 160) {
+          throw new RequestValidationError(
+            `${field} values must be 160 characters or less`,
+          );
+        }
+        values.push(normalized);
+      }
+    }
+  }
+  return Array.from(new Set(values));
+}
+
+function rejectUnknownQueryKeys(
+  params: URLSearchParams,
+  allowedKeys: Set<string>,
+): void {
+  const unknown = Array.from(new Set(params.keys())).filter((key) =>
+    !allowedKeys.has(key)
+  );
+  if (unknown.length > 0) {
+    throw new RequestValidationError(
+      `Unsupported query parameter(s): ${unknown.join(", ")}`,
+    );
+  }
 }
 
 function normalizeEnum<T extends string>(
@@ -295,6 +470,59 @@ function normalizeOptionalUuidArray(
     return undefined;
   }
   return normalizeUuidArray(value, field);
+}
+
+export function validateFlashTrainingExportUrl(
+  url: URL,
+): FlashTrainingExportQuery {
+  const params = url.searchParams;
+  rejectUnknownQueryKeys(params, FLASH_TRAINING_EXPORT_QUERY_KEYS);
+
+  const rawResponseFormat = normalizeQueryEnum(
+    params,
+    "format",
+    FLASH_TRAINING_RESPONSE_FORMATS,
+  );
+  const responseFormat: FlashTrainingExportResponseFormat =
+    rawResponseFormat === "jsonl" || rawResponseFormat === "ndjson"
+      ? "jsonl"
+      : "json";
+  const includeIncomplete = normalizeQueryBoolean(
+    params,
+    "includeIncomplete",
+  );
+
+  return {
+    captureFilters: {
+      conversationId: normalizeQueryString(params, "conversationId", 160),
+      anonUserId: normalizeQueryString(params, "anonUserId", 160),
+      source: normalizeQueryString(params, "source", 160),
+      since: normalizeQueryIsoTime(params, "since"),
+      until: normalizeQueryIsoTime(params, "until"),
+      limit: normalizeQueryInteger(params, "limit", {
+        min: 1,
+        max: MAX_FLASH_TRAINING_EXPORT_LIMIT,
+      }),
+    },
+    datasetOptions: {
+      filterMode: normalizeQueryEnum(
+        params,
+        "filterMode",
+        FLASH_TRAINING_FILTER_MODES,
+      ),
+      componentIds: normalizeQueryList(params, ["componentId", "componentIds"]),
+      schemaIds: normalizeQueryList(params, ["schemaId", "schemaIds"]),
+      capabilities: normalizeQueryList(params, ["capability", "capabilities"]),
+      includeIncomplete,
+    },
+    responseFormat,
+    datasetFormat: normalizeQueryEnum(
+      params,
+      "datasetFormat",
+      FLASH_TRAINING_JSONL_FORMATS,
+    ) || "ultralight",
+    includeTools: normalizeQueryBoolean(params, "includeTools") || false,
+  };
 }
 
 export async function validateCreateGapRequest(
