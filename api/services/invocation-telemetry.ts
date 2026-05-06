@@ -40,6 +40,11 @@ export interface LlmInvocationFinishInput {
   errorType?: string | null;
   errorMessage?: string | null;
   metadata?: JsonRecord;
+  responseSnapshot?: {
+    value: unknown;
+    snapshotType?: string;
+    metadata?: JsonRecord;
+  };
 }
 
 export interface ToolInvocationTelemetryInput {
@@ -300,6 +305,17 @@ export class LlmInvocationTelemetrySession {
         },
       );
 
+      if (input.responseSnapshot) {
+        await this.storeResponseSnapshot(input).catch((err) => {
+          telemetryLogger.warn('Failed to store LLM response snapshot', {
+            invocation_id: this.init.invocationId,
+            source: this.init.source,
+            phase: this.init.phase,
+            error: err,
+          });
+        });
+      }
+
       if (input.status !== 'success') {
         await recordExecutionFailure({
           userId: this.init.userId,
@@ -320,6 +336,58 @@ export class LlmInvocationTelemetrySession {
         error: err,
       });
     }
+  }
+
+  private async storeResponseSnapshot(input: LlmInvocationFinishInput): Promise<void> {
+    if (!input.responseSnapshot) return;
+    const snapshotType = input.responseSnapshot.snapshotType || 'llm_response';
+    const responseValue = {
+      status: input.status,
+      finish_reason: input.finishReason || null,
+      usage: safeJson(input.usage) || {},
+      error_type: input.errorType || null,
+      error_message: input.errorMessage || null,
+      value: safeJson(input.responseSnapshot.value),
+    };
+    const responseText = jsonText(responseValue);
+    const snapshot = await storeJsonSnapshot({
+      anonUserId: this.anonUserId,
+      conversationId: this.init.conversationId,
+      source: 'llm_response_snapshot',
+      relationship: 'llm_response_snapshot',
+      value: responseValue,
+      filename: `${this.init.source}-${this.init.phase}-${this.init.invocationId}-response.json`,
+      metadata: {
+        invocation_id: this.init.invocationId,
+        trace_id: this.init.traceId,
+        source: this.init.source,
+        phase: this.init.phase,
+        snapshot_type: snapshotType,
+        status: input.status,
+        ...(input.responseSnapshot.metadata || {}),
+      },
+    });
+
+    await postRows('llm_context_snapshots', {
+      invocation_id: this.init.invocationId,
+      trace_id: asUuid(this.init.traceId),
+      conversation_id: this.init.conversationId || null,
+      anon_user_id: this.anonUserId,
+      source: this.init.source,
+      snapshot_type: snapshotType,
+      message_count: 0,
+      tool_schema_count: 0,
+      artifact_id: snapshot.artifactId,
+      sha256: snapshot.sha256,
+      size_bytes: snapshot.bytes,
+      text_preview: responseText.slice(0, 4000),
+      metadata: {
+        source: this.init.source,
+        phase: this.init.phase,
+        status: input.status,
+        ...(input.responseSnapshot.metadata || {}),
+      },
+    });
   }
 
   private async startInner(): Promise<void> {

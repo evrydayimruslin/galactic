@@ -28,6 +28,19 @@ import { resolveInferenceRoute, type ResolvedInferenceRoute } from './inference-
 import type { App } from '../../shared/types/index.ts';
 import { buildJsonSchemaDescriptors, type AppForCodemode } from './codemode-tools.ts';
 import { buildAppTrustCard, type TrustCard } from './trust.ts';
+import { createLlmInvocationTelemetrySession } from './invocation-telemetry.ts';
+import {
+  buildAnalyzeOutputLabels,
+  buildExecutionConfirmationOutputLabels,
+  buildFlashInvocationMetadata,
+  buildPromptBuilderOutputLabels,
+  buildReadResponseOutputLabels,
+  FLASH_SCHEMA_IDS,
+  type FlashCapability,
+  type FlashInputFeatureInput,
+  type FlashSchemaId,
+  type FlashTaskId,
+} from './flash-finetune-metadata.ts';
 
 // ── Types ──
 
@@ -38,6 +51,27 @@ export interface SystemAgentState {
   tools: string[];
   stateSummary: string | null;
   status: string;
+}
+
+export interface FlashBrokerTelemetryContext {
+  traceId: string;
+  conversationId?: string;
+  source?: string;
+}
+
+export interface FlashCallTelemetryContext extends FlashBrokerTelemetryContext {
+  userId: string;
+  userEmail: string;
+  source: string;
+}
+
+export interface FlashCallOptions {
+  telemetry?: FlashCallTelemetryContext;
+  taskId?: FlashTaskId;
+  schemaId?: FlashSchemaId;
+  capabilities?: readonly FlashCapability[];
+  inputFeatures?: FlashInputFeatureInput | Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface FlashBrokerResult {
@@ -78,6 +112,20 @@ interface MarketplaceCandidate {
 }
 
 type FunctionEntry = FunctionIndex['functions'][string];
+
+export function buildFlashCallTelemetryContext(
+  telemetry: FlashBrokerTelemetryContext | undefined,
+  input: { userId: string; userEmail: string; conversationId?: string },
+): FlashCallTelemetryContext | undefined {
+  if (!telemetry) return undefined;
+  return {
+    userId: input.userId,
+    userEmail: input.userEmail,
+    traceId: telemetry.traceId,
+    conversationId: telemetry.conversationId || input.conversationId,
+    source: telemetry.source || 'orchestrate',
+  };
+}
 
 export type FlashEvent =
   | { type: 'analyzing'; text: string }
@@ -291,6 +339,10 @@ function buildMultimodalContent(textContent: string, files?: ChatFileAttachment[
   return parts;
 }
 
+function countFunctionConventions(functions: FunctionIndex['functions']): number {
+  return Object.values(functions).reduce((total, fn) => total + (fn.conventions?.length || 0), 0);
+}
+
 export async function* runFlashBroker(
   message: string,
   userId: string,
@@ -305,6 +357,7 @@ export async function* runFlashBroker(
   conversationId?: string,
   files?: ChatFileAttachment[],
   inferenceRoute?: ResolvedInferenceRoute,
+  telemetry?: FlashBrokerTelemetryContext,
 ): AsyncGenerator<FlashEvent> {
   let route: ResolvedInferenceRoute;
   try {
@@ -319,6 +372,11 @@ export async function* runFlashBroker(
 
   const flashModel = selectInferenceModel(route, interpreterModel || DEFAULT_FLASH_MODEL);
   const defaultHeavyModel = selectInferenceModel(route, heavyModel || DEFAULT_HEAVY_MODEL);
+  const flashTelemetry = buildFlashCallTelemetryContext(telemetry, {
+    userId,
+    userEmail,
+    conversationId,
+  });
 
   yield { type: 'analyzing', text: 'Analyzing your request...' };
 
@@ -476,7 +534,27 @@ export async function* runFlashBroker(
   if (lastExchangeStr) analyzeContent += `## Last Exchange\n${lastExchangeStr}\n\n`;
   analyzeContent += `## Current Message\n${message}\n\n## Available Functions\n${catalog}`;
 
-  const analyzeResult = await callFlash(flashModel, analyzeSystem, buildMultimodalContent(analyzeContent, files), route);
+  const analyzeResult = await callFlash(flashModel, analyzeSystem, buildMultimodalContent(analyzeContent, files), route, {
+    telemetry: flashTelemetry,
+    taskId: 'flash_broker.analyze',
+    schemaId: FLASH_SCHEMA_IDS.analyze,
+    inputFeatures: {
+      files,
+      projectContext,
+      conversationHistory,
+      availableFunctionCount: Object.keys(fnIndex.functions).length,
+      conventionCount: countFunctionConventions(fnIndex.functions),
+      scope,
+      systemAgentContext,
+    },
+    metadata: {
+      marketplace_candidate_count: marketplaceCandidates.length,
+      has_agent_skills: !!agentSkills,
+      has_conversation_topics: !!conversationTopics,
+      has_conversation_summary: !!summaryStr,
+      has_last_exchange: !!lastExchangeStr,
+    },
+  });
   if (!analyzeResult) {
     const result = heuristicFallback(message, fnIndex, defaultHeavyModel);
     yield { type: 'done', result };
@@ -749,7 +827,24 @@ export async function* runFlashBroker(
     const readSystem = systemAgentContext
       ? `You are "${systemAgentContext.persona}". ${FLASH_READ_RESPONSE_SYSTEM}`
       : FLASH_READ_RESPONSE_SYSTEM;
-    const responseText = await callFlashText(flashModel, readSystem, buildMultimodalContent(readInput, files), route)
+    const responseText = await callFlashText(flashModel, readSystem, buildMultimodalContent(readInput, files), route, {
+      telemetry: flashTelemetry,
+      taskId: 'flash_broker.read_response',
+      schemaId: FLASH_SCHEMA_IDS.readResponse,
+      inputFeatures: {
+        files,
+        projectContext,
+        conversationHistory,
+        conventionCount: allConventions.length,
+        magnifiedData,
+        conversationSearch,
+        contextQuery,
+      },
+      metadata: {
+        mode: 'read',
+        involved_app_count: appIds.length,
+      },
+    })
       || "I found the data but had trouble formatting the response. Could you try rephrasing your question?";
 
     const result: FlashBrokerResult = {
@@ -829,7 +924,26 @@ export async function* runFlashBroker(
   const promptSystem = systemAgentContext
     ? `You are constructing a prompt for "${systemAgentContext.persona}". Include their skills and conventions in the prompt.\n\n${FLASH_PROMPT_SYSTEM}`
     : FLASH_PROMPT_SYSTEM;
-  const promptResult = await callFlash(flashModel, promptSystem, buildMultimodalContent(promptInput, files), route);
+  const promptResult = await callFlash(flashModel, promptSystem, buildMultimodalContent(promptInput, files), route, {
+    telemetry: flashTelemetry,
+    taskId: 'flash_broker.prompt_builder',
+    schemaId: FLASH_SCHEMA_IDS.promptBuilder,
+    inputFeatures: {
+      files,
+      projectContext,
+      conversationHistory,
+      functionCount: Object.keys(toolMap).length,
+      conventionCount: allConventions.length,
+      magnifiedData,
+      conversationSearch,
+      contextQuery,
+    },
+    metadata: {
+      mode: 'write',
+      involved_app_count: appIds.length,
+      action_function_count: actionFunctions.length,
+    },
+  });
 
   let finalPrompt: string;
   let finalModel: string;
@@ -1149,24 +1263,107 @@ async function magnifyApp(appId: string, userId: string, scope?: string): Promis
 
 // ── Flash API Call ──
 
+type FlashMessage = { role: 'system' | 'user'; content: unknown };
+
+function createFlashTelemetrySession(
+  route: ResolvedInferenceRoute,
+  model: string,
+  messages: FlashMessage[],
+  requestParams: Record<string, unknown>,
+  options?: FlashCallOptions,
+) {
+  if (!options?.telemetry || !options.taskId) return null;
+
+  const metadata = buildFlashInvocationMetadata({
+    taskId: options.taskId,
+    schemaId: options.schemaId,
+    capabilities: options.capabilities,
+    inputFeatures: options.inputFeatures,
+    metadata: {
+      ...(options.metadata || {}),
+      route: {
+        provider: route.provider,
+        upstream_provider: route.upstreamProvider,
+        billing_mode: route.billingMode,
+        billing_source: route.billingSource,
+        key_source: route.keySource,
+        canonical_model_id: route.canonicalModelId || null,
+        billing_model_id: route.billingModelId || null,
+      },
+    },
+  });
+
+  return createLlmInvocationTelemetrySession({
+    userId: options.telemetry.userId,
+    userEmail: options.telemetry.userEmail,
+    invocationId: `${options.telemetry.traceId}:${options.taskId}:${crypto.randomUUID()}`,
+    traceId: options.telemetry.traceId,
+    conversationId: options.telemetry.conversationId,
+    source: options.telemetry.source,
+    phase: options.taskId,
+    provider: route.provider,
+    requestedModel: model,
+    resolvedModel: model,
+    billingMode: route.billingMode,
+    keySource: route.keySource,
+    requestParams,
+    messages,
+    metadata,
+  });
+}
+
+function buildJsonOutputLabels(taskId: FlashTaskId | undefined, output: unknown, parseSuccess: boolean): Record<string, unknown> {
+  if (taskId === 'flash_broker.analyze') {
+    return buildAnalyzeOutputLabels(output, { parseSuccess });
+  }
+  if (taskId === 'flash_broker.prompt_builder') {
+    return buildPromptBuilderOutputLabels(output, { parseSuccess });
+  }
+  return { parse_success: parseSuccess };
+}
+
+function buildTextOutputLabels(taskId: FlashTaskId | undefined, text: string, options?: FlashCallOptions): Record<string, unknown> {
+  if (taskId === 'orchestrate.execution_confirmation') {
+    return buildExecutionConfirmationOutputLabels(text, {
+      executionResultAvailable: options?.metadata?.execution_result_available === true,
+    });
+  }
+  return buildReadResponseOutputLabels(text);
+}
+
+function stripInternalUsage(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const copy = { ...(value as Record<string, unknown>) };
+  delete copy._usage;
+  return copy;
+}
+
 async function callFlash(
   model: string,
   systemPrompt: string,
   userContent: string | unknown[],
   route: ResolvedInferenceRoute,
+  options?: FlashCallOptions,
 ): Promise<any | null> {
+  const messages: FlashMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userContent },
+  ];
+  const requestParams = {
+    temperature: 0,
+    max_tokens: 2048,
+    response_format: { type: 'json_object' },
+  };
+  const llmTelemetry = createFlashTelemetrySession(route, model, messages, requestParams, options);
+  llmTelemetry?.start();
+
   try {
     const response = await fetchInferenceChatCompletion(
       route,
       {
         model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-        temperature: 0,
-        max_tokens: 2048,
-        response_format: { type: 'json_object' },
+        messages,
+        ...requestParams,
       },
       {
         title: 'Ultralight Flash Broker',
@@ -1175,23 +1372,136 @@ async function callFlash(
     );
 
     if (!response.ok) {
+      const detail = await response.text().catch(() => '');
       console.error(`[FLASH-BROKER] Flash failed: ${response.status}`);
+      const outputLabels = buildJsonOutputLabels(options?.taskId, null, false);
+      await llmTelemetry?.finish({
+        status: 'error',
+        errorType: 'provider_error',
+        errorMessage: `Flash failed: ${response.status}`,
+        metadata: {
+          output_labels: outputLabels,
+          parse_success: false,
+          http_status: response.status,
+        },
+        responseSnapshot: {
+          value: {
+            ok: false,
+            http_status: response.status,
+            body_preview: detail.slice(0, 4000),
+          },
+          metadata: {
+            output_labels: outputLabels,
+            parse_success: false,
+          },
+        },
+      });
       return null;
     }
 
     const data = await response.json() as {
-      choices: Array<{ message: { content: string } }>;
+      choices: Array<{ message: { content: string }; finish_reason?: string | null }>;
       usage?: object;
     };
 
     const content = data.choices?.[0]?.message?.content;
-    if (!content) return null;
+    if (!content) {
+      const outputLabels = buildJsonOutputLabels(options?.taskId, null, false);
+      await llmTelemetry?.finish({
+        status: 'error',
+        finishReason: data.choices?.[0]?.finish_reason || null,
+        usage: data.usage,
+        errorType: 'empty_response',
+        errorMessage: 'Flash returned no message content',
+        metadata: {
+          output_labels: outputLabels,
+          parse_success: false,
+        },
+        responseSnapshot: {
+          value: {
+            raw_response: data,
+          },
+          metadata: {
+            output_labels: outputLabels,
+            parse_success: false,
+          },
+        },
+      });
+      return null;
+    }
 
-    const parsed = JSON.parse(content);
+    let parsed: any;
+    try {
+      parsed = JSON.parse(content);
+    } catch (err) {
+      const outputLabels = buildJsonOutputLabels(options?.taskId, null, false);
+      await llmTelemetry?.finish({
+        status: 'error',
+        finishReason: data.choices?.[0]?.finish_reason || null,
+        usage: data.usage,
+        errorType: 'json_parse_error',
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: {
+          output_labels: outputLabels,
+          parse_success: false,
+        },
+        responseSnapshot: {
+          value: {
+            raw_content: content,
+            usage: data.usage || null,
+          },
+          metadata: {
+            output_labels: outputLabels,
+            parse_success: false,
+          },
+        },
+      });
+      return null;
+    }
     parsed._usage = data.usage || undefined;
+    const outputLabels = buildJsonOutputLabels(options?.taskId, parsed, true);
+    await llmTelemetry?.finish({
+      status: 'success',
+      finishReason: data.choices?.[0]?.finish_reason || null,
+      usage: data.usage,
+      metadata: {
+        output_labels: outputLabels,
+        parse_success: true,
+      },
+      responseSnapshot: {
+        value: {
+          raw_content: content,
+          parsed_output: stripInternalUsage(parsed),
+          usage: data.usage || null,
+        },
+        metadata: {
+          output_labels: outputLabels,
+          parse_success: true,
+        },
+      },
+    });
     return parsed;
   } catch (err) {
     console.error('[FLASH-BROKER] Flash error:', err);
+    const outputLabels = buildJsonOutputLabels(options?.taskId, null, false);
+    await llmTelemetry?.finish({
+      status: 'error',
+      errorType: 'exception',
+      errorMessage: err instanceof Error ? err.message : String(err),
+      metadata: {
+        output_labels: outputLabels,
+        parse_success: false,
+      },
+      responseSnapshot: {
+        value: {
+          error: err instanceof Error ? err.message : String(err),
+        },
+        metadata: {
+          output_labels: outputLabels,
+          parse_success: false,
+        },
+      },
+    });
     return null;
   }
 }
@@ -1204,18 +1514,26 @@ export async function callFlashText(
   systemPrompt: string,
   userContent: string | unknown[],
   route: ResolvedInferenceRoute,
+  options?: FlashCallOptions,
 ): Promise<string> {
+  const messages: FlashMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userContent },
+  ];
+  const requestParams = {
+    temperature: 0.3,
+    max_tokens: 2048,
+  };
+  const llmTelemetry = createFlashTelemetrySession(route, model, messages, requestParams, options);
+  llmTelemetry?.start();
+
   try {
     const response = await fetchInferenceChatCompletion(
       route,
       {
         model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-        temperature: 0.3,
-        max_tokens: 2048,
+        messages,
+        ...requestParams,
         // No response_format — plain text output
       },
       {
@@ -1225,17 +1543,75 @@ export async function callFlashText(
     );
 
     if (!response.ok) {
+      const detail = await response.text().catch(() => '');
       console.error(`[FLASH-BROKER] Flash text call failed: ${response.status}`);
+      const outputLabels = buildTextOutputLabels(options?.taskId, '', options);
+      await llmTelemetry?.finish({
+        status: 'error',
+        errorType: 'provider_error',
+        errorMessage: `Flash text call failed: ${response.status}`,
+        metadata: {
+          output_labels: outputLabels,
+          http_status: response.status,
+        },
+        responseSnapshot: {
+          value: {
+            ok: false,
+            http_status: response.status,
+            body_preview: detail.slice(0, 4000),
+          },
+          metadata: {
+            output_labels: outputLabels,
+          },
+        },
+      });
       return '';
     }
 
     const data = await response.json() as {
-      choices: Array<{ message: { content: string } }>;
+      choices: Array<{ message: { content: string }; finish_reason?: string | null }>;
+      usage?: object;
     };
 
-    return data.choices?.[0]?.message?.content || '';
+    const content = data.choices?.[0]?.message?.content || '';
+    const outputLabels = buildTextOutputLabels(options?.taskId, content, options);
+    await llmTelemetry?.finish({
+      status: 'success',
+      finishReason: data.choices?.[0]?.finish_reason || null,
+      usage: data.usage,
+      metadata: {
+        output_labels: outputLabels,
+      },
+      responseSnapshot: {
+        value: {
+          raw_content: content,
+          usage: data.usage || null,
+        },
+        metadata: {
+          output_labels: outputLabels,
+        },
+      },
+    });
+    return content;
   } catch (err) {
     console.error('[FLASH-BROKER] Flash text error:', err);
+    const outputLabels = buildTextOutputLabels(options?.taskId, '', options);
+    await llmTelemetry?.finish({
+      status: 'error',
+      errorType: 'exception',
+      errorMessage: err instanceof Error ? err.message : String(err),
+      metadata: {
+        output_labels: outputLabels,
+      },
+      responseSnapshot: {
+        value: {
+          error: err instanceof Error ? err.message : String(err),
+        },
+        metadata: {
+          output_labels: outputLabels,
+        },
+      },
+    });
     return '';
   }
 }

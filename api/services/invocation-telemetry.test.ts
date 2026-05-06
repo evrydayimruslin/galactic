@@ -35,6 +35,7 @@ Deno.test('invocation telemetry: records LLM context snapshot and completion', a
 
   globalThis.__env = {
     CHAT_CAPTURE_ENABLED: 'true',
+    CHAT_CAPTURE_ARTIFACTS_ENABLED: 'false',
     SUPABASE_URL: 'https://example.supabase.co',
     SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
     ANALYTICS_PEPPER_V1: 'test-pepper',
@@ -118,6 +119,91 @@ Deno.test('invocation telemetry: records LLM context snapshot and completion', a
   }
 });
 
+Deno.test('invocation telemetry: records optional LLM response snapshots', async () => {
+  const previousEnv = globalThis.__env;
+  const previousFetch = globalThis.fetch;
+  const calls: Array<{ method: string; url: string; body: unknown; prefer: string | null }> = [];
+
+  globalThis.__env = {
+    CHAT_CAPTURE_ENABLED: 'true',
+    CHAT_CAPTURE_ARTIFACTS_ENABLED: 'false',
+    SUPABASE_URL: 'https://example.supabase.co',
+    SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+    ANALYTICS_PEPPER_V1: 'test-pepper',
+  } as unknown as typeof globalThis.__env;
+
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
+    const headers = init?.headers as Record<string, string> | undefined;
+    calls.push({
+      method: init?.method || 'GET',
+      url,
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+      prefer: headers?.Prefer || null,
+    });
+
+    if (url.includes('/llm_context_snapshots')) {
+      return Promise.resolve(new Response(JSON.stringify([
+        { id: crypto.randomUUID() },
+      ]), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+    }
+
+    if (init?.method === 'PATCH') {
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
+    return Promise.resolve(new Response('', { status: 201 }));
+  }) as typeof fetch;
+
+  try {
+    const session = createLlmInvocationTelemetrySession({
+      userId: '00000000-0000-4000-8000-000000000001',
+      invocationId: '00000000-0000-4000-8000-000000000003',
+      traceId: '00000000-0000-4000-8000-000000000003',
+      conversationId: 'conv-response-snapshot-test',
+      source: 'unit_test',
+      phase: 'flash_broker.read_response',
+      provider: 'ultralight',
+      requestedModel: 'deepseek-v4-flash',
+      resolvedModel: 'deepseek-v4-flash',
+      messages: [{ role: 'user', content: 'hello' }],
+      metadata: { tier: 'flash', component_id: 'flash_broker.read_response' },
+    });
+
+    assert(session);
+    session.start();
+    await session.finish({
+      status: 'success',
+      finishReason: 'stop',
+      usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
+      metadata: { output_labels: { nonempty_response: true } },
+      responseSnapshot: {
+        value: { raw_content: 'Done.' },
+        metadata: {
+          component_id: 'flash_broker.read_response',
+          output_labels: { nonempty_response: true },
+        },
+      },
+    });
+
+    const snapshotInserts = calls.filter((call) =>
+      call.method === 'POST' && call.url.includes('/llm_context_snapshots')
+    );
+    assertEquals(snapshotInserts.length, 2);
+    assertEquals((snapshotInserts[0].body as { snapshot_type?: string }).snapshot_type, 'llm_request');
+    assertEquals((snapshotInserts[1].body as { snapshot_type?: string }).snapshot_type, 'llm_response');
+    assertEquals((snapshotInserts[1].body as { source?: string }).source, 'unit_test');
+    assertEquals((snapshotInserts[1].body as { message_count?: number }).message_count, 0);
+    assertEquals(
+      ((snapshotInserts[1].body as { metadata?: { output_labels?: { nonempty_response?: boolean } } }).metadata)
+        ?.output_labels?.nonempty_response,
+      true,
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.__env = previousEnv;
+  }
+});
+
 Deno.test('invocation telemetry: records failed tool calls and failure rows', async () => {
   const previousEnv = globalThis.__env;
   const previousFetch = globalThis.fetch;
@@ -125,6 +211,7 @@ Deno.test('invocation telemetry: records failed tool calls and failure rows', as
 
   globalThis.__env = {
     CHAT_CAPTURE_ENABLED: 'true',
+    CHAT_CAPTURE_ARTIFACTS_ENABLED: 'false',
     SUPABASE_URL: 'https://example.supabase.co',
     SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
     ANALYTICS_PEPPER_V1: 'test-pepper',

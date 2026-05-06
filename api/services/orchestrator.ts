@@ -13,7 +13,13 @@
 // loading conventions, choosing a model, then the heavy model writing.
 
 import { getEnv } from '../lib/env.ts';
-import { runFlashBroker, type FlashBrokerResult, type SystemAgentState, type SystemAgentContext } from './flash-broker.ts';
+import {
+  buildFlashCallTelemetryContext,
+  runFlashBroker,
+  type FlashBrokerResult,
+  type SystemAgentContext,
+  type SystemAgentState,
+} from './flash-broker.ts';
 import { executeDynamicCodeMode } from '../runtime/dynamic-executor.ts';
 import { getD1DatabaseId } from './d1-provisioning.ts';
 import { createAppsService } from './apps.ts';
@@ -162,6 +168,7 @@ export async function* orchestrate(
       conversationId,
       files,
       inferenceRoute,
+      options.telemetry,
     );
 
     // Forward Flash events to client as they happen
@@ -474,11 +481,30 @@ export async function* orchestrate(
           inferenceRoute,
           request.interpreterModel || 'google/gemini-3.1-flash-lite-preview:nitro',
         );
+        const confirmationTelemetry = buildFlashCallTelemetryContext(options.telemetry, {
+          userId,
+          userEmail,
+          conversationId,
+        });
         const confirmation = await callFlashText(
           interpreterModel,
           CONFIRM_SYSTEM,
           confirmInput,
           inferenceRoute,
+          confirmationTelemetry
+            ? {
+              telemetry: confirmationTelemetry,
+              taskId: 'orchestrate.execution_confirmation',
+              inputFeatures: {
+                conversationHistory: request.conversationHistory,
+              },
+              metadata: {
+                execution_result_available: execResultData !== null,
+                execution_result_bytes: resultStr.length,
+                truncated_result_bytes: truncatedResult.length,
+              },
+            }
+            : undefined,
         );
 
         if (confirmation) {
