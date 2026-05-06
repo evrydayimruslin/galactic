@@ -1,6 +1,6 @@
 # FINETUNING READINESS AUDIT
 
-Audit date: 2026-05-05  
+Audit date: 2026-05-05
 Scope: Flash and Heavy tier LLM-using components in the current Ultralight codebase. CLOB and BioASM were explicitly skipped; I found no code references matching `clob`, `CLOB`, `bioasm`, `BioASM`, `bio_asm`, or `BIOASM`.
 
 Model availability note: I checked the official Cerebras docs while writing this report. The shared public endpoint list currently shows `llama3.1-8b` and `gpt-oss-120b` as production models, with `llama3.1-8b` scheduled for deprecation on 2026-05-27. The enterprise dedicated-endpoint docs are the better match for Ultralight's reserved-capacity plan: they explicitly support bring-your-own fine-tuned weights and list Qwen3 small/tiny variants (`0.6B`, `1.7B`, `8B`, `14B`, `32B`), Llama 3.3 70B, Llama 4 Scout/Maverick, Mistral, GPT-OSS, GLM, Kimi, DeepSeek, and other families. Sources: [Cerebras supported models](https://inference-docs.cerebras.ai/models/overview) and [Cerebras dedicated endpoints](https://inference-docs.cerebras.ai/dedicated/overview).
@@ -85,34 +85,34 @@ Estimated retained-frontier fraction: 10-20% of total LLM token spend, assuming 
 
 ## 5. RECOMMENDED REFACTOR PRIORITY ORDER
 
-1. **Add a component-aware LLM registry and client wrapper (L).**  
+1. **Add a component-aware LLM registry and client wrapper (L).**
    Create a single server-side entry point such as `callLlmComponent({ componentId, tier, messages, tools, responseFormat, requestedModel, route, telemetry, evalTags })` wrapping `fetchInferenceChatCompletion()` and `AIService.call()`. Preserve existing defaults by seeding registry entries for `flash_broker.analyze`, `flash_broker.prompt_builder`, `flash_broker.read_response`, `orchestrate.heavy`, `orchestrate.confirmation`, `runtime_ai.default`, and `chat_stream.default`. This unlocks model swapping, telemetry, eval replay, traffic splits, and fine-tuned endpoint rollout without touching every callsite later.
 
-2. **Instrument untracked Flash and runtime calls (M/L).**  
+2. **Instrument untracked Flash and runtime calls (M/L).**
    Add `createLlmInvocationTelemetrySession()` around `callFlash()`, `callFlashText()`, `context-resolver.callFlashBroker()`, `RuntimeAIService.call()`, and `AIBinding.call()`. Include `component_id`, `tier`, app slug/function name for runtime calls, schema name, parse status, and teacher/baseline model. This closes the biggest training-data capture gap.
 
-3. **Extend request contracts with component metadata without breaking callers (M).**  
+3. **Extend request contracts with component metadata without breaking callers (M).**
    Add optional fields to `AIRequest`, `ChatStreamRequest`, and runtime `ultralight.ai()` requests: `component`, `tier`, `task`, and `training_eligibility`. Default to current behavior when omitted. MCP apps can then migrate gradually.
 
-4. **Externalize hard-coded MCP app model strings (M).**  
+4. **Externalize hard-coded MCP app model strings (M).**
    Replace direct `model: 'openai/gpt-4o-mini'`, `model: 'openai/gpt-4o'`, `AI_MODEL = 'google/gemini-3-flash-preview'`, and `AI_MODEL = 'meta-llama/llama-4-scout'` with component IDs or manifest-level defaults. Preserve the requested model as a fallback until the registry is populated.
 
-5. **Standardize structured-output validation and retries (M).**  
+5. **Standardize structured-output validation and retries (M).**
    For JSON tasks in Flash broker, memory wiki, email, digest, tutor, fitness, recipe, and x-scrape, use JSON schema/Zod-style validation with repair/retry metadata. Parse failures should become eval labels and training examples.
 
-6. **Build component eval harness from capture exports (M/L).**  
+6. **Build component eval harness from capture exports (M/L).**
    Add `scripts/evals/` that reads `captureExportToJsonl()` output, reconstructs component requests from `llm_context_snapshots`, replays baseline and candidate endpoints, and reports component metrics. Start with router mode accuracy, app/action F1, JSON validity, recipe execution success, and human/admin acceptance.
 
-7. **Add per-component traffic splitting and fallback policy (M).**  
+7. **Add per-component traffic splitting and fallback policy (M).**
    Registry entries should support `baseline_model`, `candidate_model`, `shadow_percent`, `serve_percent`, `fallback_model`, and fail-open rules. This lets Cerebras/OpenPipe/Together endpoints ramp without code changes.
 
-8. **Add privacy/redaction/training eligibility gates (M).**  
+8. **Add privacy/redaction/training eligibility gates (M).**
    Capture artifacts already have `training_eligibility`; make component calls honor it. Add app/user opt-out, PII redaction hooks for email/wiki/tutor data, and export filters for trainable examples only.
 
-9. **Create cost/latency dashboards by component (S/M).**  
+9. **Create cost/latency dashboards by component (S/M).**
    `llm_invocations` already stores provider/model/duration/usage. Add component IDs and dashboards so fine-tune priorities can be driven by real spend, p50/p95 latency, error rate, and parse-failure rate.
 
-10. **Add provider registry entries for Cerebras/OpenPipe/Together OpenAI-compatible endpoints (S/M).**  
+10. **Add provider registry entries for Cerebras/OpenPipe/Together OpenAI-compatible endpoints (S/M).**
    The OpenAI-compatible surface is already there. Add configured providers/base URLs/model IDs and model capability metadata rather than introducing new request code.
 
 ## 6. SUGGESTED FIRST FINE-TUNES
