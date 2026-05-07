@@ -2,10 +2,13 @@ import { formatLight, MIN_WITHDRAWAL_LIGHT } from "../../shared/types/index.ts";
 import { getEnv } from "../lib/env.ts";
 import { getBillingConfig } from "./billing-config.ts";
 import {
+  ensurePlainObject,
   normalizeOptionalString,
+  normalizeRequiredString,
   readJsonObject,
   RequestValidationError,
 } from "./request-validation.ts";
+import type { BillingAddressInput } from "./billing-addresses.ts";
 
 const ALLOWED_CHECKOUT_SOURCES = new Set(["web", "desktop"]);
 const ALLOWED_UPLOAD_VISIBILITIES = new Set(["private", "unlisted", "public"]);
@@ -42,12 +45,18 @@ export interface ValidatedWalletFundingPayload {
   amountCents: number;
   source: "web" | "desktop";
   termsAccepted: true;
+  billingAddress?: BillingAddressInput;
 }
 
 export interface ValidatedWireFundingPayload {
   amountCents: number;
   source: "web" | "desktop";
   termsAccepted: true;
+  billingAddress?: BillingAddressInput;
+}
+
+export interface ValidatedBillingAddressPayload {
+  billingAddress: BillingAddressInput;
 }
 
 export interface ValidatedConnectOnboardPayload {
@@ -255,16 +264,24 @@ export async function assertOwnedSupabaseConfig(
 
 async function validateFundingAmountRequest(
   request: Request,
-  options: { requireTerms?: boolean; minimumCents?: number } = {},
+  options: {
+    requireTerms?: boolean;
+    minimumCents?: number;
+    allowBillingAddress?: boolean;
+  } = {},
 ): Promise<{
   amountCents: number;
   source: "web" | "desktop";
   termsAccepted?: true;
+  billingAddress?: BillingAddressInput;
 }> {
   const body = await readJsonObject(request, {
-    allowedKeys: options.requireTerms
-      ? ["amount_cents", "source", "terms_accepted"]
-      : ["amount_cents", "source"],
+    allowedKeys: [
+      "amount_cents",
+      "source",
+      ...(options.requireTerms ? ["terms_accepted"] : []),
+      ...(options.allowBillingAddress ? ["billing_address"] : []),
+    ],
   });
 
   const amountCents = normalizeRequiredInteger(
@@ -302,6 +319,76 @@ async function validateFundingAmountRequest(
     amountCents,
     source: source as "web" | "desktop",
     ...(options.requireTerms ? { termsAccepted: true as const } : {}),
+    ...(options.allowBillingAddress && body.billing_address !== undefined
+      ? {
+        billingAddress: validateBillingAddressValue(
+          body.billing_address,
+          "billing_address",
+        ),
+      }
+      : {}),
+  };
+}
+
+export function validateBillingAddressValue(
+  value: unknown,
+  field = "billing_address",
+): BillingAddressInput {
+  const body = ensurePlainObject(value, `${field} must be an object`);
+  const name = normalizeOptionalString(body.name, `${field}.name`, {
+    maxLength: 160,
+  });
+  const line1 = normalizeRequiredString(body.line1, `${field}.line1`, {
+    maxLength: 200,
+  });
+  const line2 = normalizeOptionalString(body.line2, `${field}.line2`, {
+    maxLength: 200,
+  });
+  const city = normalizeRequiredString(body.city, `${field}.city`, {
+    maxLength: 120,
+  });
+  const state = normalizeOptionalString(body.state, `${field}.state`, {
+    maxLength: 120,
+  });
+  const postalCode = normalizeRequiredString(
+    body.postal_code,
+    `${field}.postal_code`,
+    { maxLength: 32 },
+  );
+  const country = normalizeRequiredString(body.country, `${field}.country`, {
+    maxLength: 2,
+  }).toUpperCase();
+
+  if (!COUNTRY_CODE_REGEX.test(country)) {
+    throw new RequestValidationError(
+      `${field}.country must be a two-letter ISO country code`,
+    );
+  }
+  if ((country === "US" || country === "CA") && !state) {
+    throw new RequestValidationError(
+      `${field}.state is required for US and CA addresses`,
+    );
+  }
+
+  return {
+    ...(name ? { name } : {}),
+    line1,
+    ...(line2 ? { line2 } : {}),
+    city,
+    ...(state ? { state } : {}),
+    postalCode,
+    country,
+  };
+}
+
+export async function validateBillingAddressRequest(
+  request: Request,
+): Promise<ValidatedBillingAddressPayload> {
+  const body = await readJsonObject(request, {
+    allowedKeys: ["billing_address"],
+  });
+  return {
+    billingAddress: validateBillingAddressValue(body.billing_address),
   };
 }
 
@@ -318,6 +405,7 @@ export async function validateWalletFundingRequest(
   return await validateFundingAmountRequest(request, {
     requireTerms: true,
     minimumCents: billingConfig.cardMinimumCents,
+    allowBillingAddress: true,
   }) as ValidatedWalletFundingPayload;
 }
 
@@ -328,6 +416,7 @@ export async function validateWireFundingRequest(
   return await validateFundingAmountRequest(request, {
     requireTerms: true,
     minimumCents: billingConfig.wireMinimumCents,
+    allowBillingAddress: true,
   }) as ValidatedWireFundingPayload;
 }
 

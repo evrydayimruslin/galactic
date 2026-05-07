@@ -6,8 +6,8 @@ import { getEnv } from "../lib/env.ts";
 import {
   attachCallReceipts,
   CALL_RECEIPT_LOG_SELECT,
-  type CallReceiptLogRow,
   type CallReceipt,
+  type CallReceiptLogRow,
 } from "./call-receipts.ts";
 import { createServerLogger } from "./logging.ts";
 
@@ -51,6 +51,11 @@ export interface McpCallLogEntry {
   infraChargeLight?: number;
   platformFeeLight?: number;
   developerNetLight?: number;
+  buyerBillingAddressId?: string;
+  buyerBillingAddressVersion?: number;
+  taxStatus?: string;
+  taxableAmountLight?: number;
+  taxAmountLight?: number;
   freeCall?: boolean;
   freeCallCount?: number | null;
   freeCallLimit?: number;
@@ -150,6 +155,11 @@ async function _insertLog(entry: McpCallLogEntry): Promise<void> {
         infra_charge_light: entry.infraChargeLight ?? null,
         platform_fee_light: entry.platformFeeLight ?? null,
         developer_net_light: entry.developerNetLight ?? null,
+        buyer_billing_address_id: entry.buyerBillingAddressId ?? null,
+        buyer_billing_address_version: entry.buyerBillingAddressVersion ?? null,
+        tax_status: entry.taxStatus ?? "not_collecting",
+        taxable_amount_light: entry.taxableAmountLight ?? 0,
+        tax_amount_light: entry.taxAmountLight ?? 0,
         free_call: entry.freeCall ?? false,
         free_call_count: entry.freeCallCount ?? null,
         free_call_limit: entry.freeCallLimit ?? null,
@@ -238,7 +248,9 @@ export function extractCallMeta(args: Record<string, unknown>): {
 export async function getRecentCalls(
   userId: string,
   options: { limit?: number; since?: string; appId?: string } = {},
-): Promise<Array<CallReceiptLogRow & { receipt_id: string; receipt: CallReceipt }>> {
+): Promise<
+  Array<CallReceiptLogRow & { receipt_id: string; receipt: CallReceipt }>
+> {
   const limit = options.limit || 50;
   let url = `${
     getEnv("SUPABASE_URL")
@@ -275,7 +287,9 @@ export async function getRecentCalls(
 export async function getAppCallLog(
   appId: string,
   options: { limit?: number } = {},
-): Promise<Array<CallReceiptLogRow & { receipt_id: string; receipt: CallReceipt }>> {
+): Promise<
+  Array<CallReceiptLogRow & { receipt_id: string; receipt: CallReceipt }>
+> {
   const limit = Math.min(options.limit || 50, 200);
   const url = `${
     getEnv("SUPABASE_URL")

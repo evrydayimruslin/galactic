@@ -4,6 +4,7 @@ import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejec
 import {
   assertOwnedSupabaseConfig,
   validateAppSupabaseConfigRequest,
+  validateBillingAddressRequest,
   validateConnectOnboardRequest,
   validateHostingCheckoutRequest,
   validateProgrammaticUploadOptions,
@@ -143,6 +144,14 @@ Deno.test("platform request validation: wallet funding reuses deposit bounds", a
         amount_cents: 2500,
         source: "web",
         terms_accepted: true,
+        billing_address: {
+          name: "Ada Lovelace",
+          line1: "123 Compute Way",
+          city: "New York",
+          state: "NY",
+          postal_code: "10001",
+          country: "us",
+        },
       }),
     }),
   );
@@ -151,6 +160,14 @@ Deno.test("platform request validation: wallet funding reuses deposit bounds", a
     amountCents: 2500,
     source: "web",
     termsAccepted: true,
+    billingAddress: {
+      name: "Ada Lovelace",
+      line1: "123 Compute Way",
+      city: "New York",
+      state: "NY",
+      postalCode: "10001",
+      country: "US",
+    },
   });
 
   await assertRejects(
@@ -183,6 +200,47 @@ Deno.test("platform request validation: wallet funding reuses deposit bounds", a
       ),
     RequestValidationError,
     "terms_accepted must be true",
+  );
+});
+
+Deno.test("platform request validation: billing address requires US region", async () => {
+  const payload = await validateBillingAddressRequest(
+    new Request("https://example.com/api/user/billing-address", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        billing_address: {
+          line1: "123 Compute Way",
+          city: "New York",
+          state: "NY",
+          postal_code: "10001",
+          country: "us",
+        },
+      }),
+    }),
+  );
+
+  assertEquals(payload.billingAddress.country, "US");
+  assertEquals(payload.billingAddress.postalCode, "10001");
+
+  await assertRejects(
+    () =>
+      validateBillingAddressRequest(
+        new Request("https://example.com/api/user/billing-address", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            billing_address: {
+              line1: "123 Compute Way",
+              city: "New York",
+              postal_code: "10001",
+              country: "US",
+            },
+          }),
+        }),
+      ),
+    RequestValidationError,
+    "state is required",
   );
 });
 

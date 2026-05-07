@@ -47,6 +47,7 @@ export {
   listSupabaseConfigs,
 } from "../services/user-supabase-configs.ts";
 import {
+  validateBillingAddressRequest,
   validateConnectOnboardRequest,
   validateHostingCheckoutRequest,
   validateSupabaseOauthConnectRequest,
@@ -88,6 +89,14 @@ import {
   createWireTransferPaymentIntent,
   WireFundingError,
 } from "../services/stripe-wire-funding.ts";
+import {
+  type BillingAddressInput,
+  getCurrentBillingAddress,
+  publicBillingAddress,
+  updateStripeCustomerBillingAddress,
+  upsertCurrentBillingAddress,
+  type UserBillingAddressProfile,
+} from "../services/billing-addresses.ts";
 
 const stripeLogger = createServerLogger("STRIPE");
 const userLogger = createServerLogger("USER");
@@ -308,6 +317,46 @@ async function getOrCreateStripeCustomerForUser(
   );
 
   return { stripeCustomerId, email };
+}
+
+async function ensureBillingAddressForFunding(input: {
+  userId: string;
+  billingAddress?: BillingAddressInput;
+  source: "wallet_funding" | "wire_funding";
+  stripeSecretKey: string;
+  stripeCustomerId: string;
+}): Promise<UserBillingAddressProfile> {
+  const profile = input.billingAddress
+    ? await upsertCurrentBillingAddress({
+      userId: input.userId,
+      address: input.billingAddress,
+      source: input.source,
+      stripeCustomerId: input.stripeCustomerId,
+    })
+    : await getCurrentBillingAddress(input.userId);
+
+  if (!profile) {
+    throw new RequestValidationError(
+      "billing_address is required before adding Light",
+      400,
+    );
+  }
+
+  try {
+    await updateStripeCustomerBillingAddress({
+      stripeSecretKey: input.stripeSecretKey,
+      stripeCustomerId: input.stripeCustomerId,
+      profile,
+    });
+  } catch (err) {
+    stripeLogger.warn("Failed to sync billing address to Stripe customer", {
+      user_id: input.userId,
+      stripe_customer_id: input.stripeCustomerId,
+      error: err,
+    });
+  }
+
+  return profile;
 }
 
 function isTier(value: unknown): value is Tier {
@@ -2687,6 +2736,86 @@ export async function handleUser(request: Request): Promise<Response> {
     );
   }
 
+  // GET /api/user/billing-address — current buyer tax-location profile
+  if (path === "/api/user/billing-address" && method === "GET") {
+    try {
+      const user = await authenticate(request);
+      const profile = await getCurrentBillingAddress(user.id);
+      return json({
+        billing_address: publicBillingAddress(profile),
+        has_billing_address: !!profile,
+      });
+    } catch (err) {
+      return error(err instanceof Error ? err.message : "Unauthorized", 401);
+    }
+  }
+
+  // PUT /api/user/billing-address — save a new current billing address version
+  if (path === "/api/user/billing-address" && method === "PUT") {
+    return withSensitiveRouteRateLimit(
+      userId,
+      "user:billing_address_update",
+      async () => {
+        try {
+          const user = await authenticate(request);
+          const { billingAddress } = await validateBillingAddressRequest(
+            request,
+          );
+          const stripeSecretKey = getEnv("STRIPE_SECRET_KEY");
+          let stripeCustomerId: string | null = null;
+          if (stripeSecretKey) {
+            const customer = await getOrCreateStripeCustomerForUser(
+              user.id,
+              stripeSecretKey,
+            );
+            stripeCustomerId = customer.stripeCustomerId;
+          }
+
+          const profile = await upsertCurrentBillingAddress({
+            userId: user.id,
+            address: billingAddress,
+            source: "manual",
+            stripeCustomerId,
+          });
+
+          if (stripeSecretKey && stripeCustomerId) {
+            try {
+              await updateStripeCustomerBillingAddress({
+                stripeSecretKey,
+                stripeCustomerId,
+                profile,
+              });
+            } catch (err) {
+              stripeLogger.warn(
+                "Failed to sync billing address to Stripe customer",
+                {
+                  user_id: user.id,
+                  stripe_customer_id: stripeCustomerId,
+                  error: err,
+                },
+              );
+            }
+          }
+
+          return json({
+            billing_address: publicBillingAddress(profile),
+            has_billing_address: true,
+          });
+        } catch (err) {
+          if (err instanceof RequestValidationError) {
+            return error(err.message, err.status);
+          }
+          return error(
+            err instanceof Error
+              ? err.message
+              : "Failed to save billing address",
+            500,
+          );
+        }
+      },
+    );
+  }
+
   // POST /api/user/wallet/express-checkout-intent — Apple Pay / Google Pay Light funding
   // Body: { amount_cents: number, source?: 'web' | 'desktop', terms_accepted: true }
   // Returns a Stripe PaymentIntent client secret for the Express Checkout Element.
@@ -2699,7 +2828,7 @@ export async function handleUser(request: Request): Promise<Response> {
       async () => {
         try {
           const user = await authenticate(request);
-          const { amountCents, source, termsAccepted } =
+          const { amountCents, source, termsAccepted, billingAddress } =
             await validateWalletFundingRequest(request);
 
           const STRIPE_SECRET_KEY = getEnv("STRIPE_SECRET_KEY");
@@ -2715,6 +2844,13 @@ export async function handleUser(request: Request): Promise<Response> {
               user.id,
               STRIPE_SECRET_KEY,
             );
+          const billingProfile = await ensureBillingAddressForFunding({
+            userId: user.id,
+            billingAddress,
+            source: "wallet_funding",
+            stripeSecretKey: STRIPE_SECRET_KEY,
+            stripeCustomerId,
+          });
           const intent = await createWalletExpressPaymentIntent({
             userId: user.id,
             stripeCustomerId,
@@ -2722,6 +2858,8 @@ export async function handleUser(request: Request): Promise<Response> {
             amountCents,
             source,
             termsAccepted,
+            billingAddressId: billingProfile.id,
+            billingAddressVersion: billingProfile.version,
           });
 
           return json({
@@ -2733,6 +2871,7 @@ export async function handleUser(request: Request): Promise<Response> {
             light_amount: intent.lightAmount,
             wallet_light_per_usd: intent.lightPerUsd,
             billing_config_version: intent.billingConfigVersion,
+            billing_address: publicBillingAddress(billingProfile),
           });
         } catch (err) {
           if (err instanceof RequestValidationError) {
@@ -2760,7 +2899,7 @@ export async function handleUser(request: Request): Promise<Response> {
       async () => {
         try {
           const user = await authenticate(request);
-          const { amountCents, source, termsAccepted } =
+          const { amountCents, source, termsAccepted, billingAddress } =
             await validateWireFundingRequest(request);
 
           const STRIPE_SECRET_KEY = getEnv("STRIPE_SECRET_KEY");
@@ -2776,6 +2915,13 @@ export async function handleUser(request: Request): Promise<Response> {
               user.id,
               STRIPE_SECRET_KEY,
             );
+          const billingProfile = await ensureBillingAddressForFunding({
+            userId: user.id,
+            billingAddress,
+            source: "wire_funding",
+            stripeSecretKey: STRIPE_SECRET_KEY,
+            stripeCustomerId,
+          });
           const intent = await createWireTransferPaymentIntent({
             userId: user.id,
             stripeCustomerId,
@@ -2783,6 +2929,8 @@ export async function handleUser(request: Request): Promise<Response> {
             amountCents,
             source,
             termsAccepted,
+            billingAddressId: billingProfile.id,
+            billingAddressVersion: billingProfile.version,
           });
 
           return json({
@@ -2794,6 +2942,7 @@ export async function handleUser(request: Request): Promise<Response> {
             billing_config_version: intent.billingConfigVersion,
             status: intent.status,
             instructions: intent.instructions,
+            billing_address: publicBillingAddress(billingProfile),
           });
         } catch (err) {
           if (err instanceof RequestValidationError) {

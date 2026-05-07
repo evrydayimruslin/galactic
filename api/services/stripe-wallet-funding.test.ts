@@ -39,3 +39,22 @@ Deno.test("stripe wallet funding: PaymentIntent params expose only card-backed w
   assertEquals(params.get("metadata[terms_accepted]"), "true");
   assertEquals(params.get("receipt_email"), "founder@example.com");
 });
+
+Deno.test("stripe wallet funding: PaymentIntent metadata carries billing address version", () => {
+  const params = buildWalletExpressPaymentIntentParams({
+    userId: "user_123",
+    stripeCustomerId: "cus_123",
+    amountCents: 2500,
+    source: "web",
+    termsAccepted: true,
+    billingConfig: DEFAULT_BILLING_CONFIG,
+    billingAddressId: "00000000-0000-0000-0000-000000000abc",
+    billingAddressVersion: 3,
+  });
+
+  assertEquals(
+    params.get("metadata[buyer_billing_address_id]"),
+    "00000000-0000-0000-0000-000000000abc",
+  );
+  assertEquals(params.get("metadata[buyer_billing_address_version]"), "3");
+});

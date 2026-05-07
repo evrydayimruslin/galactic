@@ -5930,7 +5930,7 @@ export function getLayoutHTML(options: {
       cloud_unit_light_per_1k: 1,
       storage_free_bytes: 104857600,
       storage_light_per_gb_month: 100,
-      publish_deposit_enabled: false,
+      publish_deposit_enabled: true,
       published_hosting_meter_enabled: false,
       min_withdrawal_light: 5000,
       payout_policy_copy: 'Payouts are processed on the first business day of each month. Requests must be submitted at least 21 days before that payout date to be included. Purchased Light cannot be cashed out; only creator earnings are eligible for payout.',
@@ -6015,6 +6015,10 @@ export function getLayoutHTML(options: {
       amountCents: 0,
     };
     var walletStripeJsPromise = null;
+    var billingAddressState = {
+      loaded: false,
+      address: null,
+    };
     var wireTransferState = {
       paymentIntentId: null,
       amountCents: 0,
@@ -6029,6 +6033,13 @@ export function getLayoutHTML(options: {
 
     function setWireTransferStatus(message, tone) {
       var statusEl = document.getElementById('wireTransferStatus');
+      if (!statusEl) return;
+      statusEl.textContent = message || '';
+      statusEl.style.color = tone === 'error' ? 'var(--error)' : tone === 'success' ? 'var(--success)' : 'var(--text-muted)';
+    }
+
+    function setBillingAddressStatus(message, tone) {
+      var statusEl = document.getElementById('billingAddressStatus');
       if (!statusEl) return;
       statusEl.textContent = message || '';
       statusEl.style.color = tone === 'error' ? 'var(--error)' : tone === 'success' ? 'var(--success)' : 'var(--text-muted)';
@@ -6051,6 +6062,109 @@ export function getLayoutHTML(options: {
     function formatUsdCents(cents) {
       return '$' + (Math.max(0, cents || 0) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
+
+    function setInputValue(id, value) {
+      var input = document.getElementById(id);
+      if (input) input.value = value || '';
+    }
+
+    function populateBillingAddressForm(address) {
+      if (!address) return;
+      setInputValue('billingAddressName', address.name || '');
+      setInputValue('billingAddressLine1', address.line1 || '');
+      setInputValue('billingAddressLine2', address.line2 || '');
+      setInputValue('billingAddressCity', address.city || '');
+      setInputValue('billingAddressState', address.state || '');
+      setInputValue('billingAddressPostalCode', address.postal_code || '');
+      setInputValue('billingAddressCountry', address.country || 'US');
+    }
+
+    function readBillingAddressPayload() {
+      function value(id) {
+        var input = document.getElementById(id);
+        return input && input.value ? input.value.trim() : '';
+      }
+      var country = value('billingAddressCountry').toUpperCase();
+      var payload = {
+        name: value('billingAddressName') || undefined,
+        line1: value('billingAddressLine1'),
+        line2: value('billingAddressLine2') || undefined,
+        city: value('billingAddressCity'),
+        state: value('billingAddressState') || undefined,
+        postal_code: value('billingAddressPostalCode'),
+        country: country || 'US',
+      };
+      if (!payload.line1 || !payload.city || !payload.postal_code || !payload.country) {
+        throw new Error('Billing address needs street, city, postal code, and country.');
+      }
+      if (!/^[A-Z]{2}$/.test(payload.country)) {
+        throw new Error('Country must be a two-letter code.');
+      }
+      if ((payload.country === 'US' || payload.country === 'CA') && !payload.state) {
+        throw new Error('State or province is required for US and CA addresses.');
+      }
+      return payload;
+    }
+
+    async function loadBillingAddress() {
+      if (!authToken) return null;
+      try {
+        var res = await fetch('/api/user/billing-address', {
+          headers: { 'Authorization': 'Bearer ' + authToken },
+        });
+        if (!res.ok) return null;
+        var data = await res.json();
+        billingAddressState = {
+          loaded: true,
+          address: data.billing_address || null,
+        };
+        populateBillingAddressForm(billingAddressState.address);
+        setBillingAddressStatus(
+          billingAddressState.address ? 'Billing address saved.' : '',
+          billingAddressState.address ? 'success' : 'muted',
+        );
+        return billingAddressState.address;
+      } catch {
+        return null;
+      }
+    }
+
+    window.saveBillingAddress = async function() {
+      if (!authToken) {
+        showAuthOverlay();
+        return null;
+      }
+      var payload;
+      try {
+        payload = readBillingAddressPayload();
+      } catch (err) {
+        setBillingAddressStatus(err && err.message ? err.message : 'Billing address is incomplete.', 'error');
+        return null;
+      }
+      setBillingAddressStatus('Saving billing address...', 'muted');
+      try {
+        var res = await fetch('/api/user/billing-address', {
+          method: 'PUT',
+          headers: { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ billing_address: payload }),
+        });
+        var data = await res.json();
+        if (!res.ok) {
+          setBillingAddressStatus(data.error || 'Billing address could not be saved.', 'error');
+          return null;
+        }
+        billingAddressState = {
+          loaded: true,
+          address: data.billing_address || payload,
+        };
+        populateBillingAddressForm(billingAddressState.address);
+        setBillingAddressStatus('Billing address saved.', 'success');
+        return billingAddressState.address;
+      } catch (err) {
+        setBillingAddressStatus(err && err.message ? err.message : 'Billing address could not be saved.', 'error');
+        return null;
+      }
+    };
 
     function clearWalletExpressElement() {
       if (walletExpressState.element) {
@@ -6135,6 +6249,22 @@ export function getLayoutHTML(options: {
       var el = document.getElementById('walletFundingMethods');
       if (!el) return;
       el.innerHTML =
+        '<div style="grid-column:1/-1;border:1px solid var(--border);background:var(--bg-primary);padding:var(--space-4);min-width:0;">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);margin-bottom:var(--space-3);">' +
+            '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">Billing Address</div>' +
+            '<button id="billingAddressSaveBtn" class="btn btn-sm" style="border-radius:0;border:1px solid var(--border);" onclick="saveBillingAddress()">Save</button>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:var(--space-2);">' +
+            '<div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Name</label><input id="billingAddressName" autocomplete="billing name" style="width:100%;padding:7px 9px;background:var(--bg-primary);border:1px solid var(--border);color:var(--text-primary);font-size:13px;"></div>' +
+            '<div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Country</label><input id="billingAddressCountry" maxlength="2" value="US" autocomplete="billing country" style="width:100%;padding:7px 9px;background:var(--bg-primary);border:1px solid var(--border);color:var(--text-primary);font-size:13px;text-transform:uppercase;"></div>' +
+            '<div style="grid-column:1/-1;"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Address</label><input id="billingAddressLine1" autocomplete="billing address-line1" style="width:100%;padding:7px 9px;background:var(--bg-primary);border:1px solid var(--border);color:var(--text-primary);font-size:13px;"></div>' +
+            '<div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Apt / suite</label><input id="billingAddressLine2" autocomplete="billing address-line2" style="width:100%;padding:7px 9px;background:var(--bg-primary);border:1px solid var(--border);color:var(--text-primary);font-size:13px;"></div>' +
+            '<div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">City</label><input id="billingAddressCity" autocomplete="billing address-level2" style="width:100%;padding:7px 9px;background:var(--bg-primary);border:1px solid var(--border);color:var(--text-primary);font-size:13px;"></div>' +
+            '<div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">State / region</label><input id="billingAddressState" autocomplete="billing address-level1" style="width:100%;padding:7px 9px;background:var(--bg-primary);border:1px solid var(--border);color:var(--text-primary);font-size:13px;"></div>' +
+            '<div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Postal code</label><input id="billingAddressPostalCode" autocomplete="billing postal-code" style="width:100%;padding:7px 9px;background:var(--bg-primary);border:1px solid var(--border);color:var(--text-primary);font-size:13px;"></div>' +
+          '</div>' +
+          '<div id="billingAddressStatus" style="font-size:12px;color:var(--text-muted);line-height:1.45;margin-top:var(--space-2);"></div>' +
+        '</div>' +
         '<div style="border:1px solid var(--border);background:var(--bg-primary);padding:var(--space-4);min-width:0;">' +
           '<div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);margin-bottom:var(--space-2);">' +
             '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">Apple Pay / Google Pay</div>' +
@@ -6169,6 +6299,8 @@ export function getLayoutHTML(options: {
           '<div id="wireTransferInstructions"></div>' +
           '<div id="wireTransferStatus" style="font-size:12px;color:var(--text-muted);line-height:1.45;margin-top:var(--space-2);"></div>' +
         '</div>';
+      if (billingAddressState.address) populateBillingAddressForm(billingAddressState.address);
+      if (!billingAddressState.loaded && authToken) loadBillingAddress();
       window.updateWalletFundingPreview();
       window.updateWireFundingPreview();
     }
@@ -6257,6 +6389,15 @@ export function getLayoutHTML(options: {
         setWireTransferStatus('Review and accept the Light funding terms before generating wire instructions.', 'error');
         return;
       }
+      if (!billingAddressState.loaded && authToken) await loadBillingAddress();
+      var billingAddress;
+      try {
+        billingAddress = readBillingAddressPayload();
+      } catch (err) {
+        setWireTransferStatus(err && err.message ? err.message : 'Billing address is incomplete.', 'error');
+        setBillingAddressStatus(err && err.message ? err.message : 'Billing address is incomplete.', 'error');
+        return;
+      }
 
       var btn = document.getElementById('wireTransferStartBtn');
       if (btn) btn.disabled = true;
@@ -6267,12 +6408,20 @@ export function getLayoutHTML(options: {
         var res = await fetch('/api/user/wallet/wire-transfer-intent', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ amount_cents: cents, source: _isEmbed ? 'desktop' : 'web', terms_accepted: true }),
+          body: JSON.stringify({ amount_cents: cents, source: _isEmbed ? 'desktop' : 'web', terms_accepted: true, billing_address: billingAddress }),
         });
         var data = await res.json();
         if (!res.ok) {
           setWireTransferStatus(data.error || 'Wire funding is unavailable right now.', 'error');
           return;
+        }
+        if (data.billing_address) {
+          billingAddressState = {
+            loaded: true,
+            address: data.billing_address,
+          };
+          populateBillingAddressForm(data.billing_address);
+          setBillingAddressStatus('Billing address saved.', 'success');
         }
 
         wireTransferState = {
@@ -6311,6 +6460,15 @@ export function getLayoutHTML(options: {
         setWalletExpressStatus('Review and accept the Light funding terms before showing wallet buttons.', 'error');
         return;
       }
+      if (!billingAddressState.loaded && authToken) await loadBillingAddress();
+      var billingAddress;
+      try {
+        billingAddress = readBillingAddressPayload();
+      } catch (err) {
+        setWalletExpressStatus(err && err.message ? err.message : 'Billing address is incomplete.', 'error');
+        setBillingAddressStatus(err && err.message ? err.message : 'Billing address is incomplete.', 'error');
+        return;
+      }
 
       var btn = document.getElementById('walletExpressStartBtn');
       if (btn) btn.disabled = true;
@@ -6321,12 +6479,20 @@ export function getLayoutHTML(options: {
         var res = await fetch('/api/user/wallet/express-checkout-intent', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ amount_cents: cents, source: _isEmbed ? 'desktop' : 'web', terms_accepted: true }),
+          body: JSON.stringify({ amount_cents: cents, source: _isEmbed ? 'desktop' : 'web', terms_accepted: true, billing_address: billingAddress }),
         });
         var data = await res.json();
         if (!res.ok) {
           setWalletExpressStatus(data.error || 'Wallet funding is unavailable right now.', 'error');
           return;
+        }
+        if (data.billing_address) {
+          billingAddressState = {
+            loaded: true,
+            address: data.billing_address,
+          };
+          populateBillingAddressForm(data.billing_address);
+          setBillingAddressStatus('Billing address saved.', 'success');
         }
 
         var StripeCtor = await loadStripeJs();

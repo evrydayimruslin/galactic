@@ -26,6 +26,11 @@ export const CALL_RECEIPT_LOG_SELECT = [
   "cloud_charge_light",
   "cloud_payer_user_id",
   "cloud_owner_sponsored",
+  "buyer_billing_address_id",
+  "buyer_billing_address_version",
+  "tax_status",
+  "taxable_amount_light",
+  "tax_amount_light",
 ].join(",");
 
 const CLOUD_USAGE_EVENT_RECEIPT_SELECT = [
@@ -82,6 +87,11 @@ export interface CallReceiptLogRow {
   cloud_charge_light?: number | null;
   cloud_payer_user_id?: string | null;
   cloud_owner_sponsored?: boolean | null;
+  buyer_billing_address_id?: string | null;
+  buyer_billing_address_version?: number | null;
+  tax_status?: string | null;
+  taxable_amount_light?: number | null;
+  tax_amount_light?: number | null;
 }
 
 export interface ReceiptCloudUsageEvent {
@@ -118,6 +128,11 @@ export interface CallReceipt {
   total_light: number;
   platform_fee_light: number;
   developer_net_light: number;
+  buyer_billing_address_id: string | null;
+  buyer_billing_address_version: number | null;
+  tax_status: string;
+  taxable_amount_light: number;
+  tax_amount_light: number;
   free_call: boolean;
   free_call_count: number | null;
   free_call_limit: number;
@@ -222,6 +237,7 @@ export function buildCallReceipt(
   const infraLight = eventInfraLight > 0 ? eventInfraLight : legacyInfraLight;
   const appChargeLight = numeric(log.app_charge_light) ||
     numeric(log.call_charge_light);
+  const taxAmountLight = numeric(log.tax_amount_light);
   const cloudUnits = eventCloudUnits > 0
     ? eventCloudUnits
     : numeric(log.cloud_units);
@@ -243,9 +259,16 @@ export function buildCallReceipt(
     app_price_light: numeric(log.app_price_light) || appChargeLight,
     app_charge_light: appChargeLight,
     infra_light: infraLight,
-    total_light: appChargeLight + infraLight,
+    total_light: appChargeLight + infraLight + taxAmountLight,
     platform_fee_light: numeric(log.platform_fee_light),
     developer_net_light: numeric(log.developer_net_light),
+    buyer_billing_address_id: log.buyer_billing_address_id || null,
+    buyer_billing_address_version: nullableNumeric(
+      log.buyer_billing_address_version,
+    ),
+    tax_status: log.tax_status || "not_collecting",
+    taxable_amount_light: numeric(log.taxable_amount_light),
+    tax_amount_light: taxAmountLight,
     free_call: log.free_call === true,
     free_call_count: nullableNumeric(log.free_call_count),
     free_call_limit: numeric(log.free_call_limit),

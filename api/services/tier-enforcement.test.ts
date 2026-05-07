@@ -44,7 +44,7 @@ async function withMockedEnvAndFetch(
   }
 }
 
-Deno.test("tier enforcement: legacy publish balance gate is disabled by billing config", async () => {
+Deno.test("tier enforcement: publish gate bypasses when disabled by billing config", async () => {
   await runSerial(async () => {
     const calls: string[] = [];
 
@@ -74,11 +74,14 @@ Deno.test("tier enforcement: legacy publish balance gate is disabled by billing 
   });
 });
 
-Deno.test("tier enforcement: legacy publish balance gate only runs when enabled", async () => {
+Deno.test("tier enforcement: publish gate checks balance before address", async () => {
   await runSerial(async () => {
+    const calls: string[] = [];
+
     await withMockedEnvAndFetch(
       async (input) => {
         const url = String(input);
+        calls.push(url);
 
         if (url.includes("/platform_billing_config")) {
           return Response.json([{
@@ -101,6 +104,77 @@ Deno.test("tier enforcement: legacy publish balance gate only runs when enabled"
           result,
           "Publishing is temporarily gated by a minimum ✦500 spendable Light balance. Your current balance is ✦100. Add Light from Wallet to go live.",
         );
+        assertEquals(
+          calls.some((url) => url.includes("/rest/v1/user_billing_addresses?")),
+          false,
+        );
+      },
+    );
+  });
+});
+
+Deno.test("tier enforcement: publish gate requires billing address with sufficient balance", async () => {
+  await runSerial(async () => {
+    await withMockedEnvAndFetch(
+      async (input) => {
+        const url = String(input);
+
+        if (url.includes("/platform_billing_config")) {
+          return Response.json([{
+            id: "singleton",
+            version: 22,
+            publish_deposit_enabled: true,
+          }]);
+        }
+
+        if (url.includes("/rest/v1/users?")) {
+          return Response.json([{ balance_light: 750 }]);
+        }
+
+        if (url.includes("/rest/v1/user_billing_addresses?")) {
+          return Response.json([]);
+        }
+
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+      async () => {
+        const result = await checkPublishDeposit("user-1");
+
+        assertEquals(
+          result,
+          "Publishing requires a saved billing address. Add Light from Wallet or save your billing address before going live.",
+        );
+      },
+    );
+  });
+});
+
+Deno.test("tier enforcement: publish gate passes with balance and billing address", async () => {
+  await runSerial(async () => {
+    await withMockedEnvAndFetch(
+      async (input) => {
+        const url = String(input);
+
+        if (url.includes("/platform_billing_config")) {
+          return Response.json([{
+            id: "singleton",
+            version: 22,
+            publish_deposit_enabled: true,
+          }]);
+        }
+
+        if (url.includes("/rest/v1/users?")) {
+          return Response.json([{ balance_light: 750 }]);
+        }
+
+        if (url.includes("/rest/v1/user_billing_addresses?")) {
+          return Response.json([{ id: "billing-address-1" }]);
+        }
+
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+      async () => {
+        assertEquals(await checkPublishDeposit("user-1"), null);
       },
     );
   });

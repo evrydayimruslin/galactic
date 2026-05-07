@@ -43,7 +43,7 @@ Backlog:
 - PR19: runtime/storage operation metering backbone is wired for R2/KV/appdata/memory/dynamic worker paths. Audit remaining historical control-plane/cache paths such as FN_INDEX/upload/cache helpers for unmetered R2/KV operations.
 - PR20: D1 runtime read/write metering is wired through runtime bindings and legacy service paths. Old D1 overage billing is reconciliation-only now; confirm no UI still presents the old D1 free-tier economics after PR25 copy pass.
 - PR21: storage-at-rest billing covers source/app bytes, user app data, D1 storage, and page/memory/library content bytes. There is no separate authoritative counter yet for developer-owned logs/shared platform artifacts, so those remain a storage-attribution backlog item.
-- PR22: publish deposit gating is disabled by default and guarded by billing config if re-enabled. No dedicated upload handler test file was present; coverage was added at the shared tier-enforcement helper and config/QA layers.
+- PR22/PR27: publish deposit gating is guarded by billing config and re-enabled in PR27 with a current billing-address requirement. No dedicated upload handler test file was present; coverage was added at the shared tier-enforcement helper and config/QA layers.
 - PR23: widget pulls now create a distinct `widget_pull` cloud usage event in addition to the underlying runtime/storage metering for the app call. Keep this additive model unless the final product economics decide widget pulls should bundle or replace runtime units.
 - PR23: widget monthly cost projection is desktop-local and uses the configured public rate of `0.001` Light per pull. Final receipt/admin UI should sync the displayed estimate to live billing config if admins change `widget_pulls_per_cloud_unit` or cloud-unit Light pricing.
 - PR23: coverage was added at widget runtime/helper and settlement layers. Hook/component interaction tests remain a backlog item unless a desktop hook/component harness is introduced.
@@ -56,6 +56,7 @@ Backlog:
 ## Final Hardening Backlog
 
 - Full stale-copy audit for deeper docs that are not product/API surfaces, including legacy architecture docs that still mention prior storage or 10% economics.
+- Add a sales-tax policy and implementation pass before charging/representing any transaction tax: current Light top-ups and marketplace acquisitions do not capture buyer tax address data, Stripe Tax calculations, tax jurisdictions, tax amounts, or tax liability ledger entries. Concrete first step is a versioned buyer tax-location profile that can be snapshotted or referenced from taxable Light receipts without duplicating unnecessary PII on every microtransaction. Treat top-up tax, taxable redemptions, marketplace/acquisition taxability, and Connect/platform tax liability as explicit counsel/CPA decisions before collection is enabled.
 - Full receipt audit against live data after migrations: app price, infra Light, cloud units, worker/D1/R2/KV/widget units, platform fee, developer net.
 - Ensure all runtime infra paths fail closed or hold before externally billable work.
 - Confirm no partial debits remain for cloud infrastructure charges.

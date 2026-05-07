@@ -28,6 +28,8 @@ export interface WalletExpressPaymentIntentParams {
   source: "web" | "desktop";
   termsAccepted: true;
   billingConfig: BillingConfig;
+  billingAddressId?: string;
+  billingAddressVersion?: number;
 }
 
 export interface WalletExpressPaymentIntentResult {
@@ -39,6 +41,8 @@ export interface WalletExpressPaymentIntentResult {
   lightAmount: number;
   lightPerUsd: number;
   billingConfigVersion: number;
+  billingAddressId?: string;
+  billingAddressVersion?: number;
 }
 
 interface StripePaymentIntentResponse {
@@ -77,6 +81,15 @@ export function buildWalletExpressPaymentIntentParams(
     "metadata[terms_accepted]": input.termsAccepted ? "true" : "false",
     "metadata[type]": WALLET_EXPRESS_DEPOSIT_TYPE,
   });
+  if (input.billingAddressId) {
+    params.set("metadata[buyer_billing_address_id]", input.billingAddressId);
+  }
+  if (input.billingAddressVersion) {
+    params.set(
+      "metadata[buyer_billing_address_version]",
+      String(input.billingAddressVersion),
+    );
+  }
   if (input.email) {
     params.set("receipt_email", input.email);
   }
@@ -90,6 +103,8 @@ export async function createWalletExpressPaymentIntent(input: {
   amountCents: number;
   source: "web" | "desktop";
   termsAccepted: true;
+  billingAddressId?: string;
+  billingAddressVersion?: number;
 }): Promise<WalletExpressPaymentIntentResult> {
   const stripeSecretKey = getEnv("STRIPE_SECRET_KEY");
   const publishableKey = getEnv("STRIPE_PUBLISHABLE_KEY") as string | undefined;
@@ -146,6 +161,8 @@ export async function createWalletExpressPaymentIntent(input: {
       stripe_payment_intent_status: intent.status || null,
       express_checkout_only: true,
       terms_accepted: input.termsAccepted,
+      buyer_billing_address_id: input.billingAddressId || null,
+      buyer_billing_address_version: input.billingAddressVersion || null,
     },
   });
 
@@ -158,5 +175,7 @@ export async function createWalletExpressPaymentIntent(input: {
     lightAmount,
     lightPerUsd,
     billingConfigVersion: billingConfig.version,
+    billingAddressId: input.billingAddressId,
+    billingAddressVersion: input.billingAddressVersion,
   };
 }

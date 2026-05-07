@@ -113,7 +113,7 @@ export const DEFAULT_BILLING_CONFIG: BillingConfig = {
   widgetPullsPerCloudUnit: WIDGET_PULLS_PER_CLOUD_UNIT,
   storageFreeBytes: COMBINED_FREE_TIER_BYTES,
   storageLightPerGbMonth: STORAGE_LIGHT_PER_GB_MONTH,
-  publishDepositEnabled: false,
+  publishDepositEnabled: true,
   publishedHostingMeterEnabled: false,
   payoutPolicyCopy: DEFAULT_PAYOUT_POLICY_COPY,
   updatedAt: null,

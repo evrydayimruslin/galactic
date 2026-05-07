@@ -9,6 +9,7 @@ import {
   TIER_LIMITS,
 } from "../../shared/types/index.ts";
 import { getEnv } from "../lib/env.ts";
+import { hasCurrentBillingAddress } from "./billing-addresses.ts";
 import { getBillingConfig } from "./billing-config.ts";
 
 type Visibility = "private" | "unlisted" | "public";
@@ -26,9 +27,9 @@ export function checkVisibilityAllowed(
 }
 
 /**
- * Legacy publish balance gate.
- * Disabled by default in billing config; runtime and storage metering now
- * protect platform costs for published apps.
+ * Publish readiness gate.
+ * When enabled in billing config, publishing requires a spendable Light balance
+ * and a current billing address for tax-location records.
  * Returns null if allowed, or an error message string if blocked.
  */
 export async function checkPublishDeposit(
@@ -43,11 +44,8 @@ export async function checkPublishDeposit(
   const supabaseKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
 
   if (!supabaseUrl || !supabaseKey) {
-    // Can't check — fail open
-    console.warn(
-      "[TIER] Supabase not configured, skipping legacy publish balance check",
-    );
-    return null;
+    console.error("[TIER] Supabase not configured for publish gate");
+    return "Publishing is temporarily unavailable while billing checks recover. Please try again shortly.";
   }
 
   try {
@@ -66,8 +64,7 @@ export async function checkPublishDeposit(
         "[TIER] checkPublishDeposit: fetch failed:",
         await response.text(),
       );
-      // Fail open — don't block users due to a DB issue
-      return null;
+      return "Publishing is temporarily unavailable while billing checks recover. Please try again shortly.";
     }
 
     const rows = await response.json() as Array<
@@ -85,10 +82,17 @@ export async function checkPublishDeposit(
       );
     }
 
+    if (!(await hasCurrentBillingAddress(userId))) {
+      return (
+        "Publishing requires a saved billing address. " +
+        "Add Light from Wallet or save your billing address before going live."
+      );
+    }
+
     return null; // Allowed
   } catch (err) {
     console.error("[TIER] checkPublishDeposit error:", err);
-    return null; // Fail open
+    return "Publishing is temporarily unavailable while billing checks recover. Please try again shortly.";
   }
 }
 

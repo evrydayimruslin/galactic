@@ -5,6 +5,7 @@ export type SensitiveRoute =
   | "user:hosting_checkout"
   | "user:wallet_express_checkout"
   | "user:wallet_wire_transfer"
+  | "user:billing_address_update"
   | "user:connect_onboard"
   | "user:connect_withdraw"
   | "user:marketplace_bid"
@@ -104,6 +105,16 @@ export const SENSITIVE_ROUTE_RATE_LIMITS: Record<
     limitMessage: "Too many wire funding attempts. Please wait and try again.",
     unavailableMessage:
       "Wire funding is temporarily unavailable while protection controls recover. Please try again shortly.",
+  },
+  "user:billing_address_update": {
+    endpoint: "user:billing_address_update",
+    limit: 20,
+    windowMinutes: 10,
+    resource: "PUT /api/user/billing-address",
+    limitMessage:
+      "Too many billing address updates. Please wait and try again.",
+    unavailableMessage:
+      "Billing address updates are temporarily unavailable while protection controls recover. Please try again shortly.",
   },
   "user:connect_onboard": {
     endpoint: "user:connect_onboard",

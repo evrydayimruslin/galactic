@@ -25,7 +25,7 @@ Deno.test("billing config: defaults encode current Light economics", () => {
   assertEquals(DEFAULT_BILLING_CONFIG.widgetPullsPerCloudUnit, 1);
   assertEquals(DEFAULT_BILLING_CONFIG.storageFreeBytes, 104857600);
   assertEquals(DEFAULT_BILLING_CONFIG.storageLightPerGbMonth, 100);
-  assertEquals(DEFAULT_BILLING_CONFIG.publishDepositEnabled, false);
+  assertEquals(DEFAULT_BILLING_CONFIG.publishDepositEnabled, true);
   assertEquals(DEFAULT_BILLING_CONFIG.publishedHostingMeterEnabled, false);
 });
 
@@ -91,7 +91,7 @@ Deno.test("billing config: public shape includes human-readable labels", () => {
   assertEquals(publicConfig.worker_ms_per_cloud_unit, 250);
   assertEquals(publicConfig.storage_free_bytes, 104857600);
   assertEquals(publicConfig.storage_light_per_gb_month, 100);
-  assertEquals(publicConfig.publish_deposit_enabled, false);
+  assertEquals(publicConfig.publish_deposit_enabled, true);
   assertEquals(publicConfig.published_hosting_meter_enabled, false);
   assertEquals(publicConfig.labels.card_minimum, "$25.00");
   assertEquals(publicConfig.labels.wire_minimum, "$25.00");

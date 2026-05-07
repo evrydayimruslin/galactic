@@ -29,6 +29,8 @@ export interface WireTransferPaymentIntentParams {
   source: "web" | "desktop";
   termsAccepted: true;
   billingConfig: BillingConfig;
+  billingAddressId?: string;
+  billingAddressVersion?: number;
 }
 
 export interface StripeFinancialAddress {
@@ -64,6 +66,8 @@ export interface WireTransferPaymentIntentResult {
   billingConfigVersion: number;
   status: string;
   instructions: WireTransferInstructions | null;
+  billingAddressId?: string;
+  billingAddressVersion?: number;
 }
 
 interface StripePaymentIntentResponse {
@@ -116,6 +120,15 @@ export function buildWireTransferPaymentIntentParams(
     "metadata[terms_accepted]": input.termsAccepted ? "true" : "false",
     "metadata[type]": WIRE_TRANSFER_DEPOSIT_TYPE,
   });
+  if (input.billingAddressId) {
+    params.set("metadata[buyer_billing_address_id]", input.billingAddressId);
+  }
+  if (input.billingAddressVersion) {
+    params.set(
+      "metadata[buyer_billing_address_version]",
+      String(input.billingAddressVersion),
+    );
+  }
   if (input.email) {
     params.set("receipt_email", input.email);
   }
@@ -150,6 +163,8 @@ export async function createWireTransferPaymentIntent(input: {
   amountCents: number;
   source: "web" | "desktop";
   termsAccepted: true;
+  billingAddressId?: string;
+  billingAddressVersion?: number;
 }): Promise<WireTransferPaymentIntentResult> {
   const stripeSecretKey = getEnv("STRIPE_SECRET_KEY");
   if (!stripeSecretKey) {
@@ -210,6 +225,8 @@ export async function createWireTransferPaymentIntent(input: {
       amount_remaining_cents: instructions?.amountRemainingCents || null,
       hosted_instructions_url: instructions?.hostedInstructionsUrl || null,
       terms_accepted: input.termsAccepted,
+      buyer_billing_address_id: input.billingAddressId || null,
+      buyer_billing_address_version: input.billingAddressVersion || null,
     },
   });
 
@@ -222,5 +239,7 @@ export async function createWireTransferPaymentIntent(input: {
     billingConfigVersion: billingConfig.version,
     status: intent.status || "unknown",
     instructions,
+    billingAddressId: input.billingAddressId,
+    billingAddressVersion: input.billingAddressVersion,
   };
 }
