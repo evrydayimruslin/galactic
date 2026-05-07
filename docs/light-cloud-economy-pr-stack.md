@@ -52,7 +52,8 @@ Call settlement:
 - Platform keeps infra plus 15% of app price.
 - Developer receives 85% of app price.
 - Free calls: developer sponsors infra.
-- If developer balance is zero, free calls are gated to the caller needing Light balance to call.
+- If developer balance is zero, authenticated free-call callers can cover infra only; app price remains zero.
+- If neither developer nor caller has enough Light for infra, the call is gated.
 - Paid calls can continue normally when developer balance is zero because user-paid infra keeps the platform whole.
 - Ownership never transfers.
 

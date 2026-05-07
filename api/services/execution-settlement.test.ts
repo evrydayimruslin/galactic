@@ -286,6 +286,48 @@ Deno.test("settleAppCall gates free calls when owner sponsorship has no Light", 
   });
 });
 
+Deno.test("settleAppCall keeps free app charge zero when caller funds infra fallback", async () => {
+  await withMockedEnv(async () => {
+    const settlement = await settleAppCall({
+      receiptId: "receipt-free-fallback",
+      app: createTestApp({ default_price_light: 0 }),
+      userId: "user_free",
+      functionName: "search",
+      inputArgs: { query: "free" },
+      successful: true,
+      method: "http",
+      callerAuthState: "authenticated",
+      runtimePricingPreflight: {
+        appPriceLight: 0,
+        appChargeLight: 0,
+        freeCall: true,
+        freeCallCount: null,
+        freeCallLimit: 0,
+      },
+      runtimeCloudSettlement: {
+        holdId: "hold-free-fallback",
+        eventId: "event-free-fallback",
+        payerUserId: "user_free",
+        ownerSponsoredInfra: false,
+        callerInfraFallback: true,
+        cloudUnits: 120,
+        amountLight: 0.12,
+        settledAmountLight: 0.12,
+        releasedAmountLight: 0,
+      },
+    });
+
+    assertEquals(settlement.freeCall, true);
+    assertEquals(settlement.appChargeLight, 0);
+    assertEquals(settlement.infraChargeLight, 0.12);
+    assertEquals(settlement.chargedLight, 0.12);
+    assertEquals(settlement.infraPayerUserId, "user_free");
+    assertEquals(settlement.ownerSponsoredInfra, false);
+    assertEquals(settlement.callerInfraFallback, true);
+    assertEquals(settlement.metadata.caller_infra_fallback, true);
+  });
+});
+
 Deno.test("debitWidgetPullUsage records one widget pull cloud unit with runtime payer", async () => {
   await withMockedEnv(async () => {
     let debitBody: Record<string, unknown> | null = null;

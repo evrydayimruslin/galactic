@@ -60,4 +60,38 @@ Deno.test("call receipts: combines app economics with cloud usage resource break
     "event-r2",
     "event-d1-read",
   ]);
+  assertEquals(receipt.caller_infra_fallback, false);
+});
+
+Deno.test("call receipts: marks caller-funded infra fallback for free calls", () => {
+  const receipt = buildCallReceipt(
+    {
+      id: "receipt-free-fallback",
+      user_id: "caller-123",
+      app_price_light: 0,
+      app_charge_light: 0,
+      free_call: true,
+      cloud_payer_user_id: "caller-123",
+      cloud_owner_sponsored: false,
+    },
+    [
+      {
+        id: "event-worker-fallback",
+        receipt_id: "receipt-free-fallback",
+        source: "tools/call",
+        resource: "worker_execution",
+        units: 300,
+        cloud_units: 2,
+        amount_light: 0.002,
+        metadata: { caller_infra_fallback: true },
+      },
+    ],
+  );
+
+  assertEquals(receipt.free_call, true);
+  assertEquals(receipt.app_charge_light, 0);
+  assertEquals(receipt.infra_light, 0.002);
+  assertEquals(receipt.total_light, 0.002);
+  assertEquals(receipt.owner_sponsored_infra, false);
+  assertEquals(receipt.caller_infra_fallback, true);
 });

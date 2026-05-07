@@ -15,6 +15,7 @@ Apply and verify these together before merge:
 - `supabase/migrations/20260505150000_combined_storage_d1.sql`
 - `supabase/migrations/20260505160000_payout_net_economics.sql`
 - `supabase/migrations/20260505170000_call_receipt_economics.sql`
+- `supabase/migrations/20260507120000_caller_infra_fallback.sql`
 - `supabase/tests/database/cloud_usage_ledger.test.sql`
 
 Status:
@@ -50,6 +51,7 @@ Backlog:
 - PR24: Stripe fee pass-through uses the estimate captured at payout request time. Reconcile against Stripe balance reports in admin after live runs to tune any region- or method-specific fee deltas.
 - PR25: call receipt economics are durable for new rows after `20260505170000_call_receipt_economics.sql`. Historical rows are backfilled from legacy call-charge/cloud-charge fields where possible, but historical platform fee/developer net detail may be incomplete if it was never captured.
 - PR25: admin cloud economics relies on `cloud_usage_events` plus enriched `mcp_call_logs`; run the migration stack before using it as the launch audit source.
+- PR26: owner-sponsored free-call runtime holds now fall back to caller-funded infra when the owner has no Light. Platform control-plane tools remain outside runtime metering for now and should stay protected by account/token rate limits.
 
 ## Final Hardening Backlog
 

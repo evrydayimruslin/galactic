@@ -156,6 +156,7 @@ export interface CallReceipt {
   cloud_usage_event_ids: string[];
   cloud_payer_user_id: string | null;
   owner_sponsored_infra: boolean;
+  caller_infra_fallback: boolean;
 }
 
 const RECEIPT_RESOURCES: ReceiptResource[] = [
@@ -176,7 +177,10 @@ function nullableNumeric(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function emptyResourceSummary(): Record<ReceiptResource, ReceiptResourceSummary> {
+function emptyResourceSummary(): Record<
+  ReceiptResource,
+  ReceiptResourceSummary
+> {
   return Object.fromEntries(
     RECEIPT_RESOURCES.map((resource) => [
       resource,
@@ -218,8 +222,18 @@ export function buildCallReceipt(
   const infraLight = eventInfraLight > 0 ? eventInfraLight : legacyInfraLight;
   const appChargeLight = numeric(log.app_charge_light) ||
     numeric(log.call_charge_light);
-  const cloudUnits = eventCloudUnits > 0 ? eventCloudUnits : numeric(log.cloud_units);
+  const cloudUnits = eventCloudUnits > 0
+    ? eventCloudUnits
+    : numeric(log.cloud_units);
   const eventIds = cloudEvents.map((event) => event.id).filter(Boolean);
+  const callerInfraFallback =
+    cloudEvents.some((event) =>
+      event.metadata?.caller_infra_fallback === true
+    ) ||
+    (log.free_call === true &&
+      log.cloud_owner_sponsored !== true &&
+      log.cloud_payer_user_id != null &&
+      log.cloud_payer_user_id === log.user_id);
   if (eventIds.length === 0 && log.cloud_usage_event_id) {
     eventIds.push(log.cloud_usage_event_id);
   }
@@ -272,6 +286,7 @@ export function buildCallReceipt(
     cloud_usage_event_ids: eventIds,
     cloud_payer_user_id: log.cloud_payer_user_id ?? null,
     owner_sponsored_infra: log.cloud_owner_sponsored === true,
+    caller_infra_fallback: callerInfraFallback,
   };
 }
 

@@ -167,6 +167,7 @@ export interface RuntimeCloudHoldResult extends CloudUsageHoldResult {
   expectedCloudUnits: number;
   expectedAmountLight: number;
   ownerSponsoredInfra: boolean;
+  callerInfraFallback: boolean;
 }
 
 export interface RuntimeCloudHoldSettlementParams {
@@ -445,13 +446,14 @@ export async function createRuntimeCloudHold(
 
   const payerUserId = requiredString(row.payer_user_id, "payer_user_id");
   const sponsorUserId = optionalString(row.sponsor_user_id, "sponsor_user_id");
+  const freeCall = requiredBoolean(row.free_call, "free_call");
   return {
     holdId: requiredString(row.hold_id, "hold_id"),
     payerUserId,
     sponsorUserId,
     appPriceLight: requiredNumber(row.app_price_light, "app_price_light"),
     appChargeLight: requiredNumber(row.app_charge_light, "app_charge_light"),
-    freeCall: requiredBoolean(row.free_call, "free_call"),
+    freeCall,
     freeCallCount: optionalNumber(row.free_call_count, "free_call_count"),
     freeCallLimit: requiredNumber(row.free_call_limit, "free_call_limit"),
     oldBalance: requiredNumber(row.old_balance, "old_balance"),
@@ -467,6 +469,10 @@ export async function createRuntimeCloudHold(
     expectedAmountLight,
     ownerSponsoredInfra: sponsorUserId !== null &&
       sponsorUserId === params.ownerUserId,
+    callerInfraFallback: freeCall &&
+      sponsorUserId === null &&
+      payerUserId === params.callerUserId &&
+      params.callerUserId !== params.ownerUserId,
   };
 }
 

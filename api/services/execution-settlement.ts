@@ -77,6 +77,7 @@ export interface AppCallSettlementResult {
   payerUserId: string;
   infraPayerUserId: string | null;
   ownerSponsoredInfra: boolean;
+  callerInfraFallback: boolean;
   transferId?: string;
   cloudUsageEventId?: string;
   cloudUsageHoldId?: string;
@@ -104,6 +105,7 @@ export interface RuntimeCloudSettlementForAppCall {
   eventId: string;
   payerUserId: string;
   ownerSponsoredInfra: boolean;
+  callerInfraFallback: boolean;
   cloudUnits: number;
   amountLight: number;
   settledAmountLight: number;
@@ -350,6 +352,7 @@ export async function preflightRuntimeCloudHold(
         cloud_usage_hold_id: hold.holdId,
         cloud_payer_user_id: hold.payerUserId,
         cloud_owner_sponsored: hold.ownerSponsoredInfra,
+        caller_infra_fallback: hold.callerInfraFallback,
         expected_cloud_units: hold.expectedCloudUnits,
         expected_amount_light: hold.expectedAmountLight,
         app_price_light: hold.appPriceLight,
@@ -362,7 +365,13 @@ export async function preflightRuntimeCloudHold(
   } catch (err) {
     const ownerSponsored = params.userId !== params.app.owner_id &&
       appPriceLight <= 0;
-    const code = ownerSponsored
+    const callerFallbackRequired = isCallerInfraFallbackLightRequired(err);
+    const failurePricing = callerFallbackRequired
+      ? { ...basePricing, appChargeLight: 0, freeCall: true }
+      : basePricing;
+    const code = callerFallbackRequired
+      ? "caller_light_required"
+      : ownerSponsored
       ? "owner_sponsor_light_required"
       : "caller_light_required";
     const amountLight = calculateExpectedRuntimeHoldAmount(
@@ -374,18 +383,21 @@ export async function preflightRuntimeCloudHold(
     }
     return {
       hold: null,
-      pricing: basePricing,
+      pricing: failurePricing,
       billingConfig,
       insufficientBalance: true,
       insufficientBalanceCode: code,
-      insufficientBalanceMessage: ownerSponsored
+      insufficientBalanceMessage: callerFallbackRequired
+        ? buildCallerInfraFallbackLightRequiredMessage(amountLight)
+        : ownerSponsored
         ? buildOwnerSponsorLightRequiredMessage(amountLight)
         : buildCallerLightRequiredMessage(amountLight),
       metadata: {
         app_price_light: appPriceLight,
-        app_charge_light: basePricing.appChargeLight,
-        free_call: basePricing.freeCall,
+        app_charge_light: failurePricing.appChargeLight,
+        free_call: failurePricing.freeCall,
         free_call_limit: freeCallLimit,
+        caller_infra_fallback: callerFallbackRequired,
         timeout_ms: params.timeoutMs,
         expected_amount_light: amountLight,
       },
@@ -415,6 +427,7 @@ export function createRuntimeOperationMeteringContext(
       app_slug: params.app.slug,
       runtime_cloud_hold_id: hold.holdId,
       owner_sponsored_infra: hold.ownerSponsoredInfra,
+      caller_infra_fallback: hold.callerInfraFallback,
       ...(params.metadata ?? {}),
     },
   };
@@ -446,6 +459,7 @@ export async function settleRuntimeCloudPreflight(
     eventId: settlement.eventId,
     payerUserId: preflight.hold.payerUserId,
     ownerSponsoredInfra: preflight.hold.ownerSponsoredInfra,
+    callerInfraFallback: preflight.hold.callerInfraFallback,
     cloudUnits: settlement.cloudUnits,
     amountLight: settlement.amountLight,
     settledAmountLight: settlement.settledAmountLight,
@@ -497,6 +511,7 @@ export async function debitWidgetPullUsage(
         widget_pulls_per_cloud_unit: billingConfig.widgetPullsPerCloudUnit,
         runtime_cloud_hold_id: hold.holdId,
         owner_sponsored_infra: hold.ownerSponsoredInfra,
+        caller_infra_fallback: hold.callerInfraFallback,
         ...(params.metadata ?? {}),
       },
     }, deps);
@@ -648,6 +663,7 @@ export async function settleAppCall(
         infraChargeLight: 0,
         infraPayerUserId: null,
         ownerSponsoredInfra: false,
+        callerInfraFallback: false,
         transferId,
         cloudUsageEventId,
       });
@@ -748,6 +764,11 @@ export async function settleAppCall(
       infraCharge && infraPayerUserId === app.owner_id &&
         userId !== app.owner_id,
     );
+  const callerInfraFallback = runtimeCloudSettlement?.callerInfraFallback ??
+    Boolean(
+      infraCharge && freeCall && !ownerSponsoredInfra &&
+        infraPayerUserId === userId && userId !== app.owner_id,
+    );
   let infraChargeLight = runtimeCloudSettlement?.settledAmountLight ?? 0;
   let cloudUsageHoldId = runtimeCloudSettlement?.holdId;
   let cloudUnits = runtimeCloudSettlement?.cloudUnits;
@@ -792,6 +813,7 @@ export async function settleAppCall(
           infraChargeLight: 0,
           infraPayerUserId,
           ownerSponsoredInfra,
+          callerInfraFallback,
           freeCall,
           freeCallCount,
           freeCallLimit,
@@ -816,6 +838,7 @@ export async function settleAppCall(
     infraChargeLight,
     infraPayerUserId,
     ownerSponsoredInfra,
+    callerInfraFallback,
     freeCall,
     freeCallCount,
     freeCallLimit,
@@ -1033,6 +1056,7 @@ function buildBaseSettlement(
     infraChargeLight: number;
     infraPayerUserId: string | null;
     ownerSponsoredInfra: boolean;
+    callerInfraFallback: boolean;
     freeCall: boolean;
     freeCallCount: number | null;
     freeCallLimit: number;
@@ -1055,6 +1079,7 @@ function buildBaseSettlement(
     payerUserId: params.userId,
     infraPayerUserId: values.infraPayerUserId,
     ownerSponsoredInfra: values.ownerSponsoredInfra,
+    callerInfraFallback: values.callerInfraFallback,
     transferId: values.transferId,
     cloudUsageEventId: values.cloudUsageEventId,
     cloudUsageHoldId: values.cloudUsageHoldId,
@@ -1072,6 +1097,7 @@ function buildBaseSettlement(
       free_call_limit: values.freeCallLimit,
       infra_payer_user_id: values.infraPayerUserId,
       owner_sponsored_infra: values.ownerSponsoredInfra,
+      caller_infra_fallback: values.callerInfraFallback,
       transfer_id: values.transferId,
       cloud_usage_hold_id: values.cloudUsageHoldId,
       cloud_usage_event_id: values.cloudUsageEventId,
@@ -1091,6 +1117,7 @@ function buildInsufficientSettlement(
     infraChargeLight?: number;
     infraPayerUserId?: string | null;
     ownerSponsoredInfra?: boolean;
+    callerInfraFallback?: boolean;
     freeCall: boolean;
     freeCallCount: number | null;
     freeCallLimit: number;
@@ -1110,6 +1137,7 @@ function buildInsufficientSettlement(
     infraChargeLight: values.infraChargeLight || 0,
     infraPayerUserId: values.infraPayerUserId ?? null,
     ownerSponsoredInfra: values.ownerSponsoredInfra || false,
+    callerInfraFallback: values.callerInfraFallback || false,
     freeCall: values.freeCall,
     freeCallCount: values.freeCallCount,
     freeCallLimit: values.freeCallLimit,
@@ -1138,10 +1166,23 @@ function buildCallerLightRequiredMessage(amountLight: number): string {
   }. Add Light to your wallet and try again.`;
 }
 
+function buildCallerInfraFallbackLightRequiredMessage(
+  amountLight: number,
+): string {
+  return `The app owner cannot sponsor this free call right now. You can continue by paying ${
+    formatLight(amountLight)
+  } for infrastructure from your Light balance.`;
+}
+
 function buildOwnerSponsorLightRequiredMessage(amountLight: number): string {
   return `This free call requires ${
     formatLight(amountLight)
   } of Light-backed sponsorship. Add Light to your wallet to call this app.`;
+}
+
+function isCallerInfraFallbackLightRequired(err: unknown): boolean {
+  return err instanceof CloudUsageRpcError &&
+    /caller_infra_fallback_light_required/i.test(err.message);
 }
 
 function calculateExpectedRuntimeHoldAmount(

@@ -430,6 +430,70 @@ Deno.test("runtime cloud hold reserves timeout amount and settles exact duration
   }
 });
 
+Deno.test("runtime cloud hold marks caller-funded free-call infra fallback", async () => {
+  const previousEnv = globalThis.__env;
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  globalThis.__env = {
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role",
+  } as unknown as typeof globalThis.__env;
+
+  const fetchFn = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.toString()
+      : input.url;
+    const body = init?.body && typeof init.body === "string"
+      ? JSON.parse(init.body)
+      : {};
+    calls.push({ url, body });
+
+    return Promise.resolve(
+      new Response(
+        JSON.stringify([{
+          hold_id: "00000000-0000-0000-0000-000000000701",
+          payer_user_id: "00000000-0000-0000-0000-000000000101",
+          sponsor_user_id: null,
+          app_price_light: 0,
+          app_charge_light: 0,
+          free_call: true,
+          free_call_count: null,
+          free_call_limit: 0,
+          old_balance: 10,
+          new_balance: 9.88,
+          held_amount_light: 0.12,
+          held_deposit_light: 0.12,
+          held_earned_light: 0,
+        }]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  }) as typeof fetch;
+
+  try {
+    const hold = await createRuntimeCloudHold({
+      callerUserId: "00000000-0000-0000-0000-000000000101",
+      ownerUserId: "00000000-0000-0000-0000-000000000102",
+      appId: "00000000-0000-0000-0000-000000000201",
+      functionName: "run",
+      receiptId: "receipt-runtime-fallback",
+      source: "run",
+      timeoutMs: 30_000,
+      appPriceLight: 0,
+    }, { fetchFn });
+
+    assertEquals(hold.freeCall, true);
+    assertEquals(hold.appChargeLight, 0);
+    assertEquals(hold.payerUserId, "00000000-0000-0000-0000-000000000101");
+    assertEquals(hold.ownerSponsoredInfra, false);
+    assertEquals(hold.callerInfraFallback, true);
+    assertEquals(calls[0].body.p_app_price_light, 0);
+  } finally {
+    globalThis.__env = previousEnv;
+  }
+});
+
 Deno.test("cloud usage event client accepts scalar RPC response", async () => {
   const previousEnv = globalThis.__env;
   globalThis.__env = {

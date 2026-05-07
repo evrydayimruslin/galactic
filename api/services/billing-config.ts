@@ -89,7 +89,7 @@ export const LIGHT_ECONOMY_POLICY_COPY = {
   storagePolicy:
     "The first 100MB of combined storage is included. Storage above that is charged at the configured GB-month rate.",
   freeCallSponsorship:
-    "Free calls use app-owner sponsorship for infrastructure when available. If the owner has no Light balance, the caller needs Light balance to continue.",
+    "Free calls use app-owner sponsorship for infrastructure when available. If the owner has no Light balance, the caller needs Light balance to cover infrastructure and continue.",
   termsUrl: "/terms",
 } as const;
 

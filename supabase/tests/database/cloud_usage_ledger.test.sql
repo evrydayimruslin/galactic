@@ -1,13 +1,18 @@
 BEGIN;
 
-SELECT plan(24);
+SELECT plan(33);
 
 CREATE TEMP TABLE cloud_usage_test_state (
   debit_event_id uuid,
   hold_id uuid,
   settle_event_id uuid,
   release_hold_id uuid,
-  release_amount double precision
+  release_amount double precision,
+  fallback_hold_id uuid,
+  fallback_payer_user_id uuid,
+  fallback_sponsor_user_id uuid,
+  fallback_free_call boolean,
+  fallback_app_charge_light double precision
 );
 
 INSERT INTO cloud_usage_test_state DEFAULT VALUES;
@@ -40,6 +45,14 @@ INSERT INTO public.users (
     '00000000-0000-0000-0000-000000006103',
     'cloud-caller@example.test',
     'Cloud Caller',
+    1,
+    0,
+    0
+  ),
+  (
+    '00000000-0000-0000-0000-000000006104',
+    'cloud-empty-caller@example.test',
+    'Cloud Empty Caller',
     0,
     0,
     0
@@ -328,6 +341,115 @@ SELECT is(
   ),
   1,
   'released cloud usage hold writes a release ledger entry'
+);
+
+UPDATE cloud_usage_test_state
+SET
+  fallback_hold_id = h.hold_id,
+  fallback_payer_user_id = h.payer_user_id,
+  fallback_sponsor_user_id = h.sponsor_user_id,
+  fallback_free_call = h.free_call,
+  fallback_app_charge_light = h.app_charge_light
+FROM public.create_app_call_runtime_cloud_hold(
+  '00000000-0000-0000-0000-000000006103'::uuid,
+  '00000000-0000-0000-0000-000000006102'::uuid,
+  '00000000-0000-0000-0000-000000006201'::uuid,
+  'run',
+  'cloud-runtime-caller-fallback',
+  'tools/call',
+  120,
+  120,
+  0.12,
+  0,
+  0,
+  NULL,
+  now() + interval '5 minutes',
+  1,
+  '{"trace_id":"cloud-runtime-caller-fallback"}'::jsonb
+) AS h;
+
+SELECT ok(
+  (SELECT fallback_hold_id IS NOT NULL FROM cloud_usage_test_state),
+  'runtime cloud hold falls back to caller when owner sponsor has no Light'
+);
+
+SELECT is(
+  (SELECT fallback_payer_user_id FROM cloud_usage_test_state),
+  '00000000-0000-0000-0000-000000006103'::uuid,
+  'caller-funded fallback charges the caller'
+);
+
+SELECT is(
+  (SELECT fallback_sponsor_user_id FROM cloud_usage_test_state),
+  NULL::uuid,
+  'caller-funded fallback clears owner sponsor id'
+);
+
+SELECT is(
+  (SELECT fallback_free_call FROM cloud_usage_test_state),
+  true,
+  'caller-funded fallback keeps the app call free'
+);
+
+SELECT is(
+  (SELECT fallback_app_charge_light::numeric FROM cloud_usage_test_state),
+  0::numeric,
+  'caller-funded fallback keeps app charge at zero'
+);
+
+SELECT is(
+  (
+    SELECT round(balance_light::numeric, 3)
+    FROM public.users
+    WHERE id = '00000000-0000-0000-0000-000000006103'
+  ),
+  0.88::numeric,
+  'caller-funded fallback reserves caller Light for infra'
+);
+
+SELECT is(
+  (
+    SELECT metadata->>'caller_infra_fallback'
+    FROM public.cloud_usage_holds
+    WHERE id = (SELECT fallback_hold_id FROM cloud_usage_test_state)
+  ),
+  'true',
+  'caller-funded fallback stores metadata flag'
+);
+
+SELECT is(
+  (
+    SELECT metadata->>'payer_role'
+    FROM public.cloud_usage_holds
+    WHERE id = (SELECT fallback_hold_id FROM cloud_usage_test_state)
+  ),
+  'caller_infra_fallback',
+  'caller-funded fallback stores payer role'
+);
+
+SELECT throws_like(
+  $$
+    SELECT *
+    FROM public.create_app_call_runtime_cloud_hold(
+      '00000000-0000-0000-0000-000000006104'::uuid,
+      '00000000-0000-0000-0000-000000006102'::uuid,
+      '00000000-0000-0000-0000-000000006201'::uuid,
+      'run',
+      'cloud-runtime-caller-fallback-empty',
+      'tools/call',
+      120,
+      120,
+      0.12,
+      0,
+      0,
+      NULL,
+      now() + interval '5 minutes',
+      1,
+      '{"trace_id":"cloud-runtime-caller-fallback-empty"}'::jsonb
+    )
+  $$,
+  'caller_infra_fallback_light_required:%',
+  'runtime cloud hold gates when owner and caller both lack Light'
 );
 
 SELECT * FROM finish();
