@@ -6,7 +6,7 @@ Use this checklist after the migration stack is applied in a disposable/staging 
 
 - Wallet Add Light states that external money enters only through Apple Pay / Google Pay or Stripe wire/bank transfer.
 - Wallet Add Light states that purchased Light is spend-only platform credit.
-- Wallet Earnings states that only creator earnings are payout eligible.
+- Wallet Earnings states that only unconverted creator earnings are payout eligible, and that earnings must be added to balance before spend.
 - Wallet and MCP copy state that Light cannot be transferred directly between arbitrary accounts.
 - All visible reference-rate copy uses `100 Light = $1` for the platform/payout reference, `95 Light / $1` for Apple Pay / Google Pay, and `99 Light / $1` for wire/bank transfer.
 - Funding and payout actions show a Terms hook before the API request is made.
@@ -28,7 +28,8 @@ Use this checklist after the migration stack is applied in a disposable/staging 
 
 ## Internal Light
 
-- Spend purchased Light on app calls, hosting, GPU, or marketplace actions and confirm it remains non-withdrawable.
+- Spend purchased or converted Light on app calls, hosting, GPU, or marketplace actions and confirm it remains non-withdrawable.
+- Confirm unconverted creator earnings cannot pay for app calls, cloud usage, hosting, GPU, or marketplace actions until converted.
 - Complete a marketplace sale and confirm seller proceeds land in earned balance.
 - Confirm direct arbitrary user-to-user Light transfer is not exposed through public, user, or MCP routes.
 

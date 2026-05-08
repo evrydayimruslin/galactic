@@ -53,13 +53,14 @@ export interface User {
   tier_expires_at: string | null;
   ai_credit_balance: number; // Light
   ai_credit_resets_at: string | null;
-  balance_light: number; // Total spendable Light (deposit + earned)
-  deposit_balance_light: number; // Purchased/top-up Light, spend-only
-  earned_balance_light: number; // Creator earnings, spendable or payout-eligible
+  balance_light: number; // Spendable Light from deposits and converted earnings
+  deposit_balance_light: number; // Purchased/top-up Light plus converted creator earnings
+  earned_balance_light: number; // Unconverted creator earnings, payout-eligible or convertible
   escrow_light: number; // Total Light held in marketplace escrow
   escrow_deposit_light: number; // Escrowed purchased Light
   escrow_earned_light: number; // Escrowed earned Light
   total_earned_light: number; // Lifetime creator earnings before payout/spend debits
+  auto_add_earnings_to_balance: boolean; // Future creator earnings convert to spendable balance automatically
   hosting_last_billed_at: string | null;
   // Stripe identity plus legacy auto top-up columns. Auto top-up is disabled.
   stripe_customer_id: string | null;

@@ -188,6 +188,7 @@ interface WalletUserRow {
   earned_balance_light?: number | null;
   escrow_deposit_light?: number | null;
   escrow_earned_light?: number | null;
+  auto_add_earnings_to_balance?: boolean | null;
   stripe_connect_account_id: string | null;
   stripe_connect_onboarded: boolean | null;
   stripe_connect_payouts_enabled: boolean | null;
@@ -2108,9 +2109,11 @@ const PLATFORM_TOOLS: MCPTool[] = [
   {
     name: 'ul.wallet',
     description:
-      'Manage your wallet: check balance, view earnings, withdraw to bank, view payout history. ' +
+      'Manage your wallet: check balance, view earnings, add earnings to balance, withdraw to bank, view payout history. ' +
       'action="status": balance + earnings summary + connect status. ' +
       'action="earnings": detailed earnings breakdown by app (period: 7d/30d/90d/all). ' +
+      'action="convert_earnings": add creator earnings to spendable balance (amount_light or all=true and terms_accepted=true required). ' +
+      'action="set_auto_add_earnings": toggle automatic conversion of future creator earnings (enabled required; terms_accepted=true required when enabling). ' +
       'action="withdraw": request withdrawal to connected bank (amount_light and terms_accepted=true required, min 5000). Schedules into the next eligible monthly payout run. ' +
       'action="payouts": payout history with scheduled payout dates. ' +
       'action="estimate_fee": preview withdrawal fee before committing (amount_light required).',
@@ -2125,20 +2128,38 @@ const PLATFORM_TOOLS: MCPTool[] = [
       properties: {
         action: {
           type: 'string',
-          enum: ['status', 'earnings', 'withdraw', 'payouts', 'estimate_fee'],
+          enum: [
+            'status',
+            'earnings',
+            'convert_earnings',
+            'set_auto_add_earnings',
+            'withdraw',
+            'payouts',
+            'estimate_fee',
+          ],
           description: 'Wallet action to perform.',
         },
         amount_light: {
           type: 'number',
           description:
-            `Withdrawal amount in Light (✦). Required for: withdraw, estimate_fee. Minimum: ${MIN_WITHDRAWAL_LIGHT} (${
+            `Amount in Light (✦). Required for: withdraw, estimate_fee, and convert_earnings unless all=true. Withdrawal minimum: ${MIN_WITHDRAWAL_LIGHT} (${
               formatLight(MIN_WITHDRAWAL_LIGHT)
             }).`,
+        },
+        all: {
+          type: 'boolean',
+          description:
+            'For action="convert_earnings", convert all currently unconverted creator earnings.',
+        },
+        enabled: {
+          type: 'boolean',
+          description:
+            'For action="set_auto_add_earnings", whether future creator earnings should auto-add to spendable balance.',
         },
         terms_accepted: {
           type: 'boolean',
           description:
-            'Required true for action="withdraw" after reviewing the Ultralight Terms and payout policy.',
+            'Required true for withdraw, convert_earnings, and enabling set_auto_add_earnings after reviewing the Ultralight Terms and payout policy.',
         },
         period: {
           type: 'string',
@@ -3948,7 +3969,7 @@ async function handleToolsCall(
           case 'status': {
             const [userRes, earningsRes, contentStorageRes] = await Promise.all([
               fetch(
-                `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=balance_light,escrow_light,deposit_balance_light,earned_balance_light,escrow_deposit_light,escrow_earned_light,stripe_connect_account_id,stripe_connect_onboarded,stripe_connect_payouts_enabled,storage_used_bytes,data_storage_used_bytes,d1_storage_bytes,storage_limit_bytes,total_earned_light`,
+                `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=balance_light,escrow_light,deposit_balance_light,earned_balance_light,escrow_deposit_light,escrow_earned_light,auto_add_earnings_to_balance,stripe_connect_account_id,stripe_connect_onboarded,stripe_connect_payouts_enabled,storage_used_bytes,data_storage_used_bytes,d1_storage_bytes,storage_limit_bytes,total_earned_light`,
                 { headers: wHeaders },
               ),
               fetch(
@@ -3994,12 +4015,16 @@ async function handleToolsCall(
 
             result = {
               balance_light: balance,
+              spendable_balance_light: balance,
               balance_display: formatLight(balance),
               escrow_light: escrow,
               deposit_balance_light: wUserData?.deposit_balance_light || 0,
               earned_balance_light: earnedBalance,
+              convertible_earnings_light: earnedBalance,
               escrow_deposit_light: wUserData?.escrow_deposit_light || 0,
               escrow_earned_light: wUserData?.escrow_earned_light || 0,
+              auto_add_earnings_to_balance:
+                wUserData?.auto_add_earnings_to_balance || false,
               available_light: balance,
               available_display: formatLight(balance),
               withdrawable_earnings_light: earnedBalance,
@@ -4033,7 +4058,8 @@ async function handleToolsCall(
               policy: {
                 purchased_light:
                   'Purchased Light is spend-only platform credit and is not payout eligible.',
-                creator_earnings: 'Only creator earnings can be requested for payout.',
+                creator_earnings:
+                  'Creator earnings must be added to balance before they can be spent, or requested for payout while unconverted.',
                 no_p2p_transfer: 'Light cannot be transferred directly between arbitrary accounts.',
                 terms_url: '/terms',
               },
@@ -4053,13 +4079,17 @@ async function handleToolsCall(
               Date.now() - ePeriodDays * 24 * 60 * 60 * 1000,
             ).toISOString();
 
-            const [ePeriodRes, eRecentRes] = await Promise.all([
+            const [ePeriodRes, eRecentRes, eUserRes] = await Promise.all([
               fetch(
                 `${wSbUrl}/rest/v1/transfers?to_user_id=eq.${userId}&created_at=gte.${eCutoff}&select=amount_light,app_id,function_name,reason,created_at&order=created_at.asc&limit=10000`,
                 { headers: wHeaders },
               ),
               fetch(
                 `${wSbUrl}/rest/v1/transfers?to_user_id=eq.${userId}&select=amount_light,app_id,function_name,reason,created_at&order=created_at.desc&limit=10`,
+                { headers: wHeaders },
+              ),
+              fetch(
+                `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=balance_light,deposit_balance_light,earned_balance_light,auto_add_earnings_to_balance`,
                 { headers: wHeaders },
               ),
             ]);
@@ -4090,6 +4120,9 @@ async function handleToolsCall(
               (s: number, t: { amount_light: number }) => s + t.amount_light,
               0,
             );
+            const eUserData = eUserRes.ok
+              ? await readJsonFirst<WalletUserRow>(eUserRes)
+              : null;
 
             const eAppMap = new Map<
               string,
@@ -4106,6 +4139,12 @@ async function handleToolsCall(
 
             result = {
               period: ePeriod,
+              spendable_balance_light: eUserData?.balance_light || 0,
+              deposit_balance_light: eUserData?.deposit_balance_light || 0,
+              earned_balance_light: eUserData?.earned_balance_light || 0,
+              convertible_earnings_light: eUserData?.earned_balance_light || 0,
+              auto_add_earnings_to_balance:
+                eUserData?.auto_add_earnings_to_balance || false,
               period_earned_light: ePeriodEarned,
               period_earned_display: formatLight(ePeriodEarned),
               by_app: Array.from(eAppMap.entries())
@@ -4116,6 +4155,135 @@ async function handleToolsCall(
                 }))
                 .sort((a, b) => b.earned_light - a.earned_light),
               recent: eRecentTransfers.slice(0, 5),
+            };
+            break;
+          }
+
+          case 'convert_earnings': {
+            if (toolArgs.terms_accepted !== true) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                'terms_accepted must be true to add creator earnings to spendable balance.',
+              );
+            }
+
+            const convertAll = toolArgs.all === true;
+            let convertAmount = toolArgs.amount_light as number | undefined;
+            if (convertAll && convertAmount !== undefined) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                'amount_light cannot be combined with all=true',
+              );
+            }
+
+            if (convertAll) {
+              const cUserRes = await fetch(
+                `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=earned_balance_light`,
+                { headers: wHeaders },
+              );
+              const cUserData = cUserRes.ok
+                ? await readJsonFirst<WalletUserRow>(cUserRes)
+                : null;
+              convertAmount = cUserData?.earned_balance_light || 0;
+            }
+
+            if (!convertAmount || convertAmount <= 0) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                'No creator earnings are available to add to balance.',
+              );
+            }
+
+            const cRpcRes = await fetch(
+              `${wSbUrl}/rest/v1/rpc/convert_earnings_to_deposit`,
+              {
+                method: 'POST',
+                headers: { ...wHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  p_user_id: userId,
+                  p_amount_light: convertAmount,
+                  p_source: 'manual',
+                  p_reference_table: 'users',
+                  p_reference_id: userId,
+                  p_metadata: { source: 'platform_mcp' },
+                }),
+              },
+            );
+
+            if (!cRpcRes.ok) {
+              const cRpcErr = await cRpcRes.text();
+              throw new ToolError(
+                cRpcErr.includes('Conversion exceeds earnings')
+                  ? INVALID_PARAMS
+                  : INTERNAL_ERROR,
+                cRpcErr.includes('Conversion exceeds earnings')
+                  ? 'Conversion exceeds available creator earnings.'
+                  : 'Failed to add earnings to balance.',
+              );
+            }
+
+            const cRows = await readJsonArray<{
+              conversion_id: string;
+              converted_light: number;
+              deposit_balance_light: number;
+              earned_balance_light: number;
+              balance_light: number;
+            }>(cRpcRes);
+            const cRow = cRows[0];
+            result = {
+              success: true,
+              conversion_id: cRow?.conversion_id || null,
+              converted_light: cRow?.converted_light || convertAmount,
+              converted_display: formatLight(cRow?.converted_light || convertAmount),
+              balance_light: cRow?.balance_light || 0,
+              spendable_balance_light: cRow?.balance_light || 0,
+              deposit_balance_light: cRow?.deposit_balance_light || 0,
+              earned_balance_light: cRow?.earned_balance_light || 0,
+              convertible_earnings_light: cRow?.earned_balance_light || 0,
+            };
+            break;
+          }
+
+          case 'set_auto_add_earnings': {
+            if (typeof toolArgs.enabled !== 'boolean') {
+              throw new ToolError(
+                INVALID_PARAMS,
+                'enabled must be a boolean.',
+              );
+            }
+
+            if (toolArgs.enabled === true && toolArgs.terms_accepted !== true) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                'terms_accepted must be true to auto-add future earnings to balance.',
+              );
+            }
+
+            const aaRes = await fetch(
+              `${wSbUrl}/rest/v1/users?id=eq.${userId}`,
+              {
+                method: 'PATCH',
+                headers: {
+                  ...wHeaders,
+                  'Content-Type': 'application/json',
+                  'Prefer': 'return=minimal',
+                },
+                body: JSON.stringify({
+                  auto_add_earnings_to_balance: toolArgs.enabled,
+                }),
+              },
+            );
+
+            if (!aaRes.ok) {
+              throw new ToolError(
+                INTERNAL_ERROR,
+                'Failed to update earnings auto-add setting.',
+              );
+            }
+
+            result = {
+              success: true,
+              auto_add_earnings_to_balance: toolArgs.enabled,
             };
             break;
           }
@@ -4366,7 +4534,7 @@ async function handleToolsCall(
           default:
             throw new ToolError(
               INVALID_PARAMS,
-              `Invalid action: ${walletAction}. Use status|earnings|withdraw|payouts|estimate_fee`,
+              `Invalid action: ${walletAction}. Use status|earnings|convert_earnings|set_auto_add_earnings|withdraw|payouts|estimate_fee`,
             );
         }
         break;

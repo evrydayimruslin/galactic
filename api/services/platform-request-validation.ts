@@ -68,6 +68,17 @@ export interface ValidatedWithdrawalPayload {
   termsAccepted: true;
 }
 
+export interface ValidatedEarningsConversionPayload {
+  amountLight: number | null;
+  convertAll: boolean;
+  termsAccepted: true;
+}
+
+export interface ValidatedEarningsAutoAddPayload {
+  enabled: boolean;
+  termsAccepted?: true;
+}
+
 export interface ValidatedUploadFormMetadata {
   name: string | null;
   description: string | null;
@@ -126,6 +137,16 @@ function normalizeRequiredInteger(value: unknown, field: string): number {
     !Number.isInteger(value)
   ) {
     throw new RequestValidationError(`${field} must be an integer`);
+  }
+  return value;
+}
+
+function normalizeRequiredPositiveNumber(
+  value: unknown,
+  field: string,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new RequestValidationError(`${field} must be a positive number`);
   }
   return value;
 }
@@ -470,6 +491,72 @@ export async function validateWithdrawalRequest(
   }
 
   return { amountLight, termsAccepted: true };
+}
+
+export async function validateEarningsConversionRequest(
+  request: Request,
+): Promise<ValidatedEarningsConversionPayload> {
+  const body = await readJsonObject(request, {
+    allowedKeys: ["amount_light", "all", "terms_accepted"],
+  });
+
+  if (body.terms_accepted !== true) {
+    throw new RequestValidationError(
+      "terms_accepted must be true to add earnings to balance",
+    );
+  }
+
+  if (body.all !== undefined && typeof body.all !== "boolean") {
+    throw new RequestValidationError("all must be a boolean");
+  }
+
+  const convertAll = body.all === true;
+  if (convertAll && body.amount_light !== undefined) {
+    throw new RequestValidationError(
+      "amount_light cannot be combined with all=true",
+    );
+  }
+
+  if (convertAll) {
+    return { amountLight: null, convertAll: true, termsAccepted: true };
+  }
+
+  if (body.amount_light === undefined) {
+    throw new RequestValidationError(
+      "amount_light is required unless all=true",
+    );
+  }
+
+  return {
+    amountLight: normalizeRequiredPositiveNumber(
+      body.amount_light,
+      "amount_light",
+    ),
+    convertAll: false,
+    termsAccepted: true,
+  };
+}
+
+export async function validateEarningsAutoAddRequest(
+  request: Request,
+): Promise<ValidatedEarningsAutoAddPayload> {
+  const body = await readJsonObject(request, {
+    allowedKeys: ["enabled", "terms_accepted"],
+  });
+
+  if (typeof body.enabled !== "boolean") {
+    throw new RequestValidationError("enabled must be a boolean");
+  }
+
+  if (body.enabled === true && body.terms_accepted !== true) {
+    throw new RequestValidationError(
+      "terms_accepted must be true to auto-add future earnings to balance",
+    );
+  }
+
+  return body.enabled
+    ? { enabled: true, termsAccepted: true }
+    : { enabled: false };
 }
 
 export function validateUploadFormMetadata(input: {

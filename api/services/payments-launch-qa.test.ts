@@ -7,6 +7,7 @@ import {
   toPublicBillingConfig,
 } from "./billing-config.ts";
 import {
+  validateEarningsConversionRequest,
   validateWalletFundingRequest,
   validateWireFundingRequest,
   validateWithdrawalRequest,
@@ -48,6 +49,9 @@ Deno.test("payments launch QA: public config states closed-loop Light economics"
   );
   assert(config.policy_copy.purchasedLight.includes("cannot be cashed out"));
   assert(config.policy_copy.purchasedLight.includes("transferred directly"));
+  assert(
+    config.policy_copy.creatorEarnings.includes("added to spendable balance"),
+  );
   assert(config.policy_copy.creatorEarnings.includes("requested for payout"));
   assert(config.policy_copy.cloudUsage.includes("cloud units"));
   assert(config.policy_copy.freeCallSponsorship.includes("caller needs Light"));
@@ -74,6 +78,16 @@ Deno.test("payments launch QA: money-in and payout requests require terms hooks"
       }),
     ),
     { amountCents: 50000, source: "web", termsAccepted: true },
+  );
+
+  assertEquals(
+    await validateEarningsConversionRequest(
+      jsonRequest("/api/user/earnings/convert-to-balance", {
+        amount_light: 12.5,
+        terms_accepted: true,
+      }),
+    ),
+    { amountLight: 12.5, convertAll: false, termsAccepted: true },
   );
 
   assertEquals(

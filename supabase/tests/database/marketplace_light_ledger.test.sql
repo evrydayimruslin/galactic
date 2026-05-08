@@ -1,11 +1,13 @@
 BEGIN;
 
-SELECT plan(56);
+SELECT plan(69);
 
 CREATE TEMP TABLE marketplace_wave1_state (
   first_bid_id uuid,
   accepted_bid_id uuid,
   rival_bid_id uuid,
+  conversion_id uuid,
+  auto_transfer_id uuid,
   sale jsonb,
   instant_sale jsonb,
   payout_id uuid
@@ -55,6 +57,43 @@ INSERT INTO public.users (
     0,
     0,
     NULL,
+    false
+  );
+
+INSERT INTO public.users (
+  id,
+  email,
+  display_name,
+  balance_light,
+  earned_balance_light,
+  total_earned_light,
+  auto_add_earnings_to_balance
+) VALUES
+  (
+    '00000000-0000-0000-0000-000000000104',
+    'wave1-earned-only@example.test',
+    'Wave 1 Earned Only',
+    0,
+    2000,
+    2000,
+    false
+  ),
+  (
+    '00000000-0000-0000-0000-000000000105',
+    'wave1-auto-recipient@example.test',
+    'Wave 1 Auto Recipient',
+    0,
+    0,
+    0,
+    true
+  ),
+  (
+    '00000000-0000-0000-0000-000000000106',
+    'wave1-auto-payer@example.test',
+    'Wave 1 Auto Payer',
+    1000,
+    0,
+    0,
     false
   );
 
@@ -111,6 +150,120 @@ SELECT is(
   (SELECT show_metrics FROM public.app_listings WHERE app_id = '00000000-0000-0000-0000-000000000201'),
   true,
   'listings expose show_metrics for marketplace trust/metrics cards'
+);
+
+SELECT is(
+  (SELECT balance_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000000104'),
+  0::numeric,
+  'unconverted creator earnings do not count as spendable balance'
+);
+
+SELECT throws_like(
+  $$
+    SELECT *
+    FROM public.debit_spendable_light(
+      '00000000-0000-0000-0000-000000000104'::uuid,
+      1,
+      false
+    )
+  $$,
+  'Insufficient available balance%',
+  'unconverted creator earnings cannot fund spend'
+);
+
+UPDATE marketplace_wave1_state
+SET conversion_id = c.conversion_id
+FROM public.convert_earnings_to_deposit(
+  '00000000-0000-0000-0000-000000000104'::uuid,
+  250.5,
+  'manual',
+  'users',
+  '00000000-0000-0000-0000-000000000104'::uuid,
+  '{"source":"test"}'::jsonb
+) AS c;
+
+SELECT ok(
+  (SELECT conversion_id IS NOT NULL FROM marketplace_wave1_state),
+  'convert_earnings_to_deposit returns a conversion id'
+);
+
+SELECT is(
+  (SELECT deposit_balance_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000000104'),
+  250.5::numeric,
+  'earnings conversion credits spendable deposit bucket'
+);
+
+SELECT is(
+  (SELECT balance_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000000104'),
+  250.5::numeric,
+  'earnings conversion updates spendable balance'
+);
+
+SELECT is(
+  (SELECT earned_balance_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000000104'),
+  1749.5::numeric,
+  'earnings conversion debits unconverted earnings'
+);
+
+SELECT is(
+  (
+    SELECT count(*)::integer
+    FROM public.light_ledger_entries
+    WHERE reference_table = 'earnings_balance_conversions'
+      AND reference_id = (SELECT conversion_id FROM marketplace_wave1_state)
+  ),
+  2,
+  'earnings conversion writes balanced Light ledger entries'
+);
+
+UPDATE marketplace_wave1_state
+SET auto_transfer_id = t.transfer_id
+FROM public.transfer_light(
+  '00000000-0000-0000-0000-000000000106'::uuid,
+  '00000000-0000-0000-0000-000000000105'::uuid,
+  1000,
+  'tool_call'
+) AS t;
+
+SELECT ok(
+  (SELECT auto_transfer_id IS NOT NULL FROM marketplace_wave1_state),
+  'transfer_light returns a transfer id for auto-add recipient'
+);
+
+SELECT is(
+  (SELECT balance_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000000105'),
+  850::numeric,
+  'auto-add recipient receives net earnings as spendable balance'
+);
+
+SELECT is(
+  (SELECT earned_balance_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000000105'),
+  0::numeric,
+  'auto-add recipient has no unconverted earnings after transfer'
+);
+
+SELECT is(
+  (SELECT total_earned_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000000105'),
+  850::numeric,
+  'auto-add recipient still tracks lifetime earnings'
+);
+
+SELECT is(
+  (
+    SELECT source
+    FROM public.earnings_balance_conversions
+    WHERE user_id = '00000000-0000-0000-0000-000000000105'
+    ORDER BY created_at DESC
+    LIMIT 1
+  ),
+  'auto_earning',
+  'auto-add records an automatic earnings conversion'
+);
+
+SELECT is(
+  (SELECT balance_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000000106'),
+  0::numeric,
+  'auto-add transfer still debits payer spendable balance'
 );
 
 UPDATE marketplace_wave1_state
@@ -261,8 +414,8 @@ SELECT ok(
 
 SELECT is(
   (SELECT balance_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000000101'),
-  3400::numeric,
-  'accepted sale credits seller with configured 85 percent payout'
+  0::numeric,
+  'accepted sale leaves seller payout unconverted from spendable balance'
 );
 
 SELECT is(
@@ -427,8 +580,8 @@ SELECT is(
 
 SELECT is(
   (SELECT balance_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000000101'),
-  5950::numeric,
-  'buy_now credits seller payout'
+  0::numeric,
+  'buy_now leaves seller payout unconverted from spendable balance'
 );
 
 SELECT is(
@@ -487,8 +640,8 @@ SELECT ok(
 
 SELECT is(
   (SELECT balance_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000000101'),
-  300::numeric,
-  'withdrawal debits spendable balance'
+  0::numeric,
+  'withdrawal leaves spendable balance unchanged'
 );
 
 SELECT is(

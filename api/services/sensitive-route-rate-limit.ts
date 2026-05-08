@@ -5,6 +5,8 @@ export type SensitiveRoute =
   | "user:hosting_checkout"
   | "user:wallet_express_checkout"
   | "user:wallet_wire_transfer"
+  | "user:earnings_convert"
+  | "user:earnings_auto_add"
   | "user:billing_address_update"
   | "user:connect_onboard"
   | "user:connect_withdraw"
@@ -105,6 +107,26 @@ export const SENSITIVE_ROUTE_RATE_LIMITS: Record<
     limitMessage: "Too many wire funding attempts. Please wait and try again.",
     unavailableMessage:
       "Wire funding is temporarily unavailable while protection controls recover. Please try again shortly.",
+  },
+  "user:earnings_convert": {
+    endpoint: "user:earnings_convert",
+    limit: 20,
+    windowMinutes: 10,
+    resource: "POST /api/user/earnings/convert-to-balance",
+    limitMessage:
+      "Too many earnings conversion attempts. Please wait and try again.",
+    unavailableMessage:
+      "Earnings conversion is temporarily unavailable while protection controls recover. Please try again shortly.",
+  },
+  "user:earnings_auto_add": {
+    endpoint: "user:earnings_auto_add",
+    limit: 20,
+    windowMinutes: 10,
+    resource: "PATCH /api/user/earnings/auto-add",
+    limitMessage:
+      "Too many earnings auto-add updates. Please wait and try again.",
+    unavailableMessage:
+      "Earnings auto-add updates are temporarily unavailable while protection controls recover. Please try again shortly.",
   },
   "user:billing_address_update": {
     endpoint: "user:billing_address_update",

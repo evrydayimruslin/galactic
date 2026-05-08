@@ -6,6 +6,8 @@ import {
   validateAppSupabaseConfigRequest,
   validateBillingAddressRequest,
   validateConnectOnboardRequest,
+  validateEarningsAutoAddRequest,
+  validateEarningsConversionRequest,
   validateHostingCheckoutRequest,
   validateProgrammaticUploadOptions,
   validateSupabaseOauthConnectRequest,
@@ -368,6 +370,103 @@ Deno.test("platform request validation: withdrawal request enforces integer mini
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ amount_light: 5000 }),
+        }),
+      ),
+    RequestValidationError,
+    "terms_accepted must be true",
+  );
+});
+
+Deno.test("platform request validation: earnings conversion allows fractional Light and requires terms", async () => {
+  const payload = await validateEarningsConversionRequest(
+    new Request("https://example.com/api/user/earnings/convert-to-balance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount_light: 12.345, terms_accepted: true }),
+    }),
+  );
+  assertEquals(payload, {
+    amountLight: 12.345,
+    convertAll: false,
+    termsAccepted: true,
+  });
+
+  const allPayload = await validateEarningsConversionRequest(
+    new Request("https://example.com/api/user/earnings/convert-to-balance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ all: true, terms_accepted: true }),
+    }),
+  );
+  assertEquals(allPayload, {
+    amountLight: null,
+    convertAll: true,
+    termsAccepted: true,
+  });
+
+  await assertRejects(
+    () =>
+      validateEarningsConversionRequest(
+        new Request(
+          "https://example.com/api/user/earnings/convert-to-balance",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ amount_light: 1 }),
+          },
+        ),
+      ),
+    RequestValidationError,
+    "terms_accepted must be true",
+  );
+
+  await assertRejects(
+    () =>
+      validateEarningsConversionRequest(
+        new Request(
+          "https://example.com/api/user/earnings/convert-to-balance",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ amount_light: -1, terms_accepted: true }),
+          },
+        ),
+      ),
+    RequestValidationError,
+    "amount_light must be a positive number",
+  );
+});
+
+Deno.test("platform request validation: earnings auto-add requires terms when enabling", async () => {
+  assertEquals(
+    await validateEarningsAutoAddRequest(
+      new Request("https://example.com/api/user/earnings/auto-add", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: true, terms_accepted: true }),
+      }),
+    ),
+    { enabled: true, termsAccepted: true },
+  );
+
+  assertEquals(
+    await validateEarningsAutoAddRequest(
+      new Request("https://example.com/api/user/earnings/auto-add", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      }),
+    ),
+    { enabled: false },
+  );
+
+  await assertRejects(
+    () =>
+      validateEarningsAutoAddRequest(
+        new Request("https://example.com/api/user/earnings/auto-add", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: true }),
         }),
       ),
     RequestValidationError,

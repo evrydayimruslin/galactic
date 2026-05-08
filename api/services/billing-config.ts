@@ -79,7 +79,7 @@ export const LIGHT_ECONOMY_POLICY_COPY = {
   purchasedLight:
     "Purchased Light is spend-only platform credit. It cannot be cashed out, redeemed for money, or transferred directly between arbitrary accounts.",
   creatorEarnings:
-    "Creator earnings come from platform-mediated app activity and marketplace sales. Earned Light can be spent in Ultralight or requested for payout through Stripe Connect.",
+    "Creator earnings come from platform-mediated app activity and marketplace sales. Earned Light can be added to spendable balance instantly or requested for payout through Stripe Connect while unconverted.",
   fundingTerms:
     "By adding Light, you agree that purchased Light is spend-only platform credit and that authenticated funding transactions are governed by the Terms.",
   payoutTerms:

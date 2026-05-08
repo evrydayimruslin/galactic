@@ -49,6 +49,8 @@ export {
 import {
   validateBillingAddressRequest,
   validateConnectOnboardRequest,
+  validateEarningsAutoAddRequest,
+  validateEarningsConversionRequest,
   validateHostingCheckoutRequest,
   validateSupabaseOauthConnectRequest,
   validateWalletFundingRequest,
@@ -219,6 +221,7 @@ interface HostingBalanceRow {
   escrow_deposit_light: number | null;
   escrow_earned_light: number | null;
   hosting_last_billed_at: string | null;
+  auto_add_earnings_to_balance: boolean | null;
   auto_topup_enabled: boolean | null;
   auto_topup_threshold_light: number | null;
   auto_topup_amount_light: number | null;
@@ -242,6 +245,22 @@ interface StripeConnectStatusRow {
 interface StripeConnectWithdrawRow extends StripeConnectStatusRow {
   balance_light: number;
   escrow_light: number;
+}
+
+interface EarningsBalanceRow {
+  balance_light: number | null;
+  deposit_balance_light: number | null;
+  earned_balance_light: number | null;
+  total_earned_light: number | null;
+  auto_add_earnings_to_balance: boolean | null;
+}
+
+interface EarningsConversionRpcRow {
+  conversion_id: string;
+  converted_light: number;
+  deposit_balance_light: number;
+  earned_balance_light: number;
+  balance_light: number;
 }
 
 async function readJsonBody<T>(request: Request): Promise<T> {
@@ -2827,7 +2846,7 @@ export async function handleUser(request: Request): Promise<Response> {
       const { SUPABASE_URL: sbUrl, SUPABASE_SERVICE_ROLE_KEY: sbKey } =
         getSupabaseEnv();
       const userRes = await fetch(
-        `${sbUrl}/rest/v1/users?id=eq.${user.id}&select=balance_light,escrow_light,deposit_balance_light,earned_balance_light,escrow_deposit_light,escrow_earned_light,hosting_last_billed_at,auto_topup_enabled,auto_topup_threshold_light,auto_topup_amount_light,auto_topup_last_failed_at,stripe_customer_id`,
+        `${sbUrl}/rest/v1/users?id=eq.${user.id}&select=balance_light,escrow_light,deposit_balance_light,earned_balance_light,escrow_deposit_light,escrow_earned_light,hosting_last_billed_at,auto_add_earnings_to_balance,auto_topup_enabled,auto_topup_threshold_light,auto_topup_amount_light,auto_topup_last_failed_at,stripe_customer_id`,
         {
           headers: {
             "apikey": sbKey,
@@ -2842,12 +2861,15 @@ export async function handleUser(request: Request): Promise<Response> {
 
       return json({
         balance_light: ud.balance_light ?? 0,
+        spendable_balance_light: ud.balance_light ?? 0,
         escrow_light: ud.escrow_light ?? 0,
         deposit_balance_light: ud.deposit_balance_light ?? 0,
         earned_balance_light: ud.earned_balance_light ?? 0,
+        convertible_earnings_light: ud.earned_balance_light ?? 0,
         escrow_deposit_light: ud.escrow_deposit_light ?? 0,
         escrow_earned_light: ud.escrow_earned_light ?? 0,
         withdrawable_earnings_light: ud.earned_balance_light ?? 0,
+        auto_add_earnings_to_balance: ud.auto_add_earnings_to_balance ?? false,
         hosting_last_billed_at: ud.hosting_last_billed_at ?? null,
         auto_topup: {
           enabled: false,
@@ -3214,7 +3236,7 @@ export async function handleUser(request: Request): Promise<Response> {
               { headers },
             ),
             fetch(
-              `${sbUrl}/rest/v1/users?id=eq.${user.id}&select=total_earned_light,earned_balance_light`,
+              `${sbUrl}/rest/v1/users?id=eq.${user.id}&select=balance_light,deposit_balance_light,total_earned_light,earned_balance_light,auto_add_earnings_to_balance`,
               { headers },
             ),
           ],
@@ -3243,10 +3265,7 @@ export async function handleUser(request: Request): Promise<Response> {
       }>;
       const userBalance = userBalanceRes.ok
         ? await readFirstJsonRow<
-          {
-            total_earned_light: number | null;
-            earned_balance_light: number | null;
-          }
+          EarningsBalanceRow
         >(
           userBalanceRes,
         )
@@ -3305,9 +3324,15 @@ export async function handleUser(request: Request): Promise<Response> {
 
       return json({
         total_earned_light: totalEarnedLight,
+        balance_light: userBalance?.balance_light ?? 0,
+        spendable_balance_light: userBalance?.balance_light ?? 0,
+        deposit_balance_light: userBalance?.deposit_balance_light ?? 0,
         earned_balance_light: earnedBalanceLight,
+        convertible_earnings_light: earnedBalanceLight,
         total_withdrawn_light: totalWithdrawnLight,
         withdrawable_light: withdrawableLight,
+        auto_add_earnings_to_balance:
+          userBalance?.auto_add_earnings_to_balance ?? false,
         period,
         period_earned_light: periodEarnedLight,
         period_transfers: periodTransfers.length,
@@ -3323,6 +3348,156 @@ export async function handleUser(request: Request): Promise<Response> {
     } catch (err) {
       return error(err instanceof Error ? err.message : "Unauthorized", 401);
     }
+  }
+
+  // POST /api/user/earnings/convert-to-balance — convert creator earnings into spendable Light balance
+  // Body: { amount_light: number, terms_accepted: true } or { all: true, terms_accepted: true }
+  if (path === "/api/user/earnings/convert-to-balance" && method === "POST") {
+    return withSensitiveRouteRateLimit(
+      userId,
+      "user:earnings_convert",
+      async () => {
+        try {
+          const user = await authenticate(request);
+          const { amountLight, convertAll } =
+            await validateEarningsConversionRequest(request);
+          const { SUPABASE_URL: sbUrl, SUPABASE_SERVICE_ROLE_KEY: sbKey } =
+            getSupabaseEnv();
+          const sbHeaders = {
+            "apikey": sbKey,
+            "Authorization": `Bearer ${sbKey}`,
+          };
+
+          let targetAmount = amountLight;
+          if (convertAll) {
+            const userRes = await fetch(
+              `${sbUrl}/rest/v1/users?id=eq.${user.id}&select=earned_balance_light`,
+              { headers: sbHeaders },
+            );
+            if (!userRes.ok) throw new Error("Failed to read earnings");
+            const userData = await readFirstJsonRow<
+              { earned_balance_light: number | null }
+            >(userRes);
+            targetAmount = userData?.earned_balance_light ?? 0;
+          }
+
+          if (!targetAmount || targetAmount <= 0) {
+            return error(
+              "No creator earnings are available to add to balance",
+              400,
+            );
+          }
+
+          const rpcRes = await fetch(
+            `${sbUrl}/rest/v1/rpc/convert_earnings_to_deposit`,
+            {
+              method: "POST",
+              headers: {
+                ...sbHeaders,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                p_user_id: user.id,
+                p_amount_light: targetAmount,
+                p_source: "manual",
+                p_reference_table: "users",
+                p_reference_id: user.id,
+                p_metadata: { source: "api" },
+              }),
+            },
+          );
+
+          if (!rpcRes.ok) {
+            const rpcErr = await rpcRes.text();
+            if (rpcErr.includes("Conversion exceeds earnings")) {
+              return error(
+                "Conversion exceeds available creator earnings",
+                400,
+              );
+            }
+            return error("Failed to add earnings to balance", 500);
+          }
+
+          const rows = await readJsonRows<EarningsConversionRpcRow>(rpcRes);
+          const conversion = rows[0];
+          if (!conversion) {
+            return error("Failed to add earnings to balance", 500);
+          }
+
+          return json({
+            success: true,
+            conversion_id: conversion.conversion_id,
+            converted_light: conversion.converted_light,
+            balance_light: conversion.balance_light,
+            spendable_balance_light: conversion.balance_light,
+            deposit_balance_light: conversion.deposit_balance_light,
+            earned_balance_light: conversion.earned_balance_light,
+            convertible_earnings_light: conversion.earned_balance_light,
+          });
+        } catch (err) {
+          if (err instanceof RequestValidationError) {
+            return error(err.message, err.status);
+          }
+          return error(
+            err instanceof Error
+              ? err.message
+              : "Failed to add earnings to balance",
+            500,
+          );
+        }
+      },
+    );
+  }
+
+  // PATCH /api/user/earnings/auto-add — toggle automatic conversion of future creator earnings
+  if (path === "/api/user/earnings/auto-add" && method === "PATCH") {
+    return withSensitiveRouteRateLimit(
+      userId,
+      "user:earnings_auto_add",
+      async () => {
+        try {
+          const user = await authenticate(request);
+          const { enabled } = await validateEarningsAutoAddRequest(request);
+          const { SUPABASE_URL: sbUrl, SUPABASE_SERVICE_ROLE_KEY: sbKey } =
+            getSupabaseEnv();
+
+          const updateRes = await fetch(
+            `${sbUrl}/rest/v1/users?id=eq.${user.id}`,
+            {
+              method: "PATCH",
+              headers: {
+                "apikey": sbKey,
+                "Authorization": `Bearer ${sbKey}`,
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+              },
+              body: JSON.stringify({
+                auto_add_earnings_to_balance: enabled,
+              }),
+            },
+          );
+
+          if (!updateRes.ok) {
+            throw new Error("Failed to update earnings auto-add setting");
+          }
+
+          return json({
+            success: true,
+            auto_add_earnings_to_balance: enabled,
+          });
+        } catch (err) {
+          if (err instanceof RequestValidationError) {
+            return error(err.message, err.status);
+          }
+          return error(
+            err instanceof Error
+              ? err.message
+              : "Failed to update earnings auto-add setting",
+            500,
+          );
+        }
+      },
+    );
   }
 
   // ============================================

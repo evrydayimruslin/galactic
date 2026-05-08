@@ -52,6 +52,7 @@ Backlog:
 - PR25: call receipt economics are durable for new rows after `20260505170000_call_receipt_economics.sql`. Historical rows are backfilled from legacy call-charge/cloud-charge fields where possible, but historical platform fee/developer net detail may be incomplete if it was never captured.
 - PR25: admin cloud economics relies on `cloud_usage_events` plus enriched `mcp_call_logs`; run the migration stack before using it as the launch audit source.
 - PR26: owner-sponsored free-call runtime holds now fall back to caller-funded infra when the owner has no Light. Platform control-plane tools remain outside runtime metering for now and should stay protected by account/token rate limits.
+- PR28: `balance_light` is now spendable deposit/converted Light only. Creator earnings stay in `earned_balance_light` until payout or explicit conversion, and future earnings can auto-convert only when `auto_add_earnings_to_balance` is enabled.
 
 ## Final Hardening Backlog
 

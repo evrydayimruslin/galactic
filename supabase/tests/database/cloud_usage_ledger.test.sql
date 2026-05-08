@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(33);
+SELECT plan(35);
 
 CREATE TEMP TABLE cloud_usage_test_state (
   debit_event_id uuid,
@@ -58,6 +58,22 @@ INSERT INTO public.users (
     0
   );
 
+INSERT INTO public.users (
+  id,
+  email,
+  display_name,
+  balance_light,
+  earned_balance_light,
+  total_earned_light
+) VALUES (
+  '00000000-0000-0000-0000-000000006105',
+  'cloud-earned-only@example.test',
+  'Cloud Earned Only',
+  0,
+  1,
+  1
+);
+
 INSERT INTO public.apps (
   id,
   owner_id,
@@ -98,6 +114,36 @@ SELECT throws_like(
   $$,
   'Insufficient available balance%',
   'debit_cloud_usage refuses partial cloud usage debit'
+);
+
+SELECT is(
+  (SELECT balance_light::numeric FROM public.users WHERE id = '00000000-0000-0000-0000-000000006105'),
+  0::numeric,
+  'cloud earned-only user has no spendable balance'
+);
+
+SELECT throws_like(
+  $$
+    SELECT *
+    FROM public.debit_cloud_usage(
+      '00000000-0000-0000-0000-000000006105'::uuid,
+      'mcp',
+      'worker_execution',
+      1,
+      1,
+      0.001,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      'run',
+      'cloud-earned-only',
+      1,
+      '{}'::jsonb
+    )
+  $$,
+  'Insufficient available balance%',
+  'cloud usage cannot debit unconverted creator earnings'
 );
 
 SELECT is(

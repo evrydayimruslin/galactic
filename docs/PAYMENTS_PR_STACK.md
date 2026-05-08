@@ -36,13 +36,13 @@ Scope:
 - Split purchased balance, earned balance, and escrowed holds.
 - Add immutable Light ledger entries.
 - Ensure deposits cannot be paid out.
-- Ensure earnings can be spent or paid out.
+- Ensure earnings can be added to spendable balance or paid out.
 - Preserve escrow source buckets through bid cancellation/rejection/sale.
 
 Acceptance:
 
 - Purchased Light is spend-only.
-- Earned Light is withdrawable subject to payout policy.
+- Earned Light is withdrawable subject to payout policy until it is converted into spendable balance.
 - Marketplace sale converts buyer Light into seller earned Light.
 
 ## PR 3: Internal Light Movement Migration
