@@ -1,6 +1,7 @@
 import type { EnvSchemaEntry } from './env.ts';
 import { validateEnvVarKey } from './env.ts';
 import type { MCPJsonSchema, MCPTool, MCPToolAnnotations } from './mcp.ts';
+import type { WidgetDeclaration } from './widget.ts';
 
 export interface AppManifest {
   name: string;
@@ -14,6 +15,7 @@ export interface AppManifest {
   };
   functions?: Record<string, ManifestFunction>;
   permissions?: string[];
+  widgets?: WidgetDeclaration[];
   env?: Record<string, ManifestEnvVar>;
   env_vars?: Record<string, ManifestEnvVar>;
 }
@@ -239,7 +241,9 @@ export function normalizeManifestParameters(
   if (Array.isArray(params)) {
     const result: Record<string, ManifestParameter> = {};
     for (const item of params) {
-      if (item && typeof item === 'object' && typeof (item as { name?: unknown }).name === 'string') {
+      if (
+        item && typeof item === 'object' && typeof (item as { name?: unknown }).name === 'string'
+      ) {
         const { name, ...rest } = item as { name: string } & Record<string, unknown>;
         const candidate = rest as Record<string, unknown>;
         if (
@@ -259,12 +263,210 @@ export function normalizeManifestParameters(
   return undefined;
 }
 
+const COMMAND_CARD_SIZE_RE = /^[1-4]x[1-4]$/;
+
+function validateWidgetDependencies(
+  value: unknown,
+  path: string,
+  errors: ManifestValidationError[],
+): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    errors.push({ path, message: 'dependencies must be an array' });
+    return;
+  }
+
+  value.forEach((dependency, index) => {
+    const depPath = `${path}.${index}`;
+    if (!dependency || typeof dependency !== 'object' || Array.isArray(dependency)) {
+      errors.push({ path: depPath, message: 'dependency must be an object' });
+      return;
+    }
+
+    const dep = dependency as Record<string, unknown>;
+    if (typeof dep.app !== 'string' || !dep.app.trim()) {
+      errors.push({ path: `${depPath}.app`, message: 'app is required and must be a string' });
+    }
+    if (
+      !Array.isArray(dep.functions) ||
+      dep.functions.length === 0 ||
+      dep.functions.some((fn) => typeof fn !== 'string' || !fn.trim())
+    ) {
+      errors.push({
+        path: `${depPath}.functions`,
+        message: 'functions must be a non-empty array of strings',
+      });
+    }
+    if (dep.access !== undefined && dep.access !== 'read') {
+      errors.push({
+        path: `${depPath}.access`,
+        message: 'command card dependencies only support read access',
+      });
+    }
+  });
+}
+
+function validateManifestWidgets(
+  value: unknown,
+  functions: Record<string, unknown>,
+  errors: ManifestValidationError[],
+  warnings: string[],
+): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    errors.push({ path: 'widgets', message: 'widgets must be an array' });
+    return;
+  }
+
+  const seenWidgetIds = new Set<string>();
+  value.forEach((widget, index) => {
+    const widgetPath = `widgets.${index}`;
+    if (!widget || typeof widget !== 'object' || Array.isArray(widget)) {
+      errors.push({ path: widgetPath, message: 'widget declaration must be an object' });
+      return;
+    }
+
+    const w = widget as Record<string, unknown>;
+    const widgetId = typeof w.id === 'string' ? w.id.trim() : '';
+    if (!widgetId) {
+      errors.push({ path: `${widgetPath}.id`, message: 'id is required and must be a string' });
+    } else if (seenWidgetIds.has(widgetId)) {
+      errors.push({ path: `${widgetPath}.id`, message: `duplicate widget id "${widgetId}"` });
+    } else {
+      seenWidgetIds.add(widgetId);
+    }
+
+    if (typeof w.label !== 'string' || !w.label.trim()) {
+      errors.push({
+        path: `${widgetPath}.label`,
+        message: 'label is required and must be a string',
+      });
+    }
+
+    for (const key of ['description', 'ui_function', 'data_function', 'data_tool']) {
+      if (w[key] !== undefined && typeof w[key] !== 'string') {
+        errors.push({ path: `${widgetPath}.${key}`, message: `${key} must be a string` });
+      }
+    }
+
+    if (
+      w.poll_interval_s !== undefined &&
+      (typeof w.poll_interval_s !== 'number' || !Number.isFinite(w.poll_interval_s) ||
+        w.poll_interval_s < 0)
+    ) {
+      errors.push({
+        path: `${widgetPath}.poll_interval_s`,
+        message: 'poll_interval_s must be a non-negative number',
+      });
+    }
+
+    validateWidgetDependencies(w.dependencies, `${widgetPath}.dependencies`, errors);
+
+    const uiFunction = typeof w.ui_function === 'string' && w.ui_function.trim()
+      ? w.ui_function.trim()
+      : widgetId
+      ? `widget_${widgetId}_ui`
+      : null;
+    const dataFunction = typeof w.data_function === 'string' && w.data_function.trim()
+      ? w.data_function.trim()
+      : typeof w.data_tool === 'string' && w.data_tool.trim()
+      ? w.data_tool.trim()
+      : widgetId
+      ? `widget_${widgetId}_data`
+      : null;
+
+    if (uiFunction && Object.keys(functions).length > 0 && !functions[uiFunction]) {
+      warnings.push(`Widget "${widgetId}" references missing UI function "${uiFunction}".`);
+    }
+    if (dataFunction && Object.keys(functions).length > 0 && !functions[dataFunction]) {
+      warnings.push(`Widget "${widgetId}" references missing data function "${dataFunction}".`);
+    }
+
+    if (w.cards === undefined) return;
+    if (!Array.isArray(w.cards)) {
+      errors.push({ path: `${widgetPath}.cards`, message: 'cards must be an array' });
+      return;
+    }
+
+    const seenCardIds = new Set<string>();
+    w.cards.forEach((card, cardIndex) => {
+      const cardPath = `${widgetPath}.cards.${cardIndex}`;
+      if (!card || typeof card !== 'object' || Array.isArray(card)) {
+        errors.push({ path: cardPath, message: 'card declaration must be an object' });
+        return;
+      }
+
+      const c = card as Record<string, unknown>;
+      const cardId = typeof c.id === 'string' ? c.id.trim() : '';
+      if (!cardId) {
+        errors.push({ path: `${cardPath}.id`, message: 'id is required and must be a string' });
+      } else if (seenCardIds.has(cardId)) {
+        errors.push({ path: `${cardPath}.id`, message: `duplicate card id "${cardId}"` });
+      } else {
+        seenCardIds.add(cardId);
+      }
+
+      if (typeof c.label !== 'string' || !c.label.trim()) {
+        errors.push({
+          path: `${cardPath}.label`,
+          message: 'label is required and must be a string',
+        });
+      }
+      if (typeof c.size !== 'string' || !COMMAND_CARD_SIZE_RE.test(c.size)) {
+        errors.push({
+          path: `${cardPath}.size`,
+          message: 'size must use the form "2x1" with 1-4 columns and rows',
+        });
+      }
+      if (c.render !== undefined && c.render !== 'native') {
+        errors.push({
+          path: `${cardPath}.render`,
+          message: 'only native command cards are supported',
+        });
+      }
+      if (c.kind !== undefined && typeof c.kind !== 'string') {
+        errors.push({ path: `${cardPath}.kind`, message: 'kind must be a string' });
+      }
+      for (const key of ['description', 'data_view', 'data_function']) {
+        if (c[key] !== undefined && typeof c[key] !== 'string') {
+          errors.push({ path: `${cardPath}.${key}`, message: `${key} must be a string` });
+        }
+      }
+      if (
+        c.refresh_interval_s !== undefined &&
+        (typeof c.refresh_interval_s !== 'number' ||
+          !Number.isFinite(c.refresh_interval_s) ||
+          c.refresh_interval_s < 0)
+      ) {
+        errors.push({
+          path: `${cardPath}.refresh_interval_s`,
+          message: 'refresh_interval_s must be a non-negative number',
+        });
+      }
+      validateWidgetDependencies(c.dependencies, `${cardPath}.dependencies`, errors);
+
+      const cardDataFunction = typeof c.data_function === 'string' && c.data_function.trim()
+        ? c.data_function.trim()
+        : dataFunction;
+      if (cardDataFunction && Object.keys(functions).length > 0 && !functions[cardDataFunction]) {
+        warnings.push(
+          `Widget card "${widgetId}.${cardId}" references missing data function "${cardDataFunction}".`,
+        );
+      }
+    });
+  });
+}
+
 export function validateManifest(input: unknown): ManifestValidationResult {
   const errors: ManifestValidationError[] = [];
   const warnings: string[] = [];
 
   if (!input || typeof input !== 'object') {
-    return { valid: false, errors: [{ path: '', message: 'Manifest must be an object' }], warnings };
+    return {
+      valid: false,
+      errors: [{ path: '', message: 'Manifest must be an object' }],
+      warnings,
+    };
   }
 
   const manifest = input as Record<string, unknown>;
@@ -297,18 +499,27 @@ export function validateManifest(input: unknown): ManifestValidationResult {
       const functions = manifest.functions as Record<string, unknown>;
       for (const [fnName, fnDef] of Object.entries(functions)) {
         if (!fnDef || typeof fnDef !== 'object') {
-          errors.push({ path: `functions.${fnName}`, message: 'function definition must be an object' });
+          errors.push({
+            path: `functions.${fnName}`,
+            message: 'function definition must be an object',
+          });
           continue;
         }
 
         const fn = fnDef as Record<string, unknown>;
         if (!fn.description || typeof fn.description !== 'string') {
-          errors.push({ path: `functions.${fnName}.description`, message: 'description is required' });
+          errors.push({
+            path: `functions.${fnName}.description`,
+            message: 'description is required',
+          });
         }
 
         if (fn.parameters !== undefined) {
           if (typeof fn.parameters !== 'object') {
-            errors.push({ path: `functions.${fnName}.parameters`, message: 'parameters must be an object or array' });
+            errors.push({
+              path: `functions.${fnName}.parameters`,
+              message: 'parameters must be an object or array',
+            });
           } else {
             fn.parameters = normalizeManifestParameters(fn.parameters);
           }
@@ -317,22 +528,34 @@ export function validateManifest(input: unknown): ManifestValidationResult {
     }
   }
 
-  if (manifest.env !== undefined && (typeof manifest.env !== 'object' || manifest.env === null || Array.isArray(manifest.env))) {
+  if (
+    manifest.env !== undefined &&
+    (typeof manifest.env !== 'object' || manifest.env === null || Array.isArray(manifest.env))
+  ) {
     errors.push({ path: 'env', message: 'env must be an object' });
   }
 
   if (
     manifest.env_vars !== undefined &&
-    (typeof manifest.env_vars !== 'object' || manifest.env_vars === null || Array.isArray(manifest.env_vars))
+    (typeof manifest.env_vars !== 'object' || manifest.env_vars === null ||
+      Array.isArray(manifest.env_vars))
   ) {
     errors.push({ path: 'env_vars', message: 'env_vars must be an object' });
   }
+
+  const functionsForWidgetValidation =
+    manifest.functions && typeof manifest.functions === 'object' &&
+      !Array.isArray(manifest.functions)
+      ? manifest.functions as Record<string, unknown>
+      : {};
+  validateManifestWidgets(manifest.widgets, functionsForWidgetValidation, errors, warnings);
 
   const rawEnvVars = {
     ...((manifest.env && typeof manifest.env === 'object' && !Array.isArray(manifest.env))
       ? manifest.env as Record<string, unknown>
       : {}),
-    ...((manifest.env_vars && typeof manifest.env_vars === 'object' && !Array.isArray(manifest.env_vars))
+    ...((manifest.env_vars && typeof manifest.env_vars === 'object' &&
+        !Array.isArray(manifest.env_vars))
       ? manifest.env_vars as Record<string, unknown>
       : {}),
   };
@@ -340,7 +563,10 @@ export function validateManifest(input: unknown): ManifestValidationResult {
   for (const [key, value] of Object.entries(rawEnvVars)) {
     const keyValidation = validateEnvVarKey(key);
     if (!keyValidation.valid) {
-      errors.push({ path: `env_vars.${key}`, message: keyValidation.error || 'Invalid env var key' });
+      errors.push({
+        path: `env_vars.${key}`,
+        message: keyValidation.error || 'Invalid env var key',
+      });
       continue;
     }
 
@@ -352,11 +578,17 @@ export function validateManifest(input: unknown): ManifestValidationResult {
     const envVar = value as Record<string, unknown>;
 
     if (envVar.scope !== undefined && envVar.scope !== 'universal' && envVar.scope !== 'per_user') {
-      errors.push({ path: `env_vars.${key}.scope`, message: 'scope must be "universal" or "per_user"' });
+      errors.push({
+        path: `env_vars.${key}.scope`,
+        message: 'scope must be "universal" or "per_user"',
+      });
     }
 
     if (envVar.type !== undefined && envVar.type !== 'universal' && envVar.type !== 'per_user') {
-      errors.push({ path: `env_vars.${key}.type`, message: 'type must be "universal" or "per_user"' });
+      errors.push({
+        path: `env_vars.${key}.type`,
+        message: 'type must be "universal" or "per_user"',
+      });
     }
 
     if (
@@ -417,7 +649,11 @@ export function validateManifest(input: unknown): ManifestValidationResult {
   };
 }
 
-export function manifestToMCPTools(manifest: AppManifest, _appId: string, appSlug: string): MCPTool[] {
+export function manifestToMCPTools(
+  manifest: AppManifest,
+  _appId: string,
+  appSlug: string,
+): MCPTool[] {
   if (!manifest.functions) return [];
 
   const tools: MCPTool[] = [];

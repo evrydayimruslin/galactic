@@ -54,6 +54,7 @@ export interface RuntimeConfig {
   // Inter-app calls: base URL + auth token for calling other apps via MCP
   baseUrl?: string;
   authToken?: string;
+  appCallDependencies?: RuntimeAppCallDependency[];
   // Internal service auth for TCP protocol endpoints (/api/net/*)
   workerSecret?: string;
   // Worker's direct URL (not CDN) for internal fetch calls from Dynamic Workers
@@ -73,6 +74,12 @@ export interface RuntimeConfig {
       | "d1WriteRowsPerCloudUnit"
     >
     | null;
+}
+
+export interface RuntimeAppCallDependency {
+  app: string;
+  functions: string[];
+  access?: "read";
 }
 
 export interface RuntimeAIRoute {
@@ -95,6 +102,24 @@ interface RpcToolCallEnvelope {
   error?: {
     message?: string;
   };
+}
+
+function appCallAllowedByDependency(
+  dependencies: RuntimeAppCallDependency[] | undefined,
+  targetAppId: string,
+  functionName: string,
+): boolean {
+  const normalizedTarget = targetAppId.trim();
+  const normalizedFunction = functionName.trim();
+  if (!normalizedTarget || !normalizedFunction) return false;
+
+  return (dependencies || []).some((dependency) => {
+    if (dependency.access !== undefined && dependency.access !== "read") {
+      return false;
+    }
+    if (dependency.app.trim() !== normalizedTarget) return false;
+    return dependency.functions.some((fn) => fn.trim() === normalizedFunction);
+  });
 }
 
 export interface AppDataService {
@@ -2033,8 +2058,22 @@ export async function executeInSandbox(
         functionName: string,
         callArgs?: Record<string, unknown>,
       ): Promise<unknown> => {
-        if (!config.permissions.includes("app:call")) {
-          throw new Error("app:call permission required");
+        if (
+          typeof targetAppId !== "string" || !targetAppId.trim() ||
+          typeof functionName !== "string" || !functionName.trim()
+        ) {
+          throw new Error("target app id and function name are required");
+        }
+        const hasBroadCallPermission = config.permissions.includes("app:call");
+        const hasDeclaredDependency = appCallAllowedByDependency(
+          config.appCallDependencies,
+          targetAppId,
+          functionName,
+        );
+        if (!hasBroadCallPermission && !hasDeclaredDependency) {
+          throw new Error(
+            "app:call permission or a matching read dependency is required",
+          );
         }
         if (!config.baseUrl || !config.authToken) {
           throw new Error(

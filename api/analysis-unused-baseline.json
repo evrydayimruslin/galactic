@@ -1,6 +1,18 @@
 {
   "issues": [
     {
+      "file": "handlers/admin-cloud-economics.test.ts",
+      "files": [
+        "handlers/admin-cloud-economics.test.ts"
+      ]
+    },
+    {
+      "file": "handlers/admin-flash-training-export.test.ts",
+      "files": [
+        "handlers/admin-flash-training-export.test.ts"
+      ]
+    },
+    {
       "exports": [
         "getUserId"
       ],
@@ -52,6 +64,8 @@
       "types": [
         "ApproveAssessmentPayload",
         "CreateGapPayload",
+        "FlashTrainingExportQuery",
+        "FlashTrainingExportResponseFormat",
         "RecordAssessmentPayload",
         "SetAppCategoryPayload",
         "SetAppFeaturedPayload",
@@ -101,6 +115,7 @@
         "AppSupabaseConfigState",
         "MissingAppSecretsErrorDetails",
         "ResolvedAppRuntimeEnv",
+        "RuntimeAppCallDependency",
         "StrictRuntimePermissionResolution"
       ]
     },
@@ -109,6 +124,12 @@
         "buildAppSupabaseResolutionLogEntry"
       ],
       "file": "services/app-runtime-telemetry.ts"
+    },
+    {
+      "file": "services/appdata.ts",
+      "types": [
+        "AppDataServiceOptions"
+      ]
     },
     {
       "exports": [
@@ -199,20 +220,12 @@
       ]
     },
     {
-      "file": "services/capture-inspection.ts",
+      "exports": [
+        "summarizeReceiptCloudEvents"
+      ],
+      "file": "services/call-receipts.ts",
       "types": [
-        "CaptureArtifactLinkRow",
-        "CaptureArtifactRow",
-        "CaptureEventRow",
-        "CaptureExportBundle",
-        "CaptureIntegrityReport",
-        "CaptureMessageRow",
-        "CaptureThreadRow",
-        "ExecutionFailureRow",
-        "LlmContextSnapshotRow",
-        "LlmInvocationRow",
-        "ToolInvocationRow",
-        "TrainingAnnotationRow"
+        "ReceiptCloudUsageEvent"
       ]
     },
     {
@@ -238,6 +251,27 @@
       ]
     },
     {
+      "duplicates": [
+        "{\"0\":{\"col\":17,\"line\":208,\"name\":\"calculateCloudUsageLight\",\"pos\":4890},\"1\":{\"col\":14,\"line\":222,\"name\":\"calcCloudUsageLight\",\"pos\":5379}}"
+      ],
+      "file": "services/cloud-usage.ts",
+      "types": [
+        "CloudUsageContext",
+        "CloudUsageEventParams",
+        "CloudUsageHoldReleaseResult",
+        "CloudUsageHoldSettlementResult",
+        "CreateCloudUsageHoldParams",
+        "D1UsageDebitResult",
+        "DebitCloudOperationParams",
+        "DebitD1UsageParams",
+        "ReleaseCloudUsageHoldParams",
+        "RuntimeCloudHoldParams",
+        "RuntimeCloudHoldSettlementParams",
+        "RuntimeCloudHoldSettlementResult",
+        "SettleCloudUsageHoldParams"
+      ]
+    },
+    {
       "exports": [
         "CodeCache"
       ],
@@ -247,6 +281,20 @@
       "file": "services/codemode-tools.ts",
       "types": [
         "JsonSchemaToolDescriptor"
+      ]
+    },
+    {
+      "exports": [
+        "emptyCommandDashboardLayout"
+      ],
+      "file": "services/command-dashboard.ts",
+      "types": [
+        "CommandDashboardCardInstance",
+        "CommandDashboardCardPosition",
+        "CommandDashboardLayout",
+        "CommandDashboardMetadataInput",
+        "CommandDashboardSummary",
+        "StoredCommandDashboardLayout"
       ]
     },
     {
@@ -304,6 +352,12 @@
         "startD1BillingJob"
       ],
       "file": "services/d1-billing.ts"
+    },
+    {
+      "file": "services/d1-data.ts",
+      "types": [
+        "D1DataServiceOptions"
+      ]
     },
     {
       "exports": [
@@ -394,18 +448,76 @@
     {
       "file": "services/execution-settlement.ts",
       "types": [
+        "AppCallSettlementResult",
+        "DebitWidgetPullUsageParams",
         "ExecutionTelemetry",
         "LogExecutionResultParams",
+        "PreflightRuntimeCloudHoldParams",
+        "RuntimeAppCallPricingPreflight",
+        "RuntimeCloudPreflightResult",
+        "RuntimeCloudSettlementForAppCall",
+        "RuntimeInfraCharge",
+        "RuntimeOperationMeteringContextParams",
+        "SettleAndLogAppExecutionParams",
         "SettleAndLogGpuExecutionParams",
+        "SettleAppCallParams",
         "SettleCallerAppChargeParams",
-        "SettleCallerAppChargeResult"
+        "SettleCallerAppChargeResult",
+        "WidgetPullUsageResult"
       ]
     },
     {
       "file": "services/flash-broker.ts",
       "types": [
+        "FlashBrokerTelemetryContext",
+        "FlashCallOptions",
+        "FlashCallTelemetryContext",
         "FlashEvent",
+        "PureSystemAgentDelegationInput",
         "ScopeConfig"
+      ]
+    },
+    {
+      "exports": [
+        "FLASH_ESCALATION_TARGETS",
+        "FLASH_OUTPUT_SHAPES",
+        "FLASH_TIER"
+      ],
+      "file": "services/flash-finetune-metadata.ts",
+      "types": [
+        "BuildFlashInvocationMetadataInput",
+        "FlashAnalyzeOutputLabels",
+        "FlashEscalationInput",
+        "FlashEscalationTarget",
+        "FlashInputFeatures",
+        "FlashInvocationMetadata",
+        "FlashMode",
+        "FlashOutputShape",
+        "FlashPromptBuilderOutputLabels",
+        "FlashSystemAgentDelegationLike",
+        "FlashSystemAgentType",
+        "FlashTextOutputLabels"
+      ]
+    },
+    {
+      "exports": [
+        "getFlashTrainingReadinessReasons"
+      ],
+      "file": "services/flash-training-dataset.ts",
+      "types": [
+        "FlashTrainingDataset",
+        "FlashTrainingDatasetFilterSummary",
+        "FlashTrainingDatasetRows",
+        "FlashTrainingExample",
+        "FlashTrainingJsonlExport",
+        "FlashTrainingJsonlOptions",
+        "FlashTrainingSnapshotPayload"
+      ]
+    },
+    {
+      "file": "services/flash-training-labels.ts",
+      "types": [
+        "FlashOutcomeLabelRows"
       ]
     },
     {
@@ -542,12 +654,17 @@
       ]
     },
     {
+      "duplicates": [
+        "{\"0\":{\"col\":23,\"line\":150,\"name\":\"processHostingBilling\",\"pos\":4264},\"1\":{\"col\":14,\"line\":417,\"name\":\"processStorageBilling\",\"pos\":12257}}"
+      ],
       "exports": [
+        "processStorageBilling",
         "startHostingBillingJob"
       ],
       "file": "services/hosting-billing.ts",
       "types": [
-        "BillingResult"
+        "BillingResult",
+        "StorageAtRestCharge"
       ]
     },
     {
@@ -770,10 +887,14 @@
       ]
     },
     {
+      "exports": [
+        "validateBillingAddressValue"
+      ],
       "file": "services/platform-request-validation.ts",
       "types": [
         "UploadOptionInput",
         "ValidatedAppSupabaseConfigPayload",
+        "ValidatedBillingAddressPayload",
         "ValidatedConnectOnboardPayload",
         "ValidatedHostingCheckoutPayload",
         "ValidatedSupabaseOauthConnectPayload",
@@ -824,7 +945,6 @@
     },
     {
       "exports": [
-        "ensurePlainObject",
         "rejectUnknownKeys"
       ],
       "file": "services/request-validation.ts"
@@ -862,6 +982,12 @@
       "types": [
         "AppStorageAccountingResult",
         "StorageQuotaResult"
+      ]
+    },
+    {
+      "file": "services/storage.ts",
+      "types": [
+        "R2ServiceOptions"
       ]
     },
     {

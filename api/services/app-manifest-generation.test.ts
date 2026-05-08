@@ -8,6 +8,7 @@ import {
   upsertManifestUploadFile,
 } from "./app-manifest-generation.ts";
 import { parseTypeScript } from "./parser.ts";
+import { validateManifest } from "../../shared/contracts/manifest.ts";
 
 Deno.test("manifest generation: uses entry filename when building contracts from source", async () => {
   const parseResult = await parseTypeScript(
@@ -51,7 +52,10 @@ Deno.test("manifest generation: preserves rich uploaded manifests and merges mis
 
   assertEquals(hydrated.source, "merged");
   assertEquals(hydrated.manifest.version, "2.0.0");
-  assertEquals(hydrated.manifest.functions?.listTasks?.description, "List all tasks");
+  assertEquals(
+    hydrated.manifest.functions?.listTasks?.description,
+    "List all tasks",
+  );
   assertExists(hydrated.manifest.functions?.addTask);
 });
 
@@ -94,4 +98,80 @@ Deno.test("manifest generation: upsertManifestUploadFile replaces stale manifest
   assertEquals(files.length, 2);
   assertEquals(files[1].name, "manifest.json");
   assertExists(files[1].content.includes('"search"'));
+});
+
+Deno.test("manifest validation: command cards are native, fixed-size, and read-only", () => {
+  const valid = validateManifest({
+    name: "Command Widgets",
+    version: "1.0.0",
+    type: "mcp",
+    entry: { functions: "index.ts" },
+    functions: {
+      widget_overview_ui: { description: "Render the full widget" },
+      widget_overview_data: { description: "Fetch widget and card data" },
+    },
+    widgets: [
+      {
+        id: "overview",
+        label: "Overview",
+        cards: [
+          {
+            id: "queue",
+            label: "Queue",
+            size: "2x1",
+            render: "native",
+            data_view: "queue",
+            dependencies: [{
+              app: "email-ops",
+              functions: ["list_drafts"],
+              access: "read",
+            }],
+          },
+        ],
+      },
+    ],
+  });
+
+  assertEquals(valid.valid, true);
+  assertEquals(valid.errors, []);
+
+  const invalid = validateManifest({
+    name: "Command Widgets",
+    version: "1.0.0",
+    type: "mcp",
+    entry: { functions: "index.ts" },
+    widgets: [
+      {
+        id: "overview",
+        label: "Overview",
+        cards: [
+          {
+            id: "queue",
+            label: "Queue",
+            size: "wide",
+            render: "iframe",
+            dependencies: [{
+              app: "email-ops",
+              functions: ["send_email"],
+              access: "write",
+            }],
+          },
+        ],
+      },
+    ],
+  });
+
+  assertEquals(invalid.valid, false);
+  assertEquals(
+    invalid.errors.some((error) => error.path.endsWith(".size")),
+    true,
+  );
+  assertEquals(
+    invalid.errors.some((error) => error.path.endsWith(".render")),
+    true,
+  );
+  assertEquals(
+    invalid.errors.some((error) => error.path.endsWith(".access")),
+    true,
+  );
 });

@@ -11,6 +11,7 @@ import {
   resolveAppSupabaseConfig,
   resolveManifestPermissions,
   resolveStrictManifestPermissions,
+  resolveWidgetAppCallDependencies,
   SupabaseConfigMigrationRequiredError,
 } from "./app-runtime-resources.ts";
 
@@ -406,8 +407,47 @@ Deno.test("app runtime resources: strict manifest permissions only grant declare
   });
 
   assertEquals(resolution.manifestBacked, true);
-  assertEquals(resolution.permissions, ["ai:call", "storage:read", "net:connect"]);
+  assertEquals(resolution.permissions, [
+    "ai:call",
+    "storage:read",
+    "net:connect",
+  ]);
   assertEquals(resolution.ignoredPermissions, ["unknown:scope"]);
+});
+
+Deno.test("app runtime resources: widget dependencies become read-only app call grants", () => {
+  const dependencies = resolveWidgetAppCallDependencies({
+    manifest: JSON.stringify({
+      widgets: [
+        {
+          id: "overview",
+          label: "Overview",
+          dependencies: [
+            { app: "email-ops", functions: ["listDrafts"], access: "read" },
+          ],
+          cards: [
+            {
+              id: "queue",
+              label: "Queue",
+              size: "2x1",
+              dependencies: [
+                { app: "email-ops", functions: ["getDraft", "listDrafts"] },
+                { app: "github-mcp", functions: ["listPRs"], access: "write" },
+              ],
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  assertEquals(dependencies, [
+    {
+      app: "email-ops",
+      functions: ["getDraft", "listDrafts"],
+      access: "read",
+    },
+  ]);
 });
 
 Deno.test("app runtime resources: D1 setup stays disabled when provisioning cannot resolve a database id", async () => {

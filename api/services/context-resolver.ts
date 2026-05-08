@@ -10,27 +10,27 @@
 // This replaces the heuristic keyword-matching approach with ~95% accuracy
 // at a cost of ~$0.001 per call and ~400-600ms latency.
 
-import { getFunctionIndex, type FunctionIndex } from './function-index.ts';
-import { getEntityIndex, type EntityIndex } from './entity-index.ts';
+import { type FunctionIndex, getFunctionIndex } from './function-index.ts';
+import { type EntityIndex, getEntityIndex } from './entity-index.ts';
 import { deductChatCost } from './chat-billing.ts';
 import { fetchInferenceChatCompletion, selectInferenceModel } from './inference-client.ts';
-import { resolveInferenceRoute, type ResolvedInferenceRoute } from './inference-route.ts';
+import { type ResolvedInferenceRoute, resolveInferenceRoute } from './inference-route.ts';
 import { ULTRALIGHT_DEEPSEEK_V4_FLASH_MODEL } from './platform-inference-models.ts';
 
 // ── Types ──
 
 export interface TaskContext {
   entities: Array<{
-    name: string;       // display label
-    match: string;      // what the flash model identified
-    type: string;       // entity type (approval, conversation, room, etc.)
-    id: string;         // row ID or identifier
+    name: string; // display label
+    match: string; // what the flash model identified
+    type: string; // entity type (approval, conversation, room, etc.)
+    id: string; // row ID or identifier
     appId: string;
     appName: string;
-    context: string;    // human-readable context
+    context: string; // human-readable context
   }>;
   functions: Array<{
-    name: string;       // sanitized codemode name
+    name: string; // sanitized codemode name
     appId: string;
     description: string;
     returns: string;
@@ -38,13 +38,14 @@ export interface TaskContext {
     dependsOn: string[];
   }>;
   conventions: Array<{ appName: string; key: string; value: string }>;
-  promptBlock: string;  // formatted for system prompt injection
-  modelSuggestion?: string;  // flash broker's model recommendation
+  promptBlock: string; // formatted for system prompt injection
+  modelSuggestion?: string; // flash broker's model recommendation
 }
 
 // ── Flash Broker System Prompt ──
 
-const FLASH_BROKER_SYSTEM = `You are a context resolver for an AI agent platform. Given a user's message and a catalog of available functions + data entities, output structured JSON that tells the execution model exactly what it needs.
+const FLASH_BROKER_SYSTEM =
+  `You are a context resolver for an AI agent platform. Given a user's message and a catalog of available functions + data entities, output structured JSON that tells the execution model exactly what it needs.
 
 Your job:
 1. Identify which functions from the catalog are relevant to this task
@@ -163,7 +164,9 @@ export async function resolveContext(
 
 interface FlashBrokerResult {
   functions: string[];
-  entities: Array<{ name: string; type: string; id: string; appId?: string; appName?: string; context?: string }>;
+  entities: Array<
+    { name: string; type: string; id: string; appId?: string; appName?: string; context?: string }
+  >;
   conventions: Array<{ appName: string; key: string; value: string }>;
   modelSuggestion: string;
   reasoning?: string;
@@ -190,7 +193,7 @@ async function callFlashBroker(
           { role: 'system', content: FLASH_BROKER_SYSTEM },
           { role: 'user', content: userMessage },
         ],
-        temperature: 0,     // Deterministic — same input always gives same output
+        temperature: 0, // Deterministic — same input always gives same output
         max_tokens: 1024,
         response_format: { type: 'json_object' },
       },
@@ -303,7 +306,9 @@ function buildCatalog(fnIndex: FunctionIndex, entityIndex: EntityIndex | null): 
       const fields = Object.entries(entity.fields || {})
         .map(([k, v]) => `${k}="${v}"`)
         .join(', ');
-      sections.push(`- [${entity.appSlug}/${entity.table}] id=${entity.rowId}: ${entity.label} (${fields})`);
+      sections.push(
+        `- [${entity.appSlug}/${entity.table}] id=${entity.rowId}: ${entity.label} (${fields})`,
+      );
     }
   }
 
@@ -312,6 +317,10 @@ function buildCatalog(fnIndex: FunctionIndex, entityIndex: EntityIndex | null): 
     sections.push('\n### Widgets');
     for (const w of fnIndex.widgets) {
       sections.push(`- {{widget:${w.name}:${w.appId}}} — ${w.label}`);
+      if (w.cards?.length) {
+        const cards = w.cards.map((card) => `${card.id} (${card.size})`).join(', ');
+        sections.push(`  Command cards: ${cards}`);
+      }
     }
   }
 
@@ -357,7 +366,7 @@ function heuristicFallback(
 
   // Sort by score, take top 8
   matchedFunctions.sort((a: any, b: any) => (b._score || 0) - (a._score || 0));
-  const topFunctions = matchedFunctions.slice(0, 8).map(f => {
+  const topFunctions = matchedFunctions.slice(0, 8).map((f) => {
     const { _score, ...rest } = f as any;
     return rest;
   });
@@ -379,7 +388,12 @@ function heuristicFallback(
   }
 
   const promptBlock = formatContextBlock([], topFunctions, conventions.slice(0, 5));
-  return { entities: [], functions: topFunctions, conventions: conventions.slice(0, 5), promptBlock };
+  return {
+    entities: [],
+    functions: topFunctions,
+    conventions: conventions.slice(0, 5),
+    promptBlock,
+  };
 }
 
 // ── Formatting ──
@@ -425,7 +439,9 @@ function formatContextBlock(
     lines.push('');
   }
 
-  lines.push('Use the entity IDs above directly — no need to query for them. Write ONE codemode recipe.');
+  lines.push(
+    'Use the entity IDs above directly — no need to query for them. Write ONE codemode recipe.',
+  );
 
   return lines.join('\n');
 }

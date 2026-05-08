@@ -22,8 +22,30 @@
     {
       "id": "email_inbox",
       "label": "Email Approvals",
+      "ui_function": "widget_email_inbox_ui",
+      "data_function": "widget_email_inbox_data",
       "data_tool": "widget_email_inbox_data",
-      "poll_interval_s": 30
+      "poll_interval_s": 30,
+      "cards": [
+        {
+          "id": "drafts_queue",
+          "label": "Drafts Queue",
+          "size": "2x2",
+          "render": "native",
+          "kind": "list",
+          "data_view": "drafts_queue",
+          "refresh_interval_s": 300
+        },
+        {
+          "id": "inbox_volume",
+          "label": "Inbox Volume",
+          "size": "2x1",
+          "render": "native",
+          "kind": "metric",
+          "data_view": "inbox_volume",
+          "refresh_interval_s": 300
+        }
+      ]
     }
   ],
   "functions": {

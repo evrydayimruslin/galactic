@@ -1,5 +1,6 @@
 import type { App } from "../../shared/types/index.ts";
 import type { EnvSchemaEntry } from "../../shared/contracts/env.ts";
+import type { WidgetDependencyDeclaration } from "../../shared/contracts/widget.ts";
 import { getEnv } from "../lib/env.ts";
 import { buildAppSecretDiagnostics } from "./app-diagnostics.ts";
 import {
@@ -507,6 +508,79 @@ export interface StrictRuntimePermissionResolution {
   permissions: string[];
   manifestBacked: boolean;
   ignoredPermissions: string[];
+}
+
+export interface RuntimeAppCallDependency {
+  app: string;
+  functions: string[];
+  access: "read";
+}
+
+function collectWidgetAppCallDependencies(
+  dependencies: unknown,
+  byApp: Map<string, Set<string>>,
+): void {
+  if (!Array.isArray(dependencies)) return;
+
+  for (const dependency of dependencies) {
+    if (
+      !dependency || typeof dependency !== "object" || Array.isArray(dependency)
+    ) continue;
+    const dep = dependency as WidgetDependencyDeclaration;
+    const app = typeof dep.app === "string" ? dep.app.trim() : "";
+    const access = dep.access ?? "read";
+    if (!app || access !== "read" || !Array.isArray(dep.functions)) continue;
+
+    const functions = dep.functions
+      .filter((fn): fn is string => typeof fn === "string" && !!fn.trim())
+      .map((fn) => fn.trim());
+    if (functions.length === 0) continue;
+
+    const existing = byApp.get(app) ?? new Set<string>();
+    for (const fn of functions) existing.add(fn);
+    byApp.set(app, existing);
+  }
+}
+
+export function resolveWidgetAppCallDependencies(
+  app: Pick<RuntimeApp, "manifest">,
+): RuntimeAppCallDependency[] {
+  let parsed: unknown;
+  try {
+    parsed = typeof app.manifest === "string"
+      ? JSON.parse(app.manifest)
+      : app.manifest;
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+
+  const manifest = parsed as { widgets?: unknown };
+  if (!Array.isArray(manifest.widgets)) return [];
+
+  const byApp = new Map<string, Set<string>>();
+  for (const widget of manifest.widgets) {
+    if (!widget || typeof widget !== "object" || Array.isArray(widget)) {
+      continue;
+    }
+    const widgetRecord = widget as { dependencies?: unknown; cards?: unknown };
+    collectWidgetAppCallDependencies(widgetRecord.dependencies, byApp);
+    if (Array.isArray(widgetRecord.cards)) {
+      for (const card of widgetRecord.cards) {
+        if (!card || typeof card !== "object" || Array.isArray(card)) continue;
+        collectWidgetAppCallDependencies(
+          (card as { dependencies?: unknown }).dependencies,
+          byApp,
+        );
+      }
+    }
+  }
+
+  return Array.from(byApp.entries(), ([appId, functions]) => ({
+    app: appId,
+    functions: Array.from(functions).sort(),
+    access: "read" as const,
+  })).sort((a, b) => a.app.localeCompare(b.app));
 }
 
 export function resolveStrictManifestPermissions(

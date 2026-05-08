@@ -6,7 +6,7 @@ import { getEnv } from '../lib/env.ts';
 import { createR2Service } from './storage.ts';
 import { createAppsService } from './apps.ts';
 import { buildJsonSchemaDescriptors, generateTypes, sanitizeToolName } from './codemode-tools.ts';
-import type { AppForCodemode } from './codemode-tools.ts';
+import type { AppForCodemode, WidgetIndexEntry } from './codemode-tools.ts';
 import { createD1DataService } from './d1-data.ts';
 import { parseStoredSkillsParsed } from './app-contracts.ts';
 
@@ -23,7 +23,7 @@ export interface FunctionIndex {
     conventions: string[];
     dependsOn: string[];
   }>;
-  widgets: Array<{ name: string; appId: string; label: string }>;
+  widgets: WidgetIndexEntry[];
   types: string;
   updatedAt: string;
 }
@@ -54,26 +54,37 @@ export async function rebuildFunctionIndex(userId: string): Promise<FunctionInde
   // Fetch owned apps
   const ownedRes = await fetch(
     `${SUPABASE_URL}/rest/v1/apps?owner_id=eq.${userId}&deleted_at=is.null&select=id,name,slug,manifest,skills_parsed,d1_database_id`,
-    { headers }
+    { headers },
   );
   const ownedApps = ownedRes.ok
-    ? await ownedRes.json() as Array<{ id: string; name: string; slug: string; manifest: string | null; skills_parsed: unknown; d1_database_id: string | null }>
+    ? await ownedRes.json() as Array<
+      {
+        id: string;
+        name: string;
+        slug: string;
+        manifest: string | null;
+        skills_parsed: unknown;
+        d1_database_id: string | null;
+      }
+    >
     : [];
 
   // Fetch liked apps
   const likedRes = await fetch(
     `${SUPABASE_URL}/rest/v1/user_app_likes?user_id=eq.${userId}&liked=eq.true&select=app_id`,
-    { headers }
+    { headers },
   );
   const likedIds = likedRes.ok
-    ? (await likedRes.json() as Array<{ app_id: string }>).map(l => l.app_id)
+    ? (await likedRes.json() as Array<{ app_id: string }>).map((l) => l.app_id)
     : [];
 
   let likedApps: typeof ownedApps = [];
   if (likedIds.length > 0) {
     const likedAppsRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/apps?id=in.(${likedIds.join(',')})&deleted_at=is.null&select=id,name,slug,manifest,skills_parsed,d1_database_id`,
-      { headers }
+      `${SUPABASE_URL}/rest/v1/apps?id=in.(${
+        likedIds.join(',')
+      })&deleted_at=is.null&select=id,name,slug,manifest,skills_parsed,d1_database_id`,
+      { headers },
     );
     likedApps = likedAppsRes.ok ? await likedAppsRes.json() as typeof ownedApps : [];
   }
@@ -99,17 +110,21 @@ export async function rebuildFunctionIndex(userId: string): Promise<FunctionInde
   // ── Fetch skill apps (owned + liked) — .md context files ──
   const skillOwnedRes = await fetch(
     `${SUPABASE_URL}/rest/v1/apps?owner_id=eq.${userId}&app_type=eq.skill&deleted_at=is.null&select=id,name,slug,description,storage_key`,
-    { headers }
+    { headers },
   );
   const skillOwned = skillOwnedRes.ok
-    ? await skillOwnedRes.json() as Array<{ id: string; name: string; slug: string; description: string | null; storage_key: string }>
+    ? await skillOwnedRes.json() as Array<
+      { id: string; name: string; slug: string; description: string | null; storage_key: string }
+    >
     : [];
 
   let skillLiked: typeof skillOwned = [];
   if (likedIds.length > 0) {
     const skillLikedRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/apps?id=in.(${likedIds.join(',')})&app_type=eq.skill&deleted_at=is.null&select=id,name,slug,description,storage_key`,
-      { headers }
+      `${SUPABASE_URL}/rest/v1/apps?id=in.(${
+        likedIds.join(',')
+      })&app_type=eq.skill&deleted_at=is.null&select=id,name,slug,description,storage_key`,
+      { headers },
     );
     skillLiked = skillLikedRes.ok ? await skillLikedRes.json() as typeof skillOwned : [];
   }
@@ -157,10 +172,10 @@ export async function rebuildFunctionIndex(userId: string): Promise<FunctionInde
     try {
       const d1 = createD1DataService(app.id, app.d1_database_id);
       const rows = await d1.all<{ key: string; value: string }>(
-        `SELECT key, value FROM conventions ORDER BY rowid DESC LIMIT 50`
+        `SELECT key, value FROM conventions ORDER BY rowid DESC LIMIT 50`,
       );
       if (rows.length > 0) {
-        appConventions.set(app.id, rows.map(r => `${r.key}: ${r.value}`));
+        appConventions.set(app.id, rows.map((r) => `${r.key}: ${r.value}`));
       }
     } catch {
       // conventions table may not exist — that's fine, skip
@@ -200,8 +215,8 @@ export async function rebuildFunctionIndex(userId: string): Promise<FunctionInde
           if (
             otherReturn &&
             (otherReturn.toLowerCase().includes(entityName) ||
-             otherMapping.fnName.toLowerCase().includes(`create_${entityName}`) ||
-             otherMapping.fnName.toLowerCase().includes(`get_${entityName}`))
+              otherMapping.fnName.toLowerCase().includes(`create_${entityName}`) ||
+              otherMapping.fnName.toLowerCase().includes(`get_${entityName}`))
           ) {
             dependsOn.push(otherName);
           }
@@ -331,17 +346,24 @@ function schemaToReturnType(schema: Record<string, unknown>): string {
   }
 
   if (schema.oneOf) {
-    return (schema.oneOf as Record<string, unknown>[]).map(s => schemaToReturnType(s)).join(' | ');
+    return (schema.oneOf as Record<string, unknown>[]).map((s) => schemaToReturnType(s)).join(
+      ' | ',
+    );
   }
 
   const type = schema.type as string;
   switch (type) {
-    case 'string': return 'string';
+    case 'string':
+      return 'string';
     case 'number':
-    case 'integer': return 'number';
-    case 'boolean': return 'boolean';
-    case 'null': return 'null';
-    case 'void': return 'void';
+    case 'integer':
+      return 'number';
+    case 'boolean':
+      return 'boolean';
+    case 'null':
+      return 'null';
+    case 'void':
+      return 'void';
     case 'array': {
       const items = schema.items as Record<string, unknown> | undefined;
       return items ? `${schemaToReturnType(items)}[]` : 'unknown[]';
@@ -354,6 +376,7 @@ function schemaToReturnType(schema: Record<string, unknown>): string {
       });
       return `{ ${entries.join('; ')} }`;
     }
-    default: return 'unknown';
+    default:
+      return 'unknown';
   }
 }

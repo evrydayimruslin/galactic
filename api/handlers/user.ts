@@ -145,6 +145,16 @@ interface SystemAgentStatesBody {
   states?: unknown[];
 }
 
+interface CommandDashboardMetadataBody {
+  dashboard_key?: unknown;
+  title?: unknown;
+  description?: unknown;
+  icon?: unknown;
+  sort_order?: unknown;
+  is_default?: unknown;
+  layout?: unknown;
+}
+
 interface UserProfilePatchBody {
   display_name?: string | null;
   country?: string | null;
@@ -1060,6 +1070,181 @@ export async function handleUser(request: Request): Promise<Response> {
         error: err,
       });
       return error("Failed to sync system agent states", 500);
+    }
+  }
+
+  // ============================================
+  // GET /api/user/command-widgets - Installed widget/card inventory
+  // ============================================
+  if (path === "/api/user/command-widgets" && method === "GET") {
+    try {
+      const { getFunctionIndex, rebuildFunctionIndex } = await import(
+        "../services/function-index.ts"
+      );
+      let index = await getFunctionIndex(userId);
+      if (!index) {
+        index = await rebuildFunctionIndex(userId);
+      }
+      return json({
+        widgets: index.widgets || [],
+        updated_at: index.updatedAt,
+      });
+    } catch (err) {
+      userLogger.error("Failed to load command widget inventory", {
+        user_id: userId,
+        error: err,
+      });
+      return error("Failed to load command widget inventory", 500);
+    }
+  }
+
+  // ============================================
+  // GET/POST/PATCH/DELETE /api/user/command-dashboards - Saved Command dashboards catalog
+  // ============================================
+  if (path === "/api/user/command-dashboards" && method === "GET") {
+    try {
+      const { listCommandDashboardLayouts } = await import(
+        "../services/command-dashboard.ts"
+      );
+      return json(await listCommandDashboardLayouts(userId));
+    } catch (err) {
+      userLogger.error("Failed to list command dashboards", {
+        user_id: userId,
+        error: err,
+      });
+      return error(
+        err instanceof Error
+          ? err.message
+          : "Failed to list command dashboards",
+        400,
+      );
+    }
+  }
+
+  if (path === "/api/user/command-dashboards" && method === "POST") {
+    try {
+      const body = await readJsonBody<CommandDashboardMetadataBody>(request);
+      const { createCommandDashboardLayout } = await import(
+        "../services/command-dashboard.ts"
+      );
+      return json(await createCommandDashboardLayout(userId, body));
+    } catch (err) {
+      userLogger.error("Failed to create command dashboard", {
+        user_id: userId,
+        error: err,
+      });
+      return error(
+        err instanceof Error
+          ? err.message
+          : "Failed to create command dashboard",
+        400,
+      );
+    }
+  }
+
+  if (path.startsWith("/api/user/command-dashboards/") && method === "PATCH") {
+    try {
+      const dashboardKey = decodeURIComponent(
+        path.slice("/api/user/command-dashboards/".length),
+      );
+      const body = await readJsonBody<CommandDashboardMetadataBody>(request);
+      const { updateCommandDashboardMetadata } = await import(
+        "../services/command-dashboard.ts"
+      );
+      return json(
+        await updateCommandDashboardMetadata(userId, dashboardKey, body),
+      );
+    } catch (err) {
+      userLogger.error("Failed to update command dashboard", {
+        user_id: userId,
+        error: err,
+      });
+      return error(
+        err instanceof Error
+          ? err.message
+          : "Failed to update command dashboard",
+        400,
+      );
+    }
+  }
+
+  if (path.startsWith("/api/user/command-dashboards/") && method === "DELETE") {
+    try {
+      const dashboardKey = decodeURIComponent(
+        path.slice("/api/user/command-dashboards/".length),
+      );
+      const { deleteCommandDashboardLayout } = await import(
+        "../services/command-dashboard.ts"
+      );
+      return json(await deleteCommandDashboardLayout(userId, dashboardKey));
+    } catch (err) {
+      userLogger.error("Failed to delete command dashboard", {
+        user_id: userId,
+        error: err,
+      });
+      return error(
+        err instanceof Error
+          ? err.message
+          : "Failed to delete command dashboard",
+        400,
+      );
+    }
+  }
+
+  // ============================================
+  // GET/PUT /api/user/command-dashboard - Server-synced Command layout
+  // ============================================
+  if (path === "/api/user/command-dashboard" && method === "GET") {
+    try {
+      const { getCommandDashboardLayout } = await import(
+        "../services/command-dashboard.ts"
+      );
+      const dashboard = await getCommandDashboardLayout(
+        userId,
+        url.searchParams.get("dashboard_key"),
+      );
+      return json(dashboard);
+    } catch (err) {
+      userLogger.error("Failed to load command dashboard layout", {
+        user_id: userId,
+        error: err,
+      });
+      return error(
+        err instanceof Error
+          ? err.message
+          : "Failed to load command dashboard layout",
+        400,
+      );
+    }
+  }
+
+  if (path === "/api/user/command-dashboard" && method === "PUT") {
+    try {
+      const body = await readJsonBody<CommandDashboardMetadataBody>(request);
+      if (body.layout === undefined) {
+        return error("layout is required", 400);
+      }
+      const { upsertCommandDashboardLayout } = await import(
+        "../services/command-dashboard.ts"
+      );
+      const dashboard = await upsertCommandDashboardLayout(
+        userId,
+        body.dashboard_key || url.searchParams.get("dashboard_key"),
+        body.layout,
+        body,
+      );
+      return json(dashboard);
+    } catch (err) {
+      userLogger.error("Failed to save command dashboard layout", {
+        user_id: userId,
+        error: err,
+      });
+      return error(
+        err instanceof Error
+          ? err.message
+          : "Failed to save command dashboard layout",
+        400,
+      );
     }
   }
 

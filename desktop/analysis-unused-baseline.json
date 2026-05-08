@@ -139,7 +139,8 @@
       "file": "src/lib/agentLoop.ts",
       "types": [
         "AgentLoopOptions",
-        "AgentLoopResult"
+        "AgentLoopResult",
+        "AgentLoopTrace"
       ]
     },
     {
@@ -150,14 +151,28 @@
       "file": "src/lib/agentStateSummary.ts"
     },
     {
+      "exports": [
+        "createCommandDashboard",
+        "deleteCommandDashboard",
+        "fetchCommandDashboardLayout",
+        "fetchCommandDashboards",
+        "fetchCommandWidgets",
+        "saveCommandDashboardLayout",
+        "updateCommandDashboard"
+      ],
       "file": "src/lib/api.ts",
       "types": [
         "ApiError",
+        "AppMcpToolCallOptions",
+        "CommandDashboardLayout",
+        "CommandDashboardMetadataInput",
+        "CommandDashboardSummary",
         "FunctionIndex",
         "InferenceModelOption",
         "InferenceProviderChoice",
         "McpToolResult",
         "OrchestrateEvent",
+        "StoredCommandDashboardLayout",
         "TaskContext"
       ]
     },
@@ -194,7 +209,7 @@
     },
     {
       "duplicates": [
-        "{\"0\":{\"col\":14,\"line\":22,\"name\":\"DEFAULT_INTERPRETER_MODEL\",\"pos\":929},\"1\":{\"col\":14,\"line\":24,\"name\":\"DEFAULT_CHAT_MODEL\",\"pos\":1063}}"
+        "{\"0\":{\"col\":14,\"line\":22,\"name\":\"DEFAULT_INTERPRETER_MODEL\",\"pos\":917},\"1\":{\"col\":14,\"line\":24,\"name\":\"DEFAULT_CHAT_MODEL\",\"pos\":1051}}"
       ],
       "exports": [
         "clearInferencePreference",
@@ -248,10 +263,15 @@
       ]
     },
     {
+      "exports": [
+        "DEFAULT_WIDGET_PULL_INTERVAL_MS"
+      ],
       "file": "src/lib/widgetRuntime.ts",
       "types": [
+        "WidgetDataPayload",
         "WidgetHtmlCacheEntry",
         "WidgetHtmlLoadResult",
+        "WidgetPullCostEstimate",
         "WidgetUiPayload"
       ]
     }

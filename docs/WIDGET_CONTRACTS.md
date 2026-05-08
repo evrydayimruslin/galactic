@@ -13,7 +13,10 @@ For a widget with id `email_inbox`, the canonical contract is:
 - manifest declaration:
   - `id: "email_inbox"`
   - `label: "Email Approvals"`
+  - optional `ui_function: "widget_email_inbox_ui"`
+  - optional `data_function: "widget_email_inbox_data"`
   - optional `data_tool: "widget_email_inbox_data"`
+  - optional `cards: [...]` for native Command dashboard cards
 - exported UI function:
   - `widget_email_inbox_ui`
   - returns a
@@ -35,6 +38,50 @@ canonical contract for new work.
 When `widgets[].data_tool` is present, it must match the canonical
 `widget_<id>_data` name. Older manifests may omit `data_tool`, but new or
 updated manifests should prefer the explicit canonical value for clarity.
+
+## Command Cards
+
+Widgets may expose one or more native Command dashboard cards:
+
+```json
+{
+  "widgets": [
+    {
+      "id": "email_inbox",
+      "label": "Email Approvals",
+      "data_function": "widget_email_inbox_data",
+      "cards": [
+        {
+          "id": "inbox_volume",
+          "label": "Inbox Volume",
+          "size": "2x1",
+          "render": "native",
+          "kind": "metric",
+          "data_view": "inbox_volume",
+          "refresh_interval_s": 300,
+          "dependencies": [
+            { "app": "email-ops-app-id", "functions": ["list_drafts"], "access": "read" }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Each card has exactly one fixed `size`. Command cards are read-only in v1 and
+must use `render: "native"` when the field is present. Card body data comes from
+the widget's backend data function. The desktop card pull should pass
+`{ "card_id": "...", "data_view": "..." }` into that data function; custom
+per-card `data_function` is available only when the shared data function is not
+optimal.
+
+`dependencies` declare the read-only app/function calls a card or widget data
+function may make through `ultralight.call(...)`. A matching dependency grants
+only that source app permission to attempt that target function; the target app
+still enforces the installed user's auth, settings, visibility, and permission
+rows. Broad `permissions: ["app:call"]` remains available for older/general MCPs
+but should not be used for command cards.
 
 ## Deprecated Legacy Contract
 

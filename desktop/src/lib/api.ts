@@ -7,24 +7,27 @@ import type {
   InferenceBillingMode,
   InferenceRoutePreference,
   ToolInvocationTelemetryRequest,
-} from '../../../shared/contracts/ai.ts';
-import { type ActiveBYOKProvider, BYOK_PROVIDERS } from '../../../shared/types/index.ts';
+} from "../../../shared/contracts/ai.ts";
+import {
+  type ActiveBYOKProvider,
+  BYOK_PROVIDERS,
+} from "../../../shared/types/index.ts";
 import {
   DEFAULT_CHAT_MODEL,
   DEFAULT_HEAVY_MODEL,
   DEFAULT_INTERPRETER_MODEL,
   fetchFromApi,
   getToken,
-} from './storage';
-import { type ChatStreamEvent, parseSSEStream } from './sse';
-import type { ToolUsed } from '../types/executionPlan';
-import type { AmbientSuggestion } from '../types/ambientSuggestion';
-import { createDesktopLogger } from './logging';
+} from "./storage";
+import { type ChatStreamEvent, parseSSEStream } from "./sse";
+import type { ToolUsed } from "../types/executionPlan";
+import type { AmbientSuggestion } from "../types/ambientSuggestion";
+import { createDesktopLogger } from "./logging";
 
 // ── Types ──
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
   tool_call_id?: string;
   tool_calls?: Array<{
@@ -35,7 +38,7 @@ export interface ChatMessage {
 }
 
 export interface ChatTool {
-  type: 'function';
+  type: "function";
   function: {
     name: string;
     description: string;
@@ -72,15 +75,27 @@ export interface AppMcpToolCallOptions {
 
 /** Fallback model list when server is unreachable */
 const FALLBACK_MODELS: ModelInfo[] = [
-  { id: DEFAULT_INTERPRETER_MODEL, name: 'DeepSeek V4 Flash', provider: 'deepseek' },
-  { id: DEFAULT_HEAVY_MODEL, name: 'DeepSeek V4 Pro', provider: 'deepseek' },
-  { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openai' },
-  { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'openai' },
-  { id: 'google/gemini-3-flash-preview', name: 'Gemini 3 Flash Preview', provider: 'google' },
-  { id: 'x-ai/grok-4.20-reasoning', name: 'Grok 4.20 Reasoning', provider: 'x-ai' },
+  {
+    id: DEFAULT_INTERPRETER_MODEL,
+    name: "DeepSeek V4 Flash",
+    provider: "deepseek",
+  },
+  { id: DEFAULT_HEAVY_MODEL, name: "DeepSeek V4 Pro", provider: "deepseek" },
+  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini", provider: "openai" },
+  { id: "openai/gpt-4o", name: "GPT-4o", provider: "openai" },
+  {
+    id: "google/gemini-3-flash-preview",
+    name: "Gemini 3 Flash Preview",
+    provider: "google",
+  },
+  {
+    id: "x-ai/grok-4.20-reasoning",
+    name: "Grok 4.20 Reasoning",
+    provider: "x-ai",
+  },
 ];
 
-const apiLogger = createDesktopLogger('api');
+const apiLogger = createDesktopLogger("api");
 
 function withAppMcpCallMetadata(
   args: Record<string, unknown>,
@@ -93,7 +108,8 @@ function withAppMcpCallMetadata(
     ...args,
     _widget_pull: true,
     ...(widgetPull.widgetName ? { _widget_name: widgetPull.widgetName } : {}),
-    ...(typeof widgetPull.intervalMs === 'number' && Number.isFinite(widgetPull.intervalMs)
+    ...(typeof widgetPull.intervalMs === "number" &&
+        Number.isFinite(widgetPull.intervalMs)
       ? { _widget_interval_ms: Math.max(0, Math.round(widgetPull.intervalMs)) }
       : {}),
     ...(widgetPull.reason ? { _widget_pull_reason: widgetPull.reason } : {}),
@@ -102,15 +118,18 @@ function withAppMcpCallMetadata(
 
 export type InferenceSettings = ChatInferenceOptionsResponse;
 export type InferenceSetupState =
-  | 'ready'
-  | 'needs_light_balance'
-  | 'needs_byok_key'
-  | 'needs_inference_setup';
+  | "ready"
+  | "needs_light_balance"
+  | "needs_byok_key"
+  | "needs_inference_setup";
 
-export type InferenceSetupAction = 'open_settings' | 'open_wallet' | 'use_light';
+export type InferenceSetupAction =
+  | "open_settings"
+  | "open_wallet"
+  | "use_light";
 
 export interface InferenceSetupPrompt {
-  state: Exclude<InferenceSetupState, 'ready'>;
+  state: Exclude<InferenceSetupState, "ready">;
   title: string;
   message: string;
   primaryAction: {
@@ -142,10 +161,13 @@ export interface InferenceModelOption extends ModelInfo {
   outputPrice?: number;
 }
 
-type ModelDetailInput = Pick<InferenceModelOption, 'contextWindow' | 'inputPrice' | 'outputPrice'>;
+type ModelDetailInput = Pick<
+  InferenceModelOption,
+  "contextWindow" | "inputPrice" | "outputPrice"
+>;
 
 function modelNameFromId(id: string): string {
-  return id.split('/').pop()?.replace(/:nitro$/, '') || id;
+  return id.split("/").pop()?.replace(/:nitro$/, "") || id;
 }
 
 function providerModelOptions(
@@ -184,21 +206,21 @@ function buildFallbackInferenceSettings(): InferenceSettings {
   }));
 
   return {
-    defaultBillingMode: 'light',
+    defaultBillingMode: "light",
     selected: {
-      billingMode: 'light',
-      provider: 'openrouter',
+      billingMode: "light",
+      provider: "openrouter",
       model: DEFAULT_CHAT_MODEL,
     },
     light: {
-      provider: 'openrouter',
+      provider: "openrouter",
       defaultModel: DEFAULT_CHAT_MODEL,
       models: BYOK_PROVIDERS.openrouter.models,
       balanceLight: null,
       minimumBalanceLight: 50,
       usable: false,
       markup: 1,
-      unavailableReason: 'Inference settings unavailable',
+      unavailableReason: "Inference settings unavailable",
     },
     providers,
     configuredProviderIds: [],
@@ -209,10 +231,10 @@ function buildFallbackInferenceSettings(): InferenceSettings {
 
 function authHeaders(): Record<string, string> {
   const token = getToken();
-  if (!token) throw new Error('Not authenticated');
+  if (!token) throw new Error("Not authenticated");
   return {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json',
+    "Authorization": `Bearer ${token}`,
+    "Content-Type": "application/json",
   };
 }
 
@@ -238,8 +260,8 @@ export async function* streamChat(opts: {
 }): AsyncGenerator<ChatStreamEvent> {
   let res: Response;
   try {
-    res = await fetchFromApi('/chat/stream', {
-      method: 'POST',
+    res = await fetchFromApi("/chat/stream", {
+      method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({
         model: opts.model,
@@ -253,9 +275,9 @@ export async function* streamChat(opts: {
     });
   } catch (err) {
     yield {
-      type: 'error',
+      type: "error",
       error: `Network error: ${
-        err instanceof Error ? err.message : 'Connection failed'
+        err instanceof Error ? err.message : "Connection failed"
       }. Check your internet connection.`,
     };
     return;
@@ -271,14 +293,14 @@ export async function* streamChat(opts: {
     }
 
     yield {
-      type: 'error',
+      type: "error",
       error: formatApiError(apiError, res.status),
     };
     return;
   }
 
   if (!res.body) {
-    yield { type: 'error', error: 'No response body' };
+    yield { type: "error", error: "No response body" };
     return;
   }
 
@@ -295,13 +317,15 @@ export async function recordToolInvocationTelemetry(
   payload: ToolInvocationTelemetryRequest,
 ): Promise<void> {
   try {
-    await fetchFromApi('/chat/tool-invocation', {
-      method: 'POST',
+    await fetchFromApi("/chat/tool-invocation", {
+      method: "POST",
       headers: authHeaders(),
       body: JSON.stringify(payload),
     });
   } catch (err) {
-    apiLogger.warn('Failed to record tool invocation telemetry', { error: err });
+    apiLogger.warn("Failed to record tool invocation telemetry", {
+      error: err,
+    });
   }
 }
 
@@ -311,15 +335,17 @@ export async function recordToolInvocationTelemetry(
  * Fetch available models from the server.
  */
 export async function fetchModels(): Promise<ModelInfo[]> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
 
   const token = getToken();
   if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
   try {
-    const res = await fetchFromApi('/chat/models', { headers });
+    const res = await fetchFromApi("/chat/models", { headers });
     if (!res.ok) {
       throw new Error(`Failed to fetch models: ${res.status}`);
     }
@@ -342,10 +368,10 @@ export async function fetchInferenceSettings(): Promise<InferenceSettings> {
   if (!token) return buildFallbackInferenceSettings();
 
   try {
-    const res = await fetchFromApi('/chat/inference-options', {
+    const res = await fetchFromApi("/chat/inference-options", {
       headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
       },
     });
     if (!res.ok) {
@@ -353,7 +379,7 @@ export async function fetchInferenceSettings(): Promise<InferenceSettings> {
     }
     return await res.json() as InferenceSettings;
   } catch (err) {
-    apiLogger.warn('Falling back to static inference settings', { error: err });
+    apiLogger.warn("Falling back to static inference settings", { error: err });
     return buildFallbackInferenceSettings();
   }
 }
@@ -364,28 +390,28 @@ export function getInferenceProviderChoices(
   const lightReason = settings.light.unavailableReason ||
     (settings.light.balanceLight !== null
       ? `Light balance below ${settings.light.minimumBalanceLight}`
-      : 'Light balance unavailable');
+      : "Light balance unavailable");
 
   return [
     {
-      key: 'light:openrouter',
-      billingMode: 'light',
-      provider: 'openrouter',
-      label: 'Light balance',
-      description: 'Platform inference through OpenRouter at pass-through cost',
+      key: "light:openrouter",
+      billingMode: "light",
+      provider: "openrouter",
+      label: "Light balance",
+      description: "Platform inference through OpenRouter at pass-through cost",
       usable: settings.light.usable,
       configured: true,
       reason: settings.light.usable ? undefined : lightReason,
     },
     ...settings.providers.map((provider) => ({
       key: `byok:${provider.id}`,
-      billingMode: 'byok' as const,
+      billingMode: "byok" as const,
       provider: provider.id,
       label: provider.name,
       description: provider.description,
       usable: provider.configured,
       configured: provider.configured,
-      reason: provider.configured ? undefined : 'API key not configured',
+      reason: provider.configured ? undefined : "API key not configured",
     })),
   ];
 }
@@ -393,7 +419,9 @@ export function getInferenceProviderChoices(
 export function getUsableInferenceProviderChoices(
   settings: InferenceSettings,
 ): InferenceProviderChoice[] {
-  return getInferenceProviderChoices(settings).filter((choice) => choice.usable);
+  return getInferenceProviderChoices(settings).filter((choice) =>
+    choice.usable
+  );
 }
 
 export function getEffectiveInferencePreference(
@@ -402,11 +430,12 @@ export function getEffectiveInferencePreference(
 ): Required<InferenceRoutePreference> {
   const billingMode = preference.billingMode || settings.selected.billingMode;
 
-  if (billingMode === 'light') {
+  if (billingMode === "light") {
     return {
-      billingMode: 'light',
-      provider: 'openrouter',
-      model: preference.model || settings.light.defaultModel || DEFAULT_CHAT_MODEL,
+      billingMode: "light",
+      provider: "openrouter",
+      model: preference.model || settings.light.defaultModel ||
+        DEFAULT_CHAT_MODEL,
     };
   }
 
@@ -424,9 +453,10 @@ export function getEffectiveInferencePreference(
       selectedProviderOption;
 
   return {
-    billingMode: 'byok',
+    billingMode: "byok",
     provider: provider?.id || selectedProvider,
-    model: preference.model || provider?.configuredModel || provider?.defaultModel ||
+    model: preference.model || provider?.configuredModel ||
+      provider?.defaultModel ||
       settings.selected.model,
   };
 }
@@ -437,28 +467,32 @@ export function getInferenceModelOptions(
 ): InferenceModelOption[] {
   const effective = getEffectiveInferencePreference(settings, preference);
 
-  if (effective.billingMode === 'light') {
-    const openrouter = settings.providers.find((provider) => provider.id === 'openrouter');
+  if (effective.billingMode === "light") {
+    const openrouter = settings.providers.find((provider) =>
+      provider.id === "openrouter"
+    );
     if (openrouter) {
       return providerModelOptions({
         ...openrouter,
         models: settings.light.models,
-      }, 'light');
+      }, "light");
     }
     return settings.light.models.map((model) => ({
       id: model.id,
       name: model.name || modelNameFromId(model.id),
-      provider: 'openrouter',
-      providerName: 'OpenRouter',
-      billingMode: 'light',
+      provider: "openrouter",
+      providerName: "OpenRouter",
+      billingMode: "light",
       contextWindow: model.contextWindow,
       inputPrice: model.inputPrice,
       outputPrice: model.outputPrice,
     }));
   }
 
-  const provider = settings.providers.find((option) => option.id === effective.provider);
-  return provider ? providerModelOptions(provider, 'byok') : [];
+  const provider = settings.providers.find((option) =>
+    option.id === effective.provider
+  );
+  return provider ? providerModelOptions(provider, "byok") : [];
 }
 
 function compactNumber(value: number): string {
@@ -473,11 +507,15 @@ function compactNumber(value: number): string {
 
 function formatUsd(value: number): string {
   if (value >= 10) return `$${value.toFixed(0)}`;
-  if (value >= 1) return `$${value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}`;
+  if (value >= 1) {
+    return `$${value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}`;
+  }
   return `$${value.toFixed(2)}`;
 }
 
-export function formatInferenceModelContext(contextWindow?: number): string | null {
+export function formatInferenceModelContext(
+  contextWindow?: number,
+): string | null {
   if (!contextWindow || contextWindow <= 0) return null;
   return `${compactNumber(contextWindow)} ctx`;
 }
@@ -494,15 +532,17 @@ export function formatInferenceModelPrice(
   return `${formatUsd(outputPrice!)} output per 1M`;
 }
 
-export function describeInferenceModel(model?: ModelDetailInput | null): string {
-  if (!model) return 'Model details unavailable';
+export function describeInferenceModel(
+  model?: ModelDetailInput | null,
+): string {
+  if (!model) return "Model details unavailable";
 
   const details = [
     formatInferenceModelContext(model.contextWindow),
     formatInferenceModelPrice(model.inputPrice, model.outputPrice),
   ].filter(Boolean);
 
-  return details.length > 0 ? details.join(' | ') : 'Provider pricing varies';
+  return details.length > 0 ? details.join(" | ") : "Provider pricing varies";
 }
 
 export function getInferenceSetupState(
@@ -511,15 +551,17 @@ export function getInferenceSetupState(
 ): InferenceSetupState {
   const effective = getEffectiveInferencePreference(settings, preference);
 
-  if (effective.billingMode === 'light') {
-    if (settings.light.usable) return 'ready';
+  if (effective.billingMode === "light") {
+    if (settings.light.usable) return "ready";
     return settings.configuredProviderIds.length > 0
-      ? 'needs_light_balance'
-      : 'needs_inference_setup';
+      ? "needs_light_balance"
+      : "needs_inference_setup";
   }
 
-  const provider = settings.providers.find((option) => option.id === effective.provider);
-  return provider?.configured ? 'ready' : 'needs_byok_key';
+  const provider = settings.providers.find((option) =>
+    option.id === effective.provider
+  );
+  return provider?.configured ? "ready" : "needs_byok_key";
 }
 
 export function buildInferenceSetupPrompt(
@@ -527,51 +569,56 @@ export function buildInferenceSetupPrompt(
   preference: InferenceRoutePreference = {},
 ): InferenceSetupPrompt | null {
   const state = getInferenceSetupState(settings, preference);
-  if (state === 'ready') return null;
+  if (state === "ready") return null;
 
   const effective = getEffectiveInferencePreference(settings, preference);
   const selectedProvider = settings.providers.find((provider) =>
     provider.id === effective.provider
   );
-  const configuredProviders = settings.providers.filter((provider) => provider.configured);
+  const configuredProviders = settings.providers.filter((provider) =>
+    provider.configured
+  );
 
-  if (state === 'needs_light_balance') {
+  if (state === "needs_light_balance") {
     const balanceText = settings.light.balanceLight === null
-      ? 'Your Light balance could not be verified.'
-      : `Your Light balance is ${formatLight(settings.light.balanceLight)}; chat needs at least ${
+      ? "Your Light balance could not be verified."
+      : `Your Light balance is ${
+        formatLight(settings.light.balanceLight)
+      }; chat needs at least ${
         formatLight(settings.light.minimumBalanceLight)
       }.`;
     return {
       state,
-      title: 'Light balance needed',
-      message: `${balanceText} Add Light or switch to a configured BYOK provider before sending.`,
-      primaryAction: { label: 'Add Light', action: 'open_wallet' },
+      title: "Light balance needed",
+      message:
+        `${balanceText} Add Light or switch to a configured BYOK provider before sending.`,
+      primaryAction: { label: "Add Light", action: "open_wallet" },
       secondaryAction: configuredProviders.length > 0
-        ? { label: 'Manage providers', action: 'open_settings' }
+        ? { label: "Manage providers", action: "open_settings" }
         : undefined,
     };
   }
 
-  if (state === 'needs_byok_key') {
+  if (state === "needs_byok_key") {
     return {
       state,
-      title: 'Provider key needed',
+      title: "Provider key needed",
       message: `${
         selectedProvider?.name || effective.provider
       } is selected for BYOK inference, but no API key is configured for it.`,
-      primaryAction: { label: 'Add provider key', action: 'open_settings' },
+      primaryAction: { label: "Add provider key", action: "open_settings" },
       secondaryAction: settings.light.usable
-        ? { label: 'Use Light balance', action: 'use_light' }
+        ? { label: "Use Light balance", action: "use_light" }
         : undefined,
     };
   }
 
   return {
     state,
-    title: 'Inference setup needed',
-    message: 'Add a provider API key or add Light before starting a chat.',
-    primaryAction: { label: 'Add provider key', action: 'open_settings' },
-    secondaryAction: { label: 'Add Light', action: 'open_wallet' },
+    title: "Inference setup needed",
+    message: "Add a provider API key or add Light before starting a chat.",
+    primaryAction: { label: "Add provider key", action: "open_settings" },
+    secondaryAction: { label: "Add Light", action: "open_wallet" },
   };
 }
 
@@ -583,26 +630,55 @@ export interface FunctionIndex {
     appSlug: string;
     fnName: string;
     description: string;
-    params: Record<string, { type: string; required?: boolean; description?: string }>;
+    params: Record<
+      string,
+      { type: string; required?: boolean; description?: string }
+    >;
   }>;
-  widgets: Array<{ name: string; appId: string; label: string }>;
+  widgets: Array<{
+    name: string;
+    appId: string;
+    appSlug?: string;
+    appName?: string;
+    label: string;
+    uiFunction?: string;
+    dataFunction?: string;
+    dependencies?: Array<{ app: string; functions: string[]; access?: "read" }>;
+    cards?: Array<{
+      id: string;
+      label: string;
+      size: string;
+      render: "native";
+      kind?: string;
+      dataView?: string;
+      dataFunction?: string;
+      refreshIntervalS?: number;
+      dependencies?: Array<
+        { app: string; functions: string[]; access?: "read" }
+      >;
+    }>;
+  }>;
   types: string;
   updatedAt: string | null;
 }
 
-const FN_INDEX_CACHE_KEY = 'ul_fn_index';
+const FN_INDEX_CACHE_KEY = "ul_fn_index";
 
 /**
  * Fetch the user's function index from the server, with localStorage caching.
  * Returns cached version if available and less than 5 minutes old.
  */
-export async function fetchFunctionIndex(forceRefresh = false): Promise<FunctionIndex | null> {
+export async function fetchFunctionIndex(
+  forceRefresh = false,
+): Promise<FunctionIndex | null> {
   // Check cache first
   if (!forceRefresh) {
     try {
       const cached = localStorage.getItem(FN_INDEX_CACHE_KEY);
       if (cached) {
-        const parsed = JSON.parse(cached) as FunctionIndex & { _cachedAt?: number };
+        const parsed = JSON.parse(cached) as FunctionIndex & {
+          _cachedAt?: number;
+        };
         const age = Date.now() - (parsed._cachedAt || 0);
         if (age < 5 * 60 * 1000) { // 5 minutes
           return parsed;
@@ -616,21 +692,188 @@ export async function fetchFunctionIndex(forceRefresh = false): Promise<Function
   if (!token) return null;
 
   try {
-    const res = await fetchFromApi('/chat/function-index', {
-      headers: { 'Authorization': `Bearer ${token}` },
+    const res = await fetchFromApi("/chat/function-index", {
+      headers: { "Authorization": `Bearer ${token}` },
     });
     if (!res.ok) return null;
     const index = await res.json() as FunctionIndex;
 
     // Cache with timestamp
     try {
-      localStorage.setItem(FN_INDEX_CACHE_KEY, JSON.stringify({ ...index, _cachedAt: Date.now() }));
+      localStorage.setItem(
+        FN_INDEX_CACHE_KEY,
+        JSON.stringify({ ...index, _cachedAt: Date.now() }),
+      );
     } catch { /* storage full */ }
 
     return index;
   } catch {
     return null;
   }
+}
+
+export interface CommandDashboardLayout {
+  dashboard_key: string;
+  cards: Array<{
+    instance_id: string;
+    app_id: string;
+    app_slug?: string;
+    widget_id: string;
+    card_id: string;
+    position: { x: number; y: number };
+    size: string;
+    config?: Record<string, unknown>;
+  }>;
+}
+
+export interface StoredCommandDashboardLayout {
+  dashboard_key: string;
+  title: string;
+  description: string | null;
+  icon: string | null;
+  sort_order: number;
+  is_default: boolean;
+  card_count: number;
+  layout: CommandDashboardLayout;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export type CommandDashboardSummary = Omit<
+  StoredCommandDashboardLayout,
+  "layout"
+>;
+
+export interface CommandDashboardMetadataInput {
+  dashboard_key?: string;
+  title?: string | null;
+  description?: string | null;
+  icon?: string | null;
+  sort_order?: number;
+  is_default?: boolean;
+  layout?: CommandDashboardLayout;
+}
+
+export async function fetchCommandWidgets(): Promise<
+  Pick<FunctionIndex, "widgets" | "updatedAt"> | null
+> {
+  const token = getToken();
+  if (!token) return null;
+  const res = await fetchFromApi("/api/user/command-widgets", {
+    headers: { "Authorization": `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const data = await res.json() as {
+    widgets?: FunctionIndex["widgets"];
+    updated_at?: string;
+  };
+  return {
+    widgets: data.widgets || [],
+    updatedAt: data.updated_at || null,
+  };
+}
+
+export async function fetchCommandDashboardLayout(
+  dashboardKey = "command_home",
+): Promise<StoredCommandDashboardLayout | null> {
+  const token = getToken();
+  if (!token) return null;
+  const res = await fetchFromApi(
+    `/api/user/command-dashboard?dashboard_key=${
+      encodeURIComponent(dashboardKey)
+    }`,
+    {
+      headers: { "Authorization": `Bearer ${token}` },
+    },
+  );
+  if (!res.ok) return null;
+  return await res.json() as StoredCommandDashboardLayout;
+}
+
+export async function fetchCommandDashboards(): Promise<
+  CommandDashboardSummary[] | null
+> {
+  const token = getToken();
+  if (!token) return null;
+  const res = await fetchFromApi("/api/user/command-dashboards", {
+    headers: { "Authorization": `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const data = await res.json() as { dashboards?: CommandDashboardSummary[] };
+  return data.dashboards || [];
+}
+
+export async function createCommandDashboard(
+  input: CommandDashboardMetadataInput,
+): Promise<StoredCommandDashboardLayout | null> {
+  const token = getToken();
+  if (!token) return null;
+  const res = await fetchFromApi("/api/user/command-dashboards", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) return null;
+  return await res.json() as StoredCommandDashboardLayout;
+}
+
+export async function updateCommandDashboard(
+  dashboardKey: string,
+  input: Omit<CommandDashboardMetadataInput, "dashboard_key" | "layout">,
+): Promise<StoredCommandDashboardLayout | null> {
+  const token = getToken();
+  if (!token) return null;
+  const res = await fetchFromApi(
+    `/api/user/command-dashboards/${encodeURIComponent(dashboardKey)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  if (!res.ok) return null;
+  return await res.json() as StoredCommandDashboardLayout;
+}
+
+export async function deleteCommandDashboard(
+  dashboardKey: string,
+): Promise<boolean> {
+  const token = getToken();
+  if (!token) return false;
+  const res = await fetchFromApi(
+    `/api/user/command-dashboards/${encodeURIComponent(dashboardKey)}`,
+    {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${token}` },
+    },
+  );
+  return res.ok;
+}
+
+export async function saveCommandDashboardLayout(
+  layout: CommandDashboardLayout,
+): Promise<StoredCommandDashboardLayout | null> {
+  const token = getToken();
+  if (!token) return null;
+  const res = await fetchFromApi("/api/user/command-dashboard", {
+    method: "PUT",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      dashboard_key: layout.dashboard_key,
+      layout,
+    }),
+  });
+  if (!res.ok) return null;
+  return await res.json() as StoredCommandDashboardLayout;
 }
 
 // ── Task Context (per-request entity + function resolution) ──
@@ -663,16 +906,18 @@ export interface TaskContext {
  * POSTs the prompt to /chat/context and returns matched entities,
  * functions, conventions, and a formatted promptBlock for system prompt injection.
  */
-export async function fetchTaskContext(prompt: string): Promise<TaskContext | null> {
+export async function fetchTaskContext(
+  prompt: string,
+): Promise<TaskContext | null> {
   const token = getToken();
   if (!token) return null;
 
   try {
-    const res = await fetchFromApi('/chat/context', {
-      method: 'POST',
+    const res = await fetchFromApi("/chat/context", {
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({ prompt }),
     });
@@ -696,15 +941,17 @@ export class ExecutionPlanRequestError extends Error {
 
   constructor(message: string, status: number, detail?: string) {
     super(message);
-    this.name = 'ExecutionPlanRequestError';
+    this.name = "ExecutionPlanRequestError";
     this.status = status;
     this.detail = detail;
   }
 }
 
-async function buildExecutionPlanRequestError(res: Response): Promise<ExecutionPlanRequestError> {
+async function buildExecutionPlanRequestError(
+  res: Response,
+): Promise<ExecutionPlanRequestError> {
   const fallback = `Execution plan request failed (${res.status})`;
-  const text = await res.text().catch(() => '');
+  const text = await res.text().catch(() => "");
 
   if (!text) {
     return new ExecutionPlanRequestError(fallback, res.status);
@@ -729,13 +976,13 @@ export async function executeMcpTool(
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<McpToolResult> {
-  const res = await fetchFromApi('/mcp/platform', {
-    method: 'POST',
+  const res = await fetchFromApi("/mcp/platform", {
+    method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({
-      jsonrpc: '2.0',
+      jsonrpc: "2.0",
       id: crypto.randomUUID(),
-      method: 'tools/call',
+      method: "tools/call",
       params: {
         name: toolName,
         arguments: args,
@@ -746,7 +993,10 @@ export async function executeMcpTool(
   if (!res.ok) {
     const errText = await res.text();
     return {
-      content: [{ type: 'text', text: `Tool error (${res.status}): ${errText}` }],
+      content: [{
+        type: "text",
+        text: `Tool error (${res.status}): ${errText}`,
+      }],
       isError: true,
     };
   }
@@ -758,12 +1008,13 @@ export async function executeMcpTool(
 
   if (data.error) {
     return {
-      content: [{ type: 'text', text: `Tool error: ${data.error.message}` }],
+      content: [{ type: "text", text: `Tool error: ${data.error.message}` }],
       isError: true,
     };
   }
 
-  return data.result || { content: [{ type: 'text', text: 'No result' }], isError: true };
+  return data.result ||
+    { content: [{ type: "text", text: "No result" }], isError: true };
 }
 
 /**
@@ -777,12 +1028,12 @@ export async function executeAppMcpTool(
   options?: AppMcpToolCallOptions,
 ): Promise<McpToolResult> {
   const res = await fetchFromApi(`/mcp/${appUuid}`, {
-    method: 'POST',
+    method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({
-      jsonrpc: '2.0',
+      jsonrpc: "2.0",
       id: crypto.randomUUID(),
-      method: 'tools/call',
+      method: "tools/call",
       params: {
         name: toolName,
         arguments: withAppMcpCallMetadata(args, options),
@@ -793,7 +1044,10 @@ export async function executeAppMcpTool(
   if (!res.ok) {
     const errText = await res.text();
     return {
-      content: [{ type: 'text', text: `Tool error (${res.status}): ${errText}` }],
+      content: [{
+        type: "text",
+        text: `Tool error (${res.status}): ${errText}`,
+      }],
       isError: true,
     };
   }
@@ -805,12 +1059,13 @@ export async function executeAppMcpTool(
 
   if (data.error) {
     return {
-      content: [{ type: 'text', text: `Tool error: ${data.error.message}` }],
+      content: [{ type: "text", text: `Tool error: ${data.error.message}` }],
       isError: true,
     };
   }
 
-  return data.result || { content: [{ type: 'text', text: 'No result' }], isError: true };
+  return data.result ||
+    { content: [{ type: "text", text: "No result" }], isError: true };
 }
 
 // ── Balance Check ──
@@ -820,9 +1075,10 @@ export async function executeAppMcpTool(
  */
 export async function fetchBalance(): Promise<number | null> {
   try {
-    const result = await executeMcpTool('ul.wallet', { action: 'status' });
-    const text = result.content?.[0]?.text || '';
-    const match = text.match(/(\d+\.?\d*)\s*light/i) || text.match(/balance[:\s]*✦?(\d+\.?\d*)/i);
+    const result = await executeMcpTool("ul.wallet", { action: "status" });
+    const text = result.content?.[0]?.text || "";
+    const match = text.match(/(\d+\.?\d*)\s*light/i) ||
+      text.match(/balance[:\s]*✦?(\d+\.?\d*)/i);
     if (match) {
       return parseFloat(match[1]);
     }
@@ -837,33 +1093,33 @@ export async function fetchBalance(): Promise<number | null> {
 export interface OrchestrateEvent {
   type:
     // Flash phase
-    | 'flash_status'
-    | 'ambient_suggestions'
-    | 'flash_search'
-    | 'flash_found'
-    | 'flash_context'
-    | 'flash_prompt'
-    | 'flash_direct'
+    | "flash_status"
+    | "ambient_suggestions"
+    | "flash_search"
+    | "flash_found"
+    | "flash_context"
+    | "flash_prompt"
+    | "flash_direct"
     // Heavy phase
-    | 'heavy_status'
-    | 'heavy_text'
-    | 'heavy_recipe'
+    | "heavy_status"
+    | "heavy_text"
+    | "heavy_recipe"
     // Execution phase
-    | 'plan_ready'
-    | 'plan_cancelled'
-    | 'exec_start'
-    | 'exec_result'
+    | "plan_ready"
+    | "plan_cancelled"
+    | "exec_start"
+    | "exec_result"
     // System agent delegation
-    | 'system_agent_spawn'
+    | "system_agent_spawn"
     // Meta
-    | 'usage'
-    | 'done'
-    | 'error'
+    | "usage"
+    | "done"
+    | "error"
     // Legacy compat
-    | 'status'
-    | 'text'
-    | 'tool_start'
-    | 'result';
+    | "status"
+    | "text"
+    | "tool_start"
+    | "result";
   text?: string;
   content?: string;
   name?: string;
@@ -917,7 +1173,7 @@ export async function* streamOrchestrate(opts: {
   scope?: Record<
     string,
     {
-      access: 'all' | 'functions' | 'data';
+      access: "all" | "functions" | "data";
       functions?: string[];
       conventions?: Record<string, string>;
     }
@@ -925,7 +1181,13 @@ export async function* streamOrchestrate(opts: {
   /** Behavioral instructions from the agent's admin notes */
   adminNotes?: string;
   systemAgentStates?: Array<
-    { type: string; name: string; tools: string[]; stateSummary: string | null; status: string }
+    {
+      type: string;
+      name: string;
+      tools: string[];
+      stateSummary: string | null;
+      status: string;
+    }
   >;
   systemAgentContext?: { type: string; persona: string; skillsPath: string };
   /** Local project file context gathered client-side for Tool Maker */
@@ -936,19 +1198,23 @@ export async function* streamOrchestrate(opts: {
   userMessageId?: string;
   assistantMessageId?: string;
   /** Attached files (base64 data URLs) */
-  files?: Array<{ name: string; size: number; mimeType: string; content: string }>;
+  files?: Array<
+    { name: string; size: number; mimeType: string; content: string }
+  >;
 }): AsyncGenerator<OrchestrateEvent> {
   let res: Response;
   try {
-    res = await fetchFromApi('/chat/orchestrate', {
-      method: 'POST',
+    res = await fetchFromApi("/chat/orchestrate", {
+      method: "POST",
       headers: authHeaders(),
       body: JSON.stringify(opts),
     });
   } catch (err) {
     yield {
-      type: 'error',
-      message: `Network error: ${err instanceof Error ? err.message : 'Connection failed'}`,
+      type: "error",
+      message: `Network error: ${
+        err instanceof Error ? err.message : "Connection failed"
+      }`,
     };
     return;
   }
@@ -961,7 +1227,7 @@ export async function* streamOrchestrate(opts: {
       apiError = { error: `HTTP ${res.status}: ${res.statusText}` };
     }
     yield {
-      type: 'error',
+      type: "error",
       message: formatApiError(apiError, res.status),
       status: res.status,
       code: apiError.code,
@@ -976,28 +1242,28 @@ export async function* streamOrchestrate(opts: {
   }
 
   if (!res.body) {
-    yield { type: 'error', message: 'No response body' };
+    yield { type: "error", message: "No response body" };
     return;
   }
 
   // Parse SSE stream
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = '';
+  let buffer = "";
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || ''; // Keep incomplete line
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || ""; // Keep incomplete line
 
     for (const line of lines) {
-      if (line.startsWith('data: ')) {
+      if (line.startsWith("data: ")) {
         const data = line.slice(6).trim();
-        if (data === '[DONE]') {
-          yield { type: 'done' };
+        if (data === "[DONE]") {
+          yield { type: "done" };
           return;
         }
         try {
@@ -1012,7 +1278,7 @@ export async function* streamOrchestrate(opts: {
 
 export async function confirmExecutionPlan(planId: string): Promise<void> {
   const res = await fetchFromApi(`/chat/plan/${planId}/confirm`, {
-    method: 'POST',
+    method: "POST",
     headers: authHeaders(),
   });
 
@@ -1023,7 +1289,7 @@ export async function confirmExecutionPlan(planId: string): Promise<void> {
 
 export async function cancelExecutionPlan(planId: string): Promise<void> {
   const res = await fetchFromApi(`/chat/plan/${planId}/cancel`, {
-    method: 'POST',
+    method: "POST",
     headers: authHeaders(),
   });
 
@@ -1042,13 +1308,13 @@ export async function embedConversation(opts: {
   metadata?: Record<string, unknown>;
 }): Promise<void> {
   try {
-    await fetchFromApi('/api/user/conversation-embedding', {
-      method: 'POST',
+    await fetchFromApi("/api/user/conversation-embedding", {
+      method: "POST",
       headers: authHeaders(),
       body: JSON.stringify(opts),
     });
   } catch (err) {
-    apiLogger.warn('Failed to embed conversation', { error: err });
+    apiLogger.warn("Failed to embed conversation", { error: err });
   }
 }
 
@@ -1057,17 +1323,23 @@ export async function embedConversation(opts: {
 /** Sync system agent states to server KV for Flash's Context Index */
 export async function syncSystemAgentStates(
   states: Array<
-    { type: string; name: string; tools: string[]; stateSummary: string | null; status: string }
+    {
+      type: string;
+      name: string;
+      tools: string[];
+      stateSummary: string | null;
+      status: string;
+    }
   >,
 ): Promise<void> {
   try {
-    await fetchFromApi('/api/user/system-agent-states', {
-      method: 'PUT',
+    await fetchFromApi("/api/user/system-agent-states", {
+      method: "PUT",
       headers: authHeaders(),
       body: JSON.stringify({ states }),
     });
   } catch (err) {
-    apiLogger.warn('Failed to sync system agent states', { error: err });
+    apiLogger.warn("Failed to sync system agent states", { error: err });
   }
 }
 
@@ -1075,14 +1347,14 @@ export async function syncSystemAgentStates(
 
 function formatLight(amount: number): string {
   const abs = Math.abs(amount);
-  if (abs >= 1e6) return '✦' + (abs / 1e6).toFixed(2) + 'M';
-  if (abs >= 5000) return '✦' + (abs / 1000).toFixed(1) + 'K';
-  return '✦' + (abs % 1 === 0 ? String(abs) : abs.toFixed(2));
+  if (abs >= 1e6) return "✦" + (abs / 1e6).toFixed(2) + "M";
+  if (abs >= 5000) return "✦" + (abs / 1000).toFixed(1) + "K";
+  return "✦" + (abs % 1 === 0 ? String(abs) : abs.toFixed(2));
 }
 
 function formatApiError(err: ApiError, status: number): string {
   // Include server detail if available
-  const detail = err.detail ? ` (${err.detail})` : '';
+  const detail = err.detail ? ` (${err.detail})` : "";
 
   switch (status) {
     case 401:
@@ -1092,13 +1364,15 @@ function formatApiError(err: ApiError, status: number): string {
         formatLight(err.balance_light || 0)
       } remaining). Add Light from Wallet.`;
     case 403:
-      return err.error || 'Access denied. A full account is required for chat.';
+      return err.error || "Access denied. A full account is required for chat.";
     case 429:
       return `Rate limit exceeded.${
-        err.resetAt ? ` Try again at ${new Date(err.resetAt).toLocaleTimeString()}.` : ''
+        err.resetAt
+          ? ` Try again at ${new Date(err.resetAt).toLocaleTimeString()}.`
+          : ""
       }`;
     case 503:
-      return 'Chat service is temporarily unavailable. Please try again shortly.';
+      return "Chat service is temporarily unavailable. Please try again shortly.";
     default:
       return err.error || `Request failed (${status})`;
   }

@@ -21,8 +21,8 @@ import {
   COMBINED_FREE_TIER_BYTES,
   formatLight,
   type FunctionPricing,
-  LIGHT_SYMBOL,
   LIGHT_PER_DOLLAR_PAYOUT,
+  LIGHT_SYMBOL,
   MIN_WITHDRAWAL_LIGHT,
   type PermissionRow,
   PLATFORM_FEE_RATE,
@@ -101,7 +101,12 @@ import {
 import { getEnv } from '../lib/env.ts';
 import { buildCorsHeaders } from '../services/cors.ts';
 import { buildSharedPageEntryUrl } from '../services/page-share-session.ts';
-import type { AppForCodemode, ToolMapping } from '../services/codemode-tools.ts';
+import {
+  type AppForCodemode,
+  buildWidgetIndexForApp,
+  type ToolMapping,
+  type WidgetIndexEntry,
+} from '../services/codemode-tools.ts';
 import type { PublicDiscoveryApp } from '../services/public-apps.ts';
 import type { GpuPricingDisplay } from '../services/gpu/pricing-display.ts';
 import type { GpuReliabilityStats } from '../services/gpu/reliability.ts';
@@ -2126,7 +2131,9 @@ const PLATFORM_TOOLS: MCPTool[] = [
         amount_light: {
           type: 'number',
           description:
-            `Withdrawal amount in Light (✦). Required for: withdraw, estimate_fee. Minimum: ${MIN_WITHDRAWAL_LIGHT} (${formatLight(MIN_WITHDRAWAL_LIGHT)}).`,
+            `Withdrawal amount in Light (✦). Required for: withdraw, estimate_fee. Minimum: ${MIN_WITHDRAWAL_LIGHT} (${
+              formatLight(MIN_WITHDRAWAL_LIGHT)
+            }).`,
         },
         terms_accepted: {
           type: 'boolean',
@@ -2810,7 +2817,9 @@ function buildInstructions(deskSection: string, libraryHint: string): string {
 
 MCP-first app hosting. TypeScript functions → MCP servers. 10 platform tools + unlimited app tools via ul.call.
 
-**Storage at rest: ${formatLight(STORAGE_LIGHT_PER_GB_MONTH)}/GB-month after 100MB free.** Worker, D1, R2, KV, and widget activity is metered separately as exact fractional Light cloud usage.
+**Storage at rest: ${
+    formatLight(STORAGE_LIGHT_PER_GB_MONTH)
+  }/GB-month after 100MB free.** Worker, D1, R2, KV, and widget activity is metered separately as exact fractional Light cloud usage.
 
 ${deskSection}
 
@@ -3970,7 +3979,9 @@ async function handleToolsCall(
             const dataBytes = wUserData?.data_storage_used_bytes || 0;
             const d1Bytes = wUserData?.d1_storage_bytes || 0;
             const contentRows = contentStorageRes.ok
-              ? await readJsonArray<{ type?: string | null; size?: number | null }>(contentStorageRes)
+              ? await readJsonArray<{ type?: string | null; size?: number | null }>(
+                contentStorageRes,
+              )
               : [];
             const contentBytes = contentRows.reduce(
               (sum: number, row) => sum + (row.size || 0),
@@ -4010,7 +4021,8 @@ async function handleToolsCall(
                 limit_mb: toMb(limitBytes) + ' MB',
                 used_percent: limitBytes > 0 ? Math.round((combinedBytes / limitBytes) * 100) : 0,
                 overage_bytes: storageOverageBytes,
-                overage_rate: `${LIGHT_SYMBOL}${STORAGE_LIGHT_PER_GB_MONTH}/GB-month after the storage soft cap`,
+                overage_rate:
+                  `${LIGHT_SYMBOL}${STORAGE_LIGHT_PER_GB_MONTH}/GB-month after the storage soft cap`,
               },
               connect: {
                 connected: !!wUserData?.stripe_connect_account_id,
@@ -4019,7 +4031,8 @@ async function handleToolsCall(
                   false,
               },
               policy: {
-                purchased_light: 'Purchased Light is spend-only platform credit and is not payout eligible.',
+                purchased_light:
+                  'Purchased Light is spend-only platform credit and is not payout eligible.',
                 creator_earnings: 'Only creator earnings can be requested for payout.',
                 no_p2p_transfer: 'Light cannot be transferred directly between arbitrary accounts.',
                 terms_url: '/terms',
@@ -4147,7 +4160,8 @@ async function handleToolsCall(
               payout_cutoff_at: estSchedule.payoutCutoffAt.toISOString(),
               payout_policy_version: estSchedule.payoutPolicyVersion,
               request_cutoff_days: estSchedule.requestCutoffDays,
-              note: 'Stripe payout fee (0.25% + $0.25). Requests are scheduled into the next eligible monthly payout run.',
+              note:
+                'Stripe payout fee (0.25% + $0.25). Requests are scheduled into the next eligible monthly payout run.',
             };
             break;
           }
@@ -4409,7 +4423,7 @@ async function handleToolsCall(
         let fnIndex = await getFunctionIndex(userId);
         let toolMap: Record<string, ToolMapping>;
         let availableTypes: string;
-        let widgets: Array<{ name: string; appId: string; label: string }>;
+        let widgets: WidgetIndexEntry[];
 
         if (fnIndex) {
           // Fast path — use cached index
@@ -4600,6 +4614,18 @@ async function handleToolsCall(
           ...(widgets.length > 0
             ? {
               _widgets: widgets.map((w) => `{{widget:${w.name}:${w.appId}}}`),
+              _command_cards: widgets.flatMap((w) =>
+                (w.cards || []).map((card) => ({
+                  app_id: w.appId,
+                  app_slug: w.appSlug,
+                  widget_id: w.name,
+                  card_id: card.id,
+                  label: card.label,
+                  size: card.size,
+                  render: card.render,
+                  kind: card.kind,
+                }))
+              ),
             }
             : {}),
         };
@@ -9832,6 +9858,17 @@ async function executeDiscoverInspect(
     parameters: fschema?.parameters || {},
     returns: fschema?.returns || null,
   }));
+  const widgets = manifest
+    ? buildWidgetIndexForApp({
+      id: app.id,
+      name: app.name,
+      slug: app.slug,
+      manifest: {
+        functions: manifest.functions,
+        widgets: manifest.widgets,
+      },
+    })
+    : [];
 
   // Also include exports list as fallback if manifest is sparse
   const exportedFunctions = app.exports || [];
@@ -10120,6 +10157,7 @@ async function executeDiscoverInspect(
     metadata: metadata,
     trust_card: trustCard,
     functions: functions,
+    widgets,
     exported_functions: exportedFunctions,
     storage: {
       backend: storageBackend,

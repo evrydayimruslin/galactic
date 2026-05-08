@@ -64,6 +64,7 @@ import {
   resolveAppRuntimeEnvVars,
   resolveAppSupabaseConfig,
   resolveStrictManifestPermissions,
+  resolveWidgetAppCallDependencies,
   SupabaseConfigMigrationRequiredError,
 } from "../services/app-runtime-resources.ts";
 import {
@@ -2177,6 +2178,7 @@ async function executeAppFunction(
 
     // AI-capable apps get a longer timeout (120s) since AI calls are inherently slow
     const permissions = resolveStrictManifestPermissions(app).permissions;
+    const appCallDependencies = resolveWidgetAppCallDependencies(app);
     const timeoutMs = permissions.includes("ai:call") ? 120_000 : 30_000;
     const runtimeAI = permissions.includes("ai:call")
       ? await createRuntimeAIContext(user)
@@ -2338,6 +2340,7 @@ async function executeAppFunction(
       supabase: supabaseConfig,
       baseUrl,
       authToken: meta?.authToken,
+      appCallDependencies,
       workerSecret: getEnv("WORKER_SECRET") || undefined,
       timeoutMs,
       cloudOperationMetering,

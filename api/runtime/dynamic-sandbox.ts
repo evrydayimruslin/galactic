@@ -138,12 +138,34 @@ export async function executeInDynamicSandbox(
       config.workerBaseUrl || config.baseUrl || "",
     );
     const netWorkerSecret = JSON.stringify(config.workerSecret || "");
+    const callBaseUrl = JSON.stringify(
+      config.baseUrl || config.workerBaseUrl || "",
+    );
+    const callAuthToken = JSON.stringify(config.authToken || "");
+    const callDependenciesJson = JSON.stringify(
+      config.appCallDependencies || [],
+    );
 
     const setupModule = `
 // Setup module — runs before app.js, sets globalThis.ultralight
 // RPC bindings (__rpcEnv) are set later by wrapper.js fetch() handler.
 // Lazy getters defer RPC calls until function execution time.
 globalThis.__rpcEnv = {};
+
+function __ulAllowsAppCall(targetAppId, functionName) {
+  if (${config.permissions.includes("app:call")}) return true;
+  if (typeof targetAppId !== 'string' || typeof functionName !== 'string') return false;
+  var target = targetAppId.trim();
+  var fnName = functionName.trim();
+  if (!target || !fnName) return false;
+  var dependencies = ${callDependenciesJson};
+  return dependencies.some(function(dep) {
+    if (!dep || dep.access && dep.access !== 'read') return false;
+    if (typeof dep.app !== 'string' || dep.app.trim() !== target) return false;
+    if (!Array.isArray(dep.functions)) return false;
+    return dep.functions.some(function(fn) { return typeof fn === 'string' && fn.trim() === fnName; });
+  });
+}
 
 globalThis.ultralight = {
   get db() {
@@ -193,7 +215,47 @@ globalThis.ultralight = {
       config.permissions.includes("memory:read")
     }) return Promise.reject(new Error('memory:read permission not granted.')); const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.recall(k) : Promise.resolve(null); },
   ai(r) { const e = globalThis.__rpcEnv; return e.AI ? e.AI.call(r) : Promise.resolve({ content: '', error: 'AI not available' }); },
-  call() { throw new Error('ultralight.call() not available in sandbox. Use ul.call platform tool.'); },
+  async call(targetAppId, functionName, callArgs) {
+    if (!targetAppId || !functionName) throw new Error('target app id and function name are required');
+    if (!__ulAllowsAppCall(targetAppId, functionName)) {
+      throw new Error('app:call permission or a matching read dependency is required');
+    }
+    var authToken = ${callAuthToken};
+    var baseUrl = ${callBaseUrl};
+    if (!authToken || !baseUrl) throw new Error('Inter-app calls not available (missing baseUrl or authToken)');
+    var e = globalThis.__rpcEnv;
+    var useSelf = !!(e && e.SELF);
+    var fetchFn = useSelf ? e.SELF.fetch.bind(e.SELF) : fetch;
+    var endpoint = useSelf
+      ? 'https://internal/mcp/' + encodeURIComponent(targetAppId)
+      : baseUrl.replace(/\\/$/, '') + '/mcp/' + encodeURIComponent(targetAppId);
+    var response = await fetchFn(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: crypto.randomUUID(),
+        method: 'tools/call',
+        params: { name: functionName, arguments: callArgs || {} }
+      })
+    });
+    if (!response.ok) {
+      var errorText = await response.text().catch(function() { return response.statusText; });
+      throw new Error('ultralight.call failed (' + response.status + '): ' + errorText);
+    }
+    var rpcResponse = await response.json();
+    if (rpcResponse.error) {
+      throw new Error('ultralight.call RPC error: ' + (rpcResponse.error.message || JSON.stringify(rpcResponse.error)));
+    }
+    var result = rpcResponse.result;
+    if (result && Array.isArray(result.content)) {
+      var textBlock = result.content.find(function(c) { return c && c.type === 'text'; });
+      if (textBlock && textBlock.text) {
+        try { return JSON.parse(textBlock.text); } catch (_) { return textBlock.text; }
+      }
+    }
+    return result;
+  },
   // net:connect — high-level protocol methods via internal HTTP (gated by permission)
   net: ${
       config.permissions.includes("net:connect")
@@ -367,13 +429,19 @@ export default {
     // Network: pass SELF binding so Dynamic Worker can call /api/net/* internally
     // (Direct fetch() to Worker URL goes through CDN which blocks it)
     const env = globalThis.__env;
-    if (config.permissions.includes("net:connect") && env?.SELF) {
+    const hasInterAppCall = config.permissions.includes("app:call") ||
+      !!config.appCallDependencies?.length;
+    if (
+      (config.permissions.includes("net:connect") || hasInterAppCall) &&
+      env?.SELF
+    ) {
       bindings.SELF = env.SELF;
     }
 
     // 5. Create Dynamic Worker
     const hasOutboundNetwork = config.permissions.includes("net:connect") ||
-      config.permissions.includes("net:fetch");
+      config.permissions.includes("net:fetch") ||
+      hasInterAppCall;
     const loadConfig: Parameters<typeof loader.load>[0] = {
       compatibilityDate: "2026-03-01",
       mainModule: "wrapper.js",

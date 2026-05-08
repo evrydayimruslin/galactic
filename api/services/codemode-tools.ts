@@ -5,6 +5,11 @@
 // Inspired by @cloudflare/codemode but inlined for Deno compatibility.
 
 import type { ManifestFunction, ManifestParameter } from '../../shared/contracts/manifest.ts';
+import type {
+  CommandCardDeclaration,
+  WidgetDeclaration,
+  WidgetDependencyDeclaration,
+} from '../../shared/contracts/widget.ts';
 
 // ── Types ──
 
@@ -23,7 +28,7 @@ export interface AppForCodemode {
   slug: string;
   manifest: {
     functions?: Record<string, ManifestFunction>;
-    widgets?: Array<{ id: string; label: string; }>;
+    widgets?: WidgetDeclaration[];
   };
 }
 
@@ -32,6 +37,30 @@ export interface ToolMapping {
   appName: string;
   appSlug: string;
   fnName: string;
+}
+
+export interface WidgetCardIndexEntry {
+  id: string;
+  label: string;
+  size: string;
+  render: 'native';
+  kind?: string;
+  dataView?: string;
+  dataFunction?: string;
+  refreshIntervalS?: number;
+  dependencies?: WidgetDependencyDeclaration[];
+}
+
+export interface WidgetIndexEntry {
+  name: string;
+  label: string;
+  appId: string;
+  appSlug: string;
+  appName: string;
+  uiFunction: string;
+  dataFunction: string;
+  dependencies?: WidgetDependencyDeclaration[];
+  cards: WidgetCardIndexEntry[];
 }
 
 interface RpcToolCallEnvelope {
@@ -50,15 +79,120 @@ function normalizeToolArgs(args: unknown[]): Record<string, unknown> {
     : {};
 }
 
+function widgetUiFunction(widget: Pick<WidgetDeclaration, 'id' | 'ui_function'>): string {
+  return widget.ui_function || `widget_${widget.id}_ui`;
+}
+
+function widgetDataFunction(
+  widget: Pick<WidgetDeclaration, 'id' | 'data_function' | 'data_tool'>,
+): string {
+  return widget.data_function || widget.data_tool || `widget_${widget.id}_data`;
+}
+
+function normalizeWidgetCard(
+  _widget: WidgetDeclaration,
+  card: CommandCardDeclaration,
+): WidgetCardIndexEntry {
+  return {
+    id: card.id,
+    label: card.label,
+    size: card.size,
+    render: 'native',
+    ...(card.kind ? { kind: card.kind } : {}),
+    ...(card.data_view ? { dataView: card.data_view } : {}),
+    ...(card.data_function ? { dataFunction: card.data_function } : {}),
+    ...(typeof card.refresh_interval_s === 'number'
+      ? { refreshIntervalS: card.refresh_interval_s }
+      : {}),
+    ...(card.dependencies?.length ? { dependencies: card.dependencies } : {}),
+  };
+}
+
+export function buildWidgetIndexForApp(app: AppForCodemode): WidgetIndexEntry[] {
+  const widgets: WidgetIndexEntry[] = [];
+
+  for (const widget of app.manifest.widgets || []) {
+    if (!widget?.id || !widget.label) continue;
+    widgets.push({
+      name: widget.id,
+      label: widget.label,
+      appId: app.id,
+      appSlug: app.slug,
+      appName: app.name,
+      uiFunction: widgetUiFunction(widget),
+      dataFunction: widgetDataFunction(widget),
+      ...(widget.dependencies?.length ? { dependencies: widget.dependencies } : {}),
+      cards: (widget.cards || []).map((card) => normalizeWidgetCard(widget, card)),
+    });
+  }
+
+  for (const fnName of Object.keys(app.manifest.functions || {})) {
+    if (!fnName.startsWith('widget_') || !fnName.endsWith('_ui')) continue;
+    const widgetName = fnName.replace('widget_', '').replace('_ui', '');
+    if (widgets.some((w) => w.name === widgetName && w.appId === app.id)) continue;
+    const fn = app.manifest.functions?.[fnName];
+    widgets.push({
+      name: widgetName,
+      label: fn?.description?.replace(/DO NOT call.*$/i, '').trim() || widgetName,
+      appId: app.id,
+      appSlug: app.slug,
+      appName: app.name,
+      uiFunction: fnName,
+      dataFunction: `widget_${widgetName}_data`,
+      cards: [],
+    });
+  }
+
+  return widgets;
+}
+
 // ── Tool Name Sanitization ──
 
 const JS_RESERVED = new Set([
-  'break', 'case', 'catch', 'continue', 'debugger', 'default', 'delete',
-  'do', 'else', 'finally', 'for', 'function', 'if', 'in', 'instanceof',
-  'new', 'return', 'switch', 'this', 'throw', 'try', 'typeof', 'var',
-  'void', 'while', 'with', 'class', 'const', 'enum', 'export', 'extends',
-  'import', 'super', 'implements', 'interface', 'let', 'package', 'private',
-  'protected', 'public', 'static', 'yield', 'await', 'async',
+  'break',
+  'case',
+  'catch',
+  'continue',
+  'debugger',
+  'default',
+  'delete',
+  'do',
+  'else',
+  'finally',
+  'for',
+  'function',
+  'if',
+  'in',
+  'instanceof',
+  'new',
+  'return',
+  'switch',
+  'this',
+  'throw',
+  'try',
+  'typeof',
+  'var',
+  'void',
+  'while',
+  'with',
+  'class',
+  'const',
+  'enum',
+  'export',
+  'extends',
+  'import',
+  'super',
+  'implements',
+  'interface',
+  'let',
+  'package',
+  'private',
+  'protected',
+  'public',
+  'static',
+  'yield',
+  'await',
+  'async',
 ]);
 
 /** Sanitize a tool name to a valid JavaScript identifier */
@@ -121,24 +255,27 @@ function convertManifestToJsonSchema(
 export function buildJsonSchemaDescriptors(apps: AppForCodemode[]): {
   descriptors: Record<string, JsonSchemaToolDescriptor>;
   toolMap: Record<string, ToolMapping>;
-  widgets: Array<{ name: string; label: string; appId: string }>;
+  widgets: WidgetIndexEntry[];
 } {
   const descriptors: Record<string, JsonSchemaToolDescriptor> = {};
   const toolMap: Record<string, ToolMapping> = {};
-  const widgets: Array<{ name: string; label: string; appId: string }> = [];
+  const widgets: WidgetIndexEntry[] = [];
 
   for (const app of apps) {
-    if (!app.manifest?.functions) continue;
+    if (!app.manifest) continue;
+    const manifestFunctions = app.manifest.functions || {};
 
     // Normalize params that might be in array format
-    for (const [fnName, fn] of Object.entries(app.manifest.functions)) {
+    for (const [fnName, fn] of Object.entries(manifestFunctions)) {
       // Skip widget internal functions
-      if (fnName.startsWith('widget_') && (fnName.endsWith('_ui') || fnName.endsWith('_data'))) continue;
+      if (fnName.startsWith('widget_') && (fnName.endsWith('_ui') || fnName.endsWith('_data'))) {
+        continue;
+      }
       if (fnName === 'widget_approval_queue') continue;
 
       const sanitized = sanitizeToolName(`${app.slug}_${fnName}`);
       const inputSchema = convertManifestToJsonSchema(
-        fn.parameters as Record<string, ManifestParameter> | undefined
+        fn.parameters as Record<string, ManifestParameter> | undefined,
       );
 
       descriptors[sanitized] = {
@@ -154,27 +291,7 @@ export function buildJsonSchemaDescriptors(apps: AppForCodemode[]): {
       };
     }
 
-    // Collect widgets
-    if (app.manifest.widgets) {
-      for (const w of app.manifest.widgets) {
-        widgets.push({ name: w.id, label: w.label, appId: app.id });
-      }
-    }
-
-    // Also check for widget_*_ui functions not in the widgets array
-    for (const fnName of Object.keys(app.manifest.functions)) {
-      if (fnName.startsWith('widget_') && fnName.endsWith('_ui')) {
-        const widgetName = fnName.replace('widget_', '').replace('_ui', '');
-        if (!widgets.some(w => w.name === widgetName && w.appId === app.id)) {
-          const fn = app.manifest.functions[fnName];
-          widgets.push({
-            name: widgetName,
-            label: fn.description?.replace(/DO NOT call.*$/i, '').trim() || widgetName,
-            appId: app.id,
-          });
-        }
-      }
-    }
+    widgets.push(...buildWidgetIndexForApp(app));
   }
 
   // Add discovery tools
@@ -212,7 +329,7 @@ export function buildJsonSchemaDescriptors(apps: AppForCodemode[]): {
  */
 export function generateTypes(
   descriptors: Record<string, JsonSchemaToolDescriptor>,
-  returnTypes?: Record<string, string>,  // sanitizedName → return type string
+  returnTypes?: Record<string, string>, // sanitizedName → return type string
 ): string {
   const entries: string[] = [];
 
@@ -245,13 +362,16 @@ export function generateTypes(
 function jsonSchemaTypeToTs(schema: Record<string, unknown>): string {
   const type = schema.type as string;
   if (schema.enum) {
-    return (schema.enum as unknown[]).map(v => JSON.stringify(v)).join(' | ');
+    return (schema.enum as unknown[]).map((v) => JSON.stringify(v)).join(' | ');
   }
   switch (type) {
-    case 'string': return 'string';
+    case 'string':
+      return 'string';
     case 'number':
-    case 'integer': return 'number';
-    case 'boolean': return 'boolean';
+    case 'integer':
+      return 'number';
+    case 'boolean':
+      return 'boolean';
     case 'array': {
       const items = schema.items as Record<string, unknown> | undefined;
       return items ? `${jsonSchemaTypeToTs(items)}[]` : 'unknown[]';
@@ -265,7 +385,8 @@ function jsonSchemaTypeToTs(schema: Record<string, unknown>): string {
       });
       return `{ ${entries.join('; ')} }`;
     }
-    default: return 'unknown';
+    default:
+      return 'unknown';
   }
 }
 
@@ -318,7 +439,11 @@ export function buildToolFunctions(
       if (result?.content && Array.isArray(result.content)) {
         const textBlock = result.content.find((c: { type: string }) => c.type === 'text');
         if (textBlock?.text) {
-          try { return JSON.parse(textBlock.text); } catch { return textBlock.text; }
+          try {
+            return JSON.parse(textBlock.text);
+          } catch {
+            return textBlock.text;
+          }
         }
       }
       return result;

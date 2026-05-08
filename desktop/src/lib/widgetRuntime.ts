@@ -87,7 +87,9 @@ function normalizeWidgetPullInterval(intervalMs: unknown): number {
   return Math.max(min, Math.round(intervalMs));
 }
 
-function normalizeWidgetPullSettings(raw: Partial<WidgetPullSettings> | null | undefined): WidgetPullSettings {
+function normalizeWidgetPullSettings(
+  raw: Partial<WidgetPullSettings> | null | undefined,
+): WidgetPullSettings {
   return {
     enabled: raw?.enabled === true,
     intervalMs: normalizeWidgetPullInterval(raw?.intervalMs),
@@ -173,7 +175,9 @@ export function isWidgetPullDue(settings: WidgetPullSettings, now = Date.now()):
   return now - settings.lastPulledAt >= settings.intervalMs;
 }
 
-export function estimateWidgetPullCost(settings: Pick<WidgetPullSettings, 'enabled' | 'intervalMs'>): WidgetPullCostEstimate {
+export function estimateWidgetPullCost(
+  settings: Pick<WidgetPullSettings, 'enabled' | 'intervalMs'>,
+): WidgetPullCostEstimate {
   if (!settings.enabled) {
     return { monthlyPulls: 0, monthlyLight: 0 };
   }
@@ -252,7 +256,9 @@ function findLatestWidgetHtmlCache(
     const key = globalThis.localStorage.key(i);
     if (!key) continue;
     const parsedKey = parseWidgetCacheKey(key);
-    if (!parsedKey || parsedKey.appUuid !== appUuid || parsedKey.widgetName !== widgetName) continue;
+    if (!parsedKey || parsedKey.appUuid !== appUuid || parsedKey.widgetName !== widgetName) {
+      continue;
+    }
     const entry = parseWidgetHtmlCacheEntry(globalThis.localStorage.getItem(key));
     if (!entry) continue;
     if (!latest || entry.cachedAt > latest.cachedAt) {
@@ -325,7 +331,9 @@ export function pruneStaleWidgetCaches(
     if (!parsedKey) continue;
 
     const matchingSource = sources.find((source) => {
-      if (source.appUuid !== parsedKey.appUuid || source.widgetName !== parsedKey.widgetName) return false;
+      if (source.appUuid !== parsedKey.appUuid || source.widgetName !== parsedKey.widgetName) {
+        return false;
+      }
       const sourceVersion = normalizeAppVersion(source.appVersion);
       return !sourceVersion || sourceVersion === parsedKey.appVersion;
     });
@@ -385,11 +393,12 @@ export async function fetchWidgetDataPayload(
   source: Pick<WidgetAppSource, 'appUuid' | 'appSlug' | 'dataFunction'>,
   executor: typeof executeAppMcpTool = executeAppMcpTool,
   widgetPull?: WidgetPullCallMetadata | null,
+  args: Record<string, unknown> = {},
 ): Promise<WidgetDataPayload | null> {
   const toolName = buildWidgetToolName(source.appSlug, source.dataFunction);
   const result = widgetPull
-    ? await executor(source.appUuid, toolName, {}, { widgetPull })
-    : await executor(source.appUuid, toolName, {});
+    ? await executor(source.appUuid, toolName, args, { widgetPull })
+    : await executor(source.appUuid, toolName, args);
   if (result.isError) return null;
 
   const raw = parseJsonPayload(result.content?.[0]?.text || '', 'data');
@@ -415,7 +424,8 @@ export function updateWidgetHtmlCacheMeta(
 }
 
 export async function loadWidgetHtml(
-  source: Pick<WidgetAppSource, 'appUuid' | 'appSlug' | 'widgetName' | 'uiFunction'>
+  source:
+    & Pick<WidgetAppSource, 'appUuid' | 'appSlug' | 'widgetName' | 'uiFunction'>
     & Partial<Pick<WidgetAppSource, 'appName' | 'appVersion'>>,
   options: {
     bustCache?: boolean;
@@ -443,7 +453,14 @@ export async function loadWidgetHtml(
 
   if (payload.appHtml) {
     const meta = coerceWidgetMetaFromPayload(payload.raw, source.appName || source.widgetName);
-    writeWidgetHtmlCache(source.appUuid, source.widgetName, payload.appHtml, payload.version, Date.now(), meta);
+    writeWidgetHtmlCache(
+      source.appUuid,
+      source.widgetName,
+      payload.appHtml,
+      payload.version,
+      Date.now(),
+      meta,
+    );
   }
 
   return {
@@ -465,9 +482,7 @@ export function coerceWidgetMeta(raw: unknown, fallbackTitle: string): WidgetMet
     title: typeof candidate.title === 'string' && candidate.title.trim()
       ? candidate.title
       : fallbackTitle,
-    icon: typeof candidate.icon === 'string' && candidate.icon.trim()
-      ? candidate.icon
-      : '📦',
+    icon: typeof candidate.icon === 'string' && candidate.icon.trim() ? candidate.icon : '📦',
     badge_count: badgeCount,
   };
 }
@@ -494,9 +509,10 @@ export function coerceWidgetMetaFromPayload(
 
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return cachedMeta ?? null;
   const candidate = raw as Record<string, unknown>;
-  const counts = candidate.counts && typeof candidate.counts === 'object' && !Array.isArray(candidate.counts)
-    ? candidate.counts as Record<string, unknown>
-    : null;
+  const counts =
+    candidate.counts && typeof candidate.counts === 'object' && !Array.isArray(candidate.counts)
+      ? candidate.counts as Record<string, unknown>
+      : null;
   const inferredBadgeCount = firstNumericValue([
     candidate.badge_count,
     counts?.active,
@@ -640,7 +656,9 @@ function buildWidgetBridgeScript(options: {
 
   window.ulWidgetContext = ${JSON.stringify(context)};
 
-  ${options.inlineResize ? `
+  ${
+    options.inlineResize
+      ? `
   var styleOverride = document.createElement('style');
   styleOverride.textContent = 'html, body { height: auto !important; overflow: visible !important; }';
   (document.head || document.documentElement).appendChild(styleOverride);
@@ -673,7 +691,9 @@ function buildWidgetBridgeScript(options: {
   }
 
   parent.postMessage({ type: 'ul-widget-ready', id: _appUuid + ':' + _widgetName }, '*');
-  ` : ''}
+  `
+      : ''
+  }
 })();
 </script>`;
 }

@@ -7,8 +7,8 @@ import {
   coerceWidgetMetaFromPayload,
   estimateWidgetPullCost,
   fetchWidgetDataPayload,
-  getWidgetPullSettingsStorageKey,
   getWidgetCacheKey,
+  getWidgetPullSettingsStorageKey,
   loadWidgetHtml,
   parseWidgetContextFromSearch,
   parseWidgetSourceFromSearch,
@@ -17,9 +17,9 @@ import {
   readWidgetPullSettings,
   updateWidgetPullStats,
   WIDGET_PULL_LIGHT_PER_PULL,
+  type WidgetAppSource,
   writeWidgetHtmlCache,
   writeWidgetPullSettings,
-  type WidgetAppSource,
 } from './widgetRuntime';
 
 function createLocalStorageMock(): Storage {
@@ -75,7 +75,9 @@ describe('widget runtime helpers', () => {
       meta: { title: 'Inbox', icon: '📥', badge_count: 2 },
     });
     expect(readWidgetHtmlCache('app-123', 'email_inbox', '8')).toBeNull();
-    expect(localStorage.getItem(getWidgetCacheKey('app-123', 'email_inbox', '7'))).toContain('"version":"7"');
+    expect(localStorage.getItem(getWidgetCacheKey('app-123', 'email_inbox', '7'))).toContain(
+      '"version":"7"',
+    );
   });
 
   it('prunes stale widget caches using the shared source inventory', () => {
@@ -177,6 +179,40 @@ describe('widget runtime helpers', () => {
     );
   });
 
+  it('passes command card data-view args through widget data pulls', async () => {
+    const executor = vi.fn().mockResolvedValue({
+      content: [{
+        type: 'text',
+        text: JSON.stringify({ card_id: 'inbox_volume', body: { kind: 'metric', metric: 22 } }),
+      }],
+    });
+
+    const payload = await fetchWidgetDataPayload(
+      baseSource,
+      executor,
+      {
+        widgetName: 'email_inbox',
+        intervalMs: 300_000,
+        reason: 'scheduled',
+      },
+      { card_id: 'inbox_volume', data_view: 'inbox_volume' },
+    );
+
+    expect(payload?.raw).toEqual({ card_id: 'inbox_volume', body: { kind: 'metric', metric: 22 } });
+    expect(executor).toHaveBeenCalledWith(
+      'app-123',
+      'email-ops_widget_email_inbox_data',
+      { card_id: 'inbox_volume', data_view: 'inbox_volume' },
+      {
+        widgetPull: {
+          widgetName: 'email_inbox',
+          intervalMs: 300_000,
+          reason: 'scheduled',
+        },
+      },
+    );
+  });
+
   it('persists widget pull settings and projects fractional Light cost', () => {
     expect(readWidgetPullSettings(baseSource)).toEqual({
       enabled: false,
@@ -190,7 +226,9 @@ describe('widget runtime helpers', () => {
       intervalMs: 60_000,
     });
     expect(enabled.enabled).toBe(true);
-    expect(localStorage.getItem(getWidgetPullSettingsStorageKey(baseSource))).toContain('"enabled":true');
+    expect(localStorage.getItem(getWidgetPullSettingsStorageKey(baseSource))).toContain(
+      '"enabled":true',
+    );
 
     const estimate = estimateWidgetPullCost(enabled);
     expect(estimate.monthlyPulls).toBe(43_200);

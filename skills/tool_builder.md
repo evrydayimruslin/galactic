@@ -187,6 +187,46 @@ export async function widget_my_dashboard_data(args) {
 
 **Naming convention:** Widget functions must start with `widget_` to be discovered. The `_ui` suffix returns the HTML app, the `_data` suffix returns live data.
 
+**Command cards:** A widget can expose multiple native Command dashboard cards
+from the manifest. Each card has one fixed size and opens the full widget UI
+when clicked. Cards are read-only in v1 and should use the same backend data
+function as the full widget unless a per-card data function is clearly needed.
+
+```json
+{
+  "widgets": [
+    {
+      "id": "my_dashboard",
+      "label": "My Dashboard",
+      "ui_function": "widget_my_dashboard_ui",
+      "data_function": "widget_my_dashboard_data",
+      "cards": [
+        {
+          "id": "pending_count",
+          "label": "Pending Count",
+          "size": "2x1",
+          "render": "native",
+          "kind": "metric",
+          "data_view": "pending_count",
+          "dependencies": [
+            { "app": "source-app-id", "functions": ["read_status"], "access": "read" }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+When the platform pulls a card, it passes `card_id` and `data_view` into the
+widget data function. Return structured JSON for the native card body; do not
+perform writes from card refreshes.
+
+For card/widget composition, declare read-only dependencies instead of adding a
+broad `app:call` runtime permission. A dependency lets the widget data function
+call exactly the listed target app/function through `ultralight.call(...)`, and
+the target app still applies the installed user's own auth/settings/permissions.
+
 ## Function Implementation
 
 ```js

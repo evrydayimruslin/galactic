@@ -228,7 +228,10 @@ interface UltralightNetApi {
 }
 
 interface GlobalConnectApi {
-  connect?: (address: { hostname: string; port: number }, options: { secureTransport: 'on' }) => TlsSocket | Promise<TlsSocket>;
+  connect?: (
+    address: { hostname: string; port: number },
+    options: { secureTransport: 'on' },
+  ) => TlsSocket | Promise<TlsSocket>;
   Deno?: {
     connectTls?: (options: { hostname: string; port: number }) => TlsSocket | Promise<TlsSocket>;
   };
@@ -274,7 +277,8 @@ function parseJsonObject(text: string | null | undefined): JsonObject | null {
 
 function parseStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(Boolean);
+  return value.filter((item): item is string => typeof item === 'string').map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function extractJsonPayload(content: string): string {
@@ -286,7 +290,10 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function parseDraftResponse(rawContent: string | undefined, fallbackDraft: string): EmailDraftResponse {
+function parseDraftResponse(
+  rawContent: string | undefined,
+  fallbackDraft: string,
+): EmailDraftResponse {
   const parsed = parseJsonObject(extractJsonPayload(rawContent || ''));
   const draftBody = typeof parsed?.draft_body === 'string' && parsed.draft_body.trim()
     ? parsed.draft_body.trim()
@@ -297,20 +304,27 @@ function parseDraftResponse(rawContent: string | undefined, fallbackDraft: strin
   };
 }
 
-function parseClassificationResponse(rawContent: string | undefined, fallbackLanguage: string): EmailClassificationResponse {
+function parseClassificationResponse(
+  rawContent: string | undefined,
+  fallbackLanguage: string,
+): EmailClassificationResponse {
   const parsed = parseJsonObject(extractJsonPayload(rawContent || ''));
-  const classification = typeof parsed?.classification === 'string' && CLASSIFICATIONS.has(parsed.classification as ConversationClassification)
+  const classification = typeof parsed?.classification === 'string' &&
+      CLASSIFICATIONS.has(parsed.classification as ConversationClassification)
     ? parsed.classification as ConversationClassification
     : 'other';
-  const priority = typeof parsed?.priority === 'string' && PRIORITIES.has(parsed.priority as EmailPriority)
-    ? parsed.priority as EmailPriority
-    : 'normal';
+  const priority =
+    typeof parsed?.priority === 'string' && PRIORITIES.has(parsed.priority as EmailPriority)
+      ? parsed.priority as EmailPriority
+      : 'normal';
   const draftBody = typeof parsed?.draft_body === 'string' && parsed.draft_body.trim()
     ? parsed.draft_body.trim()
     : null;
   return {
     classification,
-    language: typeof parsed?.language === 'string' && parsed.language.trim() ? parsed.language.trim() : fallbackLanguage,
+    language: typeof parsed?.language === 'string' && parsed.language.trim()
+      ? parsed.language.trim()
+      : fallbackLanguage,
     should_reply: Boolean(parsed?.should_reply),
     priority,
     draft_body: draftBody,
@@ -324,9 +338,10 @@ function parseVersionMetadata(text: string | null | undefined): LatestDraftMetad
   return {
     ...parsed,
     knowledge_gaps: parseStringArray(parsed.knowledge_gaps),
-    priority: typeof parsed.priority === 'string' && PRIORITIES.has(parsed.priority as EmailPriority)
-      ? parsed.priority as EmailPriority
-      : undefined,
+    priority:
+      typeof parsed.priority === 'string' && PRIORITIES.has(parsed.priority as EmailPriority)
+        ? parsed.priority as EmailPriority
+        : undefined,
     sent_to: typeof parsed.sent_to === 'string' ? parsed.sent_to : undefined,
     extracted_emails: parseStringArray(parsed.extracted_emails),
     primary_name: typeof parsed.primary_name === 'string' ? parsed.primary_name : null,
@@ -343,7 +358,10 @@ function getHeaderValue(headers: ReceiveEmailArgs['headers'], name: string): str
   return map[name] || map[name.toLowerCase()];
 }
 
-function formatThreadContext(versions: Array<Pick<VersionRow, 'type' | 'body'>>, cleanInbound: boolean): string {
+function formatThreadContext(
+  versions: Array<Pick<VersionRow, 'type' | 'body'>>,
+  cleanInbound: boolean,
+): string {
   return versions.map((version) => {
     const body = cleanInbound && version.type === 'inbound'
       ? cleanEmailBody(version.body || '').cleaned
@@ -361,27 +379,47 @@ function parseConversationVersions(versions: VersionRow[]): ParsedVersionRow[] {
 
 // ── Helpers ──
 
-function now(): string { return new Date().toISOString(); }
-function uid(): string { return ultralight.user.id; }
-function uname(): string { return ultralight.user.name || ultralight.user.email || 'admin'; }
+function now(): string {
+  return new Date().toISOString();
+}
+function uid(): string {
+  return ultralight.user.id;
+}
+function uname(): string {
+  return ultralight.user.name || ultralight.user.email || 'admin';
+}
 function esc(s: string): string {
   if (!s) return '';
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(
+    /"/g,
+    '&quot;',
+  ).replace(/'/g, '&#39;');
 }
 function stripHtml(html: string): string {
   if (!html) return '';
-  return html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").trim();
+  return html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n').replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").trim();
 }
 
 async function getConventionsText(): Promise<string> {
-  const rows = await ultralight.db.all('SELECT key, value, category FROM conventions WHERE user_id = ?', [uid()]) as ConventionRow[];
+  const rows = await ultralight.db.all(
+    'SELECT key, value, category FROM conventions WHERE user_id = ?',
+    [uid()],
+  ) as ConventionRow[];
   return rows.length > 0
-    ? rows.map((convention) => (convention.category ? '[' + convention.category + '] ' : '') + convention.key + ': ' + convention.value).join('\n')
+    ? rows.map((convention) =>
+      (convention.category ? '[' + convention.category + '] ' : '') + convention.key + ': ' +
+      convention.value
+    ).join('\n')
     : 'No business conventions configured yet.';
 }
 
 async function nextVersionNum(conversationId: string): Promise<number> {
-  const row = await ultralight.db.first('SELECT MAX(version_num) as mx FROM versions WHERE conversation_id = ? AND user_id = ?', [conversationId, uid()]) as MaxVersionRow | null;
+  const row = await ultralight.db.first(
+    'SELECT MAX(version_num) as mx FROM versions WHERE conversation_id = ? AND user_id = ?',
+    [conversationId, uid()],
+  ) as MaxVersionRow | null;
   return (row?.mx || 0) + 1;
 }
 
@@ -445,13 +483,20 @@ class LineReader {
   }
 
   releaseLock() {
-    try { this.reader.releaseLock(); } catch {}
+    try {
+      this.reader.releaseLock();
+    } catch {}
   }
 }
 
 // ── SMTP Sender ──
 
-async function sendViaSMTP(to: string, subject: string, body: string, inReplyTo?: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+async function sendViaSMTP(
+  to: string,
+  subject: string,
+  body: string,
+  inReplyTo?: string,
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
   const host = ultralight.env.SMTP_HOST;
   const port = parseInt(ultralight.env.SMTP_PORT || '465');
   const user = ultralight.env.SMTP_USER;
@@ -459,7 +504,9 @@ async function sendViaSMTP(to: string, subject: string, body: string, inReplyTo?
   const fromAddr = ultralight.env.BUSINESS_EMAIL || user;
   const bizName = ultralight.env.BUSINESS_NAME || 'Hotel';
 
-  if (!host || !user || !pass || !fromAddr) return { success: false, error: 'SMTP credentials not configured' };
+  if (!host || !user || !pass || !fromAddr) {
+    return { success: false, error: 'SMTP credentials not configured' };
+  }
 
   const socket = await openTlsSocket(host, port);
   const lr = new LineReader(socket.readable);
@@ -478,7 +525,7 @@ async function sendViaSMTP(to: string, subject: string, body: string, inReplyTo?
     // EHLO
     let resp = await send('EHLO ultralight-api.rgn4jz429m.workers.dev');
     // Read multi-line EHLO response
-    while (resp.charAt(3) === '-') { resp = await lr.readLine(); }
+    while (resp.charAt(3) === '-') resp = await lr.readLine();
 
     // AUTH LOGIN
     resp = await send('AUTH LOGIN');
@@ -540,8 +587,12 @@ async function sendViaSMTP(to: string, subject: string, body: string, inReplyTo?
     return { success: false, error: getErrorMessage(error) };
   } finally {
     lr.releaseLock();
-    try { writer.releaseLock(); } catch {}
-    try { socket.close(); } catch {}
+    try {
+      writer.releaseLock();
+    } catch {}
+    try {
+      socket.close();
+    } catch {}
   }
 }
 
@@ -607,11 +658,17 @@ async function createImapConnection(): Promise<ImapConnection> {
   }
 
   // Login
-  const loginResult = await cmd('LOGIN "' + user.replace(/"/g, '\\"') + '" "' + pass.replace(/"/g, '\\"') + '"');
+  const loginResult = await cmd(
+    'LOGIN "' + user.replace(/"/g, '\\"') + '" "' + pass.replace(/"/g, '\\"') + '"',
+  );
   if (!loginResult.ok) {
     lr.releaseLock();
-    try { writer.releaseLock(); } catch {}
-    try { socket.close(); } catch {}
+    try {
+      writer.releaseLock();
+    } catch {}
+    try {
+      socket.close();
+    } catch {}
     throw new Error('IMAP login failed');
   }
 
@@ -620,8 +677,12 @@ async function createImapConnection(): Promise<ImapConnection> {
 
 function closeImap(conn: Pick<ImapConnection, 'lr' | 'writer' | 'socket'>) {
   conn.lr.releaseLock();
-  try { conn.writer.releaseLock(); } catch {}
-  try { conn.socket.close(); } catch {}
+  try {
+    conn.writer.releaseLock();
+  } catch {}
+  try {
+    conn.socket.close();
+  } catch {}
 }
 
 // ── Email Parser ──
@@ -634,8 +695,11 @@ function getCharset(contentType: string): string {
 
 // Charset-aware byte decoding with UTF-8 fallback
 function decodeBytes(bytes: Uint8Array, charset: string): string {
-  try { return new TextDecoder(charset).decode(bytes); }
-  catch { return new TextDecoder('utf-8').decode(bytes); }
+  try {
+    return new TextDecoder(charset).decode(bytes);
+  } catch {
+    return new TextDecoder('utf-8').decode(bytes);
+  }
 }
 
 // Decode body bytes according to Content-Transfer-Encoding + charset.
@@ -644,21 +708,27 @@ function decodeBody(body: string, transferEncoding: string, charset: string): st
   const te = (transferEncoding || '').toLowerCase();
   if (te === 'base64') {
     try {
-      return decodeBytes(Uint8Array.from(atob(body.replace(/\s/g, '')), c => c.charCodeAt(0)), charset);
+      return decodeBytes(
+        Uint8Array.from(atob(body.replace(/\s/g, '')), (c) => c.charCodeAt(0)),
+        charset,
+      );
     } catch {
       return body;
     }
   }
   if (te === 'quoted-printable') {
-    const qp = body.replace(/=\r?\n/g, '').replace(/=([0-9A-F]{2})/gi, (_: string, h: string) => String.fromCharCode(parseInt(h, 16)));
+    const qp = body.replace(/=\r?\n/g, '').replace(
+      /=([0-9A-F]{2})/gi,
+      (_: string, h: string) => String.fromCharCode(parseInt(h, 16)),
+    );
     if (charset !== 'utf-8') {
-      return decodeBytes(new Uint8Array([...qp].map(c => c.charCodeAt(0))), charset);
+      return decodeBytes(new Uint8Array([...qp].map((c) => c.charCodeAt(0))), charset);
     }
     return qp;
   }
   // 7bit / 8bit / binary / none — apply charset if non-UTF-8 (handles ISO-2022-JP)
   if (charset !== 'utf-8') {
-    return decodeBytes(new Uint8Array([...body].map(c => c.charCodeAt(0))), charset);
+    return decodeBytes(new Uint8Array([...body].map((c) => c.charCodeAt(0))), charset);
   }
   return body;
 }
@@ -700,7 +770,10 @@ function extractTextFromMime(rawHeaders: string, body: string): string {
       const partCt = getPartHeader(unfoldHeaders(partHeaders), 'Content-Type').toLowerCase();
 
       // Skip binary attachments
-      if (partCt.startsWith('application/') || partCt.startsWith('image/') || partCt.startsWith('audio/') || partCt.startsWith('video/')) continue;
+      if (
+        partCt.startsWith('application/') || partCt.startsWith('image/') ||
+        partCt.startsWith('audio/') || partCt.startsWith('video/')
+      ) continue;
 
       // Recurse into nested multipart
       if (partCt.includes('multipart/')) {
@@ -709,7 +782,8 @@ function extractTextFromMime(rawHeaders: string, body: string): string {
         continue;
       }
 
-      const partCte = getPartHeader(unfoldHeaders(partHeaders), 'Content-Transfer-Encoding').toLowerCase();
+      const partCte = getPartHeader(unfoldHeaders(partHeaders), 'Content-Transfer-Encoding')
+        .toLowerCase();
       const partCharset = getCharset(partCt || ct);
 
       if (partCt.includes('text/plain') && !plainText) {
@@ -732,7 +806,16 @@ function extractTextFromMime(rawHeaders: string, body: string): string {
   return decoded;
 }
 
-function parseEmail(raw: string): { from: string; to: string; subject: string; body: string; messageId: string; inReplyTo: string } {
+function parseEmail(
+  raw: string,
+): {
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  messageId: string;
+  inReplyTo: string;
+} {
   const headerEnd = raw.indexOf('\r\n\r\n');
   const headerBlock = headerEnd > 0 ? raw.substring(0, headerEnd) : raw;
   const bodyBlock = headerEnd > 0 ? raw.substring(headerEnd + 4) : '';
@@ -755,15 +838,18 @@ function parseEmail(raw: string): { from: string; to: string; subject: string; b
       const cs = charset.toLowerCase();
       if (encoding.toUpperCase() === 'B') {
         try {
-          return decodeBytes(Uint8Array.from(atob(text), c => c.charCodeAt(0)), cs);
+          return decodeBytes(Uint8Array.from(atob(text), (c) => c.charCodeAt(0)), cs);
         } catch {
           return text;
         }
       }
       // Quoted-printable
-      const qp = text.replace(/_/g, ' ').replace(/=([0-9A-F]{2})/gi, (__: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+      const qp = text.replace(/_/g, ' ').replace(
+        /=([0-9A-F]{2})/gi,
+        (__: string, hex: string) => String.fromCharCode(parseInt(hex, 16)),
+      );
       if (cs !== 'utf-8') {
-        return decodeBytes(new Uint8Array([...qp].map(c => c.charCodeAt(0))), cs);
+        return decodeBytes(new Uint8Array([...qp].map((c) => c.charCodeAt(0))), cs);
       }
       return qp;
     });
@@ -783,7 +869,14 @@ function parseEmail(raw: string): { from: string; to: string; subject: string; b
 
   const textBody = extractTextFromMime(headerBlock, bodyBlock);
 
-  return { from, to, subject: subject || '(no subject)', body: textBody.trim(), messageId, inReplyTo };
+  return {
+    from,
+    to,
+    subject: subject || '(no subject)',
+    body: textBody.trim(),
+    messageId,
+    inReplyTo,
+  };
 }
 
 // ── Staff Reply Detection ──
@@ -819,7 +912,9 @@ async function checkSentFolder(guestEmail: string): Promise<boolean> {
     return false; // On error, don't block sending
   } finally {
     if (conn) {
-      try { await conn.cmd('LOGOUT'); } catch {}
+      try {
+        await conn.cmd('LOGOUT');
+      } catch {}
       closeImap(conn);
     }
   }
@@ -829,24 +924,37 @@ async function checkSentFolder(guestEmail: string): Promise<boolean> {
 // 0. CHECK INBOX — IMAP Poller
 // ============================================
 
-export async function check_inbox(args: { debug?: boolean; config_only?: boolean }): Promise<unknown> {
+export async function check_inbox(
+  args: { debug?: boolean; config_only?: boolean },
+): Promise<unknown> {
   try {
-    const businessEmail = (ultralight.env.BUSINESS_EMAIL || ultralight.env.IMAP_USER || '').toLowerCase();
+    const businessEmail = (ultralight.env.BUSINESS_EMAIL || ultralight.env.IMAP_USER || '')
+      .toLowerCase();
     const net = getNetApi();
-    if (!net?.imapFetchUnseen) throw new Error('IMAP fetch helper is not available in this runtime');
+    if (!net?.imapFetchUnseen) {
+      throw new Error('IMAP fetch helper is not available in this runtime');
+    }
 
     // Get last processed UID from DB
-    const syncRow = await ultralight.db.first('SELECT last_uid FROM imap_sync_state WHERE user_id = ?', [uid()]) as SyncStateRow | null;
+    const syncRow = await ultralight.db.first(
+      'SELECT last_uid FROM imap_sync_state WHERE user_id = ?',
+      [uid()],
+    ) as SyncStateRow | null;
     const lastUid = syncRow?.last_uid || 0;
 
     // Config-only mode: return immediately without IMAP call
     if (args.config_only) {
       return {
         config: {
-          host: ultralight.env.IMAP_HOST, port: ultralight.env.IMAP_PORT,
-          user: ultralight.env.IMAP_USER, hasPass: !!ultralight.env.IMAP_PASS, passLength: (ultralight.env.IMAP_PASS || '').length,
-          businessEmail, lastUid,
-          smtpHost: ultralight.env.SMTP_HOST, smtpPort: ultralight.env.SMTP_PORT,
+          host: ultralight.env.IMAP_HOST,
+          port: ultralight.env.IMAP_PORT,
+          user: ultralight.env.IMAP_USER,
+          hasPass: !!ultralight.env.IMAP_PASS,
+          passLength: (ultralight.env.IMAP_PASS || '').length,
+          businessEmail,
+          lastUid,
+          smtpHost: ultralight.env.SMTP_HOST,
+          smtpPort: ultralight.env.SMTP_PORT,
         },
       };
     }
@@ -871,13 +979,25 @@ export async function check_inbox(args: { debug?: boolean; config_only?: boolean
     // Debug mode: return raw IMAP result without AI processing
     if (args.debug) {
       return {
-        success: true, debug: true, lastUid,
-        config: { host: ultralight.env.IMAP_HOST, port: ultralight.env.IMAP_PORT, user: ultralight.env.IMAP_USER, hasPass: !!ultralight.env.IMAP_PASS, businessEmail },
+        success: true,
+        debug: true,
+        lastUid,
+        config: {
+          host: ultralight.env.IMAP_HOST,
+          port: ultralight.env.IMAP_PORT,
+          user: ultralight.env.IMAP_USER,
+          hasPass: !!ultralight.env.IMAP_PASS,
+          businessEmail,
+        },
         imapResult: {
           emailCount: result.emails?.length,
           maxUid: result.maxUid,
           hasMore: result.hasMore,
-          emails: (result.emails || []).map((email) => ({ uid: email.uid, from: email.from, subject: email.subject })),
+          emails: (result.emails || []).map((email) => ({
+            uid: email.uid,
+            from: email.from,
+            subject: email.subject,
+          })),
         },
       };
     }
@@ -885,7 +1005,7 @@ export async function check_inbox(args: { debug?: boolean; config_only?: boolean
     if (!result.emails || result.emails.length === 0) {
       await ultralight.db.run(
         'INSERT INTO imap_sync_state (user_id, last_uid, last_check) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET last_check = ?',
-        [uid(), lastUid, now(), now()]
+        [uid(), lastUid, now(), now()],
       );
       return { success: true, processed: 0, message: 'No new emails' };
     }
@@ -918,7 +1038,7 @@ export async function check_inbox(args: { debug?: boolean; config_only?: boolean
     // Update sync state
     await ultralight.db.run(
       'INSERT INTO imap_sync_state (user_id, last_uid, last_check) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET last_uid = MAX(imap_sync_state.last_uid, ?), last_check = ?',
-      [uid(), result.maxUid, now(), result.maxUid, now()]
+      [uid(), result.maxUid, now(), result.maxUid, now()],
     );
 
     return {
@@ -944,7 +1064,7 @@ function cleanEmailBody(body: string): { cleaned: string; original: string } {
   let cleaned = body.replace(/\r\n/g, '\n');
 
   // 1. Strip quoted-reply lines (lines starting with >)
-  cleaned = cleaned.split('\n').filter(l => !/^\s*>/.test(l)).join('\n');
+  cleaned = cleaned.split('\n').filter((l) => !/^\s*>/.test(l)).join('\n');
 
   // 2. Find earliest cut point across all markers (protect first 80 chars)
   const cutPatterns = [
@@ -987,14 +1107,17 @@ function extractEmailsFromBody(body: string): { emails: string[]; primaryName: s
   if (!body) return { emails: [], primaryName: null };
 
   // Find all email-like strings, dedupe, lowercase
-  const allEmails = [...new Set(
-    (body.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [])
-      .map(e => e.toLowerCase())
-  )];
+  const allEmails = [
+    ...new Set(
+      (body.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [])
+        .map((e) => e.toLowerCase()),
+    ),
+  ];
 
   // Filter out obvious system/noreply addresses (but keep for fallback)
-  const filtered = allEmails.filter(e =>
-    !/(?:noreply|no-reply|donotreply|mailer-daemon|postmaster|bounce|^system@|^admin@|^info@|^support@)/i.test(e)
+  const filtered = allEmails.filter((e) =>
+    !/(?:noreply|no-reply|donotreply|mailer-daemon|postmaster|bounce|^system@|^admin@|^info@|^support@)/i
+      .test(e)
   );
 
   // Look for a "primary" email via labeled fields (guest form fields)
@@ -1007,7 +1130,10 @@ function extractEmailsFromBody(body: string): { emails: string[]; primaryName: s
   let primaryEmail: string | null = null;
   for (const p of labelPatterns) {
     const m = body.match(p);
-    if (m) { primaryEmail = m[1].trim().toLowerCase(); break; }
+    if (m) {
+      primaryEmail = m[1].trim().toLowerCase();
+      break;
+    }
   }
 
   // Look for a labeled guest name
@@ -1017,13 +1143,16 @@ function extractEmailsFromBody(body: string): { emails: string[]; primaryName: s
   let primaryName: string | null = null;
   for (const p of namePatterns) {
     const m = body.match(p);
-    if (m) { primaryName = m[1].trim().replace(/\s*[様さん]$/, '').slice(0, 80); break; }
+    if (m) {
+      primaryName = m[1].trim().replace(/\s*[様さん]$/, '').slice(0, 80);
+      break;
+    }
   }
 
   // Put primary first, then rest (deduped)
   let emails = filtered;
   if (primaryEmail) {
-    emails = [primaryEmail, ...filtered.filter(e => e !== primaryEmail)];
+    emails = [primaryEmail, ...filtered.filter((e) => e !== primaryEmail)];
   }
 
   return { emails, primaryName };
@@ -1042,7 +1171,8 @@ function detectLanguage(text: string): string {
 }
 
 // Pattern for noreply/system/form sender addresses
-const NOREPLY_PATTERN = /(?:noreply|no-reply|donotreply|mailer-daemon|postmaster|bounce|notification|notify|alert|system|form|mailer|info@forms|webmaster|auto|automated)/i;
+const NOREPLY_PATTERN =
+  /(?:noreply|no-reply|donotreply|mailer-daemon|postmaster|bounce|notification|notify|alert|system|form|mailer|info@forms|webmaster|auto|automated)/i;
 
 // Known OTA / travel agency domains that send booking confirmations
 const OTA_DOMAINS = [
@@ -1065,7 +1195,8 @@ const OTA_DOMAINS = [
 ];
 
 // Subject keywords that indicate an automated booking confirmation
-const BOOKING_CONFIRMATION_KEYWORDS = /(?:confirm(?:ation|ed)?|予約(?:受付|確認|完了)|reservation\s*(?:confirmed|received)|booking\s*(?:confirmed|received)|ご予約|予約番号|予約受付|confirmation\s*number|receipt)/i;
+const BOOKING_CONFIRMATION_KEYWORDS =
+  /(?:confirm(?:ation|ed)?|予約(?:受付|確認|完了)|reservation\s*(?:confirmed|received)|booking\s*(?:confirmed|received)|ご予約|予約番号|予約受付|confirmation\s*number|receipt)/i;
 
 // ============================================
 // 1. RECEIVE EMAIL — Webhook + Direct
@@ -1077,11 +1208,17 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   if (args.method && args.json) {
     const p = await args.json();
     if (!p) return { statusCode: 400, body: { error: 'No payload' } };
-    from = p.from || ''; to = p.to || ''; subject = p.subject || '';
-    body = p.text || stripHtml(p.html || ''); messageId = p.message_id;
+    from = p.from || '';
+    to = p.to || '';
+    subject = p.subject || '';
+    body = p.text || stripHtml(p.html || '');
+    messageId = p.message_id;
   } else {
-    from = args.from || ''; to = args.to || ''; subject = args.subject || '';
-    body = args.text || stripHtml(args.html || ''); messageId = args.message_id;
+    from = args.from || '';
+    to = args.to || '';
+    subject = args.subject || '';
+    body = args.text || stripHtml(args.html || '');
+    messageId = args.message_id;
   }
 
   if (!from || !subject) return { error: 'from and subject are required' };
@@ -1094,10 +1231,10 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   // body yielded at least one real email, use that as the guest contact.
   // Otherwise fall back to the envelope From.
   const fromLower = from.toLowerCase();
-  const fromIsSystem = NOREPLY_PATTERN.test(from) || OTA_DOMAINS.some(d => fromLower.includes(d));
+  const fromIsSystem = NOREPLY_PATTERN.test(from) || OTA_DOMAINS.some((d) => fromLower.includes(d));
   const guestEmail = (fromIsSystem && bodyEmails.length > 0) ? bodyEmails[0] : from;
-  const guestName = primaryName
-    || ((fromIsSystem && bodyEmails.length > 0) ? bodyEmails[0].split('@')[0] : from.split('@')[0]);
+  const guestName = primaryName ||
+    ((fromIsSystem && bodyEmails.length > 0) ? bodyEmails[0].split('@')[0] : from.split('@')[0]);
 
   // Metadata to attach to the inbound version so the widget recipient dropdown
   // can populate from extracted emails (Phase D). Piggybacks on the existing
@@ -1114,7 +1251,7 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
     // Try to match by message_id stored on a sent version
     existingConvo = await ultralight.db.first(
       'SELECT c.* FROM conversations c JOIN versions v ON v.conversation_id = c.id WHERE v.resend_id = ? AND c.user_id = ?',
-      [inReplyTo, uid()]
+      [inReplyTo, uid()],
     ) as ConversationRow | null;
   }
   if (!existingConvo) {
@@ -1123,12 +1260,13 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
     // long full-Japanese subjects with special chars (【】：！) reliably trip.
     // Threading uses resolved guestEmail OR raw From so contact-form submissions
     // and direct replies from the same person both match.
-    const normalize = (s: string) => (s || '').replace(/^(Re|Fwd|Fw):\s*/gi, '').trim().toLowerCase();
+    const normalize = (s: string) =>
+      (s || '').replace(/^(Re|Fwd|Fw):\s*/gi, '').trim().toLowerCase();
     const cleanSubject = normalize(subject);
     if (cleanSubject) {
       const recent = await ultralight.db.all(
         'SELECT * FROM conversations WHERE user_id = ? AND (guest_email = ? OR guest_email = ?) AND status != ? ORDER BY updated_at DESC LIMIT 20',
-        [uid(), guestEmail, from, 'discarded']
+        [uid(), guestEmail, from, 'discarded'],
       ) as ConversationRow[];
       existingConvo = recent.find((conversation) => {
         const n = normalize(conversation.subject);
@@ -1146,17 +1284,19 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
     const vId = crypto.randomUUID();
     await ultralight.db.run(
       'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [vId, existingConvo.id, uid(), vNum, 'inbound', originalBody, guestEmail, inboundMeta, ts]
+      [vId, existingConvo.id, uid(), vNum, 'inbound', originalBody, guestEmail, inboundMeta, ts],
     );
 
     // Skip AI draft for internal / booking_confirmation / spam followups —
     // admin can trigger a manual draft via conversation_act('generate_draft').
-    const skipAutoDraft = ['internal', 'booking_confirmation', 'spam'].includes(existingConvo.classification);
+    const skipAutoDraft = ['internal', 'booking_confirmation', 'spam'].includes(
+      existingConvo.classification,
+    );
     if (!skipAutoDraft) {
       // Get full thread for context (cleaned bodies for AI input quality)
       const allVersions = await ultralight.db.all(
         'SELECT type, body, actor FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num',
-        [existingConvo.id, uid()]
+        [existingConvo.id, uid()],
       ) as Array<Pick<VersionRow, 'type' | 'body' | 'actor'>>;
       const threadContext = formatThreadContext(allVersions, true);
 
@@ -1164,7 +1304,14 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       const aiResp = await ultralight.ai({
         model: AI_MODEL,
         messages: [
-          { role: 'system', content: 'You are an email response agent. Draft a followup reply to an ongoing conversation.\n\nBusiness conventions:\n' + conventionsText + '\n\nFull thread so far:\n' + threadContext + '\n\nRespond with JSON:\n{"draft_body": "your reply", "knowledge_gaps": ["topics not in conventions"]}', cache_control: { type: 'ephemeral' } },
+          {
+            role: 'system',
+            content:
+              'You are an email response agent. Draft a followup reply to an ongoing conversation.\n\nBusiness conventions:\n' +
+              conventionsText + '\n\nFull thread so far:\n' + threadContext +
+              '\n\nRespond with JSON:\n{"draft_body": "your reply", "knowledge_gaps": ["topics not in conventions"]}',
+            cache_control: { type: 'ephemeral' },
+          },
           { role: 'user', content: 'Latest message from guest:\n' + cleanBody.substring(0, 2000) },
         ],
       });
@@ -1177,14 +1324,39 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       const draftVId = crypto.randomUUID();
       await ultralight.db.run(
         'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, model, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [draftVId, existingConvo.id, uid(), vNum + 1, 'auto_draft', parsed.draft_body, 'ai', AI_MODEL, JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [] }), ts]
+        [
+          draftVId,
+          existingConvo.id,
+          uid(),
+          vNum + 1,
+          'auto_draft',
+          parsed.draft_body,
+          'ai',
+          AI_MODEL,
+          JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [] }),
+          ts,
+        ],
       );
     }
 
-    await ultralight.db.run('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?', ['active', ts, existingConvo.id, uid()]);
+    await ultralight.db.run(
+      'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+      ['active', ts, existingConvo.id, uid()],
+    );
 
-    if (args.method) return { statusCode: 200, body: { received: true, conversation_id: existingConvo.id, thread: true } };
-    return { success: true, conversation_id: existingConvo.id, thread: true, classification: existingConvo.classification, language: existingConvo.language };
+    if (args.method) {
+      return {
+        statusCode: 200,
+        body: { received: true, conversation_id: existingConvo.id, thread: true },
+      };
+    }
+    return {
+      success: true,
+      conversation_id: existingConvo.id,
+      thread: true,
+      classification: existingConvo.classification,
+      language: existingConvo.language,
+    };
   }
 
   // ── New conversation ──
@@ -1200,7 +1372,7 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
 
   // Booking confirmation: known OTA domain OR noreply-pattern sender with
   // booking-related subject keywords
-  const isOtaSender = OTA_DOMAINS.some(d => fromLower.includes(d));
+  const isOtaSender = OTA_DOMAINS.some((d) => fromLower.includes(d));
   const isBookingConfirmation = !isInternal && (
     isOtaSender || (NOREPLY_PATTERN.test(from) && BOOKING_CONFIRMATION_KEYWORDS.test(subject))
   );
@@ -1208,49 +1380,101 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   if (isInternal || isBookingConfirmation) {
     const classification = isInternal ? 'internal' : 'booking_confirmation';
     const lang = detectLanguage(subject + '\n' + (cleanBody || originalBody).slice(0, 500));
-    console.log('[receive_email] fast-path classification:', classification, 'lang:', lang, 'from:', from);
+    console.log(
+      '[receive_email] fast-path classification:',
+      classification,
+      'lang:',
+      lang,
+      'from:',
+      from,
+    );
 
     await ultralight.db.run(
       'INSERT INTO conversations (id, user_id, guest_email, guest_name, subject, language, classification, status, message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [convoId, uid(), guestEmail, guestName, subject, lang, classification, 'active', messageId || null, ts, ts]
+      [
+        convoId,
+        uid(),
+        guestEmail,
+        guestName,
+        subject,
+        lang,
+        classification,
+        'active',
+        messageId || null,
+        ts,
+        ts,
+      ],
     );
     await ultralight.db.run(
       'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), convoId, uid(), 1, 'inbound', originalBody, guestEmail, inboundMeta, ts]
+      [
+        crypto.randomUUID(),
+        convoId,
+        uid(),
+        1,
+        'inbound',
+        originalBody,
+        guestEmail,
+        inboundMeta,
+        ts,
+      ],
     );
     if (args.method) return { statusCode: 200, body: { received: true, conversation_id: convoId } };
-    return { success: true, conversation_id: convoId, classification, language: lang, action: 'no_reply' };
+    return {
+      success: true,
+      conversation_id: convoId,
+      classification,
+      language: lang,
+      action: 'no_reply',
+    };
   }
 
   // ── AI classify + draft ──
   const aiResp = await ultralight.ai({
     model: AI_MODEL,
     messages: [
-      { role: 'system', content:
-        'You are an email response agent for a business. Classify inbound emails and draft professional replies.\n\n'
-        + 'Business conventions:\n' + conventionsText + '\n\n'
-        + 'Classifications: inquiry | booking_request | booking_confirmation | cancellation | complaint | feedback | internal | spam | other\n\n'
-        + 'Hints:\n'
-        + '- "booking_request" = guest asking to make a NEW reservation (should_reply=true, draft the response)\n'
-        + '- "booking_confirmation" = automated confirmation from an OTA/travel agency for an existing booking (should_reply=false)\n'
-        + '- "internal" = staff email from within the business (should_reply=false)\n'
-        + '- "spam" / "other" that does not need a response → should_reply=false\n'
-        + '- Contact-form submissions: classify by content, not by the form sender address\n\n'
-        + 'Instructions:\n'
-        + '1. Classify intent using the enum above\n'
-        + '2. Detect language (en, ja, etc.)\n'
-        + '3. Draft reply IN THE SAME LANGUAGE as sender (only when should_reply=true)\n'
-        + '4. Be warm, professional, accurate\n\n'
-        + 'Respond with JSON only:\n'
-        + '{"classification":"inquiry|booking_request|booking_confirmation|cancellation|complaint|feedback|internal|spam|other","language":"en|ja|etc","should_reply":true/false,"priority":"high|normal|low","draft_body":"full reply text or null","knowledge_gaps":["topics not covered in conventions"]}',
-        cache_control: { type: 'ephemeral' } },
-      { role: 'user', content: 'From: ' + from + (guestEmail !== from ? '\nGuest: ' + guestEmail : '') + '\nSubject: ' + subject + '\n\n' + cleanBody.substring(0, 2000) },
+      {
+        role: 'system',
+        content:
+          'You are an email response agent for a business. Classify inbound emails and draft professional replies.\n\n' +
+          'Business conventions:\n' + conventionsText + '\n\n' +
+          'Classifications: inquiry | booking_request | booking_confirmation | cancellation | complaint | feedback | internal | spam | other\n\n' +
+          'Hints:\n' +
+          '- "booking_request" = guest asking to make a NEW reservation (should_reply=true, draft the response)\n' +
+          '- "booking_confirmation" = automated confirmation from an OTA/travel agency for an existing booking (should_reply=false)\n' +
+          '- "internal" = staff email from within the business (should_reply=false)\n' +
+          '- "spam" / "other" that does not need a response → should_reply=false\n' +
+          '- Contact-form submissions: classify by content, not by the form sender address\n\n' +
+          'Instructions:\n' +
+          '1. Classify intent using the enum above\n' +
+          '2. Detect language (en, ja, etc.)\n' +
+          '3. Draft reply IN THE SAME LANGUAGE as sender (only when should_reply=true)\n' +
+          '4. Be warm, professional, accurate\n\n' +
+          'Respond with JSON only:\n' +
+          '{"classification":"inquiry|booking_request|booking_confirmation|cancellation|complaint|feedback|internal|spam|other","language":"en|ja|etc","should_reply":true/false,"priority":"high|normal|low","draft_body":"full reply text or null","knowledge_gaps":["topics not covered in conventions"]}',
+        cache_control: { type: 'ephemeral' },
+      },
+      {
+        role: 'user',
+        content: 'From: ' + from + (guestEmail !== from ? '\nGuest: ' + guestEmail : '') +
+          '\nSubject: ' + subject + '\n\n' + cleanBody.substring(0, 2000),
+      },
     ],
   });
 
-  console.log('[receive_email] AI raw response:', JSON.stringify({ content: aiResp.content?.substring(0, 500), error: aiResp.error }));
+  console.log(
+    '[receive_email] AI raw response:',
+    JSON.stringify({ content: aiResp.content?.substring(0, 500), error: aiResp.error }),
+  );
   const parsed = parseClassificationResponse(aiResp.content, detectLanguage(cleanBody));
-  console.log('[receive_email] Parsed:', JSON.stringify({ classification: parsed.classification, should_reply: parsed.should_reply, has_draft: !!parsed.draft_body }));
+  console.log(
+    '[receive_email] Parsed:',
+    JSON.stringify({
+      classification: parsed.classification,
+      should_reply: parsed.should_reply,
+      has_draft: !!parsed.draft_body,
+    }),
+  );
 
   // Force should_reply=false for classifications that never warrant an auto-draft
   const noDraftClasses = ['booking_confirmation', 'internal', 'spam'];
@@ -1262,32 +1486,63 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   // Create conversation
   await ultralight.db.run(
     'INSERT INTO conversations (id, user_id, guest_email, guest_name, subject, language, classification, status, message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [convoId, uid(), guestEmail, guestName, subject, parsed.language, parsed.classification, 'active', messageId || null, ts, ts]
+    [
+      convoId,
+      uid(),
+      guestEmail,
+      guestName,
+      subject,
+      parsed.language,
+      parsed.classification,
+      'active',
+      messageId || null,
+      ts,
+      ts,
+    ],
   );
 
   // Version 1: inbound (original body for admin reference, extracted emails in metadata)
   await ultralight.db.run(
     'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [crypto.randomUUID(), convoId, uid(), 1, 'inbound', originalBody, guestEmail, inboundMeta, ts]
+    [crypto.randomUUID(), convoId, uid(), 1, 'inbound', originalBody, guestEmail, inboundMeta, ts],
   );
 
   // Version 2: auto_draft (if should_reply)
   if (parsed.should_reply && parsed.draft_body) {
     await ultralight.db.run(
       'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, model, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), convoId, uid(), 2, 'auto_draft', parsed.draft_body, 'ai', AI_MODEL, JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [], priority: parsed.priority }), ts]
+      [
+        crypto.randomUUID(),
+        convoId,
+        uid(),
+        2,
+        'auto_draft',
+        parsed.draft_body,
+        'ai',
+        AI_MODEL,
+        JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [], priority: parsed.priority }),
+        ts,
+      ],
     );
   }
 
   if (args.method) return { statusCode: 200, body: { received: true, conversation_id: convoId } };
-  return { success: true, conversation_id: convoId, classification: parsed.classification, language: parsed.language, action: parsed.should_reply ? 'draft_queued' : 'no_reply' };
+  return {
+    success: true,
+    conversation_id: convoId,
+    classification: parsed.classification,
+    language: parsed.language,
+    action: parsed.should_reply ? 'draft_queued' : 'no_reply',
+  };
 }
 
 // ============================================
 // 2. EMAIL SEND — Outbound via Resend
 // ============================================
 
-export async function email_send(args: { to: string; subject: string; body: string; in_reply_to?: string }): Promise<unknown> {
+export async function email_send(
+  args: { to: string; subject: string; body: string; in_reply_to?: string },
+): Promise<unknown> {
   const { to, subject, body, in_reply_to } = args;
   if (!to || !subject || !body) throw new Error('to, subject, and body are required');
   const result = await sendViaSMTP(to, subject, body, in_reply_to);
@@ -1309,7 +1564,10 @@ export async function conversation_act(args: {
   const { conversation_id, action, body: inputBody, prompt, to: toOverride } = args;
   if (!conversation_id || !action) throw new Error('conversation_id and action are required');
 
-  const convo = await ultralight.db.first('SELECT * FROM conversations WHERE id = ? AND user_id = ?', [conversation_id, uid()]) as ConversationRow | null;
+  const convo = await ultralight.db.first(
+    'SELECT * FROM conversations WHERE id = ? AND user_id = ?',
+    [conversation_id, uid()],
+  ) as ConversationRow | null;
   if (!convo) throw new Error('Conversation not found');
 
   const ts = now();
@@ -1318,7 +1576,7 @@ export async function conversation_act(args: {
   // Get latest draft version
   const latestDraft = await ultralight.db.first(
     'SELECT * FROM versions WHERE conversation_id = ? AND user_id = ? AND type IN (?, ?, ?, ?) ORDER BY version_num DESC LIMIT 1',
-    [conversation_id, uid(), 'auto_draft', 'regeneration', 'manual_edit', 'followup_draft']
+    [conversation_id, uid(), 'auto_draft', 'regeneration', 'manual_edit', 'followup_draft'],
   ) as VersionRow | null;
 
   if (action === 'send') {
@@ -1337,18 +1595,37 @@ export async function conversation_act(args: {
       const vNum = await nextVersionNum(conversation_id);
       await ultralight.db.run(
         "INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, metadata, created_at) VALUES (?, ?, ?, ?, 'discarded', ?, 'system', ?, ?)",
-        [crypto.randomUUID(), conversation_id, uid(), vNum, bodyToSend, JSON.stringify({ reason: 'staff_already_replied' }), ts]
+        [
+          crypto.randomUUID(),
+          conversation_id,
+          uid(),
+          vNum,
+          bodyToSend,
+          JSON.stringify({ reason: 'staff_already_replied' }),
+          ts,
+        ],
       );
-      await ultralight.db.run('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?', ['resolved', ts, conversation_id, uid()]);
+      await ultralight.db.run(
+        'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+        ['resolved', ts, conversation_id, uid()],
+      );
       return { success: true, action: 'skipped', reason: 'staff_already_replied', conversation_id };
     }
 
     const vNum = await nextVersionNum(conversation_id);
-    const isSentBefore = !!(await ultralight.db.first("SELECT id FROM versions WHERE conversation_id = ? AND user_id = ? AND type IN ('sent', 'followup_sent')", [conversation_id, uid()]));
+    const isSentBefore = !!(await ultralight.db.first(
+      "SELECT id FROM versions WHERE conversation_id = ? AND user_id = ? AND type IN ('sent', 'followup_sent')",
+      [conversation_id, uid()],
+    ));
     const vType = isSentBefore ? 'followup_sent' : 'sent';
 
     // Send via SMTP through hotel's mail server
-    const result = await sendViaSMTP(recipient, 'Re: ' + convo.subject, bodyToSend, convo.message_id || undefined);
+    const result = await sendViaSMTP(
+      recipient,
+      'Re: ' + convo.subject,
+      bodyToSend,
+      convo.message_id || undefined,
+    );
     if (!result.success) throw new Error('Send failed: ' + result.error);
 
     // Track recipient on the sent version's metadata so the widget can show
@@ -1358,26 +1635,57 @@ export async function conversation_act(args: {
       : null;
     await ultralight.db.run(
       'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, resend_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), conversation_id, uid(), vNum, vType, bodyToSend, actor, result.messageId || null, sendMeta, ts]
+      [
+        crypto.randomUUID(),
+        conversation_id,
+        uid(),
+        vNum,
+        vType,
+        bodyToSend,
+        actor,
+        result.messageId || null,
+        sendMeta,
+        ts,
+      ],
     );
-    await ultralight.db.run('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?', ['resolved', ts, conversation_id, uid()]);
+    await ultralight.db.run(
+      'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+      ['resolved', ts, conversation_id, uid()],
+    );
 
     return { success: true, action: 'sent', conversation_id, to: recipient };
   }
 
   if (action === 'discard') {
-    await ultralight.db.run('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?', ['discarded', ts, conversation_id, uid()]);
+    await ultralight.db.run(
+      'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+      ['discarded', ts, conversation_id, uid()],
+    );
     const vNum = await nextVersionNum(conversation_id);
     await ultralight.db.run(
       'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), conversation_id, uid(), vNum, 'discarded', latestDraft?.body || '', actor, ts]
+      [
+        crypto.randomUUID(),
+        conversation_id,
+        uid(),
+        vNum,
+        'discarded',
+        latestDraft?.body || '',
+        actor,
+        ts,
+      ],
     );
     return { success: true, action: 'discarded', conversation_id };
   }
 
   if (action === 'restore') {
-    if (convo.status !== 'discarded') throw new Error('Only discarded conversations can be restored');
-    await ultralight.db.run('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?', ['active', ts, conversation_id, uid()]);
+    if (convo.status !== 'discarded') {
+      throw new Error('Only discarded conversations can be restored');
+    }
+    await ultralight.db.run(
+      'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+      ['active', ts, conversation_id, uid()],
+    );
     return { success: true, action: 'restored', conversation_id };
   }
 
@@ -1386,7 +1694,7 @@ export async function conversation_act(args: {
     const vNum = await nextVersionNum(conversation_id);
     await ultralight.db.run(
       'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), conversation_id, uid(), vNum, 'manual_edit', inputBody, actor, ts]
+      [crypto.randomUUID(), conversation_id, uid(), vNum, 'manual_edit', inputBody, actor, ts],
     );
     return { success: true, action: 'saved', conversation_id, version_num: vNum };
   }
@@ -1398,15 +1706,25 @@ export async function conversation_act(args: {
     // Get full thread for context
     const allVersions = await ultralight.db.all(
       'SELECT type, body, actor FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num',
-      [conversation_id, uid()]
+      [conversation_id, uid()],
     ) as Array<Pick<VersionRow, 'type' | 'body' | 'actor'>>;
-    const inboundBodies = allVersions.filter((version) => version.type === 'inbound').map((version) => version.body).join('\n---\n');
+    const inboundBodies = allVersions.filter((version) => version.type === 'inbound').map((
+      version,
+    ) => version.body).join('\n---\n');
     const currentDraft = latestDraft?.body || '';
 
     const aiResp = await ultralight.ai({
       model: AI_MODEL,
       messages: [
-        { role: 'system', content: 'You are rewriting a draft email response. Follow the admin\'s instructions.\n\nBusiness conventions:\n' + conventionsText + '\n\nInbound email(s):\n' + inboundBodies + '\n\nCurrent draft:\n' + currentDraft + '\n\nRespond with JSON:\n{"draft_body": "rewritten email", "knowledge_gaps": ["topics not covered"]}', cache_control: { type: 'ephemeral' } },
+        {
+          role: 'system',
+          content:
+            "You are rewriting a draft email response. Follow the admin's instructions.\n\nBusiness conventions:\n" +
+            conventionsText + '\n\nInbound email(s):\n' + inboundBodies + '\n\nCurrent draft:\n' +
+            currentDraft +
+            '\n\nRespond with JSON:\n{"draft_body": "rewritten email", "knowledge_gaps": ["topics not covered"]}',
+          cache_control: { type: 'ephemeral' },
+        },
         { role: 'user', content: 'Instruction: ' + regenPrompt },
       ],
     });
@@ -1416,10 +1734,29 @@ export async function conversation_act(args: {
     const vNum = await nextVersionNum(conversation_id);
     await ultralight.db.run(
       'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, actor_prompt, model, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), conversation_id, uid(), vNum, 'regeneration', parsed.draft_body, 'ai', regenPrompt, AI_MODEL, JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [] }), ts]
+      [
+        crypto.randomUUID(),
+        conversation_id,
+        uid(),
+        vNum,
+        'regeneration',
+        parsed.draft_body,
+        'ai',
+        regenPrompt,
+        AI_MODEL,
+        JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [] }),
+        ts,
+      ],
     );
 
-    return { success: true, action: 'regenerated', conversation_id, version_num: vNum, draft_body: parsed.draft_body, knowledge_gaps: parsed.knowledge_gaps || [] };
+    return {
+      success: true,
+      action: 'regenerated',
+      conversation_id,
+      version_num: vNum,
+      draft_body: parsed.draft_body,
+      knowledge_gaps: parsed.knowledge_gaps || [],
+    };
   }
 
   if (action === 'translate') {
@@ -1452,36 +1789,42 @@ export async function conversation_act(args: {
     const conventionsText = await getConventionsText();
     const allVersions = await ultralight.db.all(
       'SELECT type, body, actor FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num',
-      [conversation_id, uid()]
+      [conversation_id, uid()],
     ) as Array<Pick<VersionRow, 'type' | 'body' | 'actor'>>;
 
     // Prefer cleaned bodies for AI input (same cleanEmailBody used by receive_email)
     const threadContext = formatThreadContext(allVersions, true);
 
     // Detect followup context — any prior send means this is a followup, not a first draft
-    const isFollowup = allVersions.some((version) => version.type === 'sent' || version.type === 'followup_sent');
+    const isFollowup = allVersions.some((version) =>
+      version.type === 'sent' || version.type === 'followup_sent'
+    );
 
-    const adminInstruction = prompt
-      ? '\n\nAdmin instruction for this draft: ' + prompt
-      : '';
+    const adminInstruction = prompt ? '\n\nAdmin instruction for this draft: ' + prompt : '';
 
     const systemPrompt = isFollowup
-      ? 'You are an email response agent. Draft a followup reply to an ongoing conversation.\n\n'
-        + 'Business conventions:\n' + conventionsText + '\n\n'
-        + 'Full thread so far:\n' + threadContext + '\n\n'
-        + 'Reply in the same language as the guest. Be warm, professional, accurate.' + adminInstruction + '\n\n'
-        + 'Respond with JSON:\n{"draft_body": "your reply", "knowledge_gaps": ["topics not in conventions"]}'
-      : 'You are an email response agent for a business. Draft a professional reply to the guest.\n\n'
-        + 'Business conventions:\n' + conventionsText + '\n\n'
-        + 'Classification: ' + (convo.classification || 'other') + ' (admin manually requested a draft)\n\n'
-        + 'Reply in the same language as the guest. Be warm, professional, accurate.' + adminInstruction + '\n\n'
-        + 'Respond with JSON:\n{"draft_body": "full reply text", "knowledge_gaps": ["topics not covered in conventions"]}';
+      ? 'You are an email response agent. Draft a followup reply to an ongoing conversation.\n\n' +
+        'Business conventions:\n' + conventionsText + '\n\n' +
+        'Full thread so far:\n' + threadContext + '\n\n' +
+        'Reply in the same language as the guest. Be warm, professional, accurate.' +
+        adminInstruction + '\n\n' +
+        'Respond with JSON:\n{"draft_body": "your reply", "knowledge_gaps": ["topics not in conventions"]}'
+      : 'You are an email response agent for a business. Draft a professional reply to the guest.\n\n' +
+        'Business conventions:\n' + conventionsText + '\n\n' +
+        'Classification: ' + (convo.classification || 'other') +
+        ' (admin manually requested a draft)\n\n' +
+        'Reply in the same language as the guest. Be warm, professional, accurate.' +
+        adminInstruction + '\n\n' +
+        'Respond with JSON:\n{"draft_body": "full reply text", "knowledge_gaps": ["topics not covered in conventions"]}';
 
     const latestInbound = [...allVersions].reverse().find((version) => version.type === 'inbound');
     const userContent = isFollowup && latestInbound
-      ? 'Latest message from guest:\n' + cleanEmailBody(latestInbound.body || '').cleaned.substring(0, 2000)
-      : 'From: ' + convo.guest_email + '\nSubject: ' + convo.subject + '\n\n'
-        + allVersions.filter((version) => version.type === 'inbound').map((version) => cleanEmailBody(version.body || '').cleaned).join('\n---\n').substring(0, 2000);
+      ? 'Latest message from guest:\n' +
+        cleanEmailBody(latestInbound.body || '').cleaned.substring(0, 2000)
+      : 'From: ' + convo.guest_email + '\nSubject: ' + convo.subject + '\n\n' +
+        allVersions.filter((version) => version.type === 'inbound').map((version) =>
+          cleanEmailBody(version.body || '').cleaned
+        ).join('\n---\n').substring(0, 2000);
 
     const aiResp = await ultralight.ai({
       model: AI_MODEL,
@@ -1493,7 +1836,8 @@ export async function conversation_act(args: {
 
     const parsed = parseDraftResponse(
       aiResp.content,
-      (aiResp.content || '').trim() || 'Thank you for your message. I will get back to you shortly.',
+      (aiResp.content || '').trim() ||
+        'Thank you for your message. I will get back to you shortly.',
     );
 
     if (!parsed.draft_body) throw new Error('Draft generation failed: no draft_body in response');
@@ -1502,17 +1846,26 @@ export async function conversation_act(args: {
     await ultralight.db.run(
       'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, actor_prompt, model, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
-        crypto.randomUUID(), conversation_id, uid(), vNum,
+        crypto.randomUUID(),
+        conversation_id,
+        uid(),
+        vNum,
         isFollowup ? 'followup_draft' : 'auto_draft',
-        parsed.draft_body, 'ai', prompt || null, AI_MODEL,
+        parsed.draft_body,
+        'ai',
+        prompt || null,
+        AI_MODEL,
         JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [], manual_trigger: true }),
         ts,
-      ]
+      ],
     );
 
     // Nudge the conversation back to active if it was resolved/archived
     if (convo.status !== 'active') {
-      await ultralight.db.run('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?', ['active', ts, conversation_id, uid()]);
+      await ultralight.db.run(
+        'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+        ['active', ts, conversation_id, uid()],
+      );
     }
 
     return {
@@ -1530,13 +1883,23 @@ export async function conversation_act(args: {
     if (prompt) {
       // AI-generated followup
       const conventionsText = await getConventionsText();
-      const allVersions = await ultralight.db.all('SELECT type, body FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num', [conversation_id, uid()]) as Array<Pick<VersionRow, 'type' | 'body'>>;
+      const allVersions = await ultralight.db.all(
+        'SELECT type, body FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num',
+        [conversation_id, uid()],
+      ) as Array<Pick<VersionRow, 'type' | 'body'>>;
       const threadContext = formatThreadContext(allVersions, false);
 
       const aiResp = await ultralight.ai({
         model: AI_MODEL,
         messages: [
-          { role: 'system', content: 'Draft a followup email in an ongoing conversation.\n\nBusiness conventions:\n' + conventionsText + '\n\nThread:\n' + threadContext + '\n\nRespond with ONLY the email body text.', cache_control: { type: 'ephemeral' } },
+          {
+            role: 'system',
+            content:
+              'Draft a followup email in an ongoing conversation.\n\nBusiness conventions:\n' +
+              conventionsText + '\n\nThread:\n' + threadContext +
+              '\n\nRespond with ONLY the email body text.',
+            cache_control: { type: 'ephemeral' },
+          },
           { role: 'user', content: 'Followup instruction: ' + prompt },
         ],
       });
@@ -1544,18 +1907,40 @@ export async function conversation_act(args: {
       const vNum = await nextVersionNum(conversation_id);
       await ultralight.db.run(
         'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, actor_prompt, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [crypto.randomUUID(), conversation_id, uid(), vNum, 'followup_draft', aiResp.content || '', 'ai', prompt, AI_MODEL, ts]
+        [
+          crypto.randomUUID(),
+          conversation_id,
+          uid(),
+          vNum,
+          'followup_draft',
+          aiResp.content || '',
+          'ai',
+          prompt,
+          AI_MODEL,
+          ts,
+        ],
       );
-      await ultralight.db.run('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?', ['active', ts, conversation_id, uid()]);
-      return { success: true, action: 'followup_drafted', conversation_id, draft_body: aiResp.content };
+      await ultralight.db.run(
+        'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+        ['active', ts, conversation_id, uid()],
+      );
+      return {
+        success: true,
+        action: 'followup_drafted',
+        conversation_id,
+        draft_body: aiResp.content,
+      };
     } else if (inputBody) {
       // Manual followup draft
       const vNum = await nextVersionNum(conversation_id);
       await ultralight.db.run(
         'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [crypto.randomUUID(), conversation_id, uid(), vNum, 'followup_draft', inputBody, actor, ts]
+        [crypto.randomUUID(), conversation_id, uid(), vNum, 'followup_draft', inputBody, actor, ts],
       );
-      await ultralight.db.run('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?', ['active', ts, conversation_id, uid()]);
+      await ultralight.db.run(
+        'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+        ['active', ts, conversation_id, uid()],
+      );
       return { success: true, action: 'followup_drafted', conversation_id };
     }
     throw new Error('prompt or body required for followup_draft');
@@ -1572,12 +1957,15 @@ export async function conversation_history(args: { conversation_id: string }): P
   const { conversation_id } = args;
   if (!conversation_id) throw new Error('conversation_id is required');
 
-  const convo = await ultralight.db.first('SELECT * FROM conversations WHERE id = ? AND user_id = ?', [conversation_id, uid()]) as ConversationRow | null;
+  const convo = await ultralight.db.first(
+    'SELECT * FROM conversations WHERE id = ? AND user_id = ?',
+    [conversation_id, uid()],
+  ) as ConversationRow | null;
   if (!convo) throw new Error('Conversation not found');
 
   const versions = await ultralight.db.all(
     'SELECT * FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num ASC',
-    [conversation_id, uid()]
+    [conversation_id, uid()],
   ) as VersionRow[];
 
   return {
@@ -1597,11 +1985,18 @@ export async function conversations_list(args: {
 }): Promise<unknown> {
   const { status, limit, search } = args;
 
-  let sql = 'SELECT c.*, (SELECT COUNT(*) FROM versions v WHERE v.conversation_id = c.id AND v.user_id = c.user_id) as version_count FROM conversations c WHERE c.user_id = ?';
+  let sql =
+    'SELECT c.*, (SELECT COUNT(*) FROM versions v WHERE v.conversation_id = c.id AND v.user_id = c.user_id) as version_count FROM conversations c WHERE c.user_id = ?';
   const params: SqlValue[] = [uid()];
 
-  if (status) { sql += ' AND c.status = ?'; params.push(status); }
-  if (search) { sql += ' AND (c.guest_email LIKE ? OR c.subject LIKE ?)'; params.push('%' + search + '%', '%' + search + '%'); }
+  if (status) {
+    sql += ' AND c.status = ?';
+    params.push(status);
+  }
+  if (search) {
+    sql += ' AND (c.guest_email LIKE ? OR c.subject LIKE ?)';
+    params.push('%' + search + '%', '%' + search + '%');
+  }
 
   sql += ' ORDER BY c.updated_at DESC LIMIT ?';
   params.push(limit || 50);
@@ -1609,11 +2004,13 @@ export async function conversations_list(args: {
   const convos = await ultralight.db.all(sql, params) as ConversationWithVersionCountRow[];
 
   // Get latest version for each conversation
-  const result: Array<ConversationWithVersionCountRow & { latest_version: LatestVersionPreviewRow | null }> = [];
+  const result: Array<
+    ConversationWithVersionCountRow & { latest_version: LatestVersionPreviewRow | null }
+  > = [];
   for (const c of convos) {
     const latest = await ultralight.db.first(
       'SELECT type, body, actor, created_at FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num DESC LIMIT 1',
-      [c.id, uid()]
+      [c.id, uid()],
     ) as LatestVersionPreviewRow | null;
     result.push({ ...c, latest_version: latest });
   }
@@ -1628,27 +2025,44 @@ export async function conversations_list(args: {
 export async function conventions_get(args: { key?: string; category?: string }): Promise<unknown> {
   const { key, category } = args;
   if (key) {
-    const row = await ultralight.db.first('SELECT * FROM conventions WHERE user_id = ? AND key = ?', [uid(), key]) as ConventionRow | null;
+    const row = await ultralight.db.first(
+      'SELECT * FROM conventions WHERE user_id = ? AND key = ?',
+      [uid(), key],
+    ) as ConventionRow | null;
     return row || { message: 'Convention not found: ' + key };
   }
   let sql = 'SELECT * FROM conventions WHERE user_id = ?';
   const params: SqlValue[] = [uid()];
-  if (category) { sql += ' AND category = ?'; params.push(category); }
+  if (category) {
+    sql += ' AND category = ?';
+    params.push(category);
+  }
   sql += ' ORDER BY category, key';
   return { conventions: await ultralight.db.all(sql, params) as ConventionRow[] };
 }
 
-export async function conventions_set(args: { key: string; value: string; category?: string }): Promise<unknown> {
+export async function conventions_set(
+  args: { key: string; value: string; category?: string },
+): Promise<unknown> {
   const { key, value, category } = args;
   if (!key || !value) throw new Error('key and value are required');
   const ts = now();
-  const existing = await ultralight.db.first('SELECT id FROM conventions WHERE user_id = ? AND key = ?', [uid(), key]) as Pick<ConventionRow, 'id'> | null;
+  const existing = await ultralight.db.first(
+    'SELECT id FROM conventions WHERE user_id = ? AND key = ?',
+    [uid(), key],
+  ) as Pick<ConventionRow, 'id'> | null;
   if (existing) {
-    await ultralight.db.run('UPDATE conventions SET value = ?, category = ?, updated_at = ? WHERE id = ? AND user_id = ?', [value, category || 'general', ts, existing.id, uid()]);
+    await ultralight.db.run(
+      'UPDATE conventions SET value = ?, category = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+      [value, category || 'general', ts, existing.id, uid()],
+    );
     return { success: true, action: 'updated', key };
   }
   const id = crypto.randomUUID();
-  await ultralight.db.run('INSERT INTO conventions (id, user_id, key, value, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [id, uid(), key, value, category || 'general', ts, ts]);
+  await ultralight.db.run(
+    'INSERT INTO conventions (id, user_id, key, value, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [id, uid(), key, value, category || 'general', ts, ts],
+  );
   return { success: true, action: 'created', key, id };
 }
 
@@ -1660,18 +2074,18 @@ export async function conventions_set(args: { key: string; value: string; catego
 export async function approvals_list(args: { status?: string; limit?: number }): Promise<unknown> {
   const convos = await ultralight.db.all(
     'SELECT * FROM conversations WHERE user_id = ? AND status = ? ORDER BY updated_at DESC LIMIT ?',
-    [uid(), 'active', args.limit || 20]
+    [uid(), 'active', args.limit || 20],
   ) as ConversationRow[];
 
   const approvals: ApprovalBridgeRow[] = [];
   for (const c of convos) {
     const latestDraft = await ultralight.db.first(
       "SELECT * FROM versions WHERE conversation_id = ? AND user_id = ? AND type IN ('auto_draft','regeneration','manual_edit','followup_draft') ORDER BY version_num DESC LIMIT 1",
-      [c.id, uid()]
+      [c.id, uid()],
     ) as VersionRow | null;
     const inbound = await ultralight.db.first(
       "SELECT body FROM versions WHERE conversation_id = ? AND user_id = ? AND type = 'inbound' ORDER BY version_num DESC LIMIT 1",
-      [c.id, uid()]
+      [c.id, uid()],
     ) as Pick<VersionRow, 'body'> | null;
 
     if (latestDraft) {
@@ -1684,8 +2098,12 @@ export async function approvals_list(args: { status?: string; limit?: number }):
         title: 'Reply to: ' + c.subject,
         summary: 'From ' + c.guest_email,
         payload: JSON.stringify({
-          to: c.guest_email, subject: 'Re: ' + c.subject, draft_body: latestDraft.body,
-          original_body: inbound?.body || '', language: c.language, classification: c.classification,
+          to: c.guest_email,
+          subject: 'Re: ' + c.subject,
+          draft_body: latestDraft.body,
+          original_body: inbound?.body || '',
+          language: c.language,
+          classification: c.classification,
           knowledge_gaps: meta?.knowledge_gaps || [],
         }),
         created_at: c.created_at,
@@ -1699,16 +2117,28 @@ export async function approvals_list(args: { status?: string; limit?: number }):
   return { approvals, total: approvals.length, pending_count: approvals.length };
 }
 
-export async function approvals_act(args: { approval_id: string; action: string; revision?: string; admin_notes?: string }): Promise<unknown> {
+export async function approvals_act(
+  args: { approval_id: string; action: string; revision?: string; admin_notes?: string },
+): Promise<unknown> {
   // Map old approval_id (which is now conversation_id) to new actions
   const { approval_id: convoId, action, revision } = args;
   if (!convoId || !action) throw new Error('approval_id and action are required');
 
   if (action === 'approve') return conversation_act({ conversation_id: convoId, action: 'send' });
   if (action === 'reject') return conversation_act({ conversation_id: convoId, action: 'discard' });
-  if (action === 'save_draft') return conversation_act({ conversation_id: convoId, action: 'save_edit', body: revision });
-  if (action === 'revise' && revision) return conversation_act({ conversation_id: convoId, action: 'save_edit', body: revision });
-  if (action === 'regenerate') return conversation_act({ conversation_id: convoId, action: 'regenerate', prompt: revision || 'Rewrite the draft' });
+  if (action === 'save_draft') {
+    return conversation_act({ conversation_id: convoId, action: 'save_edit', body: revision });
+  }
+  if (action === 'revise' && revision) {
+    return conversation_act({ conversation_id: convoId, action: 'save_edit', body: revision });
+  }
+  if (action === 'regenerate') {
+    return conversation_act({
+      conversation_id: convoId,
+      action: 'regenerate',
+      prompt: revision || 'Rewrite the draft',
+    });
+  }
 
   throw new Error('Unknown action: ' + action);
 }
@@ -1718,30 +2148,93 @@ export async function approvals_act(args: { approval_id: string; action: string;
 // ============================================
 
 export async function widget_email_inbox_ui(args: {}): Promise<unknown> {
-  const countResult = await ultralight.db.first("SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'active'", [uid()]) as CountRow | null;
-  return { meta: { title: 'Email Approvals', icon: '📧', badge_count: countResult?.cnt || 0 }, app_html: DECK_UI_HTML, version: '5.0' };
+  const countResult = await ultralight.db.first(
+    "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'active'",
+    [uid()],
+  ) as CountRow | null;
+  return {
+    meta: { title: 'Email Approvals', icon: '📧', badge_count: countResult?.cnt || 0 },
+    app_html: DECK_UI_HTML,
+    version: '5.0',
+  };
 }
 
-export async function widget_email_inbox_data(args: { view?: string }): Promise<unknown> {
+export async function widget_email_inbox_data(
+  args: { view?: string; card_id?: string; data_view?: string },
+): Promise<unknown> {
   const view = args.view || 'active';
+  const cardView = args.data_view || args.card_id || '';
+
+  if (cardView === 'inbox_volume') {
+    const activeCnt = await ultralight.db.first(
+      "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'active'",
+      [uid()],
+    ) as CountRow | null;
+    const resolvedCnt = await ultralight.db.first(
+      "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'resolved'",
+      [uid()],
+    ) as CountRow | null;
+    const discardedCnt = await ultralight.db.first(
+      "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'discarded'",
+      [uid()],
+    ) as CountRow | null;
+    return {
+      card_id: 'inbox_volume',
+      meta: { title: 'Inbox Volume', icon: 'EO', badge_count: activeCnt?.cnt || 0, status: 'live' },
+      body: {
+        kind: 'metric',
+        metric: activeCnt?.cnt || 0,
+        label: 'drafts awaiting your review',
+      },
+      footer: `${resolvedCnt?.cnt || 0} resolved - ${discardedCnt?.cnt || 0} discarded`,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  if (cardView === 'drafts_queue') {
+    const activeCnt = await ultralight.db.first(
+      "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'active'",
+      [uid()],
+    ) as CountRow | null;
+    const convos = await ultralight.db.all(
+      'SELECT guest_name, guest_email, subject, updated_at FROM conversations WHERE user_id = ? AND status = ? ORDER BY updated_at DESC LIMIT 4',
+      [uid(), 'active'],
+    ) as Pick<ConversationRow, 'guest_name' | 'guest_email' | 'subject' | 'updated_at'>[];
+    return {
+      card_id: 'drafts_queue',
+      meta: { title: 'Drafts Queue', icon: 'EO', badge_count: activeCnt?.cnt || 0, status: 'live' },
+      body: {
+        kind: 'list',
+        rows: convos.map((conversation) => [
+          conversation.guest_name || conversation.guest_email,
+          conversation.subject || 'No subject',
+          conversation.updated_at,
+        ]),
+      },
+      footer: `${activeCnt?.cnt || 0} active drafts`,
+      updated_at: new Date().toISOString(),
+    };
+  }
 
   // Active conversations with their full version history
   const convos = await ultralight.db.all(
     'SELECT * FROM conversations WHERE user_id = ? AND status = ? ORDER BY updated_at DESC LIMIT 50',
-    [uid(), view === 'archive' ? 'resolved' : view === 'discarded' ? 'discarded' : 'active']
+    [uid(), view === 'archive' ? 'resolved' : view === 'discarded' ? 'discarded' : 'active'],
   ) as ConversationRow[];
 
   const items: EmailInboxItem[] = [];
   for (const c of convos) {
     const versions = await ultralight.db.all(
       'SELECT id, version_num, type, body, actor, actor_prompt, model, metadata, resend_id, created_at FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num ASC',
-      [c.id, uid()]
+      [c.id, uid()],
     ) as VersionRow[];
 
     const parsedVersions = parseConversationVersions(versions);
 
     // Latest draft for the card
-    const latestDraft = [...parsedVersions].reverse().find((version) => DRAFT_VERSION_TYPES.has(version.type));
+    const latestDraft = [...parsedVersions].reverse().find((version) =>
+      DRAFT_VERSION_TYPES.has(version.type)
+    );
     // All inbound messages
     const inboundMessages = parsedVersions.filter((version) => version.type === 'inbound');
     // Knowledge gaps from latest draft metadata
@@ -1765,14 +2258,27 @@ export async function widget_email_inbox_data(args: { view?: string }): Promise<
   }
 
   // Counts per status
-  const activeCnt = await ultralight.db.first("SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'active'", [uid()]) as CountRow | null;
-  const resolvedCnt = await ultralight.db.first("SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'resolved'", [uid()]) as CountRow | null;
-  const discardedCnt = await ultralight.db.first("SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'discarded'", [uid()]) as CountRow | null;
+  const activeCnt = await ultralight.db.first(
+    "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'active'",
+    [uid()],
+  ) as CountRow | null;
+  const resolvedCnt = await ultralight.db.first(
+    "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'resolved'",
+    [uid()],
+  ) as CountRow | null;
+  const discardedCnt = await ultralight.db.first(
+    "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'discarded'",
+    [uid()],
+  ) as CountRow | null;
 
   return {
     meta: { title: 'Email Approvals', icon: '📧', badge_count: activeCnt?.cnt || 0 },
     items,
-    counts: { active: activeCnt?.cnt || 0, resolved: resolvedCnt?.cnt || 0, discarded: discardedCnt?.cnt || 0 },
+    counts: {
+      active: activeCnt?.cnt || 0,
+      resolved: resolvedCnt?.cnt || 0,
+      discarded: discardedCnt?.cnt || 0,
+    },
   };
 }
 
@@ -1787,17 +2293,27 @@ export async function widget_approval_queue(args: {}): Promise<unknown> {
 // ============================================
 
 export async function widget_email_faqs_ui(args: {}): Promise<unknown> {
-  const conventions = await ultralight.db.all('SELECT * FROM conventions WHERE user_id = ? ORDER BY category, key', [uid()]) as ConventionRow[];
-  return { meta: { title: 'Email FAQs', icon: '📋', badge_count: conventions.length }, app_html: FAQS_UI_HTML, version: '1.0' };
+  const conventions = await ultralight.db.all(
+    'SELECT * FROM conventions WHERE user_id = ? ORDER BY category, key',
+    [uid()],
+  ) as ConventionRow[];
+  return {
+    meta: { title: 'Email FAQs', icon: '📋', badge_count: conventions.length },
+    app_html: FAQS_UI_HTML,
+    version: '1.0',
+  };
 }
 
 export async function widget_email_faqs_data(args: {}): Promise<unknown> {
-  const conventions = await ultralight.db.all("SELECT * FROM conventions WHERE user_id = ? AND category != '_deleted' ORDER BY category, key", [uid()]) as ConventionRow[];
+  const conventions = await ultralight.db.all(
+    "SELECT * FROM conventions WHERE user_id = ? AND category != '_deleted' ORDER BY category, key",
+    [uid()],
+  ) as ConventionRow[];
 
   // Aggregate knowledge gaps from recent versions
   const recentGaps = await ultralight.db.all(
     "SELECT metadata FROM versions WHERE user_id = ? AND metadata IS NOT NULL AND type IN ('auto_draft', 'regeneration') ORDER BY created_at DESC LIMIT 100",
-    [uid()]
+    [uid()],
   ) as Array<Pick<VersionRow, 'metadata'>>;
 
   const gapCounts: Record<string, number> = {};
