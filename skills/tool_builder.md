@@ -304,6 +304,18 @@ ul.download({ name: "my-app", description: "Does X", permissions: ["db"] })
 ```
 Generates skeleton files with function stubs. Omit `app_id` to scaffold new.
 
+For GPU/Python functions, scaffold with the GPU runtime:
+```
+ul.download({
+  name: "image-enhancer",
+  description: "Enhances images on GPU",
+  runtime: "gpu",
+  gpu_type: "A40",
+  base: "torch-cuda"
+})
+```
+GPU scaffolds generate `ultralight.gpu.yaml`, `main.py`, `requirements.txt`, and `test_fixture.json`. Do not create a Dockerfile. Ultralight owns the Dockerfile, base image, GHCR build, and RunPod template so dependencies install once at image build time instead of on worker cold start. Use `base: "torch-cuda"` for PyTorch/model workloads, otherwise use `python-cuda`.
+
 ### 2. Test
 ```
 ul.test({ files: [{ path: "index.ts", content: "..." }], function_name: "search", test_args: { query: "test" } })
@@ -313,6 +325,7 @@ ul.test({ files: [{ path: "index.ts", content: "..." }], function_name: "search"
 - `test_args`: arguments to pass
 - `lint_only: true`: validate conventions only, skip execution
 - `strict: true`: warnings become errors
+- GPU apps are validation-only in `ul.test`: it checks package shape, config, fixture, pinned requirements, and rejects Dockerfiles. Actual GPU execution happens after upload, image build, and benchmark.
 
 ### 3. Upload
 ```
@@ -320,6 +333,7 @@ ul.upload({ files: [{ path: "index.ts", content: "..." }, { path: "manifest.json
 ```
 - **First upload** (no `app_id`): creates new app, auto-live at v1.0.0
 - **Subsequent uploads** (with `app_id`): creates a **draft** — NOT live until promoted
+- GPU uploads return immediately with `gpu_status: "building"` while GitHub Actions builds/pushes the GHCR image and RunPod provisions the endpoint. Wait for `gpu_status: "live"` before calling or publishing.
 
 ### 4. Promote Draft
 ```

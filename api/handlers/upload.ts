@@ -319,6 +319,7 @@ export async function handleUpload(request: Request): Promise<Response> {
       gpuConfig = gpuValidation.config!;
       uploadLogger.info('GPU upload config detected', {
         gpu_type: gpuConfig.gpu_type,
+        base: gpuConfig.base || 'python-cuda',
         python: gpuConfig.python || '3.11',
       });
     }
@@ -334,6 +335,16 @@ export async function handleUpload(request: Request): Promise<Response> {
       });
       if (!mainPy) {
         return error('GPU functions require a main.py file', 400);
+      }
+      if (
+        validatedFiles.some((f) =>
+          (f.name.split('/').pop() || f.name).toLowerCase() === 'dockerfile'
+        )
+      ) {
+        return error(
+          'GPU functions cannot include a Dockerfile in v1. Ultralight generates the Dockerfile and base image.',
+          400,
+        );
       }
 
       // Extract function names from test_fixture.json if available
@@ -451,6 +462,7 @@ export async function handleUpload(request: Request): Promise<Response> {
         gpu_type: gpuConfig.gpu_type,
         gpu_status: 'building',
         gpu_config: gpuConfig as unknown as Record<string, unknown>,
+        gpu_base_profile: gpuConfig.base || 'python-cuda',
         gpu_max_duration_ms: gpuConfig.max_duration_ms || null,
         gpu_concurrency_limit: 5,
         version_metadata: [
@@ -1448,6 +1460,7 @@ export async function handleUploadFiles(
           gpu_type: pipeline.gpuConfig?.gpu_type,
           gpu_status: 'building',
           gpu_config: pipeline.gpuConfig as unknown as Record<string, unknown> | undefined,
+          gpu_base_profile: pipeline.gpuConfig?.base || 'python-cuda',
           gpu_max_duration_ms: pipeline.gpuConfig?.max_duration_ms || null,
           gpu_concurrency_limit: 5,
         }

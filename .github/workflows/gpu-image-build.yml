@@ -1,0 +1,165 @@
+name: GPU Image Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: Ultralight GPU build id.
+        required: true
+        type: string
+      app_id:
+        description: Ultralight app id.
+        required: true
+        type: string
+      version:
+        description: App version.
+        required: true
+        type: string
+      context_url:
+        description: Signed internal URL for the Docker build context tar.
+        required: true
+        type: string
+      callback_url:
+        description: Internal API callback URL.
+        required: true
+        type: string
+      target_image:
+        description: GHCR image ref to push.
+        required: true
+        type: string
+      base_profile:
+        description: Platform base profile.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build and Push GPU Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      BUILD_ID: ${{ inputs.build_id }}
+      APP_ID: ${{ inputs.app_id }}
+      APP_VERSION: ${{ inputs.version }}
+      CONTEXT_URL: ${{ inputs.context_url }}
+      CALLBACK_URL: ${{ inputs.callback_url }}
+      TARGET_IMAGE: ${{ inputs.target_image }}
+      BASE_PROFILE: ${{ inputs.base_profile }}
+      CALLBACK_SECRET: ${{ secrets.GPU_BUILD_CALLBACK_SECRET }}
+
+    steps:
+      - name: Mark build start
+        shell: bash
+        run: echo "BUILD_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Download build context
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ultralight-gpu-context
+          curl -fsSL "$CONTEXT_URL" -o /tmp/ultralight-gpu-context/context.tar
+          tar -xf /tmp/ultralight-gpu-context/context.tar -C /tmp/ultralight-gpu-context
+          test -f /tmp/ultralight-gpu-context/Dockerfile
+          test -f /tmp/ultralight-gpu-context/harness.py
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            --metadata-file /tmp/ultralight-gpu-build-metadata.json \
+            --label org.opencontainers.image.source="${{ github.server_url }}/${{ github.repository }}" \
+            --label io.ultralight.app_id="$APP_ID" \
+            --label io.ultralight.version="$APP_VERSION" \
+            --label io.ultralight.build_id="$BUILD_ID" \
+            --label io.ultralight.base_profile="$BASE_PROFILE" \
+            -t "$TARGET_IMAGE" \
+            /tmp/ultralight-gpu-context
+
+      - name: Inspect image
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIGEST="$(jq -r '."containerimage.digest" // empty' /tmp/ultralight-gpu-build-metadata.json)"
+          RAW_JSON="$(docker buildx imagetools inspect "$TARGET_IMAGE" --raw || true)"
+          SIZE_BYTES="$(printf '%s' "$RAW_JSON" | node -e '
+            let input = "";
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+              try {
+                const parsed = input ? JSON.parse(input) : {};
+                const manifests = Array.isArray(parsed.manifests) ? parsed.manifests : [];
+                const configSize = Number(parsed.config?.size || 0);
+                const layers = Array.isArray(parsed.layers) ? parsed.layers : [];
+                const direct = configSize + layers.reduce((sum, layer) => sum + Number(layer.size || 0), 0);
+                const manifestTotal = manifests.reduce((sum, manifest) => sum + Number(manifest.size || 0), 0);
+                console.log(Math.max(direct, manifestTotal, 0));
+              } catch {
+                console.log(0);
+              }
+            });
+          ')"
+          echo "IMAGE_DIGEST=$DIGEST" >> "$GITHUB_ENV"
+          echo "IMAGE_SIZE_BYTES=$SIZE_BYTES" >> "$GITHUB_ENV"
+
+      - name: Notify Ultralight
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$CALLBACK_SECRET" ]; then
+            echo "Missing GPU_BUILD_CALLBACK_SECRET secret." >&2
+            exit 1
+          fi
+
+          ENDED_AT="$(date +%s)"
+          BUILD_SECONDS="$((ENDED_AT - BUILD_STARTED_AT))"
+          STATUS="${{ job.status }}"
+          if [ "$STATUS" != "success" ]; then
+            STATUS="failed"
+          fi
+
+          jq -n \
+            --arg build_id "$BUILD_ID" \
+            --arg app_id "$APP_ID" \
+            --arg version "$APP_VERSION" \
+            --arg status "$STATUS" \
+            --arg image_ref "$TARGET_IMAGE" \
+            --arg image_digest "${IMAGE_DIGEST:-}" \
+            --arg error "GitHub Actions GPU image build did not complete successfully." \
+            --argjson image_size_bytes "${IMAGE_SIZE_BYTES:-0}" \
+            --argjson build_seconds "$BUILD_SECONDS" \
+            '{
+              build_id: $build_id,
+              app_id: $app_id,
+              version: $version,
+              status: $status,
+              image_ref: $image_ref,
+              image_digest: (if $image_digest == "" then null else $image_digest end),
+              image_size_bytes: $image_size_bytes,
+              build_seconds: $build_seconds,
+              error: (if $status == "success" then null else $error end)
+            }' > /tmp/ultralight-gpu-callback.json
+
+          curl -fsS \
+            -X POST "$CALLBACK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GPU-Build-Secret: $CALLBACK_SECRET" \
+            --data @/tmp/ultralight-gpu-callback.json

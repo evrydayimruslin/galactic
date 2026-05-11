@@ -2,7 +2,7 @@
 // Defines the interface that all GPU compute providers must implement.
 // MVP: RunPod Serverless. Future: CoreWeave, Lambda, Modal, colocation.
 
-import type { GpuType, GpuConfig, GpuExecutionResult } from './types.ts';
+import type { GpuConfig, GpuExecutionResult, GpuType } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Build Parameters
@@ -20,12 +20,20 @@ export interface BuildContainerParams {
   config: GpuConfig;
   /** Contents of requirements.txt, if present. */
   requirements?: string;
+  /** Pre-built image ref to use for the provider template. */
+  imageRef?: string;
+  /** Digest of the pre-built image, if supplied by the registry builder. */
+  imageDigest?: string;
 }
 
 /** Result from a successful container build. */
 export interface BuildContainerResult {
   /** Provider-assigned endpoint identifier. */
   endpointId: string;
+  /** Container image used by the provider template. */
+  imageRef?: string;
+  /** OCI image digest used by the provider template. */
+  imageDigest?: string;
   /** Build log lines for developer debugging. */
   buildLogs: string[];
 }
@@ -55,7 +63,7 @@ export interface ExecuteParams {
 /** Current status of a provider endpoint. */
 export interface EndpointStatus {
   /** Endpoint lifecycle state. */
-  status: 'active' | 'building' | 'error' | 'not_found';
+  status: "active" | "building" | "error" | "not_found";
   /** Number of active workers (0 = cold, will need cold start). */
   workers: number;
   /** Number of requests in the provider's queue. */

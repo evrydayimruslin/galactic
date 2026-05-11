@@ -193,6 +193,17 @@ export interface App {
   gpu_pricing_config: Record<string, unknown> | null; // GpuPricingConfig
   gpu_max_duration_ms: number | null; // Max execution time ceiling
   gpu_concurrency_limit: number | null; // Per-function concurrency cap
+  gpu_image_ref: string | null; // GHCR image ref for baked GPU app image
+  gpu_image_digest: string | null; // OCI image digest for baked GPU app image
+  gpu_base_profile: string | null; // Platform base image profile, e.g. python-cuda or torch-cuda
+  gpu_build_provider: string | null; // Image build provider, e.g. github_actions
+  gpu_build_run_id: string | null; // External build run identifier
+  gpu_build_cost_light: number | null; // Build cost charged to owner in Light
+  gpu_build_started_at: string | null;
+  gpu_build_finished_at: string | null;
+  gpu_build_error: string | null;
+  gpu_image_size_bytes: number | null;
+  gpu_image_user_storage_bytes: number | null;
   // Per-app rate limit config (Pro, owner-configurable)
   rate_limit_config: AppRateLimitConfig | null;
   // Per-function pricing config (owner-configurable)

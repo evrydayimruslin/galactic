@@ -3,8 +3,8 @@
 // Pure utility — no API calls, no side effects.
 
 import { parse as parseYaml } from 'yaml';
-import type { GpuConfig, GpuType } from './types.ts';
-import { isValidGpuType } from './types.ts';
+import type { GpuBaseProfile, GpuConfig, GpuType } from './types.ts';
+import { GPU_BASE_PROFILES, isValidGpuType } from './types.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,6 +26,9 @@ const ALLOWED_PYTHON_VERSIONS = ['3.10', '3.11'];
 
 /** Default Python version when not specified. */
 const DEFAULT_PYTHON_VERSION = '3.11';
+
+/** Default platform base image profile. */
+const DEFAULT_BASE_PROFILE: GpuBaseProfile = 'python-cuda';
 
 // ---------------------------------------------------------------------------
 // Detection
@@ -59,6 +62,7 @@ export function detectGpuConfig(
  * ```yaml
  * runtime: gpu
  * gpu_type: A100-80GB-SXM
+ * base: torch-cuda       # optional, defaults to python-cuda
  * python: "3.11"          # optional, defaults to 3.11
  * max_duration_ms: 30000  # optional
  * ```
@@ -97,7 +101,20 @@ export function parseGpuConfig(yamlContent: string): GpuConfigValidation {
     );
   }
 
-  // Step 4: Validate python version (optional)
+  // Step 4: Validate base profile (optional)
+  let base: GpuBaseProfile = DEFAULT_BASE_PROFILE;
+  if (parsed.base !== undefined) {
+    const rawBase = String(parsed.base);
+    if (!(GPU_BASE_PROFILES as string[]).includes(rawBase)) {
+      errors.push(
+        `"base" must be one of: ${GPU_BASE_PROFILES.join(', ')}. Got "${rawBase}"`,
+      );
+    } else {
+      base = rawBase as GpuBaseProfile;
+    }
+  }
+
+  // Step 5: Validate python version (optional)
   let python = DEFAULT_PYTHON_VERSION;
   if (parsed.python !== undefined) {
     const pyVersion = String(parsed.python);
@@ -110,7 +127,7 @@ export function parseGpuConfig(yamlContent: string): GpuConfigValidation {
     }
   }
 
-  // Step 5: Validate max_duration_ms (optional)
+  // Step 6: Validate max_duration_ms (optional)
   let maxDurationMs: number | undefined;
   if (parsed.max_duration_ms !== undefined) {
     const raw = Number(parsed.max_duration_ms);
@@ -129,6 +146,7 @@ export function parseGpuConfig(yamlContent: string): GpuConfigValidation {
   const config: GpuConfig = {
     runtime: 'gpu',
     gpu_type: gpuTypeRaw as GpuType,
+    base,
     python,
     max_duration_ms: maxDurationMs,
   };

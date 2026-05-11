@@ -5,6 +5,25 @@ import {
 
 import { resolveRunPodTemplateResolution } from "./runpod.ts";
 
+Deno.test("runpod template resolution: baked images bypass runtime code injection", () => {
+  const result = resolveRunPodTemplateResolution({
+    appId: "app-123",
+    version: "1.2.3",
+    imageRef: "ghcr.io/ultralight/gpu-apps/app-123:1.2.3",
+    imageDigest: "sha256:abc",
+  });
+
+  assertEquals(result, {
+    mode: "image",
+    imageName: "ghcr.io/ultralight/gpu-apps/app-123:1.2.3@sha256:abc",
+    env: {
+      ULTRALIGHT_BAKED_IMAGE: "1",
+      ULTRALIGHT_APP_ID: "app-123",
+      ULTRALIGHT_VERSION: "1.2.3",
+    },
+  });
+});
+
 Deno.test("runpod template resolution: prefers per-app template injection when fully configured", () => {
   const result = resolveRunPodTemplateResolution({
     appId: "app-123",

@@ -30,6 +30,24 @@ Deno.test("gpu builder preflight: reports missing config and passes once per-app
         status: "ready",
         message: "GPU build configuration is ready.",
         template_mode: "per_app",
+        build_mode: "runpod_template",
+      });
+    });
+
+    await t.step("prefers GHCR image build when configured", () => {
+      globalThis.__env = {
+        RUNPOD_API_KEY: "runpod-key",
+        GITHUB_ACTIONS_TOKEN: "github-token",
+        GPU_BUILD_CALLBACK_SECRET: "callback-secret",
+        RUNPOD_CONTAINER_REGISTRY_AUTH_ID: "registry-auth",
+      } as typeof globalThis.__env;
+
+      assertEquals(resolveGpuBuildPreflight("app-123", "1.0.0"), {
+        ok: true,
+        status: "ready",
+        message: "GPU image build configuration is ready.",
+        template_mode: "image",
+        build_mode: "ghcr_image",
       });
     });
   } finally {

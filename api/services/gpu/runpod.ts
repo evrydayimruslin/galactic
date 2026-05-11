@@ -58,6 +58,9 @@ const GPU_TYPE_TO_RUNPOD: Record<GpuType, string> = {
 export interface RunPodTemplateResolutionInput {
   appId: string;
   version: string;
+  imageRef?: string;
+  imageDigest?: string;
+  containerRegistryAuthId?: string;
   baseImage?: string;
   platformUrl?: string;
   gpuSecret?: string;
@@ -67,10 +70,17 @@ export interface RunPodTemplateResolutionInput {
 
 export type RunPodTemplateResolution =
   | {
+    mode: "image";
+    imageName: string;
+    env: Record<string, string>;
+    containerRegistryAuthId?: string;
+  }
+  | {
     mode: "per_app";
     imageName: string;
     codeUrl: string;
     env: Record<string, string>;
+    containerRegistryAuthId?: string;
   }
   | {
     mode: "shared";
@@ -81,6 +91,23 @@ export type RunPodTemplateResolution =
 export function resolveRunPodTemplateResolution(
   input: RunPodTemplateResolutionInput,
 ): RunPodTemplateResolution {
+  if (input.imageRef) {
+    return {
+      mode: "image",
+      imageName: input.imageDigest
+        ? `${input.imageRef}@${input.imageDigest}`
+        : input.imageRef,
+      ...(input.containerRegistryAuthId
+        ? { containerRegistryAuthId: input.containerRegistryAuthId }
+        : {}),
+      env: {
+        ULTRALIGHT_BAKED_IMAGE: "1",
+        ULTRALIGHT_APP_ID: input.appId,
+        ULTRALIGHT_VERSION: input.version,
+      },
+    };
+  }
+
   const baseImage = input.baseImage || "";
   const platformUrl = (input.platformUrl || "").replace(/\/+$/, "");
   const gpuSecret = input.gpuSecret || "";
@@ -95,6 +122,9 @@ export function resolveRunPodTemplateResolution(
       mode: "per_app",
       imageName: baseImage,
       codeUrl,
+      ...(input.containerRegistryAuthId
+        ? { containerRegistryAuthId: input.containerRegistryAuthId }
+        : {}),
       env: {
         ULTRALIGHT_CODE_URL: codeUrl,
         ULTRALIGHT_PLATFORM_SECRET: gpuSecret,
@@ -235,7 +265,9 @@ function getRunPodTiming(
   return {
     executionDurationMs,
     delayTimeMs,
-    billableDurationMs: computeGpuBillableDurationMs(delayTimeMs + executionDurationMs),
+    billableDurationMs: computeGpuBillableDurationMs(
+      delayTimeMs + executionDurationMs,
+    ),
   };
 }
 
@@ -306,6 +338,8 @@ export class RunPodProvider implements GPUProvider {
 
     return {
       endpointId: endpoint.id,
+      imageRef: params.imageRef,
+      imageDigest: params.imageDigest,
       buildLogs,
     };
   }
@@ -435,6 +469,9 @@ export class RunPodProvider implements GPUProvider {
     const templateResolution = resolveRunPodTemplateResolution({
       appId: params.appId,
       version: params.version,
+      imageRef: params.imageRef,
+      imageDigest: params.imageDigest,
+      containerRegistryAuthId: getEnv("RUNPOD_CONTAINER_REGISTRY_AUTH_ID"),
       baseImage: getEnv("RUNPOD_BASE_IMAGE"),
       platformUrl: getEnv("PLATFORM_URL") || getEnv("APP_URL"),
       gpuSecret: getEnv("GPU_INTERNAL_SECRET"),
@@ -442,13 +479,24 @@ export class RunPodProvider implements GPUProvider {
       allowSharedTemplateFallback,
     });
 
-    if (templateResolution.mode === "per_app") {
+    if (
+      templateResolution.mode === "image" ||
+      templateResolution.mode === "per_app"
+    ) {
       try {
         buildLogs.push(
-          `[build] Creating per-app template for ${params.appId}@${params.version}`,
+          templateResolution.mode === "image"
+            ? `[build] Creating baked-image template for ${params.appId}@${params.version}`
+            : `[build] Creating per-app template for ${params.appId}@${params.version}`,
         );
-        buildLogs.push(`[build] Base image: ${templateResolution.imageName}`);
-        buildLogs.push(`[build] Code URL: ${templateResolution.codeUrl}`);
+        buildLogs.push(
+          templateResolution.mode === "image"
+            ? `[build] Image: ${templateResolution.imageName}`
+            : `[build] Base image: ${templateResolution.imageName}`,
+        );
+        if (templateResolution.mode === "per_app") {
+          buildLogs.push(`[build] Code URL: ${templateResolution.codeUrl}`);
+        }
 
         const templateName = `ul-${params.appId.slice(0, 8)}-${params.version}`
           .slice(0, 191);
@@ -458,12 +506,22 @@ export class RunPodProvider implements GPUProvider {
           isServerless: true,
           env: templateResolution.env,
           containerDiskInGb: 20,
+          containerRegistryAuthId: templateResolution.containerRegistryAuthId,
         });
 
         buildLogs.push(`[build] Per-app template created: ${template.id}`);
         return template.id;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        if (templateResolution.mode === "image") {
+          buildLogs.push(
+            `[build] ERROR: Baked-image template creation failed: ${msg}`,
+          );
+          throw new Error(
+            "GPU image template creation failed. " +
+              `Original error: ${msg}`,
+          );
+        }
         if (!allowSharedTemplateFallback) {
           buildLogs.push(
             `[build] ERROR: Per-app template creation failed: ${msg}`,
@@ -512,10 +570,17 @@ export class RunPodProvider implements GPUProvider {
     isServerless: boolean;
     env: Record<string, string>;
     containerDiskInGb: number;
+    containerRegistryAuthId?: string;
   }): Promise<{ id: string; name: string }> {
     const envArray = Object.entries(config.env).map(([key, value]) =>
       `{key: "${key}", value: "${value.replace(/"/g, '\\"')}"}`
     ).join(", ");
+
+    const registryAuthArg = config.containerRegistryAuthId
+      ? `containerRegistryAuthId: "${
+        config.containerRegistryAuthId.replace(/"/g, '\\"')
+      }",`
+      : "";
 
     const mutation = `mutation {
       saveTemplate(input: {
@@ -523,6 +588,7 @@ export class RunPodProvider implements GPUProvider {
         imageName: "${config.imageName.replace(/"/g, '\\"')}",
         isServerless: ${config.isServerless},
         containerDiskInGb: ${config.containerDiskInGb},
+        ${registryAuthArg}
         volumeInGb: 0,
         dockerArgs: "",
         env: [${envArray}]
@@ -616,61 +682,59 @@ export class RunPodProvider implements GPUProvider {
 
     // No harness output — map RunPod status to our exit codes
     switch (response.status) {
-      case "COMPLETED":
-        {
-          const timing = getRunPodTiming(response);
-          return {
-            success: true,
-            exit_code: "success",
-            result: response.output,
-            duration_ms: timing.executionDurationMs,
-            delay_time_ms: timing.delayTimeMs,
-            billable_duration_ms: timing.billableDurationMs,
-            billing_increment_ms: GPU_BILLING_INCREMENT_MS,
-            peak_vram_gb: 0,
-            logs: [],
-          };
-        }
+      case "COMPLETED": {
+        const timing = getRunPodTiming(response);
+        return {
+          success: true,
+          exit_code: "success",
+          result: response.output,
+          duration_ms: timing.executionDurationMs,
+          delay_time_ms: timing.delayTimeMs,
+          billable_duration_ms: timing.billableDurationMs,
+          billing_increment_ms: GPU_BILLING_INCREMENT_MS,
+          peak_vram_gb: 0,
+          logs: [],
+        };
+      }
 
-      case "TIMED_OUT":
-        {
-          const timing = getRunPodTiming(response);
-          return {
-            success: false,
-            exit_code: "timeout",
-            result: null,
-            duration_ms: timing.executionDurationMs,
-            delay_time_ms: timing.delayTimeMs,
-            billable_duration_ms: timing.billableDurationMs,
-            billing_increment_ms: GPU_BILLING_INCREMENT_MS,
-            peak_vram_gb: 0,
-            logs: [],
-            error: {
-              type: "TimeoutError",
-              message: `Execution timed out after ${timing.executionDurationMs}ms`,
-            },
-          };
-        }
+      case "TIMED_OUT": {
+        const timing = getRunPodTiming(response);
+        return {
+          success: false,
+          exit_code: "timeout",
+          result: null,
+          duration_ms: timing.executionDurationMs,
+          delay_time_ms: timing.delayTimeMs,
+          billable_duration_ms: timing.billableDurationMs,
+          billing_increment_ms: GPU_BILLING_INCREMENT_MS,
+          peak_vram_gb: 0,
+          logs: [],
+          error: {
+            type: "TimeoutError",
+            message:
+              `Execution timed out after ${timing.executionDurationMs}ms`,
+          },
+        };
+      }
 
-      case "FAILED":
-        {
-          const timing = getRunPodTiming(response);
-          return {
-            success: false,
-            exit_code: this.classifyRunPodError(response.error),
-            result: null,
-            duration_ms: timing.executionDurationMs,
-            delay_time_ms: timing.delayTimeMs,
-            billable_duration_ms: timing.billableDurationMs,
-            billing_increment_ms: GPU_BILLING_INCREMENT_MS,
-            peak_vram_gb: 0,
-            logs: [],
-            error: {
-              type: "RunPodError",
-              message: response.error || "Unknown RunPod execution error",
-            },
-          };
-        }
+      case "FAILED": {
+        const timing = getRunPodTiming(response);
+        return {
+          success: false,
+          exit_code: this.classifyRunPodError(response.error),
+          result: null,
+          duration_ms: timing.executionDurationMs,
+          delay_time_ms: timing.delayTimeMs,
+          billable_duration_ms: timing.billableDurationMs,
+          billing_increment_ms: GPU_BILLING_INCREMENT_MS,
+          peak_vram_gb: 0,
+          logs: [],
+          error: {
+            type: "RunPodError",
+            message: response.error || "Unknown RunPod execution error",
+          },
+        };
+      }
 
       case "CANCELLED":
         return {

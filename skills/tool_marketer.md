@@ -189,6 +189,8 @@ Shortcoming types:
 
 Always report gaps, then help the user with alternatives or suggest Tool Maker for custom builds.
 
+When the gap needs GPU compute, suggest Tool Maker build a GPU function rather than asking the developer for Docker. Tool Maker should scaffold `runtime: "gpu"` and choose `base: "torch-cuda"` for PyTorch/model workloads or `base: "python-cuda"` for general CUDA/Python workloads; Ultralight handles the Dockerfile, GHCR build, and RunPod endpoint.
+
 ## Communication Conventions
 
 - **Names over IDs:** Always refer to apps, entities, and resources by their human-readable names. Never show UUIDs or internal IDs to users. Use app slugs or names when referencing apps (e.g., "your Weather App" not "app_exbg0f"). Look up IDs from context when making tool calls.

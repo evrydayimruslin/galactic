@@ -1495,6 +1495,22 @@ const PLATFORM_TOOLS: MCPTool[] = [
           type: 'string',
           description: 'App description — generates function stubs.',
         },
+        runtime: {
+          type: 'string',
+          enum: ['deno', 'gpu'],
+          description: 'Scaffold runtime. Use gpu for Python GPU functions.',
+        },
+        gpu_type: {
+          type: 'string',
+          description:
+            'GPU type for runtime="gpu" scaffolds, e.g. A40, L40S, A100-80GB-SXM, H100-SXM.',
+        },
+        base: {
+          type: 'string',
+          enum: ['python-cuda', 'torch-cuda'],
+          description:
+            'GPU base profile for runtime="gpu". Use torch-cuda for PyTorch/model workloads.',
+        },
         functions: {
           type: 'array',
           items: {
@@ -2564,15 +2580,16 @@ Deploy TypeScript/Python app or publish markdown page.
 - No \`app_id\`: creates new app at v1.0.0 (auto-live for Deno; GPU apps start building).
 - With \`app_id\`: adds new version (NOT live — use \`ul.set\` to activate).
 - \`files\`: array of \`{ path: string, content: string, encoding?: "text" | "base64" }\`.
-- **GPU functions:** Include \`ultralight.gpu.yaml\` + \`main.py\` in files. Runtime is auto-detected — no explicit parameter needed. Build is async; \`gpu_status\` starts at \`building\` and settles to \`live\`, \`build_failed\`, \`benchmark_failed\`, or \`build_config_invalid\`.
+- **GPU functions:** Include \`ultralight.gpu.yaml\` + \`main.py\` in files. Runtime is auto-detected on upload. For new scaffolds, pass \`runtime: "gpu"\`. Do not include a Dockerfile; Ultralight generates it, installs \`requirements.txt\` at GHCR build time, then points RunPod at the baked image. Build is async; \`gpu_status\` starts at \`building\` and settles to \`live\`, \`build_failed\`, \`benchmark_failed\`, or \`build_config_invalid\`.
 
-### ul.download({ app_id?, name?, description?, version? })
+### ul.download({ app_id?, name?, description?, version?, runtime?, gpu_type?, base? })
 - With \`app_id\`: download app source code (respects download_access setting).
-- Without \`app_id\`: scaffold a new app. Generates index.ts + manifest.json + .ultralightrc.json following all platform conventions. Optional: \`functions\` array, \`storage\` type, \`permissions\` list.
+- Without \`app_id\`: scaffold a new app. Default runtime generates index.ts + manifest.json + .ultralightrc.json. With \`runtime: "gpu"\`, generates \`ultralight.gpu.yaml\`, \`main.py\`, \`requirements.txt\`, and \`test_fixture.json\`. Optional: \`functions\` array, \`storage\` type, \`permissions\` list, \`gpu_type\`, \`base: "python-cuda" | "torch-cuda"\`.
 
 ### ul.test({ files, function_name?, test_args?, env_vars?, d1_fixtures?, lint_only?, strict? })
 Test code in sandbox without deploying.
 - Executes function with test_args in real sandbox. Storage is ephemeral.
+- GPU apps are validation-only in \`ul.test\`: it checks \`ultralight.gpu.yaml\`, \`main.py\`, \`test_fixture.json\`, pinned requirements, and rejects Dockerfiles. Actual Python/GPU execution happens after upload/build/benchmark.
 - If \`test_fixture.json\` has a single function entry, \`function_name\` can be omitted and fixture args become the default test_args.
 - \`test_fixture.json\` entries can be direct args or an envelope like \`{ args, env_vars, d1_fixtures }\`.
 - Use \`env_vars\` to inject secrets or base URLs into \`ultralight.env\` during the test run.
@@ -2683,12 +2700,14 @@ GPU functions run Python on dedicated GPU hardware (A40 through B200). They're b
 \`\`\`yaml
 runtime: gpu
 gpu_type: A100-80GB-SXM   # A40, L40, L40S, A100-80GB-PCIe, A100-80GB-SXM, H100-PCIe, H100-SXM, H100-NVL, H200, B200
+base: torch-cuda          # Optional: python-cuda (default) or torch-cuda
 python: "3.11"             # Optional: 3.10 or 3.11 (default)
 max_duration_ms: 30000     # Optional: execution timeout
 \`\`\`
 2. **\`main.py\`** — Entry point. Export handler functions.
 3. **\`requirements.txt\`** — Python dependencies (optional).
 4. **\`test_fixture.json\`** — Maps function names to test args (optional). Keys become exported function names.
+5. **No \`Dockerfile\`** — the platform generates Dockerfiles and base images. Pin dependency versions; use \`base: torch-cuda\` for PyTorch/model workloads.
 
 ### Key Differences from Deno Apps
 - **No bundling** — Python files uploaded raw, container built on RunPod
@@ -5194,6 +5213,7 @@ async function executeUpload(
       // Validate GPU config if present (new config overrides existing)
       let gpuConfig: {
         gpu_type: string;
+        base?: string;
         python?: string;
         max_duration_ms?: number;
       } | null = null;
@@ -5217,6 +5237,12 @@ async function executeUpload(
         throw new ToolError(
           VALIDATION_ERROR,
           'GPU functions require a main.py file',
+        );
+      }
+      if (uploadFiles.some((f) => (f.name.split('/').pop() || f.name).toLowerCase() === 'dockerfile')) {
+        throw new ToolError(
+          VALIDATION_ERROR,
+          'GPU functions cannot include a Dockerfile in v1. Ultralight generates the Dockerfile and base image.',
         );
       }
 
@@ -5339,6 +5365,7 @@ async function executeUpload(
       if (gpuConfig) {
         updatePayload.gpu_type = gpuConfig.gpu_type;
         updatePayload.gpu_config = gpuConfig;
+        updatePayload.gpu_base_profile = gpuConfig.base || 'python-cuda';
         updatePayload.gpu_status = 'building';
         if (gpuConfig.max_duration_ms) {
           updatePayload.gpu_max_duration_ms = gpuConfig.max_duration_ms;
@@ -5896,6 +5923,12 @@ async function executeUpload(
           'GPU functions require a main.py file',
         );
       }
+      if (uploadFiles.some((f) => (f.name.split('/').pop() || f.name).toLowerCase() === 'dockerfile')) {
+        throw new ToolError(
+          VALIDATION_ERROR,
+          'GPU functions cannot include a Dockerfile in v1. Ultralight generates the Dockerfile and base image.',
+        );
+      }
 
       // Extract exports from test_fixture.json
       let gpuExports: string[] = ['main'];
@@ -6057,6 +6090,7 @@ async function executeUpload(
         gpu_type: gpuConfig.gpu_type,
         gpu_status: 'building',
         gpu_config: gpuConfig as unknown as Record<string, unknown>,
+        gpu_base_profile: gpuConfig.base || 'python-cuda',
         gpu_max_duration_ms: gpuConfig.max_duration_ms || null,
         gpu_concurrency_limit: 5,
         version_metadata: [
@@ -6373,6 +6407,10 @@ async function executeTest(
       INVALID_PARAMS,
       'files array is required and must not be empty',
     );
+  }
+
+  if (hasGpuRuntimeFiles(files)) {
+    return await executeGpuTestValidation(userId, args, files);
   }
 
   let entryFile;
@@ -6709,6 +6747,172 @@ async function executeTest(
       exports: exports,
     };
   }
+}
+
+async function executeGpuTestValidation(
+  userId: string,
+  args: Record<string, unknown>,
+  files: Array<{ path: string; content: string }>,
+): Promise<unknown> {
+  const startedAt = Date.now();
+  logToolMakerStage(
+    {
+      stage: 'ul.test.gpu_validate',
+      status: 'started',
+      userId,
+      runtime: 'gpu',
+      fileCount: files.length,
+      functionName: typeof args.function_name === 'string' ? args.function_name : undefined,
+    },
+    { logger: platformTelemetryLogger },
+  );
+
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const normalizedFiles = files.map((file) => ({
+    name: file.path,
+    content: file.content,
+    basename: getFileBasename(file.path),
+  }));
+
+  const gpuYaml = normalizedFiles.find((file) => file.basename === 'ultralight.gpu.yaml');
+  if (!gpuYaml) errors.push('GPU apps require ultralight.gpu.yaml.');
+  const mainPy = normalizedFiles.find((file) => file.basename === 'main.py');
+  if (!mainPy) errors.push('GPU apps require main.py.');
+  if (normalizedFiles.some((file) => file.basename.toLowerCase() === 'dockerfile')) {
+    errors.push('GPU apps cannot upload a Dockerfile in v1. Ultralight generates the Dockerfile and base image.');
+  }
+
+  let gpuConfig: { gpu_type?: string; base?: string; python?: string; max_duration_ms?: number } = {};
+  if (gpuYaml) {
+    const { parseGpuConfig } = await import('../services/gpu/config.ts');
+    const validation = parseGpuConfig(gpuYaml.content);
+    if (!validation.valid) errors.push(...validation.errors);
+    else gpuConfig = validation.config || {};
+  }
+
+  const requirementsFile = normalizedFiles.find((file) => file.basename === 'requirements.txt');
+  if (requirementsFile) {
+    warnings.push(...validateGpuRequirements(requirementsFile.content, gpuConfig.base || 'python-cuda'));
+  }
+
+  const fixtureFile = normalizedFiles.find((file) => file.basename === 'test_fixture.json');
+  let exports = ['main'];
+  let fixtureArgs: Record<string, unknown> | undefined;
+  if (fixtureFile) {
+    try {
+      const fixture = JSON.parse(fixtureFile.content);
+      if (fixture && typeof fixture === 'object' && !Array.isArray(fixture)) {
+        exports = Object.keys(fixture);
+        const requestedFunction = typeof args.function_name === 'string'
+          ? args.function_name
+          : exports.length === 1
+          ? exports[0]
+          : undefined;
+        if (requestedFunction && requestedFunction in fixture) {
+          const entry = (fixture as Record<string, unknown>)[requestedFunction];
+          fixtureArgs = entry && typeof entry === 'object' && !Array.isArray(entry) && 'args' in entry
+            ? (entry as Record<string, unknown>).args as Record<string, unknown>
+            : entry as Record<string, unknown>;
+        }
+      } else {
+        warnings.push('test_fixture.json should be an object keyed by function name.');
+      }
+    } catch (err) {
+      errors.push(`Invalid test_fixture.json: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  const functionName = typeof args.function_name === 'string'
+    ? args.function_name
+    : exports.length === 1
+    ? exports[0]
+    : undefined;
+  if (functionName && fixtureFile && !exports.includes(functionName)) {
+    warnings.push(`Function "${functionName}" is not present in test_fixture.json; upload can still infer exports from the fixture keys.`);
+  }
+  if (!fixtureFile) {
+    warnings.push('Add test_fixture.json so Ultralight can infer GPU function exports and benchmark inputs.');
+  }
+
+  const strict = args.strict === true;
+  const success = errors.length === 0 && !(strict && warnings.length > 0);
+  const durationMs = Date.now() - startedAt;
+  logToolMakerStage(
+    {
+      stage: 'ul.test.gpu_validate',
+      status: success ? 'succeeded' : 'failed',
+      userId,
+      runtime: 'gpu',
+      fileCount: files.length,
+      exportCount: exports.length,
+      functionName,
+      durationMs,
+      note: errors.concat(strict ? warnings : []).join(', ') || undefined,
+    },
+    { logger: platformTelemetryLogger },
+  );
+
+  return {
+    success,
+    runtime: 'gpu',
+    mode: 'validation_only',
+    duration_ms: durationMs,
+    exports,
+    function_name: functionName,
+    test_args: args.test_args || fixtureArgs || {},
+    gpu: {
+      gpu_type: gpuConfig.gpu_type,
+      base: gpuConfig.base || 'python-cuda',
+      python: gpuConfig.python || '3.11',
+      max_duration_ms: gpuConfig.max_duration_ms,
+    },
+    lint: {
+      success,
+      errors: strict ? errors.concat(warnings) : errors,
+      warnings: strict ? [] : warnings,
+    },
+    logs: [
+      'GPU ul.test validates files only. Execution happens after upload when the GHCR image build and RunPod benchmark complete.',
+    ],
+    next_steps: success
+      ? [
+        'Upload with ul.upload({ files: [...] }).',
+        'Wait for gpu_status to become live before calling the function.',
+      ]
+      : [
+        'Fix validation errors, then run ul.test again.',
+      ],
+  };
+}
+
+function hasGpuRuntimeFiles(files: Array<{ path: string; content: string }>): boolean {
+  return files.some((file) => {
+    const basename = getFileBasename(file.path);
+    return basename === 'ultralight.gpu.yaml' || basename === 'main.py';
+  });
+}
+
+function getFileBasename(path: string): string {
+  return path.replace(/\\/g, '/').split('/').pop() || path;
+}
+
+function validateGpuRequirements(requirements: string, baseProfile: string): string[] {
+  const warnings: string[] = [];
+  const lines = requirements.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const dependencyLines = lines.filter((line) => !line.startsWith('#') && !line.startsWith('--'));
+  const unpinned = dependencyLines.filter((line) =>
+    !/^[A-Za-z0-9_.-]+(\[[^\]]+\])?==[^=\s]+/.test(line) &&
+    !/^[A-Za-z0-9_.-]+\s*@\s*/.test(line)
+  );
+  if (unpinned.length > 0) {
+    warnings.push(`Pin GPU requirements with exact versions for reproducible image builds: ${unpinned.slice(0, 5).join(', ')}`);
+  }
+  const usesTorch = dependencyLines.some((line) => /^torch(?:vision|audio)?(?:\[|==|~=|>=|<=|>|<|$)/i.test(line));
+  if (usesTorch && baseProfile !== 'torch-cuda') {
+    warnings.push('Use base: torch-cuda when requirements include torch/torchvision/torchaudio.');
+  }
+  return warnings;
 }
 
 // ── ul.shortcomings ──────────────────────────────
@@ -7368,6 +7572,14 @@ function executeScaffold(args: Record<string, unknown>): unknown {
     | undefined;
   const storage = (args.storage as string) || 'd1';
   const permissions = args.permissions as string[] | undefined;
+  const runtime = (args.runtime as string) || 'deno';
+  const gpuType = (args.gpu_type as string) || 'A40';
+  const baseProfile = (args.base as string) ||
+    (description.toLowerCase().includes('torch') ||
+        description.toLowerCase().includes('model') ||
+        description.toLowerCase().includes('inference')
+      ? 'torch-cuda'
+      : 'python-cuda');
 
   if (!name) throw new ToolError(INVALID_PARAMS, 'name is required');
   if (!description) {
@@ -7390,6 +7602,16 @@ function executeScaffold(args: Record<string, unknown>): unknown {
       >,
     },
   ];
+
+  if (runtime === 'gpu') {
+    return executeGpuScaffold({
+      name,
+      description,
+      functions: funcs,
+      gpuType,
+      baseProfile,
+    });
+  }
 
   const detectedPerms: string[] = permissions || [];
   if (
@@ -7655,6 +7877,111 @@ function executeScaffold(args: Record<string, unknown>): unknown {
       ? 'Your app uses D1 SQL. See ultralight-spec/conventions/ for schema conventions. Every table needs user_id TEXT NOT NULL.'
       : 'After ul.upload, read the generated Skills.md via resources/read to verify documentation.',
   };
+}
+
+function executeGpuScaffold(input: {
+  name: string;
+  description: string;
+  functions: Array<{
+    name: string;
+    description?: string;
+    parameters?: Array<
+      { name: string; type: string; required?: boolean; description?: string }
+    >;
+  }>;
+  gpuType: string;
+  baseProfile: string;
+}): unknown {
+  const safeBaseProfile = input.baseProfile === 'torch-cuda' ? 'torch-cuda' : 'python-cuda';
+  const gpuYaml = [
+    'runtime: gpu',
+    `gpu_type: ${input.gpuType}`,
+    `base: ${safeBaseProfile}`,
+    'python: "3.11"',
+    'max_duration_ms: 30000',
+    '',
+  ].join('\n');
+
+  const mainLines: string[] = [
+    `"""${input.name} - Ultralight GPU functions.`,
+    '',
+    input.description.replace(/"""/g, '\\"\\"\\"'),
+    '"""',
+    '',
+    'from __future__ import annotations',
+    '',
+    '',
+  ];
+
+  for (const func of input.functions) {
+    const pyName = sanitizePythonIdentifier(func.name);
+    const params = func.parameters || [];
+    mainLines.push(`def ${pyName}(args):`);
+    mainLines.push(`    """${(func.description || input.description).replace(/"""/g, '\\"\\"\\"')}"""`);
+    if (params.length > 0) {
+      for (const param of params) {
+        mainLines.push(
+          `    ${sanitizePythonIdentifier(param.name)} = args.get("${param.name}", None)`,
+        );
+      }
+      mainLines.push('');
+    }
+    mainLines.push('    return {');
+    mainLines.push('        "ok": True,');
+    mainLines.push(`        "function": "${pyName}",`);
+    mainLines.push(
+      '        "message": "Replace this scaffold with GPU-accelerated application logic.",',
+    );
+    mainLines.push('        "input": args,');
+    mainLines.push('    }');
+    mainLines.push('');
+    mainLines.push('');
+  }
+
+  const fixture: Record<string, unknown> = {};
+  for (const func of input.functions) {
+    const pyName = sanitizePythonIdentifier(func.name);
+    const fixtureArgs: Record<string, unknown> = {};
+    for (const param of func.parameters || []) {
+      fixtureArgs[param.name] = sampleValueForType(param.type);
+    }
+    fixture[pyName] = fixtureArgs;
+  }
+
+  const requirements = safeBaseProfile === 'torch-cuda'
+    ? '# torch is provided by the torch-cuda base image. Add pinned extra packages here.\n'
+    : '# Add pinned Python dependencies here, for example: numpy==2.2.5\n';
+
+  return {
+    files: [
+      { path: 'ultralight.gpu.yaml', content: gpuYaml },
+      { path: 'main.py', content: mainLines.join('\n') },
+      { path: 'requirements.txt', content: requirements },
+      { path: 'test_fixture.json', content: JSON.stringify(fixture, null, 2) },
+    ],
+    next_steps: [
+      'Replace the placeholder returns in main.py with real GPU work.',
+      'Pin any requirements.txt dependencies with exact versions.',
+      'Run ul.test({ files: [...] }) to validate the GPU package shape.',
+      `Deploy with ul.upload({ files: [...], name: "${input.name}" }) when validation passes.`,
+    ],
+    tip:
+      'Do not add a Dockerfile. Ultralight generates it, installs requirements during the GHCR build, and points RunPod at the baked image.',
+  };
+}
+
+function sanitizePythonIdentifier(value: string): string {
+  const cleaned = value.replace(/[^A-Za-z0-9_]/g, '_').replace(/^([0-9])/, '_$1');
+  return cleaned || 'run';
+}
+
+function sampleValueForType(type: string): unknown {
+  const normalized = type.toLowerCase();
+  if (normalized.includes('number') || normalized.includes('integer')) return 1;
+  if (normalized.includes('boolean')) return true;
+  if (normalized.includes('array') || normalized.endsWith('[]')) return [];
+  if (normalized.includes('object') || normalized.includes('record')) return {};
+  return 'example';
 }
 
 function tsTypeToJsonSchemaType(tsType: string): string {

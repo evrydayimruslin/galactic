@@ -314,8 +314,12 @@ def handler(event):
 # Startup sequence
 # ---------------------------------------------------------------------------
 
-# 1. Download developer code (if ULTRALIGHT_CODE_URL is set)
-download_code()
+# 1. Download developer code for legacy templates. Baked GHCR images already
+# include app code and dependencies at image build time.
+if os.environ.get("ULTRALIGHT_BAKED_IMAGE") == "1":
+    print("[harness] Baked image mode — skipping runtime code download")
+else:
+    download_code()
 
 # 2. Import runpod AFTER code download (in case developer code patches it)
 import runpod

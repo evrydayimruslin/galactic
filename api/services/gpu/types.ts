@@ -100,6 +100,11 @@ export type GpuStatus =
 /** Internal dispatch strategy (platform-managed, not developer-facing). */
 export type GpuDispatchStrategy = 'serverless' | 'reserved' | 'colocation';
 
+/** Platform-managed base image profile for GPU app images. */
+export type GpuBaseProfile = 'python-cuda' | 'torch-cuda';
+
+export const GPU_BASE_PROFILES: GpuBaseProfile[] = ['python-cuda', 'torch-cuda'];
+
 // ---------------------------------------------------------------------------
 // Developer Config (ultralight.gpu.yaml)
 // ---------------------------------------------------------------------------
@@ -108,6 +113,8 @@ export type GpuDispatchStrategy = 'serverless' | 'reserved' | 'colocation';
 export interface GpuConfig {
   runtime: 'gpu';
   gpu_type: GpuType;
+  /** Platform-managed base image profile. Defaults to "python-cuda". */
+  base?: GpuBaseProfile;
   /** Python version. Defaults to "3.11". */
   python?: string;
   /** Max execution time in ms. Suggested by platform after benchmark, developer can override. */

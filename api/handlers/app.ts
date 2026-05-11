@@ -14,7 +14,12 @@ import { handleOAuth } from './oauth.ts';
 import { handleDiscover, handleOnboarding } from './discover.ts';
 import { handleMcpConfig } from './config.ts';
 import { handleHttpEndpoint, handleHttpOptions } from './http.ts';
-import { handleGpuCodeProxy, handleInternalD1Query } from './internal-proxy.ts';
+import {
+  handleGpuBuildCallback,
+  handleGpuBuildContextProxy,
+  handleGpuCodeProxy,
+  handleInternalD1Query,
+} from './internal-proxy.ts';
 import { handleTierChange } from './tier.ts';
 import { handleAdmin } from './admin.ts';
 import { handleDeveloper } from './developer.ts';
@@ -636,6 +641,15 @@ export function createApp() {
       // Authenticated via shared secret (machine-to-machine, no user auth)
       if (path.startsWith('/internal/gpu/code/') && method === 'GET') {
         return handleGpuCodeProxy(request, path);
+      }
+
+      // GPU image build context/callback — used by GitHub Actions build workers.
+      if (path.startsWith('/internal/gpu/build-context/') && method === 'GET') {
+        return handleGpuBuildContextProxy(request, path);
+      }
+
+      if (path === '/internal/gpu/build-callback' && method === 'POST') {
+        return handleGpuBuildCallback(request);
       }
 
       // D1 query proxy — allows GPU workers to execute D1 queries via the API server
