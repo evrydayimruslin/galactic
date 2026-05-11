@@ -227,6 +227,14 @@ broad `app:call` runtime permission. A dependency lets the widget data function
 call exactly the listed target app/function through `ultralight.call(...)`, and
 the target app still applies the installed user's own auth/settings/permissions.
 
+When a user wants a Command dashboard and the data source already exists, extend
+the existing MCP with a `widgets` + `cards` manifest instead of creating a
+special dashboard app. If the needed source app does not exist or cannot be
+modified, build a small dashboard-helper MCP whose widget data function declares
+read-only dependencies on the source apps. Use `ul.command({ action: "inventory" })`
+to see available cards and `ul.command({ action: "blueprint", prompt: "..." })`
+to check how the card will fit a saved dashboard.
+
 ## Function Implementation
 
 ```js

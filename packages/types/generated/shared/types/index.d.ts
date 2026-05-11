@@ -27,6 +27,7 @@ export interface User {
     escrow_deposit_light: number;
     escrow_earned_light: number;
     total_earned_light: number;
+    auto_add_earnings_to_balance: boolean;
     hosting_last_billed_at: string | null;
     stripe_customer_id: string | null;
     auto_topup_enabled: boolean;

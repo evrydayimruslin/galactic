@@ -1,7 +1,7 @@
 // Platform MCP Handler — v4
 // Implements JSON-RPC 2.0 for the ul.* tool namespace
 // Endpoint: POST /mcp/platform
-// 17 tools: discover, download, test, upload, set, memory, permissions, connect,
+// 18 tools: discover, command, download, test, upload, set, memory, permissions, connect,
 // connections, logs, rate, call, job, auth.link, marketplace, codemode, wallet
 // + 27 backward-compat aliases for pre-consolidation tool names
 
@@ -107,6 +107,20 @@ import {
   type ToolMapping,
   type WidgetIndexEntry,
 } from '../services/codemode-tools.ts';
+import {
+  buildCommandSurfacesFromApps,
+  createCommandDashboardBlueprint,
+  getCommandSurfaceInventory,
+  normalizeCommandSurfaceKinds,
+  saveCommandDashboardFromInput,
+  type CommandSurfaceApp,
+  type CommandSurfaceKind,
+  type CommandSurfaceSource,
+} from '../services/command-surfaces.ts';
+import {
+  getCommandDashboardLayout,
+  listCommandDashboardLayouts,
+} from '../services/command-dashboard.ts';
 import type { PublicDiscoveryApp } from '../services/public-apps.ts';
 import type { GpuPricingDisplay } from '../services/gpu/pricing-display.ts';
 import type { GpuReliabilityStats } from '../services/gpu/reliability.ts';
@@ -827,6 +841,7 @@ interface DiscoverAppResult {
   gpu_type?: string | null;
   trust_card?: unknown;
   marketplace?: MarketplaceListingSnapshot | null;
+  command_surfaces?: unknown;
 }
 
 interface DiscoverContentResult {
@@ -857,6 +872,7 @@ interface DiscoverAppstoreResult {
   gpu_type?: string | null;
   trust_card?: unknown;
   marketplace?: MarketplaceListingSnapshot | null;
+  command_surfaces?: unknown;
   url?: string;
   tags?: string[];
 }
@@ -908,6 +924,7 @@ interface AppstoreFeaturedResult {
   gpu_type?: string | null;
   trust_card?: unknown;
   marketplace?: MarketplaceListingSnapshot | null;
+  command_surfaces?: unknown;
   required_secrets?: Array<
     { key: string; description: string | null; required: boolean }
   >;
@@ -936,6 +953,7 @@ interface AppstoreScoredResult {
   runtime?: string;
   gpu_type?: string | null;
   marketplace?: MarketplaceListingSnapshot | null;
+  command_surfaces?: unknown;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1206,6 +1224,7 @@ function serializeLibraryResult(
       ...(result.gpu_type ? { gpu_type: result.gpu_type } : {}),
       ...(result.trust_card ? { trust_card: result.trust_card } : {}),
       ...(result.marketplace ? { marketplace: result.marketplace } : {}),
+      ...(result.command_surfaces ? { command_surfaces: result.command_surfaces } : {}),
     };
   }
 
@@ -1217,6 +1236,44 @@ function serializeLibraryResult(
     ...(result.url ? { url: result.url } : {}),
     ...(result.tags ? { tags: result.tags } : {}),
   };
+}
+
+function discoveryCommandSurfaceKinds(args: Record<string, unknown>): CommandSurfaceKind[] {
+  if (!Array.isArray(args.surfaces)) return [];
+  return normalizeCommandSurfaceKinds(args.surfaces, []);
+}
+
+function discoveryWantsCommandSurfaces(args: Record<string, unknown>): boolean {
+  return discoveryCommandSurfaceKinds(args).length > 0;
+}
+
+function summarizeCommandSurfacesByApp(
+  apps: CommandSurfaceApp[],
+  args: Record<string, unknown>,
+  source: CommandSurfaceSource,
+): Map<string, unknown> {
+  const kinds = discoveryCommandSurfaceKinds(args);
+  if (kinds.length === 0 || apps.length === 0) return new Map();
+  const inventory = buildCommandSurfacesFromApps(apps, {
+    query: args.query || args.task,
+    surfaces: kinds,
+    limit: 100,
+    source,
+  });
+  const grouped = new Map<string, Array<(typeof inventory.surfaces)[number]>>();
+  for (const surface of inventory.surfaces) {
+    if (!grouped.has(surface.app_id)) grouped.set(surface.app_id, []);
+    grouped.get(surface.app_id)!.push(surface);
+  }
+
+  const summaries = new Map<string, unknown>();
+  for (const [appId, surfaces] of grouped) {
+    summaries.set(appId, {
+      widgets: surfaces.filter((surface) => surface.surface === 'widget'),
+      command_cards: surfaces.filter((surface) => surface.surface === 'command_card'),
+    });
+  }
+  return summaries;
 }
 
 function toTier(value: string): Tier {
@@ -1300,8 +1357,8 @@ const PLATFORM_TOOLS: MCPTool[] = [
     description: 'Find and explore apps. ' +
       'scope="desk": last 5 used apps (check first). ' +
       'scope="inspect": deep introspection of one app. ' +
-      'scope="library": your owned+liked apps. ' +
-      'scope="appstore": all published apps.',
+      'scope="library": your owned+saved apps. ' +
+      'scope="appstore": all published apps. Add surfaces=["widget","command_card"] to reveal dashboard-ready surfaces.',
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -1337,13 +1394,80 @@ const PLATFORM_TOOLS: MCPTool[] = [
           },
           description: 'Content type filter.',
         },
+        surfaces: {
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: ['function', 'widget', 'command_card'],
+          },
+          description:
+            'Optional dashboard surface filter. Include "widget" or "command_card" to return Command-ready surfaces alongside app results.',
+        },
         limit: { type: 'number', description: 'Max results. For appstore.' },
       },
       required: ['scope'],
     },
   },
 
-  // ── 2. ul.download ──────────────────────────
+  // ── 2. ul.command ──────────────────────────
+  {
+    name: 'ul.command',
+    description:
+      'Inspect and configure Command dashboards. Use action="inventory" to list installed widgets/cards, ' +
+      'action="blueprint" to draft a natural-language dashboard plan, action="save" to persist a confirmed layout, ' +
+      'and action="list"/"get" for saved dashboards. Command cards are read-only and open their full widget.',
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['inventory', 'blueprint', 'save', 'list', 'get'],
+          description: 'Command dashboard operation.',
+        },
+        query: {
+          type: 'string',
+          description: 'Search installed command surfaces. For inventory/blueprint.',
+        },
+        prompt: {
+          type: 'string',
+          description: 'Natural-language dashboard goal. For blueprint.',
+        },
+        surfaces: {
+          type: 'array',
+          items: { type: 'string', enum: ['widget', 'command_card'] },
+          description: 'Surface types to return for inventory.',
+        },
+        limit: { type: 'number', description: 'Max surfaces/cards to return.' },
+        dashboard_key: {
+          type: 'string',
+          description: 'Saved dashboard key. Defaults to command_home.',
+        },
+        title: { type: 'string', description: 'Dashboard title.' },
+        description: { type: 'string', description: 'Dashboard description.' },
+        icon: { type: 'string', description: 'Small icon token for dashboard switchers.' },
+        sort_order: { type: 'number', description: 'Dashboard ordering.' },
+        is_default: { type: 'boolean', description: 'Make this the default dashboard.' },
+        layout: {
+          type: 'object',
+          description:
+            'CommandDashboardLayout to save: { dashboard_key, cards: [{ app_id, app_slug?, widget_id, card_id, position, size, config? }] }.',
+        },
+        blueprint: {
+          type: 'object',
+          description: 'Blueprint returned by action="blueprint"; can be passed to action="save".',
+        },
+      },
+      required: ['action'],
+    },
+  },
+
+  // ── 3. ul.download ──────────────────────────
   {
     name: 'ul.download',
     description: 'With app_id: download app source code. ' +
@@ -2387,7 +2511,7 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
 // The initialize response IS the documentation. Agents receive:
 // 1. Desk menu (last 5 apps with function schemas + recent activity)
 // 2. Library hint (how many more apps, how to search)
-// 3. Complete platform tool reference (all 10 tools)
+// 3. Complete platform tool reference (all platform tools)
 // 4. Building guide (critical rules, SDK globals)
 // 5. Agent behavioral guidance
 // This replaces the need for resources/read of Skills.md.
@@ -2404,7 +2528,7 @@ function buildPlatformDocs(): string {
 - For apps listed above: call directly. First call per session auto-includes full context (schemas, storage keys, usage patterns).
 - For unknown/unlisted apps: call \`ul.discover({ scope: "inspect", app_id })\` first.
 
-## Platform Tools (10)
+## Platform Tools (18)
 
 ### ul.call({ app_id, function_name, args? })
 Execute any app's function through this single platform connection.
@@ -2418,12 +2542,21 @@ Poll an async job's status. Functions that take longer than ~25 seconds are auto
 - Returns \`{ status: "running" }\` while in progress, \`{ status: "completed", result: ... }\` when done, or \`{ status: "failed", error: ... }\`
 - Poll every 5-10 seconds until completed or failed
 
-### ul.discover({ scope, app_id?, query?, task? })
+### ul.discover({ scope, app_id?, query?, task?, surfaces? })
 Find and explore apps.
 - \`scope: "desk"\` — Last 5 used apps with schemas and recent calls
 - \`scope: "inspect"\` — Deep introspection: full skills doc, storage architecture, KV keys, cached summary, permissions, suggested queries. Requires \`app_id\`.
 - \`scope: "library"\` — Your owned + saved apps. Without \`query\`: full Library.md + memory.md. With \`query\`: semantic search (matches app names, descriptions, function signatures, capabilities).
 - \`scope: "appstore"\` — All published apps. With \`query\`: semantic search across all public apps. Results include \`runtime\` ("deno" or "gpu") and \`gpu_type\` for GPU apps. Use \`task\` for context-aware knowledge retrieval — auto-includes pages and returns inline markdown content (first 2KB) for top page matches.
+- \`surfaces: ["widget", "command_card"]\` — Include dashboard-ready widgets/cards alongside app results. Command cards are read-only native cards that open the full widget.
+
+### ul.command({ action, ... })
+Natural-language Command dashboard primitive.
+- \`action: "inventory"\` — List installed widgets and command cards. Optional \`query\`, \`surfaces\`, \`limit\`.
+- \`action: "blueprint"\` — Draft a saved-layout plan from \`prompt\` or \`query\`. Does not save anything.
+- \`action: "save"\` — Persist a confirmed \`layout\` or prior \`blueprint\` to the user's server-synced dashboards.
+- \`action: "list"\` / \`"get"\` — Inspect saved dashboards.
+- Setup flow: inventory/search → blueprint → explain/confirm → save. If no matching cards exist, search with \`ul.discover(..., surfaces:["command_card"])\`; if still missing, ask Tool Maker to build or extend a widget/card MCP.
 
 ### ul.upload({ files, name?, description?, visibility?, app_id?, type? })
 Deploy TypeScript/Python app or publish markdown page.
@@ -3144,7 +3277,45 @@ async function handleToolsCall(
         break;
       }
 
-      // ── 2. ul.download (+ scaffold when no app_id) ──────────────
+      // ── 2. ul.command ──────────────
+      case 'ul.command': {
+        const action = toolArgs.action as string | undefined;
+        if (!action) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            'Missing required parameter: action',
+          );
+        }
+        switch (action) {
+          case 'inventory':
+            result = await getCommandSurfaceInventory(userId, {
+              query: toolArgs.query,
+              surfaces: toolArgs.surfaces,
+              limit: toolArgs.limit,
+            });
+            break;
+          case 'blueprint':
+            result = await createCommandDashboardBlueprint(userId, toolArgs);
+            break;
+          case 'save':
+            result = await saveCommandDashboardFromInput(userId, toolArgs);
+            break;
+          case 'list':
+            result = await listCommandDashboardLayouts(userId);
+            break;
+          case 'get':
+            result = await getCommandDashboardLayout(userId, toolArgs.dashboard_key);
+            break;
+          default:
+            throw new ToolError(
+              INVALID_PARAMS,
+              `Invalid action: ${action}. Use inventory|blueprint|save|list|get`,
+            );
+        }
+        break;
+      }
+
+      // ── 3. ul.download (+ scaffold when no app_id) ──────────────
       case 'ul.download': {
         if (toolArgs.app_id) {
           result = await executeDownload(userId, toolArgs);
@@ -4631,7 +4802,7 @@ async function handleToolsCall(
             : [];
 
           const likedRes = await fetch(
-            `${cmSbUrl}/rest/v1/user_app_likes?user_id=eq.${userId}&liked=eq.true&select=app_id`,
+            `${cmSbUrl}/rest/v1/user_app_library?user_id=eq.${userId}&select=app_id`,
             {
               headers: {
                 'apikey': cmSbKey,
@@ -9048,6 +9219,7 @@ async function executeRate(
       `${SUPABASE_URL}/rest/v1/user_app_blocks?user_id=eq.${userId}&app_id=eq.${app.id}`,
       { method: 'DELETE', headers },
     );
+    await refreshUserLibraryIndexes(userId, 'rating_removed');
 
     const updatedApp = await appsService.findById(app.id);
     return {
@@ -9151,6 +9323,7 @@ async function executeRate(
         { method: 'DELETE', headers },
       );
     }
+    await refreshUserLibraryIndexes(userId, positive ? 'app_saved' : 'app_blocked');
   } catch (err) {
     console.error('Rate side-effect error:', err);
   }
@@ -9164,6 +9337,31 @@ async function executeRate(
     likes: updatedApp?.likes ?? 0,
     dislikes: updatedApp?.dislikes ?? 0,
   };
+}
+
+async function refreshUserLibraryIndexes(
+  userId: string,
+  reason: string,
+): Promise<void> {
+  try {
+    await rebuildUserLibrary(userId);
+  } catch (err) {
+    platformTelemetryLogger.warn('Failed to rebuild user library after rating change', {
+      user_id: userId,
+      reason,
+      error: err,
+    });
+  }
+  try {
+    const { rebuildFunctionIndex } = await import('../services/function-index.ts');
+    await rebuildFunctionIndex(userId);
+  } catch (err) {
+    platformTelemetryLogger.warn('Failed to rebuild function index after rating change', {
+      user_id: userId,
+      reason,
+      error: err,
+    });
+  }
 }
 
 /**
@@ -10398,7 +10596,7 @@ async function executeDiscoverLibrary(
     ['memory_md', 'library_md', 'page', 'app_kv', 'user_kv'];
   const searchContent = contentTypes.length > 0;
 
-  // Fetch saved app IDs from user_app_library (liked apps)
+  // Fetch saved app IDs from user_app_library
   let savedAppIds: string[] = [];
   try {
     const savedRes = await fetch(
@@ -10453,6 +10651,14 @@ async function executeDiscoverLibrary(
       }
     } catch { /* best effort */ }
   }
+
+  const commandSurfaceInventory = discoveryWantsCommandSurfaces(args)
+    ? await getCommandSurfaceInventory(userId, {
+      query,
+      surfaces: args.surfaces,
+      limit: args.limit,
+    })
+    : null;
 
   if (!query) {
     // Return full Library.md + memory.md + saved apps list
@@ -10510,6 +10716,7 @@ async function executeDiscoverLibrary(
       return {
         library: [...ownedList, ...savedList, ...savedPageList],
         memory: memoryMd,
+        ...(commandSurfaceInventory ? { command_surfaces: commandSurfaceInventory } : {}),
       };
     }
 
@@ -10534,7 +10741,11 @@ async function executeDiscoverLibrary(
       libraryMd += savedPagesSection;
     }
 
-    return { library: libraryMd, memory: memoryMd };
+    return {
+      library: libraryMd,
+      memory: memoryMd,
+      ...(commandSurfaceInventory ? { command_surfaces: commandSurfaceInventory } : {}),
+    };
   }
 
   // Semantic search against user's app embeddings — with graceful fallback to text search
@@ -10579,6 +10790,7 @@ async function executeDiscoverLibrary(
         mcp_endpoint: `/mcp/${a.id}`,
         similarity: 0,
       })),
+      ...(commandSurfaceInventory ? { command_surfaces: commandSurfaceInventory } : {}),
     };
   }
 
@@ -10717,6 +10929,7 @@ async function executeDiscoverLibrary(
                 ...(r.gpu_type ? { gpu_type: r.gpu_type } : {}),
                 ...(r.trust_card ? { trust_card: r.trust_card } : {}),
                 ...(r.marketplace ? { marketplace: r.marketplace } : {}),
+                ...(r.command_surfaces ? { command_surfaces: r.command_surfaces } : {}),
               };
             }
             return {
@@ -10742,6 +10955,7 @@ async function executeDiscoverLibrary(
       ['app', 'memory_md', 'library_md', 'page', 'app_kv', 'user_kv'],
     escalated,
     results: allResults.slice(0, 20).map(serializeLibraryResult),
+    ...(commandSurfaceInventory ? { command_surfaces: commandSurfaceInventory } : {}),
   };
 }
 
@@ -10853,6 +11067,18 @@ async function executeDiscoverAppstore(
       } catch { /* best effort */ }
     }
 
+    const commandSurfaceByApp = summarizeCommandSurfacesByApp(
+      filtered.map((app) => ({
+        id: app.id,
+        name: app.name,
+        slug: app.slug,
+        description: app.description,
+        manifest: (app as { manifest?: unknown }).manifest,
+      })),
+      args,
+      'appstore',
+    );
+
     const featuredResults: AppstoreFeaturedResult[] = filtered.map((a) => {
       const schema = resolveAppEnvSchema(a);
       const requiredSecrets = Object.entries(schema)
@@ -10883,6 +11109,9 @@ async function executeDiscoverAppstore(
           ...a,
           visibility: 'public',
         }),
+        ...(commandSurfaceByApp.has(a.id)
+          ? { command_surfaces: commandSurfaceByApp.get(a.id) }
+          : {}),
         required_secrets: requiredSecrets.length > 0 ? requiredSecrets : undefined,
         connected: connectedKeys.length > 0,
         fully_connected: requiredSecrets.length === 0 ||
@@ -10947,6 +11176,17 @@ async function executeDiscoverAppstore(
         );
       }
     }
+    const commandSurfaceByApp = summarizeCommandSurfacesByApp(
+      matches.map((app) => ({
+        id: app.id,
+        name: app.name,
+        slug: app.slug,
+        description: app.description,
+        manifest: (app as { manifest?: unknown }).manifest,
+      })),
+      args,
+      'appstore',
+    );
     return {
       mode: 'search' as const,
       query: searchTerm,
@@ -10958,6 +11198,9 @@ async function executeDiscoverAppstore(
         type: 'app' as const,
         mcp_endpoint: `/mcp/${a.id}`,
         marketplace: listingMap.get(a.id) || null,
+        ...(commandSurfaceByApp.has(a.id)
+          ? { command_surfaces: commandSurfaceByApp.get(a.id) }
+          : {}),
       })),
       total: matches.length,
     };
@@ -11072,6 +11315,21 @@ async function executeDiscoverAppstore(
       }
     }
 
+    const commandSurfaceByApp = summarizeCommandSurfacesByApp(
+      filteredResults.map((result) => {
+        const trustRow = trustRows.get(result.id);
+        return {
+          id: result.id,
+          name: result.name,
+          slug: result.slug,
+          description: result.description,
+          manifest: trustRow?.manifest ?? (result as { manifest?: unknown }).manifest,
+        };
+      }),
+      args,
+      'appstore',
+    );
+
     // ── COMPOSITE RE-RANKING ──
     // final_score = (similarity * 0.7) + (native_boost * 0.15) + (like_signal * 0.15)
     scored = filteredResults.map((r) => {
@@ -11123,6 +11381,7 @@ async function executeDiscoverAppstore(
         runtime: rr.runtime || 'deno',
         gpu_type: rr.runtime === 'gpu' ? rr.gpu_type : undefined,
         marketplace: listingMap.get(rr.id) || null,
+        command_surfaces: commandSurfaceByApp.get(rr.id),
         trust_card: buildDiscoveryTrustCard({
           ...(trustRows.get(rr.id) || {}),
           runtime: rr.runtime || trustRows.get(rr.id)?.runtime || 'deno',
@@ -11337,6 +11596,7 @@ async function executeDiscoverAppstore(
       ...(r.gpu_type ? { gpu_type: r.gpu_type } : {}),
       ...(r.trust_card ? { trust_card: r.trust_card } : {}),
       ...(r.marketplace ? { marketplace: r.marketplace } : {}),
+      ...(r.command_surfaces ? { command_surfaces: r.command_surfaces } : {}),
       ...(r.requiredSecrets && r.requiredSecrets.length > 0
         ? { required_secrets: r.requiredSecrets }
         : {}),

@@ -1,6 +1,6 @@
 # Widget Contracts
 
-Last reviewed: `2026-05-04`
+Last reviewed: `2026-05-11`
 
 This document is the canonical contract for desktop/home-screen widgets in
 Ultralight. The goal is to keep widget discovery predictable and make Wave 4
@@ -82,6 +82,33 @@ only that source app permission to attempt that target function; the target app
 still enforces the installed user's auth, settings, visibility, and permission
 rows. Broad `permissions: ["app:call"]` remains available for older/general MCPs
 but should not be used for command cards.
+
+## Command Setup Primitive
+
+Agents should use the shared platform primitive instead of inventing their own
+dashboard setup flow:
+
+```js
+ul.command({ action: "inventory", query: "work", surfaces: ["command_card"] })
+ul.command({ action: "blueprint", prompt: "email, calendar, GitHub, and expenses", title: "Work" })
+ul.command({ action: "save", blueprint })
+```
+
+`inventory` reads installed widget/card surfaces from the same function index
+that powers codemode. `blueprint` creates a proposed server-synced layout but
+does not save. `save` persists only a confirmed layout into
+`user_command_dashboard_layouts`.
+
+Tool Dealer can also ask discovery for cards:
+
+```js
+ul.discover({ scope: "library", query: "health dashboard", surfaces: ["widget", "command_card"] })
+ul.discover({ scope: "appstore", query: "fitness tracker", surfaces: ["command_card"] })
+```
+
+Those surfaces come from the same manifest `widgets[].cards[]` declarations as
+the backend runtime, so the later desktop UI veneer can render from one
+contract.
 
 ## Deprecated Legacy Contract
 

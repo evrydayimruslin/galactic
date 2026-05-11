@@ -641,12 +641,14 @@ export interface FunctionIndex {
     appSlug?: string;
     appName?: string;
     label: string;
+    description?: string;
     uiFunction?: string;
     dataFunction?: string;
     dependencies?: Array<{ app: string; functions: string[]; access?: "read" }>;
     cards?: Array<{
       id: string;
       label: string;
+      description?: string;
       size: string;
       render: "native";
       kind?: string;

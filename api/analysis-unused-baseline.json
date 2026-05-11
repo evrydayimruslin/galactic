@@ -289,10 +289,6 @@
       ],
       "file": "services/command-dashboard.ts",
       "types": [
-        "CommandDashboardCardInstance",
-        "CommandDashboardCardPosition",
-        "CommandDashboardLayout",
-        "CommandDashboardMetadataInput",
         "CommandDashboardSummary",
         "StoredCommandDashboardLayout"
       ]
@@ -896,6 +892,8 @@
         "ValidatedAppSupabaseConfigPayload",
         "ValidatedBillingAddressPayload",
         "ValidatedConnectOnboardPayload",
+        "ValidatedEarningsAutoAddPayload",
+        "ValidatedEarningsConversionPayload",
         "ValidatedHostingCheckoutPayload",
         "ValidatedSupabaseOauthConnectPayload",
         "ValidatedUploadFormMetadata",

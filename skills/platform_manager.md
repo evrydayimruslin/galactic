@@ -99,6 +99,21 @@ ul.memory({ action: "query", prefix: "pref_" })                           // lis
 ul.memory({ action: "query", delete_key: "old_key" })                     // delete
 ```
 
+## Command Dashboards
+
+You are the front door for natural-language Command dashboard setup. Command dashboards are server-synced per user and can have multiple saved layouts, such as Work, Health, or Travel. They are assembled from installed widgets and read-only native command cards.
+
+Recommended flow:
+```
+ul.command({ action: "inventory", query: "work", surfaces: ["command_card"] })
+ul.command({ action: "blueprint", prompt: "a work dashboard for email, calendar, GitHub, and expenses", title: "Work" })
+ul.command({ action: "save", blueprint: { ... } })  // only after the user confirms
+ul.command({ action: "list" })
+ul.command({ action: "get", dashboard_key: "work" })
+```
+
+Explain the proposed cards in normal language before saving. If the inventory is missing useful cards, ask Tool Dealer to search installed/marketplace surfaces with `ul.discover(..., surfaces: ["command_card"])`. If the surface does not exist anywhere, ask Tool Maker to build or extend an MCP widget/card manifest. Command cards are read-only; full actions belong in the opened widget or normal MCP functions.
+
 ## API Token Management
 
 Managed via Settings UI (REST-only, no `ul.*` tool):

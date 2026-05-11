@@ -15,6 +15,7 @@
 
 import { getEnv } from '../lib/env.ts';
 import { getFunctionIndex, rebuildFunctionIndex, type FunctionIndex } from './function-index.ts';
+import { flattenCommandSurfaceInventory } from './command-surfaces.ts';
 import { createR2Service } from './storage.ts';
 import { getD1DatabaseId } from './d1-provisioning.ts';
 import { createAppsService } from './apps.ts';
@@ -200,6 +201,7 @@ Rules:
 - For "read" mode, leave actionFunctions empty — you'll respond directly after seeing the data.
 - systemAgentDelegations: If part or all of the task is better handled by a system agent, include delegations. Each is { "agentType": "tool_marketer", "task": "Search marketplace for ..." }. Types: tool_builder (building/testing/deploying MCP apps), tool_marketer (marketplace lifecycle — browsing, discovery, publishing, pricing, analytics), platform_manager (settings/API keys/billing/guidance). Can coexist with mode="read" or "write".
 - IMPORTANT: If the user's request requires capabilities NOT FOUND in the available functions catalog, delegate to tool_marketer. Do NOT respond with "I don't have any apps for that." Instead, delegate: { "agentType": "tool_marketer", "task": "User needs [capability]. Search marketplace for tools that provide this and help them evaluate options." }. Tool Dealer will search the full marketplace, try apps, and report back.
+- Command dashboards: setup, saved layouts, and "make me a dashboard" requests belong to platform_manager. Finding dashboard-ready widgets/cards belongs to tool_marketer. Building missing widgets/cards belongs to tool_builder.
 - If "Local Project Files" context is provided, the user may be asking about their local codebase. For questions about project structure, code, or dependencies, use mode="read" or mode="direct" and answer from the context. For tasks that create or modify local files, use mode="write". If you're not in a tool_builder context, delegate file-modification tasks to tool_builder.
 - conversationSearch: If the user references past work, a previous conversation, or something discussed before (visible in "Past Conversation Topics"), put a descriptive search query here (e.g., "auth pattern for inventory management"). Leave empty if not needed.
 - updatedSummary: ALWAYS output this field. Maintain a rolling summary of this conversation. You receive the previous summary (in "Conversation Summary") and the latest exchange (in "Last Exchange"). Merge them into an updated summary (200-400 tokens max). Include: key decisions made, entities referenced by name, user preferences expressed, task progress, and commitments/follow-ups. Omit exact data values and IDs (those are available via raw history if needed). If no summary section is provided, create one from whatever conversation context is available. On the very first message with no prior context, summarize just the current request.
@@ -1755,6 +1757,27 @@ function buildCatalog(
     if (convs.size > 0) {
       const convList = [...convs].slice(0, 5);
       sections.push(`  Conventions: ${convList.join('; ')}`);
+    }
+  }
+
+  const commandCards = flattenCommandSurfaceInventory(fnIndex, {
+    surfaces: ['command_card'],
+    limit: 24,
+  }).surfaces;
+  if (commandCards.length > 0) {
+    sections.push('\n## Command Dashboard Surfaces\nInstalled read-only cards available for Command dashboards:');
+    for (const surface of commandCards) {
+      if (surface.surface !== 'command_card') continue;
+      const bits = [
+        `${surface.size}`,
+        surface.kind,
+        surface.data_view ? `view:${surface.data_view}` : null,
+      ].filter(Boolean).join(', ');
+      sections.push(
+        `- ${surface.app_slug}/${surface.widget_id}/${surface.card_id} (${surface.card_label}) [${bits}] — ${
+          surface.description || surface.widget_label
+        }`
+      );
     }
   }
 

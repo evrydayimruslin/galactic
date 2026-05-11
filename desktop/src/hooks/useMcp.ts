@@ -16,8 +16,9 @@ const TRADITIONAL_TOOLS: ChatTool[] = [
         'Find and explore apps on the Ultralight platform. ' +
         'scope="desk": last 5 used apps (check first). ' +
         'scope="inspect": deep introspection of one app (requires app_id). ' +
-        'scope="library": your owned+liked apps. ' +
-        'scope="appstore": all published apps (use query/task for search).',
+        'scope="library": your owned+saved apps. ' +
+        'scope="appstore": all published apps (use query/task for search). ' +
+        'Add surfaces=["widget","command_card"] for dashboard-ready surfaces.',
       parameters: {
         type: 'object',
         properties: {
@@ -37,6 +38,11 @@ const TRADITIONAL_TOOLS: ChatTool[] = [
           task: {
             type: 'string',
             description: 'Task description for context-aware search. For appstore.',
+          },
+          surfaces: {
+            type: 'array',
+            items: { type: 'string', enum: ['function', 'widget', 'command_card'] },
+            description: 'Optional dashboard surface filter.',
           },
           limit: {
             type: 'number',
@@ -170,6 +176,29 @@ const CODE_MODE_TOOLS: ChatTool[] = [
 const ALL_PLATFORM_TOOLS: ChatTool[] = [
   ...TRADITIONAL_TOOLS, // ul_discover, ul_call, ul_memory
   ...CODE_MODE_TOOLS.filter(t => t.function.name === 'ul_codemode'), // ul_codemode (without duplicate ul_memory)
+  {
+    type: 'function',
+    function: {
+      name: 'ul_command',
+      description:
+        'Inspect and configure Command dashboards: list installed widgets/cards, draft blueprints, save confirmed layouts, and read saved dashboards.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['inventory', 'blueprint', 'save', 'list', 'get'] },
+          query: { type: 'string', description: 'Search installed command surfaces.' },
+          prompt: { type: 'string', description: 'Natural-language dashboard goal.' },
+          surfaces: { type: 'array', items: { type: 'string', enum: ['widget', 'command_card'] } },
+          limit: { type: 'number', description: 'Max cards/surfaces.' },
+          dashboard_key: { type: 'string', description: 'Saved dashboard key.' },
+          title: { type: 'string', description: 'Dashboard title.' },
+          layout: { type: 'object', description: 'CommandDashboardLayout to save.' },
+          blueprint: { type: 'object', description: 'Blueprint returned by action="blueprint".' },
+        },
+        required: ['action'],
+      },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -340,6 +369,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'ul_call': 'ul.call',
   'ul_codemode': 'ul.codemode',
   'ul_memory': 'ul.memory',
+  'ul_command': 'ul.command',
   'ul_rate': 'ul.rate',
   'ul_upload': 'ul.upload',
   'ul_download': 'ul.download',

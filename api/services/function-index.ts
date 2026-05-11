@@ -41,7 +41,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * Rebuild the function index for a user.
- * Fetches all owned + liked apps, extracts function metadata,
+ * Fetches all owned + saved apps, extracts function metadata,
  * generates TypeScript type declarations, and stores in R2.
  */
 export async function rebuildFunctionIndex(userId: string): Promise<FunctionIndex> {
@@ -69,29 +69,29 @@ export async function rebuildFunctionIndex(userId: string): Promise<FunctionInde
     >
     : [];
 
-  // Fetch liked apps
-  const likedRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/user_app_likes?user_id=eq.${userId}&liked=eq.true&select=app_id`,
+  // Fetch saved apps
+  const savedRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/user_app_library?user_id=eq.${userId}&select=app_id`,
     { headers },
   );
-  const likedIds = likedRes.ok
-    ? (await likedRes.json() as Array<{ app_id: string }>).map((l) => l.app_id)
+  const savedIds = savedRes.ok
+    ? (await savedRes.json() as Array<{ app_id: string }>).map((l) => l.app_id)
     : [];
 
-  let likedApps: typeof ownedApps = [];
-  if (likedIds.length > 0) {
+  let savedApps: typeof ownedApps = [];
+  if (savedIds.length > 0) {
     const likedAppsRes = await fetch(
       `${SUPABASE_URL}/rest/v1/apps?id=in.(${
-        likedIds.join(',')
+        savedIds.join(',')
       })&deleted_at=is.null&select=id,name,slug,manifest,skills_parsed,d1_database_id`,
       { headers },
     );
-    likedApps = likedAppsRes.ok ? await likedAppsRes.json() as typeof ownedApps : [];
+    savedApps = likedAppsRes.ok ? await likedAppsRes.json() as typeof ownedApps : [];
   }
 
   // Deduplicate and parse manifests
   const allAppsMap = new Map<string, IndexedApp>();
-  for (const app of [...ownedApps, ...likedApps]) {
+  for (const app of [...ownedApps, ...savedApps]) {
     if (!allAppsMap.has(app.id) && app.manifest) {
       const manifest = typeof app.manifest === 'string' ? JSON.parse(app.manifest) : app.manifest;
       const skillsParsed = parseStoredSkillsParsed(app.skills_parsed);
@@ -107,7 +107,7 @@ export async function rebuildFunctionIndex(userId: string): Promise<FunctionInde
   }
   const apps = Array.from(allAppsMap.values());
 
-  // ── Fetch skill apps (owned + liked) — .md context files ──
+  // ── Fetch skill apps (owned + saved) — .md context files ──
   const skillOwnedRes = await fetch(
     `${SUPABASE_URL}/rest/v1/apps?owner_id=eq.${userId}&app_type=eq.skill&deleted_at=is.null&select=id,name,slug,description,storage_key`,
     { headers },
@@ -119,10 +119,10 @@ export async function rebuildFunctionIndex(userId: string): Promise<FunctionInde
     : [];
 
   let skillLiked: typeof skillOwned = [];
-  if (likedIds.length > 0) {
+  if (savedIds.length > 0) {
     const skillLikedRes = await fetch(
       `${SUPABASE_URL}/rest/v1/apps?id=in.(${
-        likedIds.join(',')
+        savedIds.join(',')
       })&app_type=eq.skill&deleted_at=is.null&select=id,name,slug,description,storage_key`,
       { headers },
     );

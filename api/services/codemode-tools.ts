@@ -42,6 +42,7 @@ export interface ToolMapping {
 export interface WidgetCardIndexEntry {
   id: string;
   label: string;
+  description?: string;
   size: string;
   render: 'native';
   kind?: string;
@@ -54,6 +55,7 @@ export interface WidgetCardIndexEntry {
 export interface WidgetIndexEntry {
   name: string;
   label: string;
+  description?: string;
   appId: string;
   appSlug: string;
   appName: string;
@@ -96,6 +98,7 @@ function normalizeWidgetCard(
   return {
     id: card.id,
     label: card.label,
+    ...(card.description ? { description: card.description } : {}),
     size: card.size,
     render: 'native',
     ...(card.kind ? { kind: card.kind } : {}),
@@ -116,6 +119,7 @@ export function buildWidgetIndexForApp(app: AppForCodemode): WidgetIndexEntry[] 
     widgets.push({
       name: widget.id,
       label: widget.label,
+      ...(widget.description ? { description: widget.description } : {}),
       appId: app.id,
       appSlug: app.slug,
       appName: app.name,

@@ -21,7 +21,7 @@ return apps.flatMap(a => a.functions.map(f => ({
 ```
 
 Scopes (searched in order):
-1. Library (user's own + liked apps) — free, instant
+1. Library (user's own + saved apps) — free, instant
 2. Shared (apps granted access to) — free, permissioned
 3. Market (all published apps) — discovery free, use may cost
 

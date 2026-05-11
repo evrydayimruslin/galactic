@@ -21,6 +21,8 @@ ul.discover({ scope: "appstore", query: "weather", task: "I need hourly forecast
 ul.discover({ scope: "inspect", app_id: "xxx" })            // detailed app info
 ul.discover({ scope: "library" })                           // user's own apps
 ul.discover({ scope: "library", query: "data" })            // search own apps
+ul.discover({ scope: "library", query: "work dashboard", surfaces: ["widget", "command_card"] })  // dashboard-ready surfaces
+ul.discover({ scope: "appstore", query: "fitness", surfaces: ["command_card"] })  // published apps with cards
 ```
 
 Key parameters:
@@ -29,11 +31,24 @@ Key parameters:
 - `task`: task description for smarter matching (appstore only)
 - `app_id`: required for `inspect` scope
 - `limit`: max results
+- `surfaces`: include `widget` and/or `command_card` to uncover dashboard-ready surfaces in addition to MCP functions
 
 ### Trying Tools
 ```
 ul.call({ app_id: "xxx", function_name: "search", args: { query: "test" } })
 ```
+
+## Command Dashboard Discovery
+
+Command dashboards are assembled from installed widgets and read-only native command cards. When a user asks for a dashboard, widgets for a workflow, or "what can I pin to Command?", search surfaces as well as tools:
+
+```
+ul.command({ action: "inventory", query: "email and calendar", surfaces: ["command_card"] })
+ul.discover({ scope: "library", query: "email and calendar", surfaces: ["widget", "command_card"] })
+ul.discover({ scope: "appstore", query: "email dashboard", surfaces: ["command_card"] })
+```
+
+If installed cards exist, recommend the best cards by name and what they show. If marketplace apps have useful cards, explain that installing/saving the app makes those cards available in Command. If no good cards exist, report the capability gap and suggest Tool Maker build or extend an MCP with a widget/card manifest.
 
 ## App Metrics
 
