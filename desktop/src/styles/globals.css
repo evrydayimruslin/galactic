@@ -297,3 +297,92 @@
 .typing-dot:nth-child(3) {
   animation-delay: 0.4s;
 }
+
+/* ============================================================
+   PHASE 1 ADDITIONS — premium-UI motion vocabulary.
+
+   These are the named keyframes used by the premium mockups,
+   renamed from `pui-*` to `ul-*` to match the existing brand
+   prefix. See `handoff/DESIGN-TOKENS-DIFF.md` §7 for rationale.
+
+   Apply via Tailwind utilities declared in tailwind.config.ts
+   `theme.animation` — e.g. `className="animate-msg-rise"`. No
+   component should reference the raw keyframe name except inline
+   ad-hoc CSS (rare; flag in PR).
+   ============================================================ */
+
+/* ── Entry / arrival ── */
+@keyframes ul-pop {
+  0%   { transform: translateY(6px) scale(0.98); opacity: 0; }
+  100% { transform: translateY(0) scale(1);      opacity: 1; }
+}
+@keyframes ul-toolpop {
+  0%   { transform: translateY(4px) scale(0.985); opacity: 0; }
+  100% { transform: translateY(0) scale(1);       opacity: 1; }
+}
+@keyframes ul-fade-up {
+  0%   { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes ul-fade-in {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes ul-msg-rise {
+  0%   { opacity: 0; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes ul-dot-arrive {
+  0%   { opacity: 0; transform: scale(0.2); }
+  60%  { opacity: 1; transform: scale(1.15); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* ── Pulse / breathe / shimmer ── */
+@keyframes ul-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: 0.5; transform: scale(0.85); }
+}
+@keyframes ul-breathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.025); }
+}
+@keyframes ul-shimmer {
+  0%   { background-position: -40% 0; }
+  100% { background-position: 140% 0; }
+}
+@keyframes ul-halo {
+  0%   { transform: scale(0.6); opacity: 0.6; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+
+/* ── Typing / cursor / caret ── */
+@keyframes ul-typing {
+  0%, 60%, 100% { opacity: 0.3; }
+  30%           { opacity: 1; }
+}
+@keyframes ul-cursor {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+@keyframes ul-caret {
+  0%, 50%   { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+/* ── Status: credit applied / ring resolve / card dealt ── */
+@keyframes ul-credit-rise {
+  0%   { opacity: 0; transform: translateY(8px); }
+  30%  { opacity: 1; transform: translateY(0); }
+  80%  { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-6px); }
+}
+@keyframes ul-ring-resolve {
+  0%   { box-shadow: 0 0 0 0  rgba(34,197,94,0.4); }
+  100% { box-shadow: 0 0 0 14px rgba(34,197,94,0); }
+}
+@keyframes ul-dealt-added-flash {
+  0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.0); }
+  30%  { box-shadow: 0 0 0 8px rgba(34,197,94,0.18); }
+  100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+}

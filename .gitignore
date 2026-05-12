@@ -57,3 +57,7 @@ desktop/ultralight.db
 # Generated Tauri release configs
 desktop/src-tauri/tauri.release.conf.json
 desktop/src-tauri/tauri.windows.release.conf.json
+
+# UI handoff package (Claude Design reference; not committed)
+/handoff
+/handoff/
