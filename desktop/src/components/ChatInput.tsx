@@ -186,7 +186,8 @@ export default function ChatInput({
             onKeyDown={handleKeyDown}
             placeholder={isQueueing ? 'Queue a follow-up...' : 'Message...'}
             rows={1}
-            className="flex-1 resize-none border border-gray-200 px-3 text-[13px] text-ul-text bg-white outline-none transition-colors placeholder:text-gray-500 selectable"
+            // TODO(token): border-gray-200, placeholder:text-gray-500 — no exact ul-* equivalents; kept raw.
+            className="flex-1 resize-none border border-gray-200 px-3 text-small text-ul-text bg-ul-bg outline-none transition-colors placeholder:text-gray-500 selectable"
             style={{ paddingTop: '9px', paddingBottom: '11px', lineHeight: '20px' }}
             disabled={inputDisabled}
           />

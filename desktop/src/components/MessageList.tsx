@@ -1,6 +1,6 @@
 // Scrollable message thread with auto-scroll on new content.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Message } from '../hooks/useChat';
 import type { SystemAgentConfig } from '../lib/systemAgents';
 import MessageBubble from './MessageBubble';
@@ -18,6 +18,20 @@ export default function MessageList({ messages, isLoading, systemAgent, onStarte
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const userScrolled = useRef(false);
+
+  // Track message IDs we've already rendered, so animate-msg-rise only fires
+  // on newly appended bubbles (not on first paint of a loaded thread).
+  // Lazy init seeds with every existing ID so the initial pass renders silently.
+  const [seenIds] = useState<Set<string>>(() => new Set(messages.map(m => m.id)));
+  const newIds = new Set<string>();
+  for (const msg of messages) {
+    if (!seenIds.has(msg.id)) {
+      newIds.add(msg.id);
+    }
+  }
+  useEffect(() => {
+    newIds.forEach(id => seenIds.add(id));
+  });
 
   // Build tool results map: tool_call_id → result content
   const toolResults = new Map<string, string>();
@@ -106,6 +120,7 @@ export default function MessageList({ messages, isLoading, systemAgent, onStarte
             message={msg}
             toolResults={toolResults}
             toolsExecuting={isLoading}
+            isNew={newIds.has(msg.id)}
           />
         ))}
 

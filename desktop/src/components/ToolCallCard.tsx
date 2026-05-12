@@ -110,6 +110,19 @@ export default function ToolCallCard({ toolCall, result, executing }: ToolCallCa
   const startTimeRef = useRef<number>(Date.now());
   const [elapsed, setElapsed] = useState(0);
 
+  // Ring-resolve animation: fires once on executing -> completed transition.
+  const prevExecutingRef = useRef(executing);
+  const [resolving, setResolving] = useState(false);
+  useEffect(() => {
+    const wasExecuting = prevExecutingRef.current;
+    prevExecutingRef.current = executing;
+    if (wasExecuting && !executing && result) {
+      setResolving(true);
+      const timer = setTimeout(() => setResolving(false), 700);
+      return () => clearTimeout(timer);
+    }
+  }, [executing, result]);
+
   const parsedArgs = useMemo(() => {
     try {
       return JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
@@ -159,7 +172,10 @@ export default function ToolCallCard({ toolCall, result, executing }: ToolCallCa
   const richResult = result ? <ToolResultRenderer toolName={name} args={parsedArgs} result={result} /> : null;
 
   return (
-    <div className={`my-2 rounded-lg overflow-hidden transition-colors ${
+    <div className={`my-2 rounded-lg overflow-hidden transition-colors animate-toolpop ${
+      resolving ? 'animate-ring-resolve' : ''
+    } ${
+      // TODO(token): border-blue-200, blue-50/40, border-gray-150 — no exact ul-* equivalents; kept raw.
       executing ? 'border border-blue-200 bg-gradient-to-r from-blue-50/40 to-transparent' : 'border border-gray-150'
     }`}>
       {/* Header — single clean row */}
@@ -185,7 +201,8 @@ export default function ToolCallCard({ toolCall, result, executing }: ToolCallCa
 
         {/* Timing */}
         {elapsed > 0 && (
-          <span className={`text-[10px] tabular-nums flex-shrink-0 ${executing ? 'text-blue-400' : 'text-gray-400'}`}>
+          // TODO(token): text-gray-400 — no exact ul-* equivalent; kept raw.
+          <span className={`text-nano tabular-nums flex-shrink-0 ${executing ? 'text-ul-completed' : 'text-gray-400'}`}>
             {formatDuration(elapsed)}
           </span>
         )}
@@ -207,21 +224,21 @@ export default function ToolCallCard({ toolCall, result, executing }: ToolCallCa
             <div className="space-y-0.5">
               {display.fnName && (
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[10px] text-gray-400 w-16 shrink-0">Function</span>
+                  <span className="text-nano text-gray-400 w-16 shrink-0">Function</span>
                   <span className="text-xs font-mono text-ul-text-secondary">{display.fnName}</span>
                 </div>
               )}
               {display.fnArgs && Object.keys(display.fnArgs).length > 0 && (
                 Object.entries(display.fnArgs).map(([k, v]) => (
                   <div key={k} className="flex items-baseline gap-2">
-                    <span className="text-[10px] text-gray-400 w-16 shrink-0">{toTitleCase(k)}</span>
+                    <span className="text-nano text-gray-400 w-16 shrink-0">{toTitleCase(k)}</span>
                     <span className="text-xs text-ul-text-secondary">{typeof v === 'string' ? v : JSON.stringify(v)}</span>
                   </div>
                 ))
               )}
             </div>
           ) : (
-            <pre className="text-xs font-mono bg-gray-50 rounded p-2 overflow-x-auto whitespace-pre-wrap text-ul-text-secondary">
+            <pre className="text-xs font-mono bg-ul-bg-sidebar rounded p-2 overflow-x-auto whitespace-pre-wrap text-ul-text-secondary">
               {JSON.stringify(parsedArgs, null, 2)}
             </pre>
           )}
@@ -230,7 +247,7 @@ export default function ToolCallCard({ toolCall, result, executing }: ToolCallCa
           {result && richResult ? (
             <div className="pt-1">{richResult}</div>
           ) : result ? (
-            <pre className="text-xs font-mono bg-gray-50 rounded-md p-2.5 overflow-x-auto whitespace-pre-wrap max-h-60 overflow-y-auto text-ul-text-secondary border border-gray-100">
+            <pre className="text-xs font-mono bg-ul-bg-sidebar rounded-md p-2.5 overflow-x-auto whitespace-pre-wrap max-h-60 overflow-y-auto text-ul-text-secondary border border-gray-100">
               {result.length > 3000 ? result.slice(0, 3000) + '\n... (truncated)' : result}
             </pre>
           ) : executing ? (

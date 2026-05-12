@@ -19,6 +19,8 @@ interface MessageBubbleProps {
   toolResults?: Map<string, string>;
   /** Whether this message's tool calls are being executed */
   toolsExecuting?: boolean;
+  /** True for messages appended after first paint — drives msg-rise animation */
+  isNew?: boolean;
 }
 
 const inlineWidgetLogger = createDesktopLogger('InlineWidget');
@@ -172,7 +174,7 @@ function InlineWidget({ widgetName, appId }: InlineWidgetProps) {
 
 // ── MessageBubble ──
 
-export default function MessageBubble({ message, toolResults, toolsExecuting }: MessageBubbleProps) {
+export default function MessageBubble({ message, toolResults, toolsExecuting, isNew }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const isTool = message.role === 'tool';
   const isAssistant = message.role === 'assistant';
@@ -187,7 +189,7 @@ export default function MessageBubble({ message, toolResults, toolsExecuting }: 
   const hasWidgets = segments.some(s => s.type === 'widget' || s.type === 'discover' || s.type === 'exec');
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4 ${isNew ? 'animate-msg-rise' : ''}`}>
       <div
         className={`${
           isUser
