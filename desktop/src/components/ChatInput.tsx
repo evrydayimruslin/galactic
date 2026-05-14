@@ -1,26 +1,30 @@
-// Chat input — premium-UI composer (Batch 2b-i layout pass).
+// Chat input — premium-UI composer (Batches 2b-i + 2b-ii).
 //
 // Layout (mockup: handoff/mockups/composer.jsx PremiumComposer):
 //   Card chrome with focused-state ring; two rows:
-//     TOP    [paperclip] [extraAction] [textarea] [stop?] [send]
-//     BOTTOM [Tool selection pill]                [Flash | Heavy pills]
+//     TOP    [paperclip] [textarea] [stop?] [send]
+//     BOTTOM [Tool selection pill]    [Flash | Heavy pills]
 //   Inline @-mention autocomplete rises above the card from useAgentFleet.
 //
-// Behavior wired in this PR (2b-i):
-//   • Animated send-button states: idle | armed | flying | landed
-//   • @-mention autocomplete with arrow / Enter / Tab / Esc
-//   • Tool Selection + model pills open placeholder popovers
-//
-// Wired in the next PR (2b-ii):
-//   • Tool Selection popover content from useAmbientSuggestions
-//   • Model picker popovers wired to fetchInferenceSettings + storage
-//   • ChatView migration off `extraAction` to typed onToolDealer props
+// Tool Selection popover renders ambient suggestions (passed in from
+// useAmbientSuggestions in ChatView). Model pills fetch inference settings
+// lazily on first open and persist picks via setInterpreterModel /
+// setHeavyModel.
 
-import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { ArrowUp, Paperclip, ChevronDown, Sparkles } from 'lucide-react';
 import type { Agent } from '../hooks/useAgentFleet';
+import type { AmbientSuggestion } from '../types/ambientSuggestion';
 import ProjectDropdown from './ProjectDropdown';
-import { getInterpreterModel, getHeavyModel } from '../lib/storage';
+import ToolSelectionPopover from './composer/ToolSelectionPopover';
+import ModelPickerPopover from './composer/ModelPickerPopover';
+import {
+  getInterpreterModel,
+  setInterpreterModel as persistInterpreterModel,
+  getHeavyModel,
+  setHeavyModel as persistHeavyModel,
+} from '../lib/storage';
+import { fetchInferenceSettings, type InferenceSettings } from '../lib/api';
 
 /** File attachment ready to send — base64-encoded with metadata */
 export interface ChatFile {
@@ -40,11 +44,19 @@ interface ChatInputProps {
   projectDir?: string | null;
   /** Called when user picks a new project directory */
   onProjectDirChange?: (dir: string) => void;
-  /** Optional extra action rendered beside the composer.
-   *  Legacy slot; will be deprecated in 2b-ii in favor of typed Tool Dealer props. */
-  extraAction?: ReactNode;
   /** Agent fleet for @-mention autocomplete. Falls back to no autocomplete when undefined. */
   agents?: Agent[];
+  /** Ambient + connected app suggestions (from useAmbientSuggestions). */
+  ambientSuggestions?: AmbientSuggestion[];
+  /** When true, the Tool Selection pill shows an animated halo to signal a fresh signal. */
+  ambientHasNew?: boolean;
+  /** Whether the in-chat ambient panel is currently open. Drives the pill's
+   *  "active" state and routes clicks: click while panel-open closes the panel. */
+  toolDealerPanelOpen?: boolean;
+  /** Open the in-chat ambient panel (also marks the signal as viewed). */
+  onOpenToolDealerPanel?: () => void;
+  /** Close the in-chat ambient panel. */
+  onCloseToolDealerPanel?: () => void;
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -76,57 +88,6 @@ interface MentionMenu {
   idx: number;
 }
 
-// ── Placeholder popover ───────────────────────────────────────────────
-// Anchors above its trigger via absolute positioning. 2b-ii will replace
-// the inline children with real popover sections (PopSection / PopRow).
-
-interface PlaceholderPopoverProps {
-  open: boolean;
-  onClose: () => void;
-  anchorRef: React.RefObject<HTMLElement | null>;
-  align?: 'left' | 'right';
-  width?: number;
-  title: string;
-  body: string;
-}
-
-function PlaceholderPopover({ open, onClose, anchorRef, align = 'left', width = 280, title, body }: PlaceholderPopoverProps) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (ref.current?.contains(target)) return;
-      if (anchorRef.current?.contains(target)) return;
-      onClose();
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('mousedown', onDoc);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDoc);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open, onClose, anchorRef]);
-
-  if (!open) return null;
-
-  return (
-    <div
-      ref={ref}
-      role="dialog"
-      className={`absolute z-20 ${align === 'right' ? 'right-0' : 'left-0'} rounded-lg border border-ul-border bg-ul-bg shadow-lg ring-1 ring-black/[0.02] animate-fade-up`}
-      style={{ bottom: 'calc(100% + 8px)', width }}
-    >
-      <div className="px-3.5 py-3">
-        <div className="text-caption font-semibold text-ul-text">{title}</div>
-        <div className="text-micro text-ul-text-muted mt-1 leading-relaxed">{body}</div>
-      </div>
-    </div>
-  );
-}
-
 // ── ChatInput ─────────────────────────────────────────────────────────
 
 export default function ChatInput({
@@ -136,8 +97,12 @@ export default function ChatInput({
   queueMode = false,
   projectDir,
   onProjectDirChange,
-  extraAction,
   agents,
+  ambientSuggestions = [],
+  ambientHasNew = false,
+  toolDealerPanelOpen = false,
+  onOpenToolDealerPanel,
+  onCloseToolDealerPanel,
 }: ChatInputProps) {
   const [value, setValue] = useState('');
   const [files, setFiles] = useState<ChatFile[]>([]);
@@ -146,15 +111,44 @@ export default function ChatInput({
   const [mention, setMention] = useState<MentionMenu | null>(null);
   const [popover, setPopover] = useState<'tools' | 'flash' | 'heavy' | null>(null);
 
+  // Reactive model selections — read once from storage, then maintain
+  // locally so picker updates re-render the pill label immediately.
+  const [flashModel, setFlashModel] = useState<string>(() => getInterpreterModel());
+  const [heavyModel, setHeavyModel] = useState<string>(() => getHeavyModel());
+
+  // Inference options are lazy-loaded the first time a model popover opens,
+  // then cached for the lifetime of this composer instance.
+  const [inferenceOptions, setInferenceOptions] = useState<InferenceSettings | null>(null);
+  const inferenceFetchedRef = useRef(false);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const toolsBtnRef = useRef<HTMLButtonElement>(null);
   const flashBtnRef = useRef<HTMLButtonElement>(null);
   const heavyBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Model labels (read-only display in 2b-i; picker arrives in 2b-ii)
-  const flashLabel = formatModelLabel(getInterpreterModel());
-  const heavyLabel = formatModelLabel(getHeavyModel());
+  const flashLabel = formatModelLabel(flashModel);
+  const heavyLabel = formatModelLabel(heavyModel);
+
+  // Lazy-fetch inference options on first model-popover open
+  useEffect(() => {
+    if (popover !== 'flash' && popover !== 'heavy') return;
+    if (inferenceFetchedRef.current) return;
+    inferenceFetchedRef.current = true;
+    fetchInferenceSettings()
+      .then(setInferenceOptions)
+      .catch(() => { inferenceFetchedRef.current = false; /* retry on next open */ });
+  }, [popover]);
+
+  // Handlers for model picks — write storage + update local state
+  const pickFlash = useCallback((id: string) => {
+    persistInterpreterModel(id);
+    setFlashModel(id);
+  }, []);
+  const pickHeavy = useCallback((id: string) => {
+    persistHeavyModel(id);
+    setHeavyModel(id);
+  }, []);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -407,14 +401,6 @@ export default function ChatInput({
                 className="hidden"
               />
 
-              {/* Legacy extraAction slot — to be deprecated in 2b-ii once
-                  ChatView migrates to the typed Tool Dealer props. */}
-              {extraAction ? (
-                <div className="mb-[3px] flex flex-shrink-0 items-center justify-center">
-                  {extraAction}
-                </div>
-              ) : null}
-
               <textarea
                 ref={textareaRef}
                 value={value}
@@ -472,26 +458,52 @@ export default function ChatInput({
             {/* Bottom row — tools + model pills */}
             <div className="flex items-center justify-between px-2 pb-2 gap-2">
               <div className="flex items-center gap-1">
-                {/* Tool selection pill */}
+                {/* Tool selection pill — pill is a strict toggle:
+                    • popover open  → close everything (popover + dealer panel)
+                    • dealer panel open → close panel (no popover)
+                    • neither open  → open the popover */}
                 <div className="relative">
                   <button
                     ref={toolsBtnRef}
-                    onClick={() => setPopover(p => p === 'tools' ? null : 'tools')}
+                    onClick={() => {
+                      if (popover === 'tools') {
+                        setPopover(null);
+                        onCloseToolDealerPanel?.();
+                      } else if (toolDealerPanelOpen) {
+                        onCloseToolDealerPanel?.();
+                      } else {
+                        setPopover('tools');
+                      }
+                    }}
                     // TODO(token): text-[#777] (composer mute) — close to text-ul-text-secondary but not exact; kept raw.
                     className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full text-caption font-medium transition-colors text-[#777] ${
-                      popover === 'tools' ? 'bg-ul-accent-soft' : 'bg-transparent hover:bg-ul-bg-hover'
+                      popover === 'tools' || toolDealerPanelOpen ? 'bg-ul-accent-soft' : 'bg-transparent hover:bg-ul-bg-hover'
                     }`}
                   >
-                    <Sparkles className="w-3.5 h-3.5" strokeWidth={1.5} />
+                    {ambientHasNew ? (
+                      // Animated halo — static inner ring + pulsing outer ring
+                      // when the popover is closed. Outer ring is suppressed
+                      // when the popover is already open (you're looking at it).
+                      <span className="relative w-[7px] h-[7px] inline-block flex-shrink-0">
+                        <span className="absolute inset-0 rounded-full border border-black/[0.55] box-border" />
+                        {popover !== 'tools' && (
+                          <span
+                            className="absolute inset-0 rounded-full border border-black/[0.55] box-border"
+                            style={{ animation: 'ul-halo 1.8s ease-out infinite' }}
+                          />
+                        )}
+                      </span>
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5" strokeWidth={1.5} />
+                    )}
                     <span>Tool selection</span>
                   </button>
-                  <PlaceholderPopover
+                  <ToolSelectionPopover
                     open={popover === 'tools'}
                     onClose={() => setPopover(null)}
                     anchorRef={toolsBtnRef}
-                    width={320}
-                    title="Tool selection"
-                    body="Connected apps and Tool Dealer suggestions surface here. Wired in the next update."
+                    suggestions={ambientSuggestions}
+                    onOpenPanel={onOpenToolDealerPanel}
                   />
                 </div>
               </div>
@@ -510,14 +522,14 @@ export default function ChatInput({
                   >
                     <span>{flashLabel}</span>
                   </button>
-                  <PlaceholderPopover
+                  <ModelPickerPopover
                     open={popover === 'flash'}
                     onClose={() => setPopover(null)}
                     anchorRef={flashBtnRef}
-                    align="right"
-                    width={320}
-                    title="Flash model"
-                    body="Pick provider + model for the small/fast tier. Provider catalog from /chat/inference-options wires up in the next update."
+                    tier="flash"
+                    options={inferenceOptions}
+                    selectedModel={flashModel}
+                    onPick={pickFlash}
                   />
                 </div>
 
@@ -536,14 +548,14 @@ export default function ChatInput({
                     <span>{heavyLabel}</span>
                     <ChevronDown className="w-2.5 h-2.5" strokeWidth={1.5} />
                   </button>
-                  <PlaceholderPopover
+                  <ModelPickerPopover
                     open={popover === 'heavy'}
                     onClose={() => setPopover(null)}
                     anchorRef={heavyBtnRef}
-                    align="right"
-                    width={320}
-                    title="Heavy model"
-                    body="Pick provider + model for the escalation tier. Provider catalog from /chat/inference-options wires up in the next update."
+                    tier="heavy"
+                    options={inferenceOptions}
+                    selectedModel={heavyModel}
+                    onPick={pickHeavy}
                   />
                 </div>
               </div>
