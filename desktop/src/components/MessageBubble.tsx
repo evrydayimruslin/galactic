@@ -206,14 +206,26 @@ export default function MessageBubble({ message, toolResults, toolsExecuting, is
         {isAssistant && (
           <div>
             {/* Tool calls (before or instead of text) */}
-            {message.tool_calls?.map(tc => (
-              <ToolCallCard
-                key={tc.id}
-                toolCall={tc}
-                result={toolResults?.get(tc.id)}
-                executing={toolsExecuting && !toolResults?.has(tc.id)}
-              />
-            ))}
+            {message.tool_calls?.map(tc => {
+              const raw = toolResults?.get(tc.id);
+              // Heuristic post-hoc error detection.
+              //
+              // The Message type carries no structured error metadata today,
+              // so we route results that look like errors into the `error`
+              // prop on ToolCallCard. Replace with structured fields once
+              // useChat surfaces ToolInvocationTelemetryRequest.status into
+              // the Message shape (shared/contracts/ai.ts:113).
+              const isErrorLike = !!raw && /^(error[:\s]|\[error\b|exception[:\s])/i.test(raw.trimStart());
+              return (
+                <ToolCallCard
+                  key={tc.id}
+                  toolCall={tc}
+                  result={isErrorLike ? undefined : raw}
+                  error={isErrorLike ? raw : undefined}
+                  executing={toolsExecuting && !toolResults?.has(tc.id)}
+                />
+              );
+            })}
 
             {/* Content with inline widgets */}
             {message.content && hasWidgets ? (

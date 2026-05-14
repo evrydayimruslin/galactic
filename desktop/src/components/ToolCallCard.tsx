@@ -10,6 +10,11 @@ interface ToolCallCardProps {
   toolCall: AccumulatedToolCall;
   result?: string;
   executing?: boolean;
+  /** Post-hoc error message (BE telemetry status='error' / 'aborted' / 'timeout',
+   *  or a content heuristic from MessageBubble until the BE pipes structured
+   *  error metadata into the Message type). When set, the card renders the
+   *  errored visual treatment instead of completed. */
+  error?: string;
 }
 
 // ── Helpers ──
@@ -105,7 +110,7 @@ function humanizeToolAction(name: string, args: Record<string, unknown>): { labe
 
 // ── Component ──
 
-export default function ToolCallCard({ toolCall, result, executing }: ToolCallCardProps) {
+export default function ToolCallCard({ toolCall, result, executing, error }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(false);
   const startTimeRef = useRef<number>(Date.now());
   const [elapsed, setElapsed] = useState(0);
@@ -171,12 +176,17 @@ export default function ToolCallCard({ toolCall, result, executing }: ToolCallCa
   // Rich result
   const richResult = result ? <ToolResultRenderer toolName={name} args={parsedArgs} result={result} /> : null;
 
+  // Derived 4-state: errored takes precedence over executing/result.
+  const isErrored = !!error;
+
   return (
     <div className={`my-2 rounded-lg overflow-hidden transition-colors animate-toolpop ${
-      resolving ? 'animate-ring-resolve' : ''
+      resolving && !isErrored ? 'animate-ring-resolve' : ''
     } ${
-      // TODO(token): border-blue-200, blue-50/40, border-gray-150 — no exact ul-* equivalents; kept raw.
-      executing ? 'border border-blue-200 bg-gradient-to-r from-blue-50/40 to-transparent' : 'border border-gray-150'
+      isErrored
+        ? 'border border-ul-error bg-ul-error-soft'
+        // TODO(token): border-blue-200, blue-50/40, border-gray-150 — no exact ul-* equivalents; kept raw.
+        : executing ? 'border border-blue-200 bg-gradient-to-r from-blue-50/40 to-transparent' : 'border border-gray-150'
     }`}>
       {/* Header — single clean row */}
       <button
@@ -184,7 +194,11 @@ export default function ToolCallCard({ toolCall, result, executing }: ToolCallCa
         className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50/50 transition-colors text-left"
       >
         {/* Status */}
-        {executing ? (
+        {isErrored ? (
+          <svg className="w-3.5 h-3.5 text-ul-error flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        ) : executing ? (
           <div className="w-3.5 h-3.5 rounded-full border-2 border-blue-300 border-t-blue-600 animate-spin flex-shrink-0" />
         ) : result ? (
           <svg className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -195,7 +209,9 @@ export default function ToolCallCard({ toolCall, result, executing }: ToolCallCa
         )}
 
         {/* Action description */}
-        <span className={`text-small flex-1 min-w-0 truncate ${executing ? 'text-blue-700' : 'text-ul-text-secondary'}`}>
+        <span className={`text-small flex-1 min-w-0 truncate ${
+          isErrored ? 'text-ul-error' : executing ? 'text-blue-700' : 'text-ul-text-secondary'
+        }`}>
           {display.action}
         </span>
 
@@ -218,7 +234,15 @@ export default function ToolCallCard({ toolCall, result, executing }: ToolCallCa
 
       {/* Expanded: details + result in single layer */}
       {expanded && (
-        <div className="border-t border-gray-100 px-3 py-2 space-y-2">
+        <div className={`border-t px-3 py-2 space-y-2 ${
+          isErrored ? 'border-ul-error/30' : 'border-gray-100'
+        }`}>
+          {/* Error banner — prominent when present */}
+          {isErrored && (
+            <div className="bg-ul-error-soft border border-ul-error/30 rounded-md px-2.5 py-2 text-small text-ul-error font-mono whitespace-pre-wrap">
+              {error}
+            </div>
+          )}
           {/* Formatted details — always visible when expanded */}
           {isAppCall ? (
             <div className="space-y-0.5">
