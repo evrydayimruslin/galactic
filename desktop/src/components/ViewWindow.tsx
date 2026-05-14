@@ -3,9 +3,8 @@
 
 import { useRef } from 'react';
 import WebPanel from './WebPanel';
-import HomeView from './HomeView';
+import CommandHomescreen from './CommandHomescreen';
 import LibraryView from './LibraryView';
-import { openViewWindow } from '../lib/multiWindow';
 
 function parseViewFromParams(): string {
   return new URLSearchParams(window.location.search).get('view') || '';
@@ -24,14 +23,7 @@ export default function ViewWindow() {
     case 'settings':
       return <WebPanel path='/settings' title='Settings' />;
     case 'home':
-      return (
-        <HomeView
-          onNavigateToAgent={(agentId, _initialMessage) => {
-            // Open the agent chat in yet another window
-            openViewWindow({ kind: 'chat', agentId, agentName: agentId.slice(0, 8) });
-          }}
-        />
-      );
+      return <CommandHomescreen />;
     default:
       return (
         <div className='flex items-center justify-center h-full bg-white'>

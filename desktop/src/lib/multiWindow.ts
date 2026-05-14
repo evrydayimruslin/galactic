@@ -79,7 +79,7 @@ export async function openWidgetWindow(source: WidgetAppSource, context?: Record
 
 const VIEW_TITLES: Record<string, string> = {
   home: 'Command',
-  capabilities: 'Tools',
+  library: 'Tools',
   profile: 'Profile',
   wallet: 'Wallet',
   settings: 'Settings',
