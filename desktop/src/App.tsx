@@ -190,7 +190,10 @@ export default function App() {
     }
   }, []);
 
-  const handleOnboardingComplete = useCallback((navigateTo?: 'chat' | 'tools') => {
+  // Onboarding's step 3 composer can hand off a draft prompt; we route to a
+  // new chat now and surface seeding through the chat composer as a follow-up
+  // (see handoff/DESIGN-FOLLOWUPS.md E3). Visual-only for batch 6a.
+  const handleOnboardingComplete = useCallback((navigateTo?: 'chat' | 'tools', _draftPrompt?: string) => {
     setOnboardingComplete();
     setShowOnboarding(false);
     setOnboardingHighlight('none');

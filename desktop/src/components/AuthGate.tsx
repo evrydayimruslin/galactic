@@ -10,6 +10,7 @@ import {
   sha256Hex,
   type DesktopOAuthOptions,
 } from '../lib/auth';
+import E3Mark from './ui/E3Mark';
 
 interface AuthGateProps {
   onAuthenticated: () => void;
@@ -129,12 +130,17 @@ export default function AuthGate({ onAuthenticated }: AuthGateProps) {
   return (
     <div className="flex items-center justify-center h-full bg-white">
       <div className="w-full max-w-sm px-6">
-        {/* Logo / Title */}
-        <div className="text-center mb-10">
-          <h1 className="text-h2 text-ul-text tracking-tight">
-            Ultralight
-          </h1>
-          <p className="text-small text-ul-text-muted mt-2">
+        {/* Constellation lockup — same language as the onboarding welcome screen. */}
+        <div className="text-center mb-10 flex flex-col items-center">
+          <div className="inline-flex items-center gap-2 mb-3">
+            <span className="inline-flex" style={{ marginTop: 3 }}>
+              <E3Mark size={36} color="#0a0a0a" />
+            </span>
+            <span className="font-bold leading-none tracking-[-0.03em] text-ul-text" style={{ fontSize: 30 }}>
+              Ultralight
+            </span>
+          </div>
+          <p className="text-small text-ul-text-muted">
             {mode === 'oauth-polling'
               ? 'Complete sign-in in your browser'
               : 'Sign in to get started'}

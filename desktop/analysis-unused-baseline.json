@@ -73,16 +73,33 @@
       ]
     },
     {
-      "file": "src/components/ui/icons.tsx",
-      "files": [
-        "src/components/ui/icons.tsx"
-      ]
-    },
-    {
-      "file": "src/components/ui/Spark.tsx",
-      "files": [
-        "src/components/ui/Spark.tsx"
-      ]
+      "exports": [
+        "IconArrowUp",
+        "IconBeaker",
+        "IconBolt",
+        "IconCheck",
+        "IconChevronDown",
+        "IconChevronRight",
+        "IconCirclePlus",
+        "IconCompass",
+        "IconConnector",
+        "IconCornerDownLeft",
+        "IconFolder",
+        "IconKey",
+        "IconPackage",
+        "IconPaperclip",
+        "IconPencil",
+        "IconPlugin",
+        "IconPlus",
+        "IconSearch",
+        "IconShare",
+        "IconSlash",
+        "IconSparkles",
+        "IconUser",
+        "IconWallet",
+        "Spark"
+      ],
+      "file": "src/components/ui/icons.tsx"
     },
     {
       "file": "src/components/ui/Wordmark.tsx",
