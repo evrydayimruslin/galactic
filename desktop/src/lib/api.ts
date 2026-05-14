@@ -1265,6 +1265,150 @@ export async function fetchNewlyAcquired(limit = 10): Promise<NewlyAcquiredEntry
   return Array.isArray(data) ? data : (data.results ?? []);
 }
 
+// ── Profile + Light balance + transactions + earnings ──
+//
+// All endpoints under /api/user/* return shapes that match the BE today
+// (commits 29c7d7e, b13a946, cd63ec8, bc2dbfc). FE renders what it
+// understands and tolerates extras.
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  display_name?: string | null;
+  avatar_url?: string | null;
+  tier?: string;
+  country?: string | null;
+  featured_app_id?: string | null;
+  profile_slug?: string | null;
+  byok_enabled?: boolean;
+  byok_provider?: string | null;
+  created_at?: string;
+}
+
+export async function fetchUserProfile(): Promise<UserProfile | null> {
+  const token = getToken();
+  if (!token) return null;
+  const res = await fetchFromApi('/api/user', {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  return await res.json() as UserProfile;
+}
+
+export interface UserHosting {
+  balance_light?: number;
+  escrow_light?: number;
+  deposit_balance_light?: number;
+  earned_balance_light?: number;
+  escrow_deposit_light?: number;
+  escrow_earned_light?: number;
+  auto_add_earnings_to_balance?: boolean;
+  auto_topup_threshold_light?: number | null;
+  auto_topup_amount_light?: number | null;
+}
+
+export async function fetchUserHosting(): Promise<UserHosting | null> {
+  const token = getToken();
+  if (!token) return null;
+  const res = await fetchFromApi('/api/user/hosting', {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  return await res.json() as UserHosting;
+}
+
+export interface BillingTransaction {
+  id?: string;
+  user_id?: string;
+  type?: 'charge' | 'credit' | 'deposit' | 'refund' | 'transfer' | string;
+  category?: string;
+  description?: string | null;
+  amount_cents?: number;
+  balance_after?: number | null;
+  amount_light?: number;
+  balance_after_light?: number | null;
+  billing_config_version?: number;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+}
+
+export interface UserTransactionsResponse {
+  transactions: BillingTransaction[];
+  total: number;
+  current_rate?: Record<string, number | null>;
+}
+
+export async function fetchUserTransactions(options?: {
+  limit?: number;
+  offset?: number;
+  category?: string;
+}): Promise<UserTransactionsResponse | null> {
+  const token = getToken();
+  if (!token) return null;
+  const params = new URLSearchParams();
+  if (options?.limit) params.set('limit', String(options.limit));
+  if (options?.offset) params.set('offset', String(options.offset));
+  if (options?.category) params.set('category', options.category);
+  const qs = params.toString();
+  const res = await fetchFromApi(
+    `/api/user/transactions${qs ? `?${qs}` : ''}`,
+    { headers: { 'Authorization': `Bearer ${token}` } },
+  );
+  if (!res.ok) return null;
+  return await res.json() as UserTransactionsResponse;
+}
+
+export interface UserEarnings {
+  total_earned_light: number;
+  balance_light: number;
+  deposit_balance_light: number;
+  earned_balance_light: number;
+  total_withdrawn_light: number;
+  withdrawable_light: number;
+  auto_add_earnings_to_balance: boolean;
+  period: string;
+  period_earned_light: number;
+  period_transfers: number;
+  by_app: Array<{ app_id: string; earned_light: number; call_count: number }>;
+  recent: Array<{
+    amount_light: number;
+    app_id: string;
+    function_name?: string | null;
+    reason?: string | null;
+    created_at: string;
+  }>;
+}
+
+export async function fetchUserEarnings(period: '7d' | '30d' | '90d' | 'all' = '30d'): Promise<UserEarnings | null> {
+  const token = getToken();
+  if (!token) return null;
+  const res = await fetchFromApi(`/api/user/earnings?period=${period}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  return await res.json() as UserEarnings;
+}
+
+export interface ConnectStatus {
+  connected: boolean;
+  onboarded: boolean;
+  payouts_enabled: boolean;
+  account_id?: string | null;
+  country?: string | null;
+  default_currency?: string | null;
+  withdrawable_earnings_light?: number;
+}
+
+export async function fetchConnectStatus(): Promise<ConnectStatus | null> {
+  const token = getToken();
+  if (!token) return null;
+  const res = await fetchFromApi('/api/user/connect/status', {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  return await res.json() as ConnectStatus;
+}
+
 // ── Task Context (per-request entity + function resolution) ──
 
 export interface TaskContext {

@@ -23,6 +23,7 @@ import ChatView from './components/ChatView';
 import CommandHomescreen from './components/CommandHomescreen';
 import LibraryView from './components/LibraryView';
 import MarketplaceView from './components/MarketplaceView';
+import ProfileView from './components/ProfileView';
 import ToolDetailView from './components/ToolDetailView';
 import NavSidebar from './components/NavSidebar';
 import TopToolbar from './components/TopToolbar';
@@ -460,7 +461,7 @@ export default function App() {
 
             {mountedViews.has('profile') && (
               <div style={paneStyle(view.kind === 'profile')}>
-                <WebPanel path='/my-profile' title='Profile' />
+                <ProfileView />
               </div>
             )}
 

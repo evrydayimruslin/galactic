@@ -6,6 +6,7 @@ import WebPanel from './WebPanel';
 import CommandHomescreen from './CommandHomescreen';
 import LibraryView from './LibraryView';
 import MarketplaceView from './MarketplaceView';
+import ProfileView from './ProfileView';
 
 function parseViewFromParams(): string {
   return new URLSearchParams(window.location.search).get('view') || '';
@@ -20,7 +21,7 @@ export default function ViewWindow() {
     case 'marketplace':
       return <MarketplaceView onOpenTool={() => { /* TODO(popout): wire tool detail in popout */ }} />;
     case 'profile':
-      return <WebPanel path='/my-profile' title='Profile' />;
+      return <ProfileView />;
     case 'wallet':
       return <WebPanel path='/wallet' title='Wallet' />;
     case 'settings':
