@@ -5,6 +5,7 @@ import { useRef } from 'react';
 import WebPanel from './WebPanel';
 import CommandHomescreen from './CommandHomescreen';
 import LibraryView from './LibraryView';
+import MarketplaceView from './MarketplaceView';
 
 function parseViewFromParams(): string {
   return new URLSearchParams(window.location.search).get('view') || '';
@@ -16,6 +17,8 @@ export default function ViewWindow() {
   switch (viewKind) {
     case 'library':
       return <LibraryView />;
+    case 'marketplace':
+      return <MarketplaceView onOpenTool={() => { /* TODO(popout): wire tool detail in popout */ }} />;
     case 'profile':
       return <WebPanel path='/my-profile' title='Profile' />;
     case 'wallet':

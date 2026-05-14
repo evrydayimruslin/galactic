@@ -22,6 +22,7 @@ import OnboardingWizard, { type OnboardingHighlight } from './components/Onboard
 import ChatView from './components/ChatView';
 import CommandHomescreen from './components/CommandHomescreen';
 import LibraryView from './components/LibraryView';
+import MarketplaceView from './components/MarketplaceView';
 import ToolDetailView from './components/ToolDetailView';
 import NavSidebar from './components/NavSidebar';
 import TopToolbar from './components/TopToolbar';
@@ -68,6 +69,7 @@ export default function App() {
     navigateToAgent,
     navigateToNewChat,
     navigateToLibrary,
+    navigateToMarketplace,
     navigateToToolDetail,
     navigateToProfile,
     navigateToWallet,
@@ -385,6 +387,10 @@ export default function App() {
               dismissTutorial();
               navigateToLibrary();
             }}
+            onNavigateToMarketplace={() => {
+              dismissTutorial();
+              navigateToMarketplace();
+            }}
             onNavigateToProfile={() => {
               dismissTutorial();
               navigateToProfile();
@@ -426,6 +432,12 @@ export default function App() {
             {mountedViews.has('library') && (
               <div style={paneStyle(view.kind === 'library')}>
                 <LibraryView onOpenTool={navigateToToolDetail} />
+              </div>
+            )}
+
+            {mountedViews.has('marketplace') && (
+              <div style={paneStyle(view.kind === 'marketplace')}>
+                <MarketplaceView onOpenTool={navigateToToolDetail} />
               </div>
             )}
 

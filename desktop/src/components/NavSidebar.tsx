@@ -21,6 +21,7 @@ interface NavSidebarProps {
   onShowTutorial?: () => void;
   onNavigateHome: () => void;
   onNavigateToLibrary: () => void;
+  onNavigateToMarketplace: () => void;
   onNavigateToProfile: () => void;
   onNavigateToWallet: () => void;
   onNavigateToSettings: () => void;
@@ -176,6 +177,7 @@ const iconProps = { size: 16, strokeWidth: 1.5 } as const;
 const smallIconProps = { size: 14, strokeWidth: 1.5 } as const;
 const NewSessionIcon = <CirclePlus {...iconProps} />;
 const CommandIcon = <Compass {...iconProps} />;
+const MarketIcon = <Store {...iconProps} />;
 const ToolsIcon = <Package {...iconProps} />;
 
 function SystemAgentIcon({ type }: { type: string | null }) {
@@ -196,6 +198,7 @@ export default function NavSidebar({
   isOpen,
   onNavigateHome,
   onNavigateToLibrary,
+  onNavigateToMarketplace,
   onNavigateToProfile,
   onNavigateToWallet,
   onNavigateToSettings,
@@ -426,6 +429,12 @@ export default function NavSidebar({
           highlighted={onboardingHighlight === 'tools'}
           onClick={onNavigateToLibrary}
           onContextMenu={e => handleNavContextMenu(e, { kind: 'library' })}
+        />
+        <NavItem
+          icon={MarketIcon}
+          label="Market"
+          active={!onboardingHighlight || onboardingHighlight === 'none' ? activeView.kind === 'marketplace' : false}
+          onClick={onNavigateToMarketplace}
         />
         <NavItem
           icon={NewSessionIcon}

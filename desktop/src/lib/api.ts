@@ -878,6 +878,148 @@ export async function saveCommandDashboardLayout(
   return await res.json() as StoredCommandDashboardLayout;
 }
 
+// ── Marketplace ──
+//
+// Wraps the /api/discover/marketplace browse + search endpoints and
+// /api/discover/newly-acquired feed. Response shapes are intentionally
+// loose since the BE may evolve them; the FE renders what it understands
+// and ignores extras.
+
+export interface MarketplaceListingSnapshot {
+  eligible?: boolean;
+  status?: 'ineligible' | 'unlisted' | 'open_to_offers' | 'listed' | 'sold';
+  ask_price_light?: number | null;
+  floor_price_light?: number | null;
+  instant_buy?: boolean;
+  show_metrics?: boolean;
+  active_bid_count?: number;
+  highest_bid_light?: number | null;
+  platform_fee_at_ask_light?: number | null;
+  seller_payout_at_ask_light?: number | null;
+  listing_note?: string | null;
+  updated_at?: string | null;
+}
+
+export interface MarketplaceTrustSnapshot {
+  signed_manifest?: boolean;
+  runtime?: string | null;
+  permissions?: string[];
+  capability_summary?: {
+    ai?: boolean;
+    network?: boolean;
+    storage?: boolean;
+    memory?: boolean;
+    gpu?: boolean;
+  };
+  required_secrets?: string[];
+}
+
+export interface MarketplaceResult {
+  id: string;
+  name: string;
+  slug?: string;
+  description?: string;
+  type?: 'app' | 'page' | 'skill';
+  mcp_endpoint?: string;
+  url?: string;
+  likes?: number;
+  runs_30d?: number;
+  fully_native?: boolean;
+  had_external_db?: boolean;
+  runtime?: string;
+  gpu_type?: string;
+  gpu_status?: string;
+  trust_card?: MarketplaceTrustSnapshot;
+  marketplace?: MarketplaceListingSnapshot;
+  tags?: string[];
+  final_score?: number;
+  similarity?: number;
+}
+
+export interface MarketplaceSection {
+  title: string;
+  type: 'featured' | 'category' | 'skills' | string;
+  results: MarketplaceResult[];
+}
+
+export interface MarketplaceBrowseResponse {
+  mode: 'browse';
+  sections: MarketplaceSection[];
+  total: number;
+}
+
+export interface MarketplaceSearchResponse {
+  mode: 'search';
+  results: MarketplaceResult[];
+  total: number;
+}
+
+export type MarketplaceResponse = MarketplaceBrowseResponse | MarketplaceSearchResponse;
+
+export async function fetchMarketplaceBrowse(options?: {
+  type?: 'all' | 'apps' | 'skills';
+  runtime?: 'all' | 'gpu' | 'deno';
+  limit?: number;
+}): Promise<MarketplaceBrowseResponse | null> {
+  const params = new URLSearchParams({ format: 'sections' });
+  if (options?.type) params.set('type', options.type);
+  if (options?.runtime) params.set('runtime', options.runtime);
+  if (options?.limit) params.set('limit', String(options.limit));
+
+  const token = getToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetchFromApi(`/api/discover/marketplace?${params.toString()}`, { headers });
+  if (!res.ok) return null;
+  const data = await res.json() as MarketplaceResponse;
+  return data.mode === 'browse' ? data : null;
+}
+
+export async function searchMarketplace(query: string, options?: {
+  type?: 'all' | 'apps' | 'skills';
+  runtime?: 'all' | 'gpu' | 'deno';
+  limit?: number;
+}): Promise<MarketplaceSearchResponse | null> {
+  const params = new URLSearchParams({ q: query });
+  if (options?.type) params.set('type', options.type);
+  if (options?.runtime) params.set('runtime', options.runtime);
+  if (options?.limit) params.set('limit', String(options.limit));
+
+  const token = getToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetchFromApi(`/api/discover/marketplace?${params.toString()}`, { headers });
+  if (!res.ok) return null;
+  const data = await res.json() as MarketplaceResponse;
+  return data.mode === 'search' ? data : null;
+}
+
+export interface NewlyAcquiredEntry {
+  receipt_id: string;
+  sale_id: string;
+  type: 'acquisition';
+  app_id: string;
+  app_name: string;
+  app_slug?: string;
+  app_url?: string;
+  sale_price_light: number;
+  created_at: string;
+  receipt_url?: string;
+  buyer?: { user_id: string; display_name?: string; profile_slug?: string; avatar_url?: string };
+  seller?: { user_id: string; display_name?: string; profile_slug?: string; avatar_url?: string };
+}
+
+export async function fetchNewlyAcquired(limit = 10): Promise<NewlyAcquiredEntry[]> {
+  const res = await fetchFromApi(`/api/discover/newly-acquired?limit=${limit}`, {
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) return [];
+  const data = await res.json() as NewlyAcquiredEntry[] | { results?: NewlyAcquiredEntry[] };
+  return Array.isArray(data) ? data : (data.results ?? []);
+}
+
 // ── Task Context (per-request entity + function resolution) ──
 
 export interface TaskContext {

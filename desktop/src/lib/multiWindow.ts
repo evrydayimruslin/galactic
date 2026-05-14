@@ -8,6 +8,7 @@ import { buildWidgetWindowSearchParams, type WidgetAppSource } from './widgetRun
 export type PopoutView =
   | { kind: 'home' }
   | { kind: 'library' }
+  | { kind: 'marketplace' }
   | { kind: 'profile' }
   | { kind: 'wallet' }
   | { kind: 'settings' }
@@ -80,6 +81,7 @@ export async function openWidgetWindow(source: WidgetAppSource, context?: Record
 const VIEW_TITLES: Record<string, string> = {
   home: 'Command',
   library: 'Tools',
+  marketplace: 'Market',
   profile: 'Profile',
   wallet: 'Wallet',
   settings: 'Settings',

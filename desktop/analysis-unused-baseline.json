@@ -224,6 +224,7 @@
         "CommandDashboardSummary",
         "InferenceModelOption",
         "InferenceProviderChoice",
+        "MarketplaceResponse",
         "McpToolResult",
         "OrchestrateEvent",
         "StoredCommandDashboardLayout",
