@@ -16,7 +16,7 @@
 //
 // Seller-side accept/decline flow ships in Batch 4d.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Check, X } from 'lucide-react';
 import {
   placeBid,
@@ -529,18 +529,19 @@ export default function AcquisitionFlow({
   const [outcome, setOutcome] = useState<Outcome>('bid-placed');
   const [submittedAmount, setSubmittedAmount] = useState<number>(0);
 
-  const refreshListing = useMemo(() => async () => {
+  const refreshListing = useCallback(async () => {
     const fresh = await fetchMarketplaceListing(appId);
     if (fresh) setListing(fresh);
   }, [appId]);
 
-  // If no initial listing was provided, fetch on mount.
+  // Re-fetch when the app changes, OR on mount if no initial listing was
+  // provided. Parents reusing the modal across appIds will get a fresh
+  // listing automatically.
   useEffect(() => {
     if (!initialListing) {
       void refreshListing();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appId]);
+  }, [appId, initialListing, refreshListing]);
 
   const onSubmitBid = async (amount: number, message: string | undefined, willAcquire: boolean) => {
     setSubmitting(true);

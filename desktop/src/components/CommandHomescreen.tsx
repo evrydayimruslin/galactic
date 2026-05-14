@@ -26,7 +26,7 @@
 // new cards append after existing ones and the picker is the only
 // reorder affordance.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchCommandDashboardLayout,
   fetchCommandWidgets,
@@ -316,6 +316,10 @@ export default function CommandHomescreen() {
   // Per-instance card data, keyed by instance_id
   const [cardData, setCardData] = useState<Record<string, unknown>>({});
   const [cardLoading, setCardLoading] = useState<Record<string, boolean>>({});
+  // Track which instance ids we've already started a fetch for. Ref (not
+  // state) so the dispatch loop doesn't read stale cardData/cardLoading
+  // closures when tiles change quickly (e.g. after a layout edit).
+  const fetchedInstanceIdsRef = useRef<Set<string>>(new Set());
 
   // Format today's date in the cozy header style ("Sunday, March 9")
   const today = useMemo(() => {
@@ -363,14 +367,16 @@ export default function CommandHomescreen() {
     return resolved;
   }, [layout, widgetsIndex]);
 
-  // Per-tile data fetch. Triggers when tiles list changes; only fetches
-  // tiles we haven't loaded yet. Each call to a card's dataFunction is
-  // independent so a slow widget doesn't block the rest.
+  // Per-tile data fetch. Triggers when tiles list changes; uses a ref-tracked
+  // dispatch set so the guard doesn't read stale state when tiles change
+  // quickly. On failure, the id is removed from the set so a subsequent
+  // tiles change retries.
   useEffect(() => {
     let cancelled = false;
     for (const tile of tiles) {
       const id = tile.instance.instance_id;
-      if (cardData[id] !== undefined || cardLoading[id]) continue;
+      if (fetchedInstanceIdsRef.current.has(id)) continue;
+      fetchedInstanceIdsRef.current.add(id);
       setCardLoading((s) => ({ ...s, [id]: true }));
       void fetchWidgetDataPayload(
         {
@@ -388,6 +394,8 @@ export default function CommandHomescreen() {
         })
         .catch(() => {
           if (cancelled) return;
+          // Drop from the dispatch set so a future tiles change retries.
+          fetchedInstanceIdsRef.current.delete(id);
           setCardData((s) => ({ ...s, [id]: null }));
         })
         .finally(() => {
@@ -396,7 +404,6 @@ export default function CommandHomescreen() {
         });
     }
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tiles]);
 
   const onOpenTile = useCallback((tile: ResolvedTile) => {
@@ -424,20 +431,32 @@ export default function CommandHomescreen() {
   }, [layout]);
 
   const onRemoveTile = useCallback(
-    (instanceId: string) => {
+    async (instanceId: string) => {
       if (!layout) return;
+      const prev = layout;
       const next: CommandDashboardLayout = {
         ...layout,
         cards: layout.cards.filter((c) => c.instance_id !== instanceId),
       };
-      // Clear the data cache entry so a re-add re-fetches.
+      // Optimistic layout update.
+      setLayout(next);
+      const saved = await saveCommandDashboardLayout(next);
+      if (!saved) {
+        // Revert layout; KEEP cardData intact so the restored tile still has
+        // its content. (Bug fix vs. earlier impl that purged data eagerly.)
+        setLayout(prev);
+        setError('Failed to remove. Reverted.');
+        return;
+      }
+      // Save confirmed — now safe to purge the cache + allow re-fetch if
+      // the card is later re-added.
       setCardData((s) => {
         const { [instanceId]: _drop, ...rest } = s;
         return rest;
       });
-      void persistLayout(next);
+      fetchedInstanceIdsRef.current.delete(instanceId);
     },
-    [layout, persistLayout],
+    [layout],
   );
 
   const onAddCard = useCallback(

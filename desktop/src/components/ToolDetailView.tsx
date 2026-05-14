@@ -642,7 +642,10 @@ export default function ToolDetailView({ appId, fallbackName }: ToolDetailViewPr
             <div>
               <div className="text-h1 text-ul-text leading-none tracking-tighter">{displayName}</div>
               <div className="text-small text-ul-text-secondary mt-1">
-                {app ? <>by @{app.owner_id.slice(0, 8)} · {category}</> : <>&nbsp;</>}
+                {/* Author handle: BE doesn't expose a display name today (B7/B14).
+                    Render the app slug as a stable, non-identifying handle until
+                    /api/user/.../public exposes display_name + profile_slug. */}
+                {app ? <>by {app.slug ? `@${app.slug}` : 'owner'} · {category}</> : <>&nbsp;</>}
               </div>
             </div>
           </div>

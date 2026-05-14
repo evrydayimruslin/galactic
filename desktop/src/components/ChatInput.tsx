@@ -127,6 +127,16 @@ export default function ChatInput({
   const flashBtnRef = useRef<HTMLButtonElement>(null);
   const heavyBtnRef = useRef<HTMLButtonElement>(null);
 
+  // Track in-flight launch timeouts so unmount mid-send doesn't leak +
+  // doesn't trigger "update on unmounted component" warnings.
+  const launchTimersRef = useRef<number[]>([]);
+  useEffect(() => () => {
+    for (const id of launchTimersRef.current) {
+      clearTimeout(id);
+    }
+    launchTimersRef.current = [];
+  }, []);
+
   const flashLabel = formatModelLabel(flashModel);
   const heavyLabel = formatModelLabel(heavyModel);
 
@@ -210,7 +220,7 @@ export default function ChatInput({
     setSend('flying');
     // The flying frame lingers ~180ms so the animation reads as a launch
     // before the textarea clears and the next state takes over.
-    setTimeout(() => {
+    const flyTimer = window.setTimeout(() => {
       onSend(trimmed || '(attached files)', files.length > 0 ? files : undefined);
       setValue('');
       setFiles([]);
@@ -218,8 +228,10 @@ export default function ChatInput({
         textareaRef.current.style.height = 'auto';
       }
       setSend('landed');
-      setTimeout(() => setSend('idle'), 280);
+      const landTimer = window.setTimeout(() => setSend('idle'), 280);
+      launchTimersRef.current.push(landTimer);
     }, 180);
+    launchTimersRef.current.push(flyTimer);
   }, [value, files, isLoading, queueMode, send, onSend]);
 
   // ── Keyboard ──────────────────────────────────────────────────

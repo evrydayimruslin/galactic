@@ -1,4 +1,5 @@
-// ViewWindow — pop-out shell for non-chat views (home, library, profile, wallet, settings).
+// ViewWindow — pop-out shell for non-chat views (home, library, marketplace,
+// tool-detail, profile, wallet, settings).
 // Loaded when main.tsx detects ?view= param (excluding 'chat' which uses ChatWindow).
 
 import { useRef } from 'react';
@@ -7,19 +8,41 @@ import CommandHomescreen from './CommandHomescreen';
 import LibraryView from './LibraryView';
 import MarketplaceView from './MarketplaceView';
 import ProfileView from './ProfileView';
+import ToolDetailView from './ToolDetailView';
+import { openViewWindow } from '../lib/multiWindow';
 
-function parseViewFromParams(): string {
-  return new URLSearchParams(window.location.search).get('view') || '';
+interface PoppedParams {
+  view: string;
+  appId: string;
+  appName: string;
+}
+
+function parseParams(): PoppedParams {
+  const sp = new URLSearchParams(window.location.search);
+  return {
+    view: sp.get('view') ?? '',
+    appId: sp.get('appId') ?? '',
+    appName: sp.get('appName') ?? '',
+  };
+}
+
+// In a popout window we can't push to the main window's view stack, so
+// "open a tool" means: spawn another popout for that tool. The main
+// window's deep-link / nav patterns still work for the canonical case.
+function openToolPopout(appId: string, appName: string): void {
+  void openViewWindow({ kind: 'tool-detail', appId, appName });
 }
 
 export default function ViewWindow() {
-  const viewKind = useRef(parseViewFromParams()).current;
+  const params = useRef(parseParams()).current;
 
-  switch (viewKind) {
+  switch (params.view) {
     case 'library':
-      return <LibraryView />;
+      return <LibraryView onOpenTool={openToolPopout} />;
     case 'marketplace':
-      return <MarketplaceView onOpenTool={() => { /* TODO(popout): wire tool detail in popout */ }} />;
+      return <MarketplaceView onOpenTool={openToolPopout} />;
+    case 'tool-detail':
+      return <ToolDetailView appId={params.appId} fallbackName={params.appName || undefined} />;
     case 'profile':
       return <ProfileView />;
     case 'wallet':
@@ -31,7 +54,7 @@ export default function ViewWindow() {
     default:
       return (
         <div className='flex items-center justify-center h-full bg-white'>
-          <p className='text-body text-ul-text-muted'>Unknown view: {viewKind}</p>
+          <p className='text-body text-ul-text-muted'>Unknown view: {params.view}</p>
         </div>
       );
   }

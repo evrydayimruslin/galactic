@@ -807,6 +807,11 @@ export default function ProfileView(_props: ProfileViewProps) {
     setConnect(c);
     setPayouts(py);
     setBillingAddress(ba);
+    // Helpers return null on auth/HTTP failure rather than throwing, so
+    // .catch never sees those. Surface a global error if the core profile
+    // fetch failed (token expired, BE outage); other surfaces can be
+    // missing without blocking the whole page.
+    return { profile: p, hosting: h };
   }, []);
 
   // Open Stripe Connect onboarding. The BE returns a one-time URL; we
@@ -834,6 +839,14 @@ export default function ProfileView(_props: ProfileViewProps) {
     setLoading(true);
     setError(null);
     reload()
+      .then((data) => {
+        if (cancelled) return;
+        if (!data.profile) {
+          setError(
+            'Failed to load profile. You may be signed out or the API is unreachable.',
+          );
+        }
+      })
       .catch((err: Error) => {
         if (cancelled) return;
         setError(err.message);
@@ -926,8 +939,8 @@ export default function ProfileView(_props: ProfileViewProps) {
             <SettingsTab
               profile={profile}
               billingAddress={billingAddress}
-              onProfileSaved={reload}
-              onBillingSaved={reload}
+              onProfileSaved={async () => { await reload(); }}
+              onBillingSaved={async () => { await reload(); }}
             />
           )}
         </>

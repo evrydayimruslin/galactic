@@ -9,6 +9,7 @@ export type PopoutView =
   | { kind: 'home' }
   | { kind: 'library' }
   | { kind: 'marketplace' }
+  | { kind: 'tool-detail'; appId: string; appName?: string }
   | { kind: 'profile' }
   | { kind: 'wallet' }
   | { kind: 'settings' }
@@ -82,6 +83,7 @@ const VIEW_TITLES: Record<string, string> = {
   home: 'Command',
   library: 'Tools',
   marketplace: 'Market',
+  'tool-detail': 'Tool',
   profile: 'Profile',
   wallet: 'Wallet',
   settings: 'Settings',
@@ -94,7 +96,9 @@ const VIEW_TITLES: Record<string, string> = {
 export async function openViewWindow(popout: PopoutView): Promise<void> {
   const label = popout.kind === 'chat'
     ? `chat-${popout.agentId.slice(0, 8)}`
-    : `view-${popout.kind}`;
+    : popout.kind === 'tool-detail'
+      ? `tool-${popout.appId.slice(0, 8)}`
+      : `view-${popout.kind}`;
 
   const existingWindows = await getAllWebviewWindows();
   const existing = existingWindows.find(w => w.label === label);
@@ -107,11 +111,16 @@ export async function openViewWindow(popout: PopoutView): Promise<void> {
   if (popout.kind === 'chat') {
     params.set('agentId', popout.agentId);
     params.set('agentName', popout.agentName);
+  } else if (popout.kind === 'tool-detail') {
+    params.set('appId', popout.appId);
+    if (popout.appName) params.set('appName', popout.appName);
   }
 
   const title = popout.kind === 'chat'
     ? `${popout.agentName} — Ultralight`
-    : `${VIEW_TITLES[popout.kind] || popout.kind} — Ultralight`;
+    : popout.kind === 'tool-detail'
+      ? `${popout.appName ?? 'Tool'} — Ultralight`
+      : `${VIEW_TITLES[popout.kind] || popout.kind} — Ultralight`;
 
   const _webview = new WebviewWindow(label, {
     url: `index.html?${params.toString()}`,

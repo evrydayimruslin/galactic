@@ -7,7 +7,7 @@
 // The "light" option is rendered as a virtual "Ultralight" provider on top
 // of the real BYOK providers, matching the mockup's mental model.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
 import type {
   ChatInferenceOptionsResponse,
@@ -180,10 +180,13 @@ export default function ModelPickerPopover({
   );
   const [providerId, setProviderId] = useState<string>(initialProvider);
   // Re-anchor providerId when the catalog first loads or the selected model
-  // changes from outside (e.g., user picks from the other tier).
-  if (rows.length > 0 && !rows.some((r) => r.id === providerId)) {
-    setProviderId(initialProvider);
-  }
+  // changes from outside (e.g., user picks from the other tier). Effect (not
+  // render-time setState) so React doesn't warn / loop.
+  useEffect(() => {
+    if (rows.length > 0 && !rows.some((r) => r.id === providerId)) {
+      setProviderId(initialProvider);
+    }
+  }, [rows, providerId, initialProvider]);
 
   const [providerListOpen, setProviderListOpen] = useState(false);
   const [query, setQuery] = useState('');
