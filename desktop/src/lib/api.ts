@@ -996,6 +996,79 @@ export async function searchMarketplace(query: string, options?: {
   return data.mode === 'search' ? data : null;
 }
 
+// ── Marketplace listing detail (used by ToolDetailView side rail) ──
+
+export interface MarketplaceBid {
+  id: string;
+  bidder_id?: string;
+  bidder_email?: string;
+  bidder_display_name?: string;
+  amount_light: number;
+  message?: string | null;
+  status?: 'active' | 'accepted' | 'rejected' | 'cancelled' | 'expired';
+  created_at?: string;
+  expires_at?: string | null;
+}
+
+export interface MarketplaceOwnerAdminChecklistItem {
+  id: string;
+  label: string;
+  status: 'ready' | 'action' | 'blocked' | 'optional';
+  detail?: string;
+  action?: string;
+}
+
+export interface MarketplaceOwnerAdmin {
+  payout_connected?: boolean;
+  payout_onboarded?: boolean;
+  payouts_enabled?: boolean;
+  balance_light?: number;
+  total_earned_light?: number;
+  checklist?: MarketplaceOwnerAdminChecklistItem[];
+  recommended_action_id?: string;
+  recommended_action?: string;
+}
+
+export interface MarketplaceListingDetails {
+  listing?: {
+    id?: string;
+    app_id: string;
+    owner_id?: string;
+    ask_price_light?: number | null;
+    floor_price_light?: number | null;
+    instant_buy?: boolean;
+    status?: 'ineligible' | 'unlisted' | 'open_to_offers' | 'listed' | 'sold';
+    listing_note?: string | null;
+    provenance?: unknown[];
+    updated_at?: string;
+  } | null;
+  bids: MarketplaceBid[];
+  app?: {
+    id: string;
+    name: string;
+    slug: string;
+    owner_id?: string;
+    total_runs?: number;
+    runs_30d?: number;
+    description?: string;
+    trust_card?: MarketplaceTrustSnapshot;
+  };
+  owner_admin?: MarketplaceOwnerAdmin;
+  marketplace_summary?: MarketplaceListingSnapshot & {
+    blockers?: string[];
+  };
+}
+
+export async function fetchMarketplaceListing(appId: string): Promise<MarketplaceListingDetails | null> {
+  const token = getToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetchFromApi(`/api/marketplace/listing/${encodeURIComponent(appId)}`, { headers });
+  if (!res.ok) return null;
+  return await res.json() as MarketplaceListingDetails;
+}
+
 export interface NewlyAcquiredEntry {
   receipt_id: string;
   sale_id: string;

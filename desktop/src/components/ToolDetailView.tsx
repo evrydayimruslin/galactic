@@ -16,16 +16,25 @@
 //
 // Scope notes (see DESIGN-FOLLOWUPS.md):
 //   - Sandbox runner: rendered as placeholder; real `ul.call` execution
-//     requires permissions handling and is a follow-up batch.
-//   - Side rail: ask price / bids / revenue not on the App type today —
-//     side rail renders the "Not for sale" placeholder.
-//   - Install / Acquire buttons: visual only — wiring requires the
-//     marketplace acquisition flow which is Batch 4.
+//     requires permissions handling (DESIGN-FOLLOWUPS A7).
+//   - Install / Acquire button wiring: visual only — depends on the
+//     AcquisitionFlow modal which lands in Batch 4c.
+//
+// Batch 4b retrofit:
+//   - Side rail now fetches /api/marketplace/listing/{appId} and renders
+//     real ask price + bids + revenue + owner admin checklist (when the
+//     viewer is the owner).
 
 import { useEffect, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import Glyph, { deriveGlyph, deriveTone } from './ui/Glyph';
 import { fetchFromApi, getToken } from '../lib/storage';
+import {
+  fetchMarketplaceListing,
+  type MarketplaceBid,
+  type MarketplaceListingDetails,
+  type MarketplaceOwnerAdminChecklistItem,
+} from '../lib/api';
 import type { App, SkillFunction, PermissionDeclaration } from '../../../shared/types/index';
 
 interface ToolDetailViewProps {
@@ -180,23 +189,177 @@ function CapabilityPill({ cap }: { cap: PermissionDeclaration }) {
   );
 }
 
-function SideRail() {
-  // TODO(data): Marketplace listing (ask, bids, revenue) not on App type today.
-  // Renders "Not for sale" placeholder until marketplace BE lands (Batch 4).
+// ── Side rail helpers ─────────────────────────────────────────────────
+
+function formatLight(n: number | undefined | null): string {
+  if (n === undefined || n === null) return '—';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  if (Number.isInteger(n)) return String(n);
+  return n.toFixed(3);
+}
+
+function formatRelativeHours(iso: string | undefined): string {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return '';
+  const h = Math.floor(ms / 3_600_000);
+  const d = Math.floor(ms / 86_400_000);
+  if (h < 1) return '<1h ago';
+  if (h < 24) return `${h}h ago`;
+  if (d < 7) return `${d}d ago`;
+  return `${Math.floor(d / 7)}w ago`;
+}
+
+function BidderMark({ bid }: { bid: MarketplaceBid }) {
+  const seed = bid.bidder_id || bid.bidder_email || bid.id;
+  const label = bid.bidder_display_name || bid.bidder_email?.split('@')[0] || 'bidder';
+  return (
+    <div className="flex items-center gap-1.5">
+      <Glyph glyph={deriveGlyph(label)} tone={deriveTone(seed)} size={16} />
+      <span className="text-caption text-ul-text-secondary truncate">
+        @{label}
+      </span>
+    </div>
+  );
+}
+
+function ChecklistDot({ status }: { status: MarketplaceOwnerAdminChecklistItem['status'] }) {
+  const tone =
+    status === 'ready' ? 'bg-ul-success' :
+    status === 'action' ? 'bg-ul-warning' :
+    status === 'blocked' ? 'bg-ul-error' :
+    'bg-ul-text-muted'; // 'optional'
+  return <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${tone}`} />;
+}
+
+interface SideRailProps {
+  appId: string;
+  details: MarketplaceListingDetails | null;
+  loading: boolean;
+  isOwner: boolean;
+}
+
+function SideRail({ appId: _appId, details, loading, isOwner }: SideRailProps) {
+  if (loading && !details) {
+    return (
+      <aside className="sticky top-6 self-start">
+        <div className="border border-ul-border rounded-lg overflow-hidden bg-ul-bg p-4">
+          <div className="text-caption text-ul-text-muted">Loading listing…</div>
+        </div>
+      </aside>
+    );
+  }
+
+  const listing = details?.listing ?? null;
+  const summary = details?.marketplace_summary ?? null;
+  const ask = listing?.ask_price_light ?? summary?.ask_price_light ?? null;
+  const bids = (details?.bids ?? []).slice().sort((a, b) => b.amount_light - a.amount_light);
+  const visibleBids = bids.slice(0, 3);
+  const askExists = ask !== null && ask !== undefined && ask > 0;
+  const fee = summary?.platform_fee_at_ask_light ?? null;
+  const payout = summary?.seller_payout_at_ask_light ?? null;
+
   return (
     <aside className="sticky top-6 self-start">
       <div className="border border-ul-border rounded-lg overflow-hidden bg-ul-bg">
-        <div className="px-4 py-3.5 border-b border-ul-border bg-ul-bg-raised">
-          <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-1">
-            Not for sale
+        {/* Ask header */}
+        {askExists ? (
+          <div className="px-4 py-3.5 border-b border-ul-border bg-ul-bg-raised">
+            <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-1.5">
+              For sale · ask
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-h2 font-bold font-mono tabular-nums tracking-tight">
+                ✦{formatLight(ask)}
+              </span>
+              {listing?.instant_buy && (
+                <span className="text-nano font-mono text-ul-success-strong uppercase tracking-wider">
+                  instant
+                </span>
+              )}
+            </div>
+            {/* Fee + payout — visible to owner only */}
+            {isOwner && fee !== null && payout !== null && (
+              <div className="mt-2 text-nano font-mono text-ul-text-muted leading-relaxed">
+                Platform fee ✦{formatLight(fee)} · payout ✦{formatLight(payout)}
+              </div>
+            )}
           </div>
-          <div className="text-small text-ul-text-secondary leading-tight">
-            Owner hasn't set an ask. Marketplace ask / bid surfaces arrive with the marketplace batch.
+        ) : (
+          <div className="px-4 py-3.5 border-b border-ul-border bg-ul-bg-raised">
+            <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-1">
+              Not for sale
+            </div>
+            <div className="text-small text-ul-text-secondary leading-tight">
+              Owner hasn't set an ask. Place a bid — if it's accepted, ownership transfers.
+            </div>
           </div>
+        )}
+
+        {/* Bids */}
+        <div className="px-3.5 py-3">
+          <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-2">
+            {bids.length > 0
+              ? (askExists ? `Place a bid · ${bids.length} open` : `Open bids · ${bids.length}`)
+              : 'No open bids yet'}
+          </div>
+          {visibleBids.length > 0 && (
+            <div className="flex flex-col gap-1.5 mb-2">
+              {visibleBids.map((bid) => (
+                <div key={bid.id} className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <BidderMark bid={bid} />
+                  </div>
+                  <div className="font-mono text-caption text-ul-text tabular-nums flex-shrink-0">
+                    ✦{formatLight(bid.amount_light)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            // TODO(scope): wires to AcquisitionFlow modal in Batch 4c.
+            disabled
+            className="bg-transparent text-ul-text-secondary border-none p-0 text-caption font-medium underline cursor-not-allowed opacity-60"
+            title="Bid flow arrives in Batch 4c"
+          >
+            {askExists ? 'See all bids →' : bids.length > 0 ? 'See all bids →' : 'Place a bid →'}
+          </button>
         </div>
-        <div className="px-3.5 py-2.5 text-micro text-ul-text-muted italic leading-relaxed">
-          Revenue is private.
-        </div>
+
+        {/* Revenue / owner admin */}
+        {isOwner && details?.owner_admin && details.owner_admin.checklist && details.owner_admin.checklist.length > 0 ? (
+          <div className="px-3.5 py-3 border-t border-ul-border bg-ul-bg-raised">
+            <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-2">
+              Seller checklist
+            </div>
+            <div className="flex flex-col gap-1.5 mb-2">
+              {details.owner_admin.checklist.slice(0, 5).map((item) => (
+                <div key={item.id} className="flex items-center gap-2 text-caption">
+                  <ChecklistDot status={item.status} />
+                  <span className={item.status === 'ready' ? 'text-ul-text-muted line-through' : 'text-ul-text'}>
+                    {item.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {details.owner_admin.balance_light !== undefined && (
+              <div className="text-nano font-mono text-ul-text-muted mt-2">
+                Balance ✦{formatLight(details.owner_admin.balance_light)}
+                {details.owner_admin.total_earned_light !== undefined &&
+                  ` · earned ✦${formatLight(details.owner_admin.total_earned_light)}`}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="px-3.5 py-2.5 border-t border-ul-border text-micro text-ul-text-muted italic leading-relaxed">
+            {summary?.show_metrics
+              ? 'Sales metrics visible on this tool — view from the metrics endpoint.'
+              : 'Revenue is private.'}
+          </div>
+        )}
       </div>
     </aside>
   );
@@ -208,29 +371,53 @@ export default function ToolDetailView({ appId, fallbackName }: ToolDetailViewPr
   const [app, setApp] = useState<App | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [listing, setListing] = useState<MarketplaceListingDetails | null>(null);
+  const [listingLoading, setListingLoading] = useState(true);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
+  // Load current user id for owner classification (e.g. "is this me viewing my own tool?")
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    fetchFromApi('/api/user', { headers: { 'Authorization': `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { id?: string } | null) => {
+        if (data?.id) setCurrentUserId(data.id);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setListingLoading(true);
     setError(null);
-    fetchApp(appId)
-      .then((result) => {
+    // Fetch app metadata + marketplace listing in parallel. Either may
+    // fail independently — listing is allowed to be null for unlisted apps.
+    Promise.all([fetchApp(appId), fetchMarketplaceListing(appId)])
+      .then(([appResult, listingResult]) => {
         if (cancelled) return;
-        if (!result) {
+        if (!appResult) {
           setError('Tool not found');
         } else {
-          setApp(result);
+          setApp(appResult);
         }
+        setListing(listingResult);
       })
       .catch((err: Error) => {
         if (cancelled) return;
         setError(err.message);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setListingLoading(false);
+        }
       });
     return () => { cancelled = true; };
   }, [appId]);
+
+  const isOwner = !!(app && currentUserId && app.owner_id === currentUserId);
 
   const displayName = app?.name || fallbackName || 'Loading…';
   const functions = app?.skills_parsed?.functions ?? [];
@@ -278,10 +465,14 @@ export default function ToolDetailView({ appId, fallbackName }: ToolDetailViewPr
             <button
               disabled={!app}
               className="px-5 py-3 bg-ul-bg text-ul-text border border-ul-border rounded-lg text-body font-medium cursor-pointer inline-flex items-center justify-center gap-1.5 hover:bg-ul-bg-hover disabled:opacity-40"
-              title="Acquire wiring arrives with marketplace batch"
+              title="Acquisition flow arrives in Batch 4c"
             >
               <span>Acquire</span>
-              <span className="text-ul-text-muted font-mono font-normal text-small">(make offer)</span>
+              <span className="text-ul-text-muted font-mono font-normal text-small">
+                {listing?.listing?.ask_price_light
+                  ? `(✦${formatLight(listing.listing.ask_price_light)})`
+                  : '(make offer)'}
+              </span>
             </button>
           </div>
         </div>
@@ -337,7 +528,12 @@ export default function ToolDetailView({ appId, fallbackName }: ToolDetailViewPr
               </div>
             </div>
 
-            <SideRail />
+            <SideRail
+              appId={appId}
+              details={listing}
+              loading={listingLoading}
+              isOwner={isOwner}
+            />
           </div>
         ) : null}
       </div>
