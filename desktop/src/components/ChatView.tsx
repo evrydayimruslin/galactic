@@ -142,7 +142,6 @@ export default function ChatView({
   const {
     suggestions: ambientSuggestions,
     hasNew: ambientHasNew,
-    isPulsing: ambientIsPulsing,
     markViewed: markAmbientViewed,
   } = useAmbientSuggestions();
 
@@ -1499,30 +1498,14 @@ export default function ChatView({
         queueMode={isRunnerManaged}
         projectDir={conversationProjectDir}
         onProjectDirChange={handleProjectDirChange}
-        extraAction={(
-          <button
-            onClick={() => {
-              setAmbientOpen((open) => {
-                const next = !open;
-                if (next) markAmbientViewed();
-                return next;
-              });
-            }}
-            className="relative flex h-8 w-8 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
-            title="Suggested tools"
-          >
-            <svg className="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l1.8 4.7L18.5 9l-4.7 1.3L12 15l-1.8-4.7L5.5 9l4.7-1.3L12 3z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9L18 15z" />
-            </svg>
-            {ambientHasNew && (
-              <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-emerald-500" />
-            )}
-            {ambientHasNew && ambientIsPulsing && (
-              <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
-            )}
-          </button>
-        )}
+        ambientSuggestions={ambientSuggestions}
+        ambientHasNew={ambientHasNew}
+        toolDealerPanelOpen={ambientOpen}
+        onOpenToolDealerPanel={() => {
+          markAmbientViewed();
+          setAmbientOpen(true);
+        }}
+        onCloseToolDealerPanel={() => setAmbientOpen(false)}
       />
 
       {/* Permission modal overlay */}
