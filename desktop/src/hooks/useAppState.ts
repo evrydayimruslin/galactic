@@ -8,7 +8,7 @@ export type AppView =
   | { kind: 'home' }
   | { kind: 'agent'; agentId: string; initialMessage?: string }
   | { kind: 'new-chat' }
-  | { kind: 'capabilities' }
+  | { kind: 'library' }
   | { kind: 'app-store'; appId: string; appName?: string }
   | { kind: 'profile' }
   | { kind: 'wallet' }
@@ -19,7 +19,7 @@ export interface UseAppStateReturn {
   navigateHome: () => void;
   navigateToAgent: (agentId: string, initialMessage?: string) => void;
   navigateToNewChat: () => void;
-  navigateToCapabilities: () => void;
+  navigateToLibrary: () => void;
   navigateToAppStore: (appId: string, appName?: string) => void;
   navigateToProfile: () => void;
   navigateToWallet: () => void;
@@ -121,7 +121,7 @@ export function useAppState(): UseAppStateReturn {
   const navigateHome = useCallback(() => navigate({ kind: 'home' }), [navigate]);
   const navigateToAgent = useCallback((agentId: string, initialMessage?: string) => navigate({ kind: 'agent', agentId, initialMessage }), [navigate]);
   const navigateToNewChat = useCallback(() => navigate({ kind: 'new-chat' }), [navigate]);
-  const navigateToCapabilities = useCallback(() => navigate({ kind: 'capabilities' }), [navigate]);
+  const navigateToLibrary = useCallback(() => navigate({ kind: 'library' }), [navigate]);
   const navigateToAppStore = useCallback((appId: string, appName?: string) => navigate({ kind: 'app-store', appId, appName }), [navigate]);
   const navigateToProfile = useCallback(() => navigate({ kind: 'profile' }), [navigate]);
   const navigateToWallet = useCallback(() => navigate({ kind: 'wallet' }), [navigate]);
@@ -132,7 +132,7 @@ export function useAppState(): UseAppStateReturn {
     navigateHome,
     navigateToAgent,
     navigateToNewChat,
-    navigateToCapabilities,
+    navigateToLibrary,
     navigateToAppStore,
     navigateToProfile,
     navigateToWallet,

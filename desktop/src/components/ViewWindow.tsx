@@ -1,9 +1,10 @@
-// ViewWindow — pop-out shell for non-chat views (home, capabilities, profile, wallet, settings).
+// ViewWindow — pop-out shell for non-chat views (home, library, profile, wallet, settings).
 // Loaded when main.tsx detects ?view= param (excluding 'chat' which uses ChatWindow).
 
 import { useRef } from 'react';
 import WebPanel from './WebPanel';
 import HomeView from './HomeView';
+import LibraryView from './LibraryView';
 import { openViewWindow } from '../lib/multiWindow';
 
 function parseViewFromParams(): string {
@@ -14,8 +15,8 @@ export default function ViewWindow() {
   const viewKind = useRef(parseViewFromParams()).current;
 
   switch (viewKind) {
-    case 'capabilities':
-      return <WebPanel path='/capabilities' title='Tools' />;
+    case 'library':
+      return <LibraryView />;
     case 'profile':
       return <WebPanel path='/my-profile' title='Profile' />;
     case 'wallet':

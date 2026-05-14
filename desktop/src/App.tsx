@@ -21,6 +21,7 @@ import DesktopUpdateToast from './components/DesktopUpdateToast';
 import OnboardingWizard, { type OnboardingHighlight } from './components/OnboardingWizard';
 import ChatView from './components/ChatView';
 import HomeView from './components/HomeView';
+import LibraryView from './components/LibraryView';
 import NavSidebar from './components/NavSidebar';
 import TopToolbar from './components/TopToolbar';
 import WebPanel from './components/WebPanel';
@@ -65,7 +66,7 @@ export default function App() {
     navigateHome,
     navigateToAgent,
     navigateToNewChat,
-    navigateToCapabilities,
+    navigateToLibrary,
     navigateToAppStore,
     navigateToProfile,
     navigateToWallet,
@@ -189,9 +190,9 @@ export default function App() {
     setOnboardingComplete();
     setShowOnboarding(false);
     setOnboardingHighlight('none');
-    if (navigateTo === 'tools') navigateToCapabilities();
+    if (navigateTo === 'tools') navigateToLibrary();
     else if (navigateTo === 'chat') navigateToNewChat();
-  }, [navigateToCapabilities, navigateToNewChat]);
+  }, [navigateToLibrary, navigateToNewChat]);
 
   const handleShowTutorial = useCallback(() => {
     resetOnboarding();
@@ -379,9 +380,9 @@ export default function App() {
               dismissTutorial();
               navigateHome();
             }}
-            onNavigateToCapabilities={() => {
+            onNavigateToLibrary={() => {
               dismissTutorial();
-              navigateToCapabilities();
+              navigateToLibrary();
             }}
             onNavigateToProfile={() => {
               dismissTutorial();
@@ -423,9 +424,9 @@ export default function App() {
               </div>
             )}
 
-            {mountedViews.has('capabilities') && (
-              <div style={paneStyle(view.kind === 'capabilities')}>
-                <WebPanel path='/capabilities' title='Tools' />
+            {mountedViews.has('library') && (
+              <div style={paneStyle(view.kind === 'library')}>
+                <LibraryView />
               </div>
             )}
 

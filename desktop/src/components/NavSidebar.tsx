@@ -20,7 +20,7 @@ interface NavSidebarProps {
   onboardingHighlight?: OnboardingHighlight;
   onShowTutorial?: () => void;
   onNavigateHome: () => void;
-  onNavigateToCapabilities: () => void;
+  onNavigateToLibrary: () => void;
   onNavigateToProfile: () => void;
   onNavigateToWallet: () => void;
   onNavigateToSettings: () => void;
@@ -195,7 +195,7 @@ export default function NavSidebar({
   activeView,
   isOpen,
   onNavigateHome,
-  onNavigateToCapabilities,
+  onNavigateToLibrary,
   onNavigateToProfile,
   onNavigateToWallet,
   onNavigateToSettings,
@@ -422,10 +422,10 @@ export default function NavSidebar({
         <NavItem
           icon={ToolsIcon}
           label="Tools"
-          active={!onboardingHighlight || onboardingHighlight === 'none' ? activeView.kind === 'capabilities' : false}
+          active={!onboardingHighlight || onboardingHighlight === 'none' ? activeView.kind === 'library' : false}
           highlighted={onboardingHighlight === 'tools'}
-          onClick={onNavigateToCapabilities}
-          onContextMenu={e => handleNavContextMenu(e, { kind: 'capabilities' })}
+          onClick={onNavigateToLibrary}
+          onContextMenu={e => handleNavContextMenu(e, { kind: 'library' })}
         />
         <NavItem
           icon={NewSessionIcon}

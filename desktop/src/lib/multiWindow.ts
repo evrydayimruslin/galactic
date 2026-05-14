@@ -7,7 +7,7 @@ import { buildWidgetWindowSearchParams, type WidgetAppSource } from './widgetRun
 /** Any view that can be opened in its own window. */
 export type PopoutView =
   | { kind: 'home' }
-  | { kind: 'capabilities' }
+  | { kind: 'library' }
   | { kind: 'profile' }
   | { kind: 'wallet' }
   | { kind: 'settings' }
