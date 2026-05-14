@@ -386,3 +386,12 @@
   30%  { box-shadow: 0 0 0 8px rgba(34,197,94,0.18); }
   100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
 }
+
+/* ── Edit-mode wiggle (Command homescreen) ── */
+/* Tiny rotation that ships on a continuous loop while the user is editing
+   their dashboard layout. Per-tile delay is set inline via animation-delay
+   so the deck doesn't move in lockstep. */
+@keyframes ul-wiggle {
+  0%, 100% { transform: rotate(-0.4deg); }
+  50%      { transform: rotate(0.4deg); }
+}

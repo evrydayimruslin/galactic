@@ -214,7 +214,6 @@
         "createCommandDashboard",
         "deleteCommandDashboard",
         "fetchCommandDashboards",
-        "saveCommandDashboardLayout",
         "updateCommandDashboard"
       ],
       "file": "src/lib/api.ts",

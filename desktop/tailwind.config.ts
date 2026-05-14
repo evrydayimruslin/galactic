@@ -144,6 +144,7 @@ export default {
         'dealt-added':  'ul-dealt-added-flash 700ms ease',
         'shimmer':      'ul-shimmer 1.6s linear infinite',
         'breathe':      'ul-breathe 3s ease-in-out infinite',
+        'wiggle':       'ul-wiggle 0.45s ease-in-out infinite', // +premium — edit-mode tile wiggle
       },
     },
   },

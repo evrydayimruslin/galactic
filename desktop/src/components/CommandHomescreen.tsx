@@ -11,24 +11,33 @@
 //      card_id to determine kind + dataView + sizing.
 //   4. Render the tile in a grid based on size ("WxH").
 //
-// 3c-i scope (this PR):
-//   - Chrome + grid layout + click-to-expand into the parent widget window.
-//   - Tile templates: metric, list, generic fallback. No per-tile data fetch
-//     yet — tiles show kind-aware placeholder content.
-//   - Edit Layout + + Widget buttons render as stubs.
+// Behaviour:
+//   - Chrome + 4-col grid + click-to-expand into the parent widget window.
+//   - Per-tile data fetched via the widget's dataFunction. metric / list
+//     templates render the response; generic fallback shows kind + label
+//     when the shape doesn't match a known template.
+//   - Edit mode: tiles wiggle, header recolors, × remove button per tile,
+//     "Done" exits. Remove persists via saveCommandDashboardLayout.
+//   - + Widget opens WidgetPickerModal listing every available card from
+//     the function index; pick appends to the layout and persists.
 //
-// 3c-ii (next PR): per-tile data fetching via dataFunction, edit-layout
-// drag/resize, + Widget picker modal, save via saveCommandDashboardLayout.
+// Drag/resize reorder NOT implemented (would need a DnD library or
+// hand-rolled pointer handlers); a follow-up batch can layer it on. Today
+// new cards append after existing ones and the picker is the only
+// reorder affordance.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   fetchCommandDashboardLayout,
   fetchCommandWidgets,
+  saveCommandDashboardLayout,
   type CommandDashboardLayout,
   type FunctionIndex,
 } from '../lib/api';
 import { openWidgetWindow } from '../lib/multiWindow';
+import { fetchWidgetDataPayload } from '../lib/widgetRuntime';
 import Glyph, { deriveGlyph, deriveTone } from './ui/Glyph';
+import WidgetPickerModal, { type PickedCard, buildKey } from './dashboard/WidgetPickerModal';
 
 // ── Types (FE-internal) ───────────────────────────────────────────────
 
@@ -53,36 +62,109 @@ function parseSize(size: string): { colSpan: number; rowSpan: number } {
   return { colSpan: col, rowSpan: row };
 }
 
+// ── Tile data shapes ──────────────────────────────────────────────────
+// Tolerant parsers — the data function may wrap the payload in a `body`
+// envelope (per email-ops convention) or return the body directly.
+
+interface MetricBody {
+  metric: number | string;
+  label?: string;
+  suffix?: string;
+}
+interface ListItem {
+  primary?: string;
+  secondary?: string;
+  trailing?: string;
+}
+interface ListBody {
+  items: ListItem[];
+}
+
+function unwrapBody(raw: unknown): unknown {
+  if (raw && typeof raw === 'object' && 'body' in raw) {
+    return (raw as { body: unknown }).body;
+  }
+  return raw;
+}
+
+function parseMetricBody(raw: unknown): MetricBody | null {
+  const body = unwrapBody(raw);
+  if (!body || typeof body !== 'object') return null;
+  const obj = body as Record<string, unknown>;
+  // accept `metric` (per email-ops shape) or `value` (common alternative)
+  const metric = obj.metric ?? obj.value;
+  if (metric === undefined || metric === null) return null;
+  if (typeof metric !== 'number' && typeof metric !== 'string') return null;
+  return {
+    metric,
+    label: typeof obj.label === 'string' ? obj.label : undefined,
+    suffix: typeof obj.suffix === 'string' ? obj.suffix : undefined,
+  };
+}
+
+function parseListBody(raw: unknown): ListBody | null {
+  const body = unwrapBody(raw);
+  if (!body || typeof body !== 'object') return null;
+  const items = (body as Record<string, unknown>).items;
+  if (!Array.isArray(items)) return null;
+  return {
+    items: items.map((item) => {
+      if (!item || typeof item !== 'object') return {};
+      const o = item as Record<string, unknown>;
+      return {
+        primary: typeof o.primary === 'string' ? o.primary : (typeof o.title === 'string' ? o.title : undefined),
+        secondary: typeof o.secondary === 'string' ? o.secondary : (typeof o.subtitle === 'string' ? o.subtitle : undefined),
+        trailing: typeof o.trailing === 'string' ? o.trailing : (typeof o.right === 'string' ? o.right : undefined),
+      };
+    }),
+  };
+}
+
 // ── Tile templates ────────────────────────────────────────────────────
 
-function MetricTile({ card }: { card: CardDefn }) {
-  // Placeholder structure matches the mockup's metric-shape tiles
-  // (big number, optional sub-label). Real data wiring in 3c-ii.
+function MetricTile({ card, data, loading }: { card: CardDefn; data: unknown; loading: boolean }) {
+  const parsed = parseMetricBody(data);
   return (
     <div className="flex flex-col h-full justify-between">
-      <div className="text-display text-ul-text leading-none tabular-nums">—</div>
+      <div className="text-display text-ul-text leading-none tabular-nums">
+        {loading && !parsed ? <span className="text-ul-text-muted">—</span> : (parsed?.metric ?? '—')}
+        {parsed?.suffix && <span className="text-h3 text-ul-text-muted ml-1">{parsed.suffix}</span>}
+      </div>
       <div className="text-caption text-ul-text-secondary">
-        {card.description || card.label}
+        {parsed?.label || card.description || card.label}
       </div>
     </div>
   );
 }
 
-function ListTile({ card }: { card: CardDefn }) {
-  // Placeholder structure for list-shape tiles. Empty rows hint at the
-  // future layout; 3c-ii wires real items via the data function.
+function ListTile({ card, data, loading }: { card: CardDefn; data: unknown; loading: boolean }) {
+  const parsed = parseListBody(data);
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 flex flex-col gap-1.5">
-        {[0, 1, 2].map((i) => (
-          <div
-            key={i}
-            className="flex items-center justify-between border-b border-ul-border last:border-b-0 pb-1.5"
-          >
-            <div className="h-2.5 w-2/3 bg-ul-bg-active rounded-xs" />
-            <div className="h-2 w-8 bg-ul-bg-subtle rounded-xs" />
-          </div>
-        ))}
+      <div className="flex-1 flex flex-col gap-1.5 overflow-hidden">
+        {!parsed && loading
+          ? // Skeleton rows while loading and shape unknown
+            [0, 1, 2].map((i) => (
+              <div key={i} className="flex items-center justify-between border-b border-ul-border last:border-b-0 pb-1.5">
+                <div className="h-2.5 w-2/3 bg-ul-bg-active rounded-xs" />
+                <div className="h-2 w-8 bg-ul-bg-subtle rounded-xs" />
+              </div>
+            ))
+          : parsed?.items.slice(0, 4).map((item, i) => (
+              <div key={i} className="flex items-center justify-between gap-2 border-b border-ul-border last:border-b-0 pb-1.5 min-w-0">
+                <div className="flex-1 min-w-0">
+                  {item.primary && (
+                    <div className="text-caption text-ul-text font-medium truncate">{item.primary}</div>
+                  )}
+                  {item.secondary && (
+                    <div className="text-nano text-ul-text-muted truncate">{item.secondary}</div>
+                  )}
+                </div>
+                {item.trailing && (
+                  <div className="text-nano text-ul-text-muted font-mono flex-shrink-0">{item.trailing}</div>
+                )}
+              </div>
+            ))}
       </div>
       <div className="text-nano text-ul-text-muted font-mono mt-2">
         {card.description || card.label}
@@ -91,7 +173,9 @@ function ListTile({ card }: { card: CardDefn }) {
   );
 }
 
-function GenericTile({ card }: { card: CardDefn }) {
+function GenericTile({ card, data }: { card: CardDefn; data: unknown }) {
+  // Render data if present (tolerant), else the card metadata.
+  const body = unwrapBody(data);
   return (
     <div className="flex flex-col h-full justify-center items-center text-center gap-1">
       <div className="text-caption font-semibold text-ul-text">{card.label}</div>
@@ -100,23 +184,28 @@ function GenericTile({ card }: { card: CardDefn }) {
           {card.kind}
         </div>
       )}
-      {card.description && (
+      {!body && card.description && (
         <div className="text-nano text-ul-text-secondary line-clamp-2 px-2">
           {card.description}
         </div>
       )}
+      {body && typeof body === 'object' ? (
+        <pre className="text-nano font-mono text-ul-text-muted overflow-hidden whitespace-pre-wrap max-h-16">
+          {JSON.stringify(body, null, 0)}
+        </pre>
+      ) : null}
     </div>
   );
 }
 
-function renderTileBody(card: CardDefn) {
+function renderTileBody(card: CardDefn, data: unknown, loading: boolean) {
   switch (card.kind) {
     case 'metric':
-      return <MetricTile card={card} />;
+      return <MetricTile card={card} data={data} loading={loading} />;
     case 'list':
-      return <ListTile card={card} />;
+      return <ListTile card={card} data={data} loading={loading} />;
     default:
-      return <GenericTile card={card} />;
+      return <GenericTile card={card} data={data} />;
   }
 }
 
@@ -126,25 +215,57 @@ function CozyTile({
   tile,
   colSpan,
   rowSpan,
+  data,
+  loading,
+  edit,
+  wiggleDelayMs,
   onOpen,
+  onRemove,
 }: {
   tile: ResolvedTile;
   colSpan: number;
   rowSpan: number;
+  data: unknown;
+  loading: boolean;
+  edit: boolean;
+  wiggleDelayMs: number;
   onOpen: () => void;
+  onRemove: () => void;
 }) {
   const { widget, card } = tile;
   const appLabel = widget.appName || widget.appSlug || 'tool';
   const tone = deriveTone(widget.appId);
+
   return (
-    <button
-      type="button"
-      onClick={onOpen}
+    <div
+      onClick={edit ? undefined : onOpen}
       // TODO(token): rounded-[22px] — design tile radius doesn't match
       // any current ul-* radius token (xs/sm/md/pill/lg/card/xl).
-      className="bg-ul-bg border border-ul-border rounded-[22px] p-4 relative cursor-pointer overflow-hidden transition-all duration-base hover:-translate-y-px hover:shadow-md flex flex-col gap-2.5 text-left"
-      style={{ gridColumn: `span ${colSpan}`, gridRow: `span ${rowSpan}` }}
+      className={`bg-ul-bg border border-ul-border rounded-[22px] p-4 relative overflow-${edit ? 'visible' : 'hidden'} transition-all duration-base flex flex-col gap-2.5 text-left ${
+        edit
+          ? 'cursor-grab shadow-md animate-wiggle'
+          : 'cursor-pointer hover:-translate-y-px hover:shadow-md'
+      }`}
+      style={{
+        gridColumn: `span ${colSpan}`,
+        gridRow: `span ${rowSpan}`,
+        animationDelay: edit ? `${wiggleDelayMs}ms` : undefined,
+      }}
     >
+      {edit && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          // TODO(token): bg-ul-text + shadow combo is the negative-action mockup style.
+          className="absolute -top-2 -left-2 w-[22px] h-[22px] rounded-full bg-ul-text text-white text-caption flex items-center justify-center cursor-pointer shadow-md z-10 leading-none"
+          title="Remove from dashboard"
+        >
+          ×
+        </button>
+      )}
       <div className="flex items-center gap-2.5">
         <Glyph glyph={deriveGlyph(appLabel)} tone={tone} size={22} />
         <div
@@ -155,8 +276,8 @@ function CozyTile({
         </div>
         {/* Burn rate / cost-per-min not on card defn today — DESIGN-FOLLOWUPS B6. */}
       </div>
-      <div className="flex-1 min-h-0">{renderTileBody(card)}</div>
-    </button>
+      <div className="flex-1 min-h-0">{renderTileBody(card, data, loading)}</div>
+    </div>
   );
 }
 
@@ -190,6 +311,11 @@ export default function CommandHomescreen() {
   const [widgetsIndex, setWidgetsIndex] = useState<FunctionIndex['widgets']>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [edit, setEdit] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Per-instance card data, keyed by instance_id
+  const [cardData, setCardData] = useState<Record<string, unknown>>({});
+  const [cardLoading, setCardLoading] = useState<Record<string, boolean>>({});
 
   // Format today's date in the cozy header style ("Sunday, March 9")
   const today = useMemo(() => {
@@ -237,6 +363,42 @@ export default function CommandHomescreen() {
     return resolved;
   }, [layout, widgetsIndex]);
 
+  // Per-tile data fetch. Triggers when tiles list changes; only fetches
+  // tiles we haven't loaded yet. Each call to a card's dataFunction is
+  // independent so a slow widget doesn't block the rest.
+  useEffect(() => {
+    let cancelled = false;
+    for (const tile of tiles) {
+      const id = tile.instance.instance_id;
+      if (cardData[id] !== undefined || cardLoading[id]) continue;
+      setCardLoading((s) => ({ ...s, [id]: true }));
+      void fetchWidgetDataPayload(
+        {
+          appUuid: tile.widget.appId,
+          appSlug: tile.widget.appSlug ?? '',
+          dataFunction: tile.widget.dataFunction ?? `widget_${tile.widget.name}_data`,
+        },
+        undefined,
+        null,
+        { card_id: tile.card.id, data_view: tile.card.dataView ?? tile.card.id },
+      )
+        .then((payload) => {
+          if (cancelled) return;
+          setCardData((s) => ({ ...s, [id]: payload?.raw ?? null }));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setCardData((s) => ({ ...s, [id]: null }));
+        })
+        .finally(() => {
+          if (cancelled) return;
+          setCardLoading((s) => ({ ...s, [id]: false }));
+        });
+    }
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tiles]);
+
   const onOpenTile = useCallback((tile: ResolvedTile) => {
     void openWidgetWindow({
       appUuid: tile.widget.appId,
@@ -244,50 +406,112 @@ export default function CommandHomescreen() {
       appName: tile.widget.appName ?? tile.widget.appSlug ?? 'Widget',
       widgetName: tile.widget.name,
       // Convention used by widgetRuntime: widget_<name>_ui / widget_<name>_data.
-      // We trust the manifest's declared functions when present, falling back
-      // to the convention when the index didn't include them (older builds).
       uiFunction: tile.widget.uiFunction ?? `widget_${tile.widget.name}_ui`,
       dataFunction: tile.widget.dataFunction ?? `widget_${tile.widget.name}_data`,
     });
   }, []);
 
-  const onEditLayout = useCallback(() => {
-    // 3c-ii wires edit mode (drag/resize + remove + save).
-    // TODO(scope): no-op until 3c-ii.
-  }, []);
+  // Persist a layout change. Optimistic update — UI reflects immediately;
+  // server confirms in the background. Reverts on failure.
+  const persistLayout = useCallback(async (next: CommandDashboardLayout) => {
+    const prev = layout;
+    setLayout(next);
+    const saved = await saveCommandDashboardLayout(next);
+    if (!saved) {
+      setLayout(prev);
+      setError('Failed to save dashboard. Reverted.');
+    }
+  }, [layout]);
 
-  const onAddWidget = useCallback(() => {
-    // 3c-ii wires the widget picker modal.
-    // TODO(scope): no-op until 3c-ii.
-  }, []);
+  const onRemoveTile = useCallback(
+    (instanceId: string) => {
+      if (!layout) return;
+      const next: CommandDashboardLayout = {
+        ...layout,
+        cards: layout.cards.filter((c) => c.instance_id !== instanceId),
+      };
+      // Clear the data cache entry so a re-add re-fetches.
+      setCardData((s) => {
+        const { [instanceId]: _drop, ...rest } = s;
+        return rest;
+      });
+      void persistLayout(next);
+    },
+    [layout, persistLayout],
+  );
+
+  const onAddCard = useCallback(
+    (pick: PickedCard) => {
+      const next: CommandDashboardLayout = {
+        dashboard_key: layout?.dashboard_key ?? 'command_home',
+        cards: [
+          ...(layout?.cards ?? []),
+          {
+            instance_id: crypto.randomUUID(),
+            app_id: pick.appId,
+            app_slug: pick.appSlug,
+            widget_id: pick.widgetId,
+            card_id: pick.cardId,
+            size: pick.size,
+            position: { x: 0, y: layout?.cards.length ?? 0 },
+          },
+        ],
+      };
+      void persistLayout(next);
+      setPickerOpen(false);
+    },
+    [layout, persistLayout],
+  );
+
+  // Set of widget+card keys currently on the dashboard — drives the
+  // "Added" badge on picker rows.
+  const takenKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of layout?.cards ?? []) {
+      set.add(buildKey(c.app_id, c.widget_id, c.card_id));
+    }
+    return set;
+  }, [layout]);
 
   return (
     <div className="bg-ul-warm-paper h-full overflow-auto relative">
       {/* Header */}
       <div className="px-7 pt-6 pb-3.5 flex items-end justify-between">
         <div>
-          <div className="text-micro font-mono uppercase tracking-widest text-ul-text-muted mb-1">
-            Command
+          <div
+            className={`text-micro font-mono uppercase tracking-widest mb-1 ${
+              edit ? 'text-ul-info' : 'text-ul-text-muted'
+            }`}
+          >
+            {edit ? 'Command · edit mode' : 'Command'}
           </div>
-          <div className="text-h2 text-ul-text tracking-tight">{today}</div>
+          <div className="text-h2 text-ul-text tracking-tight">
+            {edit ? 'Drag or remove' : today}
+          </div>
         </div>
         <div className="flex gap-2">
+          {edit ? (
+            <button
+              type="button"
+              onClick={() => setEdit(false)}
+              className="font-mono text-caption text-ul-text-secondary bg-ul-bg border border-ul-border px-3.5 py-2 rounded-md cursor-pointer hover:bg-ul-bg-hover"
+            >
+              Done
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEdit(true)}
+              disabled={tiles.length === 0}
+              className="font-mono text-caption text-ul-text-secondary bg-ul-bg border border-ul-border px-3 py-2 rounded-md cursor-pointer hover:bg-ul-bg-hover disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Edit layout
+            </button>
+          )}
           <button
             type="button"
-            onClick={onEditLayout}
-            // TODO(scope): disabled — 3c-ii wires edit mode.
-            disabled
-            className="font-mono text-caption text-ul-text-secondary bg-ul-bg border border-ul-border px-3 py-2 rounded-md cursor-not-allowed opacity-60"
-            title="Edit layout (coming in 3c-ii)"
-          >
-            Edit layout
-          </button>
-          <button
-            type="button"
-            onClick={onAddWidget}
-            disabled
-            className="font-mono text-caption text-white bg-ul-text border border-ul-text px-3.5 py-2 rounded-md cursor-not-allowed opacity-60"
-            title="Add widget (coming in 3c-ii)"
+            onClick={() => setPickerOpen(true)}
+            className="font-mono text-caption text-white bg-ul-text border border-ul-text px-3.5 py-2 rounded-md cursor-pointer hover:bg-ul-accent-hover"
           >
             ＋ Widget
           </button>
@@ -302,25 +526,40 @@ export default function CommandHomescreen() {
       ) : error ? (
         <div className="px-7 py-6 text-caption text-ul-error">{error}</div>
       ) : tiles.length === 0 ? (
-        <EmptyState onAddWidget={onAddWidget} />
+        <EmptyState onAddWidget={() => setPickerOpen(true)} />
       ) : (
         <div
           className="px-[22px] pt-2 pb-6 grid grid-cols-4 gap-3.5"
           style={{ gridAutoRows: '150px' }}
         >
-          {tiles.map((tile) => {
+          {tiles.map((tile, i) => {
             const { colSpan, rowSpan } = parseSize(tile.instance.size);
+            const id = tile.instance.instance_id;
             return (
               <CozyTile
-                key={tile.instance.instance_id}
+                key={id}
                 tile={tile}
                 colSpan={colSpan}
                 rowSpan={rowSpan}
+                data={cardData[id]}
+                loading={cardLoading[id] ?? false}
+                edit={edit}
+                wiggleDelayMs={i * 60}
                 onOpen={() => onOpenTile(tile)}
+                onRemove={() => onRemoveTile(id)}
               />
             );
           })}
         </div>
+      )}
+
+      {pickerOpen && (
+        <WidgetPickerModal
+          widgets={widgetsIndex}
+          takenKeys={takenKeys}
+          onClose={() => setPickerOpen(false)}
+          onPick={onAddCard}
+        />
       )}
     </div>
   );
