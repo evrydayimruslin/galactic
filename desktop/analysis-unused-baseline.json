@@ -232,7 +232,8 @@
         "PlaceBidResult",
         "SetAskPriceResult",
         "StoredCommandDashboardLayout",
-        "TaskContext"
+        "TaskContext",
+        "UserTransactionsResponse"
       ]
     },
     {
