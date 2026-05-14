@@ -145,6 +145,9 @@ export default {
         'shimmer':      'ul-shimmer 1.6s linear infinite',
         'breathe':      'ul-breathe 3s ease-in-out infinite',
         'wiggle':       'ul-wiggle 0.45s ease-in-out infinite', // +premium — edit-mode tile wiggle
+        'orbit':        'ul-orbit 60s linear infinite',          // +premium — constellation empty state
+        'spark-pulse':  'ul-spark-pulse 3.6s ease-in-out infinite', // +premium — constellation core
+        'dot-arrive':   'ul-dot-arrive 360ms cubic-bezier(0.2,0.9,0.3,1)', // +premium — constellation dots
       },
     },
   },

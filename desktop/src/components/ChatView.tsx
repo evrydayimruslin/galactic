@@ -1369,6 +1369,12 @@ export default function ChatView({
         isLoading={isActive}
         systemAgent={systemAgentConfig || undefined}
         onStarterClick={sendMessage}
+        onPickSystemAgent={(cfg) => {
+          const provisioned = agents.find(
+            (a) => a.system_agent_type === cfg.type,
+          );
+          if (provisioned && onNavigateToAgent) onNavigateToAgent(provisioned.id);
+        }}
       />
 
       {/* Queued messages indicator */}

@@ -26,6 +26,7 @@ import {
   type NewlyAcquiredEntry,
 } from '../lib/api';
 import Glyph, { deriveGlyph, deriveTone } from './ui/Glyph';
+import Spark from './ui/Spark';
 
 interface MarketplaceViewProps {
   onOpenTool: (appId: string, appName: string) => void;
@@ -420,8 +421,19 @@ export default function MarketplaceView({ onOpenTool }: MarketplaceViewProps) {
                 ))}
               </div>
             ) : search?.results?.length === 0 ? (
-              <div className="text-caption text-ul-warm-ink-muted">
-                No matches for "{query}".
+              <div className="flex flex-col items-center text-center py-12 animate-fade-up">
+                <div
+                  className="w-12 h-12 rounded-full bg-white flex items-center justify-center mb-3"
+                  style={{ boxShadow: '0 1px 0 rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.05)' }}
+                >
+                  <Spark size={22} color="#999999" />
+                </div>
+                <div className="text-small text-ul-warm-ink font-medium mb-1">
+                  No matches for "{query}".
+                </div>
+                <div className="text-micro text-ul-warm-ink-muted font-mono">
+                  Try fewer words, or browse trending below.
+                </div>
               </div>
             ) : null}
           </div>

@@ -17,6 +17,7 @@ import { type Agent, useAgentFleet } from './hooks/useAgentFleet';
 import { deriveSystemAgentId, isSystemAgentType, SYSTEM_AGENTS } from './lib/systemAgents';
 import { openViewWindow } from './lib/multiWindow';
 import AuthGate from './components/AuthGate';
+import CmdKPalette, { buildPaletteActions } from './components/CmdKPalette';
 import DesktopUpdateToast from './components/DesktopUpdateToast';
 import OnboardingWizard, { type OnboardingHighlight } from './components/OnboardingWizard';
 import ChatView from './components/ChatView';
@@ -63,6 +64,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingHighlight, setOnboardingHighlight] = useState<OnboardingHighlight>('none');
+  const [cmdkOpen, setCmdkOpen] = useState(false);
   const desktopUpdater = useDesktopUpdater();
   const {
     view,
@@ -218,6 +220,56 @@ export default function App() {
   const handleSelectAgent = useCallback((agentId: string) => {
     navigateToAgent(agentId);
   }, [navigateToAgent]);
+
+  // ── Cmd+K / Ctrl+K palette ──
+  // Only attaches once the user is authenticated so the keystroke doesn't
+  // collide with the auth screen / onboarding wizard's own input handlers.
+  useEffect(() => {
+    if (!authenticated || showOnboarding) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCmdkOpen(open => !open);
+      } else if (e.key === 'Escape' && cmdkOpen) {
+        e.preventDefault();
+        setCmdkOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [authenticated, showOnboarding, cmdkOpen]);
+
+  // Pull live system-agent fleet entries so the palette dispatches to the
+  // user's actual agent IDs, not the canonical configs.
+  const systemAgentFleet = useMemo(() => {
+    const byType = new Map<string, Agent>();
+    for (const a of agents) {
+      if (a.system_agent_type && !byType.has(a.system_agent_type)) {
+        byType.set(a.system_agent_type, a);
+      }
+    }
+    return SYSTEM_AGENTS.map(cfg => ({ config: cfg, agent: byType.get(cfg.type) }))
+      .filter((s): s is { config: typeof SYSTEM_AGENTS[number]; agent: Agent } => !!s.agent);
+  }, [agents]);
+
+  const paletteActions = useMemo(
+    () =>
+      buildPaletteActions({
+        systemAgents: systemAgentFleet.map(s => s.config),
+        onPickSystemAgent: (cfg) => {
+          const entry = systemAgentFleet.find(s => s.config.type === cfg.type);
+          if (entry) navigateToAgent(entry.agent.id);
+        },
+        onNewChat: () => {
+          setActiveAgent(null);
+          navigateToNewChat();
+        },
+        onTopUp: navigateToWallet,
+        onSettings: navigateToSettings,
+        onProfile: navigateToProfile,
+      }),
+    [systemAgentFleet, navigateToAgent, setActiveAgent, navigateToNewChat, navigateToWallet, navigateToSettings, navigateToProfile],
+  );
 
   const [newChatKey, setNewChatKey] = useState(0);
   const handleNewAgent = useCallback(() => {
@@ -516,6 +568,11 @@ export default function App() {
                 onHighlight={setOnboardingHighlight}
               />
             )}
+            <CmdKPalette
+              open={cmdkOpen}
+              onClose={() => setCmdkOpen(false)}
+              actions={paletteActions}
+            />
           </div>
         </div>
       </div>

@@ -22,6 +22,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import Glyph, { deriveGlyph, deriveTone } from './ui/Glyph';
+import Spark from './ui/Spark';
 import { fetchFromApi, getToken } from '../lib/storage';
 
 // ── Row shape (FE-internal; tolerant of varying BE response keys) ─────
@@ -390,8 +391,21 @@ export default function LibraryView({ onOpenTool }: LibraryViewProps = {}) {
           ) : error ? (
             <div className="px-3.5 py-6 text-caption text-ul-error">{error}</div>
           ) : rows.length === 0 ? (
-            <div className="px-3.5 py-6 text-caption text-ul-text-muted">
-              {query ? 'No tools match your search.' : 'No tools in your library yet.'}
+            <div className="px-3.5 py-12 flex flex-col items-center text-center animate-fade-up">
+              <div
+                className="w-12 h-12 rounded-full bg-ul-bg-raised flex items-center justify-center mb-3"
+                style={{ boxShadow: '0 1px 0 rgba(0,0,0,0.05)' }}
+              >
+                <Spark size={22} color="#999999" />
+              </div>
+              <div className="text-small text-ul-text font-medium mb-1">
+                {query ? `No tools match "${query}".` : 'No tools in your library yet.'}
+              </div>
+              <div className="text-micro text-ul-text-muted font-mono">
+                {query
+                  ? 'Try a different name, or open the Market tab to find one.'
+                  : 'Open the Market tab to install your first tool — or press ⌘K for shortcuts.'}
+              </div>
             </div>
           ) : (
             <>

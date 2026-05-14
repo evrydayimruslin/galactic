@@ -19,6 +19,13 @@
       ]
     },
     {
+      "file": "src/components/CmdKPalette.tsx",
+      "types": [
+        "BuildPaletteActionsArgs",
+        "PaletteAction"
+      ]
+    },
+    {
       "file": "src/components/ConversationSidebar.tsx",
       "files": [
         "src/components/ConversationSidebar.tsx"
@@ -76,11 +83,9 @@
       "exports": [
         "IconArrowUp",
         "IconBeaker",
-        "IconBolt",
         "IconCheck",
         "IconChevronDown",
         "IconChevronRight",
-        "IconCirclePlus",
         "IconCompass",
         "IconConnector",
         "IconCornerDownLeft",
@@ -91,12 +96,9 @@
         "IconPencil",
         "IconPlugin",
         "IconPlus",
-        "IconSearch",
         "IconShare",
         "IconSlash",
         "IconSparkles",
-        "IconUser",
-        "IconWallet",
         "Spark"
       ],
       "file": "src/components/ui/icons.tsx"

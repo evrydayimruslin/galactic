@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Message } from '../hooks/useChat';
 import type { SystemAgentConfig } from '../lib/systemAgents';
 import MessageBubble from './MessageBubble';
+import ConstellationHero from './ui/ConstellationHero';
 
 interface MessageListProps {
   messages: Message[];
@@ -12,9 +13,11 @@ interface MessageListProps {
   systemAgent?: SystemAgentConfig;
   /** Fires a starter prompt as if the user typed it */
   onStarterClick?: (prompt: string) => void;
+  /** Fired from the generic-empty constellation hero — navigates to that system agent's chat. */
+  onPickSystemAgent?: (agent: SystemAgentConfig) => void;
 }
 
-export default function MessageList({ messages, isLoading, systemAgent, onStarterClick }: MessageListProps) {
+export default function MessageList({ messages, isLoading, systemAgent, onStarterClick, onPickSystemAgent }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const userScrolled = useRef(false);
@@ -94,16 +97,11 @@ export default function MessageList({ messages, isLoading, systemAgent, onStarte
       );
     }
 
-    // Generic empty state for regular chats
+    // Generic empty state — the product constellation. Picking a dot routes
+    // the user into that system agent's chat (handled by ChatView upstream).
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <h2 className="text-h3 text-ul-text mb-2">Ultralight Chat</h2>
-          <p className="text-body text-ul-text-muted max-w-sm">
-            Ask anything. Your messages are processed through the Ultralight platform
-            with access to deployed apps and tools.
-          </p>
-        </div>
+      <div className="flex-1 min-h-0">
+        <ConstellationHero onPickAgent={onPickSystemAgent} />
       </div>
     );
   }
