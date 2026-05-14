@@ -19,7 +19,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 const DEEP_LINK_EVENT = 'ul://deep-link';
 
 export interface DeepLinkNavigator {
-  navigateToAppStore: (appId: string, appName?: string) => void;
+  navigateToToolDetail: (appId: string, appName?: string) => void;
 }
 
 /**
@@ -28,7 +28,7 @@ export interface DeepLinkNavigator {
  */
 export function parseDeepLink(
   raw: string,
-): { kind: 'app-store'; appId: string } | null {
+): { kind: 'tool-detail'; appId: string } | null {
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -44,7 +44,7 @@ export function parseDeepLink(
   if (parsed.host === 'app') {
     // Strip leading slash, take first segment only so `ultralight://app/xyz/?foo` works.
     const appId = parsed.pathname.replace(/^\//, '').split('/')[0];
-    if (appId) return { kind: 'app-store', appId };
+    if (appId) return { kind: 'tool-detail', appId };
   }
 
   return null;
@@ -55,7 +55,7 @@ export function parseDeepLink(
  * `ready` flips true. URLs received before ready are queued and drained
  * in order on the ready transition.
  *
- * @param nav   Navigator object with `navigateToAppStore` (typically the
+ * @param nav   Navigator object with `navigateToToolDetail` (typically the
  *              result of `useAppState()`).
  * @param ready Gate that prevents routing during the pre-auth checking
  *              phase. Pass `authenticated && !checking` from App.tsx.
@@ -77,8 +77,8 @@ export function useDeepLink(nav: DeepLinkNavigator, ready: boolean): void {
       console.warn('[deep-link] ignoring unknown URL:', url);
       return;
     }
-    if (intent.kind === 'app-store') {
-      navRef.current.navigateToAppStore(intent.appId);
+    if (intent.kind === 'tool-detail') {
+      navRef.current.navigateToToolDetail(intent.appId);
     }
   };
 

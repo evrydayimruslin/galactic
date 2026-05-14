@@ -176,9 +176,20 @@ function OwnerBadge({ row }: { row: LibraryRow }) {
 
 // ── Row + Section primitives ──────────────────────────────────────────
 
-function Row({ row, running = false }: { row: LibraryRow; running?: boolean }) {
+function Row({
+  row,
+  running = false,
+  onOpen,
+}: {
+  row: LibraryRow;
+  running?: boolean;
+  onOpen?: () => void;
+}) {
   return (
-    <div className="grid grid-cols-[40px_minmax(0,1fr)_70px_70px_70px] gap-4 items-center px-3.5 py-3.5 rounded-pill cursor-pointer hover:bg-ul-bg-subtle transition-colors">
+    <div
+      onClick={onOpen}
+      className={`grid grid-cols-[40px_minmax(0,1fr)_70px_70px_70px] gap-4 items-center px-3.5 py-3.5 rounded-pill ${onOpen ? 'cursor-pointer' : ''} hover:bg-ul-bg-subtle transition-colors`}
+    >
       <div className="relative">
         <Glyph glyph={row.glyph} tone={row.tone} size={36} />
         {running && (
@@ -238,7 +249,13 @@ function SectionHeader({
 
 // ── LibraryView ───────────────────────────────────────────────────────
 
-export default function LibraryView() {
+interface LibraryViewProps {
+  /** Optional click handler — when provided, rows become navigable to the
+   *  tool detail page. Wired by App.tsx from useAppState.navigateToToolDetail. */
+  onOpenTool?: (appId: string, appName: string) => void;
+}
+
+export default function LibraryView({ onOpenTool }: LibraryViewProps = {}) {
   const [tab, setTab] = useState<'Library' | 'Shared'>('Library');
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<LibraryRow[]>([]);
@@ -383,7 +400,7 @@ export default function LibraryView() {
                 <>
                   <SectionHeader title="Your tools" count={String(groups.yours.length)} />
                   {groups.yours.map((r) => (
-                    <Row key={r.id} row={r} />
+                    <Row key={r.id} row={r} onOpen={onOpenTool ? () => onOpenTool(r.id, r.name) : undefined} />
                   ))}
                 </>
               )}
@@ -395,7 +412,7 @@ export default function LibraryView() {
                     action="Manage →"
                   />
                   {groups.installed.map((r) => (
-                    <Row key={r.id} row={r} />
+                    <Row key={r.id} row={r} onOpen={onOpenTool ? () => onOpenTool(r.id, r.name) : undefined} />
                   ))}
                 </>
               )}

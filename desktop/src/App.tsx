@@ -22,6 +22,7 @@ import OnboardingWizard, { type OnboardingHighlight } from './components/Onboard
 import ChatView from './components/ChatView';
 import HomeView from './components/HomeView';
 import LibraryView from './components/LibraryView';
+import ToolDetailView from './components/ToolDetailView';
 import NavSidebar from './components/NavSidebar';
 import TopToolbar from './components/TopToolbar';
 import WebPanel from './components/WebPanel';
@@ -67,7 +68,7 @@ export default function App() {
     navigateToAgent,
     navigateToNewChat,
     navigateToLibrary,
-    navigateToAppStore,
+    navigateToToolDetail,
     navigateToProfile,
     navigateToWallet,
     navigateToSettings,
@@ -149,7 +150,7 @@ export default function App() {
   // ── postMessage bridge from embedded web iframes ──
   // The unified /app/:id store page (loaded in WebPanel) and the Market
   // tab (loaded via /capabilities) both post messages to us. We handle:
-  //   - { type: 'navigate', to: 'app-store', appId, appName? }
+  //   - { type: 'navigate', to: 'tool-detail', appId, appName? }
   //       → flip the current view to the store page for that app
   //   - { type: 'library-changed', ... }
   //       → no-op for now (v2 may refresh cached library state)
@@ -157,20 +158,20 @@ export default function App() {
     const handler = (e: MessageEvent) => {
       const data = e.data;
       if (!data || typeof data !== 'object') return;
-      if (data.type === 'navigate' && data.to === 'app-store' && typeof data.appId === 'string') {
-        navigateToAppStore(data.appId, typeof data.appName === 'string' ? data.appName : undefined);
+      if (data.type === 'navigate' && data.to === 'tool-detail' && typeof data.appId === 'string') {
+        navigateToToolDetail(data.appId, typeof data.appName === 'string' ? data.appName : undefined);
       }
       // Future: library-changed could invalidate cached state in other iframes
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [navigateToAppStore]);
+  }, [navigateToToolDetail]);
 
   // ── Deep-link routing (Phase 3) ──
   // Listens for `ultralight://app/:id` URLs delivered by the Rust side,
   // routes them to the app-store view. URLs received before auth is ready
   // are queued and drained once `authenticated && !checking` flips true.
-  useDeepLink({ navigateToAppStore }, authenticated && !checking);
+  useDeepLink({ navigateToToolDetail }, authenticated && !checking);
 
   // All hooks must be declared before any early returns
   const handleAuthenticated = useCallback(() => {
@@ -316,10 +317,10 @@ export default function App() {
         return new Set(prev).add(view.agentId);
       });
     }
-    // 'app-store' is intentionally NOT cached — we unmount each visit so
+    // 'tool-detail' is intentionally NOT cached — we unmount each visit so
     // switching between different apps always loads a fresh iframe. Visits
     // are short-lived (info pages) so there's no perf cost.
-    if (view.kind === 'app-store') return;
+    if (view.kind === 'tool-detail') return;
     setMountedViews((prev) => {
       if (prev.has(view.kind)) return prev;
       return new Set(prev).add(view.kind);
@@ -426,23 +427,23 @@ export default function App() {
 
             {mountedViews.has('library') && (
               <div style={paneStyle(view.kind === 'library')}>
-                <LibraryView />
+                <LibraryView onOpenTool={navigateToToolDetail} />
               </div>
             )}
 
             {
               /*
-          App store detail view — NOT cached in mountedViews. Only rendered
-          while the current view is 'app-store', so it unmounts on navigation
-          away. Key on appId so switching between apps forces a fresh iframe.
+          Tool detail view — NOT cached in mountedViews. Only rendered while
+          the current view is 'tool-detail', so it unmounts on navigation
+          away. Key on appId so switching between tools forces a fresh fetch.
         */
             }
-            {view.kind === 'app-store' && (
+            {view.kind === 'tool-detail' && (
               <div style={paneStyle(true)}>
-                <WebPanel
+                <ToolDetailView
                   key={view.appId}
-                  path={`/app/${view.appId}`}
-                  title={view.appName ?? 'App'}
+                  appId={view.appId}
+                  fallbackName={view.appName}
                 />
               </div>
             )}
