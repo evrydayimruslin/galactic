@@ -13,15 +13,45 @@
       ]
     },
     {
+      "file": "src/components/CardDetailModal.tsx",
+      "files": [
+        "src/components/CardDetailModal.tsx"
+      ]
+    },
+    {
       "file": "src/components/ConversationSidebar.tsx",
       "files": [
         "src/components/ConversationSidebar.tsx"
       ]
     },
     {
+      "file": "src/components/CreateAgentModal.tsx",
+      "files": [
+        "src/components/CreateAgentModal.tsx"
+      ]
+    },
+    {
       "file": "src/components/DiscoverWidget.tsx",
       "types": [
         "DiscoverWidgetMode"
+      ]
+    },
+    {
+      "file": "src/components/HomeView.tsx",
+      "files": [
+        "src/components/HomeView.tsx"
+      ]
+    },
+    {
+      "file": "src/components/KanbanBoard.tsx",
+      "files": [
+        "src/components/KanbanBoard.tsx"
+      ]
+    },
+    {
+      "file": "src/components/KanbanCard.tsx",
+      "files": [
+        "src/components/KanbanCard.tsx"
       ]
     },
     {
@@ -61,9 +91,21 @@
       ]
     },
     {
+      "file": "src/components/WidgetAppView.tsx",
+      "files": [
+        "src/components/WidgetAppView.tsx"
+      ]
+    },
+    {
       "file": "src/components/WidgetCard.tsx",
       "files": [
         "src/components/WidgetCard.tsx"
+      ]
+    },
+    {
+      "file": "src/components/WidgetHomescreen.tsx",
+      "files": [
+        "src/components/WidgetHomescreen.tsx"
       ]
     },
     {
@@ -115,9 +157,8 @@
     },
     {
       "file": "src/hooks/useKanban.ts",
-      "types": [
-        "KanbanBoard",
-        "UseKanbanReturn"
+      "files": [
+        "src/hooks/useKanban.ts"
       ]
     },
     {
@@ -149,8 +190,8 @@
     },
     {
       "file": "src/hooks/useWidgetInbox.ts",
-      "types": [
-        "WidgetInboxState"
+      "files": [
+        "src/hooks/useWidgetInbox.ts"
       ]
     },
     {
@@ -172,9 +213,7 @@
       "exports": [
         "createCommandDashboard",
         "deleteCommandDashboard",
-        "fetchCommandDashboardLayout",
         "fetchCommandDashboards",
-        "fetchCommandWidgets",
         "saveCommandDashboardLayout",
         "updateCommandDashboard"
       ],
@@ -182,10 +221,8 @@
       "types": [
         "ApiError",
         "AppMcpToolCallOptions",
-        "CommandDashboardLayout",
         "CommandDashboardMetadataInput",
         "CommandDashboardSummary",
-        "FunctionIndex",
         "InferenceModelOption",
         "InferenceProviderChoice",
         "McpToolResult",
@@ -236,6 +273,12 @@
       "file": "src/lib/storage.ts"
     },
     {
+      "file": "src/lib/suggestions.ts",
+      "files": [
+        "src/lib/suggestions.ts"
+      ]
+    },
+    {
       "exports": [
         "findSplitPoint"
       ],
@@ -250,6 +293,7 @@
     {
       "exports": [
         "generateCodeModeTypes",
+        "generateConnectedAppsSchema",
         "generateFleetContext",
         "isCodeModeCapable"
       ],
@@ -260,9 +304,15 @@
     },
     {
       "exports": [
-        "getHomeDir"
+        "getHomeDir",
+        "listMdFiles",
+        "parseFrontmatter"
       ],
-      "file": "src/lib/templates.ts"
+      "file": "src/lib/templates.ts",
+      "types": [
+        "AgentTemplate",
+        "ContextFile"
+      ]
     },
     {
       "exports": [
@@ -277,12 +327,18 @@
         "DiscoveredWidgetSource",
         "LegacyWidgetContractInventoryEntry",
         "LegacyWidgetContractObservation",
-        "WidgetDiscoveryResult"
+        "WidgetDiscoveryResult",
+        "WidgetToolDescriptor"
       ]
     },
     {
       "exports": [
-        "DEFAULT_WIDGET_PULL_INTERVAL_MS"
+        "DEFAULT_WIDGET_PULL_INTERVAL_MS",
+        "fetchWidgetUiPayload",
+        "getWidgetSourceKey",
+        "isWidgetPullDue",
+        "updateWidgetHtmlCacheMeta",
+        "WIDGET_PULL_INTERVAL_OPTIONS"
       ],
       "file": "src/lib/widgetRuntime.ts",
       "types": [
@@ -290,6 +346,7 @@
         "WidgetHtmlCacheEntry",
         "WidgetHtmlLoadResult",
         "WidgetPullCostEstimate",
+        "WidgetPullSettings",
         "WidgetUiPayload"
       ]
     }

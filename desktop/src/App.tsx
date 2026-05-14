@@ -20,7 +20,7 @@ import AuthGate from './components/AuthGate';
 import DesktopUpdateToast from './components/DesktopUpdateToast';
 import OnboardingWizard, { type OnboardingHighlight } from './components/OnboardingWizard';
 import ChatView from './components/ChatView';
-import HomeView from './components/HomeView';
+import CommandHomescreen from './components/CommandHomescreen';
 import LibraryView from './components/LibraryView';
 import ToolDetailView from './components/ToolDetailView';
 import NavSidebar from './components/NavSidebar';
@@ -419,9 +419,7 @@ export default function App() {
             {/* Cached singleton views — mounted once, then shown/hidden */}
             {mountedViews.has('home') && (
               <div style={paneStyle(view.kind === 'home')}>
-                <HomeView
-                  onNavigateToAgent={navigateToAgent}
-                />
+                <CommandHomescreen />
               </div>
             )}
 
