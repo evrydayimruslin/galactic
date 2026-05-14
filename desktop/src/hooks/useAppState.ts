@@ -9,7 +9,7 @@ export type AppView =
   | { kind: 'agent'; agentId: string; initialMessage?: string }
   | { kind: 'new-chat' }
   | { kind: 'library' }
-  | { kind: 'app-store'; appId: string; appName?: string }
+  | { kind: 'tool-detail'; appId: string; appName?: string }
   | { kind: 'profile' }
   | { kind: 'wallet' }
   | { kind: 'settings' };
@@ -20,7 +20,7 @@ export interface UseAppStateReturn {
   navigateToAgent: (agentId: string, initialMessage?: string) => void;
   navigateToNewChat: () => void;
   navigateToLibrary: () => void;
-  navigateToAppStore: (appId: string, appName?: string) => void;
+  navigateToToolDetail: (appId: string, appName?: string) => void;
   navigateToProfile: () => void;
   navigateToWallet: () => void;
   navigateToSettings: () => void;
@@ -62,7 +62,7 @@ const MAX_HISTORY = 50;
 function viewsEqual(a: AppView, b: AppView): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'agent' && b.kind === 'agent') return a.agentId === b.agentId;
-  if (a.kind === 'app-store' && b.kind === 'app-store') return a.appId === b.appId;
+  if (a.kind === 'tool-detail' && b.kind === 'tool-detail') return a.appId === b.appId;
   return true;
 }
 
@@ -122,7 +122,7 @@ export function useAppState(): UseAppStateReturn {
   const navigateToAgent = useCallback((agentId: string, initialMessage?: string) => navigate({ kind: 'agent', agentId, initialMessage }), [navigate]);
   const navigateToNewChat = useCallback(() => navigate({ kind: 'new-chat' }), [navigate]);
   const navigateToLibrary = useCallback(() => navigate({ kind: 'library' }), [navigate]);
-  const navigateToAppStore = useCallback((appId: string, appName?: string) => navigate({ kind: 'app-store', appId, appName }), [navigate]);
+  const navigateToToolDetail = useCallback((appId: string, appName?: string) => navigate({ kind: 'tool-detail', appId, appName }), [navigate]);
   const navigateToProfile = useCallback(() => navigate({ kind: 'profile' }), [navigate]);
   const navigateToWallet = useCallback(() => navigate({ kind: 'wallet' }), [navigate]);
   const navigateToSettings = useCallback(() => navigate({ kind: 'settings' }), [navigate]);
@@ -133,7 +133,7 @@ export function useAppState(): UseAppStateReturn {
     navigateToAgent,
     navigateToNewChat,
     navigateToLibrary,
-    navigateToAppStore,
+    navigateToToolDetail,
     navigateToProfile,
     navigateToWallet,
     navigateToSettings,
