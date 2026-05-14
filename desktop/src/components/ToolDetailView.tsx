@@ -27,11 +27,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
+import { Check, X as XIcon } from 'lucide-react';
 import Glyph, { deriveGlyph, deriveTone } from './ui/Glyph';
 import AcquisitionFlow from './marketplace/AcquisitionFlow';
 import { fetchFromApi, getToken } from '../lib/storage';
 import {
   fetchMarketplaceListing,
+  setAskPrice,
+  acceptBid,
+  rejectBid,
   type MarketplaceBid,
   type MarketplaceListingDetails,
   type MarketplaceOwnerAdminChecklistItem,
@@ -240,9 +244,111 @@ interface SideRailProps {
   loading: boolean;
   isOwner: boolean;
   onOpenAcquisition: () => void;
+  onListingChanged: () => Promise<void>;
 }
 
-function SideRail({ appId: _appId, details, loading, isOwner, onOpenAcquisition }: SideRailProps) {
+// ── Seller-only ask editor ────────────────────────────────────────────
+
+function AskEditor({
+  appId,
+  currentAsk,
+  currentInstantBuy,
+  onCommitted,
+  onCancel,
+}: {
+  appId: string;
+  currentAsk: number | null;
+  currentInstantBuy: boolean;
+  onCommitted: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [amount, setAmount] = useState<number>(currentAsk ?? 1000);
+  const [instant, setInstant] = useState<boolean>(currentInstantBuy);
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const onSave = async (clearing = false) => {
+    setSubmitting(true);
+    setErr(null);
+    const result = await setAskPrice({
+      appId,
+      priceLight: clearing ? null : amount,
+      instantBuy: clearing ? undefined : instant,
+    });
+    if (!result.ok) {
+      setErr(result.errorMessage || 'Failed to save ask.');
+      setSubmitting(false);
+      return;
+    }
+    await onCommitted();
+    setSubmitting(false);
+  };
+
+  return (
+    <div className="px-4 py-3.5 border-b border-ul-border bg-ul-bg-raised">
+      <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-2">
+        {currentAsk !== null ? 'Edit ask' : 'Set ask price'}
+      </div>
+      <div className="flex items-center gap-2 border border-ul-border rounded-md px-2.5 py-1.5 bg-ul-bg mb-2">
+        <span className="text-body font-mono">✦</span>
+        <input
+          type="number"
+          value={amount}
+          onChange={(e) => setAmount(Math.max(0, Number(e.target.value) || 0))}
+          min={1}
+          step={1}
+          className="flex-1 border-none outline-none text-body font-mono font-semibold tabular-nums bg-transparent"
+        />
+        <span className="text-nano text-ul-text-muted font-mono">Light</span>
+      </div>
+      <label className="flex items-center gap-2 text-caption text-ul-text-secondary cursor-pointer mb-2.5">
+        <input
+          type="checkbox"
+          checked={instant}
+          onChange={(e) => setInstant(e.target.checked)}
+          className="cursor-pointer"
+        />
+        Allow instant buy at this price
+      </label>
+      {err && <div className="text-nano text-ul-error mb-2">{err}</div>}
+      <div className="flex gap-1.5">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={submitting}
+          className="flex-1 px-2 py-1.5 bg-ul-bg text-ul-text border border-ul-border rounded-sm text-caption font-medium cursor-pointer hover:bg-ul-bg-hover disabled:opacity-60"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => void onSave(false)}
+          disabled={submitting || amount <= 0}
+          className="flex-[1.5] px-2 py-1.5 bg-ul-text text-white border-none rounded-sm text-caption font-medium cursor-pointer hover:bg-ul-accent-hover disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {submitting ? 'Saving…' : currentAsk !== null ? 'Update ask' : 'Set ask'}
+        </button>
+      </div>
+      {currentAsk !== null && (
+        <button
+          type="button"
+          onClick={() => void onSave(true)}
+          disabled={submitting}
+          className="mt-2 w-full px-2 py-1.5 bg-transparent text-ul-text-secondary border-none text-nano font-mono uppercase tracking-wider cursor-pointer hover:text-ul-error disabled:opacity-60"
+        >
+          Unlist tool
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SideRail({ appId, details, loading, isOwner, onOpenAcquisition, onListingChanged }: SideRailProps) {
+  const [editingAsk, setEditingAsk] = useState(false);
+  // Per-bid action state — which bid is being accepted/rejected, with last error
+  const [bidActionId, setBidActionId] = useState<string | null>(null);
+  const [bidActionError, setBidActionError] = useState<string | null>(null);
+
   if (loading && !details) {
     return (
       <aside className="sticky top-6 self-start">
@@ -257,19 +363,68 @@ function SideRail({ appId: _appId, details, loading, isOwner, onOpenAcquisition 
   const summary = details?.marketplace_summary ?? null;
   const ask = listing?.ask_price_light ?? summary?.ask_price_light ?? null;
   const bids = (details?.bids ?? []).slice().sort((a, b) => b.amount_light - a.amount_light);
-  const visibleBids = bids.slice(0, 3);
+  // Owners see all open bids inline; non-owners see top 3.
+  const visibleBids = isOwner ? bids : bids.slice(0, 3);
   const askExists = ask !== null && ask !== undefined && ask > 0;
   const fee = summary?.platform_fee_at_ask_light ?? null;
   const payout = summary?.seller_payout_at_ask_light ?? null;
 
+  const onAcceptBid = async (bidId: string) => {
+    setBidActionId(bidId);
+    setBidActionError(null);
+    const result = await acceptBid(bidId);
+    if (!result.ok) {
+      setBidActionError(result.errorMessage || 'Failed to accept bid.');
+      setBidActionId(null);
+      return;
+    }
+    await onListingChanged();
+    setBidActionId(null);
+  };
+
+  const onRejectBid = async (bidId: string) => {
+    setBidActionId(bidId);
+    setBidActionError(null);
+    const result = await rejectBid(bidId);
+    if (!result.ok) {
+      setBidActionError(result.errorMessage || 'Failed to reject bid.');
+      setBidActionId(null);
+      return;
+    }
+    await onListingChanged();
+    setBidActionId(null);
+  };
+
   return (
     <aside className="sticky top-6 self-start">
       <div className="border border-ul-border rounded-lg overflow-hidden bg-ul-bg">
-        {/* Ask header */}
-        {askExists ? (
+        {/* Ask header — owner gets the editor inline */}
+        {isOwner && editingAsk ? (
+          <AskEditor
+            appId={appId}
+            currentAsk={ask}
+            currentInstantBuy={!!listing?.instant_buy}
+            onCancel={() => setEditingAsk(false)}
+            onCommitted={async () => {
+              await onListingChanged();
+              setEditingAsk(false);
+            }}
+          />
+        ) : askExists ? (
           <div className="px-4 py-3.5 border-b border-ul-border bg-ul-bg-raised">
-            <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-1.5">
-              For sale · ask
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest">
+                For sale · ask
+              </div>
+              {isOwner && (
+                <button
+                  type="button"
+                  onClick={() => setEditingAsk(true)}
+                  className="text-nano font-mono text-ul-text-secondary bg-transparent border-none cursor-pointer hover:text-ul-text underline"
+                >
+                  Edit
+                </button>
+              )}
             </div>
             <div className="flex items-baseline gap-1.5">
               <span className="text-h2 font-bold font-mono tabular-nums tracking-tight">
@@ -290,11 +445,24 @@ function SideRail({ appId: _appId, details, loading, isOwner, onOpenAcquisition 
           </div>
         ) : (
           <div className="px-4 py-3.5 border-b border-ul-border bg-ul-bg-raised">
-            <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-1">
-              Not for sale
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest">
+                Not for sale
+              </div>
+              {isOwner && (
+                <button
+                  type="button"
+                  onClick={() => setEditingAsk(true)}
+                  className="text-nano font-mono text-ul-text-secondary bg-transparent border-none cursor-pointer hover:text-ul-text underline"
+                >
+                  Set ask
+                </button>
+              )}
             </div>
             <div className="text-small text-ul-text-secondary leading-tight">
-              Owner hasn't set an ask. Place a bid — if it's accepted, ownership transfers.
+              {isOwner
+                ? 'No ask set. Buyers can still post bids on this tool.'
+                : "Owner hasn't set an ask. Place a bid — if it's accepted, ownership transfers."}
             </div>
           </div>
         )}
@@ -303,11 +471,14 @@ function SideRail({ appId: _appId, details, loading, isOwner, onOpenAcquisition 
         <div className="px-3.5 py-3">
           <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-2">
             {bids.length > 0
-              ? (askExists ? `Place a bid · ${bids.length} open` : `Open bids · ${bids.length}`)
+              ? (isOwner ? `Open bids · ${bids.length}` : askExists ? `Place a bid · ${bids.length} open` : `Open bids · ${bids.length}`)
               : 'No open bids yet'}
           </div>
+          {bidActionError && (
+            <div className="text-nano text-ul-error mb-2">{bidActionError}</div>
+          )}
           {visibleBids.length > 0 && (
-            <div className="flex flex-col gap-1.5 mb-2">
+            <div className="flex flex-col gap-2 mb-2">
               {visibleBids.map((bid) => (
                 <div key={bid.id} className="flex items-center gap-2">
                   <div className="flex-1 min-w-0">
@@ -316,19 +487,41 @@ function SideRail({ appId: _appId, details, loading, isOwner, onOpenAcquisition 
                   <div className="font-mono text-caption text-ul-text tabular-nums flex-shrink-0">
                     ✦{formatLight(bid.amount_light)}
                   </div>
+                  {isOwner && (
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => void onAcceptBid(bid.id)}
+                        disabled={bidActionId !== null}
+                        className="w-6 h-6 rounded-full bg-ul-success-soft text-ul-success-strong flex items-center justify-center cursor-pointer hover:opacity-80 disabled:opacity-40 disabled:cursor-wait"
+                        title="Accept bid (transfers ownership)"
+                      >
+                        <Check className="w-3 h-3" strokeWidth={2.5} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void onRejectBid(bid.id)}
+                        disabled={bidActionId !== null}
+                        className="w-6 h-6 rounded-full bg-ul-error-soft text-ul-error flex items-center justify-center cursor-pointer hover:opacity-80 disabled:opacity-40 disabled:cursor-wait"
+                        title="Decline bid (refunds escrow)"
+                      >
+                        <XIcon className="w-3 h-3" strokeWidth={2.5} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           )}
-          <button
-            type="button"
-            onClick={onOpenAcquisition}
-            disabled={isOwner}
-            className="bg-transparent text-ul-text border-none p-0 text-caption font-medium underline cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 hover:text-ul-text-secondary"
-            title={isOwner ? "You're the owner of this tool" : undefined}
-          >
-            {askExists ? 'See all bids →' : bids.length > 0 ? 'See all bids →' : 'Place a bid →'}
-          </button>
+          {!isOwner && (
+            <button
+              type="button"
+              onClick={onOpenAcquisition}
+              className="bg-transparent text-ul-text border-none p-0 text-caption font-medium underline cursor-pointer hover:text-ul-text-secondary"
+            >
+              {askExists ? 'See all bids →' : bids.length > 0 ? 'See all bids →' : 'Place a bid →'}
+            </button>
+          )}
         </div>
 
         {/* Revenue / owner admin */}
@@ -543,6 +736,7 @@ export default function ToolDetailView({ appId, fallbackName }: ToolDetailViewPr
               loading={listingLoading}
               isOwner={isOwner}
               onOpenAcquisition={() => setAcquisitionOpen(true)}
+              onListingChanged={refetchListing}
             />
           </div>
         ) : null}

@@ -218,6 +218,7 @@
       ],
       "file": "src/lib/api.ts",
       "types": [
+        "AcceptBidResult",
         "ApiError",
         "AppMcpToolCallOptions",
         "CommandDashboardMetadataInput",
@@ -229,6 +230,7 @@
         "McpToolResult",
         "OrchestrateEvent",
         "PlaceBidResult",
+        "SetAskPriceResult",
         "StoredCommandDashboardLayout",
         "TaskContext"
       ]

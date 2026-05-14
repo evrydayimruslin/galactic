@@ -1122,6 +1122,96 @@ export async function cancelBid(bidId: string): Promise<{ ok: boolean; errorMess
   return { ok: true };
 }
 
+// ── Seller actions ──
+
+export interface SetAskPriceResult {
+  ok: boolean;
+  listing_id?: string;
+  app_id?: string;
+  ask_price_light?: number | null;
+  floor_price_light?: number | null;
+  instant_buy?: boolean;
+  errorStatus?: number;
+  errorMessage?: string;
+}
+
+/** POST /api/marketplace/ask — owner sets / updates / clears the ask price.
+ *  Pass priceLight=null to unlist (clear the ask). */
+export async function setAskPrice(input: {
+  appId: string;
+  priceLight: number | null;
+  floorLight?: number;
+  instantBuy?: boolean;
+  note?: string;
+}): Promise<SetAskPriceResult> {
+  const token = getToken();
+  if (!token) return { ok: false, errorMessage: 'Not signed in' };
+  const res = await fetchFromApi('/api/marketplace/ask', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      app_id: input.appId,
+      price_light: input.priceLight,
+      floor_light: input.floorLight,
+      instant_buy: input.instantBuy,
+      note: input.note,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, errorStatus: res.status, errorMessage: text || `Failed (${res.status})` };
+  }
+  const data = await res.json() as Omit<SetAskPriceResult, 'ok' | 'errorStatus' | 'errorMessage'>;
+  return { ok: true, ...data };
+}
+
+export interface AcceptBidResult {
+  ok: boolean;
+  sale_id?: string;
+  app_id?: string;
+  seller_id?: string;
+  buyer_id?: string;
+  sale_price_light?: number;
+  platform_fee_light?: number;
+  seller_payout_light?: number;
+  errorStatus?: number;
+  errorMessage?: string;
+}
+
+/** POST /api/marketplace/accept — owner accepts a bid. Atomic ownership
+ *  transfer + Light debit (buyer) + credit (seller). */
+export async function acceptBid(bidId: string): Promise<AcceptBidResult> {
+  const token = getToken();
+  if (!token) return { ok: false, errorMessage: 'Not signed in' };
+  const res = await fetchFromApi('/api/marketplace/accept', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bid_id: bidId }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, errorStatus: res.status, errorMessage: text || `Failed (${res.status})` };
+  }
+  const data = await res.json() as Omit<AcceptBidResult, 'ok' | 'errorStatus' | 'errorMessage'>;
+  return { ok: true, ...data };
+}
+
+/** POST /api/marketplace/reject — owner declines a bid, refunds escrow. */
+export async function rejectBid(bidId: string): Promise<{ ok: boolean; errorMessage?: string }> {
+  const token = getToken();
+  if (!token) return { ok: false, errorMessage: 'Not signed in' };
+  const res = await fetchFromApi('/api/marketplace/reject', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bid_id: bidId }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, errorMessage: text || `Failed (${res.status})` };
+  }
+  return { ok: true };
+}
+
 export interface InstantAcquireResult {
   ok: boolean;
   sale_id?: string;
