@@ -21,6 +21,7 @@
 import { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import Modal from '../ui/Modal';
+import StripePaymentPanel from './StripePaymentPanel';
 import {
   convertEarningsToBalance,
   createWalletExpressIntent,
@@ -104,6 +105,16 @@ export default function AddLightModal({ hosting, earnings, onClose, onSuccess }:
     wireInstructions?: Record<string, unknown> | null;
     paymentIntentId?: string;
   }>(null);
+  // Wallet checkout intermediate state — after the intent is created
+  // but before the user has confirmed payment in the embedded Stripe
+  // Payment Element. Cleared on success / back.
+  const [checkout, setCheckout] = useState<null | {
+    publishableKey: string;
+    clientSecret: string;
+    paymentIntentId: string;
+    light: number;
+    amountCents: number;
+  }>(null);
 
   const methodOption = METHODS.find((m) => m.id === method)!;
   const amountCents = Math.max(0, Math.round(amountUsd * 100));
@@ -160,7 +171,7 @@ export default function AddLightModal({ hosting, earnings, onClose, onSuccess }:
         onSuccess?.();
         return;
       }
-      // wallet (Apple/Google Pay)
+      // wallet (Apple/Google Pay + card via Stripe Payment Element)
       const result = await createWalletExpressIntent({
         amountCents,
         termsAccepted: true,
@@ -169,12 +180,20 @@ export default function AddLightModal({ hosting, earnings, onClose, onSuccess }:
         setError(result.errorMessage || 'Failed to start wallet checkout.');
         return;
       }
-      setSuccess({
-        kind: 'wallet',
-        light: result.light_amount ?? lightReceived,
+      if (!result.publishable_key || !result.client_secret || !result.payment_intent_id) {
+        setError('Wallet checkout response is missing payment credentials.');
+        return;
+      }
+      // Stash the intent details and let the StripePaymentPanel take
+      // over rendering. Success state is set once the panel reports
+      // the PaymentIntent reached `succeeded` / `processing`.
+      setCheckout({
+        publishableKey: result.publishable_key,
+        clientSecret: result.client_secret,
         paymentIntentId: result.payment_intent_id,
+        light: result.light_amount ?? lightReceived,
+        amountCents,
       });
-      onSuccess?.();
     } finally {
       setSubmitting(false);
     }
@@ -189,6 +208,46 @@ export default function AddLightModal({ hosting, earnings, onClose, onSuccess }:
           method={methodOption}
           onClose={onClose}
         />
+      </Modal>
+    );
+  }
+
+  // Wallet checkout — Stripe Payment Element mounts here after the
+  // PaymentIntent is created. Stays inside the same Modal chrome so
+  // the user never feels like they've left Ultralight.
+  if (checkout) {
+    return (
+      <Modal onClose={onClose} surface="plain" radius="xl" maxWidth="md" maxHeight="tall">
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute top-4 right-4 w-8 h-8 rounded-full text-ul-text-muted hover:bg-ul-bg-hover flex items-center justify-center cursor-pointer z-10"
+          title="Close"
+        >
+          <X className="w-4 h-4" strokeWidth={1.5} />
+        </button>
+        <div className="p-7">
+          <StripePaymentPanel
+            publishableKey={checkout.publishableKey}
+            clientSecret={checkout.clientSecret}
+            lightAmount={checkout.light}
+            amountCents={checkout.amountCents}
+            onComplete={(paymentIntentId) => {
+              // The BE webhook actually credits Light; this just flips
+              // the modal to the confirmation view so the user sees the
+              // sale lock in. Balance will refresh on the parent's
+              // onSuccess refetch.
+              setCheckout(null);
+              setSuccess({
+                kind: 'wallet',
+                light: checkout.light,
+                paymentIntentId,
+              });
+              onSuccess?.();
+            }}
+            onCancel={() => setCheckout(null)}
+          />
+        </div>
       </Modal>
     );
   }
@@ -431,10 +490,9 @@ function SuccessView({
         )}
         {isWallet && (
           <>
-            Your PaymentIntent for <strong className="font-mono">✦{formatLight(state.light)}</strong>{' '}
-            is created on Stripe. Completing wallet payment from the desktop requires the Stripe.js
-            wallet UI, which is shipping in a focused follow-up batch. For now you can complete the
-            payment via the web app, or pick <strong>Bank wire</strong> instead.
+            Your <strong className="font-mono">✦{formatLight(state.light)}</strong> purchase is
+            confirmed. Stripe is settling the wallet charge — Light typically credits within seconds.
+            The platform webhook handles the receipt; refresh your balance shortly to see it land.
           </>
         )}
       </div>
