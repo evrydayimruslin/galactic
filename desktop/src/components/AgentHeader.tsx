@@ -2,7 +2,7 @@
 // Uses shared AgentConfigPanel for the config UI.
 // For new chats (agent=null), creates a synthetic agent so the same panel renders.
 
-import { useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import type { Agent } from '../hooks/useAgentFleet';
 import BalanceIndicator from './BalanceIndicator';
 import ContextIndicator from './ContextIndicator';
@@ -118,6 +118,16 @@ export default function AgentHeader({
   executeMcpTool,
 }: AgentHeaderProps) {
   const [expanded, setExpanded] = useState(false);
+
+  // The composer's ＋ menu (Batch 7 A4) fires `ul-open-agent-config` to ask
+  // for the per-agent custom-instructions surface. We host that surface
+  // inside the expanded config panel, so listening here is the cleanest
+  // way to honor the request without prop-drilling through ChatView.
+  useEffect(() => {
+    const onOpen = () => setExpanded(true);
+    window.addEventListener('ul-open-agent-config', onOpen);
+    return () => window.removeEventListener('ul-open-agent-config', onOpen);
+  }, []);
 
   // Synthetic agent for new chat — lets AgentConfigPanel render identically
   const syntheticAgent = useMemo(() => !agent ? buildNewChatAgent() : null, [agent]);
