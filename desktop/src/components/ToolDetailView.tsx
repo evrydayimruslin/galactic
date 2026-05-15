@@ -30,6 +30,7 @@ import { ChevronRight } from 'lucide-react';
 import { Check, X as XIcon } from 'lucide-react';
 import Glyph, { deriveGlyph, deriveTone } from './ui/Glyph';
 import AcquisitionFlow from './marketplace/AcquisitionFlow';
+import SoldConfirmation from './marketplace/SoldConfirmation';
 import { fetchFromApi, getToken } from '../lib/storage';
 import { formatLightPrecise as formatLight, formatAuthorHandle } from '../lib/format';
 import {
@@ -235,6 +236,7 @@ function ChecklistDot({ status }: { status: MarketplaceOwnerAdminChecklistItem['
 
 interface SideRailProps {
   appId: string;
+  appName: string;
   details: MarketplaceListingDetails | null;
   loading: boolean;
   isOwner: boolean;
@@ -445,11 +447,18 @@ function VisibilityPicker({ appId, showMetrics, onCommitted }: VisibilityPickerP
   );
 }
 
-function SideRail({ appId, details, loading, isOwner, onOpenAcquisition, onListingChanged }: SideRailProps) {
+function SideRail({ appId, appName, details, loading, isOwner, onOpenAcquisition, onListingChanged }: SideRailProps) {
   const [editingAsk, setEditingAsk] = useState(false);
   // Per-bid action state — which bid is being accepted/rejected, with last error
   const [bidActionId, setBidActionId] = useState<string | null>(null);
   const [bidActionError, setBidActionError] = useState<string | null>(null);
+  // Post-accept celebration overlay. Captured before listing refresh so the
+  // modal can show the buyer + amount even after ownership has rolled over.
+  const [soldDetails, setSoldDetails] = useState<{
+    buyerHandle: string;
+    amount: number;
+    path: 'accepted' | 'instant';
+  } | null>(null);
 
   if (loading && !details) {
     return (
@@ -474,12 +483,23 @@ function SideRail({ appId, details, loading, isOwner, onOpenAcquisition, onListi
   const onAcceptBid = async (bidId: string) => {
     setBidActionId(bidId);
     setBidActionError(null);
+    // Snapshot the bid we're about to accept BEFORE the network call, so
+    // SoldConfirmation has stable details to render even after the listing
+    // rolls over to the new owner.
+    const target = bids.find((b) => b.id === bidId);
+    const buyerHandle = target?.bidder_display_name
+      ? `@${target.bidder_display_name}`
+      : target?.bidder_email
+        ? `@${target.bidder_email.split('@')[0]}`
+        : '@buyer';
+    const acceptedAmount = target?.amount_light ?? 0;
     const result = await acceptBid(bidId);
     if (!result.ok) {
       setBidActionError(result.errorMessage || 'Failed to accept bid.');
       setBidActionId(null);
       return;
     }
+    setSoldDetails({ buyerHandle, amount: acceptedAmount, path: 'accepted' });
     await onListingChanged();
     setBidActionId(null);
   };
@@ -670,6 +690,15 @@ function SideRail({ appId, details, loading, isOwner, onOpenAcquisition, onListi
           </div>
         ) : null}
       </div>
+      {soldDetails && (
+        <SoldConfirmation
+          toolName={appName}
+          buyerHandle={soldDetails.buyerHandle}
+          amount={soldDetails.amount}
+          path={soldDetails.path}
+          onClose={() => setSoldDetails(null)}
+        />
+      )}
     </aside>
   );
 }
@@ -849,6 +878,7 @@ export default function ToolDetailView({ appId, fallbackName }: ToolDetailViewPr
 
             <SideRail
               appId={appId}
+              appName={app?.name ?? fallbackName ?? 'tool'}
               details={listing}
               loading={listingLoading}
               isOwner={isOwner}
