@@ -44,8 +44,8 @@ interface AcquisitionFlowProps {
   onAcquired?: () => void;
 }
 
-type Step = 'review' | 'bid' | 'confirmation';
-type Outcome = 'bid-placed' | 'instant-bought';
+type Step = 'review' | 'bid' | 'manage' | 'confirmation';
+type Outcome = 'bid-placed' | 'instant-bought' | 'bid-updated' | 'bid-withdrawn';
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -90,7 +90,7 @@ interface ReviewStepProps {
   onInstantBuy: () => void;
   instantBuying: boolean;
   instantBuyError: string | null;
-  onCancelBid: (bidId: string) => Promise<void>;
+  onManageBid: () => void;
 }
 
 function ReviewStep({
@@ -102,7 +102,7 @@ function ReviewStep({
   onInstantBuy,
   instantBuying,
   instantBuyError,
-  onCancelBid,
+  onManageBid,
 }: ReviewStepProps) {
   const ask = listing?.listing?.ask_price_light ?? null;
   const instant = !!listing?.listing?.instant_buy;
@@ -253,10 +253,10 @@ function ReviewStep({
                   {yours ? (
                     <button
                       type="button"
-                      onClick={() => void onCancelBid(bid.id)}
+                      onClick={onManageBid}
                       className="font-mono text-nano px-3 py-1 bg-ul-bg text-ul-text border border-ul-border rounded-sm cursor-pointer hover:bg-ul-bg-hover"
                     >
-                      Withdraw
+                      Manage
                     </button>
                   ) : (
                     <span className="text-nano text-ul-text-muted font-mono">
@@ -428,6 +428,210 @@ function BidStep({ appName, listing, onBack, onSubmit, submitting, submitError }
   );
 }
 
+// ── Step 2b: manage own bid (cancel-and-replace) ─────────────────────
+//
+// 3C from the addendum. The BE has no in-place "edit bid" route — the user
+// confirmed cancel-then-place is acceptable — so this step runs two BE calls
+// when the amount changes: cancelBid + placeBid. Withdraw just runs cancelBid
+// and resolves to the bid-withdrawn outcome.
+
+interface ManageBidStepProps {
+  appName: string;
+  listing: MarketplaceListingDetails | null;
+  ownBid: MarketplaceBid;
+  onBack: () => void;
+  onUpdate: (newAmount: number, message: string | undefined, willAcquire: boolean) => Promise<void>;
+  onWithdraw: () => Promise<void>;
+  submitting: boolean;
+  submitError: string | null;
+}
+
+function ManageBidStep({
+  appName,
+  listing,
+  ownBid,
+  onBack,
+  onUpdate,
+  onWithdraw,
+  submitting,
+  submitError,
+}: ManageBidStepProps) {
+  const ask = listing?.listing?.ask_price_light ?? null;
+  const minBid = listing?.listing?.floor_price_light ?? 1;
+  const maxBid = ask ?? Number.MAX_SAFE_INTEGER;
+  const original = ownBid.amount_light;
+  const [amount, setAmount] = useState<number>(original);
+  const [message, setMessage] = useState<string>(ownBid.message ?? '');
+  const diff = amount - original;
+  const willAcquire = ask !== null && amount >= ask && (listing?.listing?.instant_buy ?? false);
+  const validAmount = amount >= minBid && amount <= maxBid;
+  const noChange = diff === 0 && message === (ownBid.message ?? '');
+
+  // Rank projection — where the new amount lands in the order book.
+  const projectedRank = (() => {
+    const others = (listing?.bids ?? []).filter((b) => b.id !== ownBid.id);
+    const all = [...others.map((b) => b.amount_light), amount].sort((a, b) => b - a);
+    return all.indexOf(amount) + 1;
+  })();
+
+  const setSafe = (v: number) => {
+    setAmount(Math.max(minBid, Math.min(maxBid, Math.round(v))));
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto px-8 py-7 relative">
+      <button
+        type="button"
+        onClick={onBack}
+        className="bg-transparent border-none text-caption text-ul-warm-ink-muted cursor-pointer mb-4 inline-flex items-center gap-1.5 hover:text-ul-warm-ink"
+      >
+        <ArrowLeft className="w-3 h-3" strokeWidth={1.5} />
+        Back
+      </button>
+      <div className="text-nano font-mono text-ul-text-muted uppercase tracking-widest mb-2">
+        Manage bid
+      </div>
+      <div className="text-h2 font-bold tracking-tight mb-1.5">Your bid on {appName}</div>
+      <div className="text-small text-ul-warm-ink-muted mb-6 leading-relaxed">
+        Adjust the amount or withdraw. Editing cancels the current bid and re-places it at the new
+        amount — the BE settles the wallet diff atomically.
+      </div>
+
+      {/* Original bid summary */}
+      <div className="border border-ul-border rounded-lg p-3.5 mb-5 bg-ul-bg-raised flex items-center justify-between gap-4">
+        <div>
+          <div className="text-nano font-mono text-ul-text-muted uppercase tracking-widest mb-1">
+            Current bid
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-body-lg font-bold font-mono tabular-nums">
+              ✦{formatLight(original)}
+            </span>
+            <span className="text-nano font-mono text-ul-text-muted">
+              placed {hoursAgo(ownBid.created_at)}
+            </span>
+          </div>
+        </div>
+        {ownBid.message && (
+          <div className="text-micro text-ul-text-secondary italic max-w-[200px] text-right leading-relaxed">
+            "{ownBid.message}"
+          </div>
+        )}
+      </div>
+
+      {/* Edit amount */}
+      <div className="mb-5">
+        <div className="flex justify-between mb-2 text-micro font-mono text-ul-text-muted uppercase tracking-widest">
+          <span>New amount</span>
+          <span>
+            {ask !== null ? `${Math.round((amount / ask) * 100)}% of ask · ` : ''}proj. rank #{projectedRank}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 border border-ul-border rounded-lg px-3.5 py-3 bg-ul-bg">
+          <span className="text-body-lg font-mono">✦</span>
+          <input
+            type="number"
+            value={amount}
+            onChange={(e) => setSafe(Number(e.target.value) || 0)}
+            className="flex-1 border-none outline-none text-body-lg font-mono font-semibold tabular-nums bg-transparent"
+            min={minBid}
+            max={maxBid}
+            step={1}
+          />
+          <span className="text-micro text-ul-text-muted font-mono">Light</span>
+        </div>
+        <div className="flex justify-between text-micro text-ul-text-muted mt-2 font-mono gap-2">
+          <span>min ✦{formatLight(minBid)}</span>
+          {ask !== null && <span>ask ✦{formatLight(ask)}</span>}
+        </div>
+      </div>
+
+      {/* Message */}
+      <div className="mb-5">
+        <label className="text-micro font-mono text-ul-text-muted uppercase tracking-widest block mb-2">
+          Message <span className="text-ul-text-muted lowercase">(optional)</span>
+        </label>
+        <textarea
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          rows={2}
+          placeholder="Add context for the seller…"
+          className="w-full border border-ul-border rounded-lg px-3.5 py-2.5 text-small text-ul-text bg-ul-bg outline-none resize-none placeholder:text-ul-text-muted"
+        />
+      </div>
+
+      {/* Wallet diff */}
+      <div className="border border-ul-border rounded-lg p-3.5 mb-5">
+        <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-2.5">
+          Wallet settlement
+        </div>
+        <div className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5 text-caption font-mono tabular-nums">
+          <span className="text-ul-warm-ink-muted">Bid change ({formatLight(original)} → {formatLight(amount)})</span>
+          <span className={`text-right font-semibold ${
+            diff > 0 ? 'text-ul-error' : diff < 0 ? 'text-ul-success-strong' : 'text-ul-text-muted'
+          }`}>
+            {diff > 0 ? `−✦${formatLight(diff)}` : diff < 0 ? `+✦${formatLight(-diff)}` : '—'}
+          </span>
+        </div>
+        <div className="text-nano text-ul-text-muted leading-relaxed mt-2">
+          Withdraw releases escrow instantly. Editing runs as cancel + re-place;
+          the bid's placement timestamp resets.
+        </div>
+      </div>
+
+      {willAcquire && (
+        <div className="mb-4 p-3 rounded-md bg-ul-success-soft border border-ul-success/20 text-caption text-ul-success-strong leading-relaxed">
+          <strong>This matches the ask.</strong> Submitting will acquire {appName} immediately — ownership
+          transfers atomically and ✦{formatLight(amount)} is debited from your wallet.
+        </div>
+      )}
+
+      {submitError && (
+        <div className="mb-4 px-3.5 py-2.5 border border-ul-error/30 bg-ul-error-soft rounded-md text-caption text-ul-error">
+          {submitError}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => void onWithdraw()}
+          disabled={submitting}
+          className="px-3.5 py-3 bg-ul-bg text-ul-error border border-ul-error/30 rounded-lg text-caption font-medium cursor-pointer hover:bg-ul-error-soft disabled:opacity-60"
+        >
+          Withdraw entirely
+        </button>
+        <button
+          type="button"
+          onClick={onBack}
+          disabled={submitting}
+          className="flex-1 px-3 py-3 bg-ul-bg text-ul-text border border-ul-border rounded-lg text-caption font-medium cursor-pointer hover:bg-ul-bg-hover disabled:opacity-60"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => void onUpdate(amount, message.trim() || undefined, willAcquire)}
+          disabled={noChange || !validAmount || submitting}
+          className={`flex-[1.4] px-3 py-3 text-white rounded-lg text-body font-medium cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+            willAcquire ? 'bg-ul-success-strong hover:opacity-90' : 'bg-ul-text hover:bg-ul-accent-hover'
+          }`}
+        >
+          {submitting
+            ? 'Updating…'
+            : noChange
+              ? 'No change'
+              : willAcquire
+                ? `Buy now · ✦${formatLight(amount)}`
+                : diff > 0
+                  ? `Raise · escrow ✦${formatLight(diff)}`
+                  : `Lower · refund ✦${formatLight(-diff)}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Step 3: confirmation ─────────────────────────────────────────────
 
 function ConfirmationStep({
@@ -443,28 +647,48 @@ function ConfirmationStep({
   onReturn: () => void;
   onDone: () => void;
 }) {
+  const headline =
+    outcome === 'instant-bought' ? 'Acquired' :
+    outcome === 'bid-placed'     ? 'Bid placed' :
+    outcome === 'bid-updated'    ? 'Bid updated' :
+                                   'Bid withdrawn';
+
+  const showReturn = outcome === 'bid-placed' || outcome === 'bid-updated';
+
   return (
     <div className="flex-1 flex items-center justify-center px-8 py-12">
       <div className="max-w-md text-center animate-fade-up">
         <div className="w-14 h-14 rounded-full bg-ul-success-soft inline-flex items-center justify-center mb-4 animate-ring-resolve">
           <Check className="w-6 h-6 text-ul-success-strong" strokeWidth={2.5} />
         </div>
-        <div className="text-h2 font-bold tracking-tight mb-2">
-          {outcome === 'instant-bought' ? 'Acquired' : 'Bid placed'}
-        </div>
+        <div className="text-h2 font-bold tracking-tight mb-2">{headline}</div>
         <div className="text-small text-ul-warm-ink-muted leading-relaxed mb-5">
-          {outcome === 'instant-bought' ? (
+          {outcome === 'instant-bought' && (
             <>You now own <strong>{appName}</strong>. ✦{formatLight(amount)} debited.</>
-          ) : (
+          )}
+          {outcome === 'bid-placed' && (
             <>
               Your bid of <strong className="font-mono text-ul-text">✦{formatLight(amount)}</strong>{' '}
               for <strong>{appName}</strong> is live. The seller has been notified. Withdraw
               anytime before acceptance.
             </>
           )}
+          {outcome === 'bid-updated' && (
+            <>
+              Your bid on <strong>{appName}</strong> is now{' '}
+              <strong className="font-mono text-ul-text">✦{formatLight(amount)}</strong>. Wallet
+              settled the difference; the seller sees the new amount on next refresh.
+            </>
+          )}
+          {outcome === 'bid-withdrawn' && (
+            <>
+              Your <strong className="font-mono text-ul-text">✦{formatLight(amount)}</strong> is
+              back in your wallet. The bid on <strong>{appName}</strong> is gone.
+            </>
+          )}
         </div>
         <div className="flex justify-center gap-2">
-          {outcome === 'bid-placed' && (
+          {showReturn && (
             <button
               type="button"
               onClick={onReturn}
@@ -566,10 +790,73 @@ export default function AcquisitionFlow({
     }
   };
 
-  const onCancelOwnBid = async (bidId: string) => {
-    const result = await cancelBid(bidId);
-    if (result.ok) {
+  // Identify the viewer's own bid in the current listing (if any). The
+  // Manage button only renders for the owning bidder, so existence implies
+  // editability — but we re-fetch listing state before opening the manage
+  // step so the user never sees stale data.
+  const ownBid = listing?.bids?.find((b) => isYourBid(b, currentUserId)) ?? null;
+
+  const onUpdateOwnBid = async (newAmount: number, message: string | undefined, willAcquire: boolean) => {
+    if (!ownBid) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      if (willAcquire) {
+        // Buying-at-ask short-circuits the edit: drop the bid, hit acquire.
+        const cancelled = await cancelBid(ownBid.id);
+        if (!cancelled.ok) {
+          setSubmitError(cancelled.errorMessage || 'Failed to release current bid.');
+          return;
+        }
+        const bought = await instantAcquire(appId);
+        if (!bought.ok) {
+          setSubmitError(bought.errorMessage || 'Instant acquire failed.');
+          return;
+        }
+        setOutcome('instant-bought');
+        setSubmittedAmount(bought.sale_price_light ?? newAmount);
+      } else {
+        // Cancel + place. We let the BE settle the wallet diff atomically;
+        // there's a small window where both calls are mid-flight, but the
+        // listing fetch on completion shows the user's actual final state.
+        const cancelled = await cancelBid(ownBid.id);
+        if (!cancelled.ok) {
+          setSubmitError(cancelled.errorMessage || 'Failed to release current bid.');
+          return;
+        }
+        const placed = await placeBid({ appId, amountLight: newAmount, message });
+        if (!placed.ok) {
+          setSubmitError(placed.errorMessage || 'Failed to re-place bid.');
+          return;
+        }
+        setOutcome('bid-updated');
+        setSubmittedAmount(newAmount);
+      }
+      setStep('confirmation');
       await refreshListing();
+      onAcquired?.();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onWithdrawOwnBid = async () => {
+    if (!ownBid) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const result = await cancelBid(ownBid.id);
+      if (!result.ok) {
+        setSubmitError(result.errorMessage || 'Failed to withdraw bid.');
+        return;
+      }
+      setOutcome('bid-withdrawn');
+      setSubmittedAmount(ownBid.amount_light);
+      setStep('confirmation');
+      await refreshListing();
+      onAcquired?.();
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -586,7 +873,7 @@ export default function AcquisitionFlow({
           onInstantBuy={onInstantBuyFromReview}
           instantBuying={instantBuying}
           instantBuyError={instantBuyError}
-          onCancelBid={onCancelOwnBid}
+          onManageBid={() => { setSubmitError(null); setStep('manage'); }}
         />
       )}
       {step === 'bid' && (
@@ -595,6 +882,18 @@ export default function AcquisitionFlow({
           listing={listing}
           onBack={() => { setSubmitError(null); setStep('review'); }}
           onSubmit={onSubmitBid}
+          submitting={submitting}
+          submitError={submitError}
+        />
+      )}
+      {step === 'manage' && ownBid && (
+        <ManageBidStep
+          appName={appName}
+          listing={listing}
+          ownBid={ownBid}
+          onBack={() => { setSubmitError(null); setStep('review'); }}
+          onUpdate={onUpdateOwnBid}
+          onWithdraw={onWithdrawOwnBid}
           submitting={submitting}
           submitError={submitError}
         />

@@ -1218,6 +1218,31 @@ export async function rejectBid(bidId: string): Promise<{ ok: boolean; errorMess
   return { ok: true };
 }
 
+/** PATCH /api/marketplace/metrics-visibility — owner toggles whether the
+ *  listing exposes 30d revenue + call-volume to prospective bidders. The BE
+ *  surface is a boolean (`show_metrics`); the FE picker exposes a 4-tier
+ *  model (public / threshold / shortlist / private) per the addendum, but
+ *  only public ↔ private map to BE state today. Threshold + shortlist are
+ *  rendered for design parity and gated as "BE work needed" until B-section
+ *  follow-ups land. */
+export async function setMetricsVisibility(input: {
+  appId: string;
+  showMetrics: boolean;
+}): Promise<{ ok: boolean; errorMessage?: string }> {
+  const token = getToken();
+  if (!token) return { ok: false, errorMessage: 'Not signed in' };
+  const res = await fetchFromApi('/api/marketplace/metrics-visibility', {
+    method: 'PATCH',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ app_id: input.appId, show_metrics: input.showMetrics }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, errorMessage: text || `Failed (${res.status})` };
+  }
+  return { ok: true };
+}
+
 export interface InstantAcquireResult {
   ok: boolean;
   sale_id?: string;

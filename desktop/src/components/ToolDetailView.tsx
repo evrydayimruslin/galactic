@@ -35,6 +35,7 @@ import { formatLightPrecise as formatLight, formatAuthorHandle } from '../lib/fo
 import {
   fetchMarketplaceListing,
   setAskPrice,
+  setMetricsVisibility,
   acceptBid,
   rejectBid,
   type MarketplaceBid,
@@ -337,6 +338,113 @@ function AskEditor({
   );
 }
 
+// ── Visibility picker (A11) ──────────────────────────────────────────
+//
+// The mockup ships a 4-tier visibility model — public / bid-threshold /
+// hand-picked / private — but the BE only exposes a boolean `show_metrics`
+// today. We render all four radios for design parity and gate the two
+// unsupported tiers as "needs BE" (DESIGN-FOLLOWUPS B-section, alongside
+// B7 / B8 / B10 marketplace enrichment).
+//
+// Public → show_metrics=true. Private → show_metrics=false. Threshold +
+// Shortlist are intentionally not interactive yet.
+
+type VisibilityMode = 'public' | 'threshold' | 'shortlist' | 'private';
+
+interface VisibilityPickerProps {
+  appId: string;
+  showMetrics: boolean | undefined;
+  onCommitted: () => Promise<void>;
+}
+
+function deriveMode(showMetrics: boolean | undefined): VisibilityMode {
+  return showMetrics ? 'public' : 'private';
+}
+
+function VisibilityPicker({ appId, showMetrics, onCommitted }: VisibilityPickerProps) {
+  const [optimistic, setOptimistic] = useState<VisibilityMode | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mode = optimistic ?? deriveMode(showMetrics);
+
+  const pick = async (next: VisibilityMode) => {
+    if (next === mode) return;
+    if (next === 'threshold' || next === 'shortlist') return; // BE-gated; no-op
+    setOptimistic(next);
+    setSaving(true);
+    setError(null);
+    const result = await setMetricsVisibility({ appId, showMetrics: next === 'public' });
+    if (!result.ok) {
+      setError(result.errorMessage || 'Failed to update visibility.');
+      setOptimistic(null);
+    } else {
+      await onCommitted();
+      setOptimistic(null);
+    }
+    setSaving(false);
+  };
+
+  const options: Array<{
+    id: VisibilityMode;
+    label: string;
+    desc: string;
+    disabled?: boolean;
+  }> = [
+    { id: 'public',    label: 'Public',          desc: 'Anyone browsing the page sees revenue + call volume.' },
+    { id: 'threshold', label: 'Bid threshold',   desc: 'Visible only after a bidder posts a minimum amount in escrow.', disabled: true },
+    { id: 'shortlist', label: 'Hand-picked',     desc: 'Allowlist specific bidders by email.', disabled: true },
+    { id: 'private',   label: 'Private',         desc: "No one but you sees the numbers. (Default.)" },
+  ];
+
+  return (
+    <div className="px-3.5 py-3 border-t border-ul-border">
+      <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-2">
+        Revenue visibility
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {options.map((opt) => {
+          const selected = mode === opt.id;
+          return (
+            <label
+              key={opt.id}
+              className={`flex gap-2.5 p-2 rounded-md cursor-pointer transition-colors ${
+                opt.disabled
+                  ? 'opacity-50 cursor-not-allowed'
+                  : selected
+                    ? 'bg-ul-bg-subtle border border-ul-text'
+                    : 'bg-transparent border border-ul-border hover:bg-ul-bg-hover'
+              }`}
+            >
+              <input
+                type="radio"
+                name={`vis-${appId}`}
+                checked={selected}
+                disabled={opt.disabled || saving}
+                onChange={() => void pick(opt.id)}
+                className="mt-0.5 flex-shrink-0 cursor-pointer disabled:cursor-not-allowed"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="text-caption font-medium text-ul-text flex items-center gap-1.5">
+                  {opt.label}
+                  {opt.disabled && (
+                    <span className="text-nano font-mono text-ul-text-muted uppercase tracking-wider">
+                      needs BE
+                    </span>
+                  )}
+                </div>
+                <div className="text-nano text-ul-text-secondary leading-relaxed mt-0.5">
+                  {opt.desc}
+                </div>
+              </div>
+            </label>
+          );
+        })}
+      </div>
+      {error && <div className="mt-2 text-nano text-ul-error">{error}</div>}
+    </div>
+  );
+}
+
 function SideRail({ appId, details, loading, isOwner, onOpenAcquisition, onListingChanged }: SideRailProps) {
   const [editingAsk, setEditingAsk] = useState(false);
   // Per-bid action state — which bid is being accepted/rejected, with last error
@@ -518,6 +626,17 @@ function SideRail({ appId, details, loading, isOwner, onOpenAcquisition, onListi
           )}
         </div>
 
+        {/* Visibility picker — owner-only, drives the existing show_metrics
+            boolean (4-tier picker per A11 mockup; threshold + shortlist
+            tiers are gated until BE supports them). */}
+        {isOwner && (
+          <VisibilityPicker
+            appId={appId}
+            showMetrics={summary?.show_metrics}
+            onCommitted={onListingChanged}
+          />
+        )}
+
         {/* Revenue / owner admin */}
         {isOwner && details?.owner_admin && details.owner_admin.checklist && details.owner_admin.checklist.length > 0 ? (
           <div className="px-3.5 py-3 border-t border-ul-border bg-ul-bg-raised">
@@ -542,13 +661,14 @@ function SideRail({ appId, details, loading, isOwner, onOpenAcquisition, onListi
               </div>
             )}
           </div>
-        ) : (
+        ) : !isOwner ? (
+          /* Non-owner: short visibility note. Owners see the picker above. */
           <div className="px-3.5 py-2.5 border-t border-ul-border text-micro text-ul-text-muted italic leading-relaxed">
             {summary?.show_metrics
               ? 'Sales metrics visible on this tool — view from the metrics endpoint.'
               : 'Revenue is private.'}
           </div>
-        )}
+        ) : null}
       </div>
     </aside>
   );
