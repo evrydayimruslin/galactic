@@ -13,12 +13,6 @@
       ]
     },
     {
-      "file": "src/components/CardDetailModal.tsx",
-      "files": [
-        "src/components/CardDetailModal.tsx"
-      ]
-    },
-    {
       "file": "src/components/CmdKPalette.tsx",
       "types": [
         "BuildPaletteActionsArgs",
@@ -32,33 +26,9 @@
       ]
     },
     {
-      "file": "src/components/CreateAgentModal.tsx",
-      "files": [
-        "src/components/CreateAgentModal.tsx"
-      ]
-    },
-    {
       "file": "src/components/DiscoverWidget.tsx",
       "types": [
         "DiscoverWidgetMode"
-      ]
-    },
-    {
-      "file": "src/components/HomeView.tsx",
-      "files": [
-        "src/components/HomeView.tsx"
-      ]
-    },
-    {
-      "file": "src/components/KanbanBoard.tsx",
-      "files": [
-        "src/components/KanbanBoard.tsx"
-      ]
-    },
-    {
-      "file": "src/components/KanbanCard.tsx",
-      "files": [
-        "src/components/KanbanCard.tsx"
       ]
     },
     {
@@ -110,27 +80,9 @@
       ]
     },
     {
-      "file": "src/components/WidgetAppView.tsx",
-      "files": [
-        "src/components/WidgetAppView.tsx"
-      ]
-    },
-    {
       "file": "src/components/WidgetCard.tsx",
       "files": [
         "src/components/WidgetCard.tsx"
-      ]
-    },
-    {
-      "file": "src/components/WidgetHomescreen.tsx",
-      "files": [
-        "src/components/WidgetHomescreen.tsx"
-      ]
-    },
-    {
-      "file": "src/components/WidgetInbox.tsx",
-      "files": [
-        "src/components/WidgetInbox.tsx"
       ]
     },
     {
@@ -175,12 +127,6 @@
       ]
     },
     {
-      "file": "src/hooks/useKanban.ts",
-      "files": [
-        "src/hooks/useKanban.ts"
-      ]
-    },
-    {
       "exports": [
         "LOCAL_TOOL_NAMES"
       ],
@@ -205,12 +151,6 @@
       "file": "src/hooks/useProjectDir.ts",
       "types": [
         "UseProjectDirReturn"
-      ]
-    },
-    {
-      "file": "src/hooks/useWidgetInbox.ts",
-      "files": [
-        "src/hooks/useWidgetInbox.ts"
       ]
     },
     {
@@ -301,12 +241,6 @@
         "setModel"
       ],
       "file": "src/lib/storage.ts"
-    },
-    {
-      "file": "src/lib/suggestions.ts",
-      "files": [
-        "src/lib/suggestions.ts"
-      ]
     },
     {
       "exports": [

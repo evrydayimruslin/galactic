@@ -1,8 +1,7 @@
-// CommandHomescreen — native cozy dashboard.
-//
-// Ports `CozyHomescreen` from handoff/mockups/command-screens.jsx. Replaces
-// the tabbed HomeView (Project / Agents / Activity) per design call A6 in
-// handoff/DESIGN-FOLLOWUPS.md.
+// CommandHomescreen — native cozy dashboard. Replaces the legacy tabbed
+// HomeView (Project / Agents / Activity) per the Batch 7 addendum's
+// A8 + A9 decisions. Ports `CozyHomescreen` from
+// handoff/mockups/command-screens.jsx.
 //
 // Data flow:
 //   1. fetchCommandDashboardLayout('command_home') -> StoredCommandDashboardLayout
@@ -20,11 +19,10 @@
 //     "Done" exits. Remove persists via saveCommandDashboardLayout.
 //   - + Widget opens WidgetPickerModal listing every available card from
 //     the function index; pick appends to the layout and persists.
-//
-// Drag/resize reorder NOT implemented (would need a DnD library or
-// hand-rolled pointer handlers); a follow-up batch can layer it on. Today
-// new cards append after existing ones and the picker is the only
-// reorder affordance.
+//   - Drag-to-reorder: in edit mode, tiles are HTML5-draggable. Dropping
+//     a tile on top of another moves it before that target and shifts the
+//     rest. Card sizes are fixed (per addendum: no resize); reorder is
+//     the only positional affordance.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -219,8 +217,16 @@ function CozyTile({
   loading,
   edit,
   wiggleDelayMs,
+  isDragging,
+  isDropTarget,
   onOpen,
   onRemove,
+  onDragStart,
+  onDragOver,
+  onDragEnter,
+  onDragLeave,
+  onDrop,
+  onDragEnd,
 }: {
   tile: ResolvedTile;
   colSpan: number;
@@ -229,8 +235,16 @@ function CozyTile({
   loading: boolean;
   edit: boolean;
   wiggleDelayMs: number;
+  isDragging: boolean;
+  isDropTarget: boolean;
   onOpen: () => void;
   onRemove: () => void;
+  onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnter: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragLeave: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd: () => void;
 }) {
   const { widget, card } = tile;
   const appLabel = widget.appName || widget.appSlug || 'tool';
@@ -239,17 +253,24 @@ function CozyTile({
   return (
     <div
       onClick={edit ? undefined : onOpen}
+      draggable={edit}
+      onDragStart={edit ? onDragStart : undefined}
+      onDragOver={edit ? onDragOver : undefined}
+      onDragEnter={edit ? onDragEnter : undefined}
+      onDragLeave={edit ? onDragLeave : undefined}
+      onDrop={edit ? onDrop : undefined}
+      onDragEnd={edit ? onDragEnd : undefined}
       // TODO(token): rounded-[22px] — design tile radius doesn't match
       // any current ul-* radius token (xs/sm/md/pill/lg/card/xl).
-      className={`bg-ul-bg border border-ul-border rounded-[22px] p-4 relative overflow-${edit ? 'visible' : 'hidden'} transition-all duration-base flex flex-col gap-2.5 text-left ${
+      className={`bg-ul-bg border rounded-[22px] p-4 relative overflow-${edit ? 'visible' : 'hidden'} transition-all duration-base flex flex-col gap-2.5 text-left ${
         edit
-          ? 'cursor-grab shadow-md animate-wiggle'
-          : 'cursor-pointer hover:-translate-y-px hover:shadow-md'
+          ? `cursor-grab shadow-md ${isDragging ? 'opacity-40' : 'animate-wiggle'} ${isDropTarget ? 'border-ul-text ring-2 ring-ul-text/15' : 'border-ul-border'}`
+          : 'cursor-pointer hover:-translate-y-px hover:shadow-md border-ul-border'
       }`}
       style={{
         gridColumn: `span ${colSpan}`,
         gridRow: `span ${rowSpan}`,
-        animationDelay: edit ? `${wiggleDelayMs}ms` : undefined,
+        animationDelay: edit && !isDragging ? `${wiggleDelayMs}ms` : undefined,
       }}
     >
       {edit && (
@@ -313,6 +334,11 @@ export default function CommandHomescreen() {
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Drag-to-reorder state (edit mode only). draggingId lives in component
+  // state so the dragged tile can fade; dropTargetId drives the ring on the
+  // tile currently being hovered. Cleared on dragend / drop.
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   // Per-instance card data, keyed by instance_id
   const [cardData, setCardData] = useState<Record<string, unknown>>({});
   const [cardLoading, setCardLoading] = useState<Record<string, boolean>>({});
@@ -482,6 +508,74 @@ export default function CommandHomescreen() {
     [layout, persistLayout],
   );
 
+  // ── Drag-to-reorder ────────────────────────────────────────────────
+  //
+  // HTML5 drag-and-drop handlers. Stays inside the addendum's "no new
+  // dependencies" rule (vs reaching for react-dnd / dnd-kit). Move-before
+  // semantics: dragging tile A onto tile B inserts A immediately before
+  // B's slot and shifts the rest right.
+
+  const onTileDragStart = useCallback(
+    (instanceId: string, e: React.DragEvent<HTMLDivElement>) => {
+      setDraggingId(instanceId);
+      // setData is required for Firefox to start a drag.
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', instanceId);
+      }
+    },
+    [],
+  );
+
+  const onTileDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    // preventDefault is what tells the browser "this is a valid drop target".
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const onTileDragEnter = useCallback((instanceId: string) => {
+    setDropTargetId(prev => (prev === instanceId ? prev : instanceId));
+  }, []);
+
+  const onTileDragLeave = useCallback((instanceId: string) => {
+    setDropTargetId(prev => (prev === instanceId ? null : prev));
+  }, []);
+
+  const onTileDragEnd = useCallback(() => {
+    setDraggingId(null);
+    setDropTargetId(null);
+  }, []);
+
+  const onTileDrop = useCallback(
+    (targetId: string) => {
+      if (!layout || !draggingId || draggingId === targetId) {
+        setDraggingId(null);
+        setDropTargetId(null);
+        return;
+      }
+      const cards = layout.cards;
+      const fromIdx = cards.findIndex(c => c.instance_id === draggingId);
+      const toIdx = cards.findIndex(c => c.instance_id === targetId);
+      if (fromIdx === -1 || toIdx === -1) {
+        setDraggingId(null);
+        setDropTargetId(null);
+        return;
+      }
+      const reordered = [...cards];
+      const [moved] = reordered.splice(fromIdx, 1);
+      // Inserting at toIdx after the splice naturally lands moved at the
+      // target's original visual position when dragging right-to-left, and
+      // just-before the target when dragging left-to-right. That matches
+      // the iOS app-grid mental model the design references.
+      reordered.splice(toIdx, 0, moved);
+      const next: CommandDashboardLayout = { ...layout, cards: reordered };
+      setDraggingId(null);
+      setDropTargetId(null);
+      void persistLayout(next);
+    },
+    [layout, draggingId, persistLayout],
+  );
+
   // Set of widget+card keys currently on the dashboard — drives the
   // "Added" badge on picker rows.
   const takenKeys = useMemo(() => {
@@ -564,8 +658,16 @@ export default function CommandHomescreen() {
                 loading={cardLoading[id] ?? false}
                 edit={edit}
                 wiggleDelayMs={i * 60}
+                isDragging={draggingId === id}
+                isDropTarget={dropTargetId === id && draggingId !== id}
                 onOpen={() => onOpenTile(tile)}
                 onRemove={() => onRemoveTile(id)}
+                onDragStart={(e) => onTileDragStart(id, e)}
+                onDragOver={onTileDragOver}
+                onDragEnter={() => onTileDragEnter(id)}
+                onDragLeave={() => onTileDragLeave(id)}
+                onDrop={() => onTileDrop(id)}
+                onDragEnd={onTileDragEnd}
               />
             );
           })}
