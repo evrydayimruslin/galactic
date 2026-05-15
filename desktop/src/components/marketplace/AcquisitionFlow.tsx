@@ -28,7 +28,8 @@ import {
 } from '../../lib/api';
 import Glyph, { deriveGlyph, deriveTone } from '../ui/Glyph';
 import Modal from '../ui/Modal';
-import { formatLightPrecise as formatLight } from '../../lib/format';
+import TransferCeremony from './TransferCeremony';
+import { formatLightPrecise as formatLight, formatAuthorHandle } from '../../lib/format';
 
 interface AcquisitionFlowProps {
   appId: string;
@@ -728,6 +729,10 @@ export default function AcquisitionFlow({
   const [instantBuyError, setInstantBuyError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome>('bid-placed');
   const [submittedAmount, setSubmittedAmount] = useState<number>(0);
+  // Snapshot the previous owner's handle the moment we hand off, so the
+  // transfer ceremony can show the from→to lockup before the listing
+  // refresh swaps the owner_id out from under us.
+  const [priorOwnerHandle, setPriorOwnerHandle] = useState<string | null>(null);
 
   const refreshListing = useCallback(async () => {
     const fresh = await fetchMarketplaceListing(appId);
@@ -743,11 +748,20 @@ export default function AcquisitionFlow({
     }
   }, [appId, initialListing, refreshListing]);
 
+  // Snapshot the soon-to-be-prior owner handle. Called BEFORE the post-
+  // acquire refreshListing so the transfer ceremony has something to show
+  // on the left side of the from→to lockup.
+  const snapshotPriorOwner = useCallback(() => {
+    const handle = formatAuthorHandle(listing?.app, { fallback: 'owner' });
+    setPriorOwnerHandle(handle);
+  }, [listing]);
+
   const onSubmitBid = async (amount: number, message: string | undefined, willAcquire: boolean) => {
     setSubmitting(true);
     setSubmitError(null);
     try {
       if (willAcquire) {
+        snapshotPriorOwner();
         const result = await instantAcquire(appId);
         if (!result.ok) {
           setSubmitError(result.errorMessage || 'Instant acquire failed.');
@@ -775,6 +789,7 @@ export default function AcquisitionFlow({
     setInstantBuying(true);
     setInstantBuyError(null);
     try {
+      snapshotPriorOwner();
       const result = await instantAcquire(appId);
       if (!result.ok) {
         setInstantBuyError(result.errorMessage || 'Instant acquire failed.');
@@ -803,6 +818,7 @@ export default function AcquisitionFlow({
     try {
       if (willAcquire) {
         // Buying-at-ask short-circuits the edit: drop the bid, hit acquire.
+        snapshotPriorOwner();
         const cancelled = await cancelBid(ownBid.id);
         if (!cancelled.ok) {
           setSubmitError(cancelled.errorMessage || 'Failed to release current bid.');
@@ -898,7 +914,18 @@ export default function AcquisitionFlow({
           submitError={submitError}
         />
       )}
-      {step === 'confirmation' && (
+      {step === 'confirmation' && outcome === 'instant-bought' && (
+        <TransferCeremony
+          toolName={appName}
+          fromHandle={`@${priorOwnerHandle ?? 'owner'}`}
+          toHandle="you"
+          amount={submittedAmount}
+          installCount={listing?.app?.runs_30d}
+          path="instant"
+          onDone={onClose}
+        />
+      )}
+      {step === 'confirmation' && outcome !== 'instant-bought' && (
         <ConfirmationStep
           appName={appName}
           outcome={outcome}
