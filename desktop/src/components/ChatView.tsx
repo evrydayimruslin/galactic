@@ -1512,6 +1512,13 @@ export default function ChatView({
           setAmbientOpen(true);
         }}
         onCloseToolDealerPanel={() => setAmbientOpen(false)}
+        queuedCount={queuedMessages.length}
+        onEditCustomInstructions={() => {
+          // AgentHeader listens for this event and expands the config panel
+          // (where the per-agent admin_notes / custom-instructions field
+          // lives). Avoids prop-drilling expanded-state through ChatView.
+          window.dispatchEvent(new CustomEvent('ul-open-agent-config'));
+        }}
       />
 
       {/* Permission modal overlay */}

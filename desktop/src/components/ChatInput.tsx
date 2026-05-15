@@ -12,12 +12,13 @@
 // setHeavyModel.
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowUp, Paperclip, ChevronDown, Sparkles } from 'lucide-react';
+import { ArrowUp, ChevronDown, Edit3, Image, Plus, Sparkles } from 'lucide-react';
 import type { Agent } from '../hooks/useAgentFleet';
 import type { AmbientSuggestion } from '../types/ambientSuggestion';
 import ProjectDropdown from './ProjectDropdown';
 import ToolSelectionPopover from './composer/ToolSelectionPopover';
 import ModelPickerPopover from './composer/ModelPickerPopover';
+import Popover from './composer/Popover';
 import {
   getInterpreterModel,
   setInterpreterModel as persistInterpreterModel,
@@ -57,6 +58,12 @@ interface ChatInputProps {
   onOpenToolDealerPanel?: () => void;
   /** Close the in-chat ambient panel. */
   onCloseToolDealerPanel?: () => void;
+  /** Number of messages waiting in the runner queue. Drives the queue-mode
+   *  meta strip below the composer (A2). */
+  queuedCount?: number;
+  /** Open the per-agent custom-instructions surface. Wired from ChatView
+   *  for the A4 ＋ menu's second row. When unset, the row is hidden. */
+  onEditCustomInstructions?: () => void;
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -103,13 +110,15 @@ export default function ChatInput({
   toolDealerPanelOpen = false,
   onOpenToolDealerPanel,
   onCloseToolDealerPanel,
+  queuedCount = 0,
+  onEditCustomInstructions,
 }: ChatInputProps) {
   const [value, setValue] = useState('');
   const [files, setFiles] = useState<ChatFile[]>([]);
   const [send, setSend] = useState<SendState>('idle');
   const [focused, setFocused] = useState(false);
   const [mention, setMention] = useState<MentionMenu | null>(null);
-  const [popover, setPopover] = useState<'tools' | 'flash' | 'heavy' | null>(null);
+  const [popover, setPopover] = useState<'plus' | 'tools' | 'flash' | 'heavy' | null>(null);
 
   // Reactive model selections — read once from storage, then maintain
   // locally so picker updates re-render the pill label immediately.
@@ -123,6 +132,7 @@ export default function ChatInput({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const plusBtnRef = useRef<HTMLButtonElement>(null);
   const toolsBtnRef = useRef<HTMLButtonElement>(null);
   const flashBtnRef = useRef<HTMLButtonElement>(null);
   const heavyBtnRef = useRef<HTMLButtonElement>(null);
@@ -393,16 +403,58 @@ export default function ChatInput({
           >
             {/* Top row — input + send */}
             <div className="flex items-end gap-2 px-3 pt-3 pb-2">
-              {/* Attachment icon */}
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={inputDisabled}
-                // TODO(token): text-gray-400 / text-gray-600 hover / hover:bg-gray-100 — no exact ul-* equivalents.
-                className="flex items-center justify-center w-8 h-8 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-30 transition-colors flex-shrink-0 mb-[3px]"
-                title="Attach file"
-              >
-                <Paperclip className="w-5 h-5 rotate-45 -scale-x-100" strokeWidth={1.5} />
-              </button>
+              {/* ＋ menu (A4) — opens a 2-row popover: "Add files or photos"
+                  and "Edit custom instructions". Replaces the old standalone
+                  paperclip; the file picker is now invoked from the popover. */}
+              <div className="relative flex-shrink-0 mb-[3px]">
+                <button
+                  ref={plusBtnRef}
+                  onClick={() => setPopover(p => p === 'plus' ? null : 'plus')}
+                  disabled={inputDisabled}
+                  className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors disabled:opacity-30 ${
+                    popover === 'plus'
+                      ? 'bg-ul-bg-active text-ul-text'
+                      : 'text-ul-text-muted hover:text-ul-text-secondary hover:bg-ul-bg-hover'
+                  }`}
+                  title="Add"
+                >
+                  <Plus className="w-5 h-5" strokeWidth={1.5} />
+                </button>
+
+                <Popover
+                  open={popover === 'plus'}
+                  onClose={() => setPopover(null)}
+                  anchorRef={plusBtnRef}
+                  width={260}
+                >
+                  <div className="p-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPopover(null);
+                        fileInputRef.current?.click();
+                      }}
+                      className="w-full flex items-center gap-3 h-9 px-2.5 rounded-md text-small font-medium text-ul-text hover:bg-ul-bg-hover transition-colors cursor-pointer border-none bg-transparent text-left"
+                    >
+                      <Image className="w-[15px] h-[15px] text-ul-text-muted-strong" strokeWidth={1.5} />
+                      <span>Add files or photos</span>
+                    </button>
+                    {onEditCustomInstructions && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPopover(null);
+                          onEditCustomInstructions();
+                        }}
+                        className="w-full flex items-center gap-3 h-9 px-2.5 rounded-md text-small font-medium text-ul-text hover:bg-ul-bg-hover transition-colors cursor-pointer border-none bg-transparent text-left"
+                      >
+                        <Edit3 className="w-[15px] h-[15px] text-ul-text-muted-strong" strokeWidth={1.5} />
+                        <span>Edit custom instructions</span>
+                      </button>
+                    )}
+                  </div>
+                </Popover>
+              </div>
 
               <input
                 ref={fileInputRef}
@@ -420,7 +472,7 @@ export default function ChatInput({
                 onKeyDown={handleKeyDown}
                 onFocus={() => setFocused(true)}
                 onBlur={() => setFocused(false)}
-                placeholder={isQueueing ? 'Queue a follow-up...' : 'Message...'}
+                placeholder={isQueueing ? 'Queue a follow-up…' : 'Message...'}
                 rows={1}
                 // TODO(token): placeholder:text-gray-500 — no exact ul-* equivalent.
                 className="flex-1 resize-none border-none px-0 text-small text-ul-text bg-transparent outline-none placeholder:text-gray-500 selectable"
@@ -428,31 +480,47 @@ export default function ChatInput({
                 disabled={inputDisabled}
               />
 
-              {/* Stop button — production-only; flagged in PR for design follow-up. */}
+              {/* Stop button (A1) — ring + spinning border + inner square.
+                  Reads as a live run with a stop affordance underneath, not
+                  a disabled control. */}
               {isLoading && (
                 <button
                   onClick={onStop}
-                  // TODO(token): bg-gray-200, text-gray-500 — no exact ul-* equivalents; kept raw.
-                  className="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 text-gray-500 hover:bg-gray-200 transition-colors flex-shrink-0 mb-0.5"
+                  className="relative flex items-center justify-center w-7 h-7 rounded-full bg-ul-bg-hover hover:bg-ul-bg-active transition-colors flex-shrink-0 mb-0.5"
                   title="Stop"
+                  aria-label="Stop run"
                 >
-                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                    <rect x="6" y="6" width="12" height="12" rx="2" />
-                  </svg>
+                  {/* Spinning ring: 1.5px circle on a 12% black base, with
+                      ul-text painted onto the top quadrant. */}
+                  <span
+                    className="absolute inset-[3px] rounded-full animate-spin"
+                    style={{
+                      borderWidth: '1.5px',
+                      borderStyle: 'solid',
+                      borderColor: 'rgba(0,0,0,0.12)',
+                      borderTopColor: 'var(--ul-text, #0a0a0a)',
+                      animationDuration: '0.8s',
+                    }}
+                  />
+                  {/* Inner stop glyph. */}
+                  <span className="relative w-[10px] h-[10px] bg-ul-text rounded-[2px]" />
                 </button>
               )}
 
-              {/* Queue / Send */}
+              {/* Queue / Send (A2) — amber circle with a tapered 3-bar queue
+                  glyph. Halo on hover + focus only (never looping per spec). */}
               {isQueueing ? (
                 <button
                   onClick={launch}
                   disabled={!hasContent}
-                  // TODO(token): bg-amber-500/600 hover pair — exact-match on the base (=ul-warning) but no -hover token.
-                  className="flex items-center justify-center w-8 h-8 rounded-full bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-30 transition-colors flex-shrink-0 mb-0.5"
+                  className="flex items-center justify-center w-7 h-7 rounded-full bg-ul-warning text-white hover:bg-ul-warning-hover hover:shadow-[0_0_0_4px_rgba(245,158,11,0.18)] focus-visible:shadow-[0_0_0_4px_rgba(245,158,11,0.18)] focus-visible:outline-none disabled:opacity-30 transition-all flex-shrink-0 mb-0.5"
                   title="Queue"
+                  aria-label="Queue follow-up"
                 >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 14 14" fill="white" aria-hidden="true">
+                    <rect x="1.5" y="2.5"  width="11"  height="2" rx="1" opacity="1" />
+                    <rect x="2.75" y="6"   width="8.5" height="2" rx="1" opacity="0.85" />
+                    <rect x="4" y="9.5"    width="6"   height="2" rx="1" opacity="0.7" />
                   </svg>
                 </button>
               ) : !isLoading ? (
@@ -571,6 +639,26 @@ export default function ChatInput({
             </div>
           </div>
         </div>
+
+        {/* Queue-mode meta strip (A2) — single line below the card so the
+            user sees how many follow-ups are stacked behind the running call.
+            Amber leading dot signals "in flight"; surrounding copy stays in
+            normal text tone. */}
+        {isQueueing && (
+          <div
+            className="mt-1.5 pl-3.5 pr-3 text-micro font-mono text-ul-text-muted-strong tabular-nums flex items-center gap-1.5"
+            aria-live="polite"
+          >
+            <span className="text-ul-warning leading-none" aria-hidden="true">·</span>
+            {queuedCount > 0 && (
+              <>
+                <span>{queuedCount} message{queuedCount === 1 ? '' : 's'} queued</span>
+                <span className="text-ul-text-muted" aria-hidden="true">·</span>
+              </>
+            )}
+            <span>running now</span>
+          </div>
+        )}
 
         {onProjectDirChange && (
           <div className="mt-2 pl-10">
