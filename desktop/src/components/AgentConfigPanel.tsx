@@ -1,4 +1,4 @@
-// Shared agent configuration panel — used in AgentHeader (chat view) and HomeView (agents tab).
+// Shared agent configuration panel — mounted by AgentHeader (chat view).
 // Supports editable Directive, Admin Notes, granular function selection per connected app,
 // per-function conventions, and model display.
 
