@@ -8,6 +8,10 @@ import {
   verifyGpuBuildCallbackSecret,
 } from "../services/gpu/image-builder.ts";
 import { completeGpuImageBuild } from "../services/gpu/builder.ts";
+import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+} from "../services/gpu/feature-flag.ts";
 
 /**
  * GPU Code Proxy — serves developer code bundles to RunPod workers.
@@ -20,6 +24,13 @@ export async function handleGpuCodeProxy(
   request: Request,
   path: string,
 ): Promise<Response> {
+  if (!isGpuSupportEnabled()) {
+    return json({
+      error: "GPU support disabled",
+      message: getGpuSupportDisabledMessage("GPU code proxy"),
+    }, 503);
+  }
+
   const expectedSecret = getEnv("GPU_INTERNAL_SECRET");
   const providedSecret = request.headers.get("X-GPU-Secret") || "";
 
@@ -69,6 +80,13 @@ export async function handleGpuBuildContextProxy(
   _request: Request,
   path: string,
 ): Promise<Response> {
+  if (!isGpuSupportEnabled()) {
+    return json({
+      error: "GPU support disabled",
+      message: getGpuSupportDisabledMessage("GPU image builds"),
+    }, 503);
+  }
+
   const parts = path.replace("/internal/gpu/build-context/", "").split("/");
   const appId = parts[0];
   const version = parts[1];
@@ -109,6 +127,14 @@ export async function handleGpuBuildContextProxy(
 export async function handleGpuBuildCallback(
   request: Request,
 ): Promise<Response> {
+  if (!isGpuSupportEnabled()) {
+    return json({
+      ok: false,
+      status: "disabled",
+      message: getGpuSupportDisabledMessage("GPU image builds"),
+    }, 503);
+  }
+
   if (!verifyGpuBuildCallbackSecret(request)) {
     console.error("[GPU-BUILD-CALLBACK] Auth failed");
     return json({ error: "Unauthorized" }, 401);
@@ -137,6 +163,13 @@ export async function handleGpuBuildCallback(
 export async function handleInternalD1Query(
   request: Request,
 ): Promise<Response> {
+  if (!isGpuSupportEnabled()) {
+    return json({
+      error: "GPU support disabled",
+      message: getGpuSupportDisabledMessage("GPU D1 proxy"),
+    }, 503);
+  }
+
   const expectedSecret = getEnv("GPU_INTERNAL_SECRET");
   const providedSecret = request.headers.get("X-GPU-Secret") || "";
 

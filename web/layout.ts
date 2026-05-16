@@ -12,6 +12,8 @@ export function getLayoutHTML(options: {
   dashSection?: string;
   /** Profile slug for /u/:slug pages */
   profileSlug?: string;
+  /** Server-side feature flag for GPU deployment/runtime surfaces. */
+  gpuSupportEnabled?: boolean;
 }): string {
   const {
     title = "Ultralight",
@@ -21,6 +23,7 @@ export function getLayoutHTML(options: {
     appName,
     embed = false,
     profileSlug,
+    gpuSupportEnabled = false,
   } = options;
   // Map legacy dashboard sections to new unified capabilities section
   let dashSection = options.dashSection || "capabilities";
@@ -2848,8 +2851,8 @@ export function getLayoutHTML(options: {
             <span class="hero-market-meta">pay per run</span>
           </div>
           <div class="hero-market-row">
-            <span class="hero-market-title">Use a GPU image pipeline</span>
-            <span class="hero-market-meta">GPU runtime</span>
+            <span class="hero-market-title">${gpuSupportEnabled ? "Use a GPU image pipeline" : "Run an image workflow"}</span>
+            <span class="hero-market-meta">${gpuSupportEnabled ? "GPU runtime" : "media ready"}</span>
           </div>
           <div class="hero-market-row">
             <span class="hero-market-title">Generate a legal clause diff</span>
@@ -2882,7 +2885,7 @@ export function getLayoutHTML(options: {
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
             </div>
             <div class="cap-card-title">Deploy agent apps</div>
-            <div class="cap-card-desc">Ship MCP, HTTP, markdown, and GPU-backed capabilities to production from the same marketplace surface.</div>
+            <div class="cap-card-desc">Ship MCP, HTTP, markdown${gpuSupportEnabled ? ", and GPU-backed" : ""} capabilities to production from the same marketplace surface.</div>
             <div class="cap-card-visual">
               <div class="cap-flow">
                 <div class="cap-flow-row">
@@ -3073,7 +3076,7 @@ export function getLayoutHTML(options: {
                   <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:var(--space-2);">Type</div>
                   <div class="marketplace-filters" style="margin-bottom:var(--space-3);">
                     <button class="marketplace-filter active" data-cap-type="all">All</button>
-                    <button class="marketplace-filter" data-cap-type="gpu">GPU</button>
+                    ${gpuSupportEnabled ? '<button class="marketplace-filter" data-cap-type="gpu">GPU</button>' : ''}
                     <button class="marketplace-filter" data-cap-type="apps">MCP</button>
                     <button class="marketplace-filter" data-cap-type="skills">.MD</button>
                   </div>
@@ -3529,6 +3532,7 @@ export function getLayoutHTML(options: {
   <script>
   (async function() {
     'use strict';
+    var gpuSupportEnabled = ${gpuSupportEnabled ? "true" : "false"};
 
     // ===== Embed Mode (desktop app iframe) =====
     var _embedParams = new URLSearchParams(window.location.search);
@@ -3796,7 +3800,7 @@ export function getLayoutHTML(options: {
         network: permissions.some(function(p) { return p === 'net:fetch' || p === 'net:connect' || String(p).indexOf('net:') === 0; }),
         storage: permissions.some(function(p) { return String(p).indexOf('storage:') === 0; }),
         memory: permissions.some(function(p) { return String(p).indexOf('memory:') === 0; }),
-        gpu: permissions.indexOf('gpu:execute') !== -1 || runtime === 'gpu'
+        gpu: gpuSupportEnabled && (permissions.indexOf('gpu:execute') !== -1 || runtime === 'gpu')
       };
     }
 
@@ -3834,7 +3838,7 @@ export function getLayoutHTML(options: {
       if (summary.network) labels.push('Network');
       if (summary.storage) labels.push('Storage');
       if (summary.memory) labels.push('Memory');
-      if (summary.gpu) labels.push('GPU');
+      if (gpuSupportEnabled && summary.gpu) labels.push('GPU');
       return labels;
     }
 
@@ -3881,11 +3885,14 @@ export function getLayoutHTML(options: {
       var permissions = Array.isArray(trust.permissions) ? trust.permissions : [];
       var requiredSecrets = Array.isArray(trust.required_secrets) ? trust.required_secrets : [];
       var perUserSecrets = Array.isArray(trust.per_user_secrets) ? trust.per_user_secrets : [];
-      var permissionLabels = permissions.length > 0 ? permissions.slice(0, 8) : [];
+      var visiblePermissions = permissions.filter(function(p) { return gpuSupportEnabled || p !== 'gpu:execute'; });
+      var permissionLabels = visiblePermissions.length > 0 ? visiblePermissions.slice(0, 8) : [];
       var secretLabels = requiredSecrets.concat(perUserSecrets.map(function(key) { return key + ' (per user)'; }));
       var note = signed
         ? 'Execution receipts are returned on calls and tied to the owner call log.'
         : 'Publish a manifest-backed version to create signed trust metadata for this app.';
+      var runtimeLabel = String(trust.runtime || app.runtime || 'deno');
+      if (!gpuSupportEnabled && runtimeLabel === 'gpu') runtimeLabel = 'deno';
 
       return '<div class="section-card">' +
         '<div class="trust-card-header">' +
@@ -3893,7 +3900,7 @@ export function getLayoutHTML(options: {
           '<span class="trust-status ' + (signed ? 'ok' : 'warn') + '">' + (signed ? 'Signed Manifest' : 'Unsigned Legacy') + '</span>' +
         '</div>' +
         '<div class="trust-grid">' +
-          renderTrustField('Runtime', String(trust.runtime || app.runtime || 'deno'), '') +
+          renderTrustField('Runtime', runtimeLabel, '') +
           renderTrustField('Version', String(trust.version || app.current_version || 'current'), '') +
           renderTrustField('Manifest Hash', shortHash(trust.manifest_hash), 'manifest_hash') +
           renderTrustField('Artifact Hash', shortHash(trust.artifact_hash), 'artifact_hash') +
@@ -3905,7 +3912,7 @@ export function getLayoutHTML(options: {
         '</div>' +
         '<div class="trust-chip-row" style="margin-bottom:var(--space-2);">' +
           renderTrustChips(permissionLabels, 'No permission scopes') +
-          (permissions.length > permissionLabels.length ? '<span class="trust-chip">+' + (permissions.length - permissionLabels.length) + ' more scopes</span>' : '') +
+          (visiblePermissions.length > permissionLabels.length ? '<span class="trust-chip">+' + (visiblePermissions.length - permissionLabels.length) + ' more scopes</span>' : '') +
         '</div>' +
         '<div class="trust-chip-row">' +
           renderTrustChips(secretLabels, 'No required secrets') +
@@ -3922,7 +3929,7 @@ export function getLayoutHTML(options: {
         if (source === 'skills_parsed') {
           return 'This app still relies on legacy code-analysis contracts. Publish a manifest-backed version before relying on stable runtime schemas.';
         }
-        if (source === 'gpu_exports') {
+        if (gpuSupportEnabled && source === 'gpu_exports') {
           return 'This GPU app still relies on export-name discovery. Publish a manifest-backed version before relying on stable runtime schemas.';
         }
         if (source === 'exports') {
@@ -3963,7 +3970,7 @@ export function getLayoutHTML(options: {
         };
       }
       // 3. GPU export fallback (legacy, read-only guidance only)
-      if (app.runtime === 'gpu' && app.exports && app.exports.length > 0) {
+      if (gpuSupportEnabled && app.runtime === 'gpu' && app.exports && app.exports.length > 0) {
         return {
           functions: app.exports.map(function(name) { return { name: name }; }),
           source: 'gpu_exports',
@@ -4614,7 +4621,9 @@ export function getLayoutHTML(options: {
       if (!label) return;
       var parts = [];
       if (activeCapType !== 'all') {
-        var typeLabels = { gpu: 'GPU', apps: 'MCP', skills: '.MD' };
+        var typeLabels = gpuSupportEnabled
+          ? { gpu: 'GPU', apps: 'MCP', skills: '.MD' }
+          : { apps: 'MCP', skills: '.MD' };
         parts.push(typeLabels[activeCapType] || activeCapType);
       }
       if (activeCapOwner !== 'all') parts.push('Mine');
@@ -4688,7 +4697,7 @@ export function getLayoutHTML(options: {
 
       var params = new URLSearchParams();
       params.set('q', query);
-      if (activeCapType === 'gpu') {
+      if (gpuSupportEnabled && activeCapType === 'gpu') {
         params.set('type', 'apps');
         params.set('runtime', 'gpu');
       } else if (activeCapType === 'apps') {
@@ -5244,7 +5253,7 @@ export function getLayoutHTML(options: {
     }
 
     function renderMarketplaceCard(item) {
-      var badge = item.type === 'app' ? (item.runtime === 'gpu' ? 'GPU' : 'MCP') : '.MD';
+      var badge = item.type === 'app' ? (gpuSupportEnabled && item.runtime === 'gpu' ? 'GPU' : 'MCP') : '.MD';
       var desc = item.description || '';
       var shortDesc = desc.length > 120 ? desc.slice(0, 120) + '...' : desc;
       var stats = '';
@@ -5254,7 +5263,7 @@ export function getLayoutHTML(options: {
         var parts = [];
         if (item.likes > 0) parts.push(item.likes + ' likes');
         if (item.runs_30d > 0) parts.push(item.runs_30d + ' runs');
-        if (item.runtime === 'gpu' && item.gpu_type) parts.push(item.gpu_type);
+        if (gpuSupportEnabled && item.runtime === 'gpu' && item.gpu_type) parts.push(item.gpu_type);
         else if (item.fully_native) parts.push('native');
         if (parts.length > 0) stats = '<div class="marketplace-stats">' + parts.join(' &middot; ') + '</div>';
         trustHtml = renderMarketplaceTrust(getTrustCard(item));

@@ -12,6 +12,7 @@ interface OnboardingWizardProps {
 }
 
 const SCREENS = ['welcome', 'apps', 'ways', 'build'] as const;
+const GPU_SUPPORT_ENABLED = import.meta.env.VITE_UL_GPU_SUPPORT_ENABLED === 'true';
 
 export default function OnboardingWizard({ onComplete, onHighlight }: OnboardingWizardProps) {
   const [step, setStep] = useState(0);
@@ -121,7 +122,9 @@ export default function OnboardingWizard({ onComplete, onHighlight }: Onboarding
               {[
                 { emoji: '🔧', title: 'Tool Maker', subtitle: 'builds it for you', desc: 'Describe what you want — it builds, tests, and deploys your app in one conversation.' },
                 { emoji: '🏫', title: 'Tool Dealer', subtitle: 'gets it listed', desc: 'Publish to the marketplace, set your price. Earn real payouts via Stripe.' },
-                { emoji: '⚡', title: 'GPU Runtimes', subtitle: 'when you need them', desc: 'Deploy compute-heavy functions on GPU infrastructure.' },
+                GPU_SUPPORT_ENABLED
+                  ? { emoji: '⚡', title: 'GPU Runtimes', subtitle: 'when you need them', desc: 'Deploy compute-heavy functions on GPU infrastructure.' }
+                  : { emoji: '📊', title: 'Live Dashboards', subtitle: 'included by default', desc: 'Give every app a focused interface for reviewing results and taking action.' },
               ].map((f, i) => (
                 <div key={i} className="bg-ul-bg-raised rounded-2xl p-7">
                   <div className="text-3xl mb-4">{f.emoji}</div>

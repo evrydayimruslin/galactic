@@ -55,9 +55,20 @@ import {
   type MarketplaceListingSummaryListing,
 } from '../services/marketplace.ts';
 import { getBillingConfig, toPublicBillingConfig } from '../services/billing-config.ts';
+import {
+  isGpuSupportEnabled,
+  sanitizeGpuTrustCard,
+} from '../services/gpu/feature-flag.ts';
 import { getEnv } from '../lib/env.ts';
 import { formatLight } from '../../shared/types/index.ts';
 import type { AppManifest } from '../../shared/contracts/manifest.ts';
+
+function renderLayoutHTML(options: Parameters<typeof getLayoutHTML>[0]): string {
+  return getLayoutHTML({
+    ...options,
+    gpuSupportEnabled: isGpuSupportEnabled(),
+  });
+}
 
 // ============================================
 // CACHE HELPERS
@@ -156,7 +167,7 @@ export function createApp() {
       // Public homepage
       if (path === '/' && method === 'GET') {
         return new Response(
-          getLayoutHTML({ initialView: 'home', embed: isEmbed }),
+          renderLayoutHTML({ initialView: 'home', embed: isEmbed }),
           {
             headers: {
               'Content-Type': 'text/html',
@@ -232,7 +243,7 @@ export function createApp() {
       // Capabilities (unified Library + Marketplace)
       if (path === '/capabilities' && method === 'GET') {
         return new Response(
-          getLayoutHTML({
+          renderLayoutHTML({
             initialView: 'dashboard',
             embed: isEmbed,
             dashSection: 'capabilities',
@@ -249,7 +260,7 @@ export function createApp() {
       // Dashboard — backward compat, maps to capabilities
       if (path === '/dash' && method === 'GET') {
         return new Response(
-          getLayoutHTML({
+          renderLayoutHTML({
             initialView: 'dashboard',
             embed: isEmbed,
             dashSection: 'capabilities',
@@ -266,7 +277,7 @@ export function createApp() {
       // Wallet — canonical payment portal shared by web and desktop embeds.
       if (path === '/wallet' && method === 'GET') {
         return new Response(
-          getLayoutHTML({
+          renderLayoutHTML({
             initialView: 'dashboard',
             embed: isEmbed,
             dashSection: 'billing',
@@ -292,7 +303,7 @@ export function createApp() {
           ? 'keys'
           : settingsSub;
         return new Response(
-          getLayoutHTML({
+          renderLayoutHTML({
             initialView: 'dashboard',
             embed: isEmbed,
             dashSection: section,
@@ -309,7 +320,7 @@ export function createApp() {
       // Marketplace — backward compat, maps to capabilities
       if (path === '/marketplace' && method === 'GET') {
         return new Response(
-          getLayoutHTML({
+          renderLayoutHTML({
             initialView: 'dashboard',
             embed: isEmbed,
             dashSection: 'capabilities',
@@ -328,7 +339,7 @@ export function createApp() {
         const slug = path.slice(3);
         if (slug) {
           return new Response(
-            getLayoutHTML({ initialView: 'profile', profileSlug: slug }),
+            renderLayoutHTML({ initialView: 'profile', profileSlug: slug }),
             {
               headers: {
                 'Content-Type': 'text/html',
@@ -342,7 +353,7 @@ export function createApp() {
       // My profile (authenticated)
       if (path === '/my-profile' && method === 'GET') {
         return new Response(
-          getLayoutHTML({ initialView: 'profile', embed: isEmbed }),
+          renderLayoutHTML({ initialView: 'profile', embed: isEmbed }),
           {
             headers: {
               'Content-Type': 'text/html',
@@ -1160,7 +1171,7 @@ export function createApp() {
             return json({ error: 'App not found' }, 404);
           }
           return new Response(
-            getLayoutHTML({ initialView: 'app', activeAppId: appId }),
+            renderLayoutHTML({ initialView: 'app', activeAppId: appId }),
             {
               headers: {
                 'Content-Type': 'text/html',
@@ -1244,7 +1255,7 @@ export function createApp() {
               return await executeServerApp(code, request, appId, subPath);
             } else {
               return new Response(
-                getLayoutHTML({
+                renderLayoutHTML({
                   title: app.name || app.slug,
                   activeAppId: appId,
                   initialView: 'app',
@@ -1263,7 +1274,7 @@ export function createApp() {
               const contractResolution = resolveAppFunctionContracts(app, {
                 allowLegacySkills: true,
                 allowLegacyExports: true,
-                allowGpuExports: true,
+                allowGpuExports: isGpuSupportEnabled(),
               });
               logAppContractResolution({
                 appId: app.id,
@@ -1295,7 +1306,7 @@ export function createApp() {
             } else {
               // Normal view with sidebar
               return new Response(
-                getLayoutHTML({
+                renderLayoutHTML({
                   title: app.name || app.slug,
                   activeAppId: appId,
                   initialView: 'app',
@@ -1609,7 +1620,7 @@ async function handleGenericDashboard(
     const contractResolution = resolveAppFunctionContracts(app, {
       allowLegacySkills: true,
       allowLegacyExports: true,
-      allowGpuExports: true,
+      allowGpuExports: isGpuSupportEnabled(),
     });
     logAppContractResolution({
       appId: app.id,
@@ -2172,7 +2183,7 @@ async function handlePublicAppPage(
       console.warn('[PublicAppPage] Failed to fetch marketplace summary:', err);
     }
 
-    const trustCard = buildAppTrustCard({ ...app, env_schema: {} });
+    const trustCard = sanitizeGpuTrustCard(buildAppTrustCard({ ...app, env_schema: {} }));
     const html = getPublicAppPageHTML(app, ownerName, baseUrl, {
       isEmbed,
       trustCard,
@@ -2249,10 +2260,14 @@ function getPublicAppPageHTML(
       trustCard.capability_summary.network ? 'Network' : '',
       trustCard.capability_summary.storage ? 'Storage' : '',
       trustCard.capability_summary.memory ? 'Memory' : '',
-      trustCard.capability_summary.gpu ? 'GPU' : '',
+      isGpuSupportEnabled() && trustCard.capability_summary.gpu ? 'GPU' : '',
     ].filter(Boolean)
     : [];
-  const trustPermissions = trustCard ? trustCard.permissions.slice(0, 8) : [];
+  const trustPermissions = trustCard
+    ? trustCard.permissions
+      .filter((permission) => isGpuSupportEnabled() || permission !== 'gpu:execute')
+      .slice(0, 8)
+    : [];
   const trustSecretLabels = trustCard
     ? [
       ...trustCard.required_secrets,
@@ -2329,6 +2344,9 @@ function getPublicAppPageHTML(
     </section>
   `
     : '';
+  const trustRuntime = trustCard && !isGpuSupportEnabled() && trustCard.runtime === 'gpu'
+    ? 'deno'
+    : trustCard?.runtime || 'deno';
   const trustCardHtml = trustCard
     ? `
     <section class="section trust-section">
@@ -2339,7 +2357,7 @@ function getPublicAppPageHTML(
     }</span>
       </div>
       <div class="trust-grid">
-        <div><span>Runtime</span><strong>${escapeHtml(trustCard.runtime || 'deno')}</strong></div>
+        <div><span>Runtime</span><strong>${escapeHtml(trustRuntime)}</strong></div>
         <div><span>Version</span><strong>${escapeHtml(trustCard.version || version)}</strong></div>
         <div><span>Manifest Hash</span><code title="${escapeHtml(trustCard.manifest_hash || '')}">${
       escapeHtml(trustShortHash(trustCard.manifest_hash))

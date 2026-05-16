@@ -8,7 +8,7 @@
 | `manifest.json` | No | App metadata, permissions, description |
 | `migrations/` | No | SQL migration files (see migrations.md) |
 | `test_fixture.json` | No | Test data for local development |
-| `ultralight.gpu.yaml` | No | GPU pipeline config (GPU apps only) |
+| `ultralight.gpu.yaml` | No | Reserved GPU pipeline config; uploads are blocked unless `GPU_SUPPORT_ENABLED=true` |
 
 ## Function signature
 

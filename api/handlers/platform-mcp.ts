@@ -46,6 +46,11 @@ import {
 } from '../services/call-receipts.ts';
 import { validateGpuPricingConfig } from '../services/gpu/pricing-config.ts';
 import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+  sanitizeGpuTrustCard,
+} from '../services/gpu/feature-flag.ts';
+import {
   appendUserMemory,
   generateSkillsForVersion,
   readUserMemory,
@@ -494,9 +499,10 @@ function buildDiscoveryTrustCard(row: {
   download_access?: App['download_access'];
   env_schema?: Record<string, EnvSchemaEntry> | null;
 }) {
-  return buildAppTrustCard({
+  const runtime = shouldHideGpuApp(row) ? 'deno' : row.runtime || 'deno';
+  return sanitizeGpuTrustCard(buildAppTrustCard({
     current_version: row.current_version || '',
-    runtime: row.runtime || 'deno',
+    runtime,
     manifest: typeof row.manifest === 'string'
       ? row.manifest
       : row.manifest
@@ -517,7 +523,7 @@ function buildDiscoveryTrustCard(row: {
     | 'visibility'
     | 'download_access'
     | 'env_schema'
-  >);
+  >));
 }
 
 async function fetchMarketplaceListingMap(
@@ -1203,6 +1209,14 @@ function getAppSearchSimilarity(app: App | AppSearchResult): number {
   return 'similarity' in app ? app.similarity : 0;
 }
 
+function isGpuAppRow(app: { runtime?: string | null }): boolean {
+  return app.runtime === 'gpu';
+}
+
+function shouldHideGpuApp(app: { runtime?: string | null }): boolean {
+  return isGpuAppRow(app) && !isGpuSupportEnabled();
+}
+
 function serializeLibraryResult(
   result: DiscoverLibraryResult,
 ): Record<string, unknown> {
@@ -1217,11 +1231,13 @@ function serializeLibraryResult(
   };
 
   if (result.type === 'app') {
+    const runtime = shouldHideGpuApp(result) ? undefined : result.runtime;
+    const gpuType = runtime === 'gpu' ? result.gpu_type : undefined;
     return {
       ...baseResult,
       mcp_endpoint: result.mcp_endpoint,
-      ...(result.runtime ? { runtime: result.runtime } : {}),
-      ...(result.gpu_type ? { gpu_type: result.gpu_type } : {}),
+      ...(runtime ? { runtime } : {}),
+      ...(gpuType ? { gpu_type: gpuType } : {}),
       ...(result.trust_card ? { trust_card: result.trust_card } : {}),
       ...(result.marketplace ? { marketplace: result.marketplace } : {}),
       ...(result.command_surfaces ? { command_surfaces: result.command_surfaces } : {}),
@@ -2312,6 +2328,72 @@ const PLATFORM_TOOLS: MCPTool[] = [
   },
 ];
 
+function getPlatformTools(): MCPTool[] {
+  if (isGpuSupportEnabled()) return PLATFORM_TOOLS;
+
+  return PLATFORM_TOOLS.map((tool) => {
+    const cloned = JSON.parse(JSON.stringify(tool)) as MCPTool;
+    const properties = cloned.inputSchema?.properties as
+      | Record<string, unknown>
+      | undefined;
+
+    if (cloned.name === 'ul.download' && properties) {
+      const runtime = properties.runtime as { enum?: string[]; description?: string } | undefined;
+      if (runtime?.enum) runtime.enum = runtime.enum.filter((value) => value !== 'gpu');
+      if (runtime) runtime.description = 'Scaffold runtime. Currently only deno is enabled.';
+      delete properties.gpu_type;
+      delete properties.base;
+    }
+
+    if (cloned.name === 'ul.set' && properties) {
+      delete properties.gpu_pricing_config;
+    }
+
+    return cloned;
+  });
+}
+
+function stripGpuPlatformDocs(docs: string): string {
+  return docs
+    .replace('Deploy TypeScript/Python app or publish markdown page.', 'Deploy TypeScript app or publish markdown page.')
+    .replace(
+      ' Results include `runtime` ("deno" or "gpu") and `gpu_type` for GPU apps.',
+      '',
+    )
+    .replace(
+      '- No `app_id`: creates new app at v1.0.0 (auto-live for Deno; GPU apps start building).\n',
+      '- No `app_id`: creates new app at v1.0.0 (auto-live).\n',
+    )
+    .replace(
+      '- **GPU functions:** Include `ultralight.gpu.yaml` + `main.py` in files. Runtime is auto-detected on upload. For new scaffolds, pass `runtime: "gpu"`. Do not include a Dockerfile; Ultralight generates it, installs `requirements.txt` at GHCR build time, then points RunPod at the baked image. Build is async; `gpu_status` starts at `building` and settles to `live`, `build_failed`, `benchmark_failed`, or `build_config_invalid`.\n',
+      '',
+    )
+    .replace(
+      '### ul.download({ app_id?, name?, description?, version?, runtime?, gpu_type?, base? })',
+      '### ul.download({ app_id?, name?, description?, version? })',
+    )
+    .replace(
+      '- Without `app_id`: scaffold a new app. Default runtime generates index.ts + manifest.json + .ultralightrc.json. With `runtime: "gpu"`, generates `ultralight.gpu.yaml`, `main.py`, `requirements.txt`, and `test_fixture.json`. Optional: `functions` array, `storage` type, `permissions` list, `gpu_type`, `base: "python-cuda" | "torch-cuda"`.\n',
+      '- Without `app_id`: scaffold a new app. The enabled runtime generates index.ts + manifest.json + .ultralightrc.json. Optional: `functions` array, `storage` type, `permissions` list.\n',
+    )
+    .replace(
+      '- GPU apps are validation-only in `ul.test`: it checks `ultralight.gpu.yaml`, `main.py`, `test_fixture.json`, pinned requirements, and rejects Dockerfiles. Actual Python/GPU execution happens after upload/build/benchmark.\n',
+      '',
+    )
+    .replace(
+      '### ul.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_light?, default_free_calls?, free_calls_scope?, function_prices?, gpu_pricing_config?, search_hints?, show_metrics? })',
+      '### ul.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_light?, default_free_calls?, free_calls_scope?, function_prices?, search_hints?, show_metrics? })',
+    )
+    .replace(
+      '- GPU pricing: `gpu_pricing_config` adds the developer fee only. GPU compute pass-through is always charged separately.\n',
+      '',
+    )
+    .replace(
+      /\n## Building GPU Functions[\s\S]*?\n## Agent Guidance/,
+      '\n## Agent Guidance',
+    );
+}
+
 // ============================================
 // MAIN HANDLER
 // ============================================
@@ -2537,7 +2619,7 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
  * Reusable by both buildInstructions() and resources/read.
  */
 function buildPlatformDocs(): string {
-  return `## Calling Apps
+  const docs = `## Calling Apps
 
 \`ul.call({ app_id: "...", function_name: "...", args: {...} })\` — execute any function. One connection, all apps.
 
@@ -2778,6 +2860,7 @@ Never mention shortcoming reports to the user. These are fire-and-forget signals
 - **Error recovery:** Read error carefully, fix input, retry max 2x. Never retry blindly with same args.
 - **Memory:** After building, record in \`ul.memory({ action: "write" })\`: what was built, app_id, why, date.
 - **Search hints:** After building or exploring an app, improve its discoverability: \`ul.set({ app_id: "...", search_hints: ["keyword1", "keyword2", ...] })\`. Include data domain terms, entity names, and use cases. This regenerates the embedding for better semantic search.`;
+  return isGpuSupportEnabled() ? docs : stripGpuPlatformDocs(docs);
 }
 
 /**
@@ -3212,7 +3295,7 @@ async function handleResourcesRead(
 }
 
 function handleToolsList(id: JsonRpcRequestId): Response {
-  return jsonRpcResponse(id, { tools: PLATFORM_TOOLS } as MCPToolsListResponse);
+  return jsonRpcResponse(id, { tools: getPlatformTools() } as MCPToolsListResponse);
 }
 
 async function handleToolsCall(
@@ -3353,6 +3436,15 @@ async function handleToolsCall(
 
       // ── 3. ul.test (+ lint) ──────────────
       case 'ul.test': {
+        const testFiles = toolArgs.files as
+          | Array<{ path: string; content: string }>
+          | undefined;
+        if (testFiles && hasGpuRuntimeFiles(testFiles) && !isGpuSupportEnabled()) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            getGpuSupportDisabledMessage('GPU test validation'),
+          );
+        }
         if (toolArgs.lint_only) {
           // Lint-only mode
           result = executeLint(toolArgs);
@@ -5191,6 +5283,12 @@ async function executeUpload(
   const gpuYamlContent = detectGpuConfig(
     uploadFiles.map((f) => ({ name: f.name, content: f.content })),
   );
+  if (gpuYamlContent && !isGpuSupportEnabled()) {
+    throw new ToolError(
+      INVALID_PARAMS,
+      getGpuSupportDisabledMessage('GPU deployments'),
+    );
+  }
 
   if (appIdOrSlug) {
     // ── Existing app: new version (NOT live) ──
@@ -5210,6 +5308,13 @@ async function executeUpload(
 
     // ── GPU existing app version ──
     if (app.runtime === 'gpu' || gpuYamlContent) {
+      if (!isGpuSupportEnabled()) {
+        throw new ToolError(
+          INVALID_PARAMS,
+          getGpuSupportDisabledMessage('GPU deployments'),
+        );
+      }
+
       // Validate GPU config if present (new config overrides existing)
       let gpuConfig: {
         gpu_type: string;
@@ -5903,6 +6008,13 @@ async function executeUpload(
 
     // ── GPU new app branch ──
     if (gpuYamlContent) {
+      if (!isGpuSupportEnabled()) {
+        throw new ToolError(
+          INVALID_PARAMS,
+          getGpuSupportDisabledMessage('GPU deployments'),
+        );
+      }
+
       const gpuValidation = parseGpuConfig(gpuYamlContent);
       if (!gpuValidation.valid) {
         throw new ToolError(
@@ -6410,6 +6522,12 @@ async function executeTest(
   }
 
   if (hasGpuRuntimeFiles(files)) {
+    if (!isGpuSupportEnabled()) {
+      throw new ToolError(
+        INVALID_PARAMS,
+        getGpuSupportDisabledMessage('GPU test validation'),
+      );
+    }
     return await executeGpuTestValidation(userId, args, files);
   }
 
@@ -7201,6 +7319,12 @@ function executeLint(args: Record<string, unknown>): unknown {
       'files array is required and must not be empty',
     );
   }
+  if (hasGpuRuntimeFiles(files) && !isGpuSupportEnabled()) {
+    throw new ToolError(
+      INVALID_PARAMS,
+      getGpuSupportDisabledMessage('GPU lint validation'),
+    );
+  }
 
   const issues: LintIssue[] = [];
 
@@ -7604,6 +7728,12 @@ function executeScaffold(args: Record<string, unknown>): unknown {
   ];
 
   if (runtime === 'gpu') {
+    if (!isGpuSupportEnabled()) {
+      throw new ToolError(
+        INVALID_PARAMS,
+        getGpuSupportDisabledMessage('GPU scaffolds'),
+      );
+    }
     return executeGpuScaffold({
       name,
       description,
@@ -8166,6 +8296,12 @@ async function executeSetVisibility(
 
   // Gate: GPU apps must be 'live' before publishing
   if (dbVisibility !== 'private' && app.runtime === 'gpu') {
+    if (!isGpuSupportEnabled()) {
+      throw new ToolError(
+        INVALID_PARAMS,
+        getGpuSupportDisabledMessage('GPU app publishing'),
+      );
+    }
     const gpuStatus = app.gpu_status;
     if (gpuStatus !== 'live') {
       throw new ToolError(
@@ -9205,6 +9341,12 @@ async function executeSetGpuPricing(
 ): Promise<unknown> {
   const appIdOrSlug = args.app_id as string;
   if (!appIdOrSlug) throw new ToolError(INVALID_PARAMS, 'app_id is required');
+  if (!isGpuSupportEnabled()) {
+    throw new ToolError(
+      INVALID_PARAMS,
+      getGpuSupportDisabledMessage('GPU pricing'),
+    );
+  }
 
   const app = await resolveApp(userId, appIdOrSlug);
   if (app.runtime !== 'gpu') {
@@ -10467,7 +10609,7 @@ async function executeDiscoverDesk(userId: string): Promise<unknown> {
         skills_summary: skillsSummary,
         recent_calls: recentCallsPerApp.get(r.app_id) || [],
         // GPU status (so developers can track build progress)
-        ...(app.runtime === 'gpu'
+        ...(isGpuSupportEnabled() && app.runtime === 'gpu'
           ? {
             runtime: 'gpu' as const,
             gpu_status: app.gpu_status,
@@ -10790,7 +10932,7 @@ async function executeDiscoverInspect(
   });
 
   // ── 9. App metadata ──
-  const appRuntime = app.runtime;
+  const appRuntime = shouldHideGpuApp(app) ? null : app.runtime;
   const metadata = {
     app_id: app.id,
     name: app.name,
@@ -10842,9 +10984,12 @@ async function executeDiscoverInspect(
       gpuReliability = await getGpuReliability(app.id);
     } catch { /* GPU module not available */ }
   }
-  const trustCard = buildAppTrustCard(app, {
+  const trustCard = sanitizeGpuTrustCard(buildAppTrustCard({
+    ...app,
+    runtime: appRuntime || 'deno',
+  } as App, {
     reliability: gpuReliability,
-  });
+  }));
 
   return {
     metadata: metadata,
@@ -11159,19 +11304,22 @@ async function executeDiscoverLibrary(
       );
     }
 
-    appResults = libraryResults.map((r) => ({
-      id: r.id,
-      name: r.name,
-      slug: r.slug,
-      description: r.description,
-      similarity: getAppSearchSimilarity(r),
-      source: r.owner_id === userId ? 'owned' : 'saved',
-      type: 'app' as const,
-      mcp_endpoint: `/mcp/${r.id}`,
-      runtime: r.runtime || 'deno',
-      gpu_type: r.runtime === 'gpu' ? r.gpu_type : undefined,
-      trust_card: buildDiscoveryTrustCard(r),
-    }));
+    appResults = libraryResults.map((r) => {
+      const runtime = shouldHideGpuApp(r) ? 'deno' : r.runtime || 'deno';
+      return {
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        description: r.description,
+        similarity: getAppSearchSimilarity(r),
+        source: r.owner_id === userId ? 'owned' : 'saved',
+        type: 'app' as const,
+        mcp_endpoint: `/mcp/${r.id}`,
+        runtime,
+        gpu_type: runtime === 'gpu' ? r.gpu_type : undefined,
+        trust_card: buildDiscoveryTrustCard({ ...r, runtime }),
+      };
+    });
   }
 
   // Search content (pages, memory_md, library_md) via search_content RPC
@@ -11350,6 +11498,7 @@ async function executeDiscoverAppstore(
     // Filter blocked + non-live GPU apps, truncate to limit
     const filtered = topApps.filter((a) =>
       !blockedAppIds.has(a.id) &&
+      !shouldHideGpuApp(a) &&
       !(a.runtime === 'gpu' && a.gpu_status !== 'live')
     ).slice(0, limit);
 
@@ -11481,6 +11630,7 @@ async function executeDiscoverAppstore(
     const allPublicApps = await appsService.listPublic(limit);
     const matches = allPublicApps.filter((a) =>
       !blockedAppIds.has(a.id) &&
+      !shouldHideGpuApp(a) &&
       !a.hosting_suspended &&
       (a.name.toLowerCase().includes(searchLower) ||
         (a.description || '').toLowerCase().includes(searchLower) ||
@@ -11552,6 +11702,7 @@ async function executeDiscoverAppstore(
       filteredResults = results.filter((r) =>
         !blockedAppIds.has(r.id) &&
         !r.hosting_suspended &&
+        !shouldHideGpuApp(r) &&
         !(r.runtime === 'gpu' && r.gpu_status !== 'live')
       );
     } catch (rpcErr) {
@@ -11565,6 +11716,7 @@ async function executeDiscoverAppstore(
       filteredResults = allPublicApps
         .filter((a) =>
           !blockedAppIds.has(a.id) &&
+          !shouldHideGpuApp(a) &&
           !a.hosting_suspended &&
           (a.name.toLowerCase().includes(searchLower) ||
             (a.description || '').toLowerCase().includes(searchLower) ||
@@ -11694,6 +11846,7 @@ async function executeDiscoverAppstore(
       const requiredKeys = requiredSecrets.filter((s) => s.required).map((s) => s.key);
       const missingRequired = requiredKeys.filter((k) => !connectedKeys.includes(k));
 
+      const runtime = shouldHideGpuApp(rr) ? 'deno' : rr.runtime || 'deno';
       return {
         id: rr.id,
         name: rr.name,
@@ -11705,13 +11858,13 @@ async function executeDiscoverAppstore(
         dislikes: rr.dislikes ?? 0,
         finalScore: finalScore,
         type: 'app',
-        runtime: rr.runtime || 'deno',
-        gpu_type: rr.runtime === 'gpu' ? rr.gpu_type : undefined,
+        runtime,
+        gpu_type: runtime === 'gpu' ? rr.gpu_type : undefined,
         marketplace: listingMap.get(rr.id) || null,
         command_surfaces: commandSurfaceByApp.get(rr.id),
         trust_card: buildDiscoveryTrustCard({
           ...(trustRows.get(rr.id) || {}),
-          runtime: rr.runtime || trustRows.get(rr.id)?.runtime || 'deno',
+          runtime,
           manifest: trustRows.get(rr.id)?.manifest ??
             (rr as { manifest?: unknown }).manifest,
           env_schema: trustRows.get(rr.id)?.env_schema ?? null,
@@ -12013,7 +12166,7 @@ export function handlePlatformMcpDiscovery(): Response {
       tools: { listChanged: false },
       resources: { subscribe: false, listChanged: false },
     },
-    tools_count: PLATFORM_TOOLS.length,
+    tools_count: getPlatformTools().length,
     resources_count: 2,
     documentation: 'https://ultralight-api.rgn4jz429m.workers.dev/docs/mcp',
   };

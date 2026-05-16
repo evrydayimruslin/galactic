@@ -42,6 +42,10 @@ import {
   buildGpuStatusDiagnostics,
 } from "../services/gpu/status.ts";
 import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+} from "../services/gpu/feature-flag.ts";
+import {
   createRuntimeOperationMeteringContext,
   debitWidgetPullUsage,
   preflightRuntimeCloudHold,
@@ -788,6 +792,14 @@ export async function handleMcp(
   if (!app) {
     return jsonRpcErrorResponse(rpcRequest.id, -32002, "App not found");
   }
+  if (app.runtime === "gpu" && !isGpuSupportEnabled()) {
+    return jsonRpcErrorResponse(
+      rpcRequest.id,
+      INTERNAL_ERROR,
+      getGpuSupportDisabledMessage("GPU runtime execution"),
+      { type: "GPU_SUPPORT_DISABLED", app_id: app.id },
+    );
+  }
 
   // Token scoping: if the API token is scoped to specific apps, enforce it
   if (!callerHasAppAccess(callerContext, [appId, app.slug, app.id])) {
@@ -1291,6 +1303,15 @@ async function handleToolsList(
   params?: { cursor?: string },
   callerUserId?: string,
 ): Promise<Response> {
+  if (app.runtime === "gpu" && !isGpuSupportEnabled()) {
+    return jsonRpcErrorResponse(
+      id,
+      INTERNAL_ERROR,
+      getGpuSupportDisabledMessage("GPU runtime execution"),
+      { type: "GPU_SUPPORT_DISABLED", app_id: app.id },
+    );
+  }
+
   const tools: MCPTool[] = [];
   let manifestTools: MCPTool[] = [];
 
@@ -1317,7 +1338,7 @@ async function handleToolsList(
       const legacyResolution = resolveAppFunctionContracts(app, {
         allowLegacySkills: true,
         allowLegacyExports: true,
-        allowGpuExports: true,
+        allowGpuExports: isGpuSupportEnabled(),
       });
       logAppContractResolution({
         appId: app.id,
@@ -1582,7 +1603,7 @@ async function handleToolsCall(
       const legacyResolution = resolveAppFunctionContracts(app, {
         allowLegacySkills: true,
         allowLegacyExports: true,
-        allowGpuExports: true,
+        allowGpuExports: isGpuSupportEnabled(),
       });
       logAppContractResolution({
         appId: app.id,
@@ -1965,6 +1986,15 @@ async function handleGpuExecution(
     widgetPull?: { widgetName?: string; intervalMs?: number; reason?: string };
   },
 ): Promise<Response> {
+  if (!isGpuSupportEnabled()) {
+    return jsonRpcErrorResponse(
+      id,
+      -32603,
+      getGpuSupportDisabledMessage("GPU runtime execution"),
+      { type: "GPU_SUPPORT_DISABLED", app_id: app.id },
+    );
+  }
+
   if (app.gpu_status !== "live") {
     return jsonRpcErrorResponse(
       id,

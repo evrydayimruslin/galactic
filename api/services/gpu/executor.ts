@@ -12,6 +12,10 @@ import {
 import { getGPUProvider } from './provider-singleton.ts';
 import { buildGpuNotReadyMessage } from './status.ts';
 import type { App } from '../../../shared/types/index.ts';
+import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+} from './feature-flag.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -96,6 +100,15 @@ export async function executeGpuFunction(
   const { app, functionName, args, executionId, maxDurationMs } = params;
 
   // ── Validation ──
+  if (!isGpuSupportEnabled()) {
+    return makeError(
+      'infra_error',
+      'GpuSupportDisabled',
+      getGpuSupportDisabledMessage('GPU runtime execution'),
+      app,
+    );
+  }
+
   if (app.gpu_status !== 'live') {
     return makeError(
       'exception',

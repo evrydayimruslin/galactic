@@ -52,6 +52,10 @@ import {
   recordUploadStorage,
 } from '../services/storage-quota.ts';
 import { validateGpuPricingConfig } from '../services/gpu/pricing-config.ts';
+import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+} from '../services/gpu/feature-flag.ts';
 import { getEnv } from '../lib/env.ts';
 import { withSensitiveRouteRateLimit } from '../services/sensitive-route-rate-limit.ts';
 import { RequestValidationError } from '../services/request-validation.ts';
@@ -1395,7 +1399,7 @@ function getFnCount(app: { manifest: unknown; skills_parsed: unknown; exports: s
   }, {
     allowLegacySkills: true,
     allowLegacyExports: true,
-    allowGpuExports: true,
+    allowGpuExports: isGpuSupportEnabled(),
   }).functions.length;
 }
 
@@ -1424,7 +1428,7 @@ async function handleGetAppInstructions(request: Request, appId: string): Promis
     }, {
       allowLegacySkills: true,
       allowLegacyExports: true,
-      allowGpuExports: true,
+      allowGpuExports: isGpuSupportEnabled(),
     });
 
     for (const fn of contractResolution.functions) {
@@ -1792,6 +1796,9 @@ async function handleUpdateApp(request: Request, appId: string): Promise<Respons
       }
 
       if ('gpu_pricing_config' in filteredUpdates) {
+        if (!isGpuSupportEnabled()) {
+          return error(getGpuSupportDisabledMessage('GPU pricing'), 403);
+        }
         if (app.runtime !== 'gpu') {
           return error('gpu_pricing_config can only be set on GPU apps', 400);
         }

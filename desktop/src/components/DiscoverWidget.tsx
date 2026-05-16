@@ -7,6 +7,7 @@ import type {
 } from '../types/ambientSuggestion';
 
 type DiscoverResult = AmbientSuggestion;
+const GPU_SUPPORT_ENABLED = import.meta.env.VITE_UL_GPU_SUPPORT_ENABLED === 'true';
 
 export type DiscoverWidgetMode =
   | { kind: 'inline'; query?: string }
@@ -34,7 +35,7 @@ function trustCapabilityLabels(trust?: AmbientTrustCard): string[] {
     summary.network ? 'Network' : '',
     summary.storage ? 'Storage' : '',
     summary.memory ? 'Memory' : '',
-    summary.gpu ? 'GPU' : '',
+    GPU_SUPPORT_ENABLED && summary.gpu ? 'GPU' : '',
   ].filter(Boolean);
 }
 
@@ -353,7 +354,7 @@ export default function DiscoverWidget({ mode, onInjectScope }: DiscoverWidgetPr
                         Skill
                       </span>
                     )}
-                    {result.runtime === 'gpu' && (
+                    {GPU_SUPPORT_ENABLED && result.runtime === 'gpu' && (
                       <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
                         GPU
                       </span>

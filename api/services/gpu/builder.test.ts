@@ -7,7 +7,9 @@ Deno.test("gpu builder preflight: reports missing config and passes once per-app
 
   try {
     await t.step("reports missing RunPod API key", () => {
-      globalThis.__env = {} as typeof globalThis.__env;
+      globalThis.__env = {
+        GPU_SUPPORT_ENABLED: "true",
+      } as typeof globalThis.__env;
 
       assertEquals(resolveGpuBuildPreflight("app-123", "1.0.0"), {
         ok: false,
@@ -19,6 +21,7 @@ Deno.test("gpu builder preflight: reports missing config and passes once per-app
 
     await t.step("passes when per-app template injection is configured", () => {
       globalThis.__env = {
+        GPU_SUPPORT_ENABLED: "true",
         RUNPOD_API_KEY: "runpod-key",
         RUNPOD_BASE_IMAGE: "ghcr.io/example/image:latest",
         PLATFORM_URL: "https://platform.example",
@@ -36,6 +39,7 @@ Deno.test("gpu builder preflight: reports missing config and passes once per-app
 
     await t.step("prefers GHCR image build when configured", () => {
       globalThis.__env = {
+        GPU_SUPPORT_ENABLED: "true",
         RUNPOD_API_KEY: "runpod-key",
         GITHUB_ACTIONS_TOKEN: "github-token",
         GPU_BUILD_CALLBACK_SECRET: "callback-secret",

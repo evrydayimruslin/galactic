@@ -33,6 +33,10 @@ import {
 import { provisionD1ForApp, type D1ProvisionResult } from './d1-provisioning.ts';
 import { detectGpuConfig, parseGpuConfig } from './gpu/config.ts';
 import type { GpuConfig } from './gpu/types.ts';
+import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+} from './gpu/feature-flag.ts';
 
 // ============================================
 // TYPES
@@ -161,6 +165,9 @@ interface RuntimeDetection {
 function detectRuntime(files: PipelineFile[]): RuntimeDetection {
   const gpuYamlContent = detectGpuConfig(files);
   if (gpuYamlContent) {
+    if (!isGpuSupportEnabled()) {
+      throw new Error(getGpuSupportDisabledMessage('GPU deployments'));
+    }
     const gpuValidation = parseGpuConfig(gpuYamlContent);
     if (!gpuValidation.valid) {
       throw new Error(`Invalid ultralight.gpu.yaml: ${gpuValidation.errors.join(', ')}`);

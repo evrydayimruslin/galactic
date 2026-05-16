@@ -33,6 +33,10 @@ import { detectGpuConfig, parseGpuConfig } from '../services/gpu/config.ts';
 import type { GpuConfig } from '../services/gpu/types.ts';
 import { assertGpuBuildPreflight } from '../services/gpu/builder.ts';
 import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+} from '../services/gpu/feature-flag.ts';
+import {
   parseMigrationFiles,
   validateMigrationSchema,
   runMigrations,
@@ -309,6 +313,9 @@ export async function handleUpload(request: Request): Promise<Response> {
     let gpuConfig: GpuConfig | null = null;
 
     if (gpuYamlContent) {
+      if (!isGpuSupportEnabled()) {
+        return error(getGpuSupportDisabledMessage('GPU deployments'), 403);
+      }
       const gpuValidation = parseGpuConfig(gpuYamlContent);
       if (!gpuValidation.valid) {
         return error(
@@ -1359,6 +1366,10 @@ export async function handleUploadFiles(
     }
 
     validatedFiles.push({ name: file.name, content: file.content });
+  }
+
+  if (detectGpuConfig(validatedFiles) && !isGpuSupportEnabled()) {
+    throw createHttpError(getGpuSupportDisabledMessage('GPU deployments'), 403);
   }
 
   // ── Run shared pipeline (manifest, entry, exports, bundle, safety, migrations) ──

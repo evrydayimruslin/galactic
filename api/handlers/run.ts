@@ -18,6 +18,10 @@ import { executeGpuFunction } from "../services/gpu/executor.ts";
 import { acquireGpuSlot } from "../services/gpu/concurrency.ts";
 import { buildGpuNotReadyMessage } from "../services/gpu/status.ts";
 import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+} from "../services/gpu/feature-flag.ts";
+import {
   buildMissingAppSecretsErrorDetails,
   buildMissingAppSecretsMessage,
   createAppD1Resources,
@@ -130,6 +134,22 @@ export async function handleRun(
 
     // ── GPU Runtime Branch ──
     if (app.runtime === "gpu") {
+      if (!isGpuSupportEnabled()) {
+        return json(
+          {
+            success: false,
+            result: null,
+            logs: [],
+            duration_ms: 0,
+            error: {
+              type: "GPU_SUPPORT_DISABLED",
+              message: getGpuSupportDisabledMessage("GPU runtime execution"),
+            },
+          } as RunResponse,
+          503,
+        );
+      }
+
       if (app.gpu_status !== "live") {
         return json(
           {

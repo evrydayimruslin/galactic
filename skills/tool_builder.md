@@ -304,7 +304,9 @@ ul.download({ name: "my-app", description: "Does X", permissions: ["db"] })
 ```
 Generates skeleton files with function stubs. Omit `app_id` to scaffold new.
 
-For GPU/Python functions, scaffold with the GPU runtime:
+GPU/Python deployments are disabled for the MVP launch unless the platform rollout flag `GPU_SUPPORT_ENABLED=true` is explicitly enabled. While that flag is off, do not scaffold GPU apps; build a Deno app or record a capability gap instead.
+
+When GPU support is explicitly enabled, scaffold with the GPU runtime:
 ```
 ul.download({
   name: "image-enhancer",
@@ -325,7 +327,7 @@ ul.test({ files: [{ path: "index.ts", content: "..." }], function_name: "search"
 - `test_args`: arguments to pass
 - `lint_only: true`: validate conventions only, skip execution
 - `strict: true`: warnings become errors
-- GPU apps are validation-only in `ul.test`: it checks package shape, config, fixture, pinned requirements, and rejects Dockerfiles. Actual GPU execution happens after upload, image build, and benchmark.
+- GPU apps are validation-only in `ul.test` when GPU support is enabled: it checks package shape, config, fixture, pinned requirements, and rejects Dockerfiles. Actual GPU execution happens after upload, image build, and benchmark.
 
 ### 3. Upload
 ```
@@ -333,7 +335,7 @@ ul.upload({ files: [{ path: "index.ts", content: "..." }, { path: "manifest.json
 ```
 - **First upload** (no `app_id`): creates new app, auto-live at v1.0.0
 - **Subsequent uploads** (with `app_id`): creates a **draft** — NOT live until promoted
-- GPU uploads return immediately with `gpu_status: "building"` while GitHub Actions builds/pushes the GHCR image and RunPod provisions the endpoint. Wait for `gpu_status: "live"` before calling or publishing.
+- GPU uploads return immediately with `gpu_status: "building"` while GitHub Actions builds/pushes the GHCR image and RunPod provisions the endpoint. Wait for `gpu_status: "live"` before calling or publishing. While `GPU_SUPPORT_ENABLED` is off, GPU uploads are rejected.
 
 ### 4. Promote Draft
 ```

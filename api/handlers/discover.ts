@@ -33,6 +33,10 @@ import {
 } from '../services/marketplace.ts';
 import type { EnvSchemaEntry } from '../../shared/types/index.ts';
 import { getEnv } from '../lib/env.ts';
+import {
+  isGpuSupportEnabled,
+  sanitizeGpuTrustCard,
+} from '../services/gpu/feature-flag.ts';
 
 // ============================================
 // TYPES
@@ -88,9 +92,12 @@ type MarketplaceListingSnapshot = MarketplaceListingSummary & {
 };
 
 function buildTrustCardForAppRow(app: AppRow): unknown {
-  return buildAppTrustCard({
+  const runtime = app.runtime === 'gpu' && !isGpuSupportEnabled()
+    ? 'deno'
+    : app.runtime || 'deno';
+  return sanitizeGpuTrustCard(buildAppTrustCard({
     current_version: app.current_version || '',
-    runtime: app.runtime || 'deno',
+    runtime,
     manifest: typeof app.manifest === 'string'
       ? app.manifest
       : app.manifest ? JSON.stringify(app.manifest) : null,
@@ -100,7 +107,11 @@ function buildTrustCardForAppRow(app: AppRow): unknown {
     visibility: app.visibility as never,
     download_access: app.download_access || 'owner',
     env_schema: app.env_schema || {},
-  } as never);
+  } as never));
+}
+
+function shouldHideGpuAppRow(app: { runtime?: string | null }): boolean {
+  return app.runtime === 'gpu' && !isGpuSupportEnabled();
 }
 
 async function fetchMarketplaceListingMap(
@@ -556,6 +567,7 @@ async function handleMarketplace(request: Request, url: URL): Promise<Response> 
       const schema = resolveAppEnvSchema(a);
       const perUserEntries = Object.entries(schema).filter(([, v]) => v.scope === 'per_user');
       const marketplace = listingMap.get(a.id) || null;
+      const runtime = shouldHideGpuAppRow(a) ? 'deno' : a.runtime || 'deno';
       return {
         id: a.id,
         name: a.name,
@@ -567,8 +579,8 @@ async function handleMarketplace(request: Request, url: URL): Promise<Response> 
         runs_30d: a.runs_30d ?? 0,
         fully_native: perUserEntries.length === 0,
         had_external_db: !!a.had_external_db,
-        runtime: a.runtime || 'deno',
-        gpu_type: a.gpu_type || null,
+        runtime,
+        gpu_type: runtime === 'gpu' ? a.gpu_type || null : null,
         trust_card: buildTrustCardForAppRow(a),
         marketplace,
       };
@@ -595,6 +607,7 @@ async function handleMarketplace(request: Request, url: URL): Promise<Response> 
           const raw = await topRes.json() as AppRow[];
           allApps = raw.filter(a =>
             !blockedAppIds.has(a.id) &&
+            !shouldHideGpuAppRow(a) &&
             // Exclude non-live GPU apps from marketplace
             !(a.runtime === 'gpu' && a.gpu_status !== 'live')
           );
@@ -770,7 +783,9 @@ async function handleMarketplace(request: Request, url: URL): Promise<Response> 
           );
 
           const filteredApps = appResults.filter(r =>
-            !blockedAppIds.has(r.id) && !r.hosting_suspended
+            !blockedAppIds.has(r.id) &&
+            !shouldHideGpuAppRow(r) &&
+            !r.hosting_suspended
           );
 
           // Fetch env schemas + metadata
@@ -810,6 +825,7 @@ async function handleMarketplace(request: Request, url: URL): Promise<Response> 
 
             // Exclude non-live GPU apps from search results
             if (meta?.runtime === 'gpu' && meta?.gpu_status !== 'live') continue;
+            if (shouldHideGpuAppRow(meta || rr)) continue;
 
             // Apply runtime filter
             const appRuntime = meta?.runtime || 'deno';
@@ -932,8 +948,10 @@ async function handleMarketplace(request: Request, url: URL): Promise<Response> 
           const rows = await keywordRes.json() as AppRow[];
           for (const a of rows) {
             if (blockedAppIds.has(a.id) || scoredAppIds.has(a.id)) continue;
+            if (shouldHideGpuAppRow(a)) continue;
             // Exclude non-live GPU apps
             if (a.runtime === 'gpu' && a.gpu_status !== 'live') continue;
+            const runtime = a.runtime || 'deno';
             const schema = resolveAppEnvSchema(a);
             const perUserEntries = Object.entries(schema).filter(([, v]) => v.scope === 'per_user');
             scored.push({
@@ -949,8 +967,8 @@ async function handleMarketplace(request: Request, url: URL): Promise<Response> 
               runs_30d: a.runs_30d ?? 0,
               fully_native: perUserEntries.length === 0,
               had_external_db: !!a.had_external_db,
-              runtime: a.runtime || 'deno',
-              gpu_type: a.gpu_type || null,
+              runtime,
+              gpu_type: runtime === 'gpu' ? a.gpu_type || null : null,
               trust_card: buildTrustCardForAppRow(a),
             });
           }
@@ -1146,7 +1164,9 @@ async function executeSearch(
 
     // Filter blocked/suspended
     const filteredResults = results.filter(r =>
-      !blockedAppIds.has(r.id) && !r.hosting_suspended
+      !blockedAppIds.has(r.id) &&
+      !shouldHideGpuAppRow(r) &&
+      !r.hosting_suspended
     );
 
     // Fetch env schemas for native_boost calculation

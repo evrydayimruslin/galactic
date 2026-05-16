@@ -11,6 +11,7 @@ import { getGpuVram, GPU_RATE_TABLE } from './types.ts';
 import { getGPUProvider, isGpuAvailable } from './provider-singleton.ts';
 import { createR2Service } from '../storage.ts';
 import { getEnv } from '../../lib/env.ts';
+import { isGpuSupportEnabled } from './feature-flag.ts';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -42,6 +43,11 @@ const BATCH_LIMIT = 5;
  * apps in 'building' or 'benchmarking' status and drives them forward.
  */
 export function startGpuBuildProcessorJob(): void {
+  if (!isGpuSupportEnabled()) {
+    console.log('[GPU-PROC] GPU support disabled, build processor disabled');
+    return;
+  }
+
   if (!isGpuAvailable()) {
     console.log('[GPU-PROC] RUNPOD_API_KEY not configured, GPU build processor disabled');
     return;
@@ -78,6 +84,7 @@ export function startGpuBuildProcessorJob(): void {
  * 2. Run benchmarks on 'benchmarking' apps
  */
 export async function processGpuBuilds(): Promise<void> {
+  if (!isGpuSupportEnabled()) return;
   await checkBuildingApps();
   await runPendingBenchmarks();
 }

@@ -189,7 +189,7 @@ Shortcoming types:
 
 Always report gaps, then help the user with alternatives or suggest Tool Maker for custom builds.
 
-When the gap needs GPU compute, suggest Tool Maker build a GPU function rather than asking the developer for Docker. Tool Maker should scaffold `runtime: "gpu"` and choose `base: "torch-cuda"` for PyTorch/model workloads or `base: "python-cuda"` for general CUDA/Python workloads; Ultralight handles the Dockerfile, GHCR build, and RunPod endpoint.
+GPU compute deployments are disabled for the MVP launch unless the platform rollout flag `GPU_SUPPORT_ENABLED=true` is explicitly enabled. While that flag is off, report GPU-heavy needs as capability gaps and suggest a Deno workaround when possible. When GPU support is explicitly enabled, suggest Tool Maker build a GPU function rather than asking the developer for Docker; Tool Maker should scaffold `runtime: "gpu"` and choose `base: "torch-cuda"` for PyTorch/model workloads or `base: "python-cuda"` for general CUDA/Python workloads.
 
 ## Communication Conventions
 

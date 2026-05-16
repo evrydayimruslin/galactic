@@ -15,6 +15,10 @@ import {
   type GpuImageBuildCallbackPayload,
   resolveGpuImageBuildReadiness,
 } from "./image-builder.ts";
+import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+} from "./feature-flag.ts";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -42,6 +46,14 @@ export function resolveGpuBuildPreflight(
   appId: string,
   version: string,
 ): GpuBuildPreflightResult {
+  if (!isGpuSupportEnabled()) {
+    return {
+      ok: false,
+      status: "build_config_invalid",
+      message: getGpuSupportDisabledMessage("GPU deployments"),
+    };
+  }
+
   if (!getEnv("RUNPOD_API_KEY")) {
     return {
       ok: false,

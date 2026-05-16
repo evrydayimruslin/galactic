@@ -12,6 +12,10 @@ import { checkAndIncrementWeeklyCalls } from "../services/weekly-calls.ts";
 import { executeGpuFunction } from "../services/gpu/executor.ts";
 import { acquireGpuSlot } from "../services/gpu/concurrency.ts";
 import { buildGpuNotReadyMessage } from "../services/gpu/status.ts";
+import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+} from "../services/gpu/feature-flag.ts";
 import { getUserTier } from "../services/tier-enforcement.ts";
 import {
   buildCorsHeaders,
@@ -180,6 +184,14 @@ export async function handleHttpEndpoint(
     const { user } = caller;
     const requestUrl = new URL(request.url);
 
+    if (app.runtime === "gpu" && !isGpuSupportEnabled()) {
+      return json({
+        error: "GPU support disabled",
+        type: "GPU_SUPPORT_DISABLED",
+        message: getGpuSupportDisabledMessage("GPU runtime execution"),
+      }, 503);
+    }
+
     // Weekly call limit check (counts against app owner)
     const ownerTier = await getUserTier(app.owner_id);
     const weeklyResult = await checkAndIncrementWeeklyCalls(
@@ -307,6 +319,14 @@ export async function handleHttpEndpoint(
 
     // ── GPU Runtime Branch ──
     if (app.runtime === "gpu") {
+      if (!isGpuSupportEnabled()) {
+        return json({
+          error: "GPU support disabled",
+          type: "GPU_SUPPORT_DISABLED",
+          message: getGpuSupportDisabledMessage("GPU runtime execution"),
+        }, 503);
+      }
+
       if (app.gpu_status !== "live") {
         return json(
           {
