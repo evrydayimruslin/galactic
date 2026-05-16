@@ -1269,6 +1269,17 @@ export async function handleUser(request: Request): Promise<Response> {
 
   // ============================================
   // GET /api/user - Get user profile
+  //
+  // Augments the hot-path `userService.getUser` payload with two
+  // self-only fields that ProfileView reads:
+  //   - `created_at`   — drives the "active since X" sub-line
+  //   - `stats`        — B14: exact counts of apps published + apps
+  //                      acquired, joined via the existing
+  //                      `get_user_profile_stats` RPC (also used by
+  //                      the public author profile handler above).
+  // Both fetches are best-effort: a 4xx/5xx from Supabase falls back
+  // to undefined so the FE's pre-B14 proxies (earnings.by_app.length
+  // for published, 0 for acquired) keep working.
   // ============================================
   if (path === "/api/user" && method === "GET") {
     try {
@@ -1276,7 +1287,49 @@ export async function handleUser(request: Request): Promise<Response> {
       if (!user) {
         return error("User not found", 404);
       }
-      return json(user);
+      const { SUPABASE_URL: sbUrl, SUPABASE_SERVICE_ROLE_KEY: sbKey } =
+        getSupabaseEnv();
+      const headers = {
+        "apikey": sbKey,
+        "Authorization": `Bearer ${sbKey}`,
+      };
+      const [createdRes, statsRes] = await Promise.all([
+        fetch(
+          `${sbUrl}/rest/v1/users?id=eq.${userId}&select=created_at`,
+          { headers },
+        ),
+        fetch(`${sbUrl}/rest/v1/rpc/get_user_profile_stats`, {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ p_user_id: userId }),
+        }),
+      ]);
+
+      let createdAt: string | undefined;
+      if (createdRes.ok) {
+        const row = await readFirstJsonRow<{ created_at: string | null }>(
+          createdRes,
+        );
+        createdAt = row?.created_at ?? undefined;
+      }
+
+      let stats:
+        | { published_app_count: number; acquired_app_count: number }
+        | undefined;
+      if (statsRes.ok) {
+        const rpc = await readJsonResponse<
+          {
+            published_count?: number;
+            acquired_count?: number;
+          }
+        >(statsRes);
+        stats = {
+          published_app_count: rpc.published_count ?? 0,
+          acquired_app_count: rpc.acquired_count ?? 0,
+        };
+      }
+
+      return json({ ...user, created_at: createdAt, stats });
     } catch (err) {
       userLogger.error("Failed to get user profile", {
         user_id: userId,
