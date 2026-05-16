@@ -208,6 +208,15 @@
       ]
     },
     {
+      "exports": [
+        "findProvider"
+      ],
+      "file": "src/lib/byok.ts",
+      "types": [
+        "VerifyResult"
+      ]
+    },
+    {
       "file": "src/lib/environment.ts",
       "types": [
         "DesktopEnvironment",

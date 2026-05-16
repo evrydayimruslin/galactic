@@ -42,6 +42,7 @@ import {
 } from '../lib/api';
 import AddLightModal from './profile/AddLightModal';
 import WithdrawModal from './profile/WithdrawModal';
+import BYOKEditor from './profile/BYOKEditor';
 import { formatLightPrecise as formatLight } from '../lib/format';
 
 // Open an external URL. Tauri's webview routes target=_blank through the
@@ -709,16 +710,11 @@ function SettingsTab({
         </div>
       </SettingsSection>
 
-      {/* BYOK status (read-only — full editor flagged as B16) */}
+      {/* BYOK key editor (B16). Each row owns its own keychain entry; the
+          'BYOK provider' flag on profile is BE-derived and updates server-
+          side when the user wires a routable model — no FE write needed. */}
       <SettingsSection title="BYOK provider" hint="Bring-your-own-key inference routing">
-        <div className="text-caption text-ul-text-secondary leading-relaxed mb-3">
-          {profile?.byok_enabled
-            ? `Active provider: ${profile.byok_provider ?? '—'}.`
-            : 'No BYOK provider configured. Without a key, inference routes through Ultralight\'s Light meter.'}
-        </div>
-        <div className="text-nano font-mono text-ul-text-muted uppercase tracking-widest">
-          Provider key management ships in a focused follow-up (DESIGN-FOLLOWUPS B16).
-        </div>
+        <BYOKEditor />
       </SettingsSection>
     </div>
   );

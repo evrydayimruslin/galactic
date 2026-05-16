@@ -162,6 +162,9 @@ pub fn run() {
       secure_storage::secure_get_auth_token,
       secure_storage::secure_set_auth_token,
       secure_storage::secure_clear_auth_token,
+      secure_storage::secure_get_secret,
+      secure_storage::secure_set_secret,
+      secure_storage::secure_clear_secret,
       // System commands
       system::open_auth_url,
     ])
