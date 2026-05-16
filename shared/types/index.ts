@@ -134,6 +134,12 @@ export interface App {
   name: string;
   description: string | null;
   icon_url: string | null;
+  /** Whether the requesting user has this app in their library
+   *  (`user_app_library` join). Optional + viewer-scoped — only the
+   *  /app/:id endpoint that handles auth populates it; bulk discover
+   *  responses leave it undefined. Seeded into the B11 install button
+   *  state machine on ToolDetailView. */
+  is_installed?: boolean;
   visibility: 'private' | 'unlisted' | 'public';
   download_access: 'owner' | 'public';
   current_version: string;

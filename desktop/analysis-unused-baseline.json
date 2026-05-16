@@ -186,6 +186,7 @@
         "ConvertEarningsResult",
         "InferenceModelOption",
         "InferenceProviderChoice",
+        "InstallLibraryAppResult",
         "InstantAcquireResult",
         "MarketplaceResponse",
         "McpToolResult",

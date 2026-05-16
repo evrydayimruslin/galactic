@@ -490,7 +490,7 @@ export default function App() {
 
             {mountedViews.has('library') && (
               <div style={paneStyle(view.kind === 'library')}>
-                <LibraryView onOpenTool={navigateToToolDetail} />
+                <LibraryView onOpenTool={navigateToToolDetail} onOpenAuthor={navigateToAuthorProfile} />
               </div>
             )}
 
