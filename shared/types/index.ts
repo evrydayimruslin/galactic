@@ -236,6 +236,20 @@ export interface SkillFunction {
   parameters: Record<string, unknown>;
   returns: unknown;
   examples?: string[];
+  /** Telemetry-derived metrics (B5). Both fields are optional; the
+   *  ToolDetailView function table renders an em-dash when either is
+   *  absent so the BE can stage the rollout one function at a time
+   *  without breaking the row.
+   *
+   *  `price_per_call_light` — average per-call cost rolled up from the
+   *  recent invocation window (BE picks the window; recommendation is
+   *  last 30 days, matching the rest of the marketplace surface).
+   *  `latency_p50_ms` — median request latency over the same window.
+   *  Authors may also self-declare these in the manifest; the BE
+   *  source of truth resolves to either.
+   */
+  price_per_call_light?: number;
+  latency_p50_ms?: number;
 }
 
 export interface PermissionDeclaration {

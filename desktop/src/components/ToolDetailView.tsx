@@ -119,12 +119,29 @@ function FunctionRow({
           </div>
           <div className="text-caption text-ul-text-secondary mt-0.5 truncate">{fn.description}</div>
         </div>
-        {/* TODO(data): per-function price/call not in skills_parsed today — placeholder. */}
-        <div className="font-mono text-caption text-ul-text-muted tabular-nums text-left">
-          ✦—<span className="text-ul-text-muted">/call</span>
+        {/* B5 — per-function price/call from telemetry rollup. Falls
+            back to the em-dash placeholder when the field is absent
+            (BE staging or no recent invocations to derive from). */}
+        <div className="font-mono text-caption tabular-nums text-left">
+          {fn.price_per_call_light !== undefined && fn.price_per_call_light !== null ? (
+            <>
+              <span className="text-ul-text">✦{formatLight(fn.price_per_call_light)}</span>
+              <span className="text-ul-text-muted">/call</span>
+            </>
+          ) : (
+            <span className="text-ul-text-muted">
+              ✦—<span className="text-ul-text-muted">/call</span>
+            </span>
+          )}
         </div>
-        {/* TODO(data): per-function latency not in skills_parsed today — placeholder. */}
-        <div className="font-mono text-micro text-ul-text-muted tabular-nums text-center">—</div>
+        {/* B5 — per-function p50 latency. */}
+        <div className="font-mono text-micro tabular-nums text-center">
+          {fn.latency_p50_ms !== undefined && fn.latency_p50_ms !== null ? (
+            <span className="text-ul-text-secondary">{Math.round(fn.latency_p50_ms)}ms</span>
+          ) : (
+            <span className="text-ul-text-muted">—</span>
+          )}
+        </div>
         <ChevronRight
           className={`w-3.5 h-3.5 text-ul-text-muted transition-transform duration-base ${open ? 'rotate-90' : ''}`}
           strokeWidth={1.5}
