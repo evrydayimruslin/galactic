@@ -24,6 +24,7 @@ import ChatView from './components/ChatView';
 import CommandHomescreen from './components/CommandHomescreen';
 import LibraryView from './components/LibraryView';
 import MarketplaceView from './components/MarketplaceView';
+import AuthorProfileView from './components/AuthorProfileView';
 import ProfileView from './components/ProfileView';
 import ToolDetailView from './components/ToolDetailView';
 import NavSidebar from './components/NavSidebar';
@@ -74,6 +75,7 @@ export default function App() {
     navigateToLibrary,
     navigateToMarketplace,
     navigateToToolDetail,
+    navigateToAuthorProfile,
     navigateToProfile,
     navigateToWallet,
     navigateToSettings,
@@ -375,10 +377,11 @@ export default function App() {
         return new Set(prev).add(view.agentId);
       });
     }
-    // 'tool-detail' is intentionally NOT cached — we unmount each visit so
-    // switching between different apps always loads a fresh iframe. Visits
-    // are short-lived (info pages) so there's no perf cost.
-    if (view.kind === 'tool-detail') return;
+    // 'tool-detail' and 'author-profile' are intentionally NOT cached —
+    // we unmount each visit so switching between different apps/authors
+    // always refetches. Visits are short-lived (info pages) so there's
+    // no perf cost.
+    if (view.kind === 'tool-detail' || view.kind === 'author-profile') return;
     setMountedViews((prev) => {
       if (prev.has(view.kind)) return prev;
       return new Set(prev).add(view.kind);
@@ -493,7 +496,7 @@ export default function App() {
 
             {mountedViews.has('marketplace') && (
               <div style={paneStyle(view.kind === 'marketplace')}>
-                <MarketplaceView onOpenTool={navigateToToolDetail} />
+                <MarketplaceView onOpenTool={navigateToToolDetail} onOpenAuthor={navigateToAuthorProfile} />
               </div>
             )}
 
@@ -510,6 +513,18 @@ export default function App() {
                   key={view.appId}
                   appId={view.appId}
                   fallbackName={view.appName}
+                  onOpenAuthor={navigateToAuthorProfile}
+                />
+              </div>
+            )}
+
+            {view.kind === 'author-profile' && (
+              <div style={paneStyle(true)}>
+                <AuthorProfileView
+                  key={view.handle}
+                  handle={view.handle}
+                  onOpenTool={navigateToToolDetail}
+                  onBack={navigateToMarketplace}
                 />
               </div>
             )}

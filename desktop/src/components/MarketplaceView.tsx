@@ -32,6 +32,10 @@ import { formatLightPrecise as formatLight, formatAuthorHandle } from '../lib/fo
 
 interface MarketplaceViewProps {
   onOpenTool: (appId: string, appName: string) => void;
+  /** Navigate to the public author profile (B7). When unset, @handle
+   *  text stays inert — preserves the pre-B7 behaviour during the BE
+   *  deploy gap or in surfaces that don't have routing handy. */
+  onOpenAuthor?: (handle: string) => void;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -62,9 +66,50 @@ function AuthorMark({ result, size = 20 }: { result: MarketplaceResult; size?: n
   return <Glyph glyph={deriveGlyph(result.slug ?? result.name)} tone={deriveTone(result.id)} size={size} />;
 }
 
+// Author handle anchor — wraps an inline `@handle` in a clickable target
+// that routes to AuthorProfileView (B7). Falls back to a plain span when
+// no onOpenAuthor handler is wired (preserves pre-B7 behaviour during
+// the BE deploy gap and in surfaces that don't have routing). The handle
+// is normalised to include the leading `@` regardless of input.
+function AuthorLink({
+  result,
+  onOpenAuthor,
+  className,
+}: {
+  result: MarketplaceResult;
+  onOpenAuthor?: (handle: string) => void;
+  className?: string;
+}) {
+  const handle = formatAuthorHandle(result, { truncateAtDash: true });
+  const display = `@${handle}`;
+  if (!onOpenAuthor || handle === 'author') {
+    return <span className={className}>{display}</span>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenAuthor(handle);
+      }}
+      className={`bg-transparent border-none p-0 cursor-pointer underline underline-offset-[3px] text-ul-text hover:text-ul-accent-hover ${className ?? ''}`}
+    >
+      {display}
+    </button>
+  );
+}
+
 // ── Featured hero (one big card on top of the page) ──────────────────
 
-function FeaturedHero({ result, onOpen }: { result: MarketplaceResult; onOpen: () => void }) {
+function FeaturedHero({
+  result,
+  onOpen,
+  onOpenAuthor,
+}: {
+  result: MarketplaceResult;
+  onOpen: () => void;
+  onOpenAuthor?: (handle: string) => void;
+}) {
   const tone = deriveTone(result.id);
   return (
     <button
@@ -94,7 +139,7 @@ function FeaturedHero({ result, onOpen }: { result: MarketplaceResult; onOpen: (
           <div className="flex items-center gap-4 text-caption text-ul-text-secondary flex-wrap">
             <span className="inline-flex items-center gap-1.5">
               <AuthorMark result={result} size={18} />
-              <span className="font-mono">@{formatAuthorHandle(result, { truncateAtDash: true })}</span>
+              <AuthorLink result={result} onOpenAuthor={onOpenAuthor} className="font-mono" />
             </span>
             <span className="text-ul-text-muted">·</span>
             <span className="font-mono">{formatCount(result.runs_30d)} runs/30d</span>
@@ -239,7 +284,15 @@ function CategoryChip({
 
 // ── Trending card (grid item under each section) ─────────────────────
 
-function TrendingCard({ result, onOpen }: { result: MarketplaceResult; onOpen: () => void }) {
+function TrendingCard({
+  result,
+  onOpen,
+  onOpenAuthor,
+}: {
+  result: MarketplaceResult;
+  onOpen: () => void;
+  onOpenAuthor?: (handle: string) => void;
+}) {
   const listing = result.marketplace;
   return (
     <div
@@ -250,9 +303,8 @@ function TrendingCard({ result, onOpen }: { result: MarketplaceResult; onOpen: (
         <AuthorMark result={result} size={28} />
         <div className="flex-1 min-w-0">
           <div className="text-body font-semibold truncate">{result.name}</div>
-          {/* TODO(data): author display name (B10). */}
           <div className="text-nano text-ul-text-muted font-mono truncate">
-            @{formatAuthorHandle(result, { truncateAtDash: true })}
+            <AuthorLink result={result} onOpenAuthor={onOpenAuthor} />
           </div>
         </div>
       </div>
@@ -326,7 +378,7 @@ function NewlyAcquiredStrip({ entries, onOpenTool }: { entries: NewlyAcquiredEnt
 
 // ── MarketplaceView ──────────────────────────────────────────────────
 
-export default function MarketplaceView({ onOpenTool }: MarketplaceViewProps) {
+export default function MarketplaceView({ onOpenTool, onOpenAuthor }: MarketplaceViewProps) {
   const [browse, setBrowse] = useState<MarketplaceBrowseResponse | null>(null);
   const [search, setSearch] = useState<MarketplaceSearchResponse | null>(null);
   const [acquisitions, setAcquisitions] = useState<NewlyAcquiredEntry[]>([]);
@@ -476,7 +528,7 @@ export default function MarketplaceView({ onOpenTool }: MarketplaceViewProps) {
             {search?.results && search.results.length > 0 ? (
               <div className="grid grid-cols-2 gap-3">
                 {search.results.map((r) => (
-                  <TrendingCard key={r.id} result={r} onOpen={() => onPickResult(r)} />
+                  <TrendingCard key={r.id} result={r} onOpen={() => onPickResult(r)} onOpenAuthor={onOpenAuthor} />
                 ))}
               </div>
             ) : search?.results?.length === 0 ? (
@@ -502,7 +554,7 @@ export default function MarketplaceView({ onOpenTool }: MarketplaceViewProps) {
             {/* Featured hero */}
             {featured && !activeCategory && (
               <div className="mb-8">
-                <FeaturedHero result={featured} onOpen={() => onPickResult(featured)} />
+                <FeaturedHero result={featured} onOpen={() => onPickResult(featured)} onOpenAuthor={onOpenAuthor} />
               </div>
             )}
 
@@ -528,7 +580,7 @@ export default function MarketplaceView({ onOpenTool }: MarketplaceViewProps) {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   {section.results.slice(0, 6).map((r) => (
-                    <TrendingCard key={r.id} result={r} onOpen={() => onPickResult(r)} />
+                    <TrendingCard key={r.id} result={r} onOpen={() => onPickResult(r)} onOpenAuthor={onOpenAuthor} />
                   ))}
                 </div>
               </div>

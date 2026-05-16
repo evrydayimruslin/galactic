@@ -49,6 +49,9 @@ interface ToolDetailViewProps {
   appId: string;
   /** Optional name to render while the full app payload loads. */
   fallbackName?: string;
+  /** Navigate to the public author profile (B7). When unset the byline
+   *  handle stays inert. */
+  onOpenAuthor?: (handle: string) => void;
 }
 
 // ── Fetch ─────────────────────────────────────────────────────────────
@@ -229,15 +232,33 @@ function formatRelativeHours(iso: string | undefined): string {
   return `${Math.floor(d / 7)}w ago`;
 }
 
-function BidderMark({ bid }: { bid: MarketplaceBid }) {
+function BidderMark({
+  bid,
+  onOpenAuthor,
+}: {
+  bid: MarketplaceBid;
+  onOpenAuthor?: (handle: string) => void;
+}) {
   const seed = bid.bidder_id || bid.bidder_email || bid.id;
   const label = bid.bidder_display_name || bid.bidder_email?.split('@')[0] || 'bidder';
+  const linkable = !!onOpenAuthor && label !== 'bidder';
   return (
     <div className="flex items-center gap-1.5">
       <Glyph glyph={deriveGlyph(label)} tone={deriveTone(seed)} size={16} />
-      <span className="text-caption text-ul-text-secondary truncate">
-        @{label}
-      </span>
+      {linkable ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenAuthor!(label);
+          }}
+          className="text-caption text-ul-text-secondary truncate underline underline-offset-[3px] bg-transparent border-none p-0 cursor-pointer hover:text-ul-text"
+        >
+          @{label}
+        </button>
+      ) : (
+        <span className="text-caption text-ul-text-secondary truncate">@{label}</span>
+      )}
     </div>
   );
 }
@@ -259,6 +280,7 @@ interface SideRailProps {
   isOwner: boolean;
   onOpenAcquisition: () => void;
   onListingChanged: () => Promise<void>;
+  onOpenAuthor?: (handle: string) => void;
 }
 
 // ── Seller-only ask editor ────────────────────────────────────────────
@@ -464,7 +486,7 @@ function VisibilityPicker({ appId, showMetrics, onCommitted }: VisibilityPickerP
   );
 }
 
-function SideRail({ appId, appName, details, loading, isOwner, onOpenAcquisition, onListingChanged }: SideRailProps) {
+function SideRail({ appId, appName, details, loading, isOwner, onOpenAcquisition, onListingChanged, onOpenAuthor }: SideRailProps) {
   const [editingAsk, setEditingAsk] = useState(false);
   // Per-bid action state — which bid is being accepted/rejected, with last error
   const [bidActionId, setBidActionId] = useState<string | null>(null);
@@ -621,7 +643,7 @@ function SideRail({ appId, appName, details, loading, isOwner, onOpenAcquisition
               {visibleBids.map((bid) => (
                 <div key={bid.id} className="flex items-center gap-2">
                   <div className="flex-1 min-w-0">
-                    <BidderMark bid={bid} />
+                    <BidderMark bid={bid} onOpenAuthor={onOpenAuthor} />
                   </div>
                   <div className="font-mono text-caption text-ul-text tabular-nums flex-shrink-0">
                     ✦{formatLight(bid.amount_light)}
@@ -722,7 +744,7 @@ function SideRail({ appId, appName, details, loading, isOwner, onOpenAcquisition
 
 // ── ToolDetailView ────────────────────────────────────────────────────
 
-export default function ToolDetailView({ appId, fallbackName }: ToolDetailViewProps) {
+export default function ToolDetailView({ appId, fallbackName, onOpenAuthor }: ToolDetailViewProps) {
   const [app, setApp] = useState<App | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -802,10 +824,29 @@ export default function ToolDetailView({ appId, fallbackName }: ToolDetailViewPr
             <div>
               <div className="text-h1 text-ul-text leading-none tracking-tighter">{displayName}</div>
               <div className="text-small text-ul-text-secondary mt-1">
-                {/* Author handle: BE doesn't expose a display name today (B7/B14).
-                    Render the app slug as a stable, non-identifying handle until
-                    /api/user/.../public exposes display_name + profile_slug. */}
-                {app ? <>by @{formatAuthorHandle(app, { fallback: 'owner' })} · {category}</> : <>&nbsp;</>}
+                {app ? (
+                  <>
+                    by{' '}
+                    {(() => {
+                      const handle = formatAuthorHandle(app, { fallback: 'owner' });
+                      if (!onOpenAuthor || handle === 'owner') {
+                        return <span>@{handle}</span>;
+                      }
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => onOpenAuthor(handle)}
+                          className="bg-transparent border-none p-0 cursor-pointer underline underline-offset-[3px] text-ul-text hover:text-ul-accent-hover"
+                        >
+                          @{handle}
+                        </button>
+                      );
+                    })()}
+                    {' '}· {category}
+                  </>
+                ) : (
+                  <>&nbsp;</>
+                )}
               </div>
             </div>
           </div>
@@ -901,6 +942,7 @@ export default function ToolDetailView({ appId, fallbackName }: ToolDetailViewPr
               isOwner={isOwner}
               onOpenAcquisition={() => setAcquisitionOpen(true)}
               onListingChanged={refetchListing}
+              onOpenAuthor={onOpenAuthor}
             />
           </div>
         ) : null}
@@ -914,6 +956,7 @@ export default function ToolDetailView({ appId, fallbackName }: ToolDetailViewPr
           initialListing={listing}
           onClose={() => setAcquisitionOpen(false)}
           onAcquired={() => { void refetchListing(); }}
+          onOpenAuthor={onOpenAuthor}
         />
       )}
     </div>

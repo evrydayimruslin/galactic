@@ -1307,6 +1307,91 @@ export async function fetchNewlyAcquired(limit = 10): Promise<NewlyAcquiredEntry
   return Array.isArray(data) ? data : (data.results ?? []);
 }
 
+// ── Author profile (B7) ──
+//
+// `GET /api/author/:handle` returns the public author page payload
+// described in the Batch B addendum. FE-first with graceful fallback —
+// on any non-200 we return null and AuthorProfileView surfaces an
+// empty-with-header state so the page is still navigable during the
+// BE deploy gap.
+//
+// `earnings` is server-side-masked to null for non-owners; the FE never
+// computes the unmasked value.
+
+export interface AuthorProfileLink {
+  label: string;
+  url: string;
+}
+
+export interface AuthorProfileToolSummary {
+  id: string;
+  name: string;
+  slug?: string;
+  tagline?: string;
+  description?: string;
+  category?: string;
+  installs?: number;
+  call_price_light?: number;
+  /** 7d daily-bucket trend, oldest first. Same shape as MarketplaceResult.sparkline. */
+  sparkline?: number[];
+  growth_7d?: number;
+  glyph_tone?: string;
+}
+
+export interface AuthorProfileAcquisition {
+  id: string;
+  app_id: string;
+  app_name: string;
+  app_slug?: string;
+  glyph_tone?: string;
+  from_handle: string;
+  /** Sale price; null when the seller hasn't opted in to public revenue. */
+  sale_price_light?: number | null;
+  acquired_at: string;
+  calls_per_week?: number;
+}
+
+export interface AuthorProfileActivityEvent {
+  /** ISO timestamp. */
+  at: string;
+  /** `"published" | "version_bump" | "acquired" | "joined"` — free-form for forward-compat. */
+  kind: string;
+  /** Human-readable description rendered as-is in the timeline. */
+  text: string;
+}
+
+export interface AuthorProfileResponse {
+  handle: string;
+  display_name?: string | null;
+  bio?: string | null;
+  location?: string | null;
+  joined?: string | null;            // ISO timestamp
+  links?: AuthorProfileLink[];
+  glyph_tone?: string | null;        // hex
+  verified?: boolean;
+  stats?: {
+    published: number;
+    installs: number;
+    acquisitions: number;
+    /** null for non-owners — BE masks server-side per the spec. */
+    earnings: number | null;
+  };
+  tools?: AuthorProfileToolSummary[];
+  acquisitions?: AuthorProfileAcquisition[];
+  activity?: AuthorProfileActivityEvent[];
+}
+
+export async function fetchAuthorProfile(handle: string): Promise<AuthorProfileResponse | null> {
+  const token = getToken();
+  // Strip the leading @ if present — endpoint expects the raw handle.
+  const clean = handle.startsWith('@') ? handle.slice(1) : handle;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetchFromApi(`/api/author/${encodeURIComponent(clean)}`, { headers });
+  if (!res.ok) return null;
+  return await res.json() as AuthorProfileResponse;
+}
+
 // ── Acquisition handoff banners (G1 + G2) ──
 //
 // Two feeds for the post-acceptance moments: sales the current user

@@ -43,6 +43,10 @@ interface AcquisitionFlowProps {
   /** Called after a successful instant-buy or bid acceptance. The parent should
    *  invalidate any cached listing for this app + close the modal. */
   onAcquired?: () => void;
+  /** Navigate to a bidder's public author profile (B7). When unset
+   *  bidder handles stay inert; the modal still closes on the click
+   *  if the caller routes via the same view stack. */
+  onOpenAuthor?: (handle: string) => void;
 }
 
 type Step = 'review' | 'bid' | 'manage' | 'confirmation';
@@ -92,6 +96,7 @@ interface ReviewStepProps {
   instantBuying: boolean;
   instantBuyError: string | null;
   onManageBid: () => void;
+  onOpenAuthor?: (handle: string) => void;
 }
 
 function ReviewStep({
@@ -101,6 +106,7 @@ function ReviewStep({
   currentUserId,
   onPlaceBid,
   onInstantBuy,
+  onOpenAuthor,
   instantBuying,
   instantBuyError,
   onManageBid,
@@ -234,7 +240,20 @@ function ReviewStep({
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 min-w-0">
                     <Glyph glyph={deriveGlyph(label)} tone={deriveTone(seed)} size={18} />
-                    <span className="text-caption font-medium truncate">@{label}</span>
+                    {onOpenAuthor && !yours && label !== 'bidder' ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenAuthor(label);
+                        }}
+                        className="text-caption font-medium truncate underline underline-offset-[3px] bg-transparent border-none p-0 cursor-pointer text-ul-text hover:text-ul-accent-hover"
+                      >
+                        @{label}
+                      </button>
+                    ) : (
+                      <span className="text-caption font-medium truncate">@{label}</span>
+                    )}
                     {yours && (
                       <span className="text-nano font-mono text-ul-info bg-ul-info-soft px-1.5 py-px rounded-xs tracking-widest uppercase">
                         you
@@ -720,6 +739,7 @@ export default function AcquisitionFlow({
   initialListing,
   onClose,
   onAcquired,
+  onOpenAuthor,
 }: AcquisitionFlowProps) {
   const [step, setStep] = useState<Step>('review');
   const [listing, setListing] = useState<MarketplaceListingDetails | null>(initialListing ?? null);
@@ -890,6 +910,12 @@ export default function AcquisitionFlow({
           instantBuying={instantBuying}
           instantBuyError={instantBuyError}
           onManageBid={() => { setSubmitError(null); setStep('manage'); }}
+          onOpenAuthor={(handle) => {
+            // Author navigation lives outside the modal. Close it first
+            // so the new view takes focus cleanly.
+            onClose();
+            onOpenAuthor?.(handle);
+          }}
         />
       )}
       {step === 'bid' && (
