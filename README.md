@@ -226,7 +226,26 @@ Full documentation: [`skills.md`](skills.md)
 ### HTTP
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| ANY | `/http/{appId}/{function}` | Direct HTTP access to app functions |
+| ANY | `/http/{appId}/{function}` | Direct HTTP access to declared app functions |
+| GET | `/api/apps/{appId}/http-routes` | Safe catalog of declared direct HTTP routes |
+
+Direct HTTP routes are declared in `manifest.json` under `http.routes`. Public
+routes must declare methods, use owner billing, and use app-scoped data:
+
+```json
+{
+  "http": {
+    "routes": {
+      "webhook": {
+        "auth": "public",
+        "methods": ["POST"],
+        "cors": { "origins": ["https://example.com"] },
+        "rate_limit": { "rpm": 60 }
+      }
+    }
+  }
+}
+```
 
 ---
 

@@ -18,6 +18,41 @@ export interface AppManifest {
   widgets?: WidgetDeclaration[];
   env?: Record<string, ManifestEnvVar>;
   env_vars?: Record<string, ManifestEnvVar>;
+  http?: ManifestHttpConfig;
+}
+
+export type ManifestHttpAuthMode = 'user' | 'public';
+export type ManifestHttpBillingMode = 'owner' | 'caller';
+export type ManifestHttpDataScope = 'app' | 'user';
+export type ManifestHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
+
+export interface ManifestHttpConfig {
+  defaults?: ManifestHttpRouteDefaults;
+  routes?: Record<string, ManifestHttpRoutePolicy>;
+}
+
+export interface ManifestHttpRouteDefaults {
+  auth?: ManifestHttpAuthMode;
+  methods?: ManifestHttpMethod[];
+  cors?: ManifestHttpCorsPolicy;
+  rate_limit?: ManifestHttpRateLimitPolicy;
+  billing?: ManifestHttpBillingMode;
+  data_scope?: ManifestHttpDataScope;
+}
+
+export interface ManifestHttpRoutePolicy extends ManifestHttpRouteDefaults {}
+
+export interface ManifestHttpCorsPolicy {
+  origins?: string[];
+  credentials?: boolean;
+  headers?: string[];
+  max_age_seconds?: number;
+}
+
+export interface ManifestHttpRateLimitPolicy {
+  rpm?: number;
+  burst?: number;
+  daily?: number;
 }
 
 export interface ManifestFunction {
@@ -264,6 +299,392 @@ export function normalizeManifestParameters(
 }
 
 const COMMAND_CARD_SIZE_RE = /^[1-4]x[1-4]$/;
+const MANIFEST_HTTP_METHODS: ManifestHttpMethod[] = [
+  'GET',
+  'POST',
+  'PUT',
+  'PATCH',
+  'DELETE',
+  'HEAD',
+];
+const MANIFEST_HTTP_RATE_LIMIT_MAX_RPM = 10_000;
+const MANIFEST_HTTP_RATE_LIMIT_MAX_BURST = 10_000;
+const MANIFEST_HTTP_RATE_LIMIT_MAX_DAILY = 10_000_000;
+const HTTP_HEADER_NAME_RE = /^[A-Za-z0-9!#$%&'*+.^_|~-]+$/;
+
+function validateHttpAuthMode(
+  value: unknown,
+  path: string,
+  errors: ManifestValidationError[],
+): ManifestHttpAuthMode | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'user' || value === 'public') return value;
+  errors.push({ path, message: 'auth must be one of: user, public' });
+  return undefined;
+}
+
+function validateHttpBillingMode(
+  value: unknown,
+  path: string,
+  errors: ManifestValidationError[],
+): ManifestHttpBillingMode | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'owner' || value === 'caller') return value;
+  errors.push({ path, message: 'billing must be one of: owner, caller' });
+  return undefined;
+}
+
+function validateHttpDataScope(
+  value: unknown,
+  path: string,
+  errors: ManifestValidationError[],
+): ManifestHttpDataScope | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'app' || value === 'user') return value;
+  errors.push({ path, message: 'data_scope must be one of: app, user' });
+  return undefined;
+}
+
+function validateHttpMethods(
+  value: unknown,
+  path: string,
+  errors: ManifestValidationError[],
+): ManifestHttpMethod[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    errors.push({ path, message: 'methods must be a non-empty array' });
+    return undefined;
+  }
+
+  const normalized: ManifestHttpMethod[] = [];
+  const seen = new Set<string>();
+  for (const [index, method] of value.entries()) {
+    if (typeof method !== 'string') {
+      errors.push({ path: `${path}.${index}`, message: 'method must be a string' });
+      continue;
+    }
+    const upper = method.trim().toUpperCase();
+    if (!MANIFEST_HTTP_METHODS.includes(upper as ManifestHttpMethod)) {
+      errors.push({
+        path: `${path}.${index}`,
+        message: `method must be one of: ${MANIFEST_HTTP_METHODS.join(', ')}`,
+      });
+      continue;
+    }
+    if (seen.has(upper)) {
+      errors.push({ path: `${path}.${index}`, message: `duplicate method "${upper}"` });
+      continue;
+    }
+    seen.add(upper);
+    normalized.push(upper as ManifestHttpMethod);
+  }
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeHttpCorsOrigin(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed === '*') return '*';
+  if (trimmed === 'tauri://localhost') return trimmed;
+
+  try {
+    const url = new URL(trimmed);
+    if (url.pathname !== '/' || url.search || url.hash) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function validateHttpCors(
+  value: unknown,
+  path: string,
+  errors: ManifestValidationError[],
+): ManifestHttpCorsPolicy | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    errors.push({ path, message: 'cors must be an object' });
+    return undefined;
+  }
+
+  const cors = value as Record<string, unknown>;
+  const normalized: ManifestHttpCorsPolicy = {};
+  if (cors.origins !== undefined) {
+    if (!Array.isArray(cors.origins) || cors.origins.length === 0) {
+      errors.push({ path: `${path}.origins`, message: 'origins must be a non-empty array' });
+    } else {
+      const origins: string[] = [];
+      const seen = new Set<string>();
+      for (const [index, originValue] of cors.origins.entries()) {
+        if (typeof originValue !== 'string') {
+          errors.push({ path: `${path}.origins.${index}`, message: 'origin must be a string' });
+          continue;
+        }
+        const origin = normalizeHttpCorsOrigin(originValue);
+        if (!origin) {
+          errors.push({
+            path: `${path}.origins.${index}`,
+            message: 'origin must be "*", "tauri://localhost", or a URL origin',
+          });
+          continue;
+        }
+        if (seen.has(origin)) {
+          errors.push({
+            path: `${path}.origins.${index}`,
+            message: `duplicate origin "${origin}"`,
+          });
+          continue;
+        }
+        seen.add(origin);
+        origins.push(origin);
+      }
+      if (origins.length > 0) normalized.origins = origins;
+    }
+  }
+
+  if (cors.credentials !== undefined) {
+    if (typeof cors.credentials !== 'boolean') {
+      errors.push({ path: `${path}.credentials`, message: 'credentials must be a boolean' });
+    } else {
+      normalized.credentials = cors.credentials;
+    }
+  }
+
+  if (cors.headers !== undefined) {
+    if (!Array.isArray(cors.headers)) {
+      errors.push({ path: `${path}.headers`, message: 'headers must be an array' });
+    } else {
+      const headers: string[] = [];
+      const seen = new Set<string>();
+      for (const [index, headerValue] of cors.headers.entries()) {
+        if (typeof headerValue !== 'string' || !HTTP_HEADER_NAME_RE.test(headerValue.trim())) {
+          errors.push({
+            path: `${path}.headers.${index}`,
+            message: 'header must be a valid HTTP header name',
+          });
+          continue;
+        }
+        const header = headerValue.trim();
+        const lower = header.toLowerCase();
+        if (seen.has(lower)) {
+          errors.push({
+            path: `${path}.headers.${index}`,
+            message: `duplicate header "${header}"`,
+          });
+          continue;
+        }
+        seen.add(lower);
+        headers.push(header);
+      }
+      if (headers.length > 0) normalized.headers = headers;
+    }
+  }
+
+  if (cors.max_age_seconds !== undefined) {
+    if (
+      typeof cors.max_age_seconds !== 'number' ||
+      !Number.isInteger(cors.max_age_seconds) ||
+      cors.max_age_seconds < 0 ||
+      cors.max_age_seconds > 86_400
+    ) {
+      errors.push({
+        path: `${path}.max_age_seconds`,
+        message: 'max_age_seconds must be an integer between 0 and 86400',
+      });
+    } else {
+      normalized.max_age_seconds = cors.max_age_seconds;
+    }
+  }
+
+  if (normalized.credentials === true && normalized.origins?.includes('*')) {
+    errors.push({
+      path: `${path}.credentials`,
+      message: 'credentials cannot be true when origins includes "*"',
+    });
+  }
+
+  return normalized;
+}
+
+function validateHttpPositiveInteger(
+  value: unknown,
+  path: string,
+  label: string,
+  max: number,
+  errors: ManifestValidationError[],
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) {
+    errors.push({ path, message: `${label} must be an integer between 1 and ${max}` });
+    return undefined;
+  }
+  return value;
+}
+
+function validateHttpRateLimit(
+  value: unknown,
+  path: string,
+  errors: ManifestValidationError[],
+): ManifestHttpRateLimitPolicy | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    errors.push({ path, message: 'rate_limit must be an object' });
+    return undefined;
+  }
+
+  const raw = value as Record<string, unknown>;
+  const rateLimit: ManifestHttpRateLimitPolicy = {};
+  const rpm = validateHttpPositiveInteger(
+    raw.rpm,
+    `${path}.rpm`,
+    'rpm',
+    MANIFEST_HTTP_RATE_LIMIT_MAX_RPM,
+    errors,
+  );
+  const burst = validateHttpPositiveInteger(
+    raw.burst,
+    `${path}.burst`,
+    'burst',
+    MANIFEST_HTTP_RATE_LIMIT_MAX_BURST,
+    errors,
+  );
+  const daily = validateHttpPositiveInteger(
+    raw.daily,
+    `${path}.daily`,
+    'daily',
+    MANIFEST_HTTP_RATE_LIMIT_MAX_DAILY,
+    errors,
+  );
+  if (rpm !== undefined) rateLimit.rpm = rpm;
+  if (burst !== undefined) rateLimit.burst = burst;
+  if (daily !== undefined) rateLimit.daily = daily;
+  return rateLimit;
+}
+
+function validateHttpRouteDefaults(
+  value: Record<string, unknown>,
+  path: string,
+  errors: ManifestValidationError[],
+): ManifestHttpRouteDefaults {
+  const defaults: ManifestHttpRouteDefaults = {};
+  const auth = validateHttpAuthMode(value.auth, `${path}.auth`, errors);
+  const billing = validateHttpBillingMode(value.billing, `${path}.billing`, errors);
+  const dataScope = validateHttpDataScope(value.data_scope, `${path}.data_scope`, errors);
+  const methods = validateHttpMethods(value.methods, `${path}.methods`, errors);
+  const cors = validateHttpCors(value.cors, `${path}.cors`, errors);
+  const rateLimit = validateHttpRateLimit(value.rate_limit, `${path}.rate_limit`, errors);
+
+  if (auth !== undefined) defaults.auth = auth;
+  if (billing !== undefined) defaults.billing = billing;
+  if (dataScope !== undefined) defaults.data_scope = dataScope;
+  if (methods !== undefined) {
+    defaults.methods = methods;
+    value.methods = methods;
+  }
+  if (cors !== undefined) {
+    defaults.cors = cors;
+    value.cors = cors;
+  }
+  if (rateLimit !== undefined) defaults.rate_limit = rateLimit;
+  return defaults;
+}
+
+function mergeHttpCors(
+  defaults?: ManifestHttpCorsPolicy,
+  route?: ManifestHttpCorsPolicy,
+): ManifestHttpCorsPolicy | undefined {
+  if (!defaults && !route) return undefined;
+  return { ...(defaults || {}), ...(route || {}) };
+}
+
+function validateManifestHttp(
+  value: unknown,
+  functions: Record<string, unknown>,
+  errors: ManifestValidationError[],
+): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    errors.push({ path: 'http', message: 'http must be an object' });
+    return;
+  }
+
+  const http = value as Record<string, unknown>;
+  let defaults: ManifestHttpRouteDefaults = {};
+  if (http.defaults !== undefined) {
+    if (!http.defaults || typeof http.defaults !== 'object' || Array.isArray(http.defaults)) {
+      errors.push({ path: 'http.defaults', message: 'defaults must be an object' });
+    } else {
+      defaults = validateHttpRouteDefaults(
+        http.defaults as Record<string, unknown>,
+        'http.defaults',
+        errors,
+      );
+    }
+  }
+
+  if (http.routes === undefined) return;
+  if (!http.routes || typeof http.routes !== 'object' || Array.isArray(http.routes)) {
+    errors.push({ path: 'http.routes', message: 'routes must be an object' });
+    return;
+  }
+
+  for (const [routeName, routeValue] of Object.entries(http.routes as Record<string, unknown>)) {
+    const routePath = `http.routes.${routeName}`;
+    if (!routeName || routeName.trim() !== routeName || /[/?#\s]/.test(routeName)) {
+      errors.push({
+        path: routePath,
+        message: 'route name must be a single function path segment',
+      });
+    }
+    if (Object.keys(functions).length > 0 && !functions[routeName]) {
+      errors.push({
+        path: routePath,
+        message: `route references missing function "${routeName}"`,
+      });
+    }
+    if (!routeValue || typeof routeValue !== 'object' || Array.isArray(routeValue)) {
+      errors.push({ path: routePath, message: 'route policy must be an object' });
+      continue;
+    }
+
+    const routeRecord = routeValue as Record<string, unknown>;
+    const route = validateHttpRouteDefaults(routeRecord, routePath, errors);
+    const auth = route.auth ?? defaults.auth ?? 'user';
+    const methods = route.methods ?? defaults.methods;
+    const billing = route.billing ?? defaults.billing ?? (auth === 'public' ? 'owner' : 'caller');
+    const dataScope = route.data_scope ?? defaults.data_scope ?? 'app';
+    const cors = mergeHttpCors(defaults.cors, route.cors);
+
+    if (auth === 'public') {
+      if (!methods || methods.length === 0) {
+        errors.push({
+          path: `${routePath}.methods`,
+          message: 'public HTTP routes must declare at least one method',
+        });
+      }
+      if (billing !== 'owner') {
+        errors.push({
+          path: `${routePath}.billing`,
+          message: 'public HTTP routes must use owner billing',
+        });
+      }
+      if (dataScope !== 'app') {
+        errors.push({
+          path: `${routePath}.data_scope`,
+          message: 'public HTTP routes must use app data scope',
+        });
+      }
+    }
+
+    if (cors?.credentials === true && cors.origins?.includes('*')) {
+      errors.push({
+        path: `${routePath}.cors.credentials`,
+        message: 'credentials cannot be true when resolved origins includes "*"',
+      });
+    }
+  }
+}
 
 function validateWidgetDependencies(
   value: unknown,
@@ -549,6 +970,7 @@ export function validateManifest(input: unknown): ManifestValidationResult {
       ? manifest.functions as Record<string, unknown>
       : {};
   validateManifestWidgets(manifest.widgets, functionsForWidgetValidation, errors, warnings);
+  validateManifestHttp(manifest.http, functionsForWidgetValidation, errors);
 
   const rawEnvVars = {
     ...((manifest.env && typeof manifest.env === 'object' && !Array.isArray(manifest.env))

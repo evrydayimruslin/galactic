@@ -80,8 +80,11 @@ export default {
       );
     }
 
-    // Handle CORS preflight
-    if (request.method === 'OPTIONS') {
+    // Handle platform-global CORS preflight. App HTTP routes resolve their
+    // own route policy inside handlers/app.ts so public API CORS can be
+    // scoped per function.
+    const isHttpRoute = url.pathname.startsWith('/http/');
+    if (request.method === 'OPTIONS' && !isHttpRoute) {
       const response = buildCorsPreflightResponse(request);
       for (const [key, value] of Object.entries(standardHeaders)) {
         response.headers.set(key, value);
@@ -99,7 +102,9 @@ export default {
         if (key === 'X-Frame-Options' && url.searchParams.get('embed') === '1') continue;
         response.headers.set(key, value);
       }
-      applyCorsHeaders(response.headers, request);
+      if (!isHttpRoute) {
+        applyCorsHeaders(response.headers, request);
+      }
 
       return response;
     } catch (err) {

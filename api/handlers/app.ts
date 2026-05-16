@@ -1104,7 +1104,7 @@ export function createApp() {
 
         // Handle CORS preflight
         if (method === 'OPTIONS') {
-          return handleHttpOptions(request, appId);
+          return await handleHttpOptions(request, appId, subPath);
         }
 
         // Platform-level generic dashboard at /_ui

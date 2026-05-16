@@ -127,6 +127,54 @@ Parameters in `manifest.json` must be an **object keyed by parameter name** (not
 
 **Do not** use the array format `[{ "name": "query", "type": "string" }]`. The platform normalizes arrays to objects, but object-keyed format is canonical and ensures correct schema delivery to agents.
 
+## Direct HTTP routes
+
+Functions are MCP-callable by default. To expose a function as a direct HTTP
+endpoint, declare it in `manifest.json` under `http.routes`:
+
+```json
+{
+  "functions": {
+    "webhook": {
+      "description": "Receive provider webhooks"
+    }
+  },
+  "http": {
+    "routes": {
+      "webhook": {
+        "auth": "public",
+        "methods": ["POST"],
+        "cors": {
+          "origins": ["https://provider.example"]
+        },
+        "rate_limit": {
+          "rpm": 60
+        }
+      }
+    }
+  }
+}
+```
+
+Route URL:
+
+```text
+POST /http/{appId}/webhook
+```
+
+Public HTTP routes:
+
+1. Must declare at least one method.
+2. Must use owner billing.
+3. Must use app data scope.
+4. Do not require an Ultralight `Authorization` header.
+5. May still receive third-party `Authorization` or signature headers; validate
+   those inside the function when integrating with webhook providers.
+
+Authenticated HTTP routes use `"auth": "user"` and require
+`Authorization: Bearer {TOKEN}`. Use `"data_scope": "user"` only for
+authenticated routes that must partition app data by the calling user.
+
 ## Rules
 
 1. **Always parameterize.** Use `?` placeholders. Never string-interpolate values into SQL.

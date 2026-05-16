@@ -36,6 +36,7 @@ import {
 } from '../services/envvars.ts';
 import {
   getScopedEnvSchemaEntries,
+  parseAppManifest,
   resolveAppEnvSchema,
 } from '../services/app-settings.ts';
 import {
@@ -73,6 +74,11 @@ import {
 } from '../services/app-contracts.ts';
 import { resolveStoredManifestCoverage } from '../services/app-manifest-generation.ts';
 import { createServerLogger } from '../services/logging.ts';
+import {
+  buildHttpRouteCatalog,
+  formatHttpRouteCatalogLine,
+  getRequestBaseUrl,
+} from '../services/http-route-catalog.ts';
 import {
   appendVersionTrustMetadata,
   buildAppTrustCard,
@@ -371,6 +377,11 @@ export async function handleApps(request: Request): Promise<Response> {
     // GET /api/apps/:appId/instructions - Agent-ready instruction block for this app
     if (subPath === '/instructions' && method === 'GET') {
       return handleGetAppInstructions(request, appId);
+    }
+
+    // GET /api/apps/:appId/http-routes - Declared direct HTTP route catalog
+    if (subPath === '/http-routes' && method === 'GET') {
+      return handleGetHttpRoutes(request, appId);
     }
 
     // GET /api/apps/:appId/skills.md - Get Skills.md documentation
@@ -1490,6 +1501,15 @@ async function handleGetAppInstructions(request: Request, appId: string): Promis
       `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${firstFn}","arguments":{}}}`
     );
 
+    const httpRoutes = buildHttpRouteCatalog(app, { baseUrl });
+    if (httpRoutes.length > 0) {
+      sections.push(
+        `## Direct HTTP Routes\n\n` +
+        httpRoutes.map(formatHttpRouteCatalogLine).join('\n') +
+        `\n\nPublic routes do not require an Ultralight token. Authenticated routes require \`Authorization: Bearer {TOKEN}\`.`
+      );
+    }
+
     // Documentation link
     sections.push(`## Full Documentation\n${baseUrl}/api/apps/${appId}/skills.md`);
 
@@ -1498,6 +1518,40 @@ async function handleGetAppInstructions(request: Request, appId: string): Promis
   } catch (err) {
     console.error('[APPS] handleGetAppInstructions failed:', err);
     return error('Failed to generate instructions', 500);
+  }
+}
+
+/**
+ * Get a safe direct HTTP route catalog for an app.
+ *
+ * Public/unlisted apps expose only manifest-declared route policy, not the raw
+ * manifest. Private apps require the owner and return the same shape.
+ */
+async function handleGetHttpRoutes(request: Request, appId: string): Promise<Response> {
+  try {
+    const { app, isOwner } = await resolvePublicAppAccess(request, appId, {
+      allowPrivateOwner: true,
+      requireFullOwnerApp: true,
+    });
+
+    if (!app) {
+      return error('App not found', 404);
+    }
+
+    if (!isOwner && shouldHideGpuApp(app)) {
+      return error('App not found', 404);
+    }
+
+    const baseUrl = getRequestBaseUrl(request);
+    return json({
+      app_id: app.id,
+      is_owner: isOwner,
+      base_url: baseUrl,
+      routes: buildHttpRouteCatalog(app, { baseUrl }),
+    });
+  } catch (err) {
+    appsLogger.error('Failed to get HTTP route catalog', { app_id: appId, error: err });
+    return error('Failed to get HTTP route catalog', 500);
   }
 }
 
@@ -1521,17 +1575,25 @@ async function handleGetApp(request: Request, appId: string): Promise<Response> 
       if (userId && publicApp.owner_id === userId) {
         const ownerApp = await appsService.findById(appId);
         if (!ownerApp) return error('App not found', 404);
-        return json(withOwnerTrustCard(ownerApp));
+        const baseUrl = getRequestBaseUrl(request);
+        return json({
+          ...withOwnerTrustCard(ownerApp),
+          http_routes: buildHttpRouteCatalog(ownerApp, { baseUrl }),
+        });
       }
 
+      const servingApp = await appsService.findPublicServingById(appId);
       if (!isGpuSupportEnabled()) {
-        const servingApp = await appsService.findPublicServingById(appId);
         if (servingApp && shouldHideGpuApp(servingApp)) {
           return error('App not found', 404);
         }
       }
 
-      return json(publicApp);
+      const baseUrl = getRequestBaseUrl(request);
+      return json({
+        ...publicApp,
+        http_routes: servingApp ? buildHttpRouteCatalog(servingApp, { baseUrl }) : [],
+      });
     }
 
     if (!userId) {
@@ -1543,7 +1605,11 @@ async function handleGetApp(request: Request, appId: string): Promise<Response> 
       return error('App not found', 404);
     }
 
-    return json(withOwnerTrustCard(ownerApp));
+    const baseUrl = getRequestBaseUrl(request);
+    return json({
+      ...withOwnerTrustCard(ownerApp),
+      http_routes: buildHttpRouteCatalog(ownerApp, { baseUrl }),
+    });
   } catch (err) {
     appsLogger.error('Failed to get app', { app_id: appId, error: err });
     return error('Failed to get app', 500);
@@ -2375,6 +2441,7 @@ async function handleGenerateDocs(request: Request, appId: string): Promise<Resp
           includeExamples: true,
           includePermissions: true,
           pricingConfig: toDocgenPricingConfig(app.pricing_config),
+          httpRoutes: buildHttpRouteCatalog(app),
         });
       } catch (genErr) {
         errors.push({
@@ -2439,7 +2506,19 @@ async function handleGenerateDocs(request: Request, appId: string): Promise<Resp
 
       // Generate the manifest and persist the generated docs
       docsLogger.info('Saving generated docs and manifest', { app_id: appId });
-      const manifest = generateManifestFromParseResult(app, parseResult, app.current_version || '1.0.0');
+      const generatedManifest = generateManifestFromParseResult(app, parseResult, app.current_version || '1.0.0');
+      const existingManifest = parseAppManifest(app.manifest);
+      const manifest = existingManifest?.type === 'mcp'
+        ? {
+          ...generatedManifest,
+          author: existingManifest.author,
+          icon: existingManifest.icon,
+          widgets: existingManifest.widgets,
+          env: existingManifest.env,
+          env_vars: existingManifest.env_vars,
+          http: existingManifest.http,
+        }
+        : generatedManifest;
       await appsService.update(appId, {
         skills_md,
         skills_parsed,

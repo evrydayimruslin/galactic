@@ -84,6 +84,12 @@ export interface App {
     name: string;
     description: string | null;
     icon_url: string | null;
+    /** Whether the requesting user has this app in their library
+     *  (`user_app_library` join). Optional + viewer-scoped — only the
+     *  /app/:id endpoint that handles auth populates it; bulk discover
+     *  responses leave it undefined. Seeded into the B11 install button
+     *  state machine on ToolDetailView. */
+    is_installed?: boolean;
     visibility: 'private' | 'unlisted' | 'public';
     download_access: 'owner' | 'public';
     current_version: string;
@@ -131,6 +137,17 @@ export interface App {
     gpu_pricing_config: Record<string, unknown> | null;
     gpu_max_duration_ms: number | null;
     gpu_concurrency_limit: number | null;
+    gpu_image_ref: string | null;
+    gpu_image_digest: string | null;
+    gpu_base_profile: string | null;
+    gpu_build_provider: string | null;
+    gpu_build_run_id: string | null;
+    gpu_build_cost_light: number | null;
+    gpu_build_started_at: string | null;
+    gpu_build_finished_at: string | null;
+    gpu_build_error: string | null;
+    gpu_image_size_bytes: number | null;
+    gpu_image_user_storage_bytes: number | null;
     rate_limit_config: AppRateLimitConfig | null;
     pricing_config: AppPricingConfig | null;
     hosting_suspended: boolean;
@@ -156,6 +173,20 @@ export interface SkillFunction {
     parameters: Record<string, unknown>;
     returns: unknown;
     examples?: string[];
+    /** Telemetry-derived metrics (B5). Both fields are optional; the
+     *  ToolDetailView function table renders an em-dash when either is
+     *  absent so the BE can stage the rollout one function at a time
+     *  without breaking the row.
+     *
+     *  `price_per_call_light` — average per-call cost rolled up from the
+     *  recent invocation window (BE picks the window; recommendation is
+     *  last 30 days, matching the rest of the marketplace surface).
+     *  `latency_p50_ms` — median request latency over the same window.
+     *  Authors may also self-declare these in the manifest; the BE
+     *  source of truth resolves to either.
+     */
+    price_per_call_light?: number;
+    latency_p50_ms?: number;
 }
 export interface PermissionDeclaration {
     permission: string;
@@ -1003,6 +1034,13 @@ export interface BYOKModel {
     contextWindow: number;
     inputPrice?: number;
     outputPrice?: number;
+    /** Editorial tier annotation (B1). When set, the composer's
+     *  ModelPickerPopover shows this model only on the matching tier;
+     *  `'both'` keeps it on both popovers. When the field is absent on
+     *  every model in a provider's catalog the FE falls back to its
+     *  pre-B1 behaviour (show everything on both tiers), so deployments
+     *  can stage the annotation rollout without breaking the picker. */
+    tier?: 'flash' | 'heavy' | 'both';
 }
 export declare const BYOK_PROVIDERS: Record<ActiveBYOKProvider, BYOKProviderInfo>;
 /**
@@ -1045,6 +1083,36 @@ export interface AppManifest {
     widgets?: WidgetDeclaration[];
     env?: Record<string, ManifestEnvVar>;
     env_vars?: Record<string, ManifestEnvVar>;
+    http?: ManifestHttpConfig;
+}
+export type ManifestHttpAuthMode = 'user' | 'public';
+export type ManifestHttpBillingMode = 'owner' | 'caller';
+export type ManifestHttpDataScope = 'app' | 'user';
+export type ManifestHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
+export interface ManifestHttpConfig {
+    defaults?: ManifestHttpRouteDefaults;
+    routes?: Record<string, ManifestHttpRoutePolicy>;
+}
+export interface ManifestHttpRouteDefaults {
+    auth?: ManifestHttpAuthMode;
+    methods?: ManifestHttpMethod[];
+    cors?: ManifestHttpCorsPolicy;
+    rate_limit?: ManifestHttpRateLimitPolicy;
+    billing?: ManifestHttpBillingMode;
+    data_scope?: ManifestHttpDataScope;
+}
+export interface ManifestHttpRoutePolicy extends ManifestHttpRouteDefaults {
+}
+export interface ManifestHttpCorsPolicy {
+    origins?: string[];
+    credentials?: boolean;
+    headers?: string[];
+    max_age_seconds?: number;
+}
+export interface ManifestHttpRateLimitPolicy {
+    rpm?: number;
+    burst?: number;
+    daily?: number;
 }
 export interface ManifestFunction {
     description: string;

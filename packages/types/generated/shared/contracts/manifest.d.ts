@@ -16,6 +16,36 @@ export interface AppManifest {
     widgets?: WidgetDeclaration[];
     env?: Record<string, ManifestEnvVar>;
     env_vars?: Record<string, ManifestEnvVar>;
+    http?: ManifestHttpConfig;
+}
+export type ManifestHttpAuthMode = 'user' | 'public';
+export type ManifestHttpBillingMode = 'owner' | 'caller';
+export type ManifestHttpDataScope = 'app' | 'user';
+export type ManifestHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
+export interface ManifestHttpConfig {
+    defaults?: ManifestHttpRouteDefaults;
+    routes?: Record<string, ManifestHttpRoutePolicy>;
+}
+export interface ManifestHttpRouteDefaults {
+    auth?: ManifestHttpAuthMode;
+    methods?: ManifestHttpMethod[];
+    cors?: ManifestHttpCorsPolicy;
+    rate_limit?: ManifestHttpRateLimitPolicy;
+    billing?: ManifestHttpBillingMode;
+    data_scope?: ManifestHttpDataScope;
+}
+export interface ManifestHttpRoutePolicy extends ManifestHttpRouteDefaults {
+}
+export interface ManifestHttpCorsPolicy {
+    origins?: string[];
+    credentials?: boolean;
+    headers?: string[];
+    max_age_seconds?: number;
+}
+export interface ManifestHttpRateLimitPolicy {
+    rpm?: number;
+    burst?: number;
+    daily?: number;
 }
 export interface ManifestFunction {
     description: string;
