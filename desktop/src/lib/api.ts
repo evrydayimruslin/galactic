@@ -1307,6 +1307,55 @@ export async function fetchNewlyAcquired(limit = 10): Promise<NewlyAcquiredEntry
   return Array.isArray(data) ? data : (data.results ?? []);
 }
 
+// ── Library install / uninstall (B11) ──
+//
+// `POST /api/user/library/install` and `…/uninstall` toggle the
+// user_app_library join row for the current user. Idempotent — re-
+// installing returns the existing row, re-uninstalling a missing row
+// is a no-op. Used by ToolDetailView's install state machine.
+//
+// FE-first with graceful fallback: a non-200 leaves the button in the
+// `idle` state and surfaces the error inline so the user can retry.
+
+export interface InstallLibraryAppResult {
+  ok: boolean;
+  /** Server timestamp of the join row (existing on idempotent re-install
+   *  so the FE can show "installed N min ago" without an extra fetch). */
+  installed_at?: string;
+  errorMessage?: string;
+}
+
+export async function installLibraryApp(appId: string): Promise<InstallLibraryAppResult> {
+  const token = getToken();
+  if (!token) return { ok: false, errorMessage: 'Not signed in' };
+  const res = await fetchFromApi('/api/user/library/install', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ app_id: appId }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, errorMessage: text || `Failed (${res.status})` };
+  }
+  const data = await res.json().catch(() => ({})) as Partial<InstallLibraryAppResult>;
+  return { ok: true, ...data };
+}
+
+export async function uninstallLibraryApp(appId: string): Promise<{ ok: boolean; errorMessage?: string }> {
+  const token = getToken();
+  if (!token) return { ok: false, errorMessage: 'Not signed in' };
+  const res = await fetchFromApi('/api/user/library/uninstall', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ app_id: appId }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, errorMessage: text || `Failed (${res.status})` };
+  }
+  return { ok: true };
+}
+
 // ── Author profile (B7) ──
 //
 // `GET /api/author/:handle` returns the public author page payload

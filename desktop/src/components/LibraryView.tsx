@@ -159,7 +159,13 @@ function mapResultToRow(r: DiscoverResult, currentUserId: string | null): Librar
 
 // ── Owner / status badge ──────────────────────────────────────────────
 
-function OwnerBadge({ row }: { row: LibraryRow }) {
+function OwnerBadge({
+  row,
+  onOpenAuthor,
+}: {
+  row: LibraryRow;
+  onOpenAuthor?: (handle: string) => void;
+}) {
   if (row.status === 'published') {
     return (
       <span className="inline-flex items-center gap-1 text-nano font-mono text-ul-success-strong bg-ul-success-soft px-1.5 py-0.5 rounded-xs uppercase font-semibold tracking-wider">
@@ -175,9 +181,31 @@ function OwnerBadge({ row }: { row: LibraryRow }) {
       </span>
     );
   }
+  // `installed` — blue pill, owner handle clickable when wired.
+  const handle = row.owner ?? null;
   return (
-    <span className="text-nano font-mono text-ul-text-secondary border border-ul-border px-1.5 py-0.5 rounded-xs tracking-wider">
-      by {row.owner ? `@${row.owner}` : 'others'}
+    <span className="inline-flex items-center gap-1 text-nano font-mono text-ul-info bg-ul-info-soft px-1.5 py-0.5 rounded-xs uppercase font-semibold tracking-wider">
+      <span className="w-1 h-1 rounded-full bg-ul-info" />
+      <span>Installed</span>
+      {handle && (
+        <>
+          <span className="text-ul-text-muted">·</span>
+          {onOpenAuthor ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenAuthor(handle);
+              }}
+              className="bg-transparent border-none p-0 cursor-pointer text-ul-info underline underline-offset-[2px] font-mono uppercase tracking-wider"
+            >
+              @{handle}
+            </button>
+          ) : (
+            <span>@{handle}</span>
+          )}
+        </>
+      )}
     </span>
   );
 }
@@ -188,10 +216,12 @@ function Row({
   row,
   running = false,
   onOpen,
+  onOpenAuthor,
 }: {
   row: LibraryRow;
   running?: boolean;
   onOpen?: () => void;
+  onOpenAuthor?: (handle: string) => void;
 }) {
   return (
     <div
@@ -212,7 +242,7 @@ function Row({
           {row.version && (
             <span className="text-nano font-mono text-ul-text-muted">{row.version}</span>
           )}
-          <OwnerBadge row={row} />
+          <OwnerBadge row={row} onOpenAuthor={onOpenAuthor} />
         </div>
         <div className="text-caption text-ul-text-secondary leading-tight truncate">
           {row.description}
@@ -261,9 +291,11 @@ interface LibraryViewProps {
   /** Optional click handler — when provided, rows become navigable to the
    *  tool detail page. Wired by App.tsx from useAppState.navigateToToolDetail. */
   onOpenTool?: (appId: string, appName: string) => void;
+  /** Routes the `Installed · @author` pill's handle to AuthorProfileView (B7). */
+  onOpenAuthor?: (handle: string) => void;
 }
 
-export default function LibraryView({ onOpenTool }: LibraryViewProps = {}) {
+export default function LibraryView({ onOpenTool, onOpenAuthor }: LibraryViewProps = {}) {
   const [tab, setTab] = useState<'Library' | 'Shared'>('Library');
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<LibraryRow[]>([]);
@@ -473,7 +505,7 @@ export default function LibraryView({ onOpenTool }: LibraryViewProps = {}) {
                 <>
                   <SectionHeader title="Your tools" count={String(groups.yours.length)} />
                   {groups.yours.map((r) => (
-                    <Row key={r.id} row={r} onOpen={onOpenTool ? () => onOpenTool(r.id, r.name) : undefined} />
+                    <Row key={r.id} row={r} onOpen={onOpenTool ? () => onOpenTool(r.id, r.name) : undefined} onOpenAuthor={onOpenAuthor} />
                   ))}
                 </>
               )}
@@ -485,7 +517,7 @@ export default function LibraryView({ onOpenTool }: LibraryViewProps = {}) {
                     action="Manage →"
                   />
                   {groups.installed.map((r) => (
-                    <Row key={r.id} row={r} onOpen={onOpenTool ? () => onOpenTool(r.id, r.name) : undefined} />
+                    <Row key={r.id} row={r} onOpen={onOpenTool ? () => onOpenTool(r.id, r.name) : undefined} onOpenAuthor={onOpenAuthor} />
                   ))}
                 </>
               )}

@@ -25,8 +25,8 @@
 //     real ask price + bids + revenue + owner admin checklist (when the
 //     viewer is the owner).
 
-import { useCallback, useEffect, useState } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronRight, Download, MoreHorizontal } from 'lucide-react';
 import { Check, X as XIcon } from 'lucide-react';
 import Glyph, { deriveGlyph, deriveTone } from './ui/Glyph';
 import AcquisitionFlow from './marketplace/AcquisitionFlow';
@@ -39,6 +39,8 @@ import {
   setMetricsVisibility,
   acceptBid,
   rejectBid,
+  installLibraryApp,
+  uninstallLibraryApp,
   type MarketplaceBid,
   type MarketplaceListingDetails,
   type MarketplaceOwnerAdminChecklistItem,
@@ -742,6 +744,201 @@ function SideRail({ appId, appName, details, loading, isOwner, onOpenAcquisition
   );
 }
 
+// ── Install button + kebab (B11) ──────────────────────────────────────
+//
+// State machine:
+//   idle → installing → installed
+//                     │
+//                     └─► (on error) idle  + inline error
+//
+// `installed` shows an inline kebab next to the checkmark. The kebab
+// popover offers Uninstall (functional) and three placeholder actions —
+// Update available / Pin / Settings — gated behind BE work that hasn't
+// landed (DESIGN-FOLLOWUPS B11).
+
+type InstallState = 'idle' | 'installing' | 'installed';
+
+function InstallButton({
+  app,
+  initialInstalled,
+  onChanged,
+}: {
+  app: App | null;
+  initialInstalled: boolean;
+  onChanged?: (installed: boolean) => void;
+}) {
+  const [state, setState] = useState<InstallState>(initialInstalled ? 'installed' : 'idle');
+  const [error, setError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const kebabRef = useRef<HTMLButtonElement | null>(null);
+
+  // Sync external state changes (e.g. ToolDetailView refetched the app
+  // and the `is_installed` flag flipped from elsewhere). Don't clobber
+  // an in-flight installing/uninstalling transition.
+  useEffect(() => {
+    if (state === 'installing') return;
+    setState(initialInstalled ? 'installed' : 'idle');
+  }, [initialInstalled, state]);
+
+  // Close the kebab menu on document click / Escape.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (kebabRef.current && !kebabRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
+
+  const onInstall = async () => {
+    if (!app || state !== 'idle') return;
+    setState('installing');
+    setError(null);
+    const result = await installLibraryApp(app.id);
+    if (!result.ok) {
+      setError(result.errorMessage || "Couldn't install. Try again.");
+      setState('idle');
+      return;
+    }
+    setState('installed');
+    onChanged?.(true);
+  };
+
+  const onUninstall = async () => {
+    if (!app) return;
+    setMenuOpen(false);
+    const previousState = state;
+    setState('idle');
+    setError(null);
+    const result = await uninstallLibraryApp(app.id);
+    if (!result.ok) {
+      setError(result.errorMessage || 'Failed to uninstall.');
+      setState(previousState);
+      return;
+    }
+    onChanged?.(false);
+  };
+
+  if (state === 'installing') {
+    return (
+      <div className="flex flex-col items-start gap-1.5">
+        <button
+          disabled
+          className="px-5 py-3 bg-ul-text text-white border-none rounded-lg text-body font-medium inline-flex items-center justify-center gap-2 cursor-wait opacity-90"
+        >
+          <span
+            className="inline-block w-3 h-3 rounded-full animate-spin"
+            style={{
+              borderWidth: '1.5px',
+              borderStyle: 'solid',
+              borderColor: 'rgba(255,255,255,0.35)',
+              borderTopColor: '#fff',
+              animationDuration: '0.75s',
+            }}
+            aria-hidden
+          />
+          Installing…
+        </button>
+      </div>
+    );
+  }
+
+  if (state === 'installed') {
+    return (
+      <div className="flex flex-col items-start gap-1.5">
+        <div className="flex items-stretch">
+          <span className="px-5 py-3 bg-ul-bg text-ul-text border border-ul-border rounded-l-lg text-body font-medium inline-flex items-center justify-center gap-1.5">
+            <Check className="w-3.5 h-3.5" strokeWidth={2} />
+            Installed
+          </span>
+          <div className="relative">
+            <button
+              ref={kebabRef}
+              type="button"
+              onClick={() => setMenuOpen((o) => !o)}
+              title="Installed-tool actions"
+              aria-label="Installed-tool actions"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              className="h-full px-2.5 bg-ul-bg text-ul-text-secondary border border-l-0 border-ul-border rounded-r-lg cursor-pointer inline-flex items-center justify-center hover:bg-ul-bg-hover"
+            >
+              <MoreHorizontal className="w-4 h-4" strokeWidth={1.5} />
+            </button>
+            {menuOpen && (
+              <div
+                role="menu"
+                className="absolute z-20 right-0 top-full mt-1.5 w-[180px] bg-ul-bg border border-ul-border rounded-md shadow-md ring-1 ring-black/[0.02] py-1 animate-fade-up"
+              >
+                <button
+                  type="button"
+                  onClick={() => void onUninstall()}
+                  role="menuitem"
+                  className="w-full text-left px-3 py-1.5 text-caption text-ul-text bg-transparent border-none cursor-pointer hover:bg-ul-bg-hover"
+                >
+                  Uninstall
+                </button>
+                <KebabPlaceholderRow label="Update available" hint="Pending BE: version-pin detection" />
+                <KebabPlaceholderRow label="Pin" hint="Pending BE: pin flag (DESIGN-FOLLOWUPS B11)" />
+                <KebabPlaceholderRow label="Settings" hint="Pending BE: per-app settings surface" />
+              </div>
+            )}
+          </div>
+        </div>
+        {error && (
+          <span className="text-nano text-ul-error">{error}</span>
+        )}
+      </div>
+    );
+  }
+
+  // idle
+  const installCount = app?.total_runs ?? 0;
+  return (
+    <div className="flex flex-col items-start gap-1.5">
+      <button
+        type="button"
+        disabled={!app}
+        onClick={() => void onInstall()}
+        className="px-5 py-3 bg-ul-text text-white border-none rounded-lg text-body font-medium cursor-pointer inline-flex items-center justify-center gap-1.5 hover:bg-ul-accent-hover disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <Download className="w-3.5 h-3.5" strokeWidth={2} />
+        <span>Install</span>
+        {installCount > 0 && (
+          <span className="font-mono font-normal text-small opacity-60">
+            ({installCount.toLocaleString()})
+          </span>
+        )}
+      </button>
+      {error && (
+        <span className="text-nano text-ul-error">{error}</span>
+      )}
+    </div>
+  );
+}
+
+function KebabPlaceholderRow({ label, hint }: { label: string; hint: string }) {
+  return (
+    <button
+      type="button"
+      disabled
+      title={hint}
+      role="menuitem"
+      className="w-full text-left px-3 py-1.5 text-caption text-ul-text-muted bg-transparent border-none cursor-not-allowed"
+    >
+      {label}
+    </button>
+  );
+}
+
 // ── ToolDetailView ────────────────────────────────────────────────────
 
 export default function ToolDetailView({ appId, fallbackName, onOpenAuthor }: ToolDetailViewProps) {
@@ -853,20 +1050,16 @@ export default function ToolDetailView({ appId, fallbackName, onOpenAuthor }: To
           {tagline && (
             <div className="text-body-lg text-ul-text leading-relaxed mb-4">{tagline}</div>
           )}
-          {/* Install + Acquire — visual only this batch. Real wiring is Batch 4. */}
-          <div className="flex gap-2">
-            <button
-              disabled={!app}
-              className="px-5 py-3 bg-ul-text text-white border-none rounded-lg text-body font-medium cursor-pointer inline-flex items-center justify-center gap-1.5 transition-all disabled:opacity-40 hover:bg-ul-accent-hover"
-              title="Install wiring arrives with marketplace batch"
-            >
-              <span>Install</span>
-              {app && app.total_runs > 0 && (
-                <span className="font-mono font-normal text-small opacity-60">
-                  ({app.total_runs.toLocaleString()})
-                </span>
-              )}
-            </button>
+          {/* Install + Acquire. Install runs the B11 state machine
+              against /api/user/library/install. Acquire is unchanged
+              per the addendum (acquire is a paid ownership transfer,
+              install is the free save-to-library affordance). */}
+          <div className="flex gap-2 items-start">
+            <InstallButton
+              app={app}
+              initialInstalled={!!app?.is_installed}
+              onChanged={(installed) => setApp((prev) => (prev ? { ...prev, is_installed: installed } : prev))}
+            />
             <button
               disabled={!app || isOwner}
               onClick={() => setAcquisitionOpen(true)}
