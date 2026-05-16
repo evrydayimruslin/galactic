@@ -11,6 +11,7 @@ export type AppView =
   | { kind: 'library' }
   | { kind: 'marketplace' }
   | { kind: 'tool-detail'; appId: string; appName?: string }
+  | { kind: 'author-profile'; handle: string }
   | { kind: 'profile' }
   | { kind: 'wallet' }
   | { kind: 'settings' };
@@ -23,6 +24,7 @@ export interface UseAppStateReturn {
   navigateToLibrary: () => void;
   navigateToMarketplace: () => void;
   navigateToToolDetail: (appId: string, appName?: string) => void;
+  navigateToAuthorProfile: (handle: string) => void;
   navigateToProfile: () => void;
   navigateToWallet: () => void;
   navigateToSettings: () => void;
@@ -65,6 +67,7 @@ function viewsEqual(a: AppView, b: AppView): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'agent' && b.kind === 'agent') return a.agentId === b.agentId;
   if (a.kind === 'tool-detail' && b.kind === 'tool-detail') return a.appId === b.appId;
+  if (a.kind === 'author-profile' && b.kind === 'author-profile') return a.handle === b.handle;
   return true;
 }
 
@@ -129,6 +132,7 @@ export function useAppState(): UseAppStateReturn {
   const navigateToLibrary = useCallback(() => navigate({ kind: 'library' }), [navigate]);
   const navigateToMarketplace = useCallback(() => navigate({ kind: 'marketplace' }), [navigate]);
   const navigateToToolDetail = useCallback((appId: string, appName?: string) => navigate({ kind: 'tool-detail', appId, appName }), [navigate]);
+  const navigateToAuthorProfile = useCallback((handle: string) => navigate({ kind: 'author-profile', handle }), [navigate]);
   const navigateToProfile = useCallback(() => navigate({ kind: 'profile' }), [navigate]);
   const navigateToWallet = useCallback(() => navigate({ kind: 'wallet' }), [navigate]);
   const navigateToSettings = useCallback(() => navigate({ kind: 'settings' }), [navigate]);
@@ -141,6 +145,7 @@ export function useAppState(): UseAppStateReturn {
     navigateToLibrary,
     navigateToMarketplace,
     navigateToToolDetail,
+    navigateToAuthorProfile,
     navigateToProfile,
     navigateToWallet,
     navigateToSettings,
