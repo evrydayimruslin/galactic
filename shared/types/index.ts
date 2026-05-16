@@ -1430,6 +1430,13 @@ export interface BYOKModel {
   contextWindow: number;
   inputPrice?: number; // per 1M tokens in USD, omitted when provider pricing is not pinned here
   outputPrice?: number; // per 1M tokens in USD, omitted when provider pricing is not pinned here
+  /** Editorial tier annotation (B1). When set, the composer's
+   *  ModelPickerPopover shows this model only on the matching tier;
+   *  `'both'` keeps it on both popovers. When the field is absent on
+   *  every model in a provider's catalog the FE falls back to its
+   *  pre-B1 behaviour (show everything on both tiers), so deployments
+   *  can stage the annotation rollout without breaking the picker. */
+  tier?: 'flash' | 'heavy' | 'both';
 }
 
 const OPENAI_COMPAT_TEXT_CAPABILITIES: BYOKProviderCapabilities = {

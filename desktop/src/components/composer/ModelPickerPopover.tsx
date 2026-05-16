@@ -38,7 +38,31 @@ interface ProviderRow {
   models: BYOKModel[];
 }
 
-function buildProviderRows(options: ChatInferenceOptionsResponse): ProviderRow[] {
+/** Returns true when any model in the catalog carries the B1 `tier`
+ *  annotation. Drives the staged-rollout fallback: when no model is
+ *  tagged we keep the legacy "both popovers show everything" behavior;
+ *  once BE starts tagging, the filter kicks in automatically. */
+function hasAnyTierAnnotation(options: ChatInferenceOptionsResponse): boolean {
+  if (options.light.models.some((m) => m.tier !== undefined)) return true;
+  return options.providers.some((p) => p.models.some((m) => m.tier !== undefined));
+}
+
+/** Match rule for a single tier — `'both'` and untagged models always
+ *  pass; otherwise we require an exact tier hit. Untagged-as-pass keeps
+ *  the picker usable during the partial rollout. */
+function modelMatchesTier(model: BYOKModel, tier: 'flash' | 'heavy'): boolean {
+  if (model.tier === undefined) return true;
+  return model.tier === tier || model.tier === 'both';
+}
+
+function buildProviderRows(
+  options: ChatInferenceOptionsResponse,
+  tier: 'flash' | 'heavy',
+): ProviderRow[] {
+  const filterByTier = hasAnyTierAnnotation(options);
+  const filterModels = (models: BYOKModel[]): BYOKModel[] =>
+    filterByTier ? models.filter((m) => modelMatchesTier(m, tier)) : models;
+
   const rows: ProviderRow[] = [];
   const light: ChatInferenceLightOption = options.light;
   rows.push({
@@ -46,7 +70,7 @@ function buildProviderRows(options: ChatInferenceOptionsResponse): ProviderRow[]
     name: 'Ultralight',
     description: 'Light-denominated · pay per call',
     status: { kind: 'light', balanceLight: light.balanceLight, usable: light.usable },
-    models: light.models,
+    models: filterModels(light.models),
   });
   for (const p of options.providers as ChatInferenceProviderOption[]) {
     rows.push({
@@ -54,7 +78,7 @@ function buildProviderRows(options: ChatInferenceOptionsResponse): ProviderRow[]
       name: p.name,
       description: p.description,
       status: { kind: 'byok', configured: p.configured },
-      models: p.models,
+      models: filterModels(p.models),
     });
   }
   return rows;
@@ -171,7 +195,7 @@ export default function ModelPickerPopover({
   selectedModel,
   onPick,
 }: ModelPickerPopoverProps) {
-  const rows = useMemo(() => (options ? buildProviderRows(options) : []), [options]);
+  const rows = useMemo(() => (options ? buildProviderRows(options, tier) : []), [options, tier]);
 
   // Selected provider + sub-list visibility
   const initialProvider = useMemo(
