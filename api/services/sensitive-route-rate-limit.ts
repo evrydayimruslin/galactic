@@ -50,6 +50,7 @@ export type SensitiveRoute =
   | "admin:approve"
   | "admin:reject"
   | "admin:balance_topup"
+  | "admin:fee_waiver_credit_grant"
   | "admin:billing_config_update"
   | "admin:cleanup_provisionals"
   | "admin:app_category"
@@ -544,6 +545,16 @@ export const SENSITIVE_ROUTE_RATE_LIMITS: Record<
       "Too many balance top-up attempts. Please wait and try again.",
     unavailableMessage:
       "Balance top-ups are temporarily unavailable while protection controls recover. Please try again shortly.",
+  },
+  "admin:fee_waiver_credit_grant": {
+    endpoint: "admin:fee_waiver_credit_grant",
+    limit: 20,
+    windowMinutes: 10,
+    resource: "POST /api/admin/fee-waiver-credits/grant",
+    limitMessage:
+      "Too many fee-waiver credit grant attempts. Please wait and try again.",
+    unavailableMessage:
+      "Fee-waiver credit grants are temporarily unavailable while protection controls recover. Please try again shortly.",
   },
   "admin:billing_config_update": {
     endpoint: "admin:billing_config_update",

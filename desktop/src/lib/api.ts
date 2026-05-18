@@ -239,6 +239,18 @@ function authHeaders(): Record<string, string> {
   };
 }
 
+export async function claimReferralToken(claimToken: string): Promise<boolean> {
+  const token = getToken();
+  if (!token || !claimToken) return false;
+
+  const res = await fetchFromApi("/auth/referral-claim", {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ claim_token: claimToken }),
+  });
+  return res.ok;
+}
+
 // ── Chat Stream ──
 
 /**
@@ -1185,6 +1197,15 @@ export interface MarketplaceOwnerAdmin {
   payouts_enabled?: boolean;
   balance_light?: number;
   total_earned_light?: number;
+  referral?: {
+    id: string;
+    app_id: string;
+    publisher_user_id: string;
+    slug: string;
+    url: string;
+    status: 'active' | 'disabled';
+    created_at: string;
+  } | null;
   checklist?: MarketplaceOwnerAdminChecklistItem[];
   recommended_action_id?: string;
   recommended_action?: string;
@@ -1335,6 +1356,10 @@ export interface AcceptBidResult {
   sale_price_light?: number;
   platform_fee_light?: number;
   seller_payout_light?: number;
+  fee_would_have_been_light?: number;
+  fee_waived_light?: number;
+  waiver_source?: string | null;
+  waiver_event_id?: string | null;
   errorStatus?: number;
   errorMessage?: string;
 }
@@ -1405,6 +1430,10 @@ export interface InstantAcquireResult {
   sale_price_light?: number;
   platform_fee_light?: number;
   seller_payout_light?: number;
+  fee_would_have_been_light?: number;
+  fee_waived_light?: number;
+  waiver_source?: string | null;
+  waiver_event_id?: string | null;
   errorStatus?: number;
   errorMessage?: string;
 }

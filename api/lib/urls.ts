@@ -21,6 +21,7 @@ export function downloadUrl(opts: { app?: string } = {}): string {
 }
 
 /** Canonical deep-link URL for opening a page inside the desktop app. */
-export function deepLinkAppUrl(appId: string): string {
-  return `ultralight://app/${appId}`;
+export function deepLinkAppUrl(appId: string, opts: { refClaim?: string | null } = {}): string {
+  const qs = opts.refClaim ? `?ref_claim=${encodeURIComponent(opts.refClaim)}` : '';
+  return `ultralight://app/${appId}${qs}`;
 }

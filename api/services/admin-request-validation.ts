@@ -33,6 +33,9 @@ const MAX_APP_CATEGORY_LENGTH = 64;
 const MAX_PAYOUT_POLICY_COPY_LENGTH = 1200;
 const MAX_POINTS_VALUE = 1_000_000;
 const MAX_TOP_UP_LIGHT = 100_000_000;
+const MAX_FEE_WAIVER_CREDIT_LIGHT = 100_000_000;
+const MAX_FEE_WAIVER_CREDIT_REASON_LENGTH = 160;
+const MAX_REFERENCE_TABLE_LENGTH = 80;
 const MAX_FUNDING_MINIMUM_CENTS = 500_000;
 const MAX_STORAGE_FREE_BYTES = 10 * 1024 * 1024 * 1024;
 const MAX_FLASH_TRAINING_EXPORT_LIMIT = 1000;
@@ -112,6 +115,16 @@ export interface ApproveAssessmentPayload {
 
 export interface TopUpBalancePayload {
   amountLight: number;
+}
+
+export interface GrantFeeWaiverCreditPayload {
+  publisherUserId: string;
+  amountLight: number;
+  reason?: string;
+  createdByUserId?: string;
+  referenceTable?: string;
+  referenceId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface SetAppCategoryPayload {
@@ -387,6 +400,19 @@ function normalizePositiveNumber(
   return value;
 }
 
+function normalizeMetadataObject(
+  value: unknown,
+  field: string,
+): Record<string, unknown> | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new RequestValidationError(`${field} must be a JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
 function normalizeRequiredRate(value: unknown, field: string): number {
   const normalized = normalizePositiveNumber(value, field, {
     max: 10_000,
@@ -426,6 +452,14 @@ function normalizeOptionalUuid(
   if (!normalized) {
     return undefined;
   }
+  if (!UUID_REGEX.test(normalized)) {
+    throw new RequestValidationError(`${field} must be a valid UUID`);
+  }
+  return normalized;
+}
+
+function normalizeUuid(value: unknown, field: string): string {
+  const normalized = normalizeRequiredString(value, field, 128);
   if (!UUID_REGEX.test(normalized)) {
     throw new RequestValidationError(`${field} must be a valid UUID`);
   }
@@ -718,6 +752,41 @@ export async function validateTopUpBalanceRequest(
     amountLight: normalizePositiveInteger(body.amount_light, "amount_light", {
       max: MAX_TOP_UP_LIGHT,
     }),
+  };
+}
+
+export async function validateGrantFeeWaiverCreditRequest(
+  request: Request,
+): Promise<GrantFeeWaiverCreditPayload> {
+  const body = await readJsonObject(request, {
+    allowedKeys: [
+      "publisher_user_id",
+      "amount_light",
+      "reason",
+      "created_by_user_id",
+      "reference_table",
+      "reference_id",
+      "metadata",
+    ],
+  });
+
+  return {
+    publisherUserId: normalizeUuid(body.publisher_user_id, "publisher_user_id"),
+    amountLight: normalizePositiveNumber(body.amount_light, "amount_light", {
+      max: MAX_FEE_WAIVER_CREDIT_LIGHT,
+    }),
+    reason: normalizeOptionalString(body.reason, "reason", {
+      maxLength: MAX_FEE_WAIVER_CREDIT_REASON_LENGTH,
+    }) || "admin_reward",
+    createdByUserId: normalizeOptionalUuid(
+      body.created_by_user_id,
+      "created_by_user_id",
+    ),
+    referenceTable: normalizeOptionalString(body.reference_table, "reference_table", {
+      maxLength: MAX_REFERENCE_TABLE_LENGTH,
+    }),
+    referenceId: normalizeOptionalUuid(body.reference_id, "reference_id"),
+    metadata: normalizeMetadataObject(body.metadata, "metadata"),
   };
 }
 

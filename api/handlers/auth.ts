@@ -14,9 +14,11 @@ import {
   clearAuthSessionCookies,
   getAuthAccessTokenFromRequest,
   getAuthRefreshTokenFromRequest,
+  getCookieValueFromRequest,
 } from '../services/auth-cookies.ts';
 import {
   authenticateRequest,
+  type AuthenticatedRequestUser,
   ensureUserExists,
   extractBearerToken,
   hasScope,
@@ -31,6 +33,12 @@ import {
 import { appendPageShareSessionCookie } from '../services/page-share-session.ts';
 import { normalizeOAuthPrompt } from '../services/oauth-login.ts';
 import { revokeSupabaseSession } from '../services/session-revocation.ts';
+import {
+  claimReferralLandingsForUser,
+  claimReferralTokenForUser,
+  REFERRAL_VISITOR_COOKIE_NAME,
+  transferReferralAttributionBetweenUsers,
+} from '../services/referrals.ts';
 import { withAuthRouteRateLimit } from '../services/auth-rate-limit.ts';
 import {
   RequestValidationError,
@@ -100,6 +108,26 @@ function appendBrowserSession(
 ): Response {
   appendAuthSessionCookies(response.headers, session);
   return response;
+}
+
+async function claimReferralCookieForUser(request: Request, userId: string): Promise<void> {
+  const visitorId = getCookieValueFromRequest(request, REFERRAL_VISITOR_COOKIE_NAME);
+  if (!visitorId) return;
+  try {
+    await claimReferralLandingsForUser({ userId, anonymousVisitorId: visitorId });
+  } catch (err) {
+    console.warn('[auth] Failed to claim referral landings:', err);
+  }
+}
+
+async function claimReferralCookieForAccessToken(
+  request: Request,
+  accessToken: string,
+): Promise<void> {
+  const verifiedUser = await verifySupabaseAccessToken(accessToken);
+  if (!verifiedUser) return;
+  await ensureUserExists(verifiedUser).catch(() => {});
+  await claimReferralCookieForUser(request, verifiedUser.id);
 }
 
 export async function handleAuth(request: Request): Promise<Response> {
@@ -187,6 +215,7 @@ export async function handleAuth(request: Request): Promise<Response> {
           expires_in?: number;
         };
         const desktopSession = url.searchParams.get('desktop_session');
+        await claimReferralCookieForAccessToken(request, tokens.access_token);
 
         // Desktop OAuth flow: store token for polling, show "close this tab" page
         if (desktopSession) {
@@ -274,6 +303,7 @@ export async function handleAuth(request: Request): Promise<Response> {
         }
 
         await ensureUserExists(verifiedUser).catch(() => {});
+        await claimReferralCookieForUser(request, verifiedUser.id);
 
         return appendBrowserSession(json({ ok: true }), {
           accessToken,
@@ -337,6 +367,9 @@ export async function handleAuth(request: Request): Promise<Response> {
         if (!verifiedUser || verifiedUser.id !== bridgePayload.sub) {
           return error('Bridge token session is invalid', 401);
         }
+
+        await ensureUserExists(verifiedUser).catch(() => {});
+        await claimReferralCookieForUser(request, verifiedUser.id);
 
         const accessTokenTtlSeconds = getAccessTokenRemainingLifetimeSeconds(bridgePayload.access_token);
         return appendBrowserSession(json({
@@ -563,13 +596,44 @@ export async function handleAuth(request: Request): Promise<Response> {
           return error('Cannot merge into self', 400);
         }
 
+        await transferReferralAttributionBetweenUsers(provisionalUserId, user.id).catch((err) => {
+          console.warn('[auth] Failed to transfer provisional referral attribution:', err);
+        });
         const result = await mergeProvisionalUser(provisionalUserId, user.id, mergeMethod);
+        await claimReferralCookieForUser(request, user.id);
         return json({ success: true, merged: result });
       } catch (err: any) {
         console.error('[AUTH] Merge failed:', err);
         return error(err.message || 'Merge failed', 500);
       }
     });
+  }
+
+  // Redeem a browser-to-desktop referral claim token.
+  if (path === '/auth/referral-claim' && request.method === 'POST') {
+    try {
+      let user: AuthenticatedRequestUser;
+      try {
+        user = await authenticate(request);
+      } catch {
+        return error('Unauthorized', 401);
+      }
+      const body = await request.json() as { claim_token?: unknown };
+      const claimToken = typeof body.claim_token === 'string' ? body.claim_token : '';
+      if (!claimToken) {
+        return error('Missing claim_token', 400);
+      }
+
+      const result = await claimReferralTokenForUser(claimToken, user.id);
+      return json({
+        ok: true,
+        claimed_landing_count: result.claimedLandingCount,
+        grant_ids: result.grantIds,
+      });
+    } catch (err) {
+      console.error('[AUTH] Referral claim failed:', err);
+      return error('Failed to claim referral', 500);
+    }
   }
 
   // Desktop OAuth polling — desktop app polls this after opening browser for Google OAuth

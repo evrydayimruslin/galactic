@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 
 import {
+  acceptBid,
   buildMarketplaceListingSummary,
   buildMarketplaceOwnerAdminSummary,
   buildPublicAcquisitionReceipt,
@@ -174,4 +175,50 @@ Deno.test("marketplace public acquisition receipt: falls back to UUID profile li
   assertEquals(receipt.buyer.display_name, "Private profile");
   assertEquals(receipt.buyer.profile_url, "/u/buyer-uuid");
   assertEquals(receipt.seller.profile_url, "/u/seller-uuid");
+});
+
+Deno.test("marketplace sale result preserves fee waiver fields", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.test",
+    SUPABASE_SERVICE_ROLE_KEY: "service-key",
+  } as typeof globalThis.__env;
+
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === "https://supabase.test/rest/v1/rpc/accept_bid") {
+      return new Response(JSON.stringify({
+        sale_id: "sale-1",
+        app_id: "app-1",
+        seller_id: "seller-1",
+        buyer_id: "buyer-1",
+        sale_price_light: 100,
+        platform_fee_light: 0,
+        seller_payout_light: 100,
+        fee_would_have_been_light: 15,
+        fee_waived_light: 15,
+        waiver_source: "referral_grant",
+        waiver_event_id: "waiver-1",
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    const result = await acceptBid("seller-1", "bid-1");
+    assertEquals(result.platform_fee_light, 0);
+    assertEquals(result.seller_payout_light, 100);
+    assertEquals(result.fee_would_have_been_light, 15);
+    assertEquals(result.fee_waived_light, 15);
+    assertEquals(result.waiver_source, "referral_grant");
+    assertEquals(result.waiver_event_id, "waiver-1");
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
 });

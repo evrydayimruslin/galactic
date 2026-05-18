@@ -76,6 +76,10 @@ export interface AppCallSettlementResult {
   appPriceLight: number;
   developerRevenueLight: number;
   platformFeeLight: number;
+  feeWouldHaveBeenLight: number;
+  feeWaivedLight: number;
+  waiverSource?: string | null;
+  waiverEventId?: string;
   infraChargeLight: number;
   freeCall: boolean;
   freeCallCount: number | null;
@@ -621,6 +625,10 @@ export async function settleAppCall(
   let freeCallCount: number | null = pricingPreflight?.freeCallCount ?? null;
   let developerRevenueLight = 0;
   let platformFeeLight = 0;
+  let feeWouldHaveBeenLight = 0;
+  let feeWaivedLight = 0;
+  let waiverSource: string | null | undefined;
+  let waiverEventId: string | undefined;
   let transferId: string | undefined;
   let cloudUsageEventId: string | undefined;
 
@@ -743,6 +751,10 @@ export async function settleAppCall(
         to_new_balance?: number;
         platform_fee?: number;
         transfer_id?: string;
+        fee_would_have_been?: number;
+        fee_waived?: number;
+        waiver_source?: string | null;
+        waiver_event_id?: string | null;
       }>;
       if (!rows || rows.length === 0) {
         return buildInsufficientSettlement(params, {
@@ -758,6 +770,18 @@ export async function settleAppCall(
       platformFeeLight = typeof rows[0].platform_fee === "number"
         ? rows[0].platform_fee
         : 0;
+      feeWouldHaveBeenLight = typeof rows[0].fee_would_have_been === "number"
+        ? rows[0].fee_would_have_been
+        : platformFeeLight;
+      feeWaivedLight = typeof rows[0].fee_waived === "number"
+        ? rows[0].fee_waived
+        : 0;
+      waiverSource = typeof rows[0].waiver_source === "string"
+        ? rows[0].waiver_source
+        : null;
+      waiverEventId = typeof rows[0].waiver_event_id === "string"
+        ? rows[0].waiver_event_id
+        : undefined;
       developerRevenueLight = appChargeLight - platformFeeLight;
       transferId = typeof rows[0].transfer_id === "string"
         ? rows[0].transfer_id
@@ -846,6 +870,10 @@ export async function settleAppCall(
           appChargeLight,
           developerRevenueLight,
           platformFeeLight,
+          feeWouldHaveBeenLight,
+          feeWaivedLight,
+          waiverSource,
+          waiverEventId,
           infraChargeLight: 0,
           infraPayerUserId,
           ownerSponsoredInfra,
@@ -871,6 +899,10 @@ export async function settleAppCall(
     appChargeLight,
     developerRevenueLight,
     platformFeeLight,
+    feeWouldHaveBeenLight,
+    feeWaivedLight,
+    waiverSource,
+    waiverEventId,
     infraChargeLight,
     infraPayerUserId,
     ownerSponsoredInfra,
@@ -1006,6 +1038,10 @@ export async function settleAndLogAppExecution(
         infra_charge_light: settlement.infraChargeLight,
         developer_revenue_light: settlement.developerRevenueLight,
         platform_fee_light: settlement.platformFeeLight,
+        fee_would_have_been_light: settlement.feeWouldHaveBeenLight,
+        fee_waived_light: settlement.feeWaivedLight,
+        waiver_source: settlement.waiverSource ?? null,
+        waiver_event_id: settlement.waiverEventId ?? null,
       },
     }, deps).catch((err) => {
       console.error("[ROUTINE] Failed to record routine contribution:", err);
@@ -1186,6 +1222,10 @@ function buildBaseSettlement(
     appChargeLight: number;
     developerRevenueLight: number;
     platformFeeLight: number;
+    feeWouldHaveBeenLight?: number;
+    feeWaivedLight?: number;
+    waiverSource?: string | null;
+    waiverEventId?: string;
     infraChargeLight: number;
     infraPayerUserId: string | null;
     ownerSponsoredInfra: boolean;
@@ -1205,6 +1245,10 @@ function buildBaseSettlement(
     appPriceLight: values.appPriceLight,
     developerRevenueLight: values.developerRevenueLight,
     platformFeeLight: values.platformFeeLight,
+    feeWouldHaveBeenLight: values.feeWouldHaveBeenLight ?? values.platformFeeLight,
+    feeWaivedLight: values.feeWaivedLight ?? 0,
+    waiverSource: values.waiverSource ?? null,
+    waiverEventId: values.waiverEventId,
     infraChargeLight: values.infraChargeLight,
     freeCall: values.freeCall,
     freeCallCount: values.freeCallCount,
@@ -1225,6 +1269,10 @@ function buildBaseSettlement(
       app_charge_light: values.appChargeLight,
       developer_revenue_light: values.developerRevenueLight,
       platform_fee_light: values.platformFeeLight,
+      fee_would_have_been_light: values.feeWouldHaveBeenLight ?? values.platformFeeLight,
+      fee_waived_light: values.feeWaivedLight ?? 0,
+      waiver_source: values.waiverSource ?? null,
+      waiver_event_id: values.waiverEventId,
       infra_charge_light: values.infraChargeLight,
       free_call: values.freeCall,
       free_call_count: values.freeCallCount,
@@ -1248,6 +1296,10 @@ function buildInsufficientSettlement(
     appChargeLight?: number;
     developerRevenueLight?: number;
     platformFeeLight?: number;
+    feeWouldHaveBeenLight?: number;
+    feeWaivedLight?: number;
+    waiverSource?: string | null;
+    waiverEventId?: string;
     infraChargeLight?: number;
     infraPayerUserId?: string | null;
     ownerSponsoredInfra?: boolean;

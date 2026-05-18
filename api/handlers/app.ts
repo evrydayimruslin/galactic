@@ -36,6 +36,7 @@ import {
   handleToolInvocationTelemetry,
 } from './chat.ts';
 import { error, json, toResponseBody } from './response.ts';
+import { appendCookie, getCookieValueFromRequest } from '../services/auth-cookies.ts';
 import { getLayoutHTML } from '../../web/layout.ts';
 import { createAppsService } from '../services/apps.ts';
 import { createR2Service } from '../services/storage.ts';
@@ -55,6 +56,13 @@ import {
   type MarketplaceListingSummaryListing,
 } from '../services/marketplace.ts';
 import { getBillingConfig, toPublicBillingConfig } from '../services/billing-config.ts';
+import {
+  createReferralClaimToken,
+  recordReferralLanding,
+  REFERRAL_VISITOR_COOKIE_MAX_AGE_SECONDS,
+  REFERRAL_VISITOR_COOKIE_NAME,
+  sha256Hex,
+} from '../services/referrals.ts';
 import {
   isGpuSupportEnabled,
   sanitizeGpuTrustCard,
@@ -289,6 +297,16 @@ export function createApp() {
             },
           },
         );
+      }
+
+      // Terms and payment policy hooks used by funding, payout, and fee-waiver flows.
+      if (path === '/terms' && method === 'GET') {
+        return new Response(await renderTermsHTML(), {
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'no-store',
+          },
+        });
       }
 
       // Settings page (account settings) — supports /settings, /settings/tokens, /settings/billing, /settings/supabase
@@ -1123,6 +1141,14 @@ export function createApp() {
 
       if (path.startsWith('/p/') && method === 'GET') {
         return handlePublishedPage(request, path);
+      }
+
+      // Publisher referral landing - GET /r/:slug
+      if (path.startsWith('/r/') && method === 'GET') {
+        const slug = path.slice(3);
+        if (slug && !slug.includes('/')) {
+          return handleReferralLanding(request, slug);
+        }
       }
 
       // Public app page - GET /app/:appId
@@ -2188,11 +2214,12 @@ async function handlePublicAppPage(
       isEmbed,
       trustCard,
       marketplaceSummary,
+      referralClaimToken: sanitizeReferralClaimQuery(urlObj.searchParams.get('ref_claim')),
     });
     return new Response(html, {
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'public, max-age=60',
+        'Cache-Control': urlObj.searchParams.has('ref_claim') ? 'no-store' : 'public, max-age=60',
       },
     });
   } catch (err) {
@@ -2227,6 +2254,7 @@ function getPublicAppPageHTML(
     isEmbed: boolean;
     trustCard?: TrustCard;
     marketplaceSummary?: PublicMarketplaceSummary | null;
+    referralClaimToken?: string | null;
   },
 ): string {
   const { isEmbed } = opts;
@@ -2236,7 +2264,9 @@ function getPublicAppPageHTML(
   const version = app.current_version ? escapeHtml(app.current_version) : '1.0';
   const mcpEndpoint = `${baseUrl}/mcp/${app.id}`;
   const shareUrl = appStoreUrl(app.id);
-  const deepLink = deepLinkAppUrl(app.id);
+  const deepLink = deepLinkAppUrl(app.id, opts.referralClaimToken ? {
+    refClaim: opts.referralClaimToken,
+  } : undefined);
   const dlUrl = downloadUrl({ app: app.id });
   const likes = Number(app.likes ?? 0);
   const runs = Number(app.total_runs ?? 0);
@@ -4140,6 +4170,96 @@ ${isEmbed ? '<meta name="robots" content="noindex">' : ''}
 </html>`;
 }
 
+async function renderTermsHTML(): Promise<string> {
+  const billingConfig = await getBillingConfig();
+  const publicConfig = toPublicBillingConfig(billingConfig);
+  const copy = publicConfig.policy_copy;
+  const platformFeePercent = `${Math.round(billingConfig.platformFeeRate * 100)}%`;
+
+  const sections = [
+    {
+      title: 'Light',
+      body: [
+        copy.purchasedLight,
+        copy.fundingTerms,
+      ],
+    },
+    {
+      title: 'Creator Earnings And Payouts',
+      body: [
+        copy.creatorEarnings,
+        billingConfig.payoutPolicyCopy,
+        copy.payoutTerms,
+      ],
+    },
+    {
+      title: 'Platform Fees And Waivers',
+      body: [
+        `Ultralight's standard internal platform fee on eligible creator revenue is ${platformFeePercent}.`,
+        copy.feeWaivers,
+        copy.feeWaiverEndUserImpact,
+        copy.feeWaiverCredit,
+      ],
+    },
+    {
+      title: 'Cloud Usage',
+      body: [
+        copy.cloudUsage,
+        copy.storagePolicy,
+        copy.freeCallSponsorship,
+      ],
+    },
+  ];
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Terms - Ultralight</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #fafafa;
+    color: #18181b;
+    line-height: 1.55;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 20px 64px; }
+  a { color: #2563eb; }
+  .eyebrow {
+    color: #71717a;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  h1 { font-size: 34px; line-height: 1.1; margin: 8px 0 12px; }
+  h2 { font-size: 18px; margin: 32px 0 8px; }
+  p { margin: 10px 0; color: #3f3f46; }
+  .updated { color: #71717a; font-size: 14px; margin-bottom: 24px; }
+  .back { display: inline-block; margin-top: 32px; font-weight: 600; text-decoration: none; }
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Ultralight Terms</div>
+  <h1>Light Economy Terms</h1>
+  <p class="updated">Last updated May 18, 2026</p>
+  <p>These terms summarize the payment, creator earnings, payout, and platform fee rules used by Ultralight. Additional product or marketplace terms may apply to specific workflows.</p>
+  ${sections.map((section) => `
+    <section>
+      <h2>${escapeHtml(section.title)}</h2>
+      ${section.body.map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join('')}
+    </section>
+  `).join('')}
+  <a class="back" href="/wallet">Back to wallet</a>
+</main>
+</body>
+</html>`;
+}
+
 // ============================================
 // PUBLIC USER PROFILE
 // ============================================
@@ -5061,6 +5181,80 @@ function getBaseUrl(request: Request): string {
   const proto = request.headers.get('x-forwarded-proto') ||
     (host.includes('localhost') ? 'http' : 'https');
   return `${proto}://${host}`;
+}
+
+function getClientIp(request: Request): string | null {
+  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    request.headers.get('x-real-ip') ||
+    null;
+}
+
+async function hashHeaderValue(value: string | null): Promise<string | null> {
+  if (!value) return null;
+  return await sha256Hex(value);
+}
+
+function sanitizeReferralClaimQuery(value: string | null): string | null {
+  if (!value || value.length > 2048) return null;
+  return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value) ? value : null;
+}
+
+async function getOptionalReferralUserId(request: Request): Promise<string | null> {
+  try {
+    const user = await authenticate(request);
+    return user.id;
+  } catch {
+    return null;
+  }
+}
+
+async function handleReferralLanding(request: Request, slug: string): Promise<Response> {
+  const visitorId = getCookieValueFromRequest(request, REFERRAL_VISITOR_COOKIE_NAME);
+  const userId = await getOptionalReferralUserId(request);
+  const landing = await recordReferralLanding({
+    slug,
+    anonymousVisitorId: visitorId,
+    userId,
+    metadata: {
+      ipHash: await hashHeaderValue(getClientIp(request)),
+      userAgentHash: await hashHeaderValue(request.headers.get('user-agent')),
+      landingUrl: request.url,
+      referrerUrl: request.headers.get('referer'),
+    },
+  });
+
+  if (landing.status === 'not_found') {
+    return new Response('Referral link not found', { status: 404 });
+  }
+
+  let claimToken: string | null = null;
+  if (!userId && landing.landingId && landing.visitorId) {
+    claimToken = await createReferralClaimToken({
+      landingId: landing.landingId,
+      visitorId: landing.visitorId,
+    });
+  }
+
+  const redirectUrl = new URL(
+    landing.appId ? `/app/${encodeURIComponent(landing.appId)}` : '/',
+    request.url,
+  );
+  if (claimToken) {
+    redirectUrl.searchParams.set('ref_claim', claimToken);
+  }
+  const headers = new Headers({
+    'Location': redirectUrl.pathname + redirectUrl.search,
+    'Cache-Control': 'no-store',
+  });
+
+  if (landing.visitorId) {
+    appendCookie(headers, REFERRAL_VISITOR_COOKIE_NAME, landing.visitorId, {
+      maxAge: REFERRAL_VISITOR_COOKIE_MAX_AGE_SECONDS,
+      httpOnly: true,
+    });
+  }
+
+  return new Response(null, { status: 302, headers });
 }
 
 /**

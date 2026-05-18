@@ -6,6 +6,7 @@
 import { getEnv } from '../lib/env.ts';
 import { formatLight, PLATFORM_FEE_RATE } from '../../shared/types/index.ts';
 import { getBillingConfig } from './billing-config.ts';
+import { getOrCreatePublisherReferralLink, type PublisherReferralLink } from './referrals.ts';
 import { buildAppTrustCard } from './trust.ts';
 
 // ============================================
@@ -55,6 +56,7 @@ export interface MarketplaceOwnerAdminSummary {
   payouts_enabled: boolean;
   balance_light: number;
   total_earned_light: number;
+  referral: PublisherReferralLink | null;
   checklist: MarketplaceOwnerAdminCheck[];
   recommended_action_id: MarketplaceOwnerAdminCheck['id'] | 'share';
   recommended_action: string;
@@ -76,6 +78,10 @@ export interface SaleResult {
   sale_price_light: number;
   platform_fee_light: number;
   seller_payout_light: number;
+  fee_would_have_been_light?: number;
+  fee_waived_light?: number;
+  waiver_source?: string | null;
+  waiver_event_id?: string | null;
 }
 
 export interface ListingDetails {
@@ -231,6 +237,10 @@ interface SaleRpcResult {
   sale_price_light: number;
   platform_fee_light: number;
   seller_payout_light: number;
+  fee_would_have_been_light?: number;
+  fee_waived_light?: number;
+  waiver_source?: string | null;
+  waiver_event_id?: string | null;
 }
 
 interface JoinedBidRow {
@@ -571,6 +581,7 @@ export function buildMarketplaceOwnerAdminSummary(
     payouts_enabled: payoutsEnabled,
     balance_light: owner?.balance_light || 0,
     total_earned_light: owner?.total_earned_light || 0,
+    referral: null,
     checklist,
     recommended_action_id: priority?.id || 'share',
     recommended_action: priority?.action || 'Share the listing and monitor incoming bids.',
@@ -837,6 +848,10 @@ export async function acceptBid(ownerId: string, bidId: string): Promise<SaleRes
     sale_price_light: result.sale_price_light,
     platform_fee_light: result.platform_fee_light,
     seller_payout_light: result.seller_payout_light,
+    fee_would_have_been_light: result.fee_would_have_been_light,
+    fee_waived_light: result.fee_waived_light,
+    waiver_source: result.waiver_source,
+    waiver_event_id: result.waiver_event_id,
   };
 }
 
@@ -949,6 +964,10 @@ export async function buyNow(buyerId: string, appId: string): Promise<SaleResult
     sale_price_light: result.sale_price_light,
     platform_fee_light: result.platform_fee_light,
     seller_payout_light: result.seller_payout_light,
+    fee_would_have_been_light: result.fee_would_have_been_light,
+    fee_waived_light: result.fee_waived_light,
+    waiver_source: result.waiver_source,
+    waiver_event_id: result.waiver_event_id,
   };
 }
 
@@ -1154,6 +1173,11 @@ export async function getListing(appId: string, viewerId?: string): Promise<List
       app,
       ownerRows[0] || null,
     );
+    try {
+      ownerAdmin.referral = await getOrCreatePublisherReferralLink(app.id, viewerId);
+    } catch (err) {
+      console.warn('[MARKETPLACE] Failed to load owner referral link:', err);
+    }
   }
 
   return {

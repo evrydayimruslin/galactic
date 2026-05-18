@@ -105,6 +105,51 @@ Deno.test("settleCallerAppCharge reports insufficient balance when transfer RPC 
   });
 });
 
+Deno.test("settleAppCall preserves waived fee fields from transfer RPC", async () => {
+  await withMockedEnv(async () => {
+    const result = await settleAppCall({
+      app: createTestApp({ default_price_light: 10 }),
+      userId: "user_waived",
+      functionName: "search",
+      inputArgs: { query: "waived" },
+      successful: true,
+    }, {
+      fetchFn: async (input, init) => {
+        const url = String(input);
+        if (url.includes("/rpc/transfer_light")) {
+          const body = JSON.parse(String(init?.body));
+          assertEquals(body.p_amount_light, 10);
+          return new Response(
+            JSON.stringify([{
+              from_new_balance: 90,
+              to_new_balance: 10,
+              platform_fee: 0,
+              transfer_id: "transfer-waived-1",
+              fee_would_have_been: 1.5,
+              fee_waived: 1.5,
+              waiver_source: "referral_grant",
+              waiver_event_id: "waiver-event-1",
+            }]),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+    });
+
+    assertEquals(result.platformFeeLight, 0);
+    assertEquals(result.developerRevenueLight, 10);
+    assertEquals(result.feeWouldHaveBeenLight, 1.5);
+    assertEquals(result.feeWaivedLight, 1.5);
+    assertEquals(result.waiverSource, "referral_grant");
+    assertEquals(result.waiverEventId, "waiver-event-1");
+    assertEquals(result.metadata.fee_waived_light, 1.5);
+  });
+});
+
 Deno.test("settleAndLogAppExecution settles app pricing across run/http style calls", async () => {
   await withMockedEnv(async () => {
     let logged: Record<string, unknown> | null = null;
@@ -155,6 +200,9 @@ Deno.test("settleAndLogAppExecution settles app pricing across run/http style ca
               to_new_balance: 8.5,
               platform_fee: 1.5,
               transfer_id: "transfer-run-1",
+              fee_would_have_been: 1.5,
+              fee_waived: 0,
+              waiver_source: null,
             }]),
             {
               status: 200,
@@ -198,6 +246,8 @@ Deno.test("settleAndLogAppExecution settles app pricing across run/http style ca
     assertEquals(result.settlement.appChargeLight, 10);
     assertEquals(result.settlement.platformFeeLight, 1.5);
     assertEquals(result.settlement.developerRevenueLight, 8.5);
+    assertEquals(result.settlement.feeWouldHaveBeenLight, 1.5);
+    assertEquals(result.settlement.feeWaivedLight, 0);
     assertEquals(result.settlement.insufficientBalance, false);
     assertEquals(result.routineStep?.step_index, 0);
     assertEquals(result.routineStep?.total_light, 10);

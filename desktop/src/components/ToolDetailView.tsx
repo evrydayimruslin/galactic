@@ -26,7 +26,7 @@
 //     viewer is the owner).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronRight, Download, MoreHorizontal } from 'lucide-react';
+import { ChevronRight, Copy, Download, MoreHorizontal } from 'lucide-react';
 import { Check, X as XIcon } from 'lucide-react';
 import Glyph, { deriveGlyph, deriveTone } from './ui/Glyph';
 import AcquisitionFlow from './marketplace/AcquisitionFlow';
@@ -502,6 +502,7 @@ function SideRail({ appId, appName, details, loading, isOwner, onOpenAcquisition
     amount: number;
     path: 'accepted' | 'instant';
   } | null>(null);
+  const [copiedReferral, setCopiedReferral] = useState(false);
 
   if (loading && !details) {
     return (
@@ -522,6 +523,18 @@ function SideRail({ appId, appName, details, loading, isOwner, onOpenAcquisition
   const askExists = ask !== null && ask !== undefined && ask > 0;
   const fee = summary?.platform_fee_at_ask_light ?? null;
   const payout = summary?.seller_payout_at_ask_light ?? null;
+  const referralUrl = details?.owner_admin?.referral?.url || null;
+
+  const copyReferralUrl = async () => {
+    if (!referralUrl) return;
+    try {
+      await navigator.clipboard.writeText(referralUrl);
+      setCopiedReferral(true);
+      window.setTimeout(() => setCopiedReferral(false), 1600);
+    } catch {
+      setCopiedReferral(false);
+    }
+  };
 
   const onAcceptBid = async (bidId: string) => {
     setBidActionId(bidId);
@@ -721,6 +734,32 @@ function SideRail({ appId, appName, details, loading, isOwner, onOpenAcquisition
                 Balance ✦{formatLight(details.owner_admin.balance_light)}
                 {details.owner_admin.total_earned_light !== undefined &&
                   ` · earned ✦${formatLight(details.owner_admin.total_earned_light)}`}
+              </div>
+            )}
+            {referralUrl && (
+              <div className="mt-3 pt-3 border-t border-ul-border">
+                <div className="text-micro font-mono text-ul-text-muted uppercase tracking-widest mb-2">
+                  Referral URL
+                </div>
+                <div className="flex items-center gap-2 min-w-0">
+                  <div
+                    className="flex-1 min-w-0 truncate text-nano font-mono text-ul-text-secondary"
+                    title={referralUrl}
+                  >
+                    {referralUrl}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void copyReferralUrl()}
+                    className="w-7 h-7 rounded-md border border-ul-border bg-ul-bg flex items-center justify-center text-ul-text-muted hover:text-ul-text hover:bg-ul-bg-hover"
+                    title="Copy referral URL"
+                    aria-label="Copy referral URL"
+                  >
+                    {copiedReferral
+                      ? <Check className="w-3.5 h-3.5" strokeWidth={2.4} />
+                      : <Copy className="w-3.5 h-3.5" strokeWidth={2} />}
+                  </button>
+                </div>
               </div>
             )}
           </div>

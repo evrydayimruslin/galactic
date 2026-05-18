@@ -3,6 +3,7 @@
 //
 // Supported schemes (v1):
 //   ultralight://app/:id                → navigate to app store view
+//   ultralight://app/:id?ref_claim=...  → navigate and redeem referral claim
 //
 // Future:
 //   ultralight://chat/new?prompt=...    → open new chat
@@ -14,6 +15,7 @@
 
 import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { claimReferralToken } from '../lib/api';
 
 /** Event emitted by Rust on every deep-link URL reception. */
 const DEEP_LINK_EVENT = 'ul://deep-link';
@@ -28,7 +30,7 @@ export interface DeepLinkNavigator {
  */
 export function parseDeepLink(
   raw: string,
-): { kind: 'tool-detail'; appId: string } | null {
+): { kind: 'tool-detail'; appId: string; referralClaimToken?: string } | null {
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -44,7 +46,8 @@ export function parseDeepLink(
   if (parsed.host === 'app') {
     // Strip leading slash, take first segment only so `ultralight://app/xyz/?foo` works.
     const appId = parsed.pathname.replace(/^\//, '').split('/')[0];
-    if (appId) return { kind: 'tool-detail', appId };
+    const referralClaimToken = parsed.searchParams.get('ref_claim') || undefined;
+    if (appId) return { kind: 'tool-detail', appId, referralClaimToken };
   }
 
   return null;
@@ -79,6 +82,11 @@ export function useDeepLink(nav: DeepLinkNavigator, ready: boolean): void {
     }
     if (intent.kind === 'tool-detail') {
       navRef.current.navigateToToolDetail(intent.appId);
+      if (intent.referralClaimToken) {
+        claimReferralToken(intent.referralClaimToken).catch((err) => {
+          console.warn('[deep-link] failed to claim referral:', err);
+        });
+      }
     }
   };
 

@@ -9,6 +9,8 @@
 //   POST  /api/admin/approve/:id        — Approve an assessment (writes points)
 //   POST  /api/admin/reject/:id         — Reject an assessment
 //   POST  /api/admin/balance/:userId    — Top up a user's Light balance
+//   POST  /api/admin/fee-waiver-credits/grant — Grant publisher fee-waiver credit
+//   GET   /api/admin/fee-waiver-credits/:publisherUserId — Inspect publisher fee-waiver credit
 //   POST  /api/admin/cleanup-provisionals — Delete expired provisional users
 //   GET   /api/admin/billing-config — Read Light economics config
 //   PATCH /api/admin/billing-config — Update Light economics config
@@ -43,6 +45,7 @@ import {
   validateSetAppCategoryRequest,
   validateSetAppFeaturedRequest,
   validateFlashTrainingExportUrl,
+  validateGrantFeeWaiverCreditRequest,
   validateTopUpBalanceRequest,
   validateUpdateBillingConfigRequest,
   validateUpdateGapRequest,
@@ -56,6 +59,10 @@ import {
   normalizeBillingConfigRow,
   toPublicBillingConfig,
 } from '../services/billing-config.ts';
+import {
+  getPublisherFeeWaiverCredit,
+  grantPublisherFeeWaiverCredit,
+} from '../services/fee-waivers.ts';
 import { getPlatformBalance } from '../services/stripe-connect.ts';
 import { processHeldPayouts } from '../services/payout-processor.ts';
 
@@ -149,6 +156,21 @@ interface AdminPayoutRunRow {
   updated_at: string;
 }
 
+interface AdminFeeWaiverEventRow {
+  id: string;
+  created_at: string;
+  payer_user_id: string;
+  publisher_user_id: string;
+  app_id: string | null;
+  transaction_kind: string;
+  gross_light: number | null;
+  fee_rate: number | null;
+  fee_would_have_been_light: number | null;
+  fee_waived_light: number | null;
+  platform_fee_charged_light: number | null;
+  waiver_source: string;
+}
+
 interface AdminCloudUsageEventRow {
   id: string;
   created_at: string;
@@ -225,6 +247,7 @@ function withAdminSensitiveRouteRateLimit(
     | 'admin:approve'
     | 'admin:reject'
     | 'admin:balance_topup'
+    | 'admin:fee_waiver_credit_grant'
     | 'admin:billing_config_update'
     | 'admin:cleanup_provisionals'
     | 'admin:app_category'
@@ -305,6 +328,23 @@ export async function handleAdmin(request: Request): Promise<Response> {
       'admin:balance_topup',
       () => topUpBalance(request, balanceMatch[1]),
     );
+  }
+
+  // POST /api/admin/fee-waiver-credits/grant — Grant publisher fee-waiver credit
+  if (path === '/api/admin/fee-waiver-credits/grant' && method === 'POST') {
+    return withAdminSensitiveRouteRateLimit(
+      request,
+      'admin:fee_waiver_credit_grant',
+      () => grantFeeWaiverCredit(request),
+    );
+  }
+
+  // GET /api/admin/fee-waiver-credits/:publisherUserId — Inspect fee-waiver credit
+  const feeCreditMatch = path.match(
+    /^\/api\/admin\/fee-waiver-credits\/([0-9a-f-]+)$/,
+  );
+  if (feeCreditMatch && method === 'GET') {
+    return getAdminFeeWaiverCredit(url, feeCreditMatch[1]);
   }
 
   // POST /api/admin/cleanup-provisionals — Delete expired provisional users
@@ -929,6 +969,53 @@ async function topUpBalance(
 }
 
 // ============================================
+// FEE-WAIVER CREDIT
+// ============================================
+
+async function grantFeeWaiverCredit(request: Request): Promise<Response> {
+  try {
+    const body = await validateGrantFeeWaiverCreditRequest(request);
+    const result = await grantPublisherFeeWaiverCredit({
+      publisherUserId: body.publisherUserId,
+      amountLight: body.amountLight,
+      reason: body.reason,
+      createdByUserId: body.createdByUserId,
+      referenceTable: body.referenceTable,
+      referenceId: body.referenceId,
+      metadata: body.metadata,
+    });
+    return json(result, 201);
+  } catch (err) {
+    if (err instanceof RequestValidationError) {
+      return error(err.message, err.status);
+    }
+    console.error('[ADMIN] grantFeeWaiverCredit failed:', err);
+    return error('Failed to grant fee-waiver credit', 500);
+  }
+}
+
+async function getAdminFeeWaiverCredit(
+  url: URL,
+  publisherUserId: string,
+): Promise<Response> {
+  try {
+    const parsedLimit = Number(url.searchParams.get('ledger_limit') || 50);
+    const ledgerLimit = Number.isInteger(parsedLimit)
+      ? Math.max(1, Math.min(parsedLimit, 100))
+      : 50;
+    return json(await getPublisherFeeWaiverCredit(publisherUserId, {
+      ledgerLimit,
+    }));
+  } catch (err) {
+    if (err instanceof RequestValidationError) {
+      return error(err.message, err.status);
+    }
+    console.error('[ADMIN] getAdminFeeWaiverCredit failed:', err);
+    return error('Failed to fetch fee-waiver credit', 500);
+  }
+}
+
+// ============================================
 // BILLING CONFIG
 // ============================================
 
@@ -1266,6 +1353,82 @@ function centsAmount(value: number | null | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+function summarizeFeeWaiverEvents(events: AdminFeeWaiverEventRow[]) {
+  const bySource: Record<
+    string,
+    {
+      event_count: number;
+      fee_would_have_been_light: number;
+      fee_waived_light: number;
+      platform_fee_charged_light: number;
+    }
+  > = {};
+  const byTransactionKind: Record<
+    string,
+    {
+      event_count: number;
+      fee_would_have_been_light: number;
+      fee_waived_light: number;
+      platform_fee_charged_light: number;
+    }
+  > = {};
+
+  const add = (
+    bucket: typeof bySource,
+    key: string | null | undefined,
+    event: AdminFeeWaiverEventRow,
+  ) => {
+    const name = key || 'unknown';
+    if (!bucket[name]) {
+      bucket[name] = {
+        event_count: 0,
+        fee_would_have_been_light: 0,
+        fee_waived_light: 0,
+        platform_fee_charged_light: 0,
+      };
+    }
+    bucket[name].event_count += 1;
+    bucket[name].fee_would_have_been_light += lightAmount(
+      event.fee_would_have_been_light,
+    );
+    bucket[name].fee_waived_light += lightAmount(event.fee_waived_light);
+    bucket[name].platform_fee_charged_light += lightAmount(
+      event.platform_fee_charged_light,
+    );
+  };
+
+  const totals = events.reduce(
+    (acc, event) => {
+      acc.event_count += 1;
+      acc.gross_light += lightAmount(event.gross_light);
+      acc.fee_would_have_been_light += lightAmount(
+        event.fee_would_have_been_light,
+      );
+      acc.fee_waived_light += lightAmount(event.fee_waived_light);
+      acc.platform_fee_charged_light += lightAmount(
+        event.platform_fee_charged_light,
+      );
+      add(bySource, event.waiver_source, event);
+      add(byTransactionKind, event.transaction_kind, event);
+      return acc;
+    },
+    {
+      event_count: 0,
+      gross_light: 0,
+      fee_would_have_been_light: 0,
+      fee_waived_light: 0,
+      platform_fee_charged_light: 0,
+    },
+  );
+
+  return {
+    ...totals,
+    by_source: bySource,
+    by_transaction_kind: byTransactionKind,
+    recent_events: events.slice(0, 100),
+  };
+}
+
 function isRetryablePayout(payout: AdminPayoutRow): boolean {
   const claimIsStale = payout.processor_claimed_at
     ? Date.parse(payout.processor_claimed_at) < Date.now() - 30 * 60 * 1000
@@ -1326,9 +1489,23 @@ async function getPayoutReconciliation(url: URL): Promise<Response> {
     'stripe_transfer_error',
     'stripe_payout_error',
   ].join(',');
+  const waiverSelect = [
+    'id',
+    'created_at',
+    'payer_user_id',
+    'publisher_user_id',
+    'app_id',
+    'transaction_kind',
+    'gross_light',
+    'fee_rate',
+    'fee_would_have_been_light',
+    'fee_waived_light',
+    'platform_fee_charged_light',
+    'waiver_source',
+  ].join(',');
 
   try {
-    const [earningsRes, payoutsRes, runsRes, stripeBalance] = await Promise.all([
+    const [earningsRes, payoutsRes, runsRes, waiverEventsRes, stripeBalance] = await Promise.all([
       fetch(
         `${SUPABASE_URL}/rest/v1/users?or=(total_earned_light.gt.0,earned_balance_light.gt.0)&select=total_earned_light,earned_balance_light`,
         { headers },
@@ -1339,6 +1516,10 @@ async function getPayoutReconciliation(url: URL): Promise<Response> {
       ),
       fetch(
         `${SUPABASE_URL}/rest/v1/payout_runs?select=*&order=scheduled_for.desc&limit=${limit}`,
+        { headers },
+      ),
+      fetch(
+        `${SUPABASE_URL}/rest/v1/platform_fee_waiver_events?select=${waiverSelect}&order=created_at.desc&limit=10000`,
         { headers },
       ),
       getPlatformBalance()
@@ -1355,6 +1536,10 @@ async function getPayoutReconciliation(url: URL): Promise<Response> {
     }>(earningsRes, 'earnings liability');
     const payouts = await readRows<AdminPayoutRow>(payoutsRes, 'payouts');
     const runs = await readRows<AdminPayoutRunRow>(runsRes, 'payout runs');
+    const waiverEvents = await readRows<AdminFeeWaiverEventRow>(
+      waiverEventsRes,
+      'platform fee waiver events',
+    );
 
     const totalEarnedLight = earnings.reduce(
       (sum, row) => sum + lightAmount(row.total_earned_light),
@@ -1442,6 +1627,7 @@ async function getPayoutReconciliation(url: URL): Promise<Response> {
       },
       stripe_balance: stripeBalance,
       payout_economics: payoutEconomics,
+      fee_waivers: summarizeFeeWaiverEvents(waiverEvents),
       payout_runs: runs,
       retryable_payouts: retryablePayouts.slice(0, limit),
     });

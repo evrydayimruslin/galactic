@@ -84,6 +84,12 @@ export const LIGHT_ECONOMY_POLICY_COPY = {
     "By adding Light, you agree that purchased Light is spend-only platform credit and that authenticated funding transactions are governed by the Terms.",
   payoutTerms:
     "By requesting a payout, you confirm that the amount is creator earnings and that payout timing, fees, and eligibility are governed by the Terms.",
+  feeWaivers:
+    "Ultralight may waive its internal platform fee on eligible creator revenue through publisher referral grants or publisher fee-waiver credit.",
+  feeWaiverEndUserImpact:
+    "Platform fee waivers affect only Ultralight's internal platform fee and publisher revenue. They do not change the gross Light amount paid by the end user.",
+  feeWaiverCredit:
+    "Publisher fee-waiver credit is platform scrip that can be used only to cover Ultralight internal platform fees on eligible creator revenue and has no cash value.",
   cloudUsage:
     "Cloud usage is metered in cloud units and charged as exact fractional Light at the configured cloud-unit rate.",
   storagePolicy:

@@ -973,6 +973,23 @@ export async function handleUser(request: Request): Promise<Response> {
     }
   }
 
+  // GET /api/marketplace/fee-waiver-leaderboard — public waived-fee ranking
+  if (path === "/api/marketplace/fee-waiver-leaderboard" && method === "GET") {
+    try {
+      const {
+        getFeeWaiverLeaderboard,
+        parseFeeWaiverLeaderboardQuery,
+      } = await import("../services/fee-waivers.ts");
+      return json(await getFeeWaiverLeaderboard(parseFeeWaiverLeaderboardQuery(url)));
+    } catch (err) {
+      if (err instanceof RequestValidationError) {
+        return error(err.message, err.status);
+      }
+      console.error("[USER] fee waiver leaderboard failed:", err);
+      return error("Failed to fetch fee-waiver leaderboard", 500);
+    }
+  }
+
   // ============================================
   // AUTHENTICATED ROUTES
   // ============================================
@@ -987,6 +1004,22 @@ export async function handleUser(request: Request): Promise<Response> {
   }
 
   const userService = createUserService();
+
+  // GET /api/user/fee-waiver-credit — current publisher's fee-waiver credit balance
+  if (path === "/api/user/fee-waiver-credit" && method === "GET") {
+    try {
+      const { getPublisherFeeWaiverCredit } = await import(
+        "../services/fee-waivers.ts"
+      );
+      return json(await getPublisherFeeWaiverCredit(userId, { ledgerLimit: 25 }));
+    } catch (err) {
+      if (err instanceof RequestValidationError) {
+        return error(err.message, err.status);
+      }
+      console.error("[USER] fee waiver credit fetch failed:", err);
+      return error("Failed to fetch fee-waiver credit", 500);
+    }
+  }
 
   // ============================================
   // POST /api/user/conversation-embedding - Embed conversation for semantic search
