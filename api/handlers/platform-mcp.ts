@@ -3466,8 +3466,28 @@ async function handleToolsCall(
 
   // Extract agent meta (_user_query, _session_id) before passing to tool handlers
   const { extractCallMeta } = await import('../services/call-logger.ts');
-  const { cleanArgs, userQuery, sessionId } = extractCallMeta(args || {});
+  const { cleanArgs, userQuery, sessionId, widgetPull, widgetAction } =
+    extractCallMeta(args || {});
   const toolArgs = cleanArgs;
+  const widgetForwardArgs: Record<string, unknown> = {
+    ...(widgetPull
+      ? {
+        _widget_pull: true,
+        _widget_name: widgetPull.widgetName,
+        _widget_interval_ms: widgetPull.intervalMs,
+        _widget_pull_reason: widgetPull.reason,
+      }
+      : {}),
+    ...(widgetAction
+      ? {
+        _widget_action: true,
+        _widget_surface_id: widgetAction.surfaceId,
+        _widget_id: widgetAction.widgetId,
+        _widget_action_id: widgetAction.actionId,
+        _widget_turn_id: widgetAction.turnId,
+      }
+      : {}),
+  };
 
   const execStart = Date.now();
   let toolMapForLogging: Record<string, ToolMapping> | undefined;
@@ -3850,7 +3870,10 @@ async function handleToolsCall(
       case 'ul.call': {
         const targetAppId = toolArgs.app_id as string;
         const targetFn = toolArgs.function_name as string;
-        const callArgs = asToolArguments(toolArgs.args);
+        const callArgs = {
+          ...asToolArguments(toolArgs.args),
+          ...widgetForwardArgs,
+        };
 
         if (!targetAppId || !targetFn) {
           throw new ToolError(
@@ -5271,6 +5294,7 @@ async function handleToolsCall(
       userTier: user.tier,
       sessionId,
       userQuery,
+      widgetAction,
     });
 
     return jsonRpcResponse(id, formatToolResult(result));
@@ -5305,6 +5329,7 @@ async function handleToolsCall(
       userTier: user.tier,
       sessionId,
       userQuery,
+      widgetAction,
     });
 
     if (err instanceof ToolError) {

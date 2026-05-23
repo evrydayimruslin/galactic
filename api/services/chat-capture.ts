@@ -1,5 +1,6 @@
 import { getEnv } from '../lib/env.ts';
 import type { ChatMessage, ChatTool, InferenceBillingMode } from '../../shared/contracts/ai.ts';
+import type { ActiveWidgetContext } from '../../shared/contracts/widget.ts';
 import {
   getAnalyticsIdentity,
   isExplicitlyDisabled,
@@ -39,6 +40,7 @@ export interface OrchestrateCaptureInit {
   scope?: unknown;
   systemAgentContext?: unknown;
   projectContext?: string;
+  activeWidgetContexts?: ActiveWidgetContext[];
   files?: ChatCaptureFile[];
 }
 
@@ -122,6 +124,41 @@ function safeJson(value: unknown): unknown {
 function previewText(value: string, maxChars = 4000): string {
   if (value.length <= maxChars) return value;
   return `${value.slice(0, maxChars)}\n...[truncated; raw content stored as artifact]`;
+}
+
+function safeJsonBytes(value: unknown): number {
+  try {
+    return utf8ByteLength(JSON.stringify(safeJson(value)) || '');
+  } catch {
+    return 0;
+  }
+}
+
+function summarizeActiveWidgetContexts(
+  contexts: ActiveWidgetContext[] | undefined,
+): JsonRecord[] {
+  if (!contexts?.length) return [];
+  return contexts.slice(0, 8).map((context) => ({
+    surface_id: context.surfaceId,
+    kind: context.kind || null,
+    status: context.status || null,
+    app_id: context.appId,
+    app_slug: context.appSlug,
+    app_name: context.appName,
+    widget_id: context.widgetId,
+    widget_name: context.widgetName || null,
+    title: context.snapshot?.title || context.title || null,
+    current_view: context.snapshot?.current_view || null,
+    visible_component_count: context.snapshot?.visible_components?.length || 0,
+    visible_data_ref_count: context.snapshot?.visible_data_refs?.length || 0,
+    selected_entity_count: context.snapshot?.selected_entities?.length || 0,
+    pending_edit_count: context.snapshot?.pending_edits?.length || 0,
+    declared_action_count: context.actions?.length || 0,
+    recent_event_count: context.recentEventCount ?? context.recentEvents?.length ?? 0,
+    recent_event_summary: context.recentEventSummary || null,
+    has_latest_data_payload: !!context.latestDataPayload,
+    updated_at: context.updatedAt || null,
+  }));
 }
 
 async function postRows(
@@ -396,6 +433,10 @@ export class OrchestrateCaptureSession {
       metadata: {
         system_agent_context: safeJson(this.init.systemAgentContext),
         has_project_context: !!this.init.projectContext,
+        active_widget_context_count: this.init.activeWidgetContexts?.length || 0,
+        active_widget_contexts: summarizeActiveWidgetContexts(
+          this.init.activeWidgetContexts,
+        ),
         file_count: this.init.files?.length || 0,
         capture_version: 'v1',
       },
@@ -427,6 +468,7 @@ export class OrchestrateCaptureSession {
       metadata: {
         trace_id: this.traceUuid,
         conversation_history_count: this.init.conversationHistory?.length || 0,
+        active_widget_context_count: this.init.activeWidgetContexts?.length || 0,
         capture_version: 'v1',
         ...preparedContent.metadata,
       },
@@ -446,6 +488,11 @@ export class OrchestrateCaptureSession {
       scope: safeJson(this.init.scope),
       systemAgentContext: safeJson(this.init.systemAgentContext),
       projectContextBytes: this.init.projectContext ? utf8ByteLength(this.init.projectContext) : 0,
+      activeWidgetContextCount: this.init.activeWidgetContexts?.length || 0,
+      activeWidgetContextBytes: safeJsonBytes(this.init.activeWidgetContexts || []),
+      activeWidgetContexts: summarizeActiveWidgetContexts(
+        this.init.activeWidgetContexts,
+      ),
       files: (this.init.files || []).map((f) => ({
         name: f.name,
         size: f.size,
@@ -469,6 +516,27 @@ export class OrchestrateCaptureSession {
         });
       } catch (err) {
         captureLogger.warn('Failed to store project context artifact', {
+          conversation_id: this.init.conversationId,
+          trace_id: this.traceUuid,
+          error: err,
+        });
+      }
+    }
+
+    if (this.init.activeWidgetContexts?.length) {
+      try {
+        await storeTextArtifact({
+          anonUserId: this.anonUserId,
+          conversationId: this.init.conversationId,
+          messageId: this.init.userMessageId,
+          source: 'active_widget_context',
+          relationship: 'active_widget_context',
+          text: JSON.stringify(safeJson(this.init.activeWidgetContexts), null, 2),
+          originalFilename: 'active-widget-contexts.json',
+          metadata: { trace_id: this.traceUuid },
+        });
+      } catch (err) {
+        captureLogger.warn('Failed to store active widget context artifact', {
           conversation_id: this.init.conversationId,
           trace_id: this.traceUuid,
           error: err,

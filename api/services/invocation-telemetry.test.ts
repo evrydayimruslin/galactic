@@ -3,9 +3,25 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 import {
+  buildWidgetActionTelemetryMetadata,
   createLlmInvocationTelemetrySession,
   recordToolInvocationTelemetry,
 } from "./invocation-telemetry.ts";
+
+Deno.test("invocation telemetry: shapes widget action metadata", () => {
+  assertEquals(buildWidgetActionTelemetryMetadata({
+    surfaceId: "surface-1",
+    widgetId: "email_inbox",
+    actionId: "send_selected_draft",
+    turnId: "turn-1",
+  }), {
+    widget_action: true,
+    widget_surface_id: "surface-1",
+    widget_id: "email_inbox",
+    widget_action_id: "send_selected_draft",
+    widget_turn_id: "turn-1",
+  });
+});
 
 Deno.test("invocation telemetry: disabled flag prevents session creation", () => {
   const previousEnv = globalThis.__env;
@@ -307,6 +323,12 @@ Deno.test("invocation telemetry: records failed tool calls and failure rows", as
       status: "error",
       errorType: "ToolError",
       errorMessage: "boom",
+      widgetAction: {
+        surfaceId: "surface-1",
+        widgetId: "email_inbox",
+        actionId: "send_selected_draft",
+        turnId: "turn-1",
+      },
     });
 
     const toolInsert = calls.find((call) =>
@@ -337,6 +359,11 @@ Deno.test("invocation telemetry: records failed tool calls and failure rows", as
       (toolInsert.body as { routine_run_id: string }).routine_run_id,
       "00000000-0000-4000-8000-000000000403",
     );
+    assertEquals(
+      (toolInsert.body as { metadata: Record<string, unknown> }).metadata
+        .widget_action_id,
+      "send_selected_draft",
+    );
 
     const failureInsert = calls.find((call) =>
       call.method === "POST" && call.url.includes("/execution_failures")
@@ -354,6 +381,11 @@ Deno.test("invocation telemetry: records failed tool calls and failure rows", as
       (failureInsert.body as { metadata: Record<string, unknown> }).metadata
         .routine_run_id,
       "00000000-0000-4000-8000-000000000403",
+    );
+    assertEquals(
+      (failureInsert.body as { metadata: Record<string, unknown> }).metadata
+        .widget_turn_id,
+      "turn-1",
     );
   } finally {
     globalThis.fetch = previousFetch;

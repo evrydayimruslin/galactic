@@ -6,7 +6,7 @@ import type {
   RoutineCapabilityDeclaration,
   RoutineDeclaration,
 } from './routine.ts';
-import type { WidgetDeclaration } from './widget.ts';
+import type { WidgetContextSourceDeclaration, WidgetDeclaration } from './widget.ts';
 
 export interface AppManifest {
   name: string;
@@ -21,6 +21,7 @@ export interface AppManifest {
   functions?: Record<string, ManifestFunction>;
   permissions?: string[];
   widgets?: WidgetDeclaration[];
+  context_sources?: WidgetContextSourceDeclaration[];
   routines?: RoutineDeclaration[];
   env?: Record<string, ManifestEnvVar>;
   env_vars?: Record<string, ManifestEnvVar>;
@@ -736,9 +737,285 @@ function validateWidgetDependencies(
   });
 }
 
+function validateOptionalStringArray(
+  value: unknown,
+  path: string,
+  message: string,
+  errors: ManifestValidationError[],
+): void {
+  if (value === undefined) return;
+  if (
+    !Array.isArray(value) ||
+    value.some((entry) => typeof entry !== 'string' || !entry.trim())
+  ) {
+    errors.push({ path, message });
+  }
+}
+
+function isSafeContextSqlIdentifier(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+}
+
+function isSelectOnlyContextQuery(sql: string): boolean {
+  const normalized = sql
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--.*$/gm, ' ')
+    .trim();
+  if (!normalized) return false;
+  if (normalized.includes(';')) return false;
+  if (!/^(select|with)\b/i.test(normalized)) return false;
+  return !/\b(insert|update|delete|drop|alter|create|replace|truncate|attach|detach|vacuum|pragma|reindex|merge|grant|revoke)\b/i
+    .test(normalized);
+}
+
+function validateManifestContextSources(
+  value: unknown,
+  functions: Record<string, unknown>,
+  errors: ManifestValidationError[],
+  warnings: string[],
+): Set<string> {
+  const ids = new Set<string>();
+  if (value === undefined) return ids;
+  if (!Array.isArray(value)) {
+    errors.push({ path: 'context_sources', message: 'context_sources must be an array' });
+    return ids;
+  }
+
+  const seen = new Set<string>();
+  value.forEach((source, index) => {
+    const sourcePath = `context_sources.${index}`;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+      errors.push({ path: sourcePath, message: 'context source declaration must be an object' });
+      return;
+    }
+
+    const s = source as Record<string, unknown>;
+    const id = typeof s.id === 'string' ? s.id.trim() : '';
+    if (!id) {
+      errors.push({ path: `${sourcePath}.id`, message: 'id is required and must be a string' });
+    } else if (seen.has(id)) {
+      errors.push({ path: `${sourcePath}.id`, message: `duplicate context source id "${id}"` });
+    } else {
+      seen.add(id);
+      ids.add(id);
+    }
+
+    if (typeof s.label !== 'string' || !s.label.trim()) {
+      errors.push({ path: `${sourcePath}.label`, message: 'label is required and must be a string' });
+    }
+    if (s.description !== undefined && typeof s.description !== 'string') {
+      errors.push({ path: `${sourcePath}.description`, message: 'description must be a string' });
+    }
+    if (s.type !== 'd1_table' && s.type !== 'd1_query' && s.type !== 'function') {
+      errors.push({
+        path: `${sourcePath}.type`,
+        message: 'type must be one of d1_table, d1_query, or function',
+      });
+    }
+    if (s.access !== 'read') {
+      errors.push({ path: `${sourcePath}.access`, message: 'access is required and must be read' });
+    }
+    if (s.searchable !== undefined && typeof s.searchable !== 'boolean') {
+      errors.push({ path: `${sourcePath}.searchable`, message: 'searchable must be a boolean' });
+    }
+
+    validateOptionalStringArray(
+      s.default_for_widgets,
+      `${sourcePath}.default_for_widgets`,
+      'default_for_widgets must be an array of non-empty strings',
+      errors,
+    );
+    validateOptionalStringArray(
+      s.tables,
+      `${sourcePath}.tables`,
+      'tables must be an array of non-empty strings',
+      errors,
+    );
+    if (Array.isArray(s.tables)) {
+      for (const [tableIndex, tableName] of s.tables.entries()) {
+        if (typeof tableName === 'string' && tableName.trim() && !isSafeContextSqlIdentifier(tableName.trim())) {
+          errors.push({
+            path: `${sourcePath}.tables.${tableIndex}`,
+            message: 'table names must be simple SQL identifiers',
+          });
+        }
+      }
+    }
+
+    if (s.query !== undefined && typeof s.query !== 'string') {
+      errors.push({ path: `${sourcePath}.query`, message: 'query must be a string' });
+    }
+    if (s.function !== undefined && typeof s.function !== 'string') {
+      errors.push({ path: `${sourcePath}.function`, message: 'function must be a string' });
+    }
+
+    if (s.type === 'd1_table' && (!Array.isArray(s.tables) || s.tables.length === 0)) {
+      errors.push({ path: `${sourcePath}.tables`, message: 'd1_table context sources must declare tables' });
+    }
+    if (s.type === 'd1_query' && (typeof s.query !== 'string' || !s.query.trim())) {
+      errors.push({ path: `${sourcePath}.query`, message: 'd1_query context sources must declare query' });
+    } else if (s.type === 'd1_query' && typeof s.query === 'string') {
+      if (!isSelectOnlyContextQuery(s.query)) {
+        errors.push({ path: `${sourcePath}.query`, message: 'd1_query context source query must be SELECT-only' });
+      }
+      if (s.query.includes('?')) {
+        errors.push({
+          path: `${sourcePath}.query`,
+          message: 'd1_query context source query must use named placeholders',
+        });
+      }
+      if (!/[:@$]user_id\b/i.test(s.query)) {
+        errors.push({
+          path: `${sourcePath}.query`,
+          message: 'd1_query context source query must include :user_id',
+        });
+      }
+    }
+    if (s.type === 'function') {
+      const functionName = typeof s.function === 'string' ? s.function.trim() : '';
+      if (!functionName) {
+        errors.push({ path: `${sourcePath}.function`, message: 'function context sources must declare function' });
+      } else if (Object.keys(functions).length > 0 && !functions[functionName]) {
+        warnings.push(`Context source "${id || index}" references missing function "${functionName}".`);
+      }
+    }
+
+    if (s.redactions !== undefined) {
+      if (!Array.isArray(s.redactions)) {
+        errors.push({ path: `${sourcePath}.redactions`, message: 'redactions must be an array' });
+      } else {
+        s.redactions.forEach((redaction, redactionIndex) => {
+          const redactionPath = `${sourcePath}.redactions.${redactionIndex}`;
+          if (!redaction || typeof redaction !== 'object' || Array.isArray(redaction)) {
+            errors.push({ path: redactionPath, message: 'redaction must be an object' });
+            return;
+          }
+          const r = redaction as Record<string, unknown>;
+          for (const key of ['field', 'pattern', 'replacement']) {
+            if (r[key] !== undefined && typeof r[key] !== 'string') {
+              errors.push({ path: `${redactionPath}.${key}`, message: `${key} must be a string` });
+            }
+          }
+        });
+      }
+    }
+  });
+
+  return ids;
+}
+
+function validateWidgetAgentActions(
+  value: unknown,
+  path: string,
+  functions: Record<string, unknown>,
+  errors: ManifestValidationError[],
+  warnings: string[],
+): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    errors.push({ path, message: 'agent_actions must be an array' });
+    return;
+  }
+
+  const seen = new Set<string>();
+  value.forEach((action, index) => {
+    const actionPath = `${path}.${index}`;
+    if (!action || typeof action !== 'object' || Array.isArray(action)) {
+      errors.push({ path: actionPath, message: 'agent action must be an object' });
+      return;
+    }
+
+    const a = action as Record<string, unknown>;
+    const id = typeof a.id === 'string' ? a.id.trim() : '';
+    if (!id) {
+      errors.push({ path: `${actionPath}.id`, message: 'id is required and must be a string' });
+    } else if (seen.has(id)) {
+      errors.push({ path: `${actionPath}.id`, message: `duplicate agent action id "${id}"` });
+    } else {
+      seen.add(id);
+    }
+
+    if (typeof a.label !== 'string' || !a.label.trim()) {
+      errors.push({ path: `${actionPath}.label`, message: 'label is required and must be a string' });
+    }
+    if (a.description !== undefined && typeof a.description !== 'string') {
+      errors.push({ path: `${actionPath}.description`, message: 'description must be a string' });
+    }
+    if (a.mode !== 'read' && a.mode !== 'write' && a.mode !== 'ui') {
+      errors.push({ path: `${actionPath}.mode`, message: 'mode must be one of read, write, or ui' });
+    }
+    if (
+      a.confirmation !== undefined &&
+      a.confirmation !== 'none' &&
+      a.confirmation !== 'user' &&
+      a.confirmation !== 'high_risk'
+    ) {
+      errors.push({
+        path: `${actionPath}.confirmation`,
+        message: 'confirmation must be one of none, user, or high_risk',
+      });
+    }
+    if (a.mode === 'write' && a.confirmation === undefined) {
+      warnings.push(`Agent action "${id || index}" is write-mode but has no confirmation policy.`);
+    }
+    if (
+      a.args_schema !== undefined &&
+      (!a.args_schema || typeof a.args_schema !== 'object' || Array.isArray(a.args_schema))
+    ) {
+      errors.push({ path: `${actionPath}.args_schema`, message: 'args_schema must be an object' });
+    }
+    if (a.expected_result !== undefined && typeof a.expected_result !== 'string') {
+      errors.push({ path: `${actionPath}.expected_result`, message: 'expected_result must be a string' });
+    }
+
+    if (a.mcp !== undefined) {
+      if (!a.mcp || typeof a.mcp !== 'object' || Array.isArray(a.mcp)) {
+        errors.push({ path: `${actionPath}.mcp`, message: 'mcp must be an object' });
+      } else {
+        const mcp = a.mcp as Record<string, unknown>;
+        const functionName = typeof mcp.function === 'string' ? mcp.function.trim() : '';
+        if (!functionName) {
+          errors.push({ path: `${actionPath}.mcp.function`, message: 'function is required and must be a string' });
+        } else if (Object.keys(functions).length > 0 && !functions[functionName]) {
+          warnings.push(`Agent action "${id || index}" references missing MCP function "${functionName}".`);
+        }
+        if (
+          mcp.args_template !== undefined &&
+          (!mcp.args_template || typeof mcp.args_template !== 'object' ||
+            Array.isArray(mcp.args_template))
+        ) {
+          errors.push({ path: `${actionPath}.mcp.args_template`, message: 'args_template must be an object' });
+        }
+      }
+    }
+
+    if (a.ui !== undefined) {
+      if (!a.ui || typeof a.ui !== 'object' || Array.isArray(a.ui)) {
+        errors.push({ path: `${actionPath}.ui`, message: 'ui must be an object' });
+      } else {
+        const ui = a.ui as Record<string, unknown>;
+        if (ui.command !== undefined && typeof ui.command !== 'string') {
+          errors.push({ path: `${actionPath}.ui.command`, message: 'command must be a string' });
+        }
+        if (ui.component_id !== undefined && typeof ui.component_id !== 'string') {
+          errors.push({ path: `${actionPath}.ui.component_id`, message: 'component_id must be a string' });
+        }
+        if (
+          ui.args_template !== undefined &&
+          (!ui.args_template || typeof ui.args_template !== 'object' ||
+            Array.isArray(ui.args_template))
+        ) {
+          errors.push({ path: `${actionPath}.ui.args_template`, message: 'args_template must be an object' });
+        }
+      }
+    }
+  });
+}
+
 function validateManifestWidgets(
   value: unknown,
   functions: Record<string, unknown>,
+  contextSourceIds: Set<string>,
   errors: ManifestValidationError[],
   warnings: string[],
 ): void {
@@ -773,10 +1050,23 @@ function validateManifestWidgets(
       });
     }
 
-    for (const key of ['description', 'ui_function', 'data_function', 'data_tool']) {
+    for (
+      const key of [
+        'description',
+        'ui_function',
+        'data_function',
+        'data_tool',
+        'context_function',
+        'actions_function',
+      ]
+    ) {
       if (w[key] !== undefined && typeof w[key] !== 'string') {
         errors.push({ path: `${widgetPath}.${key}`, message: `${key} must be a string` });
       }
+    }
+
+    if (w.agentic !== undefined && typeof w.agentic !== 'boolean') {
+      errors.push({ path: `${widgetPath}.agentic`, message: 'agentic must be a boolean' });
     }
 
     if (
@@ -791,6 +1081,27 @@ function validateManifestWidgets(
     }
 
     validateWidgetDependencies(w.dependencies, `${widgetPath}.dependencies`, errors);
+    validateOptionalStringArray(
+      w.context_sources,
+      `${widgetPath}.context_sources`,
+      'context_sources must be an array of non-empty strings',
+      errors,
+    );
+
+    if (Array.isArray(w.context_sources)) {
+      for (const sourceId of w.context_sources) {
+        if (typeof sourceId === 'string' && sourceId.trim() && !contextSourceIds.has(sourceId.trim())) {
+          warnings.push(`Widget "${widgetId || index}" references unknown context source "${sourceId.trim()}".`);
+        }
+      }
+    }
+    validateWidgetAgentActions(
+      w.agent_actions,
+      `${widgetPath}.agent_actions`,
+      functions,
+      errors,
+      warnings,
+    );
 
     const uiFunction = typeof w.ui_function === 'string' && w.ui_function.trim()
       ? w.ui_function.trim()
@@ -810,6 +1121,30 @@ function validateManifestWidgets(
     }
     if (dataFunction && Object.keys(functions).length > 0 && !functions[dataFunction]) {
       warnings.push(`Widget "${widgetId}" references missing data function "${dataFunction}".`);
+    }
+
+    const contextFunction = typeof w.context_function === 'string' && w.context_function.trim()
+      ? w.context_function.trim()
+      : null;
+    const actionsFunction = typeof w.actions_function === 'string' && w.actions_function.trim()
+      ? w.actions_function.trim()
+      : null;
+    if (contextFunction && Object.keys(functions).length > 0 && !functions[contextFunction]) {
+      warnings.push(`Widget "${widgetId}" references missing context function "${contextFunction}".`);
+    }
+    if (actionsFunction && Object.keys(functions).length > 0 && !functions[actionsFunction]) {
+      warnings.push(`Widget "${widgetId}" references missing actions function "${actionsFunction}".`);
+    }
+    if (
+      w.agentic === true &&
+      !contextFunction &&
+      !actionsFunction &&
+      (!Array.isArray(w.context_sources) || w.context_sources.length === 0) &&
+      (!Array.isArray(w.agent_actions) || w.agent_actions.length === 0)
+    ) {
+      warnings.push(
+        `Widget "${widgetId}" declares agentic mode but has no context or action source.`,
+      );
     }
 
     if (w.cards === undefined) return;
@@ -1300,7 +1635,19 @@ export function validateManifest(input: unknown): ManifestValidationResult {
       !Array.isArray(manifest.functions)
       ? manifest.functions as Record<string, unknown>
       : {};
-  validateManifestWidgets(manifest.widgets, functionsForWidgetValidation, errors, warnings);
+  const contextSourceIds = validateManifestContextSources(
+    manifest.context_sources,
+    functionsForWidgetValidation,
+    errors,
+    warnings,
+  );
+  validateManifestWidgets(
+    manifest.widgets,
+    functionsForWidgetValidation,
+    contextSourceIds,
+    errors,
+    warnings,
+  );
   validateManifestHttp(manifest.http, functionsForWidgetValidation, errors);
   validateManifestRoutines(manifest.routines, functionsForWidgetValidation, errors, warnings);
 

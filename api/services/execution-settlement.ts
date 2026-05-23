@@ -9,7 +9,7 @@ import {
   getFreeCallsScope,
   LIGHT_PER_DOLLAR_DESKTOP,
 } from "../../shared/types/index.ts";
-import type { McpCallLogEntry } from "./call-logger.ts";
+import type { McpCallLogEntry, WidgetActionCallMetadata } from "./call-logger.ts";
 import { logMcpCall } from "./call-logger.ts";
 import type { GpuExecuteResult } from "./gpu/executor.ts";
 import { settleGpuExecution } from "./gpu/billing.ts";
@@ -213,6 +213,7 @@ export interface LogExecutionResultParams {
   cloudOwnerSponsored?: boolean;
   routineContext?: RoutineTraceContext | null;
   toolInvocationId?: string;
+  widgetAction?: WidgetActionCallMetadata;
   gpuType?: string;
   gpuExitCode?: string;
   gpuDurationMs?: number;
@@ -237,6 +238,7 @@ export interface SettleAndLogGpuExecutionParams {
   userQuery?: string;
   source?: McpCallLogEntry["source"];
   routineContext?: RoutineTraceContext | null;
+  widgetAction?: WidgetActionCallMetadata;
 }
 
 export interface SettleAndLogAppExecutionParams {
@@ -261,6 +263,7 @@ export interface SettleAndLogAppExecutionParams {
   runtimePricingPreflight?: RuntimeAppCallPricingPreflight | null;
   runtimeCloudSettlement?: RuntimeCloudSettlementForAppCall | null;
   routineContext?: RoutineTraceContext | null;
+  widgetAction?: WidgetActionCallMetadata;
 }
 
 interface ExecutionSettlementDeps {
@@ -967,6 +970,7 @@ export function logExecutionResult(
     routineRunId: params.routineContext?.routineRunId,
     traceId: params.routineContext?.traceId,
     toolInvocationId: params.toolInvocationId,
+    widgetAction: params.widgetAction,
     gpuType: params.gpuType,
     gpuExitCode: params.gpuExitCode,
     gpuDurationMs: params.gpuDurationMs,
@@ -1088,6 +1092,7 @@ export async function settleAndLogAppExecution(
     cloudPayerUserId: settlement.infraPayerUserId || undefined,
     cloudOwnerSponsored: settlement.ownerSponsoredInfra,
     routineContext: params.routineContext,
+    widgetAction: params.widgetAction,
   }, deps);
 
   const routineStep = routineContribution ? await routineContribution : null;
@@ -1191,6 +1196,7 @@ export async function settleAndLogGpuExecution(
     gpuDeveloperFeeLight: settlement?.developerFeeChargedLight || 0,
     gpuFailurePolicy: settlement?.failurePolicy,
     routineContext: params.routineContext,
+    widgetAction: params.widgetAction,
   }, deps);
 
   const routineStep = routineContribution ? await routineContribution : null;

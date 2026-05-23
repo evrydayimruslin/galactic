@@ -1,4 +1,5 @@
 import type { ResolvedInferenceRoute } from "./inference-route.ts";
+import { BYOK_PROVIDERS, isActiveBYOKProvider } from "../../shared/types/index.ts";
 import { resolvePlatformInferenceModel } from "./platform-inference-models.ts";
 
 const DEFAULT_REFERER = "https://ultralight-api.rgn4jz429m.workers.dev";
@@ -40,6 +41,12 @@ export function selectInferenceModel(
 
 export function getInferenceChatCompletionsUrl(route: ResolvedInferenceRoute): string {
   return `${route.baseUrl.replace(/\/$/, "")}/chat/completions`;
+}
+
+export function supportsInferenceRealtime(route: ResolvedInferenceRoute): boolean {
+  return route.billingMode === "byok" &&
+    isActiveBYOKProvider(route.provider) &&
+    BYOK_PROVIDERS[route.provider].capabilities.realtime === true;
 }
 
 export function buildInferenceHeaders(

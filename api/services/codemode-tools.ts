@@ -16,6 +16,9 @@ import type {
 } from '../../shared/contracts/routine.ts';
 import type {
   CommandCardDeclaration,
+  WidgetActionDeclaration,
+  WidgetContextRedaction,
+  WidgetContextSourceDeclaration,
   WidgetDeclaration,
   WidgetDependencyDeclaration,
 } from '../../shared/contracts/widget.ts';
@@ -38,6 +41,7 @@ export interface AppForCodemode {
   manifest: {
     functions?: Record<string, ManifestFunction>;
     widgets?: WidgetDeclaration[];
+    context_sources?: WidgetContextSourceDeclaration[];
     routines?: RoutineDeclaration[];
   };
 }
@@ -72,7 +76,29 @@ export interface WidgetIndexEntry {
   uiFunction: string;
   dataFunction: string;
   dependencies?: WidgetDependencyDeclaration[];
+  agentic?: boolean;
+  contextFunction?: string;
+  actionsFunction?: string;
+  contextSources?: string[];
+  agentActions?: WidgetActionDeclaration[];
   cards: WidgetCardIndexEntry[];
+}
+
+export interface ContextSourceIndexEntry {
+  id: string;
+  appId: string;
+  appSlug: string;
+  appName: string;
+  label: string;
+  description?: string;
+  type: WidgetContextSourceDeclaration['type'];
+  access: 'read';
+  searchable?: boolean;
+  defaultForWidgets?: string[];
+  tables?: string[];
+  query?: string;
+  function?: string;
+  redactions?: WidgetContextRedaction[];
 }
 
 export interface RoutineIndexEntry {
@@ -153,6 +179,11 @@ export function buildWidgetIndexForApp(app: AppForCodemode): WidgetIndexEntry[] 
       uiFunction: widgetUiFunction(widget),
       dataFunction: widgetDataFunction(widget),
       ...(widget.dependencies?.length ? { dependencies: widget.dependencies } : {}),
+      ...(typeof widget.agentic === 'boolean' ? { agentic: widget.agentic } : {}),
+      ...(widget.context_function ? { contextFunction: widget.context_function } : {}),
+      ...(widget.actions_function ? { actionsFunction: widget.actions_function } : {}),
+      ...(widget.context_sources?.length ? { contextSources: widget.context_sources } : {}),
+      ...(widget.agent_actions?.length ? { agentActions: widget.agent_actions } : {}),
       cards: (widget.cards || []).map((card) => normalizeWidgetCard(widget, card)),
     });
   }
@@ -175,6 +206,32 @@ export function buildWidgetIndexForApp(app: AppForCodemode): WidgetIndexEntry[] 
   }
 
   return widgets;
+}
+
+export function buildContextSourceIndexForApp(app: AppForCodemode): ContextSourceIndexEntry[] {
+  const sources: ContextSourceIndexEntry[] = [];
+  for (const source of app.manifest.context_sources || []) {
+    if (!source?.id || !source.label || source.access !== 'read') continue;
+    sources.push({
+      id: source.id,
+      appId: app.id,
+      appSlug: app.slug,
+      appName: app.name,
+      label: source.label,
+      ...(source.description ? { description: source.description } : {}),
+      type: source.type,
+      access: 'read',
+      ...(typeof source.searchable === 'boolean' ? { searchable: source.searchable } : {}),
+      ...(source.default_for_widgets?.length
+        ? { defaultForWidgets: source.default_for_widgets }
+        : {}),
+      ...(source.tables?.length ? { tables: source.tables } : {}),
+      ...(source.query ? { query: source.query } : {}),
+      ...(source.function ? { function: source.function } : {}),
+      ...(source.redactions?.length ? { redactions: source.redactions } : {}),
+    });
+  }
+  return sources;
 }
 
 export function buildRoutineIndexForApp(app: AppForCodemode): RoutineIndexEntry[] {
@@ -315,11 +372,13 @@ export function buildJsonSchemaDescriptors(apps: AppForCodemode[]): {
   descriptors: Record<string, JsonSchemaToolDescriptor>;
   toolMap: Record<string, ToolMapping>;
   widgets: WidgetIndexEntry[];
+  contextSources: ContextSourceIndexEntry[];
   routines: RoutineIndexEntry[];
 } {
   const descriptors: Record<string, JsonSchemaToolDescriptor> = {};
   const toolMap: Record<string, ToolMapping> = {};
   const widgets: WidgetIndexEntry[] = [];
+  const contextSources: ContextSourceIndexEntry[] = [];
   const routines: RoutineIndexEntry[] = [];
 
   for (const app of apps) {
@@ -353,6 +412,7 @@ export function buildJsonSchemaDescriptors(apps: AppForCodemode[]): {
     }
 
     widgets.push(...buildWidgetIndexForApp(app));
+    contextSources.push(...buildContextSourceIndexForApp(app));
     routines.push(...buildRoutineIndexForApp(app));
   }
 
@@ -378,7 +438,7 @@ export function buildJsonSchemaDescriptors(apps: AppForCodemode[]): {
     },
   };
 
-  return { descriptors, toolMap, widgets, routines };
+  return { descriptors, toolMap, widgets, contextSources, routines };
 }
 
 // ── Generate TypeScript Types ──

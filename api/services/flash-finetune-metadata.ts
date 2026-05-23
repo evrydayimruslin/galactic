@@ -40,6 +40,7 @@ export const FLASH_CAPABILITIES = [
   "json_structured_output",
   "multimodal_context",
   "project_context_conditioning",
+  "widget_context_conditioning",
   "heuristic_fallback",
 ] as const;
 
@@ -98,6 +99,8 @@ export interface FlashInputFeatureInput {
   magnifiedData?: unknown;
   conversationSearch?: unknown;
   contextQuery?: unknown;
+  activeWidgetContexts?: unknown;
+  activeWidgetContextBlock?: unknown;
 }
 
 export interface FlashInputFeatures extends JsonRecord {
@@ -115,6 +118,9 @@ export interface FlashInputFeatures extends JsonRecord {
   magnified_context_bytes: number;
   conversation_search_requested: boolean;
   context_query_present: boolean;
+  has_active_widget_context: boolean;
+  active_widget_context_count: number;
+  active_widget_context_bytes: number;
 }
 
 export interface FlashInvocationMetadata extends JsonRecord {
@@ -293,6 +299,10 @@ export function buildFlashInputFeatures(
 ): FlashInputFeatures {
   const files = asArray(input.files);
   const magnifiedData = asRecord(input.magnifiedData);
+  const activeWidgetContexts = asArray(input.activeWidgetContexts);
+  const activeWidgetContextBlock = typeof input.activeWidgetContextBlock === "string"
+    ? input.activeWidgetContextBlock
+    : "";
 
   return {
     has_files: files.length > 0,
@@ -311,6 +321,10 @@ export function buildFlashInputFeatures(
     magnified_context_bytes: sumStringBytes(Object.values(magnifiedData)),
     conversation_search_requested: Boolean(input.conversationSearch),
     context_query_present: hasNonEmptyText(input.contextQuery),
+    has_active_widget_context: activeWidgetContexts.length > 0 ||
+      hasNonEmptyText(activeWidgetContextBlock),
+    active_widget_context_count: activeWidgetContexts.length,
+    active_widget_context_bytes: byteLength(activeWidgetContextBlock),
   };
 }
 
@@ -446,6 +460,9 @@ function inferInputFeatureCapabilities(
   if (features.has_project_context === true) {
     capabilities.push("project_context_conditioning");
   }
+  if (features.has_active_widget_context === true) {
+    capabilities.push("widget_context_conditioning");
+  }
   return capabilities;
 }
 
@@ -465,6 +482,8 @@ function isFlashInputFeatureInput(
     "magnifiedData",
     "conversationSearch",
     "contextQuery",
+    "activeWidgetContexts",
+    "activeWidgetContextBlock",
   ].some((key) => key in input);
 }
 

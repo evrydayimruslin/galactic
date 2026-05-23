@@ -55,7 +55,7 @@ export interface VersionMetadata {
     trust?: VersionTrustMetadata;
 }
 export interface VersionTrustSignature {
-    algorithm: 'HMAC-SHA256';
+    algorithm: "HMAC-SHA256";
     signer: string;
     signed_at: string;
     signature: string;
@@ -65,7 +65,7 @@ export interface VersionTrustMetadata {
     schema_version: 1;
     app_id: string;
     version: string;
-    runtime: 'deno' | 'gpu' | string;
+    runtime: "deno" | "gpu" | string;
     manifest_hash: string | null;
     artifact_hash: string;
     artifact_hashes: Record<string, string>;
@@ -76,7 +76,7 @@ export interface VersionTrustMetadata {
     per_user_secrets: string[];
     signature: VersionTrustSignature;
 }
-export type AppGpuStatus = 'building' | 'benchmarking' | 'live' | 'build_failed' | 'benchmark_failed' | 'build_config_invalid';
+export type AppGpuStatus = "building" | "benchmarking" | "live" | "build_failed" | "benchmark_failed" | "build_config_invalid";
 export interface App {
     id: string;
     owner_id: string;
@@ -127,8 +127,8 @@ export interface App {
     supabase_enabled: boolean;
     supabase_config_id: string | null;
     manifest: string | null;
-    app_type: 'mcp' | 'skill' | null;
-    runtime: 'deno' | 'gpu' | null;
+    app_type: "mcp" | "skill" | null;
+    runtime: "deno" | "gpu" | null;
     gpu_type: string | null;
     gpu_status: AppGpuStatus | null;
     gpu_endpoint_id: string | null;
@@ -155,7 +155,7 @@ export interface App {
     last_healed_at: string | null;
     auto_heal_enabled: boolean;
     d1_database_id: string | null;
-    d1_status: 'pending' | 'provisioning' | 'ready' | 'error' | null;
+    d1_status: "pending" | "provisioning" | "ready" | "error" | null;
     d1_provisioned_at: string | null;
     d1_last_migration_version: number;
     created_at: string;
@@ -195,7 +195,7 @@ export interface PermissionDeclaration {
 }
 export interface BuildLogEntry {
     time: string;
-    level: 'info' | 'warn' | 'error' | 'success';
+    level: "info" | "warn" | "error" | "success";
     message: string;
 }
 export interface EnvVarLimits {
@@ -205,11 +205,11 @@ export interface EnvVarLimits {
     reserved_prefixes: string[];
 }
 export interface EnvSchemaEntry {
-    scope: 'universal' | 'per_user';
+    scope: "universal" | "per_user";
     description?: string;
     required?: boolean;
     label?: string;
-    input?: 'text' | 'password' | 'email' | 'number' | 'url' | 'textarea';
+    input?: "text" | "password" | "email" | "number" | "url" | "textarea";
     placeholder?: string;
     help?: string;
 }
@@ -250,7 +250,7 @@ export interface Execution {
     started_at: string;
     ended_at: string | null;
     duration_ms: number | null;
-    ai_provider: 'platform' | 'byok' | null;
+    ai_provider: "platform" | "byok" | null;
     ai_model: string | null;
     ai_tokens_input: number | null;
     ai_tokens_output: number | null;
@@ -265,7 +265,7 @@ export interface Execution {
 }
 export interface LogEntry {
     time: string;
-    level: 'log' | 'error' | 'warn' | 'info';
+    level: "log" | "error" | "warn" | "info";
     message: string;
 }
 export interface SDKContext {
@@ -277,21 +277,21 @@ export interface SDKContext {
 }
 export type AIContentPart = AITextPart | AIFilePart;
 export interface AITextPart {
-    type: 'text';
+    type: "text";
     text: string;
 }
 export interface AIFilePart {
-    type: 'file';
+    type: "file";
     data: string;
     filename?: string;
 }
 export interface AIRequest {
     model?: string;
     messages: Array<{
-        role: 'system' | 'user' | 'assistant';
+        role: "system" | "user" | "assistant";
         content: string | AIContentPart[];
         cache_control?: {
-            type: 'ephemeral';
+            type: "ephemeral";
         };
     }>;
     temperature?: number;
@@ -312,13 +312,155 @@ export interface WidgetDeclaration {
     poll_interval_s?: number;
     dependencies?: WidgetDependencyDeclaration[];
     cards?: CommandCardDeclaration[];
+    agentic?: boolean;
+    context_function?: string;
+    actions_function?: string;
+    context_sources?: WidgetContextSourceRef[];
+    agent_actions?: WidgetActionDeclaration[];
 }
-export type CommandCardRenderMode = 'native';
-export type CommandCardKind = 'metric' | 'list' | 'timeline' | 'sparkline' | 'progress' | 'summary' | 'composite';
+export type WidgetContextSourceRef = string;
+export type WidgetContextSourceType = "d1_table" | "d1_query" | "function";
+export interface WidgetContextSourceDeclaration {
+    id: string;
+    label: string;
+    description?: string;
+    type: WidgetContextSourceType;
+    access: "read";
+    searchable?: boolean;
+    default_for_widgets?: string[];
+    tables?: string[];
+    query?: string;
+    function?: string;
+    redactions?: WidgetContextRedaction[];
+}
+export interface WidgetContextRedaction {
+    field?: string;
+    pattern?: string;
+    replacement?: string;
+}
+export type WidgetActionMode = "read" | "write" | "ui";
+export type WidgetConfirmationPolicy = "none" | "user" | "high_risk";
+export interface WidgetMcpActionBinding {
+    function: string;
+    args_template?: Record<string, unknown>;
+}
+export interface WidgetUiActionBinding {
+    command?: string;
+    component_id?: string;
+    args_template?: Record<string, unknown>;
+}
+export interface WidgetActionDeclaration {
+    id: string;
+    label: string;
+    description?: string;
+    mode: WidgetActionMode;
+    args_schema?: Record<string, unknown>;
+    confirmation?: WidgetConfirmationPolicy;
+    mcp?: WidgetMcpActionBinding;
+    ui?: WidgetUiActionBinding;
+    expected_result?: string;
+}
+export interface WidgetDataRef {
+    type?: string;
+    id?: string;
+    label?: string;
+    table?: string;
+    field?: string;
+    value?: unknown;
+}
+export interface WidgetVisibleComponent {
+    id: string;
+    type?: string;
+    label?: string;
+    purpose?: string;
+    data_refs?: WidgetDataRef[];
+    actions?: string[];
+    state?: Record<string, unknown>;
+}
+export interface WidgetPendingEdit {
+    field: string;
+    label?: string;
+    value?: unknown;
+    dirty?: boolean;
+    entity?: WidgetDataRef;
+}
+export interface WidgetStateSnapshot {
+    surface_id?: string;
+    app_id?: string;
+    app_slug?: string;
+    widget_id: string;
+    title?: string;
+    summary?: string;
+    current_view?: string;
+    visible_components?: WidgetVisibleComponent[];
+    visible_data_refs?: WidgetDataRef[];
+    selected_entities?: WidgetDataRef[];
+    pending_edits?: WidgetPendingEdit[];
+    enabled_actions?: string[];
+    errors?: string[];
+    updated_at?: string;
+}
+export type WidgetSurfaceEventKind = "user" | "agent" | "data" | "navigation" | "error" | "system";
+export interface WidgetSurfaceEvent {
+    id?: string;
+    surface_id?: string;
+    widget_id?: string;
+    kind: WidgetSurfaceEventKind;
+    action_id?: string;
+    turn_id?: string;
+    label?: string;
+    input?: Record<string, unknown>;
+    result?: unknown;
+    error?: string;
+    snapshot?: WidgetStateSnapshot;
+    created_at?: string;
+}
+export type WidgetSurfaceKind = "inline" | "window" | "command_card";
+export type WidgetSurfaceStatus = "opening" | "ready" | "stale" | "closed";
+export interface ActiveWidgetContext {
+    surfaceId: string;
+    kind?: WidgetSurfaceKind;
+    appId: string;
+    appSlug: string;
+    appName: string;
+    widgetId: string;
+    widgetName?: string;
+    title?: string;
+    context?: Record<string, string>;
+    status?: WidgetSurfaceStatus;
+    snapshot?: WidgetStateSnapshot | null;
+    actions?: WidgetActionDeclaration[];
+    recentEvents?: WidgetSurfaceEvent[];
+    recentEventSummary?: string;
+    recentEventCount?: number;
+    latestDataPayload?: Record<string, unknown> | null;
+    updatedAt?: number;
+}
+export interface WidgetActionInvocation {
+    surface_id: string;
+    widget_id: string;
+    action_id: string;
+    args?: Record<string, unknown>;
+    turn_id?: string;
+    source?: "user" | "agent" | "system";
+}
+export interface WidgetActionResult {
+    surface_id?: string;
+    widget_id?: string;
+    action_id: string;
+    turn_id?: string;
+    ok: boolean;
+    data?: unknown;
+    error?: string;
+    snapshot?: WidgetStateSnapshot;
+    event?: WidgetSurfaceEvent;
+}
+export type CommandCardRenderMode = "native";
+export type CommandCardKind = "metric" | "list" | "timeline" | "sparkline" | "progress" | "summary" | "composite";
 export interface WidgetDependencyDeclaration {
     app: string;
     functions: string[];
-    access?: 'read';
+    access?: "read";
 }
 export interface CommandCardDeclaration {
     id: string;
@@ -370,7 +512,7 @@ export interface WidgetAppResponse {
 export interface CommandCardDataPayload {
     card_id?: string;
     meta?: Partial<WidgetMeta> & {
-        status?: 'live' | 'paused' | 'error' | string;
+        status?: "live" | "paused" | "error" | string;
         accent?: string;
         cost_per_min?: number;
     };
@@ -381,17 +523,17 @@ export interface CommandCardDataPayload {
 }
 export type CommandCardBody = CommandMetricCardBody | CommandListCardBody | CommandTimelineCardBody | CommandSparklineCardBody | CommandProgressCardBody | CommandSummaryCardBody | CommandCompositeCardBody;
 export interface CommandMetricCardBody {
-    kind: 'metric';
+    kind: "metric";
     metric: string | number;
     label?: string;
     delta?: string;
 }
 export interface CommandListCardBody {
-    kind: 'list';
+    kind: "list";
     rows: Array<Array<string | number | boolean | null>>;
 }
 export interface CommandTimelineCardBody {
-    kind: 'timeline';
+    kind: "timeline";
     rows: Array<{
         time?: string;
         title: string;
@@ -400,24 +542,24 @@ export interface CommandTimelineCardBody {
     }>;
 }
 export interface CommandSparklineCardBody {
-    kind: 'sparkline';
+    kind: "sparkline";
     metric?: string | number;
     label?: string;
     points: number[];
 }
 export interface CommandProgressCardBody {
-    kind: 'progress';
+    kind: "progress";
     value: number;
     max?: number;
     label?: string;
 }
 export interface CommandSummaryCardBody {
-    kind: 'summary';
+    kind: "summary";
     title?: string;
     lines: string[];
 }
 export interface CommandCompositeCardBody {
-    kind: 'composite';
+    kind: "composite";
     children: Array<{
         app_id?: string;
         widget_id: string;
@@ -452,7 +594,7 @@ export interface UploadResponse {
     build_logs: BuildLogEntry[];
     d1?: {
         provisioned: boolean;
-        status: 'ready' | 'failed' | 'skipped';
+        status: "ready" | "failed" | "skipped";
         database_id?: string;
         migrations_applied: number;
         migrations_skipped: number;
@@ -488,7 +630,7 @@ export interface AppPermission {
     permission: string;
     granted_at: string;
     expires_at: string | null;
-    duration: 'perpetual' | 'session' | '1h' | '24h' | '7d';
+    duration: "perpetual" | "session" | "1h" | "24h" | "7d";
     budget_limit: number | null;
     budget_used: number;
     last_used_at: string | null;
@@ -502,7 +644,7 @@ export interface GrantConstraints {
     /** Max calls allowed before access is suspended. Resets according to budget_period. */
     budget_limit?: number | null;
     /** Rolling period for budget reset. null = lifetime budget (never resets). */
-    budget_period?: 'hour' | 'day' | 'week' | 'month' | null;
+    budget_period?: "hour" | "day" | "week" | "month" | null;
     /** ISO timestamp — permission auto-expires after this date */
     expires_at?: string | null;
     /** Per-parameter value whitelists. Keys are parameter names, values are arrays of allowed values. null = unrestricted. */
@@ -561,7 +703,7 @@ export interface AppPricingConfig {
     /** Default number of free calls per user before pricing kicks in. 0 = charge from first call. */
     default_free_calls?: number;
     /** Whether free call quota is counted per-app (shared) or per-function (separate). Default: 'function'. */
-    free_calls_scope?: 'app' | 'function';
+    free_calls_scope?: "app" | "function";
     /** Per-function price overrides. Value is Light (legacy number) or FunctionPricing object. */
     functions?: Record<string, number | FunctionPricing>;
     /** Product catalog for in-app purchases via ultralight.charge(). */
@@ -601,19 +743,19 @@ export declare function getFreeCalls(pricingConfig: AppPricingConfig | null | un
  * 'app' = single shared counter across all functions.
  * 'function' = separate counter per function (default).
  */
-export declare function getFreeCallsScope(pricingConfig: AppPricingConfig | null | undefined): 'app' | 'function';
+export declare function getFreeCallsScope(pricingConfig: AppPricingConfig | null | undefined): "app" | "function";
 /**
  * Get the GPU pricing display mode for an app.
  * Returns null if no GPU pricing is configured.
  */
-export declare function getGpuPricingMode(gpuPricingConfig: Record<string, unknown> | null | undefined): 'per_call' | 'per_unit' | 'per_duration' | null;
+export declare function getGpuPricingMode(gpuPricingConfig: Record<string, unknown> | null | undefined): "per_call" | "per_unit" | "per_duration" | null;
 /**
  * Get a human-readable label for the GPU pricing unit.
  * Returns "call" for per_call, the unit_label for per_unit, "second" for per_duration.
  */
 export declare function getGpuPricingUnitLabel(gpuPricingConfig: Record<string, unknown> | null | undefined): string;
-export type ContentType = 'page' | 'memory_md' | 'library_md';
-export type ContentVisibility = 'public' | 'private' | 'shared';
+export type ContentType = "page" | "memory_md" | "library_md";
+export type ContentVisibility = "public" | "private" | "shared";
 /** A row from the content table — indexes pages, memory.md, library.md */
 export interface ContentRow {
     id: string;
@@ -639,7 +781,7 @@ export interface ContentShare {
     content_id: string;
     shared_with_email: string;
     shared_with_user_id: string | null;
-    access_level: 'read' | 'readwrite';
+    access_level: "read" | "readwrite";
     created_at: string;
     expires_at: string | null;
 }
@@ -651,11 +793,11 @@ export interface MemoryShare {
     key_pattern: string;
     shared_with_email: string;
     shared_with_user_id: string | null;
-    access_level: 'read' | 'write' | 'readwrite';
+    access_level: "read" | "write" | "readwrite";
     created_at: string;
     expires_at: string | null;
 }
-export type Tier = 'free' | 'fun' | 'pro' | 'scale' | 'enterprise';
+export type Tier = "free" | "fun" | "pro" | "scale" | "enterprise";
 /** Light symbol character for display. */
 export declare const LIGHT_SYMBOL = "\u2726";
 /** Canonical Light/$ reference for internal USD-denominated costs and copy. */
@@ -819,7 +961,7 @@ export interface QueryOptions {
     filter?: (value: unknown) => boolean;
     sort?: {
         field: string;
-        order: 'asc' | 'desc';
+        order: "asc" | "desc";
     };
     limit?: number;
     offset?: number;
@@ -865,7 +1007,7 @@ export interface GenerationResult {
     warnings: string[];
 }
 export interface GenerationError {
-    phase: 'parse' | 'generate_skills' | 'validate' | 'embed';
+    phase: "parse" | "generate_skills" | "validate" | "embed";
     message: string;
     line?: number;
     suggestion?: string;
@@ -945,7 +1087,7 @@ export interface MCPToolCallResponse {
     isError?: boolean;
 }
 export interface MCPContent {
-    type: 'text' | 'image' | 'audio' | 'resource' | 'resource_link';
+    type: "text" | "image" | "audio" | "resource" | "resource_link";
     text?: string;
     data?: string;
     mimeType?: string;
@@ -1012,7 +1154,7 @@ export interface BYOKProviderInfo {
     id: ActiveBYOKProvider;
     name: string;
     description: string;
-    protocol: 'openai-compatible';
+    protocol: "openai-compatible";
     baseUrl: string;
     defaultModel: string;
     models: BYOKModel[];
@@ -1027,6 +1169,7 @@ export interface BYOKProviderCapabilities {
     tools: boolean;
     jsonMode: boolean;
     multimodal: boolean;
+    realtime: boolean;
 }
 export interface BYOKModel {
     id: string;
@@ -1074,13 +1217,14 @@ export interface AppManifest {
     description?: string;
     author?: string;
     icon?: string;
-    type: 'mcp';
+    type: "mcp";
     entry: {
         functions?: string;
     };
     functions?: Record<string, ManifestFunction>;
     permissions?: string[];
     widgets?: WidgetDeclaration[];
+    context_sources?: WidgetContextSourceDeclaration[];
     env?: Record<string, ManifestEnvVar>;
     env_vars?: Record<string, ManifestEnvVar>;
     http?: ManifestHttpConfig;
@@ -1123,7 +1267,7 @@ export interface ManifestFunction {
     annotations?: MCPToolAnnotations;
 }
 export interface ManifestParameter {
-    type: 'string' | 'number' | 'boolean' | 'object' | 'array';
+    type: "string" | "number" | "boolean" | "object" | "array";
     description?: string;
     required?: boolean;
     default?: unknown;
@@ -1132,17 +1276,17 @@ export interface ManifestParameter {
     properties?: Record<string, ManifestParameter>;
 }
 export interface ManifestReturn {
-    type: 'string' | 'number' | 'boolean' | 'object' | 'array' | 'void';
+    type: "string" | "number" | "boolean" | "object" | "array" | "void";
     description?: string;
 }
 export interface ManifestEnvVar {
     description?: string;
     required?: boolean;
     default?: string;
-    scope?: EnvSchemaEntry['scope'];
-    type?: EnvSchemaEntry['scope'];
+    scope?: EnvSchemaEntry["scope"];
+    type?: EnvSchemaEntry["scope"];
     label?: string;
-    input?: EnvSchemaEntry['input'];
+    input?: EnvSchemaEntry["input"];
     placeholder?: string;
     help?: string;
 }
@@ -1205,7 +1349,7 @@ export interface ChatTraceContext {
 }
 /** OpenAI-compatible message format */
 export interface ChatMessage {
-    role: 'system' | 'user' | 'assistant' | 'tool';
+    role: "system" | "user" | "assistant" | "tool";
     content: string | null;
     tool_calls?: ChatToolCall[];
     tool_call_id?: string;
@@ -1213,7 +1357,7 @@ export interface ChatMessage {
 }
 /** OpenAI-compatible tool definition */
 export interface ChatTool {
-    type: 'function';
+    type: "function";
     function: {
         name: string;
         description?: string;
@@ -1223,7 +1367,7 @@ export interface ChatTool {
 /** OpenAI-compatible tool call */
 export interface ChatToolCall {
     id: string;
-    type: 'function';
+    type: "function";
     function: {
         name: string;
         arguments: string;
@@ -1277,6 +1421,12 @@ export interface ChatBillingResult {
     balance_after: number;
     was_depleted: boolean;
 }
+export interface WidgetToolInvocationTelemetryContext {
+    surfaceId?: string;
+    widgetId?: string;
+    actionId?: string;
+    turnId?: string;
+}
 /** Request body for POST /chat/tool-invocation */
 export interface ToolInvocationTelemetryRequest {
     invocationId: string;
@@ -1290,15 +1440,19 @@ export interface ToolInvocationTelemetryRequest {
     appId?: string;
     mcpId?: string;
     functionName?: string;
+    receiptId?: string;
+    routineId?: string;
+    routineRunId?: string;
     schemaSnapshot?: unknown;
     args?: unknown;
     result?: unknown;
     startedAt?: string;
     completedAt?: string;
     durationMs?: number;
-    status: 'success' | 'error' | 'aborted' | 'timeout';
+    status: "success" | "error" | "aborted" | "timeout";
     errorType?: string;
     errorMessage?: string;
+    widgetAction?: WidgetToolInvocationTelemetryContext;
     metadata?: Record<string, unknown>;
 }
 /** Minimum balance in Light required to start a chat stream */

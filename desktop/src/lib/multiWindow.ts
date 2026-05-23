@@ -3,6 +3,7 @@
 
 import { WebviewWindow, getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { buildWidgetWindowSearchParams, type WidgetAppSource } from './widgetRuntime';
+import { createWidgetSurfaceId } from './widgetSurfaceRegistry';
 
 /** Any view that can be opened in its own window. */
 export type PopoutView =
@@ -64,7 +65,8 @@ export async function openWidgetWindow(source: WidgetAppSource, context?: Record
     return;
   }
 
-  const params = buildWidgetWindowSearchParams(source, context);
+  const surfaceId = createWidgetSurfaceId('window', source.appUuid, source.widgetName);
+  const params = buildWidgetWindowSearchParams(source, context, surfaceId);
 
   const _webview = new WebviewWindow(label, {
     url: `index.html?${params.toString()}`,

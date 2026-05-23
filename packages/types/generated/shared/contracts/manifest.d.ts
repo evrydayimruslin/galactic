@@ -1,6 +1,7 @@
 import type { EnvSchemaEntry } from './env.ts';
 import type { MCPTool, MCPToolAnnotations } from './mcp.ts';
-import type { WidgetDeclaration } from './widget.ts';
+import type { RoutineDeclaration } from './routine.ts';
+import type { WidgetContextSourceDeclaration, WidgetDeclaration } from './widget.ts';
 export interface AppManifest {
     name: string;
     version: string;
@@ -14,6 +15,8 @@ export interface AppManifest {
     functions?: Record<string, ManifestFunction>;
     permissions?: string[];
     widgets?: WidgetDeclaration[];
+    context_sources?: WidgetContextSourceDeclaration[];
+    routines?: RoutineDeclaration[];
     env?: Record<string, ManifestEnvVar>;
     env_vars?: Record<string, ManifestEnvVar>;
     http?: ManifestHttpConfig;

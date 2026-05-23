@@ -30,6 +30,7 @@ import type { App } from '../../shared/types/index.ts';
 import { buildJsonSchemaDescriptors, type AppForCodemode } from './codemode-tools.ts';
 import { buildAppTrustCard, type TrustCard } from './trust.ts';
 import { createLlmInvocationTelemetrySession } from './invocation-telemetry.ts';
+import { magnifyContextSources } from './app-context-magnifier.ts';
 import {
   recordCapabilityGapShortcoming,
   recordCapabilitySuggestionSet,
@@ -47,6 +48,13 @@ import {
   type FlashSchemaId,
   type FlashTaskId,
 } from './flash-finetune-metadata.ts';
+import type {
+  ActiveWidgetContext,
+  WidgetDataRef,
+  WidgetPendingEdit,
+  WidgetSurfaceEvent,
+  WidgetVisibleComponent,
+} from '../../shared/contracts/widget.ts';
 
 // ── Types ──
 
@@ -118,6 +126,7 @@ interface MarketplaceCandidate {
 }
 
 type FunctionEntry = FunctionIndex['functions'][string];
+type ContextSourceEntry = NonNullable<FunctionIndex['contextSources']>[number];
 
 export function buildFlashCallTelemetryContext(
   telemetry: FlashBrokerTelemetryContext | undefined,
@@ -333,6 +342,166 @@ function buildFileContext(files: ChatFileAttachment[]): string {
   return `## Attached Files\nThe user attached ${files.length} file(s) with their message:\n${items}\nThe file contents are available as base64 data URLs and should be passed to the relevant app's functions (e.g. quick_start with file_content + file_name args, or ultralight.ai with multimodal content parts).\n\n`;
 }
 
+const MAX_ACTIVE_WIDGET_CONTEXTS = 4;
+const MAX_WIDGET_COMPONENTS = 12;
+const MAX_WIDGET_ACTIONS = 12;
+const MAX_WIDGET_EVENTS = 8;
+const MAX_WIDGET_CONTEXT_BLOCK_CHARS = 12000;
+
+function compactJson(value: unknown, maxChars = 1000): string {
+  try {
+    const json = JSON.stringify(value);
+    if (!json) return '';
+    return json.length > maxChars ? `${json.slice(0, maxChars)}...` : json;
+  } catch {
+    const fallback = String(value);
+    return fallback.length > maxChars ? `${fallback.slice(0, maxChars)}...` : fallback;
+  }
+}
+
+function oneLine(value: unknown, maxChars = 240): string {
+  const text = typeof value === 'string' ? value : compactJson(value, maxChars);
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return normalized.length > maxChars ? `${normalized.slice(0, maxChars)}...` : normalized;
+}
+
+function hasEntries(value: Record<string, unknown> | undefined): boolean {
+  return !!value && Object.keys(value).length > 0;
+}
+
+function formatWidgetTimestamp(value: number | undefined): string | null {
+  if (!value || !Number.isFinite(value)) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function formatWidgetDataRef(ref: WidgetDataRef): string {
+  const label = oneLine(ref.label || ref.id || ref.type || ref.table || 'data', 100);
+  const details: string[] = [];
+  if (ref.type) details.push(`type=${oneLine(ref.type, 60)}`);
+  if (ref.id) details.push(`id=${oneLine(ref.id, 80)}`);
+  if (ref.table) details.push(`table=${oneLine(ref.table, 60)}`);
+  if (ref.field) details.push(`field=${oneLine(ref.field, 60)}`);
+  if (ref.value !== undefined) details.push(`value=${oneLine(ref.value, 120)}`);
+  return details.length > 0 ? `${label} (${details.join(', ')})` : label;
+}
+
+function formatWidgetComponent(component: WidgetVisibleComponent): string {
+  const type = component.type ? ` (${oneLine(component.type, 50)})` : '';
+  const purpose = component.purpose ? `: ${oneLine(component.purpose, 180)}` : '';
+  const dataRefs = component.data_refs?.length
+    ? ` data=[${component.data_refs.slice(0, 4).map(formatWidgetDataRef).join('; ')}]`
+    : '';
+  const actions = component.actions?.length
+    ? ` actions=[${component.actions.slice(0, 6).map((id) => oneLine(id, 60)).join(', ')}]`
+    : '';
+  const state = hasEntries(component.state)
+    ? ` state=${compactJson(component.state, 260)}`
+    : '';
+  return `${oneLine(component.label || component.id, 100)}${type}${purpose}${dataRefs}${actions}${state}`;
+}
+
+function formatWidgetPendingEdit(edit: WidgetPendingEdit): string {
+  const entity = edit.entity ? ` entity=${formatWidgetDataRef(edit.entity)}` : '';
+  const value = edit.value !== undefined ? ` value=${oneLine(edit.value, 120)}` : '';
+  return `${oneLine(edit.label || edit.field, 100)}${value}${edit.dirty ? ' dirty=true' : ''}${entity}`;
+}
+
+function formatWidgetEvent(event: WidgetSurfaceEvent): string {
+  const parts: string[] = [event.kind];
+  if (event.action_id) parts.push(`action=${oneLine(event.action_id, 80)}`);
+  if (event.turn_id) parts.push(`turn=${oneLine(event.turn_id, 80)}`);
+  if (event.label) parts.push(oneLine(event.label, 140));
+  if (event.error) parts.push(`error=${oneLine(event.error, 140)}`);
+  if (event.result !== undefined) parts.push(`result=${oneLine(event.result, 180)}`);
+  return parts.join(' - ');
+}
+
+export function buildActiveWidgetContextBlock(activeWidgetContexts?: ActiveWidgetContext[]): string {
+  const contexts = Array.isArray(activeWidgetContexts)
+    ? activeWidgetContexts.filter((context) => context && typeof context.surfaceId === 'string')
+    : [];
+  if (contexts.length === 0) return '';
+
+  const lines: string[] = [
+    '## Active Widget Context',
+    'The user is composing from the widget UI below. Treat this as current visible UI state. It can guide reads, navigation, and widget action choices. Use declared action ids/labels for action-oriented guidance; do not invent raw DOM selectors.',
+  ];
+
+  for (const context of contexts.slice(0, MAX_ACTIVE_WIDGET_CONTEXTS)) {
+    const snapshot = context.snapshot || undefined;
+    const title = snapshot?.title || context.title || context.widgetName || context.appName || context.appSlug || context.surfaceId;
+    lines.push(`### ${oneLine(title, 120)}`);
+    lines.push(`- App: ${oneLine(context.appName, 100)} (${oneLine(context.appSlug, 80)})`);
+    lines.push(`- Widget: ${oneLine(context.widgetName || context.widgetId, 100)}; surface=${oneLine(context.surfaceId, 120)}${context.kind ? `; kind=${context.kind}` : ''}`);
+    if (context.status) lines.push(`- Status: ${context.status}`);
+    const updatedAt = formatWidgetTimestamp(context.updatedAt);
+    if (updatedAt) lines.push(`- Updated: ${updatedAt}`);
+    if (hasEntries(context.context)) lines.push(`- Launch context: ${compactJson(context.context, 700)}`);
+    if (snapshot?.current_view) lines.push(`- Current view: ${oneLine(snapshot.current_view, 120)}`);
+    if (snapshot?.summary) lines.push(`- Summary: ${oneLine(snapshot.summary, 500)}`);
+    if (snapshot?.errors?.length) lines.push(`- Errors: ${snapshot.errors.slice(0, 4).map((entry) => oneLine(entry, 160)).join('; ')}`);
+
+    if (snapshot?.selected_entities?.length) {
+      lines.push(`- Selected entities: ${snapshot.selected_entities.slice(0, 8).map(formatWidgetDataRef).join('; ')}`);
+    }
+    if (snapshot?.visible_data_refs?.length) {
+      lines.push(`- Visible data refs: ${snapshot.visible_data_refs.slice(0, 10).map(formatWidgetDataRef).join('; ')}`);
+    }
+    if (snapshot?.pending_edits?.length) {
+      lines.push('- Pending edits:');
+      for (const edit of snapshot.pending_edits.slice(0, 8)) {
+        lines.push(`  - ${formatWidgetPendingEdit(edit)}`);
+      }
+    }
+    if (snapshot?.visible_components?.length) {
+      lines.push('- Visible components:');
+      for (const component of snapshot.visible_components.slice(0, MAX_WIDGET_COMPONENTS)) {
+        lines.push(`  - ${formatWidgetComponent(component)}`);
+      }
+    }
+    if (snapshot?.enabled_actions?.length) {
+      lines.push(`- Enabled action ids: ${snapshot.enabled_actions.slice(0, MAX_WIDGET_ACTIONS).map((id) => oneLine(id, 80)).join(', ')}`);
+    }
+    if (context.recentEventSummary) {
+      const count = typeof context.recentEventCount === 'number'
+        ? ` (${context.recentEventCount} recorded)`
+        : '';
+      lines.push(`- Recent event summary${count}: ${oneLine(context.recentEventSummary, 700)}`);
+    }
+    if (context.actions?.length) {
+      lines.push('- Declared widget actions:');
+      for (const action of context.actions.slice(0, MAX_WIDGET_ACTIONS)) {
+        const mode = action.mode ? ` [${action.mode}${action.confirmation ? `, confirm=${action.confirmation}` : ''}]` : '';
+        const mcp = action.mcp?.function ? ` -> ${oneLine(action.mcp.function, 120)}` : '';
+        const ui = action.ui?.command
+          ? ` -> ui:${oneLine(action.ui.command, 80)}${action.ui.component_id ? `(${oneLine(action.ui.component_id, 80)})` : ''}`
+          : '';
+        const description = action.description ? ` - ${oneLine(action.description, 220)}` : '';
+        lines.push(`  - ${oneLine(action.id, 80)}: ${oneLine(action.label, 120)}${mode}${mcp}${ui}${description}`);
+      }
+    }
+    if (context.recentEvents?.length) {
+      lines.push('- Recent widget events:');
+      for (const event of context.recentEvents.slice(-MAX_WIDGET_EVENTS)) {
+        lines.push(`  - ${formatWidgetEvent(event)}`);
+      }
+    }
+    if (hasEntries(context.latestDataPayload || undefined)) {
+      lines.push(`- Latest data payload preview: ${compactJson(context.latestDataPayload, 1200)}`);
+    }
+  }
+
+  if (contexts.length > MAX_ACTIVE_WIDGET_CONTEXTS) {
+    lines.push(`- ${contexts.length - MAX_ACTIVE_WIDGET_CONTEXTS} additional widget context(s) omitted.`);
+  }
+
+  const block = lines.join('\n');
+  return block.length > MAX_WIDGET_CONTEXT_BLOCK_CHARS
+    ? `${block.slice(0, MAX_WIDGET_CONTEXT_BLOCK_CHARS)}\n...[active widget context truncated]`
+    : block;
+}
+
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp']);
 
 /**
@@ -462,6 +631,30 @@ function nonEmptyString(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function declaredContextSourcesForApp(
+  fnIndex: FunctionIndex,
+  appId: string,
+  appSlug: string,
+  activeWidgetContexts?: ActiveWidgetContext[],
+): ContextSourceEntry[] {
+  const sources = (fnIndex.contextSources || []).filter((source) =>
+    source.appId === appId || source.appSlug === appSlug
+  );
+  if (sources.length === 0) return [];
+
+  const activeWidgetIds = new Set(
+    (activeWidgetContexts || [])
+      .filter((context) => context.appId === appId || context.appSlug === appSlug)
+      .flatMap((context) => [context.widgetId, context.widgetName].filter(Boolean) as string[]),
+  );
+  if (activeWidgetIds.size === 0) return sources;
+
+  return sources.filter((source) =>
+    !source.defaultForWidgets?.length ||
+    source.defaultForWidgets.some((widgetId) => activeWidgetIds.has(widgetId))
+  );
+}
+
 export async function* runFlashBroker(
   message: string,
   userId: string,
@@ -478,6 +671,7 @@ export async function* runFlashBroker(
   files?: ChatFileAttachment[],
   inferenceRoute?: ResolvedInferenceRoute,
   telemetry?: FlashBrokerTelemetryContext,
+  activeWidgetContexts?: ActiveWidgetContext[],
 ): AsyncGenerator<FlashEvent> {
   let route: ResolvedInferenceRoute;
   try {
@@ -605,6 +799,8 @@ export async function* runFlashBroker(
     .filter(Boolean)
     .join('\n\n')
     .slice(0, 2000);
+  const activeWidgetContextBlock = buildActiveWidgetContextBlock(activeWidgetContexts);
+  const activeWidgetContextCount = activeWidgetContexts?.length || 0;
   const hasActiveScope = !!scope && Object.keys(scope).length > 0;
   const marketplaceCandidates = hasActiveScope
     ? []
@@ -696,6 +892,7 @@ export async function* runFlashBroker(
     analyzeContent += `## SESSION SCOPE\nThis session is scoped to ONLY these apps: ${scopedNames.join(', ')}. Do not reference or suggest other apps.\n\n`;
   }
   if (files?.length) analyzeContent += buildFileContext(files);
+  if (activeWidgetContextBlock) analyzeContent += `${activeWidgetContextBlock}\n\n`;
   if (projectContext) analyzeContent += `## Local Project Files\n${projectContext}\n\n`;
   if (agentSkills) analyzeContent += `## Agent Skills Reference\n${agentSkills}\n\n`;
   if (conversationTopics) analyzeContent += `## Past Conversation Topics\n${conversationTopics}\n\n`;
@@ -715,6 +912,8 @@ export async function* runFlashBroker(
       conventionCount: countFunctionConventions(fnIndex.functions),
       scope,
       systemAgentContext,
+      activeWidgetContexts,
+      activeWidgetContextBlock,
     },
     metadata: {
       marketplace_candidate_count: marketplaceCandidates.length,
@@ -722,6 +921,7 @@ export async function* runFlashBroker(
       has_conversation_topics: !!conversationTopics,
       has_conversation_summary: !!summaryStr,
       has_last_exchange: !!lastExchangeStr,
+      active_widget_context_count: activeWidgetContextCount,
     },
   });
   if (!analyzeResult) {
@@ -996,9 +1196,34 @@ export async function* runFlashBroker(
 
   // Magnify: query D1 databases for each involved app
   const magnifiedData: Record<string, string> = {};
+  let declaredContextSourceCount = 0;
   const magnifyPromises = appIds.map(async (appId, i) => {
     const slug = appSlugs[i];
+    const declaredSources = declaredContextSourcesForApp(
+      fullFnIndex,
+      appId,
+      slug,
+      activeWidgetContexts,
+    );
     try {
+      if (declaredSources.length > 0) {
+        const executableSources = declaredSources.filter((source) =>
+          source.type === 'd1_table' || source.type === 'd1_query'
+        );
+        declaredContextSourceCount += declaredSources.length;
+        const contextResult = await magnifyContextSources(executableSources, {
+          userId,
+          query: appScopeHints[slug] || message,
+        });
+        magnifiedData[slug] = contextResult.context ||
+          '(No rows matched declared context sources)';
+        return {
+          slug,
+          tables: contextResult.sourceCount,
+          rows: contextResult.rowCount,
+        };
+      }
+
       const data = await magnifyApp(appId, userId, appScopeHints[slug]);
       magnifiedData[slug] = data.context;
       return { slug, tables: data.tableCount, rows: data.rowCount };
@@ -1038,6 +1263,7 @@ export async function* runFlashBroker(
     let readInput = `## User's Question\n${message}\n\n`;
     if (files?.length) readInput += buildFileContext(files);
     if (projectContext) readInput += `## Local Project Context\n${projectContext}\n\n`;
+    if (activeWidgetContextBlock) readInput += `${activeWidgetContextBlock}\n\n`;
     readInput += `## Live App Data\n`;
     for (const [slug, data] of Object.entries(magnifiedData)) {
       readInput += `### ${appNames[slug] || slug}\n${data}\n\n`;
@@ -1092,12 +1318,16 @@ export async function* runFlashBroker(
         magnifiedData,
         conversationSearch,
         contextQuery,
+        activeWidgetContexts,
+        activeWidgetContextBlock,
       },
       metadata: {
         mode: 'read',
-        involved_app_count: appIds.length,
-      },
-    })
+      involved_app_count: appIds.length,
+      active_widget_context_count: activeWidgetContextCount,
+      declared_context_source_count: declaredContextSourceCount,
+    },
+  })
       || "I found the data but had trouble formatting the response. Could you try rephrasing your question?";
 
     const result: FlashBrokerResult = {
@@ -1141,6 +1371,7 @@ export async function* runFlashBroker(
   let promptInput = `## User's Message\n${message}\n\n`;
   if (files?.length) promptInput += buildFileContext(files);
   if (projectContext) promptInput += `## Local Project Context\n${projectContext}\n\n`;
+  if (activeWidgetContextBlock) promptInput += `${activeWidgetContextBlock}\n\n`;
   promptInput += `## Live App Data\n`;
   for (const [slug, data] of Object.entries(magnifiedData)) {
     promptInput += `### ${appNames[slug] || slug}\n${data}\n\n`;
@@ -1190,11 +1421,15 @@ export async function* runFlashBroker(
       magnifiedData,
       conversationSearch,
       contextQuery,
+      activeWidgetContexts,
+      activeWidgetContextBlock,
     },
     metadata: {
       mode: 'write',
       involved_app_count: appIds.length,
       action_function_count: actionFunctions.length,
+      active_widget_context_count: activeWidgetContextCount,
+      declared_context_source_count: declaredContextSourceCount,
     },
   });
 
@@ -1917,6 +2152,25 @@ function buildCatalog(
     if (convs.size > 0) {
       const convList = [...convs].slice(0, 5);
       sections.push(`  Conventions: ${convList.join('; ')}`);
+    }
+  }
+
+  if (fnIndex.contextSources?.length) {
+    sections.push('\n## Declared Read Context Sources\nSearchable app data sources available for read-only grounding:');
+    for (const source of fnIndex.contextSources.slice(0, 40)) {
+      const details = [
+        source.type,
+        source.searchable === false ? 'not_searchable' : 'searchable',
+        source.defaultForWidgets?.length
+          ? `widgets:${source.defaultForWidgets.join('|')}`
+          : null,
+        source.tables?.length ? `tables:${source.tables.join('|')}` : null,
+      ].filter(Boolean).join(', ');
+      sections.push(
+        `- ${source.appSlug}:${source.id} (${source.label}) [${details}] — ${
+          source.description || 'Read context'
+        }`,
+      );
     }
   }
 

@@ -18,6 +18,28 @@
     "BUSINESS_EMAIL": { "scope": "per_user", "input": "email", "label": "From email", "required": true, "description": "From address for outbound emails (e.g. info@rockwoodhotel.com)" },
     "BUSINESS_NAME": { "scope": "per_user", "input": "text", "label": "Business name", "required": true, "description": "Display name for outbound emails (e.g. Rockwood Hotel)" }
   },
+  "context_sources": [
+    {
+      "id": "email_recent_threads",
+      "label": "Recent email threads",
+      "description": "Recent guest conversations, status, classification, language, and latest available draft context.",
+      "type": "d1_query",
+      "access": "read",
+      "searchable": true,
+      "query": "SELECT c.id, c.guest_email, c.subject, c.language, c.classification, c.status, c.updated_at, (SELECT v.body FROM versions v WHERE v.conversation_id = c.id AND v.user_id = :user_id ORDER BY v.version_num DESC LIMIT 1) AS latest_context FROM conversations c WHERE c.user_id = :user_id AND (c.subject LIKE :query OR c.guest_email LIKE :query OR c.classification LIKE :query OR c.language LIKE :query) ORDER BY c.updated_at DESC LIMIT :limit",
+      "default_for_widgets": ["email_inbox"]
+    },
+    {
+      "id": "email_business_conventions",
+      "label": "Business email conventions",
+      "description": "Business rules, FAQ entries, and tone guidance used when reviewing or rewriting draft replies.",
+      "type": "d1_table",
+      "access": "read",
+      "searchable": true,
+      "tables": ["conventions"],
+      "default_for_widgets": ["email_inbox"]
+    }
+  ],
   "widgets": [
     {
       "id": "email_inbox",
@@ -25,6 +47,10 @@
       "ui_function": "widget_email_inbox_ui",
       "data_function": "widget_email_inbox_data",
       "data_tool": "widget_email_inbox_data",
+      "agentic": true,
+      "context_function": "widget_email_inbox_data",
+      "actions_function": "widget_email_inbox_data",
+      "context_sources": ["email_recent_threads", "email_business_conventions"],
       "poll_interval_s": 30,
       "cards": [
         {
@@ -44,6 +70,115 @@
           "kind": "metric",
           "data_view": "inbox_volume",
           "refresh_interval_s": 300
+        }
+      ],
+      "agent_actions": [
+        {
+          "id": "load_selected_history",
+          "label": "Load selected history",
+          "description": "Load the full version history for the currently selected conversation.",
+          "mode": "read",
+          "confirmation": "none",
+          "mcp": { "function": "conversation_history" },
+          "expected_result": "Conversation and version history for the selected email thread."
+        },
+        {
+          "id": "show_active_view",
+          "label": "Show active conversations",
+          "description": "Switch the widget to the active conversation queue.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": {
+            "command": "navigate",
+            "component_id": "tabs",
+            "args_template": { "view": "active" }
+          },
+          "expected_result": "The active queue tab is selected."
+        },
+        {
+          "id": "show_sent_view",
+          "label": "Show sent conversations",
+          "description": "Switch the widget to the sent conversation archive.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": {
+            "command": "navigate",
+            "component_id": "tabs",
+            "args_template": { "view": "archive" }
+          },
+          "expected_result": "The sent conversation tab is selected."
+        },
+        {
+          "id": "open_version_history",
+          "label": "Open version history",
+          "description": "Expand the version history section for the selected conversation.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": { "command": "open", "component_id": "version_history" },
+          "expected_result": "The version history section is visible when the selected conversation has history."
+        },
+        {
+          "id": "show_draft_editor",
+          "label": "Show draft editor",
+          "description": "Open and focus the editable draft reply field for the selected conversation.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": { "command": "focus", "component_id": "draft_response" },
+          "expected_result": "The draft editor is open and focused."
+        },
+        {
+          "id": "show_regenerate_prompt",
+          "label": "Show regenerate prompt",
+          "description": "Open the regeneration instructions field and optionally prefill quoted text from the request.",
+          "mode": "ui",
+          "confirmation": "none",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" }
+            }
+          },
+          "ui": { "command": "prefill", "component_id": "regenerate_prompt" },
+          "expected_result": "The regeneration prompt is open and focused."
+        },
+        {
+          "id": "show_followup_prompt",
+          "label": "Show follow up prompt",
+          "description": "Open the follow-up prompt for the selected sent conversation and optionally prefill quoted text from the request.",
+          "mode": "ui",
+          "confirmation": "none",
+          "args_schema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" }
+            }
+          },
+          "ui": { "command": "prefill", "component_id": "followup_prompt" },
+          "expected_result": "The follow-up prompt is open and focused."
+        },
+        {
+          "id": "send_selected_draft",
+          "label": "Send selected draft",
+          "description": "Send the currently selected draft reply to its selected recipient.",
+          "mode": "write",
+          "confirmation": "user",
+          "mcp": {
+            "function": "conversation_act",
+            "args_template": { "action": "send" }
+          },
+          "expected_result": "The draft is sent and the widget refreshes into the latest queue state."
+        },
+        {
+          "id": "discard_selected_conversation",
+          "label": "Discard selected conversation",
+          "description": "Discard the currently selected conversation from the active queue.",
+          "mode": "write",
+          "confirmation": "user",
+          "mcp": {
+            "function": "conversation_act",
+            "args_template": { "action": "discard" }
+          },
+          "expected_result": "The conversation is discarded and the widget refreshes."
         }
       ]
     }
@@ -80,7 +215,8 @@
         { "name": "conversation_id", "type": "string", "required": true },
         { "name": "action", "type": "string", "required": true },
         { "name": "body", "type": "string", "required": false },
-        { "name": "prompt", "type": "string", "required": false }
+        { "name": "prompt", "type": "string", "required": false },
+        { "name": "to", "type": "string", "required": false }
       ]
     },
     "conversation_history": {

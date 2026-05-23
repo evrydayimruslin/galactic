@@ -11,18 +11,35 @@ import {
   buildWidgetSrcDoc,
   loadWidgetHtml,
   parseWidgetContextFromSearch,
+  parseWidgetSurfaceIdFromSearch,
   parseWidgetSourceFromSearch,
   readWidgetPullSettings,
   updateWidgetPullStats,
 } from '../lib/widgetRuntime';
+import {
+  buildWidgetSurfaceCommandMessage,
+  createWidgetSurfaceId,
+  handleWidgetBridgeMessage,
+  registerWidgetSurface,
+  unregisterWidgetSurface,
+  updateWidgetSurfaceStatus,
+  WIDGET_SURFACE_COMMAND_EVENT,
+} from '../lib/widgetSurfaceRegistry';
+import type { WidgetSurfaceCommand } from '../lib/widgetAgentTypes';
 import { createDesktopLogger } from '../lib/logging';
 import DesktopAsyncState from './DesktopAsyncState';
+import WidgetComposer from './widgets/WidgetComposer';
+import WidgetEventLog from './widgets/WidgetEventLog';
 
 const widgetWindowLogger = createDesktopLogger('WidgetWindow');
 
 export default function WidgetWindow() {
   const source = useRef(parseWidgetSourceFromSearch(window.location.search)).current;
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const surfaceId = useRef(
+    parseWidgetSurfaceIdFromSearch(window.location.search) ||
+      createWidgetSurfaceId('window', source.appUuid, source.widgetName),
+  ).current;
   const [html, setHtml] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +100,7 @@ export default function WidgetWindow() {
       apiBase,
       token,
       context: widgetContext,
+      surfaceId,
       widgetPull: {
         widgetName: source.widgetName,
         intervalMs: readWidgetPullSettings(source).intervalMs,
@@ -91,9 +109,32 @@ export default function WidgetWindow() {
     });
   })();
 
+  useEffect(() => {
+    registerWidgetSurface({
+      surfaceId,
+      kind: 'window',
+      source,
+      context: widgetContext,
+    });
+    return () => unregisterWidgetSurface(surfaceId);
+  }, [source, surfaceId, widgetContext]);
+
   // Listen for widget-to-widget navigation requests from iframe
   useEffect(() => {
     const handler = (e: MessageEvent) => {
+      if (e.data && typeof e.data === 'object') {
+        const messageSurfaceId = typeof e.data.surfaceId === 'string'
+          ? e.data.surfaceId
+          : typeof e.data.id === 'string'
+          ? e.data.id
+          : null;
+        if (messageSurfaceId && messageSurfaceId !== surfaceId) return;
+
+        handleWidgetBridgeMessage(e.data, surfaceId);
+        if (e.data.type === 'ul-widget-ready') {
+          updateWidgetSurfaceStatus(surfaceId, 'ready');
+        }
+      }
       if (e.data?.type === 'ul-open-widget' && e.data.widgetName) {
         const target = buildWidgetNavigationTarget(source, e.data.widgetName);
         openWidgetWindow(target, e.data.context);
@@ -101,7 +142,22 @@ export default function WidgetWindow() {
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [source]);
+  }, [source, surfaceId]);
+
+  useEffect(() => {
+    const handleCommand = (event: Event) => {
+      const command = (event as CustomEvent<WidgetSurfaceCommand>).detail;
+      if (!command || command.surface_id !== surfaceId) return;
+      iframeRef.current?.contentWindow?.postMessage(
+        buildWidgetSurfaceCommandMessage(command),
+        '*',
+      );
+    };
+
+    window.addEventListener(WIDGET_SURFACE_COMMAND_EVENT, handleCommand);
+    return () => window.removeEventListener(WIDGET_SURFACE_COMMAND_EVENT, handleCommand);
+  }, [surfaceId]);
+
 
   return (
     <div className="flex flex-col h-screen bg-white">
@@ -182,9 +238,14 @@ export default function WidgetWindow() {
                 appUuid: source.appUuid,
               });
             }}
+            onLoad={() => {
+              updateWidgetSurfaceStatus(surfaceId, 'ready');
+            }}
           />
         )}
       </div>
+      <WidgetEventLog surfaceId={surfaceId} />
+      <WidgetComposer surfaceId={surfaceId} source={source} context={widgetContext} />
     </div>
   );
 }

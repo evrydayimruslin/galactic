@@ -29,6 +29,7 @@ import {
   type InferenceRoutePreference,
   type ToolInvocationTelemetryRequest,
 } from "../../shared/contracts/ai.ts";
+import type { ActiveWidgetContext } from "../../shared/contracts/widget.ts";
 import { createServerLogger } from "../services/logging.ts";
 import { isValidModelId } from "../services/model-validation.ts";
 import {
@@ -792,7 +793,14 @@ export async function handleFunctionIndex(request: Request): Promise<Response> {
         user_id: user.id,
         error: err,
       });
-      return json({ functions: {}, widgets: [], types: "", updatedAt: null });
+      return json({
+        functions: {},
+        widgets: [],
+        contextSources: [],
+        routines: [],
+        types: "",
+        updatedAt: null,
+      });
     }
   }
 
@@ -921,6 +929,7 @@ export async function handleToolInvocationTelemetry(
     status: body.status,
     errorType: body.errorType,
     errorMessage: body.errorMessage,
+    widgetAction: body.widgetAction,
     metadata: body.metadata,
   });
 
@@ -1066,6 +1075,7 @@ export async function handleOrchestrate(request: Request): Promise<Response> {
     >;
     systemAgentContext?: SystemAgentContext;
     projectContext?: string;
+    activeWidgetContexts?: ActiveWidgetContext[];
     conversationId?: string;
     userMessageId?: string;
     assistantMessageId?: string;
@@ -1082,6 +1092,9 @@ export async function handleOrchestrate(request: Request): Promise<Response> {
   if (!body.message || typeof body.message !== "string") {
     return error("message is required", 400);
   }
+  const activeWidgetContexts = Array.isArray(body.activeWidgetContexts)
+    ? body.activeWidgetContexts
+    : undefined;
   if (body.inference?.model && !isValidModelId(body.inference.model)) {
     return json({
       error:
@@ -1159,6 +1172,7 @@ export async function handleOrchestrate(request: Request): Promise<Response> {
     scope: body.scope,
     systemAgentContext: body.systemAgentContext,
     projectContext: body.projectContext,
+    activeWidgetContexts,
     files: body.files,
   });
   captureSession?.start();
@@ -1177,6 +1191,7 @@ export async function handleOrchestrate(request: Request): Promise<Response> {
               scope: body.scope,
               systemAgentContext: body.systemAgentContext,
               projectContext: body.projectContext,
+              activeWidgetContexts,
               conversationId: captureConversationId,
               userMessageId: captureUserMessageId,
               files: body.files,

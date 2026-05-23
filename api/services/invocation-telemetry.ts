@@ -11,6 +11,7 @@ import {
   utf8ByteLength,
 } from "./analytics-identity.ts";
 import { storeTextArtifact } from "./artifact-store.ts";
+import type { WidgetActionCallMetadata } from "./call-logger.ts";
 import { createServerLogger } from "./logging.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -85,6 +86,7 @@ export interface ToolInvocationTelemetryInput {
   status: InvocationStatus;
   errorType?: string | null;
   errorMessage?: string | null;
+  widgetAction?: WidgetActionCallMetadata;
   metadata?: JsonRecord;
 }
 
@@ -113,6 +115,19 @@ interface ArtifactSnapshot {
 }
 
 const telemetryLogger = createServerLogger("INVOCATION-TELEMETRY");
+
+export function buildWidgetActionTelemetryMetadata(
+  widgetAction?: WidgetActionCallMetadata,
+): JsonRecord {
+  if (!widgetAction) return {};
+  return {
+    widget_action: true,
+    widget_surface_id: widgetAction.surfaceId ?? null,
+    widget_id: widgetAction.widgetId ?? null,
+    widget_action_id: widgetAction.actionId ?? null,
+    widget_turn_id: widgetAction.turnId ?? null,
+  };
+}
 
 function telemetryEnabled(): boolean {
   return !isExplicitlyDisabled(getEnv("CHAT_CAPTURE_ENABLED"));
@@ -521,6 +536,9 @@ export async function recordToolInvocationTelemetry(
 
   try {
     const identity = await analyticsIdentityFor(input.userId);
+    const widgetActionMetadata = buildWidgetActionTelemetryMetadata(
+      input.widgetAction,
+    );
     const argsSnapshot = await storeJsonSnapshot({
       anonUserId: identity.anonUserId,
       conversationId: input.conversationId,
@@ -529,6 +547,7 @@ export async function recordToolInvocationTelemetry(
       value: input.args ?? {},
       filename: `${input.toolName}-${input.invocationId}-args.json`,
       metadata: {
+        ...widgetActionMetadata,
         invocation_id: input.invocationId,
         parent_llm_invocation_id: input.parentLlmInvocationId || null,
         trace_id: input.traceId || null,
@@ -542,6 +561,7 @@ export async function recordToolInvocationTelemetry(
       value: input.result ?? null,
       filename: `${input.toolName}-${input.invocationId}-result.json`,
       metadata: {
+        ...widgetActionMetadata,
         invocation_id: input.invocationId,
         parent_llm_invocation_id: input.parentLlmInvocationId || null,
         trace_id: input.traceId || null,
@@ -580,7 +600,7 @@ export async function recordToolInvocationTelemetry(
       status: input.status,
       error_type: input.errorType || null,
       error_message: input.errorMessage || null,
-      metadata: safeJson(input.metadata || {}),
+      metadata: safeJson({ ...widgetActionMetadata, ...(input.metadata || {}) }),
     }, {
       prefer: "return=minimal,resolution=merge-duplicates",
       onConflict: "invocation_id",
@@ -598,6 +618,7 @@ export async function recordToolInvocationTelemetry(
         failureType: input.errorType || input.status,
         message: input.errorMessage || null,
         metadata: {
+          ...widgetActionMetadata,
           tool_name: input.toolName,
           tool_call_id: input.toolCallId || null,
           receipt_id: input.receiptId || null,

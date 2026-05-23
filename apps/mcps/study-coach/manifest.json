@@ -8,10 +8,189 @@
     "functions": "index.ts"
   },
   "permissions": ["ai:call"],
+  "context_sources": [
+    {
+      "id": "study_subject_progress",
+      "label": "Study subject progress",
+      "description": "Subjects, concept counts, mastery, strengths, and weaknesses for widget grounding.",
+      "type": "d1_query",
+      "access": "read",
+      "searchable": true,
+      "query": "SELECT s.id, s.name, s.description, s.updated_at, sp.avg_score, sp.quiz_count, sp.strengths, sp.weaknesses FROM subjects s LEFT JOIN student_profiles sp ON sp.subject_id = s.id AND sp.user_id = :user_id WHERE s.user_id = :user_id AND (s.name LIKE :query OR s.description LIKE :query OR sp.strengths LIKE :query OR sp.weaknesses LIKE :query) ORDER BY s.updated_at DESC LIMIT :limit",
+      "default_for_widgets": ["quiz", "progress", "lessons"]
+    },
+    {
+      "id": "study_recent_quizzes",
+      "label": "Recent quiz history",
+      "description": "Recent quiz sessions and scores for review, lesson, and progress context.",
+      "type": "d1_query",
+      "access": "read",
+      "searchable": true,
+      "query": "SELECT qs.id, qs.status, qs.score_pct, qs.total_questions, qs.correct_count, qs.started_at, qs.completed_at, s.name AS subject_name FROM quiz_sessions qs LEFT JOIN subjects s ON s.id = qs.subject_id AND s.user_id = :user_id WHERE qs.user_id = :user_id AND (qs.status LIKE :query OR s.name LIKE :query) ORDER BY COALESCE(qs.completed_at, qs.started_at, qs.generated_at) DESC LIMIT :limit",
+      "default_for_widgets": ["quiz", "progress"]
+    },
+    {
+      "id": "study_lessons",
+      "label": "Study lessons",
+      "description": "Generated lessons, statuses, covered concepts, and subject names.",
+      "type": "d1_query",
+      "access": "read",
+      "searchable": true,
+      "query": "SELECT l.id, l.title, l.status, l.weak_concepts, l.created_at, s.name AS subject_name FROM lessons l LEFT JOIN subjects s ON s.id = l.subject_id AND s.user_id = :user_id WHERE l.user_id = :user_id AND (l.title LIKE :query OR l.weak_concepts LIKE :query OR s.name LIKE :query) ORDER BY l.created_at DESC LIMIT :limit",
+      "default_for_widgets": ["progress", "lessons"]
+    }
+  ],
   "widgets": [
-    { "id": "quiz", "label": "Quiz" },
-    { "id": "progress", "label": "Study Progress" },
-    { "id": "lessons", "label": "Lessons" }
+    {
+      "id": "quiz",
+      "label": "Quiz",
+      "ui_function": "widget_quiz_ui",
+      "data_function": "widget_quiz_data",
+      "data_tool": "widget_quiz_data",
+      "agentic": true,
+      "context_function": "widget_quiz_data",
+      "actions_function": "widget_quiz_data",
+      "context_sources": ["study_subject_progress", "study_recent_quizzes"],
+      "agent_actions": [
+        {
+          "id": "show_quiz_setup",
+          "label": "Show quiz setup",
+          "description": "Return to the quiz setup view with topic input and subject picker.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": { "command": "navigate", "component_id": "quiz_setup" },
+          "expected_result": "The quiz setup view is visible."
+        },
+        {
+          "id": "focus_quiz_topic",
+          "label": "Focus quiz topic",
+          "description": "Focus the topic input and optionally prefill a requested topic.",
+          "mode": "ui",
+          "confirmation": "none",
+          "args_schema": { "type": "object", "properties": { "text": { "type": "string" } } },
+          "ui": { "command": "prefill", "component_id": "topic_input" },
+          "expected_result": "The quiz topic field is focused."
+        },
+        {
+          "id": "start_selected_subject_quiz",
+          "label": "Start selected subject quiz",
+          "description": "Start a quiz for the currently selected subject.",
+          "mode": "write",
+          "confirmation": "user",
+          "mcp": { "function": "widget_quiz_data", "args_template": { "action": "start" } },
+          "expected_result": "A quiz session starts in the widget."
+        },
+        {
+          "id": "open_related_lesson",
+          "label": "Open related lesson",
+          "description": "Open the lesson generated from the current quiz result.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": { "command": "open_widget", "component_id": "lesson_result" },
+          "expected_result": "The Lessons widget opens to the generated lesson."
+        }
+      ]
+    },
+    {
+      "id": "progress",
+      "label": "Study Progress",
+      "ui_function": "widget_progress_ui",
+      "data_function": "widget_progress_data",
+      "data_tool": "widget_progress_data",
+      "agentic": true,
+      "context_function": "widget_progress_data",
+      "actions_function": "widget_progress_data",
+      "context_sources": ["study_subject_progress", "study_recent_quizzes", "study_lessons"],
+      "agent_actions": [
+        {
+          "id": "focus_new_study_topic",
+          "label": "Focus new study topic",
+          "description": "Open the new topic input and optionally prefill a topic.",
+          "mode": "ui",
+          "confirmation": "none",
+          "args_schema": { "type": "object", "properties": { "text": { "type": "string" } } },
+          "ui": { "command": "prefill", "component_id": "topic_input" },
+          "expected_result": "The new topic field is visible and focused."
+        },
+        {
+          "id": "open_next_pending_quiz",
+          "label": "Open next pending quiz",
+          "description": "Open the first pending quiz from the progress dashboard.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": { "command": "open_widget", "component_id": "pending_quiz" },
+          "expected_result": "The Quiz widget opens to a pending quiz when one exists."
+        },
+        {
+          "id": "open_latest_unread_lesson",
+          "label": "Open latest unread lesson",
+          "description": "Open the first unread lesson from the progress dashboard.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": { "command": "open_widget", "component_id": "unread_lesson" },
+          "expected_result": "The Lessons widget opens to the unread lesson when one exists."
+        }
+      ]
+    },
+    {
+      "id": "lessons",
+      "label": "Lessons",
+      "ui_function": "widget_lessons_ui",
+      "data_function": "widget_lessons_data",
+      "data_tool": "widget_lessons_data",
+      "agentic": true,
+      "context_function": "widget_lessons_data",
+      "actions_function": "widget_lessons_data",
+      "context_sources": ["study_subject_progress", "study_lessons"],
+      "agent_actions": [
+        {
+          "id": "show_lesson_list",
+          "label": "Show lesson list",
+          "description": "Return to the lesson list.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": { "command": "navigate", "component_id": "lesson_list" },
+          "expected_result": "The lesson list is visible."
+        },
+        {
+          "id": "open_selected_lesson",
+          "label": "Open selected lesson",
+          "description": "Open the current or first available lesson.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": { "command": "open", "component_id": "lesson_detail" },
+          "expected_result": "A lesson detail view is visible."
+        },
+        {
+          "id": "next_lesson_page",
+          "label": "Next lesson page",
+          "description": "Advance to the next page in the current lesson.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": { "command": "navigate", "component_id": "lesson_page" },
+          "expected_result": "The next lesson page is visible when available."
+        },
+        {
+          "id": "start_lesson_quiz",
+          "label": "Start lesson quiz",
+          "description": "Open the Quiz widget for the current lesson subject.",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": { "command": "open_widget", "component_id": "lesson_quiz" },
+          "expected_result": "The Quiz widget opens for the lesson subject."
+        },
+        {
+          "id": "focus_lesson_topic",
+          "label": "Focus lesson topic",
+          "description": "Focus the new lesson topic input and optionally prefill a requested topic.",
+          "mode": "ui",
+          "confirmation": "none",
+          "args_schema": { "type": "object", "properties": { "text": { "type": "string" } } },
+          "ui": { "command": "prefill", "component_id": "topic_input" },
+          "expected_result": "The lesson topic field is focused."
+        }
+      ]
+    }
   ],
   "functions": {
     "quick_start": {

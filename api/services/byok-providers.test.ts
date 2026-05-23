@@ -17,6 +17,16 @@ Deno.test('BYOK provider registry exposes first-tier OpenAI-compatible providers
     assert(provider.models.length > 0);
     assert(provider.capabilities.chat);
     assert(provider.capabilities.streaming);
+    assertEquals(typeof provider.capabilities.realtime, 'boolean');
+  }
+});
+
+Deno.test('BYOK provider registry marks only OpenAI as realtime-capable', () => {
+  assertEquals(BYOK_PROVIDERS.openai.capabilities.realtime, true);
+  for (const provider of Object.values(BYOK_PROVIDERS)) {
+    if (provider.id !== 'openai') {
+      assertEquals(provider.capabilities.realtime, false);
+    }
   }
 });
 

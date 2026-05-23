@@ -12,7 +12,7 @@
 // setHeavyModel.
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowUp, ChevronDown, Edit3, Image, Plus, Sparkles } from 'lucide-react';
+import { ArrowUp, ChevronDown, Edit3, Image, Mic, Plus, Sparkles } from 'lucide-react';
 import type { Agent } from '../hooks/useAgentFleet';
 import type { AmbientSuggestion } from '../types/ambientSuggestion';
 import ProjectDropdown from './ProjectDropdown';
@@ -26,6 +26,7 @@ import {
   setHeavyModel as persistHeavyModel,
 } from '../lib/storage';
 import { fetchInferenceSettings, type InferenceSettings } from '../lib/api';
+import { appendVoiceTranscript, useVoiceInput } from '../lib/voiceInput';
 
 /** File attachment ready to send — base64-encoded with metadata */
 export interface ChatFile {
@@ -186,6 +187,24 @@ export default function ChatInput({
     setHeavyModel(id);
   }, []);
 
+  // In queue mode, input is never disabled — messages go to queue
+  const inputDisabled = isLoading && !queueMode;
+  const isQueueing = isLoading && queueMode;
+
+  const appendVoiceText = useCallback((transcript: string) => {
+    setValue((prev) => appendVoiceTranscript(prev, transcript));
+  }, []);
+
+  const focusTextarea = useCallback(() => {
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  }, []);
+
+  const voice = useVoiceInput({
+    disabled: inputDisabled,
+    onTranscript: appendVoiceText,
+    onAfterTranscript: focusTextarea,
+  });
+
   // Auto-resize textarea
   useEffect(() => {
     const el = textareaRef.current;
@@ -198,10 +217,6 @@ export default function ChatInput({
   useEffect(() => {
     textareaRef.current?.focus();
   }, []);
-
-  // In queue mode, input is never disabled — messages go to queue
-  const inputDisabled = isLoading && !queueMode;
-  const isQueueing = isLoading && queueMode;
 
   const hasContent = value.trim().length > 0 || files.length > 0;
 
@@ -521,6 +536,23 @@ export default function ChatInput({
                 </button>
               )}
 
+              {voice.supported && !isLoading && (
+                <button
+                  type="button"
+                  onClick={() => void voice.toggle()}
+                  disabled={inputDisabled}
+                  className={`flex items-center justify-center w-7 h-7 rounded-full transition-all flex-shrink-0 mb-0.5 disabled:opacity-30 ${
+                    voice.listening
+                      ? 'bg-ul-text text-white shadow-[0_0_0_4px_rgba(0,0,0,0.08)]'
+                      : 'text-ul-text-muted hover:text-ul-text-secondary hover:bg-ul-bg-hover'
+                  }`}
+                  title={voice.listening ? 'Stop dictation' : 'Dictate'}
+                  aria-label={voice.listening ? 'Stop dictation' : 'Dictate'}
+                >
+                  <Mic className="w-3.5 h-3.5" strokeWidth={1.8} />
+                </button>
+              )}
+
               {/* Queue / Send (A2) — amber circle with a tapered 3-bar queue
                   glyph. Halo on hover + focus only (never looping per spec). */}
               {isQueueing ? (
@@ -677,6 +709,12 @@ export default function ChatInput({
               </>
             )}
             <span>running now</span>
+          </div>
+        )}
+
+        {(voice.interimTranscript || voice.error) && (
+          <div className="mt-1.5 pl-3.5 pr-3 text-micro text-ul-text-muted-strong" aria-live="polite">
+            {voice.interimTranscript || voice.error}
           </div>
         )}
 

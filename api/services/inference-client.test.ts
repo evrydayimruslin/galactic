@@ -6,6 +6,7 @@ import {
   fetchInferenceChatCompletion,
   getInferenceChatCompletionsUrl,
   selectInferenceModel,
+  supportsInferenceRealtime,
 } from "./inference-client.ts";
 import {
   DEEPSEEK_THINKING_DISABLED_REQUEST_DEFAULTS,
@@ -50,6 +51,20 @@ Deno.test("inference client: BYOK mode stays on the resolved provider model", ()
   });
 
   assertEquals(selectInferenceModel(route, "google/gemini-3.1-flash-lite-preview:nitro"), "deepseek-v4-pro");
+});
+
+Deno.test("inference client: realtime is available only on OpenAI BYOK routes", () => {
+  assertEquals(supportsInferenceRealtime(makeRoute({
+    billingMode: "byok",
+    provider: "openai",
+    upstreamProvider: "openai",
+  })), true);
+  assertEquals(supportsInferenceRealtime(makeRoute({
+    billingMode: "byok",
+    provider: "deepseek",
+    upstreamProvider: "deepseek",
+  })), false);
+  assertEquals(supportsInferenceRealtime(makeRoute()), false);
 });
 
 Deno.test("inference client: Ultralight direct DeepSeek maps canonical models to upstream ids", () => {

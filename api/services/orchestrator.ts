@@ -34,6 +34,7 @@ import {
   createLlmInvocationTelemetrySession,
   recordToolInvocationTelemetry,
 } from './invocation-telemetry.ts';
+import type { ActiveWidgetContext } from '../../shared/contracts/widget.ts';
 
 // ── Types ──
 
@@ -118,6 +119,8 @@ export interface OrchestrateRequest {
   systemAgentContext?: SystemAgentContext;
   /** Local project file context gathered client-side (directory tree, config files, relevant source) */
   projectContext?: string;
+  /** Active widget surface context gathered from an open widget composer */
+  activeWidgetContexts?: ActiveWidgetContext[];
   /** Conversation ID for rolling summary persistence */
   conversationId?: string;
   /** User message ID for telemetry joins */
@@ -147,7 +150,7 @@ export async function* orchestrate(
   userEmail: string,
   options: OrchestrateOptions = {},
 ): AsyncGenerator<OrchestrateEvent> {
-  const { message, conversationHistory, interpreterModel, heavyModel, scope, systemAgentStates, systemAgentContext, projectContext, conversationId, userMessageId, files } = request;
+  const { message, conversationHistory, interpreterModel, heavyModel, scope, systemAgentStates, systemAgentContext, projectContext, activeWidgetContexts, conversationId, userMessageId, files } = request;
 
   let inferenceRoute: ResolvedInferenceRoute;
   try {
@@ -178,6 +181,7 @@ export async function* orchestrate(
       files,
       inferenceRoute,
       options.telemetry,
+      activeWidgetContexts,
     );
 
     // Forward Flash events to client as they happen

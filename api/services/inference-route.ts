@@ -1,4 +1,4 @@
-import type { ActiveBYOKProvider } from "../../shared/types/index.ts";
+import type { ActiveBYOKProvider, BYOKProviderCapabilities } from "../../shared/types/index.ts";
 import { BYOK_PROVIDERS, isActiveBYOKProvider } from "../../shared/types/index.ts";
 import type {
   InferenceBillingMode,
@@ -41,6 +41,24 @@ export interface ResolvedInferenceRoute {
   requestDefaults?: PlatformInferenceRequestDefaults;
   shouldRequireBalance: boolean;
   shouldDebitLight: boolean;
+}
+
+export function getInferenceRouteCapabilities(
+  route: Pick<ResolvedInferenceRoute, "billingMode" | "provider" | "upstreamProvider">,
+): BYOKProviderCapabilities | null {
+  if (route.billingMode === "byok" && isActiveBYOKProvider(route.provider)) {
+    return BYOK_PROVIDERS[route.provider].capabilities;
+  }
+  if (isActiveBYOKProvider(route.upstreamProvider)) {
+    return BYOK_PROVIDERS[route.upstreamProvider].capabilities;
+  }
+  return null;
+}
+
+export function routeSupportsRealtime(
+  route: Pick<ResolvedInferenceRoute, "billingMode" | "provider" | "upstreamProvider">,
+): boolean {
+  return getInferenceRouteCapabilities(route)?.realtime === true;
 }
 
 export interface ResolveInferenceRouteParams {

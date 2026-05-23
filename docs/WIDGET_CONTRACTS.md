@@ -110,6 +110,129 @@ Those surfaces come from the same manifest `widgets[].cards[]` declarations as
 the backend runtime, so the later desktop UI veneer can render from one
 contract.
 
+## Agentic Widgets
+
+Widgets can optionally expose semantic state, read context, and actions to the
+composer/agent loop. This is a progressive enhancement: widgets remain arbitrary
+clickable HTML/JS surfaces, and existing widgets do not need to adopt the
+agentic contract.
+
+The first contract layer is manifest metadata:
+
+```json
+{
+  "context_sources": [
+    {
+      "id": "email_conversations",
+      "label": "Email conversations",
+      "type": "function",
+      "access": "read",
+      "searchable": true,
+      "function": "search_conversations_context",
+      "default_for_widgets": ["email_inbox"]
+    }
+  ],
+  "widgets": [
+    {
+      "id": "email_inbox",
+      "label": "Email Approvals",
+      "agentic": true,
+      "context_function": "widget_email_inbox_context",
+      "actions_function": "widget_email_inbox_actions",
+      "context_sources": ["email_conversations"],
+      "agent_actions": [
+        {
+          "id": "send_selected_draft",
+          "label": "Send selected draft",
+          "mode": "write",
+          "confirmation": "user",
+          "mcp": {
+            "function": "conversation_act",
+            "args_template": { "action": "send" }
+          },
+          "expected_result": "The selected draft is sent and the widget refreshes."
+        },
+        {
+          "id": "show_draft_editor",
+          "label": "Show draft editor",
+          "mode": "ui",
+          "confirmation": "none",
+          "ui": {
+            "command": "focus",
+            "component_id": "draft_response"
+          },
+          "expected_result": "The draft editor is visible and focused."
+        }
+      ]
+    }
+  ]
+}
+```
+
+`context_sources[]` are read-only grounding sources for the context index. They
+may point at D1 tables, SELECT-only D1 queries, or app functions. They do not
+create a write path. Widget writes should still flow through MCP functions or
+widget-declared semantic actions.
+
+D1 context sources are permissioned by installation/library scope and by the
+manifest declaration itself. `d1_table` sources must list simple table names;
+the platform adds `user_id = :user_id` isolation and row/character budgets.
+`d1_query` sources must be a single SELECT/WITH statement, must include
+`:user_id`, and may use `:query` and `:limit` named placeholders. The platform
+also wraps declared queries in an outer row limit. Positional `?` placeholders
+and write/DDL statements are rejected. `redactions[]` are applied before rows
+are added to Flash context.
+
+Function-backed context sources are indexed for discovery and UI affordances.
+The PR5 executable read path is D1 table/query magnification; function-backed
+execution should be added only through an audited, read-only MCP invocation path.
+
+`agent_actions[]` describe actions that are safe to show to an agent. Each
+action has an id, label, mode (`read`, `write`, or `ui`), optional JSON schema,
+confirmation policy (`none`, `user`, or `high_risk`), and optional MCP binding.
+Write-mode actions should declare an explicit confirmation policy.
+
+The second layer is runtime state, reported by the widget bridge as an active
+widget context. Runtime snapshots should be compact and semantic: current view,
+visible components, selected entities, pending edits, enabled actions, errors,
+and recent event summaries. The platform should not rely on raw DOM selectors as
+the agentic control contract.
+
+Widget composers send `activeWidgetContexts[]` with orchestration requests. The
+server formats those snapshots into an `Active Widget Context` prompt block for
+Flash read/write routing, prompt construction, and capture telemetry. This is
+read/context plumbing only: clickable widgets keep working as-is, and widget
+action execution remains an explicit semantic action path rather than direct DOM
+automation.
+
+MCP-backed semantic actions run through the live widget bridge. The composer
+dispatches a `WidgetActionInvocation` with a `turn_id`, the widget handler calls
+its normal MCP functions with `_widget_surface_id`, `_widget_id`,
+`_widget_action_id`, and `_widget_turn_id` metadata, and the bridge reports a
+`WidgetActionResult` back into the surface event history. Write actions must
+still declare and pass a confirmation policy before the composer invokes them.
+
+UI-only actions use the same bridge and result path but do not need an MCP
+binding. A widget may declare `mode: "ui"` with `ui.command`,
+`ui.component_id`, and optional `ui.args_template` to describe actions like
+changing tabs, opening panels, focusing fields, or prefilling prompts. These
+actions are progressive enhancement over the clickable UI: the handler mutates
+the live widget view, calls `ulWidget.reportState`/`refreshContext`, and returns
+an ordinary `WidgetActionResult` snapshot.
+
+Each active widget surface keeps a bounded local event ring buffer. The bridge
+normalizes events with `id`, `surface_id`, `widget_id`, `turn_id` when present,
+and `created_at`, then the active widget context sends both the recent events
+and a compact `recentEventSummary`/`recentEventCount` pair into orchestration.
+The prompt path should use the summary for continuity and avoid expanding
+unbounded history into model context.
+
+MCP-backed widget actions are auditable through `mcp_call_logs` widget columns:
+`widget_action`, `widget_surface_id`, `widget_id`, `widget_action_id`, and
+`widget_turn_id`. These fields come from the same `_widget_*` metadata passed by
+the widget handler, while the app function receives only clean business
+arguments.
+
 ## Deprecated Legacy Contract
 
 The deprecated contract is a single exported function such as

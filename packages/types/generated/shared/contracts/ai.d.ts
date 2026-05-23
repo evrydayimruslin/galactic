@@ -1,19 +1,19 @@
-import type { ActiveBYOKProvider, BYOKModel, BYOKProviderCapabilities } from '../types/index.ts';
+import type { ActiveBYOKProvider, BYOKModel, BYOKProviderCapabilities } from "../types/index.ts";
 export interface AITextPart {
-    type: 'text';
+    type: "text";
     text: string;
 }
 export interface AIFilePart {
-    type: 'file';
+    type: "file";
     data: string;
     filename?: string;
 }
 export type AIContentPart = AITextPart | AIFilePart;
 export interface AIMessage {
-    role: 'system' | 'user' | 'assistant';
+    role: "system" | "user" | "assistant";
     content: string | AIContentPart[];
     cache_control?: {
-        type: 'ephemeral';
+        type: "ephemeral";
     };
 }
 export interface AITool {
@@ -58,14 +58,14 @@ export interface ChatTraceContext {
     source?: string;
 }
 export interface ChatMessage {
-    role: 'system' | 'user' | 'assistant' | 'tool';
+    role: "system" | "user" | "assistant" | "tool";
     content: string | null;
     tool_calls?: ChatToolCall[];
     tool_call_id?: string;
     name?: string;
 }
 export interface ChatTool {
-    type: 'function';
+    type: "function";
     function: {
         name: string;
         description?: string;
@@ -74,7 +74,7 @@ export interface ChatTool {
 }
 export interface ChatToolCall {
     id: string;
-    type: 'function';
+    type: "function";
     function: {
         name: string;
         arguments: string;
@@ -92,6 +92,12 @@ export interface ChatBillingResult {
     balance_after: number;
     was_depleted: boolean;
 }
+export interface WidgetToolInvocationTelemetryContext {
+    surfaceId?: string;
+    widgetId?: string;
+    actionId?: string;
+    turnId?: string;
+}
 export interface ToolInvocationTelemetryRequest {
     invocationId: string;
     traceId?: string;
@@ -104,18 +110,22 @@ export interface ToolInvocationTelemetryRequest {
     appId?: string;
     mcpId?: string;
     functionName?: string;
+    receiptId?: string;
+    routineId?: string;
+    routineRunId?: string;
     schemaSnapshot?: unknown;
     args?: unknown;
     result?: unknown;
     startedAt?: string;
     completedAt?: string;
     durationMs?: number;
-    status: 'success' | 'error' | 'aborted' | 'timeout';
+    status: "success" | "error" | "aborted" | "timeout";
     errorType?: string;
     errorMessage?: string;
+    widgetAction?: WidgetToolInvocationTelemetryContext;
     metadata?: Record<string, unknown>;
 }
-export type InferenceBillingMode = 'light' | 'byok';
+export type InferenceBillingMode = "light" | "byok";
 export interface InferenceRoutePreference {
     billingMode?: InferenceBillingMode;
     provider?: ActiveBYOKProvider;
@@ -125,7 +135,7 @@ export interface ChatInferenceProviderOption {
     id: ActiveBYOKProvider;
     name: string;
     description: string;
-    protocol: 'openai-compatible';
+    protocol: "openai-compatible";
     baseUrl: string;
     defaultModel: string;
     models: BYOKModel[];
@@ -139,7 +149,7 @@ export interface ChatInferenceProviderOption {
     addedAt: string | null;
 }
 export interface ChatInferenceLightOption {
-    provider: 'openrouter';
+    provider: "openrouter";
     defaultModel: string;
     models: BYOKModel[];
     balanceLight: number | null;

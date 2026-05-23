@@ -110,6 +110,13 @@ export interface ChatBillingResult {
   was_depleted: boolean;
 }
 
+export interface WidgetToolInvocationTelemetryContext {
+  surfaceId?: string;
+  widgetId?: string;
+  actionId?: string;
+  turnId?: string;
+}
+
 export interface ToolInvocationTelemetryRequest {
   invocationId: string;
   traceId?: string;
@@ -134,6 +141,7 @@ export interface ToolInvocationTelemetryRequest {
   status: "success" | "error" | "aborted" | "timeout";
   errorType?: string;
   errorMessage?: string;
+  widgetAction?: WidgetToolInvocationTelemetryContext;
   metadata?: Record<string, unknown>;
 }
 

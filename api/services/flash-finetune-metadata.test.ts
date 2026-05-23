@@ -206,6 +206,8 @@ Deno.test("flash finetune metadata: input feature builder summarizes context wit
       },
       conversationSearch: true,
       contextQuery: "Sarah notes",
+      activeWidgetContexts: [{ surfaceId: "surface-1" }],
+      activeWidgetContextBlock: "## Active Widget Context\n### Inbox\n",
     }),
     {
       has_files: true,
@@ -222,6 +224,9 @@ Deno.test("flash finetune metadata: input feature builder summarizes context wit
       magnified_context_bytes: 8,
       conversation_search_requested: true,
       context_query_present: true,
+      has_active_widget_context: true,
+      active_widget_context_count: 1,
+      active_widget_context_bytes: 35,
     },
   );
 });
@@ -359,6 +364,9 @@ Deno.test("flash finetune metadata: invocation metadata builds a stable training
         magnified_context_bytes: 0,
         conversation_search_requested: false,
         context_query_present: false,
+        has_active_widget_context: false,
+        active_widget_context_count: 0,
+        active_widget_context_bytes: 0,
       },
       output_labels: {
         escalation_target: "tool_dealer",

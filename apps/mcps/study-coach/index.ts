@@ -2,7 +2,7 @@
 // Your personal AI tutor with quizzes, custom lessons, and progress tracking.
 // Storage: Ultralight D1 | Permissions: ai:call
 
-const ultralight = globalThis.ultralight;
+const ultralight = (globalThis as typeof globalThis & { ultralight: any }).ultralight;
 const AI_MODEL = 'meta-llama/llama-4-scout';
 
 type SqlValue = string | number | null;
@@ -1570,6 +1570,156 @@ input[type="file"] { display: none; }
 <script>
 var state = { view: 'setup', subjects: [], selectedSubject: null, session: null, currentQ: null, answers: [], results: null, loading: false, loadingMsg: '', file: null, error: null, questionShownAt: 0 };
 var SUGGESTIONS = ['Biology', 'History', 'Math', 'Physics', 'Code', 'Language', 'Chemistry', 'Literature'];
+var agentActionsRegistered = false;
+
+function currentSubject() {
+  for (var i = 0; i < state.subjects.length; i++) {
+    if (state.subjects[i].id === state.selectedSubject) return state.subjects[i];
+  }
+  return null;
+}
+
+function buildQuizWidgetAgentSnapshot() {
+  var subject = currentSubject();
+  var enabled = ['show_quiz_setup', 'focus_quiz_topic'];
+  if (state.selectedSubject) enabled.push('start_selected_subject_quiz');
+  if (state.results && state.results.lesson && state.results.lesson.lesson_id) enabled.push('open_related_lesson');
+  var components = [
+    {
+      id: 'quiz_setup',
+      type: 'form',
+      label: 'Quiz setup',
+      purpose: 'Choose a topic, upload notes, or select a subject',
+      actions: ['show_quiz_setup', 'focus_quiz_topic', 'start_selected_subject_quiz'],
+      state: { visible: state.view === 'setup', selected_subject_id: state.selectedSubject }
+    }
+  ];
+  if (state.view === 'quiz' && state.currentQ) {
+    components.push({
+      id: 'quiz_card',
+      type: 'question',
+      label: 'Current quiz question',
+      purpose: 'Answer the active quiz question',
+      data_refs: [{ type: 'quiz_question', id: state.currentQ.id, label: state.currentQ.text }],
+      state: {
+        question_index: state.currentIdx + 1,
+        total_questions: state.session ? state.session.total : 0,
+        answered: !!state.answered,
+        question_type: state.currentQ.type || 'mc'
+      }
+    });
+  }
+  if (state.view === 'results' && state.results) {
+    components.push({
+      id: 'quiz_results',
+      type: 'summary',
+      label: 'Quiz results',
+      purpose: 'Review score, weak concepts, and generated lesson',
+      actions: ['open_related_lesson', 'show_quiz_setup'],
+      state: { score_pct: state.results.score_pct, has_lesson: !!(state.results.lesson && state.results.lesson.lesson_id) }
+    });
+  }
+  return {
+    widget_id: 'quiz',
+    title: 'Quiz',
+    summary: state.view === 'quiz' && state.currentQ
+      ? 'Question ' + (state.currentIdx + 1) + ' of ' + (state.session ? state.session.total : 0) + ': ' + state.currentQ.text
+      : state.view === 'results' && state.results
+      ? 'Quiz complete with score ' + state.results.score_pct + '%'
+      : subject
+      ? 'Quiz setup with selected subject ' + subject.name
+      : 'Quiz setup with no selected subject',
+    current_view: state.view,
+    selected_entities: [
+      subject ? { type: 'subject', id: subject.id, label: subject.name, table: 'subjects' } : null,
+      state.session ? { type: 'quiz_session', id: state.session.id, label: 'Current quiz session', table: 'quiz_sessions' } : null,
+      state.currentQ ? { type: 'quiz_question', id: state.currentQ.id, label: state.currentQ.text, table: 'quiz_answers' } : null
+    ].filter(Boolean),
+    visible_components: components,
+    pending_edits: state.view === 'quiz' && state.currentQ && !state.answered && (state.currentQ.type || 'mc') === 'open'
+      ? [{ field: 'user_answer', label: 'Open quiz answer', dirty: true }]
+      : [],
+    enabled_actions: enabled,
+    updated_at: new Date().toISOString()
+  };
+}
+
+function syncQuizWidgetAgentContext() {
+  if (!window.ulWidget || typeof window.ulWidget.reportState !== 'function') return;
+  window.ulWidget.reportState(buildQuizWidgetAgentSnapshot);
+}
+
+function registerQuizWidgetAction(action, handler) {
+  if (!window.ulWidget || typeof window.ulWidget.registerAction !== 'function') return;
+  if (typeof window.ulWidget.registerViewAction === 'function' && action.mode === 'ui') {
+    window.ulWidget.registerViewAction(action, handler);
+    return;
+  }
+  window.ulWidget.registerAction(action, handler);
+}
+
+function registerQuizAgentActions() {
+  if (agentActionsRegistered || !window.ulWidget || typeof window.ulWidget.registerAction !== 'function') return;
+  agentActionsRegistered = true;
+  registerQuizWidgetAction({
+    id: 'show_quiz_setup',
+    label: 'Show quiz setup',
+    description: 'Return to the quiz setup view with topic input and subject picker.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'navigate', component_id: 'quiz_setup' }
+  }, function() {
+    state.view = 'setup';
+    state.answered = false;
+    state.results = null;
+    render();
+    return { view: state.view };
+  });
+  registerQuizWidgetAction({
+    id: 'focus_quiz_topic',
+    label: 'Focus quiz topic',
+    description: 'Focus the topic input and optionally prefill a requested topic.',
+    mode: 'ui',
+    confirmation: 'none',
+    args_schema: { type: 'object', properties: { text: { type: 'string' } } },
+    ui: { command: 'prefill', component_id: 'topic_input' }
+  }, function(args) {
+    state.view = 'setup';
+    render();
+    var input = document.getElementById('topicInput');
+    var text = args && (args.text || args.topic || args.value);
+    if (input && text) input.value = String(text);
+    if (input && typeof input.focus === 'function') input.focus();
+    syncQuizWidgetAgentContext();
+    return { focused: !!input, prefilled: !!text };
+  });
+  registerQuizWidgetAction({
+    id: 'start_selected_subject_quiz',
+    label: 'Start selected subject quiz',
+    description: 'Start a quiz for the currently selected subject.',
+    mode: 'write',
+    confirmation: 'user',
+    mcp: { function: 'widget_quiz_data', args_template: { action: 'start' } }
+  }, async function() {
+    if (!state.selectedSubject) throw new Error('No subject selected');
+    await startQuiz();
+    return { view: state.view, session_id: state.session && state.session.id };
+  });
+  registerQuizWidgetAction({
+    id: 'open_related_lesson',
+    label: 'Open related lesson',
+    description: 'Open the lesson generated from the current quiz result.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'open_widget', component_id: 'lesson_result' }
+  }, function() {
+    var lessonId = state.results && state.results.lesson && state.results.lesson.lesson_id;
+    if (!lessonId) throw new Error('No related lesson is available');
+    openLesson(lessonId);
+    return { lesson_id: lessonId };
+  });
+  syncQuizWidgetAgentContext();
+}
 
 function log(tag, msg, data) { console.log('[Quiz/' + tag + '] ' + msg, data !== undefined ? data : ''); }
 function showError(msg) { state.error = msg; state.loading = false; render(); setTimeout(function() { state.error = null; render(); }, 8000); }
@@ -1714,6 +1864,7 @@ async function nextQuestion() {
 
 function render() {
   var el = document.getElementById('app');
+  setTimeout(syncQuizWidgetAgentContext, 0);
   var errorBanner = state.error ? '<div style="background:#fef2f2;color:#991b1b;padding:10px 14px;border-radius:8px;font-size:12px;margin-bottom:12px">' + state.error + '</div>' : '';
   if (state.loading) { el.innerHTML = errorBanner + '<div class="loading"><div class="spinner"></div><p style="margin-top:12px">' + (state.loadingMsg || 'Loading...') + '</p></div>'; return; }
 
@@ -1876,6 +2027,7 @@ async function startPendingQuiz(sessionId) {
 function toggleSubject(id) { state.selectedSubject = state.selectedSubject === id ? null : id; render(); }
 function resetQuiz() { state = { view: 'setup', subjects: state.subjects, selectedSubject: null, session: null, currentQ: null, answers: [], results: null, loading: false, loadingMsg: '', file: null, questionShownAt: 0 }; load(); }
 if (!window.ulAction) window.ulAction = function() { return Promise.reject('No bridge'); };
+registerQuizAgentActions();
 
 // Context-aware loading: auto-start quiz if opened from Lessons widget
 if (window.ulWidgetContext && window.ulWidgetContext.pending_session_id) {
@@ -1994,6 +2146,133 @@ input[type="file"] { display: none; }
 <script>
 var pState = { data: null, loading: false, file: null, showAdd: false };
 var SUGGESTIONS = ['Biology', 'History', 'Math', 'Physics', 'Code', 'Language'];
+var progressAgentActionsRegistered = false;
+
+function buildProgressWidgetAgentSnapshot() {
+  var d = pState.data || {};
+  var enabled = ['focus_new_study_topic'];
+  if (d.pending_quizzes && d.pending_quizzes.length) enabled.push('open_next_pending_quiz');
+  if (d.unread_lessons && d.unread_lessons.length) enabled.push('open_latest_unread_lesson');
+  var components = [
+    {
+      id: 'progress_summary',
+      type: 'dashboard',
+      label: 'Study progress summary',
+      purpose: 'Show concept count, quiz count, and average rating',
+      state: {
+        total_concepts: d.total_concepts || 0,
+        quiz_count: d.recent_quizzes ? d.recent_quizzes.length : 0,
+        average_understanding: d.average_understanding || null
+      }
+    },
+    {
+      id: 'topic_input',
+      type: 'input',
+      label: 'New study topic',
+      purpose: 'Create a new study subject from a topic or uploaded notes',
+      actions: ['focus_new_study_topic'],
+      state: { visible: !d.subjects || !d.subjects.length || pState.showAdd }
+    }
+  ];
+  if (d.pending_quizzes && d.pending_quizzes.length) {
+    components.push({
+      id: 'pending_quiz',
+      type: 'list',
+      label: 'Pending quizzes',
+      purpose: 'Resume pre-generated quizzes',
+      actions: ['open_next_pending_quiz'],
+      state: { count: d.pending_quizzes.length }
+    });
+  }
+  if (d.unread_lessons && d.unread_lessons.length) {
+    components.push({
+      id: 'unread_lesson',
+      type: 'list',
+      label: 'Unread lessons',
+      purpose: 'Open unread generated lessons',
+      actions: ['open_latest_unread_lesson'],
+      state: { count: d.unread_lessons.length }
+    });
+  }
+  return {
+    widget_id: 'progress',
+    title: 'Study Progress',
+    summary: (d.subjects && d.subjects.length)
+      ? 'Progress dashboard with ' + d.subjects.length + ' subject(s), ' + (d.total_concepts || 0) + ' concept(s), and ' + ((d.recent_quizzes && d.recent_quizzes.length) || 0) + ' recent quiz(es)'
+      : 'Progress onboarding view with no study data yet',
+    current_view: (d.subjects && d.subjects.length) ? 'progress' : 'onboarding',
+    selected_entities: (d.subjects || []).slice(0, 6).map(function(s) {
+      return { type: 'subject', id: s.id || s.name, label: s.name, table: 'subjects', value: { mastery: s.mastery, quiz_count: s.quiz_count } };
+    }),
+    visible_components: components,
+    enabled_actions: enabled,
+    updated_at: new Date().toISOString()
+  };
+}
+
+function syncProgressWidgetAgentContext() {
+  if (!window.ulWidget || typeof window.ulWidget.reportState !== 'function') return;
+  window.ulWidget.reportState(buildProgressWidgetAgentSnapshot);
+}
+
+function registerProgressWidgetAction(action, handler) {
+  if (!window.ulWidget || typeof window.ulWidget.registerAction !== 'function') return;
+  if (typeof window.ulWidget.registerViewAction === 'function' && action.mode === 'ui') {
+    window.ulWidget.registerViewAction(action, handler);
+    return;
+  }
+  window.ulWidget.registerAction(action, handler);
+}
+
+function registerProgressAgentActions() {
+  if (progressAgentActionsRegistered || !window.ulWidget || typeof window.ulWidget.registerAction !== 'function') return;
+  progressAgentActionsRegistered = true;
+  registerProgressWidgetAction({
+    id: 'focus_new_study_topic',
+    label: 'Focus new study topic',
+    description: 'Open the new topic input and optionally prefill a topic.',
+    mode: 'ui',
+    confirmation: 'none',
+    args_schema: { type: 'object', properties: { text: { type: 'string' } } },
+    ui: { command: 'prefill', component_id: 'topic_input' }
+  }, function(args) {
+    pState.showAdd = true;
+    render();
+    var input = document.getElementById('topicInput');
+    var text = args && (args.text || args.topic || args.value);
+    if (input && text) input.value = String(text);
+    if (input && typeof input.focus === 'function') input.focus();
+    syncProgressWidgetAgentContext();
+    return { focused: !!input, prefilled: !!text };
+  });
+  registerProgressWidgetAction({
+    id: 'open_next_pending_quiz',
+    label: 'Open next pending quiz',
+    description: 'Open the first pending quiz from the progress dashboard.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'open_widget', component_id: 'pending_quiz' }
+  }, function() {
+    var pending = pState.data && pState.data.pending_quizzes && pState.data.pending_quizzes[0];
+    if (!pending) throw new Error('No pending quiz is available');
+    openPendingQuiz(pending.id, pending.subject_id);
+    return { pending_session_id: pending.id, subject_id: pending.subject_id };
+  });
+  registerProgressWidgetAction({
+    id: 'open_latest_unread_lesson',
+    label: 'Open latest unread lesson',
+    description: 'Open the first unread lesson from the progress dashboard.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'open_widget', component_id: 'unread_lesson' }
+  }, function() {
+    var lesson = pState.data && pState.data.unread_lessons && pState.data.unread_lessons[0];
+    if (!lesson) throw new Error('No unread lesson is available');
+    openLessonWidget(lesson.id);
+    return { lesson_id: lesson.id };
+  });
+  syncProgressWidgetAgentContext();
+}
 
 document.getElementById('filePicker').addEventListener('change', function(e) {
   var f = e.target.files[0];
@@ -2029,6 +2308,7 @@ function submitTopic() {
 
 function render() {
   var el = document.getElementById('app');
+  setTimeout(syncProgressWidgetAgentContext, 0);
   if (pState.loading) { el.innerHTML = '<div class="loading"><div class="spinner"></div><p style="margin-top:12px">Loading...</p></div>'; return; }
 
   var d = pState.data;
@@ -2102,6 +2382,7 @@ function openLessonWidget(lessonId) {
   if (window.ulOpenWidget) ulOpenWidget('lessons', { lesson_id: lessonId });
 }
 if (!window.ulAction) window.ulAction = function() { return Promise.reject('No bridge'); };
+registerProgressAgentActions();
 load();
 </script>
 </body>
@@ -2228,6 +2509,150 @@ input[type="file"] { display: none; }
 <script>
 var lState = { view: 'list', lessons: [], currentLesson: null, loading: false, loadingMsg: '', file: null };
 var SUGGESTIONS = ['Biology', 'History', 'Math', 'Physics', 'Code', 'Language'];
+var lessonsAgentActionsRegistered = false;
+
+function buildLessonsWidgetAgentSnapshot() {
+  var enabled = ['show_lesson_list', 'focus_lesson_topic'];
+  if (lState.currentLesson || (lState.lessons && lState.lessons.length)) enabled.push('open_selected_lesson');
+  if (lState.currentLesson && lState.currentPage < (lState.pages || []).length - 1) enabled.push('next_lesson_page');
+  if (lState.currentLesson && lState.currentLesson.subject_id) enabled.push('start_lesson_quiz');
+  var components = [
+    {
+      id: 'lesson_list',
+      type: 'list',
+      label: 'Lesson list',
+      purpose: 'Browse generated lessons',
+      actions: ['show_lesson_list', 'open_selected_lesson'],
+      state: { visible: lState.view === 'list', count: lState.lessons ? lState.lessons.length : 0 }
+    },
+    {
+      id: 'topic_input',
+      type: 'input',
+      label: 'New lesson topic',
+      purpose: 'Generate a new personalized lesson',
+      actions: ['focus_lesson_topic'],
+      state: { visible: lState.view === 'list' }
+    }
+  ];
+  if (lState.currentLesson) {
+    components.push({
+      id: 'lesson_detail',
+      type: 'document',
+      label: lState.currentLesson.title || 'Lesson',
+      purpose: 'Read the selected lesson',
+      data_refs: [{ type: 'lesson', id: lState.currentLesson.id, label: lState.currentLesson.title, table: 'lessons' }],
+      actions: ['next_lesson_page', 'start_lesson_quiz', 'show_lesson_list'],
+      state: {
+        page: (lState.currentPage || 0) + 1,
+        total_pages: (lState.pages || []).length || 1,
+        subject_id: lState.currentLesson.subject_id || null
+      }
+    });
+  }
+  return {
+    widget_id: 'lessons',
+    title: 'Lessons',
+    summary: lState.currentLesson
+      ? 'Reading lesson "' + lState.currentLesson.title + '" page ' + ((lState.currentPage || 0) + 1) + ' of ' + ((lState.pages || []).length || 1)
+      : 'Lesson list with ' + ((lState.lessons && lState.lessons.length) || 0) + ' lesson(s)',
+    current_view: lState.view,
+    selected_entities: lState.currentLesson
+      ? [{ type: 'lesson', id: lState.currentLesson.id, label: lState.currentLesson.title, table: 'lessons' }]
+      : (lState.lessons || []).slice(0, 6).map(function(lesson) {
+        return { type: 'lesson', id: lesson.id, label: lesson.title, table: 'lessons' };
+      }),
+    visible_components: components,
+    enabled_actions: enabled,
+    updated_at: new Date().toISOString()
+  };
+}
+
+function syncLessonsWidgetAgentContext() {
+  if (!window.ulWidget || typeof window.ulWidget.reportState !== 'function') return;
+  window.ulWidget.reportState(buildLessonsWidgetAgentSnapshot);
+}
+
+function registerLessonsWidgetAction(action, handler) {
+  if (!window.ulWidget || typeof window.ulWidget.registerAction !== 'function') return;
+  if (typeof window.ulWidget.registerViewAction === 'function' && action.mode === 'ui') {
+    window.ulWidget.registerViewAction(action, handler);
+    return;
+  }
+  window.ulWidget.registerAction(action, handler);
+}
+
+function registerLessonsAgentActions() {
+  if (lessonsAgentActionsRegistered || !window.ulWidget || typeof window.ulWidget.registerAction !== 'function') return;
+  lessonsAgentActionsRegistered = true;
+  registerLessonsWidgetAction({
+    id: 'show_lesson_list',
+    label: 'Show lesson list',
+    description: 'Return to the lesson list.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'navigate', component_id: 'lesson_list' }
+  }, async function() {
+    await loadList();
+    return { view: lState.view, lesson_count: lState.lessons.length };
+  });
+  registerLessonsWidgetAction({
+    id: 'open_selected_lesson',
+    label: 'Open selected lesson',
+    description: 'Open the current or first available lesson.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'open', component_id: 'lesson_detail' }
+  }, async function() {
+    if (lState.currentLesson) return { lesson_id: lState.currentLesson.id };
+    var lesson = lState.lessons && lState.lessons[0];
+    if (!lesson) throw new Error('No lesson is available');
+    await viewLesson(lesson.id);
+    return { lesson_id: lesson.id };
+  });
+  registerLessonsWidgetAction({
+    id: 'next_lesson_page',
+    label: 'Next lesson page',
+    description: 'Advance to the next page in the current lesson.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'navigate', component_id: 'lesson_page' }
+  }, function() {
+    if (!lState.currentLesson) throw new Error('No lesson is open');
+    nextPage();
+    return { page: (lState.currentPage || 0) + 1, total_pages: (lState.pages || []).length || 1 };
+  });
+  registerLessonsWidgetAction({
+    id: 'start_lesson_quiz',
+    label: 'Start lesson quiz',
+    description: 'Open the Quiz widget for the current lesson subject.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'open_widget', component_id: 'lesson_quiz' }
+  }, function() {
+    if (!lState.currentLesson || !lState.currentLesson.subject_id) throw new Error('Current lesson has no subject');
+    openQuizForSubject(lState.currentLesson.subject_id);
+    return { subject_id: lState.currentLesson.subject_id };
+  });
+  registerLessonsWidgetAction({
+    id: 'focus_lesson_topic',
+    label: 'Focus lesson topic',
+    description: 'Focus the new lesson topic input and optionally prefill a requested topic.',
+    mode: 'ui',
+    confirmation: 'none',
+    args_schema: { type: 'object', properties: { text: { type: 'string' } } },
+    ui: { command: 'prefill', component_id: 'topic_input' }
+  }, function(args) {
+    lState.view = 'list';
+    render();
+    var input = document.getElementById('topicInput');
+    var text = args && (args.text || args.topic || args.value);
+    if (input && text) input.value = String(text);
+    if (input && typeof input.focus === 'function') input.focus();
+    syncLessonsWidgetAgentContext();
+    return { focused: !!input, prefilled: !!text };
+  });
+  syncLessonsWidgetAgentContext();
+}
 
 document.getElementById('filePicker').addEventListener('change', function(e) {
   var f = e.target.files[0];
@@ -2337,6 +2762,7 @@ async function viewLesson(id) {
 
 function render() {
   var el = document.getElementById('app');
+  setTimeout(syncLessonsWidgetAgentContext, 0);
   if (lState.loading) { el.innerHTML = '<div class="loading"><div class="spinner"></div><p style="margin-top:12px">' + lState.loadingMsg + '</p></div>'; return; }
 
   if (lState.view === 'list') {
@@ -2412,6 +2838,7 @@ function openQuizForSubject(subjectId) {
 }
 
 if (!window.ulAction) window.ulAction = function() { return Promise.reject('No bridge'); };
+registerLessonsAgentActions();
 
 // Context-aware loading: auto-navigate to specific lesson if opened from Quiz results
 if (window.ulWidgetContext && window.ulWidgetContext.lesson_id) {

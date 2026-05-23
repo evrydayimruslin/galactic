@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import type { ResolvedInferenceRoute } from "./inference-route.ts";
 import {
+  buildActiveWidgetContextBlock,
   buildFlashCallTelemetryContext,
   callFlashText,
   runFlashBroker,
@@ -79,6 +80,65 @@ Deno.test("flash broker telemetry: request conversation id and default source ar
       source: "orchestrate",
     },
   );
+});
+
+Deno.test("flash broker: active widget context block summarizes visible UI state", () => {
+  const block = buildActiveWidgetContextBlock([{
+    surfaceId: "surface-email-window",
+    kind: "window",
+    appId: "app-email",
+    appSlug: "email",
+    appName: "Email",
+    widgetId: "inbox",
+    widgetName: "Inbox",
+    status: "ready",
+    snapshot: {
+      widget_id: "inbox",
+      title: "Inbox approval queue",
+      current_view: "draft-review",
+      summary: "A draft reply is selected and ready for review.",
+      visible_components: [{
+        id: "draft-editor",
+        type: "editor",
+        label: "Draft editor",
+        purpose: "Shows the selected draft text",
+        data_refs: [{ type: "draft", id: "draft-123", label: "ACME follow-up" }],
+        actions: ["approve_draft"],
+      }],
+      selected_entities: [{ type: "thread", id: "thread-9", label: "ACME" }],
+      enabled_actions: ["approve_draft"],
+    },
+    actions: [{
+      id: "approve_draft",
+      label: "Approve draft",
+      mode: "write",
+      confirmation: "user",
+      mcp: { function: "email_approve_draft" },
+    }, {
+      id: "show_draft_editor",
+      label: "Show draft editor",
+      mode: "ui",
+      confirmation: "none",
+      ui: { command: "focus", component_id: "draft-editor" },
+    }],
+    recentEvents: [{
+      kind: "navigation",
+      label: "Opened draft review",
+      turn_id: "turn-widget-1",
+    }],
+    recentEventSummary: "navigation - Opened draft review",
+    recentEventCount: 1,
+    updatedAt: 1_714_000_000_000,
+  }]);
+
+  assertEquals(block.includes("## Active Widget Context"), true);
+  assertEquals(block.includes("Inbox approval queue"), true);
+  assertEquals(block.includes("Draft editor"), true);
+  assertEquals(block.includes("approve_draft"), true);
+  assertEquals(block.includes("email_approve_draft"), true);
+  assertEquals(block.includes("ui:focus(draft-editor)"), true);
+  assertEquals(block.includes("Recent event summary (1 recorded)"), true);
+  assertEquals(block.includes("turn=turn-widget-1"), true);
 });
 
 Deno.test("flash broker routing: pure system-agent delegations skip Heavy prompt construction", () => {
@@ -180,6 +240,7 @@ Deno.test("flash broker routing: pure system-agent delegations avoid Stage 2 and
       },
     },
     widgets: [],
+    contextSources: [],
     types: "",
     updatedAt: "2026-05-06T12:00:00.000Z",
   };

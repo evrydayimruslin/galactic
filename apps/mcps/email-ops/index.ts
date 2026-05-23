@@ -10,7 +10,7 @@
 // Widgets: widget_email_inbox_ui (full deck app), widget_email_faqs_ui (FAQ editor)
 // Permissions: ai:call, net:fetch, net:connect
 
-const ultralight = globalThis.ultralight;
+const ultralight = (globalThis as typeof globalThis & { ultralight: any }).ultralight;
 const AI_MODEL = 'google/gemini-3-flash-preview';
 
 type SqlValue = string | number | boolean | null;
@@ -2498,6 +2498,7 @@ const DECK_UI_HTML = `<!DOCTYPE html>
 
 <script>
 var items = [], filteredItems = [], currentIdx = 0, currentView = 'active', inputMode = null, loading = true;
+var agentActionsRegistered = false;
 
 function esc(s) {
   if (!s) return '';
@@ -2535,6 +2536,348 @@ function typeLabel(t) {
   return map[t] || t;
 }
 
+function selectedItem() {
+  return filteredItems[currentIdx] || null;
+}
+
+function latestDraftFor(item) {
+  if (!item || !item.versions) return null;
+  for (var i = item.versions.length - 1; i >= 0; i--) {
+    if (['auto_draft','regeneration','manual_edit','followup_draft'].indexOf(item.versions[i].type) >= 0) {
+      return item.versions[i];
+    }
+  }
+  return null;
+}
+
+function selectedRecipientFor(item) {
+  var selectEl = document.getElementById('recipient-select');
+  var customEl = document.getElementById('recipient-custom');
+  if (customEl && customEl.classList.contains('visible') && customEl.value.trim()) {
+    var recipient = customEl.value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) throw new Error('Invalid email: ' + recipient);
+    return recipient;
+  }
+  return selectEl && selectEl.value ? selectEl.value : item.guest_email;
+}
+
+function enabledWidgetActions(item) {
+  var enabled = ['show_active_view', 'show_sent_view'];
+  if (!item) return enabled;
+  enabled.push('load_selected_history');
+  var latestDraft = latestDraftFor(item);
+  if ((item.versions || []).length > 2) enabled.push('open_version_history');
+  if (currentView === 'active') {
+    enabled.push('discard_selected_conversation');
+    if (latestDraft) {
+      enabled.push('show_draft_editor');
+      enabled.push('show_regenerate_prompt');
+      enabled.push('send_selected_draft');
+    }
+  }
+  if (currentView === 'archive') {
+    enabled.push('show_followup_prompt');
+  }
+  return enabled;
+}
+
+function buildWidgetAgentSnapshot() {
+  var item = selectedItem();
+  var latestDraft = latestDraftFor(item);
+  var enabledActions = enabledWidgetActions(item);
+  var visibleComponents = [
+    {
+      id: 'tabs',
+      type: 'tabs',
+      label: 'Conversation views',
+      purpose: 'Switch between active, sent, and discarded conversations',
+      state: { view: currentView }
+    },
+    {
+      id: 'conversation_card',
+      type: 'card',
+      label: item ? item.subject : 'No conversation selected',
+      purpose: 'Inspect the selected guest conversation',
+      actions: enabledActions,
+      state: { index: currentIdx, total: filteredItems.length, input_mode: inputMode }
+    }
+  ];
+  if (latestDraft) {
+    visibleComponents.push({
+      id: 'draft_response',
+      type: 'text',
+      label: 'Draft response',
+      purpose: 'Review the selected draft before sending',
+      data_refs: [{ type: 'version', id: latestDraft.id, label: 'Latest draft' }],
+      actions: ['show_draft_editor', 'show_regenerate_prompt', 'send_selected_draft'],
+      state: { editing: inputMode === 'edit' }
+    });
+  }
+  if ((item && item.versions || []).length > 2) {
+    visibleComponents.push({
+      id: 'version_history',
+      type: 'timeline',
+      label: 'Version history',
+      purpose: 'Inspect draft and message revisions',
+      actions: ['open_version_history'],
+      state: { available: true }
+    });
+  }
+
+  return {
+    widget_id: 'email_inbox',
+    title: 'Email Approvals',
+    summary: item
+      ? currentView + ' conversation ' + (currentIdx + 1) + ' of ' + filteredItems.length + ': ' + item.subject
+      : currentView + ' view has no visible conversations',
+    current_view: currentView,
+    selected_entities: item
+      ? [{
+        type: 'conversation',
+        id: item.id,
+        label: item.subject,
+        table: 'conversations',
+        value: {
+          guest_email: item.guest_email,
+          language: item.language,
+          classification: item.classification,
+          status: item.status
+        }
+      }]
+      : [],
+    visible_components: visibleComponents,
+    visible_data_refs: item
+      ? [
+        { type: 'conversation', id: item.id, label: item.subject, table: 'conversations' },
+        latestDraft ? { type: 'version', id: latestDraft.id, label: 'Latest draft', table: 'versions' } : null
+      ].filter(Boolean)
+      : [],
+    pending_edits: inputMode
+      ? [{
+        field: inputMode === 'edit' ? 'draft_body' : inputMode === 'regen' ? 'regeneration_prompt' : 'followup_prompt',
+        label: inputMode === 'edit' ? 'Draft body' : inputMode === 'regen' ? 'Regeneration instructions' : 'Follow up',
+        dirty: true,
+        entity: item ? { type: 'conversation', id: item.id, label: item.subject } : undefined
+      }]
+      : [],
+    enabled_actions: enabledActions,
+    updated_at: new Date().toISOString()
+  };
+}
+
+function syncWidgetAgentContext() {
+  if (!window.ulWidget || typeof window.ulWidget.reportState !== 'function') return;
+  window.ulWidget.reportState(buildWidgetAgentSnapshot);
+}
+
+async function runConversationActionForSelected(action) {
+  var item = selectedItem();
+  if (!item) throw new Error('No conversation selected');
+  var result = await ulAction('conversation_act', { conversation_id: item.id, action: action });
+  inputMode = null;
+  await loadData();
+  return result;
+}
+
+async function sendSelectedDraftAgentically() {
+  var item = selectedItem();
+  if (!item) throw new Error('No conversation selected');
+  if (!latestDraftFor(item)) throw new Error('No draft to send');
+  var recipient = selectedRecipientFor(item);
+  var args = { conversation_id: item.id, action: 'send' };
+  if (recipient && recipient !== item.guest_email) args.to = recipient;
+  var result = await ulAction('conversation_act', args);
+  inputMode = null;
+  await loadData();
+  return result;
+}
+
+function registerWidgetAction(action, handler) {
+  if (!window.ulWidget) return;
+  if (typeof window.ulWidget.registerViewAction === 'function' && action.mode === 'ui') {
+    window.ulWidget.registerViewAction(action, handler);
+    return;
+  }
+  window.ulWidget.registerAction(action, handler);
+}
+
+function setActiveTab(view) {
+  document.querySelectorAll('.tab').forEach(function(t) {
+    t.classList.toggle('active', t.dataset.view === view);
+  });
+}
+
+async function showConversationView(view) {
+  currentView = view || 'active';
+  currentIdx = 0;
+  inputMode = null;
+  setActiveTab(currentView);
+  await loadData();
+  return { view: currentView, selected_count: filteredItems.length };
+}
+
+function focusElement(id) {
+  var el = document.getElementById(id);
+  if (!el) return false;
+  if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
+  if (typeof el.focus === 'function') el.focus();
+  return true;
+}
+
+function showDraftEditorAgentically() {
+  var item = selectedItem();
+  if (!item) throw new Error('No conversation selected');
+  if (!latestDraftFor(item)) throw new Error('No draft to edit');
+  inputMode = 'edit';
+  render();
+  var focused = focusElement('edit-area');
+  syncWidgetAgentContext();
+  return { input_mode: inputMode, focused: focused };
+}
+
+function openVersionHistoryAgentically() {
+  var item = selectedItem();
+  if (!item) throw new Error('No conversation selected');
+  render();
+  var el = document.getElementById('history-list');
+  if (!el) return { opened: false, reason: 'No version history for selected conversation' };
+  el.style.display = 'block';
+  focusElement('history-list');
+  syncWidgetAgentContext();
+  return { opened: true };
+}
+
+function showRegeneratePromptAgentically(args) {
+  var item = selectedItem();
+  if (!item) throw new Error('No conversation selected');
+  if (!latestDraftFor(item)) throw new Error('No draft to regenerate');
+  inputMode = 'regen';
+  render();
+  var el = document.getElementById('prompt-area');
+  var text = args && (args.text || args.prompt || args.value);
+  if (el && text) el.value = String(text);
+  focusElement('prompt-area');
+  syncWidgetAgentContext();
+  return { input_mode: inputMode, prefilled: !!text };
+}
+
+function showFollowupPromptAgentically(args) {
+  var item = selectedItem();
+  if (!item) throw new Error('No conversation selected');
+  inputMode = 'followup';
+  render();
+  var el = document.getElementById('followup-area');
+  var text = args && (args.text || args.prompt || args.value);
+  if (el && text) el.value = String(text);
+  focusElement('followup-area');
+  syncWidgetAgentContext();
+  return { input_mode: inputMode, prefilled: !!text };
+}
+
+function registerWidgetAgentActions() {
+  if (agentActionsRegistered || !window.ulWidget || typeof window.ulWidget.registerAction !== 'function') return;
+  agentActionsRegistered = true;
+  registerWidgetAction({
+    id: 'load_selected_history',
+    label: 'Load selected history',
+    description: 'Load the full version history for the currently selected conversation.',
+    mode: 'read',
+    confirmation: 'none',
+    mcp: { function: 'conversation_history' }
+  }, async function() {
+    var item = selectedItem();
+    if (!item) throw new Error('No conversation selected');
+    return await ulAction('conversation_history', { conversation_id: item.id });
+  });
+  registerWidgetAction({
+    id: 'show_active_view',
+    label: 'Show active conversations',
+    description: 'Switch the widget to the active conversation queue.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'navigate', component_id: 'tabs', args_template: { view: 'active' } }
+  }, async function(args) {
+    return await showConversationView(args.view || 'active');
+  });
+  registerWidgetAction({
+    id: 'show_sent_view',
+    label: 'Show sent conversations',
+    description: 'Switch the widget to the sent conversation archive.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'navigate', component_id: 'tabs', args_template: { view: 'archive' } }
+  }, async function(args) {
+    return await showConversationView(args.view || 'archive');
+  });
+  registerWidgetAction({
+    id: 'open_version_history',
+    label: 'Open version history',
+    description: 'Expand the version history section for the selected conversation.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'open', component_id: 'version_history' }
+  }, async function() {
+    return openVersionHistoryAgentically();
+  });
+  registerWidgetAction({
+    id: 'show_draft_editor',
+    label: 'Show draft editor',
+    description: 'Open and focus the editable draft reply field for the selected conversation.',
+    mode: 'ui',
+    confirmation: 'none',
+    ui: { command: 'focus', component_id: 'draft_response' }
+  }, async function() {
+    return showDraftEditorAgentically();
+  });
+  registerWidgetAction({
+    id: 'show_regenerate_prompt',
+    label: 'Show regenerate prompt',
+    description: 'Open the regeneration instructions field and optionally prefill quoted text from the request.',
+    mode: 'ui',
+    confirmation: 'none',
+    args_schema: { type: 'object', properties: { text: { type: 'string' } } },
+    ui: { command: 'prefill', component_id: 'regenerate_prompt' }
+  }, async function(args) {
+    return showRegeneratePromptAgentically(args || {});
+  });
+  registerWidgetAction({
+    id: 'show_followup_prompt',
+    label: 'Show follow up prompt',
+    description: 'Open the follow-up prompt for the selected sent conversation and optionally prefill quoted text.',
+    mode: 'ui',
+    confirmation: 'none',
+    args_schema: { type: 'object', properties: { text: { type: 'string' } } },
+    ui: { command: 'prefill', component_id: 'followup_prompt' }
+  }, async function(args) {
+    return showFollowupPromptAgentically(args || {});
+  });
+  registerWidgetAction({
+    id: 'send_selected_draft',
+    label: 'Send selected draft',
+    description: 'Send the currently selected draft reply to its selected recipient.',
+    mode: 'write',
+    confirmation: 'user',
+    mcp: { function: 'conversation_act', args_template: { action: 'send' } }
+  }, async function() {
+    var result = await sendSelectedDraftAgentically();
+    toast('Email sent!', true);
+    return result;
+  });
+  registerWidgetAction({
+    id: 'discard_selected_conversation',
+    label: 'Discard selected conversation',
+    description: 'Discard the currently selected conversation from the active queue.',
+    mode: 'write',
+    confirmation: 'user',
+    mcp: { function: 'conversation_act', args_template: { action: 'discard' } }
+  }, async function() {
+    var result = await runConversationActionForSelected('discard');
+    toast('Discarded', true);
+    return result;
+  });
+  syncWidgetAgentContext();
+}
+
 async function loadData() {
   try {
     var result = await ulAction('widget_email_inbox_data', { view: currentView === 'archive' ? 'archive' : currentView === 'discarded' ? 'discarded' : 'active' });
@@ -2548,6 +2891,7 @@ async function loadData() {
   } catch(e) {
     loading = false;
     document.getElementById('deck').innerHTML = '<div class="empty"><div class="empty-icon">⚠️</div><div>Failed to load: ' + e.message + '</div></div>';
+    syncWidgetAgentContext();
   }
 }
 
@@ -2583,11 +2927,12 @@ function updateLangOptions() {
 }
 
 function render() {
-  if (loading) { document.getElementById('deck').innerHTML = '<div class="empty">Loading...</div>'; return; }
+  if (loading) { document.getElementById('deck').innerHTML = '<div class="empty">Loading...</div>'; syncWidgetAgentContext(); return; }
   if (filteredItems.length === 0) {
     document.getElementById('deck').innerHTML = '<div class="empty"><div class="empty-icon">✅</div><div>' + (currentView === 'active' ? 'All caught up! No pending emails.' : currentView === 'archive' ? 'No sent emails yet.' : 'No discarded emails.') + '</div></div>';
     document.getElementById('nav-dots').innerHTML = '';
     document.getElementById('nav-info').textContent = '';
+    syncWidgetAgentContext();
     return;
   }
 
@@ -2792,6 +3137,7 @@ function render() {
   }
   if (inputMode === 'regen') { var el = document.getElementById('prompt-area'); if (el) setTimeout(function() { el.focus(); }, 50); }
   if (inputMode === 'followup') { var el = document.getElementById('followup-area'); if (el) setTimeout(function() { el.focus(); }, 50); }
+  syncWidgetAgentContext();
 }
 
 function navigate(dir) { currentIdx = Math.max(0, Math.min(filteredItems.length - 1, currentIdx + dir)); inputMode = null; render(); }
@@ -3014,6 +3360,7 @@ document.addEventListener('keydown', function(e) {
 });
 
 // Initial load
+registerWidgetAgentActions();
 loadData();
 </script>
 </body>

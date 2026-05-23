@@ -45,7 +45,7 @@ const inferencePayload: ChatInferenceOptionsResponse = {
       models: [
         { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_048_576 },
       ],
-      capabilities: { chat: true, streaming: true, tools: true, jsonMode: true, multimodal: true },
+      capabilities: { chat: true, streaming: true, tools: true, jsonMode: true, multimodal: true, realtime: false },
       docsUrl: 'https://openrouter.ai/docs',
       apiKeyUrl: 'https://openrouter.ai/settings/keys',
       configured: false,
@@ -64,7 +64,7 @@ const inferencePayload: ChatInferenceOptionsResponse = {
         { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_048_576 },
         { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576 },
       ],
-      capabilities: { chat: true, streaming: true, tools: true, jsonMode: true, multimodal: false },
+      capabilities: { chat: true, streaming: true, tools: true, jsonMode: true, multimodal: false, realtime: false },
       docsUrl: 'https://api-docs.deepseek.com',
       apiKeyUrl: 'https://platform.deepseek.com/api_keys',
       configured: true,
@@ -82,7 +82,7 @@ const inferencePayload: ChatInferenceOptionsResponse = {
       models: [
         { id: 'gpt-4o-mini', name: 'GPT-4o Mini', contextWindow: 128_000 },
       ],
-      capabilities: { chat: true, streaming: true, tools: true, jsonMode: true, multimodal: true },
+      capabilities: { chat: true, streaming: true, tools: true, jsonMode: true, multimodal: true, realtime: true },
       docsUrl: 'https://platform.openai.com/docs',
       apiKeyUrl: 'https://platform.openai.com/api-keys',
       configured: false,

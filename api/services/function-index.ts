@@ -6,7 +6,12 @@ import { getEnv } from '../lib/env.ts';
 import { createR2Service } from './storage.ts';
 import { createAppsService } from './apps.ts';
 import { buildJsonSchemaDescriptors, generateTypes, sanitizeToolName } from './codemode-tools.ts';
-import type { AppForCodemode, RoutineIndexEntry, WidgetIndexEntry } from './codemode-tools.ts';
+import type {
+  AppForCodemode,
+  ContextSourceIndexEntry,
+  RoutineIndexEntry,
+  WidgetIndexEntry,
+} from './codemode-tools.ts';
 import { createD1DataService } from './d1-data.ts';
 import { parseStoredSkillsParsed } from './app-contracts.ts';
 
@@ -24,6 +29,7 @@ export interface FunctionIndex {
     dependsOn: string[];
   }>;
   widgets: WidgetIndexEntry[];
+  contextSources: ContextSourceIndexEntry[];
   routines: RoutineIndexEntry[];
   types: string;
   updatedAt: string;
@@ -136,7 +142,7 @@ export async function rebuildFunctionIndex(userId: string): Promise<FunctionInde
   }
 
   // Build descriptors and types
-  const { descriptors, toolMap, widgets, routines } = buildJsonSchemaDescriptors(apps);
+  const { descriptors, toolMap, widgets, contextSources, routines } = buildJsonSchemaDescriptors(apps);
 
   // ── Enrichment pass: extract return types, conventions, dependency hints ──
 
@@ -255,6 +261,7 @@ export async function rebuildFunctionIndex(userId: string): Promise<FunctionInde
   const index: FunctionIndex = {
     functions,
     widgets,
+    contextSources,
     routines,
     types,
     updatedAt: new Date().toISOString(),

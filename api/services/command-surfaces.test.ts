@@ -53,6 +53,7 @@ const fnIndex: FunctionIndex = {
       kind: "progress",
     }],
   }],
+  contextSources: [],
   routines: [],
   types: "",
   updatedAt: "2026-05-11T00:00:00Z",

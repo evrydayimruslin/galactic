@@ -534,6 +534,12 @@ Deno.test("logExecutionResult records computed telemetry alongside the provided 
     freeCall: true,
     freeCallCount: 1,
     freeCallLimit: 3,
+    widgetAction: {
+      surfaceId: "surface-1",
+      widgetId: "email_inbox",
+      actionId: "send_selected_draft",
+      turnId: "turn-1",
+    },
   }, {
     logMcpCallFn: (entry) => {
       logged = entry as unknown as Record<string, unknown>;
@@ -551,6 +557,12 @@ Deno.test("logExecutionResult records computed telemetry alongside the provided 
   assertEquals(loggedEntry.freeCall, true);
   assertEquals(loggedEntry.freeCallCount, 1);
   assertEquals(loggedEntry.freeCallLimit, 3);
+  assertEquals(loggedEntry.widgetAction, {
+    surfaceId: "surface-1",
+    widgetId: "email_inbox",
+    actionId: "send_selected_draft",
+    turnId: "turn-1",
+  });
   assertEquals(loggedEntry.method, "tools/call");
   assert(typeof loggedEntry.responseSizeBytes === "number");
   assert((loggedEntry.responseSizeBytes as number) > 0);

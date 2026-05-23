@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' https://js.stripe.com; connect-src 'self' https://ultralight-api.rgn4jz429m.workers.dev https://ultralight-api-staging.rgn4jz429m.workers.dev https://openrouter.ai https://fonts.googleapis.com https://fonts.gstatic.com https://api.stripe.com https://m.stripe.network https://merchant-ui-api.stripe.com https://api.anthropic.com https://api.openai.com https://api.deepseek.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.stripe.com; frame-src 'self' https://ultralight-api.rgn4jz429m.workers.dev https://ultralight-api-staging.rgn4jz429m.workers.dev https://js.stripe.com https://hooks.stripe.com"
+      "csp": "default-src 'self'; script-src 'self' https://js.stripe.com; connect-src 'self' https://ultralight-api.rgn4jz429m.workers.dev https://ultralight-api-staging.rgn4jz429m.workers.dev https://openrouter.ai https://fonts.googleapis.com https://fonts.gstatic.com https://api.stripe.com https://m.stripe.network https://merchant-ui-api.stripe.com https://api.anthropic.com https://api.openai.com wss://api.openai.com https://api.deepseek.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.stripe.com; frame-src 'self' https://ultralight-api.rgn4jz429m.workers.dev https://ultralight-api-staging.rgn4jz429m.workers.dev https://js.stripe.com https://hooks.stripe.com"
     }
   },
   "bundle": {
@@ -41,6 +41,9 @@
       "nsis": {
         "installMode": "currentUser"
       }
+    },
+    "macOS": {
+      "infoPlist": "Info.plist"
     }
   },
   "plugins": {

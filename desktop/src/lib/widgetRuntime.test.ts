@@ -11,6 +11,7 @@ import {
   getWidgetPullSettingsStorageKey,
   loadWidgetHtml,
   parseWidgetContextFromSearch,
+  parseWidgetSurfaceIdFromSearch,
   parseWidgetSourceFromSearch,
   pruneStaleWidgetCaches,
   readWidgetHtmlCache,
@@ -241,7 +242,7 @@ describe('widget runtime helpers', () => {
 
   it('builds widget navigation targets and shared query params consistently', () => {
     const target = buildWidgetNavigationTarget(baseSource, 'approval_queue');
-    const params = buildWidgetWindowSearchParams(target, { thread: 'abc' });
+    const params = buildWidgetWindowSearchParams(target, { thread: 'abc' }, 'surface-123');
 
     expect(target).toEqual({
       ...baseSource,
@@ -251,6 +252,7 @@ describe('widget runtime helpers', () => {
     });
     expect(parseWidgetSourceFromSearch(`?${params.toString()}`)).toEqual(target);
     expect(parseWidgetContextFromSearch(`?${params.toString()}`)).toEqual({ thread: 'abc' });
+    expect(parseWidgetSurfaceIdFromSearch(`?${params.toString()}`)).toBe('surface-123');
   });
 
   it('builds shared widget srcDoc for fullscreen and inline runtimes', () => {
@@ -261,6 +263,7 @@ describe('widget runtime helpers', () => {
       widgetName: 'email_inbox',
       apiBase: 'https://api.example.com',
       token: 'secret-token',
+      surfaceId: 'surface-fullscreen',
     });
     const inline = buildWidgetSrcDoc({
       appHtml: '<div>Hello</div>',
@@ -269,15 +272,23 @@ describe('widget runtime helpers', () => {
       widgetName: 'email_inbox',
       apiBase: 'https://api.example.com',
       token: 'secret-token',
+      surfaceId: 'surface-inline',
       inlineResize: true,
     });
 
     expect(fullscreen).toContain('window.ulAction');
     expect(fullscreen).toContain('window.ulOpenWidget');
+    expect(fullscreen).toContain('window.ulWidget');
+    expect(fullscreen).toContain('registerViewAction');
+    expect(fullscreen).toContain('ul-widget-command');
     expect(fullscreen).toContain('"https://api.example.com"');
+    expect(fullscreen).toContain('"surface-fullscreen"');
     expect(fullscreen).toContain('_widget_pull');
     expect(fullscreen).toContain('_widget_name');
+    expect(fullscreen).toContain('_widget_action_id');
+    expect(fullscreen).toContain('_widget_turn_id');
     expect(inline).toContain('ul-widget-resize');
+    expect(inline).toContain('"surface-inline"');
     expect(inline).toContain('window.ulWidgetContext');
   });
 

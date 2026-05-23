@@ -546,6 +546,7 @@ export function buildWidgetNavigationTarget(
 export function buildWidgetWindowSearchParams(
   source: WidgetAppSource,
   context?: Record<string, string>,
+  surfaceId?: string,
 ): URLSearchParams {
   const params = new URLSearchParams({
     widget: '1',
@@ -557,6 +558,10 @@ export function buildWidgetWindowSearchParams(
     uiFunction: source.uiFunction,
     dataFunction: source.dataFunction,
   });
+
+  if (surfaceId) {
+    params.set('surfaceId', surfaceId);
+  }
 
   if (context) {
     for (const [key, value] of Object.entries(context)) {
@@ -580,6 +585,12 @@ export function parseWidgetSourceFromSearch(search: string): WidgetAppSource {
   };
 }
 
+export function parseWidgetSurfaceIdFromSearch(search: string): string | null {
+  const params = new URLSearchParams(search);
+  const surfaceId = params.get('surfaceId');
+  return surfaceId && surfaceId.trim() ? surfaceId : null;
+}
+
 export function parseWidgetContextFromSearch(search: string): Record<string, string> {
   const params = new URLSearchParams(search);
   const context: Record<string, string> = {};
@@ -598,10 +609,12 @@ function buildWidgetBridgeScript(options: {
   apiBase: string;
   token: string | null;
   context?: Record<string, string>;
+  surfaceId?: string;
   inlineResize?: boolean;
   widgetPull?: WidgetPullCallMetadata | null;
 }): string {
   const context = options.context ?? {};
+  const surfaceId = options.surfaceId || `${options.appUuid}:${options.widgetName}`;
   const widgetIntervalMs = typeof options.widgetPull?.intervalMs === 'number' &&
       Number.isFinite(options.widgetPull.intervalMs)
     ? Math.max(0, Math.round(options.widgetPull.intervalMs))
@@ -615,8 +628,68 @@ function buildWidgetBridgeScript(options: {
   var _appUuid = ${JSON.stringify(options.appUuid)};
   var _appSlug = ${JSON.stringify(options.appSlug)};
   var _widgetName = ${JSON.stringify(options.widgetName)};
+  var _surfaceId = ${JSON.stringify(surfaceId)};
   var _widgetIntervalMs = ${JSON.stringify(widgetIntervalMs)};
   var _widgetPullReason = ${JSON.stringify(widgetPullReason)};
+  var _ulWidgetStateProvider = null;
+  var _ulWidgetActions = {};
+  var _ulWidgetCommandContext = null;
+
+  function postWidgetMessage(type, payload) {
+    parent.postMessage(Object.assign({
+      type: type,
+      id: _surfaceId,
+      surfaceId: _surfaceId,
+      surface_id: _surfaceId,
+      appUuid: _appUuid,
+      appSlug: _appSlug,
+      widgetName: _widgetName,
+      widget_id: _widgetName
+    }, payload || {}), '*');
+  }
+
+  function readWidgetState() {
+    if (typeof _ulWidgetStateProvider !== 'function') return null;
+    try {
+      var snapshot = _ulWidgetStateProvider();
+      if (snapshot && typeof snapshot === 'object') {
+        if (!snapshot.surface_id) snapshot.surface_id = _surfaceId;
+        if (!snapshot.widget_id) snapshot.widget_id = _widgetName;
+        if (!snapshot.app_id) snapshot.app_id = _appUuid;
+        if (!snapshot.app_slug) snapshot.app_slug = _appSlug;
+      }
+      return snapshot;
+    } catch (err) {
+      postWidgetMessage('ul-widget-event', {
+        event: {
+          kind: 'error',
+          label: 'Widget state provider failed',
+          error: err && err.message ? err.message : String(err),
+          created_at: new Date().toISOString()
+        }
+      });
+      return null;
+    }
+  }
+
+  function reportWidgetState(snapshot) {
+    if (snapshot && typeof snapshot === 'object') {
+      if (!snapshot.surface_id) snapshot.surface_id = _surfaceId;
+      if (!snapshot.widget_id) snapshot.widget_id = _widgetName;
+      if (!snapshot.app_id) snapshot.app_id = _appUuid;
+      if (!snapshot.app_slug) snapshot.app_slug = _appSlug;
+      postWidgetMessage('ul-widget-state', { snapshot: snapshot });
+    }
+    return snapshot;
+  }
+
+  function reportWidgetActions() {
+    var actions = Object.keys(_ulWidgetActions).map(function(id) {
+      return _ulWidgetActions[id].declaration;
+    });
+    postWidgetMessage('ul-widget-actions', { actions: actions });
+    return actions;
+  }
 
   window.ulAction = function(functionName, args) {
     var isPlatform = functionName.indexOf('ultralight.') === 0 || functionName.indexOf('ul.') === 0;
@@ -630,6 +703,15 @@ function buildWidgetBridgeScript(options: {
         _widget_pull_reason: _widgetPullReason
       });
       if (_widgetIntervalMs !== null) callArgs._widget_interval_ms = _widgetIntervalMs;
+    }
+    if (_ulWidgetCommandContext) {
+      callArgs = Object.assign({}, callArgs, {
+        _widget_action: true,
+        _widget_surface_id: _surfaceId,
+        _widget_id: _widgetName,
+        _widget_action_id: _ulWidgetCommandContext.actionId,
+        _widget_turn_id: _ulWidgetCommandContext.turnId
+      });
     }
     return fetch(endpoint, {
       method: 'POST',
@@ -651,10 +733,114 @@ function buildWidgetBridgeScript(options: {
   };
 
   window.ulOpenWidget = function(widgetName, context) {
-    parent.postMessage({ type: 'ul-open-widget', widgetName: widgetName, context: context || {} }, '*');
+    postWidgetMessage('ul-open-widget', { widgetName: widgetName, context: context || {} });
   };
 
   window.ulWidgetContext = ${JSON.stringify(context)};
+
+  window.ulWidget = {
+    surfaceId: _surfaceId,
+    widgetName: _widgetName,
+    context: window.ulWidgetContext,
+    reportState: function(snapshotOrProvider) {
+      if (typeof snapshotOrProvider === 'function') {
+        _ulWidgetStateProvider = snapshotOrProvider;
+        return reportWidgetState(readWidgetState());
+      }
+      _ulWidgetStateProvider = function() { return snapshotOrProvider; };
+      return reportWidgetState(snapshotOrProvider);
+    },
+    refreshContext: function() {
+      return reportWidgetState(readWidgetState());
+    },
+    registerAction: function(action, handler) {
+      if (!action || typeof action !== 'object' || typeof action.id !== 'string' || !action.id) {
+        throw new Error('ulWidget.registerAction requires an action object with id');
+      }
+      _ulWidgetActions[action.id] = {
+        declaration: action,
+        handler: typeof handler === 'function' ? handler : null
+      };
+      reportWidgetActions();
+      return action.id;
+    },
+    registerViewAction: function(action, handler) {
+      var declaration = Object.assign({ mode: 'ui', confirmation: 'none' }, action || {});
+      return window.ulWidget.registerAction(declaration, handler);
+    },
+    logEvent: function(event) {
+      var payload = event && typeof event === 'object' ? event : { kind: 'system', label: String(event || '') };
+      if (!payload.created_at) payload.created_at = new Date().toISOString();
+      postWidgetMessage('ul-widget-event', { event: payload });
+      return payload;
+    }
+  };
+
+  window.addEventListener('message', function(event) {
+    var data = event.data;
+    if (!data || typeof data !== 'object' || data.type !== 'ul-widget-command') return;
+    var targetSurfaceId = data.surfaceId || data.surface_id;
+    if (targetSurfaceId && targetSurfaceId !== _surfaceId) return;
+    var actionId = data.actionId || data.action_id;
+    var turnId = data.turnId || data.turn_id;
+    var entry = actionId ? _ulWidgetActions[actionId] : null;
+    if (!entry || typeof entry.handler !== 'function') {
+      postWidgetMessage('ul-widget-action-result', {
+        result: {
+          surface_id: _surfaceId,
+          widget_id: _widgetName,
+          action_id: actionId || '',
+          turn_id: turnId,
+          ok: false,
+          error: actionId ? 'No live handler registered for action ' + actionId : 'Missing action id'
+        }
+      });
+      return;
+    }
+    postWidgetMessage('ul-widget-event', {
+      event: {
+        kind: 'agent',
+        action_id: actionId,
+        label: 'Widget command received',
+        input: data.args || {},
+        created_at: new Date().toISOString()
+      }
+    });
+    var previousCommandContext = _ulWidgetCommandContext;
+    _ulWidgetCommandContext = { actionId: actionId, turnId: turnId };
+    Promise.resolve()
+      .then(function() {
+        return entry.handler(data.args || {}, data);
+      })
+      .then(function(result) {
+        _ulWidgetCommandContext = previousCommandContext;
+        postWidgetMessage('ul-widget-action-result', {
+          result: {
+            surface_id: _surfaceId,
+            widget_id: _widgetName,
+            action_id: actionId,
+            turn_id: turnId,
+            ok: true,
+            data: result,
+            snapshot: readWidgetState() || undefined
+          }
+        });
+      })
+      .catch(function(err) {
+        _ulWidgetCommandContext = previousCommandContext;
+        postWidgetMessage('ul-widget-action-result', {
+          result: {
+            surface_id: _surfaceId,
+            widget_id: _widgetName,
+            action_id: actionId,
+            turn_id: turnId,
+            ok: false,
+            error: err && err.message ? err.message : String(err),
+            snapshot: readWidgetState() || undefined
+          }
+        });
+      });
+  });
 
   ${
     options.inlineResize
@@ -673,7 +859,7 @@ function buildWidgetBridgeScript(options: {
     }
     if (h < 50) h = document.body.scrollHeight;
     h += 24;
-    parent.postMessage({ type: 'ul-widget-resize', height: Math.ceil(h), id: _appUuid + ':' + _widgetName }, '*');
+    postWidgetMessage('ul-widget-resize', { height: Math.ceil(h) });
   }
 
   function startResizeObservers() {
@@ -690,7 +876,7 @@ function buildWidgetBridgeScript(options: {
     startResizeObservers();
   }
 
-  parent.postMessage({ type: 'ul-widget-ready', id: _appUuid + ':' + _widgetName }, '*');
+  postWidgetMessage('ul-widget-ready');
   `
       : ''
   }
@@ -706,6 +892,7 @@ export function buildWidgetSrcDoc(options: {
   apiBase: string;
   token: string | null;
   context?: Record<string, string>;
+  surfaceId?: string;
   inlineResize?: boolean;
   widgetPull?: WidgetPullCallMetadata | null;
 }): string {

@@ -22,6 +22,7 @@ import {
 import { type ChatStreamEvent, parseSSEStream } from "./sse";
 import type { ToolUsed } from "../types/executionPlan";
 import type { AmbientSuggestion } from "../types/ambientSuggestion";
+import type { ActiveWidgetContext } from "./widgetAgentTypes";
 import { createDesktopLogger } from "./logging";
 import { formatLightCompact as formatLight } from "./format";
 
@@ -658,6 +659,21 @@ export interface FunctionIndex {
     uiFunction?: string;
     dataFunction?: string;
     dependencies?: Array<{ app: string; functions: string[]; access?: "read" }>;
+    agentic?: boolean;
+    contextFunction?: string;
+    actionsFunction?: string;
+    contextSources?: string[];
+    agentActions?: Array<{
+      id: string;
+      label: string;
+      description?: string;
+      mode: "read" | "write" | "ui";
+      confirmation?: "none" | "user" | "high_risk";
+      args_schema?: Record<string, unknown>;
+      mcp?: { function: string; args_template?: Record<string, unknown> };
+      ui?: { command?: string; component_id?: string; args_template?: Record<string, unknown> };
+      expected_result?: string;
+    }>;
     cards?: Array<{
       id: string;
       label: string;
@@ -672,6 +688,21 @@ export interface FunctionIndex {
         { app: string; functions: string[]; access?: "read" }
       >;
     }>;
+  }>;
+  contextSources?: Array<{
+    id: string;
+    appId: string;
+    appSlug: string;
+    label: string;
+    description?: string;
+    type: "d1_table" | "d1_query" | "function";
+    access: "read";
+    searchable?: boolean;
+    defaultForWidgets?: string[];
+    tables?: string[];
+    query?: string;
+    function?: string;
+    redactions?: Array<{ field?: string; pattern?: string; replacement?: string }>;
   }>;
   types: string;
   updatedAt: string | null;
@@ -2588,6 +2619,8 @@ export async function* streamOrchestrate(opts: {
   systemAgentContext?: { type: string; persona: string; skillsPath: string };
   /** Local project file context gathered client-side for Tool Maker */
   projectContext?: string;
+  /** Active widget surfaces supplied by widget-local composers. */
+  activeWidgetContexts?: ActiveWidgetContext[];
   /** Conversation ID for rolling summary persistence */
   conversationId?: string;
   /** Stable local message IDs for server-side capture idempotency */

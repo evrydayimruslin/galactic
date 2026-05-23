@@ -79,6 +79,7 @@ export interface McpCallLogEntry {
   gpuPeakVramGb?: number;
   gpuDeveloperFeeLight?: number;
   gpuFailurePolicy?: string;
+  widgetAction?: WidgetActionCallMetadata;
 }
 
 export function createExecutionReceiptId(): string {
@@ -120,6 +121,72 @@ export function logMcpCall(entry: McpCallLogEntry): void {
   });
 }
 
+export function buildMcpCallLogInsertPayload(
+  entry: McpCallLogEntry,
+): Record<string, unknown> {
+  return {
+    id: entry.receiptId,
+    user_id: entry.userId,
+    app_id: entry.appId || null,
+    app_name: entry.appName || null,
+    function_name: entry.functionName,
+    method: entry.method,
+    success: entry.success,
+    duration_ms: entry.durationMs || null,
+    error_message: entry.errorMessage || null,
+    source: entry.source || "direct",
+    // Rich telemetry
+    input_args: truncateForStorage(entry.inputArgs),
+    output_result: truncateForStorage(entry.outputResult),
+    user_tier: entry.userTier || null,
+    app_version: entry.appVersion || null,
+    ai_cost_light: entry.aiCostLight || 0,
+    session_id: entry.sessionId || null,
+    sequence_number: entry.sequenceNumber ?? null,
+    user_query: entry.userQuery || null,
+    // Cost telemetry
+    response_size_bytes: entry.responseSizeBytes ?? null,
+    execution_cost_estimate_light: entry.executionCostEstimateLight ?? null,
+    call_charge_light: entry.callChargeLight ?? null,
+    app_price_light: entry.appPriceLight ?? null,
+    app_charge_light: entry.appChargeLight ?? null,
+    infra_charge_light: entry.infraChargeLight ?? null,
+    platform_fee_light: entry.platformFeeLight ?? null,
+    developer_net_light: entry.developerNetLight ?? null,
+    buyer_billing_address_id: entry.buyerBillingAddressId ?? null,
+    buyer_billing_address_version: entry.buyerBillingAddressVersion ?? null,
+    tax_status: entry.taxStatus ?? "not_collecting",
+    taxable_amount_light: entry.taxableAmountLight ?? 0,
+    tax_amount_light: entry.taxAmountLight ?? 0,
+    free_call: entry.freeCall ?? false,
+    free_call_count: entry.freeCallCount ?? null,
+    free_call_limit: entry.freeCallLimit ?? null,
+    cloud_usage_hold_id: entry.cloudUsageHoldId ?? null,
+    cloud_usage_event_id: entry.cloudUsageEventId ?? null,
+    cloud_units: entry.cloudUnits ?? null,
+    cloud_charge_light: entry.cloudChargeLight ?? null,
+    cloud_payer_user_id: entry.cloudPayerUserId ?? null,
+    cloud_owner_sponsored: entry.cloudOwnerSponsored ?? false,
+    routine_id: entry.routineId ?? null,
+    routine_run_id: entry.routineRunId ?? null,
+    trace_id: entry.traceId ?? null,
+    tool_invocation_id: entry.toolInvocationId ?? null,
+    widget_action: !!entry.widgetAction,
+    widget_surface_id: entry.widgetAction?.surfaceId ?? null,
+    widget_id: entry.widgetAction?.widgetId ?? null,
+    widget_action_id: entry.widgetAction?.actionId ?? null,
+    widget_turn_id: entry.widgetAction?.turnId ?? null,
+    // GPU metering
+    gpu_type: entry.gpuType ?? null,
+    gpu_exit_code: entry.gpuExitCode ?? null,
+    gpu_duration_ms: entry.gpuDurationMs ?? null,
+    gpu_cost_light: entry.gpuCostLight ?? null,
+    gpu_peak_vram_gb: entry.gpuPeakVramGb ?? null,
+    gpu_developer_fee_light: entry.gpuDeveloperFeeLight ?? null,
+    gpu_failure_policy: entry.gpuFailurePolicy ?? null,
+  };
+}
+
 async function _insertLog(entry: McpCallLogEntry): Promise<void> {
   const response = await fetch(
     `${getEnv("SUPABASE_URL")}/rest/v1/mcp_call_logs`,
@@ -130,62 +197,7 @@ async function _insertLog(entry: McpCallLogEntry): Promise<void> {
         "Authorization": `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        id: entry.receiptId,
-        user_id: entry.userId,
-        app_id: entry.appId || null,
-        app_name: entry.appName || null,
-        function_name: entry.functionName,
-        method: entry.method,
-        success: entry.success,
-        duration_ms: entry.durationMs || null,
-        error_message: entry.errorMessage || null,
-        source: entry.source || "direct",
-        // Rich telemetry
-        input_args: truncateForStorage(entry.inputArgs),
-        output_result: truncateForStorage(entry.outputResult),
-        user_tier: entry.userTier || null,
-        app_version: entry.appVersion || null,
-        ai_cost_light: entry.aiCostLight || 0,
-        session_id: entry.sessionId || null,
-        sequence_number: entry.sequenceNumber ?? null,
-        user_query: entry.userQuery || null,
-        // Cost telemetry
-        response_size_bytes: entry.responseSizeBytes ?? null,
-        execution_cost_estimate_light: entry.executionCostEstimateLight ?? null,
-        call_charge_light: entry.callChargeLight ?? null,
-        app_price_light: entry.appPriceLight ?? null,
-        app_charge_light: entry.appChargeLight ?? null,
-        infra_charge_light: entry.infraChargeLight ?? null,
-        platform_fee_light: entry.platformFeeLight ?? null,
-        developer_net_light: entry.developerNetLight ?? null,
-        buyer_billing_address_id: entry.buyerBillingAddressId ?? null,
-        buyer_billing_address_version: entry.buyerBillingAddressVersion ?? null,
-        tax_status: entry.taxStatus ?? "not_collecting",
-        taxable_amount_light: entry.taxableAmountLight ?? 0,
-        tax_amount_light: entry.taxAmountLight ?? 0,
-        free_call: entry.freeCall ?? false,
-        free_call_count: entry.freeCallCount ?? null,
-        free_call_limit: entry.freeCallLimit ?? null,
-        cloud_usage_hold_id: entry.cloudUsageHoldId ?? null,
-        cloud_usage_event_id: entry.cloudUsageEventId ?? null,
-        cloud_units: entry.cloudUnits ?? null,
-        cloud_charge_light: entry.cloudChargeLight ?? null,
-        cloud_payer_user_id: entry.cloudPayerUserId ?? null,
-        cloud_owner_sponsored: entry.cloudOwnerSponsored ?? false,
-        routine_id: entry.routineId ?? null,
-        routine_run_id: entry.routineRunId ?? null,
-        trace_id: entry.traceId ?? null,
-        tool_invocation_id: entry.toolInvocationId ?? null,
-        // GPU metering
-        gpu_type: entry.gpuType ?? null,
-        gpu_exit_code: entry.gpuExitCode ?? null,
-        gpu_duration_ms: entry.gpuDurationMs ?? null,
-        gpu_cost_light: entry.gpuCostLight ?? null,
-        gpu_peak_vram_gb: entry.gpuPeakVramGb ?? null,
-        gpu_developer_fee_light: entry.gpuDeveloperFeeLight ?? null,
-        gpu_failure_policy: entry.gpuFailurePolicy ?? null,
-      }),
+      body: JSON.stringify(buildMcpCallLogInsertPayload(entry)),
     },
   );
 
@@ -202,8 +214,15 @@ async function _insertLog(entry: McpCallLogEntry): Promise<void> {
   }
 }
 
+export interface WidgetActionCallMetadata {
+  surfaceId?: string;
+  widgetId?: string;
+  actionId?: string;
+  turnId?: string;
+}
+
 /**
- * Extract _user_query and _session_id from tool call arguments.
+ * Extract _user_query, _session_id, and widget metadata from tool call arguments.
  * Returns the clean args (without meta fields) and the extracted meta.
  * Agents pass these as extra fields alongside real tool arguments.
  */
@@ -216,6 +235,7 @@ export function extractCallMeta(args: Record<string, unknown>): {
     intervalMs?: number;
     reason?: string;
   };
+  widgetAction?: WidgetActionCallMetadata;
 } {
   const {
     _user_query,
@@ -224,6 +244,11 @@ export function extractCallMeta(args: Record<string, unknown>): {
     _widget_name,
     _widget_interval_ms,
     _widget_pull_reason,
+    _widget_action,
+    _widget_surface_id,
+    _widget_id,
+    _widget_action_id,
+    _widget_turn_id,
     ...cleanArgs
   } = args;
   const widgetIntervalMs = typeof _widget_interval_ms === "number" &&
@@ -242,11 +267,37 @@ export function extractCallMeta(args: Record<string, unknown>): {
         : undefined,
     }
     : undefined;
+  const widgetSurfaceId = typeof _widget_surface_id === "string" &&
+      _widget_surface_id.trim()
+    ? _widget_surface_id.trim()
+    : undefined;
+  const widgetId = typeof _widget_id === "string" && _widget_id.trim()
+    ? _widget_id.trim()
+    : typeof _widget_name === "string" && _widget_name.trim()
+    ? _widget_name.trim()
+    : undefined;
+  const widgetActionId = typeof _widget_action_id === "string" &&
+      _widget_action_id.trim()
+    ? _widget_action_id.trim()
+    : undefined;
+  const widgetTurnId = typeof _widget_turn_id === "string" &&
+      _widget_turn_id.trim()
+    ? _widget_turn_id.trim()
+    : undefined;
+  const widgetAction = _widget_action === true || widgetActionId
+    ? {
+      surfaceId: widgetSurfaceId,
+      widgetId,
+      actionId: widgetActionId,
+      turnId: widgetTurnId,
+    }
+    : undefined;
   return {
     cleanArgs,
     userQuery: typeof _user_query === "string" ? _user_query : undefined,
     sessionId: typeof _session_id === "string" ? _session_id : undefined,
     widgetPull,
+    widgetAction,
   };
 }
 

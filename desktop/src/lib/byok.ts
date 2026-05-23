@@ -45,6 +45,11 @@ export interface BYOKProviderInfo {
   authStrategy: 'bearer' | 'raw';
   /** Anthropic also requires `anthropic-version` on every request. */
   extraHeaders?: Record<string, string>;
+  /** Desktop-only capability hints for UI features that may use the key directly. */
+  capabilities: {
+    verify: boolean;
+    realtime: boolean;
+  };
 }
 
 export const BYOK_PROVIDERS: BYOKProviderInfo[] = [
@@ -60,6 +65,7 @@ export const BYOK_PROVIDERS: BYOKProviderInfo[] = [
     authHeader: 'x-api-key',
     authStrategy: 'raw',
     extraHeaders: { 'anthropic-version': '2023-06-01' },
+    capabilities: { verify: true, realtime: false },
   },
   {
     id: 'openai',
@@ -72,6 +78,7 @@ export const BYOK_PROVIDERS: BYOKProviderInfo[] = [
     probeUrl: 'https://api.openai.com/v1/models',
     authHeader: 'Authorization',
     authStrategy: 'bearer',
+    capabilities: { verify: true, realtime: true },
   },
   {
     id: 'openrouter',
@@ -84,6 +91,7 @@ export const BYOK_PROVIDERS: BYOKProviderInfo[] = [
     probeUrl: 'https://openrouter.ai/api/v1/models',
     authHeader: 'Authorization',
     authStrategy: 'bearer',
+    capabilities: { verify: true, realtime: false },
   },
   {
     id: 'deepseek',
@@ -96,6 +104,7 @@ export const BYOK_PROVIDERS: BYOKProviderInfo[] = [
     probeUrl: 'https://api.deepseek.com/v1/models',
     authHeader: 'Authorization',
     authStrategy: 'bearer',
+    capabilities: { verify: true, realtime: false },
   },
 ];
 

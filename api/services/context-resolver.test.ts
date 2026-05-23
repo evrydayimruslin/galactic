@@ -48,6 +48,7 @@ Deno.test("context resolver uses the resolved inference route instead of OpenRou
                 },
               },
               widgets: [],
+              contextSources: [],
               types: "",
               updatedAt: "2026-04-24T00:00:00Z",
             };

@@ -285,3 +285,47 @@ Deno.test("codemode descriptors: indexes routine templates alongside widgets", (
   assertEquals(descriptors.routines[0].appId, "app-compose");
   assertEquals(descriptors.routines[0].capabilities?.[0]?.access, "write");
 });
+
+Deno.test("codemode descriptors: indexes agentic widgets and context sources", () => {
+  const descriptors = buildJsonSchemaDescriptors([{
+    id: "app-email",
+    name: "Email Ops",
+    slug: "email-ops",
+    manifest: {
+      functions: {
+        widget_email_inbox_ui: { description: "Render inbox widget" },
+        widget_email_inbox_data: { description: "Load inbox widget" },
+      },
+      context_sources: [{
+        id: "recent_threads",
+        label: "Recent threads",
+        description: "Threads available to the inbox widget",
+        type: "d1_table",
+        access: "read",
+        searchable: true,
+        tables: ["conversations"],
+        default_for_widgets: ["email_inbox"],
+      }],
+      widgets: [{
+        id: "email_inbox",
+        label: "Email Inbox",
+        agentic: true,
+        context_sources: ["recent_threads"],
+        agent_actions: [{
+          id: "open_thread",
+          label: "Open thread",
+          mode: "ui",
+          confirmation: "none",
+        }],
+      }],
+    },
+  }]);
+
+  assertEquals(descriptors.widgets[0].agentic, true);
+  assertEquals(descriptors.widgets[0].contextSources, ["recent_threads"]);
+  assertEquals(descriptors.widgets[0].agentActions?.[0]?.id, "open_thread");
+  assertEquals(descriptors.contextSources.length, 1);
+  assertEquals(descriptors.contextSources[0].appSlug, "email-ops");
+  assertEquals(descriptors.contextSources[0].tables, ["conversations"]);
+  assertEquals(descriptors.contextSources[0].defaultForWidgets, ["email_inbox"]);
+});
