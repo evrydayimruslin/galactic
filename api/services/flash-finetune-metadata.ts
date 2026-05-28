@@ -120,6 +120,7 @@ export interface FlashInputFeatures extends JsonRecord {
   context_query_present: boolean;
   has_active_widget_context: boolean;
   active_widget_context_count: number;
+  active_generated_interface_context_count: number;
   active_widget_context_bytes: number;
 }
 
@@ -300,6 +301,11 @@ export function buildFlashInputFeatures(
   const files = asArray(input.files);
   const magnifiedData = asRecord(input.magnifiedData);
   const activeWidgetContexts = asArray(input.activeWidgetContexts);
+  const generatedInterfaceContextCount = activeWidgetContexts.filter((context) => {
+    const record = asRecord(context);
+    return record.surfaceType === "generated_interface" ||
+      record.kind === "generated_interface";
+  }).length;
   const activeWidgetContextBlock = typeof input.activeWidgetContextBlock === "string"
     ? input.activeWidgetContextBlock
     : "";
@@ -324,6 +330,7 @@ export function buildFlashInputFeatures(
     has_active_widget_context: activeWidgetContexts.length > 0 ||
       hasNonEmptyText(activeWidgetContextBlock),
     active_widget_context_count: activeWidgetContexts.length,
+    active_generated_interface_context_count: generatedInterfaceContextCount,
     active_widget_context_bytes: byteLength(activeWidgetContextBlock),
   };
 }

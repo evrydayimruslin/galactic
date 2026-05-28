@@ -20,6 +20,19 @@ export interface ContextSourceMagnifyResult {
   errors: string[];
 }
 
+export interface ContextSourceRowsOptions
+  extends Pick<
+    ContextSourceMagnifyOptions,
+    "userId" | "query" | "maxRowsPerSource" | "fetchFn" | "databaseIdByApp"
+  > {}
+
+export interface ContextSourceRowsResult {
+  source: ContextSourceIndexEntry;
+  rows: Array<Record<string, unknown>>;
+  rowCount: number;
+  errors: string[];
+}
+
 interface PreparedContextQuery {
   sql: string;
   params: unknown[];
@@ -240,6 +253,105 @@ async function magnifyTableSource(
   }
 
   return { context: context.trim(), rows: rowCount };
+}
+
+export async function readContextSourceRows(
+  source: ContextSourceIndexEntry,
+  options: ContextSourceRowsOptions,
+): Promise<ContextSourceRowsResult> {
+  const maxRowsPerSource = options.maxRowsPerSource ?? DEFAULT_MAX_ROWS_PER_SOURCE;
+  const errors: string[] = [];
+  const rows: Array<Record<string, unknown>> = [];
+
+  if (source.access !== 'read') {
+    return { source, rows, rowCount: 0, errors: [`${source.appSlug}:${source.id} is not readable`] };
+  }
+  if (source.type === 'function') {
+    return { source, rows, rowCount: 0, errors: [`${source.appSlug}:${source.id} function sources are not supported for generated interface data`] };
+  }
+
+  try {
+    const d1 = await getD1ForSource(source, options);
+    if (!d1) {
+      return { source, rows, rowCount: 0, errors: [`${source.appSlug}:${source.id} has no D1 database`] };
+    }
+
+    if (source.type === 'd1_table') {
+      const terms = source.searchable === false ? [] : extractSearchTerms(options.query);
+      for (const table of (source.tables || []).slice(0, MAX_TABLES_PER_SOURCE)) {
+        if (rows.length >= maxRowsPerSource) break;
+        const tableIdent = quoteIdentifier(table);
+        let tableRows: Array<Record<string, unknown>> = [];
+        const remaining = Math.max(1, maxRowsPerSource - rows.length);
+
+        if (terms.length > 0) {
+          const columns = await d1.all<{ name: string; type?: string }>(`PRAGMA table_info(${tableIdent})`);
+          const searchableColumns = columns
+            .map((column) => column.name)
+            .filter((name) =>
+              isSafeSqlIdentifier(name) &&
+              name !== 'id' &&
+              name !== 'user_id' &&
+              !name.endsWith('_id') &&
+              !name.endsWith('_at')
+            )
+            .slice(0, 8);
+
+          if (searchableColumns.length > 0) {
+            const likeClauses = terms.flatMap(() =>
+              searchableColumns.map((column) => `CAST(${quoteIdentifier(column)} AS TEXT) LIKE ?`)
+            );
+            const params = [
+              options.userId,
+              ...terms.flatMap((term) => searchableColumns.map(() => `%${term}%`)),
+              remaining,
+            ];
+            tableRows = await d1.all<Record<string, unknown>>(
+              `SELECT * FROM ${tableIdent} WHERE user_id = ? AND (${likeClauses.join(' OR ')}) ORDER BY rowid DESC LIMIT ?`,
+              params,
+            );
+          }
+        }
+
+        if (tableRows.length === 0) {
+          tableRows = await d1.all<Record<string, unknown>>(
+            `SELECT * FROM ${tableIdent} WHERE user_id = ? ORDER BY rowid DESC LIMIT ?`,
+            [options.userId, remaining],
+          );
+        }
+
+        rows.push(
+          ...tableRows.slice(0, remaining).map((row) => ({
+            ...applyRedactions(row, source.redactions),
+            __table: table,
+          })),
+        );
+      }
+    } else {
+      const prepared = prepareDeclaredContextQuery(source, {
+        userId: options.userId,
+        query: options.query,
+        limit: maxRowsPerSource,
+      });
+      const queryRows = await d1.all<Record<string, unknown>>(
+        `SELECT * FROM (${prepared.sql}) AS declared_context_source LIMIT ?`,
+        [...prepared.params, maxRowsPerSource],
+      );
+      rows.push(
+        ...queryRows
+          .slice(0, maxRowsPerSource)
+          .map((row) => applyRedactions(row, source.redactions)),
+      );
+    }
+  } catch (err) {
+    errors.push(
+      `${source.appSlug}:${source.id} ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  return { source, rows, rowCount: rows.length, errors };
 }
 
 async function magnifyQuerySource(

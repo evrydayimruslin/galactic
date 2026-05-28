@@ -54,6 +54,7 @@ import {
   settleRuntimeCloudPreflight,
 } from "../services/execution-settlement.ts";
 import {
+  type AgenticSurfaceActionCallMetadata,
   createExecutionReceiptId,
   type WidgetActionCallMetadata,
 } from "../services/call-logger.ts";
@@ -1636,7 +1637,14 @@ async function handleToolsCall(
 
   // Extract agent meta (e.g. _user_query, _session_id) before passing to sandbox
   const { extractCallMeta } = await import("../services/call-logger.ts");
-  const { cleanArgs, userQuery, sessionId, widgetPull, widgetAction } =
+  const {
+    cleanArgs,
+    userQuery,
+    sessionId,
+    widgetPull,
+    widgetAction,
+    agenticSurfaceAction,
+  } =
     extractCallMeta(args || {});
 
   // Extract auth token from request for inter-app calls (ultralight.call)
@@ -1657,6 +1665,7 @@ async function handleToolsCall(
       authToken,
       widgetPull,
       widgetAction,
+      agenticSurfaceAction,
       routineContext: routineTraceContextFromCaller(callerContext),
     },
   );
@@ -1998,6 +2007,7 @@ async function handleGpuExecution(
     authToken?: string;
     widgetPull?: { widgetName?: string; intervalMs?: number; reason?: string };
     widgetAction?: WidgetActionCallMetadata;
+    agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
     routineContext?: RoutineTraceContext;
   },
 ): Promise<Response> {
@@ -2064,6 +2074,7 @@ async function handleGpuExecution(
       source: gpuCallSource,
       routineContext: meta?.routineContext,
       widgetAction: meta?.widgetAction,
+      agenticSurfaceAction: meta?.agenticSurfaceAction,
     });
 
     if (gpuSettlement?.insufficientBalance) {
@@ -2104,6 +2115,7 @@ async function executeAppFunction(
     authToken?: string;
     widgetPull?: { widgetName?: string; intervalMs?: number; reason?: string };
     widgetAction?: WidgetActionCallMetadata;
+    agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
     routineContext?: RoutineTraceContext;
   },
 ): Promise<Response> {
@@ -2252,6 +2264,7 @@ async function executeAppFunction(
     const receiptId = createExecutionReceiptId();
     const widgetPull = meta?.widgetPull;
     const widgetAction = meta?.widgetAction;
+    const agenticSurfaceAction = meta?.agenticSurfaceAction;
     const callMethod = widgetPull ? "widget_pull" : "tools/call";
     const widgetPullMetadata = widgetPull
       ? {
@@ -2267,6 +2280,16 @@ async function executeAppFunction(
         widget_id: widgetAction.widgetId,
         widget_action_id: widgetAction.actionId,
         widget_turn_id: widgetAction.turnId,
+      }
+      : {};
+    const agenticSurfaceActionMetadata = agenticSurfaceAction
+      ? {
+        agentic_surface_action: true,
+        agentic_surface_id: agenticSurfaceAction.surfaceId,
+        agentic_interface_id: agenticSurfaceAction.interfaceId,
+        agentic_action_id: agenticSurfaceAction.actionId,
+        agentic_turn_id: agenticSurfaceAction.turnId,
+        agentic_component_id: agenticSurfaceAction.componentId,
       }
       : {};
     const cloudPreflight = await preflightRuntimeCloudHold({
@@ -2304,6 +2327,7 @@ async function executeAppFunction(
               }
               : {}),
             ...widgetActionMetadata,
+            ...agenticSurfaceActionMetadata,
           },
         },
       );
@@ -2343,6 +2367,7 @@ async function executeAppFunction(
                 widget_pull: true,
                 ...widgetPullMetadata,
                 ...widgetActionMetadata,
+                ...agenticSurfaceActionMetadata,
               },
             },
           );
@@ -2364,6 +2389,7 @@ async function executeAppFunction(
         surface: "mcp_tools_call",
         ...widgetPullMetadata,
         ...widgetActionMetadata,
+        ...agenticSurfaceActionMetadata,
         widget_pull_event_id: widgetPullUsage?.eventId,
         widget_pull_cloud_units: widgetPullUsage?.cloudUnits,
         widget_pull_amount_light: widgetPullUsage?.amountLight,
@@ -2439,6 +2465,7 @@ async function executeAppFunction(
           error_message: result.success ? null : String(result.error),
           ...widgetPullMetadata,
           ...widgetActionMetadata,
+          ...agenticSurfaceActionMetadata,
           widget_pull_event_id: widgetPullUsage?.eventId,
           widget_pull_cloud_units: widgetPullUsage?.cloudUnits,
           widget_pull_amount_light: widgetPullUsage?.amountLight,
@@ -2473,6 +2500,7 @@ async function executeAppFunction(
         runtimeCloudSettlement: cloudSettlement,
         routineContext: meta?.routineContext,
         widgetAction: meta?.widgetAction,
+        agenticSurfaceAction: meta?.agenticSurfaceAction,
       });
 
       return settlement;

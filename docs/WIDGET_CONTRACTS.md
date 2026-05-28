@@ -1,6 +1,6 @@
 # Widget Contracts
 
-Last reviewed: `2026-05-11`
+Last reviewed: `2026-05-27`
 
 This document is the canonical contract for desktop/home-screen widgets in
 Ultralight. The goal is to keep widget discovery predictable and make Wave 4
@@ -232,6 +232,77 @@ MCP-backed widget actions are auditable through `mcp_call_logs` widget columns:
 `widget_turn_id`. These fields come from the same `_widget_*` metadata passed by
 the widget handler, while the app function receives only clean business
 arguments.
+
+## Generated Agentic Interfaces
+
+Generated interfaces are Command-owned workspaces described by
+[`AgenticInterfaceSpec`](../shared/contracts/agentic-interface.ts). They are the
+next layer above agentic widgets: a planner can combine installed command cards,
+declared D1 context sources, MCP read functions, semantic actions, and embedded
+widgets into a temporary, saveable interface.
+
+The contract is intentionally typed and renderer-owned. A model may propose
+components such as `metric`, `table`, `detail`, `form`, `action_bar`,
+`card_ref`, and `widget_embed`; it may not return arbitrary HTML, CSS, React, or
+DOM selectors. The platform verifies the spec before rendering it.
+
+The first supported data binding sources are:
+
+- `command_card` - calls an existing widget data function for a declared card
+- `context_source` - reads a permissioned manifest `context_sources[]` entry
+- `mcp_read_function` - calls an allowed read function through MCP
+- `literal` - static planner-provided display data
+
+The first supported action bindings are:
+
+- `mcp_function` - invokes an app-owned MCP function
+- `widget_action` - invokes a declared semantic action on an active widget
+- `open_widget` - opens or embeds an existing widget
+- `refresh_binding` - refreshes one or more data bindings
+- `select_entity` - updates selection state inside the generated surface
+
+Generated writes must go through MCP functions or widget semantic actions, never
+raw D1 writes. The shared validator rejects unknown component kinds, missing
+required ids, unsupported data binding sources, and write actions that declare
+`confirmation: "none"`.
+
+`ul.command({ action: "interface", prompt })` is the first backend planner API
+for these specs. It reads the user's installed Command card/widget inventory,
+typed MCP function index, declared context sources, and saved Command dashboard
+summaries, then returns a draft spec plus rationale and warnings. It can include
+small safe D1 previews when `include_data_preview: true`, but it does not
+persist the generated interface.
+
+Useful generated interfaces can be persisted separately from Command dashboard
+layouts with `ul.command({ action: "save_interface", spec })`. The server stores
+only normalized, verified specs in `user_agentic_interfaces` with metadata such
+as `interface_key`, title, description, icon, source prompt, status, and
+timestamps. `list_interfaces`, `get_interface`, and `delete_interface` operate
+on that catalog. Loading a saved interface re-verifies the stored spec against
+the user's current installed cards, widgets, context sources, and MCP functions;
+missing capabilities are surfaced as warnings or dropped items instead of
+breaking the UI.
+
+Widget, command card, context source, semantic action, and MCP function
+declarations may include optional `generation_hints` metadata. Hints are indexed
+with the function index and command surface inventory, then passed into the
+interface planner context. Existing manifests remain valid without hints.
+
+Supported hint fields are:
+
+- `tags` - searchable terms that may not appear in labels
+- `preferred_component` - one of the typed generated component kinds
+- `entity_types` - records produced or acted on, such as `conversation`,
+  `draft`, `lesson`, or `approval`
+- `action_group` - a logical group for related generated actions
+- `safe_default_filters` - read-side defaults such as status and limit
+- `suggested_components` - companion generated components like details, tables,
+  timelines, text, or action bars
+- `prompt_examples` - natural-language requests the declaration should match
+
+These hints are planner guidance, not a rendering escape hatch: generated
+interfaces still use typed `AgenticInterfaceSpec` components and verified MCP,
+widget, and context-source bindings.
 
 ## Deprecated Legacy Contract
 

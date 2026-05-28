@@ -6,13 +6,22 @@ import type {
   WidgetSurfaceEvent,
 } from '../../../shared/contracts/widget.ts';
 import type {
+  ActiveAgenticSurface,
+  ActiveGeneratedInterfaceSurface,
   ActiveWidgetSurface,
+  AgenticSurfaceListener,
   RegisterWidgetSurfaceInput,
+  RegisterGeneratedInterfaceSurfaceInput,
   WidgetBridgeMessage,
   WidgetSurfaceCommand,
   WidgetSurfaceCommandListener,
   WidgetSurfaceListener,
   WidgetSurfaceStatus,
+} from './widgetAgentTypes';
+import {
+  agenticInterfaceActionsToWidgetActions,
+  isGeneratedInterfaceSurface,
+  isWidgetSurface,
 } from './widgetAgentTypes';
 
 const CHANNEL_NAME = 'ul-widget-surface-registry';
@@ -22,8 +31,9 @@ export const WIDGET_SURFACE_COMMAND_EVENT = 'ul-widget-surface-command';
 export const WIDGET_SURFACE_MAX_EVENTS = 50;
 
 const registryId = randomId('registry');
-const surfaces = new Map<string, ActiveWidgetSurface>();
-const listeners = new Set<WidgetSurfaceListener>();
+const surfaces = new Map<string, ActiveAgenticSurface>();
+const widgetListeners = new Set<WidgetSurfaceListener>();
+const agenticListeners = new Set<AgenticSurfaceListener>();
 const commandListeners = new Set<WidgetSurfaceCommandListener>();
 const actionWaiters = new Map<string, {
   resolve: (result: WidgetActionResult) => void;
@@ -33,12 +43,12 @@ let channel: BroadcastChannel | null | undefined;
 let initialized = false;
 
 type RegistryBroadcastMessage =
-  | { originId: string; type: 'upsert'; surface: ActiveWidgetSurface }
+  | { originId: string; type: 'upsert'; surface: ActiveAgenticSurface }
   | { originId: string; type: 'remove'; surfaceId: string }
   | { originId: string; type: 'command'; command: WidgetSurfaceCommand };
 
 type RegistryBroadcastPayload =
-  | { type: 'upsert'; surface: ActiveWidgetSurface }
+  | { type: 'upsert'; surface: ActiveAgenticSurface }
   | { type: 'remove'; surfaceId: string }
   | { type: 'command'; command: WidgetSurfaceCommand };
 
@@ -64,20 +74,29 @@ export function createWidgetSurfaceId(kind: string, appUuid: string, widgetName:
   return `widget-${kind}-${appPart}-${widgetPart}-${randomId('surface').slice(8)}`;
 }
 
-function normalizeSurface(surface: ActiveWidgetSurface): ActiveWidgetSurface {
+export function createGeneratedInterfaceSurfaceId(interfaceId: string): string {
+  const interfacePart = interfaceId || 'interface';
+  return `generated-interface-${interfacePart}-${randomId('surface').slice(8)}`;
+}
+
+function normalizeSurface(surface: ActiveAgenticSurface): ActiveAgenticSurface {
+  const surfaceType = surface.surfaceType || (isRecord((surface as { source?: unknown }).source)
+    ? 'widget'
+    : 'generated_interface');
   const normalized = {
     ...surface,
+    surfaceType,
     snapshot: surface.snapshot ?? null,
     actions: Array.isArray(surface.actions) ? surface.actions : [],
     events: Array.isArray(surface.events) ? surface.events : [],
-  };
+  } as ActiveAgenticSurface;
   normalized.events = normalized.events
     .slice(-WIDGET_SURFACE_MAX_EVENTS)
-    .map((event) => normalizeWidgetSurfaceEvent(normalized, event));
+    .map((event) => normalizeSurfaceEvent(normalized, event));
   return normalized;
 }
 
-function readStoredSurfaces(): ActiveWidgetSurface[] {
+function readStoredSurfaces(): ActiveAgenticSurface[] {
   if (!hasLocalStorage()) return [];
   try {
     const raw = globalThis.localStorage.getItem(STORAGE_KEY);
@@ -85,12 +104,12 @@ function readStoredSurfaces(): ActiveWidgetSurface[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .filter((surface): surface is ActiveWidgetSurface =>
+      .filter((surface): surface is ActiveAgenticSurface =>
         surface &&
         typeof surface === 'object' &&
         typeof surface.surfaceId === 'string' &&
-        surface.source &&
-        typeof surface.source === 'object'
+        ((surface.source && typeof surface.source === 'object') ||
+          (surface.generatedInterface && typeof surface.generatedInterface === 'object'))
       )
       .map(normalizeSurface);
   } catch {
@@ -101,7 +120,7 @@ function readStoredSurfaces(): ActiveWidgetSurface[] {
 function writeStoredSurfaces(): void {
   if (!hasLocalStorage()) return;
   try {
-    globalThis.localStorage.setItem(STORAGE_KEY, JSON.stringify(getActiveWidgetSurfaces()));
+    globalThis.localStorage.setItem(STORAGE_KEY, JSON.stringify(getActiveAgenticSurfaces()));
   } catch {
     // Best effort only; the in-memory registry remains canonical in this window.
   }
@@ -133,14 +152,19 @@ function postBroadcast(message: RegistryBroadcastPayload): void {
 }
 
 function dispatchChanged(): void {
-  const snapshot = getActiveWidgetSurfaces();
-  for (const listener of listeners) listener(snapshot);
+  const snapshot = getActiveAgenticSurfaces();
+  const widgetSnapshot = snapshot.filter(isWidgetSurface);
+  for (const listener of widgetListeners) listener(widgetSnapshot);
+  for (const listener of agenticListeners) listener(snapshot);
   if (hasWindow() && typeof CustomEvent === 'function') {
     window.dispatchEvent(new CustomEvent(SURFACE_CHANGED_EVENT, { detail: { surfaces: snapshot } }));
   }
 }
 
-function upsertSurface(surface: ActiveWidgetSurface, options: { broadcast?: boolean } = {}): ActiveWidgetSurface {
+function upsertSurface(
+  surface: ActiveAgenticSurface,
+  options: { broadcast?: boolean } = {},
+): ActiveAgenticSurface {
   const normalized = normalizeSurface(surface);
   surfaces.set(normalized.surfaceId, normalized);
   writeStoredSurfaces();
@@ -212,15 +236,20 @@ function normalizeCommandTurnId(command: WidgetActionInvocation): WidgetSurfaceC
   return { ...command, turn_id: randomId('turn') };
 }
 
-function normalizeWidgetSurfaceEvent(
-  surface: ActiveWidgetSurface,
+function normalizeSurfaceEvent(
+  surface: ActiveAgenticSurface,
   event: WidgetSurfaceEvent,
 ): WidgetSurfaceEvent {
+  const widgetId = isWidgetSurface(surface)
+    ? surface.source.widgetName
+    : surface.generatedInterface.id;
   return {
     ...event,
     id: event.id || randomId('event'),
     surface_id: event.surface_id || surface.surfaceId,
-    widget_id: event.widget_id || surface.source.widgetName,
+    widget_id: event.widget_id || widgetId,
+    interface_id: event.interface_id ||
+      (isGeneratedInterfaceSurface(surface) ? surface.generatedInterface.id : undefined),
     created_at: event.created_at || new Date().toISOString(),
   };
 }
@@ -231,20 +260,53 @@ export function registerWidgetSurface(input: RegisterWidgetSurfaceInput): Active
   const surfaceId = input.surfaceId ||
     createWidgetSurfaceId(input.kind, input.source.appUuid, input.source.widgetName);
   const existing = surfaces.get(surfaceId);
+  const widgetExisting = existing && isWidgetSurface(existing) ? existing : null;
 
   return upsertSurface({
     surfaceId,
     kind: input.kind,
+    surfaceType: 'widget',
     source: input.source,
     context: input.context,
-    status: existing?.status ?? 'opening',
-    snapshot: existing?.snapshot ?? null,
-    actions: existing?.actions ?? [],
-    events: existing?.events ?? [],
-    latestDataPayload: input.latestDataPayload ?? existing?.latestDataPayload ?? null,
-    registeredAt: existing?.registeredAt ?? now,
+    status: widgetExisting?.status ?? 'opening',
+    snapshot: widgetExisting?.snapshot ?? null,
+    actions: widgetExisting?.actions ?? [],
+    events: widgetExisting?.events ?? [],
+    latestDataPayload: input.latestDataPayload ?? widgetExisting?.latestDataPayload ?? null,
+    registeredAt: widgetExisting?.registeredAt ?? now,
     updatedAt: now,
-  });
+  }) as ActiveWidgetSurface;
+}
+
+export function registerGeneratedInterfaceSurface(
+  input: RegisterGeneratedInterfaceSurfaceInput,
+): ActiveGeneratedInterfaceSurface {
+  setupRegistry();
+  const now = Date.now();
+  const surfaceId = input.surfaceId || createGeneratedInterfaceSurfaceId(input.spec.id);
+  const existing = surfaces.get(surfaceId);
+  const generatedExisting = existing && isGeneratedInterfaceSurface(existing)
+    ? existing
+    : null;
+
+  return upsertSurface({
+    surfaceId,
+    kind: 'generated_interface',
+    surfaceType: 'generated_interface',
+    generatedInterface: {
+      id: input.spec.id,
+      title: input.spec.title,
+      description: input.spec.description,
+      mode: input.spec.mode,
+    },
+    status: input.status ?? generatedExisting?.status ?? 'ready',
+    snapshot: input.snapshot ?? generatedExisting?.snapshot ?? null,
+    actions: agenticInterfaceActionsToWidgetActions(input.spec.actions),
+    events: generatedExisting?.events ?? [],
+    latestDataPayload: generatedExisting?.latestDataPayload ?? null,
+    registeredAt: generatedExisting?.registeredAt ?? now,
+    updatedAt: now,
+  }) as ActiveGeneratedInterfaceSurface;
 }
 
 export function unregisterWidgetSurface(surfaceId: string): void {
@@ -255,11 +317,23 @@ export function unregisterWidgetSurface(surfaceId: string): void {
   dispatchChanged();
 }
 
+export const unregisterAgenticSurface = unregisterWidgetSurface;
+
 export function updateWidgetSurfaceStatus(surfaceId: string, status: WidgetSurfaceStatus): ActiveWidgetSurface | null {
   setupRegistry();
   const surface = surfaces.get(surfaceId);
-  if (!surface) return null;
-  return upsertSurface({ ...surface, status, updatedAt: Date.now() });
+  if (!surface || !isWidgetSurface(surface)) return null;
+  return upsertSurface({ ...surface, status, updatedAt: Date.now() }) as ActiveWidgetSurface;
+}
+
+export function updateGeneratedInterfaceSurfaceStatus(
+  surfaceId: string,
+  status: WidgetSurfaceStatus,
+): ActiveGeneratedInterfaceSurface | null {
+  setupRegistry();
+  const surface = surfaces.get(surfaceId);
+  if (!surface || !isGeneratedInterfaceSurface(surface)) return null;
+  return upsertSurface({ ...surface, status, updatedAt: Date.now() }) as ActiveGeneratedInterfaceSurface;
 }
 
 export function updateWidgetSurfaceSnapshot(
@@ -268,13 +342,28 @@ export function updateWidgetSurfaceSnapshot(
 ): ActiveWidgetSurface | null {
   setupRegistry();
   const surface = surfaces.get(surfaceId);
-  if (!surface) return null;
+  if (!surface || !isWidgetSurface(surface)) return null;
   return upsertSurface({
     ...surface,
     snapshot,
     status: surface.status === 'opening' ? 'ready' : surface.status,
     updatedAt: Date.now(),
-  });
+  }) as ActiveWidgetSurface;
+}
+
+export function updateGeneratedInterfaceSurfaceSnapshot(
+  surfaceId: string,
+  snapshot: WidgetStateSnapshot,
+): ActiveGeneratedInterfaceSurface | null {
+  setupRegistry();
+  const surface = surfaces.get(surfaceId);
+  if (!surface || !isGeneratedInterfaceSurface(surface)) return null;
+  return upsertSurface({
+    ...surface,
+    snapshot,
+    status: surface.status === 'opening' ? 'ready' : surface.status,
+    updatedAt: Date.now(),
+  }) as ActiveGeneratedInterfaceSurface;
 }
 
 export function updateWidgetSurfaceActions(
@@ -283,12 +372,12 @@ export function updateWidgetSurfaceActions(
 ): ActiveWidgetSurface | null {
   setupRegistry();
   const surface = surfaces.get(surfaceId);
-  if (!surface) return null;
+  if (!surface || !isWidgetSurface(surface)) return null;
   return upsertSurface({
     ...surface,
     actions: Array.isArray(actions) ? actions : [],
     updatedAt: Date.now(),
-  });
+  }) as ActiveWidgetSurface;
 }
 
 export function appendWidgetSurfaceEvent(
@@ -297,13 +386,28 @@ export function appendWidgetSurfaceEvent(
 ): ActiveWidgetSurface | null {
   setupRegistry();
   const surface = surfaces.get(surfaceId);
-  if (!surface) return null;
-  const normalizedEvent = normalizeWidgetSurfaceEvent(surface, event);
+  if (!surface || !isWidgetSurface(surface)) return null;
+  const normalizedEvent = normalizeSurfaceEvent(surface, event);
   return upsertSurface({
     ...surface,
     events: [...surface.events, normalizedEvent].slice(-WIDGET_SURFACE_MAX_EVENTS),
     updatedAt: Date.now(),
-  });
+  }) as ActiveWidgetSurface;
+}
+
+export function appendGeneratedInterfaceSurfaceEvent(
+  surfaceId: string,
+  event: WidgetSurfaceEvent,
+): ActiveGeneratedInterfaceSurface | null {
+  setupRegistry();
+  const surface = surfaces.get(surfaceId);
+  if (!surface || !isGeneratedInterfaceSurface(surface)) return null;
+  const normalizedEvent = normalizeSurfaceEvent(surface, event);
+  return upsertSurface({
+    ...surface,
+    events: [...surface.events, normalizedEvent].slice(-WIDGET_SURFACE_MAX_EVENTS),
+    updatedAt: Date.now(),
+  }) as ActiveGeneratedInterfaceSurface;
 }
 
 export function recordWidgetActionResult(
@@ -312,7 +416,7 @@ export function recordWidgetActionResult(
 ): ActiveWidgetSurface | null {
   setupRegistry();
   const surface = surfaces.get(surfaceId);
-  if (!surface) return null;
+  if (!surface || !isWidgetSurface(surface)) return null;
   const normalizedResult: WidgetActionResult = {
     ...result,
     surface_id: result.surface_id ?? surfaceId,
@@ -329,7 +433,7 @@ export function recordWidgetActionResult(
     snapshot: normalizedResult.event?.snapshot ?? normalizedResult.snapshot,
     created_at: normalizedResult.event?.created_at ?? new Date().toISOString(),
   } satisfies WidgetSurfaceEvent;
-  const normalizedEvent = normalizeWidgetSurfaceEvent(surface, event);
+  const normalizedEvent = normalizeSurfaceEvent(surface, event);
 
   const updatedSurface = upsertSurface({
     ...surface,
@@ -348,7 +452,7 @@ export function recordWidgetActionResult(
     }
   }
 
-  return updatedSurface;
+  return updatedSurface as ActiveWidgetSurface;
 }
 
 export function handleWidgetBridgeMessage(data: unknown, fallbackSurfaceId?: string): boolean {
@@ -392,20 +496,45 @@ export function handleWidgetBridgeMessage(data: unknown, fallbackSurfaceId?: str
 
 export function getWidgetSurface(surfaceId: string): ActiveWidgetSurface | null {
   setupRegistry();
-  return surfaces.get(surfaceId) ?? null;
+  const surface = surfaces.get(surfaceId);
+  return surface && isWidgetSurface(surface) ? surface : null;
 }
 
 export function getActiveWidgetSurfaces(): ActiveWidgetSurface[] {
+  setupRegistry();
+  return [...surfaces.values()]
+    .filter(isWidgetSurface)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export function getGeneratedInterfaceSurface(
+  surfaceId: string,
+): ActiveGeneratedInterfaceSurface | null {
+  setupRegistry();
+  const surface = surfaces.get(surfaceId);
+  return surface && isGeneratedInterfaceSurface(surface) ? surface : null;
+}
+
+export function getActiveAgenticSurfaces(): ActiveAgenticSurface[] {
   setupRegistry();
   return [...surfaces.values()].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export function subscribeWidgetSurfaces(listener: WidgetSurfaceListener): () => void {
   setupRegistry();
-  listeners.add(listener);
+  widgetListeners.add(listener);
   listener(getActiveWidgetSurfaces());
   return () => {
-    listeners.delete(listener);
+    widgetListeners.delete(listener);
+  };
+}
+
+export function subscribeAgenticSurfaces(listener: AgenticSurfaceListener): () => void {
+  setupRegistry();
+  agenticListeners.add(listener);
+  listener(getActiveAgenticSurfaces());
+  return () => {
+    agenticListeners.delete(listener);
   };
 }
 
@@ -423,7 +552,7 @@ export function dispatchWidgetSurfaceCommand(command: WidgetActionInvocation): v
 }
 
 export function buildWidgetSurfaceCommandMessage(command: WidgetSurfaceCommand): Record<string, unknown> {
-  return {
+  const message: Record<string, unknown> = {
     type: 'ul-widget-command',
     surface_id: command.surface_id,
     surfaceId: command.surface_id,
@@ -436,6 +565,23 @@ export function buildWidgetSurfaceCommandMessage(command: WidgetSurfaceCommand):
     turnId: command.turn_id,
     source: command.source,
   };
+  if (command.agentic_surface_id) {
+    message.agentic_surface_id = command.agentic_surface_id;
+    message.agenticSurfaceId = command.agentic_surface_id;
+  }
+  if (command.agentic_interface_id) {
+    message.agentic_interface_id = command.agentic_interface_id;
+    message.agenticInterfaceId = command.agentic_interface_id;
+  }
+  if (command.agentic_action_id) {
+    message.agentic_action_id = command.agentic_action_id;
+    message.agenticActionId = command.agentic_action_id;
+  }
+  if (command.agentic_component_id) {
+    message.agentic_component_id = command.agentic_component_id;
+    message.agenticComponentId = command.agentic_component_id;
+  }
+  return message;
 }
 
 export function invokeWidgetSurfaceAction(
@@ -446,7 +592,7 @@ export function invokeWidgetSurfaceAction(
   const normalizedCommand = normalizeCommandTurnId(command);
   const turnId = normalizedCommand.turn_id as string;
   const surface = surfaces.get(normalizedCommand.surface_id);
-  if (!surface) {
+  if (!surface || !isWidgetSurface(surface)) {
     return Promise.resolve({
       surface_id: normalizedCommand.surface_id,
       widget_id: normalizedCommand.widget_id,
@@ -504,7 +650,8 @@ export function subscribeWidgetSurfaceCommands(listener: WidgetSurfaceCommandLis
 
 export function clearWidgetSurfaceRegistryForTests(): void {
   surfaces.clear();
-  listeners.clear();
+  widgetListeners.clear();
+  agenticListeners.clear();
   commandListeners.clear();
   for (const waiter of actionWaiters.values()) {
     clearTimeout(waiter.timeoutId);

@@ -14,7 +14,9 @@ function baseManifest(overrides: Record<string, unknown> = {}): AppManifest {
     functions: {
       widget_email_inbox_ui: { description: "Render the email widget" },
       widget_email_inbox_data: { description: "Load email widget data" },
-      search_conversations_context: { description: "Search conversations for context" },
+      search_conversations_context: {
+        description: "Search conversations for context",
+      },
       conversation_act: { description: "Act on a conversation" },
     },
     ...overrides,
@@ -32,6 +34,12 @@ Deno.test("agentic widget manifest: accepts read context sources and semantic ac
         searchable: true,
         function: "search_conversations_context",
         default_for_widgets: ["email_inbox"],
+        generation_hints: {
+          tags: ["email", "threads"],
+          preferred_component: "table",
+          entity_types: ["conversation"],
+          prompt_examples: ["find the latest guest email about parking"],
+        },
       },
       {
         id: "recent_threads",
@@ -42,6 +50,11 @@ Deno.test("agentic widget manifest: accepts read context sources and semantic ac
         query:
           "SELECT id, subject FROM conversations WHERE user_id = :user_id AND subject LIKE :query ORDER BY updated_at DESC LIMIT :limit",
         default_for_widgets: ["email_inbox"],
+        generation_hints: {
+          tags: ["recent"],
+          preferred_component: "list",
+          safe_default_filters: { limit: 10 },
+        },
       },
     ],
     widgets: [
@@ -52,6 +65,16 @@ Deno.test("agentic widget manifest: accepts read context sources and semantic ac
         context_function: "widget_email_inbox_data",
         actions_function: "widget_email_inbox_data",
         context_sources: ["email_conversations"],
+        generation_hints: {
+          tags: ["email approvals"],
+          preferred_component: "widget_embed",
+          entity_types: ["conversation", "draft"],
+          suggested_components: [{
+            kind: "action_bar",
+            title: "Draft actions",
+            action_ids: ["send_selected_draft", "show_draft_editor"],
+          }],
+        },
         agent_actions: [
           {
             id: "send_selected_draft",
@@ -61,6 +84,10 @@ Deno.test("agentic widget manifest: accepts read context sources and semantic ac
             mcp: {
               function: "conversation_act",
               args_template: { action: "send" },
+            },
+            generation_hints: {
+              action_group: "draft_review",
+              tags: ["send", "approval"],
             },
           },
           {
@@ -93,6 +120,7 @@ Deno.test("agentic widget manifest: rejects unsafe context/action shapes", () =>
         type: "d1_query",
         access: "write",
         query: "DELETE FROM conversations WHERE user_id = :user_id",
+        generation_hints: { preferred_component: "iframe" },
       },
     ],
     widgets: [
@@ -101,12 +129,14 @@ Deno.test("agentic widget manifest: rejects unsafe context/action shapes", () =>
         label: "Email Inbox",
         agentic: "yes",
         context_sources: ["missing_source"],
+        generation_hints: { tags: [123] },
         agent_actions: [
           {
             id: "send",
             label: "Send",
             mode: "delete",
             ui: { command: 123 },
+            generation_hints: { suggested_components: [{ kind: "portal" }] },
           },
         ],
       },
@@ -130,11 +160,34 @@ Deno.test("agentic widget manifest: rejects unsafe context/action shapes", () =>
     true,
   );
   assertEquals(
-    result.errors.some((error) => error.path === "widgets.0.agent_actions.0.mode"),
+    result.errors.some((error) =>
+      error.path === "widgets.0.agent_actions.0.mode"
+    ),
     true,
   );
   assertEquals(
-    result.errors.some((error) => error.path === "widgets.0.agent_actions.0.ui.command"),
+    result.errors.some((error) =>
+      error.path === "widgets.0.agent_actions.0.ui.command"
+    ),
+    true,
+  );
+  assertEquals(
+    result.errors.some((error) =>
+      error.path === "context_sources.0.generation_hints.preferred_component"
+    ),
+    true,
+  );
+  assertEquals(
+    result.errors.some((error) =>
+      error.path === "widgets.0.generation_hints.tags"
+    ),
+    true,
+  );
+  assertEquals(
+    result.errors.some((error) =>
+      error.path ===
+        "widgets.0.agent_actions.0.generation_hints.suggested_components.0.kind"
+    ),
     true,
   );
   assertEquals(

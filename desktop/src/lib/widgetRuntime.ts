@@ -712,6 +712,16 @@ function buildWidgetBridgeScript(options: {
         _widget_action_id: _ulWidgetCommandContext.actionId,
         _widget_turn_id: _ulWidgetCommandContext.turnId
       });
+      if (_ulWidgetCommandContext.agenticActionId || _ulWidgetCommandContext.agenticInterfaceId) {
+        callArgs = Object.assign({}, callArgs, {
+          _agentic_surface_action: true,
+          _agentic_surface_id: _ulWidgetCommandContext.agenticSurfaceId,
+          _agentic_interface_id: _ulWidgetCommandContext.agenticInterfaceId,
+          _agentic_action_id: _ulWidgetCommandContext.agenticActionId,
+          _agentic_turn_id: _ulWidgetCommandContext.turnId,
+          _agentic_component_id: _ulWidgetCommandContext.agenticComponentId
+        });
+      }
     }
     return fetch(endpoint, {
       method: 'POST',
@@ -783,6 +793,10 @@ function buildWidgetBridgeScript(options: {
     if (targetSurfaceId && targetSurfaceId !== _surfaceId) return;
     var actionId = data.actionId || data.action_id;
     var turnId = data.turnId || data.turn_id;
+    var agenticSurfaceId = data.agenticSurfaceId || data.agentic_surface_id;
+    var agenticInterfaceId = data.agenticInterfaceId || data.agentic_interface_id;
+    var agenticActionId = data.agenticActionId || data.agentic_action_id;
+    var agenticComponentId = data.agenticComponentId || data.agentic_component_id;
     var entry = actionId ? _ulWidgetActions[actionId] : null;
     if (!entry || typeof entry.handler !== 'function') {
       postWidgetMessage('ul-widget-action-result', {
@@ -807,7 +821,14 @@ function buildWidgetBridgeScript(options: {
       }
     });
     var previousCommandContext = _ulWidgetCommandContext;
-    _ulWidgetCommandContext = { actionId: actionId, turnId: turnId };
+    _ulWidgetCommandContext = {
+      actionId: actionId,
+      turnId: turnId,
+      agenticSurfaceId: agenticSurfaceId,
+      agenticInterfaceId: agenticInterfaceId,
+      agenticActionId: agenticActionId,
+      agenticComponentId: agenticComponentId
+    };
     Promise.resolve()
       .then(function() {
         return entry.handler(data.args || {}, data);

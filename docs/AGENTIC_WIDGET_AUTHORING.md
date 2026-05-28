@@ -1,6 +1,6 @@
 # Agentic Widget Authoring
 
-Last reviewed: `2026-05-23`
+Last reviewed: `2026-05-28`
 
 Agentic widgets are normal clickable widgets with optional semantic handles for
 composer and agent control. A widget should keep its existing HTML, buttons,
@@ -20,7 +20,14 @@ Declare the widget, its data shell, read context, and semantic actions:
       "access": "read",
       "searchable": true,
       "query": "SELECT id, title, status FROM records WHERE user_id = :user_id AND title LIKE :query ORDER BY updated_at DESC LIMIT :limit",
-      "default_for_widgets": ["review_queue"]
+      "default_for_widgets": ["review_queue"],
+      "generation_hints": {
+        "tags": ["review", "approvals"],
+        "preferred_component": "table",
+        "entity_types": ["record"],
+        "safe_default_filters": { "status": "pending", "limit": 10 },
+        "prompt_examples": ["show pending records to approve"]
+      }
     }
   ],
   "widgets": [
@@ -34,6 +41,24 @@ Declare the widget, its data shell, read context, and semantic actions:
       "context_function": "widget_review_queue_data",
       "actions_function": "widget_review_queue_data",
       "context_sources": ["recent_records"],
+      "generation_hints": {
+        "tags": ["review queue", "approval workflow"],
+        "preferred_component": "widget_embed",
+        "entity_types": ["record"],
+        "action_group": "record_review",
+        "suggested_components": [
+          {
+            "kind": "table",
+            "title": "Pending records",
+            "description": "Show pending records with owner, status, and update time."
+          },
+          {
+            "kind": "action_bar",
+            "title": "Review actions",
+            "action_ids": ["show_editor", "approve_selected"]
+          }
+        ]
+      },
       "agent_actions": [
         {
           "id": "show_editor",
@@ -50,6 +75,11 @@ Declare the widget, its data shell, read context, and semantic actions:
           "mcp": {
             "function": "record_act",
             "args_template": { "action": "approve" }
+          },
+          "generation_hints": {
+            "tags": ["approve"],
+            "action_group": "record_review",
+            "entity_types": ["record"]
           }
         }
       ]
@@ -61,6 +91,24 @@ Declare the widget, its data shell, read context, and semantic actions:
 Use `d1_table` or SELECT-only `d1_query` context sources for read grounding.
 Queries must include `:user_id`; `:query` and `:limit` are available for search
 and budgeted retrieval. Do not use context sources for writes.
+
+`generation_hints` are optional quality hints for generated agentic interfaces.
+They do not make custom views mandatory and they do not change the clickable
+widget contract. Use them when the default planner would otherwise have to infer
+too much from labels alone:
+
+- `tags` and `prompt_examples` make cards, context sources, and functions easier
+  to find from natural language.
+- `preferred_component` nudges generated surfaces toward `table`, `list`,
+  `metric`, `detail`, `timeline`, `widget_embed`, `form`, `action_bar`, or
+  another supported component kind.
+- `entity_types` tells the planner what records are produced or acted on.
+- `action_group` helps companion actions cluster together.
+- `safe_default_filters` may prefill read-only filters such as
+  `{ "status": "pending", "limit": 10 }`; write actions still require their
+  normal MCP/widget confirmation policy.
+- `suggested_components` lets a widget/card author propose companion pieces,
+  such as a details panel next to a queue or an action bar beside a selected row.
 
 ## Runtime Bridge
 

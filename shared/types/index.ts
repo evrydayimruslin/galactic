@@ -1,6 +1,12 @@
 // Ultralight Shared Types
 // Used across API, Web, and Runtime
 
+export {
+  isAgenticInterfaceSpec,
+  validateAgenticInterfaceSpec,
+} from "../contracts/agentic-interface.ts";
+export type * from "../contracts/agentic-interface.ts";
+
 // ============================================
 // USER & AUTH
 // ============================================
@@ -140,8 +146,8 @@ export interface App {
    *  responses leave it undefined. Seeded into the B11 install button
    *  state machine on ToolDetailView. */
   is_installed?: boolean;
-  visibility: 'private' | 'unlisted' | 'public';
-  download_access: 'owner' | 'public';
+  visibility: "private" | "unlisted" | "public";
+  download_access: "owner" | "public";
   current_version: string;
   versions: string[];
   version_metadata: VersionMetadata[];
@@ -470,9 +476,42 @@ export interface WidgetDeclaration {
   actions_function?: string;
   context_sources?: WidgetContextSourceRef[];
   agent_actions?: WidgetActionDeclaration[];
+  generation_hints?: WidgetGenerationHints;
 }
 
 export type WidgetContextSourceRef = string;
+
+export type WidgetGenerationComponentKind =
+  | "metric"
+  | "list"
+  | "table"
+  | "detail"
+  | "form"
+  | "action_bar"
+  | "timeline"
+  | "card_ref"
+  | "widget_embed"
+  | "routine_panel"
+  | "text";
+
+export interface WidgetGenerationSuggestedComponent {
+  kind: WidgetGenerationComponentKind;
+  title?: string;
+  description?: string;
+  data_view?: string;
+  context_source_id?: string;
+  action_ids?: string[];
+}
+
+export interface WidgetGenerationHints {
+  tags?: string[];
+  preferred_component?: WidgetGenerationComponentKind;
+  entity_types?: string[];
+  action_group?: string;
+  safe_default_filters?: Record<string, unknown>;
+  suggested_components?: WidgetGenerationSuggestedComponent[];
+  prompt_examples?: string[];
+}
 
 export type WidgetContextSourceType = "d1_table" | "d1_query" | "function";
 
@@ -488,6 +527,7 @@ export interface WidgetContextSourceDeclaration {
   query?: string;
   function?: string;
   redactions?: WidgetContextRedaction[];
+  generation_hints?: WidgetGenerationHints;
 }
 
 export interface WidgetContextRedaction {
@@ -521,6 +561,7 @@ export interface WidgetActionDeclaration {
   mcp?: WidgetMcpActionBinding;
   ui?: WidgetUiActionBinding;
   expected_result?: string;
+  generation_hints?: WidgetGenerationHints;
 }
 
 export interface WidgetDataRef {
@@ -552,9 +593,12 @@ export interface WidgetPendingEdit {
 
 export interface WidgetStateSnapshot {
   surface_id?: string;
+  surface_type?: ActiveSurfaceType;
   app_id?: string;
   app_slug?: string;
   widget_id: string;
+  interface_id?: string;
+  interface_title?: string;
   title?: string;
   summary?: string;
   current_view?: string;
@@ -579,6 +623,7 @@ export interface WidgetSurfaceEvent {
   id?: string;
   surface_id?: string;
   widget_id?: string;
+  interface_id?: string;
   kind: WidgetSurfaceEventKind;
   action_id?: string;
   turn_id?: string;
@@ -590,18 +635,28 @@ export interface WidgetSurfaceEvent {
   created_at?: string;
 }
 
-export type WidgetSurfaceKind = "inline" | "window" | "command_card";
+export type WidgetSurfaceKind =
+  | "inline"
+  | "window"
+  | "command_card"
+  | "generated_interface";
+
+export type ActiveSurfaceType = "widget" | "generated_interface";
 
 export type WidgetSurfaceStatus = "opening" | "ready" | "stale" | "closed";
 
 export interface ActiveWidgetContext {
   surfaceId: string;
+  surfaceType?: ActiveSurfaceType;
   kind?: WidgetSurfaceKind;
   appId: string;
   appSlug: string;
   appName: string;
   widgetId: string;
   widgetName?: string;
+  interfaceId?: string;
+  interfaceTitle?: string;
+  interfaceMode?: "temporary" | "saved";
   title?: string;
   context?: Record<string, string>;
   status?: WidgetSurfaceStatus;
@@ -663,6 +718,7 @@ export interface CommandCardDeclaration {
   data_function?: string;
   refresh_interval_s?: number;
   dependencies?: WidgetDependencyDeclaration[];
+  generation_hints?: WidgetGenerationHints;
 }
 
 export interface WidgetAction {
@@ -1627,7 +1683,7 @@ export interface BYOKModel {
    *  every model in a provider's catalog the FE falls back to its
    *  pre-B1 behaviour (show everything on both tiers), so deployments
    *  can stage the annotation rollout without breaking the picker. */
-  tier?: 'flash' | 'heavy' | 'both';
+  tier?: "flash" | "heavy" | "both";
 }
 
 const OPENAI_COMPAT_TEXT_CAPABILITIES: BYOKProviderCapabilities = {
@@ -1717,7 +1773,11 @@ export const BYOK_PROVIDERS: Record<ActiveBYOKProvider, BYOKProviderInfo> = {
         outputPrice: 15,
       },
     ],
-    capabilities: { ...OPENAI_COMPAT_TEXT_CAPABILITIES, multimodal: true, realtime: true },
+    capabilities: {
+      ...OPENAI_COMPAT_TEXT_CAPABILITIES,
+      multimodal: true,
+      realtime: true,
+    },
     apiKeyPrefix: "sk-",
     docsUrl: "https://platform.openai.com/docs",
     apiKeyUrl: "https://platform.openai.com/api-keys",
@@ -1892,10 +1952,16 @@ export interface AppManifest {
   http?: ManifestHttpConfig;
 }
 
-export type ManifestHttpAuthMode = 'user' | 'public';
-export type ManifestHttpBillingMode = 'owner' | 'caller';
-export type ManifestHttpDataScope = 'app' | 'user';
-export type ManifestHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
+export type ManifestHttpAuthMode = "user" | "public";
+export type ManifestHttpBillingMode = "owner" | "caller";
+export type ManifestHttpDataScope = "app" | "user";
+export type ManifestHttpMethod =
+  | "GET"
+  | "POST"
+  | "PUT"
+  | "PATCH"
+  | "DELETE"
+  | "HEAD";
 
 export interface ManifestHttpConfig {
   defaults?: ManifestHttpRouteDefaults;
@@ -1933,6 +1999,7 @@ export interface ManifestFunction {
   examples?: string[];
   /** MCP tool annotations — behavioral hints for agents (readOnlyHint, destructiveHint, etc.) */
   annotations?: MCPToolAnnotations;
+  generation_hints?: WidgetGenerationHints;
 }
 
 export interface ManifestParameter {
@@ -2191,12 +2258,12 @@ export function normalizeManifestParameters(
 
 const COMMAND_CARD_SIZE_RE = /^[1-4]x[1-4]$/;
 const MANIFEST_HTTP_METHODS: ManifestHttpMethod[] = [
-  'GET',
-  'POST',
-  'PUT',
-  'PATCH',
-  'DELETE',
-  'HEAD',
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "HEAD",
 ];
 const MANIFEST_HTTP_RATE_LIMIT_MAX_RPM = 10_000;
 const MANIFEST_HTTP_RATE_LIMIT_MAX_BURST = 10_000;
@@ -2209,8 +2276,8 @@ function validateHttpAuthMode(
   errors: ManifestValidationError[],
 ): ManifestHttpAuthMode | undefined {
   if (value === undefined) return undefined;
-  if (value === 'user' || value === 'public') return value;
-  errors.push({ path, message: 'auth must be one of: user, public' });
+  if (value === "user" || value === "public") return value;
+  errors.push({ path, message: "auth must be one of: user, public" });
   return undefined;
 }
 
@@ -2220,8 +2287,8 @@ function validateHttpBillingMode(
   errors: ManifestValidationError[],
 ): ManifestHttpBillingMode | undefined {
   if (value === undefined) return undefined;
-  if (value === 'owner' || value === 'caller') return value;
-  errors.push({ path, message: 'billing must be one of: owner, caller' });
+  if (value === "owner" || value === "caller") return value;
+  errors.push({ path, message: "billing must be one of: owner, caller" });
   return undefined;
 }
 
@@ -2231,8 +2298,8 @@ function validateHttpDataScope(
   errors: ManifestValidationError[],
 ): ManifestHttpDataScope | undefined {
   if (value === undefined) return undefined;
-  if (value === 'app' || value === 'user') return value;
-  errors.push({ path, message: 'data_scope must be one of: app, user' });
+  if (value === "app" || value === "user") return value;
+  errors.push({ path, message: "data_scope must be one of: app, user" });
   return undefined;
 }
 
@@ -2243,27 +2310,33 @@ function validateHttpMethods(
 ): ManifestHttpMethod[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.length === 0) {
-    errors.push({ path, message: 'methods must be a non-empty array' });
+    errors.push({ path, message: "methods must be a non-empty array" });
     return undefined;
   }
 
   const normalized: ManifestHttpMethod[] = [];
   const seen = new Set<string>();
   for (const [index, method] of value.entries()) {
-    if (typeof method !== 'string') {
-      errors.push({ path: `${path}.${index}`, message: 'method must be a string' });
+    if (typeof method !== "string") {
+      errors.push({
+        path: `${path}.${index}`,
+        message: "method must be a string",
+      });
       continue;
     }
     const upper = method.trim().toUpperCase();
     if (!MANIFEST_HTTP_METHODS.includes(upper as ManifestHttpMethod)) {
       errors.push({
         path: `${path}.${index}`,
-        message: `method must be one of: ${MANIFEST_HTTP_METHODS.join(', ')}`,
+        message: `method must be one of: ${MANIFEST_HTTP_METHODS.join(", ")}`,
       });
       continue;
     }
     if (seen.has(upper)) {
-      errors.push({ path: `${path}.${index}`, message: `duplicate method "${upper}"` });
+      errors.push({
+        path: `${path}.${index}`,
+        message: `duplicate method "${upper}"`,
+      });
       continue;
     }
     seen.add(upper);
@@ -2276,12 +2349,12 @@ function validateHttpMethods(
 function normalizeHttpCorsOrigin(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  if (trimmed === '*') return '*';
-  if (trimmed === 'tauri://localhost') return trimmed;
+  if (trimmed === "*") return "*";
+  if (trimmed === "tauri://localhost") return trimmed;
 
   try {
     const url = new URL(trimmed);
-    if (url.pathname !== '/' || url.search || url.hash) return null;
+    if (url.pathname !== "/" || url.search || url.hash) return null;
     return url.origin;
   } catch {
     return null;
@@ -2294,8 +2367,8 @@ function validateHttpCors(
   errors: ManifestValidationError[],
 ): ManifestHttpCorsPolicy | undefined {
   if (value === undefined) return undefined;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    errors.push({ path, message: 'cors must be an object' });
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push({ path, message: "cors must be an object" });
     return undefined;
   }
 
@@ -2303,13 +2376,19 @@ function validateHttpCors(
   const normalized: ManifestHttpCorsPolicy = {};
   if (cors.origins !== undefined) {
     if (!Array.isArray(cors.origins) || cors.origins.length === 0) {
-      errors.push({ path: `${path}.origins`, message: 'origins must be a non-empty array' });
+      errors.push({
+        path: `${path}.origins`,
+        message: "origins must be a non-empty array",
+      });
     } else {
       const origins: string[] = [];
       const seen = new Set<string>();
       for (const [index, originValue] of cors.origins.entries()) {
-        if (typeof originValue !== 'string') {
-          errors.push({ path: `${path}.origins.${index}`, message: 'origin must be a string' });
+        if (typeof originValue !== "string") {
+          errors.push({
+            path: `${path}.origins.${index}`,
+            message: "origin must be a string",
+          });
           continue;
         }
         const origin = normalizeHttpCorsOrigin(originValue);
@@ -2335,8 +2414,11 @@ function validateHttpCors(
   }
 
   if (cors.credentials !== undefined) {
-    if (typeof cors.credentials !== 'boolean') {
-      errors.push({ path: `${path}.credentials`, message: 'credentials must be a boolean' });
+    if (typeof cors.credentials !== "boolean") {
+      errors.push({
+        path: `${path}.credentials`,
+        message: "credentials must be a boolean",
+      });
     } else {
       normalized.credentials = cors.credentials;
     }
@@ -2344,15 +2426,21 @@ function validateHttpCors(
 
   if (cors.headers !== undefined) {
     if (!Array.isArray(cors.headers)) {
-      errors.push({ path: `${path}.headers`, message: 'headers must be an array' });
+      errors.push({
+        path: `${path}.headers`,
+        message: "headers must be an array",
+      });
     } else {
       const headers: string[] = [];
       const seen = new Set<string>();
       for (const [index, headerValue] of cors.headers.entries()) {
-        if (typeof headerValue !== 'string' || !HTTP_HEADER_NAME_RE.test(headerValue.trim())) {
+        if (
+          typeof headerValue !== "string" ||
+          !HTTP_HEADER_NAME_RE.test(headerValue.trim())
+        ) {
           errors.push({
             path: `${path}.headers.${index}`,
-            message: 'header must be a valid HTTP header name',
+            message: "header must be a valid HTTP header name",
           });
           continue;
         }
@@ -2374,21 +2462,21 @@ function validateHttpCors(
 
   if (cors.max_age_seconds !== undefined) {
     if (
-      typeof cors.max_age_seconds !== 'number' ||
+      typeof cors.max_age_seconds !== "number" ||
       !Number.isInteger(cors.max_age_seconds) ||
       cors.max_age_seconds < 0 ||
       cors.max_age_seconds > 86_400
     ) {
       errors.push({
         path: `${path}.max_age_seconds`,
-        message: 'max_age_seconds must be an integer between 0 and 86400',
+        message: "max_age_seconds must be an integer between 0 and 86400",
       });
     } else {
       normalized.max_age_seconds = cors.max_age_seconds;
     }
   }
 
-  if (normalized.credentials === true && normalized.origins?.includes('*')) {
+  if (normalized.credentials === true && normalized.origins?.includes("*")) {
     errors.push({
       path: `${path}.credentials`,
       message: 'credentials cannot be true when origins includes "*"',
@@ -2406,8 +2494,14 @@ function validateHttpPositiveInteger(
   errors: ManifestValidationError[],
 ): number | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) {
-    errors.push({ path, message: `${label} must be an integer between 1 and ${max}` });
+  if (
+    typeof value !== "number" || !Number.isInteger(value) || value < 1 ||
+    value > max
+  ) {
+    errors.push({
+      path,
+      message: `${label} must be an integer between 1 and ${max}`,
+    });
     return undefined;
   }
   return value;
@@ -2419,8 +2513,8 @@ function validateHttpRateLimit(
   errors: ManifestValidationError[],
 ): ManifestHttpRateLimitPolicy | undefined {
   if (value === undefined) return undefined;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    errors.push({ path, message: 'rate_limit must be an object' });
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push({ path, message: "rate_limit must be an object" });
     return undefined;
   }
 
@@ -2429,21 +2523,21 @@ function validateHttpRateLimit(
   const rpm = validateHttpPositiveInteger(
     raw.rpm,
     `${path}.rpm`,
-    'rpm',
+    "rpm",
     MANIFEST_HTTP_RATE_LIMIT_MAX_RPM,
     errors,
   );
   const burst = validateHttpPositiveInteger(
     raw.burst,
     `${path}.burst`,
-    'burst',
+    "burst",
     MANIFEST_HTTP_RATE_LIMIT_MAX_BURST,
     errors,
   );
   const daily = validateHttpPositiveInteger(
     raw.daily,
     `${path}.daily`,
-    'daily',
+    "daily",
     MANIFEST_HTTP_RATE_LIMIT_MAX_DAILY,
     errors,
   );
@@ -2460,11 +2554,23 @@ function validateHttpRouteDefaults(
 ): ManifestHttpRouteDefaults {
   const defaults: ManifestHttpRouteDefaults = {};
   const auth = validateHttpAuthMode(value.auth, `${path}.auth`, errors);
-  const billing = validateHttpBillingMode(value.billing, `${path}.billing`, errors);
-  const dataScope = validateHttpDataScope(value.data_scope, `${path}.data_scope`, errors);
+  const billing = validateHttpBillingMode(
+    value.billing,
+    `${path}.billing`,
+    errors,
+  );
+  const dataScope = validateHttpDataScope(
+    value.data_scope,
+    `${path}.data_scope`,
+    errors,
+  );
   const methods = validateHttpMethods(value.methods, `${path}.methods`, errors);
   const cors = validateHttpCors(value.cors, `${path}.cors`, errors);
-  const rateLimit = validateHttpRateLimit(value.rate_limit, `${path}.rate_limit`, errors);
+  const rateLimit = validateHttpRateLimit(
+    value.rate_limit,
+    `${path}.rate_limit`,
+    errors,
+  );
 
   if (auth !== undefined) defaults.auth = auth;
   if (billing !== undefined) defaults.billing = billing;
@@ -2495,37 +2601,52 @@ function validateManifestHttp(
   errors: ManifestValidationError[],
 ): void {
   if (value === undefined) return;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    errors.push({ path: 'http', message: 'http must be an object' });
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push({ path: "http", message: "http must be an object" });
     return;
   }
 
   const http = value as Record<string, unknown>;
   let defaults: ManifestHttpRouteDefaults = {};
   if (http.defaults !== undefined) {
-    if (!http.defaults || typeof http.defaults !== 'object' || Array.isArray(http.defaults)) {
-      errors.push({ path: 'http.defaults', message: 'defaults must be an object' });
+    if (
+      !http.defaults || typeof http.defaults !== "object" ||
+      Array.isArray(http.defaults)
+    ) {
+      errors.push({
+        path: "http.defaults",
+        message: "defaults must be an object",
+      });
     } else {
       defaults = validateHttpRouteDefaults(
         http.defaults as Record<string, unknown>,
-        'http.defaults',
+        "http.defaults",
         errors,
       );
     }
   }
 
   if (http.routes === undefined) return;
-  if (!http.routes || typeof http.routes !== 'object' || Array.isArray(http.routes)) {
-    errors.push({ path: 'http.routes', message: 'routes must be an object' });
+  if (
+    !http.routes || typeof http.routes !== "object" ||
+    Array.isArray(http.routes)
+  ) {
+    errors.push({ path: "http.routes", message: "routes must be an object" });
     return;
   }
 
-  for (const [routeName, routeValue] of Object.entries(http.routes as Record<string, unknown>)) {
+  for (
+    const [routeName, routeValue] of Object.entries(
+      http.routes as Record<string, unknown>,
+    )
+  ) {
     const routePath = `http.routes.${routeName}`;
-    if (!routeName || routeName.trim() !== routeName || /[/?#\s]/.test(routeName)) {
+    if (
+      !routeName || routeName.trim() !== routeName || /[/?#\s]/.test(routeName)
+    ) {
       errors.push({
         path: routePath,
-        message: 'route name must be a single function path segment',
+        message: "route name must be a single function path segment",
       });
     }
     if (Object.keys(functions).length > 0 && !functions[routeName]) {
@@ -2534,44 +2655,51 @@ function validateManifestHttp(
         message: `route references missing function "${routeName}"`,
       });
     }
-    if (!routeValue || typeof routeValue !== 'object' || Array.isArray(routeValue)) {
-      errors.push({ path: routePath, message: 'route policy must be an object' });
+    if (
+      !routeValue || typeof routeValue !== "object" || Array.isArray(routeValue)
+    ) {
+      errors.push({
+        path: routePath,
+        message: "route policy must be an object",
+      });
       continue;
     }
 
     const routeRecord = routeValue as Record<string, unknown>;
     const route = validateHttpRouteDefaults(routeRecord, routePath, errors);
-    const auth = route.auth ?? defaults.auth ?? 'user';
+    const auth = route.auth ?? defaults.auth ?? "user";
     const methods = route.methods ?? defaults.methods;
-    const billing = route.billing ?? defaults.billing ?? (auth === 'public' ? 'owner' : 'caller');
-    const dataScope = route.data_scope ?? defaults.data_scope ?? 'app';
+    const billing = route.billing ?? defaults.billing ??
+      (auth === "public" ? "owner" : "caller");
+    const dataScope = route.data_scope ?? defaults.data_scope ?? "app";
     const cors = mergeHttpCors(defaults.cors, route.cors);
 
-    if (auth === 'public') {
+    if (auth === "public") {
       if (!methods || methods.length === 0) {
         errors.push({
           path: `${routePath}.methods`,
-          message: 'public HTTP routes must declare at least one method',
+          message: "public HTTP routes must declare at least one method",
         });
       }
-      if (billing !== 'owner') {
+      if (billing !== "owner") {
         errors.push({
           path: `${routePath}.billing`,
-          message: 'public HTTP routes must use owner billing',
+          message: "public HTTP routes must use owner billing",
         });
       }
-      if (dataScope !== 'app') {
+      if (dataScope !== "app") {
         errors.push({
           path: `${routePath}.data_scope`,
-          message: 'public HTTP routes must use app data scope',
+          message: "public HTTP routes must use app data scope",
         });
       }
     }
 
-    if (cors?.credentials === true && cors.origins?.includes('*')) {
+    if (cors?.credentials === true && cors.origins?.includes("*")) {
       errors.push({
         path: `${routePath}.cors.credentials`,
-        message: 'credentials cannot be true when resolved origins includes "*"',
+        message:
+          'credentials cannot be true when resolved origins includes "*"',
       });
     }
   }
@@ -2621,6 +2749,152 @@ function validateWidgetDependencies(
       });
     }
   });
+}
+
+function validateOptionalStringArray(
+  value: unknown,
+  path: string,
+  message: string,
+  errors: ManifestValidationError[],
+): void {
+  if (value === undefined) return;
+  if (
+    !Array.isArray(value) ||
+    value.some((entry) => typeof entry !== "string" || !entry.trim())
+  ) {
+    errors.push({ path, message });
+  }
+}
+
+const GENERATION_COMPONENT_KINDS = new Set([
+  "metric",
+  "list",
+  "table",
+  "detail",
+  "form",
+  "action_bar",
+  "timeline",
+  "card_ref",
+  "widget_embed",
+  "routine_panel",
+  "text",
+]);
+
+function validateGenerationHints(
+  value: unknown,
+  path: string,
+  errors: ManifestValidationError[],
+): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push({ path, message: "generation_hints must be an object" });
+    return;
+  }
+
+  const hints = value as Record<string, unknown>;
+  validateOptionalStringArray(
+    hints.tags,
+    `${path}.tags`,
+    "tags must be an array of non-empty strings",
+    errors,
+  );
+  validateOptionalStringArray(
+    hints.entity_types,
+    `${path}.entity_types`,
+    "entity_types must be an array of non-empty strings",
+    errors,
+  );
+  validateOptionalStringArray(
+    hints.prompt_examples,
+    `${path}.prompt_examples`,
+    "prompt_examples must be an array of non-empty strings",
+    errors,
+  );
+
+  if (
+    hints.preferred_component !== undefined &&
+    (typeof hints.preferred_component !== "string" ||
+      !GENERATION_COMPONENT_KINDS.has(hints.preferred_component))
+  ) {
+    errors.push({
+      path: `${path}.preferred_component`,
+      message:
+        "preferred_component must be a supported generated component kind",
+    });
+  }
+  if (
+    hints.action_group !== undefined && typeof hints.action_group !== "string"
+  ) {
+    errors.push({
+      path: `${path}.action_group`,
+      message: "action_group must be a string",
+    });
+  }
+  if (
+    hints.safe_default_filters !== undefined &&
+    (!hints.safe_default_filters ||
+      typeof hints.safe_default_filters !== "object" ||
+      Array.isArray(hints.safe_default_filters))
+  ) {
+    errors.push({
+      path: `${path}.safe_default_filters`,
+      message: "safe_default_filters must be an object",
+    });
+  }
+
+  if (hints.suggested_components !== undefined) {
+    if (!Array.isArray(hints.suggested_components)) {
+      errors.push({
+        path: `${path}.suggested_components`,
+        message: "suggested_components must be an array",
+      });
+    } else {
+      hints.suggested_components.forEach((component, index) => {
+        const componentPath = `${path}.suggested_components.${index}`;
+        if (
+          !component || typeof component !== "object" ||
+          Array.isArray(component)
+        ) {
+          errors.push({
+            path: componentPath,
+            message: "suggested component must be an object",
+          });
+          return;
+        }
+        const c = component as Record<string, unknown>;
+        if (
+          typeof c.kind !== "string" ||
+          !GENERATION_COMPONENT_KINDS.has(c.kind)
+        ) {
+          errors.push({
+            path: `${componentPath}.kind`,
+            message: "kind must be a supported generated component kind",
+          });
+        }
+        for (
+          const key of [
+            "title",
+            "description",
+            "data_view",
+            "context_source_id",
+          ]
+        ) {
+          if (c[key] !== undefined && typeof c[key] !== "string") {
+            errors.push({
+              path: `${componentPath}.${key}`,
+              message: `${key} must be a string`,
+            });
+          }
+        }
+        validateOptionalStringArray(
+          c.action_ids,
+          `${componentPath}.action_ids`,
+          "action_ids must be an array of non-empty strings",
+          errors,
+        );
+      });
+    }
+  }
 }
 
 function validateManifestWidgets(
@@ -2695,6 +2969,11 @@ function validateManifestWidgets(
     validateWidgetDependencies(
       w.dependencies,
       `${widgetPath}.dependencies`,
+      errors,
+    );
+    validateGenerationHints(
+      w.generation_hints,
+      `${widgetPath}.generation_hints`,
       errors,
     );
 
@@ -2812,6 +3091,11 @@ function validateManifestWidgets(
         `${cardPath}.dependencies`,
         errors,
       );
+      validateGenerationHints(
+        c.generation_hints,
+        `${cardPath}.generation_hints`,
+        errors,
+      );
 
       const cardDataFunction =
         typeof c.data_function === "string" && c.data_function.trim()
@@ -2907,6 +3191,11 @@ export function validateManifest(input: unknown): ManifestValidationResult {
             message: "description is required",
           });
         }
+        validateGenerationHints(
+          fn.generation_hints,
+          `functions.${fnName}.generation_hints`,
+          errors,
+        );
 
         // Normalize parameters: convert array format → object-keyed format in-place
         if (fn.parameters !== undefined) {

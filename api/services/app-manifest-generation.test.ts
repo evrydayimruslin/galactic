@@ -244,15 +244,28 @@ Deno.test("manifest validation: routine templates declare schedules, config, and
   });
 
   assertEquals(invalid.valid, false);
-  assertEquals(invalid.errors.some((error) => error.path.endsWith(".id")), true);
-  assertEquals(invalid.errors.some((error) => error.path.endsWith(".handler")), true);
   assertEquals(
-    invalid.errors.some((error) => error.path.endsWith(".default_schedule.every_minutes")),
+    invalid.errors.some((error) => error.path.endsWith(".id")),
     true,
   );
-  assertEquals(invalid.errors.some((error) => error.path.endsWith(".access")), true);
   assertEquals(
-    invalid.errors.some((error) => error.path.endsWith(".budget_defaults.max_light_per_day")),
+    invalid.errors.some((error) => error.path.endsWith(".handler")),
+    true,
+  );
+  assertEquals(
+    invalid.errors.some((error) =>
+      error.path.endsWith(".default_schedule.every_minutes")
+    ),
+    true,
+  );
+  assertEquals(
+    invalid.errors.some((error) => error.path.endsWith(".access")),
+    true,
+  );
+  assertEquals(
+    invalid.errors.some((error) =>
+      error.path.endsWith(".budget_defaults.max_light_per_day")
+    ),
     true,
   );
 });
@@ -264,7 +277,9 @@ Deno.test("codemode descriptors: indexes routine templates alongside widgets", (
     slug: "routine-composer",
     manifest: {
       functions: {
-        poll_email_followups: { description: "Poll inbox and draft follow-ups" },
+        poll_email_followups: {
+          description: "Poll inbox and draft follow-ups",
+        },
       },
       routines: [{
         id: "sales_followup_loop",
@@ -295,6 +310,16 @@ Deno.test("codemode descriptors: indexes agentic widgets and context sources", (
       functions: {
         widget_email_inbox_ui: { description: "Render inbox widget" },
         widget_email_inbox_data: { description: "Load inbox widget" },
+        conversations_list: {
+          description: "List email conversations",
+          generation_hints: {
+            tags: ["email", "threads"],
+            preferred_component: "table",
+            entity_types: ["conversation"],
+            safe_default_filters: { status: "active", limit: 10 },
+            prompt_examples: ["show active guest conversations"],
+          },
+        },
       },
       context_sources: [{
         id: "recent_threads",
@@ -305,17 +330,48 @@ Deno.test("codemode descriptors: indexes agentic widgets and context sources", (
         searchable: true,
         tables: ["conversations"],
         default_for_widgets: ["email_inbox"],
+        generation_hints: {
+          tags: ["email", "guest"],
+          preferred_component: "table",
+          entity_types: ["conversation"],
+        },
       }],
       widgets: [{
         id: "email_inbox",
         label: "Email Inbox",
         agentic: true,
         context_sources: ["recent_threads"],
+        generation_hints: {
+          tags: ["email approvals"],
+          preferred_component: "widget_embed",
+          entity_types: ["conversation", "draft"],
+        },
+        cards: [{
+          id: "drafts_queue",
+          label: "Drafts Queue",
+          size: "2x1",
+          render: "native",
+          kind: "list",
+          generation_hints: {
+            tags: ["approvals"],
+            preferred_component: "table",
+            suggested_components: [{
+              kind: "detail",
+              title: "Selected draft",
+              description:
+                "Show the selected draft and available review actions.",
+            }],
+          },
+        }],
         agent_actions: [{
           id: "open_thread",
           label: "Open thread",
           mode: "ui",
           confirmation: "none",
+          generation_hints: {
+            action_group: "thread_navigation",
+            tags: ["open", "thread"],
+          },
         }],
       }],
     },
@@ -323,9 +379,31 @@ Deno.test("codemode descriptors: indexes agentic widgets and context sources", (
 
   assertEquals(descriptors.widgets[0].agentic, true);
   assertEquals(descriptors.widgets[0].contextSources, ["recent_threads"]);
+  assertEquals(
+    descriptors.widgets[0].generationHints?.preferred_component,
+    "widget_embed",
+  );
+  assertEquals(
+    descriptors.widgets[0].cards[0].generationHints?.preferred_component,
+    "table",
+  );
   assertEquals(descriptors.widgets[0].agentActions?.[0]?.id, "open_thread");
+  assertEquals(
+    descriptors.widgets[0].agentActions?.[0]?.generation_hints?.action_group,
+    "thread_navigation",
+  );
   assertEquals(descriptors.contextSources.length, 1);
   assertEquals(descriptors.contextSources[0].appSlug, "email-ops");
   assertEquals(descriptors.contextSources[0].tables, ["conversations"]);
-  assertEquals(descriptors.contextSources[0].defaultForWidgets, ["email_inbox"]);
+  assertEquals(descriptors.contextSources[0].defaultForWidgets, [
+    "email_inbox",
+  ]);
+  assertEquals(descriptors.contextSources[0].generationHints?.entity_types, [
+    "conversation",
+  ]);
+  assertEquals(
+    descriptors.toolMap.email_ops_conversations_list?.generationHints
+      ?.safe_default_filters,
+    { status: "active", limit: 10 },
+  );
 });

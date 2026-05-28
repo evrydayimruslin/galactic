@@ -18,7 +18,16 @@ const fnIndex: FunctionIndex = {
     appName: "Email Ops",
     uiFunction: "widget_email_ops_ui",
     dataFunction: "widget_email_ops_data",
-    dependencies: [{ app: "calendar", functions: ["list_events"], access: "read" }],
+    dependencies: [{
+      app: "calendar",
+      functions: ["list_events"],
+      access: "read",
+    }],
+    generationHints: {
+      tags: ["backoffice"],
+      preferred_component: "widget_embed",
+      entity_types: ["conversation"],
+    },
     cards: [{
       id: "drafts_queue",
       label: "Drafts Queue",
@@ -35,7 +44,17 @@ const fnIndex: FunctionIndex = {
       render: "native",
       kind: "list",
       dataFunction: "widget_email_urgent_data",
-      dependencies: [{ app: "crm", functions: ["list_accounts"], access: "read" }],
+      dependencies: [{
+        app: "crm",
+        functions: ["list_accounts"],
+        access: "read",
+      }],
+      generationHints: {
+        tags: ["vip escalation"],
+        preferred_component: "table",
+        entity_types: ["conversation"],
+        prompt_examples: ["review priority guest approvals"],
+      },
     }],
   }, {
     name: "fitness",
@@ -82,6 +101,7 @@ Deno.test("command surfaces: flattens widget and card inventory", () => {
   if (urgent?.surface === "command_card") {
     assertEquals(urgent.data_function, "widget_email_urgent_data");
     assertEquals(urgent.dependencies?.length, 2);
+    assertEquals(urgent.generation_hints?.preferred_component, "table");
   }
 });
 
@@ -97,6 +117,37 @@ Deno.test("command surfaces: filters command cards by natural language query", (
   if (surface.surface === "command_card") {
     assertEquals(surface.card_id, "steps_today");
   }
+});
+
+Deno.test("command surfaces: searches and returns generation hints", () => {
+  const inventory = flattenCommandSurfaceInventory(fnIndex, {
+    query: "vip escalation",
+    surfaces: ["command_card"],
+  });
+
+  assertEquals(inventory.surfaces.length, 1);
+  const [surface] = inventory.surfaces;
+  assertEquals(surface.surface, "command_card");
+  if (surface.surface === "command_card") {
+    assertEquals(surface.card_id, "urgent_threads");
+    assertEquals(surface.generation_hints?.entity_types, ["conversation"]);
+  }
+});
+
+Deno.test("command surfaces: scopes inventory to a specific app", () => {
+  const inventory = flattenCommandSurfaceInventory(fnIndex, {
+    app_scope: { app_slugs: ["fitness"] },
+  });
+
+  assertEquals(inventory.totals, {
+    widgets: 2,
+    command_cards: 3,
+    apps: 2,
+  });
+  assertEquals(inventory.surfaces.map((surface) => surface.app_slug), [
+    "fitness",
+    "fitness",
+  ]);
 });
 
 Deno.test("command surfaces: builds a packed dashboard blueprint", () => {

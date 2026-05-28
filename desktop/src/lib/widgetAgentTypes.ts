@@ -1,4 +1,5 @@
 import type {
+  ActiveSurfaceType,
   ActiveWidgetContext,
   WidgetActionDeclaration,
   WidgetActionInvocation,
@@ -8,15 +9,18 @@ import type {
   WidgetSurfaceEvent,
   WidgetSurfaceStatus,
 } from '../../../shared/contracts/widget.ts';
+import type {
+  AgenticInterfaceAction,
+  AgenticInterfaceSpec,
+} from '../../../shared/contracts/agentic-interface.ts';
 import type { WidgetAppSource, WidgetDataPayload } from './widgetRuntime';
 
 export type { ActiveWidgetContext, WidgetSurfaceKind, WidgetSurfaceStatus };
 
-export interface ActiveWidgetSurface {
+export interface ActiveSurfaceBase {
   surfaceId: string;
   kind: WidgetSurfaceKind;
-  source: WidgetAppSource;
-  context?: Record<string, string>;
+  surfaceType: ActiveSurfaceType;
   status: WidgetSurfaceStatus;
   snapshot: WidgetStateSnapshot | null;
   actions: WidgetActionDeclaration[];
@@ -26,12 +30,42 @@ export interface ActiveWidgetSurface {
   updatedAt: number;
 }
 
+export interface ActiveWidgetSurface extends ActiveSurfaceBase {
+  surfaceType: 'widget';
+  source: WidgetAppSource;
+  context?: Record<string, string>;
+}
+
+export interface GeneratedInterfaceSurfaceSource {
+  id: string;
+  title: string;
+  description?: string;
+  mode: AgenticInterfaceSpec['mode'];
+}
+
+export interface ActiveGeneratedInterfaceSurface extends ActiveSurfaceBase {
+  surfaceType: 'generated_interface';
+  kind: 'generated_interface';
+  generatedInterface: GeneratedInterfaceSurfaceSource;
+}
+
+export type ActiveAgenticSurface =
+  | ActiveWidgetSurface
+  | ActiveGeneratedInterfaceSurface;
+
 export interface RegisterWidgetSurfaceInput {
   surfaceId?: string;
   kind: WidgetSurfaceKind;
   source: WidgetAppSource;
   context?: Record<string, string>;
   latestDataPayload?: WidgetDataPayload | null;
+}
+
+export interface RegisterGeneratedInterfaceSurfaceInput {
+  surfaceId?: string;
+  spec: AgenticInterfaceSpec;
+  status?: WidgetSurfaceStatus;
+  snapshot?: WidgetStateSnapshot | null;
 }
 
 export type WidgetBridgeMessage =
@@ -65,6 +99,8 @@ export type WidgetSurfaceCommand = WidgetActionInvocation;
 
 export type WidgetSurfaceListener = (surfaces: ActiveWidgetSurface[]) => void;
 
+export type AgenticSurfaceListener = (surfaces: ActiveAgenticSurface[]) => void;
+
 export type WidgetSurfaceCommandListener = (command: WidgetSurfaceCommand) => void;
 
 const MAX_EVENT_SUMMARY_ITEMS = 6;
@@ -90,6 +126,62 @@ function summarizeWidgetSurfaceEvent(event: WidgetSurfaceEvent): string {
   return parts.join(' - ');
 }
 
+export function isWidgetSurface(surface: ActiveAgenticSurface): surface is ActiveWidgetSurface {
+  return surface.surfaceType === 'widget';
+}
+
+export function isGeneratedInterfaceSurface(
+  surface: ActiveAgenticSurface,
+): surface is ActiveGeneratedInterfaceSurface {
+  return surface.surfaceType === 'generated_interface';
+}
+
+export function agenticInterfaceActionsToWidgetActions(
+  actions: AgenticInterfaceAction[] | undefined,
+): WidgetActionDeclaration[] {
+  return (actions || []).map((action) => {
+    const declaration: WidgetActionDeclaration = {
+      id: action.id,
+      label: action.label,
+      description: action.description,
+      mode: action.mode,
+      confirmation: action.confirmation,
+      args_schema: action.args_schema,
+      expected_result: action.expected_result,
+    };
+    if (action.kind === 'mcp_function') {
+      declaration.mcp = {
+        function: action.function_name,
+        args_template: action.args_template,
+      };
+    } else if (action.kind === 'open_widget') {
+      declaration.ui = {
+        command: 'open_widget',
+        component_id: action.widget_id,
+        args_template: action.context,
+      };
+    } else if (action.kind === 'widget_action') {
+      declaration.ui = {
+        command: action.action_id,
+        component_id: action.surface_id || action.widget_id,
+        args_template: action.args_template,
+      };
+    } else if (action.kind === 'refresh_binding') {
+      declaration.ui = {
+        command: 'refresh_binding',
+        args_template: { binding_ids: action.binding_ids },
+      };
+    } else if (action.kind === 'select_entity') {
+      declaration.ui = {
+        command: 'select_entity',
+        component_id: action.component_id,
+        args_template: action.args_template,
+      };
+    }
+    return declaration;
+  });
+}
+
 export function summarizeWidgetSurfaceEvents(
   events: WidgetSurfaceEvent[] | undefined,
   maxItems = MAX_EVENT_SUMMARY_ITEMS,
@@ -105,6 +197,7 @@ export function buildActiveWidgetContext(surface: ActiveWidgetSurface): ActiveWi
   const recentEvents = surface.events.slice(-10);
   return {
     surfaceId: surface.surfaceId,
+    surfaceType: 'widget',
     kind: surface.kind,
     appId: surface.source.appUuid,
     appSlug: surface.source.appSlug,
@@ -113,6 +206,36 @@ export function buildActiveWidgetContext(surface: ActiveWidgetSurface): ActiveWi
     widgetName: surface.source.widgetName,
     title: surface.snapshot?.title || surface.source.appName,
     context: surface.context,
+    status: surface.status,
+    snapshot: surface.snapshot,
+    actions: surface.actions,
+    recentEvents,
+    recentEventSummary: summarizeWidgetSurfaceEvents(surface.events),
+    recentEventCount: surface.events.length,
+    latestDataPayload: surface.latestDataPayload?.raw ?? null,
+    updatedAt: surface.updatedAt,
+  };
+}
+
+export function buildActiveAgenticSurfaceContext(
+  surface: ActiveAgenticSurface,
+): ActiveWidgetContext {
+  if (isWidgetSurface(surface)) return buildActiveWidgetContext(surface);
+
+  const recentEvents = surface.events.slice(-10);
+  return {
+    surfaceId: surface.surfaceId,
+    surfaceType: 'generated_interface',
+    kind: 'generated_interface',
+    appId: 'generated-interface',
+    appSlug: 'generated-interface',
+    appName: 'Generated Interface',
+    widgetId: surface.generatedInterface.id,
+    widgetName: surface.generatedInterface.title,
+    interfaceId: surface.generatedInterface.id,
+    interfaceTitle: surface.generatedInterface.title,
+    interfaceMode: surface.generatedInterface.mode,
+    title: surface.snapshot?.title || surface.generatedInterface.title,
     status: surface.status,
     snapshot: surface.snapshot,
     actions: surface.actions,

@@ -159,6 +159,16 @@ interface CommandDashboardMetadataBody {
   layout?: unknown;
 }
 
+interface AgenticInterfaceBody {
+  interface_key?: unknown;
+  title?: unknown;
+  description?: unknown;
+  icon?: unknown;
+  spec?: unknown;
+  source_prompt?: unknown;
+  status?: unknown;
+}
+
 interface UserProfilePatchBody {
   display_name?: string | null;
   country?: string | null;
@@ -1153,6 +1163,116 @@ export async function handleUser(request: Request): Promise<Response> {
         error: err,
       });
       return error("Failed to load command widget inventory", 500);
+    }
+  }
+
+  // ============================================
+  // GET/POST/PATCH/DELETE /api/user/agentic-interfaces - Saved generated interfaces catalog
+  // ============================================
+  if (path === "/api/user/agentic-interfaces" && method === "GET") {
+    try {
+      const { listAgenticInterfaces } = await import(
+        "../services/agentic-interface-storage.ts"
+      );
+      return json(await listAgenticInterfaces(userId));
+    } catch (err) {
+      userLogger.error("Failed to list agentic interfaces", {
+        user_id: userId,
+        error: err,
+      });
+      return error(
+        err instanceof Error
+          ? err.message
+          : "Failed to list agentic interfaces",
+        400,
+      );
+    }
+  }
+
+  if (path === "/api/user/agentic-interfaces" && method === "POST") {
+    try {
+      const body = await readJsonBody<AgenticInterfaceBody>(request);
+      const { saveAgenticInterface } = await import(
+        "../services/agentic-interface-storage.ts"
+      );
+      return json(await saveAgenticInterface(userId, body));
+    } catch (err) {
+      userLogger.error("Failed to save agentic interface", {
+        user_id: userId,
+        error: err,
+      });
+      return error(
+        err instanceof Error ? err.message : "Failed to save agentic interface",
+        400,
+      );
+    }
+  }
+
+  if (path.startsWith("/api/user/agentic-interfaces/") && method === "GET") {
+    try {
+      const interfaceKey = decodeURIComponent(
+        path.slice("/api/user/agentic-interfaces/".length),
+      );
+      const { getAgenticInterface } = await import(
+        "../services/agentic-interface-storage.ts"
+      );
+      return json(await getAgenticInterface(userId, interfaceKey));
+    } catch (err) {
+      userLogger.error("Failed to load agentic interface", {
+        user_id: userId,
+        error: err,
+      });
+      return error(
+        err instanceof Error ? err.message : "Failed to load agentic interface",
+        400,
+      );
+    }
+  }
+
+  if (path.startsWith("/api/user/agentic-interfaces/") && method === "PATCH") {
+    try {
+      const interfaceKey = decodeURIComponent(
+        path.slice("/api/user/agentic-interfaces/".length),
+      );
+      const body = await readJsonBody<AgenticInterfaceBody>(request);
+      const { updateAgenticInterface } = await import(
+        "../services/agentic-interface-storage.ts"
+      );
+      return json(await updateAgenticInterface(userId, interfaceKey, body));
+    } catch (err) {
+      userLogger.error("Failed to update agentic interface", {
+        user_id: userId,
+        error: err,
+      });
+      return error(
+        err instanceof Error
+          ? err.message
+          : "Failed to update agentic interface",
+        400,
+      );
+    }
+  }
+
+  if (path.startsWith("/api/user/agentic-interfaces/") && method === "DELETE") {
+    try {
+      const interfaceKey = decodeURIComponent(
+        path.slice("/api/user/agentic-interfaces/".length),
+      );
+      const { deleteAgenticInterface } = await import(
+        "../services/agentic-interface-storage.ts"
+      );
+      return json(await deleteAgenticInterface(userId, interfaceKey));
+    } catch (err) {
+      userLogger.error("Failed to delete agentic interface", {
+        user_id: userId,
+        error: err,
+      });
+      return error(
+        err instanceof Error
+          ? err.message
+          : "Failed to delete agentic interface",
+        400,
+      );
     }
   }
 

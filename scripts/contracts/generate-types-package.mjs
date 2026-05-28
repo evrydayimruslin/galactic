@@ -12,6 +12,7 @@ const templatePath = path.join(packageDir, 'index.template.d.ts');
 const outputPath = path.join(packageDir, 'index.d.ts');
 
 const contractFiles = [
+  'agentic-interface.ts',
   'ai.ts',
   'env.ts',
   'jsonrpc.ts',

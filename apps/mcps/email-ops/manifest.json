@@ -7,16 +7,76 @@
   "permissions": ["ai:call", "net:fetch", "net:connect"],
   "storage": "d1",
   "env_vars": {
-    "IMAP_HOST": { "scope": "per_user", "input": "text", "label": "IMAP host", "required": true, "description": "IMAP server hostname (e.g. imap.titan.email)" },
-    "IMAP_PORT": { "scope": "per_user", "input": "number", "label": "IMAP port", "required": true, "description": "IMAP port (993 for TLS)" },
-    "IMAP_USER": { "scope": "per_user", "input": "email", "label": "IMAP login", "required": true, "description": "IMAP login (full email address)" },
-    "IMAP_PASS": { "scope": "per_user", "input": "password", "label": "IMAP password", "required": true, "description": "IMAP password" },
-    "SMTP_HOST": { "scope": "per_user", "input": "text", "label": "SMTP host", "required": true, "description": "SMTP server hostname (e.g. smtp.titan.email)" },
-    "SMTP_PORT": { "scope": "per_user", "input": "number", "label": "SMTP port", "required": true, "description": "SMTP port (465 for TLS)" },
-    "SMTP_USER": { "scope": "per_user", "input": "email", "label": "SMTP login", "required": true, "description": "SMTP login (full email address)" },
-    "SMTP_PASS": { "scope": "per_user", "input": "password", "label": "SMTP password", "required": true, "description": "SMTP password" },
-    "BUSINESS_EMAIL": { "scope": "per_user", "input": "email", "label": "From email", "required": true, "description": "From address for outbound emails (e.g. info@rockwoodhotel.com)" },
-    "BUSINESS_NAME": { "scope": "per_user", "input": "text", "label": "Business name", "required": true, "description": "Display name for outbound emails (e.g. Rockwood Hotel)" }
+    "IMAP_HOST": {
+      "scope": "per_user",
+      "input": "text",
+      "label": "IMAP host",
+      "required": true,
+      "description": "IMAP server hostname (e.g. imap.titan.email)"
+    },
+    "IMAP_PORT": {
+      "scope": "per_user",
+      "input": "number",
+      "label": "IMAP port",
+      "required": true,
+      "description": "IMAP port (993 for TLS)"
+    },
+    "IMAP_USER": {
+      "scope": "per_user",
+      "input": "email",
+      "label": "IMAP login",
+      "required": true,
+      "description": "IMAP login (full email address)"
+    },
+    "IMAP_PASS": {
+      "scope": "per_user",
+      "input": "password",
+      "label": "IMAP password",
+      "required": true,
+      "description": "IMAP password"
+    },
+    "SMTP_HOST": {
+      "scope": "per_user",
+      "input": "text",
+      "label": "SMTP host",
+      "required": true,
+      "description": "SMTP server hostname (e.g. smtp.titan.email)"
+    },
+    "SMTP_PORT": {
+      "scope": "per_user",
+      "input": "number",
+      "label": "SMTP port",
+      "required": true,
+      "description": "SMTP port (465 for TLS)"
+    },
+    "SMTP_USER": {
+      "scope": "per_user",
+      "input": "email",
+      "label": "SMTP login",
+      "required": true,
+      "description": "SMTP login (full email address)"
+    },
+    "SMTP_PASS": {
+      "scope": "per_user",
+      "input": "password",
+      "label": "SMTP password",
+      "required": true,
+      "description": "SMTP password"
+    },
+    "BUSINESS_EMAIL": {
+      "scope": "per_user",
+      "input": "email",
+      "label": "From email",
+      "required": true,
+      "description": "From address for outbound emails (e.g. info@rockwoodhotel.com)"
+    },
+    "BUSINESS_NAME": {
+      "scope": "per_user",
+      "input": "text",
+      "label": "Business name",
+      "required": true,
+      "description": "Display name for outbound emails (e.g. Rockwood Hotel)"
+    }
   },
   "context_sources": [
     {
@@ -27,7 +87,17 @@
       "access": "read",
       "searchable": true,
       "query": "SELECT c.id, c.guest_email, c.subject, c.language, c.classification, c.status, c.updated_at, (SELECT v.body FROM versions v WHERE v.conversation_id = c.id AND v.user_id = :user_id ORDER BY v.version_num DESC LIMIT 1) AS latest_context FROM conversations c WHERE c.user_id = :user_id AND (c.subject LIKE :query OR c.guest_email LIKE :query OR c.classification LIKE :query OR c.language LIKE :query) ORDER BY c.updated_at DESC LIMIT :limit",
-      "default_for_widgets": ["email_inbox"]
+      "default_for_widgets": ["email_inbox"],
+      "generation_hints": {
+        "tags": ["email", "guest", "drafts", "approvals"],
+        "preferred_component": "table",
+        "entity_types": ["conversation", "draft"],
+        "safe_default_filters": { "limit": 10 },
+        "prompt_examples": [
+          "review recent guest email approvals",
+          "show active guest conversations"
+        ]
+      }
     },
     {
       "id": "email_business_conventions",
@@ -37,7 +107,13 @@
       "access": "read",
       "searchable": true,
       "tables": ["conventions"],
-      "default_for_widgets": ["email_inbox"]
+      "default_for_widgets": ["email_inbox"],
+      "generation_hints": {
+        "tags": ["email", "faq", "tone", "business rules"],
+        "preferred_component": "detail",
+        "entity_types": ["convention", "faq"],
+        "prompt_examples": ["show the hotel tone rules for drafting replies"]
+      }
     }
   ],
   "widgets": [
@@ -51,6 +127,33 @@
       "context_function": "widget_email_inbox_data",
       "actions_function": "widget_email_inbox_data",
       "context_sources": ["email_recent_threads", "email_business_conventions"],
+      "generation_hints": {
+        "tags": ["email approvals", "guest replies", "draft review"],
+        "preferred_component": "widget_embed",
+        "entity_types": ["conversation", "draft", "guest"],
+        "action_group": "draft_review",
+        "suggested_components": [
+          {
+            "kind": "table",
+            "title": "Draft review queue",
+            "description": "Review draft replies with guest, subject, language, status, and latest context.",
+            "data_view": "drafts_queue"
+          },
+          {
+            "kind": "action_bar",
+            "title": "Draft actions",
+            "description": "Expose the safe review actions for the selected draft.",
+            "action_ids": [
+              "show_draft_editor",
+              "send_selected_draft",
+              "discard_selected_conversation"
+            ]
+          }
+        ],
+        "prompt_examples": [
+          "build an interface for reviewing pending guest email drafts"
+        ]
+      },
       "poll_interval_s": 30,
       "cards": [
         {
@@ -60,7 +163,20 @@
           "render": "native",
           "kind": "list",
           "data_view": "drafts_queue",
-          "refresh_interval_s": 300
+          "refresh_interval_s": 300,
+          "generation_hints": {
+            "tags": ["approval queue", "drafts", "guest emails"],
+            "preferred_component": "table",
+            "entity_types": ["conversation", "draft"],
+            "suggested_components": [
+              {
+                "kind": "detail",
+                "title": "Selected draft",
+                "description": "Show the selected conversation, current draft body, and history cues."
+              }
+            ],
+            "prompt_examples": ["review pending email drafts"]
+          }
         },
         {
           "id": "inbox_volume",
@@ -69,7 +185,12 @@
           "render": "native",
           "kind": "metric",
           "data_view": "inbox_volume",
-          "refresh_interval_s": 300
+          "refresh_interval_s": 300,
+          "generation_hints": {
+            "tags": ["email volume", "inbox status"],
+            "preferred_component": "metric",
+            "entity_types": ["conversation"]
+          }
         }
       ],
       "agent_actions": [
@@ -80,6 +201,12 @@
           "mode": "read",
           "confirmation": "none",
           "mcp": { "function": "conversation_history" },
+          "generation_hints": {
+            "tags": ["history", "draft review"],
+            "preferred_component": "timeline",
+            "entity_types": ["conversation_version"],
+            "action_group": "draft_review"
+          },
           "expected_result": "Conversation and version history for the selected email thread."
         },
         {
@@ -166,6 +293,11 @@
             "function": "conversation_act",
             "args_template": { "action": "send" }
           },
+          "generation_hints": {
+            "tags": ["send", "approve draft"],
+            "action_group": "draft_review",
+            "entity_types": ["draft"]
+          },
           "expected_result": "The draft is sent and the widget refreshes into the latest queue state."
         },
         {
@@ -177,6 +309,11 @@
           "mcp": {
             "function": "conversation_act",
             "args_template": { "action": "discard" }
+          },
+          "generation_hints": {
+            "tags": ["discard", "reject draft"],
+            "action_group": "draft_review",
+            "entity_types": ["conversation"]
           },
           "expected_result": "The conversation is discarded and the widget refreshes."
         }
@@ -211,6 +348,12 @@
     },
     "conversation_act": {
       "description": "Take action on a conversation: send, discard, restore, save_edit, regenerate, followup_draft.",
+      "generation_hints": {
+        "tags": ["email", "draft action", "send", "discard", "regenerate"],
+        "action_group": "draft_review",
+        "entity_types": ["conversation", "draft"],
+        "prompt_examples": ["send the selected guest draft after confirmation"]
+      },
       "parameters": [
         { "name": "conversation_id", "type": "string", "required": true },
         { "name": "action", "type": "string", "required": true },
@@ -221,12 +364,25 @@
     },
     "conversation_history": {
       "description": "Get full version history for a conversation.",
+      "generation_hints": {
+        "tags": ["email history", "versions", "draft review"],
+        "preferred_component": "timeline",
+        "entity_types": ["conversation_version"],
+        "prompt_examples": ["show the history for this guest conversation"]
+      },
       "parameters": [
         { "name": "conversation_id", "type": "string", "required": true }
       ]
     },
     "conversations_list": {
       "description": "List conversations by status.",
+      "generation_hints": {
+        "tags": ["email", "guest conversations", "approval queue"],
+        "preferred_component": "table",
+        "entity_types": ["conversation", "draft"],
+        "safe_default_filters": { "status": "active", "limit": 10 },
+        "prompt_examples": ["list active guest conversations waiting on review"]
+      },
       "parameters": [
         { "name": "status", "type": "string", "required": false },
         { "name": "limit", "type": "number", "required": false }
@@ -234,6 +390,12 @@
     },
     "conventions_get": {
       "description": "Get business conventions/guidelines by key or category",
+      "generation_hints": {
+        "tags": ["faq", "tone", "business rules"],
+        "preferred_component": "detail",
+        "entity_types": ["convention"],
+        "prompt_examples": ["show hotel email tone and FAQ rules"]
+      },
       "parameters": [
         { "name": "key", "type": "string", "required": false },
         { "name": "category", "type": "string", "required": false }
@@ -263,10 +425,25 @@
         { "name": "admin_notes", "type": "string", "required": false }
       ]
     },
-    "widget_approval_queue": { "description": "Legacy widget bridge for older desktop builds.", "parameters": [] },
-    "widget_email_inbox_ui": { "description": "Email approvals deck UI.", "parameters": [] },
-    "widget_email_inbox_data": { "description": "Email approvals data.", "parameters": [] },
-    "widget_email_faqs_ui": { "description": "FAQ editor widget UI.", "parameters": [] },
-    "widget_email_faqs_data": { "description": "FAQ editor data.", "parameters": [] }
+    "widget_approval_queue": {
+      "description": "Legacy widget bridge for older desktop builds.",
+      "parameters": []
+    },
+    "widget_email_inbox_ui": {
+      "description": "Email approvals deck UI.",
+      "parameters": []
+    },
+    "widget_email_inbox_data": {
+      "description": "Email approvals data.",
+      "parameters": []
+    },
+    "widget_email_faqs_ui": {
+      "description": "FAQ editor widget UI.",
+      "parameters": []
+    },
+    "widget_email_faqs_data": {
+      "description": "FAQ editor data.",
+      "parameters": []
+    }
   }
 }

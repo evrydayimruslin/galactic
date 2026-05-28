@@ -123,6 +123,15 @@ import {
   type CommandSurfaceKind,
   type CommandSurfaceSource,
 } from '../services/command-surfaces.ts';
+import { planAgenticInterface } from '../services/agentic-interface-planner.ts';
+import { executeAgenticInterfaceAction } from '../services/agentic-interface-actions.ts';
+import { resolveAgenticInterfaceData } from '../services/agentic-interface-data.ts';
+import {
+  deleteAgenticInterface,
+  getAgenticInterface,
+  listAgenticInterfaces,
+  saveAgenticInterface,
+} from '../services/agentic-interface-storage.ts';
 import {
   getCommandDashboardLayout,
   listCommandDashboardLayouts,
@@ -1436,7 +1445,11 @@ const PLATFORM_TOOLS: MCPTool[] = [
     description:
       'Inspect and configure Command dashboards. Use action="inventory" to list installed widgets/cards, ' +
       'action="blueprint" to draft a natural-language dashboard plan, action="save" to persist a confirmed layout, ' +
-      'and action="list"/"get" for saved dashboards. Command cards are read-only and open their full widget.',
+      'action="interface" to draft a generated agentic interface, action="interface_data" to resolve its live data, ' +
+      'action="interface_action" to execute a verified generated-interface action, ' +
+      'action="save_interface"/"list_interfaces"/"get_interface"/"delete_interface" for saved generated interfaces, ' +
+      'and action="list"/"get" for saved dashboards. ' +
+      'Command cards are read-only and open their full widget.',
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -1448,8 +1461,21 @@ const PLATFORM_TOOLS: MCPTool[] = [
       properties: {
         action: {
           type: 'string',
-          enum: ['inventory', 'blueprint', 'save', 'list', 'get'],
-          description: 'Command dashboard operation.',
+          enum: [
+            'inventory',
+            'blueprint',
+            'interface',
+            'interface_data',
+            'interface_action',
+            'save_interface',
+            'list_interfaces',
+            'get_interface',
+            'delete_interface',
+            'save',
+            'list',
+            'get',
+          ],
+          description: 'Command dashboard/interface operation.',
         },
         query: {
           type: 'string',
@@ -1457,7 +1483,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
         },
         prompt: {
           type: 'string',
-          description: 'Natural-language dashboard goal. For blueprint.',
+          description: 'Natural-language dashboard/interface goal. For blueprint/interface.',
         },
         surfaces: {
           type: 'array',
@@ -1465,13 +1491,82 @@ const PLATFORM_TOOLS: MCPTool[] = [
           description: 'Surface types to return for inventory.',
         },
         limit: { type: 'number', description: 'Max surfaces/cards to return.' },
+        max_components: {
+          type: 'number',
+          description: 'Max components in a generated agentic interface. For interface.',
+        },
+        mode: {
+          type: 'string',
+          enum: ['temporary', 'saved'],
+          description: 'Desired interface mode. Planning never persists the interface.',
+        },
+        include_data_preview: {
+          type: 'boolean',
+          description: 'Include a small safe read-only D1/context preview in the planner context.',
+        },
+        spec: {
+          type: 'object',
+          description: 'Verified AgenticInterfaceSpec. For interface_data/interface_action/save_interface.',
+        },
+        action_id: {
+          type: 'string',
+          description: 'Generated interface action id. For interface_action.',
+        },
+        args: {
+          type: 'object',
+          description: 'Action arguments. For interface_action.',
+        },
+        confirmed: {
+          type: 'boolean',
+          description: 'True only after the user confirmed a write/high-risk interface action.',
+        },
+        surface_id: {
+          type: 'string',
+          description: 'Active generated interface surface id for audit.',
+        },
+        turn_id: {
+          type: 'string',
+          description: 'Action turn id for generated interface audit.',
+        },
+        component_id: {
+          type: 'string',
+          description: 'Component that originated the action, when known.',
+        },
+        binding_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional binding ids to refresh. For interface_data.',
+        },
+        max_rows_per_binding: {
+          type: 'number',
+          description: 'Max data rows per binding. For interface_data.',
+        },
+        app_id: { type: 'string', description: 'Optional app ID scope.' },
+        app_slug: { type: 'string', description: 'Optional app slug scope.' },
+        app_scope: {
+          type: 'object',
+          description: 'Optional app scope: { app_ids?: string[], app_slugs?: string[] }.',
+        },
         dashboard_key: {
           type: 'string',
           description: 'Saved dashboard key. Defaults to command_home.',
         },
-        title: { type: 'string', description: 'Dashboard title.' },
-        description: { type: 'string', description: 'Dashboard description.' },
-        icon: { type: 'string', description: 'Small icon token for dashboard switchers.' },
+        interface_key: {
+          type: 'string',
+          description: 'Saved generated interface key.',
+        },
+        title: { type: 'string', description: 'Dashboard or generated interface title.' },
+        description: { type: 'string', description: 'Dashboard or generated interface description.' },
+        icon: { type: 'string', description: 'Small icon token for dashboard or interface switchers.' },
+        source_prompt: {
+          type: 'string',
+          description: 'Original user prompt for a saved generated interface.',
+        },
+        status: {
+          type: 'string',
+          enum: ['active', 'archived'],
+          description: 'Saved generated interface status.',
+        },
         sort_order: { type: 'number', description: 'Dashboard ordering.' },
         is_default: { type: 'boolean', description: 'Make this the default dashboard.' },
         layout: {
@@ -2795,6 +2890,11 @@ Find and explore apps.
 Natural-language Command dashboard primitive.
 - \`action: "inventory"\` — List installed widgets and command cards. Optional \`query\`, \`surfaces\`, \`limit\`.
 - \`action: "blueprint"\` — Draft a saved-layout plan from \`prompt\` or \`query\`. Does not save anything.
+- \`action: "interface"\` — Draft a typed generated agentic interface from installed cards, widgets, context sources, and MCP functions. Optional \`prompt\`, \`app_scope\`, \`max_components\`, \`mode\`, \`include_data_preview\`. Does not save anything.
+- \`action: "interface_data"\` — Resolve live read data for a verified \`AgenticInterfaceSpec\`. Optional \`binding_ids\` refreshes only those bindings; reads are capped and write paths still go through approved widget/MCP actions.
+- \`action: "interface_action"\` — Execute a verified generated-interface action by \`action_id\`. Read/UI actions can run directly; write/high-risk actions must pass \`confirmed: true\` after explicit user confirmation.
+- \`action: "save_interface"\` — Persist a normalized verified generated interface spec in the separate saved-interface catalog. Optional \`interface_key\`, \`title\`, \`description\`, \`icon\`, and \`source_prompt\`.
+- \`action: "list_interfaces"\` / \`"get_interface"\` / \`"delete_interface"\` — Inspect, reopen, or archive saved generated interfaces. Loaded specs are re-verified against current installed apps/functions.
 - \`action: "save"\` — Persist a confirmed \`layout\` or prior \`blueprint\` to the user's server-synced dashboards.
 - \`action: "list"\` / \`"get"\` — Inspect saved dashboards.
 - Setup flow: inventory/search → blueprint → explain/confirm → save. If no matching cards exist, search with \`ul.discover(..., surfaces:["command_card"])\`; if still missing, ask Tool Maker to build or extend a widget/card MCP.
@@ -3466,7 +3566,14 @@ async function handleToolsCall(
 
   // Extract agent meta (_user_query, _session_id) before passing to tool handlers
   const { extractCallMeta } = await import('../services/call-logger.ts');
-  const { cleanArgs, userQuery, sessionId, widgetPull, widgetAction } =
+  const {
+    cleanArgs,
+    userQuery,
+    sessionId,
+    widgetPull,
+    widgetAction,
+    agenticSurfaceAction,
+  } =
     extractCallMeta(args || {});
   const toolArgs = cleanArgs;
   const widgetForwardArgs: Record<string, unknown> = {
@@ -3485,6 +3592,16 @@ async function handleToolsCall(
         _widget_id: widgetAction.widgetId,
         _widget_action_id: widgetAction.actionId,
         _widget_turn_id: widgetAction.turnId,
+      }
+      : {}),
+    ...(agenticSurfaceAction
+      ? {
+        _agentic_surface_action: true,
+        _agentic_surface_id: agenticSurfaceAction.surfaceId,
+        _agentic_interface_id: agenticSurfaceAction.interfaceId,
+        _agentic_action_id: agenticSurfaceAction.actionId,
+        _agentic_turn_id: agenticSurfaceAction.turnId,
+        _agentic_component_id: agenticSurfaceAction.componentId,
       }
       : {}),
   };
@@ -3571,6 +3688,117 @@ async function handleToolsCall(
           case 'blueprint':
             result = await createCommandDashboardBlueprint(userId, toolArgs);
             break;
+          case 'interface':
+            result = await planAgenticInterface(userId, toolArgs);
+            break;
+          case 'interface_data': {
+            const reqUrl = new URL(request.url);
+            const host = request.headers.get('host') || reqUrl.host;
+            const proto = request.headers.get('x-forwarded-proto') ||
+              (host.includes('localhost') ? 'http' : 'https');
+            const baseUrl = `${proto}://${host}`;
+            const authToken = request.headers.get('Authorization')?.slice(7);
+            if (!authToken) {
+              throw new ToolError(
+                INTERNAL_ERROR,
+                'Missing auth token for interface data calls',
+              );
+            }
+            result = await resolveAgenticInterfaceData(userId, toolArgs, {
+              executeAppFunction: async ({ appId, functionName, args }) => {
+                const rpcPayload = {
+                  jsonrpc: '2.0',
+                  id: crypto.randomUUID(),
+                  method: 'tools/call',
+                  params: {
+                    name: functionName,
+                    arguments: args || {},
+                  },
+                };
+                const callResponse = await fetch(`${baseUrl}/mcp/${appId}`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${authToken}`,
+                  },
+                  body: JSON.stringify(rpcPayload),
+                });
+                if (!callResponse.ok) {
+                  const errText = await callResponse.text().catch(() => callResponse.statusText);
+                  throw new Error(`Call failed (${callResponse.status}): ${errText}`);
+                }
+                const rpcResponse = await callResponse
+                  .json() as RpcToolCallResultEnvelope;
+                if (rpcResponse.error) {
+                  throw new Error(
+                    rpcResponse.error.message || JSON.stringify(rpcResponse.error),
+                  );
+                }
+                return unwrapToolCallResult(rpcResponse.result);
+              },
+            });
+            break;
+          }
+	          case 'interface_action': {
+	            const reqUrl = new URL(request.url);
+	            const host = request.headers.get('host') || reqUrl.host;
+	            const proto = request.headers.get('x-forwarded-proto') ||
+              (host.includes('localhost') ? 'http' : 'https');
+            const baseUrl = `${proto}://${host}`;
+            const authToken = request.headers.get('Authorization')?.slice(7);
+            if (!authToken) {
+              throw new ToolError(
+                INTERNAL_ERROR,
+                'Missing auth token for interface action calls',
+              );
+            }
+            result = await executeAgenticInterfaceAction(userId, toolArgs, {
+              executeAppFunction: async ({ appId, functionName, args }) => {
+                const rpcPayload = {
+                  jsonrpc: '2.0',
+                  id: crypto.randomUUID(),
+                  method: 'tools/call',
+                  params: {
+                    name: functionName,
+                    arguments: args || {},
+                  },
+                };
+                const callResponse = await fetch(`${baseUrl}/mcp/${appId}`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${authToken}`,
+                  },
+                  body: JSON.stringify(rpcPayload),
+                });
+                if (!callResponse.ok) {
+                  const errText = await callResponse.text().catch(() => callResponse.statusText);
+                  throw new Error(`Call failed (${callResponse.status}): ${errText}`);
+                }
+                const rpcResponse = await callResponse
+                  .json() as RpcToolCallResultEnvelope;
+                if (rpcResponse.error) {
+                  throw new Error(
+                    rpcResponse.error.message || JSON.stringify(rpcResponse.error),
+                  );
+                }
+                return unwrapToolCallResult(rpcResponse.result);
+              },
+            });
+            break;
+          }
+          case 'save_interface':
+            result = await saveAgenticInterface(userId, toolArgs);
+            break;
+          case 'list_interfaces':
+            result = await listAgenticInterfaces(userId);
+            break;
+          case 'get_interface':
+            result = await getAgenticInterface(userId, toolArgs.interface_key);
+            break;
+          case 'delete_interface':
+            result = await deleteAgenticInterface(userId, toolArgs.interface_key);
+            break;
           case 'save':
             result = await saveCommandDashboardFromInput(userId, toolArgs);
             break;
@@ -3583,7 +3811,7 @@ async function handleToolsCall(
           default:
             throw new ToolError(
               INVALID_PARAMS,
-              `Invalid action: ${action}. Use inventory|blueprint|save|list|get`,
+              `Invalid action: ${action}. Use inventory|blueprint|interface|interface_data|interface_action|save_interface|list_interfaces|get_interface|delete_interface|save|list|get`,
             );
         }
         break;
@@ -5295,6 +5523,7 @@ async function handleToolsCall(
       sessionId,
       userQuery,
       widgetAction,
+      agenticSurfaceAction,
     });
 
     return jsonRpcResponse(id, formatToolResult(result));
@@ -5330,6 +5559,7 @@ async function handleToolsCall(
       sessionId,
       userQuery,
       widgetAction,
+      agenticSurfaceAction,
     });
 
     if (err instanceof ToolError) {

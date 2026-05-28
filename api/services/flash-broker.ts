@@ -417,6 +417,13 @@ function formatWidgetEvent(event: WidgetSurfaceEvent): string {
   return parts.join(' - ');
 }
 
+function getActiveSurfaceType(context: ActiveWidgetContext): "widget" | "generated_interface" {
+  return context.surfaceType === "generated_interface" ||
+      context.kind === "generated_interface"
+    ? "generated_interface"
+    : "widget";
+}
+
 export function buildActiveWidgetContextBlock(activeWidgetContexts?: ActiveWidgetContext[]): string {
   const contexts = Array.isArray(activeWidgetContexts)
     ? activeWidgetContexts.filter((context) => context && typeof context.surfaceId === 'string')
@@ -424,16 +431,22 @@ export function buildActiveWidgetContextBlock(activeWidgetContexts?: ActiveWidge
   if (contexts.length === 0) return '';
 
   const lines: string[] = [
-    '## Active Widget Context',
-    'The user is composing from the widget UI below. Treat this as current visible UI state. It can guide reads, navigation, and widget action choices. Use declared action ids/labels for action-oriented guidance; do not invent raw DOM selectors.',
+    '## Active Agentic Surface Context',
+    'The user is composing with the active UI surface(s) below. Treat this as current visible UI state. It can guide reads, navigation, selected-entity reasoning, and declared action choices. Use declared action ids/labels for action-oriented guidance; do not invent raw DOM selectors.',
   ];
 
   for (const context of contexts.slice(0, MAX_ACTIVE_WIDGET_CONTEXTS)) {
+    const surfaceType = getActiveSurfaceType(context);
     const snapshot = context.snapshot || undefined;
-    const title = snapshot?.title || context.title || context.widgetName || context.appName || context.appSlug || context.surfaceId;
+    const title = snapshot?.title || context.title || context.interfaceTitle || context.widgetName || context.appName || context.appSlug || context.surfaceId;
     lines.push(`### ${oneLine(title, 120)}`);
-    lines.push(`- App: ${oneLine(context.appName, 100)} (${oneLine(context.appSlug, 80)})`);
-    lines.push(`- Widget: ${oneLine(context.widgetName || context.widgetId, 100)}; surface=${oneLine(context.surfaceId, 120)}${context.kind ? `; kind=${context.kind}` : ''}`);
+    if (surfaceType === "generated_interface") {
+      lines.push(`- Surface: generated_interface; interface=${oneLine(context.interfaceTitle || context.widgetName || context.widgetId, 100)}; id=${oneLine(context.interfaceId || context.widgetId, 100)}; surface=${oneLine(context.surfaceId, 120)}`);
+      if (context.interfaceMode) lines.push(`- Interface mode: ${context.interfaceMode}`);
+    } else {
+      lines.push(`- App: ${oneLine(context.appName, 100)} (${oneLine(context.appSlug, 80)})`);
+      lines.push(`- Widget: ${oneLine(context.widgetName || context.widgetId, 100)}; surface=${oneLine(context.surfaceId, 120)}${context.kind ? `; kind=${context.kind}` : ''}`);
+    }
     if (context.status) lines.push(`- Status: ${context.status}`);
     const updatedAt = formatWidgetTimestamp(context.updatedAt);
     if (updatedAt) lines.push(`- Updated: ${updatedAt}`);
@@ -470,7 +483,7 @@ export function buildActiveWidgetContextBlock(activeWidgetContexts?: ActiveWidge
       lines.push(`- Recent event summary${count}: ${oneLine(context.recentEventSummary, 700)}`);
     }
     if (context.actions?.length) {
-      lines.push('- Declared widget actions:');
+      lines.push(surfaceType === "generated_interface" ? '- Declared interface actions:' : '- Declared widget actions:');
       for (const action of context.actions.slice(0, MAX_WIDGET_ACTIONS)) {
         const mode = action.mode ? ` [${action.mode}${action.confirmation ? `, confirm=${action.confirmation}` : ''}]` : '';
         const mcp = action.mcp?.function ? ` -> ${oneLine(action.mcp.function, 120)}` : '';
@@ -482,7 +495,7 @@ export function buildActiveWidgetContextBlock(activeWidgetContexts?: ActiveWidge
       }
     }
     if (context.recentEvents?.length) {
-      lines.push('- Recent widget events:');
+      lines.push(surfaceType === "generated_interface" ? '- Recent interface events:' : '- Recent widget events:');
       for (const event of context.recentEvents.slice(-MAX_WIDGET_EVENTS)) {
         lines.push(`  - ${formatWidgetEvent(event)}`);
       }
@@ -493,12 +506,12 @@ export function buildActiveWidgetContextBlock(activeWidgetContexts?: ActiveWidge
   }
 
   if (contexts.length > MAX_ACTIVE_WIDGET_CONTEXTS) {
-    lines.push(`- ${contexts.length - MAX_ACTIVE_WIDGET_CONTEXTS} additional widget context(s) omitted.`);
+    lines.push(`- ${contexts.length - MAX_ACTIVE_WIDGET_CONTEXTS} additional active surface context(s) omitted.`);
   }
 
   const block = lines.join('\n');
   return block.length > MAX_WIDGET_CONTEXT_BLOCK_CHARS
-    ? `${block.slice(0, MAX_WIDGET_CONTEXT_BLOCK_CHARS)}\n...[active widget context truncated]`
+    ? `${block.slice(0, MAX_WIDGET_CONTEXT_BLOCK_CHARS)}\n...[active surface context truncated]`
     : block;
 }
 

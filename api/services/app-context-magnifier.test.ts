@@ -8,6 +8,7 @@ import {
   isSelectOnlyContextQuery,
   magnifyContextSources,
   prepareDeclaredContextQuery,
+  readContextSourceRows,
 } from "./app-context-magnifier.ts";
 
 function d1Response(results: Record<string, unknown>[]) {
@@ -112,6 +113,73 @@ Deno.test("app context magnifier: searches declared D1 tables with user isolatio
   assertEquals(result.context.includes("sarah@example.com"), false);
   assertEquals(result.context.includes("user-1"), false);
   assertEquals(calls.some((call) => call.params[0] === "user-1"), true);
+});
+
+Deno.test("app context magnifier: returns scoped redacted rows for generated interface data", async () => {
+  const calls: Array<{ sql: string; params: unknown[] }> = [];
+  const fetchFn = ((_: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body || "{}")) as {
+      sql: string;
+      params?: unknown[];
+    };
+    calls.push({ sql: body.sql, params: body.params || [] });
+
+    if (body.sql.startsWith("PRAGMA table_info")) {
+      return Promise.resolve(d1Response([
+        { name: "id" },
+        { name: "user_id" },
+        { name: "subject" },
+        { name: "email" },
+        { name: "secret" },
+      ]));
+    }
+
+    return Promise.resolve(d1Response([{
+      id: "thread-1",
+      user_id: "user-1",
+      subject: "ACME follow-up",
+      email: "sarah@example.com",
+      secret: "token-123",
+    }, {
+      id: "thread-2",
+      user_id: "user-1",
+      subject: "Overflow row",
+      email: "overflow@example.com",
+      secret: "token-456",
+    }]));
+  }) as typeof fetch;
+
+  const result = await readContextSourceRows({
+    id: "threads",
+    appId: "app-email",
+    appSlug: "email",
+    appName: "Email",
+    label: "Email threads",
+    type: "d1_table",
+    access: "read",
+    searchable: true,
+    tables: ["threads"],
+    redactions: [{ field: "email" }, { field: "secret" }],
+  }, {
+    userId: "user-1",
+    query: "ACME approval",
+    maxRowsPerSource: 1,
+    fetchFn,
+    databaseIdByApp: () => Promise.resolve("db-email"),
+  });
+
+  assertEquals(result.errors, []);
+  assertEquals(result.rowCount, 1);
+  assertEquals(result.rows, [{
+    id: "thread-1",
+    subject: "ACME follow-up",
+    email: "[redacted]",
+    secret: "[redacted]",
+    __table: "threads",
+  }]);
+  assertEquals(calls.some((call) => call.sql.includes("WHERE user_id = ?")), true);
+  assertEquals(calls.some((call) => call.params.includes("user-1")), true);
+  assertEquals(calls.some((call) => call.params.includes(1)), true);
 });
 
 Deno.test("app context magnifier: executes declared D1 query placeholders", async () => {

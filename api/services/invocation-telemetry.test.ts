@@ -3,6 +3,7 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 import {
+  buildAgenticSurfaceActionTelemetryMetadata,
   buildWidgetActionTelemetryMetadata,
   createLlmInvocationTelemetrySession,
   recordToolInvocationTelemetry,
@@ -20,6 +21,23 @@ Deno.test("invocation telemetry: shapes widget action metadata", () => {
     widget_id: "email_inbox",
     widget_action_id: "send_selected_draft",
     widget_turn_id: "turn-1",
+  });
+});
+
+Deno.test("invocation telemetry: shapes generated interface action metadata", () => {
+  assertEquals(buildAgenticSurfaceActionTelemetryMetadata({
+    surfaceId: "surface-generated",
+    interfaceId: "email_interface",
+    actionId: "send",
+    turnId: "turn-1",
+    componentId: "actions",
+  }), {
+    agentic_surface_action: true,
+    agentic_surface_id: "surface-generated",
+    agentic_interface_id: "email_interface",
+    agentic_action_id: "send",
+    agentic_turn_id: "turn-1",
+    agentic_component_id: "actions",
   });
 });
 
@@ -329,6 +347,13 @@ Deno.test("invocation telemetry: records failed tool calls and failure rows", as
         actionId: "send_selected_draft",
         turnId: "turn-1",
       },
+      agenticSurfaceAction: {
+        surfaceId: "surface-generated",
+        interfaceId: "email_interface",
+        actionId: "send",
+        turnId: "turn-agentic-1",
+        componentId: "actions",
+      },
     });
 
     const toolInsert = calls.find((call) =>
@@ -364,6 +389,11 @@ Deno.test("invocation telemetry: records failed tool calls and failure rows", as
         .widget_action_id,
       "send_selected_draft",
     );
+    assertEquals(
+      (toolInsert.body as { metadata: Record<string, unknown> }).metadata
+        .agentic_action_id,
+      "send",
+    );
 
     const failureInsert = calls.find((call) =>
       call.method === "POST" && call.url.includes("/execution_failures")
@@ -386,6 +416,11 @@ Deno.test("invocation telemetry: records failed tool calls and failure rows", as
       (failureInsert.body as { metadata: Record<string, unknown> }).metadata
         .widget_turn_id,
       "turn-1",
+    );
+    assertEquals(
+      (failureInsert.body as { metadata: Record<string, unknown> }).metadata
+        .agentic_turn_id,
+      "turn-agentic-1",
     );
   } finally {
     globalThis.fetch = previousFetch;

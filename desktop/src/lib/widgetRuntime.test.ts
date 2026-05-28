@@ -287,6 +287,8 @@ describe('widget runtime helpers', () => {
     expect(fullscreen).toContain('_widget_name');
     expect(fullscreen).toContain('_widget_action_id');
     expect(fullscreen).toContain('_widget_turn_id');
+    expect(fullscreen).toContain('_agentic_surface_action');
+    expect(fullscreen).toContain('_agentic_action_id');
     expect(inline).toContain('ul-widget-resize');
     expect(inline).toContain('"surface-inline"');
     expect(inline).toContain('window.ulWidgetContext');

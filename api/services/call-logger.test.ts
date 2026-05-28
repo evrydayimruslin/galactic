@@ -66,3 +66,52 @@ Deno.test("call logger: persists widget action audit columns", () => {
   assertEquals(payload.widget_turn_id, "turn-1");
   assertEquals(payload.input_args, { draft_id: "draft-1" });
 });
+
+Deno.test("call logger: extracts generated interface action metadata without leaking meta args", () => {
+  const result = extractCallMeta({
+    approval_id: "approval-1",
+    _agentic_surface_action: true,
+    _agentic_surface_id: "surface-generated",
+    _agentic_interface_id: "email_interface",
+    _agentic_action_id: "send",
+    _agentic_turn_id: "turn-1",
+    _agentic_component_id: "actions",
+  });
+
+  assertEquals(result.cleanArgs, { approval_id: "approval-1" });
+  assertEquals(result.agenticSurfaceAction, {
+    surfaceId: "surface-generated",
+    interfaceId: "email_interface",
+    actionId: "send",
+    turnId: "turn-1",
+    componentId: "actions",
+  });
+});
+
+Deno.test("call logger: persists generated interface action audit columns", () => {
+  const payload = buildMcpCallLogInsertPayload({
+    userId: "user-1",
+    appId: "app-email",
+    appName: "Email",
+    functionName: "email_send_draft",
+    method: "tools/call",
+    success: true,
+    inputArgs: { draft_id: "draft-1" },
+    outputResult: { ok: true },
+    agenticSurfaceAction: {
+      surfaceId: "surface-generated",
+      interfaceId: "email_interface",
+      actionId: "send",
+      turnId: "turn-1",
+      componentId: "actions",
+    },
+  });
+
+  assertEquals(payload.agentic_surface_action, true);
+  assertEquals(payload.agentic_surface_id, "surface-generated");
+  assertEquals(payload.agentic_interface_id, "email_interface");
+  assertEquals(payload.agentic_action_id, "send");
+  assertEquals(payload.agentic_turn_id, "turn-1");
+  assertEquals(payload.agentic_component_id, "actions");
+  assertEquals(payload.input_args, { draft_id: "draft-1" });
+});

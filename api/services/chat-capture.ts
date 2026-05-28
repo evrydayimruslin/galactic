@@ -138,27 +138,37 @@ function summarizeActiveWidgetContexts(
   contexts: ActiveWidgetContext[] | undefined,
 ): JsonRecord[] {
   if (!contexts?.length) return [];
-  return contexts.slice(0, 8).map((context) => ({
-    surface_id: context.surfaceId,
-    kind: context.kind || null,
-    status: context.status || null,
-    app_id: context.appId,
-    app_slug: context.appSlug,
-    app_name: context.appName,
-    widget_id: context.widgetId,
-    widget_name: context.widgetName || null,
-    title: context.snapshot?.title || context.title || null,
-    current_view: context.snapshot?.current_view || null,
-    visible_component_count: context.snapshot?.visible_components?.length || 0,
-    visible_data_ref_count: context.snapshot?.visible_data_refs?.length || 0,
-    selected_entity_count: context.snapshot?.selected_entities?.length || 0,
-    pending_edit_count: context.snapshot?.pending_edits?.length || 0,
-    declared_action_count: context.actions?.length || 0,
-    recent_event_count: context.recentEventCount ?? context.recentEvents?.length ?? 0,
-    recent_event_summary: context.recentEventSummary || null,
-    has_latest_data_payload: !!context.latestDataPayload,
-    updated_at: context.updatedAt || null,
-  }));
+  return contexts.slice(0, 8).map((context) => {
+    const surfaceType = context.surfaceType === 'generated_interface' ||
+        context.kind === 'generated_interface'
+      ? 'generated_interface'
+      : 'widget';
+    return {
+      surface_id: context.surfaceId,
+      surface_type: surfaceType,
+      kind: context.kind || null,
+      status: context.status || null,
+      app_id: context.appId,
+      app_slug: context.appSlug,
+      app_name: context.appName,
+      widget_id: context.widgetId,
+      widget_name: context.widgetName || null,
+      interface_id: context.interfaceId || null,
+      interface_title: context.interfaceTitle || null,
+      interface_mode: context.interfaceMode || null,
+      title: context.snapshot?.title || context.title || null,
+      current_view: context.snapshot?.current_view || null,
+      visible_component_count: context.snapshot?.visible_components?.length || 0,
+      visible_data_ref_count: context.snapshot?.visible_data_refs?.length || 0,
+      selected_entity_count: context.snapshot?.selected_entities?.length || 0,
+      pending_edit_count: context.snapshot?.pending_edits?.length || 0,
+      declared_action_count: context.actions?.length || 0,
+      recent_event_count: context.recentEventCount ?? context.recentEvents?.length ?? 0,
+      recent_event_summary: context.recentEventSummary || null,
+      has_latest_data_payload: !!context.latestDataPayload,
+      updated_at: context.updatedAt || null,
+    };
+  });
 }
 
 async function postRows(

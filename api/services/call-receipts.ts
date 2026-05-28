@@ -35,6 +35,12 @@ export const CALL_RECEIPT_LOG_SELECT = [
   "widget_id",
   "widget_action_id",
   "widget_turn_id",
+  "agentic_surface_action",
+  "agentic_surface_id",
+  "agentic_interface_id",
+  "agentic_action_id",
+  "agentic_turn_id",
+  "agentic_component_id",
   "buyer_billing_address_id",
   "buyer_billing_address_version",
   "tax_status",
@@ -105,6 +111,12 @@ export interface CallReceiptLogRow {
   widget_id?: string | null;
   widget_action_id?: string | null;
   widget_turn_id?: string | null;
+  agentic_surface_action?: boolean | null;
+  agentic_surface_id?: string | null;
+  agentic_interface_id?: string | null;
+  agentic_action_id?: string | null;
+  agentic_turn_id?: string | null;
+  agentic_component_id?: string | null;
   buyer_billing_address_id?: string | null;
   buyer_billing_address_version?: number | null;
   tax_status?: string | null;

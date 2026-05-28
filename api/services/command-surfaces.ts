@@ -1,4 +1,7 @@
-import type { WidgetDependencyDeclaration } from '../../shared/contracts/widget.ts';
+import type {
+  WidgetDependencyDeclaration,
+  WidgetGenerationHints,
+} from '../../shared/contracts/widget.ts';
 import type { WidgetIndexEntry } from './codemode-tools.ts';
 import { buildWidgetIndexForApp, type AppForCodemode } from './codemode-tools.ts';
 import {
@@ -9,8 +12,7 @@ import {
   upsertCommandDashboardLayout,
 } from './command-dashboard.ts';
 import {
-  getFunctionIndex,
-  rebuildFunctionIndex,
+  getOrRebuildFunctionIndex,
   type FunctionIndex,
 } from './function-index.ts';
 
@@ -25,7 +27,7 @@ export interface CommandSurfaceApp {
   manifest?: unknown;
 }
 
-interface CommandWidgetSurfaceEntry {
+export interface CommandWidgetSurfaceEntry {
   surface: 'widget';
   id: string;
   app_id: string;
@@ -39,10 +41,11 @@ interface CommandWidgetSurfaceEntry {
   cards_count: number;
   card_ids: string[];
   dependencies?: WidgetDependencyDeclaration[];
+  generation_hints?: WidgetGenerationHints;
   source: CommandSurfaceSource;
 }
 
-interface CommandCardSurfaceEntry {
+export interface CommandCardSurfaceEntry {
   surface: 'command_card';
   id: string;
   app_id: string;
@@ -60,22 +63,28 @@ interface CommandCardSurfaceEntry {
   data_function: string;
   refresh_interval_s?: number;
   dependencies?: WidgetDependencyDeclaration[];
+  generation_hints?: WidgetGenerationHints;
   opens_widget: true;
   source: CommandSurfaceSource;
 }
 
-type CommandSurfaceEntry =
+export type CommandSurfaceEntry =
   | CommandWidgetSurfaceEntry
   | CommandCardSurfaceEntry;
 
-interface CommandSurfaceInventoryOptions {
+export interface CommandSurfaceInventoryOptions {
   query?: unknown;
   surfaces?: unknown;
   limit?: unknown;
   source?: CommandSurfaceSource;
+  app_id?: unknown;
+  app_ids?: unknown;
+  app_slug?: unknown;
+  app_slugs?: unknown;
+  app_scope?: unknown;
 }
 
-interface CommandSurfaceInventory {
+export interface CommandSurfaceInventory {
   query: string | null;
   surfaces: CommandSurfaceEntry[];
   totals: {
@@ -152,6 +161,44 @@ function normalizeQuery(value: unknown): string | null {
   return trimmed ? trimmed.slice(0, 240) : null;
 }
 
+function normalizeStringList(value: unknown): string[] {
+  if (typeof value === 'string' && value.trim()) return [value.trim()];
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((entry): entry is string =>
+      typeof entry === 'string' && entry.trim().length > 0
+    )
+    .map((entry) => entry.trim()))];
+}
+
+function normalizeAppScope(options: CommandSurfaceInventoryOptions): {
+  appIds: Set<string>;
+  appSlugs: Set<string>;
+} {
+  const appScope = isRecord(options.app_scope) ? options.app_scope : {};
+  const appIds = new Set([
+    ...normalizeStringList(options.app_id),
+    ...normalizeStringList(options.app_ids),
+    ...normalizeStringList(appScope.app_id),
+    ...normalizeStringList(appScope.app_ids),
+  ]);
+  const appSlugs = new Set([
+    ...normalizeStringList(options.app_slug),
+    ...normalizeStringList(options.app_slugs),
+    ...normalizeStringList(appScope.app_slug),
+    ...normalizeStringList(appScope.app_slugs),
+  ]);
+  return { appIds, appSlugs };
+}
+
+function surfaceMatchesAppScope(
+  surface: CommandSurfaceEntry,
+  scope: { appIds: Set<string>; appSlugs: Set<string> },
+): boolean {
+  if (scope.appIds.size === 0 && scope.appSlugs.size === 0) return true;
+  return scope.appIds.has(surface.app_id) || scope.appSlugs.has(surface.app_slug);
+}
+
 function tokenize(value: string): string[] {
   return value
     .toLowerCase()
@@ -177,6 +224,7 @@ function mergeDependencies(
 }
 
 function surfaceSearchText(surface: CommandSurfaceEntry): string {
+  const hints = surface.generation_hints ? generationHintText(surface.generation_hints) : '';
   const fields = surface.surface === 'command_card'
     ? [
       surface.app_name,
@@ -188,6 +236,7 @@ function surfaceSearchText(surface: CommandSurfaceEntry): string {
       surface.description || '',
       surface.kind || '',
       surface.data_view || '',
+      hints,
     ]
     : [
       surface.app_name,
@@ -196,8 +245,27 @@ function surfaceSearchText(surface: CommandSurfaceEntry): string {
       surface.widget_id,
       surface.description || '',
       surface.card_ids.join(' '),
+      hints,
     ];
   return fields.join(' ').toLowerCase();
+}
+
+function generationHintText(hints: WidgetGenerationHints): string {
+  return [
+    ...(hints.tags || []),
+    ...(hints.entity_types || []),
+    ...(hints.prompt_examples || []),
+    hints.preferred_component || '',
+    hints.action_group || '',
+    ...(hints.suggested_components || []).flatMap((component) => [
+      component.kind,
+      component.title || '',
+      component.description || '',
+      component.data_view || '',
+      component.context_source_id || '',
+      ...(component.action_ids || []),
+    ]),
+  ].filter(Boolean).join(' ');
 }
 
 function scoreSurface(surface: CommandSurfaceEntry, query: string | null): number {
@@ -233,6 +301,7 @@ function buildWidgetSurface(
     cards_count: widget.cards.length,
     card_ids: widget.cards.map((card) => card.id),
     ...(widget.dependencies?.length ? { dependencies: widget.dependencies } : {}),
+    ...(widget.generationHints ? { generation_hints: widget.generationHints } : {}),
     source,
   };
 }
@@ -263,6 +332,9 @@ function buildCardSurface(
       ? { refresh_interval_s: card.refreshIntervalS }
       : {}),
     ...(dependencies ? { dependencies } : {}),
+    ...(card.generationHints || widget.generationHints
+      ? { generation_hints: card.generationHints || widget.generationHints }
+      : {}),
     opens_widget: true,
     source,
   };
@@ -276,6 +348,7 @@ export function flattenCommandSurfaceInventory(
   const requestedSurfaces = normalizeCommandSurfaceKinds(options.surfaces);
   const requested = new Set(requestedSurfaces);
   const source = options.source || 'installed';
+  const appScope = normalizeAppScope(options);
   const entries: CommandSurfaceEntry[] = [];
   const appIds = new Set<string>();
 
@@ -292,6 +365,7 @@ export function flattenCommandSurfaceInventory(
   }
 
   const scored: ScoredSurface[] = entries
+    .filter((surface) => surfaceMatchesAppScope(surface, appScope))
     .map((surface) => ({ surface, score: scoreSurface(surface, query) }))
     .filter((entry) => !query || entry.score > 0)
     .sort((a, b) => {
@@ -353,10 +427,7 @@ export async function getCommandSurfaceInventory(
   userId: string,
   options: CommandSurfaceInventoryOptions = {},
 ): Promise<CommandSurfaceInventory> {
-  let fnIndex = await getFunctionIndex(userId);
-  if (!fnIndex) {
-    fnIndex = await rebuildFunctionIndex(userId);
-  }
+  const fnIndex = await getOrRebuildFunctionIndex(userId);
   return flattenCommandSurfaceInventory(fnIndex, options);
 }
 

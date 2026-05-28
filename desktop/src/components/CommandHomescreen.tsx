@@ -28,9 +28,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchCommandDashboardLayout,
   fetchCommandWidgets,
+  fetchAgenticInterface,
+  fetchAgenticInterfaces,
   fetchRoutineMonitor,
+  generateCommandInterface,
+  executeAgenticInterfaceAction,
+  deleteAgenticInterface,
   runRoutineNow,
+  saveAgenticInterface,
   saveCommandDashboardLayout,
+  savedAgenticInterfaceToPlannerResult,
+  type AgenticInterfaceActionExecutionContext,
+  type AgenticInterfacePlannerResult,
+  type AgenticInterfaceSummary,
   type CommandDashboardLayout,
   type FunctionIndex,
   type RoutineMonitorItem,
@@ -39,9 +49,18 @@ import {
 } from '../lib/api';
 import { openWidgetWindow } from '../lib/multiWindow';
 import { fetchWidgetDataPayload } from '../lib/widgetRuntime';
+import {
+  getActiveWidgetSurfaces,
+  invokeWidgetSurfaceAction,
+} from '../lib/widgetSurfaceRegistry';
 import Glyph, { deriveGlyph, deriveTone } from './ui/Glyph';
 import WidgetPickerModal, { type PickedCard, buildKey } from './dashboard/WidgetPickerModal';
 import RoutineMonitorPanel from './RoutineMonitorPanel';
+import CommandComposer from './command/CommandComposer';
+import GeneratedInterface from './agentic/GeneratedInterface';
+import AgenticInterfaceLibrary from './agentic/AgenticInterfaceLibrary';
+import type { AgenticOpenWidgetRequest } from './agentic/AgenticInterfaceHost';
+import type { AgenticInterfaceAction } from '../../../shared/contracts/agentic-interface.ts';
 
 // ── Types (FE-internal) ───────────────────────────────────────────────
 
@@ -53,6 +72,24 @@ interface ResolvedTile {
   instance: CardInstance;
   widget: WidgetDefn;
   card: CardDefn;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function actionArgs(
+  action: AgenticInterfaceAction,
+  args?: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...(isRecord(action.args_template) ? action.args_template : {}),
+    ...(args || {}),
+  };
+}
+
+function generatedActionError(action: AgenticInterfaceAction, fallback: string): Error {
+  return new Error(`${action.label}: ${fallback}`);
 }
 
 // ── Sizing ────────────────────────────────────────────────────────────
@@ -351,6 +388,15 @@ export default function CommandHomescreen() {
   const [routineMonitor, setRoutineMonitor] = useState<RoutineMonitorResponse | null>(null);
   const [routineLoading, setRoutineLoading] = useState(false);
   const [routineError, setRoutineError] = useState<string | null>(null);
+  const [generatedInterface, setGeneratedInterface] = useState<AgenticInterfacePlannerResult | null>(null);
+  const [interfaceLoading, setInterfaceLoading] = useState(false);
+  const [interfaceError, setInterfaceError] = useState<string | null>(null);
+  const [savedInterfaces, setSavedInterfaces] = useState<AgenticInterfaceSummary[]>([]);
+  const [savedInterfacesLoading, setSavedInterfacesLoading] = useState(false);
+  const [savedInterfacesError, setSavedInterfacesError] = useState<string | null>(null);
+  const [savingInterface, setSavingInterface] = useState(false);
+  const [activeInterfaceKey, setActiveInterfaceKey] = useState<string | null>(null);
+  const [lastInterfacePrompt, setLastInterfacePrompt] = useState<string | null>(null);
   // Track which instance ids we've already started a fetch for. Ref (not
   // state) so the dispatch loop doesn't read stale cardData/cardLoading
   // closures when tiles change quickly (e.g. after a layout edit).
@@ -384,6 +430,23 @@ export default function CommandHomescreen() {
       });
     return () => { cancelled = true; };
   }, []);
+
+  const refreshSavedInterfaces = useCallback(async () => {
+    setSavedInterfacesLoading(true);
+    setSavedInterfacesError(null);
+    try {
+      const interfaces = await fetchAgenticInterfaces();
+      setSavedInterfaces(interfaces);
+    } catch (err) {
+      setSavedInterfacesError(err instanceof Error ? err.message : 'Failed to load saved interfaces');
+    } finally {
+      setSavedInterfacesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSavedInterfaces();
+  }, [refreshSavedInterfaces]);
 
   const refreshRoutineMonitor = useCallback(async () => {
     setRoutineLoading(true);
@@ -497,6 +560,168 @@ export default function CommandHomescreen() {
       dataFunction: tile.widget.dataFunction ?? `widget_${tile.widget.name}_data`,
     });
   }, []);
+
+  const onOpenGeneratedWidget = useCallback((request: AgenticOpenWidgetRequest) => {
+    const widget = widgetsIndex.find((entry) =>
+      entry.appId === request.appId && entry.name === request.widgetId
+    );
+    void openWidgetWindow({
+      appUuid: request.appId,
+      appSlug: request.appSlug || widget?.appSlug || '',
+      appName: widget?.appName || request.appSlug || 'Widget',
+      widgetName: request.widgetId,
+      uiFunction: widget?.uiFunction || `widget_${request.widgetId}_ui`,
+      dataFunction: widget?.dataFunction || `widget_${request.widgetId}_data`,
+    }, request.context);
+  }, [widgetsIndex]);
+
+  const onGeneratedAction = useCallback(async (
+    action: AgenticInterfaceAction,
+    args: Record<string, unknown> | undefined,
+    context: AgenticInterfaceActionExecutionContext,
+  ) => {
+    if (!generatedInterface) {
+      throw generatedActionError(action, 'No generated interface is active.');
+    }
+    setInterfaceError(null);
+
+    if (action.kind === 'widget_action') {
+      const activeSurfaces = getActiveWidgetSurfaces();
+      const surface = activeSurfaces.find((entry) =>
+        action.surface_id
+          ? entry.surfaceId === action.surface_id
+          : entry.source.widgetName === action.widget_id &&
+            (entry.source.appUuid === action.app_id ||
+              (action.app_slug && entry.source.appSlug === action.app_slug))
+      );
+      if (!surface) {
+        throw generatedActionError(
+          action,
+          `Open ${action.widget_id} before running this widget action.`,
+        );
+      }
+      const result = await invokeWidgetSurfaceAction({
+        surface_id: surface.surfaceId,
+        widget_id: action.widget_id,
+        action_id: action.action_id,
+        args: actionArgs(action, args),
+        turn_id: context.turnId,
+        source: 'agent',
+        agentic_surface_id: context.surfaceId,
+        agentic_interface_id: generatedInterface.normalized_spec.id,
+        agentic_action_id: action.id,
+        agentic_component_id: context.componentId,
+      });
+      if (!result.ok) {
+        throw generatedActionError(action, result.error || 'Widget action failed.');
+      }
+      return result.data ?? result;
+    }
+
+    const result = await executeAgenticInterfaceAction({
+      spec: generatedInterface.normalized_spec,
+      action_id: action.id,
+      args,
+      confirmed: context.confirmed,
+      surface_id: context.surfaceId,
+      turn_id: context.turnId,
+      component_id: context.componentId,
+    });
+    if (result.status === 'requires_confirmation') {
+      throw generatedActionError(action, result.error || 'Confirmation is required.');
+    }
+    if (result.status === 'client_action_required') {
+      throw generatedActionError(action, 'This action must run from an active widget surface.');
+    }
+    if (result.status === 'error') {
+      throw generatedActionError(action, result.error || 'Action failed.');
+    }
+    return result.result ?? result.open_widget ?? result.refreshed_binding_ids ?? result.selected_entity ?? result;
+  }, [generatedInterface]);
+
+  const onGenerateInterface = useCallback(async (prompt: string) => {
+    setInterfaceLoading(true);
+    setInterfaceError(null);
+    setLastInterfacePrompt(prompt);
+    try {
+      const result = await generateCommandInterface({
+        prompt,
+        mode: 'temporary',
+        max_components: 8,
+      });
+      setGeneratedInterface(result);
+      setActiveInterfaceKey(null);
+    } catch (err) {
+      setInterfaceError(err instanceof Error ? err.message : 'Failed to generate interface');
+    } finally {
+      setInterfaceLoading(false);
+    }
+  }, []);
+
+  const onSaveGeneratedInterface = useCallback(async () => {
+    if (!generatedInterface) return;
+    setSavingInterface(true);
+    setInterfaceError(null);
+    try {
+      const spec = generatedInterface.normalized_spec;
+      const saved = await saveAgenticInterface({
+        ...(activeInterfaceKey ? { interface_key: activeInterfaceKey } : {}),
+        title: spec.title,
+        description: spec.description ?? null,
+        spec,
+        source_prompt: lastInterfacePrompt ?? spec.provenance?.prompt ?? null,
+      });
+      setActiveInterfaceKey(saved.interface_key);
+      setGeneratedInterface(savedAgenticInterfaceToPlannerResult(saved));
+      await refreshSavedInterfaces();
+    } catch (err) {
+      setInterfaceError(err instanceof Error ? err.message : 'Failed to save generated interface');
+    } finally {
+      setSavingInterface(false);
+    }
+  }, [activeInterfaceKey, generatedInterface, lastInterfacePrompt, refreshSavedInterfaces]);
+
+  const onOpenSavedInterface = useCallback(async (interfaceKey: string) => {
+    setInterfaceLoading(true);
+    setInterfaceError(null);
+    try {
+      const saved = await fetchAgenticInterface(interfaceKey);
+      setGeneratedInterface(savedAgenticInterfaceToPlannerResult(saved));
+      setActiveInterfaceKey(saved.interface_key);
+      setLastInterfacePrompt(saved.source_prompt);
+    } catch (err) {
+      setInterfaceError(err instanceof Error ? err.message : 'Failed to open saved interface');
+    } finally {
+      setInterfaceLoading(false);
+    }
+  }, []);
+
+  const onDeleteSavedInterface = useCallback(async (interfaceKey: string) => {
+    const item = savedInterfaces.find((entry) => entry.interface_key === interfaceKey);
+    if (!window.confirm(`Delete ${item?.title || 'this saved interface'}?`)) return;
+    setSavedInterfacesError(null);
+    try {
+      const ok = await deleteAgenticInterface(interfaceKey);
+      if (!ok) {
+        setSavedInterfacesError('Failed to delete saved interface');
+        return;
+      }
+      if (activeInterfaceKey === interfaceKey) {
+        setActiveInterfaceKey(null);
+        setGeneratedInterface((current) => current
+          ? {
+            ...current,
+            draft_spec: { ...current.draft_spec, mode: 'temporary' },
+            normalized_spec: { ...current.normalized_spec, mode: 'temporary' },
+            persisted: false,
+          }
+          : current);
+      }
+      await refreshSavedInterfaces();
+    } catch (err) {
+      setSavedInterfacesError(err instanceof Error ? err.message : 'Failed to delete saved interface');
+    }
+  }, [activeInterfaceKey, refreshSavedInterfaces, savedInterfaces]);
 
   // Persist a layout change. Optimistic update — UI reflects immediately;
   // server confirms in the background. Reverts on failure.
@@ -696,6 +921,30 @@ export default function CommandHomescreen() {
           onRunNow={handleRunRoutineNow}
         />
       </div>
+
+      <CommandComposer loading={interfaceLoading} onGenerate={onGenerateInterface} />
+      <AgenticInterfaceLibrary
+        interfaces={savedInterfaces}
+        loading={savedInterfacesLoading}
+        saving={savingInterface}
+        activeKey={activeInterfaceKey}
+        hasCurrent={!!generatedInterface}
+        error={savedInterfacesError}
+        onSaveCurrent={onSaveGeneratedInterface}
+        onOpen={onOpenSavedInterface}
+        onDelete={onDeleteSavedInterface}
+        onRefresh={refreshSavedInterfaces}
+      />
+      {interfaceError && (
+        <div className="px-[22px] pb-2 text-caption text-ul-text-muted">{interfaceError}</div>
+      )}
+      {generatedInterface && (
+        <GeneratedInterface
+          result={generatedInterface}
+          onAction={onGeneratedAction}
+          onOpenWidget={onOpenGeneratedWidget}
+        />
+      )}
 
       {/* Body */}
       {loading && !layout ? (

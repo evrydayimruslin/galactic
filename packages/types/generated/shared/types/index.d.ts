@@ -1,3 +1,5 @@
+export { isAgenticInterfaceSpec, validateAgenticInterfaceSpec, } from "../contracts/agentic-interface.ts";
+export type * from "../contracts/agentic-interface.ts";
 export declare const ACTIVE_BYOK_PROVIDER_IDS: readonly ["openrouter", "openai", "deepseek", "nvidia", "google", "xai"];
 export declare const LEGACY_BYOK_PROVIDER_IDS: readonly ["anthropic", "moonshot"];
 export type ActiveBYOKProvider = typeof ACTIVE_BYOK_PROVIDER_IDS[number];
@@ -90,8 +92,8 @@ export interface App {
      *  responses leave it undefined. Seeded into the B11 install button
      *  state machine on ToolDetailView. */
     is_installed?: boolean;
-    visibility: 'private' | 'unlisted' | 'public';
-    download_access: 'owner' | 'public';
+    visibility: "private" | "unlisted" | "public";
+    download_access: "owner" | "public";
     current_version: string;
     versions: string[];
     version_metadata: VersionMetadata[];
@@ -317,8 +319,27 @@ export interface WidgetDeclaration {
     actions_function?: string;
     context_sources?: WidgetContextSourceRef[];
     agent_actions?: WidgetActionDeclaration[];
+    generation_hints?: WidgetGenerationHints;
 }
 export type WidgetContextSourceRef = string;
+export type WidgetGenerationComponentKind = "metric" | "list" | "table" | "detail" | "form" | "action_bar" | "timeline" | "card_ref" | "widget_embed" | "routine_panel" | "text";
+export interface WidgetGenerationSuggestedComponent {
+    kind: WidgetGenerationComponentKind;
+    title?: string;
+    description?: string;
+    data_view?: string;
+    context_source_id?: string;
+    action_ids?: string[];
+}
+export interface WidgetGenerationHints {
+    tags?: string[];
+    preferred_component?: WidgetGenerationComponentKind;
+    entity_types?: string[];
+    action_group?: string;
+    safe_default_filters?: Record<string, unknown>;
+    suggested_components?: WidgetGenerationSuggestedComponent[];
+    prompt_examples?: string[];
+}
 export type WidgetContextSourceType = "d1_table" | "d1_query" | "function";
 export interface WidgetContextSourceDeclaration {
     id: string;
@@ -332,6 +353,7 @@ export interface WidgetContextSourceDeclaration {
     query?: string;
     function?: string;
     redactions?: WidgetContextRedaction[];
+    generation_hints?: WidgetGenerationHints;
 }
 export interface WidgetContextRedaction {
     field?: string;
@@ -359,6 +381,7 @@ export interface WidgetActionDeclaration {
     mcp?: WidgetMcpActionBinding;
     ui?: WidgetUiActionBinding;
     expected_result?: string;
+    generation_hints?: WidgetGenerationHints;
 }
 export interface WidgetDataRef {
     type?: string;
@@ -386,9 +409,12 @@ export interface WidgetPendingEdit {
 }
 export interface WidgetStateSnapshot {
     surface_id?: string;
+    surface_type?: ActiveSurfaceType;
     app_id?: string;
     app_slug?: string;
     widget_id: string;
+    interface_id?: string;
+    interface_title?: string;
     title?: string;
     summary?: string;
     current_view?: string;
@@ -405,6 +431,7 @@ export interface WidgetSurfaceEvent {
     id?: string;
     surface_id?: string;
     widget_id?: string;
+    interface_id?: string;
     kind: WidgetSurfaceEventKind;
     action_id?: string;
     turn_id?: string;
@@ -415,16 +442,21 @@ export interface WidgetSurfaceEvent {
     snapshot?: WidgetStateSnapshot;
     created_at?: string;
 }
-export type WidgetSurfaceKind = "inline" | "window" | "command_card";
+export type WidgetSurfaceKind = "inline" | "window" | "command_card" | "generated_interface";
+export type ActiveSurfaceType = "widget" | "generated_interface";
 export type WidgetSurfaceStatus = "opening" | "ready" | "stale" | "closed";
 export interface ActiveWidgetContext {
     surfaceId: string;
+    surfaceType?: ActiveSurfaceType;
     kind?: WidgetSurfaceKind;
     appId: string;
     appSlug: string;
     appName: string;
     widgetId: string;
     widgetName?: string;
+    interfaceId?: string;
+    interfaceTitle?: string;
+    interfaceMode?: "temporary" | "saved";
     title?: string;
     context?: Record<string, string>;
     status?: WidgetSurfaceStatus;
@@ -473,6 +505,7 @@ export interface CommandCardDeclaration {
     data_function?: string;
     refresh_interval_s?: number;
     dependencies?: WidgetDependencyDeclaration[];
+    generation_hints?: WidgetGenerationHints;
 }
 export interface WidgetAction {
     label: string;
@@ -1183,7 +1216,7 @@ export interface BYOKModel {
      *  every model in a provider's catalog the FE falls back to its
      *  pre-B1 behaviour (show everything on both tiers), so deployments
      *  can stage the annotation rollout without breaking the picker. */
-    tier?: 'flash' | 'heavy' | 'both';
+    tier?: "flash" | "heavy" | "both";
 }
 export declare const BYOK_PROVIDERS: Record<ActiveBYOKProvider, BYOKProviderInfo>;
 /**
@@ -1229,10 +1262,10 @@ export interface AppManifest {
     env_vars?: Record<string, ManifestEnvVar>;
     http?: ManifestHttpConfig;
 }
-export type ManifestHttpAuthMode = 'user' | 'public';
-export type ManifestHttpBillingMode = 'owner' | 'caller';
-export type ManifestHttpDataScope = 'app' | 'user';
-export type ManifestHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
+export type ManifestHttpAuthMode = "user" | "public";
+export type ManifestHttpBillingMode = "owner" | "caller";
+export type ManifestHttpDataScope = "app" | "user";
+export type ManifestHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
 export interface ManifestHttpConfig {
     defaults?: ManifestHttpRouteDefaults;
     routes?: Record<string, ManifestHttpRoutePolicy>;
@@ -1265,6 +1298,7 @@ export interface ManifestFunction {
     examples?: string[];
     /** MCP tool annotations — behavioral hints for agents (readOnlyHint, destructiveHint, etc.) */
     annotations?: MCPToolAnnotations;
+    generation_hints?: WidgetGenerationHints;
 }
 export interface ManifestParameter {
     type: "string" | "number" | "boolean" | "object" | "array";

@@ -80,6 +80,7 @@ export interface McpCallLogEntry {
   gpuDeveloperFeeLight?: number;
   gpuFailurePolicy?: string;
   widgetAction?: WidgetActionCallMetadata;
+  agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
 }
 
 export function createExecutionReceiptId(): string {
@@ -176,6 +177,12 @@ export function buildMcpCallLogInsertPayload(
     widget_id: entry.widgetAction?.widgetId ?? null,
     widget_action_id: entry.widgetAction?.actionId ?? null,
     widget_turn_id: entry.widgetAction?.turnId ?? null,
+    agentic_surface_action: !!entry.agenticSurfaceAction,
+    agentic_surface_id: entry.agenticSurfaceAction?.surfaceId ?? null,
+    agentic_interface_id: entry.agenticSurfaceAction?.interfaceId ?? null,
+    agentic_action_id: entry.agenticSurfaceAction?.actionId ?? null,
+    agentic_turn_id: entry.agenticSurfaceAction?.turnId ?? null,
+    agentic_component_id: entry.agenticSurfaceAction?.componentId ?? null,
     // GPU metering
     gpu_type: entry.gpuType ?? null,
     gpu_exit_code: entry.gpuExitCode ?? null,
@@ -221,6 +228,14 @@ export interface WidgetActionCallMetadata {
   turnId?: string;
 }
 
+export interface AgenticSurfaceActionCallMetadata {
+  surfaceId?: string;
+  interfaceId?: string;
+  actionId?: string;
+  turnId?: string;
+  componentId?: string;
+}
+
 /**
  * Extract _user_query, _session_id, and widget metadata from tool call arguments.
  * Returns the clean args (without meta fields) and the extracted meta.
@@ -236,6 +251,7 @@ export function extractCallMeta(args: Record<string, unknown>): {
     reason?: string;
   };
   widgetAction?: WidgetActionCallMetadata;
+  agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
 } {
   const {
     _user_query,
@@ -249,6 +265,12 @@ export function extractCallMeta(args: Record<string, unknown>): {
     _widget_id,
     _widget_action_id,
     _widget_turn_id,
+    _agentic_surface_action,
+    _agentic_surface_id,
+    _agentic_interface_id,
+    _agentic_action_id,
+    _agentic_turn_id,
+    _agentic_component_id,
     ...cleanArgs
   } = args;
   const widgetIntervalMs = typeof _widget_interval_ms === "number" &&
@@ -292,12 +314,43 @@ export function extractCallMeta(args: Record<string, unknown>): {
       turnId: widgetTurnId,
     }
     : undefined;
+  const agenticSurfaceId = typeof _agentic_surface_id === "string" &&
+      _agentic_surface_id.trim()
+    ? _agentic_surface_id.trim()
+    : undefined;
+  const agenticInterfaceId = typeof _agentic_interface_id === "string" &&
+      _agentic_interface_id.trim()
+    ? _agentic_interface_id.trim()
+    : undefined;
+  const agenticActionId = typeof _agentic_action_id === "string" &&
+      _agentic_action_id.trim()
+    ? _agentic_action_id.trim()
+    : undefined;
+  const agenticTurnId = typeof _agentic_turn_id === "string" &&
+      _agentic_turn_id.trim()
+    ? _agentic_turn_id.trim()
+    : undefined;
+  const agenticComponentId = typeof _agentic_component_id === "string" &&
+      _agentic_component_id.trim()
+    ? _agentic_component_id.trim()
+    : undefined;
+  const agenticSurfaceAction = _agentic_surface_action === true ||
+      agenticActionId || agenticInterfaceId
+    ? {
+      surfaceId: agenticSurfaceId,
+      interfaceId: agenticInterfaceId,
+      actionId: agenticActionId,
+      turnId: agenticTurnId,
+      componentId: agenticComponentId,
+    }
+    : undefined;
   return {
     cleanArgs,
     userQuery: typeof _user_query === "string" ? _user_query : undefined,
     sessionId: typeof _session_id === "string" ? _session_id : undefined,
     widgetPull,
     widgetAction,
+    agenticSurfaceAction,
   };
 }
 

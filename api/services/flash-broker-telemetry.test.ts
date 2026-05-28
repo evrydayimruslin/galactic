@@ -131,7 +131,7 @@ Deno.test("flash broker: active widget context block summarizes visible UI state
     updatedAt: 1_714_000_000_000,
   }]);
 
-  assertEquals(block.includes("## Active Widget Context"), true);
+  assertEquals(block.includes("## Active Agentic Surface Context"), true);
   assertEquals(block.includes("Inbox approval queue"), true);
   assertEquals(block.includes("Draft editor"), true);
   assertEquals(block.includes("approve_draft"), true);
@@ -139,6 +139,73 @@ Deno.test("flash broker: active widget context block summarizes visible UI state
   assertEquals(block.includes("ui:focus(draft-editor)"), true);
   assertEquals(block.includes("Recent event summary (1 recorded)"), true);
   assertEquals(block.includes("turn=turn-widget-1"), true);
+});
+
+Deno.test("flash broker: active surface context block summarizes generated interfaces", () => {
+  const block = buildActiveWidgetContextBlock([{
+    surfaceId: "generated-interface-1",
+    surfaceType: "generated_interface",
+    kind: "generated_interface",
+    appId: "generated-interface",
+    appSlug: "generated-interface",
+    appName: "Generated Interface",
+    widgetId: "approval_control_room",
+    widgetName: "Approval control room",
+    interfaceId: "approval_control_room",
+    interfaceTitle: "Approval control room",
+    interfaceMode: "temporary",
+    status: "ready",
+    snapshot: {
+      surface_type: "generated_interface",
+      widget_id: "approval_control_room",
+      interface_id: "approval_control_room",
+      title: "Approval control room",
+      current_view: "generated_interface",
+      visible_components: [{
+        id: "approvals-table",
+        type: "table",
+        label: "Approvals",
+        data_refs: [{ type: "context_source", id: "email_queue" }],
+        actions: ["send_approval"],
+        state: { selected_row_index: 1 },
+      }],
+      selected_entities: [{
+        type: "selected_row",
+        id: "approvals-table:1",
+        label: "Approvals",
+        value: { subject: "ACME budget" },
+      }],
+      pending_edits: [{
+        field: "reply.message",
+        label: "Message",
+        value: "Looks good.",
+        dirty: true,
+      }],
+      enabled_actions: ["send_approval"],
+    },
+    actions: [{
+      id: "send_approval",
+      label: "Send approval",
+      mode: "write",
+      confirmation: "user",
+      mcp: { function: "email_send_approval" },
+    }],
+    recentEvents: [{
+      kind: "user",
+      action_id: "select_entity",
+      label: "Selected Approvals row 2",
+    }],
+    recentEventSummary: "user - action=select_entity - Selected Approvals row 2",
+    recentEventCount: 1,
+  }]);
+
+  assertEquals(block.includes("Surface: generated_interface"), true);
+  assertEquals(block.includes("Interface mode: temporary"), true);
+  assertEquals(block.includes("Selected entities"), true);
+  assertEquals(block.includes("ACME budget"), true);
+  assertEquals(block.includes("Pending edits"), true);
+  assertEquals(block.includes("Declared interface actions"), true);
+  assertEquals(block.includes("email_send_approval"), true);
 });
 
 Deno.test("flash broker routing: pure system-agent delegations skip Heavy prompt construction", () => {

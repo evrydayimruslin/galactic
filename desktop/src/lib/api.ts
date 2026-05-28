@@ -8,6 +8,15 @@ import type {
   InferenceRoutePreference,
   ToolInvocationTelemetryRequest,
 } from "../../../shared/contracts/ai.ts";
+import type {
+  AgenticInterfaceAction,
+  AgenticInterfaceDataBindingSource,
+  AgenticInterfaceDroppedItem,
+  AgenticInterfaceSpec,
+  AgenticInterfaceValidationResult,
+  AgenticInterfaceVerificationResult,
+  AgenticInterfaceWarning,
+} from "../../../shared/contracts/agentic-interface.ts";
 import {
   type ActiveBYOKProvider,
   BYOK_PROVIDERS,
@@ -648,6 +657,9 @@ export interface FunctionIndex {
       string,
       { type: string; required?: boolean; description?: string }
     >;
+    returns?: string;
+    conventions?: string[];
+    dependsOn?: string[];
   }>;
   widgets: Array<{
     name: string;
@@ -693,6 +705,7 @@ export interface FunctionIndex {
     id: string;
     appId: string;
     appSlug: string;
+    appName?: string;
     label: string;
     description?: string;
     type: "d1_table" | "d1_query" | "function";
@@ -703,6 +716,15 @@ export interface FunctionIndex {
     query?: string;
     function?: string;
     redactions?: Array<{ field?: string; pattern?: string; replacement?: string }>;
+  }>;
+  routines?: Array<{
+    id: string;
+    label: string;
+    description?: string;
+    appId: string;
+    appSlug: string;
+    appName: string;
+    handler: string;
   }>;
   types: string;
   updatedAt: string | null;
@@ -798,6 +820,334 @@ export interface CommandDashboardMetadataInput {
   sort_order?: number;
   is_default?: boolean;
   layout?: CommandDashboardLayout;
+}
+
+export interface AgenticInterfacePlannerResult {
+  draft_spec: AgenticInterfaceSpec;
+  normalized_spec: AgenticInterfaceSpec;
+  validation: AgenticInterfaceValidationResult;
+  verification: AgenticInterfaceVerificationResult;
+  rationale: string[];
+  warnings: AgenticInterfaceWarning[];
+  dropped: AgenticInterfaceDroppedItem[];
+  planner: {
+    version: string;
+    policy: string;
+    context_summary: Record<string, unknown>;
+  };
+  inventory: {
+    surfaces_considered: number;
+    functions_considered: number;
+    context_sources_considered: number;
+    saved_dashboards_considered: number;
+    data_preview_rows?: number;
+  };
+  data_preview?: {
+    context: string;
+    sourceCount: number;
+    rowCount: number;
+    errors: string[];
+  };
+  persisted: boolean;
+}
+
+export interface AgenticInterfaceSummary {
+  id: string;
+  interface_key: string;
+  title: string;
+  description: string | null;
+  icon: string | null;
+  source_prompt: string | null;
+  mode: "saved";
+  status: "active" | "archived";
+  component_count: number;
+  action_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface StoredAgenticInterface extends AgenticInterfaceSummary {
+  stored_spec: AgenticInterfaceSpec;
+  normalized_spec: AgenticInterfaceSpec;
+  verification: AgenticInterfaceVerificationResult;
+  warnings: AgenticInterfaceWarning[];
+  dropped: AgenticInterfaceDroppedItem[];
+}
+
+export interface AgenticInterfaceSaveInput {
+  interface_key?: string;
+  title?: string | null;
+  description?: string | null;
+  icon?: string | null;
+  spec: AgenticInterfaceSpec;
+  source_prompt?: string | null;
+  status?: "active" | "archived";
+}
+
+export interface AgenticInterfaceBindingData {
+  binding_id: string;
+  source: AgenticInterfaceDataBindingSource;
+  label?: string;
+  status: "ok" | "error" | "skipped";
+  data: unknown;
+  raw?: unknown;
+  row_count?: number;
+  refreshed_at: string;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AgenticInterfaceDataResult {
+  spec_id: string;
+  title: string;
+  bindings: Record<string, AgenticInterfaceBindingData>;
+  binding_order: string[];
+  errors: string[];
+  row_count: number;
+  refreshed_at: string;
+}
+
+export interface AgenticInterfaceActionExecutionContext {
+  surfaceId?: string;
+  turnId: string;
+  componentId?: string;
+  confirmed?: boolean;
+}
+
+export interface AgenticInterfaceActionExecutionResult {
+  spec_id: string;
+  action_id: string;
+  kind: AgenticInterfaceAction["kind"];
+  mode: AgenticInterfaceAction["mode"];
+  confirmation?: AgenticInterfaceAction["confirmation"];
+  status: "ok" | "error" | "requires_confirmation" | "client_action_required";
+  result?: unknown;
+  error?: string;
+  refreshed_binding_ids?: string[];
+  open_widget?: {
+    app_id: string;
+    app_slug?: string;
+    widget_id: string;
+    context?: Record<string, string>;
+  };
+  widget_action?: {
+    app_id?: string;
+    app_slug?: string;
+    widget_id: string;
+    action_id: string;
+    surface_id?: string;
+    args: Record<string, unknown>;
+  };
+  selected_entity?: {
+    component_id?: string;
+    args: Record<string, unknown>;
+  };
+  audit: {
+    surface_id?: string;
+    interface_id: string;
+    action_id: string;
+    turn_id: string;
+    component_id?: string;
+  };
+  executed_at: string;
+}
+
+function parseMcpJsonContent<T>(result: McpToolResult): T {
+  if (result.isError) {
+    const message = result.content.find((entry) => entry.text)?.text || "Tool call failed";
+    throw new Error(message);
+  }
+  const text = result.content.find((entry) => entry.type === "text" && entry.text)?.text;
+  if (!text) throw new Error("Tool response did not include JSON content");
+  return JSON.parse(text) as T;
+}
+
+async function parseApiJsonOrThrow<T>(res: Response, fallback: string): Promise<T> {
+  if (res.ok) return await res.json() as T;
+  const body = await res.json().catch(() => null) as ApiError | null;
+  throw new Error(body?.error || body?.detail || `${fallback} (${res.status})`);
+}
+
+export async function generateCommandInterface(input: {
+  prompt: string;
+  mode?: "temporary" | "saved";
+  max_components?: number;
+  include_data_preview?: boolean;
+  app_id?: string;
+  app_slug?: string;
+  app_scope?: Record<string, unknown>;
+}): Promise<AgenticInterfacePlannerResult> {
+  const result = await executeMcpTool("ul.command", {
+    action: "interface",
+    prompt: input.prompt,
+    ...(input.mode ? { mode: input.mode } : {}),
+    ...(input.max_components ? { max_components: input.max_components } : {}),
+    ...(input.include_data_preview !== undefined
+      ? { include_data_preview: input.include_data_preview }
+      : {}),
+    ...(input.app_id ? { app_id: input.app_id } : {}),
+    ...(input.app_slug ? { app_slug: input.app_slug } : {}),
+    ...(input.app_scope ? { app_scope: input.app_scope } : {}),
+  });
+  return parseMcpJsonContent<AgenticInterfacePlannerResult>(result);
+}
+
+export async function fetchAgenticInterfaceData(input: {
+  spec: AgenticInterfaceSpec;
+  binding_ids?: string[];
+  query?: string;
+  max_rows_per_binding?: number;
+}): Promise<AgenticInterfaceDataResult> {
+  const result = await executeMcpTool("ul.command", {
+    action: "interface_data",
+    spec: input.spec,
+    ...(input.binding_ids?.length ? { binding_ids: input.binding_ids } : {}),
+    ...(input.query ? { query: input.query } : {}),
+    ...(input.max_rows_per_binding !== undefined
+      ? { max_rows_per_binding: input.max_rows_per_binding }
+      : {}),
+  });
+  return parseMcpJsonContent<AgenticInterfaceDataResult>(result);
+}
+
+export async function executeAgenticInterfaceAction(input: {
+  spec: AgenticInterfaceSpec;
+  action_id: string;
+  args?: Record<string, unknown>;
+  confirmed?: boolean;
+  surface_id?: string;
+  turn_id?: string;
+  component_id?: string;
+}): Promise<AgenticInterfaceActionExecutionResult> {
+  const result = await executeMcpTool("ul.command", {
+    action: "interface_action",
+    spec: input.spec,
+    action_id: input.action_id,
+    ...(input.args ? { args: input.args } : {}),
+    ...(input.confirmed !== undefined ? { confirmed: input.confirmed } : {}),
+    ...(input.surface_id ? { surface_id: input.surface_id } : {}),
+    ...(input.turn_id ? { turn_id: input.turn_id } : {}),
+    ...(input.component_id ? { component_id: input.component_id } : {}),
+  });
+  return parseMcpJsonContent<AgenticInterfaceActionExecutionResult>(result);
+}
+
+export async function fetchAgenticInterfaces(): Promise<AgenticInterfaceSummary[]> {
+  const token = getToken();
+  if (!token) return [];
+  const res = await fetchFromApi("/api/user/agentic-interfaces", {
+    headers: { "Authorization": `Bearer ${token}` },
+  });
+  const data = await parseApiJsonOrThrow<{ interfaces?: AgenticInterfaceSummary[] }>(
+    res,
+    "Failed to load saved interfaces",
+  );
+  return data.interfaces || [];
+}
+
+export async function fetchAgenticInterface(
+  interfaceKey: string,
+): Promise<StoredAgenticInterface> {
+  const token = getToken();
+  if (!token) throw new Error("Sign in to load saved interfaces");
+  const res = await fetchFromApi(
+    `/api/user/agentic-interfaces/${encodeURIComponent(interfaceKey)}`,
+    {
+      headers: { "Authorization": `Bearer ${token}` },
+    },
+  );
+  return await parseApiJsonOrThrow<StoredAgenticInterface>(
+    res,
+    "Failed to load saved interface",
+  );
+}
+
+export async function saveAgenticInterface(
+  input: AgenticInterfaceSaveInput,
+): Promise<StoredAgenticInterface> {
+  const token = getToken();
+  if (!token) throw new Error("Sign in to save generated interfaces");
+  const res = await fetchFromApi("/api/user/agentic-interfaces", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+  return await parseApiJsonOrThrow<StoredAgenticInterface>(
+    res,
+    "Failed to save generated interface",
+  );
+}
+
+export async function updateAgenticInterface(
+  interfaceKey: string,
+  input: Partial<AgenticInterfaceSaveInput>,
+): Promise<StoredAgenticInterface> {
+  const token = getToken();
+  if (!token) throw new Error("Sign in to update saved interfaces");
+  const res = await fetchFromApi(
+    `/api/user/agentic-interfaces/${encodeURIComponent(interfaceKey)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+  return await parseApiJsonOrThrow<StoredAgenticInterface>(
+    res,
+    "Failed to update saved interface",
+  );
+}
+
+export async function deleteAgenticInterface(
+  interfaceKey: string,
+): Promise<boolean> {
+  const token = getToken();
+  if (!token) return false;
+  const res = await fetchFromApi(
+    `/api/user/agentic-interfaces/${encodeURIComponent(interfaceKey)}`,
+    {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${token}` },
+    },
+  );
+  if (!res.ok) return false;
+  return true;
+}
+
+export function savedAgenticInterfaceToPlannerResult(
+  saved: StoredAgenticInterface,
+): AgenticInterfacePlannerResult {
+  return {
+    draft_spec: saved.stored_spec,
+    normalized_spec: saved.normalized_spec,
+    validation: saved.verification.validation,
+    verification: saved.verification,
+    rationale: [`Loaded saved interface "${saved.title}".`],
+    warnings: saved.warnings,
+    dropped: saved.dropped,
+    planner: {
+      version: "saved",
+      policy: "Saved verified specs are re-verified against current installed apps, widgets, context sources, and MCP functions on load.",
+      context_summary: {
+        interface_key: saved.interface_key,
+        status: saved.status,
+        updated_at: saved.updated_at,
+      },
+    },
+    inventory: {
+      surfaces_considered: 0,
+      functions_considered: 0,
+      context_sources_considered: 0,
+      saved_dashboards_considered: 0,
+    },
+    persisted: true,
+  };
 }
 
 export async function fetchCommandWidgets(): Promise<

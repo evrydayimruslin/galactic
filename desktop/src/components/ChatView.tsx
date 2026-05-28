@@ -52,6 +52,11 @@ import { dispatchAmbientSuggestions, useAmbientSuggestions } from '../hooks/useA
 import { createDesktopLogger } from '../lib/logging';
 import { openViewWindow } from '../lib/multiWindow';
 import type { AmbientSuggestion } from '../types/ambientSuggestion';
+import { subscribeAgenticSurfaces } from '../lib/widgetSurfaceRegistry';
+import {
+  buildActiveAgenticSurfaceContext,
+  type ActiveAgenticSurface,
+} from '../lib/widgetAgentTypes';
 
 /** Map flash broker's model suggestion to a real OpenRouter model ID */
 function resolveModelFromBroker(suggestion?: string): string | undefined {
@@ -187,6 +192,11 @@ export default function ChatView({
   preChatScopeRef.current = preChatScope;
   const activeAgentRef = useRef(activeAgent);
   activeAgentRef.current = activeAgent;
+  const activeAgenticSurfacesRef = useRef<ActiveAgenticSurface[]>([]);
+
+  useEffect(() => subscribeAgenticSurfaces((surfaces) => {
+    activeAgenticSurfacesRef.current = surfaces;
+  }), []);
 
   // Fetch all user apps for pre-chat scope dropdown (once)
   const preChatAppsFetchedRef = useRef(false);
@@ -603,6 +613,8 @@ export default function ChatView({
     const executeWindowSeconds = currentAgent?.execute_window_seconds ?? 8;
     const resolvedConversationId = conversationIdOverride || activeId || currentAgent?.conversation_id || assistantId;
     const inference = getInferencePreference() ?? undefined;
+    const activeWidgetContexts = activeAgenticSurfacesRef.current
+      .map(buildActiveAgenticSurfaceContext);
 
     // Attach pending files (from ChatInput)
     const chatFiles = pendingFilesRef.current || undefined;
@@ -623,6 +635,7 @@ export default function ChatView({
       userMessageId: userMsg.id,
       assistantMessageId: assistantId,
       files: chatFiles,
+      activeWidgetContexts: activeWidgetContexts.length > 0 ? activeWidgetContexts : undefined,
     })) {
       switch (event.type) {
         case 'ambient_suggestions':

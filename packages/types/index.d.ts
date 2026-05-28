@@ -14,6 +14,7 @@ import type {
 } from './generated/shared/contracts/runtime';
 
 export type * from './generated/shared/contracts/env';
+export type * from './generated/shared/contracts/agentic-interface';
 export type * from './generated/shared/contracts/jsonrpc';
 export type * from './generated/shared/contracts/manifest';
 export type * from './generated/shared/contracts/mcp';

@@ -12,6 +12,7 @@ import type {
   RoutineIndexEntry,
   WidgetIndexEntry,
 } from './codemode-tools.ts';
+import type { WidgetGenerationHints } from '../../shared/contracts/widget.ts';
 import { createD1DataService } from './d1-data.ts';
 import { parseStoredSkillsParsed } from './app-contracts.ts';
 
@@ -27,6 +28,7 @@ export interface FunctionIndex {
     returns: string;
     conventions: string[];
     dependsOn: string[];
+    generationHints?: WidgetGenerationHints;
   }>;
   widgets: WidgetIndexEntry[];
   contextSources: ContextSourceIndexEntry[];
@@ -240,6 +242,7 @@ export async function rebuildFunctionIndex(userId: string): Promise<FunctionInde
       returns: returnTypesMap[sanitizedName] || 'unknown',
       conventions: appConventions.get(mapping.appId) || [],
       dependsOn: [...new Set(dependsOn)], // deduplicate
+      ...(mapping.generationHints ? { generationHints: mapping.generationHints } : {}),
     };
   }
 
@@ -330,6 +333,16 @@ export async function getFunctionIndex(userId: string): Promise<FunctionIndex | 
   } catch {
     return null;
   }
+}
+
+/**
+ * Return the cached function index when available, rebuilding on demand when the
+ * user has not generated one yet. Command, Flash, and codemode all need the
+ * same "catalog or build" behavior.
+ */
+export async function getOrRebuildFunctionIndex(userId: string): Promise<FunctionIndex> {
+  const cached = await getFunctionIndex(userId);
+  return cached ?? await rebuildFunctionIndex(userId);
 }
 
 // ── Supabase Env Helper ──

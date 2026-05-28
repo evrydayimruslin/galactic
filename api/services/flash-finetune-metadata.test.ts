@@ -206,7 +206,10 @@ Deno.test("flash finetune metadata: input feature builder summarizes context wit
       },
       conversationSearch: true,
       contextQuery: "Sarah notes",
-      activeWidgetContexts: [{ surfaceId: "surface-1" }],
+      activeWidgetContexts: [
+        { surfaceId: "surface-1" },
+        { surfaceId: "surface-2", surfaceType: "generated_interface" },
+      ],
       activeWidgetContextBlock: "## Active Widget Context\n### Inbox\n",
     }),
     {
@@ -225,7 +228,8 @@ Deno.test("flash finetune metadata: input feature builder summarizes context wit
       conversation_search_requested: true,
       context_query_present: true,
       has_active_widget_context: true,
-      active_widget_context_count: 1,
+      active_widget_context_count: 2,
+      active_generated_interface_context_count: 1,
       active_widget_context_bytes: 35,
     },
   );
@@ -366,6 +370,7 @@ Deno.test("flash finetune metadata: invocation metadata builds a stable training
         context_query_present: false,
         has_active_widget_context: false,
         active_widget_context_count: 0,
+        active_generated_interface_context_count: 0,
         active_widget_context_bytes: 0,
       },
       output_labels: {

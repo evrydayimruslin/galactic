@@ -540,6 +540,13 @@ Deno.test("logExecutionResult records computed telemetry alongside the provided 
       actionId: "send_selected_draft",
       turnId: "turn-1",
     },
+    agenticSurfaceAction: {
+      surfaceId: "surface-generated",
+      interfaceId: "email_interface",
+      actionId: "send",
+      turnId: "turn-agentic-1",
+      componentId: "actions",
+    },
   }, {
     logMcpCallFn: (entry) => {
       logged = entry as unknown as Record<string, unknown>;
@@ -562,6 +569,13 @@ Deno.test("logExecutionResult records computed telemetry alongside the provided 
     widgetId: "email_inbox",
     actionId: "send_selected_draft",
     turnId: "turn-1",
+  });
+  assertEquals(loggedEntry.agenticSurfaceAction, {
+    surfaceId: "surface-generated",
+    interfaceId: "email_interface",
+    actionId: "send",
+    turnId: "turn-agentic-1",
+    componentId: "actions",
   });
   assertEquals(loggedEntry.method, "tools/call");
   assert(typeof loggedEntry.responseSizeBytes === "number");

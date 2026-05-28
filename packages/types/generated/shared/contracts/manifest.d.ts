@@ -1,14 +1,14 @@
-import type { EnvSchemaEntry } from './env.ts';
-import type { MCPTool, MCPToolAnnotations } from './mcp.ts';
-import type { RoutineDeclaration } from './routine.ts';
-import type { WidgetContextSourceDeclaration, WidgetDeclaration } from './widget.ts';
+import type { EnvSchemaEntry } from "./env.ts";
+import type { MCPTool, MCPToolAnnotations } from "./mcp.ts";
+import type { RoutineDeclaration } from "./routine.ts";
+import type { WidgetContextSourceDeclaration, WidgetDeclaration, WidgetGenerationHints } from "./widget.ts";
 export interface AppManifest {
     name: string;
     version: string;
     description?: string;
     author?: string;
     icon?: string;
-    type: 'mcp';
+    type: "mcp";
     entry: {
         functions?: string;
     };
@@ -21,10 +21,10 @@ export interface AppManifest {
     env_vars?: Record<string, ManifestEnvVar>;
     http?: ManifestHttpConfig;
 }
-export type ManifestHttpAuthMode = 'user' | 'public';
-export type ManifestHttpBillingMode = 'owner' | 'caller';
-export type ManifestHttpDataScope = 'app' | 'user';
-export type ManifestHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
+export type ManifestHttpAuthMode = "user" | "public";
+export type ManifestHttpBillingMode = "owner" | "caller";
+export type ManifestHttpDataScope = "app" | "user";
+export type ManifestHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
 export interface ManifestHttpConfig {
     defaults?: ManifestHttpRouteDefaults;
     routes?: Record<string, ManifestHttpRoutePolicy>;
@@ -56,9 +56,10 @@ export interface ManifestFunction {
     returns?: ManifestReturn;
     examples?: string[];
     annotations?: MCPToolAnnotations;
+    generation_hints?: WidgetGenerationHints;
 }
 export interface ManifestParameter {
-    type: 'string' | 'number' | 'boolean' | 'object' | 'array';
+    type: "string" | "number" | "boolean" | "object" | "array";
     description?: string;
     required?: boolean;
     default?: unknown;
@@ -67,17 +68,17 @@ export interface ManifestParameter {
     properties?: Record<string, ManifestParameter>;
 }
 export interface ManifestReturn {
-    type: 'string' | 'number' | 'boolean' | 'object' | 'array' | 'void';
+    type: "string" | "number" | "boolean" | "object" | "array" | "void";
     description?: string;
 }
 export interface ManifestEnvVar {
     description?: string;
     required?: boolean;
     default?: string;
-    scope?: EnvSchemaEntry['scope'];
-    type?: EnvSchemaEntry['scope'];
+    scope?: EnvSchemaEntry["scope"];
+    type?: EnvSchemaEntry["scope"];
     label?: string;
-    input?: EnvSchemaEntry['input'];
+    input?: EnvSchemaEntry["input"];
     placeholder?: string;
     help?: string;
 }

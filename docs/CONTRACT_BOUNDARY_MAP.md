@@ -10,6 +10,9 @@ Canonical shared source lives under `shared/contracts/*`.
 
 Current Wave 3 families:
 
+- `shared/contracts/agentic-interface.ts`
+  Generated Command interface specs, native component/data/action bindings, and
+  spec validation helpers.
 - `shared/contracts/jsonrpc.ts`
   JSON-RPC request/response ids, envelopes, and error objects used by MCP and
   SDK clients.

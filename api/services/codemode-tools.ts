@@ -21,6 +21,7 @@ import type {
   WidgetContextSourceDeclaration,
   WidgetDeclaration,
   WidgetDependencyDeclaration,
+  WidgetGenerationHints,
 } from '../../shared/contracts/widget.ts';
 
 // ── Types ──
@@ -51,6 +52,7 @@ export interface ToolMapping {
   appName: string;
   appSlug: string;
   fnName: string;
+  generationHints?: WidgetGenerationHints;
 }
 
 export interface WidgetCardIndexEntry {
@@ -64,6 +66,7 @@ export interface WidgetCardIndexEntry {
   dataFunction?: string;
   refreshIntervalS?: number;
   dependencies?: WidgetDependencyDeclaration[];
+  generationHints?: WidgetGenerationHints;
 }
 
 export interface WidgetIndexEntry {
@@ -76,6 +79,7 @@ export interface WidgetIndexEntry {
   uiFunction: string;
   dataFunction: string;
   dependencies?: WidgetDependencyDeclaration[];
+  generationHints?: WidgetGenerationHints;
   agentic?: boolean;
   contextFunction?: string;
   actionsFunction?: string;
@@ -99,6 +103,7 @@ export interface ContextSourceIndexEntry {
   query?: string;
   function?: string;
   redactions?: WidgetContextRedaction[];
+  generationHints?: WidgetGenerationHints;
 }
 
 export interface RoutineIndexEntry {
@@ -161,6 +166,7 @@ function normalizeWidgetCard(
       ? { refreshIntervalS: card.refresh_interval_s }
       : {}),
     ...(card.dependencies?.length ? { dependencies: card.dependencies } : {}),
+    ...(card.generation_hints ? { generationHints: card.generation_hints } : {}),
   };
 }
 
@@ -179,6 +185,7 @@ export function buildWidgetIndexForApp(app: AppForCodemode): WidgetIndexEntry[] 
       uiFunction: widgetUiFunction(widget),
       dataFunction: widgetDataFunction(widget),
       ...(widget.dependencies?.length ? { dependencies: widget.dependencies } : {}),
+      ...(widget.generation_hints ? { generationHints: widget.generation_hints } : {}),
       ...(typeof widget.agentic === 'boolean' ? { agentic: widget.agentic } : {}),
       ...(widget.context_function ? { contextFunction: widget.context_function } : {}),
       ...(widget.actions_function ? { actionsFunction: widget.actions_function } : {}),
@@ -229,6 +236,7 @@ export function buildContextSourceIndexForApp(app: AppForCodemode): ContextSourc
       ...(source.query ? { query: source.query } : {}),
       ...(source.function ? { function: source.function } : {}),
       ...(source.redactions?.length ? { redactions: source.redactions } : {}),
+      ...(source.generation_hints ? { generationHints: source.generation_hints } : {}),
     });
   }
   return sources;
@@ -408,6 +416,7 @@ export function buildJsonSchemaDescriptors(apps: AppForCodemode[]): {
         appName: app.name,
         appSlug: app.slug,
         fnName,
+        ...(fn.generation_hints ? { generationHints: fn.generation_hints } : {}),
       };
     }
 
