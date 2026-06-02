@@ -8,6 +8,7 @@ import { authenticate } from "./auth.ts";
 import { appStoreUrl, deepLinkAppUrl, downloadUrl } from "../lib/urls.ts";
 import { handleApps } from "./apps.ts";
 import { handleUser } from "./user.ts";
+import { handleLaunch } from "./launch.ts";
 import { handleMcp, handleMcpDiscovery } from "./mcp.ts";
 import {
   handlePlatformMcp,
@@ -646,6 +647,11 @@ export function createApp() {
       // Stripe webhook route — unauthenticated, verified by signature
       if (path === "/api/webhooks/stripe" && method === "POST") {
         return handleUser(request);
+      }
+
+      // Launch MVP facade - thin public/auth APIs for the external-agent-first site.
+      if (path.startsWith("/api/launch")) {
+        return handleLaunch(request);
       }
 
       // Marketplace API routes — authenticated bid/ask/accept endpoints
