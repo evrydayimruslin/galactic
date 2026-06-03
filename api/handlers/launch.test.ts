@@ -72,6 +72,111 @@ Deno.test('launch facade: install instructions expose MCP and CLI targets', asyn
   });
 });
 
+Deno.test('launch facade: install can include tool-specific handoff', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request(
+          'https://ultralight.test/api/launch/install?tool=deploy-helper',
+        ),
+      );
+      const body = await response.json() as {
+        toolInstall?: {
+          selectedToolSlug: string;
+          publicToolUrl: string;
+          platformMcpUrl: string;
+          recommendedApiKey: {
+            scopes?: string[];
+            appIds?: string[];
+          };
+          widgetUrls: Array<{ id: string; openUrl: string; renderUrl?: string | null }>;
+          agentHandoff: string[];
+        } | null;
+      };
+
+      assertEquals(response.status, 200);
+      assertEquals(body.toolInstall?.selectedToolSlug, 'deploy-helper');
+      assertEquals(
+        body.toolInstall?.publicToolUrl,
+        'https://ultralight.test/tools/deploy-helper',
+      );
+      assertEquals(
+        body.toolInstall?.platformMcpUrl,
+        'https://ultralight.test/mcp/platform',
+      );
+      assertEquals(body.toolInstall?.recommendedApiKey.scopes, [
+        'apps:call',
+      ]);
+      assertEquals(body.toolInstall?.recommendedApiKey.appIds, ['app-1']);
+      assertEquals(body.toolInstall?.widgetUrls[0].id, 'ops');
+      assertEquals(
+        body.toolInstall?.widgetUrls[0].renderUrl,
+        'https://ultralight.test/api/launch/tools/deploy-helper/widgets/ops/render',
+      );
+      assertStringIncludes(
+        body.toolInstall?.agentHandoff.join('\n') || '',
+        'receipt_id',
+      );
+    },
+    async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+        return jsonResponse([
+          {
+            id: 'app-1',
+            owner_id: 'owner-1',
+            slug: 'deploy-helper',
+            name: 'Deploy Helper',
+            description: 'Deploy tools for existing agents',
+            visibility: 'public',
+            download_access: 'public',
+            current_version: 'v1',
+            manifest: {
+              widgets: [{
+                id: 'ops',
+                label: 'Ops',
+                description: 'Operations widget',
+                ui_function: 'widget_ops_ui',
+                data_function: 'widget_ops_data',
+              }],
+            },
+            exports: ['widget_ops_ui', 'widget_ops_data'],
+            pricing_config: {},
+            gpu_pricing_config: null,
+            runtime: 'deno',
+            gpu_status: null,
+            gpu_type: null,
+            version_metadata: [],
+            env_schema: {},
+            tags: ['deploy'],
+            category: 'devtools',
+            likes: 0,
+            dislikes: 0,
+            weighted_likes: 0,
+            weighted_dislikes: 0,
+            total_runs: 0,
+            runs_30d: 0,
+            hosting_suspended: false,
+            updated_at: '2026-06-01T00:00:00.000Z',
+            created_at: '2026-06-01T00:00:00.000Z',
+          },
+        ]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+        return jsonResponse([
+          {
+            id: 'owner-1',
+            display_name: 'Ada',
+            profile_slug: 'ada',
+            avatar_url: null,
+          },
+        ]);
+      }
+      return jsonResponse([]);
+    },
+  );
+});
+
 Deno.test('launch facade: status exposes self-describing agent links', async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
@@ -94,6 +199,21 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
       body.apiRoutes.includes('GET /api/launch/openapi.json'),
       true,
     );
+    assertEquals(
+      body.apiRoutes.includes('POST /api/launch/api-keys'),
+      true,
+    );
+    assertEquals(
+      body.apiRoutes.includes(
+        'POST /api/launch/tools/:id/widgets/:widgetId/render',
+      ),
+      true,
+    );
+    assertEquals(body.endpoints.apiKeys, '/api/launch/api-keys');
+    assertEquals(
+      body.endpoints.widgetRender,
+      '/api/launch/tools/{id}/widgets/{widgetId}/render',
+    );
     assertEquals(body.capabilities.deferred.includes('desktop'), true);
   });
 });
@@ -107,7 +227,10 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
       openapi: string;
       servers: Array<{ url: string }>;
       paths: Record<string, unknown>;
-      components?: { securitySchemes?: Record<string, unknown> };
+      components?: {
+        securitySchemes?: Record<string, unknown>;
+        schemas?: Record<string, unknown>;
+      };
       'x-launch-scope'?: { deferredCapabilities?: string[] };
     };
 
@@ -115,13 +238,154 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
     assertEquals(spec.openapi, '3.1.0');
     assertEquals(spec.servers[0].url, 'https://ultralight.test');
     assertEquals(Boolean(spec.paths['/api/launch/discover']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/api-keys']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/api-keys/{id}']), true);
+    assertEquals(
+      Boolean(spec.paths['/api/launch/tools/{id}/widgets/{widgetId}']),
+      true,
+    );
+    assertEquals(
+      Boolean(spec.paths['/api/launch/tools/{id}/widgets/{widgetId}/render']),
+      true,
+    );
     assertEquals(Boolean(spec.paths['/api/launch/status']), true);
     assertEquals(Boolean(spec.paths['/mcp/platform']), true);
     assertEquals(Boolean(spec.components?.securitySchemes?.bearerAuth), true);
+    assertEquals(Boolean(spec.components?.schemas?.ApiKeySummary), true);
+    assertEquals(Boolean(spec.components?.schemas?.TrustCard), true);
+    assertEquals(Boolean(spec.components?.schemas?.WidgetDetail), true);
+    assertEquals(Boolean(spec.components?.schemas?.WidgetRenderResponse), true);
+    assertEquals(Boolean(spec.components?.schemas?.WalletSummary), true);
     assertEquals(
       spec['x-launch-scope']?.deferredCapabilities?.includes('desktop'),
       true,
     );
+  });
+});
+
+Deno.test('launch facade: widget detail exposes render surface metadata', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request(
+          'https://ultralight.test/api/launch/tools/deploy-helper/widgets/ops',
+        ),
+      );
+      const body = await response.json() as {
+        tool: { slug: string };
+        widget: {
+          summary: {
+            id: string;
+            detailUrl?: string;
+            renderUrl?: string;
+          };
+          functions: {
+            uiFunction?: string | null;
+            dataFunction?: string | null;
+          };
+          renderSurface?: { htmlField?: string; authRequired?: boolean } | null;
+        };
+      };
+
+      assertEquals(response.status, 200);
+      assertEquals(body.tool.slug, 'deploy-helper');
+      assertEquals(body.widget.summary.id, 'ops');
+      assertEquals(
+        body.widget.summary.detailUrl,
+        '/api/launch/tools/deploy-helper/widgets/ops',
+      );
+      assertEquals(
+        body.widget.summary.renderUrl,
+        '/api/launch/tools/deploy-helper/widgets/ops/render',
+      );
+      assertEquals(body.widget.functions.uiFunction, 'widget_ops_ui');
+      assertEquals(body.widget.functions.dataFunction, 'widget_ops_data');
+      assertEquals(body.widget.renderSurface?.htmlField, 'app_html');
+      assertEquals(body.widget.renderSurface?.authRequired, true);
+    },
+    async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+        return jsonResponse([
+          {
+            id: 'app-1',
+            owner_id: 'owner-1',
+            slug: 'deploy-helper',
+            name: 'Deploy Helper',
+            description: 'Deploy tools for existing agents',
+            visibility: 'public',
+            download_access: 'public',
+            current_version: 'v1',
+            manifest: {
+              widgets: [{
+                id: 'ops',
+                label: 'Ops',
+                description: 'Operations widget',
+                ui_function: 'widget_ops_ui',
+                data_function: 'widget_ops_data',
+              }],
+            },
+            exports: ['widget_ops_ui', 'widget_ops_data'],
+            pricing_config: {},
+            gpu_pricing_config: null,
+            runtime: 'deno',
+            gpu_status: null,
+            gpu_type: null,
+            version_metadata: [],
+            env_schema: {},
+            tags: ['deploy'],
+            category: 'devtools',
+            likes: 0,
+            dislikes: 0,
+            weighted_likes: 0,
+            weighted_dislikes: 0,
+            total_runs: 0,
+            runs_30d: 0,
+            hosting_suspended: false,
+            updated_at: '2026-06-01T00:00:00.000Z',
+            created_at: '2026-06-01T00:00:00.000Z',
+          },
+        ]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+        return jsonResponse([
+          {
+            id: 'owner-1',
+            display_name: 'Ada',
+            profile_slug: 'ada',
+            avatar_url: null,
+          },
+        ]);
+      }
+      return jsonResponse([]);
+    },
+  );
+});
+
+Deno.test('launch facade: widget render requires authentication', async () => {
+  await withLaunchEnv(async () => {
+    const response = await handleLaunch(
+      new Request(
+        'https://ultralight.test/api/launch/tools/deploy-helper/widgets/ops/render',
+        { method: 'POST' },
+      ),
+    );
+    const body = await response.json() as { error?: string };
+
+    assertEquals(response.status, 401);
+    assertEquals(body.error, 'Authentication required');
+  });
+});
+
+Deno.test('launch facade: API key metadata requires authentication', async () => {
+  await withLaunchEnv(async () => {
+    const response = await handleLaunch(
+      new Request('https://ultralight.test/api/launch/api-keys'),
+    );
+    const body = await response.json() as { error?: string };
+
+    assertEquals(response.status, 401);
+    assertEquals(body.error, 'Authentication required');
   });
 });
 

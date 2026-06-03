@@ -2,6 +2,7 @@
 // Thin MVP-facing endpoints for the external-agent-first website.
 
 import { authenticate } from './auth.ts';
+import { handleRun } from './run.ts';
 import { error, json } from './response.ts';
 import { getEnv } from '../lib/env.ts';
 import {
@@ -12,6 +13,9 @@ import { isGpuSupportEnabled, sanitizeGpuTrustCard } from '../services/gpu/featu
 import { buildAppTrustCard } from '../services/trust.ts';
 import { RequestValidationError } from '../services/request-validation.ts';
 import { createEmbeddingService } from '../services/embedding.ts';
+import { getRecentCalls } from '../services/call-logger.ts';
+import { type ApiToken, createToken, listTokens, revokeToken } from '../services/tokens.ts';
+import { withSensitiveRouteRateLimit } from '../services/sensitive-route-rate-limit.ts';
 import {
   LAUNCH_API_ROUTES,
   LAUNCH_DEFERRED_CAPABILITIES,
@@ -21,10 +25,13 @@ import {
   LAUNCH_PLATFORM_PRIMITIVES,
   LAUNCH_PUBLIC_ROUTES,
   LAUNCH_SCOPE_CONTRACT,
+  type LaunchApiKeyCreateRequest,
+  type LaunchApiKeySummary,
   type LaunchApiRoute,
   type LaunchDiscoveryRetrievalSummary,
   type LaunchDiscoverySource,
   type LaunchInstallInstruction,
+  type LaunchInstallResponse,
   type LaunchLeaderboardEntry,
   type LaunchLeaderboardKind,
   type LaunchLeaderboardResponse,
@@ -36,16 +43,24 @@ import {
   type LaunchPublicRoute,
   type LaunchRelevanceSummary,
   type LaunchToolAdminSummary,
+  type LaunchToolInstallContext,
   type LaunchToolKind,
   type LaunchToolOwnerSummary,
   type LaunchToolRelationship,
   type LaunchToolSummary,
   type LaunchToolVisibility,
+  type LaunchTrustCard,
+  type LaunchWalletEarningSummary,
+  type LaunchWalletPayoutSummary,
+  type LaunchWalletReceiptSummary,
   type LaunchWalletSummary,
+  type LaunchWalletTransaction,
+  type LaunchWidgetDetail,
   type LaunchWidgetSummary,
 } from '../../shared/contracts/launch.ts';
 import type { AppManifest } from '../../shared/contracts/manifest.ts';
 import type { WidgetDeclaration } from '../../shared/contracts/widget.ts';
+import type { RunResponse } from '../../shared/types/index.ts';
 
 const APP_SELECT = [
   'id',
@@ -89,6 +104,7 @@ const DEFAULT_DISCOVERY_LIMIT = 24;
 interface AuthUser {
   id: string;
   email?: string;
+  authSource?: string;
 }
 
 interface LaunchAppRow {
@@ -142,6 +158,34 @@ interface WalletRow {
   stripe_connect_account_id?: string | null;
   stripe_connect_onboarded?: boolean | null;
   stripe_connect_payouts_enabled?: boolean | null;
+}
+
+interface BillingTransactionRow {
+  id: string;
+  type: string | null;
+  category: string | null;
+  description: string | null;
+  amount_light: number | null;
+  balance_after_light?: number | null;
+  app_id?: string | null;
+  app_name?: string | null;
+  created_at?: string | null;
+}
+
+interface TransferRow {
+  amount_light: number | null;
+  app_id?: string | null;
+  function_name?: string | null;
+  reason?: string | null;
+  created_at?: string | null;
+}
+
+interface PayoutRow {
+  id: string;
+  amount_light: number | null;
+  status: string | null;
+  created_at?: string | null;
+  completed_at?: string | null;
 }
 
 interface BuilderLeaderboardRpcRow {
@@ -262,7 +306,7 @@ const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
     label: 'API keys',
     description: 'Create API tokens for MCP, CLI, and direct API access.',
     route: '/settings',
-    apiRoute: 'GET /api/launch/install',
+    apiRoute: 'GET /api/launch/api-keys',
   },
   owner_admin: {
     label: 'Owner admin',
@@ -287,11 +331,29 @@ export async function handleLaunch(request: Request): Promise<Response> {
   const path = url.pathname;
   const method = request.method;
 
-  if (method !== 'GET') {
-    return error('Launch API is read-only in this MVP facade', 405);
-  }
-
   try {
+    if (path === '/api/launch/api-keys' || path.startsWith('/api/launch/api-keys/')) {
+      return await handleLaunchApiKeys(request, path, method);
+    }
+
+    const widgetRenderMatch = path.match(
+      /^\/api\/launch\/tools\/([^/]+)\/widgets\/([^/]+)\/render$/,
+    );
+    if (widgetRenderMatch) {
+      if (method !== 'POST') {
+        return error('Method not allowed for launch widget render', 405);
+      }
+      return await handleLaunchWidgetRender(
+        request,
+        widgetRenderMatch[1],
+        widgetRenderMatch[2],
+      );
+    }
+
+    if (method !== 'GET') {
+      return error('Launch API is read-only in this MVP facade', 405);
+    }
+
     if (path === '/api/launch/status') {
       return json(buildLaunchStatus(request));
     }
@@ -301,7 +363,7 @@ export async function handleLaunch(request: Request): Promise<Response> {
     }
 
     if (path === '/api/launch/install') {
-      return json({ instructions: buildInstallInstructions(request) });
+      return json(await buildLaunchInstallResponse(request, url));
     }
 
     if (path === '/api/launch/platform-primitives') {
@@ -332,6 +394,17 @@ export async function handleLaunch(request: Request): Promise<Response> {
     const adminToolMatch = path.match(/^\/api\/launch\/admin\/tools\/([^/]+)$/);
     if (adminToolMatch) {
       return await handleLaunchToolAdmin(request, adminToolMatch[1]);
+    }
+
+    const widgetDetailMatch = path.match(
+      /^\/api\/launch\/tools\/([^/]+)\/widgets\/([^/]+)$/,
+    );
+    if (widgetDetailMatch) {
+      return await handleLaunchWidgetDetail(
+        request,
+        widgetDetailMatch[1],
+        widgetDetailMatch[2],
+      );
     }
 
     const widgetsMatch = path.match(/^\/api\/launch\/tools\/([^/]+)\/widgets$/);
@@ -376,7 +449,10 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       status: '/api/launch/status',
       openapi: '/api/launch/openapi.json',
       install: '/api/launch/install',
+      apiKeys: '/api/launch/api-keys',
       discover: '/api/launch/discover?query={query}',
+      widgetDetail: '/api/launch/tools/{id}/widgets/{widgetId}',
+      widgetRender: '/api/launch/tools/{id}/widgets/{widgetId}/render',
       platformPrimitives: '/api/launch/platform-primitives?q={query}',
       leaderboard: '/api/launch/leaderboard?kind=builder&period=30d',
       mcpPlatform: '/mcp/platform',
@@ -447,19 +523,128 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
         get: {
           operationId: 'getLaunchInstallInstructions',
           summary: 'Get MCP, CLI, and direct API install instructions',
+          parameters: [
+            queryParam(
+              'tool',
+              { type: 'string', maxLength: 200 },
+              'Optional public tool id or slug for a tool-specific install handoff',
+            ),
+          ],
           responses: {
             '200': {
-              description: 'Copyable launch install instructions',
+              description:
+                'Copyable launch install instructions and optional tool-specific install context',
               content: jsonContent({
                 type: 'object',
+                required: ['instructions', 'generatedAt'],
                 properties: {
                   instructions: {
                     type: 'array',
                     items: { $ref: '#/components/schemas/InstallInstruction' },
                   },
+                  toolInstall: {
+                    oneOf: [
+                      { $ref: '#/components/schemas/ToolInstallContext' },
+                      { type: 'null' },
+                    ],
+                  },
+                  generatedAt: { type: 'string', format: 'date-time' },
                 },
               }),
             },
+            '404': { description: 'Requested install tool not found' },
+          },
+        },
+      },
+      '/api/launch/api-keys': {
+        get: {
+          operationId: 'listLaunchApiKeys',
+          summary: 'List authenticated launch API keys',
+          description:
+            'Returns API key metadata only. Full tokens are never returned from list responses.',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': {
+              description: 'API key metadata',
+              content: jsonContent({
+                type: 'object',
+                required: ['apiKeys', 'generatedAt'],
+                properties: {
+                  apiKeys: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/ApiKeySummary' },
+                  },
+                  generatedAt: { type: 'string', format: 'date-time' },
+                },
+              }),
+            },
+            '401': { description: 'Authentication required' },
+          },
+        },
+        post: {
+          operationId: 'createLaunchApiKey',
+          summary: 'Create a reveal-once API key for external agents',
+          description:
+            'Creates a salted-hash API token. The plaintext token is returned only in this response.',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: jsonContent({ $ref: '#/components/schemas/ApiKeyCreateRequest' }),
+          },
+          responses: {
+            '200': {
+              description: 'Reveal-once API key payload',
+              content: jsonContent({
+                type: 'object',
+                required: [
+                  'success',
+                  'apiKey',
+                  'plaintextToken',
+                  'message',
+                  'generatedAt',
+                ],
+                properties: {
+                  success: { type: 'boolean', const: true },
+                  apiKey: { $ref: '#/components/schemas/ApiKeySummary' },
+                  plaintextToken: { type: 'string' },
+                  message: { type: 'string' },
+                  generatedAt: { type: 'string', format: 'date-time' },
+                },
+              }),
+            },
+            '400': { description: 'Invalid API key request' },
+            '401': { description: 'Authentication required' },
+            '409': { description: 'API key name already exists' },
+          },
+        },
+      },
+      '/api/launch/api-keys/{id}': {
+        delete: {
+          operationId: 'revokeLaunchApiKey',
+          summary: 'Revoke an authenticated launch API key',
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string' },
+            description: 'API key id',
+          }],
+          responses: {
+            '200': {
+              description: 'API key revoked',
+              content: jsonContent({
+                type: 'object',
+                required: ['success', 'revokedId', 'message', 'generatedAt'],
+                properties: {
+                  success: { type: 'boolean', const: true },
+                  revokedId: { type: 'string' },
+                  message: { type: 'string' },
+                  generatedAt: { type: 'string', format: 'date-time' },
+                },
+              }),
+            },
+            '401': { description: 'Authentication required' },
           },
         },
       },
@@ -540,7 +725,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                 type: 'object',
                 properties: {
                   tool: { $ref: '#/components/schemas/ToolSummary' },
-                  trustCard: { type: 'object' },
+                  trustCard: { $ref: '#/components/schemas/TrustCard' },
                 },
               }),
             },
@@ -573,6 +758,87 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                 },
               }),
             },
+          },
+        },
+      },
+      '/api/launch/tools/{id}/widgets/{widgetId}': {
+        get: {
+          operationId: 'getLaunchWidgetDetail',
+          summary: 'Inspect a public widget surface for a tool',
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+              description: 'Tool id or slug',
+            },
+            {
+              name: 'widgetId',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+              description: 'Widget id from the tool manifest',
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'Widget detail and render surface',
+              content: jsonContent({
+                type: 'object',
+                properties: {
+                  tool: { type: 'object' },
+                  widget: { $ref: '#/components/schemas/WidgetDetail' },
+                  generatedAt: { type: 'string', format: 'date-time' },
+                },
+              }),
+            },
+            '404': { description: 'Tool or widget not found' },
+          },
+        },
+      },
+      '/api/launch/tools/{id}/widgets/{widgetId}/render': {
+        post: {
+          operationId: 'renderLaunchWidget',
+          summary: 'Render a widget UI through the existing app runtime',
+          description:
+            'Authenticated render endpoint. Calls the widget UI function through the existing runtime, billing, secret, and receipt path; website clients should sandbox returned HTML in an iframe.',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+              description: 'Tool id or slug',
+            },
+            {
+              name: 'widgetId',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+              description: 'Widget id from the tool manifest',
+            },
+          ],
+          requestBody: {
+            required: false,
+            content: jsonContent({
+              type: 'object',
+              properties: {
+                args: { type: 'object', additionalProperties: true },
+              },
+            }),
+          },
+          responses: {
+            '200': {
+              description: 'Rendered widget HTML payload',
+              content: jsonContent({
+                $ref: '#/components/schemas/WidgetRenderResponse',
+              }),
+            },
+            '401': { description: 'Authentication required' },
+            '402': { description: 'Light balance required by runtime billing' },
+            '404': { description: 'Tool or widget not found' },
           },
         },
       },
@@ -615,7 +881,16 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             description: 'Owned tool id or slug',
           }],
           responses: {
-            '200': { description: 'Tool admin summary' },
+            '200': {
+              description: 'Tool admin summary',
+              content: jsonContent({
+                type: 'object',
+                properties: {
+                  admin: { type: 'object' },
+                  trustCard: { $ref: '#/components/schemas/TrustCard' },
+                },
+              }),
+            },
             '401': { description: 'Authentication required' },
             '404': { description: 'Tool not found or not owned' },
           },
@@ -627,7 +902,16 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           summary: 'Get authenticated Light balance and payout status',
           security: [{ bearerAuth: [] }],
           responses: {
-            '200': { description: 'Light wallet summary' },
+            '200': {
+              description: 'Light wallet summary and recent wallet rows',
+              content: jsonContent({
+                type: 'object',
+                properties: {
+                  wallet: { $ref: '#/components/schemas/WalletSummary' },
+                  generatedAt: { type: 'string', format: 'date-time' },
+                },
+              }),
+            },
             '401': { description: 'Authentication required' },
           },
         },
@@ -716,6 +1000,78 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             requiresApiKey: { type: 'boolean' },
           },
         },
+        ToolInstallContext: {
+          type: 'object',
+          required: [
+            'tool',
+            'selectedToolSlug',
+            'publicToolUrl',
+            'installUrl',
+            'platformMcpUrl',
+            'recommendedApiKey',
+            'widgetUrls',
+            'agentHandoff',
+          ],
+          properties: {
+            tool: { $ref: '#/components/schemas/ToolSummary' },
+            selectedToolSlug: { type: 'string' },
+            publicToolUrl: { type: 'string' },
+            installUrl: { type: 'string' },
+            platformMcpUrl: { type: 'string' },
+            recommendedApiKey: {
+              $ref: '#/components/schemas/ApiKeyCreateRequest',
+            },
+            widgetUrls: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  label: { type: 'string' },
+                  openUrl: { type: 'string' },
+                  renderUrl: { type: ['string', 'null'] },
+                },
+              },
+            },
+            agentHandoff: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        ApiKeySummary: {
+          type: 'object',
+          required: ['id', 'name', 'tokenPrefix', 'scopes', 'createdAt'],
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            tokenPrefix: { type: 'string' },
+            scopes: { type: 'array', items: { type: 'string' } },
+            appIds: {
+              type: ['array', 'null'],
+              items: { type: 'string' },
+            },
+            functionNames: {
+              type: ['array', 'null'],
+              items: { type: 'string' },
+            },
+            lastUsedAt: { type: ['string', 'null'], format: 'date-time' },
+            expiresAt: { type: ['string', 'null'], format: 'date-time' },
+            createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        ApiKeyCreateRequest: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 50 },
+            expiresInDays: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 365,
+            },
+            scopes: { type: 'array', items: { type: 'string' } },
+            appIds: { type: 'array', items: { type: 'string' } },
+            functionNames: { type: 'array', items: { type: 'string' } },
+          },
+        },
         ToolSummary: {
           type: 'object',
           properties: {
@@ -738,6 +1094,66 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             relevance: { $ref: '#/components/schemas/Relevance' },
           },
         },
+        TrustCard: {
+          type: 'object',
+          required: [
+            'schema_version',
+            'signed_manifest',
+            'runtime',
+            'artifact_count',
+            'permissions',
+            'capability_summary',
+            'required_secrets',
+            'per_user_secrets',
+            'access',
+            'execution_receipts',
+          ],
+          properties: {
+            schema_version: { type: 'integer', const: 1 },
+            signed_manifest: { type: 'boolean' },
+            signer: { type: ['string', 'null'] },
+            signed_at: { type: ['string', 'null'], format: 'date-time' },
+            version: { type: ['string', 'null'] },
+            runtime: { type: 'string' },
+            manifest_hash: { type: ['string', 'null'] },
+            artifact_hash: { type: ['string', 'null'] },
+            artifact_count: { type: 'integer', minimum: 0 },
+            permissions: { type: 'array', items: { type: 'string' } },
+            capability_summary: {
+              type: 'object',
+              required: ['ai', 'network', 'storage', 'memory', 'gpu'],
+              properties: {
+                ai: { type: 'boolean' },
+                network: { type: 'boolean' },
+                storage: { type: 'boolean' },
+                memory: { type: 'boolean' },
+                gpu: { type: 'boolean' },
+              },
+            },
+            required_secrets: { type: 'array', items: { type: 'string' } },
+            per_user_secrets: { type: 'array', items: { type: 'string' } },
+            access: {
+              type: 'object',
+              properties: {
+                visibility: {
+                  type: 'string',
+                  enum: ['public', 'private', 'unlisted'],
+                },
+                download_access: { type: ['string', 'null'] },
+              },
+            },
+            reliability: {},
+            execution_receipts: {
+              type: 'object',
+              required: ['enabled', 'field', 'backing_log'],
+              properties: {
+                enabled: { type: 'boolean', const: true },
+                field: { type: 'string', const: 'receipt_id' },
+                backing_log: { type: 'string', const: 'mcp_call_logs.id' },
+              },
+            },
+          },
+        },
         WidgetSummary: {
           type: 'object',
           properties: {
@@ -747,6 +1163,96 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             public: { type: 'boolean' },
             previewAvailable: { type: 'boolean' },
             openUrl: { type: ['string', 'null'] },
+            detailUrl: { type: ['string', 'null'] },
+            renderUrl: { type: ['string', 'null'] },
+          },
+        },
+        WidgetDetail: {
+          type: 'object',
+          properties: {
+            summary: { $ref: '#/components/schemas/WidgetSummary' },
+            functions: {
+              type: 'object',
+              properties: {
+                uiFunction: { type: ['string', 'null'] },
+                dataFunction: { type: ['string', 'null'] },
+                dataTool: { type: ['string', 'null'] },
+              },
+            },
+            pollIntervalSeconds: { type: ['number', 'null'] },
+            dependencies: { type: 'array', items: {} },
+            renderSurface: {
+              type: ['object', 'null'],
+              properties: {
+                mode: { type: 'string', const: 'runtime_function' },
+                endpoint: {
+                  type: 'string',
+                  const: 'POST /api/launch/tools/:id/widgets/:widgetId/render',
+                },
+                method: { type: 'string', const: 'POST' },
+                authRequired: { type: 'boolean', const: true },
+                uiFunction: { type: 'string' },
+                dataFunction: { type: ['string', 'null'] },
+                dataTool: { type: ['string', 'null'] },
+                htmlField: { type: 'string', const: 'app_html' },
+                sandbox: { type: 'object' },
+              },
+            },
+          },
+        },
+        WidgetRenderResponse: {
+          type: 'object',
+          required: ['success', 'tool', 'widget', 'render', 'generatedAt'],
+          properties: {
+            success: { type: 'boolean' },
+            tool: { type: 'object' },
+            widget: { type: 'object' },
+            render: {
+              type: ['object', 'null'],
+              properties: {
+                html: { type: 'string' },
+                meta: { type: ['object', 'null'] },
+                version: { type: ['string', 'null'] },
+                rawResult: {},
+                receiptId: { type: ['string', 'null'] },
+                durationMs: { type: ['number', 'null'] },
+              },
+            },
+            error: { type: ['object', 'null'] },
+            generatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        WalletSummary: {
+          type: 'object',
+          properties: {
+            balance: { $ref: '#/components/schemas/MoneyAmount' },
+            spendableBalance: { $ref: '#/components/schemas/MoneyAmount' },
+            depositBalance: { $ref: '#/components/schemas/MoneyAmount' },
+            earnedBalance: { $ref: '#/components/schemas/MoneyAmount' },
+            escrowBalance: { $ref: '#/components/schemas/MoneyAmount' },
+            canTopUp: { type: 'boolean' },
+            topUpUrl: { type: ['string', 'null'] },
+            transactionsUrl: { type: ['string', 'null'] },
+            receiptsUrl: { type: ['string', 'null'] },
+            earningsUrl: { type: ['string', 'null'] },
+            payoutsUrl: { type: ['string', 'null'] },
+            payoutStatus: { type: ['object', 'null'] },
+            actions: { type: 'array', items: { type: 'object' } },
+            recentTransactions: {
+              type: 'array',
+              items: { type: 'object' },
+            },
+            recentReceipts: { type: 'array', items: { type: 'object' } },
+            recentEarnings: { type: 'array', items: { type: 'object' } },
+            recentPayouts: { type: 'array', items: { type: 'object' } },
+          },
+        },
+        MoneyAmount: {
+          type: 'object',
+          required: ['light', 'display'],
+          properties: {
+            light: { type: 'number' },
+            display: { type: 'string' },
           },
         },
         PlatformPrimitiveSuggestion: {
@@ -791,6 +1297,96 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       deferredCapabilities: LAUNCH_DEFERRED_CAPABILITIES,
     },
   };
+}
+
+async function handleLaunchApiKeys(
+  request: Request,
+  path: string,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForApiKeys(user);
+
+  if (path === '/api/launch/api-keys') {
+    if (method === 'GET') {
+      const tokens = await listTokens(user.id);
+      return json({
+        apiKeys: tokens.map(toLaunchApiKeySummary),
+        generatedAt: new Date().toISOString(),
+      });
+    }
+
+    if (method === 'POST') {
+      return await withSensitiveRouteRateLimit(
+        user.id,
+        'user:token_create',
+        async () => {
+          try {
+            const createRequest = parseLaunchApiKeyCreateRequest(
+              await readJsonBody<Record<string, unknown>>(request),
+            );
+            const result = await createToken(user.id, createRequest.name, {
+              expiresInDays: createRequest.expiresInDays,
+              scopes: createRequest.scopes,
+              app_ids: createRequest.appIds,
+              function_names: createRequest.functionNames,
+            });
+
+            return json({
+              success: true,
+              apiKey: toLaunchApiKeySummary(result.token),
+              plaintextToken: result.plaintext_token,
+              message: 'API key created. Copy it now; the full token is revealed only once.',
+              generatedAt: new Date().toISOString(),
+            });
+          } catch (err) {
+            if (err instanceof RequestValidationError) {
+              return error(err.message, err.status);
+            }
+            if (err instanceof Error && err.message.includes('already exists')) {
+              return error(err.message, 409);
+            }
+            if (err instanceof Error && err.message.includes('Token limit reached')) {
+              return error(err.message, 403);
+            }
+            console.error('[LAUNCH] API key creation failed:', err);
+            return error('Failed to create API key', 500);
+          }
+        },
+      );
+    }
+
+    return error('Method not allowed for launch API keys', 405);
+  }
+
+  const deleteMatch = path.match(/^\/api\/launch\/api-keys\/([^/]+)$/);
+  if (deleteMatch && method === 'DELETE') {
+    const tokenId = parseApiKeyId(deleteMatch[1]);
+    return await withSensitiveRouteRateLimit(
+      user.id,
+      'user:token_delete',
+      async () => {
+        try {
+          await revokeToken(user.id, tokenId);
+          return json({
+            success: true,
+            revokedId: tokenId,
+            message: 'API key revoked.',
+            generatedAt: new Date().toISOString(),
+          });
+        } catch (err) {
+          console.error('[LAUNCH] API key revocation failed:', err);
+          return error('Failed to revoke API key', 500);
+        }
+      },
+    );
+  }
+
+  if (deleteMatch) {
+    return error('Method not allowed for launch API key', 405);
+  }
+
+  return error('Launch API key endpoint not found', 404);
 }
 
 async function handleLaunchDiscover(
@@ -967,6 +1563,138 @@ async function handleLaunchToolWidgets(
   });
 }
 
+async function handleLaunchWidgetDetail(
+  request: Request,
+  encodedLocator: string,
+  encodedWidgetId: string,
+): Promise<Response> {
+  const locator = parseLocator(encodedLocator);
+  const widgetId = parseWidgetId(encodedWidgetId);
+  const viewer = await tryAuthenticate(request);
+  const row = await fetchToolByLocator(locator, { publicOnly: true });
+  if (!row) return error('Tool not found', 404);
+  if (shouldHideGpu(row)) return error('Tool not found', 404);
+
+  const widget = findWidgetDeclaration(row, widgetId);
+  if (!widget) return error('Widget not found', 404);
+
+  const installedIds = viewer ? await fetchInstalledIds(viewer.id) : new Set<string>();
+  const owners = await fetchOwnerMap([row.owner_id]);
+  const tool = toLaunchToolSummary(row, {
+    owners,
+    viewerId: viewer?.id,
+    installedIds,
+  });
+  const detail = toLaunchWidgetDetail(row, widget);
+
+  return json({
+    tool: {
+      id: tool.id,
+      slug: tool.slug,
+      name: tool.name,
+      relationship: tool.relationship,
+      publicUrl: tool.publicUrl,
+      adminUrl: tool.adminUrl,
+    },
+    widget: detail,
+    generatedAt: new Date().toISOString(),
+  });
+}
+
+async function handleLaunchWidgetRender(
+  request: Request,
+  encodedLocator: string,
+  encodedWidgetId: string,
+): Promise<Response> {
+  await requireLaunchUser(request);
+  const locator = parseLocator(encodedLocator);
+  const widgetId = parseWidgetId(encodedWidgetId);
+  const row = await fetchToolByLocator(locator, { publicOnly: true });
+  if (!row) return error('Tool not found', 404);
+  if (shouldHideGpu(row)) return error('Tool not found', 404);
+
+  const widget = findWidgetDeclaration(row, widgetId);
+  if (!widget) return error('Widget not found', 404);
+  const functions = widgetFunctions(row, widget);
+  if (!functions.uiFunction) {
+    return error('Widget does not expose a UI function', 400);
+  }
+
+  const body = await readOptionalJsonBody<Record<string, unknown>>(request);
+  const args = asRecord(body.args) || {};
+  const runRequest = new Request(
+    `${new URL(request.url).origin}/api/run/${encodeURIComponent(row.id)}`,
+    {
+      method: 'POST',
+      headers: forwardRuntimeHeaders(request),
+      body: JSON.stringify({
+        function: functions.uiFunction,
+        args,
+      }),
+    },
+  );
+  const runResponse = await handleRun(runRequest, row.id);
+  const runPayload = await runResponse.json().catch(() => null) as RunResponse | null;
+  const summary = toLaunchWidgetSummary(row, widget);
+  const tool = {
+    id: row.id,
+    slug: row.slug || row.id,
+    name: row.name || row.slug || row.id,
+  };
+
+  if (!runResponse.ok || !runPayload?.success) {
+    return json({
+      success: false,
+      tool,
+      widget: {
+        id: summary.id,
+        label: summary.label,
+        description: summary.description,
+      },
+      render: null,
+      error: {
+        type: runPayload?.error?.type,
+        message: runPayload?.error?.message ||
+          `Widget render failed (${runResponse.status})`,
+        details: runPayload?.error?.details,
+      },
+      generatedAt: new Date().toISOString(),
+    }, runResponse.ok ? 500 : runResponse.status);
+  }
+
+  const render = toWidgetRenderedPayload(runPayload);
+  if (!render.html) {
+    return json({
+      success: false,
+      tool,
+      widget: {
+        id: summary.id,
+        label: summary.label,
+        description: summary.description,
+      },
+      render: null,
+      error: {
+        type: 'WIDGET_HTML_MISSING',
+        message: 'Widget UI function did not return app_html or html.',
+      },
+      generatedAt: new Date().toISOString(),
+    }, 422);
+  }
+
+  return json({
+    success: true,
+    tool,
+    widget: {
+      id: summary.id,
+      label: summary.label,
+      description: summary.description,
+    },
+    render,
+    error: null,
+    generatedAt: new Date().toISOString(),
+  });
+}
+
 async function handleLaunchToolAdmin(
   request: Request,
   encodedLocator: string,
@@ -1007,15 +1735,21 @@ async function handleLaunchToolAdmin(
 async function handleLaunchWallet(request: Request): Promise<Response> {
   const user = await requireLaunchUser(request);
   const db = getDbConfig();
-  const rows = await dbGet<WalletRow>(
-    db,
-    'users',
-    {
-      id: `eq.${user.id}`,
-      select: USER_BALANCE_SELECT,
-      limit: '1',
-    },
-  );
+  const [rows, transactions, receipts, earnings, payouts] = await Promise.all([
+    dbGet<WalletRow>(
+      db,
+      'users',
+      {
+        id: `eq.${user.id}`,
+        select: USER_BALANCE_SELECT,
+        limit: '1',
+      },
+    ),
+    fetchWalletTransactions(user.id),
+    fetchWalletReceipts(user.id),
+    fetchWalletEarnings(user.id),
+    fetchWalletPayouts(user.id),
+  ]);
   const row = rows[0] || {
     balance_light: 0,
     deposit_balance_light: 0,
@@ -1036,6 +1770,47 @@ async function handleLaunchWallet(request: Request): Promise<Response> {
     earningsUrl: '/wallet?tab=earnings',
     payoutsUrl: '/wallet?tab=payouts',
     payoutStatus: payoutStatusFor(row),
+    actions: [
+      {
+        id: 'topup',
+        label: 'Add Light',
+        description: 'Fund tool calls, installs, widgets, and hosting.',
+        href: '/wallet?tab=topup',
+        enabled: true,
+      },
+      {
+        id: 'transactions',
+        label: 'Transactions',
+        description: 'Review Light movements from wallet funding and charges.',
+        href: '/wallet?tab=transactions',
+        enabled: true,
+      },
+      {
+        id: 'receipts',
+        label: 'Receipts',
+        description: 'Inspect tool-call receipts with app, infra, and fee economics.',
+        href: '/wallet?tab=receipts',
+        enabled: true,
+      },
+      {
+        id: 'earnings',
+        label: 'Earnings',
+        description: 'Track creator Light earned from monetized tool usage.',
+        href: '/wallet?tab=earnings',
+        enabled: true,
+      },
+      {
+        id: 'payouts',
+        label: 'Payouts',
+        description: 'Review Stripe Connect payout readiness and recent payouts.',
+        href: '/wallet?tab=payouts',
+        enabled: true,
+      },
+    ],
+    recentTransactions: transactions,
+    recentReceipts: receipts,
+    recentEarnings: earnings,
+    recentPayouts: payouts,
   };
 
   return json({
@@ -1067,6 +1842,121 @@ function payoutStatusFor(row: WalletRow): LaunchPayoutStatus {
     description: 'Creator earnings can accrue as Light before a payout account is connected.',
     actionUrl: '/wallet?tab=payouts',
   };
+}
+
+async function fetchWalletTransactions(
+  userId: string,
+): Promise<LaunchWalletTransaction[]> {
+  try {
+    const rows = await dbGet<BillingTransactionRow>(
+      getDbConfig(),
+      'billing_transactions',
+      {
+        user_id: `eq.${userId}`,
+        select:
+          'id,type,category,description,amount_light,balance_after_light,app_id,app_name,created_at',
+        order: 'created_at.desc',
+        limit: '10',
+      },
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      type: row.type || 'transaction',
+      category: row.category || 'wallet',
+      description: row.description || 'Light transaction',
+      amount: money(numeric(row.amount_light)),
+      balanceAfter: row.balance_after_light === undefined
+        ? null
+        : money(numeric(row.balance_after_light)),
+      appId: row.app_id || null,
+      appName: row.app_name || null,
+      createdAt: row.created_at || null,
+    }));
+  } catch (err) {
+    console.warn('[LAUNCH] Wallet transactions unavailable:', err);
+    return [];
+  }
+}
+
+async function fetchWalletReceipts(
+  userId: string,
+): Promise<LaunchWalletReceiptSummary[]> {
+  try {
+    const rows = await getRecentCalls(userId, { limit: 10 });
+    return rows.map((row) => ({
+      receiptId: row.receipt_id,
+      appId: row.app_id || null,
+      appName: row.app_name || null,
+      functionName: row.function_name || null,
+      success: row.success !== false,
+      total: money(numeric(row.receipt.total_light)),
+      appCharge: money(numeric(row.receipt.app_charge_light)),
+      infraCharge: money(numeric(row.receipt.infra_light)),
+      platformFee: money(numeric(row.receipt.platform_fee_light)),
+      developerNet: money(numeric(row.receipt.developer_net_light)),
+      createdAt: row.created_at || null,
+      receiptUrl: `/wallet?tab=receipts&receipt=${encodeURIComponent(row.receipt_id)}`,
+    }));
+  } catch (err) {
+    console.warn('[LAUNCH] Wallet receipts unavailable:', err);
+    return [];
+  }
+}
+
+async function fetchWalletEarnings(
+  userId: string,
+): Promise<LaunchWalletEarningSummary[]> {
+  try {
+    const rows = await dbGet<TransferRow>(
+      getDbConfig(),
+      'transfers',
+      {
+        to_user_id: `eq.${userId}`,
+        select: 'amount_light,app_id,function_name,reason,created_at',
+        order: 'created_at.desc',
+        limit: '10',
+      },
+    );
+    return rows
+      .filter((row) => row.reason !== 'withdrawal' && row.reason !== 'withdrawal_refund')
+      .map((row) => ({
+        amount: money(numeric(row.amount_light)),
+        appId: row.app_id || null,
+        functionName: row.function_name || null,
+        reason: row.reason || 'earning',
+        createdAt: row.created_at || null,
+      }));
+  } catch (err) {
+    console.warn('[LAUNCH] Wallet earnings unavailable:', err);
+    return [];
+  }
+}
+
+async function fetchWalletPayouts(
+  userId: string,
+): Promise<LaunchWalletPayoutSummary[]> {
+  try {
+    const rows = await dbGet<PayoutRow>(
+      getDbConfig(),
+      'payouts',
+      {
+        user_id: `eq.${userId}`,
+        select: 'id,amount_light,status,created_at,completed_at',
+        order: 'created_at.desc',
+        limit: '10',
+      },
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      amount: money(numeric(row.amount_light)),
+      status: row.status || 'pending',
+      createdAt: row.created_at || null,
+      completedAt: row.completed_at || null,
+    }));
+  } catch (err) {
+    console.warn('[LAUNCH] Wallet payouts unavailable:', err);
+    return [];
+  }
 }
 
 async function handleLaunchLeaderboard(url: URL): Promise<Response> {
@@ -1207,6 +2097,75 @@ function buildInstallInstructions(
       requiresApiKey: true,
     },
   ];
+}
+
+async function buildLaunchInstallResponse(
+  request: Request,
+  url: URL,
+): Promise<LaunchInstallResponse> {
+  const toolLocator = normalizeQuery(url.searchParams.get('tool'));
+  return {
+    instructions: buildInstallInstructions(request),
+    toolInstall: toolLocator ? await buildToolInstallContext(request, toolLocator) : null,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function buildToolInstallContext(
+  request: Request,
+  locator: string,
+): Promise<LaunchToolInstallContext> {
+  const row = await fetchToolByLocator(locator, { publicOnly: true });
+  if (!row) {
+    throw new RequestValidationError('Tool not found', 404);
+  }
+  if (shouldHideGpu(row)) {
+    throw new RequestValidationError('Tool not found', 404);
+  }
+
+  const viewer = await tryAuthenticate(request);
+  const installedIds = viewer ? await fetchInstalledIds(viewer.id) : new Set<string>();
+  const owners = await fetchOwnerMap([row.owner_id]);
+  const tool = toLaunchToolSummary(row, {
+    owners,
+    viewerId: viewer?.id,
+    installedIds,
+  });
+  const baseUrl = publicBaseUrl(request);
+  const platformMcpUrl = `${baseUrl}/mcp/platform`;
+  const publicToolUrl = `${baseUrl}${tool.publicUrl || `/tools/${encodeURIComponent(tool.slug)}`}`;
+  const installUrl = `${baseUrl}/install?tool=${encodeURIComponent(tool.slug)}`;
+  const widgetUrls = tool.widgets
+    .filter((widget) => widget.openUrl)
+    .map((widget) => ({
+      id: widget.id,
+      label: widget.label,
+      openUrl: `${baseUrl}${widget.openUrl}`,
+      renderUrl: widget.renderUrl ? `${baseUrl}${widget.renderUrl}` : null,
+    }));
+
+  return {
+    tool,
+    selectedToolSlug: tool.slug,
+    publicToolUrl,
+    installUrl,
+    platformMcpUrl,
+    recommendedApiKey: {
+      name: `${tool.slug} external agent`,
+      expiresInDays: 90,
+      scopes: ['apps:call'],
+      appIds: [tool.id],
+    },
+    widgetUrls,
+    agentHandoff: [
+      `Inspect ${publicToolUrl} for pricing, trust, and widget links.`,
+      `Use ${platformMcpUrl} as the Ultralight MCP endpoint with a bearer API key scoped to app ${tool.id}.`,
+      `Call this tool through MCP/API, then return ${
+        widgetUrls[0]?.openUrl || publicToolUrl
+      } when UI is useful.`,
+      'Preserve receipt_id values and Light balance errors in the final agent response.',
+    ],
+  };
 }
 
 async function fetchPublicApps(options: {
@@ -1482,21 +2441,129 @@ function extractWidgets(row: LaunchAppRow): LaunchWidgetSummary[] {
   const manifest = parseManifest(row.manifest);
   const widgets = manifest?.widgets;
   if (!Array.isArray(widgets)) return [];
-  const slug = row.slug || row.id;
   return widgets
     .filter((widget): widget is WidgetDeclaration =>
       Boolean(widget && typeof widget.id === 'string' && widget.id.trim())
     )
-    .map((widget) => ({
-      id: widget.id,
-      label: widget.label || widget.id,
-      description: widget.description || null,
-      public: normalizeVisibility(row.visibility) !== 'private',
-      previewAvailable: Boolean(
-        widget.ui_function || widget.data_function || widget.data_tool,
-      ),
-      openUrl: `/tools/${encodeURIComponent(slug)}?widget=${encodeURIComponent(widget.id)}`,
-    }));
+    .map((widget) => toLaunchWidgetSummary(row, widget));
+}
+
+function toLaunchWidgetSummary(
+  row: LaunchAppRow,
+  widget: WidgetDeclaration,
+): LaunchWidgetSummary {
+  const slug = row.slug || row.id;
+  const functions = widgetFunctions(row, widget);
+  const encodedSlug = encodeURIComponent(slug);
+  const encodedWidgetId = encodeURIComponent(widget.id);
+  const detailUrl = `/api/launch/tools/${encodedSlug}/widgets/${encodedWidgetId}`;
+  return {
+    id: widget.id,
+    label: widget.label || widget.id,
+    description: widget.description || null,
+    public: normalizeVisibility(row.visibility) !== 'private',
+    previewAvailable: Boolean(
+      functions.uiFunction || functions.dataFunction || functions.dataTool,
+    ),
+    openUrl: `/tools/${encodedSlug}?widget=${encodedWidgetId}`,
+    detailUrl,
+    renderUrl: functions.uiFunction ? `${detailUrl}/render` : null,
+  };
+}
+
+function toLaunchWidgetDetail(
+  row: LaunchAppRow,
+  widget: WidgetDeclaration,
+): LaunchWidgetDetail {
+  const summary = toLaunchWidgetSummary(row, widget);
+  const functions = widgetFunctions(row, widget);
+  return {
+    summary,
+    functions,
+    pollIntervalSeconds: typeof widget.poll_interval_s === 'number' ? widget.poll_interval_s : null,
+    dependencies: Array.isArray(widget.dependencies) ? widget.dependencies as unknown[] : [],
+    renderSurface: functions.uiFunction
+      ? {
+        mode: 'runtime_function',
+        endpoint: 'POST /api/launch/tools/:id/widgets/:widgetId/render',
+        method: 'POST',
+        authRequired: true,
+        uiFunction: functions.uiFunction,
+        dataFunction: functions.dataFunction,
+        dataTool: functions.dataTool,
+        htmlField: 'app_html',
+        sandbox: {
+          iframe: true,
+          allowScripts: true,
+          allowSameOrigin: false,
+        },
+      }
+      : null,
+  };
+}
+
+function findWidgetDeclaration(
+  row: LaunchAppRow,
+  widgetId: string,
+): WidgetDeclaration | null {
+  const manifest = parseManifest(row.manifest);
+  const widgets = manifest?.widgets;
+  if (!Array.isArray(widgets)) return null;
+  return widgets.find((widget): widget is WidgetDeclaration =>
+    Boolean(widget && typeof widget.id === 'string' && widget.id === widgetId)
+  ) || null;
+}
+
+function widgetFunctions(
+  row: LaunchAppRow,
+  widget: WidgetDeclaration,
+): {
+  uiFunction: string | null;
+  dataFunction: string | null;
+  dataTool: string | null;
+} {
+  const exports = new Set(row.exports || []);
+  const defaultUiFunction = `widget_${widget.id}_ui`;
+  const defaultDataFunction = `widget_${widget.id}_data`;
+  const uiFunction = stringOrNull(widget.ui_function) ||
+    (exports.has(defaultUiFunction) ? defaultUiFunction : null);
+  const dataFunction = stringOrNull(widget.data_function) ||
+    (exports.has(defaultDataFunction) ? defaultDataFunction : null);
+  const dataTool = stringOrNull(widget.data_tool) || dataFunction;
+  return {
+    uiFunction,
+    dataFunction,
+    dataTool,
+  };
+}
+
+function toWidgetRenderedPayload(
+  payload: RunResponse,
+): {
+  html: string;
+  meta?: Record<string, unknown> | null;
+  version?: string | null;
+  rawResult?: unknown;
+  receiptId?: string | null;
+  durationMs?: number | null;
+} {
+  const result = payload.result;
+  const record = asRecord(result);
+  const html = typeof record?.app_html === 'string'
+    ? record.app_html
+    : typeof record?.html === 'string'
+    ? record.html
+    : typeof result === 'string'
+    ? result
+    : '';
+  return {
+    html,
+    meta: asRecord(record?.meta) || null,
+    version: stringOrNull(record?.version),
+    rawResult: result,
+    receiptId: payload.receipt_id || null,
+    durationMs: typeof payload.duration_ms === 'number' ? payload.duration_ms : null,
+  };
 }
 
 function pricingSummary(row: LaunchAppRow): LaunchPricingSummary {
@@ -1548,7 +2615,7 @@ function normalizeVisibility(
   return 'private';
 }
 
-function buildLaunchTrustCard(row: LaunchAppRow): unknown {
+function buildLaunchTrustCard(row: LaunchAppRow): LaunchTrustCard {
   return sanitizeGpuTrustCard(buildAppTrustCard({
     current_version: row.current_version || '',
     runtime: row.runtime === 'gpu' && !isGpuSupportEnabled() ? 'deno' : row.runtime || 'deno',
@@ -1561,7 +2628,7 @@ function buildLaunchTrustCard(row: LaunchAppRow): unknown {
     visibility: normalizeVisibility(row.visibility),
     download_access: row.download_access || 'owner',
     env_schema: row.env_schema || {},
-  } as never));
+  } as never) as LaunchTrustCard);
 }
 
 function shouldHideGpu(row: LaunchAppRow): boolean {
@@ -1832,6 +2899,128 @@ function parseManifest(value: unknown): AppManifest | null {
   return null;
 }
 
+async function readJsonBody<T>(request: Request): Promise<T> {
+  try {
+    return await request.json() as T;
+  } catch {
+    throw new RequestValidationError('Invalid JSON body');
+  }
+}
+
+async function readOptionalJsonBody<T>(
+  request: Request,
+): Promise<Partial<T>> {
+  const text = await request.text();
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text) as Partial<T>;
+  } catch {
+    throw new RequestValidationError('Invalid JSON body');
+  }
+}
+
+function forwardRuntimeHeaders(request: Request): Headers {
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  const authorization = request.headers.get('authorization');
+  const cookie = request.headers.get('cookie');
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  const realIp = request.headers.get('x-real-ip');
+  if (authorization) headers.set('Authorization', authorization);
+  if (cookie) headers.set('Cookie', cookie);
+  if (forwardedFor) headers.set('x-forwarded-for', forwardedFor);
+  if (realIp) headers.set('x-real-ip', realIp);
+  return headers;
+}
+
+function toLaunchApiKeySummary(token: ApiToken): LaunchApiKeySummary {
+  return {
+    id: token.id,
+    name: token.name,
+    tokenPrefix: token.token_prefix,
+    scopes: token.scopes || [],
+    appIds: token.app_ids,
+    functionNames: token.function_names,
+    lastUsedAt: token.last_used_at,
+    expiresAt: token.expires_at,
+    createdAt: token.created_at,
+  };
+}
+
+function requireAccountSessionForApiKeys(user: AuthUser): void {
+  if (user.authSource === 'api_token' || user.authSource === 'routine_actor') {
+    throw new RequestValidationError('API key management requires an account session', 403);
+  }
+}
+
+function parseLaunchApiKeyCreateRequest(
+  body: Record<string, unknown>,
+): LaunchApiKeyCreateRequest {
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!name) {
+    throw new RequestValidationError('API key name is required');
+  }
+  if (name.length > 50) {
+    throw new RequestValidationError('API key name must be 50 characters or less');
+  }
+
+  const expiresValue = body.expiresInDays ?? body.expires_in_days;
+  let expiresInDays: number | undefined;
+  if (expiresValue !== undefined) {
+    if (
+      typeof expiresValue !== 'number' ||
+      !Number.isInteger(expiresValue) ||
+      expiresValue < 1 ||
+      expiresValue > 365
+    ) {
+      throw new RequestValidationError('expiresInDays must be an integer between 1 and 365');
+    }
+    expiresInDays = expiresValue;
+  }
+
+  const scopes = optionalStringArray(body.scopes, 'scopes');
+  const appIds = optionalStringArray(body.appIds ?? body.app_ids, 'appIds');
+  const functionNames = optionalStringArray(
+    body.functionNames ?? body.function_names,
+    'functionNames',
+  );
+
+  return {
+    name,
+    ...(expiresInDays !== undefined ? { expiresInDays } : {}),
+    ...(scopes !== undefined ? { scopes } : {}),
+    ...(appIds !== undefined ? { appIds } : {}),
+    ...(functionNames !== undefined ? { functionNames } : {}),
+  };
+}
+
+function optionalStringArray(value: unknown, field: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new RequestValidationError(`${field} must be an array of strings`);
+  }
+  const normalized = value.map((entry) => typeof entry === 'string' ? entry.trim() : '');
+  if (normalized.some((entry) => !entry)) {
+    throw new RequestValidationError(`${field} must be an array of non-empty strings`);
+  }
+  return normalized;
+}
+
+function parseApiKeyId(encodedId: string): string {
+  const id = decodeURIComponent(encodedId).trim();
+  if (!/^[A-Za-z0-9-]{1,100}$/.test(id)) {
+    throw new RequestValidationError('Invalid API key id');
+  }
+  return id;
+}
+
+function parseWidgetId(encodedId: string): string {
+  const id = decodeURIComponent(encodedId).trim();
+  if (!/^[A-Za-z0-9._:-]{1,100}$/.test(id)) {
+    throw new RequestValidationError('Invalid widget id');
+  }
+  return id;
+}
+
 function parseKind(value: string | null): LaunchToolKind | 'all' {
   if (!value || value === 'all') return 'all';
   if (
@@ -1987,6 +3176,10 @@ function roundScore(value: unknown): number {
 
 function numeric(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

@@ -1904,7 +1904,6 @@ export async function handleUser(request: Request): Promise<Response> {
           id: t.id,
           name: t.name,
           token_prefix: t.token_prefix,
-          plaintext_token: t.plaintext_token || null,
           scopes: t.scopes,
           app_ids: t.app_ids,
           function_names: t.function_names,

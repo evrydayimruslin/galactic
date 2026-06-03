@@ -48,6 +48,8 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     nav: 'primary',
     apiRoutes: [
       'GET /api/launch/install',
+      'GET /api/launch/api-keys',
+      'POST /api/launch/api-keys',
       'GET /api/launch/status',
       'GET /api/launch/openapi.json',
     ],
@@ -74,6 +76,8 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     apiRoutes: [
       'GET /api/launch/tools/:id',
       'GET /api/launch/tools/:id/widgets',
+      'GET /api/launch/tools/:id/widgets/:widgetId',
+      'POST /api/launch/tools/:id/widgets/:widgetId/render',
     ],
   },
   {
@@ -88,7 +92,11 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     path: '/settings',
     label: 'Settings',
     nav: 'account',
-    apiRoutes: ['GET /api/launch/install'],
+    apiRoutes: [
+      'GET /api/launch/api-keys',
+      'POST /api/launch/api-keys',
+      'DELETE /api/launch/api-keys/:id',
+    ],
   },
   {
     key: 'adminTool',

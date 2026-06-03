@@ -1,24 +1,28 @@
 import type {
+  LaunchApiKeyCreateRequest,
+  LaunchApiKeyCreateResponse,
+  LaunchApiKeyDeleteResponse,
+  LaunchApiKeyListResponse,
   LaunchDiscoveryRequest,
   LaunchDiscoveryResponse,
   LaunchInstallInstruction,
+  LaunchInstallResponse,
   LaunchLeaderboardKind,
   LaunchLeaderboardResponse,
   LaunchLibraryResponse,
   LaunchPlatformPrimitiveSuggestion,
   LaunchToolAdminSummary,
   LaunchToolSummary,
+  LaunchTrustCard,
   LaunchWalletSummary,
+  LaunchWidgetDetailResponse,
+  LaunchWidgetRenderRequest,
+  LaunchWidgetRenderResponse,
 } from '../../../../shared/contracts/launch.ts';
-
-export interface LaunchInstallResponse {
-  instructions: LaunchInstallInstruction[];
-  generatedAt?: string;
-}
 
 export interface LaunchToolResponse {
   tool: LaunchToolSummary;
-  trustCard?: unknown;
+  trustCard?: LaunchTrustCard;
   generatedAt?: string;
 }
 
@@ -43,7 +47,7 @@ export interface LaunchPlatformPrimitivesResponse {
 
 export interface LaunchToolAdminResponse {
   admin: LaunchToolAdminSummary;
-  trustCard?: unknown;
+  trustCard?: LaunchTrustCard;
   generatedAt?: string;
 }
 
@@ -66,8 +70,11 @@ export class LaunchApiClient {
     this.getAuthToken = options.getAuthToken;
   }
 
-  install(): Promise<LaunchInstallResponse> {
-    return this.fetchJson('/api/launch/install');
+  install(request: { tool?: string } = {}): Promise<LaunchInstallResponse> {
+    const params = new URLSearchParams();
+    if (request.tool) params.set('tool', request.tool);
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return this.fetchJson(`/api/launch/install${suffix}`);
   }
 
   library(): Promise<LaunchLibraryResponse> {
@@ -102,6 +109,33 @@ export class LaunchApiClient {
     );
   }
 
+  widgetDetail(
+    idOrSlug: string,
+    widgetId: string,
+  ): Promise<LaunchWidgetDetailResponse> {
+    return this.fetchJson(
+      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/widgets/${
+        encodeURIComponent(widgetId)
+      }`,
+    );
+  }
+
+  renderWidget(
+    idOrSlug: string,
+    widgetId: string,
+    request: LaunchWidgetRenderRequest = {},
+  ): Promise<LaunchWidgetRenderResponse> {
+    return this.fetchJson(
+      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/widgets/${
+        encodeURIComponent(widgetId)
+      }/render`,
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
   wallet(): Promise<LaunchWalletResponse> {
     return this.fetchJson('/api/launch/wallet');
   }
@@ -126,14 +160,43 @@ export class LaunchApiClient {
     return this.fetchJson(`/api/launch/admin/tools/${encodeURIComponent(id)}`);
   }
 
-  private async fetchJson<T>(path: string): Promise<T> {
-    const headers: Record<string, string> = {
-      Accept: 'application/json',
-    };
-    const token = this.getAuthToken?.();
-    if (token) headers.Authorization = `Bearer ${token}`;
+  apiKeys(): Promise<LaunchApiKeyListResponse> {
+    return this.fetchJson('/api/launch/api-keys');
+  }
 
-    const response = await fetch(`${this.baseUrl}${path}`, { headers });
+  createApiKey(
+    request: LaunchApiKeyCreateRequest,
+  ): Promise<LaunchApiKeyCreateResponse> {
+    return this.fetchJson('/api/launch/api-keys', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  revokeApiKey(id: string): Promise<LaunchApiKeyDeleteResponse> {
+    return this.fetchJson(`/api/launch/api-keys/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  private async fetchJson<T>(
+    path: string,
+    init: RequestInit = {},
+  ): Promise<T> {
+    const headers = new Headers({ Accept: 'application/json' });
+    if (init.body) headers.set('Content-Type', 'application/json');
+    const token = this.getAuthToken?.();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    if (init.headers) {
+      new Headers(init.headers).forEach((value, key) => {
+        headers.set(key, value);
+      });
+    }
+
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      headers,
+    });
     if (!response.ok) {
       const message = await response.text().catch(() => '');
       throw new Error(

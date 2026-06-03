@@ -6,9 +6,12 @@ import {
   LAUNCH_INSTALL_TARGETS,
   LAUNCH_PLATFORM_PRIMITIVES,
   LAUNCH_SCOPE_CONTRACT,
+  type LaunchApiKeyCreateResponse,
+  type LaunchApiKeySummary,
   type LaunchDiscoveryRequest,
   type LaunchDiscoveryResponse,
   type LaunchDiscoveryRetrievalSummary,
+  type LaunchInstallResponse,
   type LaunchInstallInstruction,
   type LaunchInstallTarget,
   type LaunchLeaderboardEntry,
@@ -17,10 +20,13 @@ import {
   type LaunchLibraryResponse,
   type LaunchPlatformPrimitiveSuggestion,
   type LaunchToolAdminSummary,
+  type LaunchToolInstallContext,
   type LaunchToolKind,
   type LaunchToolSummary,
+  type LaunchTrustCard,
   type LaunchWalletSummary,
   type LaunchWidgetSummary,
+  type LaunchWidgetRenderResponse,
 } from '../../../shared/contracts/launch.ts';
 import { launchApi } from './lib/api';
 import {
@@ -39,9 +45,14 @@ if (!app) {
 const appRoot = app;
 type InstallState =
   | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'loaded'; instructions: LaunchInstallInstruction[] }
-  | { status: 'error'; message: string };
+  | { status: 'loading'; key: string; tool?: string }
+  | {
+    status: 'loaded';
+    key: string;
+    instructions: LaunchInstallInstruction[];
+    toolInstall?: LaunchToolInstallContext | null;
+  }
+  | { status: 'error'; key: string; message: string };
 type LibraryState =
   | { status: 'idle' }
   | { status: 'loading' }
@@ -49,11 +60,11 @@ type LibraryState =
   | { status: 'error'; message: string };
 type AdminToolState =
   | { status: 'loading' }
-  | { status: 'loaded'; admin: LaunchToolAdminSummary; trustCard?: unknown }
+  | { status: 'loaded'; admin: LaunchToolAdminSummary; trustCard?: LaunchTrustCard }
   | { status: 'error'; message: string };
 type PublicToolState =
   | { status: 'loading' }
-  | { status: 'loaded'; tool: LaunchToolSummary; trustCard?: unknown }
+  | { status: 'loaded'; tool: LaunchToolSummary; trustCard?: LaunchTrustCard }
   | { status: 'error'; message: string };
 type DiscoverState =
   | { status: 'idle' }
@@ -77,14 +88,30 @@ type WalletState =
   | { status: 'loaded'; wallet: LaunchWalletSummary }
   | { status: 'error'; message: string };
 type WalletTab = 'topup' | 'transactions' | 'receipts' | 'earnings' | 'payouts';
+type ApiKeysState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | {
+    status: 'loaded';
+    apiKeys: LaunchApiKeySummary[];
+    reveal?: LaunchApiKeyCreateResponse | null;
+  }
+  | { status: 'error'; message: string };
+type WidgetRenderState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'loaded'; response: LaunchWidgetRenderResponse }
+  | { status: 'error'; message: string };
 
 let installState: InstallState = { status: 'idle' };
 let libraryState: LibraryState = { status: 'idle' };
 let discoverState: DiscoverState = { status: 'idle' };
 let leaderboardState: LeaderboardState = { status: 'idle' };
 let walletState: WalletState = { status: 'idle' };
+let apiKeysState: ApiKeysState = { status: 'idle' };
 const adminToolStates = new Map<string, AdminToolState>();
 const publicToolStates = new Map<string, PublicToolState>();
+const widgetRenderStates = new Map<string, WidgetRenderState>();
 
 window.addEventListener('popstate', render);
 document.addEventListener('click', (event) => {
@@ -105,12 +132,43 @@ document.addEventListener('click', (event) => {
   event.preventDefault();
   void copyInstallConfig(button);
 });
+document.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const button = target.closest<HTMLButtonElement>('button[data-copy-api-token]');
+  if (!button) return;
+  event.preventDefault();
+  void copyApiToken(button);
+});
+document.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const button = target.closest<HTMLButtonElement>('button[data-render-widget]');
+  if (!button) return;
+  event.preventDefault();
+  void renderWidget(button);
+});
+document.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const button = target.closest<HTMLButtonElement>('button[data-revoke-api-key]');
+  if (!button) return;
+  event.preventDefault();
+  void revokeApiKey(button);
+});
 document.addEventListener('submit', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLFormElement)) return;
   if (!target.matches('form[data-discover-search]')) return;
   event.preventDefault();
   navigate(discoverUrlFromForm(target));
+});
+document.addEventListener('submit', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLFormElement)) return;
+  if (!target.matches('form[data-api-key-form]')) return;
+  event.preventDefault();
+  void createApiKey(target);
 });
 
 render();
@@ -130,11 +188,14 @@ function navigate(path: string): void {
 function ensureRouteData(route: ResolvedLaunchRoute): void {
   if (
     (route.definition.key === 'home' || route.definition.key === 'install' ||
-      route.definition.key === 'settings') &&
-    installState.status === 'idle'
+      route.definition.key === 'settings')
   ) {
-    installState = { status: 'loading' };
-    void loadInstallInstructions();
+    const request = currentInstallRequest();
+    const key = installKey(request);
+    if (installState.status === 'idle' || installState.key !== key) {
+      installState = { status: 'loading', key, tool: request.tool };
+      void loadInstallInstructions(request, key);
+    }
   }
 
   if (route.definition.key === 'library' && libraryState.status === 'idle') {
@@ -166,6 +227,11 @@ function ensureRouteData(route: ResolvedLaunchRoute): void {
     void loadWallet();
   }
 
+  if (route.definition.key === 'settings' && apiKeysState.status === 'idle') {
+    apiKeysState = { status: 'loading' };
+    void loadApiKeys();
+  }
+
   if (route.definition.key === 'adminTool') {
     const id = route.params.id || '';
     if (id && !adminToolStates.has(id)) {
@@ -183,16 +249,22 @@ function ensureRouteData(route: ResolvedLaunchRoute): void {
   }
 }
 
-async function loadInstallInstructions(): Promise<void> {
+async function loadInstallInstructions(
+  request: { tool?: string },
+  key: string,
+): Promise<void> {
   try {
-    const response = await launchApi.install();
+    const response: LaunchInstallResponse = await launchApi.install(request);
     installState = {
       status: 'loaded',
+      key,
       instructions: sortInstallInstructions(response.instructions),
+      toolInstall: response.toolInstall || null,
     };
   } catch (err) {
     installState = {
       status: 'error',
+      key,
       message: err instanceof Error ? err.message : 'Install instructions unavailable',
     };
   }
@@ -202,7 +274,8 @@ async function loadInstallInstructions(): Promise<void> {
     route.definition.key === 'home' || route.definition.key === 'install' ||
     route.definition.key === 'settings'
   ) {
-    render();
+    const currentKey = installKey(currentInstallRequest());
+    if (currentKey === key) render();
   }
 }
 
@@ -301,6 +374,28 @@ async function loadWallet(): Promise<void> {
 
   if (
     resolveLaunchRoute(window.location.pathname).definition.key === 'wallet'
+  ) {
+    render();
+  }
+}
+
+async function loadApiKeys(): Promise<void> {
+  try {
+    const response = await launchApi.apiKeys();
+    apiKeysState = {
+      status: 'loaded',
+      apiKeys: response.apiKeys,
+      reveal: apiKeysState.status === 'loaded' ? apiKeysState.reveal : null,
+    };
+  } catch (err) {
+    apiKeysState = {
+      status: 'error',
+      message: err instanceof Error ? err.message : 'API keys unavailable',
+    };
+  }
+
+  if (
+    resolveLaunchRoute(window.location.pathname).definition.key === 'settings'
   ) {
     render();
   }
@@ -513,6 +608,7 @@ function homePage(): string {
 
 function installPage(): string {
   return `
+    ${toolInstallContextPanel()}
     <section class="panel">
       <div class="section-heading">
         <h2>Install Targets</h2>
@@ -762,7 +858,6 @@ function settingsPage(): string {
         <p>Settings stays focused on API key, install defaults, and account basics. BYOK is intentionally not a public launch surface.</p>
       </div>
       <div class="settings-list">
-        ${settingsRow('API key', 'Used by CLI, MCP config, and external agents.')}
         ${settingsRow('Install defaults', 'Preferred agent target and endpoint copy.')}
         ${
     settingsRow(
@@ -772,6 +867,27 @@ function settingsPage(): string {
   }
       </div>
     </section>
+    <section class="content-grid two">
+      <div class="panel">
+        <div class="section-heading">
+          <h2>Create API Key</h2>
+          <p>Keys power CLI, MCP configs, direct API calls, and widget rendering from existing agents.</p>
+        </div>
+        ${apiKeyCreateForm()}
+      </div>
+      <div class="panel">
+        <div class="section-heading">
+          <h2>Active API Keys</h2>
+          <p>Plaintext tokens are reveal-once; this list only shows metadata.</p>
+        </div>
+        ${apiKeyList()}
+      </div>
+    </section>
+    ${apiContractPanel([
+      'GET /api/launch/api-keys',
+      'POST /api/launch/api-keys',
+      'DELETE /api/launch/api-keys/:id',
+    ])}
   `;
 }
 
@@ -914,6 +1030,65 @@ function installInstructionList(): string {
   `;
 }
 
+function toolInstallContextPanel(): string {
+  const requestedTool = currentInstallRequest().tool;
+  if (!requestedTool) return '';
+  if (installState.status === 'error') {
+    return `
+      <section class="panel">
+        ${emptyState('Tool install unavailable', installState.message)}
+      </section>
+    `;
+  }
+  if (installState.status !== 'loaded') {
+    return `
+      <section class="panel">
+        ${emptyState('Loading tool install', 'Fetching the tool-specific agent handoff.')}
+      </section>
+    `;
+  }
+  const context = installState.toolInstall;
+  if (!context) return '';
+  return `
+    <section class="panel tool-install-panel">
+      <div class="section-heading">
+        <h2>Install ${escapeHtml(context.tool.name)}</h2>
+        <p>${escapeHtml(context.tool.description || 'Tool-specific install handoff for external agents.')}</p>
+      </div>
+      <div class="content-grid two">
+        <div class="summary-list">
+          ${summaryRow('Tool', context.selectedToolSlug)}
+          ${summaryRow('MCP endpoint', context.platformMcpUrl)}
+          ${summaryRow('Public page', context.publicToolUrl)}
+          ${summaryRow('Scoped key', apiKeyRecommendationLabel(context))}
+        </div>
+        <div class="settings-list">
+          ${context.agentHandoff.map((item) => settingsRow('Agent step', item)).join('')}
+        </div>
+      </div>
+      ${context.widgetUrls.length ? `
+        <div class="widget-list install-widget-list">
+          ${context.widgetUrls.map((widget) => `
+            <a class="widget-card widget-selector" href="${escapeAttribute(widget.openUrl)}" data-route>
+              <div>
+                <strong>${escapeHtml(widget.label)}</strong>
+                <span>${escapeHtml(widget.id)}</span>
+              </div>
+              <span class="tool-kind">${widget.renderUrl ? 'Renderable' : 'Open'}</span>
+            </a>
+          `).join('')}
+        </div>
+      ` : ''}
+    </section>
+  `;
+}
+
+function apiKeyRecommendationLabel(context: LaunchToolInstallContext): string {
+  const scopes = context.recommendedApiKey.scopes?.join(', ') || 'apps:call';
+  const appIds = context.recommendedApiKey.appIds?.join(', ') || context.tool.id;
+  return `${scopes}; app ${appIds}`;
+}
+
 function installInstructionCard(instruction: LaunchInstallInstruction): string {
   return `
     <article class="install-card">
@@ -990,15 +1165,6 @@ function installTargetCard(
     <article class="target-card">
       <span>${escapeHtml(labelize(target))}</span>
       <small>${escapeHtml(description)}</small>
-    </article>
-  `;
-}
-
-function primitiveCard(primitive: string): string {
-  return `
-    <article class="primitive-card">
-      <strong>${escapeHtml(labelize(primitive))}</strong>
-      <span>Indexed launch primitive</span>
     </article>
   `;
 }
@@ -1251,29 +1417,6 @@ function discoverKindOptions(selected: LaunchToolKind | 'all'): string {
   ).join('');
 }
 
-function toolSummarySkeleton(slug: string): string {
-  return `
-    <div class="summary-list">
-      ${summaryRow('Slug', slug || 'from route')}
-      ${summaryRow('Install', 'MCP/API/CLI affordance')}
-      ${summaryRow('Pricing', 'Light call pricing')}
-      ${summaryRow('Owner', 'Public profile + admin if owner')}
-    </div>
-  `;
-}
-
-function widgetSkeleton(): string {
-  return `
-    <div class="widget-frame">
-      <div class="widget-toolbar">
-        <span>Widget preview</span>
-        <button class="button secondary compact" type="button">Open</button>
-      </div>
-      <div class="widget-body">No widget loaded yet</div>
-    </div>
-  `;
-}
-
 function walletMiniMetric(label: string, value: string): string {
   return `
     <div class="wallet-mini-metric">
@@ -1318,17 +1461,9 @@ function walletTabPanel(wallet: LaunchWalletSummary, tab: WalletTab): string {
     case 'topup':
       return walletTopupPanel(wallet);
     case 'transactions':
-      return walletLinkedPanel(
-        'Transactions',
-        'The launch wallet summary is connected. Normalized transaction rows come from the existing wallet ledger endpoint in the next backend expansion.',
-        wallet.transactionsUrl,
-      );
+      return walletTransactionsPanel(wallet);
     case 'receipts':
-      return walletLinkedPanel(
-        'Receipts',
-        'Receipts are preserved by tool execution and marketplace flows. This tab keeps the launch surface anchored while row-level receipt contracts are promoted.',
-        wallet.receiptsUrl,
-      );
+      return walletReceiptsPanel(wallet);
     case 'earnings':
       return walletEarningsPanel(wallet);
     case 'payouts':
@@ -1353,7 +1488,44 @@ function walletTopupPanel(wallet: LaunchWalletSummary): string {
   `;
 }
 
+function walletTransactionsPanel(wallet: LaunchWalletSummary): string {
+  const rows = wallet.recentTransactions || [];
+  return `
+    <div class="wallet-tab-panel">
+      ${rows.length ? `
+        <div class="settings-list">
+          ${rows.map((row) => `
+            <div class="settings-row">
+              <strong>${escapeHtml(row.description)}</strong>
+              <span>${escapeHtml(row.category)} · ${escapeHtml(row.amount.display)} · ${escapeHtml(row.createdAt ? formatDate(row.createdAt) : 'Unknown date')}</span>
+            </div>
+          `).join('')}
+        </div>
+      ` : emptyState('No transactions yet', 'Wallet funding and charges will appear here.')}
+    </div>
+  `;
+}
+
+function walletReceiptsPanel(wallet: LaunchWalletSummary): string {
+  const rows = wallet.recentReceipts || [];
+  return `
+    <div class="wallet-tab-panel">
+      ${rows.length ? `
+        <div class="settings-list">
+          ${rows.map((row) => `
+            <div class="settings-row">
+              <strong>${escapeHtml(row.appName || row.appId || 'Tool receipt')}</strong>
+              <span>${escapeHtml(row.functionName || 'function')} · ${escapeHtml(row.total.display)} · ${escapeHtml(row.success ? 'success' : 'failed')} · ${escapeHtml(row.createdAt ? formatDate(row.createdAt) : 'Unknown date')}</span>
+            </div>
+          `).join('')}
+        </div>
+      ` : emptyState('No receipts yet', 'Tool-call receipts will appear after monetized usage.')}
+    </div>
+  `;
+}
+
 function walletEarningsPanel(wallet: LaunchWalletSummary): string {
+  const rows = wallet.recentEarnings || [];
   return `
     <div class="wallet-tab-panel">
       <div class="summary-list">
@@ -1361,6 +1533,16 @@ function walletEarningsPanel(wallet: LaunchWalletSummary): string {
         ${summaryRow('Escrow balance', wallet.escrowBalance?.display || '0 Light')}
         ${summaryRow('Payout status', wallet.payoutStatus?.label || 'Unknown')}
       </div>
+      ${rows.length ? `
+        <div class="settings-list wallet-row-list">
+          ${rows.map((row) => `
+            <div class="settings-row">
+              <strong>${escapeHtml(row.amount.display)}</strong>
+              <span>${escapeHtml(row.reason)} · ${escapeHtml(row.functionName || row.appId || 'tool usage')} · ${escapeHtml(row.createdAt ? formatDate(row.createdAt) : 'Unknown date')}</span>
+            </div>
+          `).join('')}
+        </div>
+      ` : emptyState('No earnings yet', 'Creator earnings appear after paid tool usage.')}
       <p class="muted-copy">Creator earnings accrue as Light. Payout readiness is derived from the launch wallet facade.</p>
     </div>
   `;
@@ -1368,6 +1550,7 @@ function walletEarningsPanel(wallet: LaunchWalletSummary): string {
 
 function walletPayoutPanel(wallet: LaunchWalletSummary): string {
   const status = wallet.payoutStatus;
+  const rows = wallet.recentPayouts || [];
   return `
     <div class="wallet-tab-panel">
       <div class="payout-status ${status?.kind || 'unavailable'}">
@@ -1378,21 +1561,16 @@ function walletPayoutPanel(wallet: LaunchWalletSummary): string {
         ${summaryRow('Earned balance', wallet.earnedBalance?.display || '0 Light')}
         ${summaryRow('Escrow balance', wallet.escrowBalance?.display || '0 Light')}
       </div>
-    </div>
-  `;
-}
-
-function walletLinkedPanel(
-  title: string,
-  description: string,
-  href: string | null | undefined,
-): string {
-  return `
-    <div class="wallet-tab-panel">
-      ${emptyState(title, description)}
-      <div class="action-row standalone-actions">
-        ${href ? routeButton(`Open ${title}`, href, 'secondary') : ''}
-      </div>
+      ${rows.length ? `
+        <div class="settings-list wallet-row-list">
+          ${rows.map((row) => `
+            <div class="settings-row">
+              <strong>${escapeHtml(row.amount.display)}</strong>
+              <span>${escapeHtml(row.status)} · ${escapeHtml(row.createdAt ? formatDate(row.createdAt) : 'Unknown date')}</span>
+            </div>
+          `).join('')}
+        </div>
+      ` : emptyState('No payouts yet', 'Payout records will appear after creator withdrawals.')}
     </div>
   `;
 }
@@ -1434,6 +1612,8 @@ function publicWidgetSurface(tool: LaunchToolSummary): string {
   }
 
   const selected = selectedWidget(tool.widgets);
+  const renderState = widgetRenderStates.get(widgetRenderKey(tool.slug, selected.id)) ||
+    { status: 'idle' } satisfies WidgetRenderState;
   return `
     <div class="widget-frame public-widget-frame">
       <div class="widget-toolbar">
@@ -1445,12 +1625,21 @@ function publicWidgetSurface(tool: LaunchToolSummary): string {
       }" data-route>Open</a>`
       : ''
   }
+        ${
+    selected.renderUrl
+      ? `<button class="button primary compact" type="button" data-render-widget="${
+        escapeAttribute(selected.id)
+      }" data-render-tool="${escapeAttribute(tool.slug)}">Render</button>`
+      : ''
+  }
       </div>
       <div class="widget-body public-widget-body">
         <div class="summary-list">
           ${summaryRow('Widget ID', selected.id)}
           ${summaryRow('Description', selected.description || 'Widget surface')}
           ${summaryRow('Public', selected.public ? 'Yes' : 'No')}
+          ${summaryRow('Detail API', selected.detailUrl || 'Unavailable')}
+          ${summaryRow('Render API', selected.renderUrl || 'No UI function')}
           ${
     summaryRow(
       'Preview',
@@ -1458,6 +1647,7 @@ function publicWidgetSurface(tool: LaunchToolSummary): string {
     )
   }
         </div>
+        ${widgetRenderPanel(renderState)}
       </div>
     </div>
     <div class="widget-list surface-selector">
@@ -1467,6 +1657,37 @@ function publicWidgetSurface(tool: LaunchToolSummary): string {
   }
     </div>
   `;
+}
+
+function widgetRenderPanel(state: WidgetRenderState): string {
+  if (state.status === 'loading') {
+    return emptyState('Rendering widget', 'Calling the widget UI function through the launch runtime.');
+  }
+  if (state.status === 'error') {
+    return emptyState('Widget render failed', state.message);
+  }
+  if (state.status === 'loaded') {
+    const response = state.response;
+    if (!response.success || !response.render?.html) {
+      return emptyState(
+        'Widget render failed',
+        response.error?.message || 'The widget did not return renderable HTML.',
+      );
+    }
+    return `
+      <div class="rendered-widget-shell">
+        <iframe class="rendered-widget-frame" sandbox="allow-scripts" srcdoc="${
+      escapeAttribute(response.render.html)
+    }"></iframe>
+        <div class="summary-list render-receipt">
+          ${summaryRow('Receipt', response.render.receiptId || 'No receipt')}
+          ${summaryRow('Duration', response.render.durationMs === null || response.render.durationMs === undefined ? 'Unknown' : `${response.render.durationMs} ms`)}
+          ${summaryRow('Version', response.render.version || 'Unknown')}
+        </div>
+      </div>
+    `;
+  }
+  return '';
 }
 
 function publicWidgetSelector(
@@ -1683,13 +1904,7 @@ function sourceListLabel(
 
 function updatedLabel(tool: LaunchToolSummary): string {
   if (!tool.updatedAt) return 'Unknown';
-  const date = new Date(tool.updatedAt);
-  if (Number.isNaN(date.getTime())) return tool.updatedAt;
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
+  return formatDate(tool.updatedAt);
 }
 
 function settingsRow(label: string, description: string): string {
@@ -1697,6 +1912,77 @@ function settingsRow(label: string, description: string): string {
     <div class="settings-row">
       <strong>${escapeHtml(label)}</strong>
       <span>${escapeHtml(description)}</span>
+    </div>
+  `;
+}
+
+function apiKeyCreateForm(): string {
+  const reveal = apiKeysState.status === 'loaded' ? apiKeysState.reveal : null;
+  return `
+    <form class="settings-list api-key-form" data-api-key-form>
+      <label class="field-stack">
+        <span>Name</span>
+        <input name="name" type="text" maxlength="50" placeholder="Claude Code launch key" required />
+      </label>
+      <label class="field-stack">
+        <span>Expires</span>
+        <select name="expiresInDays">
+          <option value="30">30 days</option>
+          <option value="90" selected>90 days</option>
+          <option value="365">365 days</option>
+        </select>
+      </label>
+      <button class="button primary" type="submit">Create key</button>
+    </form>
+    ${reveal ? apiKeyReveal(reveal) : ''}
+  `;
+}
+
+function apiKeyReveal(reveal: LaunchApiKeyCreateResponse): string {
+  return `
+    <div class="reveal-box">
+      <div class="install-card-header">
+        <div>
+          <h3>${escapeHtml(reveal.apiKey.name)}</h3>
+          <p>${escapeHtml(reveal.message)}</p>
+        </div>
+        <button class="button secondary compact" type="button" data-copy-api-token>Copy token</button>
+      </div>
+      <pre class="config-block"><code>${escapeHtml(reveal.plaintextToken)}</code></pre>
+    </div>
+  `;
+}
+
+function apiKeyList(): string {
+  if (apiKeysState.status === 'error') {
+    return emptyState('API keys unavailable', apiKeysState.message);
+  }
+  if (apiKeysState.status !== 'loaded') {
+    return emptyState('Loading API keys', 'Fetching launch key metadata.');
+  }
+  if (apiKeysState.apiKeys.length === 0) {
+    return emptyState(
+      'No API keys yet',
+      'Create one to install Ultralight into external agents.',
+    );
+  }
+  return `
+    <div class="settings-list">
+      ${apiKeysState.apiKeys.map(apiKeyRow).join('')}
+    </div>
+  `;
+}
+
+function apiKeyRow(key: LaunchApiKeySummary): string {
+  return `
+    <div class="settings-row action-settings-row">
+      <strong>${escapeHtml(key.name)}</strong>
+      <span>${escapeHtml(key.tokenPrefix)}... · ${
+    escapeHtml(key.scopes.join(', ') || 'default scopes')
+  } · ${escapeHtml(key.expiresAt ? `expires ${formatDate(key.expiresAt)}` : 'no expiry')}</span>
+      <button class="button secondary compact" type="button" data-revoke-api-key="${
+    escapeAttribute(key.id)
+  }">Revoke</button>
     </div>
   `;
 }
@@ -1728,6 +2014,11 @@ function apiContractPanel(routes: string[]): string {
       </div>
     </section>
   `;
+}
+
+function currentInstallRequest(): { tool?: string } {
+  const tool = new URLSearchParams(window.location.search).get('tool')?.trim();
+  return tool ? { tool } : {};
 }
 
 function currentDiscoverRequest(): LaunchDiscoveryRequest {
@@ -1797,6 +2088,10 @@ function discoverKey(request: LaunchDiscoveryRequest): string {
   });
 }
 
+function installKey(request: { tool?: string }): string {
+  return `install:${request.tool || ''}`;
+}
+
 function leaderboardKey(period: LeaderboardPeriod): string {
   return `leaderboard:${period}`;
 }
@@ -1822,6 +2117,20 @@ function leaderboardPeriodLabel(period: LeaderboardPeriod): string {
     case '30d':
       return '30 days';
   }
+}
+
+function widgetRenderKey(toolSlug: string, widgetId: string): string {
+  return `${toolSlug}:${widgetId}`;
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
 }
 
 function shortUserId(userId: string): string {
@@ -1855,6 +2164,87 @@ async function copyInstallConfig(button: HTMLButtonElement): Promise<void> {
   } catch {
     showCopyFeedback(button, 'Copy failed');
   }
+}
+
+async function copyApiToken(button: HTMLButtonElement): Promise<void> {
+  if (apiKeysState.status !== 'loaded' || !apiKeysState.reveal) return;
+  try {
+    await writeClipboard(apiKeysState.reveal.plaintextToken);
+    showCopyFeedback(button, 'Copied');
+  } catch {
+    showCopyFeedback(button, 'Copy failed');
+  }
+}
+
+async function createApiKey(form: HTMLFormElement): Promise<void> {
+  const data = new FormData(form);
+  const name = String(data.get('name') || '').trim();
+  const expiresInDays = Number(data.get('expiresInDays') || 90);
+  if (!name) return;
+
+  apiKeysState = { status: 'loading' };
+  render();
+  try {
+    const reveal = await launchApi.createApiKey({
+      name,
+      expiresInDays: Number.isFinite(expiresInDays) ? expiresInDays : 90,
+      scopes: ['apps:call'],
+    });
+    const list = await launchApi.apiKeys();
+    apiKeysState = {
+      status: 'loaded',
+      apiKeys: list.apiKeys,
+      reveal,
+    };
+  } catch (err) {
+    apiKeysState = {
+      status: 'error',
+      message: err instanceof Error ? err.message : 'Failed to create API key',
+    };
+  }
+  render();
+}
+
+async function revokeApiKey(button: HTMLButtonElement): Promise<void> {
+  const id = button.dataset.revokeApiKey;
+  if (!id) return;
+  try {
+    await launchApi.revokeApiKey(id);
+    const list = await launchApi.apiKeys();
+    apiKeysState = {
+      status: 'loaded',
+      apiKeys: list.apiKeys,
+      reveal: apiKeysState.status === 'loaded' ? apiKeysState.reveal : null,
+    };
+  } catch (err) {
+    apiKeysState = {
+      status: 'error',
+      message: err instanceof Error ? err.message : 'Failed to revoke API key',
+    };
+  }
+  render();
+}
+
+async function renderWidget(button: HTMLButtonElement): Promise<void> {
+  const toolSlug = button.dataset.renderTool;
+  const widgetId = button.dataset.renderWidget;
+  if (!toolSlug || !widgetId) return;
+
+  const key = widgetRenderKey(toolSlug, widgetId);
+  widgetRenderStates.set(key, { status: 'loading' });
+  render();
+  try {
+    const response = await launchApi.renderWidget(toolSlug, widgetId, {
+      args: {},
+    });
+    widgetRenderStates.set(key, { status: 'loaded', response });
+  } catch (err) {
+    widgetRenderStates.set(key, {
+      status: 'error',
+      message: err instanceof Error ? err.message : 'Widget render unavailable',
+    });
+  }
+  render();
 }
 
 async function writeClipboard(text: string): Promise<void> {

@@ -48,10 +48,15 @@ export const LAUNCH_API_ROUTES = [
   'GET /api/launch/status',
   'GET /api/launch/openapi.json',
   'GET /api/launch/install',
+  'GET /api/launch/api-keys',
+  'POST /api/launch/api-keys',
+  'DELETE /api/launch/api-keys/:id',
   'GET /api/launch/library',
   'GET /api/launch/discover',
   'GET /api/launch/tools/:id',
   'GET /api/launch/tools/:id/widgets',
+  'GET /api/launch/tools/:id/widgets/:widgetId',
+  'POST /api/launch/tools/:id/widgets/:widgetId/render',
   'GET /api/launch/admin/tools/:id',
   'GET /api/launch/wallet',
   'GET /api/launch/leaderboard',
@@ -138,6 +143,68 @@ export interface LaunchInstallInstruction {
   requiresApiKey: boolean;
 }
 
+export interface LaunchToolInstallContext {
+  tool: LaunchToolSummary;
+  selectedToolSlug: string;
+  publicToolUrl: string;
+  installUrl: string;
+  platformMcpUrl: string;
+  recommendedApiKey: LaunchApiKeyCreateRequest;
+  widgetUrls: Array<{
+    id: string;
+    label: string;
+    openUrl: string;
+    renderUrl?: string | null;
+  }>;
+  agentHandoff: string[];
+}
+
+export interface LaunchInstallResponse {
+  instructions: LaunchInstallInstruction[];
+  toolInstall?: LaunchToolInstallContext | null;
+  generatedAt: string;
+}
+
+export interface LaunchApiKeySummary {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  scopes: string[];
+  appIds?: string[] | null;
+  functionNames?: string[] | null;
+  lastUsedAt?: string | null;
+  expiresAt?: string | null;
+  createdAt: string;
+}
+
+export interface LaunchApiKeyCreateRequest {
+  name: string;
+  expiresInDays?: number;
+  scopes?: string[];
+  appIds?: string[];
+  functionNames?: string[];
+}
+
+export interface LaunchApiKeyListResponse {
+  apiKeys: LaunchApiKeySummary[];
+  generatedAt: string;
+}
+
+export interface LaunchApiKeyCreateResponse {
+  success: true;
+  apiKey: LaunchApiKeySummary;
+  plaintextToken: string;
+  message: string;
+  generatedAt: string;
+}
+
+export interface LaunchApiKeyDeleteResponse {
+  success: true;
+  revokedId: string;
+  message: string;
+  generatedAt: string;
+}
+
 export interface LaunchMoneyAmount {
   light: number;
   display: string;
@@ -156,6 +223,73 @@ export interface LaunchWidgetSummary {
   public: boolean;
   previewAvailable: boolean;
   openUrl?: string | null;
+  detailUrl?: string | null;
+  renderUrl?: string | null;
+}
+
+export interface LaunchWidgetFunctionSummary {
+  uiFunction?: string | null;
+  dataFunction?: string | null;
+  dataTool?: string | null;
+}
+
+export interface LaunchWidgetRenderSurface {
+  mode: 'runtime_function';
+  endpoint: LaunchApiRoute;
+  method: 'POST';
+  authRequired: true;
+  uiFunction: string;
+  dataFunction?: string | null;
+  dataTool?: string | null;
+  htmlField: 'app_html';
+  sandbox: {
+    iframe: true;
+    allowScripts: true;
+    allowSameOrigin: false;
+  };
+}
+
+export interface LaunchWidgetDetail {
+  summary: LaunchWidgetSummary;
+  functions: LaunchWidgetFunctionSummary;
+  pollIntervalSeconds?: number | null;
+  dependencies?: unknown[];
+  renderSurface?: LaunchWidgetRenderSurface | null;
+}
+
+export interface LaunchWidgetDetailResponse {
+  tool: Pick<
+    LaunchToolSummary,
+    'id' | 'slug' | 'name' | 'relationship' | 'publicUrl' | 'adminUrl'
+  >;
+  widget: LaunchWidgetDetail;
+  generatedAt: string;
+}
+
+export interface LaunchWidgetRenderRequest {
+  args?: Record<string, unknown>;
+}
+
+export interface LaunchWidgetRenderedPayload {
+  html: string;
+  meta?: Record<string, unknown> | null;
+  version?: string | null;
+  rawResult?: unknown;
+  receiptId?: string | null;
+  durationMs?: number | null;
+}
+
+export interface LaunchWidgetRenderResponse {
+  success: boolean;
+  tool: Pick<LaunchToolSummary, 'id' | 'slug' | 'name'>;
+  widget: Pick<LaunchWidgetSummary, 'id' | 'label' | 'description'>;
+  render: LaunchWidgetRenderedPayload | null;
+  error?: {
+    type?: string;
+    message: string;
+    details?: unknown;
+  } | null;
+  generatedAt: string;
 }
 
 export type LaunchDiscoveryRetrievalMode =
@@ -229,6 +363,38 @@ export interface LaunchToolAdminSummary {
   logsUrl?: string | null;
 }
 
+export interface LaunchTrustCard {
+  schema_version: 1;
+  signed_manifest: boolean;
+  signer: string | null;
+  signed_at: string | null;
+  version: string | null;
+  runtime: string;
+  manifest_hash: string | null;
+  artifact_hash: string | null;
+  artifact_count: number;
+  permissions: string[];
+  capability_summary: {
+    ai: boolean;
+    network: boolean;
+    storage: boolean;
+    memory: boolean;
+    gpu: boolean;
+  };
+  required_secrets: string[];
+  per_user_secrets: string[];
+  access: {
+    visibility: LaunchToolVisibility;
+    download_access: string | null;
+  };
+  reliability?: unknown;
+  execution_receipts: {
+    enabled: true;
+    field: 'receipt_id';
+    backing_log: 'mcp_call_logs.id';
+  };
+}
+
 export interface LaunchDiscoveryRequest {
   query?: string;
   kind?: LaunchToolKind | 'all';
@@ -273,6 +439,11 @@ export interface LaunchWalletSummary {
   earningsUrl?: string | null;
   payoutsUrl?: string | null;
   payoutStatus?: LaunchPayoutStatus | null;
+  actions?: LaunchWalletAction[];
+  recentTransactions?: LaunchWalletTransaction[];
+  recentReceipts?: LaunchWalletReceiptSummary[];
+  recentEarnings?: LaunchWalletEarningSummary[];
+  recentPayouts?: LaunchWalletPayoutSummary[];
 }
 
 export type LaunchPayoutStatusKind =
@@ -286,6 +457,57 @@ export interface LaunchPayoutStatus {
   label: string;
   description: string;
   actionUrl?: string | null;
+}
+
+export interface LaunchWalletAction {
+  id: 'topup' | 'transactions' | 'receipts' | 'earnings' | 'payouts';
+  label: string;
+  description: string;
+  href?: string | null;
+  enabled: boolean;
+}
+
+export interface LaunchWalletTransaction {
+  id: string;
+  type: string;
+  category: string;
+  description: string;
+  amount: LaunchMoneyAmount;
+  balanceAfter?: LaunchMoneyAmount | null;
+  appId?: string | null;
+  appName?: string | null;
+  createdAt?: string | null;
+}
+
+export interface LaunchWalletReceiptSummary {
+  receiptId: string;
+  appId?: string | null;
+  appName?: string | null;
+  functionName?: string | null;
+  success: boolean;
+  total: LaunchMoneyAmount;
+  appCharge: LaunchMoneyAmount;
+  infraCharge: LaunchMoneyAmount;
+  platformFee: LaunchMoneyAmount;
+  developerNet: LaunchMoneyAmount;
+  createdAt?: string | null;
+  receiptUrl?: string | null;
+}
+
+export interface LaunchWalletEarningSummary {
+  amount: LaunchMoneyAmount;
+  appId?: string | null;
+  functionName?: string | null;
+  reason: string;
+  createdAt?: string | null;
+}
+
+export interface LaunchWalletPayoutSummary {
+  id: string;
+  amount: LaunchMoneyAmount;
+  status: string;
+  createdAt?: string | null;
+  completedAt?: string | null;
 }
 
 export interface LaunchLeaderboardEntry {

@@ -695,6 +695,35 @@ select {
   line-height: 1.4;
 }
 
+.field-stack {
+  display: grid;
+  gap: 6px;
+}
+
+.field-stack span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.field-stack input,
+.field-stack select {
+  min-height: 40px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-strong);
+  background: #fff;
+  color: var(--text);
+}
+
+.reveal-box {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--accent);
+  background: #e9f5f2;
+}
+
 .tool-list {
   gap: 12px;
 }
@@ -944,8 +973,33 @@ select {
   color: var(--text);
 }
 
+.rendered-widget-shell {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.rendered-widget-frame {
+  width: 100%;
+  min-height: 420px;
+  border: 1px solid var(--border-strong);
+  background: #fff;
+}
+
+.render-receipt .summary-row {
+  grid-template-columns: 120px minmax(0, 1fr);
+}
+
 .surface-selector {
   margin-top: 12px;
+}
+
+.tool-install-panel .content-grid {
+  margin-bottom: 14px;
+}
+
+.install-widget-list {
+  margin-top: 14px;
 }
 
 .trust-grid .summary-row {

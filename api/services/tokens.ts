@@ -332,7 +332,7 @@ export async function createToken(
     token_prefix: tokenPrefix,
     token_hash: tokenHash,
     token_salt: tokenSalt,
-    plaintext_token: plaintextToken,
+    plaintext_token: null,
     scopes: options?.scopes || ['*'],
     app_ids: options?.app_ids || null,
     function_names: options?.function_names || null,
@@ -362,7 +362,9 @@ export async function createToken(
  */
 export async function listTokens(userId: string): Promise<ApiToken[]> {
   let { data, error } = await tokensTable()
-    .select('id, user_id, name, token_prefix, plaintext_token, scopes, app_ids, function_names, last_used_at, last_used_ip, expires_at, created_at')
+    .select(
+      'id, user_id, name, token_prefix, scopes, app_ids, function_names, last_used_at, last_used_ip, expires_at, created_at',
+    )
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
 
@@ -370,7 +372,10 @@ export async function listTokens(userId: string): Promise<ApiToken[]> {
     throw new Error(`Failed to list tokens: ${error.message}`);
   }
 
-  return data || [];
+  return (data || []).map((row: Omit<ApiToken, 'plaintext_token'>) => ({
+    ...row,
+    plaintext_token: null,
+  }));
 }
 
 /**

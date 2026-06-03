@@ -55,7 +55,7 @@ by a later stage.
 - `/install` - copyable MCP, CLI, and API install instructions.
 - `/library` - signed-in owned and installed tools.
 - `/discover` - public tool and page discovery.
-- `/tools/:slug` - public tool page with install/run/widget affordances.
+- `/tools/:slug` - public tool page with install and open-widget affordances.
 - `/wallet` - Light balance, top-up, transactions, receipts, earnings, payouts.
 - `/settings` - account, API key, and launch-safe preferences.
 - `/admin/tools/:id` - owner-only tool management.
@@ -68,10 +68,15 @@ to broad internal handlers.
 - `GET /api/launch/install`
 - `GET /api/launch/status`
 - `GET /api/launch/openapi.json`
+- `GET /api/launch/api-keys`
+- `POST /api/launch/api-keys`
+- `DELETE /api/launch/api-keys/:id`
 - `GET /api/launch/library`
 - `GET /api/launch/discover`
 - `GET /api/launch/tools/:id`
 - `GET /api/launch/tools/:id/widgets`
+- `GET /api/launch/tools/:id/widgets/:widgetId`
+- `POST /api/launch/tools/:id/widgets/:widgetId/render`
 - `GET /api/launch/wallet`
 - `GET /api/launch/leaderboard`
 - `GET /api/launch/platform-primitives`
@@ -79,6 +84,10 @@ to broad internal handlers.
 The facade should call existing backend services and filter out deferred
 capabilities such as command cards, BYOK-first flows, desktop-only fields, and
 general-agent surfaces.
+
+`GET /api/launch/install?tool=:slug` should return the same generic install
+targets plus a tool-specific handoff: public tool URL, platform MCP endpoint,
+scoped API-key recommendation, widget URLs, and short agent instructions.
 
 ## MVP Navigation
 
@@ -104,6 +113,11 @@ Widgets are the only public launch UI surface. If a tool has widgets, public and
 library tool pages should show a widget preview or open-widget action. If a tool
 does not have widgets, the page should show install, run, pricing, trust, owner,
 and admin affordances.
+
+Public widget pages expose the widget id and launch detail/render API. Rendering
+is authenticated and goes through the existing app runtime, so tool UI HTML is
+returned as a sandboxed website payload while billing, secrets, and receipts stay
+on the normal execution path.
 
 Command cards, generated interfaces, native composers, and command dashboards
 remain hidden for later stages.
