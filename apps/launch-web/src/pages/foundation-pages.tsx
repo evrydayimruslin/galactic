@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react";
+import { useState, type ReactElement, type ReactNode } from "react";
 
 import {
   LAUNCH_SCOPE_CONTRACT,
@@ -21,213 +21,462 @@ import {
   RouteLink,
   Section,
 } from "../components/launch-chrome";
+import agentClaudeUrl from "../assets/agents/agent-claude.png";
+import agentCodexUrl from "../assets/agents/agent-codex.png";
+import agentCursorUrl from "../assets/agents/agent-cursor.png";
+import agentOpenclawUrl from "../assets/agents/agent-openclaw.png";
 
-const agentLogos = ["Claude Code", "Cursor", "Codex", "OpenAI MCP", "Generic MCP", "CLI", "API"];
-const featuredTools = [
+interface ToolFixture {
+  author: string;
+  callPrice: number;
+  category: string;
+  color: string;
+  free?: boolean;
+  growth: number;
+  id: string;
+  installs: number;
+  kind: "mcp" | "http";
+  name: string;
+  slug: string;
+  spark: number[];
+  summary: string;
+  widgets: number;
+}
+
+interface InstallTarget {
+  config: (key: string) => string;
+  description: string;
+  group: "MCP" | "Direct";
+  label: string;
+  requiresApiKey: boolean;
+  steps: string[];
+  target: string;
+}
+
+interface LeaderboardRow {
+  color: string;
+  eventCount: number;
+  featured?: string;
+  name: string;
+  rank: number;
+  value: number;
+}
+
+const apiKeyMask = "ulk_live_••••••••••••4xN4";
+const apiKeyPlaceholder = "$ULTRALIGHT_API_KEY";
+const mcpUrl = "https://api.ultralight.dev/mcp/platform";
+
+const orbitAgents = [
+  { alt: "Codex", className: "agent-one", src: agentCodexUrl },
+  { alt: "Cursor", className: "agent-two", src: agentCursorUrl },
+  { alt: "OpenClaw", className: "agent-three", src: agentOpenclawUrl },
+  { alt: "Claude", className: "agent-four", src: agentClaudeUrl },
+] as const;
+
+const discoverTools: ToolFixture[] = [
   {
     author: "@kepler",
+    callPrice: 0.012,
+    category: "Weather",
     color: "#7c3aed",
-    installs: "24.8k",
+    growth: 0.18,
+    id: "tool_8fa21c",
+    installs: 24803,
+    kind: "mcp",
     name: "get_weather",
-    price: "Free install",
-    summary: "Hyper-local weather, forecasts, and alert widgets.",
-    widgets: "2 widgets",
+    slug: "get_weather",
+    spark: [11, 13, 16, 12, 17, 21, 28],
+    summary: "Hyper-local weather, forecasts, and severe-weather widgets.",
+    widgets: 2,
   },
   {
     author: "@anchor",
+    callPrice: 0.003,
+    category: "Finance",
     color: "#0891b2",
-    installs: "19.4k",
+    growth: 0.06,
+    id: "tool_3b90de",
+    installs: 19402,
+    kind: "http",
     name: "currency_convert",
-    price: "0.002/call",
-    summary: "Live FX across 180+ pairs with historical rates.",
-    widgets: "Functions only",
+    slug: "currency_convert",
+    spark: [14, 15, 16, 15, 17, 18, 19],
+    summary: "Live FX across 180+ pairs with spot and historical rates.",
+    widgets: 0,
   },
   {
     author: "stripe",
+    callPrice: 0.024,
+    category: "Payments",
     color: "#635bff",
-    installs: "18.2k",
+    growth: 0.31,
+    id: "tool_st",
+    installs: 18204,
+    kind: "http",
     name: "stripe.subscribe",
-    price: "Receipts on",
-    summary: "Create subscriptions and return billing receipts.",
-    widgets: "1 widget",
+    slug: "stripe_subscribe",
+    spark: [10, 9, 12, 16, 18, 22, 30],
+    summary: "Create subscriptions, meter usage, and return receipts.",
+    widgets: 1,
+  },
+  {
+    author: "@vellum",
+    callPrice: 0.018,
+    category: "Docs",
+    color: "#ea580c",
+    growth: 0.12,
+    id: "tool_pd",
+    installs: 15211,
+    kind: "mcp",
+    name: "pdf.parse",
+    slug: "pdf_parse",
+    spark: [12, 13, 14, 15, 16, 17, 19],
+    summary: "Layout-aware PDF text, table, and citation extraction.",
+    widgets: 0,
+  },
+  {
+    author: "@octo",
+    callPrice: 0.005,
+    category: "Code",
+    color: "#0a0a0a",
+    free: true,
+    growth: 0.09,
+    id: "tool_gh",
+    installs: 14093,
+    kind: "mcp",
+    name: "github.diff",
+    slug: "github_diff",
+    spark: [13, 14, 14, 15, 16, 16, 17],
+    summary: "Branch diff, review comments, and CI status summaries.",
+    widgets: 0,
+  },
+  {
+    author: "@cartography",
+    callPrice: 0.008,
+    category: "Maps",
+    color: "#10b981",
+    free: true,
+    growth: 0.21,
+    id: "tool_mp",
+    installs: 12705,
+    kind: "http",
+    name: "maps.route",
+    slug: "maps_route",
+    spark: [9, 10, 11, 12, 13, 15, 16],
+    summary: "Driving, walking, and transit ETAs for agent plans.",
+    widgets: 1,
   },
 ];
+
 const primitives = [
-  ["Install", "Connect the MCP/API layer to existing agents."],
-  ["Discover", "Find tools and platform primitives semantically."],
-  ["Wallet", "Spendable Light, receipts, earnings, payouts."],
-  ["Widgets", "Open optional UI for tools when UI matters."],
+  ["install", "Install Ultralight", "Connect the MCP/API layer to an existing agent.", "/install"],
+  ["discover", "Discover tools", "Find public agent-native tools and widgets.", "/store"],
+  ["wallet", "Light wallet", "Spendable Light for installs, calls, hosting.", "/wallet"],
+  ["widgets", "Widgets", "Open public UI surfaces attached to tools.", "/tools/:slug"],
 ] as const;
-const flow = ["Install", "Discover", "Inspect", "Call", "Open widget", "Show receipt"];
+
+const builderLeaders: LeaderboardRow[] = [
+  { rank: 1, name: "@kepler", color: "#7c3aed", value: 4820.4, eventCount: 268000, featured: "get_weather" },
+  { rank: 2, name: "stripe", color: "#635bff", value: 3910.2, eventCount: 142000, featured: "stripe.subscribe" },
+  { rank: 3, name: "@anchor", color: "#0891b2", value: 2740.8, eventCount: 198000, featured: "currency_convert" },
+  { rank: 4, name: "@vellum", color: "#ea580c", value: 1690.0, eventCount: 64000, featured: "pdf.parse" },
+  { rank: 5, name: "@cartography", color: "#10b981", value: 1120.5, eventCount: 88000, featured: "maps.route" },
+];
+
+const feeLeaders: LeaderboardRow[] = [
+  { rank: 1, name: "stripe", color: "#635bff", value: 1284.0, eventCount: 5120 },
+  { rank: 2, name: "@kepler", color: "#7c3aed", value: 942.6, eventCount: 4380 },
+  { rank: 3, name: "@octo", color: "#0a0a0a", value: 770.2, eventCount: 2010 },
+  { rank: 4, name: "@anchor", color: "#0891b2", value: 615.4, eventCount: 3160 },
+  { rank: 5, name: "@hex", color: "#22c55e", value: 402.1, eventCount: 1890 },
+];
+
+const installTargets: InstallTarget[] = [
+  {
+    config: (key) => genericMcpConfig(key),
+    description: "Add Ultralight as a remote MCP server for an existing Claude Code workspace.",
+    group: "MCP",
+    label: "Claude Code",
+    requiresApiKey: true,
+    steps: [
+      "Create an Ultralight API token from Settings.",
+      "Set ULTRALIGHT_API_KEY in your shell or Claude Code environment.",
+      "Add the remote MCP server with an Authorization header.",
+    ],
+    target: "claude_code",
+  },
+  {
+    config: (key) => genericMcpConfig(key),
+    description: "Install the Ultralight MCP server in Cursor's MCP configuration.",
+    group: "MCP",
+    label: "Cursor",
+    requiresApiKey: true,
+    steps: [
+      "Open Cursor MCP settings.",
+      "Add the ultralight server entry below.",
+      "Reload Cursor so agents can discover Ultralight tools.",
+    ],
+    target: "cursor",
+  },
+  {
+    config: (key) =>
+      `[mcp_servers.ultralight]\nurl = "${mcpUrl}"\nheaders = { Authorization = "Bearer ${key}" }`,
+    description: "Connect Codex to the same remote MCP endpoint used by other agents.",
+    group: "MCP",
+    label: "Codex",
+    requiresApiKey: true,
+    steps: [
+      "Create an Ultralight API token.",
+      "Add a remote MCP server named ultralight.",
+      "Use the platform MCP endpoint and Authorization header below.",
+    ],
+    target: "codex",
+  },
+  {
+    config: (key) =>
+      JSON.stringify({ server_url: mcpUrl, authorization: `Bearer ${key}` }, null, 2),
+    description: "Register Ultralight as a remote MCP server for OpenAI agent runtimes that support MCP tools.",
+    group: "MCP",
+    label: "OpenAI Remote MCP",
+    requiresApiKey: true,
+    steps: [
+      "Use the platform MCP endpoint as the server URL.",
+      "Pass your Ultralight API token as a bearer Authorization header.",
+      "Allow the agent to list tools before calling specific tools.",
+    ],
+    target: "openai_remote_mcp",
+  },
+  {
+    config: (key) => genericMcpConfig(key),
+    description: "Use the standard remote MCP server declaration for any compatible agent.",
+    group: "MCP",
+    label: "Generic MCP",
+    requiresApiKey: true,
+    steps: [
+      "Copy the server configuration into your agent's MCP config.",
+      "Replace the API token placeholder with an Ultralight API token.",
+      "Restart the agent or refresh its tool registry.",
+    ],
+    target: "generic_mcp",
+  },
+  {
+    config: (key) =>
+      `npm install -g ultralightpro\nultralight login --token ${key}\nultralight upload .`,
+    description: "Use the Ultralight CLI to login, upload, test, and run deployed tools.",
+    group: "Direct",
+    label: "CLI",
+    requiresApiKey: true,
+    steps: [
+      "Install the ultralightpro package.",
+      "Run ultralight login --token <your-token>.",
+      "Run ultralight upload . from a deployable tool directory.",
+    ],
+    target: "cli",
+  },
+  {
+    config: (key) =>
+      `curl "https://api.ultralight.dev/api/launch/status"\ncurl -H "Authorization: Bearer ${key}" \\\n  "https://api.ultralight.dev/api/launch/library"`,
+    description: "Call launch and platform endpoints directly with an Ultralight API token.",
+    group: "Direct",
+    label: "Direct API",
+    requiresApiKey: true,
+    steps: [
+      "Create an API token from Settings.",
+      "Send Authorization: Bearer <token> on authenticated requests.",
+      "Read /api/launch/status and /openapi.json before calling.",
+    ],
+    target: "api",
+  },
+];
+
+const externalLoop = [
+  "Install MCP / CLI / API",
+  "Discover tools + primitives",
+  "Inspect pricing, trust, widgets",
+  "Call through MCP / API",
+  "Return widget links + receipts",
+];
 
 export function HomeFoundationPage({ navigate }: LaunchPageProps): ReactElement {
   return (
-    <>
-      <PageHeader
-        actions={
-          <>
+    <div className="launch-page-narrow home-page">
+      <section className="home-hero">
+        <div className="home-hero-copy">
+          <h1>Many agents?<br />One tool layer.</h1>
+          <p>
+            Connected agents now inherit every published tool, with unified auth
+            and payments. Or deploy your own.
+          </p>
+          <div className="hero-actions left">
             <RouteButton icon="copy" navigate={navigate} size="lg" to="/install">
               Add to agent
             </RouteButton>
             <RouteButton navigate={navigate} size="lg" to="/store" variant="secondary">
               Browse Store
             </RouteButton>
-          </>
-        }
-        eyebrow="External-agent tool layer"
-        intro="One endpoint lets existing agents discover tools, run functions, open widgets, and settle usage in Light."
-        title="Many agents? One tool layer."
-      />
-
-      <section className="orbit-band" aria-label="Agent-native platform loop">
-        <div className="orbit-copy">
-          <p>
-            Deploy tools any existing agent can install, run, compose, and pay for.
-          </p>
-          <div className="agent-wall">
-            {agentLogos.map((logo) => <span key={logo}>{logo}</span>)}
           </div>
         </div>
-        <div className="orbit-system" aria-hidden="true">
-          <span className="orbit-core"><Icon name="spark" size={36} /></span>
-          <span className="orbit-dot dot-one">Tools</span>
-          <span className="orbit-dot dot-two">Auth</span>
-          <span className="orbit-dot dot-three">Pay</span>
-          <span className="orbit-dot dot-four">UI</span>
-        </div>
+        <AgentOrbit />
       </section>
 
-      <Section title="The external agent loop">
-        <div className="flow-strip">
-          {flow.map((step, index) => (
-            <div className="flow-step" key={step}>
-              <Mono>{index + 1}</Mono>
-              <span>{step}</span>
-            </div>
-          ))}
-        </div>
-      </Section>
+      <ValueProps />
+
+      <section className="shared-core-section">
+        <h2>Thousands have given Ultralight to their agents</h2>
+        <p>
+          Every agent draws from one core: the same context, tools, auth, and payments.
+        </p>
+        <SharedCore />
+      </section>
 
       <Section
         action={<RouteLink navigate={navigate} to="/store">Browse all</RouteLink>}
         title="Tools shipping now"
       >
-        <div className="tool-grid">
-          {featuredTools.map((tool) => <ToolCard key={tool.name} tool={tool} />)}
+        <div className="home-tool-grid">
+          {discoverTools.slice(0, 6).map((tool) => <CompactToolCard key={tool.id} tool={tool} />)}
         </div>
       </Section>
 
-      <Section title="One endpoint. Every capability.">
-        <div className="two-column">
-          <Card>
-            <h3>Agent config preview</h3>
-            <p>
-              The production install page will copy the right MCP, CLI, or API
-              instructions for the selected agent.
-            </p>
-            <CodeBlock>{`{
-  "mcpServers": {
-    "ultralight": {
-      "url": "https://api.ultralight.dev/mcp/platform",
-      "headers": { "Authorization": "Bearer $KEY" }
-    }
-  }
-}`}</CodeBlock>
-          </Card>
-          <div className="primitive-grid">
-            {primitives.map(([title, body]) => (
-              <Card key={title} tone="subtle">
-                <h3>{title}</h3>
-                <p>{body}</p>
-              </Card>
-            ))}
-          </div>
+      <section className="endpoint-section">
+        <div>
+          <h2>One endpoint. Every capability.</h2>
+          <p>
+            Point your agent at a single MCP server. It discovers the whole
+            catalog, calls any tool, and settles in Light.
+          </p>
+          <RouteButton icon="copy" navigate={navigate} size="lg" to="/install">
+            Add to agent
+          </RouteButton>
         </div>
-      </Section>
-    </>
+        <ConfigPreview />
+      </section>
+
+      <section className="closing-band">
+        <div>
+          <h2>Give your agent the tool layer.</h2>
+          <p>One endpoint for every capability: discover, call, and settle in Light.</p>
+        </div>
+        <div className="hero-actions left">
+          <RouteButton icon="copy" navigate={navigate} size="lg" to="/install" variant="secondary">
+            Add to agent
+          </RouteButton>
+          <RouteButton navigate={navigate} size="lg" to="/store" variant="ghost">
+            Browse Store
+          </RouteButton>
+        </div>
+      </section>
+    </div>
   );
 }
 
-export function InstallFoundationPage({ navigate }: LaunchPageProps): ReactElement {
+export function InstallFoundationPage(_props: LaunchPageProps): ReactElement {
+  const [target, setTarget] = useState("claude_code");
+  const [signedIn, setSignedIn] = useState(false);
+  const selected = installTargets.find((item) => item.target === target) || installTargets[0];
+  const key = signedIn ? "ulk_live_7Qp2sR9vK3mD8xN4" : apiKeyPlaceholder;
+
   return (
-    <>
+    <div className="launch-page install-page">
       <PageHeader
-        actions={<RouteButton icon="key" navigate={navigate} size="lg" to="/settings">Create key</RouteButton>}
+        actions={
+          <Button icon="key" onClick={() => setSignedIn((value) => !value)} size="lg" variant={signedIn ? "secondary" : "primary"}>
+            {signedIn ? "Use placeholder" : "Simulate sign in"}
+          </Button>
+        }
         eyebrow="Install"
-        intro="Connect Ultralight to the agents your team already uses. API keys are revealed once and scoped for tool calls."
-        title="Add Ultralight to an existing agent."
+        intro="One remote MCP endpoint, or the CLI and API, lets any existing agent discover, call, and pay for tools."
+        title="Connect Ultralight to your agent."
       />
-      <Section title="Supported launch targets">
-        <div className="target-grid">
-          {agentLogos.map((target) => (
-            <Card key={target}>
-              <div className="card-row">
-                <span className="target-icon"><Icon name="terminal" /></span>
-                <div>
-                  <h3>{target}</h3>
-                  <p>MCP or direct API setup with bearer token auth.</p>
-                </div>
-              </div>
-            </Card>
-          ))}
-        </div>
-      </Section>
-      <Section title="Single key launch UX">
-        <Card>
-          <div className="split-card">
+
+      <div className="install-loop">
+        {externalLoop.map((step, index) => (
+          <span key={step}>
+            <Mono>{index + 1}</Mono>
+            {step}
+          </span>
+        ))}
+      </div>
+
+      <KeyBanner signedIn={signedIn} />
+
+      <div className="install-grid">
+        <aside className="target-sidebar">
+          <TargetPicker active={target} onPick={setTarget} />
+        </aside>
+        <section className="target-panel">
+          <div className="target-heading">
             <div>
-              <Pill tone="green">Reveal once</Pill>
-              <h3>Provision once, pass scoped tokens to agents.</h3>
-              <p>
-                The launch implementation keeps provisioning keys out of widget
-                HTML. Tool widgets receive temporary execution context from the
-                platform render path.
-              </p>
+              <h2>{selected.label}</h2>
+              <p>{selected.description}</p>
             </div>
-            <CodeBlock>{`ULTRALIGHT_API_KEY=ulk_live_...
-ultralight mcp install --target codex
-ultralight tools search "weather"`}</CodeBlock>
+            {selected.requiresApiKey ? <Pill>requires API key</Pill> : null}
           </div>
-        </Card>
-      </Section>
-    </>
+          <ol className="install-steps">
+            {selected.steps.map((step) => <li key={step}>{step}</li>)}
+          </ol>
+          <ConfigPreview code={selected.config(key)} highlight={key} />
+        </section>
+      </div>
+    </div>
   );
 }
 
 export function StoreFoundationPage({ navigate }: LaunchPageProps): ReactElement {
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState("all");
+  const filteredTools = discoverTools.filter((tool) =>
+    (kind === "all" || tool.kind === kind) &&
+    (!query ||
+      `${tool.name} ${tool.summary} ${tool.category}`.toLowerCase().includes(
+        query.toLowerCase(),
+      ))
+  );
+
   return (
-    <>
-      <PageHeader
-        actions={<Button icon="search" size="lg" variant="secondary">Search tools</Button>}
-        eyebrow="Store"
-        intro="Public discovery for tools, widgets, platform primitives, builders, and fee-credit leaders."
-        title="Find the right callable surface."
-      />
-      <Section title="Semantic discovery">
-        <div className="search-panel">
-          <Icon name="search" />
-          <span>Try deploy, wallet, pricing, install, publish, or weather.</span>
-        </div>
-        <div className="tool-grid">
-          {featuredTools.map((tool) => (
+    <div className="launch-page-narrow store-page">
+      <section className="store-heading">
+        <h1>Tools your agent can call.</h1>
+        <SearchControls query={query} setQuery={setQuery} />
+        <div className="kind-tabs" aria-label="Tool kinds">
+          {["all", "mcp", "http"].map((option) => (
             <button
-              className="tool-card-button"
-              key={tool.name}
-              onClick={() => navigate(`/tools/${tool.name}`)}
+              className={kind === option ? "active" : ""}
+              key={option}
+              onClick={() => setKind(option)}
               type="button"
             >
-              <ToolCard tool={tool} />
+              {option === "all" ? "All" : option.toUpperCase()}
             </button>
           ))}
         </div>
-      </Section>
-      <Section title="Leaderboards">
-        <div className="two-column">
-          <Leaderboard title="Builders" valueLabel="earned" />
-          <Leaderboard title="Fee credit" valueLabel="waived" />
-        </div>
-      </Section>
-    </>
+      </section>
+
+      <div className="store-layout">
+        <section className="store-results">
+          <RetrievalNote query={query} />
+          <div className="store-tool-grid">
+            {filteredTools.length > 0
+              ? filteredTools.map((tool) => (
+                <button
+                  className="tool-card-button"
+                  key={tool.id}
+                  onClick={() => navigate(`/tools/${tool.slug}`)}
+                  type="button"
+                >
+                  <StoreToolCard tool={tool} />
+                </button>
+              ))
+              : <NoResults onClear={() => setQuery("")} />}
+          </div>
+        </section>
+        <aside className="store-sidebar">
+          <PrimitivesRail navigate={navigate} />
+          <Leaderboard title="Top builders" subtitle="By earned Light" rows={builderLeaders} />
+          <Leaderboard title="Fee credit" subtitle="Fee-waiver program" rows={feeLeaders} />
+        </aside>
+      </div>
+    </div>
   );
 }
 
@@ -303,7 +552,7 @@ export function LibraryFoundationPage({ navigate }: LaunchPageProps): ReactEleme
       />
       <Section title="Installed">
         <div className="tool-grid">
-          {featuredTools.slice(0, 2).map((tool) => <ToolCard key={tool.name} tool={tool} />)}
+          {discoverTools.slice(0, 2).map((tool) => <StoreToolCard key={tool.id} tool={tool} />)}
         </div>
       </Section>
       <Section title="Owned">
@@ -395,7 +644,7 @@ export function SettingsFoundationPage(_props: LaunchPageProps): ReactElement {
           <Card>
             <h3>API key</h3>
             <p>Create, copy once, rotate, or revoke scoped launch tokens.</p>
-            <CodeBlock>{"ulk_live_••••••••••••4xN4"}</CodeBlock>
+            <CodeBlock>{apiKeyMask}</CodeBlock>
           </Card>
           <Card>
             <h3>Default permission</h3>
@@ -412,58 +661,312 @@ export function SettingsFoundationPage(_props: LaunchPageProps): ReactElement {
   );
 }
 
-function ToolCard({
-  tool,
-}: {
-  tool: typeof featuredTools[number];
-}): ReactElement {
+function ValueProps(): ReactElement {
+  const items = [
+    ["01", "One core", "Plug in and inherit context, tools, balance, and preferences."],
+    ["02", "No subscriptions", "Agents pay per call, only for what they use."],
+    ["03", "Open marketplace", "Every published tool is discoverable and callable by any agent."],
+    ["04", "Inherited power", "Every deployed tool inherits composability and distribution."],
+  ] as const;
   return (
-    <Card className="tool-card">
-      <div className="tool-title">
-        <Avatar color={tool.color} name={tool.author} />
-        <div>
-          <h3>{tool.name}</h3>
-          <span>{tool.author}</span>
+    <section className="value-grid">
+      {items.map(([number, title, body]) => (
+        <div className="value-item" key={number}>
+          <span>{number}</span>
+          <h2>{title}</h2>
+          <p>{body}</p>
         </div>
+      ))}
+    </section>
+  );
+}
+
+function SharedCore(): ReactElement {
+  return (
+    <div className="shared-core">
+      {["Context", "Tools", "Auth", "Payments"].map((item) => <span key={item}>{item}</span>)}
+    </div>
+  );
+}
+
+function AgentOrbit(): ReactElement {
+  return (
+    <div className="agent-orbit" aria-hidden="true">
+      <svg className="orbit-lines" viewBox="0 0 440 440" aria-hidden="true">
+        <ellipse cx="220" cy="220" rx="204" ry="102" />
+        <ellipse cx="220" cy="220" rx="170" ry="85" />
+        <ellipse cx="220" cy="220" rx="136" ry="68" />
+        <ellipse cx="220" cy="220" rx="96" ry="48" />
+      </svg>
+      <span className="orbit-node node-center"><Icon name="spark" size={34} /></span>
+      {orbitAgents.map((agent) => (
+        <img
+          alt={agent.alt}
+          className={`orbit-agent ${agent.className}`}
+          height={34}
+          key={agent.alt}
+          src={agent.src}
+          width={34}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ConfigPreview({
+  code,
+  highlight,
+}: {
+  code?: string;
+  highlight?: string;
+}): ReactElement {
+  const config = code ?? genericMcpConfig("$KEY");
+  return (
+    <div className="config-preview">
+      <div className="config-titlebar">
+        <span style={{ background: "#ec6a5e" }} />
+        <span style={{ background: "#f4bf4f" }} />
+        <span style={{ background: "#61c554" }} />
+        <Mono>mcp.json</Mono>
+      </div>
+      <pre>
+        <code>{highlight ? highlightSnippet(config, highlight) : config}</code>
+      </pre>
+    </div>
+  );
+}
+
+function highlightSnippet(text: string, highlight: string): ReactNode {
+  if (!highlight || !text.includes(highlight)) return text;
+  const parts = text.split(highlight);
+  return parts.map((part, index) => (
+    <span key={`${part}-${index}`}>
+      {part}
+      {index < parts.length - 1 ? <mark>{highlight}</mark> : null}
+    </span>
+  ));
+}
+
+function CompactToolCard({ tool }: { tool: ToolFixture }): ReactElement {
+  const free = tool.free || tool.callPrice === 0;
+  return (
+    <Card className="compact-tool-card">
+      <div className="compact-tool-title">
+        <Avatar color={tool.color} name={tool.author} />
+        <Mono>{tool.name}</Mono>
       </div>
       <p>{tool.summary}</p>
-      <div className="tool-meta">
-        <Mono>{tool.installs} installs</Mono>
-        <span>{tool.widgets}</span>
-      </div>
-      <div className="tool-meta">
-        <Pill tone={tool.price === "Free install" ? "green" : "default"}>{tool.price}</Pill>
-        <Pill>Signed</Pill>
+      <div className="compact-tool-footer">
+        <Mono>{formatNumber(tool.installs)} installs</Mono>
+        {free ? <span>Free</span> : <span>{formatLight(tool.callPrice)}/call</span>}
       </div>
     </Card>
   );
 }
 
-function Leaderboard({
-  title,
-  valueLabel,
-}: {
-  title: string;
-  valueLabel: string;
-}): ReactElement {
-  const rows = [
-    ["@kepler", "4.8k"],
-    ["stripe", "3.9k"],
-    ["@anchor", "2.7k"],
-  ];
+function KeyBanner({ signedIn }: { signedIn: boolean }): ReactElement {
   return (
-    <Card>
-      <h3>{title}</h3>
+    <section className={signedIn ? "key-banner signed-in" : "key-banner"}>
+      <span className="target-icon"><Icon name="key" /></span>
+      <div>
+        <h2>{signedIn ? "Your API key is included below" : "Sign in to drop your key into these snippets"}</h2>
+        <p>
+          {signedIn
+            ? <>Copy any snippet and it is ready to run: <Mono>{apiKeyMask}</Mono>.</>
+            : <>Until then they show <Mono>{apiKeyPlaceholder}</Mono>; replace it with your own token.</>}
+        </p>
+      </div>
+      <Button size="sm" variant={signedIn ? "secondary" : "primary"}>
+        {signedIn ? "Copy key" : "Sign in"}
+      </Button>
+    </section>
+  );
+}
+
+function TargetPicker({
+  active,
+  onPick,
+}: {
+  active: string;
+  onPick: (target: string) => void;
+}): ReactElement {
+  return (
+    <div className="target-picker">
+      {(["MCP", "Direct"] as const).map((group) => (
+        <div key={group}>
+          <p className="section-label">{group === "MCP" ? "Remote MCP servers" : "CLI and API"}</p>
+          <div className="target-list">
+            {installTargets.filter((target) => target.group === group).map((target) => (
+              <button
+                className={active === target.target ? "active" : ""}
+                key={target.target}
+                onClick={() => onPick(target.target)}
+                type="button"
+              >
+                <Icon name={group === "MCP" ? "spark" : "terminal"} />
+                {target.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SearchControls({
+  query,
+  setQuery,
+}: {
+  query: string;
+  setQuery: (query: string) => void;
+}): ReactElement {
+  return (
+    <label className="search-control">
+      <Icon name="search" />
+      <input
+        aria-label="Search tools"
+        onChange={(event) => setQuery(event.currentTarget.value)}
+        placeholder="Search tools, capabilities, widgets..."
+        type="search"
+        value={query}
+      />
+      {query ? (
+        <button onClick={() => setQuery("")} type="button">Clear</button>
+      ) : null}
+    </label>
+  );
+}
+
+function RetrievalNote({ query }: { query: string }): ReactElement {
+  if (!query) {
+    return (
+      <div className="retrieval-note">
+        Browsing all public tools · top by install
+      </div>
+    );
+  }
+  return (
+    <div className="retrieval-note active">
+      <span /> hybrid retrieval · semantic + lexical fallback
+    </div>
+  );
+}
+
+function StoreToolCard({ tool }: { tool: ToolFixture }): ReactElement {
+  return (
+    <Card className="store-tool-card">
+      <div className="store-card-title">
+        <Avatar color={tool.color} name={tool.author} />
+        <div>
+          <h3>{tool.name}</h3>
+          <span>{tool.author}</span>
+        </div>
+        <Pill>{tool.kind}</Pill>
+      </div>
+      <p>{tool.summary}</p>
+      <div className="store-card-meta">
+        <Mono>{formatNumber(tool.installs)} installs</Mono>
+        {tool.widgets > 0 ? <span><Icon name="grid" size={12} /> {tool.widgets} widgets</span> : <span>functions only</span>}
+      </div>
+      <Sparkline points={tool.spark} growth={tool.growth} />
+    </Card>
+  );
+}
+
+function Sparkline({ growth, points }: { growth: number; points: number[] }): ReactElement {
+  const max = Math.max(...points);
+  const min = Math.min(...points);
+  const range = max - min || 1;
+  const polyline = points.map((value, index) => {
+    const x = (index / (points.length - 1)) * 74;
+    const y = 24 - ((value - min) / range) * 24;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return (
+    <svg className={growth > 0.1 ? "sparkline growing" : "sparkline"} viewBox="0 0 74 28" aria-hidden="true">
+      <polyline points={polyline} />
+    </svg>
+  );
+}
+
+function PrimitivesRail({ navigate }: { navigate: (to: string) => void }): ReactElement {
+  return (
+    <Card className="primitives-rail">
+      <p className="section-label">For agents · platform primitives</p>
+      {primitives.map(([key, label, description, route]) => (
+        <button
+          key={key}
+          onClick={() => navigate(route === "/tools/:slug" ? "/tools/get_weather" : route)}
+          type="button"
+        >
+          <span>
+            <strong>{label}</strong>
+            <small>{description}</small>
+          </span>
+          <Mono>{route}</Mono>
+        </button>
+      ))}
+    </Card>
+  );
+}
+
+function Leaderboard({
+  rows,
+  subtitle,
+  title,
+}: {
+  rows: LeaderboardRow[];
+  subtitle: string;
+  title: string;
+}): ReactElement {
+  const [period, setPeriod] = useState("30d");
+  return (
+    <Card className="leaderboard-card">
+      <div className="leaderboard-head">
+        <div>
+          <h3>{title}</h3>
+          <p>{subtitle}</p>
+        </div>
+        <div className="mini-segments">
+          {["30d", "90d", "all"].map((option) => (
+            <button
+              className={period === option ? "active" : ""}
+              key={option}
+              onClick={() => setPeriod(option)}
+              type="button"
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="leaderboard-list">
-        {rows.map(([name, value], index) => (
-          <div className="leader-row" key={name}>
-            <Mono>{index + 1}</Mono>
-            <span>{name}</span>
-            <strong>{value} {valueLabel}</strong>
+        {rows.map((row) => (
+          <div className="leader-row" key={`${title}-${row.rank}`}>
+            <Mono>{row.rank}</Mono>
+            <Avatar color={row.color} name={row.name} />
+            <span>
+              <strong>{row.name}</strong>
+              {row.featured ? <small>{row.featured}</small> : null}
+            </span>
+            <Mono>{formatLight(row.value)}</Mono>
           </div>
         ))}
       </div>
     </Card>
+  );
+}
+
+function NoResults({ onClear }: { onClear: () => void }): ReactElement {
+  return (
+    <div className="store-empty">
+      <EmptyState icon="search" title="No tools match that yet">
+        Semantic search would fall back to lexical results here. Try broader terms,
+        or browse by kind.
+      </EmptyState>
+      <Button onClick={onClear} size="sm" variant="secondary">Clear search</Button>
+    </div>
   );
 }
 
@@ -503,4 +1006,31 @@ function CapabilityTag({
 
 export function FoundationNotice({ children }: { children: ReactNode }): ReactElement {
   return <EmptyState title="Ready for page port">{children}</EmptyState>;
+}
+
+function genericMcpConfig(key: string): string {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        ultralight: {
+          headers: { Authorization: `Bearer ${key}` },
+          url: mcpUrl,
+        },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function formatNumber(value: number): string {
+  if (value >= 10_000) return `${Math.round(value / 1000)}k`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  return String(value);
+}
+
+function formatLight(value: number): string {
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  if (value >= 1) return value.toFixed(1);
+  return value.toFixed(3);
 }
