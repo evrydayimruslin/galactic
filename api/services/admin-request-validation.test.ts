@@ -119,8 +119,8 @@ Deno.test("admin request validation: billing config accepts rates and policy cop
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         canonical_light_per_usd: 100,
-        wallet_light_per_usd: 95,
-        wire_light_per_usd: 99,
+        wallet_light_per_usd: 100,
+        wire_light_per_usd: 100,
         payout_light_per_usd: 100,
         platform_fee_rate: 0.15,
         min_withdrawal_light: 5000,
@@ -144,8 +144,8 @@ Deno.test("admin request validation: billing config accepts rates and policy cop
 
   assertEquals(payload, {
     canonical_light_per_usd: 100,
-    wallet_light_per_usd: 95,
-    wire_light_per_usd: 99,
+    wallet_light_per_usd: 100,
+    wire_light_per_usd: 100,
     payout_light_per_usd: 100,
     platform_fee_rate: 0.15,
     min_withdrawal_light: 5000,

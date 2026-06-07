@@ -181,7 +181,7 @@ function normalizeFundingMethod(
 
 function lightRate(metadata: Record<string, string | undefined>): number {
   const parsed = readNumber(metadata.light_per_usd);
-  return parsed && parsed > 0 ? parsed : 95;
+  return parsed && parsed > 0 ? parsed : 100;
 }
 
 function configVersion(metadata: Record<string, string | undefined>): number {

@@ -1,0 +1,52 @@
+/* Premium UI keyframes + small global helpers */
+
+@keyframes pui-halo { 0% { transform: scale(0.6); opacity: 0.6; } 100% { transform: scale(2.4); opacity: 0; } }
+@keyframes pui-shimmer { 0% { background-position: -40% 0; } 100% { background-position: 140% 0; } }
+@keyframes pui-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.025); } }
+@keyframes pui-pop { 0% { transform: translateY(6px) scale(0.98); opacity: 0; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
+@keyframes pui-toolpop { 0% { transform: translateY(4px) scale(0.985); opacity: 0; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
+@keyframes pui-spin { to { transform: rotate(360deg); } }
+@keyframes pui-cursor { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes pui-dealt-added-flash { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.0); } 30% { box-shadow: 0 0 0 8px rgba(34,197,94,0.18); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
+.pui-dealt-added { animation: pui-dealt-added-flash 700ms ease; }
+@keyframes pui-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.85); } }
+@keyframes pui-fade-in { 0% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes pui-fade-up { 0% { opacity: 0; transform: translateY(6px); } 100% { opacity: 1; transform: translateY(0); } }
+@keyframes pui-msg-rise { 0% { opacity: 0; transform: translateY(4px); } 100% { opacity: 1; transform: translateY(0); } }
+@keyframes pui-typing { 0%, 60%, 100% { opacity: 0.3; } 30% { opacity: 1; } }
+@keyframes pui-credit-rise { 0% { opacity: 0; transform: translateY(8px); } 30% { opacity: 1; transform: translateY(0); } 80% { opacity: 1; } 100% { opacity: 0; transform: translateY(-6px); } }
+@keyframes pui-orbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes pui-spark-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@keyframes pui-dot-arrive { 0% { opacity: 0; transform: scale(0.2); } 60% { opacity: 1; transform: scale(1.15); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes pui-caret { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+@keyframes pui-ring-resolve { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); } 100% { box-shadow: 0 0 0 14px rgba(34,197,94,0); } }
+
+/* artboard frame helper */
+.pui-frame {
+  background: #fff; border: 1px solid rgba(0,0,0,0.08);
+  border-radius: 12px; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.pui-frame-label {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  color: #999; padding: 6px 12px; border-bottom: 1px solid rgba(0,0,0,0.06);
+  background: #fafafa; letter-spacing: 0.05em; text-transform: uppercase;
+  display: flex; align-items: center; gap: 8px;
+}
+.pui-frame-label .dot { width: 6px; height: 6px; border-radius: 9999px; background: #d1d5db; }
+.pui-frame-label.before .dot { background: #d1d5db; }
+.pui-frame-label.after .dot { background: #22c55e; }
+.pui-side-by-side { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; }
+
+.pui-note {
+  font-size: 13px; line-height: 1.6; color: #555; padding: 16px 24px;
+  background: #fafafa; border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+.pui-note strong { color: #0a0a0a; }
+.pui-note code { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: rgba(0,0,0,0.04); padding: 1px 5px; border-radius: 3px; }
+
+button { font-family: inherit; }
+*::-webkit-scrollbar { display: none; }
+* { scrollbar-width: none; }
+
+kbd { font-family: 'JetBrains Mono', monospace; }

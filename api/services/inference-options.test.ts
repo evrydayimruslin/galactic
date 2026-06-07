@@ -46,6 +46,7 @@ Deno.test("inference options: Light-only account exposes provider registry and b
     billingMode: "light",
     provider: "openrouter",
     model: BYOK_PROVIDERS.openrouter.defaultModel,
+    webSearchEnabled: false,
   });
   assertEquals(options.light.balanceLight, 42);
   assertEquals(options.light.minimumBalanceLight, CHAT_MIN_BALANCE_LIGHT);
@@ -91,6 +92,7 @@ Deno.test("inference options: configured BYOK account selects primary provider",
     billingMode: "byok",
     provider: "nvidia",
     model: "minimaxai/minimax-m2.7",
+    webSearchEnabled: false,
   });
   assertEquals(options.light.usable, true);
   assertEquals(options.configuredProviderIds, ["openai", "nvidia"]);

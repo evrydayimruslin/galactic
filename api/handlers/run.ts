@@ -41,6 +41,8 @@ import {
   callerHasAppAccess,
   callerHasFunctionAccess,
   callerHasRequiredScope,
+  callerUsesApiToken,
+  callerUsesRoutineActorToken,
   type RequestCallerContext,
   resolveRequestCallerContext,
 } from "../services/request-caller-context.ts";
@@ -58,6 +60,10 @@ import {
   type MemoryService as MemoryServiceImpl,
 } from "../services/memory.ts";
 import { getEnv } from "../lib/env.ts";
+import {
+  buildAgentPermissionConfigureUrl,
+  enforceAgentFunctionPermission,
+} from "../services/agent-function-permissions.ts";
 
 function toLogEntries(lines: string[]): LogEntry[] {
   return lines.map((message) => ({
@@ -168,6 +174,35 @@ export async function handleRun(
       !callerHasRequiredScope(caller, "apps:call")
     ) {
       return error("Token missing required scope: apps:call", 403);
+    }
+
+    if (callerUsesApiToken(caller) || callerUsesRoutineActorToken(caller)) {
+      const permission = await enforceAgentFunctionPermission({
+        userId,
+        appId: app.id,
+        functionName,
+        configureUrl: buildAgentPermissionConfigureUrl(
+          requestBaseUrl(request),
+          app.id,
+          functionName,
+        ),
+      });
+      if (!permission.allowed) {
+        return json(
+          {
+            success: false,
+            result: null,
+            logs: [],
+            duration_ms: 0,
+            error: {
+              type: permission.errorType,
+              message: permission.message,
+              details: permission.details,
+            },
+          } as RunResponse,
+          permission.httpStatus,
+        );
+      }
     }
 
     // ── GPU Runtime Branch ──
@@ -522,4 +557,14 @@ export async function handleRun(
     console.error("Run error:", err);
     return error(err instanceof Error ? err.message : "Execution failed", 500);
   }
+}
+
+function requestBaseUrl(request: Request): string {
+  const configured = getEnv("BASE_URL");
+  if (configured) return configured.replace(/\/+$/, "");
+  const url = new URL(request.url);
+  const host = request.headers.get("host") || url.host;
+  const proto = request.headers.get("x-forwarded-proto") ||
+    (host.includes("localhost") ? "http" : "https");
+  return `${proto}://${host}`;
 }

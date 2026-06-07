@@ -102,7 +102,14 @@ Deno.test("command surfaces: flattens widget and card inventory", () => {
     assertEquals(urgent.data_function, "widget_email_urgent_data");
     assertEquals(urgent.dependencies?.length, 2);
     assertEquals(urgent.generation_hints?.preferred_component, "table");
+    assertEquals(urgent.embedding_text.includes("vip escalation"), true);
+    assertEquals(urgent.embedding_text.includes("Urgent Threads"), true);
   }
+
+  const widget = inventory.surfaces.find((surface) =>
+    surface.surface === "widget" && surface.widget_id === "email_ops"
+  );
+  assertEquals(widget?.embedding_text.includes("Email Ops"), true);
 });
 
 Deno.test("command surfaces: filters command cards by natural language query", () => {

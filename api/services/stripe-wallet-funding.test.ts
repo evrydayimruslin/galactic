@@ -33,8 +33,8 @@ Deno.test("stripe wallet funding: PaymentIntent params expose only card-backed w
     params.get("metadata[funding_method]"),
     WALLET_EXPRESS_FUNDING_METHOD,
   );
-  assertEquals(params.get("metadata[light_amount]"), "2375");
-  assertEquals(params.get("metadata[light_per_usd]"), "95");
+  assertEquals(params.get("metadata[light_amount]"), "2500");
+  assertEquals(params.get("metadata[light_per_usd]"), "100");
   assertEquals(params.get("metadata[source]"), "desktop");
   assertEquals(params.get("metadata[terms_accepted]"), "true");
   assertEquals(params.get("receipt_email"), "founder@example.com");

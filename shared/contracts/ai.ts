@@ -151,7 +151,12 @@ export interface InferenceRoutePreference {
   billingMode?: InferenceBillingMode;
   provider?: ActiveBYOKProvider;
   model?: string;
+  webSearchEnabled?: boolean;
 }
+
+export type ChatInferenceSelectedPreference =
+  Required<Pick<InferenceRoutePreference, "billingMode" | "provider" | "model">> &
+  Pick<InferenceRoutePreference, "webSearchEnabled">;
 
 export interface ChatInferenceProviderOption {
   id: ActiveBYOKProvider;
@@ -184,7 +189,7 @@ export interface ChatInferenceLightOption {
 
 export interface ChatInferenceOptionsResponse {
   defaultBillingMode: InferenceBillingMode;
-  selected: Required<InferenceRoutePreference>;
+  selected: ChatInferenceSelectedPreference;
   light: ChatInferenceLightOption;
   providers: ChatInferenceProviderOption[];
   configuredProviderIds: ActiveBYOKProvider[];

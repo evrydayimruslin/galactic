@@ -1,125 +1,145 @@
-export const LAUNCH_MVP_VERSION = 'launch-mvp-v1' as const;
+export const LAUNCH_MVP_VERSION = "launch-mvp-v1" as const;
 
 export const LAUNCH_INCLUDED_CAPABILITIES = [
-  'install',
-  'tool_library',
-  'tool_discovery',
-  'public_tool_pages',
-  'widgets',
-  'owner_admin',
-  'light_wallet',
-  'builder_leaderboard',
-  'fee_credit_leaderboard',
-  'launch_embeddings',
-  'cli_api_mcp',
+  "install",
+  "tool_library",
+  "tool_discovery",
+  "public_tool_pages",
+  "widgets",
+  "owner_admin",
+  "light_wallet",
+  "builder_leaderboard",
+  "fee_credit_leaderboard",
+  "launch_embeddings",
+  "cli_api_mcp",
 ] as const;
 
-export type LaunchIncludedCapability = typeof LAUNCH_INCLUDED_CAPABILITIES[number];
+export type LaunchIncludedCapability =
+  typeof LAUNCH_INCLUDED_CAPABILITIES[number];
 
 export const LAUNCH_DEFERRED_CAPABILITIES = [
-  'desktop',
-  'byok',
-  'web_search',
-  'cerebras',
-  'standalone_agent',
-  'command_cards',
-  'command_dashboards',
-  'agentic_ui_composer',
-  'routines',
-  'tool_builder_agent',
+  "desktop",
+  "byok",
+  "web_search",
+  "cerebras",
+  "standalone_agent",
+  "command_cards",
+  "command_dashboards",
+  "agentic_ui_composer",
+  "routines",
+  "tool_builder_agent",
 ] as const;
 
-export type LaunchDeferredCapability = typeof LAUNCH_DEFERRED_CAPABILITIES[number];
+export type LaunchDeferredCapability =
+  typeof LAUNCH_DEFERRED_CAPABILITIES[number];
 
 export const LAUNCH_PUBLIC_ROUTES = [
-  '/',
-  '/install',
-  '/library',
-  '/discover',
-  '/tools/:slug',
-  '/wallet',
-  '/settings',
-  '/admin/tools/:id',
+  "/",
+  "/install",
+  "/library",
+  "/store",
+  "/tools/:slug",
+  "/wallet",
+  "/settings",
+  "/admin/tools/:id",
 ] as const;
 
 export type LaunchPublicRoute = typeof LAUNCH_PUBLIC_ROUTES[number];
 
+export const LAUNCH_COMPATIBILITY_PUBLIC_ROUTES = [
+  "/discover",
+] as const;
+
+export type LaunchCompatibilityPublicRoute =
+  typeof LAUNCH_COMPATIBILITY_PUBLIC_ROUTES[number];
+
 export const LAUNCH_API_ROUTES = [
-  'GET /api/launch/status',
-  'GET /api/launch/openapi.json',
-  'GET /api/launch/install',
-  'GET /api/launch/api-keys',
-  'POST /api/launch/api-keys',
-  'DELETE /api/launch/api-keys/:id',
-  'GET /api/launch/library',
-  'GET /api/launch/discover',
-  'GET /api/launch/tools/:id',
-  'GET /api/launch/tools/:id/widgets',
-  'GET /api/launch/tools/:id/widgets/:widgetId',
-  'POST /api/launch/tools/:id/widgets/:widgetId/render',
-  'GET /api/launch/admin/tools/:id',
-  'GET /api/launch/wallet',
-  'GET /api/launch/leaderboard',
-  'GET /api/launch/platform-primitives',
+  "GET /api/launch/status",
+  "GET /api/launch/openapi.json",
+  "GET /api/launch/install",
+  "GET /api/launch/api-keys",
+  "POST /api/launch/api-keys",
+  "DELETE /api/launch/api-keys/:id",
+  "GET /api/launch/library",
+  "GET /api/launch/store",
+  "GET /api/launch/discover",
+  "GET /api/launch/tools/:id",
+  "GET /api/launch/tools/:id/widgets",
+  "GET /api/launch/tools/:id/widgets/:widgetId",
+  "POST /api/launch/tools/:id/widgets/:widgetId/render",
+  "GET /api/launch/tools/:id/functions",
+  "POST /api/launch/tools/:id/functions/:functionName/run",
+  "GET /api/launch/tools/:id/agent-permissions",
+  "PATCH /api/launch/tools/:id/agent-permissions",
+  "GET /api/launch/admin/tools/:id",
+  "GET /api/launch/wallet",
+  "GET /api/launch/wallet/transactions",
+  "GET /api/launch/wallet/receipts",
+  "GET /api/launch/wallet/earnings",
+  "GET /api/launch/wallet/payouts",
+  "GET /api/launch/wallet/topup/quote",
+  "POST /api/launch/wallet/topup/intent",
+  "GET /api/launch/leaderboard",
+  "GET /api/launch/platform-primitives",
 ] as const;
 
 export type LaunchApiRoute = typeof LAUNCH_API_ROUTES[number];
 
 export const LAUNCH_INSTALL_TARGETS = [
-  'claude_code',
-  'cursor',
-  'codex',
-  'openai_remote_mcp',
-  'generic_mcp',
-  'cli',
-  'api',
+  "claude_code",
+  "cursor",
+  "codex",
+  "openai_remote_mcp",
+  "generic_mcp",
+  "cli",
+  "api",
 ] as const;
 
 export type LaunchInstallTarget = typeof LAUNCH_INSTALL_TARGETS[number];
 
 export const LAUNCH_TOOL_RELATIONSHIPS = [
-  'owner',
-  'installed',
-  'public',
+  "owner",
+  "installed",
+  "public",
 ] as const;
 
 export type LaunchToolRelationship = typeof LAUNCH_TOOL_RELATIONSHIPS[number];
 
 export const LAUNCH_TOOL_KINDS = [
-  'mcp',
-  'http',
-  'markdown',
-  'gpu',
+  "mcp",
+  "http",
+  "markdown",
+  "gpu",
 ] as const;
 
 export type LaunchToolKind = typeof LAUNCH_TOOL_KINDS[number];
 
 export const LAUNCH_TOOL_VISIBILITIES = [
-  'public',
-  'private',
-  'unlisted',
+  "public",
+  "private",
+  "unlisted",
 ] as const;
 
 export type LaunchToolVisibility = typeof LAUNCH_TOOL_VISIBILITIES[number];
 
 export const LAUNCH_LEADERBOARD_KINDS = [
-  'builder',
-  'fee_credit',
+  "builder",
+  "fee_credit",
 ] as const;
 
 export type LaunchLeaderboardKind = typeof LAUNCH_LEADERBOARD_KINDS[number];
 
 export const LAUNCH_PLATFORM_PRIMITIVES = [
-  'install',
-  'deploy',
-  'publish',
-  'discover',
-  'wallet',
-  'pricing',
-  'receipts',
-  'api_keys',
-  'owner_admin',
-  'widgets',
+  "install",
+  "deploy",
+  "publish",
+  "store",
+  "wallet",
+  "pricing",
+  "receipts",
+  "api_keys",
+  "owner_admin",
+  "widgets",
 ] as const;
 
 export type LaunchPlatformPrimitive = typeof LAUNCH_PLATFORM_PRIMITIVES[number];
@@ -130,6 +150,7 @@ export interface LaunchScopeContract {
   includedCapabilities: readonly LaunchIncludedCapability[];
   deferredCapabilities: readonly LaunchDeferredCapability[];
   publicRoutes: readonly LaunchPublicRoute[];
+  compatibilityPublicRoutes: readonly LaunchCompatibilityPublicRoute[];
   apiRoutes: readonly LaunchApiRoute[];
 }
 
@@ -205,6 +226,23 @@ export interface LaunchApiKeyDeleteResponse {
   generatedAt: string;
 }
 
+export const LAUNCH_AGENT_FUNCTION_POLICIES = [
+  "always",
+  "ask",
+  "never",
+] as const;
+
+export type LaunchAgentFunctionPolicy =
+  typeof LAUNCH_AGENT_FUNCTION_POLICIES[number];
+
+export const LAUNCH_WALLET_FUNDING_METHODS = [
+  "card",
+  "ach",
+] as const;
+
+export type LaunchWalletFundingMethod =
+  typeof LAUNCH_WALLET_FUNDING_METHODS[number];
+
 export interface LaunchMoneyAmount {
   light: number;
   display: string;
@@ -214,6 +252,148 @@ export interface LaunchPricingSummary {
   defaultCallPrice?: LaunchMoneyAmount | null;
   freeToInstall: boolean;
   paidFunctionsCount?: number;
+}
+
+export interface LaunchFunctionSummary {
+  name: string;
+  description?: string | null;
+  inputSchema?: Record<string, unknown> | null;
+  outputSchema?: Record<string, unknown> | null;
+  pricing?: LaunchPricingSummary | null;
+  widgetIds?: string[];
+  agentPermission?: LaunchAgentFunctionPermissionSummary | null;
+}
+
+export interface LaunchToolFunctionsResponse {
+  tool: Pick<
+    LaunchToolSummary,
+    "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
+  >;
+  functions: LaunchFunctionSummary[];
+  generatedAt: string;
+}
+
+export interface LaunchFunctionRunRequest {
+  args?: Record<string, unknown>;
+}
+
+export interface LaunchFunctionRunWarning {
+  type: string;
+  message: string;
+  details?: unknown;
+}
+
+export interface LaunchFunctionRunResponse {
+  success: boolean;
+  tool: Pick<LaunchToolSummary, "id" | "slug" | "name">;
+  functionName: string;
+  result?: unknown;
+  receiptId?: string | null;
+  warnings?: LaunchFunctionRunWarning[];
+  error?: {
+    type?: string;
+    message: string;
+    details?: unknown;
+  } | null;
+  generatedAt: string;
+}
+
+export type LaunchAgentFunctionPermissionSource = "explicit" | "default";
+
+export interface LaunchAgentFunctionPermissionSummary {
+  appId: string;
+  functionName: string;
+  policy: LaunchAgentFunctionPolicy;
+  source: LaunchAgentFunctionPermissionSource;
+  updatedAt?: string | null;
+}
+
+export interface LaunchAgentFunctionPermissionUpdate {
+  functionName: string;
+  policy: LaunchAgentFunctionPolicy;
+}
+
+export interface LaunchAgentFunctionPermissionsResponse {
+  tool: Pick<
+    LaunchToolSummary,
+    "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
+  >;
+  defaultPolicy: LaunchAgentFunctionPolicy;
+  permissions: LaunchAgentFunctionPermissionSummary[];
+  generatedAt: string;
+}
+
+export interface LaunchAgentFunctionPermissionsUpdateRequest {
+  defaultPolicy?: LaunchAgentFunctionPolicy;
+  permissions?: LaunchAgentFunctionPermissionUpdate[];
+}
+
+export interface LaunchAgentPermissionRequired {
+  type: "permission_required";
+  policy: "ask";
+  appId: string;
+  functionName: string;
+  message: string;
+  configureUrl: string;
+  source?: LaunchAgentFunctionPermissionSource;
+  updatedAt?: string | null;
+}
+
+export interface LaunchAgentPermissionDenied {
+  type: "permission_denied";
+  policy: "never";
+  appId: string;
+  functionName: string;
+  message: string;
+  configureUrl: string;
+  source?: LaunchAgentFunctionPermissionSource;
+  updatedAt?: string | null;
+}
+
+export interface LaunchWalletFundingPreset {
+  light: number;
+  label: string;
+  recommended?: boolean;
+}
+
+export interface LaunchWalletFundingQuoteRequest {
+  amountLight: number;
+  method: LaunchWalletFundingMethod;
+}
+
+export interface LaunchWalletFundingFeeSummary {
+  method: LaunchWalletFundingMethod;
+  methodLabel: "Card" | "Bank (ACH)";
+  amountLight: number;
+  lightPerDollar: 100;
+  baseAmountCents: number;
+  processingFeeCents: number;
+  totalAmountCents: number;
+  feeFormula: string;
+}
+
+export interface LaunchWalletFundingQuoteResponse {
+  quote: LaunchWalletFundingFeeSummary;
+  presets: LaunchWalletFundingPreset[];
+  generatedAt: string;
+}
+
+export interface LaunchWalletFundingIntentRequest
+  extends LaunchWalletFundingQuoteRequest {
+  termsAccepted?: true;
+  billingAddress?: unknown;
+  returnUrl?: string;
+}
+
+export interface LaunchWalletFundingIntentResponse {
+  success: true;
+  publishableKey: string;
+  paymentIntentId: string;
+  clientSecret: string;
+  stripeCustomerId: string;
+  quote: LaunchWalletFundingFeeSummary;
+  billingAddress?: unknown;
+  generatedAt: string;
 }
 
 export interface LaunchWidgetSummary {
@@ -234,14 +414,14 @@ export interface LaunchWidgetFunctionSummary {
 }
 
 export interface LaunchWidgetRenderSurface {
-  mode: 'runtime_function';
+  mode: "runtime_function";
   endpoint: LaunchApiRoute;
-  method: 'POST';
+  method: "POST";
   authRequired: true;
   uiFunction: string;
   dataFunction?: string | null;
   dataTool?: string | null;
-  htmlField: 'app_html';
+  htmlField: "app_html";
   sandbox: {
     iframe: true;
     allowScripts: true;
@@ -260,7 +440,7 @@ export interface LaunchWidgetDetail {
 export interface LaunchWidgetDetailResponse {
   tool: Pick<
     LaunchToolSummary,
-    'id' | 'slug' | 'name' | 'relationship' | 'publicUrl' | 'adminUrl'
+    "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
   >;
   widget: LaunchWidgetDetail;
   generatedAt: string;
@@ -281,8 +461,8 @@ export interface LaunchWidgetRenderedPayload {
 
 export interface LaunchWidgetRenderResponse {
   success: boolean;
-  tool: Pick<LaunchToolSummary, 'id' | 'slug' | 'name'>;
-  widget: Pick<LaunchWidgetSummary, 'id' | 'label' | 'description'>;
+  tool: Pick<LaunchToolSummary, "id" | "slug" | "name">;
+  widget: Pick<LaunchWidgetSummary, "id" | "label" | "description">;
   render: LaunchWidgetRenderedPayload | null;
   error?: {
     type?: string;
@@ -293,19 +473,19 @@ export interface LaunchWidgetRenderResponse {
 }
 
 export type LaunchDiscoveryRetrievalMode =
-  | 'browse'
-  | 'lexical'
-  | 'semantic'
-  | 'hybrid';
+  | "browse"
+  | "lexical"
+  | "semantic"
+  | "hybrid";
 
 export type LaunchDiscoverySource =
-  | 'tools'
-  | 'widgets'
-  | 'public_pages'
-  | 'install_docs'
-  | 'platform_primitives';
+  | "tools"
+  | "widgets"
+  | "public_pages"
+  | "install_docs"
+  | "platform_primitives";
 
-export type LaunchRelevanceSource = 'semantic' | 'lexical' | 'curated';
+export type LaunchRelevanceSource = "semantic" | "lexical" | "curated";
 
 export interface LaunchRelevanceSummary {
   source: LaunchRelevanceSource;
@@ -351,13 +531,13 @@ export interface LaunchToolSummary {
 export interface LaunchToolAdminSummary {
   tool: LaunchToolSummary;
   editableFields: readonly (
-    | 'name'
-    | 'description'
-    | 'visibility'
-    | 'pricing'
-    | 'widgets'
-    | 'secrets'
-    | 'trust'
+    | "name"
+    | "description"
+    | "visibility"
+    | "pricing"
+    | "widgets"
+    | "secrets"
+    | "trust"
   )[];
   receiptsUrl?: string | null;
   logsUrl?: string | null;
@@ -390,14 +570,14 @@ export interface LaunchTrustCard {
   reliability?: unknown;
   execution_receipts: {
     enabled: true;
-    field: 'receipt_id';
-    backing_log: 'mcp_call_logs.id';
+    field: "receipt_id";
+    backing_log: "mcp_call_logs.id";
   };
 }
 
 export interface LaunchDiscoveryRequest {
   query?: string;
-  kind?: LaunchToolKind | 'all';
+  kind?: LaunchToolKind | "all";
   includeWidgets?: boolean;
   limit?: number;
 }
@@ -409,6 +589,9 @@ export interface LaunchDiscoveryResponse {
   retrieval?: LaunchDiscoveryRetrievalSummary;
   generatedAt: string;
 }
+
+export type LaunchStoreRequest = LaunchDiscoveryRequest;
+export type LaunchStoreResponse = LaunchDiscoveryResponse;
 
 export interface LaunchLibraryResponse {
   owned: LaunchToolSummary[];
@@ -446,11 +629,66 @@ export interface LaunchWalletSummary {
   recentPayouts?: LaunchWalletPayoutSummary[];
 }
 
+export type LaunchWalletDetailKind =
+  | "transactions"
+  | "receipts"
+  | "earnings"
+  | "payouts";
+
+export interface LaunchWalletPageRequest {
+  cursor?: string | null;
+  limit?: number;
+  /**
+   * Tool id filter. Supported for receipts and earnings in the MVP launch facade.
+   */
+  tool?: string | null;
+}
+
+export interface LaunchWalletPageInfo {
+  limit: number;
+  nextCursor?: string | null;
+  hasMore: boolean;
+}
+
+export interface LaunchWalletTransactionsResponse {
+  kind: "transactions";
+  items: LaunchWalletTransaction[];
+  page: LaunchWalletPageInfo;
+  generatedAt: string;
+}
+
+export interface LaunchWalletReceiptsResponse {
+  kind: "receipts";
+  items: LaunchWalletReceiptSummary[];
+  page: LaunchWalletPageInfo;
+  generatedAt: string;
+}
+
+export interface LaunchWalletEarningsResponse {
+  kind: "earnings";
+  items: LaunchWalletEarningSummary[];
+  page: LaunchWalletPageInfo;
+  generatedAt: string;
+}
+
+export interface LaunchWalletPayoutsResponse {
+  kind: "payouts";
+  items: LaunchWalletPayoutSummary[];
+  page: LaunchWalletPageInfo;
+  generatedAt: string;
+}
+
+export type LaunchWalletDetailResponse =
+  | LaunchWalletTransactionsResponse
+  | LaunchWalletReceiptsResponse
+  | LaunchWalletEarningsResponse
+  | LaunchWalletPayoutsResponse;
+
 export type LaunchPayoutStatusKind =
-  | 'not_connected'
-  | 'onboarding'
-  | 'ready'
-  | 'unavailable';
+  | "not_connected"
+  | "onboarding"
+  | "ready"
+  | "unavailable";
 
 export interface LaunchPayoutStatus {
   kind: LaunchPayoutStatusKind;
@@ -460,7 +698,7 @@ export interface LaunchPayoutStatus {
 }
 
 export interface LaunchWalletAction {
-  id: 'topup' | 'transactions' | 'receipts' | 'earnings' | 'payouts';
+  id: "topup" | "transactions" | "receipts" | "earnings" | "payouts";
   label: string;
   description: string;
   href?: string | null;
@@ -518,35 +756,37 @@ export interface LaunchLeaderboardEntry {
   avatarUrl?: string | null;
   value: LaunchMoneyAmount;
   eventCount?: number;
-  featuredTool?: Pick<LaunchToolSummary, 'id' | 'slug' | 'name'> | null;
+  featuredTool?: Pick<LaunchToolSummary, "id" | "slug" | "name"> | null;
 }
 
 export interface LaunchLeaderboardResponse {
   kind: LaunchLeaderboardKind;
-  period: '30d' | '90d' | 'all';
+  period: "30d" | "90d" | "all";
   entries: LaunchLeaderboardEntry[];
   generatedAt: string;
 }
 
 export const LAUNCH_SCOPE_CONTRACT: LaunchScopeContract = {
   version: LAUNCH_MVP_VERSION,
-  thesis: 'Deploy tools any existing agent can install, run, compose, and pay for.',
+  thesis:
+    "Deploy tools any existing agent can install, run, compose, and pay for.",
   includedCapabilities: LAUNCH_INCLUDED_CAPABILITIES,
   deferredCapabilities: LAUNCH_DEFERRED_CAPABILITIES,
   publicRoutes: LAUNCH_PUBLIC_ROUTES,
+  compatibilityPublicRoutes: LAUNCH_COMPATIBILITY_PUBLIC_ROUTES,
   apiRoutes: LAUNCH_API_ROUTES,
 };
 
 export function isLaunchDeferredCapability(
   value: unknown,
 ): value is LaunchDeferredCapability {
-  return typeof value === 'string' &&
+  return typeof value === "string" &&
     (LAUNCH_DEFERRED_CAPABILITIES as readonly string[]).includes(value);
 }
 
 export function isLaunchIncludedCapability(
   value: unknown,
 ): value is LaunchIncludedCapability {
-  return typeof value === 'string' &&
+  return typeof value === "string" &&
     (LAUNCH_INCLUDED_CAPABILITIES as readonly string[]).includes(value);
 }

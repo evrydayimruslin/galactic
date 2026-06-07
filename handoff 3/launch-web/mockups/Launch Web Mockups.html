@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Brand" name="Launch Web Mockups" subtitle="Tier 1: sign-in, tool pages, discover, install — desktop + mobile + states" viewport="1400x900" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Launch Web · Tier 1 + 2 Mockups</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<link rel="stylesheet" href="colors_and_type.css"/>
+<link rel="stylesheet" href="premium.css"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,500;1,6..72,600&display=swap" rel="stylesheet"/>
+<style>
+  html, body { margin: 0; height: 100%; background: #f0eee9; font-family: 'Newsreader', Georgia, 'Times New Roman', serif; }
+  *::-webkit-scrollbar { display: none; }
+  * { scrollbar-width: none; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="launch-data.jsx"></script>
+<script type="text/babel" src="launch-chrome.jsx"></script>
+<script type="text/babel" src="launch-trust.jsx"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="launch-signin.jsx"></script>
+<script type="text/babel" src="launch-toolpage.jsx"></script>
+<script type="text/babel" src="launch-toolpage-mobile.jsx"></script>
+<script type="text/babel" src="launch-widget.jsx"></script>
+<script type="text/babel" src="launch-discover.jsx"></script>
+<script type="text/babel" src="launch-install.jsx"></script>
+<script type="text/babel" src="launch-wallet.jsx"></script>
+<script type="text/babel" src="launch-admin.jsx"></script>
+<script type="text/babel" src="launch-home-orbit.jsx"></script>
+<script type="text/babel" src="launch-home.jsx"></script>
+<script type="text/babel" src="launch-library.jsx"></script>
+<script type="text/babel" src="launch-settings.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+const { DesignCanvas, DCSection, DCArtboard } = window;
+const { L } = window.LaunchData;
+const { SignInDesktop, SignInMobile } = window.LaunchSignIn;
+const { ToolPageDesktop } = window.LaunchToolPage;
+const { ToolPageMobile, ToolLoading, ToolNotFound } = window.LaunchToolPageMobile;
+const { DiscoverDesktop, DiscoverMobile, DiscoverEmpty } = window.LaunchDiscover;
+const { InstallDesktop, InstallMobile } = window.LaunchInstall;
+const { WalletDesktop, WalletMobile, WalletState } = window.LaunchWallet;
+const { AdminDesktop, AdminMobile } = window.LaunchAdmin;
+const { HomeDesktop, HomeMobile } = window.LaunchHome;
+const { LibraryDesktop, LibraryMobile } = window.LaunchLibrary;
+const { SettingsDesktop, SettingsMobile, NewKeyModal } = window.LaunchSettings;
+const { TrustVariants } = window.LaunchTrust;
+const { WidgetDesktop, WidgetMobile } = window.LaunchWidget;
+
+// ── Spec card — names the backend contract each screen represents ─────────────
+function Chip({ children, dark }) {
+  return <span style={{ display: dark ? 'block' : 'inline-block', width: dark ? 'fit-content' : undefined, maxWidth: '100%', boxSizing: 'border-box',
+    fontFamily: L.mono, fontSize: 11, lineHeight: 1.5, color: dark ? '#e2e8f0' : L.sec, whiteSpace: 'normal', wordBreak: 'break-word',
+    background: dark ? '#0f172a' : '#fff', border: `1px solid ${dark ? '#0f172a' : L.border}`, borderRadius: 6, padding: '5px 9px', marginRight: 6, marginBottom: 6 }}>{children}</span>;
+}
+function SpecCard({ title, intro, routes, fields, states }) {
+  return (
+    <div style={{ width:'100%', height:'100%', boxSizing:'border-box', padding: '22px 22px', background:'#fbfbfa', fontFamily: L.font, overflow:'hidden' }}>
+      <div style={{ fontFamily: L.mono, fontSize: 10.5, letterSpacing:'0.1em', textTransform:'uppercase', color: L.mute, marginBottom: 10 }}>Screen spec</div>
+      <div style={{ fontSize: 19, fontWeight: 700, letterSpacing:'-0.02em', marginBottom: 8 }}>{title}</div>
+      <div style={{ fontSize: 13, color: L.sec, lineHeight: 1.55, marginBottom: 18 }}>{intro}</div>
+
+      <div style={{ fontFamily: L.mono, fontSize: 10, letterSpacing:'0.08em', textTransform:'uppercase', color: L.mute, marginBottom: 8 }}>Backend</div>
+      <div style={{ marginBottom: 18 }}>{routes.map((r,i) => <Chip key={i} dark>{r}</Chip>)}</div>
+
+      <div style={{ fontFamily: L.mono, fontSize: 10, letterSpacing:'0.08em', textTransform:'uppercase', color: L.mute, marginBottom: 8 }}>Represents</div>
+      <ul style={{ margin:'0 0 18px', padding:'0 0 0 16px', fontSize: 12.5, color: L.text, lineHeight: 1.7 }}>
+        {fields.map((f,i) => <li key={i}>{f}</li>)}
+      </ul>
+
+      <div style={{ fontFamily: L.mono, fontSize: 10, letterSpacing:'0.08em', textTransform:'uppercase', color: L.mute, marginBottom: 8 }}>States in this section</div>
+      <div>{states.map((s,i) => <Chip key={i}>{s}</Chip>)}</div>
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <DesignCanvas>
+
+      {/* ── HOME ──────────────────────────────────────────────── */}
+      <DCSection id="home" title="Home" subtitle="Launch home + primary install CTA. The signed-out front door: Home → Add to agent → Store.">
+        <DCArtboard id="home-spec" label="Spec" width={380} height={1080}>
+          <SpecCard
+            title="Home"
+            intro="Marketing front door in the terse Ultralight voice. Thesis headline, copyable MCP config, the agent loop, live tools, primitives, and a builders teaser."
+            routes={['GET /api/launch/status', 'GET /api/launch/install', 'GET /api/launch/platform-primitives', 'GET /api/launch/leaderboard?kind=builder']}
+            fields={['status.thesis + externalAgentLoop + capabilities', 'install config preview (one MCP endpoint)', 'featured LaunchToolSummary[] + primitives + builders']}
+            states={['Desktop', 'Desktop · signed-in', 'Mobile']}
+          />
+        </DCArtboard>
+        <DCArtboard id="home-desktop" label="Desktop · signed-out" width={1280} height={1080}><HomeDesktop/></DCArtboard>
+        <DCArtboard id="home-desktop-in" label="Desktop · signed-in (Light > 0)" width={1280} height={1080}><HomeDesktop signedIn={true} balance={12.40}/></DCArtboard>
+        <DCArtboard id="home-mobile" label="Mobile" width={390} height={1000}><HomeMobile/></DCArtboard>
+      </DCSection>
+
+      {/* ── SIGN IN ───────────────────────────────────────────── */}
+      <DCSection id="signin" title="Sign in" subtitle="Popup over any surface — public browsing never needs it. Post-auth, act immediately.">
+        <DCArtboard id="signin-spec" label="Spec" width={380} height={760}>
+          <SpecCard
+            title="Sign-in popup"
+            intro="A modal, not a page. Public tools, discovery, and widgets stay viewable signed-out. Sign-in is requested only for install-with-key, wallet, and owner admin."
+            routes={['Google OAuth → session', "localStorage 'ultralight.launch.authToken'"]}
+            fields={['Bearer token used by authed launch endpoints', 'No dedicated auth contract — gate on 401', 'Post-auth: resume the blocked action immediately']}
+            states={['Default', 'Authenticating', 'Use another account', 'Mobile sheet']}
+          />
+        </DCArtboard>
+        <DCArtboard id="signin-desktop" label="Desktop · default" width={1180} height={760}><SignInDesktop state="default"/></DCArtboard>
+        <DCArtboard id="signin-auth" label="Desktop · authenticating" width={1180} height={760}><SignInDesktop state="authenticating"/></DCArtboard>
+        <DCArtboard id="signin-mobile" label="Mobile · sheet" width={390} height={780}><SignInMobile state="default"/></DCArtboard>
+        <DCArtboard id="signin-another" label="Mobile · another account" width={390} height={780}><SignInMobile state="another"/></DCArtboard>
+      </DCSection>
+
+      {/* ── LIBRARY ───────────────────────────────────────────── */}
+      <DCSection id="library" title="Library" subtitle="Signed-in. Tools you own (with admin) and tools you’ve installed.">
+        <DCArtboard id="lib-spec" label="Spec" width={380} height={860}>
+          <SpecCard
+            title="Library"
+            intro="One view, switched by a house dropdown: Installed tools (Store-style grid, tap to open the public page) or Tools you own (admin stats + manage). No badges, no per-call price."
+            routes={['GET /api/launch/library']}
+            fields={['LaunchLibraryResponse: owned[] + installed[]', 'installed render as Store cards → public tool page', 'owned: adminUrl, widgets, stats; price shows “Free” when all fns free']}
+            states={['Default', 'Mobile', 'Empty / new user']}
+          />
+        </DCArtboard>
+        <DCArtboard id="lib-desktop" label="Desktop" width={1180} height={860}><LibraryDesktop/></DCArtboard>
+        <DCArtboard id="lib-mobile" label="Mobile" width={390} height={860}><LibraryMobile/></DCArtboard>
+        <DCArtboard id="lib-empty" label="Desktop · empty" width={1180} height={860}><LibraryDesktop empty={true}/></DCArtboard>
+      </DCSection>
+
+      {/* ── OWNER ADMIN ───────────────────────────────────────── */}
+      <DCSection id="admin" title="Owner admin" subtitle="Owner-only management for a tool you own. Edit, pricing, widgets, secrets, trust, receipts, logs.">
+        <DCArtboard id="adm-spec" label="Spec" width={380} height={900}>
+          <SpecCard
+            title="Owner admin"
+            intro="Owner-only. Tabs map 1:1 to editableFields plus receipts and logs. Visibility toggles public / unlisted / private; secrets stay server-side."
+            routes={['GET /api/launch/admin/tools/:id', 'receiptsUrl ?tab=receipts', 'logsUrl ?tab=logs']}
+            fields={['LaunchToolAdminSummary.editableFields[]', 'name, description, visibility, pricing, widgets, secrets, trust', 'receipts = incoming revenue · logs = runs + errors']}
+            states={['Edit', 'Pricing', 'Widgets', 'Secrets', 'Trust', 'Receipts', 'Logs', 'Hosting suspended', 'New / empty']}
+          />
+        </DCArtboard>
+        <DCArtboard id="adm-edit" label="Desktop · edit" width={1180} height={900}><AdminDesktop tab="edit"/></DCArtboard>
+        <DCArtboard id="adm-pricing" label="Desktop · pricing" width={1180} height={900}><AdminDesktop tab="pricing"/></DCArtboard>
+        <DCArtboard id="adm-widgets" label="Desktop · widgets" width={1180} height={900}><AdminDesktop tab="widgets"/></DCArtboard>
+        <DCArtboard id="adm-secrets" label="Desktop · secrets" width={1180} height={900}><AdminDesktop tab="secrets"/></DCArtboard>
+        <DCArtboard id="adm-receipts" label="Desktop · receipts (revenue)" width={1180} height={900}><AdminDesktop tab="receipts"/></DCArtboard>
+        <DCArtboard id="adm-logs" label="Desktop · logs" width={1180} height={900}><AdminDesktop tab="logs"/></DCArtboard>
+        <DCArtboard id="adm-suspended" label="Desktop · hosting suspended" width={1180} height={900}><AdminDesktop tab="edit" suspended={true}/></DCArtboard>
+        <DCArtboard id="adm-mobile" label="Mobile" width={390} height={860}><AdminMobile tab="edit"/></DCArtboard>
+      </DCSection>
+
+      {/* ── STORE ─────────────────────────────────────────────── */}
+      <DCSection id="discover" title="Store" subtitle="The Store — public tool discovery: search, results grid, platform primitives, and leaderboards. Shown in its default (no query) state.">
+        <DCArtboard id="disc-spec" label="Spec" width={380} height={900}>
+          <SpecCard
+            title="Store (Discover)"
+            intro="Semantic-first search with lexical fallback. Result grid, agent-facing platform primitives, and both leaderboards (builder = earnings, fee-credit = fees waived)."
+            routes={['GET /api/launch/discover', 'GET /api/launch/leaderboard?kind=builder', 'GET /api/launch/leaderboard?kind=fee_credit', 'GET /api/launch/platform-primitives']}
+            fields={['results: LaunchToolSummary[] + relevance source', 'retrieval: mode, embeddedSources, fallbackReason', 'LaunchLeaderboardEntry: rank, value(✦), featuredTool']}
+            states={['Default (query)', 'Mobile (tabs)', 'No results → fallback']}
+          />
+        </DCArtboard>
+        <DCArtboard id="disc-desktop" label="Desktop" width={1280} height={900}><DiscoverDesktop/></DCArtboard>
+        <DCArtboard id="disc-mobile" label="Mobile" width={390} height={860}><DiscoverMobile query=""/></DCArtboard>
+        <DCArtboard id="disc-empty" label="No results · fallback" width={840} height={560}><DiscoverEmpty/></DCArtboard>
+      </DCSection>
+
+      {/* ── PUBLIC TOOL PAGE (widgets · no widgets · states) ───── */}
+      <DCSection id="toolpage" title="Public tool page" subtitle="One contract, three shapes: widget-led tools, function-only tools, and the loading / not-found states. No auth to view.">
+        <DCArtboard id="tpw-spec" label="Spec · with widgets" width={380} height={880}>
+          <SpecCard
+            title="Tool page (widget tool)"
+            intro="When a tool exposes widgets, Open Widget leads. Functions show read-only examples; the Trust & Setup card carries permissions, version, runtime, and required setup."
+            routes={['GET /api/launch/tools/:id', 'GET /api/launch/tools/:id/widgets']}
+            fields={['LaunchToolSummary: kind, visibility, pricing, owner, tags', 'LaunchWidgetSummary[]: label, public, previewAvailable, openUrl', 'trustCard: signer, version, capabilities, receipts']}
+            states={['Default', 'Installed (post-auth)', 'Mobile', 'Loading', '404']}
+          />
+        </DCArtboard>
+        <DCArtboard id="tpw-desktop" label="With widgets · desktop" width={1280} height={880}><ToolPageDesktop toolKey="weather"/></DCArtboard>
+        <DCArtboard id="tpw-installed" label="With widgets · installed (post-auth)" width={1280} height={880}><ToolPageDesktop toolKey="weather" installed={true}/></DCArtboard>
+        <DCArtboard id="tpw-mobile" label="With widgets · mobile" width={390} height={860}><ToolPageMobile toolKey="weather"/></DCArtboard>
+        <DCArtboard id="tpn-spec" label="Spec · no widgets" width={380} height={880}>
+          <SpecCard
+            title="Tool page (no widgets)"
+            intro="No widget surface → Install + Copy MCP config lead. Functions show read-only examples; Trust & Setup carries permissions; pricing stays separate. Same contract, widgets:[]."
+            routes={['GET /api/launch/tools/:id', 'GET /api/launch/tools/:id/widgets → []']}
+            fields={['functions[] with per-call ✦ price + p50 latency', 'capabilities (read / write / net)', 'pricing: freeToInstall, paidFunctionsCount']}
+            states={['Default', 'Unlisted', 'Mobile']}
+          />
+        </DCArtboard>
+        <DCArtboard id="tpn-desktop" label="No widgets · desktop" width={1280} height={880}><ToolPageDesktop toolKey="fx"/></DCArtboard>
+        <DCArtboard id="tpn-unlisted" label="No widgets · unlisted" width={1280} height={880}><ToolPageDesktop toolKey="fx" unlisted={true}/></DCArtboard>
+        <DCArtboard id="tpn-mobile" label="No widgets · mobile" width={390} height={860}><ToolPageMobile toolKey="fx"/></DCArtboard>
+        <DCArtboard id="tps-loading" label="State · loading" width={840} height={560}><ToolLoading/></DCArtboard>
+        <DCArtboard id="tps-404" label="State · not found / private" width={840} height={560}><ToolNotFound/></DCArtboard>
+      </DCSection>
+
+      {/* ── WALLET ────────────────────────────────────────────── */}
+      <DCSection id="wallet" title="Wallet" subtitle="Light balance, top-up, one combined transaction ledger, and creator earnings. Signed-in only.">
+        <DCArtboard id="wal-spec" label="Spec" width={380} height={900}>
+          <SpecCard
+            title="Wallet"
+            intro="One tabbed account surface for Light. Balance is a single combined transaction ledger (spend + top-ups + transfers + payouts) with infinite scroll; a Stripe top-up flow; and a filterable creator-earnings ledger."
+            routes={['GET /api/launch/wallet', 'GET /api/launch/wallet/ledger?cursor=', 'GET /api/launch/wallet/earnings?tool=']}
+            fields={['LaunchWalletSummary: spendable / earned (✦)', 'ledger[]: kind (call|topup|transfer|payout), amt, when', 'earnings[]: tool, amt — filterable by tool']}
+            states={['Balance', 'Top up', 'Earnings', 'Empty', 'Payout states']}
+          />
+        </DCArtboard>
+        <DCArtboard id="wal-balance" label="Desktop · balance" width={1180} height={900}><WalletDesktop tab="balance"/></DCArtboard>
+        <DCArtboard id="wal-topup" label="Desktop · top up" width={1180} height={900}><WalletDesktop tab="topup"/></DCArtboard>
+        <DCArtboard id="wal-earnings" label="Desktop · earnings" width={1180} height={900}><WalletDesktop tab="earnings"/></DCArtboard>
+        <DCArtboard id="wal-mobile" label="Mobile" width={390} height={860}><WalletMobile tab="balance"/></DCArtboard>
+        <DCArtboard id="wal-payouts" label="Payout states" width={840} height={560}><WalletState which="payouts"/></DCArtboard>
+        <DCArtboard id="wal-empty" label="Empty · new account" width={840} height={560}><WalletState which="zero"/></DCArtboard>
+      </DCSection>
+
+      {/* ── PROFILE ───────────────────────────────────────────── */}
+      <DCSection id="settings" title="Profile" subtitle="Reached from the profile icon, top right. Account and launch-safe preferences. Agent tokens are delivered via Add to agent — no key management here.">
+        <DCArtboard id="set-spec" label="Spec" width={380} height={820}>
+          <SpecCard
+            title="Profile"
+            intro="Account + launch-safe preferences only. Opened from the profile menu in the top bar. Connecting an agent routes to Add to agent (token included there), so there’s no separate API-key management screen."
+            routes={['Account profile', 'Preferences', 'Add to agent (token delivery)']}
+            fields={['account: name, email, handle, sign out', 'prefs: default agent target, visibility, receipts', 'no key list — tokens travel with the instructions']}
+            states={['Default', 'Mobile']}
+          />
+        </DCArtboard>
+        <DCArtboard id="set-desktop" label="Desktop" width={1180} height={820}><SettingsDesktop/></DCArtboard>
+        <DCArtboard id="set-mobile" label="Mobile" width={390} height={860}><SettingsMobile/></DCArtboard>
+      </DCSection>
+
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -18,6 +18,7 @@ Deno.test('BYOK provider registry exposes first-tier OpenAI-compatible providers
     assert(provider.capabilities.chat);
     assert(provider.capabilities.streaming);
     assertEquals(typeof provider.capabilities.realtime, 'boolean');
+    assertEquals(typeof provider.capabilities.webSearch, 'boolean');
   }
 });
 
@@ -26,6 +27,16 @@ Deno.test('BYOK provider registry marks only OpenAI as realtime-capable', () => 
   for (const provider of Object.values(BYOK_PROVIDERS)) {
     if (provider.id !== 'openai') {
       assertEquals(provider.capabilities.realtime, false);
+    }
+  }
+});
+
+Deno.test('BYOK provider registry marks OpenRouter and OpenAI as web-search capable', () => {
+  assertEquals(BYOK_PROVIDERS.openrouter.capabilities.webSearch, true);
+  assertEquals(BYOK_PROVIDERS.openai.capabilities.webSearch, true);
+  for (const provider of Object.values(BYOK_PROVIDERS)) {
+    if (provider.id !== 'openrouter' && provider.id !== 'openai') {
+      assertEquals(provider.capabilities.webSearch, false);
     }
   }
 });

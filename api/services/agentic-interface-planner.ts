@@ -316,6 +316,7 @@ function preferredDataKind(
 }
 
 function surfaceText(surface: CommandSurfaceEntry): string {
+  if (surface.embedding_text) return surface.embedding_text;
   const hints = generationHintText(surface.generation_hints);
   if (surface.surface === "command_card") {
     return [

@@ -26,12 +26,14 @@ Deno.test("payments launch QA: public config states closed-loop Light economics"
   const config = toPublicBillingConfig(DEFAULT_BILLING_CONFIG);
 
   assertEquals(config.canonical_light_per_usd, 100);
-  assertEquals(config.wallet_light_per_usd, 95);
-  assertEquals(config.wire_light_per_usd, 99);
+  assertEquals(config.wallet_light_per_usd, 100);
+  assertEquals(config.wire_light_per_usd, 100);
+  assertEquals(config.ach_light_per_usd, 100);
   assertEquals(config.payout_light_per_usd, 100);
   assertEquals(config.platform_fee_rate, 0.15);
   assertEquals(config.card_minimum_cents, 2500);
   assertEquals(config.wire_minimum_cents, 2500);
+  assertEquals(config.ach_minimum_cents, 2500);
   assertEquals(config.cloud_unit_light_per_1k, 1);
   assertEquals(config.storage_light_per_gb_month, 100);
   assertEquals(config.publish_deposit_enabled, true);

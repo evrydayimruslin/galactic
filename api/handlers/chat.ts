@@ -297,6 +297,7 @@ export async function handleChatStream(request: Request): Promise<Response> {
     max_tokens: body.max_tokens ?? 4096,
     stream: true,
     stream_options: { include_usage: true },
+    web_search_enabled: body.inference?.webSearchEnabled === true,
     ...(body.tools && body.tools.length > 0 ? { tools: body.tools } : {}),
   };
 
@@ -319,12 +320,14 @@ export async function handleChatStream(request: Request): Promise<Response> {
       stream: true,
       stream_options: { include_usage: true },
       inference: body.inference ?? null,
+      web_search_enabled: body.inference?.webSearchEnabled === true,
     },
     messages: body.messages,
     tools: body.tools,
     metadata: {
       assistant_message_id: captureAssistantMessageId,
       tool_schema_count: body.tools?.length || 0,
+      web_search_enabled: body.inference?.webSearchEnabled === true,
     },
   });
   llmTelemetry?.start();

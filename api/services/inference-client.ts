@@ -3,6 +3,8 @@ import { BYOK_PROVIDERS, isActiveBYOKProvider } from "../../shared/types/index.t
 import { resolvePlatformInferenceModel } from "./platform-inference-models.ts";
 
 const DEFAULT_REFERER = "https://ultralight-api.rgn4jz429m.workers.dev";
+const INTERNAL_WEB_SEARCH_FLAG = "web_search_enabled";
+const OPENAI_CHAT_WEB_SEARCH_MODEL = "gpt-5-search-api";
 
 export interface InferenceFetchOptions {
   title?: string;
@@ -50,6 +52,13 @@ export function supportsInferenceRealtime(route: ResolvedInferenceRoute): boolea
     BYOK_PROVIDERS[route.provider].capabilities.realtime === true;
 }
 
+export function supportsInferenceWebSearch(
+  route: Pick<ResolvedInferenceRoute, "upstreamProvider">,
+): boolean {
+  return isActiveBYOKProvider(route.upstreamProvider) &&
+    BYOK_PROVIDERS[route.upstreamProvider].capabilities.webSearch === true;
+}
+
 export function buildInferenceHeaders(
   route: ResolvedInferenceRoute,
   options: InferenceFetchOptions = {},
@@ -68,11 +77,43 @@ export function buildInferenceRequestBody(
 ): Record<string, unknown> {
   const requestedModel = typeof body.model === "string" ? body.model : null;
   const model = selectInferenceModel(route, requestedModel);
-  return {
+  const requestBody: Record<string, unknown> = {
     ...body,
     model,
     ...(route.requestDefaults ?? {}),
   };
+  const webSearchRequested = requestBody[INTERNAL_WEB_SEARCH_FLAG] === true;
+  delete requestBody[INTERNAL_WEB_SEARCH_FLAG];
+
+  if (!webSearchRequested || !supportsInferenceWebSearch(route)) {
+    return requestBody;
+  }
+
+  if (route.upstreamProvider === "openrouter") {
+    const plugins = Array.isArray(requestBody.plugins)
+      ? [...requestBody.plugins]
+      : [];
+    if (!plugins.some((plugin) =>
+      !!plugin && typeof plugin === "object" &&
+      (plugin as Record<string, unknown>).id === "web"
+    )) {
+      plugins.push({ id: "web" });
+    }
+    return { ...requestBody, plugins };
+  }
+
+  if (route.upstreamProvider === "openai") {
+    const existingOptions = requestBody.web_search_options;
+    return {
+      ...requestBody,
+      model: OPENAI_CHAT_WEB_SEARCH_MODEL,
+      web_search_options: existingOptions && typeof existingOptions === "object"
+        ? existingOptions
+        : {},
+    };
+  }
+
+  return requestBody;
 }
 
 export function fetchInferenceChatCompletion(

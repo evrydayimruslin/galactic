@@ -605,6 +605,9 @@ export default function AgentConfigPanel({
   const selectedProviderConfig = effectiveInference
     ? inferenceSettings?.providers.find((provider) => provider.id === effectiveInference.provider)
     : null;
+  const inferenceWebSearchSupported = effectiveInference?.billingMode === 'light'
+    ? true
+    : selectedProviderConfig?.capabilities.webSearch === true;
   const configuredProviderCount = inferenceSettings?.configuredProviderIds.length ?? 0;
   const inferenceRouteSummary = effectiveInference?.billingMode === 'light'
     ? `Light balance via OpenRouter at ${inferenceSettings?.light.markup ?? 1}x cost`
@@ -631,6 +634,7 @@ export default function AgentConfigPanel({
     const basePreference: InferenceRoutePreference = {
       billingMode: choice.billingMode,
       provider: choice.provider,
+      webSearchEnabled: inferencePreference.webSearchEnabled,
     };
     const availableModels = getInferenceModelOptions(inferenceSettings, basePreference);
     const currentModel = inferencePreference.model;
@@ -639,7 +643,7 @@ export default function AgentConfigPanel({
       : getEffectiveInferencePreference(inferenceSettings, basePreference).model;
 
     persistInferencePreference({ ...basePreference, model });
-  }, [inferencePreference.model, inferenceSettings, persistInferencePreference, providerChoices]);
+  }, [inferencePreference.model, inferencePreference.webSearchEnabled, inferenceSettings, persistInferencePreference, providerChoices]);
 
   const handleSelectInferenceModel = useCallback((model: string) => {
     if (!inferenceSettings) return;
@@ -648,8 +652,19 @@ export default function AgentConfigPanel({
       billingMode: effective.billingMode,
       provider: effective.provider,
       model,
+      webSearchEnabled: inferencePreference.webSearchEnabled,
     });
   }, [inferencePreference, inferenceSettings, persistInferencePreference]);
+
+  const handleToggleInferenceWebSearch = useCallback(() => {
+    if (!effectiveInference) return;
+    persistInferencePreference({
+      billingMode: effectiveInference.billingMode,
+      provider: effectiveInference.provider,
+      model: effectiveInference.model,
+      webSearchEnabled: !effectiveInference.webSearchEnabled,
+    });
+  }, [effectiveInference, persistInferencePreference]);
 
   const handleSelectFlashModel = useCallback(async (value: string) => {
     setFlashModelValue(value);
@@ -1060,6 +1075,14 @@ export default function AgentConfigPanel({
           <span className='min-w-0 truncate'>{describeInferenceModel(selectedInferenceModel)}</span>
         </div>
         <div className='mt-2 flex items-center gap-2'>
+          <button
+            type='button'
+            onClick={handleToggleInferenceWebSearch}
+            disabled={!effectiveInference || !inferenceWebSearchSupported}
+            className='px-2 py-1 text-[11px] font-medium border border-gray-200 bg-white text-gray-500 hover:text-gray-700 hover:border-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+          >
+            Browsing {effectiveInference?.webSearchEnabled ? 'On' : 'Off'}
+          </button>
           <button
             type='button'
             onClick={() => void openViewWindow({ kind: 'settings' })}

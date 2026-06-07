@@ -227,6 +227,7 @@ function buildFallbackInferenceSettings(): InferenceSettings {
       billingMode: "light",
       provider: "openrouter",
       model: DEFAULT_CHAT_MODEL,
+      webSearchEnabled: false,
     },
     light: {
       provider: "openrouter",
@@ -455,8 +456,12 @@ export function getUsableInferenceProviderChoices(
 export function getEffectiveInferencePreference(
   settings: InferenceSettings,
   preference: InferenceRoutePreference = {},
-): Required<InferenceRoutePreference> {
+): Required<Pick<InferenceRoutePreference, "billingMode" | "provider" | "model">> &
+  Pick<InferenceRoutePreference, "webSearchEnabled"> {
   const billingMode = preference.billingMode || settings.selected.billingMode;
+  const webSearchEnabled = preference.webSearchEnabled ??
+    settings.selected.webSearchEnabled ??
+    false;
 
   if (billingMode === "light") {
     return {
@@ -464,6 +469,7 @@ export function getEffectiveInferencePreference(
       provider: "openrouter",
       model: preference.model || settings.light.defaultModel ||
         DEFAULT_CHAT_MODEL,
+      webSearchEnabled,
     };
   }
 
@@ -486,6 +492,7 @@ export function getEffectiveInferencePreference(
     model: preference.model || provider?.configuredModel ||
       provider?.defaultModel ||
       settings.selected.model,
+    webSearchEnabled,
   };
 }
 

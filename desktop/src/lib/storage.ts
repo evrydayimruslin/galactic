@@ -318,13 +318,17 @@ function coerceInferencePreference(raw: unknown): InferenceRoutePreference | nul
   const model = typeof candidate.model === 'string' && candidate.model.trim()
     ? candidate.model.trim()
     : undefined;
+  const webSearchEnabled = typeof candidate.webSearchEnabled === 'boolean'
+    ? candidate.webSearchEnabled
+    : undefined;
 
-  if (!billingMode && !provider && !model) return null;
+  if (!billingMode && !provider && !model && webSearchEnabled === undefined) return null;
 
   const preference: InferenceRoutePreference = {};
   if (billingMode) preference.billingMode = billingMode;
   if (provider) preference.provider = provider;
   if (model) preference.model = model;
+  if (webSearchEnabled !== undefined) preference.webSearchEnabled = webSearchEnabled;
   return preference;
 }
 

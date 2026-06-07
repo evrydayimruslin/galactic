@@ -359,24 +359,33 @@ export function extractCallMeta(args: Record<string, unknown>): {
  */
 export async function getRecentCalls(
   userId: string,
-  options: { limit?: number; since?: string; appId?: string } = {},
+  options: {
+    limit?: number;
+    since?: string;
+    before?: string;
+    appId?: string;
+  } = {},
 ): Promise<
   Array<CallReceiptLogRow & { receipt_id: string; receipt: CallReceipt }>
 > {
   const limit = options.limit || 50;
-  let url = `${
-    getEnv("SUPABASE_URL")
-  }/rest/v1/mcp_call_logs?user_id=eq.${userId}&order=created_at.desc&limit=${limit}&select=${CALL_RECEIPT_LOG_SELECT}`;
+  const url = new URL(`${getEnv("SUPABASE_URL")}/rest/v1/mcp_call_logs`);
+  url.searchParams.set("user_id", `eq.${userId}`);
+  url.searchParams.set("order", "created_at.desc");
+  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("select", CALL_RECEIPT_LOG_SELECT);
 
   if (options.since) {
-    url += `&created_at=gt.${options.since}`;
+    url.searchParams.set("created_at", `gt.${options.since}`);
+  } else if (options.before) {
+    url.searchParams.set("created_at", `lt.${options.before}`);
   }
 
   if (options.appId) {
-    url += `&app_id=eq.${options.appId}`;
+    url.searchParams.set("app_id", `eq.${options.appId}`);
   }
 
-  const response = await fetch(url, {
+  const response = await fetch(url.toString(), {
     headers: {
       "apikey": getEnv("SUPABASE_SERVICE_ROLE_KEY"),
       "Authorization": `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,

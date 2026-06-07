@@ -285,11 +285,13 @@ export function toPublicBillingConfig(config: BillingConfig) {
     canonical_light_per_usd: config.canonicalLightPerUsd,
     wallet_light_per_usd: config.walletLightPerUsd,
     wire_light_per_usd: config.wireLightPerUsd,
+    ach_light_per_usd: config.wireLightPerUsd,
     payout_light_per_usd: config.payoutLightPerUsd,
     platform_fee_rate: config.platformFeeRate,
     min_withdrawal_light: config.minWithdrawalLight,
     card_minimum_cents: config.cardMinimumCents,
     wire_minimum_cents: config.wireMinimumCents,
+    ach_minimum_cents: config.wireMinimumCents,
     cloud_unit_light_per_1k: config.cloudUnitLightPer1k,
     worker_ms_per_cloud_unit: config.workerMsPerCloudUnit,
     d1_read_rows_per_cloud_unit: config.d1ReadRowsPerCloudUnit,
@@ -307,11 +309,13 @@ export function toPublicBillingConfig(config: BillingConfig) {
       canonical_rate: formatLightPerUsd(config.canonicalLightPerUsd),
       wallet_rate: formatLightPerUsd(config.walletLightPerUsd),
       wire_rate: formatLightPerUsd(config.wireLightPerUsd),
+      ach_rate: formatLightPerUsd(config.wireLightPerUsd),
       payout_rate: `${
         config.payoutLightPerUsd.toLocaleString("en-US")
       } Light = $1`,
       card_minimum: formatUsdCents(config.cardMinimumCents),
       wire_minimum: formatUsdCents(config.wireMinimumCents),
+      ach_minimum: formatUsdCents(config.wireMinimumCents),
       cloud_unit_rate: `${
         formatLightRate(config.cloudUnitLightPer1k)
       } / 1,000 cloud units`,

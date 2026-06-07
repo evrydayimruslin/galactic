@@ -1,196 +1,150 @@
-// BYOK provider key store + verify probe.
+// Server-backed BYOK provider configuration.
 //
-// Backs B16. Keys live in the OS keychain (one entry per provider) via
-// the secure_get_secret / secure_set_secret / secure_clear_secret Tauri
-// commands we added in src-tauri/src/secure_storage.rs. We diverged from
-// the addendum's `~/.ultralight/byok.json chmod 600` filesystem
-// suggestion because the OS keychain is strictly more secure on macOS /
-// Windows / Linux and we already use it for the auth token — adding
-// another file-on-disk surface would have been a regression.
-//
-// Verify-on-save hits each provider's `/v1/models` endpoint directly
-// from the desktop process. CSP additions for the four hostnames live in
-// desktop/src-tauri/tauri.conf.json.
+// Keys are stored and encrypted by the API service in users.byok_keys. The
+// desktop app never receives plaintext keys after save; it only sends new keys
+// to /api/user/byok for validation + encryption.
 
-import { invoke } from '@tauri-apps/api/core';
+import type {
+  ActiveBYOKProvider,
+  BYOKConfig,
+  BYOKProviderInfo as SharedBYOKProviderInfo,
+} from '../../../shared/types/index.ts';
+import { fetchFromApi, getToken } from './storage';
 
-// ── Provider registry ────────────────────────────────────────────────
+export type BYOKProvider = ActiveBYOKProvider;
 
-export type BYOKProvider = 'anthropic' | 'openai' | 'openrouter' | 'deepseek';
-
-export interface BYOKProviderInfo {
-  id: BYOKProvider;
-  name: string;
-  /** One-line tagline shown when no key is configured. */
+export interface BYOKProviderInfo extends SharedBYOKProviderInfo {
   tagline: string;
-  /** Single-letter monogram for the row glyph. */
   glyph: string;
-  /** Brand-ish tone. Data, not a design token (per Glyph convention). */
   tone: string;
-  /** Expected prefix on the API key — used both for placeholder text and
-   *  as a sanity check on the masked-display fallback when the BE has a
-   *  cached key but the keychain doesn't (shouldn't happen, but keeps
-   *  the UI from rendering a partial mask). */
   keyPrefix: string;
-  /** Account name passed to the Tauri secure_storage commands. Allowlisted
-   *  on the Rust side. */
-  account: string;
-  /** Probe URL hit on verify-on-save. */
-  probeUrl: string;
-  /** Header carrying the key on the probe request. */
-  authHeader: 'Authorization' | 'x-api-key';
-  /** Strategy for forming the auth value:
-   *    'bearer' → `Authorization: Bearer ${key}`
-   *    'raw'    → `x-api-key: ${key}`  (Anthropic's convention) */
-  authStrategy: 'bearer' | 'raw';
-  /** Anthropic also requires `anthropic-version` on every request. */
-  extraHeaders?: Record<string, string>;
-  /** Desktop-only capability hints for UI features that may use the key directly. */
-  capabilities: {
-    verify: boolean;
-    realtime: boolean;
-  };
 }
 
-export const BYOK_PROVIDERS: BYOKProviderInfo[] = [
-  {
-    id: 'anthropic',
-    name: 'Anthropic',
-    tagline: 'Claude family',
-    glyph: 'A',
-    tone: '#C8642C',
-    keyPrefix: 'sk-ant-',
-    account: 'byok_anthropic',
-    probeUrl: 'https://api.anthropic.com/v1/models',
-    authHeader: 'x-api-key',
-    authStrategy: 'raw',
-    extraHeaders: { 'anthropic-version': '2023-06-01' },
-    capabilities: { verify: true, realtime: false },
-  },
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    tagline: 'GPT models',
-    glyph: 'O',
-    tone: '#0a0a0a',
-    keyPrefix: 'sk-',
-    account: 'byok_openai',
-    probeUrl: 'https://api.openai.com/v1/models',
-    authHeader: 'Authorization',
-    authStrategy: 'bearer',
-    capabilities: { verify: true, realtime: true },
-  },
-  {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    tagline: '200+ models, one bill',
-    glyph: 'R',
-    tone: '#7c3aed',
-    keyPrefix: 'sk-or-',
-    account: 'byok_openrouter',
-    probeUrl: 'https://openrouter.ai/api/v1/models',
-    authHeader: 'Authorization',
-    authStrategy: 'bearer',
-    capabilities: { verify: true, realtime: false },
-  },
-  {
-    id: 'deepseek',
-    name: 'DeepSeek',
-    tagline: 'DeepSeek-V3, R1',
-    glyph: 'D',
-    tone: '#1f6feb',
-    keyPrefix: 'sk-',
-    account: 'byok_deepseek',
-    probeUrl: 'https://api.deepseek.com/v1/models',
-    authHeader: 'Authorization',
-    authStrategy: 'bearer',
-    capabilities: { verify: true, realtime: false },
-  },
-];
-
-export function findProvider(id: BYOKProvider): BYOKProviderInfo {
-  const p = BYOK_PROVIDERS.find((x) => x.id === id);
-  if (!p) throw new Error(`Unknown BYOK provider: ${id}`);
-  return p;
+export interface BYOKStatusResponse {
+  enabled: boolean;
+  primary_provider: ActiveBYOKProvider | null;
+  configs: BYOKConfig[];
+  available_providers: SharedBYOKProviderInfo[];
 }
 
-// ── Keychain wrappers ────────────────────────────────────────────────
-
-export async function getBYOKKey(provider: BYOKProvider): Promise<string | null> {
-  const info = findProvider(provider);
-  try {
-    return await invoke<string | null>('secure_get_secret', { account: info.account });
-  } catch {
-    // Keychain access failures usually mean the user denied the prompt;
-    // surface as "no key" so the UI shows the empty-state CTA.
-    return null;
-  }
-}
-
-export async function setBYOKKey(provider: BYOKProvider, value: string): Promise<void> {
-  const info = findProvider(provider);
-  await invoke('secure_set_secret', { account: info.account, value });
-}
-
-export async function clearBYOKKey(provider: BYOKProvider): Promise<void> {
-  const info = findProvider(provider);
-  await invoke('secure_clear_secret', { account: info.account });
-}
-
-// ── Verify-on-save ───────────────────────────────────────────────────
-
-export interface VerifyResult {
-  ok: boolean;
-  /** HTTP status from the probe, when one was received. */
-  status?: number;
-  /** Human-readable message for inline display below the input. */
+export interface BYOKMutationResponse {
+  success: boolean;
+  config?: BYOKConfig;
   message?: string;
 }
 
-export async function verifyBYOKKey(
-  provider: BYOKProvider,
-  key: string,
-): Promise<VerifyResult> {
-  const info = findProvider(provider);
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(info.extraHeaders ?? {}),
-  };
-  headers[info.authHeader] =
-    info.authStrategy === 'bearer' ? `Bearer ${key}` : key;
+const PROVIDER_TONES: Partial<Record<ActiveBYOKProvider, string>> = {
+  openrouter: '#7c3aed',
+  openai: '#0a0a0a',
+  deepseek: '#1f6feb',
+  nvidia: '#16a34a',
+  google: '#2563eb',
+  xai: '#111827',
+};
 
-  try {
-    const res = await fetch(info.probeUrl, { method: 'GET', headers });
-    if (res.ok) return { ok: true, status: res.status };
-    if (res.status === 401 || res.status === 403) {
-      return {
-        ok: false,
-        status: res.status,
-        message: `That key didn't authenticate against ${info.name}. Check it and try again.`,
-      };
-    }
-    return {
-      ok: false,
-      status: res.status,
-      message: `Verification failed (${res.status}). Check your key and network.`,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      message: err instanceof Error
-        ? `Couldn't reach ${info.name}: ${err.message}`
-        : `Couldn't reach ${info.name}.`,
-    };
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  if (!token) {
+    throw new Error('Sign in before configuring BYOK providers.');
   }
+  return {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  };
 }
 
-// ── Display helpers ──────────────────────────────────────────────────
+function providerGlyph(provider: SharedBYOKProviderInfo): string {
+  if (provider.id === 'openrouter') return 'R';
+  if (provider.id === 'openai') return 'O';
+  if (provider.id === 'deepseek') return 'D';
+  if (provider.id === 'nvidia') return 'N';
+  if (provider.id === 'google') return 'G';
+  if (provider.id === 'xai') return 'X';
+  return provider.name.charAt(0).toUpperCase();
+}
 
-/** Format a raw key value as the spec's masked form:
- *  first 7 chars + 13 bullets + last 4 chars (e.g. `sk-ant-•••••••••••••a9c4`).
- *  Shorter keys collapse to "•••" so we never accidentally expose more
- *  than the safe head + tail. */
-export function maskBYOKKey(value: string): string {
-  if (value.length < 12) return '•••';
-  return value.slice(0, 7) + '•••••••••••••' + value.slice(-4);
+export function decorateBYOKProvider(provider: SharedBYOKProviderInfo): BYOKProviderInfo {
+  return {
+    ...provider,
+    tagline: provider.description,
+    glyph: providerGlyph(provider),
+    tone: PROVIDER_TONES[provider.id] ?? '#6b7280',
+    keyPrefix: provider.apiKeyPrefix ?? '',
+  };
+}
+
+async function readJsonOrThrow<T>(res: Response): Promise<T> {
+  if (res.ok) return await res.json() as T;
+
+  let message = `Request failed (${res.status})`;
+  try {
+    const body = await res.json() as { error?: string; detail?: string; message?: string };
+    message = body.error || body.detail || body.message || message;
+  } catch {
+    try {
+      message = await res.text() || message;
+    } catch {
+      // Keep the generic status message.
+    }
+  }
+  throw new Error(message);
+}
+
+export async function fetchBYOKConfig(): Promise<BYOKStatusResponse> {
+  const res = await fetchFromApi('/api/user/byok', {
+    headers: authHeaders(),
+  });
+  return readJsonOrThrow<BYOKStatusResponse>(res);
+}
+
+export async function saveBYOKKey(
+  provider: BYOKProvider,
+  apiKey: string,
+  model?: string,
+  validate = true,
+): Promise<BYOKMutationResponse> {
+  const res = await fetchFromApi('/api/user/byok', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({
+      provider,
+      api_key: apiKey,
+      ...(model ? { model } : {}),
+      validate,
+    }),
+  });
+  return readJsonOrThrow<BYOKMutationResponse>(res);
+}
+
+export async function updateBYOKProvider(
+  provider: BYOKProvider,
+  updates: { apiKey?: string; model?: string; validate?: boolean },
+): Promise<BYOKMutationResponse> {
+  const res = await fetchFromApi(`/api/user/byok/${encodeURIComponent(provider)}`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({
+      ...(updates.apiKey ? { api_key: updates.apiKey } : {}),
+      ...(updates.model !== undefined ? { model: updates.model } : {}),
+      validate: updates.validate ?? true,
+    }),
+  });
+  return readJsonOrThrow<BYOKMutationResponse>(res);
+}
+
+export async function clearBYOKKey(provider: BYOKProvider): Promise<void> {
+  const res = await fetchFromApi(`/api/user/byok/${encodeURIComponent(provider)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  await readJsonOrThrow<BYOKMutationResponse>(res);
+}
+
+export async function setPrimaryBYOKProvider(provider: BYOKProvider): Promise<void> {
+  const res = await fetchFromApi('/api/user/byok/primary', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ provider }),
+  });
+  await readJsonOrThrow<BYOKMutationResponse>(res);
 }

@@ -150,6 +150,41 @@ Deno.test("stripe deposits: payment intent success keys idempotency by intent ID
   assertEquals(input?.lightAmount, 950);
 });
 
+Deno.test("stripe deposits: gross-up metadata credits intended Light", () => {
+  const event: StripeWebhookEvent = {
+    id: "evt_launch_topup_paid",
+    type: "payment_intent.succeeded",
+    data: {
+      object: {
+        id: "pi_launch_topup",
+        object: "payment_intent",
+        status: "succeeded",
+        amount: 10330,
+        amount_received: 10330,
+        metadata: {
+          user_id: "user-launch",
+          type: "wallet_topup",
+          funding_method: "launch_card_gross_up",
+          amount_cents: "10330",
+          base_amount_cents: "10000",
+          processing_fee_cents: "330",
+          light_amount: "10000",
+          light_per_usd: "100",
+          gross_up: "true",
+        },
+      },
+    },
+  };
+
+  const input = buildStripeDepositFinalization(event);
+
+  assertEquals(input?.requestedAmountCents, 10330);
+  assertEquals(input?.requestedLight, 10000);
+  assertEquals(input?.amountCents, 10330);
+  assertEquals(input?.lightAmount, 10000);
+  assertEquals(input?.lightPerUsd, 100);
+});
+
 Deno.test("stripe deposits: failure and reversal events map to deposit ledger inputs", () => {
   const failed: StripeWebhookEvent = {
     id: "evt_failed",

@@ -13,6 +13,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { ArrowUp, ChevronDown, Edit3, Image, Mic, Plus, Sparkles } from 'lucide-react';
+import type { InferenceRoutePreference } from '../../../shared/contracts/ai';
 import type { Agent } from '../hooks/useAgentFleet';
 import type { AmbientSuggestion } from '../types/ambientSuggestion';
 import ProjectDropdown from './ProjectDropdown';
@@ -24,6 +25,8 @@ import {
   setInterpreterModel as persistInterpreterModel,
   getHeavyModel,
   setHeavyModel as persistHeavyModel,
+  getInferencePreference,
+  setInferencePreference as persistInferencePreference,
 } from '../lib/storage';
 import { fetchInferenceSettings, type InferenceSettings } from '../lib/api';
 import { appendVoiceTranscript, useVoiceInput } from '../lib/voiceInput';
@@ -144,6 +147,9 @@ export default function ChatInput({
   // locally so picker updates re-render the pill label immediately.
   const [flashModel, setFlashModel] = useState<string>(() => getInterpreterModel());
   const [heavyModel, setHeavyModel] = useState<string>(() => getHeavyModel());
+  const [inferencePreference, setInferencePreferenceState] = useState<InferenceRoutePreference>(
+    () => getInferencePreference() ?? {},
+  );
 
   // Inference options are lazy-loaded the first time a model popover opens,
   // then cached for the lifetime of this composer instance.
@@ -165,6 +171,16 @@ export default function ChatInput({
       clearTimeout(id);
     }
     launchTimersRef.current = [];
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => setInferencePreferenceState(getInferencePreference() ?? {});
+    window.addEventListener('ul-inference-preference-changed', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.removeEventListener('ul-inference-preference-changed', refresh);
+      window.removeEventListener('focus', refresh);
+    };
   }, []);
 
   const flashLabel = formatModelLabel(flashModel);
@@ -189,6 +205,12 @@ export default function ChatInput({
     persistHeavyModel(id);
     setHeavyModel(id);
   }, []);
+
+  const setWebSearchEnabled = useCallback((enabled: boolean) => {
+    const next = { ...(getInferencePreference() ?? inferencePreference), webSearchEnabled: enabled };
+    setInferencePreferenceState(next);
+    persistInferencePreference(next);
+  }, [inferencePreference]);
 
   // In queue mode, input is never disabled — messages go to queue
   const inputDisabled = isLoading && !queueMode;
@@ -669,6 +691,8 @@ export default function ChatInput({
                     options={inferenceOptions}
                     selectedModel={flashModel}
                     onPick={pickFlash}
+                    webSearchEnabled={inferencePreference.webSearchEnabled === true}
+                    onWebSearchChange={setWebSearchEnabled}
                   />
                 </div>
 
@@ -694,6 +718,8 @@ export default function ChatInput({
                     options={inferenceOptions}
                     selectedModel={heavyModel}
                     onPick={pickHeavy}
+                    webSearchEnabled={inferencePreference.webSearchEnabled === true}
+                    onWebSearchChange={setWebSearchEnabled}
                   />
                 </div>
               </div>

@@ -25,14 +25,15 @@
 //     real ask price + bids + revenue + owner admin checklist (when the
 //     viewer is the owner).
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronRight, Copy, Download, MoreHorizontal } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronRight, Copy, Download, ExternalLink, MoreHorizontal } from 'lucide-react';
 import { Check, X as XIcon } from 'lucide-react';
 import Glyph, { deriveGlyph, deriveTone } from './ui/Glyph';
 import AcquisitionFlow from './marketplace/AcquisitionFlow';
 import SoldConfirmation from './marketplace/SoldConfirmation';
 import { fetchFromApi, getToken } from '../lib/storage';
 import { formatLightPrecise as formatLight, formatAuthorHandle } from '../lib/format';
+import { openWidgetWindow } from '../lib/multiWindow';
 import {
   fetchMarketplaceListing,
   setAskPrice,
@@ -46,6 +47,8 @@ import {
   type MarketplaceOwnerAdminChecklistItem,
 } from '../lib/api';
 import type { App, SkillFunction, PermissionDeclaration } from '../../../shared/types/index';
+import type { AppManifest } from '../../../shared/contracts/manifest';
+import type { CommandCardDeclaration, WidgetDeclaration } from '../../../shared/contracts/widget';
 
 interface ToolDetailViewProps {
   appId: string;
@@ -81,6 +84,84 @@ function parseFunctionArgs(parameters: Record<string, unknown> | undefined): str
   const keys = Object.keys(parameters);
   if (keys.length === 0) return '()';
   return `(${keys.join(', ')})`;
+}
+
+interface ToolCommandCardSurface {
+  id: string;
+  label: string;
+  description?: string;
+  size: string;
+  dataFunction: string;
+}
+
+interface ToolWidgetSurface {
+  widgetId: string;
+  label: string;
+  description?: string;
+  uiFunction: string;
+  dataFunction: string;
+  cards: ToolCommandCardSurface[];
+}
+
+function parseAppManifest(value: string | null | undefined): AppManifest | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' ? parsed as AppManifest : null;
+  } catch {
+    return null;
+  }
+}
+
+function widgetUiFunction(widget: Pick<WidgetDeclaration, 'id' | 'ui_function'>): string {
+  return widget.ui_function || `widget_${widget.id}_ui`;
+}
+
+function widgetDataFunction(widget: Pick<WidgetDeclaration, 'id' | 'data_function' | 'data_tool'>): string {
+  return widget.data_function || widget.data_tool || `widget_${widget.id}_data`;
+}
+
+function normalizeCardSurface(widget: WidgetDeclaration, card: CommandCardDeclaration): ToolCommandCardSurface {
+  return {
+    id: card.id,
+    label: card.label,
+    ...(card.description ? { description: card.description } : {}),
+    size: card.size,
+    dataFunction: card.data_function || widgetDataFunction(widget),
+  };
+}
+
+function buildToolWidgetSurfaces(app: App): ToolWidgetSurface[] {
+  const manifest = parseAppManifest(app.manifest);
+  if (!manifest) return [];
+
+  const surfaces: ToolWidgetSurface[] = [];
+  for (const widget of manifest.widgets || []) {
+    if (!widget?.id || !widget.label) continue;
+    surfaces.push({
+      widgetId: widget.id,
+      label: widget.label,
+      ...(widget.description ? { description: widget.description } : {}),
+      uiFunction: widgetUiFunction(widget),
+      dataFunction: widgetDataFunction(widget),
+      cards: (widget.cards || []).map((card) => normalizeCardSurface(widget, card)),
+    });
+  }
+
+  for (const [fnName, fn] of Object.entries(manifest.functions || {})) {
+    if (!fnName.startsWith('widget_') || !fnName.endsWith('_ui')) continue;
+    const widgetId = fnName.replace(/^widget_/, '').replace(/_ui$/, '');
+    if (surfaces.some((surface) => surface.widgetId === widgetId)) continue;
+    surfaces.push({
+      widgetId,
+      label: fn.description?.replace(/DO NOT call.*$/i, '').trim() || widgetId,
+      uiFunction: fnName,
+      dataFunction: `widget_${widgetId}_data`,
+      cards: [],
+    });
+  }
+
+  return surfaces;
 }
 
 // Permission strings look like "memory:read" / "net:api.openai.com" / "ai:call".
@@ -217,6 +298,75 @@ function CapabilityPill({ cap }: { cap: PermissionDeclaration }) {
         {arrow} {label}
       </span>
       <span className="text-caption text-ul-text-secondary">{detail}</span>
+    </div>
+  );
+}
+
+function WidgetSurfaceSection({
+  app,
+  surfaces,
+}: {
+  app: App;
+  surfaces: ToolWidgetSurface[];
+}) {
+  if (surfaces.length === 0) return null;
+
+  const openSurface = (surface: ToolWidgetSurface) => {
+    void openWidgetWindow({
+      appUuid: app.id,
+      appSlug: app.slug ?? '',
+      appName: app.name,
+      widgetName: surface.widgetId,
+      uiFunction: surface.uiFunction,
+      dataFunction: surface.dataFunction,
+    });
+  };
+
+  return (
+    <div className="mb-8">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-body-lg font-semibold tracking-tight">Widgets & cards</div>
+        <div className="text-nano font-mono text-ul-text-muted">
+          {surfaces.length} surface{surfaces.length === 1 ? '' : 's'}
+        </div>
+      </div>
+      <div className="border border-ul-border rounded-lg overflow-hidden bg-ul-bg">
+        {surfaces.map((surface, index) => (
+          <div key={surface.widgetId} className={index === 0 ? '' : 'border-t border-ul-border'}>
+            <div className="flex items-center gap-3 px-3.5 py-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-small font-semibold text-ul-text truncate">{surface.label}</div>
+                <div className="text-caption text-ul-text-secondary truncate">
+                  {surface.description || surface.widgetId}
+                </div>
+                {surface.cards.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {surface.cards.map((card) => (
+                      <button
+                        type="button"
+                        key={card.id}
+                        onClick={() => openSurface(surface)}
+                        title={card.description || card.label}
+                        className="px-2 py-1 rounded-sm border border-ul-border bg-ul-bg-raised text-nano font-mono text-ul-text-secondary hover:bg-ul-bg-hover"
+                      >
+                        {card.label} · {card.size}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => openSurface(surface)}
+                className="px-3 py-1.5 rounded-sm border border-ul-border bg-ul-bg text-caption font-medium text-ul-text inline-flex items-center gap-1.5 hover:bg-ul-bg-hover"
+              >
+                <ExternalLink className="w-3.5 h-3.5" strokeWidth={1.7} />
+                Open
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1047,6 +1197,7 @@ export default function ToolDetailView({ appId, fallbackName, onOpenAuthor }: To
   const tagline = app?.description || app?.skills_parsed?.description || '';
   const category = app?.category || 'tool';
   const slug = app?.slug || appId;
+  const widgetSurfaces = useMemo(() => app ? buildToolWidgetSurfaces(app) : [], [app]);
 
   return (
     <div className="bg-ul-bg h-full overflow-auto font-sans">
@@ -1126,6 +1277,8 @@ export default function ToolDetailView({ appId, fallbackName, onOpenAuthor }: To
         ) : app ? (
           <div className="grid grid-cols-[1fr_320px] gap-8 items-start">
             <div className="min-w-0">
+              <WidgetSurfaceSection app={app} surfaces={widgetSurfaces} />
+
               {/* Functions */}
               <div className="mb-8">
                 <div className="mb-2">

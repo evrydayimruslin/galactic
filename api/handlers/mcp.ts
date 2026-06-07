@@ -79,6 +79,8 @@ import {
   callerHasAppAccess,
   callerHasFunctionAccess,
   callerHasRequiredScope,
+  callerUsesApiToken,
+  callerUsesRoutineActorToken,
   type RequestCallerContext,
   resolveRequestCallerContext,
 } from "../services/request-caller-context.ts";
@@ -113,6 +115,10 @@ import type {
 import { normalizeJsonRpcResponseId } from "../../shared/contracts/jsonrpc.ts";
 import type { App, BYOKProvider } from "../../shared/types/index.ts";
 import { getEnv } from "../lib/env.ts";
+import {
+  buildAgentPermissionConfigureUrl,
+  enforceAgentFunctionPermission,
+} from "../services/agent-function-permissions.ts";
 
 // ============================================
 // MEMORY SERVICE (lazy singleton)
@@ -128,6 +134,16 @@ function getMemoryService(): MemoryServiceImpl | null {
     }
   }
   return _memoryService;
+}
+
+function requestBaseUrl(request: Request): string {
+  const configured = getEnv("BASE_URL");
+  if (configured) return configured.replace(/\/+$/, "");
+  const url = new URL(request.url);
+  const host = request.headers.get("host") || url.host;
+  const proto = request.headers.get("x-forwarded-proto") ||
+    (host.includes("localhost") ? "http" : "https");
+  return `${proto}://${host}`;
 }
 
 // ============================================
@@ -1588,6 +1604,30 @@ async function handleToolsCall(
     }
   }
 
+  if (
+    callerUsesApiToken(callerContext) ||
+    callerUsesRoutineActorToken(callerContext)
+  ) {
+    const permission = await enforceAgentFunctionPermission({
+      userId,
+      appId: app.id,
+      functionName: rawName,
+      configureUrl: buildAgentPermissionConfigureUrl(
+        requestBaseUrl(request),
+        app.id,
+        rawName,
+      ),
+    });
+    if (!permission.allowed) {
+      return jsonRpcErrorResponse(
+        id,
+        permission.rpcCode,
+        permission.message,
+        permission.details,
+      );
+    }
+  }
+
   // Determine the actual function name to execute from canonical manifest contracts only.
   let functionName = rawName;
   let manifest: AppManifest;
@@ -1905,6 +1945,7 @@ async function executeSDKTool(
             error: `RPC error: ${
               rpcResponse.error.message || JSON.stringify(rpcResponse.error)
             }`,
+            details: rpcResponse.error.data,
           };
           break;
         }

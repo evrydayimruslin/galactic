@@ -189,6 +189,7 @@ type PublicSearchApp = PublicDiscoveryApp & {
 interface JsonRpcErrorPayload {
   code?: number;
   message?: string;
+  data?: unknown;
 }
 
 interface RpcToolCallResultEnvelope {
@@ -3730,8 +3731,10 @@ async function handleToolsCall(
                 const rpcResponse = await callResponse
                   .json() as RpcToolCallResultEnvelope;
                 if (rpcResponse.error) {
-                  throw new Error(
+                  throw new ToolError(
+                    rpcResponse.error.code || INTERNAL_ERROR,
                     rpcResponse.error.message || JSON.stringify(rpcResponse.error),
+                    rpcResponse.error.data,
                   );
                 }
                 return unwrapToolCallResult(rpcResponse.result);
@@ -3778,8 +3781,10 @@ async function handleToolsCall(
                 const rpcResponse = await callResponse
                   .json() as RpcToolCallResultEnvelope;
                 if (rpcResponse.error) {
-                  throw new Error(
+                  throw new ToolError(
+                    rpcResponse.error.code || INTERNAL_ERROR,
                     rpcResponse.error.message || JSON.stringify(rpcResponse.error),
+                    rpcResponse.error.data,
                   );
                 }
                 return unwrapToolCallResult(rpcResponse.result);
@@ -4159,6 +4164,7 @@ async function handleToolsCall(
           throw new ToolError(
             rpcResponse.error.code || INTERNAL_ERROR,
             rpcResponse.error.message || JSON.stringify(rpcResponse.error),
+            rpcResponse.error.data,
           );
         }
 

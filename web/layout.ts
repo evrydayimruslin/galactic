@@ -44,7 +44,7 @@ export function getLayoutHTML(options: {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title} - Ultralight</title>
-  <meta name="description" content="TypeScript functions become MCP servers. Instantly.">
+  <meta name="description" content="Deploy tools that existing agents can install, run, compose, and pay for with Light.">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%230a0a0a'/%3E%3Cstop offset='100%25' stop-color='%23333333'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M6 4 L6 22 Q6 28 12 28 L12 28 L12 4 L17 4 L17 28 Q17 28 20 28 Q26 28 26 22 L26 4 L21 4 L21 22 Q21 24 20 24 L12 24 Q10.5 24 10.5 22 L10.5 4 Z' fill='url(%23g)'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2832,8 +2832,8 @@ export function getLayoutHTML(options: {
     <div id="homeView"${initialView !== "home" ? ' style="display:none;"' : ""}>
       <section class="hero">
         <div class="hero-eyebrow">Ultralight</div>
-        <h1>The agent app economy</h1>
-        <p class="hero-subcopy">Deploy once. Agents discover it. Users run it without per-app setup. Creators earn, sell, and build resale value around useful capabilities.</p>
+        <h1>Tools for the agents you already use</h1>
+        <p class="hero-subcopy">Connect Claude Code, Codex, Cursor, or any MCP-capable agent once. Deploy tools that inherit auth, Light billing, composability, widgets, and marketplace distribution.</p>
         <div class="hero-actions" style="margin-top:var(--space-4);">
           <button id="heroCTA" class="btn btn-primary btn-lg" style="gap:var(--space-2);border-radius:0;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
@@ -2843,20 +2843,20 @@ export function getLayoutHTML(options: {
         </div>
         <div class="hero-market-strip" aria-label="Marketplace examples">
           <div class="hero-market-row">
-            <span class="hero-market-title">Run a video captioner</span>
-            <span class="hero-market-meta">use instantly</span>
+            <span class="hero-market-title">Paste install instructions into your agent</span>
+            <span class="hero-market-meta">no desktop first</span>
           </div>
           <div class="hero-market-row">
-            <span class="hero-market-title">Call a scraping agent</span>
-            <span class="hero-market-meta">pay per run</span>
+            <span class="hero-market-title">Fund Light before private deploys</span>
+            <span class="hero-market-meta">usage-backed</span>
           </div>
           <div class="hero-market-row">
-            <span class="hero-market-title">${gpuSupportEnabled ? "Use a GPU image pipeline" : "Run an image workflow"}</span>
-            <span class="hero-market-meta">${gpuSupportEnabled ? "GPU runtime" : "media ready"}</span>
+            <span class="hero-market-title">${gpuSupportEnabled ? "Deploy a GPU image pipeline" : "Deploy an image workflow"}</span>
+            <span class="hero-market-meta">${gpuSupportEnabled ? "tool runtime" : "agent-ready"}</span>
           </div>
           <div class="hero-market-row">
-            <span class="hero-market-title">Generate a legal clause diff</span>
-            <span class="hero-market-meta">agent-ready</span>
+            <span class="hero-market-title">Open widgets and command cards</span>
+            <span class="hero-market-meta">UI surfaces</span>
           </div>
           <div class="hero-market-row">
             <span class="hero-market-title">Acquire an app's revenue stream</span>
@@ -2868,7 +2868,7 @@ export function getLayoutHTML(options: {
       <!-- Setup Instructions Block (hidden until authenticated) -->
       <div id="setupBlock" class="setup-block" style="display:none;max-width:640px;margin:var(--space-8) auto 0;background:var(--bg-raised);border:1px solid var(--border-strong);border-radius:var(--radius-lg);padding:var(--space-5);overflow:hidden;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3);">
-          <span style="font-size:13px;font-weight:500;color:var(--text-secondary);">Paste this into your agent:</span>
+          <span style="font-size:13px;font-weight:500;color:var(--text-secondary);">Paste this into your existing agent:</span>
           <button id="setupCopyBtn" class="btn btn-ghost btn-sm" style="font-size:12px;">Copy</button>
         </div>
         <pre id="setupCode" style="background:var(--bg-base);border:1px solid var(--border);border-radius:var(--radius-md);padding:var(--space-4);font-family:var(--font-mono);font-size:13px;line-height:1.6;color:var(--text-secondary);overflow-x:auto;white-space:pre-wrap;word-break:break-all;"></pre>
@@ -2877,15 +2877,15 @@ export function getLayoutHTML(options: {
 
       <!-- Section 1: Agent app economy -->
       <section class="cap-section">
-        <div class="cap-section-heading">What ships at MVP</div>
+        <div class="cap-section-heading">Launch MVP: latch onto existing agents first</div>
         <div class="cap-grid">
           <!-- Free instant deployments -->
           <div class="cap-card">
             <div class="cap-card-icon">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
             </div>
-            <div class="cap-card-title">Deploy agent apps</div>
-            <div class="cap-card-desc">Ship MCP, HTTP, markdown${gpuSupportEnabled ? ", and GPU-backed" : ""} capabilities to production from the same marketplace surface.</div>
+            <div class="cap-card-title">Connect existing agents</div>
+            <div class="cap-card-desc">Copy MCP install instructions into the coding agent you already trust. No desktop download is required to start.</div>
             <div class="cap-card-visual">
               <div class="cap-flow">
                 <div class="cap-flow-row">
@@ -2902,13 +2902,13 @@ export function getLayoutHTML(options: {
             </div>
           </div>
 
-          <!-- Take everything with you -->
+          <!-- Light balance first -->
           <div class="cap-card">
             <div class="cap-card-icon">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
             </div>
-            <div class="cap-card-title">Distribute everywhere</div>
-            <div class="cap-card-desc">One app can be discovered from web market pages, desktop chat widgets, and agent-side appstore search.</div>
+            <div class="cap-card-title">Fund Light</div>
+            <div class="cap-card-desc">Usage-backed Light balances cover cloud calls and give private deploys a cost floor before expensive infrastructure spins up.</div>
             <div class="cap-card-visual">
               <div class="cap-pills">
                 <span>Custom apps</span>
@@ -2923,8 +2923,8 @@ export function getLayoutHTML(options: {
             <div class="cap-card-icon">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
             </div>
-            <div class="cap-card-title">Run without setup</div>
-            <div class="cap-card-desc">Users connect Ultralight once. Apps inherit shared auth, permissions, wallet, and per-user settings.</div>
+            <div class="cap-card-title">Deploy tool surfaces</div>
+            <div class="cap-card-desc">Ship MCP, HTTP, markdown${gpuSupportEnabled ? ", GPU-backed" : ""}, widget, and command-card surfaces to agents and web pages.</div>
             <div class="cap-card-visual">
               <div class="cap-carousel">
                 <div class="cap-carousel-inner">
@@ -2950,8 +2950,8 @@ export function getLayoutHTML(options: {
             <div class="cap-card-icon">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
             </div>
-            <div class="cap-card-title">Monetize and resell</div>
-            <div class="cap-card-desc">Creators can charge per call, receive payouts, list apps for acquisition, accept bids, and transfer ownership.</div>
+            <div class="cap-card-title">Manage tools</div>
+            <div class="cap-card-desc">Set per-function pricing, secrets, permissions, trust cards, installs, earnings, bids, and ownership transfer after launch.</div>
           </div>
         </div>
       </section>

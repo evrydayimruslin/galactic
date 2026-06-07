@@ -1,0 +1,271 @@
+/* ============================================================
+   Ultralight Design System — Colors & Type Tokens
+   Source of truth: desktop/tailwind.config.ts + globals.css
+   from github.com/evrydayimruslin/ultralight @ main
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* ── FOREGROUND ── */
+  --ul-text: #0a0a0a;
+  --ul-text-secondary: #555555;
+  --ul-text-muted: #999999;
+
+  /* ── BACKGROUND ── */
+  --ul-bg: #ffffff;
+  --ul-bg-raised: #fafafa;        /* code blocks, sub-surfaces */
+  --ul-bg-subtle: rgba(0, 0, 0, 0.02);
+  --ul-bg-hover: rgba(0, 0, 0, 0.04);
+  --ul-bg-active: rgba(0, 0, 0, 0.06);
+  --ul-bg-sidebar: #f9fafb;       /* gray-50, sidebar/toolbar */
+
+  /* ── BORDERS ── */
+  --ul-border: rgba(0, 0, 0, 0.08);
+  --ul-border-strong: rgba(0, 0, 0, 0.15);
+  --ul-border-focus: rgba(0, 0, 0, 0.4);
+
+  /* ── ACCENT (the brand is monochrome — accent is pure black) ── */
+  --ul-accent: #0a0a0a;
+  --ul-accent-hover: #333333;
+  --ul-accent-soft: rgba(0, 0, 0, 0.06);
+
+  /* ── SEMANTIC ── */
+  --ul-success: #22c55e;
+  --ul-success-soft: rgba(34, 197, 94, 0.10);
+  --ul-error: #ef4444;
+  --ul-error-soft: rgba(239, 68, 68, 0.08);
+  --ul-warning: #f59e0b;
+  --ul-warning-soft: rgba(245, 158, 11, 0.08);
+  --ul-info: #3b82f6;             /* blue-500, used by Tool Builder + executing tool calls */
+  --ul-info-soft: rgba(59, 130, 246, 0.10);
+
+  /* ── DEEP ACCENTS (system agents) ── */
+  --ul-deep-green: #004225;       /* Tool Marketer */
+  --ul-wine: #722F37;             /* Platform Manager */
+
+  /* ── TYPE FAMILIES ── */
+  --ul-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --ul-font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* ── TYPE SCALE (from tailwind theme.fontSize) ── */
+  --ul-fs-display: 48px;   --ul-lh-display: 1.1; --ul-fw-display: 700; --ul-ls-display: -0.03em;
+  --ul-fs-h1: 32px;        --ul-lh-h1: 1.2;     --ul-fw-h1: 700;     --ul-ls-h1: -0.02em;
+  --ul-fs-h2: 24px;        --ul-lh-h2: 1.3;     --ul-fw-h2: 600;     --ul-ls-h2: -0.015em;
+  --ul-fs-h3: 18px;        --ul-lh-h3: 1.4;     --ul-fw-h3: 600;     --ul-ls-h3: -0.01em;
+  --ul-fs-body-lg: 16px;   --ul-lh-body-lg: 1.6; --ul-fw-body-lg: 400;
+  --ul-fs-body: 14px;      --ul-lh-body: 1.6;   --ul-fw-body: 400;
+  --ul-fs-small: 13px;     --ul-lh-small: 1.5;  --ul-fw-small: 400;
+  --ul-fs-caption: 12px;   --ul-lh-caption: 1.4; --ul-fw-caption: 500; --ul-ls-caption: 0.01em;
+
+  /* ── RADII ── */
+  --ul-radius-sm: 6px;
+  --ul-radius-md: 8px;
+  --ul-radius-lg: 12px;
+  --ul-radius-xl: 16px;
+  --ul-radius-full: 9999px;
+
+  /* ── SHADOWS ── */
+  --ul-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --ul-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --ul-shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.10);
+  --ul-shadow-xl: 0 16px 50px rgba(0, 0, 0, 0.12);
+  --ul-shadow-glow: 0 0 0 3px rgba(0, 0, 0, 0.06);
+
+  /* ── SPACING (tailwind 4px grid; selected scale) ── */
+  --ul-space-1: 4px;
+  --ul-space-2: 8px;
+  --ul-space-3: 12px;
+  --ul-space-4: 16px;
+  --ul-space-5: 20px;
+  --ul-space-6: 24px;
+  --ul-space-8: 32px;
+  --ul-space-10: 40px;
+  --ul-space-12: 48px;
+  --ul-space-16: 64px;
+  --ul-space-20: 80px;
+
+  /* ── MOTION ── */
+  --ul-duration-fast: 120ms;
+  --ul-duration-base: 200ms;
+  --ul-duration-slow: 300ms;
+  --ul-ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ── LAYOUT ── */
+  --ul-max-content: 1200px;
+  --ul-max-narrow: 720px;
+  --ul-h-nav: 64px;
+  --ul-h-toolbar: 28px;        /* macOS title bar */
+  --ul-w-sidebar: 256px;
+}
+
+/* ============================================================
+   Semantic helpers — apply to elements directly
+   ============================================================ */
+
+.ul-display {
+  font-family: var(--ul-font-sans);
+  font-size: var(--ul-fs-display);
+  line-height: var(--ul-lh-display);
+  font-weight: var(--ul-fw-display);
+  letter-spacing: var(--ul-ls-display);
+  color: var(--ul-text);
+}
+
+.ul-h1 {
+  font-family: var(--ul-font-sans);
+  font-size: var(--ul-fs-h1);
+  line-height: var(--ul-lh-h1);
+  font-weight: var(--ul-fw-h1);
+  letter-spacing: var(--ul-ls-h1);
+  color: var(--ul-text);
+}
+
+.ul-h2 {
+  font-family: var(--ul-font-sans);
+  font-size: var(--ul-fs-h2);
+  line-height: var(--ul-lh-h2);
+  font-weight: var(--ul-fw-h2);
+  letter-spacing: var(--ul-ls-h2);
+  color: var(--ul-text);
+}
+
+.ul-h3 {
+  font-family: var(--ul-font-sans);
+  font-size: var(--ul-fs-h3);
+  line-height: var(--ul-lh-h3);
+  font-weight: var(--ul-fw-h3);
+  letter-spacing: var(--ul-ls-h3);
+  color: var(--ul-text);
+}
+
+.ul-body-lg {
+  font-family: var(--ul-font-sans);
+  font-size: var(--ul-fs-body-lg);
+  line-height: var(--ul-lh-body-lg);
+  font-weight: var(--ul-fw-body-lg);
+  color: var(--ul-text);
+}
+
+.ul-body {
+  font-family: var(--ul-font-sans);
+  font-size: var(--ul-fs-body);
+  line-height: var(--ul-lh-body);
+  font-weight: var(--ul-fw-body);
+  color: var(--ul-text);
+}
+
+.ul-small {
+  font-family: var(--ul-font-sans);
+  font-size: var(--ul-fs-small);
+  line-height: var(--ul-lh-small);
+  font-weight: var(--ul-fw-small);
+  color: var(--ul-text-secondary);
+}
+
+.ul-caption {
+  font-family: var(--ul-font-sans);
+  font-size: var(--ul-fs-caption);
+  line-height: var(--ul-lh-caption);
+  font-weight: var(--ul-fw-caption);
+  letter-spacing: var(--ul-ls-caption);
+  color: var(--ul-text-muted);
+  text-transform: uppercase;
+}
+
+.ul-mono {
+  font-family: var(--ul-font-mono);
+  font-size: 13px;
+}
+
+/* Section labels in the product (e.g. "AGENTS", "CHATS") */
+.ul-section-label {
+  font-family: var(--ul-font-sans);
+  font-size: var(--ul-fs-caption);
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ul-text-muted);
+}
+
+/* Buttons (mirrors globals.css .btn/.btn-primary/.btn-secondary/.btn-ghost) */
+.ul-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-family: var(--ul-font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  border: none;
+  transition: all var(--ul-duration-base) var(--ul-ease);
+}
+.ul-btn:focus-visible { box-shadow: var(--ul-shadow-glow); }
+
+.ul-btn-primary { background: var(--ul-accent); color: #fff; }
+.ul-btn-primary:hover { background: var(--ul-accent-hover); }
+
+.ul-btn-secondary {
+  background: var(--ul-bg-hover);
+  color: var(--ul-text);
+  border: 1px solid var(--ul-border);
+}
+.ul-btn-secondary:hover { background: var(--ul-bg-active); }
+
+.ul-btn-ghost { background: transparent; color: var(--ul-text-secondary); }
+.ul-btn-ghost:hover { background: var(--ul-bg-hover); color: var(--ul-text); }
+
+.ul-btn-sm { height: 30px; padding: 0 12px; font-size: 12px; border-radius: 6px; }
+.ul-btn-lg { height: 42px; padding: 0 20px; font-size: 14px; border-radius: 12px; }
+
+/* Input */
+.ul-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-family: var(--ul-font-sans);
+  font-size: 14px;
+  border: 1px solid var(--ul-border);
+  background: var(--ul-bg);
+  color: var(--ul-text);
+  outline: none;
+  transition: all var(--ul-duration-base) var(--ul-ease);
+}
+.ul-input:focus {
+  border-color: var(--ul-border-focus);
+  box-shadow: var(--ul-shadow-glow);
+}
+.ul-input::placeholder { color: var(--ul-text-muted); }
+
+/* Card */
+.ul-card {
+  background: var(--ul-bg);
+  border: 1px solid var(--ul-border);
+  border-radius: var(--ul-radius-lg);
+}
+.ul-card-hover:hover {
+  background: #fafafa;
+  box-shadow: var(--ul-shadow-sm);
+}
+
+/* Status dot helpers */
+.ul-dot { width: 8px; height: 8px; border-radius: 9999px; display: inline-block; }
+.ul-dot-running { background: var(--ul-success); }
+.ul-dot-completed { background: #60a5fa; }
+.ul-dot-pending { background: #d1d5db; }
+.ul-dot-error { background: var(--ul-error); }
+.ul-dot-warning { background: var(--ul-warning); }
+
+/* ============================================================
+   Brand animations — for Logo + BootAnimation components
+   ============================================================ */
+@keyframes ul-orbit-spin   { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes ul-fade-in      { 0% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes ul-spark-pulse  { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@keyframes ul-dot-r        { 0% { r: 0; } 60% { r: 14px; } 100% { r: 12px; } }
+@keyframes ul-spin         { to { transform: rotate(360deg); } }

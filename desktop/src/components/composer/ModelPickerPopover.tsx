@@ -8,7 +8,7 @@
 // of the real BYOK providers, matching the mockup's mental model.
 
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, Search } from 'lucide-react';
+import { ChevronDown, Globe2, Search } from 'lucide-react';
 import type {
   ChatInferenceOptionsResponse,
   ChatInferenceLightOption,
@@ -28,6 +28,8 @@ interface ModelPickerPopoverProps {
   selectedModel: string;
   /** Called when user picks a model id (catalog or custom paste). */
   onPick: (modelId: string) => void;
+  webSearchEnabled: boolean;
+  onWebSearchChange: (enabled: boolean) => void;
 }
 
 interface ProviderRow {
@@ -90,6 +92,16 @@ function findInitialProviderId(rows: ProviderRow[], selectedModel: string): stri
   }
   // Fallback to Ultralight (light option)
   return rows[0]?.id ?? '__light__';
+}
+
+function providerSupportsWebSearch(
+  options: ChatInferenceOptionsResponse | null,
+  row: ProviderRow | undefined,
+): boolean {
+  if (!options || !row) return false;
+  if (row.id === '__light__') return options.light.provider === 'openrouter';
+  const provider = options.providers.find((p) => p.id === row.id);
+  return provider?.capabilities.webSearch === true;
 }
 
 function StatusBadge({ status }: { status: ProviderRow['status'] }) {
@@ -194,6 +206,8 @@ export default function ModelPickerPopover({
   options,
   selectedModel,
   onPick,
+  webSearchEnabled,
+  onWebSearchChange,
 }: ModelPickerPopoverProps) {
   const rows = useMemo(() => (options ? buildProviderRows(options, tier) : []), [options, tier]);
 
@@ -216,6 +230,7 @@ export default function ModelPickerPopover({
   const [query, setQuery] = useState('');
 
   const current = rows.find((r) => r.id === providerId);
+  const currentSupportsWebSearch = providerSupportsWebSearch(options, current);
   const q = query.trim().toLowerCase();
   const filteredModels = useMemo(() => {
     if (!current) return [];
@@ -333,6 +348,29 @@ export default function ModelPickerPopover({
 
       {/* Sticky search */}
       <div className="flex-shrink-0 px-3.5 pt-2 pb-2.5 border-t border-ul-border bg-ul-bg">
+        <button
+          type="button"
+          disabled={!currentSupportsWebSearch}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!currentSupportsWebSearch) return;
+            onWebSearchChange(!webSearchEnabled);
+          }}
+          className={`mb-2 w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md border text-left transition-colors ${
+            currentSupportsWebSearch
+              ? webSearchEnabled
+                ? 'border-ul-text bg-ul-bg-hover text-ul-text'
+                : 'border-ul-border bg-ul-bg text-ul-text-secondary hover:bg-ul-bg-hover'
+              : 'border-ul-border bg-ul-bg text-ul-text-muted opacity-60 cursor-not-allowed'
+          }`}
+        >
+          <Globe2 className="w-3.5 h-3.5 flex-shrink-0" strokeWidth={1.6} />
+          <span className="flex-1 text-caption font-medium">Browsing</span>
+          <span className="text-nano font-mono uppercase">
+            {currentSupportsWebSearch ? (webSearchEnabled ? 'on' : 'off') : 'unsupported'}
+          </span>
+        </button>
         <div className="flex items-center gap-1.5 px-2.5 py-1 border border-ul-border rounded-md">
           <Search className="w-3 h-3 text-ul-text-muted flex-shrink-0" strokeWidth={1.5} />
           <input

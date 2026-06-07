@@ -1,24 +1,38 @@
 import type {
+  LaunchAgentFunctionPermissionsResponse,
+  LaunchAgentFunctionPermissionsUpdateRequest,
   LaunchApiKeyCreateRequest,
   LaunchApiKeyCreateResponse,
   LaunchApiKeyDeleteResponse,
   LaunchApiKeyListResponse,
   LaunchDiscoveryRequest,
   LaunchDiscoveryResponse,
+  LaunchFunctionRunRequest,
+  LaunchFunctionRunResponse,
   LaunchInstallInstruction,
   LaunchInstallResponse,
   LaunchLeaderboardKind,
   LaunchLeaderboardResponse,
   LaunchLibraryResponse,
   LaunchPlatformPrimitiveSuggestion,
+  LaunchStoreRequest,
+  LaunchStoreResponse,
   LaunchToolAdminSummary,
+  LaunchToolFunctionsResponse,
   LaunchToolSummary,
   LaunchTrustCard,
+  LaunchWalletDetailKind,
+  LaunchWalletDetailResponse,
+  LaunchWalletFundingIntentRequest,
+  LaunchWalletFundingIntentResponse,
+  LaunchWalletFundingMethod,
+  LaunchWalletFundingQuoteResponse,
+  LaunchWalletPageRequest,
   LaunchWalletSummary,
   LaunchWidgetDetailResponse,
   LaunchWidgetRenderRequest,
   LaunchWidgetRenderResponse,
-} from '../../../../shared/contracts/launch.ts';
+} from "../../../../shared/contracts/launch.ts";
 
 export interface LaunchToolResponse {
   tool: LaunchToolSummary;
@@ -29,9 +43,9 @@ export interface LaunchToolResponse {
 export interface LaunchToolWidgetsResponse {
   tool: Pick<
     LaunchToolSummary,
-    'id' | 'slug' | 'name' | 'relationship' | 'publicUrl' | 'adminUrl'
+    "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
   >;
-  widgets: LaunchToolSummary['widgets'];
+  widgets: LaunchToolSummary["widgets"];
   generatedAt?: string;
 }
 
@@ -57,7 +71,7 @@ export interface LaunchApiClientOptions {
 }
 
 export interface LaunchLeaderboardRequest {
-  period?: LaunchLeaderboardResponse['period'];
+  period?: LaunchLeaderboardResponse["period"];
   limit?: number;
 }
 
@@ -66,35 +80,39 @@ export class LaunchApiClient {
   private readonly getAuthToken?: () => string | null;
 
   constructor(options: LaunchApiClientOptions = {}) {
-    this.baseUrl = options.baseUrl?.replace(/\/$/u, '') || '';
+    this.baseUrl = options.baseUrl?.replace(/\/$/u, "") || "";
     this.getAuthToken = options.getAuthToken;
   }
 
   install(request: { tool?: string } = {}): Promise<LaunchInstallResponse> {
     const params = new URLSearchParams();
-    if (request.tool) params.set('tool', request.tool);
-    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    if (request.tool) params.set("tool", request.tool);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return this.fetchJson(`/api/launch/install${suffix}`);
   }
 
   library(): Promise<LaunchLibraryResponse> {
-    return this.fetchJson('/api/launch/library');
+    return this.fetchJson("/api/launch/library");
+  }
+
+  store(request: LaunchStoreRequest = {}): Promise<LaunchStoreResponse> {
+    const params = new URLSearchParams();
+    if (request.query) params.set("query", request.query);
+    if (request.kind && request.kind !== "all") {
+      params.set("kind", request.kind);
+    }
+    if (request.includeWidgets !== undefined) {
+      params.set("includeWidgets", String(request.includeWidgets));
+    }
+    if (request.limit) params.set("limit", String(request.limit));
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.fetchJson(`/api/launch/store${suffix}`);
   }
 
   discover(
     request: LaunchDiscoveryRequest = {},
   ): Promise<LaunchDiscoveryResponse> {
-    const params = new URLSearchParams();
-    if (request.query) params.set('query', request.query);
-    if (request.kind && request.kind !== 'all') {
-      params.set('kind', request.kind);
-    }
-    if (request.includeWidgets !== undefined) {
-      params.set('includeWidgets', String(request.includeWidgets));
-    }
-    if (request.limit) params.set('limit', String(request.limit));
-    const suffix = params.size > 0 ? `?${params.toString()}` : '';
-    return this.fetchJson(`/api/launch/discover${suffix}`);
+    return this.store(request);
   }
 
   tool(idOrSlug: string): Promise<LaunchToolResponse> {
@@ -130,30 +148,114 @@ export class LaunchApiClient {
         encodeURIComponent(widgetId)
       }/render`,
       {
-        method: 'POST',
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  toolFunctions(idOrSlug: string): Promise<LaunchToolFunctionsResponse> {
+    return this.fetchJson(
+      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/functions`,
+    );
+  }
+
+  runToolFunction(
+    idOrSlug: string,
+    functionName: string,
+    request: LaunchFunctionRunRequest = {},
+  ): Promise<LaunchFunctionRunResponse> {
+    return this.fetchJson(
+      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/functions/${
+        encodeURIComponent(functionName)
+      }/run`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  toolAgentPermissions(
+    idOrSlug: string,
+  ): Promise<LaunchAgentFunctionPermissionsResponse> {
+    return this.fetchJson(
+      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/agent-permissions`,
+    );
+  }
+
+  updateToolAgentPermissions(
+    idOrSlug: string,
+    request: LaunchAgentFunctionPermissionsUpdateRequest,
+  ): Promise<LaunchAgentFunctionPermissionsResponse> {
+    return this.fetchJson(
+      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/agent-permissions`,
+      {
+        method: "PATCH",
         body: JSON.stringify(request),
       },
     );
   }
 
   wallet(): Promise<LaunchWalletResponse> {
-    return this.fetchJson('/api/launch/wallet');
+    return this.fetchJson("/api/launch/wallet");
+  }
+
+  walletDetail(
+    kind: LaunchWalletDetailKind,
+    request: LaunchWalletPageRequest = {},
+  ): Promise<LaunchWalletDetailResponse> {
+    const params = new URLSearchParams();
+    if (request.cursor) params.set("cursor", request.cursor);
+    if (request.limit) params.set("limit", String(request.limit));
+    if (request.tool) params.set("tool", request.tool);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.fetchJson(`/api/launch/wallet/${kind}${suffix}`);
+  }
+
+  walletTopUpQuote(request: {
+    amountLight: number;
+    method: LaunchWalletFundingMethod;
+  }): Promise<LaunchWalletFundingQuoteResponse> {
+    const params = new URLSearchParams({
+      amount_light: String(request.amountLight),
+      method: request.method,
+    });
+    return this.fetchJson(
+      `/api/launch/wallet/topup/quote?${params.toString()}`,
+    );
+  }
+
+  createWalletTopUpIntent(
+    request: LaunchWalletFundingIntentRequest,
+  ): Promise<LaunchWalletFundingIntentResponse> {
+    return this.fetchJson("/api/launch/wallet/topup/intent", {
+      method: "POST",
+      body: JSON.stringify({
+        amount_light: request.amountLight,
+        method: request.method,
+        terms_accepted: request.termsAccepted ?? true,
+        ...(request.billingAddress !== undefined
+          ? { billing_address: request.billingAddress }
+          : {}),
+      }),
+    });
   }
 
   leaderboard(
-    kind: LaunchLeaderboardKind = 'builder',
+    kind: LaunchLeaderboardKind = "builder",
     request: LaunchLeaderboardRequest = {},
   ): Promise<LaunchLeaderboardResponse> {
     const params = new URLSearchParams({ kind });
-    if (request.period) params.set('period', request.period);
-    if (request.limit) params.set('limit', String(request.limit));
+    if (request.period) params.set("period", request.period);
+    if (request.limit) params.set("limit", String(request.limit));
     return this.fetchJson(
       `/api/launch/leaderboard?${params.toString()}`,
     );
   }
 
   platformPrimitives(): Promise<LaunchPlatformPrimitivesResponse> {
-    return this.fetchJson('/api/launch/platform-primitives');
+    return this.fetchJson("/api/launch/platform-primitives");
   }
 
   toolAdmin(id: string): Promise<LaunchToolAdminResponse> {
@@ -161,21 +263,21 @@ export class LaunchApiClient {
   }
 
   apiKeys(): Promise<LaunchApiKeyListResponse> {
-    return this.fetchJson('/api/launch/api-keys');
+    return this.fetchJson("/api/launch/api-keys");
   }
 
   createApiKey(
     request: LaunchApiKeyCreateRequest,
   ): Promise<LaunchApiKeyCreateResponse> {
-    return this.fetchJson('/api/launch/api-keys', {
-      method: 'POST',
+    return this.fetchJson("/api/launch/api-keys", {
+      method: "POST",
       body: JSON.stringify(request),
     });
   }
 
   revokeApiKey(id: string): Promise<LaunchApiKeyDeleteResponse> {
     return this.fetchJson(`/api/launch/api-keys/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
+      method: "DELETE",
     });
   }
 
@@ -183,10 +285,10 @@ export class LaunchApiClient {
     path: string,
     init: RequestInit = {},
   ): Promise<T> {
-    const headers = new Headers({ Accept: 'application/json' });
-    if (init.body) headers.set('Content-Type', 'application/json');
+    const headers = new Headers({ Accept: "application/json" });
+    if (init.body) headers.set("Content-Type", "application/json");
     const token = this.getAuthToken?.();
-    if (token) headers.set('Authorization', `Bearer ${token}`);
+    if (token) headers.set("Authorization", `Bearer ${token}`);
     if (init.headers) {
       new Headers(init.headers).forEach((value, key) => {
         headers.set(key, value);
@@ -198,7 +300,7 @@ export class LaunchApiClient {
       headers,
     });
     if (!response.ok) {
-      const message = await response.text().catch(() => '');
+      const message = await response.text().catch(() => "");
       throw new Error(
         message || `Launch API request failed (${response.status})`,
       );
@@ -208,5 +310,6 @@ export class LaunchApiClient {
 }
 
 export const launchApi = new LaunchApiClient({
-  getAuthToken: () => window.localStorage.getItem('ultralight.launch.authToken'),
+  getAuthToken: () =>
+    window.localStorage.getItem("ultralight.launch.authToken"),
 });

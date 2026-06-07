@@ -1195,11 +1195,11 @@ export const LIGHT_SYMBOL = "✦";
 /** Canonical Light/$ reference for internal USD-denominated costs and copy. */
 export const LIGHT_PER_DOLLAR_CANONICAL = 100;
 
-/** Exchange rate: Light credited per $1 USD through Apple Pay / Google Pay. */
-export const LIGHT_PER_DOLLAR_WALLET = 95;
+/** Exchange rate: Light credited per $1 USD through card wallet funding. */
+export const LIGHT_PER_DOLLAR_WALLET = LIGHT_PER_DOLLAR_CANONICAL;
 
-/** Exchange rate: Light credited per $1 USD through Stripe wire/bank transfer. */
-export const LIGHT_PER_DOLLAR_WIRE = 99;
+/** Legacy bank-transfer rate alias retained while launch UI says Bank (ACH). */
+export const LIGHT_PER_DOLLAR_WIRE = LIGHT_PER_DOLLAR_CANONICAL;
 
 /** Legacy alias retained while old web checkout surfaces are migrated. */
 export const LIGHT_PER_DOLLAR_WEB = LIGHT_PER_DOLLAR_WALLET;
@@ -1670,6 +1670,7 @@ export interface BYOKProviderCapabilities {
   jsonMode: boolean;
   multimodal: boolean;
   realtime: boolean;
+  webSearch: boolean;
 }
 
 export interface BYOKModel {
@@ -1678,6 +1679,8 @@ export interface BYOKModel {
   contextWindow: number;
   inputPrice?: number; // per 1M tokens in USD, omitted when provider pricing is not pinned here
   outputPrice?: number; // per 1M tokens in USD, omitted when provider pricing is not pinned here
+  /** Provider-native hosted web search support for this model, when known. */
+  webSearch?: boolean;
   /** Editorial tier annotation (B1). When set, the composer's
    *  ModelPickerPopover shows this model only on the matching tier;
    *  `'both'` keeps it on both popovers. When the field is absent on
@@ -1694,6 +1697,7 @@ const OPENAI_COMPAT_TEXT_CAPABILITIES: BYOKProviderCapabilities = {
   jsonMode: true,
   multimodal: false,
   realtime: false,
+  webSearch: false,
 };
 
 // First-tier BYOK provider registry. Runtime routing still chooses how each entry is used.
@@ -1745,7 +1749,11 @@ export const BYOK_PROVIDERS: Record<ActiveBYOKProvider, BYOKProviderInfo> = {
         contextWindow: 256000,
       },
     ],
-    capabilities: { ...OPENAI_COMPAT_TEXT_CAPABILITIES, multimodal: true },
+    capabilities: {
+      ...OPENAI_COMPAT_TEXT_CAPABILITIES,
+      multimodal: true,
+      webSearch: true,
+    },
     apiKeyPrefix: "sk-or-",
     docsUrl: "https://openrouter.ai/docs",
     apiKeyUrl: "https://openrouter.ai/keys",
@@ -1773,11 +1781,30 @@ export const BYOK_PROVIDERS: Record<ActiveBYOKProvider, BYOKProviderInfo> = {
         inputPrice: 5,
         outputPrice: 15,
       },
+      {
+        id: "gpt-5-search-api",
+        name: "GPT-5 Search API",
+        contextWindow: 128000,
+        webSearch: true,
+      },
+      {
+        id: "gpt-4o-search-preview",
+        name: "GPT-4o Search Preview",
+        contextWindow: 128000,
+        webSearch: true,
+      },
+      {
+        id: "gpt-4o-mini-search-preview",
+        name: "GPT-4o Mini Search Preview",
+        contextWindow: 128000,
+        webSearch: true,
+      },
     ],
     capabilities: {
       ...OPENAI_COMPAT_TEXT_CAPABILITIES,
       multimodal: true,
       realtime: true,
+      webSearch: true,
     },
     apiKeyPrefix: "sk-",
     docsUrl: "https://platform.openai.com/docs",

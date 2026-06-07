@@ -36,6 +36,7 @@ export interface CommandWidgetSurfaceEntry {
   widget_id: string;
   widget_label: string;
   description: string | null;
+  embedding_text: string;
   ui_function: string;
   data_function: string;
   cards_count: number;
@@ -56,6 +57,7 @@ export interface CommandCardSurfaceEntry {
   card_id: string;
   card_label: string;
   description: string | null;
+  embedding_text: string;
   size: string;
   render: 'native';
   kind?: string;
@@ -223,31 +225,52 @@ function mergeDependencies(
   return merged.size > 0 ? Array.from(merged.values()) : undefined;
 }
 
+function compactEmbeddingText(fields: Array<string | null | undefined>): string {
+  return fields
+    .filter((field): field is string => typeof field === 'string' && field.trim().length > 0)
+    .map((field) => field.replace(/\s+/g, ' ').trim())
+    .join(' | ')
+    .slice(0, 4000);
+}
+
+function widgetEmbeddingText(widget: WidgetIndexEntry): string {
+  const hints = widget.generationHints ? generationHintText(widget.generationHints) : '';
+  return compactEmbeddingText([
+    `Surface: widget`,
+    `App: ${widget.appName}`,
+    `Slug: ${widget.appSlug}`,
+    `Widget: ${widget.label}`,
+    `Widget id: ${widget.name}`,
+    widget.description,
+    widget.cards.length ? `Cards: ${widget.cards.map((card) => `${card.label} ${card.id}`).join(', ')}` : '',
+    hints,
+  ]);
+}
+
+function cardEmbeddingText(
+  widget: WidgetIndexEntry,
+  card: WidgetIndexEntry['cards'][number],
+): string {
+  const hints = card.generationHints || widget.generationHints
+    ? generationHintText(card.generationHints || widget.generationHints!)
+    : '';
+  return compactEmbeddingText([
+    `Surface: command card`,
+    `App: ${widget.appName}`,
+    `Slug: ${widget.appSlug}`,
+    `Widget: ${widget.label}`,
+    `Widget id: ${widget.name}`,
+    `Card: ${card.label}`,
+    `Card id: ${card.id}`,
+    card.description || widget.description,
+    card.kind ? `Kind: ${card.kind}` : '',
+    card.dataView ? `Data view: ${card.dataView}` : '',
+    hints,
+  ]);
+}
+
 function surfaceSearchText(surface: CommandSurfaceEntry): string {
-  const hints = surface.generation_hints ? generationHintText(surface.generation_hints) : '';
-  const fields = surface.surface === 'command_card'
-    ? [
-      surface.app_name,
-      surface.app_slug,
-      surface.widget_label,
-      surface.widget_id,
-      surface.card_label,
-      surface.card_id,
-      surface.description || '',
-      surface.kind || '',
-      surface.data_view || '',
-      hints,
-    ]
-    : [
-      surface.app_name,
-      surface.app_slug,
-      surface.widget_label,
-      surface.widget_id,
-      surface.description || '',
-      surface.card_ids.join(' '),
-      hints,
-    ];
-  return fields.join(' ').toLowerCase();
+  return surface.embedding_text.toLowerCase();
 }
 
 function generationHintText(hints: WidgetGenerationHints): string {
@@ -296,6 +319,7 @@ function buildWidgetSurface(
     widget_id: widget.name,
     widget_label: widget.label,
     description: widget.description || null,
+    embedding_text: widgetEmbeddingText(widget),
     ui_function: widget.uiFunction,
     data_function: widget.dataFunction,
     cards_count: widget.cards.length,
@@ -323,6 +347,7 @@ function buildCardSurface(
     card_id: card.id,
     card_label: card.label,
     description: card.description || widget.description || null,
+    embedding_text: cardEmbeddingText(widget, card),
     size: card.size,
     render: 'native',
     ...(card.kind ? { kind: card.kind } : {}),

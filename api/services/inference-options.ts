@@ -91,6 +91,7 @@ export async function buildInferenceOptions(
       billingMode: defaultBillingMode,
       provider: selectedProvider,
       model: configuredModel?.trim() || BYOK_PROVIDERS[selectedProvider].defaultModel,
+      webSearchEnabled: false,
     },
     light: {
       provider: "openrouter",

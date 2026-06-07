@@ -1,7 +1,8 @@
 :root {
   color-scheme: light;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
   --bg: #f6f7f4;
   --surface: #ffffff;
   --surface-muted: #edf1ed;
@@ -773,6 +774,132 @@ select {
   padding: 0 12px 12px;
 }
 
+.function-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.function-card {
+  border: 1px solid var(--border);
+  background: #fbfcfa;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.function-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.function-card-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.function-card p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.permission-pill {
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  padding: 5px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.permission-pill.policy-always {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: #e9f5f2;
+}
+
+.permission-pill.policy-never {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.permission-pill.policy-ask {
+  border-color: #9fbaf4;
+  color: var(--blue);
+}
+
+.function-meta-list .summary-row {
+  grid-template-columns: 135px minmax(0, 1fr);
+}
+
+.function-run-form {
+  display: grid;
+  gap: 8px;
+}
+
+.function-args {
+  min-height: 120px;
+  padding: 9px;
+  border: 1px solid var(--border-strong);
+  background: #fff;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  resize: vertical;
+}
+
+.function-run-result {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  background: #fbfcfa;
+}
+
+.function-run-result.function-run-error {
+  border-color: #fecaca;
+  color: var(--danger);
+}
+
+.run-result-note {
+  margin: 0;
+}
+
+.function-result {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  overflow: auto;
+  max-height: 280px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.function-run-warnings {
+  display: grid;
+  gap: 4px;
+}
+
+.function-run-warnings strong,
+.function-run-warnings span {
+  display: block;
+}
+
+.function-result-header {
+  min-height: auto;
+}
+
+.function-result-header strong,
+.function-result-header span {
+  font-size: 13px;
+}
+
 .widget-list {
   gap: 10px;
 }
@@ -903,6 +1030,42 @@ select {
 .wallet-tab-panel {
   display: grid;
   gap: 12px;
+}
+
+.wallet-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wallet-ledger-row {
+  grid-template-columns: minmax(140px, 0.9fr) minmax(0, 1.5fr) auto;
+}
+
+.wallet-amount {
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.wallet-amount.positive {
+  color: var(--accent-strong);
+}
+
+.wallet-load-more {
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.wallet-loading-copy,
+.wallet-error-copy {
+  text-align: center;
+}
+
+.wallet-error-copy {
+  color: var(--danger);
 }
 
 .muted-copy {

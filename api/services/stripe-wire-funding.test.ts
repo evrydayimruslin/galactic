@@ -40,8 +40,8 @@ Deno.test("stripe wire funding: PaymentIntent params expose only customer balanc
     params.get("metadata[funding_method]"),
     WIRE_TRANSFER_FUNDING_METHOD,
   );
-  assertEquals(params.get("metadata[light_amount]"), "2475");
-  assertEquals(params.get("metadata[light_per_usd]"), "99");
+  assertEquals(params.get("metadata[light_amount]"), "2500");
+  assertEquals(params.get("metadata[light_per_usd]"), "100");
   assertEquals(params.get("metadata[source]"), "desktop");
   assertEquals(params.get("metadata[terms_accepted]"), "true");
   assertEquals(params.get("receipt_email"), "founder@example.com");

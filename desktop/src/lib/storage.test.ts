@@ -116,12 +116,14 @@ describe('secure desktop storage', () => {
       billingMode: 'byok',
       provider: 'deepseek',
       model: 'deepseek-v4-pro',
+      webSearchEnabled: true,
     });
 
     expect(storage.getInferencePreference()).toEqual({
       billingMode: 'byok',
       provider: 'deepseek',
       model: 'deepseek-v4-pro',
+      webSearchEnabled: true,
     });
 
     localStorage.setItem('ul_inference_preference', JSON.stringify({
