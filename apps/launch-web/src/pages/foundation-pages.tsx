@@ -91,7 +91,7 @@ interface ToolDetailFixture extends ToolFixture {
   title: string;
   updatedAt: string;
   version: string;
-  visibility: "public" | "unlisted";
+  visibility: "public" | "private" | "unlisted";
   widgetList: ToolWidgetFixture[];
 }
 
@@ -341,6 +341,52 @@ const toolDetails: Record<string, ToolDetailFixture> = Object.fromEntries(
     return [detail.slug, detail];
   }),
 );
+
+const installedLibrarySlugs = [
+  "currency_convert",
+  "pdf_parse",
+  "maps_route",
+  "github_diff",
+];
+const ownedLibrarySlugs = ["get_weather"];
+
+const adminTabs = [
+  ["edit", "Edit"],
+  ["pricing", "Pricing"],
+  ["widgets", "Widgets"],
+  ["secrets", "Secrets"],
+  ["trust", "Trust"],
+  ["receipts", "Receipts"],
+  ["logs", "Logs"],
+] as const;
+
+type AdminTabId = typeof adminTabs[number][0];
+
+const visibilityOptions = [
+  ["public", "Public", "Listed in the Store, embeddable widgets, installable by anyone."],
+  ["unlisted", "Unlisted", "Reachable by direct link only. Not indexed in the Store."],
+  ["private", "Private", "Only you can see and call it. Hidden everywhere else."],
+] as const;
+
+const adminSecrets = [
+  { key: "OPENWEATHER_API_KEY", set: true },
+  { key: "NOAA_TOKEN", set: true },
+  { key: "CACHE_TTL_SECONDS", set: false },
+] as const;
+
+const adminReceipts = [
+  { caller: "@arbiter", fn: "forecast", light: 0.012, status: "ok", when: "1m" },
+  { caller: "agent_7f", fn: "now", light: 0.004, status: "ok", when: "3m" },
+  { caller: "@nimbus", fn: "historical", light: 0.018, status: "ok", when: "12m" },
+  { caller: "agent_2b", fn: "alerts", light: 0.006, status: "error", when: "28m" },
+] as const;
+
+const adminLogs = [
+  { fn: "forecast", ms: 142, status: "ok", when: "1m" },
+  { fn: "now", ms: 68, status: "ok", when: "3m" },
+  { fn: "alerts", ms: 0, note: "upstream 503 · api.openweather.com", status: "error", when: "28m" },
+  { fn: "historical", ms: 280, status: "ok", when: "1h" },
+] as const;
 
 export function HomeFoundationPage({ navigate }: LaunchPageProps): ReactElement {
   return (
@@ -1199,55 +1245,477 @@ function ToolNotFoundPage({
 }
 
 export function LibraryFoundationPage({ navigate }: LaunchPageProps): ReactElement {
+  const [view, setView] = useState<"installed" | "owned">("installed");
+  const installedTools = installedLibrarySlugs.map((slug) => toolDetails[slug]).filter(Boolean);
+  const ownedTools = ownedLibrarySlugs.map((slug) => toolDetails[slug]).filter(Boolean);
+  const count = view === "installed" ? installedTools.length : ownedTools.length;
+
   return (
-    <>
-      <PageHeader
-        actions={<RouteButton icon="grid" navigate={navigate} size="lg" to="/store">Open Store</RouteButton>}
-        eyebrow="Library"
-        intro="Installed tools and owned tools live together, with owner admin one click away."
-        title="Your launch tool library."
-      />
-      <Section title="Installed">
-        <div className="tool-grid">
-          {discoverTools.slice(0, 2).map((tool) => <StoreToolCard key={tool.id} tool={tool} />)}
+    <div className="launch-page-narrow library-page">
+      <div className="library-toolbar">
+        <div className="library-picker">
+          <button
+            className={view === "installed" ? "active" : ""}
+            onClick={() => setView("installed")}
+            type="button"
+          >
+            Installed tools
+          </button>
+          <button
+            className={view === "owned" ? "active" : ""}
+            onClick={() => setView("owned")}
+            type="button"
+          >
+            Tools you own
+          </button>
         </div>
-      </Section>
-      <Section title="Owned">
-        <Card>
-          <div className="card-row spaced">
-            <div>
-              <h3>get_weather</h3>
-              <p>Public, 2 widgets, 4 functions, receipts enabled.</p>
-            </div>
-            <RouteButton navigate={navigate} to="/admin/tools/tool_8fa21c" variant="secondary">
-              Admin
-            </RouteButton>
-          </div>
-        </Card>
-      </Section>
-    </>
+        <Mono>{count}</Mono>
+        <RouteButton icon="grid" navigate={navigate} to="/store" variant="secondary">
+          Browse Store
+        </RouteButton>
+      </div>
+
+      {view === "installed" ? (
+        <div className="library-installed-grid">
+          {installedTools.map((tool) => (
+            <button
+              className="tool-card-button"
+              key={tool.id}
+              onClick={() => navigate(`/tools/${tool.slug}`)}
+              type="button"
+            >
+              <StoreToolCard tool={tool} />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="owned-tool-list">
+          {ownedTools.map((tool) => (
+            <OwnedToolCard key={tool.id} navigate={navigate} tool={tool} />
+          ))}
+        </div>
+      )}
+
+      {installedTools.length === 0 && ownedTools.length === 0 ? (
+        <div className="library-empty-grid">
+          <LibraryEmptyCard
+            action="Deploy docs"
+            body="Ship your first tool from the CLI and it appears here with installs, calls, widgets, and earnings."
+            title="Tools you own"
+          />
+          <LibraryEmptyCard
+            action="Browse Store"
+            body="Tools you install from the Store appear here, ready to configure and call from agents."
+            title="Installed"
+          />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
-export function AdminFoundationPage(_props: LaunchPageProps): ReactElement {
+export function AdminFoundationPage({ navigate, route }: LaunchPageProps): ReactElement {
+  const tool = adminToolFromRoute(route.params.id);
+  const initialTab = adminTabFromSearch();
+  const [tab, setTab] = useState<AdminTabId>(initialTab);
+  const [visibility, setVisibility] = useState<ToolDetailFixture["visibility"]>(tool.visibility);
+
   return (
-    <>
-      <PageHeader
-        eyebrow="Owner admin"
-        intro="Owner-only management for tool details, pricing, widgets, secrets, trust, receipts, and logs."
-        title="Manage get_weather."
+    <div className="launch-page-narrow admin-page">
+      <AdminHeader navigate={navigate} tool={tool} visibility={visibility} />
+      <div className="admin-tabs" role="tablist" aria-label="Tool admin sections">
+        {adminTabs.map(([id, label]) => (
+          <button
+            className={tab === id ? "active" : ""}
+            key={id}
+            onClick={() => setTab(id)}
+            type="button"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <AdminTabPanel
+        navigate={navigate}
+        setVisibility={setVisibility}
+        tab={tab}
+        tool={tool}
+        visibility={visibility}
       />
-      <Section title="Admin surface">
-        <div className="admin-grid">
-          {["Details", "Pricing", "Widgets", "Secrets", "Trust", "Receipts"].map((item) => (
-            <Card key={item}>
-              <h3>{item}</h3>
-              <p>Production controls will wire into the existing app/admin endpoints.</p>
-            </Card>
+    </div>
+  );
+}
+
+function OwnedToolCard({
+  navigate,
+  tool,
+}: {
+  navigate: (to: string) => void;
+  tool: ToolDetailFixture;
+}): ReactElement {
+  return (
+    <Card className="owned-tool-card">
+      <div className="owned-tool-main">
+        <Avatar color={tool.color} name={tool.author} />
+        <div>
+          <h3>{tool.title}</h3>
+          <p>{tool.summary}</p>
+        </div>
+      </div>
+      <div className="owned-tool-metrics">
+        <MetricTile label="Installs" value={formatNumber(tool.installs)} />
+        <MetricTile label="Calls/day" value={formatNumber(tool.callsPerDay)} />
+        <MetricTile label="Earned 30d" value="✦297.6" />
+      </div>
+      <div className="owned-tool-actions">
+        <RouteButton navigate={navigate} to={`/admin/tools/${tool.id}`} variant="primary">
+          Manage
+        </RouteButton>
+        <RouteButton navigate={navigate} to={`/tools/${tool.slug}`} variant="secondary">
+          Public page
+        </RouteButton>
+        {tool.widgetList.length > 0 ? (
+          <RouteButton
+            icon="grid"
+            navigate={navigate}
+            to={`/tools/${tool.slug}?widget=${tool.widgetList[0].id}`}
+            variant="ghost"
+          >
+            {tool.widgetList.length} widgets
+          </RouteButton>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
+function MetricTile({ label, value }: { label: string; value: string }): ReactElement {
+  return (
+    <div className="metric-tile">
+      <p className="section-label">{label}</p>
+      <Mono>{value}</Mono>
+    </div>
+  );
+}
+
+function LibraryEmptyCard({
+  action,
+  body,
+  title,
+}: {
+  action: string;
+  body: string;
+  title: string;
+}): ReactElement {
+  return (
+    <div className="library-empty-card">
+      <strong>{title}: nothing yet</strong>
+      <p>{body}</p>
+      <Button size="sm" variant={title === "Tools you own" ? "primary" : "secondary"}>
+        {action}
+      </Button>
+    </div>
+  );
+}
+
+function AdminHeader({
+  navigate,
+  tool,
+  visibility,
+}: {
+  navigate: (to: string) => void;
+  tool: ToolDetailFixture;
+  visibility: ToolDetailFixture["visibility"];
+}): ReactElement {
+  return (
+    <section className="admin-header">
+      <div className="admin-title-row">
+        <Avatar color={tool.color} name={tool.author} />
+        <div>
+          <div className="admin-title-line">
+            <h1>{tool.title}</h1>
+            <Pill tone={visibility === "public" ? "green" : "amber"}>{visibility}</Pill>
+          </div>
+          <p>{formatNumber(tool.installs)} installs · {formatNumber(tool.callsPerDay)} calls/day</p>
+        </div>
+      </div>
+      <div className="admin-header-actions">
+        <RouteButton navigate={navigate} to={`/tools/${tool.slug}`} variant="secondary">
+          View public page
+        </RouteButton>
+        <Button>Save changes</Button>
+      </div>
+    </section>
+  );
+}
+
+function AdminTabPanel({
+  navigate,
+  setVisibility,
+  tab,
+  tool,
+  visibility,
+}: {
+  navigate: (to: string) => void;
+  setVisibility: (visibility: ToolDetailFixture["visibility"]) => void;
+  tab: AdminTabId;
+  tool: ToolDetailFixture;
+  visibility: ToolDetailFixture["visibility"];
+}): ReactElement {
+  switch (tab) {
+    case "pricing":
+      return <AdminPricingPanel tool={tool} />;
+    case "widgets":
+      return <AdminWidgetsPanel navigate={navigate} tool={tool} />;
+    case "secrets":
+      return <AdminSecretsPanel />;
+    case "trust":
+      return <AdminTrustPanel tool={tool} />;
+    case "receipts":
+      return <AdminReceiptsPanel tool={tool} />;
+    case "logs":
+      return <AdminLogsPanel />;
+    case "edit":
+    default:
+      return (
+        <AdminEditPanel
+          setVisibility={setVisibility}
+          tool={tool}
+          visibility={visibility}
+        />
+      );
+  }
+}
+
+function AdminEditPanel({
+  setVisibility,
+  tool,
+  visibility,
+}: {
+  setVisibility: (visibility: ToolDetailFixture["visibility"]) => void;
+  tool: ToolDetailFixture;
+  visibility: ToolDetailFixture["visibility"];
+}): ReactElement {
+  return (
+    <div className="admin-panel admin-edit-panel">
+      <AdminField label="Name">
+        <div className="admin-input mono">{tool.name}</div>
+      </AdminField>
+      <AdminField label="Description">
+        <div className="admin-textarea">{tool.summary}</div>
+      </AdminField>
+      <div className="admin-split-fields">
+        <AdminField label="Category">
+          <div className="admin-input">{tool.category}</div>
+        </AdminField>
+        <AdminField label="Tags">
+          <div className="admin-tags">
+            {["weather", "forecast", "noaa"].map((tag) => <span key={tag}>{tag}</span>)}
+          </div>
+        </AdminField>
+      </div>
+      <AdminField label="Visibility">
+        <div className="visibility-list">
+          {visibilityOptions.map(([id, label, description]) => (
+            <button
+              className={visibility === id ? "active" : ""}
+              key={id}
+              onClick={() => setVisibility(id)}
+              type="button"
+            >
+              <span />
+              <div>
+                <strong>{label}</strong>
+                <small>{description}</small>
+              </div>
+            </button>
           ))}
         </div>
-      </Section>
-    </>
+      </AdminField>
+    </div>
+  );
+}
+
+function AdminPricingPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
+  return (
+    <div className="admin-panel">
+      <div className="admin-table admin-pricing-table">
+        <div className="admin-table-head">
+          <span>Function</span>
+          <span>Price / call</span>
+          <span>p50</span>
+        </div>
+        {tool.functions.map((fn) => (
+          <div className="admin-table-row" key={fn.name}>
+            <Mono>{fn.name}</Mono>
+            <label>
+              <span>✦</span>
+              <input defaultValue={fn.price.toFixed(3)} />
+            </label>
+            <Mono>{fn.p50}ms</Mono>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AdminWidgetsPanel({
+  navigate,
+  tool,
+}: {
+  navigate: (to: string) => void;
+  tool: ToolDetailFixture;
+}): ReactElement {
+  if (tool.widgetList.length === 0) {
+    return (
+      <div className="admin-panel">
+        <EmptyState icon="grid" title="No widgets yet">
+          Widgets deployed by the tool runtime will appear here with visibility controls.
+        </EmptyState>
+      </div>
+    );
+  }
+
+  return (
+    <div className="admin-panel admin-widget-list">
+      {tool.widgetList.map((widget) => (
+        <Card className="admin-widget-row" key={widget.id}>
+          <span className="target-icon"><Icon name="grid" /></span>
+          <div>
+            <h3>{widget.label} <Mono>{widget.id}</Mono></h3>
+            <p>{widget.description}</p>
+          </div>
+          <select defaultValue="public" aria-label={`${widget.label} visibility`}>
+            <option value="public">Public</option>
+            <option value="unlisted">Unlisted</option>
+            <option value="private">Private</option>
+          </select>
+          <Button
+            onClick={() => navigate(`/tools/${tool.slug}?widget=${widget.id}`)}
+            size="sm"
+            variant="secondary"
+          >
+            Open
+          </Button>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function AdminSecretsPanel(): ReactElement {
+  return (
+    <div className="admin-panel">
+      <div className="secret-note">
+        <Icon name="shield" />
+        <span>Secrets are encrypted and never leave the runtime. Agents and widgets cannot read them.</span>
+      </div>
+      <div className="secret-list">
+        {adminSecrets.map((secret) => (
+          <Card className="secret-row" key={secret.key}>
+            <Icon name="key" />
+            <Mono>{secret.key}</Mono>
+            <span>{secret.set ? "•••••••• set" : "not set"}</span>
+            <Button size="sm" variant="secondary">{secret.set ? "Rotate" : "Add"}</Button>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AdminTrustPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
+  return (
+    <div className="admin-panel">
+      <Card>
+        <div className="trust-card-head">
+          <Icon name="shield" />
+          <div>
+            <h3>Signed manifest · receipts on</h3>
+            <p>Trust fields are what public tool pages and external agents inspect before calling.</p>
+          </div>
+        </div>
+        <div className="manifest-grid">
+          <MetaPair label="signer" value={tool.signer} />
+          <MetaPair label="version" value={`v${tool.version}`} />
+          <MetaPair label="runtime" value={tool.runtime} />
+          <MetaPair label="updated" value={`${tool.updatedAt} ago`} />
+        </div>
+      </Card>
+      <Card>
+        <p className="section-label">Declared capabilities</p>
+        <div className="capability-list">
+          {tool.capabilities.map((capability) => (
+            <ToolCapabilityPill capability={capability} key={`${capability.kind}-${capability.text}`} />
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function AdminReceiptsPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
+  return (
+    <div className="admin-panel">
+      <div className="admin-receipt-metrics">
+        <MetricTile label="Revenue · 30d" value="✦297.6" />
+        <MetricTile label="Calls · 30d" value={formatNumber(tool.callsPerDay * 30)} />
+      </div>
+      <div className="admin-table admin-receipts-table">
+        <div className="admin-table-head">
+          <span>Caller</span>
+          <span>Function</span>
+          <span>Earned</span>
+          <span>Status</span>
+          <span>When</span>
+        </div>
+        {adminReceipts.map((receipt) => (
+          <div className="admin-table-row" key={`${receipt.caller}-${receipt.when}`}>
+            <span className="status-cell">
+              <span className={receipt.status === "error" ? "error" : ""} />
+              {receipt.caller}
+            </span>
+            <Mono>{receipt.fn}</Mono>
+            <span>✦{receipt.light.toFixed(3)}</span>
+            <Mono>{receipt.status}</Mono>
+            <Mono>{receipt.when}</Mono>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AdminLogsPanel(): ReactElement {
+  return (
+    <div className="admin-panel admin-log-list">
+      <p className="section-label">Recent runs</p>
+      {adminLogs.map((log) => (
+        <div className="admin-log-row" key={`${log.fn}-${log.when}`}>
+          <span className={log.status === "error" ? "error" : ""} />
+          <Mono>{log.fn}</Mono>
+          {"note" in log && log.note ? <small>{log.note}</small> : <small />}
+          <Mono>{log.ms}ms</Mono>
+          <Mono>{log.when}</Mono>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AdminField({
+  children,
+  label,
+}: {
+  children: ReactNode;
+  label: string;
+}): ReactElement {
+  return (
+    <label className="admin-field">
+      <span>{label}</span>
+      {children}
+    </label>
   );
 }
 
@@ -1914,6 +2382,16 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
   };
 
   return { ...base, ...overrides[tool.slug] };
+}
+
+function adminToolFromRoute(id?: string): ToolDetailFixture {
+  if (!id) return toolDetails.get_weather;
+  return Object.values(toolDetails).find((tool) => tool.id === id || tool.slug === id) || toolDetails.get_weather;
+}
+
+function adminTabFromSearch(): AdminTabId {
+  const tab = new URLSearchParams(window.location.search).get("tab");
+  return adminTabs.some(([id]) => id === tab) ? tab as AdminTabId : "edit";
 }
 
 function argDefault(arg: string): string {
