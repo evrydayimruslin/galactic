@@ -62,6 +62,39 @@ interface LeaderboardRow {
   value: number;
 }
 
+interface ToolCapability {
+  kind: "read" | "write" | "net";
+  text: string;
+}
+
+interface ToolFunctionFixture {
+  args: string[];
+  description: string;
+  name: string;
+  p50: number;
+  permission: "always" | "ask" | "never";
+  price: number;
+}
+
+interface ToolWidgetFixture {
+  description: string;
+  id: string;
+  label: string;
+}
+
+interface ToolDetailFixture extends ToolFixture {
+  callsPerDay: number;
+  capabilities: ToolCapability[];
+  functions: ToolFunctionFixture[];
+  runtime: string;
+  signer: string;
+  title: string;
+  updatedAt: string;
+  version: string;
+  visibility: "public" | "unlisted";
+  widgetList: ToolWidgetFixture[];
+}
+
 const apiKeyMask = "ulk_live_••••••••••••4xN4";
 const apiKeyPlaceholder = "$ULTRALIGHT_API_KEY";
 const mcpUrl = "https://api.ultralight.dev/mcp/platform";
@@ -297,6 +330,18 @@ const externalLoop = [
   "Return widget links + receipts",
 ];
 
+const defaultCapabilities: ToolCapability[] = [
+  { kind: "read", text: "public source data" },
+  { kind: "net", text: "outbound HTTPS" },
+];
+
+const toolDetails: Record<string, ToolDetailFixture> = Object.fromEntries(
+  discoverTools.map((tool) => {
+    const detail = createToolDetail(tool);
+    return [detail.slug, detail];
+  }),
+);
+
 export function HomeFoundationPage({ navigate }: LaunchPageProps): ReactElement {
   return (
     <div className="launch-page-narrow home-page">
@@ -482,61 +527,673 @@ export function StoreFoundationPage({ navigate }: LaunchPageProps): ReactElement
 
 export function ToolFoundationPage({ navigate, route }: LaunchPageProps): ReactElement {
   const slug = route.params.slug || "get_weather";
+  const tool = toolDetails[slug];
+  const widgetId = new URLSearchParams(window.location.search).get("widget");
+
+  if (!tool) return <ToolNotFoundPage navigate={navigate} slug={slug} />;
+  if (widgetId) return <WidgetOpenSurface navigate={navigate} tool={tool} widgetId={widgetId} />;
+  return <ToolDetailSurface navigate={navigate} tool={tool} />;
+}
+
+function ToolDetailSurface({
+  navigate,
+  tool,
+}: {
+  navigate: (to: string) => void;
+  tool: ToolDetailFixture;
+}): ReactElement {
+  const hasWidgets = tool.widgetList.length > 0;
+  const [installed, setInstalled] = useState(false);
+  const [tab, setTab] = useState<"widgets" | "functions" | "details">(
+    hasWidgets ? "widgets" : "functions",
+  );
+  const [selectedWidgetId, setSelectedWidgetId] = useState(tool.widgetList[0]?.id || "");
+  const [selectedFunctionName, setSelectedFunctionName] = useState(tool.functions[0]?.name || "");
+
+  return (
+    <div className="launch-page-narrow tool-page">
+      <button className="back-link" onClick={() => navigate("/store")} type="button">
+        Store / <Mono>{tool.slug}</Mono>
+      </button>
+
+      <section className="public-tool-header">
+        <Avatar color={tool.color} name={tool.author} />
+        <div>
+          <div className="tool-title-row">
+            <h1>{tool.title}</h1>
+            <Pill>{tool.kind}</Pill>
+            <Pill tone="green">{tool.visibility}</Pill>
+          </div>
+          <p>{tool.summary}</p>
+          <div className="tool-meta-row">
+            <span>{tool.author.replace("@", "")}</span>
+            <span>{formatNumber(tool.installs)} installs</span>
+            <span>{formatNumber(tool.callsPerDay)} calls/day</span>
+            <span>updated {tool.updatedAt}</span>
+          </div>
+          <div className="tool-header-actions">
+            <Button
+              icon={installed ? "check" : undefined}
+              onClick={() => setInstalled((value) => !value)}
+              size="lg"
+              variant={installed ? "secondary" : "primary"}
+            >
+              {installed ? "Installed" : "Install"}
+            </Button>
+            {hasWidgets ? (
+              <Button
+                icon="grid"
+                onClick={() => navigate(`/tools/${tool.slug}?widget=${selectedWidgetId}`)}
+                size="lg"
+                variant="secondary"
+              >
+                Open widget
+              </Button>
+            ) : (
+              <RouteButton icon="copy" navigate={navigate} size="lg" to="/install" variant="secondary">
+                Copy MCP config
+              </RouteButton>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <div className="tool-tabs" role="tablist" aria-label="Tool page sections">
+        {hasWidgets ? (
+          <button className={tab === "widgets" ? "active" : ""} onClick={() => setTab("widgets")} type="button">
+            Widgets
+          </button>
+        ) : null}
+        <button className={tab === "functions" ? "active" : ""} onClick={() => setTab("functions")} type="button">
+          Functions
+        </button>
+        <button className={tab === "details" ? "active" : ""} onClick={() => setTab("details")} type="button">
+          Details
+        </button>
+      </div>
+
+      <div className="tool-detail-layout">
+        <main className="tool-main-panel">
+          {tab === "widgets" ? (
+            <ToolWidgetsPanel
+              navigate={navigate}
+              selectedWidgetId={selectedWidgetId}
+              setSelectedWidgetId={setSelectedWidgetId}
+              tool={tool}
+            />
+          ) : null}
+          {tab === "functions" ? (
+            <ToolFunctionsPanel
+              selectedFunctionName={selectedFunctionName}
+              setSelectedFunctionName={setSelectedFunctionName}
+              tool={tool}
+            />
+          ) : null}
+          {tab === "details" ? <ToolDetailsPanel tool={tool} /> : null}
+        </main>
+        <aside className="tool-rail">
+          <ToolTrustRail tool={tool} />
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function ToolWidgetsPanel({
+  navigate,
+  selectedWidgetId,
+  setSelectedWidgetId,
+  tool,
+}: {
+  navigate: (to: string) => void;
+  selectedWidgetId: string;
+  setSelectedWidgetId: (id: string) => void;
+  tool: ToolDetailFixture;
+}): ReactElement {
+  const [state, setState] = useState<WidgetState>("ready");
+  const widget = tool.widgetList.find((item) => item.id === selectedWidgetId) || tool.widgetList[0];
+
+  if (!widget) {
+    return (
+      <EmptyState icon="grid" title="No public widget">
+        This tool exposes functions only. Agents can still install and call it through MCP or API.
+      </EmptyState>
+    );
+  }
+
+  return (
+    <Card className="widget-surface-card">
+      <div className="widget-panel-top">
+        <div>
+          <p className="section-label">Developer-authored UI</p>
+          <h2>{widget.label}</h2>
+          <p>{widget.description}</p>
+        </div>
+        <Button
+          icon="grid"
+          onClick={() => navigate(`/tools/${tool.slug}?widget=${widget.id}`)}
+          variant="secondary"
+        >
+          Open widget
+        </Button>
+      </div>
+      <WidgetSelector selected={widget.id} setSelected={setSelectedWidgetId} widgets={tool.widgetList} />
+      <WidgetStateSelector state={state} setState={setState} />
+      <WidgetSandboxShell state={state} tool={tool} widget={widget} />
+    </Card>
+  );
+}
+
+function ToolFunctionsPanel({
+  selectedFunctionName,
+  setSelectedFunctionName,
+  tool,
+}: {
+  selectedFunctionName: string;
+  setSelectedFunctionName: (name: string) => void;
+  tool: ToolDetailFixture;
+}): ReactElement {
+  const selectedFunction =
+    tool.functions.find((fn) => fn.name === selectedFunctionName) || tool.functions[0];
+
+  return (
+    <div className="functions-panel">
+      <div className="function-list">
+        <p className="section-label">Functions ({tool.functions.length})</p>
+        {tool.functions.map((fn) => (
+          <button
+            className={selectedFunction.name === fn.name ? "active" : ""}
+            key={fn.name}
+            onClick={() => setSelectedFunctionName(fn.name)}
+            type="button"
+          >
+            <span>
+              <Mono>{fn.name}</Mono>
+              <small>{fn.description}</small>
+            </span>
+            <Mono>{formatToolPrice(fn.price)}</Mono>
+          </button>
+        ))}
+      </div>
+      <FunctionSandboxCard fn={selectedFunction} tool={tool} />
+    </div>
+  );
+}
+
+function FunctionSandboxCard({
+  fn,
+  tool,
+}: {
+  fn: ToolFunctionFixture;
+  tool: ToolDetailFixture;
+}): ReactElement {
+  const [ran, setRan] = useState(false);
+
+  return (
+    <Card className="function-sandbox-card">
+      <div className="function-sandbox-head">
+        <div>
+          <Mono>{fn.name}</Mono>
+          <p>{fn.description}</p>
+        </div>
+        <Pill>{formatToolPrice(fn.price)}/call</Pill>
+      </div>
+      <div className="arg-grid">
+        {fn.args.length > 0 ? fn.args.map((arg) => (
+          <label key={arg}>
+            <span>{arg}</span>
+            <input defaultValue={argDefault(arg)} placeholder={argHint(arg)} />
+          </label>
+        )) : <p className="muted-note">No arguments.</p>}
+      </div>
+      <div className="manual-run-row">
+        <Button icon="arrow" onClick={() => setRan(true)} size="sm">
+          Run
+        </Button>
+        <span>Manual website runs create receipts; external agents still obey saved permission.</span>
+      </div>
+      {ran ? (
+        <div className="function-response">
+          <p className="section-label">response · 200 · receipt queued</p>
+          <pre>{JSON.stringify(functionResponse(tool.slug, fn.name), null, 2)}</pre>
+        </div>
+      ) : null}
+      <PermissionControl fn={fn} />
+    </Card>
+  );
+}
+
+function PermissionControl({ fn }: { fn: ToolFunctionFixture }): ReactElement {
+  const [permission, setPermission] = useState(fn.permission);
+  const [savedPermission, setSavedPermission] = useState(fn.permission);
+  const dirty = permission !== savedPermission;
+  const options = [
+    ["always", "Always"],
+    ["ask", "Ask"],
+    ["never", "Never"],
+  ] as const;
+
+  return (
+    <div className="permission-control">
+      <div>
+        <strong>External-agent permission</strong>
+        <span>Default is ask. Manual website runs are separate.</span>
+      </div>
+      <div className="permission-actions">
+        <div className="mini-segments">
+          {options.map(([id, label]) => (
+            <button
+              className={permission === id ? "active" : ""}
+              key={id}
+              onClick={() => setPermission(id)}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <Button
+          onClick={() => setSavedPermission(permission)}
+          size="sm"
+          variant={dirty ? "primary" : "secondary"}
+        >
+          {dirty ? "Save" : "Saved"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ToolDetailsPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
+  return (
+    <div className="details-panel">
+      <Card>
+        <p className="section-label">Signed manifest</p>
+        <h3>{tool.signer}</h3>
+        <p>
+          The public manifest advertises runtime, capabilities, widget surfaces,
+          pricing, receipts, and setup needs before any agent calls the tool.
+        </p>
+        <div className="manifest-grid">
+          <MetaPair label="version" value={tool.version} />
+          <MetaPair label="runtime" value={tool.runtime} />
+          <MetaPair label="receipts" value="enabled" />
+          <MetaPair label="visibility" value={tool.visibility} />
+        </div>
+      </Card>
+      <Card>
+        <p className="section-label">Capabilities</p>
+        <div className="capability-list">
+          {tool.capabilities.map((capability) => (
+            <ToolCapabilityPill capability={capability} key={`${capability.kind}-${capability.text}`} />
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function ToolTrustRail({ tool }: { tool: ToolDetailFixture }): ReactElement {
+  const paidFunctions = tool.functions.filter((fn) => fn.price > 0);
+  const minPrice = paidFunctions.length > 0
+    ? Math.min(...paidFunctions.map((fn) => fn.price))
+    : 0;
+
+  return (
+    <div className="tool-rail-stack">
+      <Card className="trust-card">
+        <div className="trust-card-head">
+          <Icon name="shield" />
+          <div>
+            <h3>Ready to call</h3>
+            <p>Signed manifest, receipts, and capability disclosure are live.</p>
+          </div>
+        </div>
+        <div className="trust-meta">
+          <MetaPair label="signer" value={tool.signer} />
+          <MetaPair label="version" value={tool.version} />
+          <MetaPair label="runtime" value={tool.runtime} />
+        </div>
+      </Card>
+      <Card>
+        <p className="section-label">Pricing</p>
+        <div className="pricing-line">
+          <strong>Free to install</strong>
+          <Mono>{paidFunctions.length} paid functions</Mono>
+        </div>
+        <div className="trust-meta">
+          <MetaPair label="metering" value="per call" />
+          <MetaPair label="from" value={minPrice > 0 ? `✦${formatLight(minPrice)}` : "Free"} />
+          <MetaPair label="calls/day" value={formatNumber(tool.callsPerDay)} />
+        </div>
+      </Card>
+      <Card>
+        <p className="section-label">Owner</p>
+        <div className="owner-row">
+          <Avatar color={tool.color} name={tool.author} />
+          <div>
+            <strong>{tool.author}</strong>
+            <span>Builder rank #{builderRankFor(tool.author)}</span>
+          </div>
+        </div>
+      </Card>
+      <div className="works-with">
+        <p className="section-label">Works with</p>
+        <div>
+          {["Claude Code", "Cursor", "Codex", "MCP", "CLI", "API"].map((label) => (
+            <span key={label}>{label}</span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type WidgetState = "ready" | "loading" | "error" | "setup";
+
+function WidgetOpenSurface({
+  navigate,
+  tool,
+  widgetId,
+}: {
+  navigate: (to: string) => void;
+  tool: ToolDetailFixture;
+  widgetId: string;
+}): ReactElement {
+  const widget = tool.widgetList.find((item) => item.id === widgetId) || tool.widgetList[0];
+  const [state, setState] = useState<WidgetState>("ready");
+
+  if (!widget) return <ToolDetailSurface navigate={navigate} tool={tool} />;
+
+  return (
+    <div className="launch-page-narrow widget-open-page">
+      <button className="back-link" onClick={() => navigate(`/tools/${tool.slug}`)} type="button">
+        <Mono>{tool.slug}</Mono> / {widget.label}
+      </button>
+      <div className="widget-open-grid">
+        <main>
+          <div className="widget-open-head">
+            <div>
+              <p className="section-label">Open widget</p>
+              <h1>{widget.label}</h1>
+              <p>{widget.description}</p>
+            </div>
+            <WidgetStateSelector state={state} setState={setState} />
+          </div>
+          <WidgetSandboxShell state={state} tool={tool} widget={widget} />
+        </main>
+        <aside>
+          <ToolTrustRail tool={tool} />
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function WidgetSelector({
+  selected,
+  setSelected,
+  widgets,
+}: {
+  selected: string;
+  setSelected: (id: string) => void;
+  widgets: ToolWidgetFixture[];
+}): ReactElement {
+  return (
+    <div className="widget-selector">
+      {widgets.map((widget) => (
+        <button
+          className={selected === widget.id ? "active" : ""}
+          key={widget.id}
+          onClick={() => setSelected(widget.id)}
+          type="button"
+        >
+          <Mono>{widget.id}</Mono>
+          <span>{widget.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function WidgetStateSelector({
+  setState,
+  state,
+}: {
+  setState: (state: WidgetState) => void;
+  state: WidgetState;
+}): ReactElement {
+  const options = [
+    ["ready", "Ready"],
+    ["loading", "Loading"],
+    ["error", "Error"],
+    ["setup", "Setup"],
+  ] as const;
+
+  return (
+    <div className="widget-state-selector" aria-label="Widget render state">
+      {options.map(([id, label]) => (
+        <button
+          className={state === id ? "active" : ""}
+          key={id}
+          onClick={() => setState(id)}
+          type="button"
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function WidgetSandboxShell({
+  state,
+  tool,
+  widget,
+}: {
+  state: WidgetState;
+  tool: ToolDetailFixture;
+  widget: ToolWidgetFixture;
+}): ReactElement {
+  return (
+    <div className="widget-shell">
+      <div className="widget-shell-top">
+        <Avatar color={tool.color} name={tool.author} />
+        <div>
+          <strong>{widget.label}</strong>
+          <Mono>{tool.name} · widget</Mono>
+        </div>
+        <Pill tone="green">relayed · no key</Pill>
+      </div>
+      <div className="widget-iframe-body">
+        <span className="iframe-label">iframe · sandboxed</span>
+        <WidgetBody state={state} tool={tool} widget={widget} />
+      </div>
+      <div className="widget-relay-footer">
+        <Icon name="shield" size={13} />
+        <span>Calls relay through Ultralight; the widget never sees your API key.</span>
+        <Mono>ulAction("{primaryFunctionFor(tool).name}")</Mono>
+        {state === "ready" ? <Mono>session 4:58</Mono> : null}
+      </div>
+    </div>
+  );
+}
+
+function WidgetBody({
+  state,
+  tool,
+  widget,
+}: {
+  state: WidgetState;
+  tool: ToolDetailFixture;
+  widget: ToolWidgetFixture;
+}): ReactElement {
+  if (state === "loading") {
+    return (
+      <div className="widget-state-body">
+        <span className="widget-spinner" />
+        <h3>Starting widget session...</h3>
+        <Mono>POST /api/widget-session · {widget.id}</Mono>
+      </div>
+    );
+  }
+  if (state === "error") {
+    return (
+      <div className="widget-state-body">
+        <span className="state-icon error"><Icon name="shield" /></span>
+        <h3>Could not load this widget</h3>
+        <p>The widget UI function failed to render. Your balance was not charged.</p>
+        <div className="card-row">
+          <Button size="sm">Retry</Button>
+          <Button size="sm" variant="secondary">Report</Button>
+        </div>
+      </div>
+    );
+  }
+  if (state === "setup") {
+    return (
+      <div className="widget-state-body">
+        <span className="state-icon setup"><Icon name="shield" /></span>
+        <h3>Finish setup to run this widget</h3>
+        <p>{tool.name} needs one connection before this widget can run. Your API key is never shared.</p>
+        <div className="card-row">
+          <Button size="sm">Go to setup</Button>
+          <Button size="sm" variant="ghost">Why?</Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (tool.slug === "get_weather" && widget.id === "now_badge") return <WeatherNowBadge />;
+  if (tool.slug === "get_weather") return <WeatherForecastWidget />;
+  if (tool.slug === "stripe_subscribe") return <SubscriptionWidget />;
+  if (tool.slug === "maps_route") return <RouteWidget />;
+  return <GenericToolWidget tool={tool} />;
+}
+
+function WeatherForecastWidget(): ReactElement {
+  const days = [
+    ["Mon", 24, 17],
+    ["Tue", 23, 16],
+    ["Wed", 21, 15],
+    ["Thu", 22, 16],
+    ["Fri", 25, 18],
+  ] as const;
+
+  return (
+    <div className="weather-widget-card">
+      <div className="weather-widget-search">
+        <span>Tokyo</span>
+        <button type="button">↻</button>
+      </div>
+      <div className="weather-widget-main">
+        <span>Tokyo</span>
+        <strong>17°</strong>
+        <small>H:24° L:15° · partly cloudy</small>
+      </div>
+      <div className="weather-day-grid">
+        {days.map(([day, high, low]) => (
+          <div key={day}>
+            <Mono>{day}</Mono>
+            <span />
+            <strong>{high}°</strong>
+            <small>{low}°</small>
+          </div>
+        ))}
+      </div>
+      <Mono>powered by get_weather</Mono>
+    </div>
+  );
+}
+
+function WeatherNowBadge(): ReactElement {
+  return (
+    <div className="weather-now-badge">
+      <span />
+      <strong>Tokyo 17°</strong>
+      <Mono>partly cloudy</Mono>
+    </div>
+  );
+}
+
+function SubscriptionWidget(): ReactElement {
+  return (
+    <div className="subscription-widget">
+      <p className="section-label">Checkout action</p>
+      <h3>Agent Pro Seat</h3>
+      <div className="pricing-line">
+        <strong>✦2.400/call</strong>
+        <Mono>receipt required</Mono>
+      </div>
+      <Button size="sm">Create subscription</Button>
+    </div>
+  );
+}
+
+function RouteWidget(): ReactElement {
+  return (
+    <div className="route-widget">
+      <div>
+        <span />
+        <strong>Brooklyn</strong>
+      </div>
+      <div>
+        <span />
+        <strong>SoHo</strong>
+      </div>
+      <Mono>42 min · transit</Mono>
+    </div>
+  );
+}
+
+function GenericToolWidget({ tool }: { tool: ToolDetailFixture }): ReactElement {
+  return (
+    <div className="generic-widget">
+      <Avatar color={tool.color} name={tool.author} />
+      <h3>{tool.title}</h3>
+      <p>{tool.summary}</p>
+      <Mono>{primaryFunctionFor(tool).name} ready</Mono>
+    </div>
+  );
+}
+
+function MetaPair({ label, value }: { label: string; value: string }): ReactElement {
+  return (
+    <div className="meta-pair">
+      <span>{label}</span>
+      <Mono>{value}</Mono>
+    </div>
+  );
+}
+
+function ToolCapabilityPill({ capability }: { capability: ToolCapability }): ReactElement {
+  return (
+    <div className={`tool-capability tool-capability-${capability.kind}`}>
+      <Mono>{capability.kind}</Mono>
+      <span>{capability.text}</span>
+    </div>
+  );
+}
+
+function ToolNotFoundPage({
+  navigate,
+  slug,
+}: {
+  navigate: (to: string) => void;
+  slug: string;
+}): ReactElement {
   return (
     <>
       <PageHeader
-        actions={
-          <>
-            <Button icon="check" size="lg">Install</Button>
-            <RouteButton navigate={navigate} size="lg" to="/store" variant="secondary">
-              Back to Store
-            </RouteButton>
-          </>
-        }
+        actions={<RouteButton navigate={navigate} size="lg" to="/store">Back to Store</RouteButton>}
         eyebrow="Public tool page"
-        intro="Public pages show trust, pricing, functions, widgets, and install state before an agent calls anything."
+        intro="This public tool is not available in the launch fixture set yet."
         title={slug}
       />
-      <div className="tool-layout">
-        <Section title="Widget preview">
-          <Card className="widget-preview">
-            <div className="widget-toolbar">
-              <Pill tone="green">Public</Pill>
-              <Mono>forecast_card</Mono>
-            </div>
-            <div className="weather-widget">
-              <strong>72 F</strong>
-              <span>Clear, light wind</span>
-              <div className="weather-bars">
-                {[64, 70, 73, 69, 66].map((value) => (
-                  <span key={value} style={{ height: `${value - 38}px` }} />
-                ))}
-              </div>
-            </div>
-          </Card>
-        </Section>
-        <Section title="Trust + functions">
-          <div className="stack">
-            <Card>
-              <h3>Signed manifest</h3>
-              <p>Runtime, capabilities, setup requirements, receipts, and signer details sit here.</p>
-              <div className="pill-row">
-                <Pill tone="green">Receipts</Pill>
-                <Pill>Read</Pill>
-                <Pill>Network</Pill>
-              </div>
-            </Card>
-            <Card>
-              <h3>forecast</h3>
-              <p>Manual website runs bypass external-agent prompts and still return receipts.</p>
-              <div className="card-row spaced">
-                <Mono>0.012/call</Mono>
-                <Button size="sm" variant="secondary">Run</Button>
-              </div>
-            </Card>
-          </div>
-        </Section>
-      </div>
+      <EmptyState icon="search" title="Tool not found">
+        Public tool pages will load from the launch tool contract when the live store
+        API is connected.
+      </EmptyState>
     </>
   );
 }
@@ -1006,6 +1663,377 @@ function CapabilityTag({
 
 export function FoundationNotice({ children }: { children: ReactNode }): ReactElement {
   return <EmptyState title="Ready for page port">{children}</EmptyState>;
+}
+
+function createToolDetail(tool: ToolFixture): ToolDetailFixture {
+  const base: ToolDetailFixture = {
+    ...tool,
+    callsPerDay: Math.round(tool.installs * 1.48),
+    capabilities: defaultCapabilities,
+    functions: [
+      {
+        args: ["input"],
+        description: `Run the primary ${tool.name} action.`,
+        name: "run",
+        p50: 120,
+        permission: "ask",
+        price: tool.free ? 0 : tool.callPrice,
+      },
+    ],
+    runtime: tool.kind === "mcp" ? "deno · edge" : "worker · http",
+    signer: `${tool.author.replace("@", "")}.studio`,
+    title: titleizeToolName(tool.name),
+    updatedAt: "4d",
+    version: "1.0.0",
+    visibility: "public",
+    widgetList: tool.widgets > 0
+      ? [{ id: "overview", label: "Overview", description: "Public tool UI preview." }]
+      : [],
+  };
+
+  const overrides: Record<string, Partial<ToolDetailFixture>> = {
+    currency_convert: {
+      callsPerDay: 9200,
+      capabilities: [
+        { kind: "read", text: "reference FX rates" },
+        { kind: "read", text: "user-supplied currency pair and amount" },
+        { kind: "net", text: "outbound HTTPS to rate provider" },
+      ],
+      functions: [
+        {
+          args: ["from", "to", "amount"],
+          description: "Spot-rate conversion between any pair.",
+          name: "convert",
+          p50: 84,
+          permission: "ask",
+          price: 0.002,
+        },
+        {
+          args: ["from", "to", "date"],
+          description: "End-of-day historical rate for a given date.",
+          name: "historical",
+          p50: 120,
+          permission: "ask",
+          price: 0.003,
+        },
+        {
+          args: [],
+          description: "List all supported currency pairs.",
+          name: "list_pairs",
+          p50: 40,
+          permission: "always",
+          price: 0,
+        },
+      ],
+      signer: "anchor.studio",
+      title: "Currency Convert",
+      updatedAt: "2d",
+      version: "1.12.0",
+      widgetList: [],
+    },
+    get_weather: {
+      callsPerDay: 38200,
+      capabilities: [
+        { kind: "read", text: "public weather data" },
+        { kind: "read", text: "user-supplied city or coordinates" },
+        { kind: "net", text: "outbound HTTPS to weather providers" },
+      ],
+      functions: [
+        {
+          args: ["city", "days"],
+          description: "Five-day hyperlocal forecast.",
+          name: "forecast",
+          p50: 142,
+          permission: "ask",
+          price: 0.012,
+        },
+        {
+          args: ["city"],
+          description: "Current temperature and conditions.",
+          name: "now",
+          p50: 68,
+          permission: "always",
+          price: 0.004,
+        },
+        {
+          args: ["city"],
+          description: "Active severe-weather alerts.",
+          name: "alerts",
+          p50: 92,
+          permission: "ask",
+          price: 0.006,
+        },
+        {
+          args: ["city", "date"],
+          description: "Look up any past day.",
+          name: "historical",
+          p50: 280,
+          permission: "ask",
+          price: 0.018,
+        },
+      ],
+      signer: "kepler.studio",
+      title: "Get Weather",
+      updatedAt: "4d",
+      version: "2.4.1",
+      widgetList: [
+        {
+          id: "forecast_card",
+          label: "Forecast card",
+          description: "Five-day outlook with highs, lows, and current conditions.",
+        },
+        {
+          id: "now_badge",
+          label: "Now badge",
+          description: "Compact current-conditions chip for quick agent responses.",
+        },
+      ],
+    },
+    github_diff: {
+      capabilities: [
+        { kind: "read", text: "repository branch metadata" },
+        { kind: "read", text: "CI status and pull request comments" },
+        { kind: "net", text: "outbound HTTPS to GitHub" },
+      ],
+      functions: [
+        {
+          args: ["repo", "base", "head"],
+          description: "Summarize changes between two refs.",
+          name: "diff",
+          p50: 210,
+          permission: "ask",
+          price: 0,
+        },
+        {
+          args: ["repo", "pull_request"],
+          description: "Read recent review comments and CI status.",
+          name: "review_context",
+          p50: 160,
+          permission: "ask",
+          price: 0,
+        },
+      ],
+      signer: "octo.tools",
+      title: "GitHub Diff",
+      updatedAt: "1d",
+      version: "0.9.4",
+      widgetList: [],
+    },
+    maps_route: {
+      capabilities: [
+        { kind: "read", text: "origin and destination text" },
+        { kind: "net", text: "outbound HTTPS to route provider" },
+      ],
+      functions: [
+        {
+          args: ["origin", "destination", "mode"],
+          description: "Return ETA, route distance, and transit mode.",
+          name: "route",
+          p50: 120,
+          permission: "ask",
+          price: 0,
+        },
+      ],
+      signer: "cartography.tools",
+      title: "Maps Route",
+      updatedAt: "3d",
+      version: "1.3.0",
+      widgetList: [
+        {
+          id: "route_card",
+          label: "Route card",
+          description: "Visual route summary for travel planning agents.",
+        },
+      ],
+    },
+    pdf_parse: {
+      capabilities: [
+        { kind: "read", text: "uploaded PDF files" },
+        { kind: "read", text: "text, tables, and citations" },
+      ],
+      functions: [
+        {
+          args: ["file_url"],
+          description: "Extract layout-aware text and tables.",
+          name: "parse",
+          p50: 420,
+          permission: "ask",
+          price: 0.018,
+        },
+        {
+          args: ["file_url", "query"],
+          description: "Find cited spans that match a query.",
+          name: "cite",
+          p50: 300,
+          permission: "ask",
+          price: 0.012,
+        },
+      ],
+      signer: "vellum.tools",
+      title: "PDF Parse",
+      updatedAt: "5d",
+      version: "1.7.2",
+      widgetList: [],
+    },
+    stripe_subscribe: {
+      capabilities: [
+        { kind: "write", text: "create Stripe subscriptions" },
+        { kind: "read", text: "subscription and metering status" },
+        { kind: "net", text: "outbound HTTPS to Stripe" },
+      ],
+      functions: [
+        {
+          args: ["customer", "price_id"],
+          description: "Create a subscription and return a receipt.",
+          name: "create_subscription",
+          p50: 190,
+          permission: "ask",
+          price: 0.024,
+        },
+        {
+          args: ["subscription", "quantity"],
+          description: "Record metered usage for an active subscription.",
+          name: "meter_usage",
+          p50: 110,
+          permission: "ask",
+          price: 0.008,
+        },
+      ],
+      signer: "stripe.com",
+      title: "Stripe Subscribe",
+      updatedAt: "1d",
+      version: "3.2.0",
+      widgetList: [
+        {
+          id: "checkout_action",
+          label: "Checkout action",
+          description: "Small UI for creating and confirming subscription actions.",
+        },
+      ],
+    },
+  };
+
+  return { ...base, ...overrides[tool.slug] };
+}
+
+function argDefault(arg: string): string {
+  const defaults: Record<string, string> = {
+    amount: "100",
+    base: "main",
+    city: "Tokyo",
+    customer: "cus_launch",
+    date: "2026-05-01",
+    days: "5",
+    destination: "SoHo",
+    file_url: "https://example.com/report.pdf",
+    from: "USD",
+    head: "feature",
+    input: "demo",
+    mode: "transit",
+    origin: "Brooklyn",
+    price_id: "price_agent_pro",
+    pull_request: "42",
+    quantity: "1",
+    query: "risk factors",
+    repo: "owner/repo",
+    subscription: "sub_launch",
+    to: "EUR",
+  };
+  return defaults[arg] || "";
+}
+
+function argHint(arg: string): string {
+  const hints: Record<string, string> = {
+    amount: "number",
+    city: "city name",
+    date: "YYYY-MM-DD",
+    days: "1-14",
+    from: "ISO 4217",
+    mode: "driving, walking, transit",
+    to: "ISO 4217",
+  };
+  return hints[arg] || "value";
+}
+
+function builderRankFor(author: string): string {
+  const row = builderLeaders.find((leader) => leader.name === author);
+  return row ? String(row.rank) : "12";
+}
+
+function formatToolPrice(value: number): string {
+  return value > 0 ? `✦${formatLight(value)}` : "Free";
+}
+
+function functionResponse(slug: string, name: string): Record<string, unknown> {
+  const responses: Record<string, Record<string, unknown>> = {
+    "currency_convert.convert": {
+      amount: 100,
+      asOf: "2026-06-02T14:00Z",
+      from: "USD",
+      rate: 0.924,
+      result: 92.4,
+      to: "EUR",
+    },
+    "currency_convert.historical": {
+      date: "2026-05-01",
+      from: "USD",
+      rate: 0.918,
+      to: "EUR",
+    },
+    "currency_convert.list_pairs": {
+      count: 182,
+      sample: ["USD/EUR", "USD/JPY", "GBP/USD", "EUR/JPY"],
+    },
+    "get_weather.alerts": {
+      active: false,
+      alerts: [],
+      city: "Tokyo",
+    },
+    "get_weather.forecast": {
+      city: "Tokyo",
+      days: 5,
+      forecast: [
+        { day: "Mon", hi: 24, lo: 17, sky: "cloudy" },
+        { day: "Tue", hi: 23, lo: 16, sky: "rain" },
+      ],
+      unit: "C",
+    },
+    "get_weather.historical": {
+      city: "Tokyo",
+      conditions: "clear",
+      date: "2026-05-01",
+      tempC: 19,
+    },
+    "get_weather.now": {
+      city: "Tokyo",
+      conditions: "partly cloudy",
+      hi: 24,
+      lo: 15,
+      tempC: 17,
+    },
+  };
+  return responses[`${slug}.${name}`] || { ok: true, receipt: "rec_launch_demo" };
+}
+
+function primaryFunctionFor(tool: ToolDetailFixture): ToolFunctionFixture {
+  return tool.functions[0] || {
+    args: [],
+    description: "Run the tool.",
+    name: "run",
+    p50: 100,
+    permission: "ask",
+    price: tool.callPrice,
+  };
+}
+
+function titleizeToolName(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replaceAll(".", " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function genericMcpConfig(key: string): string {
