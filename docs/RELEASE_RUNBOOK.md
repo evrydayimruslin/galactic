@@ -11,8 +11,9 @@ Before running this flow, make sure:
 - the staging and production Workers.dev origins point at the right Worker
   deployments; if replacing them with custom domains, confirm the domains are
   project-owned first
-- the `ultralight-launch-web` Cloudflare Pages project exists, with production
-  branch `main` and staging preview branch `staging`
+- the `ultralight-launch-web` Cloudflare Pages project exists, or the launch-web
+  deploy workflow can create it with production branch `main` before the first
+  staging branch upload
 - GitHub environment secrets are configured for:
   - staging database deploy
   - production database deploy
