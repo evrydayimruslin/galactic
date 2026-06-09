@@ -1902,10 +1902,29 @@ button {
   background: repeating-linear-gradient(45deg, #fcfcfc, #fcfcfc 10px, #fafafa 10px, #fafafa 20px);
 }
 
+.widget-iframe-body-live {
+  display: block;
+  min-height: 360px;
+  padding: 0;
+  place-items: unset;
+  background: var(--ul-raised);
+}
+
+.launch-widget-iframe {
+  display: block;
+  width: 100%;
+  min-height: 360px;
+  border: 0;
+  background: #fff;
+  transition: height 160ms ease;
+}
+
 .iframe-label {
   position: absolute;
   top: 8px;
   right: 10px;
+  z-index: 1;
+  pointer-events: none;
   color: var(--ul-faint);
   font-family: var(--ul-mono);
   font-size: 9.5px;

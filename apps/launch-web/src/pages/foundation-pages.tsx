@@ -26,8 +26,18 @@ import {
   type LaunchWalletTransaction,
 } from "../../../../shared/contracts/launch.ts";
 import type { LaunchPageProps } from "../App";
-import { getLaunchAuthDiagnostic, signOutLaunch } from "../lib/auth";
+import {
+  buildLaunchSignInUrl,
+  getLaunchAuthDiagnostic,
+  hasLaunchAuthToken,
+  signOutLaunch,
+} from "../lib/auth";
 import { launchApi } from "../lib/api";
+import {
+  buildLaunchWidgetDocument,
+  createLaunchWidgetSurfaceId,
+  isLaunchWidgetBridgeMessage,
+} from "../lib/widget-runtime";
 import {
   Avatar,
   Button,
@@ -1492,7 +1502,12 @@ function ToolWidgetsPanel({
         widgets={tool.widgetList}
       />
       <WidgetStateSelector state={state} setState={setState} />
-      <WidgetSandboxShell state={state} tool={tool} widget={widget} />
+      <WidgetSandboxShell
+        navigate={navigate}
+        state={state}
+        tool={tool}
+        widget={widget}
+      />
     </Card>
   );
 }
@@ -1845,7 +1860,12 @@ function WidgetOpenSurface({
             </div>
             <WidgetStateSelector state={state} setState={setState} />
           </div>
-          <WidgetSandboxShell state={state} tool={tool} widget={widget} />
+          <WidgetSandboxShell
+            navigate={navigate}
+            state={state}
+            tool={tool}
+            widget={widget}
+          />
         </main>
         <aside>
           <ToolTrustRail tool={tool} />
@@ -1912,14 +1932,18 @@ function WidgetStateSelector({
 }
 
 function WidgetSandboxShell({
+  navigate,
   state,
   tool,
   widget,
 }: {
+  navigate: (to: string) => void;
   state: WidgetState;
   tool: ToolDetailFixture;
   widget: ToolWidgetFixture;
 }): ReactElement {
+  const runtime = useLaunchWidgetRender(tool, widget, state === "ready");
+
   return (
     <div className="widget-shell">
       <div className="widget-shell-top">
@@ -1928,29 +1952,139 @@ function WidgetSandboxShell({
           <strong>{widget.label}</strong>
           <Mono>{tool.name} · widget</Mono>
         </div>
-        <Pill tone="green">relayed · no key</Pill>
+        <Pill tone={runtime.status === "error" ? "amber" : "green"}>
+          {runtime.status === "error" ? "render issue" : "relayed · no key"}
+        </Pill>
       </div>
-      <div className="widget-iframe-body">
+      <div
+        className={`widget-iframe-body ${
+          state === "ready" ? "widget-iframe-body-live" : ""
+        }`}
+      >
         <span className="iframe-label">iframe · sandboxed</span>
-        <WidgetBody state={state} tool={tool} widget={widget} />
+        <WidgetBody
+          navigate={navigate}
+          runtime={runtime}
+          state={state}
+          tool={tool}
+          widget={widget}
+        />
       </div>
       <div className="widget-relay-footer">
         <Icon name="shield" size={13} />
         <span>
           Calls relay through Ultralight; the widget never sees your API key.
         </span>
-        <Mono>ulAction("{primaryFunctionFor(tool).name}")</Mono>
+        <Mono>ulAction("{widgetActionName(widget)}")</Mono>
         {state === "ready" ? <Mono>session 4:58</Mono> : null}
       </div>
     </div>
   );
 }
 
+type WidgetRuntimeStatus = "idle" | "loading" | "ready" | "error" | "setup";
+
+interface WidgetRuntimeState {
+  documentHtml: string | null;
+  error: string | null;
+  reload: () => void;
+  status: WidgetRuntimeStatus;
+  surfaceId: string;
+}
+
+function useLaunchWidgetRender(
+  tool: ToolDetailFixture,
+  widget: ToolWidgetFixture,
+  enabled: boolean,
+): WidgetRuntimeState {
+  const surfaceRef = useRef({ key: "", surfaceId: "" });
+  const surfaceKey = `${tool.id}:${widget.id}`;
+  if (surfaceRef.current.key !== surfaceKey) {
+    surfaceRef.current = {
+      key: surfaceKey,
+      surfaceId: createLaunchWidgetSurfaceId(tool.id, widget.id),
+    };
+  }
+
+  const [version, setVersion] = useState(0);
+  const [runtime, setRuntime] = useState<
+    Omit<WidgetRuntimeState, "reload" | "surfaceId">
+  >({
+    documentHtml: null,
+    error: null,
+    status: "idle",
+  });
+
+  useEffect(() => {
+    if (!enabled) {
+      setRuntime({ documentHtml: null, error: null, status: "idle" });
+      return;
+    }
+    if (!hasLaunchAuthToken()) {
+      setRuntime({
+        documentHtml: null,
+        error: null,
+        status: "setup",
+      });
+      return;
+    }
+
+    let cancelled = false;
+    setRuntime({ documentHtml: null, error: null, status: "loading" });
+    launchApi.renderWidget(tool.slug, widget.id, { args: {} })
+      .then((response) => {
+        if (cancelled) return;
+        if (!response.success || !response.render?.html) {
+          throw new Error(
+            response.error?.message || "Widget UI did not return HTML.",
+          );
+        }
+        const documentHtml = buildLaunchWidgetDocument({
+          appHtml: response.render.html,
+          context: {},
+          surfaceId: surfaceRef.current.surfaceId,
+          toolId: tool.id,
+          toolSlug: tool.slug,
+          widgetId: widget.id,
+        });
+        setRuntime({ documentHtml, error: null, status: "ready" });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setRuntime({
+          documentHtml: null,
+          error: err instanceof Error ? err.message : String(err),
+          status: "error",
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, tool.id, tool.slug, widget.id, version]);
+
+  return {
+    ...runtime,
+    reload: () => {
+      surfaceRef.current = {
+        key: surfaceKey,
+        surfaceId: createLaunchWidgetSurfaceId(tool.id, widget.id),
+      };
+      setVersion((value) => value + 1);
+    },
+    surfaceId: surfaceRef.current.surfaceId,
+  };
+}
+
 function WidgetBody({
+  navigate,
+  runtime,
   state,
   tool,
   widget,
 }: {
+  navigate: (to: string) => void;
+  runtime: WidgetRuntimeState;
   state: WidgetState;
   tool: ToolDetailFixture;
   widget: ToolWidgetFixture;
@@ -2001,101 +2135,216 @@ function WidgetBody({
     );
   }
 
-  if (tool.slug === "get_weather" && widget.id === "now_badge") {
-    return <WeatherNowBadge />;
+  if (runtime.status === "setup") {
+    return (
+      <div className="widget-state-body">
+        <span className="state-icon setup">
+          <Icon name="key" />
+        </span>
+        <h3>Sign in to run this widget</h3>
+        <p>
+          Developer-authored UI loads through an authenticated relay so tool
+          keys stay hidden.
+        </p>
+        <Button onClick={() => (window.location.href = buildLaunchSignInUrl())}>
+          Sign in
+        </Button>
+      </div>
+    );
   }
-  if (tool.slug === "get_weather") return <WeatherForecastWidget />;
-  if (tool.slug === "stripe_subscribe") return <SubscriptionWidget />;
-  if (tool.slug === "maps_route") return <RouteWidget />;
-  return <GenericToolWidget tool={tool} />;
-}
-
-function WeatherForecastWidget(): ReactElement {
-  const days = [
-    ["Mon", 24, 17],
-    ["Tue", 23, 16],
-    ["Wed", 21, 15],
-    ["Thu", 22, 16],
-    ["Fri", 25, 18],
-  ] as const;
+  if (runtime.status === "loading" || runtime.status === "idle") {
+    return (
+      <div className="widget-state-body">
+        <span className="widget-spinner" />
+        <h3>Rendering widget...</h3>
+        <Mono>POST /widgets/{widget.id}/render</Mono>
+      </div>
+    );
+  }
+  if (runtime.status === "error" || !runtime.documentHtml) {
+    return (
+      <div className="widget-state-body">
+        <span className="state-icon error">
+          <Icon name="shield" />
+        </span>
+        <h3>Could not load this widget</h3>
+        <p>{runtime.error || "The widget UI function failed to render."}</p>
+        <div className="card-row">
+          <Button onClick={runtime.reload} size="sm">Retry</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="weather-widget-card">
-      <div className="weather-widget-search">
-        <span>Tokyo</span>
-        <button type="button">↻</button>
-      </div>
-      <div className="weather-widget-main">
-        <span>Tokyo</span>
-        <strong>17°</strong>
-        <small>H:24° L:15° · partly cloudy</small>
-      </div>
-      <div className="weather-day-grid">
-        {days.map(([day, high, low]) => (
-          <div key={day}>
-            <Mono>{day}</Mono>
-            <span />
-            <strong>{high}°</strong>
-            <small>{low}°</small>
-          </div>
-        ))}
-      </div>
-      <Mono>powered by get_weather</Mono>
-    </div>
+    <LaunchWidgetFrame
+      documentHtml={runtime.documentHtml}
+      navigate={navigate}
+      surfaceId={runtime.surfaceId}
+      tool={tool}
+      widget={widget}
+    />
   );
 }
 
-function WeatherNowBadge(): ReactElement {
+function LaunchWidgetFrame({
+  documentHtml,
+  navigate,
+  surfaceId,
+  tool,
+  widget,
+}: {
+  documentHtml: string;
+  navigate: (to: string) => void;
+  surfaceId: string;
+  tool: ToolDetailFixture;
+  widget: ToolWidgetFixture;
+}): ReactElement {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const sentDocumentRef = useRef(false);
+  const [height, setHeight] = useState(360);
+
+  useEffect(() => {
+    sentDocumentRef.current = false;
+    setHeight(360);
+  }, [documentHtml, surfaceId]);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow) return;
+      if (!isLaunchWidgetBridgeMessage(event.data)) return;
+      const message = event.data;
+      if (typeof message.surfaceId === "string" && message.surfaceId !== surfaceId) {
+        return;
+      }
+
+      if (message.type === "ul-widget-frame-ready") {
+        sendWidgetDocument(iframeRef.current, surfaceId, documentHtml, sentDocumentRef);
+        return;
+      }
+      if (message.type === "ul-widget-resize" && typeof message.height === "number") {
+        setHeight(Math.max(260, Math.min(message.height, 1600)));
+        return;
+      }
+      if (message.type === "ul-open-widget" && typeof message.widgetName === "string") {
+        const nextWidget = tool.widgetList.find((item) =>
+          item.id === message.widgetName
+        );
+        if (nextWidget) navigate(toolPreviewPath(tool, nextWidget.id));
+        return;
+      }
+      if (message.type === "ul-widget-action-request") {
+        void respondToWidgetAction({
+          iframe: iframeRef.current,
+          message,
+          surfaceId,
+          tool,
+          widget,
+        });
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [documentHtml, navigate, surfaceId, tool, widget]);
+
   return (
-    <div className="weather-now-badge">
-      <span />
-      <strong>Tokyo 17°</strong>
-      <Mono>partly cloudy</Mono>
-    </div>
+    <iframe
+      className="launch-widget-iframe"
+      key={surfaceId}
+      onLoad={() =>
+        sendWidgetDocument(iframeRef.current, surfaceId, documentHtml, sentDocumentRef)}
+      ref={iframeRef}
+      sandbox="allow-scripts"
+      src="/widget-frame.html"
+      style={{ height }}
+      title={`${tool.title} ${widget.label} widget`}
+    />
   );
 }
 
-function SubscriptionWidget(): ReactElement {
-  return (
-    <div className="subscription-widget">
-      <p className="section-label">Checkout action</p>
-      <h3>Agent Pro Seat</h3>
-      <div className="pricing-line">
-        <strong>✦2.400/call</strong>
-        <Mono>receipt required</Mono>
-      </div>
-      <Button size="sm">Create subscription</Button>
-    </div>
-  );
+function sendWidgetDocument(
+  iframe: HTMLIFrameElement | null,
+  surfaceId: string,
+  documentHtml: string,
+  sentDocumentRef: { current: boolean },
+): void {
+  if (!iframe?.contentWindow || sentDocumentRef.current) return;
+  sentDocumentRef.current = true;
+  iframe.contentWindow.postMessage({
+    type: "ul-widget-load",
+    surfaceId,
+    html: documentHtml,
+  }, "*");
 }
 
-function RouteWidget(): ReactElement {
-  return (
-    <div className="route-widget">
-      <div>
-        <span />
-        <strong>Brooklyn</strong>
-      </div>
-      <div>
-        <span />
-        <strong>SoHo</strong>
-      </div>
-      <Mono>42 min · transit</Mono>
-    </div>
-  );
+async function respondToWidgetAction({
+  iframe,
+  message,
+  surfaceId,
+  tool,
+  widget,
+}: {
+  iframe: HTMLIFrameElement | null;
+  message: { args?: unknown; functionName?: unknown; requestId?: unknown };
+  surfaceId: string;
+  tool: ToolDetailFixture;
+  widget: ToolWidgetFixture;
+}): Promise<void> {
+  const requestId = typeof message.requestId === "string"
+    ? message.requestId
+    : "";
+  if (!iframe?.contentWindow || !requestId) return;
+
+  try {
+    const functionName = typeof message.functionName === "string"
+      ? message.functionName
+      : "";
+    if (!functionName) throw new Error("Widget action is missing a function name.");
+    if (isPlatformWidgetAction(functionName)) {
+      throw new Error(
+        `${functionName} is not available in launch web widgets yet.`,
+      );
+    }
+
+    const args = {
+      ...(asRecord(message.args) || {}),
+      _widget_pull: true,
+      _widget_name: widget.id,
+      _widget_pull_reason: "widget_action",
+      _widget_surface_id: surfaceId,
+    };
+    const response = await launchApi.runToolFunction(tool.slug, functionName, {
+      args,
+    });
+    if (!response.success || response.error) {
+      throw new Error(response.error?.message || "Widget action failed.");
+    }
+    iframe.contentWindow.postMessage({
+      type: "ul-widget-action-response",
+      surfaceId,
+      requestId,
+      success: true,
+      result: response.result ?? null,
+    }, "*");
+  } catch (err) {
+    iframe.contentWindow.postMessage({
+      type: "ul-widget-action-response",
+      surfaceId,
+      requestId,
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    }, "*");
+  }
 }
 
-function GenericToolWidget(
-  { tool }: { tool: ToolDetailFixture },
-): ReactElement {
-  return (
-    <div className="generic-widget">
-      <Avatar color={tool.color} name={tool.author} />
-      <h3>{tool.title}</h3>
-      <p>{tool.summary}</p>
-      <Mono>{primaryFunctionFor(tool).name} ready</Mono>
-    </div>
-  );
+function isPlatformWidgetAction(functionName: string): boolean {
+  return functionName.startsWith("ul.") ||
+    functionName.startsWith("ultralight.");
+}
+
+function widgetActionName(widget: ToolWidgetFixture): string {
+  return `widget_${widget.id}_data`;
 }
 
 function MetaPair(
@@ -4447,17 +4696,6 @@ function functionResponse(slug: string, name: string): Record<string, unknown> {
   };
   return responses[`${slug}.${name}`] ||
     { ok: true, receipt: "rec_launch_demo" };
-}
-
-function primaryFunctionFor(tool: ToolDetailFixture): ToolFunctionFixture {
-  return tool.functions[0] || {
-    args: [],
-    description: "Run the tool.",
-    name: "run",
-    p50: 100,
-    permission: "ask",
-    price: tool.callPrice,
-  };
 }
 
 function titleizeToolName(value: string): string {
