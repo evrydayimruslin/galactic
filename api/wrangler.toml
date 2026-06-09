@@ -41,6 +41,8 @@ BASE_URL = "https://ultralight-api.rgn4jz429m.workers.dev"
 ENVIRONMENT = "production"
 CORS_ALLOWED_ORIGINS = "https://ultralight-api.rgn4jz429m.workers.dev,https://ultralight-launch-web.pages.dev,tauri://localhost,https://tauri.localhost,http://tauri.localhost"
 GPU_SUPPORT_ENABLED = "false"
+SUPABASE_URL = "https://uavjzycsltdnwblwutmb.supabase.co"
+CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 # Optional rollout knob for Wave 4 alias retirement:
 # PLATFORM_MCP_DISABLED_ALIASES = "removable"
 # or a comma-separated subset such as "ul.execute,ul.lint"
@@ -77,6 +79,8 @@ BASE_URL = "https://ultralight-api-staging.rgn4jz429m.workers.dev"
 ENVIRONMENT = "staging"
 CORS_ALLOWED_ORIGINS = "https://ultralight-api-staging.rgn4jz429m.workers.dev,https://staging.ultralight-launch-web.pages.dev,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5178,http://127.0.0.1:5178,http://localhost:1420,http://127.0.0.1:1420,tauri://localhost,https://tauri.localhost,http://tauri.localhost"
 GPU_SUPPORT_ENABLED = "false"
+SUPABASE_URL = "https://uavjzycsltdnwblwutmb.supabase.co"
+CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 # Optional rollout knob for Wave 4 alias retirement:
 # PLATFORM_MCP_DISABLED_ALIASES = "removable"
 

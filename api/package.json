@@ -20,9 +20,9 @@
     "test:marketplace": "DENO_BIN=${DENO_BIN:-$(command -v deno 2>/dev/null || printf '%s' \"$HOME/.deno/bin/deno\")}; if ! command -v \"$DENO_BIN\" >/dev/null 2>&1; then echo \"Deno not found: $DENO_BIN\" >&2; exit 127; fi; \"$DENO_BIN\" test --allow-env --allow-run --no-check --no-lock services/marketplace.test.ts services/marketplace-request-validation.test.ts services/marketplace-maintenance.test.ts",
     "test:full": "DENO_BIN=${DENO_BIN:-$(command -v deno 2>/dev/null || printf '%s' \"$HOME/.deno/bin/deno\")}; if ! command -v \"$DENO_BIN\" >/dev/null 2>&1; then echo \"Deno not found: $DENO_BIN\" >&2; exit 127; fi; \"$DENO_BIN\" test --allow-env --allow-run --no-check --no-lock handlers/*.test.ts services/*.test.ts runtime/*.test.ts",
     "test:gpu-live": "DENO_BIN=${DENO_BIN:-$(command -v deno 2>/dev/null || printf '%s' \"$HOME/.deno/bin/deno\")}; if ! command -v \"$DENO_BIN\" >/dev/null 2>&1; then echo \"Deno not found: $DENO_BIN\" >&2; exit 127; fi; \"$DENO_BIN\" run --allow-net --allow-env services/gpu/smoke-test.ts",
-    "deploy": "wrangler deploy --config wrangler.toml --env=\"\"",
+    "deploy": "wrangler deploy --config wrangler.toml --env=\"\" --keep-vars",
     "deploy:dry-run": "wrangler deploy --config wrangler.toml --env=\"\" --dry-run",
-    "deploy:staging": "wrangler deploy --config wrangler.toml --env staging",
+    "deploy:staging": "wrangler deploy --config wrangler.toml --env staging --keep-vars",
     "tail": "wrangler tail --config wrangler.toml"
   },
   "dependencies": {
