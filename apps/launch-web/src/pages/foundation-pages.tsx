@@ -17,6 +17,7 @@ import {
   type LaunchLeaderboardEntry,
   type LaunchMoneyAmount,
   type LaunchPublisherPublishRequirement,
+  type LaunchToolRelationship,
   type LaunchToolSummary,
   type LaunchTrustCard,
   type LaunchWalletEarningSummary,
@@ -107,6 +108,7 @@ interface ToolDetailFixture extends ToolFixture {
   callsPerDay: number;
   capabilities: ToolCapability[];
   functions: ToolFunctionFixture[];
+  relationship: LaunchToolRelationship;
   runtime: string;
   signer: string;
   title: string;
@@ -119,6 +121,14 @@ interface ToolDetailFixture extends ToolFixture {
 const apiKeyMask = "ulk_live_••••••••••••4xN4";
 const apiKeyPlaceholder = "$ULTRALIGHT_API_KEY";
 const mcpUrl = "https://api.ultralight.dev/mcp/platform";
+
+function toolPreviewPath(
+  tool: Pick<ToolDetailFixture, "slug">,
+  widgetId?: string,
+): string {
+  const base = `/tools/${encodeURIComponent(tool.slug)}`;
+  return widgetId ? `${base}?widget=${encodeURIComponent(widgetId)}` : base;
+}
 
 const orbitAgents = [
   { alt: "Codex", className: "agent-one", src: agentCodexUrl },
@@ -720,7 +730,7 @@ function liveToolFixture(
     : base.functions;
   const widgets = tool.widgets.length > 0
     ? tool.widgets.map((widget) => ({
-      description: widget.description || "Public tool UI preview.",
+      description: widget.description || "Tool UI preview.",
       id: widget.id,
       label: widget.label,
     }))
@@ -745,6 +755,7 @@ function liveToolFixture(
     id: tool.id,
     kind: tool.kind,
     name: tool.name,
+    relationship: tool.relationship,
     runtime: trust?.runtime || base.runtime,
     signer: trust?.signer || base.signer,
     slug: tool.slug,
@@ -1312,10 +1323,14 @@ function ToolDetailSurface({
       <ApiNotice live={live} noun="tool details" />
       <button
         className="back-link"
-        onClick={() => navigate("/store")}
+        onClick={() =>
+          navigate(
+            tool.relationship === "owner" ? "/library?view=owned" : "/store",
+          )}
         type="button"
       >
-        Store / <Mono>{tool.slug}</Mono>
+        {tool.relationship === "owner" ? "Library" : "Store"} /{" "}
+        <Mono>{tool.slug}</Mono>
       </button>
 
       <section className="public-tool-header">
@@ -1324,7 +1339,9 @@ function ToolDetailSurface({
           <div className="tool-title-row">
             <h1>{tool.title}</h1>
             <Pill>{tool.kind}</Pill>
-            <Pill tone="green">{tool.visibility}</Pill>
+            <Pill tone={tool.visibility === "public" ? "green" : "amber"}>
+              {tool.visibility}
+            </Pill>
           </div>
           <p>{tool.summary}</p>
           <div className="tool-meta-row">
@@ -1347,7 +1364,7 @@ function ToolDetailSurface({
                 <Button
                   icon="grid"
                   onClick={() =>
-                    navigate(`/tools/${tool.slug}?widget=${selectedWidgetId}`)}
+                    navigate(toolPreviewPath(tool, selectedWidgetId))}
                   size="lg"
                   variant="secondary"
                 >
@@ -1446,7 +1463,7 @@ function ToolWidgetsPanel({
 
   if (!widget) {
     return (
-      <EmptyState icon="grid" title="No public widget">
+      <EmptyState icon="grid" title="No widget">
         This tool exposes functions only. Agents can still install and call it
         through MCP or API.
       </EmptyState>
@@ -1463,7 +1480,7 @@ function ToolWidgetsPanel({
         </div>
         <Button
           icon="grid"
-          onClick={() => navigate(`/tools/${tool.slug}?widget=${widget.id}`)}
+          onClick={() => navigate(toolPreviewPath(tool, widget.id))}
           variant="secondary"
         >
           Open widget
@@ -1813,7 +1830,7 @@ function WidgetOpenSurface({
       <ApiNotice live={live} noun="widget details" />
       <button
         className="back-link"
-        onClick={() => navigate(`/tools/${tool.slug}`)}
+        onClick={() => navigate(toolPreviewPath(tool))}
         type="button"
       >
         <Mono>{tool.slug}</Mono> / {widget.label}
@@ -2118,13 +2135,13 @@ function ToolNotFoundPage({
             Back to Store
           </RouteButton>
         }
-        eyebrow="Public tool page"
-        intro="This public tool is not available in the launch fixture set yet."
+        eyebrow="Tool preview"
+        intro="This tool is not available to the current session."
         title={slug}
       />
       <EmptyState icon="search" title="Tool not found">
-        Public tool pages will load from the launch tool contract when the live
-        store API is connected.
+        Sign in with an account that owns or installed this tool, or use a
+        public tool URL.
       </EmptyState>
     </>
   );
@@ -2334,17 +2351,17 @@ function OwnedToolCard({
         </RouteButton>
         <RouteButton
           navigate={navigate}
-          to={`/tools/${tool.slug}`}
+          to={toolPreviewPath(tool)}
           variant="secondary"
         >
-          Public page
+          Preview
         </RouteButton>
         {tool.widgetList.length > 0
           ? (
             <RouteButton
               icon="grid"
               navigate={navigate}
-              to={`/tools/${tool.slug}?widget=${tool.widgetList[0].id}`}
+              to={toolPreviewPath(tool, tool.widgetList[0].id)}
               variant="ghost"
             >
               {tool.widgetList.length} widgets
@@ -2419,10 +2436,10 @@ function AdminHeader({
       <div className="admin-header-actions">
         <RouteButton
           navigate={navigate}
-          to={`/tools/${tool.slug}`}
+          to={toolPreviewPath(tool)}
           variant="secondary"
         >
-          View public page
+          Preview
         </RouteButton>
         <Button>Save changes</Button>
       </div>
@@ -2586,7 +2603,7 @@ function AdminWidgetsPanel({
           </select>
           <Button
             onClick={() =>
-              navigate(`/tools/${tool.slug}?widget=${widget.id}`)}
+              navigate(toolPreviewPath(tool, widget.id))}
             size="sm"
             variant="secondary"
           >
@@ -3994,6 +4011,7 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
         price: tool.free ? 0 : tool.callPrice,
       },
     ],
+    relationship: "public",
     runtime: tool.kind === "mcp" ? "deno · edge" : "worker · http",
     signer: `${tool.author.replace("@", "")}.studio`,
     title: titleizeToolName(tool.name),
@@ -4004,7 +4022,7 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
       ? [{
         id: "overview",
         label: "Overview",
-        description: "Public tool UI preview.",
+        description: "Tool UI preview.",
       }]
       : [],
   };

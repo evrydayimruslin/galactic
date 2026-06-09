@@ -2456,15 +2456,10 @@ async function handleLaunchTool(
   request: Request,
   encodedLocator: string,
 ): Promise<Response> {
-  const locator = parseLocator(encodedLocator);
-  const viewer = await tryAuthenticate(request);
-  const row = await fetchToolByLocator(locator, { publicOnly: true });
-  if (!row) return error("Tool not found", 404);
-  if (shouldHideGpu(row)) return error("Tool not found", 404);
+  const resolved = await resolveLaunchVisibleTool(request, encodedLocator);
+  if (!resolved) return error("Tool not found", 404);
+  const { installedIds, row, viewer } = resolved;
 
-  const installedIds = viewer
-    ? await fetchInstalledIds(viewer.id)
-    : new Set<string>();
   const owners = await fetchOwnerMap([row.owner_id]);
   const tool = toLaunchToolSummary(row, {
     owners,
@@ -2483,15 +2478,10 @@ async function handleLaunchToolWidgets(
   request: Request,
   encodedLocator: string,
 ): Promise<Response> {
-  const locator = parseLocator(encodedLocator);
-  const viewer = await tryAuthenticate(request);
-  const row = await fetchToolByLocator(locator, { publicOnly: true });
-  if (!row) return error("Tool not found", 404);
-  if (shouldHideGpu(row)) return error("Tool not found", 404);
+  const resolved = await resolveLaunchVisibleTool(request, encodedLocator);
+  if (!resolved) return error("Tool not found", 404);
+  const { installedIds, row, viewer } = resolved;
 
-  const installedIds = viewer
-    ? await fetchInstalledIds(viewer.id)
-    : new Set<string>();
   const owners = await fetchOwnerMap([row.owner_id]);
   const tool = toLaunchToolSummary(row, {
     owners,
@@ -2748,19 +2738,14 @@ async function handleLaunchWidgetDetail(
   encodedLocator: string,
   encodedWidgetId: string,
 ): Promise<Response> {
-  const locator = parseLocator(encodedLocator);
   const widgetId = parseWidgetId(encodedWidgetId);
-  const viewer = await tryAuthenticate(request);
-  const row = await fetchToolByLocator(locator, { publicOnly: true });
-  if (!row) return error("Tool not found", 404);
-  if (shouldHideGpu(row)) return error("Tool not found", 404);
+  const resolved = await resolveLaunchVisibleTool(request, encodedLocator);
+  if (!resolved) return error("Tool not found", 404);
+  const { installedIds, row, viewer } = resolved;
 
   const widget = findWidgetDeclaration(row, widgetId);
   if (!widget) return error("Widget not found", 404);
 
-  const installedIds = viewer
-    ? await fetchInstalledIds(viewer.id)
-    : new Set<string>();
   const owners = await fetchOwnerMap([row.owner_id]);
   const tool = toLaunchToolSummary(row, {
     owners,
@@ -2788,12 +2773,11 @@ async function handleLaunchWidgetRender(
   encodedLocator: string,
   encodedWidgetId: string,
 ): Promise<Response> {
-  await requireLaunchUser(request);
-  const locator = parseLocator(encodedLocator);
+  const user = await requireLaunchUser(request);
   const widgetId = parseWidgetId(encodedWidgetId);
-  const row = await fetchToolByLocator(locator, { publicOnly: true });
-  if (!row) return error("Tool not found", 404);
-  if (shouldHideGpu(row)) return error("Tool not found", 404);
+  const resolved = await resolveLaunchRunnableTool(user, encodedLocator);
+  if (!resolved) return error("Tool not found", 404);
+  const { row } = resolved;
 
   const widget = findWidgetDeclaration(row, widgetId);
   if (!widget) return error("Widget not found", 404);
@@ -3990,6 +3974,21 @@ async function resolvePublicLaunchTool(
   const row = await fetchToolByLocator(locator, { publicOnly: true });
   if (!row || shouldHideGpu(row)) return null;
   return { row, installedIds: new Set<string>() };
+}
+
+async function resolveLaunchVisibleTool(
+  request: Request,
+  encodedLocator: string,
+): Promise<
+  | { row: LaunchAppRow; installedIds: Set<string>; viewer: AuthUser | null }
+  | null
+> {
+  const viewer = await tryAuthenticate(request);
+  const resolved = viewer
+    ? await resolveLaunchRunnableTool(viewer, encodedLocator)
+    : await resolvePublicLaunchTool(encodedLocator);
+  if (!resolved) return null;
+  return { ...resolved, viewer };
 }
 
 async function resolveLaunchRunnableTool(

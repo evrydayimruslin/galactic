@@ -116,6 +116,18 @@ function launchPermissionTestApp(): Record<string, unknown> {
   };
 }
 
+function privateOwnerTestApp(): Record<string, unknown> {
+  return {
+    ...launchPermissionTestApp(),
+    id: 'app-private-1',
+    owner_id: 'user-1',
+    slug: 'private-helper',
+    name: 'Private Helper',
+    description: 'Private owner-only preview tool',
+    visibility: 'private',
+  };
+}
+
 Deno.test('launch facade: install instructions expose MCP and CLI targets', async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
@@ -633,6 +645,126 @@ Deno.test('launch facade: public slug lookups avoid uuid id comparisons', async 
             avatar_url: null,
           },
         ]);
+      }
+      return jsonResponse([]);
+    },
+  );
+});
+
+Deno.test('launch facade: owners can preview private tools and widgets', async () => {
+  await withLaunchEnv(
+    async () => {
+      const endpoints = [
+        '/api/launch/tools/private-helper',
+        '/api/launch/tools/private-helper/widgets',
+        '/api/launch/tools/private-helper/widgets/ops',
+        '/api/launch/tools/private-helper/functions',
+        '/api/launch/tools/private-helper/skills',
+      ];
+
+      for (const endpoint of endpoints) {
+        const response = await handleLaunch(
+          new Request(`https://ultralight.test${endpoint}`, {
+            headers: { Authorization: 'Bearer browser-session-token' },
+          }),
+        );
+        const body = await response.json() as {
+          error?: string;
+          functions?: Array<{ name: string }>;
+          skills?: Array<{ id: string }>;
+          tool?: { relationship?: string; slug?: string };
+          widget?: { summary?: { id?: string } };
+          widgets?: Array<{ id: string }>;
+        };
+
+        assertEquals(response.status, 200, `${endpoint}: ${body.error || ''}`);
+        assertEquals(body.tool?.slug, 'private-helper');
+        assertEquals(body.tool?.relationship, 'owner');
+        if (endpoint.endsWith('/widgets')) {
+          assertEquals(body.widgets?.[0]?.id, 'ops');
+        }
+        if (endpoint.endsWith('/widgets/ops')) {
+          assertEquals(body.widget?.summary?.id, 'ops');
+        }
+        if (endpoint.endsWith('/functions')) {
+          assertEquals(
+            body.functions?.map((entry) => entry.name),
+            ['deploy', 'inspect', 'widget_ops_data', 'widget_ops_ui'],
+          );
+        }
+        if (endpoint.endsWith('/skills')) {
+          assertEquals(body.skills?.[0]?.id, 'context');
+        }
+      }
+    },
+    async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === 'https://supabase.test/auth/v1/user') {
+        return jsonResponse({
+          id: 'user-1',
+          email: 'founder@example.com',
+          user_metadata: {},
+        });
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
+        return jsonResponse([{ id: 'user-1' }]);
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
+        return jsonResponse([{ tier: 'free' }]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/user_app_library?')) {
+        return jsonResponse([]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+        if (url.includes('owner_id=eq.user-1')) {
+          return jsonResponse([privateOwnerTestApp()]);
+        }
+        return jsonResponse([]);
+      }
+      if (
+        url.startsWith(
+          'https://supabase.test/rest/v1/user_agent_permission_defaults?',
+        )
+      ) {
+        return jsonResponse([{ user_id: 'user-1', default_policy: 'ask' }]);
+      }
+      if (
+        url.startsWith(
+          'https://supabase.test/rest/v1/user_agent_function_permissions?',
+        )
+      ) {
+        return jsonResponse([]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+        return jsonResponse([
+          {
+            id: 'user-1',
+            display_name: 'Founder',
+            profile_slug: 'founder',
+            avatar_url: null,
+          },
+        ]);
+      }
+      return jsonResponse([]);
+    },
+  );
+});
+
+Deno.test('launch facade: unauthenticated private previews stay hidden', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request('https://ultralight.test/api/launch/tools/private-helper'),
+      );
+      const body = await response.json() as { error?: string };
+
+      assertEquals(response.status, 404);
+      assertEquals(body.error, 'Tool not found');
+    },
+    async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+        return jsonResponse([]);
       }
       return jsonResponse([]);
     },
