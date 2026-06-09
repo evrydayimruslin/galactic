@@ -13,11 +13,14 @@ export type LaunchRouteKey =
   | "tool"
   | "wallet"
   | "settings"
-  | "adminTool";
+  | "adminTool"
+  | "authCallback";
+
+export type LaunchRoutePath = LaunchPublicRoute | "/auth/callback";
 
 export interface LaunchRouteDefinition {
   key: LaunchRouteKey;
-  path: LaunchPublicRoute;
+  path: LaunchRoutePath;
   label: string;
   nav: "primary" | "account" | "hidden";
   apiRoutes: LaunchApiRoute[];
@@ -124,6 +127,13 @@ export const launchRoutes: LaunchRouteDefinition[] = [
       "GET /api/launch/tools/:id/agent-permissions",
       "PATCH /api/launch/tools/:id/agent-permissions",
     ],
+  },
+  {
+    key: "authCallback",
+    path: "/auth/callback",
+    label: "Auth callback",
+    nav: "hidden",
+    apiRoutes: [],
   },
 ];
 

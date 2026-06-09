@@ -174,6 +174,8 @@ async function loadRouteData(
       ]);
       return { adminTool, toolAgentPermissions, toolFunctions };
     }
+    case "authCallback":
+      return {};
   }
 }
 

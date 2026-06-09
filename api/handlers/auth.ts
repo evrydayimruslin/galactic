@@ -123,11 +123,83 @@ async function claimReferralCookieForUser(request: Request, userId: string): Pro
 async function claimReferralCookieForAccessToken(
   request: Request,
   accessToken: string,
-): Promise<void> {
+): Promise<Awaited<ReturnType<typeof verifySupabaseAccessToken>>> {
   const verifiedUser = await verifySupabaseAccessToken(accessToken);
-  if (!verifiedUser) return;
+  if (!verifiedUser) return null;
   await ensureUserExists(verifiedUser).catch(() => {});
   await claimReferralCookieForUser(request, verifiedUser.id);
+  return verifiedUser;
+}
+
+function allowedLaunchWebOrigins(): Set<string> {
+  const origins = new Set<string>();
+  for (const rawOrigin of (getEnv('CORS_ALLOWED_ORIGINS') || '').split(',')) {
+    const trimmed = rawOrigin.trim();
+    if (!trimmed) continue;
+    try {
+      origins.add(new URL(trimmed).origin);
+    } catch {
+      // Ignore malformed CORS entries.
+    }
+  }
+  return origins;
+}
+
+function isSafeLaunchPath(value: string): boolean {
+  return value.startsWith('/') && !value.startsWith('//') && !value.includes('\\');
+}
+
+function resolveLaunchWebReturnTarget(
+  request: Request,
+  returnTo?: string | null,
+): { callbackUrl: URL } | null {
+  if (!returnTo) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(returnTo);
+  } catch {
+    return null;
+  }
+
+  if (parsed.origin === new URL(request.url).origin) return null;
+  if (!allowedLaunchWebOrigins().has(parsed.origin)) return null;
+
+  const nextPath = `${parsed.pathname || '/'}${parsed.search || ''}`;
+  const callbackUrl = new URL('/auth/callback', parsed.origin);
+  callbackUrl.searchParams.set(
+    'next',
+    isSafeLaunchPath(nextPath) ? nextPath : '/settings',
+  );
+  return { callbackUrl };
+}
+
+async function buildLaunchWebBridgeRedirect(
+  request: Request,
+  returnTo: string | undefined,
+  accessToken: string,
+  userId: string,
+): Promise<Response | null> {
+  const target = resolveLaunchWebReturnTarget(request, returnTo);
+  if (!target) return null;
+
+  const issued = await issueEmbedBridgeToken({
+    accessToken,
+    audience: 'launch_web',
+    userId,
+  });
+  target.callbackUrl.hash = new URLSearchParams({
+    bridge_token: issued.token,
+    expires_in: String(issued.expiresIn),
+  }).toString();
+
+  return new Response(null, {
+    status: 302,
+    headers: {
+      'Location': target.callbackUrl.toString(),
+      'Cache-Control': 'no-store',
+    },
+  });
 }
 
 export async function handleAuth(request: Request): Promise<Response> {
@@ -215,7 +287,12 @@ export async function handleAuth(request: Request): Promise<Response> {
           expires_in?: number;
         };
         const desktopSession = url.searchParams.get('desktop_session');
-        await claimReferralCookieForAccessToken(request, tokens.access_token);
+        const verifiedUser = await claimReferralCookieForAccessToken(request, tokens.access_token);
+        if (!verifiedUser) {
+          return new Response(getCallbackErrorHTML('Unable to verify the signed-in account. Please try again.'), {
+            headers: { 'Content-Type': 'text/html' },
+          });
+        }
 
         // Desktop OAuth flow: store token for polling, show "close this tab" page
         if (desktopSession) {
@@ -231,6 +308,14 @@ export async function handleAuth(request: Request): Promise<Response> {
         }
 
         const returnTo = url.searchParams.get('return_to') || undefined;
+        const launchWebRedirect = await buildLaunchWebBridgeRedirect(
+          request,
+          returnTo,
+          tokens.access_token,
+          verifiedUser.id,
+        );
+        if (launchWebRedirect) return launchWebRedirect;
+
         return appendBrowserSession(new Response(getCallbackSuccessHTML(returnTo), {
           headers: { 'Content-Type': 'text/html' },
         }), {
@@ -320,6 +405,45 @@ export async function handleAuth(request: Request): Promise<Response> {
     });
   }
 
+  // Exchange a short-lived launch web bridge token into a Supabase bearer token
+  // for the Pages-hosted launch frontend.
+  if (path === '/auth/launch/exchange' && request.method === 'POST') {
+    return withAuthRouteRateLimit(request, 'auth:launch_exchange', async () => {
+      try {
+        const { bridgeToken } = await validateEmbedBridgeExchangeRequest(request);
+        const bridgePayload = await consumeEmbedBridgeToken(bridgeToken);
+        if (!bridgePayload || bridgePayload.aud !== 'launch_web') {
+          return error('Invalid or expired launch sign-in token', 401);
+        }
+
+        const verifiedUser = await verifySupabaseAccessToken(bridgePayload.access_token);
+        if (!verifiedUser || verifiedUser.id !== bridgePayload.sub) {
+          return error('Launch sign-in session is invalid', 401);
+        }
+
+        await ensureUserExists(verifiedUser).catch(() => {});
+        await claimReferralCookieForUser(request, verifiedUser.id);
+
+        return json({
+          access_token: bridgePayload.access_token,
+          expires_in: getAccessTokenRemainingLifetimeSeconds(bridgePayload.access_token),
+          audience: 'launch_web',
+          user: {
+            id: verifiedUser.id,
+            email: verifiedUser.email,
+            metadata: verifiedUser.user_metadata || {},
+          },
+        });
+      } catch (err) {
+        if (err instanceof RequestValidationError) {
+          return error(err.message, err.status);
+        }
+        console.error('[auth] Launch web exchange failed:', err);
+        return error('Failed to complete launch web sign-in', 500);
+      }
+    });
+  }
+
   // Create a short-lived opaque bridge token for desktop embed flows.
   if (path === '/auth/embed/bridge' && request.method === 'POST') {
     return withAuthRouteRateLimit(request, 'auth:embed_bridge', async () => {
@@ -359,7 +483,7 @@ export async function handleAuth(request: Request): Promise<Response> {
         const { bridgeToken } = await validateEmbedBridgeExchangeRequest(request);
 
         const bridgePayload = await consumeEmbedBridgeToken(bridgeToken);
-        if (!bridgePayload) {
+        if (!bridgePayload || bridgePayload.aud !== 'desktop_embed') {
           return error('Invalid or expired bridge token', 401);
         }
 

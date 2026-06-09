@@ -25,6 +25,7 @@ import {
   type LaunchWalletTransaction,
 } from "../../../../shared/contracts/launch.ts";
 import type { LaunchPageProps } from "../App";
+import { signOutLaunch } from "../lib/auth";
 import { launchApi } from "../lib/api";
 import {
   Avatar,
@@ -2828,7 +2829,17 @@ export function SettingsFoundationPage(
           <h1>Ada Lovelace</h1>
           <p>ada@analytical.engine · @you</p>
         </div>
-        <Button size="sm" variant="secondary">Sign out</Button>
+        <Button
+          onClick={() => {
+            void signOutLaunch().finally(() => {
+              window.location.href = "/";
+            });
+          }}
+          size="sm"
+          variant="secondary"
+        >
+          Sign out
+        </Button>
       </div>
 
       <SettingsCard

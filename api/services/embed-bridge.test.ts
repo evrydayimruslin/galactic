@@ -63,6 +63,25 @@ Deno.test("embed bridge: issues and consumes a valid opaque token", async () => 
   });
 });
 
+Deno.test("embed bridge: can issue launch web bridge tokens", async () => {
+  await withMockedEnv(async () => {
+    const nowMs = Date.UTC(2026, 3, 20, 12, 0, 0);
+    const jwt = makeJwt(Math.floor(nowMs / 1000) + 1800);
+    const issued = await issueEmbedBridgeToken({
+      accessToken: jwt,
+      audience: "launch_web",
+      userId: "user-1",
+      ttlSeconds: 60,
+      nowMs,
+    });
+
+    const consumed = await consumeEmbedBridgeToken(issued.token, nowMs);
+    assert(consumed !== null);
+    assertEquals(consumed?.aud, "launch_web");
+    assertEquals(consumed?.access_token, jwt);
+  });
+});
+
 Deno.test("embed bridge: clamps token ttl to access-token lifetime", async () => {
   await withMockedEnv(async () => {
     const nowMs = Date.UTC(2026, 3, 20, 12, 0, 0);

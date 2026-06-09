@@ -1,5 +1,10 @@
 import type { ReactElement, ReactNode } from "react";
 
+import {
+  buildLaunchSignInUrl,
+  hasLaunchAuthToken,
+  signOutLaunch,
+} from "../lib/auth";
 import type { LaunchRouteDefinition, LaunchRouteKey } from "../lib/routes";
 
 export type IconName =
@@ -75,6 +80,17 @@ export function LaunchShell({
   title,
 }: LaunchShellProps): ReactElement {
   const navRoutes = primaryRoutes.filter((route) => route.key !== "home");
+  const signedIn = hasLaunchAuthToken();
+  const handleAuthClick = () => {
+    if (!signedIn) {
+      window.location.href = buildLaunchSignInUrl();
+      return;
+    }
+    void signOutLaunch().finally(() => {
+      window.location.href = "/";
+    });
+  };
+
   return (
     <div className="launch-shell">
       <header className="top-nav">
@@ -101,8 +117,8 @@ export function LaunchShell({
           <Button icon="copy" onClick={() => navigate("/install")} size="sm">
             Add to agent
           </Button>
-          <Button onClick={() => navigate("/settings")} size="sm" variant="ghost">
-            Sign in
+          <Button onClick={handleAuthClick} size="sm" variant="ghost">
+            {signedIn ? "Sign out" : "Sign in"}
           </Button>
         </div>
       </header>

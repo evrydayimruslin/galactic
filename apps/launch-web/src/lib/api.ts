@@ -33,6 +33,7 @@ import type {
   LaunchWidgetRenderRequest,
   LaunchWidgetRenderResponse,
 } from "../../../../shared/contracts/launch.ts";
+import { getLaunchAuthToken } from "./auth";
 
 export interface LaunchToolResponse {
   tool: LaunchToolSummary;
@@ -328,6 +329,5 @@ export class LaunchApiClient {
 
 export const launchApi = new LaunchApiClient({
   baseUrl: configuredLaunchApiBaseUrl,
-  getAuthToken: () =>
-    window.localStorage.getItem("ultralight.launch.authToken"),
+  getAuthToken: getLaunchAuthToken,
 });

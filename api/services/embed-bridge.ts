@@ -6,9 +6,11 @@ const BRIDGE_IV_LENGTH = 12;
 const DEFAULT_BRIDGE_TTL_SECONDS = 60;
 const MAX_BRIDGE_TTL_SECONDS = 120;
 
+export type EmbedBridgeAudience = 'desktop_embed' | 'launch_web';
+
 export interface EmbedBridgeTokenPayload {
   v: 1;
-  aud: 'desktop_embed';
+  aud: EmbedBridgeAudience;
   sub: string;
   access_token: string;
   issued_at: number;
@@ -51,7 +53,7 @@ function parsePayload(value: unknown): EmbedBridgeTokenPayload | null {
   if (!value || typeof value !== 'object') return null;
   const payload = value as Record<string, unknown>;
   if (payload.v !== 1) return null;
-  if (payload.aud !== 'desktop_embed') return null;
+  if (payload.aud !== 'desktop_embed' && payload.aud !== 'launch_web') return null;
   if (typeof payload.sub !== 'string' || !payload.sub) return null;
   if (typeof payload.access_token !== 'string' || !payload.access_token) return null;
   if (typeof payload.issued_at !== 'number' || !Number.isFinite(payload.issued_at)) return null;
@@ -88,6 +90,7 @@ export function getAccessTokenRemainingLifetimeSeconds(token: string, nowMs = Da
 
 export async function issueEmbedBridgeToken(input: {
   accessToken: string;
+  audience?: EmbedBridgeAudience;
   userId: string;
   ttlSeconds?: number | null;
   nowMs?: number;
@@ -101,7 +104,7 @@ export async function issueEmbedBridgeToken(input: {
 
   const payload: EmbedBridgeTokenPayload = {
     v: 1,
-    aud: 'desktop_embed',
+    aud: input.audience || 'desktop_embed',
     sub: input.userId,
     access_token: input.accessToken,
     issued_at: Math.floor(nowMs / 1000),

@@ -13,6 +13,11 @@ export default {
         changeOrigin: true,
         secure: true,
       },
+      "/auth": {
+        target: launchApiProxyTarget,
+        changeOrigin: true,
+        secure: true,
+      },
     },
     fs: {
       allow: ["../.."],

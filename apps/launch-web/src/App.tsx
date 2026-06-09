@@ -22,6 +22,11 @@ import {
   WalletFoundationPage,
 } from "./pages/foundation-pages";
 import { LaunchShell } from "./components/launch-chrome";
+import {
+  exchangeLaunchBridgeToken,
+  normalizeLocalPath,
+  setLaunchAuthToken,
+} from "./lib/auth";
 
 export interface LocationState {
   pathname: string;
@@ -44,6 +49,7 @@ const routeTitles: Record<LaunchRouteKey, string> = {
   wallet: "Wallet",
   settings: "Settings",
   adminTool: "Tool admin",
+  authCallback: "Signing in",
 };
 
 export function App(): ReactElement {
@@ -105,7 +111,50 @@ function RouteSwitch({ live, location, route, navigate }: LaunchPageProps): Reac
       return <SettingsFoundationPage live={live} location={location} route={route} navigate={navigate} />;
     case "adminTool":
       return <AdminFoundationPage live={live} location={location} route={route} navigate={navigate} />;
+    case "authCallback":
+      return <AuthCallbackPage location={location} />;
   }
+}
+
+function AuthCallbackPage({ location }: { location: LocationState }): ReactElement {
+  const [message, setMessage] = useState("Finishing sign in...");
+
+  useEffect(() => {
+    let cancelled = false;
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/u, ""));
+    const query = new URLSearchParams(location.search);
+    const bridgeToken = hash.get("bridge_token");
+    const nextPath = normalizeLocalPath(query.get("next"));
+
+    if (!bridgeToken) {
+      setMessage("Sign-in callback is missing a session token.");
+      return;
+    }
+
+    exchangeLaunchBridgeToken(bridgeToken)
+      .then((response) => {
+        if (cancelled) return;
+        setLaunchAuthToken(response.access_token);
+        window.location.replace(nextPath);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setMessage(err instanceof Error ? err.message : String(err));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location.search]);
+
+  return (
+    <div className="launch-page-narrow auth-callback-page">
+      <div className="auth-callback-panel">
+        <p className="section-label">Google sign in</p>
+        <h1>{message}</h1>
+      </div>
+    </div>
+  );
 }
 
 function currentLocation(): LocationState {

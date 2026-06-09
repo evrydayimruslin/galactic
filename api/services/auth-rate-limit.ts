@@ -7,6 +7,7 @@ export type AuthRateLimitRoute =
   | 'auth:merge'
   | 'auth:embed_bridge'
   | 'auth:embed_exchange'
+  | 'auth:launch_exchange'
   | 'auth:page_share_exchange'
   | 'auth:signout'
   | 'auth:desktop-poll'
@@ -92,6 +93,16 @@ export const AUTH_ROUTE_RATE_LIMITS: Record<AuthRateLimitRoute, AuthRateLimitPol
     resource: '/auth/embed/exchange',
     limitMessage: 'Too many desktop embed session exchanges. Please wait and try again.',
     unavailableMessage: 'Desktop embed session exchange is temporarily unavailable while auth protections recover. Please try again shortly.',
+  },
+  'auth:launch_exchange': {
+    endpoint: 'auth:launch_exchange',
+    limit: 60,
+    windowMinutes: 5,
+    keySource: 'ip',
+    responseKind: 'json',
+    resource: '/auth/launch/exchange',
+    limitMessage: 'Too many launch web sign-in exchanges. Please wait and try again.',
+    unavailableMessage: 'Launch web sign-in exchange is temporarily unavailable while auth protections recover. Please try again shortly.',
   },
   'auth:page_share_exchange': {
     endpoint: 'auth:page_share_exchange',
