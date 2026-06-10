@@ -26,6 +26,14 @@ export interface RequestCallerContext {
   tokenFunctionNames: string[] | null;
   scopes?: string[];
   routineActor?: AuthenticatedRequestUser['routineActor'];
+  // Verified cross-Agent caller identity (from a valid X-Ultralight-Caller
+  // header). Present only when this request is one Agent calling another on
+  // behalf of the user; drives the cross-Agent grant check.
+  callerApp?: {
+    appId: string;
+    callerFunction: string | null;
+    hop: number;
+  };
 }
 
 interface ResolveRequestCallerContextOptions {

@@ -143,6 +143,8 @@ export async function executeInDynamicSandbox(
       config.baseUrl || config.workerBaseUrl || "",
     );
     const callAuthToken = JSON.stringify(config.authToken || "");
+    const callerContextToken = JSON.stringify(config.callerContextToken || "");
+    const slotBindingsJson = JSON.stringify(config.slotBindings || []);
     const callDependenciesJson = JSON.stringify(
       config.appCallDependencies || [],
     );
@@ -230,9 +232,14 @@ globalThis.ultralight = {
     var endpoint = useSelf
       ? 'https://internal/mcp/' + encodeURIComponent(targetAppId)
       : baseUrl.replace(/\\/$/, '') + '/mcp/' + encodeURIComponent(targetAppId);
+    var __headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken };
+    // Unforgeable caller identity (minted server-side, asserts only this app).
+    // The target uses it to run the cross-Agent grant check.
+    var __callerCtx = ${callerContextToken};
+    if (__callerCtx) __headers['X-Ultralight-Caller'] = __callerCtx;
     var response = await fetchFn(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+      headers: __headers,
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: crypto.randomUUID(),
@@ -256,6 +263,21 @@ globalThis.ultralight = {
       }
     }
     return result;
+  },
+  // Resolve a logical slot (declared in this Agent's manifest imports) to the
+  // concrete target the user wired it to. Only the granted functions are
+  // exposed; each routes through ultralight.call (grant-gated at the target).
+  use(slotName) {
+    var slots = ${slotBindingsJson};
+    var binding = slots.find(function(s) { return s && s.slot === slotName; });
+    if (!binding) {
+      throw new Error('No Agent is wired to slot "' + slotName + '". Bind it on the Agent page.');
+    }
+    var api = {};
+    (binding.functions || []).forEach(function(fn) {
+      api[fn] = function(args) { return globalThis.ultralight.call(binding.targetAppId, fn, args); };
+    });
+    return api;
   },
   // net:connect — high-level protocol methods via internal HTTP (gated by permission)
   net: ${

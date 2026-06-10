@@ -170,6 +170,23 @@
       ]
     },
     {
+      "exports": [
+        "AgentCallerContextError"
+      ],
+      "file": "services/agent-caller-context.ts",
+      "types": [
+        "MintCallerContextInput",
+        "VerifyCallerContextResult"
+      ]
+    },
+    {
+      "exports": [
+        "listGrants",
+        "setGrantStatus"
+      ],
+      "file": "services/agent-grants.ts"
+    },
+    {
       "file": "services/agentic-interface-actions.ts",
       "types": [
         "AgenticInterfaceActionAudit",
@@ -253,7 +270,6 @@
         "AppSupabaseConfigState",
         "MissingAppSecretsErrorDetails",
         "ResolvedAppRuntimeEnv",
-        "RuntimeAppCallDependency",
         "StrictRuntimePermissionResolution"
       ]
     },
@@ -1249,12 +1265,6 @@
         "ResolvedPendingPermissionRow",
         "VerifiedSupabaseUser"
       ]
-    },
-    {
-      "exports": [
-        "ANONYMOUS_USER_ID"
-      ],
-      "file": "services/request-caller-context.ts"
     },
     {
       "exports": [

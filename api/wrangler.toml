@@ -107,6 +107,10 @@ crons = [
 #   OPENROUTER_API_KEY
 #   DEEPSEEK_API_KEY
 #   BYOK_ENCRYPTION_KEY
+#   AGENT_CALLER_SECRET — HMAC key for cross-Agent caller-context tokens (P5).
+#     MUST be a server-only secret; deliberately distinct from WORKER_SECRET
+#     (which is exposed inside the sandbox). Falls back to
+#     ROUTINE_ACTOR_TOKEN_SECRET / SUPABASE_SERVICE_ROLE_KEY if unset.
 #   RUNPOD_API_KEY
 #   GPU_SUPPORT_ENABLED=true|false
 #   RUNPOD_TEMPLATE_ID

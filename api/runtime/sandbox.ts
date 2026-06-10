@@ -59,6 +59,13 @@ export interface RuntimeConfig {
   baseUrl?: string;
   authToken?: string;
   appCallDependencies?: RuntimeAppCallDependency[];
+  // Signed caller-context token (X-Ultralight-Caller) minted server-side so a
+  // cross-Agent call can prove WHO is calling without trusting sandbox code.
+  // Asserts only the caller's OWN app id, so an app reading it cannot forge a
+  // different caller.
+  callerContextToken?: string;
+  // Logical slot -> concrete target bindings for ultralight.use(slot).
+  slotBindings?: Array<{ slot: string; targetAppId: string; functions: string[] }>;
   // Internal service auth for TCP protocol endpoints (/api/net/*)
   workerSecret?: string;
   // Worker's direct URL (not CDN) for internal fetch calls from Dynamic Workers

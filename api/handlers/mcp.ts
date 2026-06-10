@@ -76,6 +76,7 @@ import {
   SupabaseConfigMigrationRequiredError,
 } from "../services/app-runtime-resources.ts";
 import {
+  ANONYMOUS_USER_ID,
   callerHasAppAccess,
   callerHasFunctionAccess,
   callerHasRequiredScope,
@@ -88,6 +89,21 @@ import {
   type RoutineTraceContext,
   routineTraceContextFromCaller,
 } from "../services/routine-trace.ts";
+import {
+  createPendingGrantRequest,
+  recordGrantSpend,
+  resolveCallerGrant,
+  resolveCallerGrantDependencies,
+  resolveSlotBindings,
+} from "../services/agent-grants.ts";
+import {
+  mintCallerContextToken,
+  verifyCallerContextToken,
+} from "../services/agent-caller-context.ts";
+import {
+  AGENT_CALLER_CONTEXT_HEADER,
+  MAX_AGENT_CALL_HOP_DEPTH,
+} from "../../shared/contracts/agent-grants.ts";
 import type {
   MCPContent,
   MCPJsonSchema,
@@ -810,6 +826,43 @@ export async function handleMcp(
   // Process auth result
   userId = callerContext.userId;
   user = callerContext.user;
+
+  // Cross-Agent caller identity: a valid X-Ultralight-Caller header means this
+  // request is one Agent calling another on behalf of the user. The token is
+  // unforgeable (HMAC, server-only secret) and asserts the caller app id, the
+  // user, the executing caller function, and the call-chain hop. We verify it
+  // here and attach callerApp so handleToolsCall can run the grant check.
+  const callerCtxHeader = request.headers.get(AGENT_CALLER_CONTEXT_HEADER);
+  if (callerCtxHeader) {
+    const verified = await verifyCallerContextToken(callerCtxHeader);
+    if (!verified.claims) {
+      // Present-but-invalid (tampered / expired / hop-exceeded) must fail
+      // closed — never silently downgrade to a direct user call.
+      return jsonRpcErrorResponse(
+        rpcRequest.id,
+        -32004,
+        verified.error === "hop_exceeded"
+          ? `Cross-Agent call chain exceeded the maximum depth of ${MAX_AGENT_CALL_HOP_DEPTH}.`
+          : "Invalid or expired cross-Agent caller context.",
+        { type: "AGENT_CALLER_CONTEXT_INVALID", reason: verified.error },
+      );
+    }
+    // The signed user must match the authenticated user — a caller context
+    // cannot act for a different user than the forwarded bearer.
+    if (verified.claims.userId !== userId) {
+      return jsonRpcErrorResponse(
+        rpcRequest.id,
+        -32004,
+        "Cross-Agent caller context does not match the authenticated user.",
+        { type: "AGENT_CALLER_CONTEXT_USER_MISMATCH" },
+      );
+    }
+    callerContext.callerApp = {
+      appId: verified.claims.callerAppId,
+      callerFunction: verified.claims.callerFunction,
+      hop: verified.claims.hop,
+    };
+  }
 
   // Update last_active_at for provisional users (fire-and-forget)
   if (callerContext.authUser?.provisional) {
@@ -1631,10 +1684,60 @@ async function handleToolsCall(
     }
   }
 
-  if (
+  // Cross-Agent grant check (P5): when this call comes from another Agent
+  // (verified caller context present), the user grant is AUTHORITATIVE for the
+  // A→B hop — it does not additionally require the connected-agent policy. A
+  // call with no active grant is denied and a pending request is recorded so
+  // it surfaces in the user's approval inbox.
+  let callerGrantId: string | null = null;
+  if (callerContext.callerApp) {
+    const caller = callerContext.callerApp;
+    // An Agent never needs a grant to call its own functions.
+    if (caller.appId !== app.id) {
+      const resolution = await resolveCallerGrant({
+        userId,
+        callerAppId: caller.appId,
+        callerFunction: caller.callerFunction,
+        targetAppId: app.id,
+        targetFunction: rawName,
+      });
+      if (!resolution.allowed) {
+        let pendingRequestId = resolution.pendingRequestId ?? null;
+        if (resolution.reason === "no_grant") {
+          pendingRequestId = await createPendingGrantRequest({
+            userId,
+            callerAppId: caller.appId,
+            callerFunction: caller.callerFunction,
+            targetAppId: app.id,
+            targetFunction: rawName,
+          });
+        }
+        const message = resolution.reason === "cap_exceeded"
+          ? `This cross-Agent connection has reached its monthly credit cap for ${rawName}.`
+          : `Your connected Agent has not been granted permission to call ${rawName} on this Agent.`;
+        return jsonRpcErrorResponse(id, -32003, message, {
+          type: resolution.reason === "cap_exceeded"
+            ? "AGENT_GRANT_CAP_EXCEEDED"
+            : "AGENT_GRANT_REQUIRED",
+          callerAppId: caller.appId,
+          targetAppId: app.id,
+          functionName: rawName,
+          pendingRequestId,
+          configureUrl: buildCallerPermissionConfigureUrl(
+            requestBaseUrl(request),
+            app.id,
+            rawName,
+          ),
+        });
+      }
+      callerGrantId = resolution.grant?.id ?? null;
+    }
+  } else if (
     callerUsesApiToken(callerContext) ||
     callerUsesRoutineActorToken(callerContext)
   ) {
+    // Direct call from the user's connected agent (no caller-Agent context):
+    // the existing always/ask/never policy governs.
     const permission = await enforceCallerFunctionPermission({
       userId,
       appId: app.id,
@@ -1733,6 +1836,11 @@ async function handleToolsCall(
       widgetAction,
       agenticSurfaceAction,
       routineContext: routineTraceContextFromCaller(callerContext),
+      // Cross-Agent attribution: the grant authorizing this call (for spend
+      // accounting) and the inbound hop (so this Agent's own sub-calls mint a
+      // token at hop + 1).
+      callerGrantId,
+      incomingHop: callerContext.callerApp?.hop ?? 0,
     },
   );
 }
@@ -2171,6 +2279,8 @@ async function executeAppFunction(
     widgetAction?: WidgetActionCallMetadata;
     agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
     routineContext?: RoutineTraceContext;
+    callerGrantId?: string | null;
+    incomingHop?: number;
   },
 ): Promise<Response> {
   try {
@@ -2293,10 +2403,40 @@ async function executeAppFunction(
 
     // AI-capable apps get a longer timeout (120s) since AI calls are inherently slow
     const permissions = resolveStrictManifestPermissions(app).permissions;
-    const appCallDependencies = resolveRuntimeAppCallDependencies(
+    const manifestDependencies = resolveRuntimeAppCallDependencies(
       app,
       callerContext,
     );
+    // P5: a user's active cross-Agent grants (and slot bindings) let granted
+    // calls be EXPRESSED in-sandbox even when the developer never declared
+    // them; the target still authorizes each call via the grant check.
+    let grantDependencies: typeof manifestDependencies = [];
+    let slotBindings: Awaited<ReturnType<typeof resolveSlotBindings>> = [];
+    let callerContextToken: string | undefined;
+    if (userId && userId !== ANONYMOUS_USER_ID) {
+      try {
+        [grantDependencies, slotBindings] = await Promise.all([
+          resolveCallerGrantDependencies(userId, app.id),
+          resolveSlotBindings(userId, app.id),
+        ]);
+      } catch (err) {
+        console.warn("[MCP] Failed to resolve cross-Agent grants:", err);
+      }
+      // Mint the unforgeable caller context this Agent attaches to ITS OWN
+      // outbound cross-Agent calls. Best-effort: a missing signing secret
+      // disables outbound grant-gated calls rather than failing this call.
+      try {
+        callerContextToken = await mintCallerContextToken({
+          callerAppId: app.id,
+          userId,
+          callerFunction: functionName,
+          incomingHop: meta?.incomingHop ?? 0,
+        });
+      } catch (err) {
+        console.warn("[MCP] Failed to mint caller context token:", err);
+      }
+    }
+    const appCallDependencies = [...manifestDependencies, ...grantDependencies];
     const timeoutMs = permissions.includes("ai:call") ? 120_000 : 30_000;
     const runtimeAI = permissions.includes("ai:call")
       ? await createRuntimeAIContext(user)
@@ -2491,6 +2631,8 @@ async function executeAppFunction(
       baseUrl,
       authToken: meta?.authToken,
       appCallDependencies,
+      callerContextToken,
+      slotBindings,
       workerSecret: getEnv("WORKER_SECRET") || undefined,
       timeoutMs,
       cloudOperationMetering,
@@ -2558,6 +2700,16 @@ async function executeAppFunction(
         widgetAction: meta?.widgetAction,
         agenticSurfaceAction: meta?.agenticSurfaceAction,
       });
+
+      // P5: attribute the credits this cross-Agent call consumed to its grant's
+      // monthly window (drives the per-grant spend cap). Best-effort.
+      if (meta?.callerGrantId) {
+        const grantSpend = (settlement?.chargedLight ?? 0) +
+          (result.aiCostLight || 0);
+        if (grantSpend > 0) {
+          await recordGrantSpend(meta.callerGrantId, grantSpend);
+        }
+      }
 
       return settlement;
     };
