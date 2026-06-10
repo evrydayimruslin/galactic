@@ -1,23 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
-  LaunchAgentFunctionPermissionsResponse,
+  LaunchAgentFunctionsResponse,
   LaunchApiKeyListResponse,
   LaunchByokSummaryResponse,
+  LaunchCallerFunctionPermissionsResponse,
   LaunchInferenceOptionsResponse,
   LaunchInstallResponse,
   LaunchLeaderboardResponse,
   LaunchLibraryResponse,
-  LaunchToolFunctionsResponse,
   LaunchStoreRequest,
   LaunchStoreResponse,
   LaunchWalletDetailResponse,
 } from "../../../../shared/contracts/launch.ts";
 import {
   launchApi,
+  type LaunchAgentAdminResponse,
+  type LaunchAgentResponse,
   type LaunchPlatformPrimitivesResponse,
-  type LaunchToolAdminResponse,
-  type LaunchToolResponse,
   type LaunchWalletResponse,
 } from "./api";
 import type { ResolvedLaunchRoute } from "./routes";
@@ -34,12 +34,12 @@ export interface LaunchRouteLiveData {
   builderLeaderboard?: LaunchLeaderboardResponse;
   feeLeaderboard?: LaunchLeaderboardResponse;
   library?: LaunchLibraryResponse;
-  tool?: LaunchToolResponse;
-  toolFunctions?: LaunchToolFunctionsResponse;
-  toolAgentPermissions?: LaunchAgentFunctionPermissionsResponse;
+  agent?: LaunchAgentResponse;
+  agentFunctions?: LaunchAgentFunctionsResponse;
+  agentCallerPermissions?: LaunchCallerFunctionPermissionsResponse;
   wallet?: LaunchWalletResponse;
   walletDetail?: LaunchWalletDetailResponse;
-  adminTool?: LaunchToolAdminResponse;
+  adminAgent?: LaunchAgentAdminResponse;
   platformPrimitives?: LaunchPlatformPrimitivesResponse;
 }
 
@@ -119,9 +119,9 @@ async function loadRouteData(
       return { status, install, platformPrimitives: primitives, store };
     }
     case "install": {
-      const tool = search.get("tool") || undefined;
+      const agent = search.get("agent") || search.get("tool") || undefined;
       const [install, apiKeys] = await Promise.all([
-        launchApi.install({ tool }),
+        launchApi.install({ agent }),
         optional(() => launchApi.apiKeys()),
       ]);
       return { install, apiKeys };
@@ -139,15 +139,16 @@ async function loadRouteData(
       ]);
       return { builderLeaderboard, feeLeaderboard, store };
     }
-    case "tool": {
+    case "agent": {
       const id = route.params.slug || "";
       if (!id) return {};
-      const [tool, toolFunctions, toolAgentPermissions] = await Promise.all([
-        launchApi.tool(id),
-        optional(() => launchApi.toolFunctions(id)),
-        optional(() => launchApi.toolAgentPermissions(id)),
-      ]);
-      return { tool, toolAgentPermissions, toolFunctions };
+      const [agent, agentFunctions, agentCallerPermissions] = await Promise
+        .all([
+          launchApi.agent(id),
+          optional(() => launchApi.agentFunctions(id)),
+          optional(() => launchApi.agentCallerPermissions(id)),
+        ]);
+      return { agent, agentCallerPermissions, agentFunctions };
     }
     case "library": {
       return { library: await launchApi.library() };
@@ -168,15 +169,16 @@ async function loadRouteData(
       ]);
       return { apiKeys, byok, inferenceOptions };
     }
-    case "adminTool": {
+    case "adminAgent": {
       const id = route.params.id || "";
       if (!id) return {};
-      const [adminTool, toolFunctions, toolAgentPermissions] = await Promise.all([
-        launchApi.toolAdmin(id),
-        optional(() => launchApi.toolFunctions(id)),
-        optional(() => launchApi.toolAgentPermissions(id)),
-      ]);
-      return { adminTool, toolAgentPermissions, toolFunctions };
+      const [adminAgent, agentFunctions, agentCallerPermissions] = await Promise
+        .all([
+          launchApi.agentAdmin(id),
+          optional(() => launchApi.agentFunctions(id)),
+          optional(() => launchApi.agentCallerPermissions(id)),
+        ]);
+      return { adminAgent, agentCallerPermissions, agentFunctions };
     }
     case "authCallback":
       return {};

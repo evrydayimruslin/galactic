@@ -3073,12 +3073,12 @@ Preferred routes:
 - Install or connect an agent: \`/install\`
 - Manage wallet, balance, deposits, receipts, or earnings: \`/wallet\`
 - Manage API keys, preferences, account settings, or saved credentials: \`/settings\`
-- Manage tool permissions, pricing, secrets, versions, or owner controls: \`/admin/tools/:id\`
-- Inspect a public tool UI, pricing, or trust card: \`/tools/:slug\`
+- Manage an Agent's caller permissions, pricing, secrets, versions, or owner controls: \`/admin/agents/:id\`
+- Inspect a public Agent page, pricing, or trust card: \`/agents/:slug\` (legacy \`/tools/:slug\` redirects)
 - Show API/OpenAPI docs: \`/api/launch/openapi.json\`
 - Show platform skills/docs to another agent: \`/api/skills\`
 
-When a discovery result includes \`matched_subject.next_action\`, prefer that action: call a matched function or inspect the tool before guessing.
+When a discovery result includes \`matched_subject.next_action\`, prefer that action: call a matched function or inspect the Agent before guessing.
 
 ## Skills As Functions
 

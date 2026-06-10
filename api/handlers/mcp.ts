@@ -116,9 +116,9 @@ import { normalizeJsonRpcResponseId } from "../../shared/contracts/jsonrpc.ts";
 import type { App, BYOKProvider } from "../../shared/types/index.ts";
 import { getEnv } from "../lib/env.ts";
 import {
-  buildAgentPermissionConfigureUrl,
-  enforceAgentFunctionPermission,
-} from "../services/agent-function-permissions.ts";
+  buildCallerPermissionConfigureUrl,
+  enforceCallerFunctionPermission,
+} from "../services/caller-function-permissions.ts";
 
 // ============================================
 // MEMORY SERVICE (lazy singleton)
@@ -1635,11 +1635,11 @@ async function handleToolsCall(
     callerUsesApiToken(callerContext) ||
     callerUsesRoutineActorToken(callerContext)
   ) {
-    const permission = await enforceAgentFunctionPermission({
+    const permission = await enforceCallerFunctionPermission({
       userId,
       appId: app.id,
       functionName: rawName,
-      configureUrl: buildAgentPermissionConfigureUrl(
+      configureUrl: buildCallerPermissionConfigureUrl(
         requestBaseUrl(request),
         app.id,
         rawName,

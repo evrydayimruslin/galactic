@@ -1,11 +1,14 @@
 import type {
-  LaunchAgentFunctionPermissionsResponse,
-  LaunchAgentFunctionPermissionsUpdateRequest,
+  LaunchAgentAdminSummary,
+  LaunchAgentFunctionsResponse,
+  LaunchAgentSummary,
   LaunchApiKeyCreateRequest,
   LaunchApiKeyCreateResponse,
   LaunchApiKeyDeleteResponse,
   LaunchApiKeyListResponse,
   LaunchByokMutationResponse,
+  LaunchCallerFunctionPermissionsResponse,
+  LaunchCallerFunctionPermissionsUpdateRequest,
   LaunchByokPrimaryRequest,
   LaunchByokSummaryResponse,
   LaunchByokUpsertRequest,
@@ -22,9 +25,6 @@ import type {
   LaunchPlatformPrimitiveSuggestion,
   LaunchStoreRequest,
   LaunchStoreResponse,
-  LaunchToolAdminSummary,
-  LaunchToolFunctionsResponse,
-  LaunchToolSummary,
   LaunchTrustCard,
   LaunchWalletDetailKind,
   LaunchWalletDetailResponse,
@@ -42,11 +42,16 @@ import {
   refreshLaunchSessionIfAvailable,
 } from "./auth";
 
-export interface LaunchToolResponse {
-  tool: LaunchToolSummary;
+export interface LaunchAgentResponse {
+  agent?: LaunchAgentSummary;
+  /** @deprecated Alias emitted during the Tools -> Agents rename window. */
+  tool?: LaunchAgentSummary;
   trustCard?: LaunchTrustCard;
   generatedAt?: string;
 }
+
+/** @deprecated Use LaunchAgentResponse. */
+export type LaunchToolResponse = LaunchAgentResponse;
 
 export interface LaunchWalletResponse {
   wallet: LaunchWalletSummary;
@@ -58,11 +63,14 @@ export interface LaunchPlatformPrimitivesResponse {
   generatedAt?: string;
 }
 
-export interface LaunchToolAdminResponse {
-  admin: LaunchToolAdminSummary;
+export interface LaunchAgentAdminResponse {
+  admin: LaunchAgentAdminSummary;
   trustCard?: LaunchTrustCard;
   generatedAt?: string;
 }
+
+/** @deprecated Use LaunchAgentAdminResponse. */
+export type LaunchToolAdminResponse = LaunchAgentAdminResponse;
 
 export interface LaunchApiClientOptions {
   baseUrl?: string;
@@ -99,9 +107,16 @@ export class LaunchApiClient {
     return this.fetchJson("/api/launch/status");
   }
 
-  install(request: { tool?: string } = {}): Promise<LaunchInstallResponse> {
+  install(
+    request: { agent?: string; tool?: string } = {},
+  ): Promise<LaunchInstallResponse> {
     const params = new URLSearchParams();
-    if (request.tool) params.set("tool", request.tool);
+    const agent = request.agent || request.tool;
+    if (agent) {
+      params.set("agent", agent);
+      // Deprecated alias kept for one rename window.
+      params.set("tool", agent);
+    }
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return this.fetchJson(`/api/launch/install${suffix}`);
   }
@@ -127,23 +142,33 @@ export class LaunchApiClient {
     return this.store(request);
   }
 
-  tool(idOrSlug: string): Promise<LaunchToolResponse> {
-    return this.fetchJson(`/api/launch/tools/${encodeURIComponent(idOrSlug)}`);
+  agent(idOrSlug: string): Promise<LaunchAgentResponse> {
+    return this.fetchJson(`/api/launch/agents/${encodeURIComponent(idOrSlug)}`);
   }
 
-  toolFunctions(idOrSlug: string): Promise<LaunchToolFunctionsResponse> {
+  /** @deprecated Use agent(). */
+  tool(idOrSlug: string): Promise<LaunchAgentResponse> {
+    return this.agent(idOrSlug);
+  }
+
+  agentFunctions(idOrSlug: string): Promise<LaunchAgentFunctionsResponse> {
     return this.fetchJson(
-      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/functions`,
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/functions`,
     );
   }
 
-  runToolFunction(
+  /** @deprecated Use agentFunctions(). */
+  toolFunctions(idOrSlug: string): Promise<LaunchAgentFunctionsResponse> {
+    return this.agentFunctions(idOrSlug);
+  }
+
+  runAgentFunction(
     idOrSlug: string,
     functionName: string,
     request: LaunchFunctionRunRequest = {},
   ): Promise<LaunchFunctionRunResponse> {
     return this.fetchJson(
-      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/functions/${
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/functions/${
         encodeURIComponent(functionName)
       }/run`,
       {
@@ -153,25 +178,49 @@ export class LaunchApiClient {
     );
   }
 
-  toolAgentPermissions(
+  /** @deprecated Use runAgentFunction(). */
+  runToolFunction(
     idOrSlug: string,
-  ): Promise<LaunchAgentFunctionPermissionsResponse> {
+    functionName: string,
+    request: LaunchFunctionRunRequest = {},
+  ): Promise<LaunchFunctionRunResponse> {
+    return this.runAgentFunction(idOrSlug, functionName, request);
+  }
+
+  agentCallerPermissions(
+    idOrSlug: string,
+  ): Promise<LaunchCallerFunctionPermissionsResponse> {
     return this.fetchJson(
-      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/agent-permissions`,
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/caller-permissions`,
     );
   }
 
-  updateToolAgentPermissions(
+  /** @deprecated Use agentCallerPermissions(). */
+  toolAgentPermissions(
     idOrSlug: string,
-    request: LaunchAgentFunctionPermissionsUpdateRequest,
-  ): Promise<LaunchAgentFunctionPermissionsResponse> {
+  ): Promise<LaunchCallerFunctionPermissionsResponse> {
+    return this.agentCallerPermissions(idOrSlug);
+  }
+
+  updateAgentCallerPermissions(
+    idOrSlug: string,
+    request: LaunchCallerFunctionPermissionsUpdateRequest,
+  ): Promise<LaunchCallerFunctionPermissionsResponse> {
     return this.fetchJson(
-      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/agent-permissions`,
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/caller-permissions`,
       {
         method: "PATCH",
         body: JSON.stringify(request),
       },
     );
+  }
+
+  /** @deprecated Use updateAgentCallerPermissions(). */
+  updateToolAgentPermissions(
+    idOrSlug: string,
+    request: LaunchCallerFunctionPermissionsUpdateRequest,
+  ): Promise<LaunchCallerFunctionPermissionsResponse> {
+    return this.updateAgentCallerPermissions(idOrSlug, request);
   }
 
   wallet(): Promise<LaunchWalletResponse> {
@@ -185,7 +234,12 @@ export class LaunchApiClient {
     const params = new URLSearchParams();
     if (request.cursor) params.set("cursor", request.cursor);
     if (request.limit) params.set("limit", String(request.limit));
-    if (request.tool) params.set("tool", request.tool);
+    const agentFilter = request.agent || request.tool;
+    if (agentFilter) {
+      params.set("agent", agentFilter);
+      // Deprecated alias kept for one rename window.
+      params.set("tool", agentFilter);
+    }
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return this.fetchJson(`/api/launch/wallet/${kind}${suffix}`);
   }
@@ -277,8 +331,13 @@ export class LaunchApiClient {
     return this.fetchJson("/api/launch/platform-primitives");
   }
 
-  toolAdmin(id: string): Promise<LaunchToolAdminResponse> {
-    return this.fetchJson(`/api/launch/admin/tools/${encodeURIComponent(id)}`);
+  agentAdmin(id: string): Promise<LaunchAgentAdminResponse> {
+    return this.fetchJson(`/api/launch/admin/agents/${encodeURIComponent(id)}`);
+  }
+
+  /** @deprecated Use agentAdmin(). */
+  toolAdmin(id: string): Promise<LaunchAgentAdminResponse> {
+    return this.agentAdmin(id);
   }
 
   apiKeys(): Promise<LaunchApiKeyListResponse> {

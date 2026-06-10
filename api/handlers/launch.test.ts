@@ -283,7 +283,7 @@ Deno.test('launch facade: install can include tool-specific handoff', async () =
       assertEquals(body.toolInstall?.selectedToolSlug, 'deploy-helper');
       assertEquals(
         body.toolInstall?.publicToolUrl,
-        'https://ultralight.test/tools/deploy-helper',
+        'https://ultralight.test/agents/deploy-helper',
       );
       assertEquals(
         body.toolInstall?.platformMcpUrl,
@@ -421,22 +421,22 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
       false,
     );
     assertEquals(
-      body.apiRoutes.includes('GET /api/launch/tools/:id/functions'),
+      body.apiRoutes.includes('GET /api/launch/agents/:id/functions'),
       true,
     );
     assertEquals(
       body.apiRoutes.includes(
-        'POST /api/launch/tools/:id/functions/:functionName/run',
+        'POST /api/launch/agents/:id/functions/:functionName/run',
       ),
       true,
     );
     assertEquals(
-      body.apiRoutes.includes('GET /api/launch/tools/:id/agent-permissions'),
+      body.apiRoutes.includes('GET /api/launch/agents/:id/caller-permissions'),
       true,
     );
     assertEquals(
       body.apiRoutes.includes(
-        'PATCH /api/launch/tools/:id/agent-permissions',
+        'PATCH /api/launch/agents/:id/caller-permissions',
       ),
       true,
     );
@@ -468,16 +468,16 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
     assertEquals(body.endpoints.toolSkills, undefined);
     assertEquals(body.endpoints.skillPull, undefined);
     assertEquals(
-      body.endpoints.toolFunctions,
-      '/api/launch/tools/{id}/functions',
+      body.endpoints.agentFunctions,
+      '/api/launch/agents/{id}/functions',
     );
     assertEquals(
       body.endpoints.functionRun,
-      '/api/launch/tools/{id}/functions/{functionName}/run',
+      '/api/launch/agents/{id}/functions/{functionName}/run',
     );
     assertEquals(
-      body.endpoints.agentPermissions,
-      '/api/launch/tools/{id}/agent-permissions',
+      body.endpoints.callerPermissions,
+      '/api/launch/agents/{id}/caller-permissions',
     );
     assertEquals(
       body.endpoints.walletTopUpQuote,
@@ -493,7 +493,7 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
     );
     assertEquals(
       body.endpoints.walletEarnings,
-      '/api/launch/wallet/earnings?tool={toolId}&limit=25&cursor={cursor}',
+      '/api/launch/wallet/earnings?agent={agentId}&limit=25&cursor={cursor}',
     );
     assertEquals(body.capabilities.deferred.includes('desktop'), true);
     assertEquals(body.capabilities.included.includes('credits_wallet'), true);
@@ -547,15 +547,15 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
       Object.keys(spec.paths).some((path) => path.includes('/skills')),
       false,
     );
-    assertEquals(Boolean(spec.paths['/api/launch/tools/{id}/functions']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/agents/{id}/functions']), true);
     assertEquals(
       Boolean(
-        spec.paths['/api/launch/tools/{id}/functions/{functionName}/run'],
+        spec.paths['/api/launch/agents/{id}/functions/{functionName}/run'],
       ),
       true,
     );
     assertEquals(
-      Boolean(spec.paths['/api/launch/tools/{id}/agent-permissions']),
+      Boolean(spec.paths['/api/launch/agents/{id}/caller-permissions']),
       true,
     );
     assertEquals(Boolean(spec.paths['/api/launch/status']), true);
@@ -563,7 +563,7 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
     assertEquals(Boolean(spec.components?.securitySchemes?.bearerAuth), true);
     assertEquals(Boolean(spec.components?.schemas?.ApiKeySummary), true);
     assertEquals(
-      Boolean(spec.components?.schemas?.AgentFunctionPermissions),
+      Boolean(spec.components?.schemas?.CallerFunctionPermissions),
       true,
     );
     assertEquals(Boolean(spec.components?.schemas?.TrustCard), true);
@@ -1852,3 +1852,34 @@ function parseJsonBody(
   if (typeof body !== 'string') return {};
   return JSON.parse(body) as Record<string, unknown>;
 }
+
+Deno.test("launch facade: legacy /tools and /agent-permissions paths still serve (rename aliases)", async () => {
+  await withLaunchEnv(async () => {
+    // Legacy paths must normalize onto canonical handlers: these auth-gated
+    // routes return 401 (handler reached), not the route-level 404.
+    const legacyRun = await handleLaunch(
+      new Request(
+        "https://ultralight.test/api/launch/tools/deploy-helper/functions/run_check/run",
+        { method: "POST", body: "{}" },
+      ),
+    );
+    await legacyRun.body?.cancel();
+    assertEquals(legacyRun.status, 401);
+
+    const legacyPerms = await handleLaunch(
+      new Request(
+        "https://ultralight.test/api/launch/tools/deploy-helper/agent-permissions",
+      ),
+    );
+    await legacyPerms.body?.cancel();
+    assertEquals(legacyPerms.status, 401);
+
+    const canonicalPerms = await handleLaunch(
+      new Request(
+        "https://ultralight.test/api/launch/agents/deploy-helper/caller-permissions",
+      ),
+    );
+    await canonicalPerms.body?.cancel();
+    assertEquals(canonicalPerms.status, 401);
+  });
+});

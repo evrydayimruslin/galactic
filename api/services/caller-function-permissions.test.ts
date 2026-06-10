@@ -1,11 +1,11 @@
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 
 import {
-  buildAgentPermissionConfigureUrl,
-  enforceAgentFunctionPermission,
-  listAgentFunctionPermissions,
-  updateAgentFunctionPermissions,
-} from "./agent-function-permissions.ts";
+  buildCallerPermissionConfigureUrl,
+  enforceCallerFunctionPermission,
+  listCallerFunctionPermissions,
+  updateCallerFunctionPermissions,
+} from "./caller-function-permissions.ts";
 
 const TEST_ENV = {
   BASE_URL: "https://ultralight.test",
@@ -41,12 +41,12 @@ function jsonResponse(value: unknown): Response {
 Deno.test("agent function permissions: default ask blocks external execution", async () => {
   await withEnv(
     async () => {
-      const configureUrl = buildAgentPermissionConfigureUrl(
+      const configureUrl = buildCallerPermissionConfigureUrl(
         "https://ultralight.test",
         "app-1",
         "deploy",
       );
-      const result = await enforceAgentFunctionPermission({
+      const result = await enforceCallerFunctionPermission({
         userId: "user-1",
         appId: "app-1",
         functionName: "deploy",
@@ -68,7 +68,7 @@ Deno.test("agent function permissions: default ask blocks external execution", a
 Deno.test("agent function permissions: explicit always allows execution", async () => {
   await withEnv(
     async () => {
-      const result = await enforceAgentFunctionPermission({
+      const result = await enforceCallerFunctionPermission({
         userId: "user-1",
         appId: "app-1",
         functionName: "deploy",
@@ -102,7 +102,7 @@ Deno.test("agent function permissions: explicit always allows execution", async 
 Deno.test("agent function permissions: list resolves explicit and default policies", async () => {
   await withEnv(
     async () => {
-      const result = await listAgentFunctionPermissions({
+      const result = await listCallerFunctionPermissions({
         userId: "user-1",
         appId: "app-1",
         functionNames: ["inspect", "deploy"],
@@ -139,7 +139,7 @@ Deno.test("agent function permissions: update upserts default and function overr
   const writes: Array<{ url: string; body: unknown }> = [];
   await withEnv(
     async () => {
-      await updateAgentFunctionPermissions({
+      await updateCallerFunctionPermissions({
         userId: "user-1",
         appId: "app-1",
         defaultPolicy: "ask",

@@ -37,16 +37,18 @@ export const LAUNCH_PUBLIC_ROUTES = [
   "/install",
   "/library",
   "/store",
-  "/tools/:slug",
+  "/agents/:slug",
   "/wallet",
   "/settings",
-  "/admin/tools/:id",
+  "/admin/agents/:id",
 ] as const;
 
 export type LaunchPublicRoute = typeof LAUNCH_PUBLIC_ROUTES[number];
 
 export const LAUNCH_COMPATIBILITY_PUBLIC_ROUTES = [
   "/discover",
+  "/tools/:slug",
+  "/admin/tools/:id",
 ] as const;
 
 export type LaunchCompatibilityPublicRoute =
@@ -67,12 +69,12 @@ export const LAUNCH_API_ROUTES = [
   "GET /api/launch/library",
   "GET /api/launch/store",
   "GET /api/launch/discover",
-  "GET /api/launch/tools/:id",
-  "GET /api/launch/tools/:id/functions",
-  "POST /api/launch/tools/:id/functions/:functionName/run",
-  "GET /api/launch/tools/:id/agent-permissions",
-  "PATCH /api/launch/tools/:id/agent-permissions",
-  "GET /api/launch/admin/tools/:id",
+  "GET /api/launch/agents/:id",
+  "GET /api/launch/agents/:id/functions",
+  "POST /api/launch/agents/:id/functions/:functionName/run",
+  "GET /api/launch/agents/:id/caller-permissions",
+  "PATCH /api/launch/agents/:id/caller-permissions",
+  "GET /api/launch/admin/agents/:id",
   "GET /api/launch/wallet",
   "GET /api/launch/wallet/transactions",
   "GET /api/launch/wallet/receipts",
@@ -86,6 +88,21 @@ export const LAUNCH_API_ROUTES = [
 
 export type LaunchApiRoute = typeof LAUNCH_API_ROUTES[number];
 
+// Legacy request paths from the Tools -> Agents rename. The facade still
+// serves them (normalized to the canonical /agents/caller-permissions
+// paths); removal is scheduled one release window after clients migrate.
+export const LAUNCH_COMPATIBILITY_API_ROUTES = [
+  "GET /api/launch/tools/:id",
+  "GET /api/launch/tools/:id/functions",
+  "POST /api/launch/tools/:id/functions/:functionName/run",
+  "GET /api/launch/tools/:id/agent-permissions",
+  "PATCH /api/launch/tools/:id/agent-permissions",
+  "GET /api/launch/admin/tools/:id",
+] as const;
+
+export type LaunchCompatibilityApiRoute =
+  typeof LAUNCH_COMPATIBILITY_API_ROUTES[number];
+
 export const LAUNCH_INSTALL_TARGETS = [
   "claude_code",
   "cursor",
@@ -98,30 +115,30 @@ export const LAUNCH_INSTALL_TARGETS = [
 
 export type LaunchInstallTarget = typeof LAUNCH_INSTALL_TARGETS[number];
 
-export const LAUNCH_TOOL_RELATIONSHIPS = [
+export const LAUNCH_AGENT_RELATIONSHIPS = [
   "owner",
   "installed",
   "public",
 ] as const;
 
-export type LaunchToolRelationship = typeof LAUNCH_TOOL_RELATIONSHIPS[number];
+export type LaunchAgentRelationship = typeof LAUNCH_AGENT_RELATIONSHIPS[number];
 
-export const LAUNCH_TOOL_KINDS = [
+export const LAUNCH_AGENT_KINDS = [
   "mcp",
   "http",
   "markdown",
   "gpu",
 ] as const;
 
-export type LaunchToolKind = typeof LAUNCH_TOOL_KINDS[number];
+export type LaunchAgentKind = typeof LAUNCH_AGENT_KINDS[number];
 
-export const LAUNCH_TOOL_VISIBILITIES = [
+export const LAUNCH_AGENT_VISIBILITIES = [
   "public",
   "private",
   "unlisted",
 ] as const;
 
-export type LaunchToolVisibility = typeof LAUNCH_TOOL_VISIBILITIES[number];
+export type LaunchAgentVisibility = typeof LAUNCH_AGENT_VISIBILITIES[number];
 
 export const LAUNCH_LEADERBOARD_KINDS = [
   "builder",
@@ -164,9 +181,15 @@ export interface LaunchInstallInstruction {
   requiresApiKey: boolean;
 }
 
-export interface LaunchToolInstallContext {
-  tool: LaunchToolSummary;
+export interface LaunchAgentInstallContext {
+  agent: LaunchAgentSummary;
+  /** @deprecated Use agent. */
+  tool: LaunchAgentSummary;
+  selectedAgentSlug: string;
+  /** @deprecated Use selectedAgentSlug. */
   selectedToolSlug: string;
+  publicAgentUrl: string;
+  /** @deprecated Use publicAgentUrl. */
   publicToolUrl: string;
   installUrl: string;
   platformMcpUrl: string;
@@ -176,7 +199,9 @@ export interface LaunchToolInstallContext {
 
 export interface LaunchInstallResponse {
   instructions: LaunchInstallInstruction[];
-  toolInstall?: LaunchToolInstallContext | null;
+  agentInstall?: LaunchAgentInstallContext | null;
+  /** @deprecated Use agentInstall. */
+  toolInstall?: LaunchAgentInstallContext | null;
   generatedAt: string;
 }
 
@@ -220,14 +245,14 @@ export interface LaunchApiKeyDeleteResponse {
   generatedAt: string;
 }
 
-export const LAUNCH_AGENT_FUNCTION_POLICIES = [
+export const LAUNCH_CALLER_FUNCTION_POLICIES = [
   "always",
   "ask",
   "never",
 ] as const;
 
-export type LaunchAgentFunctionPolicy =
-  typeof LAUNCH_AGENT_FUNCTION_POLICIES[number];
+export type LaunchCallerFunctionPolicy =
+  typeof LAUNCH_CALLER_FUNCTION_POLICIES[number];
 
 export const LAUNCH_WALLET_FUNDING_METHODS = [
   "card",
@@ -273,14 +298,20 @@ export interface LaunchFunctionSummary {
   outputSchema?: Record<string, unknown> | null;
   pricing?: LaunchPricingSummary | null;
   accessPolicy?: LaunchAccessPolicySummary | null;
-  agentPermission?: LaunchAgentFunctionPermissionSummary | null;
+  callerPermission?: LaunchCallerFunctionPermissionSummary | null;
+  /** @deprecated Use callerPermission. */
+  agentPermission?: LaunchCallerFunctionPermissionSummary | null;
 }
 
-export interface LaunchToolFunctionsResponse {
-  tool: Pick<
-    LaunchToolSummary,
-    "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
-  >;
+export type LaunchAgentHandle = Pick<
+  LaunchAgentSummary,
+  "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
+>;
+
+export interface LaunchAgentFunctionsResponse {
+  agent: LaunchAgentHandle;
+  /** @deprecated Use agent. */
+  tool: LaunchAgentHandle;
   functions: LaunchFunctionSummary[];
   generatedAt: string;
 }
@@ -297,7 +328,9 @@ export interface LaunchFunctionRunWarning {
 
 export interface LaunchFunctionRunResponse {
   success: boolean;
-  tool: Pick<LaunchToolSummary, "id" | "slug" | "name">;
+  agent: Pick<LaunchAgentSummary, "id" | "slug" | "name">;
+  /** @deprecated Use agent. */
+  tool: Pick<LaunchAgentSummary, "id" | "slug" | "name">;
   functionName: string;
   result?: unknown;
   receiptId?: string | null;
@@ -310,55 +343,54 @@ export interface LaunchFunctionRunResponse {
   generatedAt: string;
 }
 
-export type LaunchAgentFunctionPermissionSource = "explicit" | "default";
+export type LaunchCallerFunctionPermissionSource = "explicit" | "default";
 
-export interface LaunchAgentFunctionPermissionSummary {
+export interface LaunchCallerFunctionPermissionSummary {
   appId: string;
   functionName: string;
-  policy: LaunchAgentFunctionPolicy;
-  source: LaunchAgentFunctionPermissionSource;
+  policy: LaunchCallerFunctionPolicy;
+  source: LaunchCallerFunctionPermissionSource;
   updatedAt?: string | null;
 }
 
-export interface LaunchAgentFunctionPermissionUpdate {
+export interface LaunchCallerFunctionPermissionUpdate {
   functionName: string;
-  policy: LaunchAgentFunctionPolicy;
+  policy: LaunchCallerFunctionPolicy;
 }
 
-export interface LaunchAgentFunctionPermissionsResponse {
-  tool: Pick<
-    LaunchToolSummary,
-    "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
-  >;
-  defaultPolicy: LaunchAgentFunctionPolicy;
-  permissions: LaunchAgentFunctionPermissionSummary[];
+export interface LaunchCallerFunctionPermissionsResponse {
+  agent: LaunchAgentHandle;
+  /** @deprecated Use agent. */
+  tool: LaunchAgentHandle;
+  defaultPolicy: LaunchCallerFunctionPolicy;
+  permissions: LaunchCallerFunctionPermissionSummary[];
   generatedAt: string;
 }
 
-export interface LaunchAgentFunctionPermissionsUpdateRequest {
-  defaultPolicy?: LaunchAgentFunctionPolicy;
-  permissions?: LaunchAgentFunctionPermissionUpdate[];
+export interface LaunchCallerFunctionPermissionsUpdateRequest {
+  defaultPolicy?: LaunchCallerFunctionPolicy;
+  permissions?: LaunchCallerFunctionPermissionUpdate[];
 }
 
-export interface LaunchAgentPermissionRequired {
+export interface LaunchCallerPermissionRequired {
   type: "permission_required";
   policy: "ask";
   appId: string;
   functionName: string;
   message: string;
   configureUrl: string;
-  source?: LaunchAgentFunctionPermissionSource;
+  source?: LaunchCallerFunctionPermissionSource;
   updatedAt?: string | null;
 }
 
-export interface LaunchAgentPermissionDenied {
+export interface LaunchCallerPermissionDenied {
   type: "permission_denied";
   policy: "never";
   appId: string;
   functionName: string;
   message: string;
   configureUrl: string;
-  source?: LaunchAgentFunctionPermissionSource;
+  source?: LaunchCallerFunctionPermissionSource;
   updatedAt?: string | null;
 }
 
@@ -502,22 +534,22 @@ export interface LaunchDiscoveryRetrievalSummary {
   fallbackReason?: string | null;
 }
 
-export interface LaunchToolOwnerSummary {
+export interface LaunchAgentOwnerSummary {
   userId: string;
   displayName?: string | null;
   profileSlug?: string | null;
   avatarUrl?: string | null;
 }
 
-export interface LaunchToolSummary {
+export interface LaunchAgentSummary {
   id: string;
   slug: string;
   name: string;
   description?: string | null;
-  kind: LaunchToolKind;
-  visibility: LaunchToolVisibility;
-  relationship: LaunchToolRelationship;
-  owner: LaunchToolOwnerSummary;
+  kind: LaunchAgentKind;
+  visibility: LaunchAgentVisibility;
+  relationship: LaunchAgentRelationship;
+  owner: LaunchAgentOwnerSummary;
   installed: boolean;
   installUrl?: string | null;
   publicUrl?: string | null;
@@ -528,8 +560,10 @@ export interface LaunchToolSummary {
   relevance?: LaunchRelevanceSummary;
 }
 
-export interface LaunchToolAdminSummary {
-  tool: LaunchToolSummary;
+export interface LaunchAgentAdminSummary {
+  agent: LaunchAgentSummary;
+  /** @deprecated Use agent. */
+  tool: LaunchAgentSummary;
   editableFields: readonly (
     | "name"
     | "description"
@@ -563,7 +597,7 @@ export interface LaunchTrustCard {
   required_secrets: string[];
   per_user_secrets: string[];
   access: {
-    visibility: LaunchToolVisibility;
+    visibility: LaunchAgentVisibility;
     download_access: string | null;
   };
   reliability?: unknown;
@@ -576,13 +610,13 @@ export interface LaunchTrustCard {
 
 export interface LaunchDiscoveryRequest {
   query?: string;
-  kind?: LaunchToolKind | "all";
+  kind?: LaunchAgentKind | "all";
   limit?: number;
 }
 
 export interface LaunchDiscoveryResponse {
   query?: string | null;
-  results: LaunchToolSummary[];
+  results: LaunchAgentSummary[];
   platformPrimitives?: LaunchPlatformPrimitiveSuggestion[];
   retrieval?: LaunchDiscoveryRetrievalSummary;
   generatedAt: string;
@@ -592,8 +626,8 @@ export type LaunchStoreRequest = LaunchDiscoveryRequest;
 export type LaunchStoreResponse = LaunchDiscoveryResponse;
 
 export interface LaunchLibraryResponse {
-  owned: LaunchToolSummary[];
-  installed: LaunchToolSummary[];
+  owned: LaunchAgentSummary[];
+  installed: LaunchAgentSummary[];
   generatedAt: string;
 }
 
@@ -640,6 +674,8 @@ export interface LaunchWalletPageRequest {
   /**
    * Tool id filter. Supported for receipts and earnings in the MVP launch facade.
    */
+  agent?: string | null;
+  /** @deprecated Use agent. */
   tool?: string | null;
 }
 
@@ -757,7 +793,7 @@ export interface LaunchLeaderboardEntry {
   avatarUrl?: string | null;
   value: LaunchMoneyAmount;
   eventCount?: number;
-  featuredTool?: Pick<LaunchToolSummary, "id" | "slug" | "name"> | null;
+  featuredTool?: Pick<LaunchAgentSummary, "id" | "slug" | "name"> | null;
 }
 
 export interface LaunchLeaderboardResponse {
@@ -791,3 +827,49 @@ export function isLaunchIncludedCapability(
   return typeof value === "string" &&
     (LAUNCH_INCLUDED_CAPABILITIES as readonly string[]).includes(value);
 }
+
+// ---------------------------------------------------------------------------
+// Deprecated aliases from the Tools -> Agents rename (Phase 3).
+// Removal scheduled one release window after clients migrate.
+// ---------------------------------------------------------------------------
+
+/** @deprecated Use LAUNCH_AGENT_RELATIONSHIPS. */
+export const LAUNCH_TOOL_RELATIONSHIPS = LAUNCH_AGENT_RELATIONSHIPS;
+/** @deprecated Use LaunchAgentRelationship. */
+export type LaunchToolRelationship = LaunchAgentRelationship;
+/** @deprecated Use LAUNCH_AGENT_KINDS. */
+export const LAUNCH_TOOL_KINDS = LAUNCH_AGENT_KINDS;
+/** @deprecated Use LaunchAgentKind. */
+export type LaunchToolKind = LaunchAgentKind;
+/** @deprecated Use LAUNCH_AGENT_VISIBILITIES. */
+export const LAUNCH_TOOL_VISIBILITIES = LAUNCH_AGENT_VISIBILITIES;
+/** @deprecated Use LaunchAgentVisibility. */
+export type LaunchToolVisibility = LaunchAgentVisibility;
+/** @deprecated Use LaunchAgentInstallContext. */
+export type LaunchToolInstallContext = LaunchAgentInstallContext;
+/** @deprecated Use LaunchAgentFunctionsResponse. */
+export type LaunchToolFunctionsResponse = LaunchAgentFunctionsResponse;
+/** @deprecated Use LaunchAgentOwnerSummary. */
+export type LaunchToolOwnerSummary = LaunchAgentOwnerSummary;
+/** @deprecated Use LaunchAgentSummary. */
+export type LaunchToolSummary = LaunchAgentSummary;
+/** @deprecated Use LaunchAgentAdminSummary. */
+export type LaunchToolAdminSummary = LaunchAgentAdminSummary;
+/** @deprecated Use LAUNCH_CALLER_FUNCTION_POLICIES. */
+export const LAUNCH_AGENT_FUNCTION_POLICIES = LAUNCH_CALLER_FUNCTION_POLICIES;
+/** @deprecated Use LaunchCallerFunctionPolicy. */
+export type LaunchAgentFunctionPolicy = LaunchCallerFunctionPolicy;
+/** @deprecated Use LaunchCallerFunctionPermissionSource. */
+export type LaunchAgentFunctionPermissionSource = LaunchCallerFunctionPermissionSource;
+/** @deprecated Use LaunchCallerFunctionPermissionSummary. */
+export type LaunchAgentFunctionPermissionSummary = LaunchCallerFunctionPermissionSummary;
+/** @deprecated Use LaunchCallerFunctionPermissionUpdate. */
+export type LaunchAgentFunctionPermissionUpdate = LaunchCallerFunctionPermissionUpdate;
+/** @deprecated Use LaunchCallerFunctionPermissionsResponse. */
+export type LaunchAgentFunctionPermissionsResponse = LaunchCallerFunctionPermissionsResponse;
+/** @deprecated Use LaunchCallerFunctionPermissionsUpdateRequest. */
+export type LaunchAgentFunctionPermissionsUpdateRequest = LaunchCallerFunctionPermissionsUpdateRequest;
+/** @deprecated Use LaunchCallerPermissionRequired. */
+export type LaunchAgentPermissionRequired = LaunchCallerPermissionRequired;
+/** @deprecated Use LaunchCallerPermissionDenied. */
+export type LaunchAgentPermissionDenied = LaunchCallerPermissionDenied;

@@ -8,7 +8,7 @@ import {
 
 import {
   LAUNCH_SCOPE_CONTRACT,
-  type LaunchAgentFunctionPermissionsResponse,
+  type LaunchCallerFunctionPermissionsResponse,
   type LaunchApiKeySummary,
   type LaunchByokProviderOption,
   type LaunchDeferredCapability,
@@ -19,8 +19,8 @@ import {
   type LaunchLeaderboardEntry,
   type LaunchMoneyAmount,
   type LaunchPublisherPublishRequirement,
-  type LaunchToolRelationship,
-  type LaunchToolSummary,
+  type LaunchAgentRelationship,
+  type LaunchAgentSummary,
   type LaunchTrustCard,
   type LaunchWalletEarningSummary,
   type LaunchWalletReceiptSummary,
@@ -50,7 +50,7 @@ import agentCodexUrl from "../assets/agents/agent-codex.png";
 import agentCursorUrl from "../assets/agents/agent-cursor.png";
 import agentOpenclawUrl from "../assets/agents/agent-openclaw.png";
 
-interface ToolFixture {
+interface AgentFixture {
   author: string;
   callPrice: number;
   category: string;
@@ -85,12 +85,12 @@ interface LeaderboardRow {
   value: number;
 }
 
-interface ToolCapability {
+interface AgentCapability {
   kind: "read" | "write" | "net";
   text: string;
 }
 
-interface ToolFunctionFixture {
+interface AgentFunctionFixture {
   args: string[];
   description: string;
   name: string;
@@ -99,11 +99,11 @@ interface ToolFunctionFixture {
   price: number;
 }
 
-interface ToolDetailFixture extends ToolFixture {
+interface AgentDetailFixture extends AgentFixture {
   callsPerDay: number;
-  capabilities: ToolCapability[];
-  functions: ToolFunctionFixture[];
-  relationship: LaunchToolRelationship;
+  capabilities: AgentCapability[];
+  functions: AgentFunctionFixture[];
+  relationship: LaunchAgentRelationship;
   runtime: string;
   signer: string;
   title: string;
@@ -116,8 +116,8 @@ const apiKeyMask = "ulk_live_••••••••••••4xN4";
 const apiKeyPlaceholder = "$ULTRALIGHT_API_KEY";
 const mcpUrl = "https://api.ultralight.dev/mcp/platform";
 
-function toolPreviewPath(tool: Pick<ToolDetailFixture, "slug">): string {
-  return `/tools/${encodeURIComponent(tool.slug)}`;
+function agentPreviewPath(tool: Pick<AgentDetailFixture, "slug">): string {
+  return `/agents/${encodeURIComponent(tool.slug)}`;
 }
 
 const orbitAgents = [
@@ -127,7 +127,7 @@ const orbitAgents = [
   { alt: "Claude", className: "agent-four", src: agentClaudeUrl },
 ] as const;
 
-const discoverTools: ToolFixture[] = [
+const discoverAgents: AgentFixture[] = [
   {
     author: "@kepler",
     callPrice: 0.012,
@@ -225,8 +225,8 @@ const primitives = [
   ],
   [
     "discover",
-    "Discover tools",
-    "Find public agent-native tools.",
+    "Discover Agents",
+    "Find public Agents your connected agent can call.",
     "/store",
   ],
   [
@@ -331,7 +331,7 @@ const installTargets: InstallTarget[] = [
     steps: [
       "Open Cursor MCP settings.",
       "Add the ultralight server entry below.",
-      "Reload Cursor so agents can discover Ultralight tools.",
+      "Reload Cursor so your connected agent can discover Ultralight Agents.",
     ],
     target: "cursor",
   },
@@ -365,7 +365,7 @@ const installTargets: InstallTarget[] = [
     steps: [
       "Use the platform MCP endpoint as the server URL.",
       "Pass your Ultralight API token as a bearer Authorization header.",
-      "Allow the agent to list tools before calling specific tools.",
+      "Allow the agent to list available Agents before calling specific ones.",
     ],
     target: "openai_remote_mcp",
   },
@@ -387,14 +387,14 @@ const installTargets: InstallTarget[] = [
     config: (key) =>
       `npm install -g ultralightpro\nultralight login --token ${key}\nultralight upload .`,
     description:
-      "Use the Ultralight CLI to login, upload, test, and run deployed tools.",
+      "Use the Ultralight CLI to login, upload, test, and run deployed Agents.",
     group: "Direct",
     label: "CLI",
     requiresApiKey: true,
     steps: [
       "Install the ultralightpro package.",
       "Run ultralight login --token <your-token>.",
-      "Run ultralight upload . from a deployable tool directory.",
+      "Run ultralight upload . from a deployable Agent directory.",
     ],
     target: "cli",
   },
@@ -417,20 +417,20 @@ const installTargets: InstallTarget[] = [
 
 const externalLoop = [
   "Install MCP / CLI / API",
-  "Discover tools + primitives",
+  "Discover Agents + primitives",
   "Inspect pricing + trust",
   "Call through MCP / API",
   "Return results + receipts",
 ];
 
-const defaultCapabilities: ToolCapability[] = [
+const defaultCapabilities: AgentCapability[] = [
   { kind: "read", text: "public source data" },
   { kind: "net", text: "outbound HTTPS" },
 ];
 
-const toolDetails: Record<string, ToolDetailFixture> = Object.fromEntries(
-  discoverTools.map((tool) => {
-    const detail = createToolDetail(tool);
+const agentDetails: Record<string, AgentDetailFixture> = Object.fromEntries(
+  discoverAgents.map((tool) => {
+    const detail = createAgentDetail(tool);
     return [detail.slug, detail];
   }),
 );
@@ -454,8 +454,8 @@ const adminTabs = [
 
 type AdminTabId = typeof adminTabs[number][0];
 type LibraryView = "installed" | "owned";
-type StoreKindFilter = "all" | ToolFixture["kind"];
-type ToolPageTabId = "details" | "functions";
+type StoreKindFilter = "all" | AgentFixture["kind"];
+type AgentPageTabId = "details" | "functions";
 
 const visibilityOptions = [
   [
@@ -687,15 +687,15 @@ const livePalette = [
   "#10b981",
 ];
 
-function liveToolFixture(
-  tool: LaunchToolSummary,
+function liveAgentFixture(
+  tool: LaunchAgentSummary,
   options: {
     functions?: LaunchFunctionSummary[];
-    permissions?: LaunchAgentFunctionPermissionsResponse;
+    permissions?: LaunchCallerFunctionPermissionsResponse;
     trustCard?: LaunchTrustCard;
   } = {},
-): ToolDetailFixture {
-  const base = toolDetails[tool.slug] || createToolDetail({
+): AgentDetailFixture {
+  const base = agentDetails[tool.slug] || createAgentDetail({
     author: liveOwnerLabel(tool.owner),
     callPrice: creditsValue(tool.pricing?.defaultCallPrice),
     category: tool.tags?.[0] || tool.kind.toUpperCase(),
@@ -708,7 +708,7 @@ function liveToolFixture(
     name: tool.name,
     slug: tool.slug,
     spark: stableSpark(tool.id),
-    summary: tool.description || "Agent-callable Ultralight tool.",
+    summary: tool.description || "Agent published on Ultralight.",
   });
   const permissions = new Map(
     (options.permissions?.permissions || []).map((
@@ -721,7 +721,8 @@ function liveToolFixture(
       description: fn.description || `Run ${fn.name}.`,
       name: fn.name,
       p50: base.functions[index]?.p50 || 120,
-      permission: permissions.get(fn.name) || fn.agentPermission?.policy ||
+      permission: permissions.get(fn.name) || fn.callerPermission?.policy ||
+        fn.agentPermission?.policy ||
         base.functions[index]?.permission || "ask",
       price: creditsValue(fn.pricing?.defaultCallPrice),
     }))
@@ -751,30 +752,30 @@ function liveToolFixture(
     signer: trust?.signer || base.signer,
     slug: tool.slug,
     summary: tool.description || base.summary,
-    title: titleizeToolName(tool.name),
+    title: titleizeAgentName(tool.name),
     updatedAt: relativeTime(tool.updatedAt) || base.updatedAt,
     version: trust?.version || base.version,
     visibility: tool.visibility,
   };
 }
 
-function liveStoreTools(tools?: LaunchToolSummary[]): ToolFixture[] {
-  if (!tools || tools.length === 0) return discoverTools;
-  return tools.map((tool) => liveToolFixture(tool));
+function liveStoreAgents(tools?: LaunchAgentSummary[]): AgentFixture[] {
+  if (!tools || tools.length === 0) return discoverAgents;
+  return tools.map((tool) => liveAgentFixture(tool));
 }
 
-function liveDetailTool(
-  tool?: LaunchToolSummary,
+function liveDetailAgent(
+  tool?: LaunchAgentSummary,
   functions?: LaunchFunctionSummary[],
-  permissions?: LaunchAgentFunctionPermissionsResponse,
+  permissions?: LaunchCallerFunctionPermissionsResponse,
   trustCard?: LaunchTrustCard,
-): ToolDetailFixture | null {
+): AgentDetailFixture | null {
   return tool
-    ? liveToolFixture(tool, { functions, permissions, trustCard })
+    ? liveAgentFixture(tool, { functions, permissions, trustCard })
     : null;
 }
 
-function liveOwnerLabel(owner: LaunchToolSummary["owner"]): string {
+function liveOwnerLabel(owner: LaunchAgentSummary["owner"]): string {
   if (owner.profileSlug) {
     return owner.profileSlug.startsWith("@")
       ? owner.profileSlug
@@ -894,7 +895,7 @@ function liveEarningRows(earnings?: LaunchWalletEarningSummary[]): LedgerRow[] {
   if (!earnings || earnings.length === 0) return walletEarnings;
   return earnings.map((entry) => ({
     amount: creditsValue(entry.amount),
-    detail: `${entry.appId || "tool"} · ${entry.functionName || entry.reason}`,
+    detail: `${entry.appId || "agent"} · ${entry.functionName || entry.reason}`,
     kind: "earning",
     when: relativeTime(entry.createdAt) || "now",
   }));
@@ -909,7 +910,7 @@ function liveReceiptRows(
     latency: 0,
     light: creditsValue(receipt.total),
     status: receipt.success ? "ok" : "error",
-    tool: receipt.appName || receipt.appId || "tool",
+    tool: receipt.appName || receipt.appId || "agent",
     when: relativeTime(receipt.createdAt) || "now",
   }));
 }
@@ -977,18 +978,18 @@ function ApiNotice({
 export function HomeFoundationPage(
   { live, navigate }: LaunchPageProps,
 ): ReactElement {
-  const homeTools = liveStoreTools(live.data.store?.results).slice(0, 6);
+  const homeTools = liveStoreAgents(live.data.store?.results).slice(0, 6);
   return (
     <div className="launch-page-narrow home-page">
       <ApiNotice live={live} noun="launch data" />
       <section className="home-hero">
         <div className="home-hero-copy">
           <h1>
-            Many agents?<br />One tool layer.
+            Many agents?<br />One Agent layer.
           </h1>
           <p>
-            Connected agents now inherit every published tool, with unified auth
-            and payments. Or deploy your own.
+            Connected agents now inherit every published Agent, with unified
+            auth and payments. Or deploy your own.
           </p>
           <div className="hero-actions left">
             <RouteButton
@@ -1017,8 +1018,8 @@ export function HomeFoundationPage(
       <section className="shared-core-section">
         <h2>Thousands have given Ultralight to their agents</h2>
         <p>
-          Every agent draws from one core: the same context, tools, auth, and
-          payments.
+          Every connected agent draws from one core: the same context, Agents,
+          auth, and payments.
         </p>
         <SharedCore />
       </section>
@@ -1027,11 +1028,11 @@ export function HomeFoundationPage(
         action={
           <RouteLink navigate={navigate} to="/store">Browse all</RouteLink>
         }
-        title="Tools shipping now"
+        title="Agents shipping now"
       >
         <div className="home-tool-grid">
           {homeTools.map((tool) => (
-            <CompactToolCard
+            <CompactAgentCard
               key={tool.id}
               tool={tool}
             />
@@ -1043,8 +1044,8 @@ export function HomeFoundationPage(
         <div>
           <h2>One endpoint. Every capability.</h2>
           <p>
-            Point your agent at a single MCP server. It discovers the whole
-            catalog, calls any tool, and settles in credits.
+            Point your connected agent at a single MCP server. It discovers the
+            whole catalog, calls any Agent, and settles in credits.
           </p>
           <RouteButton icon="copy" navigate={navigate} size="lg" to="/install">
             Add to agent
@@ -1055,7 +1056,7 @@ export function HomeFoundationPage(
 
       <section className="closing-band">
         <div>
-          <h2>Give your agent the tool layer.</h2>
+          <h2>Give your connected agent the Agent layer.</h2>
           <p>
             One endpoint for every capability: discover, call, and settle in
             credits.
@@ -1114,7 +1115,7 @@ export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
           </Button>
         }
         eyebrow="Install"
-        intro="One remote MCP endpoint, or the CLI and API, lets any existing agent discover, call, and pay for tools."
+        intro="One remote MCP endpoint, or the CLI and API, lets any existing agent discover, call, and pay for Agents."
         title="Connect Ultralight to your agent."
       />
       <ApiNotice live={live} noun="install instructions" />
@@ -1170,7 +1171,7 @@ export function StoreFoundationPage(
     setKind(nextKind);
     syncSearchParams({ kind: nextKind === "all" ? null : nextKind });
   };
-  const storeTools = liveStoreTools(live.data.store?.results);
+  const storeTools = liveStoreAgents(live.data.store?.results);
   const builderRows = liveLeaderboardRows(
     live.data.builderLeaderboard?.entries,
   );
@@ -1185,11 +1186,11 @@ export function StoreFoundationPage(
 
   return (
     <div className="launch-page-narrow store-page">
-      <ApiNotice live={live} noun="store tools" />
+      <ApiNotice live={live} noun="store Agents" />
       <section className="store-heading">
-        <h1>Tools your agent can call.</h1>
+        <h1>Agents your connected agent can call.</h1>
         <SearchControls query={query} setQuery={updateQuery} />
-        <div className="kind-tabs" aria-label="Tool kinds">
+        <div className="kind-tabs" aria-label="Agent kinds">
           {(["all", "mcp", "http"] as const).map((option) => (
             <button
               className={kind === option ? "active" : ""}
@@ -1215,10 +1216,10 @@ export function StoreFoundationPage(
                 <button
                   className="tool-card-button"
                   key={tool.id}
-                  onClick={() => navigate(`/tools/${tool.slug}`)}
+                  onClick={() => navigate(`/agents/${tool.slug}`)}
                   type="button"
                 >
-                  <StoreToolCard tool={tool} />
+                  <StoreAgentCard tool={tool} />
                 </button>
               ))
               : <NoResults onClear={() => updateQuery("")} />}
@@ -1242,20 +1243,20 @@ export function StoreFoundationPage(
   );
 }
 
-export function ToolFoundationPage(
+export function AgentFoundationPage(
   { live, location, navigate, route }: LaunchPageProps,
 ): ReactElement {
   const slug = route.params.slug || "get_weather";
-  const tool = liveDetailTool(
-    live.data.tool?.tool,
-    live.data.toolFunctions?.functions,
-    live.data.toolAgentPermissions,
-    live.data.tool?.trustCard,
-  ) || toolDetails[slug];
+  const tool = liveDetailAgent(
+    live.data.agent?.agent ?? live.data.agent?.tool,
+    live.data.agentFunctions?.functions,
+    live.data.agentCallerPermissions,
+    live.data.agent?.trustCard,
+  ) || agentDetails[slug];
 
-  if (!tool) return <ToolNotFoundPage navigate={navigate} slug={slug} />;
+  if (!tool) return <AgentNotFoundPage navigate={navigate} slug={slug} />;
   return (
-    <ToolDetailSurface
+    <AgentDetailSurface
       live={live}
       locationSearch={location.search}
       navigate={navigate}
@@ -1264,7 +1265,7 @@ export function ToolFoundationPage(
   );
 }
 
-function ToolDetailSurface({
+function AgentDetailSurface({
   live,
   locationSearch,
   navigate,
@@ -1273,25 +1274,25 @@ function ToolDetailSurface({
   live: LaunchPageProps["live"];
   locationSearch: string;
   navigate: (to: string) => void;
-  tool: ToolDetailFixture;
+  tool: AgentDetailFixture;
 }): ReactElement {
   const [installed, setInstalled] = useState(false);
-  const [tab, setTab] = useState<ToolPageTabId>(() => toolTabFromSearch());
+  const [tab, setTab] = useState<AgentPageTabId>(() => agentTabFromSearch());
   const [selectedFunctionName, setSelectedFunctionName] = useState(
     tool.functions[0]?.name || "",
   );
   useEffect(() => {
-    setTab(toolTabFromSearch());
+    setTab(agentTabFromSearch());
   }, [locationSearch]);
 
-  const activateToolTab = (nextTab: ToolPageTabId) => {
+  const activateToolTab = (nextTab: AgentPageTabId) => {
     setTab(nextTab);
     syncSearchParams({ tab: nextTab === "functions" ? null : nextTab });
   };
 
   return (
     <div className="launch-page-narrow tool-page">
-      <ApiNotice live={live} noun="tool details" />
+      <ApiNotice live={live} noun="Agent details" />
       <button
         className="back-link"
         onClick={() =>
@@ -1343,7 +1344,7 @@ function ToolDetailSurface({
         </div>
       </section>
 
-      <div className="tool-tabs" role="tablist" aria-label="Tool page sections">
+      <div className="tool-tabs" role="tablist" aria-label="Agent page sections">
         <button
           className={tab === "functions" ? "active" : ""}
           onClick={() => activateToolTab("functions")}
@@ -1364,7 +1365,7 @@ function ToolDetailSurface({
         <main className="tool-main-panel">
           {tab === "functions"
             ? (
-              <ToolFunctionsPanel
+              <AgentFunctionsPanel
                 live={live}
                 selectedFunctionName={selectedFunctionName}
                 setSelectedFunctionName={setSelectedFunctionName}
@@ -1372,17 +1373,17 @@ function ToolDetailSurface({
               />
             )
             : null}
-          {tab === "details" ? <ToolDetailsPanel tool={tool} /> : null}
+          {tab === "details" ? <AgentDetailsPanel tool={tool} /> : null}
         </main>
         <aside className="tool-rail">
-          <ToolTrustRail tool={tool} />
+          <AgentTrustRail tool={tool} />
         </aside>
       </div>
     </div>
   );
 }
 
-function ToolFunctionsPanel({
+function AgentFunctionsPanel({
   live,
   selectedFunctionName,
   setSelectedFunctionName,
@@ -1391,7 +1392,7 @@ function ToolFunctionsPanel({
   live: LaunchPageProps["live"];
   selectedFunctionName: string;
   setSelectedFunctionName: (name: string) => void;
-  tool: ToolDetailFixture;
+  tool: AgentDetailFixture;
 }): ReactElement {
   const selectedFunction =
     tool.functions.find((fn) => fn.name === selectedFunctionName) ||
@@ -1412,7 +1413,7 @@ function ToolFunctionsPanel({
               <Mono>{fn.name}</Mono>
               <small>{fn.description}</small>
             </span>
-            <Mono>{formatToolPrice(fn.price)}</Mono>
+            <Mono>{formatAgentPrice(fn.price)}</Mono>
           </button>
         ))}
       </div>
@@ -1426,9 +1427,9 @@ function FunctionSandboxCard({
   live,
   tool,
 }: {
-  fn: ToolFunctionFixture;
+  fn: AgentFunctionFixture;
   live: LaunchPageProps["live"];
-  tool: ToolDetailFixture;
+  tool: AgentDetailFixture;
 }): ReactElement {
   const formRef = useRef<HTMLFormElement>(null);
   const [response, setResponse] = useState<Record<string, unknown> | null>(
@@ -1445,7 +1446,7 @@ function FunctionSandboxCard({
       fn.args.map((arg) => [arg, data.get(arg) || argDefault(arg)]),
     );
     try {
-      const result = await launchApi.runToolFunction(tool.id, fn.name, {
+      const result = await launchApi.runAgentFunction(tool.id, fn.name, {
         args,
       });
       setResponse({
@@ -1472,7 +1473,7 @@ function FunctionSandboxCard({
           <Mono>{fn.name}</Mono>
           <p>{fn.description}</p>
         </div>
-        <Pill>{formatToolPrice(fn.price)}/call</Pill>
+        <Pill>{formatAgentPrice(fn.price)}/call</Pill>
       </div>
       <form className="arg-grid" ref={formRef}>
         {fn.args.length > 0
@@ -1493,8 +1494,8 @@ function FunctionSandboxCard({
           {runState === "running" ? "Running" : "Run"}
         </Button>
         <span>
-          Manual website runs create receipts; external agents still obey saved
-          permission.
+          Manual website runs create receipts; your connected agent still obeys
+          the saved permission.
         </span>
       </div>
       {response || runState === "running"
@@ -1521,9 +1522,9 @@ function PermissionControl({
   live,
   tool,
 }: {
-  fn: ToolFunctionFixture;
+  fn: AgentFunctionFixture;
   live: LaunchPageProps["live"];
-  tool: ToolDetailFixture;
+  tool: AgentDetailFixture;
 }): ReactElement {
   const [permission, setPermission] = useState(fn.permission);
   const [savedPermission, setSavedPermission] = useState(fn.permission);
@@ -1540,7 +1541,7 @@ function PermissionControl({
   return (
     <div className="permission-control">
       <div>
-        <strong>External-agent permission</strong>
+        <strong>Connected agent permission</strong>
         <span>Default is ask. Manual website runs are separate.</span>
       </div>
       <div className="permission-actions">
@@ -1561,7 +1562,7 @@ function PermissionControl({
             if (!dirty) return;
             setSaveState("saving");
             try {
-              await launchApi.updateToolAgentPermissions(tool.id, {
+              await launchApi.updateAgentCallerPermissions(tool.id, {
                 permissions: [{ functionName: fn.name, policy: permission }],
               });
               setSavedPermission(permission);
@@ -1587,7 +1588,7 @@ function PermissionControl({
   );
 }
 
-function ToolDetailsPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
+function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement {
   return (
     <div className="details-panel">
       <Card>
@@ -1595,7 +1596,7 @@ function ToolDetailsPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
         <h3>{tool.signer}</h3>
         <p>
           The public manifest advertises runtime, capabilities, pricing,
-          receipts, and setup needs before any agent calls the tool.
+          receipts, and setup needs before any connected agent calls the Agent.
         </p>
         <div className="manifest-grid">
           <MetaPair label="version" value={tool.version} />
@@ -1608,7 +1609,7 @@ function ToolDetailsPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
         <p className="section-label">Capabilities</p>
         <div className="capability-list">
           {tool.capabilities.map((capability) => (
-            <ToolCapabilityPill
+            <AgentCapabilityPill
               capability={capability}
               key={`${capability.kind}-${capability.text}`}
             />
@@ -1619,7 +1620,7 @@ function ToolDetailsPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
   );
 }
 
-function ToolTrustRail({ tool }: { tool: ToolDetailFixture }): ReactElement {
+function AgentTrustRail({ tool }: { tool: AgentDetailFixture }): ReactElement {
   const paidFunctions = tool.functions.filter((fn) => fn.price > 0);
   const minPrice = paidFunctions.length > 0
     ? Math.min(...paidFunctions.map((fn) => fn.price))
@@ -1691,8 +1692,8 @@ function MetaPair(
   );
 }
 
-function ToolCapabilityPill(
-  { capability }: { capability: ToolCapability },
+function AgentCapabilityPill(
+  { capability }: { capability: AgentCapability },
 ): ReactElement {
   return (
     <div className={`tool-capability tool-capability-${capability.kind}`}>
@@ -1702,7 +1703,7 @@ function ToolCapabilityPill(
   );
 }
 
-function ToolNotFoundPage({
+function AgentNotFoundPage({
   navigate,
   slug,
 }: {
@@ -1717,13 +1718,13 @@ function ToolNotFoundPage({
             Back to Store
           </RouteButton>
         }
-        eyebrow="Tool preview"
-        intro="This tool is not available to the current session."
+        eyebrow="Agent preview"
+        intro="This Agent is not available to the current session."
         title={slug}
       />
-      <EmptyState icon="search" title="Tool not found">
-        Sign in with an account that owns or installed this tool, or use a
-        public tool URL.
+      <EmptyState icon="search" title="Agent not found">
+        Sign in with an account that owns or installed this Agent, or use a
+        public Agent URL.
       </EmptyState>
     </>
   );
@@ -1735,14 +1736,14 @@ export function LibraryFoundationPage(
   const [view, setView] = useState<LibraryView>(libraryViewFromSearch());
   const useFixtureFallback = live.status !== "ready" && live.status !== "error";
   const installedTools = live.data.library?.installed?.length
-    ? live.data.library.installed.map((tool) => liveToolFixture(tool))
+    ? live.data.library.installed.map((tool) => liveAgentFixture(tool))
     : useFixtureFallback
-    ? installedLibrarySlugs.map((slug) => toolDetails[slug]).filter(Boolean)
+    ? installedLibrarySlugs.map((slug) => agentDetails[slug]).filter(Boolean)
     : [];
   const ownedTools = live.data.library?.owned?.length
-    ? live.data.library.owned.map((tool) => liveToolFixture(tool))
+    ? live.data.library.owned.map((tool) => liveAgentFixture(tool))
     : useFixtureFallback
-    ? ownedLibrarySlugs.map((slug) => toolDetails[slug]).filter(Boolean)
+    ? ownedLibrarySlugs.map((slug) => agentDetails[slug]).filter(Boolean)
     : [];
   const count = view === "installed"
     ? installedTools.length
@@ -1766,14 +1767,14 @@ export function LibraryFoundationPage(
             onClick={() => selectView("installed")}
             type="button"
           >
-            Installed tools
+            Installed Agents
           </button>
           <button
             className={view === "owned" ? "active" : ""}
             onClick={() => selectView("owned")}
             type="button"
           >
-            Tools you own
+            Agents you own
           </button>
         </div>
         <Mono>{count}</Mono>
@@ -1795,16 +1796,16 @@ export function LibraryFoundationPage(
                 <button
                   className="tool-card-button"
                   key={tool.id}
-                  onClick={() => navigate(`/tools/${tool.slug}`)}
+                  onClick={() => navigate(`/agents/${tool.slug}`)}
                   type="button"
                 >
-                  <StoreToolCard tool={tool} />
+                  <StoreAgentCard tool={tool} />
                 </button>
               ))
               : (
                 <EmptyState icon="key" title="Sign in to load your library">
                   The live library endpoint needs an account session before it
-                  can show installed tools.
+                  can show installed Agents.
                 </EmptyState>
               )}
           </div>
@@ -1813,12 +1814,12 @@ export function LibraryFoundationPage(
           <div className="owned-tool-list">
             {ownedTools.length > 0
               ? ownedTools.map((tool) => (
-                <OwnedToolCard key={tool.id} navigate={navigate} tool={tool} />
+                <OwnedAgentCard key={tool.id} navigate={navigate} tool={tool} />
               ))
               : (
-                <EmptyState icon="key" title="Sign in to load owned tools">
+                <EmptyState icon="key" title="Sign in to load owned Agents">
                   The live library endpoint needs an account session before it
-                  can show tools you own.
+                  can show Agents you own.
                 </EmptyState>
               )}
           </div>
@@ -1830,12 +1831,12 @@ export function LibraryFoundationPage(
           <div className="library-empty-grid">
             <LibraryEmptyCard
               action="Deploy docs"
-              body="Ship your first tool from the CLI and it appears here with installs, calls, and earnings."
-              title="Tools you own"
+              body="Ship your first Agent from the CLI and it appears here with installs, calls, and earnings."
+              title="Agents you own"
             />
             <LibraryEmptyCard
               action="Browse Store"
-              body="Tools you install from the Store appear here, ready to configure and call from agents."
+              body="Agents you install from the Store appear here, ready for your connected agent to call."
               title="Installed"
             />
           </div>
@@ -1848,15 +1849,15 @@ export function LibraryFoundationPage(
 export function AdminFoundationPage(
   { live, location, navigate, route }: LaunchPageProps,
 ): ReactElement {
-  const tool = liveDetailTool(
-    live.data.adminTool?.admin.tool,
-    live.data.toolFunctions?.functions,
-    live.data.toolAgentPermissions,
-    live.data.adminTool?.trustCard,
-  ) || adminToolFromRoute(route.params.id);
+  const tool = liveDetailAgent(
+    live.data.adminAgent?.admin.agent ?? live.data.adminAgent?.admin.tool,
+    live.data.agentFunctions?.functions,
+    live.data.agentCallerPermissions,
+    live.data.adminAgent?.trustCard,
+  ) || adminAgentFromRoute(route.params.id);
   const initialTab = adminTabFromSearch();
   const [tab, setTab] = useState<AdminTabId>(initialTab);
-  const [visibility, setVisibility] = useState<ToolDetailFixture["visibility"]>(
+  const [visibility, setVisibility] = useState<AgentDetailFixture["visibility"]>(
     tool.visibility,
   );
   useEffect(() => {
@@ -1873,12 +1874,12 @@ export function AdminFoundationPage(
 
   return (
     <div className="launch-page-narrow admin-page">
-      <ApiNotice live={live} noun="tool admin" />
+      <ApiNotice live={live} noun="Agent admin" />
       <AdminHeader navigate={navigate} tool={tool} visibility={visibility} />
       <div
         className="admin-tabs"
         role="tablist"
-        aria-label="Tool admin sections"
+        aria-label="Agent admin sections"
       >
         {adminTabs.map(([id, label]) => (
           <button
@@ -1902,12 +1903,12 @@ export function AdminFoundationPage(
   );
 }
 
-function OwnedToolCard({
+function OwnedAgentCard({
   navigate,
   tool,
 }: {
   navigate: (to: string) => void;
-  tool: ToolDetailFixture;
+  tool: AgentDetailFixture;
 }): ReactElement {
   return (
     <Card className="owned-tool-card">
@@ -1926,14 +1927,14 @@ function OwnedToolCard({
       <div className="owned-tool-actions">
         <RouteButton
           navigate={navigate}
-          to={`/admin/tools/${tool.id}`}
+          to={`/admin/agents/${tool.id}`}
           variant="primary"
         >
           Manage
         </RouteButton>
         <RouteButton
           navigate={navigate}
-          to={toolPreviewPath(tool)}
+          to={agentPreviewPath(tool)}
           variant="secondary"
         >
           Preview
@@ -1969,7 +1970,7 @@ function LibraryEmptyCard({
       <p>{body}</p>
       <Button
         size="sm"
-        variant={title === "Tools you own" ? "primary" : "secondary"}
+        variant={title === "Agents you own" ? "primary" : "secondary"}
       >
         {action}
       </Button>
@@ -1983,8 +1984,8 @@ function AdminHeader({
   visibility,
 }: {
   navigate: (to: string) => void;
-  tool: ToolDetailFixture;
-  visibility: ToolDetailFixture["visibility"];
+  tool: AgentDetailFixture;
+  visibility: AgentDetailFixture["visibility"];
 }): ReactElement {
   return (
     <section className="admin-header">
@@ -2006,7 +2007,7 @@ function AdminHeader({
       <div className="admin-header-actions">
         <RouteButton
           navigate={navigate}
-          to={toolPreviewPath(tool)}
+          to={agentPreviewPath(tool)}
           variant="secondary"
         >
           Preview
@@ -2025,10 +2026,10 @@ function AdminTabPanel({
   visibility,
 }: {
   navigate: (to: string) => void;
-  setVisibility: (visibility: ToolDetailFixture["visibility"]) => void;
+  setVisibility: (visibility: AgentDetailFixture["visibility"]) => void;
   tab: AdminTabId;
-  tool: ToolDetailFixture;
-  visibility: ToolDetailFixture["visibility"];
+  tool: AgentDetailFixture;
+  visibility: AgentDetailFixture["visibility"];
 }): ReactElement {
   switch (tab) {
     case "pricing":
@@ -2058,9 +2059,9 @@ function AdminEditPanel({
   tool,
   visibility,
 }: {
-  setVisibility: (visibility: ToolDetailFixture["visibility"]) => void;
-  tool: ToolDetailFixture;
-  visibility: ToolDetailFixture["visibility"];
+  setVisibility: (visibility: AgentDetailFixture["visibility"]) => void;
+  tool: AgentDetailFixture;
+  visibility: AgentDetailFixture["visibility"];
 }): ReactElement {
   return (
     <div className="admin-panel admin-edit-panel">
@@ -2105,7 +2106,7 @@ function AdminEditPanel({
 }
 
 function AdminPricingPanel(
-  { tool }: { tool: ToolDetailFixture },
+  { tool }: { tool: AgentDetailFixture },
 ): ReactElement {
   return (
     <div className="admin-panel">
@@ -2136,8 +2137,8 @@ function AdminSecretsPanel(): ReactElement {
       <div className="secret-note">
         <Icon name="shield" />
         <span>
-          Secrets are encrypted and never leave the runtime. Agents cannot read
-          them.
+          Secrets are encrypted and never leave the runtime. Connected agents
+          cannot read them.
         </span>
       </div>
       <div className="secret-list">
@@ -2156,7 +2157,7 @@ function AdminSecretsPanel(): ReactElement {
   );
 }
 
-function AdminTrustPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
+function AdminTrustPanel({ tool }: { tool: AgentDetailFixture }): ReactElement {
   return (
     <div className="admin-panel">
       <Card>
@@ -2165,7 +2166,7 @@ function AdminTrustPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
           <div>
             <h3>Signed manifest · receipts on</h3>
             <p>
-              Trust fields are what public tool pages and external agents
+              Trust fields are what public Agent pages and connected agents
               inspect before calling.
             </p>
           </div>
@@ -2181,7 +2182,7 @@ function AdminTrustPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
         <p className="section-label">Declared capabilities</p>
         <div className="capability-list">
           {tool.capabilities.map((capability) => (
-            <ToolCapabilityPill
+            <AgentCapabilityPill
               capability={capability}
               key={`${capability.kind}-${capability.text}`}
             />
@@ -2193,7 +2194,7 @@ function AdminTrustPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
 }
 
 function AdminReceiptsPanel(
-  { tool }: { tool: ToolDetailFixture },
+  { tool }: { tool: AgentDetailFixture },
 ): ReactElement {
   return (
     <div className="admin-panel">
@@ -2362,7 +2363,7 @@ export function SettingsFoundationPage(
   const useKeyFixtureFallback = live.status !== "ready" &&
     live.status !== "error";
   const [newKeyVisible, setNewKeyVisible] = useState(false);
-  const [newToolPermission, setNewToolPermission] = useState<
+  const [newAgentPermission, setNewAgentPermission] = useState<
     "always" | "ask" | "never"
   >("ask");
   const [installedPermission, setInstalledPermission] = useState<
@@ -2427,7 +2428,7 @@ export function SettingsFoundationPage(
             </Button>
           )
           : null}
-        subtitle="Tokens your agents use to call Ultralight. New keys reveal once."
+        subtitle="Tokens your connected agents use to call Ultralight. New keys reveal once."
         title="API keys"
       >
         <div className="api-key-primary">
@@ -2474,18 +2475,18 @@ export function SettingsFoundationPage(
       <ByokSettingsCard live={live} navigate={navigate} />
 
       <SettingsCard
-        subtitle="Launch-safe defaults for how agents may call tool functions."
+        subtitle="Launch-safe defaults for how your connected agent may call Agent functions."
         title="Preferences"
       >
         <PreferenceRow
           control={
             <PermissionSelect
-              onChange={setNewToolPermission}
-              value={newToolPermission}
+              onChange={setNewAgentPermission}
+              value={newAgentPermission}
             />
           }
-          description="How agents may call functions on tools you deploy."
-          title="Default new tool permissions"
+          description="How your connected agent may call functions on Agents you deploy."
+          title="Default permissions for new Agents"
         />
         <PreferenceRow
           control={
@@ -2494,8 +2495,8 @@ export function SettingsFoundationPage(
               value={installedPermission}
             />
           }
-          description="How agents may call functions on tools you install."
-          title="Default installed tool permissions"
+          description="How your connected agent may call functions on Agents you install."
+          title="Default permissions for installed Agents"
         />
       </SettingsCard>
 
@@ -2785,11 +2786,11 @@ function WalletReceiptsPanel(
     <Card className="wallet-table-card">
       <div className="wallet-section-head">
         <h2>Receipts</h2>
-        <Pill>tool calls</Pill>
+        <Pill>Agent calls</Pill>
       </div>
       <div className="wallet-receipt-table">
         <div className="wallet-table-head">
-          <span>Tool</span>
+          <span>Agent</span>
           <span>Credits</span>
           <span>Latency</span>
           <span>Status</span>
@@ -3417,12 +3418,12 @@ function ValueProps(): ReactElement {
     [
       "03",
       "Open marketplace",
-      "Every published tool is discoverable and callable by any agent.",
+      "Every published Agent is discoverable and callable by any connected agent.",
     ],
     [
       "04",
       "Inherited power",
-      "Every deployed tool inherits composability and distribution.",
+      "Every deployed Agent inherits composability and distribution.",
     ],
   ] as const;
   return (
@@ -3441,7 +3442,7 @@ function ValueProps(): ReactElement {
 function SharedCore(): ReactElement {
   return (
     <div className="shared-core">
-      {["Context", "Tools", "Auth", "Payments"].map((item) => (
+      {["Context", "Agents", "Auth", "Payments"].map((item) => (
         <span key={item}>{item}</span>
       ))}
     </div>
@@ -3508,7 +3509,7 @@ function highlightSnippet(text: string, highlight: string): ReactNode {
   ));
 }
 
-function CompactToolCard({ tool }: { tool: ToolFixture }): ReactElement {
+function CompactAgentCard({ tool }: { tool: AgentFixture }): ReactElement {
   const free = tool.free || tool.callPrice === 0;
   return (
     <Card className="compact-tool-card">
@@ -3611,9 +3612,9 @@ function SearchControls({
     <label className="search-control">
       <Icon name="search" />
       <input
-        aria-label="Search tools"
+        aria-label="Search Agents"
         onChange={(event) => setQuery(event.currentTarget.value)}
-        placeholder="Search tools, capabilities, functions..."
+        placeholder="Search Agents, capabilities, functions..."
         type="search"
         value={query}
       />
@@ -3630,7 +3631,7 @@ function RetrievalNote(
   if (!query) {
     return (
       <div className="retrieval-note">
-        Browsing all public tools · {mode || "top by install"}
+        Browsing all public Agents · {mode || "top by install"}
       </div>
     );
   }
@@ -3641,7 +3642,7 @@ function RetrievalNote(
   );
 }
 
-function StoreToolCard({ tool }: { tool: ToolFixture }): ReactElement {
+function StoreAgentCard({ tool }: { tool: AgentFixture }): ReactElement {
   return (
     <Card className="store-tool-card">
       <div className="store-card-title">
@@ -3759,7 +3760,7 @@ function Leaderboard({
 function NoResults({ onClear }: { onClear: () => void }): ReactElement {
   return (
     <div className="store-empty">
-      <EmptyState icon="search" title="No tools match that yet">
+      <EmptyState icon="search" title="No Agents match that yet">
         Semantic search would fall back to lexical results here. Try broader
         terms, or browse by kind.
       </EmptyState>
@@ -3810,8 +3811,8 @@ export function FoundationNotice(
   return <EmptyState title="Ready for page port">{children}</EmptyState>;
 }
 
-function createToolDetail(tool: ToolFixture): ToolDetailFixture {
-  const base: ToolDetailFixture = {
+function createAgentDetail(tool: AgentFixture): AgentDetailFixture {
+  const base: AgentDetailFixture = {
     ...tool,
     callsPerDay: Math.round(tool.installs * 1.48),
     capabilities: defaultCapabilities,
@@ -3828,13 +3829,13 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
     relationship: "public",
     runtime: tool.kind === "mcp" ? "deno · edge" : "worker · http",
     signer: `${tool.author.replace("@", "")}.studio`,
-    title: titleizeToolName(tool.name),
+    title: titleizeAgentName(tool.name),
     updatedAt: "4d",
     version: "1.0.0",
     visibility: "public",
   };
 
-  const overrides: Record<string, Partial<ToolDetailFixture>> = {
+  const overrides: Record<string, Partial<AgentDetailFixture>> = {
     currency_convert: {
       callsPerDay: 9200,
       capabilities: [
@@ -4030,11 +4031,11 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
   return { ...base, ...overrides[tool.slug] };
 }
 
-function adminToolFromRoute(id?: string): ToolDetailFixture {
-  if (!id) return toolDetails.get_weather;
-  return Object.values(toolDetails).find((tool) =>
+function adminAgentFromRoute(id?: string): AgentDetailFixture {
+  if (!id) return agentDetails.get_weather;
+  return Object.values(agentDetails).find((tool) =>
     tool.id === id || tool.slug === id
-  ) || toolDetails.get_weather;
+  ) || agentDetails.get_weather;
 }
 
 function queryParam(name: string): string {
@@ -4067,7 +4068,7 @@ function libraryViewFromSearch(): LibraryView {
   return queryParam("view") === "owned" ? "owned" : "installed";
 }
 
-function toolTabFromSearch(): ToolPageTabId {
+function agentTabFromSearch(): AgentPageTabId {
   const tab = queryParam("tab");
   if (tab === "details" || tab === "functions") return tab;
   return "functions";
@@ -4167,7 +4168,7 @@ function builderRankFor(author: string): string {
   return row ? String(row.rank) : "12";
 }
 
-function formatToolPrice(value: number): string {
+function formatAgentPrice(value: number): string {
   return value > 0 ? `✦${formatCredits(value)}` : "Free";
 }
 
@@ -4223,7 +4224,7 @@ function functionResponse(slug: string, name: string): Record<string, unknown> {
     { ok: true, receipt: "rec_launch_demo" };
 }
 
-function titleizeToolName(value: string): string {
+function titleizeAgentName(value: string): string {
   return value
     .replaceAll("_", " ")
     .replaceAll(".", " ")

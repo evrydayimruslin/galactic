@@ -170,22 +170,6 @@
       ]
     },
     {
-      "exports": [
-        "AGENT_FUNCTION_PERMISSION_RPC_CODE",
-        "DEFAULT_AGENT_FUNCTION_POLICY",
-        "normalizeAgentFunctionPolicy",
-        "resolveAgentFunctionPermission"
-      ],
-      "file": "services/agent-function-permissions.ts",
-      "types": [
-        "AgentFunctionPermissionEnforcement",
-        "AgentFunctionPermissionEnforcementInput",
-        "AgentFunctionPermissionListInput",
-        "AgentFunctionPermissionResolution",
-        "AgentFunctionPermissionUpdateInput"
-      ]
-    },
-    {
       "file": "services/agentic-interface-actions.ts",
       "types": [
         "AgenticInterfaceActionAudit",
@@ -380,6 +364,22 @@
       "file": "services/call-receipts.ts",
       "types": [
         "ReceiptCloudUsageEvent"
+      ]
+    },
+    {
+      "exports": [
+        "CALLER_FUNCTION_PERMISSION_RPC_CODE",
+        "DEFAULT_CALLER_FUNCTION_POLICY",
+        "normalizeCallerFunctionPolicy",
+        "resolveCallerFunctionPermission"
+      ],
+      "file": "services/caller-function-permissions.ts",
+      "types": [
+        "CallerFunctionPermissionEnforcement",
+        "CallerFunctionPermissionEnforcementInput",
+        "CallerFunctionPermissionListInput",
+        "CallerFunctionPermissionResolution",
+        "CallerFunctionPermissionUpdateInput"
       ]
     },
     {

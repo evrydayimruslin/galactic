@@ -16,8 +16,8 @@ Options:
   --pages-url <url>                 Launch web Pages origin override
   --api-url <url>                   Launch API origin override
   --token <token>                   Bearer token for authenticated launch API probes
-  --tool-slug <slug>                Public tool slug for /tools/:slug route (default: example)
-  --admin-tool-id <id>              Tool id for /admin/tools/:id route and optional admin API probe (default: example)
+  --tool-slug <slug>                Public Agent slug for /agents/:slug route (default: example)
+  --admin-tool-id <id>              Agent id for /admin/agents/:id route and optional admin API probe (default: example)
   --output-dir <path>               Evidence output directory (defaults to UL_LAUNCH_EVIDENCE_DIR)
   --timeout-ms <ms>                 Per-request timeout (default: 15000)
   --skip-auth-api                   Skip authenticated launch API probes even when token is set
@@ -83,7 +83,7 @@ const pageRoutes = [
   { name: "page-store", path: "/store", auth: false },
   {
     name: "page-public-tool",
-    path: `/tools/${encodeURIComponent(toolSlug)}`,
+    path: `/agents/${encodeURIComponent(toolSlug)}`,
     auth: false,
   },
   { name: "page-library", path: "/library", auth: true },
@@ -91,7 +91,7 @@ const pageRoutes = [
   { name: "page-settings", path: "/settings", auth: true },
   {
     name: "page-admin-tool",
-    path: `/admin/tools/${encodeURIComponent(adminToolId)}`,
+    path: `/admin/agents/${encodeURIComponent(adminToolId)}`,
     auth: true,
   },
 ];
@@ -138,7 +138,7 @@ const authenticatedApiProbes = [
 if (adminToolId && adminToolId !== "example") {
   authenticatedApiProbes.push({
     name: "api-launch-admin-tool",
-    path: `/api/launch/admin/tools/${encodeURIComponent(adminToolId)}`,
+    path: `/api/launch/admin/agents/${encodeURIComponent(adminToolId)}`,
     failureClass: "auth-data",
   });
 }

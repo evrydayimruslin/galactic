@@ -10,10 +10,10 @@ export type LaunchRouteKey =
   | "install"
   | "library"
   | "store"
-  | "tool"
+  | "agent"
   | "wallet"
   | "settings"
-  | "adminTool"
+  | "adminAgent"
   | "authCallback";
 
 export type LaunchRoutePath = LaunchPublicRoute | "/auth/callback";
@@ -72,16 +72,16 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     apiRoutes: ["GET /api/launch/store", "GET /api/launch/leaderboard"],
   },
   {
-    key: "tool",
-    path: "/tools/:slug",
-    label: "Tool",
+    key: "agent",
+    path: "/agents/:slug",
+    label: "Agent",
     nav: "hidden",
     apiRoutes: [
-      "GET /api/launch/tools/:id",
-      "GET /api/launch/tools/:id/functions",
-      "POST /api/launch/tools/:id/functions/:functionName/run",
-      "GET /api/launch/tools/:id/agent-permissions",
-      "PATCH /api/launch/tools/:id/agent-permissions",
+      "GET /api/launch/agents/:id",
+      "GET /api/launch/agents/:id/functions",
+      "POST /api/launch/agents/:id/functions/:functionName/run",
+      "GET /api/launch/agents/:id/caller-permissions",
+      "PATCH /api/launch/agents/:id/caller-permissions",
     ],
   },
   {
@@ -113,21 +113,21 @@ export const launchRoutes: LaunchRouteDefinition[] = [
       "DELETE /api/launch/byok/:provider",
       "POST /api/launch/byok/primary",
       "GET /api/launch/inference-options",
-      "GET /api/launch/tools/:id/agent-permissions",
-      "PATCH /api/launch/tools/:id/agent-permissions",
+      "GET /api/launch/agents/:id/caller-permissions",
+      "PATCH /api/launch/agents/:id/caller-permissions",
     ],
   },
   {
-    key: "adminTool",
-    path: "/admin/tools/:id",
-    label: "Tool Admin",
+    key: "adminAgent",
+    path: "/admin/agents/:id",
+    label: "Agent Admin",
     nav: "hidden",
     apiRoutes: [
-      "GET /api/launch/admin/tools/:id",
-      "GET /api/launch/tools/:id/functions",
-      "POST /api/launch/tools/:id/functions/:functionName/run",
-      "GET /api/launch/tools/:id/agent-permissions",
-      "PATCH /api/launch/tools/:id/agent-permissions",
+      "GET /api/launch/admin/agents/:id",
+      "GET /api/launch/agents/:id/functions",
+      "POST /api/launch/agents/:id/functions/:functionName/run",
+      "GET /api/launch/agents/:id/caller-permissions",
+      "PATCH /api/launch/agents/:id/caller-permissions",
     ],
   },
   {
@@ -167,7 +167,16 @@ export function launchApiRoutes(): readonly LaunchApiRoute[] {
 function normalizePath(pathname: string): string {
   if (!pathname || pathname === "/") return "/";
   const cleanPath = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
-  return cleanPath === "/discover" ? "/store" : cleanPath;
+  if (cleanPath === "/discover") return "/store";
+  // Tools -> Agents rename: legacy inbound paths stay routable for one
+  // compatibility window (mirrors LAUNCH_COMPATIBILITY_PUBLIC_ROUTES).
+  if (cleanPath.startsWith("/tools/")) {
+    return `/agents/${cleanPath.slice("/tools/".length)}`;
+  }
+  if (cleanPath.startsWith("/admin/tools/")) {
+    return `/admin/agents/${cleanPath.slice("/admin/tools/".length)}`;
+  }
+  return cleanPath;
 }
 
 function matchRoute(

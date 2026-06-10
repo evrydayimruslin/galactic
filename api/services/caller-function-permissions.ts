@@ -1,51 +1,51 @@
 import {
-  LAUNCH_AGENT_FUNCTION_POLICIES,
-  type LaunchAgentFunctionPermissionsResponse,
-  type LaunchAgentFunctionPermissionSummary,
-  type LaunchAgentFunctionPolicy,
-  type LaunchAgentPermissionDenied,
-  type LaunchAgentPermissionRequired,
+  LAUNCH_CALLER_FUNCTION_POLICIES,
+  type LaunchCallerFunctionPermissionsResponse,
+  type LaunchCallerFunctionPermissionSummary,
+  type LaunchCallerFunctionPolicy,
+  type LaunchCallerPermissionDenied,
+  type LaunchCallerPermissionRequired,
 } from "../../shared/contracts/launch.ts";
 import { getEnv } from "../lib/env.ts";
 import { RequestValidationError } from "./request-validation.ts";
 
-export const DEFAULT_AGENT_FUNCTION_POLICY: LaunchAgentFunctionPolicy = "ask";
-export const AGENT_FUNCTION_PERMISSION_RPC_CODE = -32003;
+export const DEFAULT_CALLER_FUNCTION_POLICY: LaunchCallerFunctionPolicy = "ask";
+export const CALLER_FUNCTION_PERMISSION_RPC_CODE = -32003;
 
-type AgentPermissionBlock =
-  | LaunchAgentPermissionRequired
-  | LaunchAgentPermissionDenied;
+type CallerPermissionBlock =
+  | LaunchCallerPermissionRequired
+  | LaunchCallerPermissionDenied;
 
 interface DbConfig {
   baseUrl: string;
   headers: HeadersInit;
 }
 
-interface AgentPermissionDefaultRow {
+interface CallerPermissionDefaultRow {
   user_id: string;
   default_policy: string | null;
   updated_at?: string | null;
 }
 
-interface AgentFunctionPermissionRow {
+interface CallerFunctionPermissionRow {
   app_id: string;
   function_name: string;
   policy: string | null;
   updated_at?: string | null;
 }
 
-export interface AgentFunctionPermissionResolution
-  extends LaunchAgentFunctionPermissionSummary {
-  defaultPolicy: LaunchAgentFunctionPolicy;
+export interface CallerFunctionPermissionResolution
+  extends LaunchCallerFunctionPermissionSummary {
+  defaultPolicy: LaunchCallerFunctionPolicy;
 }
 
-export interface AgentFunctionPermissionListInput {
+export interface CallerFunctionPermissionListInput {
   userId: string;
   appId: string;
   functionNames: string[];
 }
 
-export interface AgentFunctionPermissionUpdateInput {
+export interface CallerFunctionPermissionUpdateInput {
   userId: string;
   appId: string;
   defaultPolicy?: unknown;
@@ -57,62 +57,63 @@ export interface AgentFunctionPermissionUpdateInput {
   allowedFunctionNames?: string[];
 }
 
-export interface AgentFunctionPermissionEnforcementInput {
+export interface CallerFunctionPermissionEnforcementInput {
   userId: string;
   appId: string;
   functionName: string;
   configureUrl: string;
 }
 
-export type AgentFunctionPermissionEnforcement =
+export type CallerFunctionPermissionEnforcement =
   | {
     allowed: true;
-    resolution: AgentFunctionPermissionResolution;
+    resolution: CallerFunctionPermissionResolution;
   }
   | {
     allowed: false;
     httpStatus: 403;
-    rpcCode: typeof AGENT_FUNCTION_PERMISSION_RPC_CODE;
+    rpcCode: typeof CALLER_FUNCTION_PERMISSION_RPC_CODE;
     errorType: "AGENT_PERMISSION_REQUIRED" | "AGENT_PERMISSION_DENIED";
     message: string;
-    details: AgentPermissionBlock;
-    resolution: AgentFunctionPermissionResolution;
+    details: CallerPermissionBlock;
+    resolution: CallerFunctionPermissionResolution;
   };
 
-export function normalizeAgentFunctionPolicy(
+export function normalizeCallerFunctionPolicy(
   value: unknown,
   field = "policy",
-): LaunchAgentFunctionPolicy {
+): LaunchCallerFunctionPolicy {
   if (
     typeof value === "string" &&
-    (LAUNCH_AGENT_FUNCTION_POLICIES as readonly string[]).includes(value)
+    (LAUNCH_CALLER_FUNCTION_POLICIES as readonly string[]).includes(value)
   ) {
-    return value as LaunchAgentFunctionPolicy;
+    return value as LaunchCallerFunctionPolicy;
   }
   throw new RequestValidationError(
     `${field} must be one of: always, ask, never`,
   );
 }
 
-export function buildAgentPermissionConfigureUrl(
+export function buildCallerPermissionConfigureUrl(
   baseUrl: string,
   appId: string,
   functionName: string,
 ): string {
-  const url = new URL("/settings", baseUrl);
-  url.searchParams.set("tab", "agent-permissions");
-  url.searchParams.set("app", appId);
+  // Points at the Agent page, where the per-function permission control
+  // lives (the facade resolves UUID or slug locators).
+  const url = new URL(`/agents/${encodeURIComponent(appId)}`, baseUrl);
+  url.searchParams.set("tab", "functions");
   url.searchParams.set("function", functionName);
   return url.toString();
 }
 
-export async function resolveAgentFunctionPermission(
+export async function resolveCallerFunctionPermission(
   input: {
     userId: string;
     appId: string;
     functionName: string;
   },
-): Promise<AgentFunctionPermissionResolution> {
+): Promise<CallerFunctionPermissionResolution> {
   const { defaultPolicy, permissionRows } = await fetchPermissionState(
     input.userId,
     input.appId,
@@ -140,11 +141,11 @@ export async function resolveAgentFunctionPermission(
   };
 }
 
-export async function listAgentFunctionPermissions(
-  input: AgentFunctionPermissionListInput,
+export async function listCallerFunctionPermissions(
+  input: CallerFunctionPermissionListInput,
 ): Promise<
   Pick<
-    LaunchAgentFunctionPermissionsResponse,
+    LaunchCallerFunctionPermissionsResponse,
     "defaultPolicy" | "permissions"
   >
 > {
@@ -165,25 +166,25 @@ export async function listAgentFunctionPermissions(
       policy: explicit ? normalizeStoredPolicy(explicit.policy) : defaultPolicy,
       source: explicit ? "explicit" : "default",
       updatedAt: explicit?.updated_at || null,
-    } satisfies LaunchAgentFunctionPermissionSummary;
+    } satisfies LaunchCallerFunctionPermissionSummary;
   });
 
   return { defaultPolicy, permissions };
 }
 
-export async function updateAgentFunctionPermissions(
-  input: AgentFunctionPermissionUpdateInput,
+export async function updateCallerFunctionPermissions(
+  input: CallerFunctionPermissionUpdateInput,
 ): Promise<void> {
   const db = getDbConfig();
   if (!db) {
     throw new RequestValidationError(
-      "Agent permission storage is not configured",
+      "Caller permission storage is not configured",
       503,
     );
   }
 
   if (input.defaultPolicy !== undefined) {
-    const defaultPolicy = normalizeAgentFunctionPolicy(
+    const defaultPolicy = normalizeCallerFunctionPolicy(
       input.defaultPolicy,
       "defaultPolicy",
     );
@@ -210,14 +211,14 @@ export async function updateAgentFunctionPermissions(
     );
     if (allowed.size > 0 && !allowed.has(functionName)) {
       throw new RequestValidationError(
-        `Unknown function for this tool: ${functionName}`,
+        `Unknown function for this Agent: ${functionName}`,
       );
     }
     return {
       user_id: input.userId,
       app_id: input.appId,
       function_name: functionName,
-      policy: normalizeAgentFunctionPolicy(entry.policy),
+      policy: normalizeCallerFunctionPolicy(entry.policy),
     };
   });
   if (rows.length === 0) return;
@@ -230,18 +231,18 @@ export async function updateAgentFunctionPermissions(
   );
 }
 
-export async function enforceAgentFunctionPermission(
-  input: AgentFunctionPermissionEnforcementInput,
-): Promise<AgentFunctionPermissionEnforcement> {
-  const resolution = await resolveAgentFunctionPermission(input);
+export async function enforceCallerFunctionPermission(
+  input: CallerFunctionPermissionEnforcementInput,
+): Promise<CallerFunctionPermissionEnforcement> {
+  const resolution = await resolveCallerFunctionPermission(input);
   if (resolution.policy === "always") {
     return { allowed: true, resolution };
   }
 
   const isAsk = resolution.policy === "ask";
   const message = isAsk
-    ? `External agent permission required before calling ${input.functionName}.`
-    : `External agents are not allowed to call ${input.functionName}.`;
+    ? `Your connected agent needs permission to call ${input.functionName}.`
+    : `Connected agents are not allowed to call ${input.functionName}.`;
   const details = {
     type: isAsk ? "permission_required" : "permission_denied",
     policy: resolution.policy,
@@ -251,12 +252,12 @@ export async function enforceAgentFunctionPermission(
     configureUrl: input.configureUrl,
     source: resolution.source,
     updatedAt: resolution.updatedAt || null,
-  } as AgentPermissionBlock;
+  } as CallerPermissionBlock;
 
   return {
     allowed: false,
     httpStatus: 403,
-    rpcCode: AGENT_FUNCTION_PERMISSION_RPC_CODE,
+    rpcCode: CALLER_FUNCTION_PERMISSION_RPC_CODE,
     errorType: isAsk ? "AGENT_PERMISSION_REQUIRED" : "AGENT_PERMISSION_DENIED",
     message,
     details,
@@ -264,11 +265,11 @@ export async function enforceAgentFunctionPermission(
   };
 }
 
-function normalizeStoredPolicy(value: unknown): LaunchAgentFunctionPolicy {
+function normalizeStoredPolicy(value: unknown): LaunchCallerFunctionPolicy {
   return (typeof value === "string" &&
-      (LAUNCH_AGENT_FUNCTION_POLICIES as readonly string[]).includes(value))
-    ? value as LaunchAgentFunctionPolicy
-    : DEFAULT_AGENT_FUNCTION_POLICY;
+      (LAUNCH_CALLER_FUNCTION_POLICIES as readonly string[]).includes(value))
+    ? value as LaunchCallerFunctionPolicy
+    : DEFAULT_CALLER_FUNCTION_POLICY;
 }
 
 function normalizeFunctionName(value: unknown): string {
@@ -298,20 +299,20 @@ async function fetchPermissionState(
   userId: string,
   appId: string,
 ): Promise<{
-  defaultPolicy: LaunchAgentFunctionPolicy;
-  permissionRows: AgentFunctionPermissionRow[];
+  defaultPolicy: LaunchCallerFunctionPolicy;
+  permissionRows: CallerFunctionPermissionRow[];
 }> {
   const db = getDbConfig();
   if (!db) {
     return {
-      defaultPolicy: DEFAULT_AGENT_FUNCTION_POLICY,
+      defaultPolicy: DEFAULT_CALLER_FUNCTION_POLICY,
       permissionRows: [],
     };
   }
 
   try {
     const [defaultRows, permissionRows] = await Promise.all([
-      dbGet<AgentPermissionDefaultRow>(
+      dbGet<CallerPermissionDefaultRow>(
         db,
         "user_agent_permission_defaults",
         {
@@ -320,7 +321,7 @@ async function fetchPermissionState(
           limit: "1",
         },
       ),
-      dbGet<AgentFunctionPermissionRow>(
+      dbGet<CallerFunctionPermissionRow>(
         db,
         "user_agent_function_permissions",
         {
@@ -336,9 +337,9 @@ async function fetchPermissionState(
       permissionRows,
     };
   } catch (err) {
-    console.warn("[AGENT-PERMISSIONS] Falling back to ask policy:", err);
+    console.warn("[CALLER-PERMISSIONS] Falling back to ask policy:", err);
     return {
-      defaultPolicy: DEFAULT_AGENT_FUNCTION_POLICY,
+      defaultPolicy: DEFAULT_CALLER_FUNCTION_POLICY,
       permissionRows: [],
     };
   }

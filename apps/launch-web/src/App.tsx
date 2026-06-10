@@ -19,12 +19,12 @@ import {
 } from "./lib/live-data";
 import {
   AdminFoundationPage,
+  AgentFoundationPage,
   HomeFoundationPage,
   InstallFoundationPage,
   LibraryFoundationPage,
   SettingsFoundationPage,
   StoreFoundationPage,
-  ToolFoundationPage,
   WalletFoundationPage,
 } from "./pages/foundation-pages";
 import { LaunchShell } from "./components/launch-chrome";
@@ -55,10 +55,10 @@ const routeTitles: Record<LaunchRouteKey, string> = {
   install: "Install",
   library: "Library",
   store: "Store",
-  tool: "Tool",
+  agent: "Agent",
   wallet: "Wallet",
   settings: "Settings",
-  adminTool: "Tool admin",
+  adminAgent: "Agent admin",
   authCallback: "Signing in",
 };
 
@@ -178,9 +178,9 @@ function RouteSwitch(
           navigate={navigate}
         />
       );
-    case "tool":
+    case "agent":
       return (
-        <ToolFoundationPage
+        <AgentFoundationPage
           live={live}
           location={location}
           route={route}
@@ -205,7 +205,7 @@ function RouteSwitch(
           navigate={navigate}
         />
       );
-    case "adminTool":
+    case "adminAgent":
       return (
         <AdminFoundationPage
           live={live}

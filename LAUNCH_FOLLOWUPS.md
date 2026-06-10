@@ -10,6 +10,24 @@ This file tracks issues intentionally deferred while we land the launch PR
 sequence. It is not a backlog for everything in the repo; it is a scoped list
 of launch-relevant follow-ups discovered during implementation.
 
+## Phase 3 (2026-06-10)
+
+- **Tools → Agents alias windows:** the rename shipped with full backward
+  compatibility — legacy public routes (`/tools/:slug`, `/admin/tools/:id`),
+  legacy API paths (`/api/launch/tools/*`, `.../agent-permissions` — see
+  `LAUNCH_COMPATIBILITY_API_ROUTES`), deprecated response-field aliases
+  (`tool`, `toolInstall`, `selectedToolSlug`, `publicToolUrl`,
+  `agentPermission`), and deprecated contract type aliases
+  (`LaunchTool*`, `LaunchAgentFunctionPermission*`). Schedule removal one
+  release window after clients migrate.
+- **Republish @ultralightpro/types** after the next API deploy so external
+  consumers get the `LaunchAgent*`/`LaunchCaller*` names (old names remain
+  as deprecated aliases — non-breaking).
+- **Unrenamed by design:** DB tables (`user_agent_function_permissions`,
+  `user_agent_permission_defaults`), machine error codes
+  (`AGENT_PERMISSION_REQUIRED`/`DENIED`, RPC -32003), and MCP protocol
+  vocabulary (`tools/list`, `tools/call`).
+
 ## Phase 2 (2026-06-10)
 
 - **Deploy-before-republish ordering:** the CLI now sends

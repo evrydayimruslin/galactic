@@ -61,9 +61,9 @@ import {
 } from "../services/memory.ts";
 import { getEnv } from "../lib/env.ts";
 import {
-  buildAgentPermissionConfigureUrl,
-  enforceAgentFunctionPermission,
-} from "../services/agent-function-permissions.ts";
+  buildCallerPermissionConfigureUrl,
+  enforceCallerFunctionPermission,
+} from "../services/caller-function-permissions.ts";
 
 function toLogEntries(lines: string[]): LogEntry[] {
   return lines.map((message) => ({
@@ -177,11 +177,11 @@ export async function handleRun(
     }
 
     if (callerUsesApiToken(caller) || callerUsesRoutineActorToken(caller)) {
-      const permission = await enforceAgentFunctionPermission({
+      const permission = await enforceCallerFunctionPermission({
         userId,
         appId: app.id,
         functionName,
-        configureUrl: buildAgentPermissionConfigureUrl(
+        configureUrl: buildCallerPermissionConfigureUrl(
           requestBaseUrl(request),
           app.id,
           functionName,

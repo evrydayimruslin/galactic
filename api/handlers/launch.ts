@@ -25,7 +25,7 @@ import {
 } from "../services/tokens.ts";
 import { withSensitiveRouteRateLimit } from "../services/sensitive-route-rate-limit.ts";
 import {
-  LAUNCH_AGENT_FUNCTION_POLICIES,
+  LAUNCH_CALLER_FUNCTION_POLICIES,
   LAUNCH_API_ROUTES,
   LAUNCH_DEFERRED_CAPABILITIES,
   LAUNCH_INCLUDED_CAPABILITIES,
@@ -34,8 +34,8 @@ import {
   LAUNCH_PLATFORM_PRIMITIVES,
   LAUNCH_PUBLIC_ROUTES,
   LAUNCH_SCOPE_CONTRACT,
-  type LaunchAgentFunctionPermissionsResponse,
-  type LaunchAgentFunctionPermissionsUpdateRequest,
+  type LaunchCallerFunctionPermissionsResponse,
+  type LaunchCallerFunctionPermissionsUpdateRequest,
   type LaunchApiKeyCreateRequest,
   type LaunchApiKeySummary,
   type LaunchApiRoute,
@@ -61,14 +61,14 @@ import {
   type LaunchPublicRoute,
   type LaunchRelevanceSummary,
   type LaunchSemanticSubjectType,
-  type LaunchToolAdminSummary,
-  type LaunchToolFunctionsResponse,
-  type LaunchToolInstallContext,
-  type LaunchToolKind,
-  type LaunchToolOwnerSummary,
-  type LaunchToolRelationship,
-  type LaunchToolSummary,
-  type LaunchToolVisibility,
+  type LaunchAgentAdminSummary,
+  type LaunchAgentFunctionsResponse,
+  type LaunchAgentInstallContext,
+  type LaunchAgentKind,
+  type LaunchAgentOwnerSummary,
+  type LaunchAgentRelationship,
+  type LaunchAgentSummary,
+  type LaunchAgentVisibility,
   type LaunchTrustCard,
   type LaunchWalletDetailKind,
   type LaunchWalletDetailResponse,
@@ -119,9 +119,9 @@ import {
 } from "../services/stripe-processing-fees.ts";
 import { getBillingConfig } from "../services/billing-config.ts";
 import {
-  listAgentFunctionPermissions,
-  updateAgentFunctionPermissions,
-} from "../services/agent-function-permissions.ts";
+  listCallerFunctionPermissions,
+  updateCallerFunctionPermissions,
+} from "../services/caller-function-permissions.ts";
 import { resolveManifestAccessPolicy } from "../services/access-policy.ts";
 
 const APP_SELECT = [
@@ -318,7 +318,7 @@ interface DbConfig {
 }
 
 interface ToolMapOptions {
-  owners: Map<string, LaunchToolOwnerSummary>;
+  owners: Map<string, LaunchAgentOwnerSummary>;
   viewerId?: string | null;
   installedIds?: Set<string>;
 }
@@ -374,8 +374,8 @@ const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
   publish: {
     label: "Publish for discovery",
     description: "Make a deployed tool public or unlisted for agent installs.",
-    route: "/admin/tools/:id",
-    apiRoute: "GET /api/launch/admin/tools/:id",
+    route: "/admin/agents/:id",
+    apiRoute: "GET /api/launch/admin/agents/:id",
   },
   store: {
     label: "Store",
@@ -392,14 +392,14 @@ const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
   pricing: {
     label: "Tool pricing",
     description: "Inspect per-call pricing and free-call configuration.",
-    route: "/admin/tools/:id",
-    apiRoute: "GET /api/launch/admin/tools/:id",
+    route: "/admin/agents/:id",
+    apiRoute: "GET /api/launch/admin/agents/:id",
   },
   receipts: {
     label: "Receipts",
     description: "Track monetized tool usage and marketplace receipts.",
-    route: "/admin/tools/:id",
-    apiRoute: "GET /api/launch/admin/tools/:id",
+    route: "/admin/agents/:id",
+    apiRoute: "GET /api/launch/admin/agents/:id",
   },
   api_keys: {
     label: "API keys",
@@ -410,8 +410,8 @@ const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
   owner_admin: {
     label: "Owner admin",
     description: "Manage visibility, pricing, logs, and receipts.",
-    route: "/admin/tools/:id",
-    apiRoute: "GET /api/launch/admin/tools/:id",
+    route: "/admin/agents/:id",
+    apiRoute: "GET /api/launch/admin/agents/:id",
   },
 };
 
@@ -421,9 +421,32 @@ let primitiveEmbeddingCache: PrimitiveEmbeddingCache | null = null;
 
 const userService = createUserService();
 
+// Legacy request paths from the Tools -> Agents rename (Phase 3): the old
+// /api/launch/tools/* and .../agent-permissions paths normalize onto the
+// canonical /agents/caller-permissions handlers. Removal is scheduled one
+// release window after clients migrate (LAUNCH_COMPATIBILITY_API_ROUTES).
+function normalizeLaunchApiPath(pathname: string): string {
+  let normalized = pathname;
+  const legacyToolsPrefix = "/api/launch/" + "tools/";
+  const legacyAdminToolsPrefix = "/api/launch/admin/" + "tools/";
+  if (normalized.startsWith(legacyAdminToolsPrefix)) {
+    normalized = "/api/launch/admin/agents/" +
+      normalized.slice(legacyAdminToolsPrefix.length);
+  } else if (normalized.startsWith(legacyToolsPrefix)) {
+    normalized = "/api/launch/agents/" +
+      normalized.slice(legacyToolsPrefix.length);
+  }
+  const legacyPermissionsSuffix = "/agent-" + "permissions";
+  if (normalized.endsWith(legacyPermissionsSuffix)) {
+    normalized = normalized.slice(0, -legacyPermissionsSuffix.length) +
+      "/caller-permissions";
+  }
+  return normalized;
+}
+
 export async function handleLaunch(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  const path = url.pathname;
+  const path = normalizeLaunchApiPath(url.pathname);
   const method = request.method;
 
   try {
@@ -449,7 +472,7 @@ export async function handleLaunch(request: Request): Promise<Response> {
     }
 
     const agentPermissionsMatch = path.match(
-      /^\/api\/launch\/tools\/([^/]+)\/agent-permissions$/,
+      /^\/api\/launch\/agents\/([^/]+)\/caller-permissions$/,
     );
     if (agentPermissionsMatch && method === "PATCH") {
       return await handleLaunchToolAgentPermissionsUpdate(
@@ -459,7 +482,7 @@ export async function handleLaunch(request: Request): Promise<Response> {
     }
 
     const functionRunMatch = path.match(
-      /^\/api\/launch\/tools\/([^/]+)\/functions\/([^/]+)\/run$/,
+      /^\/api\/launch\/agents\/([^/]+)\/functions\/([^/]+)\/run$/,
     );
     if (functionRunMatch && method === "POST") {
       return await handleLaunchFunctionRun(
@@ -542,13 +565,13 @@ export async function handleLaunch(request: Request): Promise<Response> {
     }
 
     const functionsMatch = path.match(
-      /^\/api\/launch\/tools\/([^/]+)\/functions$/,
+      /^\/api\/launch\/agents\/([^/]+)\/functions$/,
     );
     if (functionsMatch) {
       return await handleLaunchToolFunctions(request, functionsMatch[1]);
     }
 
-    const toolMatch = path.match(/^\/api\/launch\/tools\/([^/]+)$/);
+    const toolMatch = path.match(/^\/api\/launch\/agents\/([^/]+)$/);
     if (toolMatch) {
       return await handleLaunchTool(request, toolMatch[1]);
     }
@@ -592,9 +615,9 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       store: "/api/launch/store?query={query}",
       discover: "/api/launch/discover?query={query}",
       discoverAlias: "/api/launch/discover?query={query}",
-      toolFunctions: "/api/launch/tools/{id}/functions",
-      functionRun: "/api/launch/tools/{id}/functions/{functionName}/run",
-      agentPermissions: "/api/launch/tools/{id}/agent-permissions",
+      agentFunctions: "/api/launch/agents/{id}/functions",
+      functionRun: "/api/launch/agents/{id}/functions/{functionName}/run",
+      callerPermissions: "/api/launch/agents/{id}/caller-permissions",
       platformPrimitives: "/api/launch/platform-primitives?q={query}",
       leaderboard: "/api/launch/leaderboard?kind=builder&period=30d",
       wallet: "/api/launch/wallet",
@@ -602,7 +625,7 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
         "/api/launch/wallet/transactions?limit=25&cursor={cursor}",
       walletReceipts: "/api/launch/wallet/receipts?limit=25&cursor={cursor}",
       walletEarnings:
-        "/api/launch/wallet/earnings?tool={toolId}&limit=25&cursor={cursor}",
+        "/api/launch/wallet/earnings?agent={agentId}&limit=25&cursor={cursor}",
       walletPayouts: "/api/launch/wallet/payouts?limit=25&cursor={cursor}",
       walletTopUpQuote:
         "/api/launch/wallet/topup/quote?amount_credits=2500&method=card",
@@ -1049,7 +1072,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       },
       "/api/launch/store": storePathSpec,
       "/api/launch/discover": legacyDiscoverPathSpec,
-      "/api/launch/tools/{id}": {
+      "/api/launch/agents/{id}": {
         get: {
           operationId: "getLaunchTool",
           summary: "Inspect a public tool by id or slug",
@@ -1075,7 +1098,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           },
         },
       },
-      "/api/launch/tools/{id}/functions": {
+      "/api/launch/agents/{id}/functions": {
         get: {
           operationId: "getLaunchToolFunctions",
           summary: "List launch-safe functions for a tool",
@@ -1099,7 +1122,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           },
         },
       },
-      "/api/launch/tools/{id}/functions/{functionName}/run": {
+      "/api/launch/agents/{id}/functions/{functionName}/run": {
         post: {
           operationId: "runLaunchToolFunction",
           summary: "Run one tool function from the launch website",
@@ -1146,7 +1169,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           },
         },
       },
-      "/api/launch/tools/{id}/agent-permissions": {
+      "/api/launch/agents/{id}/caller-permissions": {
         get: {
           operationId: "getLaunchToolAgentPermissions",
           summary: "Get external-agent permission policy for a tool",
@@ -1164,7 +1187,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "200": {
               description: "Per-function external-agent permission policy",
               content: jsonContent({
-                $ref: "#/components/schemas/AgentFunctionPermissions",
+                $ref: "#/components/schemas/CallerFunctionPermissions",
               }),
             },
             "401": { description: "Authentication required" },
@@ -1192,7 +1215,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               properties: {
                 defaultPolicy: {
                   type: "string",
-                  enum: LAUNCH_AGENT_FUNCTION_POLICIES,
+                  enum: LAUNCH_CALLER_FUNCTION_POLICIES,
                 },
                 permissions: {
                   type: "array",
@@ -1203,7 +1226,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                       functionName: { type: "string" },
                       policy: {
                         type: "string",
-                        enum: LAUNCH_AGENT_FUNCTION_POLICIES,
+                        enum: LAUNCH_CALLER_FUNCTION_POLICIES,
                       },
                     },
                   },
@@ -1215,7 +1238,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "200": {
               description: "Updated per-function external-agent policy",
               content: jsonContent({
-                $ref: "#/components/schemas/AgentFunctionPermissions",
+                $ref: "#/components/schemas/CallerFunctionPermissions",
               }),
             },
             "400": { description: "Invalid policy request" },
@@ -1251,7 +1274,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           },
         },
       },
-      "/api/launch/admin/tools/{id}": {
+      "/api/launch/admin/agents/{id}": {
         get: {
           operationId: "getLaunchToolAdmin",
           summary: "Inspect owner-only launch-safe tool administration",
@@ -1650,7 +1673,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             generatedAt: { type: "string", format: "date-time" },
           },
         },
-        AgentFunctionPermission: {
+        CallerFunctionPermission: {
           type: "object",
           required: ["appId", "functionName", "policy", "source"],
           properties: {
@@ -1658,7 +1681,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             functionName: { type: "string" },
             policy: {
               type: "string",
-              enum: LAUNCH_AGENT_FUNCTION_POLICIES,
+              enum: LAUNCH_CALLER_FUNCTION_POLICIES,
             },
             source: { type: "string", enum: ["explicit", "default"] },
             updatedAt: { type: ["string", "null"], format: "date-time" },
@@ -1712,9 +1735,16 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                 { type: "null" },
               ],
             },
-            agentPermission: {
+            callerPermission: {
               oneOf: [
-                { $ref: "#/components/schemas/AgentFunctionPermission" },
+                { $ref: "#/components/schemas/CallerFunctionPermission" },
+                { type: "null" },
+              ],
+            },
+            agentPermission: {
+              description: "Deprecated alias of callerPermission.",
+              oneOf: [
+                { $ref: "#/components/schemas/CallerFunctionPermission" },
                 { type: "null" },
               ],
             },
@@ -1758,18 +1788,18 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             generatedAt: { type: "string", format: "date-time" },
           },
         },
-        AgentFunctionPermissions: {
+        CallerFunctionPermissions: {
           type: "object",
           required: ["tool", "defaultPolicy", "permissions", "generatedAt"],
           properties: {
             tool: { type: "object" },
             defaultPolicy: {
               type: "string",
-              enum: LAUNCH_AGENT_FUNCTION_POLICIES,
+              enum: LAUNCH_CALLER_FUNCTION_POLICIES,
             },
             permissions: {
               type: "array",
-              items: { $ref: "#/components/schemas/AgentFunctionPermission" },
+              items: { $ref: "#/components/schemas/CallerFunctionPermission" },
             },
             generatedAt: { type: "string", format: "date-time" },
           },
@@ -2501,7 +2531,7 @@ async function handleLaunchDiscover(
     query,
     results: rows.map((row) =>
       withToolRelevance(
-        toLaunchToolSummary(row, {
+        toLaunchAgentSummary(row, {
           owners,
           viewerId: viewer?.id,
           installedIds,
@@ -2533,14 +2563,14 @@ async function handleLaunchLibrary(request: Request): Promise<Response> {
 
   return json({
     owned: ownedRows.map((row) =>
-      toLaunchToolSummary(row, {
+      toLaunchAgentSummary(row, {
         owners,
         viewerId: user.id,
         installedIds,
       })
     ),
     installed: installedRows.map((row) =>
-      toLaunchToolSummary(row, {
+      toLaunchAgentSummary(row, {
         owners,
         viewerId: user.id,
         installedIds,
@@ -2559,13 +2589,15 @@ async function handleLaunchTool(
   const { installedIds, row, viewer } = resolved;
 
   const owners = await fetchOwnerMap([row.owner_id]);
-  const tool = toLaunchToolSummary(row, {
+  const tool = toLaunchAgentSummary(row, {
     owners,
     viewerId: viewer?.id,
     installedIds,
   });
 
   return json({
+    agent: tool,
+    // Deprecated alias kept for one rename window.
     tool,
     trustCard: buildLaunchTrustCard(row),
     generatedAt: new Date().toISOString(),
@@ -2584,19 +2616,22 @@ async function handleLaunchToolFunctions(
   const { row, installedIds } = resolved;
 
   const owners = await fetchOwnerMap([row.owner_id]);
-  const tool = toLaunchToolSummary(row, {
+  const tool = toLaunchAgentSummary(row, {
     owners,
     viewerId: viewer?.id,
     installedIds,
   });
   const functions = await buildLaunchFunctionSummaries(row, viewer?.id);
 
+  const handle = toLaunchToolHandle(tool);
   return json(
     {
-      tool: toLaunchToolHandle(tool),
+      agent: handle,
+      // Deprecated alias kept for one rename window.
+      tool: handle,
       functions,
       generatedAt: new Date().toISOString(),
-    } satisfies LaunchToolFunctionsResponse,
+    } satisfies LaunchAgentFunctionsResponse,
   );
 }
 
@@ -2641,6 +2676,7 @@ async function handleLaunchFunctionRun(
     return json(
       {
         success: false,
+        agent: tool,
         tool,
         functionName,
         receiptId: runPayload?.receipt_id || null,
@@ -2660,6 +2696,7 @@ async function handleLaunchFunctionRun(
   return json(
     {
       success: true,
+      agent: tool,
       tool,
       functionName,
       result: runPayload.result,
@@ -2681,12 +2718,14 @@ async function handleLaunchToolAdmin(
   if (!row) return error("Tool not found", 404);
 
   const owners = await fetchOwnerMap([row.owner_id]);
-  const tool = toLaunchToolSummary(row, {
+  const tool = toLaunchAgentSummary(row, {
     owners,
     viewerId: user.id,
     installedIds: new Set<string>(),
   });
-  const admin: LaunchToolAdminSummary = {
+  const admin: LaunchAgentAdminSummary = {
+    agent: tool,
+    // Deprecated alias kept for one rename window.
     tool,
     editableFields: [
       "name",
@@ -2696,8 +2735,8 @@ async function handleLaunchToolAdmin(
       "secrets",
       "trust",
     ],
-    receiptsUrl: `/admin/tools/${encodeURIComponent(row.id)}?tab=receipts`,
-    logsUrl: `/admin/tools/${encodeURIComponent(row.id)}?tab=logs`,
+    receiptsUrl: `/admin/agents/${encodeURIComponent(row.id)}?tab=receipts`,
+    logsUrl: `/admin/agents/${encodeURIComponent(row.id)}?tab=logs`,
   };
 
   return json({
@@ -2717,7 +2756,7 @@ async function handleLaunchToolAgentPermissions(
   if (!resolved) return error("Tool not found", 404);
 
   return json(
-    await buildLaunchAgentPermissionsResponse(
+    await buildLaunchCallerPermissionsResponse(
       user,
       resolved.row,
       resolved.installedIds,
@@ -2739,18 +2778,18 @@ async function handleLaunchToolAgentPermissionsUpdate(
     throw new RequestValidationError("Invalid agent permissions request");
   }
   const functionNames = extractFunctionNames(resolved.row);
-  await updateAgentFunctionPermissions({
+  await updateCallerFunctionPermissions({
     userId: user.id,
     appId: resolved.row.id,
     defaultPolicy: body.defaultPolicy ?? body.default_policy,
     permissions: body.permissions as
-      | LaunchAgentFunctionPermissionsUpdateRequest["permissions"]
+      | LaunchCallerFunctionPermissionsUpdateRequest["permissions"]
       | undefined,
     allowedFunctionNames: functionNames,
   });
 
   return json(
-    await buildLaunchAgentPermissionsResponse(
+    await buildLaunchCallerPermissionsResponse(
       user,
       resolved.row,
       resolved.installedIds,
@@ -3165,7 +3204,9 @@ function parseWalletPageRequest(
 ): ParsedWalletPageRequest {
   const limit = parseWalletPageLimit(url.searchParams.get("limit"));
   const cursor = parseWalletCursor(url.searchParams.get("cursor"));
-  const rawTool = url.searchParams.get("tool")?.trim() || undefined;
+  // ?agent= is canonical; ?tool= remains a deprecated alias for one window.
+  const rawTool = url.searchParams.get("agent")?.trim() ||
+    url.searchParams.get("tool")?.trim() || undefined;
   const tool = rawTool && (kind === "receipts" || kind === "earnings")
     ? normalizeWalletToolFilter(rawTool)
     : undefined;
@@ -3436,12 +3477,16 @@ async function buildLaunchInstallResponse(
   request: Request,
   url: URL,
 ): Promise<LaunchInstallResponse> {
-  const toolLocator = normalizeQuery(url.searchParams.get("tool"));
+  const toolLocator = normalizeQuery(url.searchParams.get("agent")) ||
+    normalizeQuery(url.searchParams.get("tool"));
+  const agentInstall = toolLocator
+    ? await buildToolInstallContext(request, toolLocator)
+    : null;
   return {
     instructions: buildInstallInstructions(request),
-    toolInstall: toolLocator
-      ? await buildToolInstallContext(request, toolLocator)
-      : null,
+    agentInstall: agentInstall,
+    // Deprecated alias kept for one rename window.
+    toolInstall: agentInstall,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -3449,7 +3494,7 @@ async function buildLaunchInstallResponse(
 async function buildToolInstallContext(
   request: Request,
   locator: string,
-): Promise<LaunchToolInstallContext> {
+): Promise<LaunchAgentInstallContext> {
   const row = await fetchToolByLocator(locator, { publicOnly: true });
   if (!row) {
     throw new RequestValidationError("Tool not found", 404);
@@ -3463,7 +3508,7 @@ async function buildToolInstallContext(
     ? await fetchInstalledIds(viewer.id)
     : new Set<string>();
   const owners = await fetchOwnerMap([row.owner_id]);
-  const tool = toLaunchToolSummary(row, {
+  const tool = toLaunchAgentSummary(row, {
     owners,
     viewerId: viewer?.id,
     installedIds,
@@ -3471,13 +3516,17 @@ async function buildToolInstallContext(
   const baseUrl = publicBaseUrl(request);
   const platformMcpUrl = `${baseUrl}/mcp/platform`;
   const publicToolUrl = `${baseUrl}${
-    tool.publicUrl || `/tools/${encodeURIComponent(tool.slug)}`
+    tool.publicUrl || `/agents/${encodeURIComponent(tool.slug)}`
   }`;
   const installUrl = `${baseUrl}/install?tool=${encodeURIComponent(tool.slug)}`;
 
   return {
+    agent: tool,
+    // Deprecated aliases kept for one rename window.
     tool,
+    selectedAgentSlug: tool.slug,
     selectedToolSlug: tool.slug,
+    publicAgentUrl: publicToolUrl,
     publicToolUrl,
     installUrl,
     platformMcpUrl,
@@ -3498,7 +3547,7 @@ async function buildToolInstallContext(
 
 async function fetchPublicApps(options: {
   query: string | null;
-  kind: LaunchToolKind | "all";
+  kind: LaunchAgentKind | "all";
   limit: number;
   excludeIds?: Set<string>;
 }): Promise<RankedLaunchAppRow[]> {
@@ -3546,7 +3595,7 @@ async function tryEmbedLaunchQuery(
 
 async function fetchSemanticPublicApps(options: {
   embedding: number[];
-  kind: LaunchToolKind | "all";
+  kind: LaunchAgentKind | "all";
   limit: number;
 }): Promise<RankedLaunchAppRow[]> {
   let subjectRows: RankedLaunchAppRow[] = [];
@@ -3577,7 +3626,7 @@ async function fetchSemanticPublicApps(options: {
 
 async function fetchSubjectSemanticPublicApps(options: {
   embedding: number[];
-  kind: LaunchToolKind | "all";
+  kind: LaunchAgentKind | "all";
   limit: number;
 }): Promise<RankedLaunchAppRow[]> {
   const db = getDbConfig();
@@ -3651,7 +3700,7 @@ async function fetchSubjectSemanticPublicApps(options: {
 
 async function fetchLegacySemanticPublicApps(options: {
   embedding: number[];
-  kind: LaunchToolKind | "all";
+  kind: LaunchAgentKind | "all";
   limit: number;
 }): Promise<RankedLaunchAppRow[]> {
   const db = getDbConfig();
@@ -3825,32 +3874,35 @@ async function resolveAgentPermissionTool(
   return await resolveLaunchRunnableTool(user, encodedLocator);
 }
 
-async function buildLaunchAgentPermissionsResponse(
+async function buildLaunchCallerPermissionsResponse(
   user: AuthUser,
   row: LaunchAppRow,
   installedIds: Set<string>,
-): Promise<LaunchAgentFunctionPermissionsResponse> {
+): Promise<LaunchCallerFunctionPermissionsResponse> {
   const owners = await fetchOwnerMap([row.owner_id]);
-  const tool = toLaunchToolSummary(row, {
+  const tool = toLaunchAgentSummary(row, {
     owners,
     viewerId: user.id,
     installedIds,
   });
-  const permissions = await listAgentFunctionPermissions({
+  const permissions = await listCallerFunctionPermissions({
     userId: user.id,
     appId: row.id,
     functionNames: extractFunctionNames(row),
   });
 
+  const handle = {
+    id: tool.id,
+    slug: tool.slug,
+    name: tool.name,
+    relationship: tool.relationship,
+    publicUrl: tool.publicUrl,
+    adminUrl: tool.adminUrl,
+  };
   return {
-    tool: {
-      id: tool.id,
-      slug: tool.slug,
-      name: tool.name,
-      relationship: tool.relationship,
-      publicUrl: tool.publicUrl,
-      adminUrl: tool.adminUrl,
-    },
+    agent: handle,
+    // Deprecated alias kept for one rename window.
+    tool: handle,
     defaultPolicy: permissions.defaultPolicy,
     permissions: permissions.permissions,
     generatedAt: new Date().toISOString(),
@@ -3865,7 +3917,7 @@ async function buildLaunchFunctionSummaries(
   const manifest = parseManifest(row.manifest);
   const manifestFunctions = asRecord(manifest?.functions) || {};
   const permissions = viewerId
-    ? await listAgentFunctionPermissions({
+    ? await listCallerFunctionPermissions({
       userId: viewerId,
       appId: row.id,
       functionNames: names,
@@ -3888,6 +3940,8 @@ async function buildLaunchFunctionSummaries(
       outputSchema: outputSchemaForFunction(functionDef),
       pricing: pricingSummaryForFunction(row, name),
       accessPolicy,
+      callerPermission: permissionByFunction.get(name) || null,
+      // Deprecated alias kept for one rename window.
       agentPermission: permissionByFunction.get(name) || null,
     };
   });
@@ -3909,9 +3963,9 @@ function accessPolicySummaryForTool(
 }
 
 function toLaunchToolHandle(
-  tool: LaunchToolSummary,
+  tool: LaunchAgentSummary,
 ): Pick<
-  LaunchToolSummary,
+  LaunchAgentSummary,
   "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
 > {
   return {
@@ -3994,9 +4048,9 @@ function pricingSummaryForFunction(
 
 async function fetchOwnerMap(
   ownerIds: string[],
-): Promise<Map<string, LaunchToolOwnerSummary>> {
+): Promise<Map<string, LaunchAgentOwnerSummary>> {
   const ids = Array.from(new Set(ownerIds)).filter(Boolean);
-  const map = new Map<string, LaunchToolOwnerSummary>();
+  const map = new Map<string, LaunchAgentOwnerSummary>();
   for (const id of ids) {
     map.set(id, { userId: id });
   }
@@ -4079,10 +4133,10 @@ function toBuilderLeaderboardEntry(
   };
 }
 
-function toLaunchToolSummary(
+function toLaunchAgentSummary(
   row: LaunchAppRow,
   options: ToolMapOptions,
-): LaunchToolSummary {
+): LaunchAgentSummary {
   const slug = row.slug || row.id;
   const installed = options.installedIds?.has(row.id) || false;
   const relationship = relationshipFor(row, options.viewerId, installed);
@@ -4097,9 +4151,9 @@ function toLaunchToolSummary(
     owner: options.owners.get(row.owner_id) || { userId: row.owner_id },
     installed,
     installUrl: `/install?tool=${encodeURIComponent(slug)}`,
-    publicUrl: `/tools/${encodeURIComponent(slug)}`,
+    publicUrl: `/agents/${encodeURIComponent(slug)}`,
     adminUrl: relationship === "owner"
-      ? `/admin/tools/${encodeURIComponent(row.id)}`
+      ? `/admin/agents/${encodeURIComponent(row.id)}`
       : null,
     pricing: pricingSummary(row),
     tags: row.tags || [],
@@ -4129,7 +4183,7 @@ function functionPrice(value: unknown): number {
   return numeric(record?.price_light);
 }
 
-function inferToolKind(row: LaunchAppRow): LaunchToolKind {
+function inferToolKind(row: LaunchAppRow): LaunchAgentKind {
   if (row.app_type === "skill") return "markdown";
   if (row.runtime === "gpu") return "gpu";
   const manifest = parseManifest(row.manifest);
@@ -4142,7 +4196,7 @@ function relationshipFor(
   row: LaunchAppRow,
   viewerId: string | null | undefined,
   installed: boolean,
-): LaunchToolRelationship {
+): LaunchAgentRelationship {
   if (viewerId && row.owner_id === viewerId) return "owner";
   if (installed) return "installed";
   return "public";
@@ -4150,7 +4204,7 @@ function relationshipFor(
 
 function normalizeVisibility(
   value: string | null | undefined,
-): LaunchToolVisibility {
+): LaunchAgentVisibility {
   if (value === "private" || value === "unlisted" || value === "public") {
     return value;
   }
@@ -4181,7 +4235,7 @@ function shouldHideGpu(row: LaunchAppRow): boolean {
   return row.runtime === "gpu" && !isGpuSupportEnabled();
 }
 
-function matchesKind(row: LaunchAppRow, kind: LaunchToolKind | "all"): boolean {
+function matchesKind(row: LaunchAppRow, kind: LaunchAgentKind | "all"): boolean {
   return kind === "all" || inferToolKind(row) === kind;
 }
 
@@ -4214,9 +4268,9 @@ function annotateLexicalRow(
 }
 
 function withToolRelevance(
-  tool: LaunchToolSummary,
+  tool: LaunchAgentSummary,
   relevance?: LaunchRelevanceSummary,
-): LaunchToolSummary {
+): LaunchAgentSummary {
   return relevance ? { ...tool, relevance } : tool;
 }
 
@@ -4676,7 +4730,7 @@ function parseFunctionName(encodedName: string): string {
   return name;
 }
 
-function parseKind(value: string | null): LaunchToolKind | "all" {
+function parseKind(value: string | null): LaunchAgentKind | "all" {
   if (!value || value === "all") return "all";
   if (
     value === "mcp" || value === "http" || value === "markdown" ||
