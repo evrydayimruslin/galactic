@@ -29,7 +29,6 @@ import {
   MIN_WITHDRAWAL_LIGHT,
   type PermissionRow,
   PLATFORM_FEE_RATE,
-  type SkillPricing,
   STORAGE_LIGHT_PER_GB_MONTH,
   type Tier,
   type TimeWindow,
@@ -235,11 +234,9 @@ interface DiscoveryMatchedSubject {
   semantic_description?: string | null;
   preview?: string | null;
   next_action?: {
-    kind: "inspect_tool" | "call_function" | "pull_skill" | "open_widget";
+    kind: "inspect_tool" | "call_function";
     endpoint?: string;
     function_name?: string;
-    skill_id?: string;
-    widget_id?: string;
   };
 }
 
@@ -1087,7 +1084,6 @@ function buildSemanticMatchedSubject(
     match.subject_type,
     match.subject_id,
   );
-  const encodedTool = encodeURIComponent(app.slug || app.id);
   const matched: DiscoveryMatchedSubject = {
     source: "tool_semantic_embedding",
     type: match.subject_type,
@@ -1105,21 +1101,6 @@ function buildSemanticMatchedSubject(
       kind: "call_function",
       endpoint: `/mcp/${app.id}`,
       function_name: readOptionalString(metadata.name) || subjectName,
-    };
-  } else if (match.subject_type === "skill") {
-    matched.next_action = {
-      kind: "pull_skill",
-      endpoint: `/api/launch/tools/${encodedTool}/skills/${
-        encodeURIComponent(subjectName)
-      }/pull`,
-      skill_id: subjectName,
-    };
-  } else if (match.subject_type === "widget") {
-    const widgetId = readOptionalString(metadata.widget_id) || subjectName;
-    matched.next_action = {
-      kind: "open_widget",
-      endpoint: `/tools/${encodedTool}?widget=${encodeURIComponent(widgetId)}`,
-      widget_id: widgetId,
     };
   } else {
     matched.next_action = {
@@ -1370,18 +1351,6 @@ function isFunctionPricing(value: unknown): value is FunctionPricing {
     );
 }
 
-function isSkillPricing(value: unknown): value is SkillPricing {
-  return isRecord(value) &&
-    typeof value.price_light === "number" &&
-    value.price_light >= 0 &&
-    value.price_light <= 10000 &&
-    (
-      value.free_pulls === undefined ||
-      (typeof value.free_pulls === "number" && value.free_pulls >= 0 &&
-        Number.isInteger(value.free_pulls))
-    );
-}
-
 function getAppSearchSimilarity(app: App | AppSearchResult): number {
   return "similarity" in app ? app.similarity : 0;
 }
@@ -1449,7 +1418,9 @@ function summarizeCommandSurfacesByApp(
   args: Record<string, unknown>,
   source: CommandSurfaceSource,
 ): Map<string, unknown> {
-  const kinds = discoveryCommandSurfaceKinds(args);
+  const kinds = discoveryCommandSurfaceKinds(args).filter((kind) =>
+    kind === "command_card"
+  );
   if (kinds.length === 0 || apps.length === 0) return new Map();
   const inventory = buildCommandSurfacesFromApps(apps, {
     query: args.query || args.task,
@@ -1466,7 +1437,6 @@ function summarizeCommandSurfacesByApp(
   const summaries = new Map<string, unknown>();
   for (const [appId, surfaces] of grouped) {
     summaries.set(appId, {
-      widgets: surfaces.filter((surface) => surface.surface === "widget"),
       command_cards: surfaces.filter((surface) =>
         surface.surface === "command_card"
       ),
@@ -1557,7 +1527,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
       'scope="desk": last 5 used apps (check first). ' +
       'scope="inspect": deep introspection of one app. ' +
       'scope="library": your owned+saved apps. ' +
-      'scope="appstore": all published apps. Add surfaces=["widget","command_card"] to reveal dashboard-ready surfaces.',
+      'scope="appstore": all published apps. Add surfaces=["command_card"] to reveal dashboard-ready surfaces.',
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -1597,10 +1567,10 @@ const PLATFORM_TOOLS: MCPTool[] = [
           type: "array",
           items: {
             type: "string",
-            enum: ["function", "widget", "command_card"],
+            enum: ["function", "command_card"],
           },
           description:
-            'Optional dashboard surface filter. Include "widget" or "command_card" to return Command-ready surfaces alongside app results.',
+            'Optional dashboard surface filter. Include "command_card" to return Command-ready surfaces alongside app results.',
         },
         limit: { type: "number", description: "Max results. For appstore." },
       },
@@ -2003,7 +1973,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
         policy: {
           type: "boolean",
           description:
-            "When true, scaffold policy.ts plus manifest access_policy for programmable function/skill pricing and denial logic.",
+            "When true, scaffold policy.ts plus manifest access_policy for programmable function pricing and denial logic.",
         },
       },
     },
@@ -2213,19 +2183,6 @@ const PLATFORM_TOOLS: MCPTool[] = [
         function_prices: {
           description:
             'Per-function prices: { "fn": light } or { "fn": { price_light: light, free_calls?: N } }. null = remove.',
-        },
-        default_skill_pull_price_light: {
-          description:
-            "Default price in Light (✦) to pull full skill context into an agent prompt. null = free.",
-        },
-        default_free_skill_pulls: {
-          type: "integer",
-          description:
-            "Default free full-context skill pulls per user before charging begins. 0 = charge from first pull.",
-        },
-        skill_prices: {
-          description:
-            'Per-skill context pull prices: { "skill_id": light } or { "skill_id": { price_light: light, free_pulls?: N } }. null = remove.',
         },
         gpu_pricing_config: {
           description:
@@ -2857,8 +2814,8 @@ function stripGpuPlatformDocs(docs: string): string {
       "",
     )
     .replace(
-      "### ul.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_light?, default_free_calls?, free_calls_scope?, function_prices?, default_skill_pull_price_light?, default_free_skill_pulls?, skill_prices?, gpu_pricing_config?, search_hints?, show_metrics? })",
-      "### ul.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_light?, default_free_calls?, free_calls_scope?, function_prices?, default_skill_pull_price_light?, default_free_skill_pulls?, skill_prices?, search_hints?, show_metrics? })",
+      "### ul.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_light?, default_free_calls?, free_calls_scope?, function_prices?, gpu_pricing_config?, search_hints?, show_metrics? })",
+      "### ul.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_light?, default_free_calls?, free_calls_scope?, function_prices?, search_hints?, show_metrics? })",
     )
     .replace(
       "- GPU pricing: `gpu_pricing_config` adds the developer fee only. GPU compute pass-through is always charged separately.\n",
@@ -3113,21 +3070,15 @@ Preferred routes:
 - Manage wallet, balance, deposits, receipts, or earnings: \`/wallet\`
 - Manage API keys, preferences, account settings, or saved credentials: \`/settings\`
 - Manage tool permissions, pricing, secrets, versions, or owner controls: \`/admin/tools/:id\`
-- Inspect a public tool UI, widget, pricing, or trust card: \`/tools/:slug\`
+- Inspect a public tool UI, pricing, or trust card: \`/tools/:slug\`
 - Show API/OpenAPI docs: \`/api/launch/openapi.json\`
 - Show platform skills/docs to another agent: \`/api/skills\`
 
-When a discovery result includes \`matched_subject.next_action\`, prefer that action: call a matched function, pull a matched skill, open a matched widget, or inspect the tool before guessing.
+When a discovery result includes \`matched_subject.next_action\`, prefer that action: call a matched function or inspect the tool before guessing.
 
-## First-Class Skills
+## Skills As Functions
 
-Skills live beside functions in \`manifest.json\`. A function executes Worker code; a skill is semantic context that an agent can discover and pull into its own context. Pulling a skill may charge Light, but it does not run a Worker function.
-
-Manifest shape: \`"skills": { "context": { "name": "Research Context", "description": "Short public description", "semantic_description": "Discovery text for agents", "preview": "Safe teaser shown before purchase", "resource": "skills.md", "format": "markdown" } }\`.
-
-Use skill pulls when the agent needs full instructions, domain context, examples, or private implementation guidance. Public discovery may show the skill name, description, semantic description, preview, price, and pull URL; paid full bodies stay behind the pull action.
-
-Pricing: \`ul.set({ default_skill_pull_price_light, default_free_skill_pulls, skill_prices })\` charges for full-context retrieval. It is separate from function call pricing and from Worker execution.
+Skills are a convention, not a separate primitive. An Agent MAY export a skills-index function, e.g. \`skills_index(args: {})\` returning \`{ skills: [{ id, name, description }] }\`, plus a reader \`skill_reader(args: { skill_id: string })\` returning \`{ id, content, format: "markdown" }\`. Full skill text is priced like any other function via per-function pricing (\`function_prices\` / \`free_calls\`). Generated skills.md function docs are always free.
 
 ## Platform Tools (19)
 
@@ -3149,7 +3100,7 @@ Find and explore apps.
 - \`scope: "inspect"\` — Deep introspection: full skills doc, storage architecture, KV keys, cached summary, permissions, suggested queries. Requires \`app_id\`.
 - \`scope: "library"\` — Your owned + saved apps. Without \`query\`: full Library.md + memory.md. With \`query\`: semantic search (matches app names, descriptions, function signatures, capabilities).
 - \`scope: "appstore"\` — All published apps. With \`query\`: semantic search across all public apps. Results include \`runtime\` ("deno" or "gpu") and \`gpu_type\` for GPU apps. Use \`task\` for context-aware knowledge retrieval — auto-includes pages and returns inline markdown content (first 2KB) for top page matches.
-- \`surfaces: ["widget", "command_card"]\` — Include dashboard-ready widgets/cards alongside app results. Command cards are read-only native cards that open the full widget.
+- \`surfaces: ["command_card"]\` — Include dashboard-ready command cards alongside app results. Command cards are read-only native cards.
 
 ### ul.command({ action, ... })
 Natural-language Command dashboard primitive.
@@ -3198,14 +3149,13 @@ Test code in sandbox without deploying.
 - Returns: \`{ success, result?, error?, duration_ms, exports, logs?, lint? }\`.
 - Always test before \`ul.upload\`.
 
-### ul.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_light?, default_free_calls?, free_calls_scope?, function_prices?, default_skill_pull_price_light?, default_free_skill_pulls?, skill_prices?, gpu_pricing_config?, search_hints?, show_metrics? })
+### ul.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_light?, default_free_calls?, free_calls_scope?, function_prices?, gpu_pricing_config?, search_hints?, show_metrics? })
 Batch configure app settings. Each field is optional — only provided fields are updated.
 - \`version\`: set which version is live
 - \`visibility\`: "private" | "unlisted" | "published" (published = app store)
 - \`supabase_server\`: assign Bring Your Own Supabase server (or null to unassign)
 - Rate limits: \`calls_per_minute\`, \`calls_per_day\` (null = platform defaults)
 - Pricing: \`default_price_light\`, \`function_prices: { "fn_name": light }\` or \`{ "fn_name": { price_light, free_calls? } }\`
-- Skill pricing: \`default_skill_pull_price_light\`, \`skill_prices: { "context": light }\` or \`{ "context": { price_light, free_pulls? } }\`. Skill pricing charges agents for pulling full context, not for Worker execution.
 - GPU pricing: \`gpu_pricing_config\` adds the developer fee only. GPU compute pass-through is always charged separately.
 - Free preview: \`default_free_calls\` (number of free calls per user before charging), \`free_calls_scope\`: "function" (each function counted separately) or "app" (shared counter across all functions)
 - \`search_hints\`: array of keywords for better semantic search discovery. Regenerates embedding.
@@ -3250,13 +3200,13 @@ View call logs and health events.
 
 **Workflow:** \`ul.download\` (scaffold) → implement → \`ul.test\` → \`ul.upload\` → \`ul.set\`
 
-**Always include a manifest.json** alongside index.ts. The manifest enables per-function and per-skill pricing in the dashboard, typed parameter schemas for better agent tool use, permission grants, Settings surfaces on public app pages, and a declared \`access_policy\` hook for custom-coded permission/monetization logic. Without it, functions are auto-detected from exports but lack parameter/return metadata. Structure: \`{ "functions": { "fnName": { "description": "...", "parameters": { "paramName": { "type": "string", "required": true, "description": "What this param does" } } } }, "skills": { "context": { "description": "...", "semantic_description": "...", "resource": "skills.md", "format": "markdown" } }, "access_policy": { "mode": "module", "module": "policy.ts", "export": "planAccess" }, "env_vars": { "MY_KEY": { "scope": "per_user", "input": "password", "description": "..." } } }\`. Parameters must be an object keyed by parameter name (NOT an array). \`access_policy.module\` records the source file, and \`access_policy.export\` must be exported from the bundled app entry surface, e.g. \`export { planAccess } from "./policy.ts";\`. Policy functions receive \`{ app, caller, subject, input, metadata, static }\` and return \`{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }\` or \`{ effect: "deny", reason }\`. \`ul.download\` scaffolds the base manifest automatically.
+**Always include a manifest.json** alongside index.ts. The manifest enables per-function pricing in the dashboard, typed parameter schemas for better agent tool use, permission grants, Settings surfaces on public app pages, and a declared \`access_policy\` hook for custom-coded permission/monetization logic. Without it, functions are auto-detected from exports but lack parameter/return metadata. Structure: \`{ "functions": { "fnName": { "description": "...", "parameters": { "paramName": { "type": "string", "required": true, "description": "What this param does" } } } }, "access_policy": { "mode": "module", "module": "policy.ts", "export": "planAccess" }, "env_vars": { "MY_KEY": { "scope": "per_user", "input": "password", "description": "..." } } }\`. Parameters must be an object keyed by parameter name (NOT an array). \`access_policy.module\` records the source file, and \`access_policy.export\` must be exported from the bundled app entry surface, e.g. \`export { planAccess } from "./policy.ts";\`. Policy functions receive \`{ app, caller, subject, input, metadata, static }\` and return \`{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }\` or \`{ effect: "deny", reason }\`. \`ul.download\` scaffolds the base manifest automatically.
 
 ### Programmable Permissions and Monetization
 
 Use \`ul.download({ name, description, policy: true })\` to scaffold \`policy.ts\` plus the manifest \`access_policy\` hook. Export it from the bundled entry surface with \`export { planAccess } from "./policy.ts";\`.
 
-The policy function is the custom code path for both functions and first-class skills. It receives \`{ app, caller, subject, input, metadata, static }\`, where \`subject\` identifies the requested function or skill and \`static\` contains the manifest/dashboard pricing defaults. Return \`{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }\` to customize price/quota/metadata, or \`{ effect: "deny", reason }\` to block. Static manifest pricing remains the fallback when no policy hook is configured.
+The policy function is the custom code path for functions. It receives \`{ app, caller, subject, input, metadata, static }\`, where \`subject\` identifies the requested function and \`static\` contains the manifest/dashboard pricing defaults. Return \`{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }\` to customize price/quota/metadata, or \`{ effect: "deny", reason }\` to block. Static manifest pricing remains the fallback when no policy hook is configured.
 
 ### Critical Rules
 1. **FUNCTION SIGNATURE:** Single args object. \`function search(args: { query: string })\` NOT \`function search(query: string)\`. The sandbox passes args as a single object.
@@ -4253,10 +4203,7 @@ async function handleToolsCall(
           toolArgs.default_price_light !== undefined ||
           toolArgs.function_prices !== undefined ||
           toolArgs.default_free_calls !== undefined ||
-          toolArgs.free_calls_scope !== undefined ||
-          toolArgs.default_skill_pull_price_light !== undefined ||
-          toolArgs.default_free_skill_pulls !== undefined ||
-          toolArgs.skill_prices !== undefined
+          toolArgs.free_calls_scope !== undefined
         ) {
           setResults.pricing = await executeSetPricing(userId, {
             app_id: toolArgs.app_id,
@@ -4264,10 +4211,6 @@ async function handleToolsCall(
             functions: toolArgs.function_prices,
             default_free_calls: toolArgs.default_free_calls,
             free_calls_scope: toolArgs.free_calls_scope,
-            default_skill_pull_price_light:
-              toolArgs.default_skill_pull_price_light,
-            default_free_skill_pulls: toolArgs.default_free_skill_pulls,
-            skills: toolArgs.skill_prices,
           });
           setCount++;
         }
@@ -8882,9 +8825,9 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
     "    };",
     "  }",
     "",
-    "  // Start by preserving dashboard/static pricing for functions and skills.",
+    "  // Start by preserving dashboard/static pricing for functions.",
     "  // Replace or branch here for custom discounts, denials, free quotas,",
-    "  // promotions, per-customer rules, or paid skill context pulls.",
+    "  // promotions, or per-customer rules.",
     "  return {",
     '    effect: "allow",',
     "    price_light: policy.static.price_light,",
@@ -8944,7 +8887,7 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
         : null,
       "Replace the placeholder scaffoldResponse() logic in index.ts with real application behavior.",
       includePolicy
-        ? "Edit policy.ts to customize function and skill pricing, free quotas, denials, and policy metadata."
+        ? "Edit policy.ts to customize function pricing, free quotas, denials, and policy metadata."
         : null,
       'Run each function with ul.test({ files: [...], function_name: "...", test_args: {...} }).',
       "Run ul.test({ files: [...], lint_only: true }) before you upload.",
@@ -10169,30 +10112,18 @@ async function executeSetPricing(
 
   const defaultPrice = args.default_price_light as number | null | undefined;
   const defaultFreeCalls = args.default_free_calls as number | null | undefined;
-  const defaultSkillPullPrice = args.default_skill_pull_price_light as
-    | number
-    | null
-    | undefined;
-  const defaultFreeSkillPulls = args.default_free_skill_pulls as
-    | number
-    | null
-    | undefined;
   const freeCallsScope = args.free_calls_scope as
     | AppPricingConfig["free_calls_scope"]
     | null
     | undefined;
   const functions = args.functions;
-  const skills = args.skills;
 
   // If all are null/undefined, clear pricing entirely
   if (
     (defaultPrice === null || defaultPrice === undefined) &&
     (functions === null || functions === undefined) &&
     (defaultFreeCalls === null || defaultFreeCalls === undefined) &&
-    (freeCallsScope === null || freeCallsScope === undefined) &&
-    (defaultSkillPullPrice === null || defaultSkillPullPrice === undefined) &&
-    (defaultFreeSkillPulls === null || defaultFreeSkillPulls === undefined) &&
-    (skills === null || skills === undefined)
+    (freeCallsScope === null || freeCallsScope === undefined)
   ) {
     const patchRes = await fetch(
       `${SUPABASE_URL}/rest/v1/apps?id=eq.${app.id}`,
@@ -10218,7 +10149,7 @@ async function executeSetPricing(
     return {
       app_id: app.id,
       pricing_config: null,
-      message: "Pricing removed. All functions and skills are now free.",
+      message: "Pricing removed. All functions are now free.",
     };
   }
 
@@ -10245,29 +10176,6 @@ async function executeSetPricing(
       );
     }
     config.default_free_calls = defaultFreeCalls;
-  }
-
-  if (defaultSkillPullPrice !== undefined && defaultSkillPullPrice !== null) {
-    if (defaultSkillPullPrice < 0 || defaultSkillPullPrice > 10000) {
-      throw new ToolError(
-        INVALID_PARAMS,
-        "default_skill_pull_price_light must be 0-10000 (max ✦10,000 per pull)",
-      );
-    }
-    config.default_skill_pull_price_light = defaultSkillPullPrice;
-  }
-
-  if (defaultFreeSkillPulls !== undefined && defaultFreeSkillPulls !== null) {
-    if (
-      defaultFreeSkillPulls < 0 || defaultFreeSkillPulls > 1000000 ||
-      !Number.isInteger(defaultFreeSkillPulls)
-    ) {
-      throw new ToolError(
-        INVALID_PARAMS,
-        "default_free_skill_pulls must be a non-negative integer up to 1,000,000",
-      );
-    }
-    config.default_free_skill_pulls = defaultFreeSkillPulls;
   }
 
   if (freeCallsScope !== undefined && freeCallsScope !== null) {
@@ -10309,35 +10217,6 @@ async function executeSetPricing(
     config.functions = validatedFunctions;
   }
 
-  if (skills !== undefined && skills !== null) {
-    if (!isRecord(skills)) {
-      throw new ToolError(
-        INVALID_PARAMS,
-        "skills must be an object { skillId: light } or { skillId: { price_light, free_pulls? } }",
-      );
-    }
-    const validatedSkills: NonNullable<AppPricingConfig["skills"]> = {};
-    for (const [skill, val] of Object.entries(skills)) {
-      if (typeof val === "number") {
-        if (val < 0 || val > 10000) {
-          throw new ToolError(
-            INVALID_PARAMS,
-            `Skill price for "${skill}" must be 0-10000 Light`,
-          );
-        }
-        validatedSkills[skill] = val;
-      } else if (isSkillPricing(val)) {
-        validatedSkills[skill] = val;
-      } else {
-        throw new ToolError(
-          INVALID_PARAMS,
-          `Skill price for "${skill}" must be a number or { price_light, free_pulls? }`,
-        );
-      }
-    }
-    config.skills = validatedSkills;
-  }
-
   const patchRes = await fetch(`${SUPABASE_URL}/rest/v1/apps?id=eq.${app.id}`, {
     method: "PATCH",
     headers: {
@@ -10366,14 +10245,6 @@ async function executeSetPricing(
   if (config.default_free_calls) {
     parts.push(`${config.default_free_calls} free calls per user`);
   }
-  if (config.default_skill_pull_price_light) {
-    parts.push(
-      `default skill context: ${config.default_skill_pull_price_light}✦/pull`,
-    );
-  }
-  if (config.default_free_skill_pulls) {
-    parts.push(`${config.default_free_skill_pulls} free skill pulls per user`);
-  }
   if (config.free_calls_scope === "app") {
     parts.push("free calls shared across all functions");
   }
@@ -10389,26 +10260,11 @@ async function executeSetPricing(
       }
     }
   }
-  if (config.skills) {
-    for (const [skill, val] of Object.entries(config.skills)) {
-      if (typeof val === "number") {
-        parts.push(`${skill}: ${val}✦/skill pull`);
-      } else {
-        const sp = val;
-        const spParts = [`${sp.price_light}✦/skill pull`];
-        if (sp.free_pulls) spParts.push(`${sp.free_pulls} free`);
-        parts.push(`${skill}: ${spParts.join(", ")}`);
-      }
-    }
-  }
-
   return {
     app_id: app.id,
     pricing_config: config,
     message: parts.length > 0
-      ? `Pricing set: ${
-        parts.join(", ")
-      }. Callers and skill-pulling agents will be charged in Light.`
+      ? `Pricing set: ${parts.join(", ")}. Callers will be charged in Light.`
       : "Pricing set but all prices are 0 (free).",
   };
 }

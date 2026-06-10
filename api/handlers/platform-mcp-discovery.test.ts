@@ -103,8 +103,7 @@ Deno.test("platform MCP appstore discovery returns subject-level function call h
         assertEquals(body.p_subject_types, [
           "app",
           "function",
-          "skill",
-          "widget",
+          "platform_primitive",
         ]);
         return jsonResponse([{
           embedding_id: "embedding-1",
@@ -180,6 +179,104 @@ Deno.test("platform MCP appstore discovery returns subject-level function call h
 
       if (url.startsWith("https://supabase.test/rest/v1/app_impressions")) {
         return jsonResponse([]);
+      }
+
+      return jsonResponse([]);
+    },
+  );
+});
+
+Deno.test("platform MCP appstore discovery falls back to inspect_tool for legacy skill subjects", async () => {
+  await withPlatformDiscoverEnv(
+    async () => {
+      const result = await executeDiscoverAppstore(USER_ID, {
+        query: "citation context",
+        limit: 1,
+        types: ["app"],
+      }) as {
+        mode: string;
+        results: Array<{
+          id: string;
+          matched_subject?: {
+            type: string;
+            id: string;
+            next_action?: {
+              kind: string;
+              endpoint?: string;
+            };
+          };
+        }>;
+      };
+
+      assertEquals(result.mode, "search");
+      assertEquals(result.results[0].id, "app-1");
+      assertEquals(result.results[0].matched_subject?.type, "skill");
+      assertEquals(result.results[0].matched_subject?.id, "context");
+      assertEquals(
+        result.results[0].matched_subject?.next_action?.kind,
+        "inspect_tool",
+      );
+      assertEquals(
+        result.results[0].matched_subject?.next_action?.endpoint,
+        "/mcp/app-1",
+      );
+    },
+    async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+
+      if (url === "https://openrouter.ai/api/v1/embeddings") {
+        return jsonResponse({
+          data: [{ embedding: [1, 0], index: 0 }],
+          model: "test-embedding",
+          usage: { prompt_tokens: 1, total_tokens: 1 },
+        });
+      }
+
+      if (
+        url ===
+          "https://supabase.test/rest/v1/rpc/search_tool_semantic_embeddings"
+      ) {
+        return jsonResponse([{
+          embedding_id: "embedding-1",
+          app_id: "app-1",
+          app_version: "v1",
+          subject_type: "skill",
+          subject_id: "skill:context",
+          subject_label: "Research context",
+          embedding_text: "Skill preview metadata only.",
+          embedding_text_hash: "hash-1",
+          model: "test-embedding",
+          provider: "openrouter",
+          embedding_charge_id: "charge-1",
+          status: "ready",
+          metadata: {
+            label: "Research context",
+            description: "Paid research planning context.",
+          },
+          similarity: 0.93,
+          app_name: "Research Helper",
+          app_slug: "research-helper",
+          app_description: "Plans citation-heavy research.",
+          app_owner_id: "owner-1",
+          app_visibility: "public",
+          app_current_version: "v1",
+        }]);
+      }
+
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
+        return jsonResponse([{
+          id: "app-1",
+          name: "Research Helper",
+          slug: "research-helper",
+          env_schema: {},
+          manifest: {},
+          current_version: "v1",
+          version_metadata: [],
+          runtime: "deno",
+          visibility: "public",
+          download_access: "public",
+          had_external_db: false,
+        }]);
       }
 
       return jsonResponse([]);

@@ -100,11 +100,9 @@ interface DiscoveryMatchedSubject {
   semantic_description?: string | null;
   preview?: string | null;
   next_action?: {
-    kind: "inspect_tool" | "call_function" | "pull_skill" | "open_widget";
+    kind: "inspect_tool" | "call_function";
     endpoint?: string;
     function_name?: string;
-    skill_id?: string;
-    widget_id?: string;
   };
 }
 
@@ -275,7 +273,6 @@ function buildMatchedSubject(
 
   const metadata = match.metadata || {};
   const subjectName = stripSubjectPrefix(match.subject_type, match.subject_id);
-  const encodedTool = encodeURIComponent(app.slug || app.id);
   const matched: DiscoveryMatchedSubject = {
     source: "tool_semantic_embedding",
     type: match.subject_type,
@@ -293,21 +290,6 @@ function buildMatchedSubject(
       kind: "call_function",
       endpoint: `/mcp/${app.id}`,
       function_name: readString(metadata.name) || subjectName,
-    };
-  } else if (match.subject_type === "skill") {
-    matched.next_action = {
-      kind: "pull_skill",
-      endpoint: `/api/launch/tools/${encodedTool}/skills/${
-        encodeURIComponent(subjectName)
-      }/pull`,
-      skill_id: subjectName,
-    };
-  } else if (match.subject_type === "widget") {
-    const widgetId = readString(metadata.widget_id) || subjectName;
-    matched.next_action = {
-      kind: "open_widget",
-      endpoint: `/tools/${encodedTool}?widget=${encodeURIComponent(widgetId)}`,
-      widget_id: widgetId,
     };
   } else {
     matched.next_action = {

@@ -16,7 +16,6 @@ import {
   type LaunchPlatformPrimitivesResponse,
   type LaunchToolAdminResponse,
   type LaunchToolResponse,
-  type LaunchToolWidgetsResponse,
   type LaunchWalletResponse,
 } from "./api";
 import type { ResolvedLaunchRoute } from "./routes";
@@ -32,7 +31,6 @@ export interface LaunchRouteLiveData {
   feeLeaderboard?: LaunchLeaderboardResponse;
   library?: LaunchLibraryResponse;
   tool?: LaunchToolResponse;
-  toolWidgets?: LaunchToolWidgetsResponse;
   toolFunctions?: LaunchToolFunctionsResponse;
   toolAgentPermissions?: LaunchAgentFunctionPermissionsResponse;
   wallet?: LaunchWalletResponse;
@@ -112,7 +110,7 @@ async function loadRouteData(
         optional(() => launchApi.status()),
         optional(() => launchApi.install()),
         optional(() => launchApi.platformPrimitives()),
-        optional(() => launchApi.store({ includeWidgets: true, limit: 6 })),
+        optional(() => launchApi.store({ limit: 6 })),
       ]);
       return { status, install, platformPrimitives: primitives, store };
     }
@@ -126,7 +124,6 @@ async function loadRouteData(
     }
     case "store": {
       const request: LaunchStoreRequest = {
-        includeWidgets: true,
         kind: storeKind(search.get("kind")),
         limit: 24,
         query: search.get("q") || undefined,
@@ -141,14 +138,12 @@ async function loadRouteData(
     case "tool": {
       const id = route.params.slug || "";
       if (!id) return {};
-      const [tool, toolWidgets, toolFunctions, toolAgentPermissions] =
-        await Promise.all([
-          launchApi.tool(id),
-          optional(() => launchApi.toolWidgets(id)),
-          optional(() => launchApi.toolFunctions(id)),
-          optional(() => launchApi.toolAgentPermissions(id)),
-        ]);
-      return { tool, toolAgentPermissions, toolFunctions, toolWidgets };
+      const [tool, toolFunctions, toolAgentPermissions] = await Promise.all([
+        launchApi.tool(id),
+        optional(() => launchApi.toolFunctions(id)),
+        optional(() => launchApi.toolAgentPermissions(id)),
+      ]);
+      return { tool, toolAgentPermissions, toolFunctions };
     }
     case "library": {
       return { library: await launchApi.library() };

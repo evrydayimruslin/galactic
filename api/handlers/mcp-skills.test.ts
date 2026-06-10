@@ -7,7 +7,7 @@ const APP_ID = 'skill-app';
 const OWNER_ID = '11111111-1111-4111-8111-111111111111';
 const CALLER_ID = '22222222-2222-4222-8222-222222222222';
 const CALLER_TOKEN = 'caller-token';
-const SECRET_SKILL_BODY = 'SECRET_FULL_SKILL_CONTEXT';
+const FULL_SKILL_BODY = 'FULL_SKILL_CONTEXT_BODY';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -35,17 +35,6 @@ async function parseJson(response: Response): Promise<Record<string, unknown>> {
   return await response.json() as Record<string, unknown>;
 }
 
-async function parseToolJson(
-  response: Response,
-): Promise<Record<string, unknown>> {
-  const payload = await parseJson(response);
-  const result = payload.result as {
-    content: Array<{ type: string; text?: string }>;
-  };
-  const text = result.content.find((entry) => entry.type === 'text')?.text;
-  return JSON.parse(text || '{}') as Record<string, unknown>;
-}
-
 function installMcpSkillHarness(): () => void {
   const originalFetch = globalThis.fetch;
   const originalEnv = globalThis.__env
@@ -62,13 +51,20 @@ function installMcpSkillHarness(): () => void {
     runtime: 'deno',
     app_type: 'mcp',
     storage_key: 'apps/paid-skill',
-    skills_md: `# Paid Skill\n\n${SECRET_SKILL_BODY}`,
+    skills_md: `# Paid Skill\n\n${FULL_SKILL_BODY}`,
     manifest: JSON.stringify({
       name: 'Paid Skill',
       version: '1.0.0',
       type: 'mcp',
       entry: { functions: 'index.ts' },
-      functions: {},
+      functions: {
+        summarize_billing: {
+          description: 'Summarize launch billing behavior.',
+          parameters: {},
+        },
+      },
+      // Legacy manifest skill declarations are still valid manifest input,
+      // but no longer gate skills_md behind a monetized preview.
       skills: {
         context: {
           name: 'Launch billing context',
@@ -79,6 +75,7 @@ function installMcpSkillHarness(): () => void {
         },
       },
     }),
+    // Legacy monetized skill-pull pricing must no longer gate documentation.
     pricing_config: {
       default_price_light: 0,
       default_skill_pull_price_light: 25,
@@ -145,25 +142,6 @@ function installMcpSkillHarness(): () => void {
       return jsonResponse([{ current_count: 1 }]);
     }
 
-    if (url.pathname === '/rest/v1/rpc/transfer_light') {
-      return jsonResponse([{
-        platform_fee: 4,
-        transfer_id: 'transfer-1',
-        fee_would_have_been: 4,
-        fee_waived: 0,
-        waiver_source: null,
-        waiver_event_id: null,
-      }]);
-    }
-
-    if (url.pathname === '/rest/v1/rpc/record_skill_pull_receipt') {
-      return jsonResponse([{
-        receipt_id: 'receipt-1',
-        transfer_id: 'transfer-1',
-        waiver_event_id: null,
-      }]);
-    }
-
     throw new Error(`Unexpected ${method} ${url.pathname}${url.search}`);
   }) as typeof fetch;
 
@@ -175,17 +153,40 @@ function installMcpSkillHarness(): () => void {
   };
 }
 
-Deno.test('MCP monetized skills expose previews and gate full context behind pullSkill', async () => {
+Deno.test('MCP tools/list no longer exposes skill SDK tools', async () => {
   const cleanup = installMcpSkillHarness();
   try {
+    const toolsPayload = await parseJson(
+      await handleMcp(mcpRequest('tools/list'), APP_ID),
+    );
+    const tools = (toolsPayload.result as Record<string, unknown>)
+      .tools as Array<{ name: string }>;
+    const toolNames = tools.map((tool) => tool.name);
+
+    assertEquals(toolNames.includes('ultralight.getSkills'), false);
+    assertEquals(toolNames.includes('ultralight.pullSkill'), false);
+    // App functions and the rest of the SDK surface remain available.
+    assertEquals(toolNames.includes('paid-skill_summarize_billing'), true);
+    assertEquals(toolNames.includes('ultralight.store'), true);
+  } finally {
+    cleanup();
+  }
+});
+
+Deno.test('MCP serves full skills_md for free with no preview gating', async () => {
+  const cleanup = installMcpSkillHarness();
+  try {
+    // initialize: skills_md is always inlined in full.
     const initPayload = await parseJson(
       await handleMcp(mcpRequest('initialize'), APP_ID),
     );
     const instructions = ((initPayload.result as Record<string, unknown>)
       .instructions || '') as string;
-    assertEquals(instructions.includes(SECRET_SKILL_BODY), false);
-    assertStringIncludes(instructions, 'ultralight.pullSkill');
+    assertStringIncludes(instructions, FULL_SKILL_BODY);
+    assertEquals(instructions.includes('ultralight.pullSkill'), false);
+    assertEquals(instructions.includes('ultralight.getSkills'), false);
 
+    // resources/read skills.md: full content, no payment required.
     const resourcePayload = await parseJson(
       await handleMcp(
         mcpRequest('resources/read', {
@@ -194,40 +195,49 @@ Deno.test('MCP monetized skills expose previews and gate full context behind pul
         APP_ID,
       ),
     );
-    const resourceText = ((resourcePayload.result as Record<string, unknown>).contents as Array<
-      { text?: string }
-    >)[0].text || '';
-    assertEquals(resourceText.includes(SECRET_SKILL_BODY), false);
-    assertStringIncludes(resourceText, 'ultralight.pullSkill');
+    const resourceText = ((resourcePayload.result as Record<string, unknown>)
+      .contents as Array<{ text?: string }>)[0].text || '';
+    assertStringIncludes(resourceText, FULL_SKILL_BODY);
+    assertEquals(resourceText.includes('ultralight.pullSkill'), false);
 
-    const skillsResult = await parseToolJson(
+    // resources/read skills.json: discovery payload no longer references
+    // pull tooling or pricing.
+    const discoveryPayload = await parseJson(
       await handleMcp(
-        mcpRequest('tools/call', {
-          name: 'ultralight.getSkills',
-          arguments: {},
+        mcpRequest('resources/read', {
+          uri: `ultralight://app/${APP_ID}/skills.json`,
         }),
         APP_ID,
       ),
     );
-    assertEquals(skillsResult.skills_md, null);
+    const discoveryText = ((discoveryPayload.result as Record<string, unknown>)
+      .contents as Array<{ text?: string }>)[0].text || '';
+    assertEquals(discoveryText.includes('ultralight.pullSkill'), false);
+    const discovery = JSON.parse(discoveryText) as Record<string, unknown>;
+    assertEquals(discovery.app_id, APP_ID);
     assertEquals(
-      (skillsResult.preview_md as string).includes(SECRET_SKILL_BODY),
-      false,
+      discovery.skills_md_resource_uri,
+      `ultralight://app/${APP_ID}/skills.md`,
     );
-    assertEquals(skillsResult.full_context_requires_pull, true);
+  } finally {
+    cleanup();
+  }
+});
 
-    const pullResult = await parseToolJson(
-      await handleMcp(
-        mcpRequest('tools/call', {
-          name: 'ultralight.pullSkill',
-          arguments: { skill_id: 'context' },
-        }),
-        APP_ID,
-      ),
-    );
-    assertStringIncludes(pullResult.content as string, SECRET_SKILL_BODY);
-    assertEquals(pullResult.charged_light, 25);
-    assertEquals(pullResult.receipt_id, 'receipt-1');
+Deno.test('MCP tools/call rejects removed skill SDK tools', async () => {
+  const cleanup = installMcpSkillHarness();
+  try {
+    for (const name of ['ultralight.getSkills', 'ultralight.pullSkill']) {
+      const payload = await parseJson(
+        await handleMcp(
+          mcpRequest('tools/call', { name, arguments: {} }),
+          APP_ID,
+        ),
+      );
+      const rpcError = payload.error as { message?: string } | undefined;
+      assertEquals(payload.result, undefined);
+      assertStringIncludes(rpcError?.message || '', 'Unknown SDK tool');
+    }
   } finally {
     cleanup();
   }

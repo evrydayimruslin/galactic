@@ -14,9 +14,23 @@ const CORE_GUIDANCE = [
   "`/tools/:slug`",
   "`/api/launch/openapi.json`",
   "`/api/skills`",
-  "Pulling a skill may charge Light, but it does not run a Worker function",
+  "## Skills As Functions",
+  "`skills_index(args: {})`",
+  "`skill_reader(args: { skill_id: string })`",
+  "Generated skills.md function docs are always free",
   "`ul.download({ name, description, policy: true })`",
-  "custom code path for both functions and first-class skills",
+  "custom code path for functions",
+];
+
+// First-class skills and widgets are off the launch surface: the docs must not
+// teach skill pulls, skill pricing, or widget discovery actions.
+const RETIRED_GUIDANCE = [
+  "First-Class Skills",
+  "pull_skill",
+  "open_widget",
+  "default_skill_pull_price_light",
+  "default_free_skill_pulls",
+  "skill_prices",
 ];
 
 function jsonResponse(value: unknown): Response {
@@ -105,6 +119,13 @@ async function withPlatformDocsEnv<T>(fn: () => Promise<T>): Promise<T> {
 function assertCoreGuidance(text: string): void {
   for (const expected of CORE_GUIDANCE) {
     assertStringIncludes(text, expected);
+  }
+  for (const retired of RETIRED_GUIDANCE) {
+    assertEquals(
+      text.includes(retired),
+      false,
+      `docs must not mention "${retired}"`,
+    );
   }
 }
 

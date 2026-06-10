@@ -76,10 +76,6 @@ jobs:
         working-directory: .
         run: node scripts/checks/check-contract-guardrails.mjs
 
-      - name: Widget contract guardrails
-        working-directory: .
-        run: node scripts/checks/check-widget-contracts.mjs
-
       - name: Unused-code baseline
         run: npm run analyze:unused
 

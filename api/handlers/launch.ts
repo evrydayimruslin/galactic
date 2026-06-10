@@ -16,10 +16,7 @@ import {
 import { buildAppTrustCard } from "../services/trust.ts";
 import { RequestValidationError } from "../services/request-validation.ts";
 import { createEmbeddingService } from "../services/embedding.ts";
-import {
-  createExecutionReceiptId,
-  getRecentCalls,
-} from "../services/call-logger.ts";
+import { getRecentCalls } from "../services/call-logger.ts";
 import {
   type ApiToken,
   createToken,
@@ -60,15 +57,12 @@ import {
   type LaunchPublicRoute,
   type LaunchRelevanceSummary,
   type LaunchSemanticSubjectType,
-  type LaunchSkillPullResponse,
-  type LaunchSkillSummary,
   type LaunchToolAdminSummary,
   type LaunchToolFunctionsResponse,
   type LaunchToolInstallContext,
   type LaunchToolKind,
   type LaunchToolOwnerSummary,
   type LaunchToolRelationship,
-  type LaunchToolSkillsResponse,
   type LaunchToolSummary,
   type LaunchToolVisibility,
   type LaunchTrustCard,
@@ -83,11 +77,8 @@ import {
   type LaunchWalletReceiptSummary,
   type LaunchWalletSummary,
   type LaunchWalletTransaction,
-  type LaunchWidgetDetail,
-  type LaunchWidgetSummary,
 } from "../../shared/contracts/launch.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
-import type { WidgetDeclaration } from "../../shared/contracts/widget.ts";
 import type { RunResponse } from "../../shared/types/index.ts";
 import {
   type BillingAddressInput,
@@ -113,11 +104,6 @@ import {
   listAgentFunctionPermissions,
   updateAgentFunctionPermissions,
 } from "../services/agent-function-permissions.ts";
-import {
-  listAppSkills,
-  pullSkillContext,
-  SkillPullBillingError,
-} from "../services/skill-pulls.ts";
 import { resolveManifestAccessPolicy } from "../services/access-policy.ts";
 
 const APP_SELECT = [
@@ -132,7 +118,6 @@ const APP_SELECT = [
   "current_version",
   "manifest",
   "exports",
-  "skills_md",
   "pricing_config",
   "gpu_pricing_config",
   "runtime",
@@ -182,7 +167,6 @@ interface LaunchAppRow {
   current_version?: string | null;
   manifest?: unknown;
   exports?: string[] | null;
-  skills_md?: string | null;
   pricing_config?: unknown;
   gpu_pricing_config?: unknown;
   runtime?: string | null;
@@ -319,7 +303,6 @@ interface ToolMapOptions {
   owners: Map<string, LaunchToolOwnerSummary>;
   viewerId?: string | null;
   installedIds?: Set<string>;
-  includeWidgets?: boolean;
 }
 
 interface PrimitiveMetadata {
@@ -376,7 +359,7 @@ const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
   },
   store: {
     label: "Store",
-    description: "Find public agent-native tools and widget surfaces.",
+    description: "Find public agent-native tools.",
     route: "/store",
     apiRoute: "GET /api/launch/store",
   },
@@ -406,15 +389,9 @@ const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
   },
   owner_admin: {
     label: "Owner admin",
-    description: "Manage visibility, pricing, widgets, logs, and receipts.",
+    description: "Manage visibility, pricing, logs, and receipts.",
     route: "/admin/tools/:id",
     apiRoute: "GET /api/launch/admin/tools/:id",
-  },
-  widgets: {
-    label: "Widgets",
-    description: "Open public UI surfaces attached to tools.",
-    route: "/tools/:slug",
-    apiRoute: "GET /api/launch/tools/:id/widgets",
   },
 };
 
@@ -460,31 +437,6 @@ export async function handleLaunch(request: Request): Promise<Response> {
         request,
         functionRunMatch[1],
         functionRunMatch[2],
-      );
-    }
-
-    const skillPullMatch = path.match(
-      /^\/api\/launch\/tools\/([^/]+)\/skills\/([^/]+)\/pull$/,
-    );
-    if (skillPullMatch && method === "POST") {
-      return await handleLaunchSkillPull(
-        request,
-        skillPullMatch[1],
-        skillPullMatch[2],
-      );
-    }
-
-    const widgetRenderMatch = path.match(
-      /^\/api\/launch\/tools\/([^/]+)\/widgets\/([^/]+)\/render$/,
-    );
-    if (widgetRenderMatch) {
-      if (method !== "POST") {
-        return error("Method not allowed for launch widget render", 405);
-      }
-      return await handleLaunchWidgetRender(
-        request,
-        widgetRenderMatch[1],
-        widgetRenderMatch[2],
       );
     }
 
@@ -563,29 +515,6 @@ export async function handleLaunch(request: Request): Promise<Response> {
       return await handleLaunchToolFunctions(request, functionsMatch[1]);
     }
 
-    const skillsMatch = path.match(
-      /^\/api\/launch\/tools\/([^/]+)\/skills$/,
-    );
-    if (skillsMatch) {
-      return await handleLaunchToolSkills(request, skillsMatch[1]);
-    }
-
-    const widgetDetailMatch = path.match(
-      /^\/api\/launch\/tools\/([^/]+)\/widgets\/([^/]+)$/,
-    );
-    if (widgetDetailMatch) {
-      return await handleLaunchWidgetDetail(
-        request,
-        widgetDetailMatch[1],
-        widgetDetailMatch[2],
-      );
-    }
-
-    const widgetsMatch = path.match(/^\/api\/launch\/tools\/([^/]+)\/widgets$/);
-    if (widgetsMatch) {
-      return await handleLaunchToolWidgets(request, widgetsMatch[1]);
-    }
-
     const toolMatch = path.match(/^\/api\/launch\/tools\/([^/]+)$/);
     if (toolMatch) {
       return await handleLaunchTool(request, toolMatch[1]);
@@ -628,12 +557,8 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       store: "/api/launch/store?query={query}",
       discover: "/api/launch/discover?query={query}",
       discoverAlias: "/api/launch/discover?query={query}",
-      widgetDetail: "/api/launch/tools/{id}/widgets/{widgetId}",
-      widgetRender: "/api/launch/tools/{id}/widgets/{widgetId}/render",
       toolFunctions: "/api/launch/tools/{id}/functions",
       functionRun: "/api/launch/tools/{id}/functions/{functionName}/run",
-      toolSkills: "/api/launch/tools/{id}/skills",
-      skillPull: "/api/launch/tools/{id}/skills/{skillId}/pull",
       agentPermissions: "/api/launch/tools/{id}/agent-permissions",
       platformPrimitives: "/api/launch/platform-primitives?q={query}",
       leaderboard: "/api/launch/leaderboard?kind=builder&period=30d",
@@ -654,8 +579,8 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
     externalAgentLoop: [
       "Install Ultralight MCP, CLI, or direct API access.",
       "Browse the store for relevant tools and platform primitives.",
-      "Inspect tool capabilities, pricing, trust, and widgets.",
-      "Call tools through MCP/API and return widget links when UI matters.",
+      "Inspect tool capabilities, pricing, and trust.",
+      "Call tools through MCP/API and return public tool links when UI matters.",
       "Preserve Light receipts and errors in the final response.",
     ],
   };
@@ -686,11 +611,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
         default: "all",
       },
       "Optional tool kind filter",
-    ),
-    queryParam(
-      "includeWidgets",
-      { type: "boolean", default: true },
-      "Include widget summaries in tool results",
     ),
     queryParam(
       "limit",
@@ -728,7 +648,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       operationId: "storeLaunchTools",
       summary: "Browse public launch tools and platform primitives",
       description:
-        "Canonical launch store endpoint. Semantic-first tool retrieval with lexical fallback. Results expose public tool pages, widget surfaces, pricing, owner, and retrieval metadata.",
+        "Canonical launch store endpoint. Semantic-first tool retrieval with lexical fallback. Results expose public tool pages, pricing, owner, and retrieval metadata.",
       parameters: storeParameters,
       responses: storeResponse,
     },
@@ -998,121 +918,12 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           },
         },
       },
-      "/api/launch/tools/{id}/widgets": {
-        get: {
-          operationId: "getLaunchToolWidgets",
-          summary: "List public widget surfaces for a tool",
-          parameters: [{
-            name: "id",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-            description: "Tool id or slug",
-          }],
-          responses: {
-            "200": {
-              description: "Widget surface summaries",
-              content: jsonContent({
-                type: "object",
-                properties: {
-                  tool: { type: "object" },
-                  widgets: {
-                    type: "array",
-                    items: { $ref: "#/components/schemas/WidgetSummary" },
-                  },
-                },
-              }),
-            },
-          },
-        },
-      },
-      "/api/launch/tools/{id}/widgets/{widgetId}": {
-        get: {
-          operationId: "getLaunchWidgetDetail",
-          summary: "Inspect a public widget surface for a tool",
-          parameters: [
-            {
-              name: "id",
-              in: "path",
-              required: true,
-              schema: { type: "string" },
-              description: "Tool id or slug",
-            },
-            {
-              name: "widgetId",
-              in: "path",
-              required: true,
-              schema: { type: "string" },
-              description: "Widget id from the tool manifest",
-            },
-          ],
-          responses: {
-            "200": {
-              description: "Widget detail and render surface",
-              content: jsonContent({
-                type: "object",
-                properties: {
-                  tool: { type: "object" },
-                  widget: { $ref: "#/components/schemas/WidgetDetail" },
-                  generatedAt: { type: "string", format: "date-time" },
-                },
-              }),
-            },
-            "404": { description: "Tool or widget not found" },
-          },
-        },
-      },
-      "/api/launch/tools/{id}/widgets/{widgetId}/render": {
-        post: {
-          operationId: "renderLaunchWidget",
-          summary: "Render a widget UI through the existing app runtime",
-          description:
-            "Authenticated render endpoint. Calls the widget UI function through the existing runtime, billing, secret, and receipt path; website clients should sandbox returned HTML in an iframe.",
-          security: [{ bearerAuth: [] }],
-          parameters: [
-            {
-              name: "id",
-              in: "path",
-              required: true,
-              schema: { type: "string" },
-              description: "Tool id or slug",
-            },
-            {
-              name: "widgetId",
-              in: "path",
-              required: true,
-              schema: { type: "string" },
-              description: "Widget id from the tool manifest",
-            },
-          ],
-          requestBody: {
-            required: false,
-            content: jsonContent({
-              type: "object",
-              properties: {
-                args: { type: "object", additionalProperties: true },
-              },
-            }),
-          },
-          responses: {
-            "200": {
-              description: "Rendered widget HTML payload",
-              content: jsonContent({
-                $ref: "#/components/schemas/WidgetRenderResponse",
-              }),
-            },
-            "401": { description: "Authentication required" },
-            "402": { description: "Light balance required by runtime billing" },
-            "404": { description: "Tool or widget not found" },
-          },
-        },
-      },
       "/api/launch/tools/{id}/functions": {
         get: {
           operationId: "getLaunchToolFunctions",
           summary: "List launch-safe functions for a tool",
           description:
-            "Returns public function metadata, pricing, widget linkage, and the signed-in user's effective external-agent policy when authenticated.",
+            "Returns public function metadata, pricing, and the signed-in user's effective external-agent policy when authenticated.",
           parameters: [{
             name: "id",
             in: "path",
@@ -1173,66 +984,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "401": { description: "Authentication required" },
             "402": { description: "Light balance required by runtime billing" },
             "404": { description: "Tool or function not found" },
-          },
-        },
-      },
-      "/api/launch/tools/{id}/skills": {
-        get: {
-          operationId: "getLaunchToolSkills",
-          summary: "List monetizable skills for a tool",
-          description:
-            "Returns skill context metadata and pull pricing. Pulling a full skill brings context into an agent prompt and does not execute the tool Worker.",
-          parameters: [{
-            name: "id",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-            description: "Tool id or slug",
-          }],
-          responses: {
-            "200": {
-              description: "Tool skill summaries",
-              content: jsonContent({
-                $ref: "#/components/schemas/ToolSkillsResponse",
-              }),
-            },
-            "404": { description: "Tool not found" },
-          },
-        },
-      },
-      "/api/launch/tools/{id}/skills/{skillId}/pull": {
-        post: {
-          operationId: "pullLaunchToolSkill",
-          summary: "Pull full skill context into an agent prompt",
-          description:
-            "Authenticated account-session endpoint. Charges configured skill context pricing and returns the full skill content plus receipt economics.",
-          security: [{ bearerAuth: [] }],
-          parameters: [
-            {
-              name: "id",
-              in: "path",
-              required: true,
-              schema: { type: "string" },
-              description: "Tool id or slug",
-            },
-            {
-              name: "skillId",
-              in: "path",
-              required: true,
-              schema: { type: "string" },
-              description: "Skill id from the tool skills endpoint",
-            },
-          ],
-          responses: {
-            "200": {
-              description: "Skill content and receipt economics",
-              content: jsonContent({
-                $ref: "#/components/schemas/SkillPullResponse",
-              }),
-            },
-            "401": { description: "Authentication required" },
-            "402": { description: "Light balance required by skill pricing" },
-            "404": { description: "Tool or skill not found" },
           },
         },
       },
@@ -1595,7 +1346,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "installUrl",
             "platformMcpUrl",
             "recommendedApiKey",
-            "widgetUrls",
             "agentHandoff",
           ],
           properties: {
@@ -1606,18 +1356,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             platformMcpUrl: { type: "string" },
             recommendedApiKey: {
               $ref: "#/components/schemas/ApiKeyCreateRequest",
-            },
-            widgetUrls: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  id: { type: "string" },
-                  label: { type: "string" },
-                  openUrl: { type: "string" },
-                  renderUrl: { type: ["string", "null"] },
-                },
-              },
             },
             agentHandoff: { type: "array", items: { type: "string" } },
           },
@@ -1687,21 +1425,8 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                 { type: "null" },
               ],
             },
-            defaultSkillPullPrice: {
-              oneOf: [
-                {
-                  type: "object",
-                  properties: {
-                    light: { type: "number" },
-                    display: { type: "string" },
-                  },
-                },
-                { type: "null" },
-              ],
-            },
             freeToInstall: { type: "boolean" },
             paidFunctionsCount: { type: "integer" },
-            paidSkillsCount: { type: "integer" },
           },
         },
         AccessPolicySummary: {
@@ -1739,7 +1464,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                 { type: "null" },
               ],
             },
-            widgetIds: { type: "array", items: { type: "string" } },
             agentPermission: {
               oneOf: [
                 { $ref: "#/components/schemas/AgentFunctionPermission" },
@@ -1786,81 +1510,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             generatedAt: { type: "string", format: "date-time" },
           },
         },
-        SkillSummary: {
-          type: "object",
-          required: ["id", "name", "semanticDescription", "pullUrl"],
-          properties: {
-            id: { type: "string" },
-            name: { type: "string" },
-            description: { type: ["string", "null"] },
-            semanticDescription: { type: "string" },
-            pricing: {
-              type: ["object", "null"],
-              properties: {
-                pullPrice: {
-                  oneOf: [
-                    {
-                      type: "object",
-                      properties: {
-                        light: { type: "number" },
-                        display: { type: "string" },
-                      },
-                    },
-                    { type: "null" },
-                  ],
-                },
-                freePulls: { type: "integer" },
-                monetized: { type: "boolean" },
-              },
-            },
-            accessPolicy: {
-              oneOf: [
-                { $ref: "#/components/schemas/AccessPolicySummary" },
-                { type: "null" },
-              ],
-            },
-            pullUrl: { type: "string" },
-          },
-        },
-        ToolSkillsResponse: {
-          type: "object",
-          required: ["tool", "skills", "generatedAt"],
-          properties: {
-            tool: { type: "object" },
-            skills: {
-              type: "array",
-              items: { $ref: "#/components/schemas/SkillSummary" },
-            },
-            generatedAt: { type: "string", format: "date-time" },
-          },
-        },
-        SkillPullResponse: {
-          type: "object",
-          required: ["success", "tool", "skill", "generatedAt"],
-          properties: {
-            success: { type: "boolean" },
-            tool: { type: "object" },
-            skill: { $ref: "#/components/schemas/SkillSummary" },
-            content: { type: "string" },
-            receiptId: { type: ["string", "null"] },
-            charged: { $ref: "#/components/schemas/MoneyAmount" },
-            developerRevenue: { $ref: "#/components/schemas/MoneyAmount" },
-            platformFee: { $ref: "#/components/schemas/MoneyAmount" },
-            freePull: { type: "boolean" },
-            freePullCount: { type: ["integer", "null"] },
-            freePullLimit: { type: "integer" },
-            waiverSource: { type: ["string", "null"] },
-            error: {
-              type: ["object", "null"],
-              properties: {
-                type: { type: "string" },
-                message: { type: "string" },
-                details: {},
-              },
-            },
-            generatedAt: { type: "string", format: "date-time" },
-          },
-        },
         AgentFunctionPermissions: {
           type: "object",
           required: ["tool", "defaultPolicy", "permissions", "generatedAt"],
@@ -1892,10 +1541,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             publicUrl: { type: ["string", "null"] },
             adminUrl: { type: ["string", "null"] },
             installUrl: { type: ["string", "null"] },
-            widgets: {
-              type: "array",
-              items: { $ref: "#/components/schemas/WidgetSummary" },
-            },
             relevance: { $ref: "#/components/schemas/Relevance" },
           },
         },
@@ -1957,74 +1602,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                 backing_log: { type: "string", const: "mcp_call_logs.id" },
               },
             },
-          },
-        },
-        WidgetSummary: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-            label: { type: "string" },
-            description: { type: ["string", "null"] },
-            public: { type: "boolean" },
-            previewAvailable: { type: "boolean" },
-            openUrl: { type: ["string", "null"] },
-            detailUrl: { type: ["string", "null"] },
-            renderUrl: { type: ["string", "null"] },
-          },
-        },
-        WidgetDetail: {
-          type: "object",
-          properties: {
-            summary: { $ref: "#/components/schemas/WidgetSummary" },
-            functions: {
-              type: "object",
-              properties: {
-                uiFunction: { type: ["string", "null"] },
-                dataFunction: { type: ["string", "null"] },
-                dataTool: { type: ["string", "null"] },
-              },
-            },
-            pollIntervalSeconds: { type: ["number", "null"] },
-            dependencies: { type: "array", items: {} },
-            renderSurface: {
-              type: ["object", "null"],
-              properties: {
-                mode: { type: "string", const: "runtime_function" },
-                endpoint: {
-                  type: "string",
-                  const: "POST /api/launch/tools/:id/widgets/:widgetId/render",
-                },
-                method: { type: "string", const: "POST" },
-                authRequired: { type: "boolean", const: true },
-                uiFunction: { type: "string" },
-                dataFunction: { type: ["string", "null"] },
-                dataTool: { type: ["string", "null"] },
-                htmlField: { type: "string", const: "app_html" },
-                sandbox: { type: "object" },
-              },
-            },
-          },
-        },
-        WidgetRenderResponse: {
-          type: "object",
-          required: ["success", "tool", "widget", "render", "generatedAt"],
-          properties: {
-            success: { type: "boolean" },
-            tool: { type: "object" },
-            widget: { type: "object" },
-            render: {
-              type: ["object", "null"],
-              properties: {
-                html: { type: "string" },
-                meta: { type: ["object", "null"] },
-                version: { type: ["string", "null"] },
-                rawResult: {},
-                receiptId: { type: ["string", "null"] },
-                durationMs: { type: ["number", "null"] },
-              },
-            },
-            error: { type: ["object", "null"] },
-            generatedAt: { type: "string", format: "date-time" },
           },
         },
         WalletSummary: {
@@ -2208,8 +1785,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               enum: [
                 "app",
                 "function",
-                "skill",
-                "widget",
                 "platform_primitive",
               ],
             },
@@ -2342,7 +1917,6 @@ async function handleLaunchDiscover(
     url.searchParams.get("limit"),
     DEFAULT_DISCOVERY_LIMIT,
   );
-  const includeWidgets = url.searchParams.get("includeWidgets") !== "false";
   const viewer = await tryAuthenticate(request);
   const installedIds = viewer
     ? await fetchInstalledIds(viewer.id)
@@ -2406,7 +1980,6 @@ async function handleLaunchDiscover(
           owners,
           viewerId: viewer?.id,
           installedIds,
-          includeWidgets,
         }),
         row.launchRelevance,
       )
@@ -2474,35 +2047,6 @@ async function handleLaunchTool(
   });
 }
 
-async function handleLaunchToolWidgets(
-  request: Request,
-  encodedLocator: string,
-): Promise<Response> {
-  const resolved = await resolveLaunchVisibleTool(request, encodedLocator);
-  if (!resolved) return error("Tool not found", 404);
-  const { installedIds, row, viewer } = resolved;
-
-  const owners = await fetchOwnerMap([row.owner_id]);
-  const tool = toLaunchToolSummary(row, {
-    owners,
-    viewerId: viewer?.id,
-    installedIds,
-  });
-
-  return json({
-    tool: {
-      id: tool.id,
-      slug: tool.slug,
-      name: tool.name,
-      relationship: tool.relationship,
-      publicUrl: tool.publicUrl,
-      adminUrl: tool.adminUrl,
-    },
-    widgets: tool.widgets,
-    generatedAt: new Date().toISOString(),
-  });
-}
-
 async function handleLaunchToolFunctions(
   request: Request,
   encodedLocator: string,
@@ -2519,7 +2063,6 @@ async function handleLaunchToolFunctions(
     owners,
     viewerId: viewer?.id,
     installedIds,
-    includeWidgets: false,
   });
   const functions = await buildLaunchFunctionSummaries(row, viewer?.id);
 
@@ -2529,34 +2072,6 @@ async function handleLaunchToolFunctions(
       functions,
       generatedAt: new Date().toISOString(),
     } satisfies LaunchToolFunctionsResponse,
-  );
-}
-
-async function handleLaunchToolSkills(
-  request: Request,
-  encodedLocator: string,
-): Promise<Response> {
-  const viewer = await tryAuthenticate(request);
-  const resolved = viewer
-    ? await resolveLaunchRunnableTool(viewer, encodedLocator)
-    : await resolvePublicLaunchTool(encodedLocator);
-  if (!resolved) return error("Tool not found", 404);
-  const { row, installedIds } = resolved;
-
-  const owners = await fetchOwnerMap([row.owner_id]);
-  const tool = toLaunchToolSummary(row, {
-    owners,
-    viewerId: viewer?.id,
-    installedIds,
-    includeWidgets: false,
-  });
-
-  return json(
-    {
-      tool: toLaunchToolHandle(tool),
-      skills: buildLaunchSkillSummaries(row),
-      generatedAt: new Date().toISOString(),
-    } satisfies LaunchToolSkillsResponse,
   );
 }
 
@@ -2631,238 +2146,6 @@ async function handleLaunchFunctionRun(
   );
 }
 
-async function handleLaunchSkillPull(
-  request: Request,
-  encodedLocator: string,
-  encodedSkillId: string,
-): Promise<Response> {
-  const user = await requireLaunchUser(request);
-  requireAccountSessionForFunctionRun(user);
-  const resolved = await resolveLaunchRunnableTool(user, encodedLocator);
-  if (!resolved) return error("Tool not found", 404);
-  const { row } = resolved;
-  const skillId = parseSkillId(encodedSkillId);
-  const operationId = request.headers.get("Idempotency-Key")?.trim() ||
-    request.headers.get("X-Idempotency-Key")?.trim() ||
-    createExecutionReceiptId();
-
-  try {
-    const result = await pullSkillContext({
-      app: row,
-      userId: user.id,
-      skillId,
-      operationId,
-      metadata: {
-        launch_route: `/api/launch/tools/${
-          row.slug || row.id
-        }/skills/${skillId}/pull`,
-        operation_id: operationId,
-      },
-    });
-    const skill = toLaunchSkillSummary(row, result.skill);
-    const tool = {
-      id: row.id,
-      slug: row.slug || row.id,
-      name: row.name || row.slug || row.id,
-    };
-
-    return json(
-      {
-        success: true,
-        tool,
-        skill,
-        content: result.content,
-        receiptId: result.receipt.id,
-        charged: result.chargedLight > 0 ? money(result.chargedLight) : null,
-        developerRevenue: result.developerRevenueLight > 0
-          ? money(result.developerRevenueLight)
-          : null,
-        platformFee: result.platformFeeLight > 0
-          ? money(result.platformFeeLight)
-          : null,
-        freePull: result.freePull,
-        freePullCount: result.freePullCount,
-        freePullLimit: result.freePullLimit,
-        waiverSource: result.waiverSource,
-        error: null,
-        generatedAt: new Date().toISOString(),
-      } satisfies LaunchSkillPullResponse,
-    );
-  } catch (err) {
-    const status = err instanceof SkillPullBillingError
-      ? err.status
-      : err instanceof Error && err.message === "Skill not found"
-      ? 404
-      : 500;
-    return json(
-      {
-        success: false,
-        tool: {
-          id: row.id,
-          slug: row.slug || row.id,
-          name: row.name || row.slug || row.id,
-        },
-        skill: buildLaunchSkillSummaries(row).find((skill) =>
-          skill.id === skillId
-        ) || {
-          id: skillId,
-          name: skillId,
-          description: null,
-          semanticDescription: skillId,
-          pricing: null,
-          pullUrl: `/api/launch/tools/${
-            encodeURIComponent(row.slug || row.id)
-          }/skills/${encodeURIComponent(skillId)}/pull`,
-        },
-        receiptId: null,
-        charged: null,
-        error: {
-          type: err instanceof SkillPullBillingError
-            ? err.code === "access_policy_denied"
-              ? "access_policy_denied"
-              : err.code === "access_policy_error"
-              ? "access_policy_error"
-              : "caller_light_required"
-            : "skill_pull_failed",
-          message: err instanceof Error ? err.message : "Skill pull failed",
-        },
-        generatedAt: new Date().toISOString(),
-      } satisfies LaunchSkillPullResponse,
-      status,
-    );
-  }
-}
-
-async function handleLaunchWidgetDetail(
-  request: Request,
-  encodedLocator: string,
-  encodedWidgetId: string,
-): Promise<Response> {
-  const widgetId = parseWidgetId(encodedWidgetId);
-  const resolved = await resolveLaunchVisibleTool(request, encodedLocator);
-  if (!resolved) return error("Tool not found", 404);
-  const { installedIds, row, viewer } = resolved;
-
-  const widget = findWidgetDeclaration(row, widgetId);
-  if (!widget) return error("Widget not found", 404);
-
-  const owners = await fetchOwnerMap([row.owner_id]);
-  const tool = toLaunchToolSummary(row, {
-    owners,
-    viewerId: viewer?.id,
-    installedIds,
-  });
-  const detail = toLaunchWidgetDetail(row, widget);
-
-  return json({
-    tool: {
-      id: tool.id,
-      slug: tool.slug,
-      name: tool.name,
-      relationship: tool.relationship,
-      publicUrl: tool.publicUrl,
-      adminUrl: tool.adminUrl,
-    },
-    widget: detail,
-    generatedAt: new Date().toISOString(),
-  });
-}
-
-async function handleLaunchWidgetRender(
-  request: Request,
-  encodedLocator: string,
-  encodedWidgetId: string,
-): Promise<Response> {
-  const user = await requireLaunchUser(request);
-  const widgetId = parseWidgetId(encodedWidgetId);
-  const resolved = await resolveLaunchRunnableTool(user, encodedLocator);
-  if (!resolved) return error("Tool not found", 404);
-  const { row } = resolved;
-
-  const widget = findWidgetDeclaration(row, widgetId);
-  if (!widget) return error("Widget not found", 404);
-  const functions = widgetFunctions(row, widget);
-  if (!functions.uiFunction) {
-    return error("Widget does not expose a UI function", 400);
-  }
-
-  const body = await readOptionalJsonBody<Record<string, unknown>>(request);
-  const args = asRecord(body.args) || {};
-  const runRequest = new Request(
-    `${new URL(request.url).origin}/api/run/${encodeURIComponent(row.id)}`,
-    {
-      method: "POST",
-      headers: forwardRuntimeHeaders(request),
-      body: JSON.stringify({
-        function: functions.uiFunction,
-        args,
-      }),
-    },
-  );
-  const runResponse = await handleRun(runRequest, row.id);
-  const runPayload = await runResponse.json().catch(() => null) as
-    | RunResponse
-    | null;
-  const summary = toLaunchWidgetSummary(row, widget);
-  const tool = {
-    id: row.id,
-    slug: row.slug || row.id,
-    name: row.name || row.slug || row.id,
-  };
-
-  if (!runResponse.ok || !runPayload?.success) {
-    return json({
-      success: false,
-      tool,
-      widget: {
-        id: summary.id,
-        label: summary.label,
-        description: summary.description,
-      },
-      render: null,
-      error: {
-        type: runPayload?.error?.type,
-        message: runPayload?.error?.message ||
-          `Widget render failed (${runResponse.status})`,
-        details: runPayload?.error?.details,
-      },
-      generatedAt: new Date().toISOString(),
-    }, runResponse.ok ? 500 : runResponse.status);
-  }
-
-  const render = toWidgetRenderedPayload(runPayload);
-  if (!render.html) {
-    return json({
-      success: false,
-      tool,
-      widget: {
-        id: summary.id,
-        label: summary.label,
-        description: summary.description,
-      },
-      render: null,
-      error: {
-        type: "WIDGET_HTML_MISSING",
-        message: "Widget UI function did not return app_html or html.",
-      },
-      generatedAt: new Date().toISOString(),
-    }, 422);
-  }
-
-  return json({
-    success: true,
-    tool,
-    widget: {
-      id: summary.id,
-      label: summary.label,
-      description: summary.description,
-    },
-    render,
-    error: null,
-    generatedAt: new Date().toISOString(),
-  });
-}
-
 async function handleLaunchToolAdmin(
   request: Request,
   encodedLocator: string,
@@ -2885,7 +2168,6 @@ async function handleLaunchToolAdmin(
       "description",
       "visibility",
       "pricing",
-      "widgets",
       "secrets",
       "trust",
     ],
@@ -3006,7 +2288,7 @@ async function handleLaunchWallet(request: Request): Promise<Response> {
       {
         id: "topup",
         label: "Add Light",
-        description: "Fund tool calls, installs, widgets, and hosting.",
+        description: "Fund tool calls, installs, and hosting.",
         href: "/wallet?tab=topup",
         enabled: true,
       },
@@ -3663,14 +2945,6 @@ async function buildToolInstallContext(
     tool.publicUrl || `/tools/${encodeURIComponent(tool.slug)}`
   }`;
   const installUrl = `${baseUrl}/install?tool=${encodeURIComponent(tool.slug)}`;
-  const widgetUrls = tool.widgets
-    .filter((widget) => widget.openUrl)
-    .map((widget) => ({
-      id: widget.id,
-      label: widget.label,
-      openUrl: `${baseUrl}${widget.openUrl}`,
-      renderUrl: widget.renderUrl ? `${baseUrl}${widget.renderUrl}` : null,
-    }));
 
   return {
     tool,
@@ -3684,13 +2958,10 @@ async function buildToolInstallContext(
       scopes: ["apps:call"],
       appIds: [tool.id],
     },
-    widgetUrls,
     agentHandoff: [
-      `Inspect ${publicToolUrl} for pricing, trust, and widget links.`,
+      `Inspect ${publicToolUrl} for pricing and trust.`,
       `Use ${platformMcpUrl} as the Ultralight MCP endpoint with a bearer API key scoped to app ${tool.id}.`,
-      `Call this tool through MCP/API, then return ${
-        widgetUrls[0]?.openUrl || publicToolUrl
-      } when UI is useful.`,
+      `Call this tool through MCP/API, then return ${publicToolUrl} when UI is useful.`,
       "Preserve receipt_id values and Light balance errors in the final agent response.",
     ],
   };
@@ -3793,7 +3064,7 @@ async function fetchSubjectSemanticPublicApps(options: {
           MAX_DISCOVERY_LIMIT,
           Math.max(options.limit * 6, 60),
         ),
-        p_subject_types: ["app", "function", "skill", "widget"],
+        p_subject_types: ["app", "function"],
         p_app_version: null,
         p_visibility: ["public", "unlisted"],
         p_include_platform_primitives: false,
@@ -4035,7 +3306,6 @@ async function buildLaunchAgentPermissionsResponse(
     owners,
     viewerId: user.id,
     installedIds,
-    includeWidgets: false,
   });
   const permissions = await listAgentFunctionPermissions({
     userId: user.id,
@@ -4065,7 +3335,6 @@ async function buildLaunchFunctionSummaries(
   const names = extractFunctionNames(row);
   const manifest = parseManifest(row.manifest);
   const manifestFunctions = asRecord(manifest?.functions) || {};
-  const widgetIdsByFunction = widgetIdsByFunctionName(row);
   const permissions = viewerId
     ? await listAgentFunctionPermissions({
       userId: viewerId,
@@ -4090,40 +3359,9 @@ async function buildLaunchFunctionSummaries(
       outputSchema: outputSchemaForFunction(functionDef),
       pricing: pricingSummaryForFunction(row, name),
       accessPolicy,
-      widgetIds: widgetIdsByFunction.get(name) || [],
       agentPermission: permissionByFunction.get(name) || null,
     };
   });
-}
-
-function buildLaunchSkillSummaries(row: LaunchAppRow): LaunchSkillSummary[] {
-  return listAppSkills(row).map((skill) => toLaunchSkillSummary(row, skill));
-}
-
-function toLaunchSkillSummary(
-  row: LaunchAppRow,
-  skill: ReturnType<typeof listAppSkills>[number],
-): LaunchSkillSummary {
-  const locator = row.slug || row.id;
-  const accessPolicy = accessPolicySummaryForTool(row);
-  const pullPrice = skill.pricing.priceLight > 0
-    ? money(skill.pricing.priceLight)
-    : null;
-  return {
-    id: skill.id,
-    name: skill.name,
-    description: skill.description,
-    semanticDescription: skill.semanticDescription,
-    pricing: {
-      pullPrice,
-      freePulls: skill.pricing.freePulls,
-      monetized: skill.pricing.monetized,
-    },
-    accessPolicy,
-    pullUrl: `/api/launch/tools/${encodeURIComponent(locator)}/skills/${
-      encodeURIComponent(skill.id)
-    }/pull`,
-  };
 }
 
 function accessPolicySummaryForTool(
@@ -4171,42 +3409,7 @@ function extractFunctionNames(row: LaunchAppRow): string[] {
       names.add(functionName.trim());
     }
   }
-  const widgets = manifest?.widgets;
-  if (Array.isArray(widgets)) {
-    for (const widget of widgets) {
-      if (!widget || typeof widget.id !== "string") continue;
-      const functions = widgetFunctions(row, widget);
-      if (functions.uiFunction) names.add(functions.uiFunction);
-      if (functions.dataFunction) names.add(functions.dataFunction);
-      if (functions.dataTool) names.add(functions.dataTool);
-    }
-  }
   return Array.from(names).sort((left, right) => left.localeCompare(right));
-}
-
-function widgetIdsByFunctionName(row: LaunchAppRow): Map<string, string[]> {
-  const map = new Map<string, string[]>();
-  const manifest = parseManifest(row.manifest);
-  const widgets = manifest?.widgets;
-  if (!Array.isArray(widgets)) return map;
-
-  for (const widget of widgets) {
-    if (!widget || typeof widget.id !== "string") continue;
-    const functions = widgetFunctions(row, widget);
-    for (
-      const functionName of [
-        functions.uiFunction,
-        functions.dataFunction,
-        functions.dataTool,
-      ]
-    ) {
-      if (!functionName) continue;
-      const ids = map.get(functionName) || [];
-      if (!ids.includes(widget.id)) ids.push(widget.id);
-      map.set(functionName, ids);
-    }
-  }
-  return map;
 }
 
 function inputSchemaForFunction(
@@ -4370,170 +3573,24 @@ function toLaunchToolSummary(
       ? `/admin/tools/${encodeURIComponent(row.id)}`
       : null,
     pricing: pricingSummary(row),
-    widgets: options.includeWidgets === false ? [] : extractWidgets(row),
     tags: row.tags || [],
     updatedAt: row.updated_at || row.created_at || null,
-  };
-}
-
-function extractWidgets(row: LaunchAppRow): LaunchWidgetSummary[] {
-  const manifest = parseManifest(row.manifest);
-  const widgets = manifest?.widgets;
-  if (!Array.isArray(widgets)) return [];
-  return widgets
-    .filter((widget): widget is WidgetDeclaration =>
-      Boolean(widget && typeof widget.id === "string" && widget.id.trim())
-    )
-    .map((widget) => toLaunchWidgetSummary(row, widget));
-}
-
-function toLaunchWidgetSummary(
-  row: LaunchAppRow,
-  widget: WidgetDeclaration,
-): LaunchWidgetSummary {
-  const slug = row.slug || row.id;
-  const functions = widgetFunctions(row, widget);
-  const encodedSlug = encodeURIComponent(slug);
-  const encodedWidgetId = encodeURIComponent(widget.id);
-  const detailUrl =
-    `/api/launch/tools/${encodedSlug}/widgets/${encodedWidgetId}`;
-  return {
-    id: widget.id,
-    label: widget.label || widget.id,
-    description: widget.description || null,
-    public: normalizeVisibility(row.visibility) !== "private",
-    previewAvailable: Boolean(
-      functions.uiFunction || functions.dataFunction || functions.dataTool,
-    ),
-    openUrl: `/tools/${encodedSlug}?widget=${encodedWidgetId}`,
-    detailUrl,
-    renderUrl: functions.uiFunction ? `${detailUrl}/render` : null,
-  };
-}
-
-function toLaunchWidgetDetail(
-  row: LaunchAppRow,
-  widget: WidgetDeclaration,
-): LaunchWidgetDetail {
-  const summary = toLaunchWidgetSummary(row, widget);
-  const functions = widgetFunctions(row, widget);
-  return {
-    summary,
-    functions,
-    pollIntervalSeconds: typeof widget.poll_interval_s === "number"
-      ? widget.poll_interval_s
-      : null,
-    dependencies: Array.isArray(widget.dependencies)
-      ? widget.dependencies as unknown[]
-      : [],
-    renderSurface: functions.uiFunction
-      ? {
-        mode: "runtime_function",
-        endpoint: "POST /api/launch/tools/:id/widgets/:widgetId/render",
-        method: "POST",
-        authRequired: true,
-        uiFunction: functions.uiFunction,
-        dataFunction: functions.dataFunction,
-        dataTool: functions.dataTool,
-        htmlField: "app_html",
-        sandbox: {
-          iframe: true,
-          allowScripts: true,
-          allowSameOrigin: false,
-        },
-      }
-      : null,
-  };
-}
-
-function findWidgetDeclaration(
-  row: LaunchAppRow,
-  widgetId: string,
-): WidgetDeclaration | null {
-  const manifest = parseManifest(row.manifest);
-  const widgets = manifest?.widgets;
-  if (!Array.isArray(widgets)) return null;
-  return widgets.find((widget): widget is WidgetDeclaration =>
-    Boolean(widget && typeof widget.id === "string" && widget.id === widgetId)
-  ) || null;
-}
-
-function widgetFunctions(
-  row: LaunchAppRow,
-  widget: WidgetDeclaration,
-): {
-  uiFunction: string | null;
-  dataFunction: string | null;
-  dataTool: string | null;
-} {
-  const exports = new Set(row.exports || []);
-  const defaultUiFunction = `widget_${widget.id}_ui`;
-  const defaultDataFunction = `widget_${widget.id}_data`;
-  const uiFunction = stringOrNull(widget.ui_function) ||
-    (exports.has(defaultUiFunction) ? defaultUiFunction : null);
-  const dataFunction = stringOrNull(widget.data_function) ||
-    (exports.has(defaultDataFunction) ? defaultDataFunction : null);
-  const dataTool = stringOrNull(widget.data_tool) || dataFunction;
-  return {
-    uiFunction,
-    dataFunction,
-    dataTool,
-  };
-}
-
-function toWidgetRenderedPayload(
-  payload: RunResponse,
-): {
-  html: string;
-  meta?: Record<string, unknown> | null;
-  version?: string | null;
-  rawResult?: unknown;
-  receiptId?: string | null;
-  durationMs?: number | null;
-} {
-  const result = payload.result;
-  const record = asRecord(result);
-  const html = typeof record?.app_html === "string"
-    ? record.app_html
-    : typeof record?.html === "string"
-    ? record.html
-    : typeof result === "string"
-    ? result
-    : "";
-  return {
-    html,
-    meta: asRecord(record?.meta) || null,
-    version: stringOrNull(record?.version),
-    rawResult: result,
-    receiptId: payload.receipt_id || null,
-    durationMs: typeof payload.duration_ms === "number"
-      ? payload.duration_ms
-      : null,
   };
 }
 
 function pricingSummary(row: LaunchAppRow): LaunchPricingSummary {
   const pricingConfig = asRecord(row.pricing_config);
   const defaultPrice = numeric(pricingConfig?.default_price_light);
-  const defaultSkillPullPrice = numeric(
-    pricingConfig?.default_skill_pull_price_light,
-  );
   const functionPrices = asRecord(pricingConfig?.functions);
   const paidFunctionsCount = functionPrices
     ? Object.values(functionPrices).filter((value) => functionPrice(value) > 0)
       .length
     : 0;
-  const paidSkillsCount =
-    listAppSkills(row).filter((skill) => skill.pricing.monetized).length;
 
   return {
     defaultCallPrice: defaultPrice > 0 ? money(defaultPrice) : null,
-    defaultSkillPullPrice: defaultSkillPullPrice > 0
-      ? money(defaultSkillPullPrice)
-      : null,
     freeToInstall: true,
     paidFunctionsCount,
-    paidSkillsCount,
   };
 }
 
@@ -4607,10 +3664,6 @@ function matchesQuery(row: LaunchAppRow, query: string | null): boolean {
     row.description,
     row.category,
     ...(row.tags || []),
-    ...extractWidgets(row).flatMap((widget) => [
-      widget.label,
-      widget.description || "",
-    ]),
   ].join(" ").toLowerCase();
   return haystack.includes(query.toLowerCase());
 }
@@ -4624,7 +3677,7 @@ function annotateLexicalRow(
     launchRelevance: {
       source: query ? "lexical" : "curated",
       score: query ? lexicalRowScore(row, query) : null,
-      signals: query ? ["tool_metadata", "widget_metadata"] : [
+      signals: query ? ["tool_metadata"] : [
         "community_signal",
       ],
     },
@@ -4649,10 +3702,6 @@ function lexicalRowScore(row: LaunchAppRow, query: string | null): number {
     row.description,
     row.category,
     ...(row.tags || []),
-    ...extractWidgets(row).flatMap((widget) => [
-      widget.label,
-      widget.description || "",
-    ]),
   ].join(" ").toLowerCase();
   const matches = terms.filter((term) => haystack.includes(term)).length;
   return roundScore(matches / terms.length);
@@ -4669,7 +3718,7 @@ function buildDiscoveryRetrieval(options: {
     return {
       mode: "browse",
       embeddedSources: [],
-      fallbackSources: ["tools", "widgets", "platform_primitives"],
+      fallbackSources: ["tools", "platform_primitives"],
       embeddingModel: null,
       fallbackReason: null,
     };
@@ -4689,7 +3738,6 @@ function buildDiscoveryRetrieval(options: {
     )
   ) {
     fallbackSources.add("tools");
-    fallbackSources.add("widgets");
   }
   if (
     options.primitiveSuggestions.some((suggestion) =>
@@ -5051,28 +4099,12 @@ function parseApiKeyId(encodedId: string): string {
   return id;
 }
 
-function parseWidgetId(encodedId: string): string {
-  const id = decodeURIComponent(encodedId).trim();
-  if (!/^[A-Za-z0-9._:-]{1,100}$/.test(id)) {
-    throw new RequestValidationError("Invalid widget id");
-  }
-  return id;
-}
-
 function parseFunctionName(encodedName: string): string {
   const name = decodeURIComponent(encodedName).trim();
   if (!/^[A-Za-z0-9._:-]{1,200}$/.test(name)) {
     throw new RequestValidationError("Invalid function name");
   }
   return name;
-}
-
-function parseSkillId(encodedId: string): string {
-  const id = decodeURIComponent(encodedId).trim();
-  if (!/^[A-Za-z0-9._:-]{1,200}$/.test(id)) {
-    throw new RequestValidationError("Invalid skill id");
-  }
-  return id;
 }
 
 function parseKind(value: string | null): LaunchToolKind | "all" {

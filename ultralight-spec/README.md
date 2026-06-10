@@ -23,3 +23,4 @@ This `ultralight-spec/` directory contains the canonical conventions for buildin
 | `conventions/api-surface.md` | Available SDK methods and usage rules |
 | `conventions/metering.md` | Free tier limits, pricing, rate limits |
 | `conventions/security.md` | Parameterization, blocked operations, permissions |
+| `conventions/skills-as-functions.md` | Shipping long-form context via skills_index / skill_reader functions |

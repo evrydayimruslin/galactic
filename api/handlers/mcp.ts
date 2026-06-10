@@ -119,12 +119,6 @@ import {
   buildAgentPermissionConfigureUrl,
   enforceAgentFunctionPermission,
 } from "../services/agent-function-permissions.ts";
-import {
-  DEFAULT_SKILL_ID,
-  listAppSkills,
-  pullSkillContext,
-  SkillPullBillingError,
-} from "../services/skill-pulls.ts";
 
 // ============================================
 // MEMORY SERVICE (lazy singleton)
@@ -159,111 +153,21 @@ function appDisplayName(app: App): string {
 function hasSkillContext(app: App): boolean {
   return Boolean(
     app.skills_md?.trim() || (app.app_type === "skill" && app.storage_key),
-  ) || manifestDeclaresSkills(app.manifest);
-}
-
-function manifestDeclaresSkills(manifestValue: unknown): boolean {
-  const manifest = typeof manifestValue === "string"
-    ? (() => {
-      try {
-        return JSON.parse(manifestValue);
-      } catch {
-        return null;
-      }
-    })()
-    : manifestValue;
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    return false;
-  }
-  const skills = (manifest as Record<string, unknown>).skills;
-  return Boolean(
-    skills && typeof skills === "object" && !Array.isArray(skills) &&
-      Object.keys(skills).length > 0,
   );
-}
-
-function canReadFullSkillContext(app: App, userId?: string): boolean {
-  if (userId && userId === app.owner_id) return true;
-  return !listAppSkills(app).some((skill) => skill.pricing.monetized);
-}
-
-function buildMcpSkillSummaries(app: App, appId: string) {
-  return listAppSkills(app).map((skill) => ({
-    id: skill.id,
-    name: skill.name,
-    description: skill.description,
-    semantic_description: skill.semanticDescription,
-    resource: skill.resource,
-    price_light: skill.pricing.priceLight,
-    free_pulls: skill.pricing.freePulls,
-    monetized: skill.pricing.monetized,
-    full_context_available_via: "ultralight.pullSkill",
-    full_context_resource_uri: `ultralight://app/${appId}/skills.md`,
-  }));
 }
 
 function buildSkillsDiscoveryPayload(
   app: App,
   appId: string,
-  userId?: string,
 ): Record<string, unknown> {
-  const fullContextReadable = canReadFullSkillContext(app, userId);
-  const requiresPull = hasSkillContext(app) && !fullContextReadable;
   return {
     app_id: appId,
     app_name: appDisplayName(app),
     description: app.description,
-    skills: buildMcpSkillSummaries(app, appId),
-    full_context_included: false,
-    full_context_resource_uri: `ultralight://app/${appId}/skills.md`,
-    full_context_requires_pull: requiresPull,
-    pull_tool: "ultralight.pullSkill",
-    note: requiresPull
-      ? "Full skill context is monetized. Call ultralight.pullSkill with the skill_id to retrieve it and record the billing receipt."
-      : "Full skill context can be read from the skills.md resource when available.",
+    skills_md_resource_uri: `ultralight://app/${appId}/skills.md`,
+    note:
+      "Full skill documentation can be read for free from the skills.md resource.",
   };
-}
-
-function buildSkillsPreviewMarkdown(
-  app: App,
-  appId: string,
-  userId?: string,
-): string {
-  const skills = buildMcpSkillSummaries(app, appId);
-  const requiresPull = hasSkillContext(app) &&
-    !canReadFullSkillContext(app, userId);
-  const defaultPullSkillId = skills[0]?.id || DEFAULT_SKILL_ID;
-  const lines = [
-    `# ${appDisplayName(app)} Skills`,
-    "",
-    app.description || "Skill metadata for this Ultralight app.",
-    "",
-    "## Available Skills",
-  ];
-
-  for (const skill of skills) {
-    const price = skill.price_light > 0 ? `${skill.price_light} Light` : "free";
-    const freePulls = skill.free_pulls > 0
-      ? `; first ${skill.free_pulls} pull${
-        skill.free_pulls === 1 ? "" : "s"
-      } free`
-      : "";
-    lines.push(
-      "",
-      `- ${skill.name} (${skill.id})`,
-      `  Semantic description: ${skill.semantic_description}`,
-      `  Full-context price: ${price}${freePulls}`,
-    );
-  }
-
-  lines.push(
-    "",
-    requiresPull
-      ? `Call ultralight.pullSkill with {"skill_id":"${defaultPullSkillId}"} to pull the full skill context into this agent session and record a receipt.`
-      : `Read ultralight://app/${appId}/skills.md for full skill context when available.`,
-  );
-
-  return lines.join("\n");
 }
 
 // ============================================
@@ -515,77 +419,6 @@ function nextSequenceNumber(sessionId: string | undefined): number | undefined {
 // ============================================
 
 const SDK_TOOLS: MCPTool[] = [
-  // ---- Skills (Documentation) ----
-  {
-    name: "ultralight.getSkills",
-    title: "Get Skills",
-    description:
-      "Get skill metadata and free preview context for this app. Call this FIRST before using other tools. " +
-      "If full skill context is monetized, call ultralight.pullSkill to retrieve it with a receipt.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-    outputSchema: {
-      type: "object",
-      properties: {
-        skills_md: {
-          type: "string",
-          nullable: true,
-          description:
-            "The full Skills.md markdown content when free for this caller, otherwise null.",
-        },
-        preview_md: {
-          type: "string",
-          description: "Non-leaky skill summary and retrieval instructions.",
-        },
-        skills: {
-          type: "array",
-          items: { type: "object" },
-          description: "Semantic skill summaries with pricing metadata.",
-        },
-        full_context_requires_pull: { type: "boolean" },
-        pull_tool: { type: "string" },
-        app_name: { type: "string" },
-        app_id: { type: "string" },
-      },
-    },
-  },
-  {
-    name: "ultralight.pullSkill",
-    title: "Pull Skill Context",
-    description:
-      "Pull a full skill body into this agent's context. This may spend Light according to the app's skill pricing and returns a receipt.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        skill_id: {
-          type: "string",
-          default: DEFAULT_SKILL_ID,
-          description:
-            "Skill identifier from ultralight.getSkills. Defaults to the app context skill.",
-        },
-      },
-    },
-    outputSchema: {
-      type: "object",
-      properties: {
-        skill_id: { type: "string" },
-        content: {
-          type: "string",
-          description:
-            "Full skill context markdown to include in the agent prompt.",
-        },
-        charged_light: { type: "number" },
-        developer_revenue_light: { type: "number" },
-        platform_fee_light: { type: "number" },
-        free_pull: { type: "boolean" },
-        receipt_id: { type: "string", nullable: true },
-        transfer_id: { type: "string", nullable: true },
-      },
-    },
-  },
-
   // ---- Data Storage ----
   {
     name: "ultralight.store",
@@ -1179,7 +1012,7 @@ export async function handleMcp(
   try {
     switch (rpcMethod) {
       case "initialize": {
-        const response = handleInitialize(id, appId, app, userId);
+        const response = handleInitialize(id, appId, app);
         // Streamable HTTP: assign a session ID on initialize
         const sessionId = crypto.randomUUID();
         const headers = new Headers(response.headers);
@@ -1242,21 +1075,17 @@ function handleInitialize(
   id: JsonRpcId,
   appId: string,
   app: App,
-  userId?: string,
 ): Response {
   let instructions: string;
 
-  if (app.skills_md && canReadFullSkillContext(app, userId)) {
-    // Free or owner-owned skills may still be inlined for compatibility.
+  if (app.skills_md) {
+    // Skills.md is free documentation — always inline it in full.
     instructions = app.skills_md;
-  } else if (hasSkillContext(app)) {
-    instructions = buildSkillsPreviewMarkdown(app, appId, userId) +
-      `\n\nCall ultralight.getSkills for machine-readable skill pricing metadata.`;
   } else {
     // Skills.md not yet generated — use description + resource directive
     instructions = (app.description ||
       `${app.name || app.slug} — an Ultralight MCP server.`) +
-      `\n\nCall ultralight.getSkills to check whether skill context is available.`;
+      `\n\nRead the ultralight://app/${appId}/manifest.json resource for function definitions and schemas.`;
   }
 
   const result: MCPServerInfo = {
@@ -1285,21 +1114,20 @@ function handleResourcesList(
 ): Response {
   const resources: MCPResourceDescriptor[] = [];
 
-  // Skills are first-class context primitives. The JSON resource is always a
-  // non-leaky preview; skills.md may return a preview when full context is paid.
+  // Skills.md is auto-generated function documentation, served free in full.
   if (hasSkillContext(app)) {
     resources.push({
       uri: `ultralight://app/${appId}/skills.json`,
       name: `${app.name || app.slug} — Skill Metadata`,
       description:
-        "Semantic skill summaries, pricing, and the tool to call for full paid context.",
+        "Machine-readable pointer to the free skills.md documentation resource.",
       mimeType: "application/json",
     });
     resources.push({
       uri: `ultralight://app/${appId}/skills.md`,
       name: `${app.name || app.slug} — Skills & Usage Guide`,
       description:
-        "Skills guide. Monetized full skill bodies are retrieved via ultralight.pullSkill instead of free resource reads.",
+        "Auto-generated usage documentation for this app's functions. Always served in full, free of charge.",
       mimeType: "text/markdown",
     });
   }
@@ -1346,10 +1174,10 @@ async function handleResourcesRead(
     );
   }
 
-  // Skills.md — auto-generated function documentation
+  // Skills.md — auto-generated function documentation, always served in full
   const expectedSkillsUri = `ultralight://app/${appId}/skills.md`;
   if (uri === expectedSkillsUri) {
-    if (!hasSkillContext(app)) {
+    if (!hasSkillContext(app) || !app.skills_md) {
       return jsonRpcErrorResponse(
         id,
         -32002,
@@ -1357,13 +1185,10 @@ async function handleResourcesRead(
       );
     }
 
-    const text = app.skills_md && canReadFullSkillContext(app, userId)
-      ? app.skills_md
-      : buildSkillsPreviewMarkdown(app, appId, userId);
     const contents: MCPResourceContent[] = [{
       uri: uri,
       mimeType: "text/markdown",
-      text,
+      text: app.skills_md,
     }];
 
     return jsonRpcResponse(id, { contents });
@@ -1383,7 +1208,7 @@ async function handleResourcesRead(
       uri: uri,
       mimeType: "application/json",
       text: JSON.stringify(
-        buildSkillsDiscoveryPayload(app, appId, userId),
+        buildSkillsDiscoveryPayload(app, appId),
         null,
         2,
       ),
@@ -1957,109 +1782,6 @@ async function executeSDKTool(
     let result: unknown;
 
     switch (toolName) {
-      // Skills (documentation)
-      case "ultralight.getSkills": {
-        const appsService = createAppsService();
-        const app = await appsService.findById(appId);
-        if (!app) {
-          return jsonRpcErrorResponse(id, NOT_FOUND, "App not found");
-        }
-        const fullContextReadable = Boolean(
-          app.skills_md && canReadFullSkillContext(app, userId),
-        );
-        const previewMd = buildSkillsPreviewMarkdown(app, appId, userId);
-        result = {
-          skills_md: fullContextReadable ? app.skills_md : null,
-          preview_md: previewMd,
-          skills: buildMcpSkillSummaries(app, appId),
-          full_context_included: fullContextReadable,
-          full_context_requires_pull: hasSkillContext(app) &&
-            !canReadFullSkillContext(app, userId),
-          full_context_resource_uri: `ultralight://app/${appId}/skills.md`,
-          pull_tool: "ultralight.pullSkill",
-          app_name: app.name || app.slug || appId,
-          app_id: appId,
-        };
-        break;
-      }
-
-      case "ultralight.pullSkill": {
-        const appsService = createAppsService();
-        const app = await appsService.findById(appId);
-        if (!app) {
-          return jsonRpcErrorResponse(id, NOT_FOUND, "App not found");
-        }
-        const skillId = typeof args.skill_id === "string"
-          ? args.skill_id
-          : typeof args.skillId === "string"
-          ? args.skillId
-          : DEFAULT_SKILL_ID;
-        const operationId = typeof args.idempotency_key === "string" &&
-            args.idempotency_key.trim()
-          ? args.idempotency_key.trim()
-          : typeof args.idempotencyKey === "string" &&
-              args.idempotencyKey.trim()
-          ? args.idempotencyKey.trim()
-          : createExecutionReceiptId();
-
-        try {
-          const pulled = await pullSkillContext({
-            app,
-            userId,
-            skillId,
-            operationId,
-            metadata: {
-              source: "mcp_sdk",
-              tool_name: "ultralight.pullSkill",
-              app_id: appId,
-              operation_id: operationId,
-            },
-          });
-          result = {
-            skill_id: pulled.skill.id,
-            skill_name: pulled.skill.name,
-            semantic_description: pulled.skill.semanticDescription,
-            content: pulled.content,
-            charged_light: pulled.chargedLight,
-            developer_revenue_light: pulled.developerRevenueLight,
-            platform_fee_light: pulled.platformFeeLight,
-            fee_would_have_been_light: pulled.feeWouldHaveBeenLight,
-            fee_waived_light: pulled.feeWaivedLight,
-            waiver_source: pulled.waiverSource,
-            free_pull: pulled.freePull,
-            free_pull_count: pulled.freePullCount,
-            free_pull_limit: pulled.freePullLimit,
-            receipt_id: pulled.receipt.id,
-            transfer_id: pulled.receipt.transferId,
-            waiver_event_id: pulled.receipt.waiverEventId,
-          };
-        } catch (err) {
-          if (err instanceof SkillPullBillingError) {
-            return jsonRpcErrorResponse(
-              id,
-              err.status === 403
-                ? INVALID_REQUEST
-                : err.status >= 500
-                ? INTERNAL_ERROR
-                : PAYMENT_REQUIRED,
-              err.message,
-              {
-                type: err.status === 403
-                  ? "SKILL_PULL_ACCESS_DENIED"
-                  : err.status >= 500
-                  ? "SKILL_PULL_POLICY_ERROR"
-                  : "SKILL_PULL_PAYMENT_REQUIRED",
-                app_id: appId,
-                skill_id: skillId,
-                code: err.code,
-              },
-            );
-          }
-          throw err;
-        }
-        break;
-      }
-
       // Storage
       case "ultralight.store": {
         const storeKey = args.key as string;

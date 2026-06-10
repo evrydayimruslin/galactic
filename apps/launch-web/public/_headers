@@ -4,26 +4,6 @@
   Permissions-Policy: camera=(), microphone=(), geolocation=()
   Content-Security-Policy: default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; frame-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://ultralight-api.rgn4jz429m.workers.dev https://ultralight-api-staging.rgn4jz429m.workers.dev
 
-/__widget-frame/
-  ! Content-Security-Policy
-  ! Permissions-Policy
-  ! Referrer-Policy
-  ! X-Content-Type-Options
-  X-Content-Type-Options: nosniff
-  Referrer-Policy: no-referrer
-  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
-  Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; img-src data: blob: https:; font-src data: https:; style-src 'unsafe-inline' https:; script-src 'unsafe-inline'
-
-/__widget-frame/*
-  ! Content-Security-Policy
-  ! Permissions-Policy
-  ! Referrer-Policy
-  ! X-Content-Type-Options
-  X-Content-Type-Options: nosniff
-  Referrer-Policy: no-referrer
-  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
-  Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; img-src data: blob: https:; font-src data: https:; style-src 'unsafe-inline' https:; script-src 'unsafe-inline'
-
 /index.html
   Cache-Control: no-store
 

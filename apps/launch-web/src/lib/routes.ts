@@ -78,9 +78,6 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     nav: "hidden",
     apiRoutes: [
       "GET /api/launch/tools/:id",
-      "GET /api/launch/tools/:id/widgets",
-      "GET /api/launch/tools/:id/widgets/:widgetId",
-      "POST /api/launch/tools/:id/widgets/:widgetId/render",
       "GET /api/launch/tools/:id/functions",
       "POST /api/launch/tools/:id/functions/:functionName/run",
       "GET /api/launch/tools/:id/agent-permissions",

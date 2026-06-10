@@ -6,9 +6,7 @@ import { getEnv } from "../lib/env.ts";
 import type {
   AppManifest,
   ManifestFunction,
-  ManifestSkill,
 } from "../../shared/contracts/manifest.ts";
-import type { WidgetDeclaration } from "../../shared/contracts/widget.ts";
 import type { ParsedSkills } from "../../shared/types/index.ts";
 import { buildEconomicIdempotencyKey } from "./economic-idempotency.ts";
 import {
@@ -34,6 +32,9 @@ export interface EmbeddingResult {
   };
 }
 
+// "skill" and "widget" are legacy row values: generation no longer emits them
+// and default searches no longer request them, but existing rows keep them
+// (no migration) and search results may still surface them when requested.
 export type ToolSemanticSubjectType =
   | "app"
   | "function"
@@ -348,62 +349,6 @@ function parsedFunctionText(
   return truncateEmbeddingText(parts.filter(Boolean).join("\n"));
 }
 
-function manifestSkillText(
-  app: ToolSemanticEmbeddingAppInfo,
-  id: string,
-  skill: ManifestSkill,
-): string {
-  const parts = [
-    `Tool: ${app.name || app.slug || app.id}`,
-    `Skill: ${skill.name || id}`,
-  ];
-  appendLine(parts, "Tool description", app.description);
-  appendLine(parts, "Skill description", skill.description);
-  appendLine(parts, "Semantic description", skill.semantic_description);
-  appendLine(parts, "Preview", skill.preview);
-  appendLine(parts, "Resource", skill.resource);
-  return truncateEmbeddingText(parts.filter(Boolean).join("\n"));
-}
-
-function widgetText(
-  app: ToolSemanticEmbeddingAppInfo,
-  widget: WidgetDeclaration,
-): string {
-  const parts = [
-    `Tool: ${app.name || app.slug || app.id}`,
-    `Widget: ${widget.label || widget.id}`,
-  ];
-  appendLine(parts, "Tool description", app.description);
-  appendLine(parts, "Widget description", widget.description);
-  appendLine(parts, "UI function", widget.ui_function);
-  appendLine(parts, "Data function", widget.data_function || widget.data_tool);
-  appendLine(parts, "Context function", widget.context_function);
-  appendLine(parts, "Actions function", widget.actions_function);
-  if (widget.context_sources?.length) {
-    parts.push(`Context sources: ${widget.context_sources.join(", ")}`);
-  }
-  if (widget.agent_actions?.length) {
-    parts.push(
-      `Agent actions: ${
-        widget.agent_actions.map((action) =>
-          [
-            action.id,
-            action.label,
-            action.description,
-            action.expected_result,
-          ].filter(Boolean).join(" - ")
-        ).join("; ")
-      }`,
-    );
-  }
-  appendLine(
-    parts,
-    "Generation hints",
-    generationHintsText(widget.generation_hints),
-  );
-  return truncateEmbeddingText(parts.filter(Boolean).join("\n"));
-}
-
 export function buildToolSemanticEmbeddingSubjects(input: {
   app: ToolSemanticEmbeddingAppInfo;
   manifest?: AppManifest | null;
@@ -430,13 +375,6 @@ export function buildToolSemanticEmbeddingSubjects(input: {
   }
   if (manifest?.skills) {
     appParts.push(`Skills: ${Object.keys(manifest.skills).join(", ")}`);
-  }
-  if (manifest?.widgets?.length) {
-    appParts.push(
-      `Widgets: ${
-        manifest.widgets.map((widget) => widget.label || widget.id).join(", ")
-      }`,
-    );
   }
   subjects.push({
     subjectType: "app",
@@ -482,44 +420,6 @@ export function buildToolSemanticEmbeddingSubjects(input: {
         },
       });
     }
-  }
-
-  if (manifest?.skills) {
-    for (const [id, skill] of Object.entries(manifest.skills)) {
-      subjects.push({
-        subjectType: "skill",
-        subjectId: `skill:${id}`,
-        label: skill.name || id,
-        embeddingText: manifestSkillText(app, id, skill),
-        metadata: {
-          label: skill.name || id,
-          name: skill.name || null,
-          description: skill.description || null,
-          semantic_description: skill.semantic_description || null,
-          preview: skill.preview || null,
-          resource: skill.resource || null,
-          format: skill.format || null,
-          source: "tool_semantic_embedding",
-        },
-      });
-    }
-  }
-
-  for (const widget of manifest?.widgets || []) {
-    subjects.push({
-      subjectType: "widget",
-      subjectId: `widget:${widget.id}`,
-      label: widget.label || widget.id,
-      embeddingText: widgetText(app, widget),
-      metadata: {
-        label: widget.label || widget.id,
-        description: widget.description || null,
-        widget_id: widget.id,
-        ui_function: widget.ui_function || null,
-        data_function: widget.data_function || widget.data_tool || null,
-        source: "tool_semantic_embedding",
-      },
-    });
   }
 
   return subjects.filter((subject) => subject.embeddingText.trim().length > 0);
@@ -1023,7 +923,7 @@ export async function searchAppsByToolSemanticEmbedding(
     {
       ...options,
       subjectTypes: options.subjectTypes ||
-        ["app", "function", "skill", "widget"],
+        ["app", "function", "platform_primitive"],
       includePlatformPrimitives: false,
     },
     deps,

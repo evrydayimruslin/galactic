@@ -29,9 +29,6 @@ import type {
   LaunchWalletFundingQuoteResponse,
   LaunchWalletPageRequest,
   LaunchWalletSummary,
-  LaunchWidgetDetailResponse,
-  LaunchWidgetRenderRequest,
-  LaunchWidgetRenderResponse,
 } from "../../../../shared/contracts/launch.ts";
 import {
   clearLaunchAuthToken,
@@ -43,15 +40,6 @@ import {
 export interface LaunchToolResponse {
   tool: LaunchToolSummary;
   trustCard?: LaunchTrustCard;
-  generatedAt?: string;
-}
-
-export interface LaunchToolWidgetsResponse {
-  tool: Pick<
-    LaunchToolSummary,
-    "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
-  >;
-  widgets: LaunchToolSummary["widgets"];
   generatedAt?: string;
 }
 
@@ -123,9 +111,6 @@ export class LaunchApiClient {
     if (request.kind && request.kind !== "all") {
       params.set("kind", request.kind);
     }
-    if (request.includeWidgets !== undefined) {
-      params.set("includeWidgets", String(request.includeWidgets));
-    }
     if (request.limit) params.set("limit", String(request.limit));
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return this.fetchJson(`/api/launch/store${suffix}`);
@@ -139,41 +124,6 @@ export class LaunchApiClient {
 
   tool(idOrSlug: string): Promise<LaunchToolResponse> {
     return this.fetchJson(`/api/launch/tools/${encodeURIComponent(idOrSlug)}`);
-  }
-
-  toolWidgets(
-    idOrSlug: string,
-  ): Promise<LaunchToolWidgetsResponse> {
-    return this.fetchJson(
-      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/widgets`,
-    );
-  }
-
-  widgetDetail(
-    idOrSlug: string,
-    widgetId: string,
-  ): Promise<LaunchWidgetDetailResponse> {
-    return this.fetchJson(
-      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/widgets/${
-        encodeURIComponent(widgetId)
-      }`,
-    );
-  }
-
-  renderWidget(
-    idOrSlug: string,
-    widgetId: string,
-    request: LaunchWidgetRenderRequest = {},
-  ): Promise<LaunchWidgetRenderResponse> {
-    return this.fetchJson(
-      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/widgets/${
-        encodeURIComponent(widgetId)
-      }/render`,
-      {
-        method: "POST",
-        body: JSON.stringify(request),
-      },
-    );
   }
 
   toolFunctions(idOrSlug: string): Promise<LaunchToolFunctionsResponse> {

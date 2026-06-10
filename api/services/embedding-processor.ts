@@ -163,7 +163,7 @@ export async function processNullEmbeddings(): Promise<number> {
 }
 
 /**
- * Operator-triggered backfill for app/function/skill/widget semantic index rows.
+ * Operator-triggered backfill for app/function semantic index rows.
  * This intentionally does not run on the 10s content embedding interval because
  * provider calls are not free even when billing idempotency prevents duplicate
  * Light charges.

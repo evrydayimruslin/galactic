@@ -26,6 +26,12 @@ Deno.test('platform scaffold: policy flag adds policy file and manifest hook', (
   assertStringIncludes(index, 'export { planAccess } from "./policy.ts";');
   assertStringIncludes(policy, 'ToolAccessPolicyFunction');
   assertStringIncludes(policy, 'policy.static.price_light');
+  // First-class skills are retired: scaffold output must not teach them.
+  assertEquals(policy.toLowerCase().includes('skill'), false);
+  assertEquals(
+    'skills' in (JSON.parse(manifestJson) as Record<string, unknown>),
+    false,
+  );
 
   const manifest = JSON.parse(manifestJson) as {
     access_policy?: { mode?: string; module?: string; export?: string };
@@ -38,5 +44,9 @@ Deno.test('platform scaffold: policy flag adds policy file and manifest hook', (
   assertEquals(
     scaffold.next_steps.some((step) => step.includes('Edit policy.ts')),
     true,
+  );
+  assertEquals(
+    scaffold.next_steps.some((step) => step.toLowerCase().includes('skill')),
+    false,
   );
 });

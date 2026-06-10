@@ -16,12 +16,18 @@ export interface AppManifest {
     skills?: Record<string, ManifestSkill>;
     access_policy?: ManifestAccessPolicy;
     permissions?: string[];
+    external_functions?: ManifestExternalDependency[];
     widgets?: WidgetDeclaration[];
     context_sources?: WidgetContextSourceDeclaration[];
     routines?: RoutineDeclaration[];
     env?: Record<string, ManifestEnvVar>;
     env_vars?: Record<string, ManifestEnvVar>;
     http?: ManifestHttpConfig;
+}
+export interface ManifestExternalDependency {
+    app: string;
+    functions: string[];
+    access?: 'read' | 'write';
 }
 export type ManifestHttpAuthMode = 'user' | 'public';
 export type ManifestHttpBillingMode = 'owner' | 'caller';

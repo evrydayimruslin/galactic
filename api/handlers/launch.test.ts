@@ -183,9 +183,6 @@ Deno.test('launch facade: install can include tool-specific handoff', async () =
             scopes?: string[];
             appIds?: string[];
           };
-          widgetUrls: Array<
-            { id: string; openUrl: string; renderUrl?: string | null }
-          >;
           agentHandoff: string[];
         } | null;
       };
@@ -204,11 +201,7 @@ Deno.test('launch facade: install can include tool-specific handoff', async () =
         'apps:call',
       ]);
       assertEquals(body.toolInstall?.recommendedApiKey.appIds, ['app-1']);
-      assertEquals(body.toolInstall?.widgetUrls[0].id, 'ops');
-      assertEquals(
-        body.toolInstall?.widgetUrls[0].renderUrl,
-        'https://ultralight.test/api/launch/tools/deploy-helper/widgets/ops/render',
-      );
+      assertEquals('widgetUrls' in (body.toolInstall || {}), false);
       assertStringIncludes(
         body.toolInstall?.agentHandoff.join('\n') || '',
         'receipt_id',
@@ -282,7 +275,7 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
       available: boolean;
       version: string;
       apiRoutes: string[];
-      endpoints: Record<string, string>;
+      endpoints: Record<string, string | undefined>;
       compatibilityPublicRoutes: string[];
       capabilities: { deferred: string[] };
     };
@@ -328,10 +321,12 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
       true,
     );
     assertEquals(
-      body.apiRoutes.includes(
-        'POST /api/launch/tools/:id/widgets/:widgetId/render',
-      ),
-      true,
+      body.apiRoutes.some((route) => route.includes('/widgets')),
+      false,
+    );
+    assertEquals(
+      body.apiRoutes.some((route) => route.includes('/skills')),
+      false,
     );
     assertEquals(
       body.apiRoutes.includes('GET /api/launch/tools/:id/functions'),
@@ -340,16 +335,6 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
     assertEquals(
       body.apiRoutes.includes(
         'POST /api/launch/tools/:id/functions/:functionName/run',
-      ),
-      true,
-    );
-    assertEquals(
-      body.apiRoutes.includes('GET /api/launch/tools/:id/skills'),
-      true,
-    );
-    assertEquals(
-      body.apiRoutes.includes(
-        'POST /api/launch/tools/:id/skills/:skillId/pull',
       ),
       true,
     );
@@ -364,10 +349,10 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
       true,
     );
     assertEquals(body.endpoints.apiKeys, '/api/launch/api-keys');
-    assertEquals(
-      body.endpoints.widgetRender,
-      '/api/launch/tools/{id}/widgets/{widgetId}/render',
-    );
+    assertEquals(body.endpoints.widgetRender, undefined);
+    assertEquals(body.endpoints.widgetDetail, undefined);
+    assertEquals(body.endpoints.toolSkills, undefined);
+    assertEquals(body.endpoints.skillPull, undefined);
     assertEquals(
       body.endpoints.toolFunctions,
       '/api/launch/tools/{id}/functions',
@@ -375,14 +360,6 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
     assertEquals(
       body.endpoints.functionRun,
       '/api/launch/tools/{id}/functions/{functionName}/run',
-    );
-    assertEquals(
-      body.endpoints.toolSkills,
-      '/api/launch/tools/{id}/skills',
-    );
-    assertEquals(
-      body.endpoints.skillPull,
-      '/api/launch/tools/{id}/skills/{skillId}/pull',
     );
     assertEquals(
       body.endpoints.agentPermissions,
@@ -441,23 +418,18 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
     assertEquals(Boolean(spec.paths['/api/launch/api-keys']), true);
     assertEquals(Boolean(spec.paths['/api/launch/api-keys/{id}']), true);
     assertEquals(
-      Boolean(spec.paths['/api/launch/tools/{id}/widgets/{widgetId}']),
-      true,
+      Object.keys(spec.paths).some((path) => path.includes('/widgets')),
+      false,
     );
     assertEquals(
-      Boolean(spec.paths['/api/launch/tools/{id}/widgets/{widgetId}/render']),
-      true,
+      Object.keys(spec.paths).some((path) => path.includes('/skills')),
+      false,
     );
     assertEquals(Boolean(spec.paths['/api/launch/tools/{id}/functions']), true);
     assertEquals(
       Boolean(
         spec.paths['/api/launch/tools/{id}/functions/{functionName}/run'],
       ),
-      true,
-    );
-    assertEquals(Boolean(spec.paths['/api/launch/tools/{id}/skills']), true);
-    assertEquals(
-      Boolean(spec.paths['/api/launch/tools/{id}/skills/{skillId}/pull']),
       true,
     );
     assertEquals(
@@ -472,10 +444,13 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
       Boolean(spec.components?.schemas?.AgentFunctionPermissions),
       true,
     );
-    assertEquals(Boolean(spec.components?.schemas?.ToolSkillsResponse), true);
     assertEquals(Boolean(spec.components?.schemas?.TrustCard), true);
-    assertEquals(Boolean(spec.components?.schemas?.WidgetDetail), true);
-    assertEquals(Boolean(spec.components?.schemas?.WidgetRenderResponse), true);
+    assertEquals(
+      Object.keys(spec.components?.schemas || {}).some((name) =>
+        name.includes('Widget') || name.includes('Skill')
+      ),
+      false,
+    );
     assertEquals(
       Boolean(spec.components?.schemas?.ToolFunctionsResponse),
       true,
@@ -497,103 +472,36 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
   });
 });
 
-Deno.test('launch facade: widget detail exposes render surface metadata', async () => {
-  await withLaunchEnv(
-    async () => {
+Deno.test('launch facade: widget and skill endpoints are removed', async () => {
+  await withLaunchEnv(async () => {
+    const removedGetEndpoints = [
+      '/api/launch/tools/deploy-helper/widgets',
+      '/api/launch/tools/deploy-helper/widgets/ops',
+      '/api/launch/tools/deploy-helper/skills',
+    ];
+    for (const endpoint of removedGetEndpoints) {
       const response = await handleLaunch(
-        new Request(
-          'https://ultralight.test/api/launch/tools/deploy-helper/widgets/ops',
-        ),
+        new Request(`https://ultralight.test${endpoint}`),
       );
-      const body = await response.json() as {
-        tool: { slug: string };
-        widget: {
-          summary: {
-            id: string;
-            detailUrl?: string;
-            renderUrl?: string;
-          };
-          functions: {
-            uiFunction?: string | null;
-            dataFunction?: string | null;
-          };
-          renderSurface?: { htmlField?: string; authRequired?: boolean } | null;
-        };
-      };
+      const body = await response.json() as { error?: string };
 
-      assertEquals(response.status, 200);
-      assertEquals(body.tool.slug, 'deploy-helper');
-      assertEquals(body.widget.summary.id, 'ops');
-      assertEquals(
-        body.widget.summary.detailUrl,
-        '/api/launch/tools/deploy-helper/widgets/ops',
+      assertEquals(response.status, 404, endpoint);
+      assertEquals(body.error, 'Launch endpoint not found', endpoint);
+    }
+
+    const removedPostEndpoints = [
+      '/api/launch/tools/deploy-helper/widgets/ops/render',
+      '/api/launch/tools/deploy-helper/skills/context/pull',
+    ];
+    for (const endpoint of removedPostEndpoints) {
+      const response = await handleLaunch(
+        new Request(`https://ultralight.test${endpoint}`, { method: 'POST' }),
       );
-      assertEquals(
-        body.widget.summary.renderUrl,
-        '/api/launch/tools/deploy-helper/widgets/ops/render',
-      );
-      assertEquals(body.widget.functions.uiFunction, 'widget_ops_ui');
-      assertEquals(body.widget.functions.dataFunction, 'widget_ops_data');
-      assertEquals(body.widget.renderSurface?.htmlField, 'app_html');
-      assertEquals(body.widget.renderSurface?.authRequired, true);
-    },
-    async (input) => {
-      const url = input instanceof Request ? input.url : String(input);
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
-        return jsonResponse([
-          {
-            id: 'app-1',
-            owner_id: 'owner-1',
-            slug: 'deploy-helper',
-            name: 'Deploy Helper',
-            description: 'Deploy tools for existing agents',
-            visibility: 'public',
-            download_access: 'public',
-            current_version: 'v1',
-            manifest: {
-              widgets: [{
-                id: 'ops',
-                label: 'Ops',
-                description: 'Operations widget',
-                ui_function: 'widget_ops_ui',
-                data_function: 'widget_ops_data',
-              }],
-            },
-            exports: ['widget_ops_ui', 'widget_ops_data'],
-            pricing_config: {},
-            gpu_pricing_config: null,
-            runtime: 'deno',
-            gpu_status: null,
-            gpu_type: null,
-            version_metadata: [],
-            env_schema: {},
-            tags: ['deploy'],
-            category: 'devtools',
-            likes: 0,
-            dislikes: 0,
-            weighted_likes: 0,
-            weighted_dislikes: 0,
-            total_runs: 0,
-            runs_30d: 0,
-            hosting_suspended: false,
-            updated_at: '2026-06-01T00:00:00.000Z',
-            created_at: '2026-06-01T00:00:00.000Z',
-          },
-        ]);
-      }
-      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
-        return jsonResponse([
-          {
-            id: 'owner-1',
-            display_name: 'Ada',
-            profile_slug: 'ada',
-            avatar_url: null,
-          },
-        ]);
-      }
-      return jsonResponse([]);
-    },
-  );
+      await response.body?.cancel();
+
+      assertEquals(response.status, 405, endpoint);
+    }
+  });
 });
 
 Deno.test('launch facade: public slug lookups avoid uuid id comparisons', async () => {
@@ -601,10 +509,7 @@ Deno.test('launch facade: public slug lookups avoid uuid id comparisons', async 
     async () => {
       const endpoints = [
         '/api/launch/tools/deploy-helper',
-        '/api/launch/tools/deploy-helper/widgets',
-        '/api/launch/tools/deploy-helper/widgets/ops',
         '/api/launch/tools/deploy-helper/functions',
-        '/api/launch/tools/deploy-helper/skills',
       ];
 
       for (const endpoint of endpoints) {
@@ -651,15 +556,12 @@ Deno.test('launch facade: public slug lookups avoid uuid id comparisons', async 
   );
 });
 
-Deno.test('launch facade: owners can preview private tools and widgets', async () => {
+Deno.test('launch facade: owners can preview private tools', async () => {
   await withLaunchEnv(
     async () => {
       const endpoints = [
         '/api/launch/tools/private-helper',
-        '/api/launch/tools/private-helper/widgets',
-        '/api/launch/tools/private-helper/widgets/ops',
         '/api/launch/tools/private-helper/functions',
-        '/api/launch/tools/private-helper/skills',
       ];
 
       for (const endpoint of endpoints) {
@@ -671,29 +573,17 @@ Deno.test('launch facade: owners can preview private tools and widgets', async (
         const body = await response.json() as {
           error?: string;
           functions?: Array<{ name: string }>;
-          skills?: Array<{ id: string }>;
           tool?: { relationship?: string; slug?: string };
-          widget?: { summary?: { id?: string } };
-          widgets?: Array<{ id: string }>;
         };
 
         assertEquals(response.status, 200, `${endpoint}: ${body.error || ''}`);
         assertEquals(body.tool?.slug, 'private-helper');
         assertEquals(body.tool?.relationship, 'owner');
-        if (endpoint.endsWith('/widgets')) {
-          assertEquals(body.widgets?.[0]?.id, 'ops');
-        }
-        if (endpoint.endsWith('/widgets/ops')) {
-          assertEquals(body.widget?.summary?.id, 'ops');
-        }
         if (endpoint.endsWith('/functions')) {
           assertEquals(
             body.functions?.map((entry) => entry.name),
             ['deploy', 'inspect', 'widget_ops_data', 'widget_ops_ui'],
           );
-        }
-        if (endpoint.endsWith('/skills')) {
-          assertEquals(body.skills?.[0]?.id, 'context');
         }
       }
     },
@@ -771,22 +661,7 @@ Deno.test('launch facade: unauthenticated private previews stay hidden', async (
   );
 });
 
-Deno.test('launch facade: widget render requires authentication', async () => {
-  await withLaunchEnv(async () => {
-    const response = await handleLaunch(
-      new Request(
-        'https://ultralight.test/api/launch/tools/deploy-helper/widgets/ops/render',
-        { method: 'POST' },
-      ),
-    );
-    const body = await response.json() as { error?: string };
-
-    assertEquals(response.status, 401);
-    assertEquals(body.error, 'Authentication required');
-  });
-});
-
-Deno.test('launch facade: tool functions expose pricing, schemas, widgets, and policy', async () => {
+Deno.test('launch facade: tool functions expose pricing, schemas, and policy', async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
@@ -815,19 +690,23 @@ Deno.test('launch facade: tool functions expose pricing, schemas, widgets, and p
             exportName: string;
             execution: string;
           } | null;
-          widgetIds?: string[];
           agentPermission?: { policy: string; source: string } | null;
         }>;
       };
 
       assertEquals(response.status, 200);
       assertEquals(body.tool.slug, 'deploy-helper');
+      assertEquals('widgets' in body.tool, false);
       assertEquals(body.functions.map((entry) => entry.name), [
         'deploy',
         'inspect',
         'widget_ops_data',
         'widget_ops_ui',
       ]);
+      assertEquals(
+        body.functions.some((entry) => 'widgetIds' in entry),
+        false,
+      );
       const deploy = body.functions[0];
       assertEquals(deploy.description, 'Deploy code');
       assertEquals(Boolean(deploy.inputSchema?.properties?.repo), true);
@@ -841,8 +720,6 @@ Deno.test('launch facade: tool functions expose pricing, schemas, widgets, and p
       assertEquals(deploy.accessPolicy?.execution, 'runtime_policy');
       assertEquals(deploy.agentPermission?.policy, 'always');
       assertEquals(deploy.agentPermission?.source, 'explicit');
-      const widgetUi = body.functions.find((entry) => entry.name === 'widget_ops_ui');
-      assertEquals(widgetUi?.widgetIds, ['ops']);
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
@@ -883,90 +760,6 @@ Deno.test('launch facade: tool functions expose pricing, schemas, widgets, and p
           function_name: 'deploy',
           policy: 'always',
         }]);
-      }
-      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
-        return jsonResponse([
-          {
-            id: 'owner-1',
-            display_name: 'Ada',
-            profile_slug: 'ada',
-            avatar_url: null,
-          },
-        ]);
-      }
-      return jsonResponse([]);
-    },
-  );
-});
-
-Deno.test('launch facade: tool skills expose context pricing and pull URL', async () => {
-  await withLaunchEnv(
-    async () => {
-      const response = await handleLaunch(
-        new Request(
-          'https://ultralight.test/api/launch/tools/deploy-helper/skills',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
-        ),
-      );
-      const body = await response.json() as {
-        tool: { slug: string };
-        skills: Array<{
-          id: string;
-          semanticDescription: string;
-          pricing?: {
-            pullPrice?: { light: number; display: string } | null;
-            freePulls: number;
-            monetized: boolean;
-          } | null;
-          accessPolicy?: {
-            configured: boolean;
-            mode: string;
-            module: string | null;
-            exportName: string;
-            execution: string;
-          } | null;
-          pullUrl: string;
-        }>;
-      };
-
-      assertEquals(response.status, 200);
-      assertEquals(body.tool.slug, 'deploy-helper');
-      assertEquals(body.skills[0].id, 'context');
-      assertEquals(body.skills[0].pricing?.pullPrice?.light, 2);
-      assertEquals(body.skills[0].accessPolicy?.configured, true);
-      assertEquals(body.skills[0].accessPolicy?.execution, 'runtime_policy');
-      assertEquals(body.skills[0].pricing?.freePulls, 1);
-      assertEquals(body.skills[0].pricing?.monetized, true);
-      assertEquals(
-        body.skills[0].pullUrl,
-        '/api/launch/tools/deploy-helper/skills/context/pull',
-      );
-      assertEquals(
-        body.skills[0].semanticDescription.includes('Deploy Helper'),
-        true,
-      );
-    },
-    async (input) => {
-      const url = input instanceof Request ? input.url : String(input);
-      if (url === 'https://supabase.test/auth/v1/user') {
-        return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
-          user_metadata: {},
-        });
-      }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
-      }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
-      }
-      if (url.startsWith('https://supabase.test/rest/v1/user_app_library?')) {
-        return jsonResponse([]);
-      }
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
-        if (url.includes('owner_id=eq.user-1')) return jsonResponse([]);
-        return jsonResponse([launchPermissionTestApp()]);
       }
       if (url.startsWith('https://supabase.test/rest/v1/users?')) {
         return jsonResponse([
@@ -1545,6 +1338,7 @@ Deno.test('launch facade: store uses semantic app and platform primitive embeddi
       ]);
       assertEquals(body.retrieval.fallbackSources, []);
       assertEquals(body.results[0].id, 'app-1');
+      assertEquals('widgets' in body.results[0], false);
       assertEquals(body.results[0].relevance?.source, 'semantic');
       assertEquals(body.results[0].relevance?.score, 0.91);
       assertEquals(body.platformPrimitives[0].primitive, 'deploy');

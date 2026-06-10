@@ -26,18 +26,8 @@ import {
   type LaunchWalletTransaction,
 } from "../../../../shared/contracts/launch.ts";
 import type { LaunchPageProps } from "../App";
-import {
-  buildLaunchSignInUrl,
-  getLaunchAuthDiagnostic,
-  hasLaunchAuthToken,
-  signOutLaunch,
-} from "../lib/auth";
-import { launchApi, LaunchApiAuthenticationError } from "../lib/api";
-import {
-  buildLaunchWidgetDocument,
-  createLaunchWidgetSurfaceId,
-  isLaunchWidgetBridgeMessage,
-} from "../lib/widget-runtime";
+import { getLaunchAuthDiagnostic, signOutLaunch } from "../lib/auth";
+import { launchApi } from "../lib/api";
 import {
   Avatar,
   Button,
@@ -72,7 +62,6 @@ interface ToolFixture {
   slug: string;
   spark: number[];
   summary: string;
-  widgets: number;
 }
 
 interface InstallTarget {
@@ -108,12 +97,6 @@ interface ToolFunctionFixture {
   price: number;
 }
 
-interface ToolWidgetFixture {
-  description: string;
-  id: string;
-  label: string;
-}
-
 interface ToolDetailFixture extends ToolFixture {
   callsPerDay: number;
   capabilities: ToolCapability[];
@@ -125,19 +108,14 @@ interface ToolDetailFixture extends ToolFixture {
   updatedAt: string;
   version: string;
   visibility: "public" | "private" | "unlisted";
-  widgetList: ToolWidgetFixture[];
 }
 
 const apiKeyMask = "ulk_live_••••••••••••4xN4";
 const apiKeyPlaceholder = "$ULTRALIGHT_API_KEY";
 const mcpUrl = "https://api.ultralight.dev/mcp/platform";
 
-function toolPreviewPath(
-  tool: Pick<ToolDetailFixture, "slug">,
-  widgetId?: string,
-): string {
-  const base = `/tools/${encodeURIComponent(tool.slug)}`;
-  return widgetId ? `${base}?widget=${encodeURIComponent(widgetId)}` : base;
+function toolPreviewPath(tool: Pick<ToolDetailFixture, "slug">): string {
+  return `/tools/${encodeURIComponent(tool.slug)}`;
 }
 
 const orbitAgents = [
@@ -160,8 +138,7 @@ const discoverTools: ToolFixture[] = [
     name: "get_weather",
     slug: "get_weather",
     spark: [11, 13, 16, 12, 17, 21, 28],
-    summary: "Hyper-local weather, forecasts, and severe-weather widgets.",
-    widgets: 2,
+    summary: "Hyper-local weather, forecasts, and severe-weather alerts.",
   },
   {
     author: "@anchor",
@@ -176,7 +153,6 @@ const discoverTools: ToolFixture[] = [
     slug: "currency_convert",
     spark: [14, 15, 16, 15, 17, 18, 19],
     summary: "Live FX across 180+ pairs with spot and historical rates.",
-    widgets: 0,
   },
   {
     author: "stripe",
@@ -191,7 +167,6 @@ const discoverTools: ToolFixture[] = [
     slug: "stripe_subscribe",
     spark: [10, 9, 12, 16, 18, 22, 30],
     summary: "Create subscriptions, meter usage, and return receipts.",
-    widgets: 1,
   },
   {
     author: "@vellum",
@@ -206,7 +181,6 @@ const discoverTools: ToolFixture[] = [
     slug: "pdf_parse",
     spark: [12, 13, 14, 15, 16, 17, 19],
     summary: "Layout-aware PDF text, table, and citation extraction.",
-    widgets: 0,
   },
   {
     author: "@octo",
@@ -222,7 +196,6 @@ const discoverTools: ToolFixture[] = [
     slug: "github_diff",
     spark: [13, 14, 14, 15, 16, 16, 17],
     summary: "Branch diff, review comments, and CI status summaries.",
-    widgets: 0,
   },
   {
     author: "@cartography",
@@ -238,7 +211,6 @@ const discoverTools: ToolFixture[] = [
     slug: "maps_route",
     spark: [9, 10, 11, 12, 13, 15, 16],
     summary: "Driving, walking, and transit ETAs for agent plans.",
-    widgets: 1,
   },
 ];
 
@@ -252,7 +224,7 @@ const primitives = [
   [
     "discover",
     "Discover tools",
-    "Find public agent-native tools and widgets.",
+    "Find public agent-native tools.",
     "/store",
   ],
   [
@@ -260,12 +232,6 @@ const primitives = [
     "Light wallet",
     "Spendable Light for installs, calls, hosting.",
     "/wallet",
-  ],
-  [
-    "widgets",
-    "Widgets",
-    "Open public UI surfaces attached to tools.",
-    "/tools/:slug",
   ],
 ] as const;
 
@@ -450,9 +416,9 @@ const installTargets: InstallTarget[] = [
 const externalLoop = [
   "Install MCP / CLI / API",
   "Discover tools + primitives",
-  "Inspect pricing, trust, widgets",
+  "Inspect pricing + trust",
   "Call through MCP / API",
-  "Return widget links + receipts",
+  "Return results + receipts",
 ];
 
 const defaultCapabilities: ToolCapability[] = [
@@ -478,7 +444,6 @@ const ownedLibrarySlugs = ["get_weather"];
 const adminTabs = [
   ["edit", "Edit"],
   ["pricing", "Pricing"],
-  ["widgets", "Widgets"],
   ["secrets", "Secrets"],
   ["trust", "Trust"],
   ["receipts", "Receipts"],
@@ -488,13 +453,13 @@ const adminTabs = [
 type AdminTabId = typeof adminTabs[number][0];
 type LibraryView = "installed" | "owned";
 type StoreKindFilter = "all" | ToolFixture["kind"];
-type ToolPageTabId = "details" | "functions" | "widgets";
+type ToolPageTabId = "details" | "functions";
 
 const visibilityOptions = [
   [
     "public",
     "Public",
-    "Listed in the Store, embeddable widgets, installable by anyone.",
+    "Listed in the Store, installable by anyone.",
   ],
   [
     "unlisted",
@@ -720,7 +685,6 @@ function liveToolFixture(
     slug: tool.slug,
     spark: stableSpark(tool.id),
     summary: tool.description || "Agent-callable Ultralight tool.",
-    widgets: tool.widgets.length,
   });
   const permissions = new Map(
     (options.permissions?.permissions || []).map((
@@ -738,13 +702,6 @@ function liveToolFixture(
       price: lightValue(fn.pricing?.defaultCallPrice),
     }))
     : base.functions;
-  const widgets = tool.widgets.length > 0
-    ? tool.widgets.map((widget) => ({
-      description: widget.description || "Tool UI preview.",
-      id: widget.id,
-      label: widget.label,
-    }))
-    : base.widgetList;
   const trust = options.trustCard;
   const paidFunctionPrices = functions.map((fn) => fn.price).filter((price) =>
     price > 0
@@ -774,8 +731,6 @@ function liveToolFixture(
     updatedAt: relativeTime(tool.updatedAt) || base.updatedAt,
     version: trust?.version || base.version,
     visibility: tool.visibility,
-    widgetList: widgets,
-    widgets: widgets.length,
   };
 }
 
@@ -1271,20 +1226,8 @@ export function ToolFoundationPage(
     live.data.toolAgentPermissions,
     live.data.tool?.trustCard,
   ) || toolDetails[slug];
-  const widgetId = new URLSearchParams(location.search).get("widget");
 
   if (!tool) return <ToolNotFoundPage navigate={navigate} slug={slug} />;
-  if (widgetId) {
-    return (
-      <WidgetOpenSurface
-        locationSearch={location.search}
-        live={live}
-        navigate={navigate}
-        tool={tool}
-        widgetId={widgetId}
-      />
-    );
-  }
   return (
     <ToolDetailSurface
       live={live}
@@ -1306,26 +1249,18 @@ function ToolDetailSurface({
   navigate: (to: string) => void;
   tool: ToolDetailFixture;
 }): ReactElement {
-  const hasWidgets = tool.widgetList.length > 0;
   const [installed, setInstalled] = useState(false);
-  const [tab, setTab] = useState<ToolPageTabId>(() =>
-    toolTabFromSearch(hasWidgets)
-  );
-  const [selectedWidgetId, setSelectedWidgetId] = useState(
-    tool.widgetList[0]?.id || "",
-  );
+  const [tab, setTab] = useState<ToolPageTabId>(() => toolTabFromSearch());
   const [selectedFunctionName, setSelectedFunctionName] = useState(
     tool.functions[0]?.name || "",
   );
   useEffect(() => {
-    setTab(toolTabFromSearch(hasWidgets));
-  }, [hasWidgets, locationSearch]);
+    setTab(toolTabFromSearch());
+  }, [locationSearch]);
 
   const activateToolTab = (nextTab: ToolPageTabId) => {
     setTab(nextTab);
-    syncSearchParams({
-      tab: nextTab === (hasWidgets ? "widgets" : "functions") ? null : nextTab,
-    });
+    syncSearchParams({ tab: nextTab === "functions" ? null : nextTab });
   };
 
   return (
@@ -1369,45 +1304,20 @@ function ToolDetailSurface({
             >
               {installed ? "Installed" : "Install"}
             </Button>
-            {hasWidgets
-              ? (
-                <Button
-                  icon="grid"
-                  onClick={() =>
-                    navigate(toolPreviewPath(tool, selectedWidgetId))}
-                  size="lg"
-                  variant="secondary"
-                >
-                  Open widget
-                </Button>
-              )
-              : (
-                <RouteButton
-                  icon="copy"
-                  navigate={navigate}
-                  size="lg"
-                  to="/install"
-                  variant="secondary"
-                >
-                  Copy MCP config
-                </RouteButton>
-              )}
+            <RouteButton
+              icon="copy"
+              navigate={navigate}
+              size="lg"
+              to="/install"
+              variant="secondary"
+            >
+              Copy MCP config
+            </RouteButton>
           </div>
         </div>
       </section>
 
       <div className="tool-tabs" role="tablist" aria-label="Tool page sections">
-        {hasWidgets
-          ? (
-            <button
-              className={tab === "widgets" ? "active" : ""}
-              onClick={() => activateToolTab("widgets")}
-              type="button"
-            >
-              Widgets
-            </button>
-          )
-          : null}
         <button
           className={tab === "functions" ? "active" : ""}
           onClick={() => activateToolTab("functions")}
@@ -1426,16 +1336,6 @@ function ToolDetailSurface({
 
       <div className="tool-detail-layout">
         <main className="tool-main-panel">
-          {tab === "widgets"
-            ? (
-              <ToolWidgetsPanel
-                navigate={navigate}
-                selectedWidgetId={selectedWidgetId}
-                setSelectedWidgetId={setSelectedWidgetId}
-                tool={tool}
-              />
-            )
-            : null}
           {tab === "functions"
             ? (
               <ToolFunctionsPanel
@@ -1453,62 +1353,6 @@ function ToolDetailSurface({
         </aside>
       </div>
     </div>
-  );
-}
-
-function ToolWidgetsPanel({
-  navigate,
-  selectedWidgetId,
-  setSelectedWidgetId,
-  tool,
-}: {
-  navigate: (to: string) => void;
-  selectedWidgetId: string;
-  setSelectedWidgetId: (id: string) => void;
-  tool: ToolDetailFixture;
-}): ReactElement {
-  const [state, setState] = useState<WidgetState>("ready");
-  const widget = tool.widgetList.find((item) => item.id === selectedWidgetId) ||
-    tool.widgetList[0];
-
-  if (!widget) {
-    return (
-      <EmptyState icon="grid" title="No widget">
-        This tool exposes functions only. Agents can still install and call it
-        through MCP or API.
-      </EmptyState>
-    );
-  }
-
-  return (
-    <Card className="widget-surface-card">
-      <div className="widget-panel-top">
-        <div>
-          <p className="section-label">Developer-authored UI</p>
-          <h2>{widget.label}</h2>
-          <p>{widget.description}</p>
-        </div>
-        <Button
-          icon="grid"
-          onClick={() => navigate(toolPreviewPath(tool, widget.id))}
-          variant="secondary"
-        >
-          Open widget
-        </Button>
-      </div>
-      <WidgetSelector
-        selected={widget.id}
-        setSelected={setSelectedWidgetId}
-        widgets={tool.widgetList}
-      />
-      <WidgetStateSelector state={state} setState={setState} />
-      <WidgetSandboxShell
-        navigate={navigate}
-        state={state}
-        tool={tool}
-        widget={widget}
-      />
-    </Card>
   );
 }
 
@@ -1724,8 +1568,8 @@ function ToolDetailsPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
         <p className="section-label">Signed manifest</p>
         <h3>{tool.signer}</h3>
         <p>
-          The public manifest advertises runtime, capabilities, widget surfaces,
-          pricing, receipts, and setup needs before any agent calls the tool.
+          The public manifest advertises runtime, capabilities, pricing,
+          receipts, and setup needs before any agent calls the tool.
         </p>
         <div className="manifest-grid">
           <MetaPair label="version" value={tool.version} />
@@ -1808,551 +1652,6 @@ function ToolTrustRail({ tool }: { tool: ToolDetailFixture }): ReactElement {
       </div>
     </div>
   );
-}
-
-type WidgetState = "ready" | "loading" | "error" | "setup";
-
-function WidgetOpenSurface({
-  live,
-  locationSearch,
-  navigate,
-  tool,
-  widgetId,
-}: {
-  live: LaunchPageProps["live"];
-  locationSearch: string;
-  navigate: (to: string) => void;
-  tool: ToolDetailFixture;
-  widgetId: string;
-}): ReactElement {
-  const widget = tool.widgetList.find((item) => item.id === widgetId) ||
-    tool.widgetList[0];
-  const [state, setState] = useState<WidgetState>("ready");
-
-  if (!widget) {
-    return (
-      <ToolDetailSurface
-        live={live}
-        locationSearch={locationSearch}
-        navigate={navigate}
-        tool={tool}
-      />
-    );
-  }
-
-  return (
-    <div className="launch-page-narrow widget-open-page">
-      <ApiNotice live={live} noun="widget details" />
-      <button
-        className="back-link"
-        onClick={() => navigate(toolPreviewPath(tool))}
-        type="button"
-      >
-        <Mono>{tool.slug}</Mono> / {widget.label}
-      </button>
-      <div className="widget-open-grid">
-        <main>
-          <div className="widget-open-head">
-            <div>
-              <p className="section-label">Open widget</p>
-              <h1>{widget.label}</h1>
-              <p>{widget.description}</p>
-            </div>
-            <WidgetStateSelector state={state} setState={setState} />
-          </div>
-          <WidgetSandboxShell
-            navigate={navigate}
-            state={state}
-            tool={tool}
-            widget={widget}
-          />
-        </main>
-        <aside>
-          <ToolTrustRail tool={tool} />
-        </aside>
-      </div>
-    </div>
-  );
-}
-
-function WidgetSelector({
-  selected,
-  setSelected,
-  widgets,
-}: {
-  selected: string;
-  setSelected: (id: string) => void;
-  widgets: ToolWidgetFixture[];
-}): ReactElement {
-  return (
-    <div className="widget-selector">
-      {widgets.map((widget) => (
-        <button
-          className={selected === widget.id ? "active" : ""}
-          key={widget.id}
-          onClick={() => setSelected(widget.id)}
-          type="button"
-        >
-          <Mono>{widget.id}</Mono>
-          <span>{widget.label}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function WidgetStateSelector({
-  setState,
-  state,
-}: {
-  setState: (state: WidgetState) => void;
-  state: WidgetState;
-}): ReactElement {
-  const options = [
-    ["ready", "Ready"],
-    ["loading", "Loading"],
-    ["error", "Error"],
-    ["setup", "Setup"],
-  ] as const;
-
-  return (
-    <div className="widget-state-selector" aria-label="Widget render state">
-      {options.map(([id, label]) => (
-        <button
-          className={state === id ? "active" : ""}
-          key={id}
-          onClick={() => setState(id)}
-          type="button"
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function WidgetSandboxShell({
-  navigate,
-  state,
-  tool,
-  widget,
-}: {
-  navigate: (to: string) => void;
-  state: WidgetState;
-  tool: ToolDetailFixture;
-  widget: ToolWidgetFixture;
-}): ReactElement {
-  const runtime = useLaunchWidgetRender(tool, widget, state === "ready");
-
-  return (
-    <div className="widget-shell">
-      <div className="widget-shell-top">
-        <Avatar color={tool.color} name={tool.author} />
-        <div>
-          <strong>{widget.label}</strong>
-          <Mono>{tool.name} · widget</Mono>
-        </div>
-        <Pill tone={runtime.status === "error" ? "amber" : "green"}>
-          {runtime.status === "error" ? "render issue" : "relayed · no key"}
-        </Pill>
-      </div>
-      <div
-        className={`widget-iframe-body ${
-          state === "ready" ? "widget-iframe-body-live" : ""
-        }`}
-      >
-        <span className="iframe-label">iframe · sandboxed</span>
-        <WidgetBody
-          navigate={navigate}
-          runtime={runtime}
-          state={state}
-          tool={tool}
-          widget={widget}
-        />
-      </div>
-      <div className="widget-relay-footer">
-        <Icon name="shield" size={13} />
-        <span>
-          Calls relay through Ultralight; the widget never sees your API key.
-        </span>
-        <Mono>ulAction("{widgetActionName(widget)}")</Mono>
-        {state === "ready" ? <Mono>session 4:58</Mono> : null}
-      </div>
-    </div>
-  );
-}
-
-type WidgetRuntimeStatus = "idle" | "loading" | "ready" | "error" | "setup";
-
-interface WidgetRuntimeState {
-  documentHtml: string | null;
-  error: string | null;
-  reload: () => void;
-  status: WidgetRuntimeStatus;
-  surfaceId: string;
-}
-
-function useLaunchWidgetRender(
-  tool: ToolDetailFixture,
-  widget: ToolWidgetFixture,
-  enabled: boolean,
-): WidgetRuntimeState {
-  const surfaceRef = useRef({ key: "", surfaceId: "" });
-  const surfaceKey = `${tool.id}:${widget.id}`;
-  if (surfaceRef.current.key !== surfaceKey) {
-    surfaceRef.current = {
-      key: surfaceKey,
-      surfaceId: createLaunchWidgetSurfaceId(tool.id, widget.id),
-    };
-  }
-
-  const [version, setVersion] = useState(0);
-  const [runtime, setRuntime] = useState<
-    Omit<WidgetRuntimeState, "reload" | "surfaceId">
-  >({
-    documentHtml: null,
-    error: null,
-    status: "idle",
-  });
-
-  useEffect(() => {
-    if (!enabled) {
-      setRuntime({ documentHtml: null, error: null, status: "idle" });
-      return;
-    }
-    if (!hasLaunchAuthToken()) {
-      setRuntime({
-        documentHtml: null,
-        error: null,
-        status: "setup",
-      });
-      return;
-    }
-
-    let cancelled = false;
-    setRuntime({ documentHtml: null, error: null, status: "loading" });
-    launchApi.renderWidget(tool.slug, widget.id, { args: {} })
-      .then((response) => {
-        if (cancelled) return;
-        if (!response.success || !response.render?.html) {
-          throw new Error(
-            response.error?.message || "Widget UI did not return HTML.",
-          );
-        }
-        const documentHtml = buildLaunchWidgetDocument({
-          appHtml: response.render.html,
-          context: {},
-          surfaceId: surfaceRef.current.surfaceId,
-          toolId: tool.id,
-          toolSlug: tool.slug,
-          widgetId: widget.id,
-        });
-        setRuntime({ documentHtml, error: null, status: "ready" });
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        if (err instanceof LaunchApiAuthenticationError) {
-          setRuntime({
-            documentHtml: null,
-            error: err.message,
-            status: "setup",
-          });
-          return;
-        }
-        setRuntime({
-          documentHtml: null,
-          error: err instanceof Error ? err.message : String(err),
-          status: "error",
-        });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled, tool.id, tool.slug, widget.id, version]);
-
-  return {
-    ...runtime,
-    reload: () => {
-      surfaceRef.current = {
-        key: surfaceKey,
-        surfaceId: createLaunchWidgetSurfaceId(tool.id, widget.id),
-      };
-      setVersion((value) => value + 1);
-    },
-    surfaceId: surfaceRef.current.surfaceId,
-  };
-}
-
-function WidgetBody({
-  navigate,
-  runtime,
-  state,
-  tool,
-  widget,
-}: {
-  navigate: (to: string) => void;
-  runtime: WidgetRuntimeState;
-  state: WidgetState;
-  tool: ToolDetailFixture;
-  widget: ToolWidgetFixture;
-}): ReactElement {
-  if (state === "loading") {
-    return (
-      <div className="widget-state-body">
-        <span className="widget-spinner" />
-        <h3>Starting widget session...</h3>
-        <Mono>POST /api/widget-session · {widget.id}</Mono>
-      </div>
-    );
-  }
-  if (state === "error") {
-    return (
-      <div className="widget-state-body">
-        <span className="state-icon error">
-          <Icon name="shield" />
-        </span>
-        <h3>Could not load this widget</h3>
-        <p>
-          The widget UI function failed to render. Your balance was not charged.
-        </p>
-        <div className="card-row">
-          <Button size="sm">Retry</Button>
-          <Button size="sm" variant="secondary">Report</Button>
-        </div>
-      </div>
-    );
-  }
-  if (state === "setup") {
-    return (
-      <div className="widget-state-body">
-        <span className="state-icon setup">
-          <Icon name="shield" />
-        </span>
-        <h3>Finish setup to run this widget</h3>
-        <p>
-          {tool.name}{" "}
-          needs one connection before this widget can run. Your API key is never
-          shared.
-        </p>
-        <div className="card-row">
-          <Button size="sm">Go to setup</Button>
-          <Button size="sm" variant="ghost">Why?</Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (runtime.status === "setup") {
-    return (
-      <div className="widget-state-body">
-        <span className="state-icon setup">
-          <Icon name="key" />
-        </span>
-        <h3>Sign in to run this widget</h3>
-        <p>
-          Developer-authored UI loads through an authenticated relay so tool
-          keys stay hidden.
-        </p>
-        <Button onClick={() => (window.location.href = buildLaunchSignInUrl())}>
-          Sign in
-        </Button>
-      </div>
-    );
-  }
-  if (runtime.status === "loading" || runtime.status === "idle") {
-    return (
-      <div className="widget-state-body">
-        <span className="widget-spinner" />
-        <h3>Rendering widget...</h3>
-        <Mono>POST /widgets/{widget.id}/render</Mono>
-      </div>
-    );
-  }
-  if (runtime.status === "error" || !runtime.documentHtml) {
-    return (
-      <div className="widget-state-body">
-        <span className="state-icon error">
-          <Icon name="shield" />
-        </span>
-        <h3>Could not load this widget</h3>
-        <p>{runtime.error || "The widget UI function failed to render."}</p>
-        <div className="card-row">
-          <Button onClick={runtime.reload} size="sm">Retry</Button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <LaunchWidgetFrame
-      documentHtml={runtime.documentHtml}
-      navigate={navigate}
-      surfaceId={runtime.surfaceId}
-      tool={tool}
-      widget={widget}
-    />
-  );
-}
-
-function LaunchWidgetFrame({
-  documentHtml,
-  navigate,
-  surfaceId,
-  tool,
-  widget,
-}: {
-  documentHtml: string;
-  navigate: (to: string) => void;
-  surfaceId: string;
-  tool: ToolDetailFixture;
-  widget: ToolWidgetFixture;
-}): ReactElement {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const sentDocumentRef = useRef(false);
-  const [height, setHeight] = useState(360);
-
-  useEffect(() => {
-    sentDocumentRef.current = false;
-    setHeight(360);
-  }, [documentHtml, surfaceId]);
-
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.source !== iframeRef.current?.contentWindow) return;
-      if (!isLaunchWidgetBridgeMessage(event.data)) return;
-      const message = event.data;
-      if (typeof message.surfaceId === "string" && message.surfaceId !== surfaceId) {
-        return;
-      }
-
-      if (message.type === "ul-widget-frame-ready") {
-        sendWidgetDocument(iframeRef.current, surfaceId, documentHtml, sentDocumentRef);
-        return;
-      }
-      if (message.type === "ul-widget-resize" && typeof message.height === "number") {
-        setHeight(Math.max(260, Math.min(message.height, 1600)));
-        return;
-      }
-      if (message.type === "ul-open-widget" && typeof message.widgetName === "string") {
-        const nextWidget = tool.widgetList.find((item) =>
-          item.id === message.widgetName
-        );
-        if (nextWidget) navigate(toolPreviewPath(tool, nextWidget.id));
-        return;
-      }
-      if (message.type === "ul-widget-action-request") {
-        void respondToWidgetAction({
-          iframe: iframeRef.current,
-          message,
-          surfaceId,
-          tool,
-          widget,
-        });
-      }
-    };
-
-    window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
-  }, [documentHtml, navigate, surfaceId, tool, widget]);
-
-  return (
-    <iframe
-      className="launch-widget-iframe"
-      key={surfaceId}
-      onLoad={() =>
-        sendWidgetDocument(iframeRef.current, surfaceId, documentHtml, sentDocumentRef)}
-      ref={iframeRef}
-      sandbox="allow-scripts"
-      src="/__widget-frame/"
-      style={{ height }}
-      title={`${tool.title} ${widget.label} widget`}
-    />
-  );
-}
-
-function sendWidgetDocument(
-  iframe: HTMLIFrameElement | null,
-  surfaceId: string,
-  documentHtml: string,
-  sentDocumentRef: { current: boolean },
-): void {
-  if (!iframe?.contentWindow || sentDocumentRef.current) return;
-  sentDocumentRef.current = true;
-  iframe.contentWindow.postMessage({
-    type: "ul-widget-load",
-    surfaceId,
-    html: documentHtml,
-  }, "*");
-}
-
-async function respondToWidgetAction({
-  iframe,
-  message,
-  surfaceId,
-  tool,
-  widget,
-}: {
-  iframe: HTMLIFrameElement | null;
-  message: { args?: unknown; functionName?: unknown; requestId?: unknown };
-  surfaceId: string;
-  tool: ToolDetailFixture;
-  widget: ToolWidgetFixture;
-}): Promise<void> {
-  const requestId = typeof message.requestId === "string"
-    ? message.requestId
-    : "";
-  if (!iframe?.contentWindow || !requestId) return;
-
-  try {
-    const functionName = typeof message.functionName === "string"
-      ? message.functionName
-      : "";
-    if (!functionName) throw new Error("Widget action is missing a function name.");
-    if (isPlatformWidgetAction(functionName)) {
-      throw new Error(
-        `${functionName} is not available in launch web widgets yet.`,
-      );
-    }
-
-    const args = {
-      ...(asRecord(message.args) || {}),
-      _widget_pull: true,
-      _widget_name: widget.id,
-      _widget_pull_reason: "widget_action",
-      _widget_surface_id: surfaceId,
-    };
-    const response = await launchApi.runToolFunction(tool.slug, functionName, {
-      args,
-    });
-    if (!response.success || response.error) {
-      throw new Error(response.error?.message || "Widget action failed.");
-    }
-    iframe.contentWindow.postMessage({
-      type: "ul-widget-action-response",
-      surfaceId,
-      requestId,
-      success: true,
-      result: response.result ?? null,
-    }, "*");
-  } catch (err) {
-    iframe.contentWindow.postMessage({
-      type: "ul-widget-action-response",
-      surfaceId,
-      requestId,
-      success: false,
-      error: err instanceof Error ? err.message : String(err),
-    }, "*");
-  }
-}
-
-function isPlatformWidgetAction(functionName: string): boolean {
-  return functionName.startsWith("ul.") ||
-    functionName.startsWith("ultralight.");
-}
-
-function widgetActionName(widget: ToolWidgetFixture): string {
-  return `widget_${widget.id}_data`;
 }
 
 function MetaPair(
@@ -2505,7 +1804,7 @@ export function LibraryFoundationPage(
           <div className="library-empty-grid">
             <LibraryEmptyCard
               action="Deploy docs"
-              body="Ship your first tool from the CLI and it appears here with installs, calls, widgets, and earnings."
+              body="Ship your first tool from the CLI and it appears here with installs, calls, and earnings."
               title="Tools you own"
             />
             <LibraryEmptyCard
@@ -2613,18 +1912,6 @@ function OwnedToolCard({
         >
           Preview
         </RouteButton>
-        {tool.widgetList.length > 0
-          ? (
-            <RouteButton
-              icon="grid"
-              navigate={navigate}
-              to={toolPreviewPath(tool, tool.widgetList[0].id)}
-              variant="ghost"
-            >
-              {tool.widgetList.length} widgets
-            </RouteButton>
-          )
-          : null}
       </div>
     </Card>
   );
@@ -2720,8 +2007,6 @@ function AdminTabPanel({
   switch (tab) {
     case "pricing":
       return <AdminPricingPanel tool={tool} />;
-    case "widgets":
-      return <AdminWidgetsPanel navigate={navigate} tool={tool} />;
     case "secrets":
       return <AdminSecretsPanel />;
     case "trust":
@@ -2819,67 +2104,14 @@ function AdminPricingPanel(
   );
 }
 
-function AdminWidgetsPanel({
-  navigate,
-  tool,
-}: {
-  navigate: (to: string) => void;
-  tool: ToolDetailFixture;
-}): ReactElement {
-  if (tool.widgetList.length === 0) {
-    return (
-      <div className="admin-panel">
-        <EmptyState icon="grid" title="No widgets yet">
-          Widgets deployed by the tool runtime will appear here with visibility
-          controls.
-        </EmptyState>
-      </div>
-    );
-  }
-
-  return (
-    <div className="admin-panel admin-widget-list">
-      {tool.widgetList.map((widget) => (
-        <Card className="admin-widget-row" key={widget.id}>
-          <span className="target-icon">
-            <Icon name="grid" />
-          </span>
-          <div>
-            <h3>
-              {widget.label} <Mono>{widget.id}</Mono>
-            </h3>
-            <p>{widget.description}</p>
-          </div>
-          <select
-            defaultValue="public"
-            aria-label={`${widget.label} visibility`}
-          >
-            <option value="public">Public</option>
-            <option value="unlisted">Unlisted</option>
-            <option value="private">Private</option>
-          </select>
-          <Button
-            onClick={() =>
-              navigate(toolPreviewPath(tool, widget.id))}
-            size="sm"
-            variant="secondary"
-          >
-            Open
-          </Button>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
 function AdminSecretsPanel(): ReactElement {
   return (
     <div className="admin-panel">
       <div className="secret-note">
         <Icon name="shield" />
         <span>
-          Secrets are encrypted and never leave the runtime. Agents and widgets
-          cannot read them.
+          Secrets are encrypted and never leave the runtime. Agents cannot read
+          them.
         </span>
       </div>
       <div className="secret-list">
@@ -3247,7 +2479,7 @@ export function SettingsFoundationPage(
           <strong>Connecting an agent?</strong>
           <p>
             Use Add to agent. It bundles your API key into install instructions
-            without passing it to widgets.
+            without exposing it in the page.
           </p>
         </div>
         <RouteButton
@@ -3637,7 +2869,7 @@ function WalletReceiptRow(
 function WalletLoadingFooter(): ReactElement {
   return (
     <div className="wallet-loading-footer">
-      <span className="widget-spinner" />
+      <span className="launch-spinner" />
       <span>Loading more...</span>
     </div>
   );
@@ -4051,7 +3283,7 @@ function SearchControls({
       <input
         aria-label="Search tools"
         onChange={(event) => setQuery(event.currentTarget.value)}
-        placeholder="Search tools, capabilities, widgets..."
+        placeholder="Search tools, capabilities, functions..."
         type="search"
         value={query}
       />
@@ -4093,13 +3325,9 @@ function StoreToolCard({ tool }: { tool: ToolFixture }): ReactElement {
       <p>{tool.summary}</p>
       <div className="store-card-meta">
         <Mono>{formatNumber(tool.installs)} installs</Mono>
-        {tool.widgets > 0
-          ? (
-            <span>
-              <Icon name="grid" size={12} /> {tool.widgets} widgets
-            </span>
-          )
-          : <span>functions only</span>}
+        {tool.free || tool.callPrice === 0
+          ? <span>Free</span>
+          : <span>{formatLight(tool.callPrice)}/call</span>}
       </div>
       <Sparkline points={tool.spark} growth={tool.growth} />
     </Card>
@@ -4137,8 +3365,7 @@ function PrimitivesRail(
       {primitives.map(([key, label, description, route]) => (
         <button
           key={key}
-          onClick={() =>
-            navigate(route === "/tools/:slug" ? "/tools/get_weather" : route)}
+          onClick={() => navigate(route)}
           type="button"
         >
           <span>
@@ -4275,13 +3502,6 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
     updatedAt: "4d",
     version: "1.0.0",
     visibility: "public",
-    widgetList: tool.widgets > 0
-      ? [{
-        id: "overview",
-        label: "Overview",
-        description: "Tool UI preview.",
-      }]
-      : [],
   };
 
   const overrides: Record<string, Partial<ToolDetailFixture>> = {
@@ -4322,7 +3542,6 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
       title: "Currency Convert",
       updatedAt: "2d",
       version: "1.12.0",
-      widgetList: [],
     },
     get_weather: {
       callsPerDay: 38200,
@@ -4369,20 +3588,6 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
       title: "Get Weather",
       updatedAt: "4d",
       version: "2.4.1",
-      widgetList: [
-        {
-          id: "forecast_card",
-          label: "Forecast card",
-          description:
-            "Five-day outlook with highs, lows, and current conditions.",
-        },
-        {
-          id: "now_badge",
-          label: "Now badge",
-          description:
-            "Compact current-conditions chip for quick agent responses.",
-        },
-      ],
     },
     github_diff: {
       capabilities: [
@@ -4412,7 +3617,6 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
       title: "GitHub Diff",
       updatedAt: "1d",
       version: "0.9.4",
-      widgetList: [],
     },
     maps_route: {
       capabilities: [
@@ -4433,13 +3637,6 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
       title: "Maps Route",
       updatedAt: "3d",
       version: "1.3.0",
-      widgetList: [
-        {
-          id: "route_card",
-          label: "Route card",
-          description: "Visual route summary for travel planning agents.",
-        },
-      ],
     },
     pdf_parse: {
       capabilities: [
@@ -4468,7 +3665,6 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
       title: "PDF Parse",
       updatedAt: "5d",
       version: "1.7.2",
-      widgetList: [],
     },
     stripe_subscribe: {
       capabilities: [
@@ -4498,14 +3694,6 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
       title: "Stripe Subscribe",
       updatedAt: "1d",
       version: "3.2.0",
-      widgetList: [
-        {
-          id: "checkout_action",
-          label: "Checkout action",
-          description:
-            "Small UI for creating and confirming subscription actions.",
-        },
-      ],
     },
   };
 
@@ -4549,11 +3737,10 @@ function libraryViewFromSearch(): LibraryView {
   return queryParam("view") === "owned" ? "owned" : "installed";
 }
 
-function toolTabFromSearch(hasWidgets: boolean): ToolPageTabId {
+function toolTabFromSearch(): ToolPageTabId {
   const tab = queryParam("tab");
   if (tab === "details" || tab === "functions") return tab;
-  if (tab === "widgets" && hasWidgets) return tab;
-  return hasWidgets ? "widgets" : "functions";
+  return "functions";
 }
 
 function adminTabFromSearch(): AdminTabId {

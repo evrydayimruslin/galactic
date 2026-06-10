@@ -5,7 +5,6 @@ export const LAUNCH_INCLUDED_CAPABILITIES = [
   "tool_library",
   "tool_discovery",
   "public_tool_pages",
-  "widgets",
   "owner_admin",
   "light_wallet",
   "builder_leaderboard",
@@ -64,13 +63,8 @@ export const LAUNCH_API_ROUTES = [
   "GET /api/launch/store",
   "GET /api/launch/discover",
   "GET /api/launch/tools/:id",
-  "GET /api/launch/tools/:id/widgets",
-  "GET /api/launch/tools/:id/widgets/:widgetId",
-  "POST /api/launch/tools/:id/widgets/:widgetId/render",
   "GET /api/launch/tools/:id/functions",
   "POST /api/launch/tools/:id/functions/:functionName/run",
-  "GET /api/launch/tools/:id/skills",
-  "POST /api/launch/tools/:id/skills/:skillId/pull",
   "GET /api/launch/tools/:id/agent-permissions",
   "PATCH /api/launch/tools/:id/agent-permissions",
   "GET /api/launch/admin/tools/:id",
@@ -141,7 +135,6 @@ export const LAUNCH_PLATFORM_PRIMITIVES = [
   "receipts",
   "api_keys",
   "owner_admin",
-  "widgets",
 ] as const;
 
 export type LaunchPlatformPrimitive = typeof LAUNCH_PLATFORM_PRIMITIVES[number];
@@ -173,12 +166,6 @@ export interface LaunchToolInstallContext {
   installUrl: string;
   platformMcpUrl: string;
   recommendedApiKey: LaunchApiKeyCreateRequest;
-  widgetUrls: Array<{
-    id: string;
-    label: string;
-    openUrl: string;
-    renderUrl?: string | null;
-  }>;
   agentHandoff: string[];
 }
 
@@ -260,10 +247,8 @@ export interface LaunchPublisherPublishRequirement {
 
 export interface LaunchPricingSummary {
   defaultCallPrice?: LaunchMoneyAmount | null;
-  defaultSkillPullPrice?: LaunchMoneyAmount | null;
   freeToInstall: boolean;
   paidFunctionsCount?: number;
-  paidSkillsCount?: number;
 }
 
 export interface LaunchAccessPolicySummary {
@@ -281,7 +266,6 @@ export interface LaunchFunctionSummary {
   outputSchema?: Record<string, unknown> | null;
   pricing?: LaunchPricingSummary | null;
   accessPolicy?: LaunchAccessPolicySummary | null;
-  widgetIds?: string[];
   agentPermission?: LaunchAgentFunctionPermissionSummary | null;
 }
 
@@ -291,50 +275,6 @@ export interface LaunchToolFunctionsResponse {
     "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
   >;
   functions: LaunchFunctionSummary[];
-  generatedAt: string;
-}
-
-export interface LaunchSkillSummary {
-  id: string;
-  name: string;
-  description?: string | null;
-  semanticDescription: string;
-  pricing?: {
-    pullPrice: LaunchMoneyAmount | null;
-    freePulls: number;
-    monetized: boolean;
-  } | null;
-  accessPolicy?: LaunchAccessPolicySummary | null;
-  pullUrl: string;
-}
-
-export interface LaunchToolSkillsResponse {
-  tool: Pick<
-    LaunchToolSummary,
-    "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
-  >;
-  skills: LaunchSkillSummary[];
-  generatedAt: string;
-}
-
-export interface LaunchSkillPullResponse {
-  success: boolean;
-  tool: Pick<LaunchToolSummary, "id" | "slug" | "name">;
-  skill: LaunchSkillSummary;
-  content?: string;
-  receiptId?: string | null;
-  charged?: LaunchMoneyAmount | null;
-  developerRevenue?: LaunchMoneyAmount | null;
-  platformFee?: LaunchMoneyAmount | null;
-  freePull?: boolean;
-  freePullCount?: number | null;
-  freePullLimit?: number;
-  waiverSource?: string | null;
-  error?: {
-    type?: string;
-    message: string;
-    details?: unknown;
-  } | null;
   generatedAt: string;
 }
 
@@ -461,82 +401,6 @@ export interface LaunchWalletFundingIntentResponse {
   generatedAt: string;
 }
 
-export interface LaunchWidgetSummary {
-  id: string;
-  label: string;
-  description?: string | null;
-  public: boolean;
-  previewAvailable: boolean;
-  openUrl?: string | null;
-  detailUrl?: string | null;
-  renderUrl?: string | null;
-}
-
-export interface LaunchWidgetFunctionSummary {
-  uiFunction?: string | null;
-  dataFunction?: string | null;
-  dataTool?: string | null;
-}
-
-export interface LaunchWidgetRenderSurface {
-  mode: "runtime_function";
-  endpoint: LaunchApiRoute;
-  method: "POST";
-  authRequired: true;
-  uiFunction: string;
-  dataFunction?: string | null;
-  dataTool?: string | null;
-  htmlField: "app_html";
-  sandbox: {
-    iframe: true;
-    allowScripts: true;
-    allowSameOrigin: false;
-  };
-}
-
-export interface LaunchWidgetDetail {
-  summary: LaunchWidgetSummary;
-  functions: LaunchWidgetFunctionSummary;
-  pollIntervalSeconds?: number | null;
-  dependencies?: unknown[];
-  renderSurface?: LaunchWidgetRenderSurface | null;
-}
-
-export interface LaunchWidgetDetailResponse {
-  tool: Pick<
-    LaunchToolSummary,
-    "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
-  >;
-  widget: LaunchWidgetDetail;
-  generatedAt: string;
-}
-
-export interface LaunchWidgetRenderRequest {
-  args?: Record<string, unknown>;
-}
-
-export interface LaunchWidgetRenderedPayload {
-  html: string;
-  meta?: Record<string, unknown> | null;
-  version?: string | null;
-  rawResult?: unknown;
-  receiptId?: string | null;
-  durationMs?: number | null;
-}
-
-export interface LaunchWidgetRenderResponse {
-  success: boolean;
-  tool: Pick<LaunchToolSummary, "id" | "slug" | "name">;
-  widget: Pick<LaunchWidgetSummary, "id" | "label" | "description">;
-  render: LaunchWidgetRenderedPayload | null;
-  error?: {
-    type?: string;
-    message: string;
-    details?: unknown;
-  } | null;
-  generatedAt: string;
-}
-
 export type LaunchDiscoveryRetrievalMode =
   | "browse"
   | "lexical"
@@ -545,7 +409,6 @@ export type LaunchDiscoveryRetrievalMode =
 
 export type LaunchDiscoverySource =
   | "tools"
-  | "widgets"
   | "public_pages"
   | "install_docs"
   | "platform_primitives";
@@ -555,8 +418,6 @@ export type LaunchRelevanceSource = "semantic" | "lexical" | "curated";
 export type LaunchSemanticSubjectType =
   | "app"
   | "function"
-  | "skill"
-  | "widget"
   | "platform_primitive";
 
 export interface LaunchRelevanceSummary {
@@ -599,7 +460,6 @@ export interface LaunchToolSummary {
   publicUrl?: string | null;
   adminUrl?: string | null;
   pricing?: LaunchPricingSummary;
-  widgets: LaunchWidgetSummary[];
   tags?: string[];
   updatedAt?: string | null;
   relevance?: LaunchRelevanceSummary;
@@ -612,7 +472,6 @@ export interface LaunchToolAdminSummary {
     | "description"
     | "visibility"
     | "pricing"
-    | "widgets"
     | "secrets"
     | "trust"
   )[];
@@ -655,7 +514,6 @@ export interface LaunchTrustCard {
 export interface LaunchDiscoveryRequest {
   query?: string;
   kind?: LaunchToolKind | "all";
-  includeWidgets?: boolean;
   limit?: number;
 }
 

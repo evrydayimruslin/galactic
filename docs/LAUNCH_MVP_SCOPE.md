@@ -102,8 +102,9 @@ still reflect the pre-pivot scope.
 |---|---|
 | Session refresh + auth hardening | Landed (Phase 0) |
 | Desktop CORS/bridge decoupling | Landed (Phase 0); endpoint teardown later |
-| Skills → Functions convention (P3) | Pending (Phase 1) |
-| Widget removal (P2) | Pending (Phase 1) |
+| Skills → Functions convention (P3) | Landed (Phase 1) |
+| Widget removal (P2) | Landed (Phase 1) |
+| P5 manifest `external_functions` declaration | Landed (Phase 1 foundation) |
 | BYOK + Credits surfaces (P1) | Pending (Phase 2) |
 | Tools → Agents rename (P4, incl. caller-permissions rename) | Pending (Phase 3) |
 | Cross-Agent permissions (P5) | Pending (Phase 4) |

@@ -493,7 +493,6 @@ button {
 .tool-meta,
 .split-card,
 .leader-row,
-.widget-toolbar,
 .spaced {
   display: flex;
   align-items: center;
@@ -675,35 +674,6 @@ button {
 .stack {
   display: grid;
   gap: 12px;
-}
-
-.widget-preview {
-  min-height: 420px;
-}
-
-.widget-toolbar {
-  justify-content: space-between;
-  margin-bottom: 28px;
-}
-
-.weather-widget {
-  display: grid;
-  min-height: 300px;
-  align-content: center;
-  justify-items: center;
-  gap: 12px;
-  border: 1px solid var(--ul-border);
-  border-radius: 8px;
-  background: var(--ul-raised);
-}
-
-.weather-widget strong {
-  font-size: 56px;
-  font-weight: 400;
-}
-
-.weather-widget span {
-  color: var(--ul-secondary);
 }
 
 .weather-bars {
@@ -1631,8 +1601,7 @@ button {
   gap: 10px;
 }
 
-.tool-page,
-.widget-open-page {
+.tool-page {
   width: min(100%, 1040px);
 }
 
@@ -1738,22 +1707,18 @@ button {
   color: var(--ul-text);
 }
 
-.tool-detail-layout,
-.widget-open-grid {
+.tool-detail-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
   gap: 24px;
   align-items: start;
 }
 
-.tool-main-panel,
-.widget-open-grid main,
-.widget-open-grid aside {
+.tool-main-panel {
   min-width: 0;
 }
 
-.tool-rail,
-.widget-open-grid aside {
+.tool-rail {
   position: sticky;
   top: 82px;
 }
@@ -1763,14 +1728,6 @@ button {
   gap: 14px;
 }
 
-.widget-surface-card {
-  padding: 0;
-  overflow: hidden;
-}
-
-.widget-panel-top,
-.widget-shell-top,
-.widget-relay-footer,
 .function-sandbox-head,
 .manual-run-row,
 .permission-control,
@@ -1782,368 +1739,17 @@ button {
   align-items: center;
 }
 
-.widget-panel-top {
-  justify-content: space-between;
-  gap: 18px;
-  padding: 18px;
-  border-bottom: 1px solid var(--ul-border);
-}
-
-.widget-panel-top h2,
-.widget-open-head h1 {
-  margin: 0 0 6px;
-  font-size: 26px;
-  font-weight: 500;
-  line-height: 1.1;
-  letter-spacing: 0;
-}
-
-.widget-panel-top p:not(.section-label),
-.widget-open-head p:not(.section-label) {
-  margin: 0;
-  color: var(--ul-secondary);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.widget-selector {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  padding: 12px 18px 0;
-}
-
-.widget-selector button {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border: 1px solid var(--ul-border);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--ul-secondary);
-  cursor: pointer;
-}
-
-.widget-selector button.active {
-  border-color: var(--ul-text);
-  background: var(--ul-text);
-  color: #fff;
-}
-
-.widget-state-selector {
-  display: inline-flex;
-  width: fit-content;
-  gap: 4px;
-  margin: 12px 18px 4px;
-  padding: 4px;
-  border: 1px solid var(--ul-border);
-  border-radius: 10px;
-  background: var(--ul-raised);
-}
-
-.widget-state-selector button {
-  padding: 6px 9px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--ul-secondary);
-  cursor: pointer;
-  font-family: var(--ul-sans);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.widget-state-selector .active {
-  background: #fff;
-  color: var(--ul-text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-}
-
-.widget-shell {
-  overflow: hidden;
-  border: 1px solid var(--ul-border-strong);
-  border-radius: 12px;
-  background: #fff;
-}
-
-.widget-surface-card .widget-shell {
-  margin: 12px 18px 18px;
-}
-
-.widget-shell-top {
-  gap: 10px;
-  padding: 11px 14px;
-  border-bottom: 1px solid var(--ul-border);
-  background: var(--ul-raised);
-}
-
-.widget-shell-top > div {
-  min-width: 0;
-  flex: 1;
-}
-
-.widget-shell-top strong,
-.widget-shell-top .mono {
-  display: block;
-}
-
-.widget-shell-top strong {
-  margin-bottom: 2px;
-  font-size: 13px;
-}
-
-.widget-iframe-body {
-  position: relative;
-  display: grid;
-  min-height: 340px;
-  place-items: center;
-  padding: 24px;
-  background: repeating-linear-gradient(45deg, #fcfcfc, #fcfcfc 10px, #fafafa 10px, #fafafa 20px);
-}
-
-.widget-iframe-body-live {
-  display: block;
-  min-height: 360px;
-  padding: 0;
-  place-items: unset;
-  background: var(--ul-raised);
-}
-
-.launch-widget-iframe {
-  display: block;
-  width: 100%;
-  min-height: 360px;
-  border: 0;
-  background: #fff;
-  transition: height 160ms ease;
-}
-
-.iframe-label {
-  position: absolute;
-  top: 8px;
-  right: 10px;
-  z-index: 1;
-  pointer-events: none;
-  color: var(--ul-faint);
-  font-family: var(--ul-mono);
-  font-size: 9.5px;
-  text-transform: uppercase;
-}
-
-.widget-relay-footer {
-  gap: 10px;
-  padding: 9px 14px;
-  border-top: 1px solid var(--ul-border);
-  background: #0b1220;
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.widget-relay-footer svg {
-  flex: 0 0 auto;
-  color: #a7f3d0;
-}
-
-.widget-relay-footer span {
-  min-width: 0;
-  flex: 1;
-}
-
-.widget-relay-footer .mono {
-  color: rgba(255, 255, 255, 0.55);
-}
-
-.widget-state-body {
-  display: grid;
-  max-width: 390px;
-  justify-items: center;
-  gap: 11px;
-  text-align: center;
-}
-
-.widget-state-body h3 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.widget-state-body p {
-  margin: 0;
-  color: var(--ul-secondary);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.widget-spinner {
+.launch-spinner {
   width: 24px;
   height: 24px;
   border: 2px solid var(--ul-border);
   border-top-color: var(--ul-text);
   border-radius: 999px;
-  animation: widget-spin 700ms linear infinite;
+  animation: launch-spin 700ms linear infinite;
 }
 
-@keyframes widget-spin {
+@keyframes launch-spin {
   to { transform: rotate(360deg); }
-}
-
-.state-icon {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  border-radius: 11px;
-}
-
-.state-icon.error {
-  background: rgba(239, 68, 68, 0.08);
-  color: var(--ul-red);
-}
-
-.state-icon.setup {
-  background: rgba(245, 158, 11, 0.1);
-  color: var(--ul-amber-deep);
-}
-
-.weather-widget-card {
-  display: grid;
-  width: min(100%, 360px);
-  gap: 10px;
-}
-
-.weather-widget-search {
-  display: flex;
-  gap: 8px;
-}
-
-.weather-widget-search span,
-.weather-widget-search button {
-  border: 1px solid var(--ul-border);
-  border-radius: 9px;
-  background: #fff;
-}
-
-.weather-widget-search span {
-  flex: 1;
-  padding: 8px 11px;
-  color: var(--ul-text);
-  font-size: 13px;
-}
-
-.weather-widget-search button {
-  width: 38px;
-  cursor: pointer;
-}
-
-.weather-widget-main {
-  padding: 16px;
-  border: 1px solid var(--ul-border);
-  border-radius: 12px;
-  background: #fff;
-}
-
-.weather-widget-main span,
-.weather-widget-main small {
-  display: block;
-  color: var(--ul-secondary);
-}
-
-.weather-widget-main strong {
-  display: block;
-  margin: 3px 0;
-  font-size: 40px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.weather-day-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 4px;
-}
-
-.weather-day-grid div {
-  display: grid;
-  justify-items: center;
-  gap: 5px;
-  padding: 8px 0;
-  border-radius: 8px;
-  background: var(--ul-raised);
-}
-
-.weather-day-grid span {
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  background: #dbeafe;
-}
-
-.weather-day-grid strong,
-.weather-day-grid small {
-  font-family: var(--ul-mono);
-  font-size: 11px;
-}
-
-.weather-day-grid small {
-  color: var(--ul-muted);
-}
-
-.weather-widget-card > .mono {
-  justify-self: center;
-  color: var(--ul-muted);
-}
-
-.weather-now-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 16px;
-  border: 1px solid var(--ul-border);
-  border-radius: 999px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-.weather-now-badge > span {
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  background: #dbeafe;
-}
-
-.subscription-widget,
-.route-widget,
-.generic-widget {
-  display: grid;
-  width: min(100%, 340px);
-  gap: 12px;
-  padding: 18px;
-  border: 1px solid var(--ul-border);
-  border-radius: 12px;
-  background: #fff;
-}
-
-.route-widget div {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.route-widget div span {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: var(--ul-green);
-}
-
-.route-widget div:first-child span {
-  background: var(--ul-blue);
-}
-
-.generic-widget {
-  justify-items: center;
-  text-align: center;
 }
 
 .functions-panel {
@@ -2396,23 +2002,6 @@ button {
   color: var(--ul-secondary);
   font-family: var(--ul-mono);
   font-size: 11px;
-}
-
-.widget-open-grid {
-  grid-template-columns: minmax(0, 1fr) 320px;
-}
-
-.widget-open-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 14px;
-}
-
-.widget-open-head .widget-state-selector {
-  margin: 0;
-  flex-shrink: 0;
 }
 
 .library-page,
@@ -2823,41 +2412,15 @@ button {
   text-align: right;
 }
 
-.admin-widget-list,
 .secret-list {
   display: grid;
   gap: 10px;
 }
 
-.admin-widget-row,
 .secret-row {
   display: grid;
   align-items: center;
   gap: 12px;
-}
-
-.admin-widget-row {
-  grid-template-columns: auto minmax(0, 1fr) 140px auto;
-}
-
-.admin-widget-row h3 {
-  margin-bottom: 3px;
-}
-
-.admin-widget-row p {
-  color: var(--ul-secondary);
-  font-size: 11.5px;
-}
-
-.admin-widget-row select {
-  width: 100%;
-  padding: 7px 9px;
-  border: 1px solid var(--ul-border);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--ul-text);
-  font-family: var(--ul-sans);
-  font-size: 13px;
 }
 
 .secret-note {
@@ -3099,7 +2662,7 @@ button {
   border-top: 1px solid var(--ul-border);
 }
 
-.wallet-loading-footer .widget-spinner {
+.wallet-loading-footer .launch-spinner {
   width: 14px;
   height: 14px;
 }
@@ -3887,7 +3450,6 @@ button {
 
   .public-tool-header,
   .tool-detail-layout,
-  .widget-open-grid,
   .functions-panel,
   .manifest-grid {
     grid-template-columns: 1fr;
@@ -3901,14 +3463,11 @@ button {
     font-size: 30px;
   }
 
-  .tool-rail,
-  .widget-open-grid aside {
+  .tool-rail {
     position: static;
     margin-top: 18px;
   }
 
-  .widget-panel-top,
-  .widget-open-head,
   .function-sandbox-head,
   .manual-run-row,
   .permission-control {
@@ -3916,7 +3475,6 @@ button {
     justify-items: start;
   }
 
-  .widget-panel-top .launch-button,
   .permission-actions {
     width: 100%;
   }
@@ -3927,31 +3485,6 @@ button {
 
   .permission-actions .launch-button {
     flex: 0 0 auto;
-  }
-
-  .widget-state-selector,
-  .widget-open-head .widget-state-selector {
-    max-width: 100%;
-    overflow-x: auto;
-  }
-
-  .widget-iframe-body {
-    min-height: 300px;
-    padding: 22px 14px;
-  }
-
-  .widget-relay-footer {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .widget-relay-footer .mono {
-    grid-column: 2;
-  }
-
-  .weather-day-grid {
-    grid-template-columns: repeat(5, minmax(44px, 1fr));
-    overflow-x: auto;
   }
 
   .function-list {
@@ -3998,14 +3531,9 @@ button {
     width: 100%;
   }
 
-  .admin-widget-row,
   .secret-row {
     grid-template-columns: 1fr;
     justify-items: start;
-  }
-
-  .admin-widget-row .target-icon {
-    margin-bottom: -4px;
   }
 
   .admin-pricing-table .admin-table-head,

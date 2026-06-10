@@ -41,7 +41,7 @@ async function withDiscoverEnv<T>(
   }
 }
 
-Deno.test("/api/discover uses subject semantic index and returns safe skill pull hints", async () => {
+Deno.test("/api/discover uses subject semantic index and returns inspect hints for legacy skill subjects", async () => {
   const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
   await withDiscoverEnv(
     async () => {
@@ -78,11 +78,11 @@ Deno.test("/api/discover uses subject semantic index and returns safe skill pull
       );
       assertEquals(
         body.results[0].matched_subject?.next_action?.kind,
-        "pull_skill",
+        "inspect_tool",
       );
       assertEquals(
         body.results[0].matched_subject?.next_action?.endpoint,
-        "/api/launch/tools/research-helper/skills/context/pull",
+        "/mcp/app-1",
       );
       assertEquals(
         calls.some((call) => call.url.endsWith("/rest/v1/rpc/search_apps")),

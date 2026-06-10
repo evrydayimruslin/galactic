@@ -301,8 +301,13 @@ Deno.test("tool semantic embedding search sends subject filters", async () => {
 });
 
 Deno.test("tool semantic app search dedupes to the best subject per app", async () => {
-  const fetchFn = (() =>
-    Promise.resolve(
+  const calls: Array<{ body: Record<string, unknown> }> = [];
+  const fetchFn = ((_input: string | URL | Request, init?: RequestInit) => {
+    const body = init?.body && typeof init.body === "string"
+      ? JSON.parse(init.body)
+      : {};
+    calls.push({ body });
+    return Promise.resolve(
       new Response(
         JSON.stringify([
           {
@@ -331,11 +336,11 @@ Deno.test("tool semantic app search dedupes to the best subject per app", async 
             embedding_id: "embedding-high",
             app_id: "app-1",
             app_version: "v1",
-            subject_type: "skill",
-            subject_id: "skill:research",
+            subject_type: "function",
+            subject_id: "function:research",
             subject_label: "research",
-            embedding_text: "Research skill",
-            embedding_text_hash: "hash-skill",
+            embedding_text: "Research records",
+            embedding_text_hash: "hash-research",
             model: "model",
             provider: "openrouter",
             embedding_charge_id: null,
@@ -374,7 +379,8 @@ Deno.test("tool semantic app search dedupes to the best subject per app", async 
         ]),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
-    )) as typeof fetch;
+    );
+  }) as typeof fetch;
 
   const rows = await searchAppsByToolSemanticEmbedding(
     [1],
@@ -386,9 +392,14 @@ Deno.test("tool semantic app search dedupes to the best subject per app", async 
     },
   );
 
+  assertEquals(calls[0].body.p_subject_types, [
+    "app",
+    "function",
+    "platform_primitive",
+  ]);
   assertEquals(rows.length, 2);
   assertEquals(rows[0].embedding_id, "embedding-high");
-  assertEquals(rows[0].subject_type, "skill");
+  assertEquals(rows[0].subject_type, "function");
   assertEquals(rows[1].app_id, "app-2");
 });
 
@@ -450,7 +461,7 @@ Deno.test("legacy app embedding search sends current search_apps RPC args", asyn
   }
 });
 
-Deno.test("tool semantic subject builder emits app, function, skill, and widget rows", () => {
+Deno.test("tool semantic subject builder emits only app and function rows", () => {
   const subjects = buildToolSemanticEmbeddingSubjects({
     app: {
       id: "app-123",
@@ -501,15 +512,11 @@ Deno.test("tool semantic subject builder emits app, function, skill, and widget 
     [
       "app:app",
       "function:function:search",
-      "skill:skill:research",
-      "widget:widget:results",
     ],
   );
-  assertEquals(
-    subjects.find((subject) => subject.subjectId === "skill:research")
-      ?.embeddingText.includes("Context for research planning"),
-    true,
-  );
+  const appSubject = subjects.find((subject) => subject.subjectId === "app");
+  assertEquals(appSubject?.embeddingText.includes("Skills: research"), true);
+  assertEquals(appSubject?.embeddingText.includes("Widgets:"), false);
 });
 
 Deno.test("tool semantic embedding generation charges and upserts each subject idempotently", async () => {
@@ -583,18 +590,16 @@ Deno.test("tool semantic embedding generation charges and upserts each subject i
     },
   });
 
-  assertEquals(result.readyCount, 3);
+  assertEquals(result.readyCount, 2);
   assertEquals(result.failedCount, 0);
   assertEquals(result.appEmbedding?.embedding, [1, 0]);
   assertEquals(upsertCalls.map((call) => call.subjectType), [
     "app",
     "function",
-    "skill",
   ]);
   assertEquals(upsertCalls.map((call) => call.embeddingChargeId), [
     "charge-1",
     "charge-2",
-    "charge-3",
   ]);
   assertEquals(
     String(chargeCalls[1].idempotencyKey).includes("function%3Asearch"),

@@ -262,6 +262,7 @@
       "exports": [
         "APP_ENTRY_FILES",
         "resolveAppEnvVars",
+        "resolveManifestExternalFunctionDependencies",
         "resolveRoutineActorAppCallDependencies"
       ],
       "file": "services/app-runtime-resources.ts",
@@ -1360,6 +1361,10 @@
       ]
     },
     {
+      "exports": [
+        "DEFAULT_SKILL_ID",
+        "listAppSkills"
+      ],
       "file": "services/skill-pulls.ts",
       "types": [
         "AppSkillSummary",
