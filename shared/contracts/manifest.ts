@@ -26,12 +26,24 @@ export interface AppManifest {
   skills?: Record<string, ManifestSkill>;
   access_policy?: ManifestAccessPolicy;
   permissions?: string[];
+  // Functions on OTHER Agents this app calls via ultralight.call(). Declared
+  // at deploy time so the runtime can authorize cross-Agent calls and so
+  // Agent pages can surface which callers want access (P5 grant model).
+  external_functions?: ManifestExternalDependency[];
   widgets?: WidgetDeclaration[];
   context_sources?: WidgetContextSourceDeclaration[];
   routines?: RoutineDeclaration[];
   env?: Record<string, ManifestEnvVar>;
   env_vars?: Record<string, ManifestEnvVar>;
   http?: ManifestHttpConfig;
+}
+
+export interface ManifestExternalDependency {
+  // Target Agent id or slug.
+  app: string;
+  // Function names on the target Agent this app wants to call.
+  functions: string[];
+  access?: 'read' | 'write';
 }
 
 export type ManifestHttpAuthMode = 'user' | 'public';
@@ -910,6 +922,57 @@ function validateWidgetDependencies(
       errors.push({
         path: `${depPath}.access`,
         message: 'command card dependencies only support read access',
+      });
+    }
+  });
+}
+
+function validateManifestExternalFunctions(
+  value: unknown,
+  errors: ManifestValidationError[],
+): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    errors.push({
+      path: 'external_functions',
+      message: 'external_functions must be an array',
+    });
+    return;
+  }
+
+  value.forEach((dependency, index) => {
+    const depPath = `external_functions.${index}`;
+    if (
+      !dependency || typeof dependency !== 'object' || Array.isArray(dependency)
+    ) {
+      errors.push({ path: depPath, message: 'dependency must be an object' });
+      return;
+    }
+
+    const dep = dependency as Record<string, unknown>;
+    if (typeof dep.app !== 'string' || !dep.app.trim()) {
+      errors.push({
+        path: `${depPath}.app`,
+        message: 'app is required and must be a string',
+      });
+    }
+    if (
+      !Array.isArray(dep.functions) ||
+      dep.functions.length === 0 ||
+      dep.functions.some((fn) => typeof fn !== 'string' || !fn.trim())
+    ) {
+      errors.push({
+        path: `${depPath}.functions`,
+        message: 'functions must be a non-empty array of strings',
+      });
+    }
+    if (
+      dep.access !== undefined && dep.access !== 'read' &&
+      dep.access !== 'write'
+    ) {
+      errors.push({
+        path: `${depPath}.access`,
+        message: 'access must be "read" or "write"',
       });
     }
   });
@@ -2371,6 +2434,8 @@ export function validateManifest(input: unknown): ManifestValidationResult {
   if (manifest.access_policy !== undefined) {
     validateManifestAccessPolicy(manifest.access_policy, errors);
   }
+
+  validateManifestExternalFunctions(manifest.external_functions, errors);
 
   if (
     manifest.env !== undefined &&

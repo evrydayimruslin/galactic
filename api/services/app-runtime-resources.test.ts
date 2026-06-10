@@ -451,6 +451,64 @@ Deno.test("app runtime resources: widget dependencies become read-only app call 
   ]);
 });
 
+Deno.test("app runtime resources: manifest external_functions become app call grants", () => {
+  const dependencies = resolveRuntimeAppCallDependencies({
+    manifest: JSON.stringify({
+      external_functions: [
+        { app: "email-ops", functions: ["listDrafts", "getDraft"] },
+        { app: "crm", functions: ["logLead"], access: "write" },
+        { app: "", functions: ["ignored"] },
+        { app: "bad-entry", functions: [] },
+      ],
+    }),
+  });
+
+  assertEquals(dependencies, [
+    {
+      app: "crm",
+      functions: ["logLead"],
+      access: "write",
+    },
+    {
+      app: "email-ops",
+      functions: ["getDraft", "listDrafts"],
+      access: "read",
+    },
+  ]);
+});
+
+Deno.test("app runtime resources: external_functions merge with widget dependencies", () => {
+  const dependencies = resolveRuntimeAppCallDependencies({
+    manifest: JSON.stringify({
+      external_functions: [
+        { app: "email-ops", functions: ["sendDraft"], access: "write" },
+      ],
+      widgets: [
+        {
+          id: "overview",
+          label: "Overview",
+          dependencies: [
+            { app: "email-ops", functions: ["listDrafts"], access: "read" },
+          ],
+        },
+      ],
+    }),
+  });
+
+  assertEquals(dependencies, [
+    {
+      app: "email-ops",
+      functions: ["listDrafts"],
+      access: "read",
+    },
+    {
+      app: "email-ops",
+      functions: ["sendDraft"],
+      access: "write",
+    },
+  ]);
+});
+
 Deno.test("app runtime resources: runtime dependencies include routine actor capability grants", () => {
   const dependencies = resolveRuntimeAppCallDependencies(
     {

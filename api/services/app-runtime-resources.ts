@@ -645,6 +645,54 @@ export function resolveWidgetAppCallDependencies(
   return flattenRuntimeAppCallDependencies(byApp);
 }
 
+// Top-level manifest declaration of functions on OTHER Agents this app calls
+// (manifest.external_functions). This is the P5 cross-Agent dependency
+// mechanism that generalizes the widget-scoped `dependencies` declarations.
+function collectManifestExternalFunctionDependencies(
+  app: Pick<RuntimeApp, "manifest">,
+  byApp: RuntimeDependencyMap,
+): void {
+  let parsed: unknown;
+  try {
+    parsed = typeof app.manifest === "string"
+      ? JSON.parse(app.manifest)
+      : app.manifest;
+  } catch {
+    return;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+
+  const manifest = parsed as { external_functions?: unknown };
+  if (!Array.isArray(manifest.external_functions)) return;
+
+  for (const dependency of manifest.external_functions) {
+    if (
+      !dependency || typeof dependency !== "object" || Array.isArray(dependency)
+    ) continue;
+    const dep = dependency as {
+      app?: unknown;
+      functions?: unknown;
+      access?: unknown;
+    };
+    const targetApp = typeof dep.app === "string" ? dep.app.trim() : "";
+    if (!targetApp || !Array.isArray(dep.functions)) continue;
+    const access = dep.access === "write" ? "write" : "read";
+
+    for (const fn of dep.functions) {
+      if (typeof fn !== "string" || !fn.trim()) continue;
+      addRuntimeAppCallDependency(byApp, targetApp, fn.trim(), access);
+    }
+  }
+}
+
+export function resolveManifestExternalFunctionDependencies(
+  app: Pick<RuntimeApp, "manifest">,
+): RuntimeAppCallDependency[] {
+  const byApp: RuntimeDependencyMap = new Map();
+  collectManifestExternalFunctionDependencies(app, byApp);
+  return flattenRuntimeAppCallDependencies(byApp);
+}
+
 function collectRoutineActorAppCallDependencies(
   caller: RuntimeCallerLike | undefined,
   byApp: RuntimeDependencyMap,
@@ -679,6 +727,7 @@ export function resolveRuntimeAppCallDependencies(
   caller?: RuntimeCallerLike,
 ): RuntimeAppCallDependency[] {
   const byApp: RuntimeDependencyMap = new Map();
+  collectManifestExternalFunctionDependencies(app, byApp);
   collectManifestWidgetAppCallDependencies(app, byApp);
   collectRoutineActorAppCallDependencies(caller, byApp);
   return flattenRuntimeAppCallDependencies(byApp);
