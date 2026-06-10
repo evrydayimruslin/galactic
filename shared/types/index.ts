@@ -991,9 +991,13 @@ export interface AppRateLimitConfig {
  * Platform fee is deducted on every transfer.
  */
 export interface AppPricingConfig {
-  /** Default price in Light per tool call. Applies to any function not in `functions`. 0 = free. */
-  default_price_light: number;
-  /** Default price in Light per full skill context pull. Applies to skills not in `skills`. */
+  /** Default price in USD cents per tool call. Applies to any function not in `functions`. 0 = free. */
+  default_price_usd_cents?: number;
+  /** @deprecated Use default_price_usd_cents. */
+  default_price_light?: number;
+  /** Default price in USD cents per full skill context pull. Applies to skills not in `skills`. */
+  default_skill_pull_price_usd_cents?: number;
+  /** @deprecated Use default_skill_pull_price_usd_cents. */
   default_skill_pull_price_light?: number;
   /** Default number of free calls per user before pricing kicks in. 0 = charge from first call. */
   default_free_calls?: number;
@@ -1001,9 +1005,9 @@ export interface AppPricingConfig {
   default_free_skill_pulls?: number;
   /** Whether free call quota is counted per-app (shared) or per-function (separate). Default: 'function'. */
   free_calls_scope?: "app" | "function";
-  /** Per-function price overrides. Value is Light (legacy number) or FunctionPricing object. */
+  /** Per-function price overrides. Value is USD cents or FunctionPricing object. */
   functions?: Record<string, number | FunctionPricing>;
-  /** Per-skill context-pull price overrides. Value is Light (legacy number) or SkillPricing object. */
+  /** Per-skill context-pull price overrides. Value is USD cents or SkillPricing object. */
   skills?: Record<string, number | SkillPricing>;
   /** Product catalog for in-app purchases via ultralight.charge(). */
   products?: AppProduct[];
@@ -1011,16 +1015,20 @@ export interface AppPricingConfig {
 
 /** Per-function pricing override with optional free calls. */
 export interface FunctionPricing {
-  /** Price in Light per call. */
-  price_light: number;
+  /** Price in USD cents per call. */
+  price_usd_cents?: number;
+  /** @deprecated Use price_usd_cents. */
+  price_light?: number;
   /** Number of free calls for this function per user. Overrides app-level default_free_calls. */
   free_calls?: number;
 }
 
 /** Per-skill pricing override with optional free pulls. */
 export interface SkillPricing {
-  /** Price in Light to pull the full skill context into an agent prompt. */
-  price_light: number;
+  /** Price in USD cents to pull the full skill context into an agent prompt. */
+  price_usd_cents?: number;
+  /** @deprecated Use price_usd_cents. */
+  price_light?: number;
   /** Number of free full-context pulls for this skill per user. */
   free_pulls?: number;
 }
@@ -1031,8 +1039,10 @@ export interface AppProduct {
   id: string;
   /** Human-readable name */
   name: string;
-  /** Price in Light */
-  price_light: number;
+  /** Price in USD cents. */
+  price_usd_cents?: number;
+  /** @deprecated Use price_usd_cents. */
+  price_light?: number;
   /** Optional description */
   description?: string;
 }
@@ -1050,9 +1060,10 @@ export function getCallPriceLight(
   if (pricingConfig.functions && functionName in pricingConfig.functions) {
     const val = pricingConfig.functions[functionName];
     if (typeof val === "number") return val; // legacy format
-    return val.price_light; // FunctionPricing format
+    return val.price_usd_cents ?? val.price_light ?? 0; // FunctionPricing format
   }
-  return pricingConfig.default_price_light || 0;
+  return pricingConfig.default_price_usd_cents ??
+    pricingConfig.default_price_light ?? 0;
 }
 
 /**
@@ -1099,9 +1110,10 @@ export function getSkillPullPriceLight(
   if (pricingConfig.skills && skillId in pricingConfig.skills) {
     const val = pricingConfig.skills[skillId];
     if (typeof val === "number") return val;
-    return val.price_light;
+    return val.price_usd_cents ?? val.price_light ?? 0;
   }
-  return pricingConfig.default_skill_pull_price_light || 0;
+  return pricingConfig.default_skill_pull_price_usd_cents ??
+    pricingConfig.default_skill_pull_price_light ?? 0;
 }
 
 /**
@@ -1257,6 +1269,49 @@ export const LIGHT_PER_DOLLAR_DESKTOP = LIGHT_PER_DOLLAR_CANONICAL;
 
 /** Exchange rate: $1 USD per this many Light when publishers withdraw. */
 export const LIGHT_PER_DOLLAR_PAYOUT = LIGHT_PER_DOLLAR_CANONICAL;
+
+/** Product-facing name for spend-only USD-denominated platform credits. */
+export const CREDIT_BALANCE_LABEL = "Credit balance";
+
+/** One legacy Light unit is now one USD cent. */
+export const USD_CENTS_PER_LIGHT = 1;
+
+/** Convert legacy Light storage units to USD cents. Fractional cents are allowed for metered usage. */
+export function lightToCreditUsdCents(amountLight: number): number {
+  return Number.isFinite(amountLight) ? amountLight * USD_CENTS_PER_LIGHT : 0;
+}
+
+/** Convert USD cents to the legacy Light storage unit. */
+export function creditUsdCentsToLight(amountUsdCents: number): number {
+  return Number.isFinite(amountUsdCents) ? amountUsdCents / USD_CENTS_PER_LIGHT : 0;
+}
+
+/** Format USD-denominated credits from a cents amount. */
+export function formatCreditUsdCents(amountUsdCents: number): string {
+  if (!Number.isFinite(amountUsdCents) || amountUsdCents === 0) return "$0.00";
+  const dollars = amountUsdCents / 100;
+  const absDollars = Math.abs(dollars);
+  const sign = dollars < 0 ? "-" : "";
+  if (absDollars > 0 && absDollars < 0.01) {
+    return `${sign}$${
+      absDollars.toLocaleString("en-US", {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 6,
+      })
+    }`;
+  }
+  return `${sign}$${
+    absDollars.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  }`;
+}
+
+/** Format USD-denominated credits from the legacy Light storage amount. */
+export function formatCreditFromLight(amountLight: number): string {
+  return formatCreditUsdCents(lightToCreditUsdCents(amountLight));
+}
 
 /** Platform fee rate applied on creator revenue. */
 export const PLATFORM_FEE_RATE = 0.15;
@@ -2133,8 +2188,12 @@ export interface ToolAccessPolicyPlanPayload {
     subject_kind: ToolAccessPolicySubjectKind;
     subjectId: string;
     subject_id: string;
+    priceUsdCents: number;
+    price_usd_cents: number;
     priceLight: number;
     price_light: number;
+    chargeUsdCents: number;
+    charge_usd_cents: number;
     chargeLight: number;
     charge_light: number;
     free: boolean;
@@ -2149,8 +2208,12 @@ export interface ToolAccessPolicyPlanPayload {
 
 export interface ToolAccessPolicyAllowDecision {
   effect?: "allow";
+  price_usd_cents?: number;
+  priceUsdCents?: number;
   price_light?: number;
   priceLight?: number;
+  charge_usd_cents?: number;
+  chargeUsdCents?: number;
   charge_light?: number;
   chargeLight?: number;
   free?: boolean;

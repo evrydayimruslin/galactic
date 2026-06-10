@@ -130,8 +130,12 @@ export interface ToolAccessPolicyPlanPayload {
     subject_kind: ToolAccessPolicySubjectKind;
     subjectId: string;
     subject_id: string;
+    priceUsdCents: number;
+    price_usd_cents: number;
     priceLight: number;
     price_light: number;
+    chargeUsdCents: number;
+    charge_usd_cents: number;
     chargeLight: number;
     charge_light: number;
     free: boolean;
@@ -146,8 +150,12 @@ export interface ToolAccessPolicyPlanPayload {
 
 export interface ToolAccessPolicyAllowDecision {
   effect?: 'allow';
+  price_usd_cents?: number;
+  priceUsdCents?: number;
   price_light?: number;
   priceLight?: number;
+  charge_usd_cents?: number;
+  chargeUsdCents?: number;
   charge_light?: number;
   chargeLight?: number;
   free?: boolean;

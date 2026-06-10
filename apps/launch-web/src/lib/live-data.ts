@@ -7,6 +7,7 @@ import type {
   LaunchLeaderboardResponse,
   LaunchLibraryResponse,
   LaunchToolFunctionsResponse,
+  LaunchToolSkillsResponse,
   LaunchStoreRequest,
   LaunchStoreResponse,
   LaunchWalletDetailResponse,
@@ -34,6 +35,7 @@ export interface LaunchRouteLiveData {
   tool?: LaunchToolResponse;
   toolWidgets?: LaunchToolWidgetsResponse;
   toolFunctions?: LaunchToolFunctionsResponse;
+  toolSkills?: LaunchToolSkillsResponse;
   toolAgentPermissions?: LaunchAgentFunctionPermissionsResponse;
   wallet?: LaunchWalletResponse;
   walletDetail?: LaunchWalletDetailResponse;
@@ -141,14 +143,15 @@ async function loadRouteData(
     case "tool": {
       const id = route.params.slug || "";
       if (!id) return {};
-      const [tool, toolWidgets, toolFunctions, toolAgentPermissions] =
+      const [tool, toolWidgets, toolFunctions, toolSkills, toolAgentPermissions] =
         await Promise.all([
           launchApi.tool(id),
           optional(() => launchApi.toolWidgets(id)),
           optional(() => launchApi.toolFunctions(id)),
+          optional(() => launchApi.toolSkills(id)),
           optional(() => launchApi.toolAgentPermissions(id)),
         ]);
-      return { tool, toolAgentPermissions, toolFunctions, toolWidgets };
+      return { tool, toolAgentPermissions, toolFunctions, toolSkills, toolWidgets };
     }
     case "library": {
       return { library: await launchApi.library() };
@@ -167,12 +170,13 @@ async function loadRouteData(
     case "adminTool": {
       const id = route.params.id || "";
       if (!id) return {};
-      const [adminTool, toolFunctions, toolAgentPermissions] = await Promise.all([
+      const [adminTool, toolFunctions, toolSkills, toolAgentPermissions] = await Promise.all([
         launchApi.toolAdmin(id),
         optional(() => launchApi.toolFunctions(id)),
+        optional(() => launchApi.toolSkills(id)),
         optional(() => launchApi.toolAgentPermissions(id)),
       ]);
-      return { adminTool, toolAgentPermissions, toolFunctions };
+      return { adminTool, toolAgentPermissions, toolFunctions, toolSkills };
     }
     case "authCallback":
       return {};

@@ -246,7 +246,11 @@ export type LaunchWalletFundingMethod =
   typeof LAUNCH_WALLET_FUNDING_METHODS[number];
 
 export interface LaunchMoneyAmount {
+  /** @deprecated Legacy storage unit. One Light equals one USD cent. */
   light: number;
+  /** USD cents represented by this credit amount. Fractional cents are possible for metered usage. */
+  usdCents: number;
+  currency: "USD";
   display: string;
 }
 
@@ -365,17 +369,53 @@ export interface LaunchFunctionRunResponse {
 
 export type LaunchAgentFunctionPermissionSource = "explicit" | "default";
 
+export type LaunchAgentSpendCapSubjectType = "tool" | "function" | "skill";
+
+export type LaunchAgentSpendCapSource = "explicit" | "none";
+
+export interface LaunchMonthlySpendCapSummary {
+  appId: string;
+  subjectType: LaunchAgentSpendCapSubjectType;
+  subjectName?: string | null;
+  monthlyCap: LaunchMoneyAmount | null;
+  monthlySpend: LaunchMoneyAmount;
+  projectedSpend?: LaunchMoneyAmount | null;
+  remaining: LaunchMoneyAmount | null;
+  periodStart: string;
+  periodEnd: string;
+  source: LaunchAgentSpendCapSource;
+  updatedAt?: string | null;
+}
+
 export interface LaunchAgentFunctionPermissionSummary {
   appId: string;
   functionName: string;
   policy: LaunchAgentFunctionPolicy;
   source: LaunchAgentFunctionPermissionSource;
+  monthlySpendCap?: LaunchMonthlySpendCapSummary | null;
   updatedAt?: string | null;
 }
 
 export interface LaunchAgentFunctionPermissionUpdate {
   functionName: string;
   policy: LaunchAgentFunctionPolicy;
+  monthlySpendCapUsdCents?: number | null;
+  monthlySpendCapLight?: number | null;
+}
+
+export interface LaunchAgentSkillSpendCapSummary {
+  appId: string;
+  skillId: string;
+  skillName: string;
+  monthlySpendCap: LaunchMonthlySpendCapSummary;
+}
+
+export interface LaunchAgentSpendCapUpdate {
+  subjectType: LaunchAgentSpendCapSubjectType;
+  subjectName?: string | null;
+  monthlyCapUsdCents?: number | null;
+  /** @deprecated Use monthlyCapUsdCents. */
+  monthlyCapLight?: number | null;
 }
 
 export interface LaunchAgentFunctionPermissionsResponse {
@@ -385,12 +425,18 @@ export interface LaunchAgentFunctionPermissionsResponse {
   >;
   defaultPolicy: LaunchAgentFunctionPolicy;
   permissions: LaunchAgentFunctionPermissionSummary[];
+  skillSpendCaps?: LaunchAgentSkillSpendCapSummary[];
+  spendCaps?: LaunchMonthlySpendCapSummary[];
+  toolSpendCap?: LaunchMonthlySpendCapSummary | null;
   generatedAt: string;
 }
 
 export interface LaunchAgentFunctionPermissionsUpdateRequest {
   defaultPolicy?: LaunchAgentFunctionPolicy;
   permissions?: LaunchAgentFunctionPermissionUpdate[];
+  spendCaps?: LaunchAgentSpendCapUpdate[];
+  toolMonthlySpendCapUsdCents?: number | null;
+  toolMonthlySpendCapLight?: number | null;
 }
 
 export interface LaunchAgentPermissionRequired {
@@ -416,20 +462,28 @@ export interface LaunchAgentPermissionDenied {
 }
 
 export interface LaunchWalletFundingPreset {
+  usdCents: number;
+  /** @deprecated Legacy storage unit. One Light equals one USD cent. */
   light: number;
   label: string;
   recommended?: boolean;
 }
 
 export interface LaunchWalletFundingQuoteRequest {
-  amountLight: number;
+  amountUsdCents?: number;
+  /** @deprecated Use amountUsdCents. */
+  amountLight?: number;
   method: LaunchWalletFundingMethod;
 }
 
 export interface LaunchWalletFundingFeeSummary {
   method: LaunchWalletFundingMethod;
   methodLabel: "Card" | "Bank (ACH)";
+  amountUsdCents: number;
+  creditAmount: LaunchMoneyAmount;
+  /** @deprecated Legacy storage unit. One Light equals one USD cent. */
   amountLight: number;
+  /** @deprecated Always 100 while legacy Light fields remain. */
   lightPerDollar: 100;
   baseAmountCents: number;
   processingFeeCents: number;

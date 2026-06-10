@@ -1,4 +1,5 @@
 import {
+  Fragment,
   type ReactElement,
   type ReactNode,
   useEffect,
@@ -16,22 +17,29 @@ import {
   type LaunchInstallInstruction,
   type LaunchLeaderboardEntry,
   type LaunchMoneyAmount,
+  type LaunchMonthlySpendCapSummary,
   type LaunchPublisherPublishRequirement,
+  type LaunchSkillSummary,
   type LaunchToolRelationship,
   type LaunchToolSummary,
   type LaunchTrustCard,
+  type LaunchPayoutStatus,
   type LaunchWalletEarningSummary,
   type LaunchWalletReceiptSummary,
   type LaunchWalletSummary,
   type LaunchWalletTransaction,
 } from "../../../../shared/contracts/launch.ts";
+import {
+  CREDIT_BALANCE_LABEL,
+  formatCreditFromLight,
+} from "../../../../shared/types/index.ts";
 import type { LaunchPageProps } from "../App";
 import {
-  buildLaunchSignInUrl,
   getLaunchAuthDiagnostic,
   hasLaunchAuthToken,
   signOutLaunch,
 } from "../lib/auth";
+import { useSignInModal } from "../components/sign-in-modal";
 import { launchApi, LaunchApiAuthenticationError } from "../lib/api";
 import {
   buildLaunchWidgetDocument,
@@ -99,13 +107,29 @@ interface ToolCapability {
   text: string;
 }
 
+const capabilityGlyphs: Record<ToolCapability["kind"], string> = {
+  net: "⇄",
+  read: "↘",
+  write: "↗",
+};
+
 interface ToolFunctionFixture {
   args: string[];
   description: string;
+  monthlySpendCap?: LaunchMonthlySpendCapSummary | null;
   name: string;
   p50: number;
   permission: "always" | "ask" | "never";
   price: number;
+}
+
+interface ToolSkillFixture {
+  description: string;
+  id: string;
+  monthlySpendCap?: LaunchMonthlySpendCapSummary | null;
+  name: string;
+  price: number;
+  semanticDescription: string;
 }
 
 interface ToolWidgetFixture {
@@ -121,7 +145,9 @@ interface ToolDetailFixture extends ToolFixture {
   relationship: LaunchToolRelationship;
   runtime: string;
   signer: string;
+  skills: ToolSkillFixture[];
   title: string;
+  toolSpendCap?: LaunchMonthlySpendCapSummary | null;
   updatedAt: string;
   version: string;
   visibility: "public" | "private" | "unlisted";
@@ -257,8 +283,8 @@ const primitives = [
   ],
   [
     "wallet",
-    "Light wallet",
-    "Spendable Light for installs, calls, hosting.",
+    CREDIT_BALANCE_LABEL,
+    "USD credits for installs, calls, and hosting.",
     "/wallet",
   ],
   [
@@ -488,7 +514,7 @@ const adminTabs = [
 type AdminTabId = typeof adminTabs[number][0];
 type LibraryView = "installed" | "owned";
 type StoreKindFilter = "all" | ToolFixture["kind"];
-type ToolPageTabId = "details" | "functions" | "widgets";
+type ToolPageTabId = "details" | "functions" | "skills" | "widgets";
 
 const visibilityOptions = [
   [
@@ -559,6 +585,7 @@ interface LedgerRow {
   amount: number;
   detail: string;
   kind: "call" | "earning" | "payout" | "topup" | "transfer";
+  tool?: string;
   when: string;
 }
 
@@ -617,17 +644,37 @@ const walletEarnings: LedgerRow[] = [
     amount: 248.0,
     detail: "get_weather · forecast",
     kind: "earning",
+    tool: "get_weather",
     when: "5h",
   },
   {
     amount: 120.4,
     detail: "tweet.draft · compose",
     kind: "earning",
+    tool: "tweet.draft",
     when: "8h",
   },
-  { amount: 40.0, detail: "radar.tile · render", kind: "earning", when: "1d" },
-  { amount: 192.0, detail: "get_weather · now", kind: "earning", when: "1d" },
-  { amount: 40.0, detail: "radar.tile · render", kind: "earning", when: "3d" },
+  {
+    amount: 40.0,
+    detail: "radar.tile · render",
+    kind: "earning",
+    tool: "radar.tile",
+    when: "1d",
+  },
+  {
+    amount: 192.0,
+    detail: "get_weather · now",
+    kind: "earning",
+    tool: "get_weather",
+    when: "1d",
+  },
+  {
+    amount: 40.0,
+    detail: "radar.tile · render",
+    kind: "earning",
+    tool: "radar.tile",
+    when: "3d",
+  },
 ];
 
 const walletReceipts: ReceiptRowFixture[] = [
@@ -703,6 +750,7 @@ function liveToolFixture(
   options: {
     functions?: LaunchFunctionSummary[];
     permissions?: LaunchAgentFunctionPermissionsResponse;
+    skills?: LaunchSkillSummary[];
     trustCard?: LaunchTrustCard;
   } = {},
 ): ToolDetailFixture {
@@ -727,10 +775,23 @@ function liveToolFixture(
       entry,
     ) => [entry.functionName, entry.policy]),
   );
+  const functionSpendCaps = new Map(
+    (options.permissions?.permissions || []).map((entry) => [
+      entry.functionName,
+      entry.monthlySpendCap || null,
+    ]),
+  );
+  const skillSpendCaps = new Map(
+    (options.permissions?.skillSpendCaps || []).map((entry) => [
+      entry.skillId,
+      entry.monthlySpendCap,
+    ]),
+  );
   const functions = options.functions && options.functions.length > 0
     ? options.functions.map((fn, index) => ({
       args: inputArgs(fn.inputSchema),
       description: fn.description || `Run ${fn.name}.`,
+      monthlySpendCap: functionSpendCaps.get(fn.name) || null,
       name: fn.name,
       p50: base.functions[index]?.p50 || 120,
       permission: permissions.get(fn.name) || fn.agentPermission?.policy ||
@@ -745,6 +806,16 @@ function liveToolFixture(
       label: widget.label,
     }))
     : base.widgetList;
+  const skills = options.skills && options.skills.length > 0
+    ? options.skills.map((skill) => ({
+      description: skill.description || skill.semanticDescription,
+      id: skill.id,
+      monthlySpendCap: skillSpendCaps.get(skill.id) || null,
+      name: skill.name,
+      price: lightValue(skill.pricing?.pullPrice),
+      semanticDescription: skill.semanticDescription,
+    }))
+    : base.skills;
   const trust = options.trustCard;
   const paidFunctionPrices = functions.map((fn) => fn.price).filter((price) =>
     price > 0
@@ -768,9 +839,11 @@ function liveToolFixture(
     relationship: tool.relationship,
     runtime: trust?.runtime || base.runtime,
     signer: trust?.signer || base.signer,
+    skills,
     slug: tool.slug,
     summary: tool.description || base.summary,
     title: titleizeToolName(tool.name),
+    toolSpendCap: options.permissions?.toolSpendCap || null,
     updatedAt: relativeTime(tool.updatedAt) || base.updatedAt,
     version: trust?.version || base.version,
     visibility: tool.visibility,
@@ -787,11 +860,12 @@ function liveStoreTools(tools?: LaunchToolSummary[]): ToolFixture[] {
 function liveDetailTool(
   tool?: LaunchToolSummary,
   functions?: LaunchFunctionSummary[],
+  skills?: LaunchSkillSummary[],
   permissions?: LaunchAgentFunctionPermissionsResponse,
   trustCard?: LaunchTrustCard,
 ): ToolDetailFixture | null {
   return tool
-    ? liveToolFixture(tool, { functions, permissions, trustCard })
+    ? liveToolFixture(tool, { functions, permissions, skills, trustCard })
     : null;
 }
 
@@ -915,6 +989,7 @@ function liveEarningRows(earnings?: LaunchWalletEarningSummary[]): LedgerRow[] {
     amount: lightValue(entry.amount),
     detail: `${entry.appId || "tool"} · ${entry.functionName || entry.reason}`,
     kind: "earning",
+    tool: entry.appId || undefined,
     when: relativeTime(entry.createdAt) || "now",
   }));
 }
@@ -1063,7 +1138,7 @@ export function HomeFoundationPage(
           <h2>One endpoint. Every capability.</h2>
           <p>
             Point your agent at a single MCP server. It discovers the whole
-            catalog, calls any tool, and settles in Light.
+            catalog, calls any tool, and settles with your credit balance.
           </p>
           <RouteButton icon="copy" navigate={navigate} size="lg" to="/install">
             Add to agent
@@ -1077,7 +1152,7 @@ export function HomeFoundationPage(
           <h2>Give your agent the tool layer.</h2>
           <p>
             One endpoint for every capability: discover, call, and settle in
-            Light.
+            dollars.
           </p>
         </div>
         <div className="hero-actions left">
@@ -1109,6 +1184,7 @@ export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
   const firstTarget = targets[0]?.target || "claude_code";
   const [target, setTarget] = useState(firstTarget);
   const signedIn = Boolean(live.data.apiKeys?.apiKeys?.length);
+  const openSignInModal = useSignInModal();
   const selected = targets.find((item) => item.target === target) ||
     targets[0] || installTargets[0];
   const firstKey = live.data.apiKeys?.apiKeys[0]?.tokenPrefix || apiKeyMask;
@@ -1126,6 +1202,7 @@ export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
         actions={
           <Button
             icon="key"
+            onClick={signedIn ? undefined : openSignInModal}
             size="lg"
             variant={signedIn ? "secondary" : "primary"}
           >
@@ -1140,10 +1217,15 @@ export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
 
       <div className="install-loop">
         {externalLoop.map((step, index) => (
-          <span key={step}>
-            <Mono>{index + 1}</Mono>
-            {step}
-          </span>
+          <Fragment key={step}>
+            <span>
+              <Mono>{index + 1}</Mono>
+              {step}
+            </span>
+            {index < externalLoop.length - 1
+              ? <Icon name="arrow" size={13} />
+              : null}
+          </Fragment>
         ))}
       </div>
 
@@ -1247,7 +1329,7 @@ export function StoreFoundationPage(
           <PrimitivesRail navigate={navigate} />
           <Leaderboard
             title="Top builders"
-            subtitle="By earned Light"
+            subtitle="By earned credits"
             rows={builderRows.length > 0 ? builderRows : builderLeaders}
           />
           <Leaderboard
@@ -1268,6 +1350,7 @@ export function ToolFoundationPage(
   const tool = liveDetailTool(
     live.data.tool?.tool,
     live.data.toolFunctions?.functions,
+    live.data.toolSkills?.skills,
     live.data.toolAgentPermissions,
     live.data.tool?.trustCard,
   ) || toolDetails[slug];
@@ -1307,9 +1390,10 @@ function ToolDetailSurface({
   tool: ToolDetailFixture;
 }): ReactElement {
   const hasWidgets = tool.widgetList.length > 0;
+  const hasSkills = tool.skills.length > 0;
   const [installed, setInstalled] = useState(false);
   const [tab, setTab] = useState<ToolPageTabId>(() =>
-    toolTabFromSearch(hasWidgets)
+    toolTabFromSearch(hasWidgets, hasSkills)
   );
   const [selectedWidgetId, setSelectedWidgetId] = useState(
     tool.widgetList[0]?.id || "",
@@ -1317,9 +1401,12 @@ function ToolDetailSurface({
   const [selectedFunctionName, setSelectedFunctionName] = useState(
     tool.functions[0]?.name || "",
   );
+  const [selectedSkillId, setSelectedSkillId] = useState(
+    tool.skills[0]?.id || "",
+  );
   useEffect(() => {
-    setTab(toolTabFromSearch(hasWidgets));
-  }, [hasWidgets, locationSearch]);
+    setTab(toolTabFromSearch(hasWidgets, hasSkills));
+  }, [hasSkills, hasWidgets, locationSearch]);
 
   const activateToolTab = (nextTab: ToolPageTabId) => {
     setTab(nextTab);
@@ -1343,6 +1430,16 @@ function ToolDetailSurface({
         <Mono>{tool.slug}</Mono>
       </button>
 
+      {tool.visibility === "unlisted"
+        ? (
+          <div className="unlisted-banner">
+            <Icon name="shield" size={13} />
+            Unlisted — visible only to people with the link. Not indexed in the
+            Store.
+          </div>
+        )
+        : null}
+
       <section className="public-tool-header">
         <Avatar color={tool.color} name={tool.author} />
         <div>
@@ -1361,14 +1458,6 @@ function ToolDetailSurface({
             <span>updated {tool.updatedAt}</span>
           </div>
           <div className="tool-header-actions">
-            <Button
-              icon={installed ? "check" : undefined}
-              onClick={() => setInstalled((value) => !value)}
-              size="lg"
-              variant={installed ? "secondary" : "primary"}
-            >
-              {installed ? "Installed" : "Install"}
-            </Button>
             {hasWidgets
               ? (
                 <Button
@@ -1376,22 +1465,31 @@ function ToolDetailSurface({
                   onClick={() =>
                     navigate(toolPreviewPath(tool, selectedWidgetId))}
                   size="lg"
-                  variant="secondary"
+                  variant="primary"
                 >
                   Open widget
                 </Button>
               )
-              : (
-                <RouteButton
-                  icon="copy"
-                  navigate={navigate}
-                  size="lg"
-                  to="/install"
-                  variant="secondary"
-                >
-                  Copy MCP config
-                </RouteButton>
-              )}
+              : null}
+            <Button
+              icon={installed ? "check" : undefined}
+              onClick={() => setInstalled((value) => !value)}
+              size="lg"
+              variant={installed || hasWidgets ? "secondary" : "primary"}
+            >
+              {installed ? "Installed" : "Install"}
+            </Button>
+            {hasWidgets ? null : (
+              <RouteButton
+                icon="copy"
+                navigate={navigate}
+                size="lg"
+                to="/install"
+                variant="secondary"
+              >
+                Copy MCP config
+              </RouteButton>
+            )}
           </div>
         </div>
       </section>
@@ -1415,6 +1513,17 @@ function ToolDetailSurface({
         >
           Functions
         </button>
+        {hasSkills
+          ? (
+            <button
+              className={tab === "skills" ? "active" : ""}
+              onClick={() => activateToolTab("skills")}
+              type="button"
+            >
+              Skills
+            </button>
+          )
+          : null}
         <button
           className={tab === "details" ? "active" : ""}
           onClick={() => activateToolTab("details")}
@@ -1446,10 +1555,20 @@ function ToolDetailSurface({
               />
             )
             : null}
+          {tab === "skills"
+            ? (
+              <ToolSkillsPanel
+                live={live}
+                selectedSkillId={selectedSkillId}
+                setSelectedSkillId={setSelectedSkillId}
+                tool={tool}
+              />
+            )
+            : null}
           {tab === "details" ? <ToolDetailsPanel tool={tool} /> : null}
         </main>
         <aside className="tool-rail">
-          <ToolTrustRail tool={tool} />
+          <ToolTrustRail live={live} tool={tool} />
         </aside>
       </div>
     </div>
@@ -1551,6 +1670,69 @@ function ToolFunctionsPanel({
   );
 }
 
+function ToolSkillsPanel({
+  live,
+  selectedSkillId,
+  setSelectedSkillId,
+  tool,
+}: {
+  live: LaunchPageProps["live"];
+  selectedSkillId: string;
+  setSelectedSkillId: (id: string) => void;
+  tool: ToolDetailFixture;
+}): ReactElement {
+  const selectedSkill =
+    tool.skills.find((skill) => skill.id === selectedSkillId) ||
+    tool.skills[0];
+
+  if (!selectedSkill) {
+    return (
+      <EmptyState icon="copy" title="No skills">
+        This tool exposes functions only.
+      </EmptyState>
+    );
+  }
+
+  return (
+    <div className="functions-panel">
+      <div className="function-list">
+        <p className="section-label">Skills ({tool.skills.length})</p>
+        {tool.skills.map((skill) => (
+          <button
+            className={selectedSkill.id === skill.id ? "active" : ""}
+            key={skill.id}
+            onClick={() => setSelectedSkillId(skill.id)}
+            type="button"
+          >
+            <span>
+              <Mono>{skill.name}</Mono>
+              <small>{skill.description}</small>
+            </span>
+            <Mono>{formatToolPrice(skill.price)}</Mono>
+          </button>
+        ))}
+      </div>
+      <Card className="function-sandbox-card skill-policy-card">
+        <div className="function-sandbox-head">
+          <div>
+            <Mono>{selectedSkill.name}</Mono>
+            <p>{selectedSkill.semanticDescription}</p>
+          </div>
+          <Pill>{formatToolPrice(selectedSkill.price)}/pull</Pill>
+        </div>
+        <SpendCapControl
+          cap={selectedSkill.monthlySpendCap}
+          live={live}
+          subjectName={selectedSkill.id}
+          subjectType="skill"
+          title="Monthly skill cap"
+          tool={tool}
+        />
+      </Card>
+    </div>
+  );
+}
+
 function FunctionSandboxCard({
   fn,
   live,
@@ -1642,6 +1824,14 @@ function FunctionSandboxCard({
         )
         : null}
       <PermissionControl fn={fn} live={live} tool={tool} />
+      <SpendCapControl
+        cap={fn.monthlySpendCap}
+        live={live}
+        subjectName={fn.name}
+        subjectType="function"
+        title="Monthly function cap"
+        tool={tool}
+      />
     </Card>
   );
 }
@@ -1717,6 +1907,99 @@ function PermissionControl({
   );
 }
 
+function SpendCapControl({
+  cap,
+  live,
+  subjectName,
+  subjectType,
+  title,
+  tool,
+}: {
+  cap?: LaunchMonthlySpendCapSummary | null;
+  live: LaunchPageProps["live"];
+  subjectName?: string;
+  subjectType: "function" | "skill" | "tool";
+  title: string;
+  tool: ToolDetailFixture;
+}): ReactElement {
+  const initialValue = capInputValue(cap);
+  const [value, setValue] = useState(initialValue);
+  const [savedValue, setSavedValue] = useState(initialValue);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "error">(
+    "idle",
+  );
+
+  useEffect(() => {
+    const nextValue = capInputValue(cap);
+    setValue(nextValue);
+    setSavedValue(nextValue);
+    setSaveState("idle");
+  }, [
+    cap?.monthlyCap?.usdCents,
+    cap?.monthlyCap?.light,
+    cap?.monthlySpend.light,
+    cap?.updatedAt,
+  ]);
+
+  const dirty = value.trim() !== savedValue.trim();
+  const saveCap = async () => {
+    if (!dirty) return;
+    const parsed = parseSpendCapInput(value);
+    if (parsed === undefined) {
+      setSaveState("error");
+      return;
+    }
+    setSaveState("saving");
+    try {
+      await launchApi.updateToolAgentPermissions(tool.id, {
+        spendCaps: [{
+          monthlyCapUsdCents: parsed,
+          subjectName: subjectType === "tool" ? null : subjectName || "",
+          subjectType,
+        }],
+      });
+      setSavedValue(value.trim());
+      setSaveState("idle");
+      live.reload();
+    } catch {
+      setSaveState("error");
+    }
+  };
+
+  return (
+    <div className="spend-cap-control">
+      <div>
+        <strong>{title}</strong>
+        <span>{spendCapStatus(cap)}</span>
+      </div>
+      <div className="spend-cap-actions">
+        <label>
+          <span>USD / month</span>
+          <input
+            inputMode="decimal"
+            onChange={(event) => setValue(event.currentTarget.value)}
+            placeholder="Uncapped"
+            value={value}
+          />
+        </label>
+        <Button
+          onClick={saveCap}
+          size="sm"
+          variant={dirty ? "primary" : "secondary"}
+        >
+          {saveState === "saving"
+            ? "Saving"
+            : saveState === "error"
+            ? "Retry"
+            : dirty
+            ? "Save"
+            : "Saved"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ToolDetailsPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
   return (
     <div className="details-panel">
@@ -1749,7 +2032,13 @@ function ToolDetailsPanel({ tool }: { tool: ToolDetailFixture }): ReactElement {
   );
 }
 
-function ToolTrustRail({ tool }: { tool: ToolDetailFixture }): ReactElement {
+function ToolTrustRail({
+  live,
+  tool,
+}: {
+  live: LaunchPageProps["live"];
+  tool: ToolDetailFixture;
+}): ReactElement {
   const paidFunctions = tool.functions.filter((fn) => fn.price > 0);
   const minPrice = paidFunctions.length > 0
     ? Math.min(...paidFunctions.map((fn) => fn.price))
@@ -1758,20 +2047,48 @@ function ToolTrustRail({ tool }: { tool: ToolDetailFixture }): ReactElement {
   return (
     <div className="tool-rail-stack">
       <Card className="trust-card">
-        <div className="trust-card-head">
-          <Icon name="shield" />
-          <div>
-            <h3>Ready to call</h3>
-            <p>
-              Signed manifest, receipts, and capability disclosure are live.
-            </p>
-          </div>
+        <div className="trust-card-title">
+          <p className="section-label">Trust &amp; setup</p>
+          {tool.relationship === "owner"
+            ? <span className="trust-owner-badge">You own this</span>
+            : null}
+        </div>
+        <div className="trust-signed-row">
+          <span className="trust-signed-dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          <strong>Signed manifest</strong>
         </div>
         <div className="trust-meta">
-          <MetaPair label="signer" value={tool.signer} />
-          <MetaPair label="version" value={tool.version} />
-          <MetaPair label="runtime" value={tool.runtime} />
+          <MetaPair label="Signer" value={tool.signer} />
+          <MetaPair label="Version" value={tool.version} />
+          <MetaPair label="Runtime" value={tool.runtime} />
+          {tool.relationship === "owner"
+            ? <MetaPair label="Visibility" value={tool.visibility} />
+            : null}
         </div>
+        {tool.capabilities.length > 0
+          ? (
+            <div className="trust-perms">
+              <p className="section-label">Permissions</p>
+              <div className="trust-perm-list">
+                {tool.capabilities.map((capability) => (
+                  <div
+                    className={`trust-perm-pill trust-perm-${capability.kind}`}
+                    key={`${capability.kind}-${capability.text}`}
+                  >
+                    <span className="mono">
+                      {capabilityGlyphs[capability.kind]} {capability.kind}
+                    </span>
+                    <span>{capability.text}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+          : null}
       </Card>
       <Card>
         <p className="section-label">Pricing</p>
@@ -1780,13 +2097,23 @@ function ToolTrustRail({ tool }: { tool: ToolDetailFixture }): ReactElement {
           <Mono>{paidFunctions.length} paid functions</Mono>
         </div>
         <div className="trust-meta">
-          <MetaPair label="metering" value="per call" />
+          <MetaPair label="Metering" value="per call" />
           <MetaPair
-            label="from"
-            value={minPrice > 0 ? `✦${formatLight(minPrice)}` : "Free"}
+            label="From"
+            value={formatToolPrice(minPrice)}
           />
-          <MetaPair label="calls/day" value={formatNumber(tool.callsPerDay)} />
+          <MetaPair
+            label="Calls / day"
+            value={formatNumber(tool.callsPerDay)}
+          />
         </div>
+        <SpendCapControl
+          cap={tool.toolSpendCap}
+          live={live}
+          subjectType="tool"
+          title="Monthly tool cap"
+          tool={tool}
+        />
       </Card>
       <Card>
         <p className="section-label">Owner</p>
@@ -1868,7 +2195,7 @@ function WidgetOpenSurface({
           />
         </main>
         <aside>
-          <ToolTrustRail tool={tool} />
+          <ToolTrustRail live={live} tool={tool} />
         </aside>
       </div>
     </div>
@@ -1976,7 +2303,9 @@ function WidgetSandboxShell({
           Calls relay through Ultralight; the widget never sees your API key.
         </span>
         <Mono>ulAction("{widgetActionName(widget)}")</Mono>
-        {state === "ready" ? <Mono>session 4:58</Mono> : null}
+        {state === "ready"
+          ? <span className="mono session-time">session 4:58</span>
+          : null}
       </div>
     </div>
   );
@@ -2097,6 +2426,7 @@ function WidgetBody({
   tool: ToolDetailFixture;
   widget: ToolWidgetFixture;
 }): ReactElement {
+  const openSignInModal = useSignInModal();
   if (state === "loading") {
     return (
       <div className="widget-state-body">
@@ -2112,9 +2442,9 @@ function WidgetBody({
         <span className="state-icon error">
           <Icon name="shield" />
         </span>
-        <h3>Could not load this widget</h3>
+        <h3>Couldn't load this widget</h3>
         <p>
-          The widget UI function failed to render. Your balance was not charged.
+          The widget UI function failed to render. Your balance wasn't charged.
         </p>
         <div className="card-row">
           <Button size="sm">Retry</Button>
@@ -2154,7 +2484,7 @@ function WidgetBody({
           Developer-authored UI loads through an authenticated relay so tool
           keys stay hidden.
         </p>
-        <Button onClick={() => (window.location.href = buildLaunchSignInUrl())}>
+        <Button onClick={openSignInModal}>
           Sign in
         </Button>
       </div>
@@ -2175,8 +2505,9 @@ function WidgetBody({
         <span className="state-icon error">
           <Icon name="shield" />
         </span>
-        <h3>Could not load this widget</h3>
+        <h3>Couldn't load this widget</h3>
         <p>{runtime.error || "The widget UI function failed to render."}</p>
+        <p>Your balance wasn't charged.</p>
         <div className="card-row">
           <Button onClick={runtime.reload} size="sm">Retry</Button>
         </div>
@@ -2435,23 +2766,16 @@ export function LibraryFoundationPage(
     <div className="launch-page-narrow library-page">
       <ApiNotice live={live} noun="library" />
       <div className="library-toolbar">
-        <div className="library-picker">
-          <button
-            className={view === "installed" ? "active" : ""}
-            onClick={() => selectView("installed")}
-            type="button"
-          >
-            Installed tools
-          </button>
-          <button
-            className={view === "owned" ? "active" : ""}
-            onClick={() => selectView("owned")}
-            type="button"
-          >
-            Tools you own
-          </button>
-        </div>
-        <Mono>{count}</Mono>
+        <select
+          aria-label="Library view"
+          className="picker-select"
+          onChange={(event) => selectView(event.target.value as LibraryView)}
+          value={view}
+        >
+          <option value="installed">Installed tools</option>
+          <option value="owned">Tools you own</option>
+        </select>
+        <span className="library-count">{count}</span>
         <RouteButton
           icon="grid"
           navigate={navigate}
@@ -2526,6 +2850,7 @@ export function AdminFoundationPage(
   const tool = liveDetailTool(
     live.data.adminTool?.admin.tool,
     live.data.toolFunctions?.functions,
+    live.data.toolSkills?.skills,
     live.data.toolAgentPermissions,
     live.data.adminTool?.trustCard,
   ) || adminToolFromRoute(route.params.id);
@@ -2596,7 +2921,7 @@ function OwnedToolCard({
       <div className="owned-tool-metrics">
         <MetricTile label="Installs" value={formatNumber(tool.installs)} />
         <MetricTile label="Calls/day" value={formatNumber(tool.callsPerDay)} />
-        <MetricTile label="Earned 30d" value="✦297.6" />
+        <MetricTile label="Earned 30d" value={formatCreditFromLight(297.6)} />
       </div>
       <div className="owned-tool-actions">
         <RouteButton
@@ -2607,11 +2932,12 @@ function OwnedToolCard({
           Manage
         </RouteButton>
         <RouteButton
+          icon="external"
           navigate={navigate}
           to={toolPreviewPath(tool)}
           variant="secondary"
         >
-          Preview
+          Public page
         </RouteButton>
         {tool.widgetList.length > 0
           ? (
@@ -2652,7 +2978,7 @@ function LibraryEmptyCard({
 }): ReactElement {
   return (
     <div className="library-empty-card">
-      <strong>{title}: nothing yet</strong>
+      <strong>{title} — nothing yet</strong>
       <p>{body}</p>
       <Button
         size="sm"
@@ -2692,11 +3018,12 @@ function AdminHeader({
       </div>
       <div className="admin-header-actions">
         <RouteButton
+          icon="external"
           navigate={navigate}
           to={toolPreviewPath(tool)}
           variant="secondary"
         >
-          Preview
+          View public page
         </RouteButton>
         <Button>Save changes</Button>
       </div>
@@ -2808,8 +3135,8 @@ function AdminPricingPanel(
           <div className="admin-table-row" key={fn.name}>
             <Mono>{fn.name}</Mono>
             <label>
-              <span>✦</span>
-              <input defaultValue={fn.price.toFixed(3)} />
+              <span>$</span>
+              <input defaultValue={(fn.price / 100).toFixed(4)} />
             </label>
             <Mono>{fn.p50}ms</Mono>
           </div>
@@ -2851,6 +3178,7 @@ function AdminWidgetsPanel({
             <p>{widget.description}</p>
           </div>
           <select
+            className="picker-select"
             defaultValue="public"
             aria-label={`${widget.label} visibility`}
           >
@@ -2940,7 +3268,10 @@ function AdminReceiptsPanel(
   return (
     <div className="admin-panel">
       <div className="admin-receipt-metrics">
-        <MetricTile label="Revenue · 30d" value="✦297.6" />
+        <MetricTile
+          label="Revenue · 30d"
+          value={formatCreditFromLight(297.6)}
+        />
         <MetricTile
           label="Calls · 30d"
           value={formatNumber(tool.callsPerDay * 30)}
@@ -2964,7 +3295,7 @@ function AdminReceiptsPanel(
               {receipt.caller}
             </span>
             <Mono>{receipt.fn}</Mono>
-            <span>✦{receipt.light.toFixed(3)}</span>
+            <span>{formatCreditFromLight(receipt.light)}</span>
             <Mono>{receipt.status}</Mono>
             <Mono>{receipt.when}</Mono>
           </div>
@@ -3036,7 +3367,7 @@ export function WalletFoundationPage(
       <ApiNotice live={live} noun="wallet" />
       <div className="wallet-hero">
         <WalletAmount
-          label={showEarnings ? "Earned Light" : "Spendable Light"}
+          label={showEarnings ? "Earned credits" : CREDIT_BALANCE_LABEL}
           value={showEarnings ? totals.earned : totals.spendable}
         />
         <div className="wallet-hero-actions">
@@ -3051,7 +3382,7 @@ export function WalletFoundationPage(
             ? null
             : (
               <Button icon="wallet" onClick={() => selectTab("topup")}>
-                Add Light
+                Add credits
               </Button>
             )}
         </div>
@@ -3085,13 +3416,18 @@ export function WalletFoundationPage(
         )
         : null}
       {tab === "topup"
-        ? <WalletTopUpPanel earnedLight={totals.earned} />
+        ? <WalletTopUpPanel earnedCreditCents={totals.earned} />
         : null}
       {tab === "receipts"
         ? <WalletReceiptsPanel receipts={liveReceiptRows(receipts)} />
         : null}
       {tab === "earnings"
-        ? <WalletEarningsPanel earnings={liveEarningRows(earnings)} />
+        ? (
+          <WalletEarningsPanel
+            earnings={liveEarningRows(earnings)}
+            payoutStatus={wallet?.payoutStatus}
+          />
+        )
         : null}
     </div>
   );
@@ -3137,7 +3473,7 @@ export function SettingsFoundationPage(
       <div className="profile-strip">
         <Avatar color="#0a0a0a" name="@you" />
         <div>
-          <h1>{canManageKeys ? "Account" : "Not signed in"}</h1>
+          <h1>Profile</h1>
           <p>
             {canManageKeys
               ? "Launch account session"
@@ -3169,8 +3505,8 @@ export function SettingsFoundationPage(
             </Button>
           )
           : null}
-        subtitle="Tokens your agents use to call Ultralight. New keys reveal once."
-        title="API keys"
+        subtitle="One token your agents use to call Ultralight."
+        title="API key"
       >
         <div className="api-key-primary">
           <Icon name="key" />
@@ -3246,8 +3582,9 @@ export function SettingsFoundationPage(
         <div>
           <strong>Connecting an agent?</strong>
           <p>
-            Use Add to agent. It bundles your API key into install instructions
-            without passing it to widgets.
+            Use <strong>Add to agent</strong>{" "}
+            — it bundles your API key automatically. Or manage the key directly
+            above.
           </p>
         </div>
         <RouteButton
@@ -3278,12 +3615,14 @@ export function SettingsFoundationPage(
 function WalletAmount(
   { label, value }: { label: string; value: number },
 ): ReactElement {
-  const [whole, fraction] = value.toFixed(3).split(".");
+  const [whole, fraction = "00"] = formatCreditFromLight(value).slice(1).split(
+    ".",
+  );
   return (
     <div className="wallet-amount">
       <span>{label}</span>
       <strong>
-        <small>✦</small>
+        <small>$</small>
         {Number(whole).toLocaleString()}
         <em>.{fraction}</em>
       </strong>
@@ -3305,19 +3644,25 @@ function WalletBalancePanel({
       <div className="wallet-metric-grid">
         <MetricTile
           label="Deposited"
-          value={`✦${formatNumber(totals.deposited)}`}
+          value={formatCreditFromLight(totals.deposited)}
         />
-        <MetricTile label="Earned" value={`✦${formatNumber(totals.earned)}`} />
-        <MetricTile label="Escrow" value={`✦${formatNumber(totals.escrow)}`} />
+        <MetricTile
+          label="Earned"
+          value={formatCreditFromLight(totals.earned)}
+        />
+        <MetricTile
+          label="Escrow"
+          value={formatCreditFromLight(totals.escrow)}
+        />
         {publishRequirement?.enabled
           ? (
             <MetricTile
               label={publishRequirement.met
                 ? "Publish ready"
                 : "Publish minimum"}
-              value={`✦${
-                formatNumber(lightValue(publishRequirement.requiredBalance))
-              }`}
+              value={formatCreditFromLight(
+                lightValue(publishRequirement.requiredBalance),
+              )}
             />
           )
           : null}
@@ -3343,10 +3688,10 @@ function WalletBalancePanel({
 }
 
 function WalletTopUpPanel(
-  { earnedLight }: { earnedLight: number },
+  { earnedCreditCents }: { earnedCreditCents: number },
 ): ReactElement {
   const [method, setMethod] = useState<PaymentMethod>("card");
-  const [lightAmount, setLightAmount] = useState(10000);
+  const [creditUsdCents, setCreditUsdCents] = useState(10000);
   const [checkoutState, setCheckoutState] = useState<
     "idle" | "creating" | "ready" | "error"
   >("idle");
@@ -3359,9 +3704,9 @@ function WalletTopUpPanel(
       totalDollars: number;
     } | null
   >(null);
-  const quote = liveQuote || quoteTopUp(lightAmount, method);
+  const quote = liveQuote || quoteTopUp(creditUsdCents, method);
   const presets = method === "earnings"
-    ? [1000, 2500, 10000, 25000, Math.floor(earnedLight)]
+    ? [1000, 2500, 10000, 25000, Math.floor(earnedCreditCents)]
     : [1000, 2500, 10000, 25000, 50000];
 
   useEffect(() => {
@@ -3370,7 +3715,7 @@ function WalletTopUpPanel(
       return;
     }
     let cancelled = false;
-    launchApi.walletTopUpQuote({ amountLight: lightAmount, method })
+    launchApi.walletTopUpQuote({ amountUsdCents: creditUsdCents, method })
       .then((response) => {
         if (cancelled) return;
         setLiveQuote({
@@ -3386,7 +3731,7 @@ function WalletTopUpPanel(
     return () => {
       cancelled = true;
     };
-  }, [lightAmount, method]);
+  }, [creditUsdCents, method]);
 
   const createTopUpIntent = async () => {
     if (method === "earnings") {
@@ -3399,7 +3744,7 @@ function WalletTopUpPanel(
     setCheckoutState("creating");
     try {
       const response = await launchApi.createWalletTopUpIntent({
-        amountLight: lightAmount,
+        amountUsdCents: creditUsdCents,
         method,
         termsAccepted: true,
       });
@@ -3414,23 +3759,27 @@ function WalletTopUpPanel(
   return (
     <div className="wallet-topup-grid">
       <Card className="wallet-topup-card">
-        <p className="section-label">Light amount</p>
+        <p className="section-label">Credit amount</p>
         <div className="light-input-shell">
-          <span>✦</span>
-          <strong>{lightAmount.toLocaleString()}</strong>
-          <small>Light</small>
+          <span>$</span>
+          <strong>{(creditUsdCents / 100).toLocaleString(undefined, {
+            maximumFractionDigits: 2,
+            minimumFractionDigits: 2,
+          })}</strong>
+          <small>USD</small>
         </div>
         <div className="amount-presets">
           {presets.map((amount) => (
             <button
-              className={lightAmount === amount ? "active" : ""}
+              className={creditUsdCents === amount ? "active" : ""}
               key={amount}
-              onClick={() => setLightAmount(amount)}
+              onClick={() => setCreditUsdCents(amount)}
               type="button"
             >
-              {amount === Math.floor(earnedLight) && method === "earnings"
+              {amount === Math.floor(earnedCreditCents) &&
+                  method === "earnings"
                 ? "Max"
-                : amount.toLocaleString()}
+                : formatCreditFromLight(amount)}
             </button>
           ))}
         </div>
@@ -3477,21 +3826,21 @@ function WalletTopUpPanel(
         />
         <QuoteLine
           label="Rate"
-          value={method === "earnings" ? "1:1 · no fee" : "✦100 / $1"}
+          value={method === "earnings" ? "1:1 · no fee" : "$1 credit / $1"}
         />
         <div className="quote-total">
           <span>{method === "earnings" ? "Transfer" : "Total"}</span>
           <strong>{formatCurrency(quote.totalDollars)}</strong>
         </div>
         <div className="quote-receive">
-          <span>You receive</span>
-          <strong>✦{lightAmount.toLocaleString()}</strong>
+          <span>Credit added</span>
+          <strong>{formatCreditFromLight(creditUsdCents)}</strong>
         </div>
         <Button onClick={createTopUpIntent} size="lg">
           {checkoutState === "creating"
             ? "Creating checkout"
             : method === "earnings"
-            ? `Transfer ✦${lightAmount.toLocaleString()}`
+            ? `Transfer ${formatCreditFromLight(creditUsdCents)}`
             : `Pay ${formatCurrency(quote.totalDollars)}`}
         </Button>
         {checkoutMessage
@@ -3530,7 +3879,7 @@ function WalletReceiptsPanel(
       <div className="wallet-receipt-table">
         <div className="wallet-table-head">
           <span>Tool</span>
-          <span>Light</span>
+          <span>Amount</span>
           <span>Latency</span>
           <span>Status</span>
           <span>When</span>
@@ -3546,31 +3895,101 @@ function WalletReceiptsPanel(
   );
 }
 
-function WalletEarningsPanel(
-  { earnings }: { earnings: LedgerRow[] },
-): ReactElement {
+const payoutBannerFallback = {
+  action: "Withdraw earnings",
+  description:
+    "Stripe Connect payouts are enabled. Withdraw earned credits to your bank or transfer them to spendable balance.",
+  label: "Payouts ready",
+  tone: "green",
+} as const;
+
+function payoutBannerContent(payoutStatus?: LaunchPayoutStatus | null): {
+  action: string;
+  description: string;
+  label: string;
+  tone: "amber" | "green" | "neutral";
+} {
+  if (!payoutStatus) return payoutBannerFallback;
+  const tone = payoutStatus.kind === "ready"
+    ? "green"
+    : payoutStatus.kind === "onboarding"
+    ? "amber"
+    : "neutral";
+  const action = payoutStatus.kind === "ready"
+    ? "Withdraw earnings"
+    : payoutStatus.kind === "onboarding"
+    ? "Resume Stripe onboarding"
+    : "Connect payouts";
+  return {
+    action,
+    description: payoutStatus.description ||
+      payoutBannerFallback.description,
+    label: payoutStatus.label || payoutBannerFallback.label,
+    tone,
+  };
+}
+
+function WalletEarningsPanel({
+  earnings,
+  payoutStatus,
+}: {
+  earnings: LedgerRow[];
+  payoutStatus?: LaunchPayoutStatus | null;
+}): ReactElement {
+  const [toolFilter, setToolFilter] = useState("all");
+  const banner = payoutBannerContent(payoutStatus);
+  const tools = Array.from(
+    new Set(
+      earnings.map((row) => row.tool).filter((tool): tool is string =>
+        Boolean(tool)
+      ),
+    ),
+  );
+  const visibleEarnings = toolFilter === "all"
+    ? earnings
+    : earnings.filter((row) => row.tool === toolFilter);
+
   return (
     <div className="wallet-panel">
-      <Card className="payout-banner">
+      <Card className={`payout-banner payout-banner-${banner.tone}`}>
         <span className="target-icon">
           <Icon name="shield" />
         </span>
         <div>
-          <h3>Payouts ready</h3>
-          <p>
-            Stripe Connect payouts are enabled. Withdraw earned Light to your
-            bank or transfer to spendable balance.
-          </p>
+          <h3>{banner.label}</h3>
+          <p>{banner.description}</p>
         </div>
-        <Button size="sm">Withdraw earnings</Button>
+        <Button
+          size="sm"
+          variant={banner.tone === "neutral" ? "secondary" : "primary"}
+        >
+          {banner.action}
+        </Button>
       </Card>
       <Card className="wallet-ledger-card">
         <div className="wallet-section-head">
           <h2>Earnings ledger</h2>
-          <Pill>creator income</Pill>
+          <div className="wallet-earnings-controls">
+            {tools.length > 0
+              ? (
+                <select
+                  aria-label="Filter earnings by tool"
+                  className="admin-input earnings-tool-filter"
+                  onChange={(event) => setToolFilter(event.target.value)}
+                  value={toolFilter}
+                >
+                  <option value="all">All tools</option>
+                  {tools.map((tool) => (
+                    <option key={tool} value={tool}>{tool}</option>
+                  ))}
+                </select>
+              )
+              : null}
+            <Pill>creator income</Pill>
+          </div>
         </div>
         <div className="wallet-ledger">
-          {earnings.map((row, index) => (
+          {visibleEarnings.map((row, index) => (
             <WalletLedgerRow
               first={index === 0}
               key={`${row.detail}-${row.when}-${index}`}
@@ -3590,21 +4009,20 @@ function WalletLedgerRow(
   const positive = row.amount > 0;
   const glyphs: Record<LedgerRow["kind"], string> = {
     call: "→",
-    earning: "✦",
+    earning: "$",
     payout: "↑",
     topup: "+",
     transfer: "⇄",
   };
   return (
     <div className={first ? "wallet-ledger-row first" : "wallet-ledger-row"}>
-      <Mono>{glyphs[row.kind]}</Mono>
+      <span className={`mono ledger-glyph ledger-glyph-${row.kind}`}>
+        {glyphs[row.kind]}
+      </span>
       <span>{row.detail}</span>
       <Mono>{row.when}</Mono>
       <span className={positive ? "mono positive" : "mono"}>
-        {positive ? "+" : "-"}✦{Math.abs(row.amount).toLocaleString(undefined, {
-          maximumFractionDigits: 3,
-          minimumFractionDigits: 3,
-        })}
+        {positive ? "+" : "-"}{formatCreditFromLight(Math.abs(row.amount))}
       </span>
     </div>
   );
@@ -3622,7 +4040,7 @@ function WalletReceiptRow(
           <em>·{receipt.fn}</em>
         </Mono>
       </span>
-      <Mono>✦{receipt.light.toFixed(3)}</Mono>
+      <Mono>{formatCreditFromLight(receipt.light)}</Mono>
       <Mono>{receipt.latency}ms</Mono>
       <span
         className={receipt.status === "error" ? "mono error" : "mono positive"}
@@ -3638,7 +4056,7 @@ function WalletLoadingFooter(): ReactElement {
   return (
     <div className="wallet-loading-footer">
       <span className="widget-spinner" />
-      <span>Loading more...</span>
+      <span>Loading more…</span>
     </div>
   );
 }
@@ -3929,18 +4347,45 @@ function ConfigPreview({
         <Mono>mcp.json</Mono>
       </div>
       <pre>
-        <code>{highlight ? highlightSnippet(config, highlight) : config}</code>
+        <code>
+          {highlight
+            ? highlightSnippet(config, highlight)
+            : colorizeSnippet(config)}
+        </code>
       </pre>
     </div>
   );
 }
 
+function colorizeSnippet(text: string): ReactNode {
+  const nodes: ReactNode[] = [];
+  const pattern = /"[^"\n]*"/gu;
+  let cursor = 0;
+  let match = pattern.exec(text);
+  while (match) {
+    if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
+    const after = text.slice(match.index + match[0].length).trimStart();
+    nodes.push(
+      <span
+        className={after.startsWith(":") ? "json-key" : "json-string"}
+        key={match.index}
+      >
+        {match[0]}
+      </span>,
+    );
+    cursor = match.index + match[0].length;
+    match = pattern.exec(text);
+  }
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
+
 function highlightSnippet(text: string, highlight: string): ReactNode {
-  if (!highlight || !text.includes(highlight)) return text;
+  if (!highlight || !text.includes(highlight)) return colorizeSnippet(text);
   const parts = text.split(highlight);
   return parts.map((part, index) => (
     <span key={`${part}-${index}`}>
-      {part}
+      {colorizeSnippet(part)}
       {index < parts.length - 1 ? <mark>{highlight}</mark> : null}
     </span>
   ));
@@ -3959,13 +4404,14 @@ function CompactToolCard({ tool }: { tool: ToolFixture }): ReactElement {
         <Mono>{formatNumber(tool.installs)} installs</Mono>
         {free
           ? <span>Free</span>
-          : <span>{formatLight(tool.callPrice)}/call</span>}
+          : <span>{formatToolPrice(tool.callPrice)}/call</span>}
       </div>
     </Card>
   );
 }
 
 function KeyBanner({ signedIn }: { signedIn: boolean }): ReactElement {
+  const openSignInModal = useSignInModal();
   return (
     <section className={signedIn ? "key-banner signed-in" : "key-banner"}>
       <span className="target-icon">
@@ -3994,7 +4440,11 @@ function KeyBanner({ signedIn }: { signedIn: boolean }): ReactElement {
             )}
         </p>
       </div>
-      <Button size="sm" variant={signedIn ? "secondary" : "primary"}>
+      <Button
+        onClick={signedIn ? undefined : openSignInModal}
+        size="sm"
+        variant={signedIn ? "secondary" : "primary"}
+      >
         {signedIn ? "Copy key" : "Sign in"}
       </Button>
     </section>
@@ -4084,10 +4534,7 @@ function StoreToolCard({ tool }: { tool: ToolFixture }): ReactElement {
     <Card className="store-tool-card">
       <div className="store-card-title">
         <Avatar color={tool.color} name={tool.author} />
-        <div>
-          <h3>{tool.name}</h3>
-          <span>{tool.author}</span>
-        </div>
+        <h3>{tool.name}</h3>
         <Pill>{tool.kind}</Pill>
       </div>
       <p>{tool.summary}</p>
@@ -4096,10 +4543,10 @@ function StoreToolCard({ tool }: { tool: ToolFixture }): ReactElement {
         {tool.widgets > 0
           ? (
             <span>
-              <Icon name="grid" size={12} /> {tool.widgets} widgets
+              <Icon name="grid" size={11} /> {tool.widgets} widgets
             </span>
           )
-          : <span>functions only</span>}
+          : null}
       </div>
       <Sparkline points={tool.spark} growth={tool.growth} />
     </Card>
@@ -4113,14 +4560,14 @@ function Sparkline(
   const min = Math.min(...points);
   const range = max - min || 1;
   const polyline = points.map((value, index) => {
-    const x = (index / (points.length - 1)) * 74;
-    const y = 24 - ((value - min) / range) * 24;
+    const x = (index / (points.length - 1)) * 56;
+    const y = 15 - ((value - min) / range) * 14;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(" ");
   return (
     <svg
       className={growth > 0.1 ? "sparkline growing" : "sparkline"}
-      viewBox="0 0 74 28"
+      viewBox="0 0 56 16"
       aria-hidden="true"
     >
       <polyline points={polyline} />
@@ -4185,13 +4632,17 @@ function Leaderboard({
       <div className="leaderboard-list">
         {rows.map((row) => (
           <div className="leader-row" key={`${title}-${row.rank}`}>
-            <Mono>{row.rank}</Mono>
-            <Avatar color={row.color} name={row.name} />
-            <span>
-              <strong>{row.name}</strong>
-              {row.featured ? <small>{row.featured}</small> : null}
+            <span className={row.rank <= 3 ? "leader-rank top" : "leader-rank"}>
+              {row.rank}
             </span>
-            <Mono>{formatLight(row.value)}</Mono>
+            <span className="leader-entity">
+              <Avatar color={row.color} name={row.name} />
+              <span>
+                <strong>{row.name}</strong>
+                {row.featured ? <small>{row.featured}</small> : null}
+              </span>
+            </span>
+            <Mono>{formatCreditFromLight(row.value)}</Mono>
           </div>
         ))}
       </div>
@@ -4271,7 +4722,9 @@ function createToolDetail(tool: ToolFixture): ToolDetailFixture {
     relationship: "public",
     runtime: tool.kind === "mcp" ? "deno · edge" : "worker · http",
     signer: `${tool.author.replace("@", "")}.studio`,
+    skills: [],
     title: titleizeToolName(tool.name),
+    toolSpendCap: null,
     updatedAt: "4d",
     version: "1.0.0",
     visibility: "public",
@@ -4549,9 +5002,13 @@ function libraryViewFromSearch(): LibraryView {
   return queryParam("view") === "owned" ? "owned" : "installed";
 }
 
-function toolTabFromSearch(hasWidgets: boolean): ToolPageTabId {
+function toolTabFromSearch(
+  hasWidgets: boolean,
+  hasSkills: boolean,
+): ToolPageTabId {
   const tab = queryParam("tab");
   if (tab === "details" || tab === "functions") return tab;
+  if (tab === "skills" && hasSkills) return tab;
   if (tab === "widgets" && hasWidgets) return tab;
   return hasWidgets ? "widgets" : "functions";
 }
@@ -4568,13 +5025,13 @@ function walletTabFromSearch(): WalletTabId {
     : "balance";
 }
 
-function quoteTopUp(lightAmount: number, method: PaymentMethod): {
+function quoteTopUp(creditUsdCents: number, method: PaymentMethod): {
   baseDollars: number;
   feeDollars: number;
   feeNote: string;
   totalDollars: number;
 } {
-  const baseDollars = lightAmount / 100;
+  const baseDollars = creditUsdCents / 100;
   if (method === "earnings") {
     return {
       baseDollars,
@@ -4651,7 +5108,28 @@ function builderRankFor(author: string): string {
 }
 
 function formatToolPrice(value: number): string {
-  return value > 0 ? `✦${formatLight(value)}` : "Free";
+  return value > 0 ? formatCreditFromLight(value) : "Free";
+}
+
+function capInputValue(cap?: LaunchMonthlySpendCapSummary | null): string {
+  if (!cap?.monthlyCap) return "";
+  return (cap.monthlyCap.usdCents / 100).toFixed(2);
+}
+
+function parseSpendCapInput(value: string): number | null | undefined {
+  const trimmed = value.trim().replaceAll(",", "");
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? Math.round(parsed * 100)
+    : undefined;
+}
+
+function spendCapStatus(cap?: LaunchMonthlySpendCapSummary | null): string {
+  if (!cap) return "No spend this month.";
+  const spend = cap.monthlySpend.display;
+  if (!cap.monthlyCap) return `${spend} spent this month.`;
+  return `${spend} spent · ${cap.remaining?.display || "$0.00"} remaining.`;
 }
 
 function functionResponse(slug: string, name: string): Record<string, unknown> {
@@ -4735,10 +5213,4 @@ function formatNumber(value: number): string {
   if (value >= 10_000) return `${Math.round(value / 1000)}k`;
   if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
   return String(value);
-}
-
-function formatLight(value: number): string {
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
-  if (value >= 1) return value.toFixed(1);
-  return value.toFixed(3);
 }

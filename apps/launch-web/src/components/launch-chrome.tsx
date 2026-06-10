@@ -1,17 +1,14 @@
-import type { ReactElement, ReactNode } from "react";
+import { type ReactElement, type ReactNode, useId } from "react";
 
-import {
-  buildLaunchSignInUrl,
-  hasLaunchAuthToken,
-  recordLaunchAuthDiagnostic,
-  signOutLaunch,
-} from "../lib/auth";
+import { hasLaunchAuthToken, signOutLaunch } from "../lib/auth";
 import type { LaunchRouteDefinition, LaunchRouteKey } from "../lib/routes";
+import { useSignInModal } from "./sign-in-modal";
 
 export type IconName =
   | "arrow"
   | "check"
   | "copy"
+  | "external"
   | "grid"
   | "key"
   | "menu"
@@ -82,15 +79,8 @@ export function LaunchShell({
 }: LaunchShellProps): ReactElement {
   const navRoutes = primaryRoutes.filter((route) => route.key !== "home");
   const signedIn = hasLaunchAuthToken();
-  const handleAuthClick = () => {
-    if (!signedIn) {
-      recordLaunchAuthDiagnostic({
-        nextPath: `${window.location.pathname}${window.location.search}`,
-        status: "redirecting",
-      });
-      window.location.href = buildLaunchSignInUrl();
-      return;
-    }
+  const openSignInModal = useSignInModal();
+  const handleSignOut = () => {
     void signOutLaunch().finally(() => {
       window.location.href = "/";
     });
@@ -122,9 +112,21 @@ export function LaunchShell({
           <Button icon="copy" onClick={() => navigate("/install")} size="sm">
             Add to agent
           </Button>
-          <Button onClick={handleAuthClick} size="sm" variant="ghost">
-            {signedIn ? "Sign out" : "Sign in"}
-          </Button>
+          {signedIn
+            ? (
+              <Button onClick={handleSignOut} size="sm" variant="ghost">
+                Sign out
+              </Button>
+            )
+            : (
+              <button
+                className="signin-link"
+                onClick={openSignInModal}
+                type="button"
+              >
+                Sign in
+              </button>
+            )}
         </div>
       </header>
 
@@ -285,6 +287,8 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }): Re
       return <svg {...common}><path d="m5 12 5 5L20 7" /></svg>;
     case "copy":
       return <svg {...common}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>;
+    case "external":
+      return <svg {...common}><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" /></svg>;
     case "grid":
       return <svg {...common}><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>;
     case "key":
@@ -305,9 +309,35 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }): Re
 }
 
 export function Wordmark(): ReactElement {
+  const maskId = `wm${useId().replace(/:/gu, "")}`;
   return (
     <span className="wordmark">
-      <span className="wordmark-mark" aria-hidden="true" />
+      <svg
+        aria-hidden="true"
+        className="wordmark-mark"
+        shapeRendering="geometricPrecision"
+        viewBox="44 56 168 144"
+      >
+        <mask
+          height="256"
+          id={maskId}
+          maskUnits="userSpaceOnUse"
+          width="256"
+          x="0"
+          y="0"
+        >
+          <rect fill="black" height="256" width="256" x="0" y="0" />
+          <circle cx="128" cy="116.02" fill="white" r="84" />
+          <circle cx="128" cy="98.02" fill="black" r="72.24" />
+        </mask>
+        <circle
+          cx="128"
+          cy="116.02"
+          fill="currentColor"
+          mask={`url(#${maskId})`}
+          r="84"
+        />
+      </svg>
       <span>Ultralight</span>
     </span>
   );

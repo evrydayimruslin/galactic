@@ -19,6 +19,7 @@ import type {
   LaunchStoreResponse,
   LaunchToolAdminSummary,
   LaunchToolFunctionsResponse,
+  LaunchToolSkillsResponse,
   LaunchToolSummary,
   LaunchTrustCard,
   LaunchWalletDetailKind,
@@ -176,6 +177,12 @@ export class LaunchApiClient {
     );
   }
 
+  toolSkills(idOrSlug: string): Promise<LaunchToolSkillsResponse> {
+    return this.fetchJson(
+      `/api/launch/tools/${encodeURIComponent(idOrSlug)}/skills`,
+    );
+  }
+
   runToolFunction(
     idOrSlug: string,
     functionName: string,
@@ -230,11 +237,11 @@ export class LaunchApiClient {
   }
 
   walletTopUpQuote(request: {
-    amountLight: number;
+    amountUsdCents: number;
     method: LaunchWalletFundingMethod;
   }): Promise<LaunchWalletFundingQuoteResponse> {
     const params = new URLSearchParams({
-      amount_light: String(request.amountLight),
+      amount_usd_cents: String(request.amountUsdCents),
       method: request.method,
     });
     return this.fetchJson(
@@ -248,7 +255,7 @@ export class LaunchApiClient {
     return this.fetchJson("/api/launch/wallet/topup/intent", {
       method: "POST",
       body: JSON.stringify({
-        amount_light: request.amountLight,
+        amount_usd_cents: request.amountUsdCents ?? request.amountLight,
         method: request.method,
         terms_accepted: request.termsAccepted ?? true,
         ...(request.billingAddress !== undefined

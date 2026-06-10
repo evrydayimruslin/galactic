@@ -506,6 +506,61 @@ to pass an incrementing `replayKey`.
 
 ---
 
+## H. Launch Web UI parity pass (2026-06-09)
+
+Items surfaced while streamlining `apps/launch-web` against the
+`handoff/launch-web/mockups` canvas (Launch Web Mockups.html). Everything
+implementable from existing FE data shipped; the rest is listed here.
+
+### H1. ✦ Light glyph vs USD credits — needs a design decision
+The mockups render every money value with the `✦` Light glyph
+(`launch-data.jsx` `fmtLight`, wallet/leaderboard/admin receipts). The
+codebase has since migrated display to **USD-denominated credits** —
+`formatCreditFromLight` in `shared/types/index.ts:1312` is documented as
+formatting "USD credits from the *legacy* Light storage amount". We kept
+`$` everywhere rather than regress the migration. The mockup set needs a
+refresh to USD, or product needs to re-bless ✦ as a display unit.
+
+### H2. Hosting-suspended banner has no contract field
+`launch-admin.jsx:188–191` shows an amber "Hosting suspended" banner.
+`LaunchToolAdminSummary` carries no hosting/suspension flag, so the
+banner isn't rendered. Needs a BE contract addition.
+
+### H3. Trust & Setup card — partial data only
+The full mockup card (`launch-trust.jsx`) includes a Receipts row, a
+"Required setup" section (OAuth/secret status), and a "View manifest"
+footer action. The public tool contract exposes none of these (no
+manifest URL, receipts flag, or setup state). Shipped: signed-manifest
+header, owner badge, meta rows, capability permission pills.
+
+### H4. Mobile Catalog tabs not ported
+`launch-discover.jsx:140–166` gives mobile a three-tab layout (Tools /
+Builders / Fee credit). The app currently stacks the desktop sections on
+mobile. Port pending design confirmation that tabs are still wanted.
+
+### H5. Retrieval diagnostics in empty state
+Mockup empty state shows "semantic ✗ → lexical ✗" style retrieval
+telemetry with per-mode counts. Confirm `/api/launch/discover` exposes
+`embeddedSources`/counts; FE currently renders only the mode string.
+
+### H6. Wallet "Receipts" tab is an app addition
+Mockup wallet has Balance / Top up / Earnings only; the app adds a
+Receipts tab. Kept — design should confirm or fold it into the Balance
+ledger.
+
+### H7. "Use another account" can't force account selection
+The sign-in modal's "Use another account" state redirects through the
+same `buildLaunchSignInUrl()`; the auth bridge has no
+`prompt=select_account` passthrough. Small BE addendum if the forced
+chooser matters.
+
+### H8. Minor type deviations kept
+- Leaderboard names render mono; mockup uses sans 12.5/500.
+- Install-page "Sign in" CTAs now open the sign-in modal (they were
+  inert placeholders); confirm intended post-auth behavior.
+
+---
+
 ## How this file is maintained
 
 - Append new items as each batch surfaces them; never overwrite an
