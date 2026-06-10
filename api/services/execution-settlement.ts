@@ -1478,9 +1478,9 @@ function buildInsufficientSettlement(
 }
 
 function buildCallerLightRequiredMessage(amountLight: number): string {
-  return `Insufficient Light balance. This call requires ${
+  return `Insufficient credits balance. This call requires ${
     formatLight(amountLight)
-  }. Add Light to your wallet or add creator earnings to balance and try again.`;
+  }. Add credits to your wallet or add creator earnings to balance and try again.`;
 }
 
 function buildCallerInfraFallbackLightRequiredMessage(
@@ -1488,13 +1488,13 @@ function buildCallerInfraFallbackLightRequiredMessage(
 ): string {
   return `The app owner cannot sponsor this free call right now. You can continue by paying ${
     formatLight(amountLight)
-  } for infrastructure from your Light balance.`;
+  } for infrastructure from your credits balance.`;
 }
 
 function buildOwnerSponsorLightRequiredMessage(amountLight: number): string {
   return `This free call requires ${
     formatLight(amountLight)
-  } of Light-backed sponsorship. Add Light to your wallet or add creator earnings to balance to call this app.`;
+  } of credits-backed sponsorship. Add credits to your wallet or add creator earnings to balance to call this app.`;
 }
 
 function isCallerInfraFallbackLightRequired(err: unknown): boolean {

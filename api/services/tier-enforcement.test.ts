@@ -104,7 +104,7 @@ Deno.test("tier enforcement: publish gate checks balance before address", async 
 
         assertEquals(
           result,
-          "Publishing requires at least ✦1000 spendable Light before a non-private tool can go live. Current balance: ✦100. Add Light from Wallet to go live.",
+          "Publishing requires at least ✦1000 spendable credits before a non-private tool can go live. Current balance: ✦100. Add credits from Wallet to go live.",
         );
         assertEquals(
           calls.some((url) => url.includes("/rest/v1/user_billing_addresses?")),
@@ -215,7 +215,7 @@ Deno.test("tier enforcement: publish readiness exposes structured balance detail
         assertEquals(readiness.block?.status, 402);
         assertEquals(
           readiness.block?.nextAction,
-          "Add Light from Wallet to go live.",
+          "Add credits from Wallet to go live.",
         );
       },
     );

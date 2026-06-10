@@ -185,12 +185,12 @@ export async function checkPublisherPublishReadiness(
     const balance = rows[0]?.balance_light ?? 0;
 
     if (balance < requiredLight) {
-      const nextAction = "Add Light from Wallet to go live.";
+      const nextAction = "Add credits from Wallet to go live.";
       const block: PublishReadinessBlock = {
         reason: "insufficient_publish_balance",
         message: `Publishing requires at least ${
           formatLight(requiredLight)
-        } spendable Light before a non-private tool can go live. Current balance: ${
+        } spendable credits before a non-private tool can go live. Current balance: ${
           formatLight(balance)
         }. ${nextAction}`,
         requiredLight,

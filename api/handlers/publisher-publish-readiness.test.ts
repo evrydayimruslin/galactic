@@ -222,7 +222,7 @@ Deno.test("publisher readiness: Platform MCP ul.set version returns structured m
         assertEquals(payload.error.data?.current_balance_light, 100);
         assertEquals(
           payload.error.data?.next_action,
-          "Add Light from Wallet to go live.",
+          "Add credits from Wallet to go live.",
         );
       },
     );

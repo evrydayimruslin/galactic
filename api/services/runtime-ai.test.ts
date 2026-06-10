@@ -260,6 +260,10 @@ Deno.test("runtime AI context: credits route below minimum balance is blocked pr
     assertEquals(context.route, null);
     assertEquals(context.resolvedRoute, null);
     assertEquals(context.userApiKey, null);
+    // The reason must ride the context so the dynamic-worker AI binding can
+    // surface the same message as the in-process service path.
+    assertStringIncludes(context.unavailableReason ?? "", "credits");
+    assertStringIncludes(context.unavailableReason ?? "", "BYOK");
 
     const response = await context.aiService.call({
       model: "deepseek/deepseek-v4-flash",

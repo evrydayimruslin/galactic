@@ -3018,7 +3018,9 @@ function ByokSettingsCard({
   navigate: (to: string) => void;
 }): ReactElement {
   const canManageKeys = live.status !== "error";
-  const providers = live.data.byok?.providers?.length
+  // Fixtures only stand in while live data is absent; a live response is
+  // authoritative even if empty (matches the API-keys card pattern).
+  const providers = live.data.byok
     ? live.data.byok.providers
     : byokProviderFixtures;
   const [selectedProvider, setSelectedProvider] = useState("");
@@ -3139,7 +3141,7 @@ function ByokSettingsCard({
               <label>
                 <span>API key</span>
                 <input
-                  autoComplete="off"
+                  autoComplete="new-password"
                   onChange={(event) =>
                     setApiKeyDraft(event.currentTarget.value)}
                   placeholder={activeOption?.apiKeyPrefix
@@ -3270,12 +3272,14 @@ function ByokBillingBanner({
   providers: LaunchByokProviderOption[];
 }): ReactElement {
   if (!inference) {
+    // Auth-neutral: this branch covers both signed-out visitors and
+    // signed-in users whose inference-options fetch failed.
     return (
       <div className="byok-banner">
         <Icon name="spark" />
         <span>
-          Sign in to see whether runs bill platform credits or use your own
-          provider keys.
+          Runs bill platform credits unless a primary BYOK provider key is
+          configured.
         </span>
       </div>
     );

@@ -2307,6 +2307,7 @@ async function executeAppFunction(
         aiService: createUnavailableAIService(
           "ai:call permission not granted.",
         ),
+        unavailableReason: "ai:call permission not granted.",
       };
 
     // ── Async promotion threshold: if execution exceeds this, return a job envelope ──
@@ -2476,6 +2477,7 @@ async function executeAppFunction(
       code,
       permissions,
       userApiKey: runtimeAI.userApiKey,
+      aiUnavailableReason: runtimeAI.unavailableReason,
       aiRoute: runtimeAI.route,
       user,
       appDataService,

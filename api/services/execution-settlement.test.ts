@@ -462,7 +462,7 @@ Deno.test("settleAppCall gates free calls when owner sponsorship has no Light", 
     assertEquals(settlement.billingConfigVersion, 32);
     assertMatch(
       settlement.insufficientBalanceMessage || "",
-      /Add Light/,
+      /Add credits/,
     );
   });
 });

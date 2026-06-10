@@ -19,6 +19,10 @@ export interface RuntimeAIContext {
   resolvedRoute: ResolvedInferenceRoute | null;
   aiService: RuntimeAIService;
   userApiKey: string | null;
+  // Human-readable reason AI is unavailable (no user, balance gate, route
+  // error). Threaded into the dynamic-worker AI binding so sandboxed apps
+  // see the same message as the in-process service path.
+  unavailableReason: string | null;
 }
 
 export interface RuntimeAIUser {
@@ -145,6 +149,7 @@ export async function createRuntimeAIContext(
       resolvedRoute: null,
       aiService: createUnavailableAIService(message),
       userApiKey: null,
+      unavailableReason: message,
     };
   }
 
@@ -171,6 +176,7 @@ export async function createRuntimeAIContext(
             resolvedRoute: null,
             aiService: createUnavailableAIService(message),
             userApiKey: null,
+            unavailableReason: message,
           };
         }
       } catch (balanceError) {
@@ -190,6 +196,7 @@ export async function createRuntimeAIContext(
       resolvedRoute: route,
       aiService: createRoutedRuntimeAIService(route, user.id),
       userApiKey: route.apiKey,
+      unavailableReason: null,
     };
   } catch (error) {
     const message = routeErrorMessage(error);
@@ -198,6 +205,7 @@ export async function createRuntimeAIContext(
       resolvedRoute: null,
       aiService: createUnavailableAIService(message),
       userApiKey: null,
+      unavailableReason: message,
     };
   }
 }

@@ -376,6 +376,7 @@ export async function handleRun(
         aiService: createUnavailableAIService(
           "ai:call permission not granted.",
         ),
+        unavailableReason: "ai:call permission not granted.",
       };
 
     // Execute in sandbox — AI-capable apps get 120s timeout
@@ -412,7 +413,7 @@ export async function handleRun(
           error: {
             type: cloudPreflight.insufficientBalanceCode || "LIGHT_REQUIRED",
             message: cloudPreflight.insufficientBalanceMessage ||
-              "Light balance required to call this app.",
+              "Credits balance required to call this app.",
             details: cloudPreflight.metadata,
           },
         } as RunResponse,
@@ -466,6 +467,7 @@ export async function handleRun(
         code,
         permissions,
         userApiKey: runtimeAI.userApiKey,
+        aiUnavailableReason: runtimeAI.unavailableReason,
         aiRoute: runtimeAI.route,
         user,
         appDataService,
@@ -535,7 +537,7 @@ export async function handleRun(
           error: {
             type: settlement.insufficientBalanceCode || "LIGHT_REQUIRED",
             message: settlement.insufficientBalanceMessage ||
-              "Light balance required to call this app.",
+              "Credits balance required to call this app.",
             details: settlement.metadata,
           },
         } as RunResponse,

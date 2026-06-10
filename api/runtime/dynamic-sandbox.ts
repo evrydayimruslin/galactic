@@ -67,6 +67,7 @@ interface DynamicWorkerEntrypointExports {
       billingSource: string | null;
       requestDefaults: Record<string, unknown> | null;
       shouldDebitLight: boolean;
+      unavailableReason?: string | null;
     };
   }): unknown;
 }
@@ -422,6 +423,7 @@ export default {
           billingSource: config.aiRoute?.billingSource || null,
           requestDefaults: config.aiRoute?.requestDefaults || null,
           shouldDebitLight: !!config.aiRoute?.shouldDebitLight,
+          unavailableReason: config.aiUnavailableReason || null,
         },
       });
     }

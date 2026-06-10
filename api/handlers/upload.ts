@@ -168,7 +168,7 @@ function assertUploadQuota(quotaCheck: {
         formatBytes(quotaCheck.limit_bytes)
       } require at least ${
         quotaCheck.minimum_balance_light ?? 1000
-      } Light to cover storage charges. Current balance: ${
+      } credits to cover storage charges. Current balance: ${
         quotaCheck.current_balance_light ?? 0
       } Light.`,
       402,

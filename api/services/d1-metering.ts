@@ -239,7 +239,7 @@ export async function checkD1BalanceWithOptions(
     if (user.balance_light <= 0) {
       return {
         allowed: false,
-        reason: 'Insufficient balance. D1 free tier exceeded. Add Light from Wallet.',
+        reason: 'Insufficient balance. D1 free tier exceeded. Add credits from Wallet.',
       };
     }
 

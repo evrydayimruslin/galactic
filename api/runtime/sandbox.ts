@@ -33,6 +33,9 @@ export interface RuntimeConfig {
   permissions: string[];
   userApiKey: string | null;
   aiRoute?: RuntimeAIRoute | null;
+  // Why env.AI is unavailable when aiRoute is null (balance gate, no user,
+  // route error) — surfaced verbatim to sandboxed ultralight.ai() callers.
+  aiUnavailableReason?: string | null;
   // Authenticated user context (null if anonymous)
   user: UserContext | null;
   // App data storage (R2-based, zero config) — LEGACY, kept for internal R2 ops

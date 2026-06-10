@@ -46,11 +46,11 @@ Deno.test("stripe processing fees: launch top-up amount must be a supported inte
   assertThrows(
     () => quoteLaunchWalletFunding({ amountLight: 999, method: "card" }),
     RequestValidationError,
-    "amount_light must be at least 1000",
+    "amount_credits must be at least 1000",
   );
   assertThrows(
     () => quoteLaunchWalletFunding({ amountLight: 1_000.5, method: "ach" }),
     RequestValidationError,
-    "amount_light must be an integer",
+    "amount_credits must be an integer",
   );
 });

@@ -590,6 +590,7 @@ export async function handleHttpEndpoint(
         aiService: createUnavailableAIService(
           "ai:call permission not granted.",
         ),
+        unavailableReason: "ai:call permission not granted.",
       };
     // Dynamic Worker sandbox — avoids `new Function()` restriction on CF Workers
     const { executeInDynamicSandbox } = await import(
@@ -615,7 +616,7 @@ export async function handleHttpEndpoint(
         new Response(
           JSON.stringify({
             error: cloudPreflight.insufficientBalanceMessage ||
-              "Light balance required to call this app.",
+              "Credits balance required to call this app.",
             type: cloudPreflight.insufficientBalanceCode || "LIGHT_REQUIRED",
             receipt_id: receiptId,
             details: cloudPreflight.metadata,
@@ -681,6 +682,7 @@ export async function handleHttpEndpoint(
         code,
         permissions: httpPermissions,
         userApiKey: runtimeAI.userApiKey,
+        aiUnavailableReason: runtimeAI.unavailableReason,
         aiRoute: runtimeAI.route,
         user,
         appDataService,
@@ -749,7 +751,7 @@ export async function handleHttpEndpoint(
         new Response(
           JSON.stringify({
             error: settlement.insufficientBalanceMessage ||
-              "Light balance required to call this app.",
+              "Credits balance required to call this app.",
             type: settlement.insufficientBalanceCode || "LIGHT_REQUIRED",
             receipt_id: receiptId,
             details: settlement.metadata,

@@ -22,6 +22,7 @@ interface AIBindingProps {
   billingSource: string | null;
   requestDefaults: Record<string, unknown> | null;
   shouldDebitLight: boolean;
+  unavailableReason?: string | null;
 }
 
 type ContentPart = { type: 'text'; text: string }
@@ -88,6 +89,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       requestDefaults,
       shouldDebitLight,
       userId,
+      unavailableReason,
     } = this.ctx.props;
 
     if (!apiKey || !provider || !baseUrl) {
@@ -95,7 +97,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
         content: '',
         model: 'none',
         usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
-        error: 'AI is not configured for this request.',
+        error: unavailableReason || 'AI is not configured for this request.',
       };
     }
 

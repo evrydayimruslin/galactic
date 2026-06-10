@@ -11,10 +11,10 @@ export const LAUNCH_WALLET_LIGHT_PER_DOLLAR = LIGHT_PER_DOLLAR_CANONICAL;
 export const LAUNCH_WALLET_MIN_TOPUP_LIGHT = 1_000;
 export const LAUNCH_WALLET_MAX_TOPUP_LIGHT = 500_000;
 export const LAUNCH_WALLET_FUNDING_PRESETS: LaunchWalletFundingPreset[] = [
-  { light: 1_000, label: "1,000 Light" },
-  { light: 2_500, label: "2,500 Light", recommended: true },
-  { light: 5_000, label: "5,000 Light" },
-  { light: 10_000, label: "10,000 Light" },
+  { light: 1_000, label: "1,000 credits" },
+  { light: 2_500, label: "2,500 credits", recommended: true },
+  { light: 5_000, label: "5,000 credits" },
+  { light: 10_000, label: "10,000 credits" },
 ];
 
 const CARD_FEE_BPS = 290;
@@ -34,16 +34,16 @@ export function normalizeLaunchFundingAmountLight(value: unknown): number {
     typeof value !== "number" || !Number.isFinite(value) ||
     !Number.isInteger(value)
   ) {
-    throw new RequestValidationError("amount_light must be an integer");
+    throw new RequestValidationError("amount_credits must be an integer");
   }
   if (value < LAUNCH_WALLET_MIN_TOPUP_LIGHT) {
     throw new RequestValidationError(
-      `amount_light must be at least ${LAUNCH_WALLET_MIN_TOPUP_LIGHT}`,
+      `amount_credits must be at least ${LAUNCH_WALLET_MIN_TOPUP_LIGHT}`,
     );
   }
   if (value > LAUNCH_WALLET_MAX_TOPUP_LIGHT) {
     throw new RequestValidationError(
-      `amount_light must be ${LAUNCH_WALLET_MAX_TOPUP_LIGHT} or less`,
+      `amount_credits must be ${LAUNCH_WALLET_MAX_TOPUP_LIGHT} or less`,
     );
   }
   return value;

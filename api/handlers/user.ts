@@ -1006,11 +1006,22 @@ export async function handleUser(request: Request): Promise<Response> {
 
   // All remaining user endpoints require authentication
   let userId: string;
+  let authSource: string | undefined;
   try {
     const auth = await authenticate(request);
     userId = auth.id;
+    authSource = auth.authSource;
   } catch (err) {
     return error("Authentication required", 401);
+  }
+
+  // BYOK key management is account-session-only, matching the launch facade
+  // (requireAccountSessionForByok): agent API tokens and routine actors must
+  // not be able to install or rotate the user's provider keys.
+  if (path === "/api/user/byok" || path.startsWith("/api/user/byok/")) {
+    if (authSource === "api_token" || authSource === "routine_actor") {
+      return error("BYOK and inference settings require an account session", 403);
+    }
   }
 
   const userService = createUserService();
