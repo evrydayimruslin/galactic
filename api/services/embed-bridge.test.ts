@@ -47,6 +47,7 @@ Deno.test("embed bridge: issues and consumes a valid opaque token", async () => 
     const jwt = makeJwt(Math.floor(nowMs / 1000) + 1800);
     const issued = await issueEmbedBridgeToken({
       accessToken: jwt,
+      audience: "desktop_embed",
       userId: "user-1",
       ttlSeconds: 60,
       nowMs,
@@ -60,6 +61,7 @@ Deno.test("embed bridge: issues and consumes a valid opaque token", async () => 
     assertEquals(consumed?.sub, "user-1");
     assertEquals(consumed?.aud, "desktop_embed");
     assertEquals(consumed?.access_token, jwt);
+    assertEquals(consumed?.refresh_token, undefined);
   });
 });
 
@@ -71,6 +73,7 @@ Deno.test("embed bridge: can issue launch web bridge tokens", async () => {
       accessToken: jwt,
       audience: "launch_web",
       userId: "user-1",
+      refreshToken: "refresh-token-1",
       ttlSeconds: 60,
       nowMs,
     });
@@ -79,6 +82,7 @@ Deno.test("embed bridge: can issue launch web bridge tokens", async () => {
     assert(consumed !== null);
     assertEquals(consumed?.aud, "launch_web");
     assertEquals(consumed?.access_token, jwt);
+    assertEquals(consumed?.refresh_token, "refresh-token-1");
   });
 });
 
@@ -88,6 +92,7 @@ Deno.test("embed bridge: clamps token ttl to access-token lifetime", async () =>
     const jwt = makeJwt(Math.floor(nowMs / 1000) + 25);
     const issued = await issueEmbedBridgeToken({
       accessToken: jwt,
+      audience: "desktop_embed",
       userId: "user-1",
       ttlSeconds: 60,
       nowMs,
@@ -103,6 +108,7 @@ Deno.test("embed bridge: rejects expired or malformed tokens", async () => {
     const jwt = makeJwt(Math.floor(nowMs / 1000) + 1800);
     const issued = await issueEmbedBridgeToken({
       accessToken: jwt,
+      audience: "desktop_embed",
       userId: "user-1",
       ttlSeconds: 5,
       nowMs,

@@ -1,5 +1,12 @@
 # Launch Site Upgrades Implementation Roadmap
 
+> **⚠️ SUPERSEDED (2026-06-10)** by
+> [LAUNCH_PIVOT_DECISIONS.md](LAUNCH_PIVOT_DECISIONS.md). In particular, the
+> "Monetized skills live at the same platform level as functions" product
+> decision is reversed (skills fold into a functions convention, P3), and the
+> Workstream 1 widget wiring is removed from launch scope (P2). Treat the
+> remaining content as historical context only.
+
 Last updated: 2026-06-08
 
 This roadmap captures the next implementation sequence after the narrowed launch-scope backend pass. It focuses on turning the launch web surface into a live product UI, then filling the missing economics and deployment primitives behind it.

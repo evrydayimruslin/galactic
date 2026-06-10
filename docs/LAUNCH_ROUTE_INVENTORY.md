@@ -1,5 +1,10 @@
 # Launch Route Inventory
 
+> **⚠️ STALE (2026-06-10)**: this Wave 0 inventory predates the `/api/launch`
+> facade entirely and still inventories desktop/web-shell surfaces. The launch
+> route source of truth is `shared/contracts/launch.ts` plus
+> [LAUNCH_MVP_SCOPE.md](LAUNCH_MVP_SCOPE.md).
+
 Last reviewed: `2026-04-21`
 
 This document is the Wave 0 route and surface inventory for launch hardening. It

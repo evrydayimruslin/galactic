@@ -39,6 +39,11 @@ import {
   issueEmbedBridgeToken,
 } from "../services/embed-bridge.ts";
 import { appendPageShareSessionCookie } from "../services/page-share-session.ts";
+import {
+  appendLaunchRefreshCookie,
+  clearLaunchRefreshCookie,
+  getLaunchRefreshTokenFromRequest,
+} from "../services/launch-session-cookies.ts";
 import { normalizeOAuthPrompt } from "../services/oauth-login.ts";
 import { revokeSupabaseSession } from "../services/session-revocation.ts";
 import {
@@ -149,6 +154,12 @@ function callbackStateValue(
     "";
 }
 
+class RefreshTokenExchangeError extends Error {
+  constructor(readonly status: number) {
+    super("Token refresh failed");
+  }
+}
+
 async function exchangeRefreshToken(refreshToken: string): Promise<{
   access_token: string;
   refresh_token?: string;
@@ -164,7 +175,7 @@ async function exchangeRefreshToken(refreshToken: string): Promise<{
   );
 
   if (!tokenResponse.ok) {
-    throw new Error("Token refresh failed");
+    throw new RefreshTokenExchangeError(tokenResponse.status);
   }
 
   return await tokenResponse.json();
@@ -261,6 +272,7 @@ async function buildLaunchWebBridgeRedirect(
   returnTo: string | undefined,
   accessToken: string,
   userId: string,
+  refreshToken?: string | null,
 ): Promise<Response | null> {
   const target = resolveLaunchWebReturnTarget(request, returnTo);
   if (!target) return null;
@@ -269,6 +281,7 @@ async function buildLaunchWebBridgeRedirect(
     accessToken,
     audience: "launch_web",
     userId,
+    refreshToken,
   });
   target.callbackUrl.hash = new URLSearchParams({
     bridge_token: issued.token,
@@ -450,6 +463,7 @@ export async function handleAuth(request: Request): Promise<Response> {
           returnTo,
           tokens.access_token,
           verifiedUser.id,
+          tokens.refresh_token,
         );
         if (launchWebRedirect) {
           return withClearedOAuthCallbackStateCookies(launchWebRedirect);
@@ -597,18 +611,26 @@ export async function handleAuth(request: Request): Promise<Response> {
         await ensureUserExists(verifiedUser).catch(() => {});
         await claimReferralCookieForUser(request, verifiedUser.id);
 
-        return json({
+        const response = json({
           access_token: bridgePayload.access_token,
           expires_in: getAccessTokenRemainingLifetimeSeconds(
             bridgePayload.access_token,
           ),
           audience: "launch_web",
+          refresh_supported: Boolean(bridgePayload.refresh_token),
           user: {
             id: verifiedUser.id,
             email: verifiedUser.email,
             metadata: verifiedUser.user_metadata || {},
           },
         });
+        if (bridgePayload.refresh_token) {
+          appendLaunchRefreshCookie(
+            response.headers,
+            bridgePayload.refresh_token,
+          );
+        }
+        return response;
       } catch (err) {
         if (err instanceof RequestValidationError) {
           return error(err.message, err.status);
@@ -616,6 +638,83 @@ export async function handleAuth(request: Request): Promise<Response> {
         console.error("[auth] Launch web exchange failed:", err);
         return error("Failed to complete launch web sign-in", 500);
       }
+    });
+  }
+
+  // Rotate the launch web session: exchange the HttpOnly refresh cookie for a
+  // fresh Supabase access token so the Pages SPA can outlive the ~1h JWT
+  // without redoing the full OAuth redirect.
+  if (path === "/auth/launch/refresh" && request.method === "POST") {
+    return withAuthRouteRateLimit(request, "auth:launch_refresh", async () => {
+      // Defense-in-depth CSRF check: browsers always send Origin on
+      // cross-origin POSTs, and only the launch web origins may rotate.
+      const requestOrigin = request.headers.get("Origin");
+      if (requestOrigin) {
+        let normalizedOrigin: string | null = null;
+        try {
+          normalizedOrigin = new URL(requestOrigin).origin;
+        } catch {
+          normalizedOrigin = null;
+        }
+        if (
+          !normalizedOrigin ||
+          !allowedLaunchWebOrigins().has(normalizedOrigin)
+        ) {
+          return error("Origin is not allowed to refresh launch sessions", 403);
+        }
+      }
+
+      const refreshToken = getLaunchRefreshTokenFromRequest(request);
+      if (!refreshToken) {
+        return error("No launch session to refresh", 401);
+      }
+
+      let tokens: Awaited<ReturnType<typeof exchangeRefreshToken>>;
+      try {
+        tokens = await exchangeRefreshToken(refreshToken);
+      } catch (err) {
+        // Clear the cookie only when the auth provider explicitly rejected
+        // the refresh token; a transient outage must not destroy the session.
+        const rejected = err instanceof RefreshTokenExchangeError &&
+          err.status >= 400 && err.status < 500;
+        if (rejected) {
+          const response = error("Launch session has expired", 401);
+          clearLaunchRefreshCookie(response.headers);
+          return response;
+        }
+        return error("Session refresh is temporarily unavailable", 503);
+      }
+
+      const verifiedUser = await verifySupabaseAccessToken(
+        tokens.access_token,
+      );
+      if (!verifiedUser) {
+        const response = error("Launch session is invalid", 401);
+        clearLaunchRefreshCookie(response.headers);
+        return response;
+      }
+
+      await ensureUserExists(verifiedUser).catch(() => {});
+
+      const response = json({
+        access_token: tokens.access_token,
+        expires_in: tokens.expires_in ??
+          getAccessTokenRemainingLifetimeSeconds(tokens.access_token),
+        audience: "launch_web",
+        refresh_supported: true,
+        user: {
+          id: verifiedUser.id,
+          email: verifiedUser.email,
+          metadata: verifiedUser.user_metadata || {},
+        },
+      });
+      // Supabase rotates refresh tokens; persist the successor (or keep the
+      // current one when rotation is not enabled).
+      appendLaunchRefreshCookie(
+        response.headers,
+        tokens.refresh_token || refreshToken,
+      );
+      return response;
     });
   }
 
@@ -644,6 +743,7 @@ export async function handleAuth(request: Request): Promise<Response> {
 
       const issued = await issueEmbedBridgeToken({
         accessToken,
+        audience: "desktop_embed",
         userId: verifiedUser.id,
       });
 
@@ -801,6 +901,7 @@ export async function handleAuth(request: Request): Promise<Response> {
         await revokeSupabaseSession(accessToken, "local");
         const response = json({ ok: true });
         clearAuthSessionCookies(response.headers);
+        clearLaunchRefreshCookie(response.headers);
         return response;
       } catch (err) {
         if (err instanceof RequestValidationError) {
@@ -809,6 +910,7 @@ export async function handleAuth(request: Request): Promise<Response> {
         console.error("[auth] Sign-out revocation failed:", err);
         const response = json({ error: "Failed to revoke session" }, 502);
         clearAuthSessionCookies(response.headers);
+        clearLaunchRefreshCookie(response.headers);
         return response;
       }
     });

@@ -1,5 +1,11 @@
 # Launch Follow-ups
 
+> **⚠️ PARTIALLY SUPERSEDED (2026-06-10)**: the desktop app is scrapped, so
+> every desktop-release follow-up below (signing, notarization, updater
+> keypairs, desktop smoke) is void. The owned-domain cleanup and live
+> staging/production smoke items remain relevant. Current plan:
+> [docs/LAUNCH_PIVOT_DECISIONS.md](docs/LAUNCH_PIVOT_DECISIONS.md).
+
 This file tracks issues intentionally deferred while we land the launch PR
 sequence. It is not a backlog for everything in the repo; it is a scoped list
 of launch-relevant follow-ups discovered during implementation.

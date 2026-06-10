@@ -31,8 +31,10 @@ import { LaunchShell } from "./components/launch-chrome";
 import {
   exchangeLaunchBridgeToken,
   getLaunchAuthToken,
+  isLaunchRefreshAvailable,
   normalizeLocalPath,
   recordLaunchAuthDiagnostic,
+  refreshLaunchSession,
   setLaunchAuthToken,
 } from "./lib/auth";
 
@@ -69,6 +71,20 @@ export function App(): ReactElement {
     const onPopState = () => setLocation(currentLocation());
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  // Silent session restore on load: the access token only lives ~1h, but the
+  // API may hold a refresh cookie. Without this the chrome renders signed-out
+  // until some API call happens to refresh.
+  useEffect(() => {
+    if (getLaunchAuthToken() || !isLaunchRefreshAvailable()) return;
+    let cancelled = false;
+    refreshLaunchSession().then((token) => {
+      if (token && !cancelled) setLocation(currentLocation());
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const navigate = useCallback((to: string) => {

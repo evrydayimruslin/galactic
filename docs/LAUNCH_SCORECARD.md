@@ -1,5 +1,10 @@
 # Launch Scorecard
 
+> **⚠️ SUPERSEDED (2026-06-10)**: this scorecard predates the launch pivot —
+> its stop-ship list is desktop-centric, and the desktop app is scrapped. See
+> [LAUNCH_PIVOT_DECISIONS.md](LAUNCH_PIVOT_DECISIONS.md) and
+> [LAUNCH_MVP_SCOPE.md](LAUNCH_MVP_SCOPE.md) for the current launch surface.
+
 Last reviewed: `2026-04-24`
 
 This scorecard maps the current codebase against the launch checklist used in

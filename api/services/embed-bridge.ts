@@ -13,6 +13,9 @@ export interface EmbedBridgeTokenPayload {
   aud: EmbedBridgeAudience;
   sub: string;
   access_token: string;
+  // Present only for launch_web bridges: lets the exchange endpoint set an
+  // HttpOnly refresh cookie so the browser session can outlive the access JWT.
+  refresh_token?: string;
   issued_at: number;
   expires_at: number;
   jti: string;
@@ -56,6 +59,7 @@ function parsePayload(value: unknown): EmbedBridgeTokenPayload | null {
   if (payload.aud !== 'desktop_embed' && payload.aud !== 'launch_web') return null;
   if (typeof payload.sub !== 'string' || !payload.sub) return null;
   if (typeof payload.access_token !== 'string' || !payload.access_token) return null;
+  if (payload.refresh_token !== undefined && typeof payload.refresh_token !== 'string') return null;
   if (typeof payload.issued_at !== 'number' || !Number.isFinite(payload.issued_at)) return null;
   if (typeof payload.expires_at !== 'number' || !Number.isFinite(payload.expires_at)) return null;
   if (typeof payload.jti !== 'string' || !payload.jti) return null;
@@ -90,8 +94,10 @@ export function getAccessTokenRemainingLifetimeSeconds(token: string, nowMs = Da
 
 export async function issueEmbedBridgeToken(input: {
   accessToken: string;
-  audience?: EmbedBridgeAudience;
+  // Required: an omitted audience must never silently mint a desktop token.
+  audience: EmbedBridgeAudience;
   userId: string;
+  refreshToken?: string | null;
   ttlSeconds?: number | null;
   nowMs?: number;
 }): Promise<{ token: string; expiresIn: number }> {
@@ -104,9 +110,10 @@ export async function issueEmbedBridgeToken(input: {
 
   const payload: EmbedBridgeTokenPayload = {
     v: 1,
-    aud: input.audience || 'desktop_embed',
+    aud: input.audience,
     sub: input.userId,
     access_token: input.accessToken,
+    ...(input.refreshToken ? { refresh_token: input.refreshToken } : {}),
     issued_at: Math.floor(nowMs / 1000),
     expires_at: Math.floor(nowMs / 1000) + effectiveTtl,
     jti: crypto.randomUUID(),

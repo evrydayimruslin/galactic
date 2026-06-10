@@ -70,7 +70,7 @@ Deno.test("cors: blocks disallowed production browser origins", () => {
   assertEquals(headers["Access-Control-Allow-Credentials"], undefined);
 });
 
-Deno.test("cors: keeps tauri origins available in production", () => {
+Deno.test("cors: never includes scrapped desktop tauri origins", () => {
   const origins = resolveAllowedCorsOrigins({
     baseUrl: "https://ultralight-api.rgn4jz429m.workers.dev",
     environment: "production",
@@ -80,7 +80,8 @@ Deno.test("cors: keeps tauri origins available in production", () => {
     origins.includes("https://ultralight-api.rgn4jz429m.workers.dev"),
     true,
   );
-  assertEquals(origins.includes("tauri://localhost"), true);
+  assertEquals(origins.includes("tauri://localhost"), false);
+  assertEquals(origins.includes("https://tauri.localhost"), false);
   assertEquals(origins.includes("http://localhost:5173"), false);
 });
 
@@ -96,7 +97,7 @@ Deno.test("cors: keeps localhost origins available outside production", () => {
   );
   assertEquals(origins.includes("http://localhost:5173"), true);
   assertEquals(origins.includes("http://localhost:5178"), true);
-  assertEquals(origins.includes("tauri://localhost"), true);
+  assertEquals(origins.includes("tauri://localhost"), false);
 });
 
 Deno.test("cors: preflight rejects disallowed origins", async () => {

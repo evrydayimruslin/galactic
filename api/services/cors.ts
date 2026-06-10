@@ -21,26 +21,17 @@ export interface RouteCorsPolicyInput {
 const DEFAULT_ALLOW_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 const DEFAULT_ALLOW_HEADERS = "Content-Type, Authorization, X-Requested-With";
 const PREFLIGHT_MAX_AGE_SECONDS = "86400";
-const TAURI_ALLOWED_ORIGINS = [
-  "tauri://localhost",
-  "https://tauri.localhost",
-  "http://tauri.localhost",
-] as const;
 const LOCAL_DEV_ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
   "http://localhost:5178",
   "http://127.0.0.1:5178",
-  "http://localhost:1420",
-  "http://127.0.0.1:1420",
 ] as const;
 
 function normalizeOrigin(origin: string | null | undefined): string | null {
   if (!origin) return null;
   const trimmed = origin.trim();
   if (!trimmed) return null;
-
-  if (trimmed === "tauri://localhost") return trimmed;
 
   try {
     return new URL(trimmed).origin;
@@ -96,10 +87,6 @@ export function resolveAllowedCorsOrigins(
   }
 
   appendOrigin(allowed, config.baseUrl);
-
-  for (const origin of TAURI_ALLOWED_ORIGINS) {
-    allowed.add(origin);
-  }
 
   const environment = (config.environment || "").trim().toLowerCase();
   if (environment !== "production") {

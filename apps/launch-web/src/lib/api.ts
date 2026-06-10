@@ -37,6 +37,7 @@ import {
   clearLaunchAuthToken,
   getLaunchAuthToken,
   recordLaunchAuthDiagnostic,
+  refreshLaunchSessionIfAvailable,
 } from "./auth";
 
 export interface LaunchToolResponse {
@@ -73,6 +74,9 @@ export interface LaunchToolAdminResponse {
 export interface LaunchApiClientOptions {
   baseUrl?: string;
   getAuthToken?: () => string | null;
+  // Silent session refresh hook. Called when no token is available before a
+  // request, and once after a 401, then the request is retried.
+  refreshAuthToken?: () => Promise<string | null>;
 }
 
 export class LaunchApiAuthenticationError extends Error {
@@ -90,10 +94,12 @@ export interface LaunchLeaderboardRequest {
 export class LaunchApiClient {
   private readonly baseUrl: string;
   private readonly getAuthToken?: () => string | null;
+  private readonly refreshAuthToken?: () => Promise<string | null>;
 
   constructor(options: LaunchApiClientOptions = {}) {
     this.baseUrl = options.baseUrl?.replace(/\/$/u, "") || "";
     this.getAuthToken = options.getAuthToken;
+    this.refreshAuthToken = options.refreshAuthToken;
   }
 
   status(): Promise<Record<string, unknown>> {
@@ -297,13 +303,13 @@ export class LaunchApiClient {
     });
   }
 
-  private async fetchJson<T>(
+  private async sendRequest(
     path: string,
-    init: RequestInit = {},
-  ): Promise<T> {
+    init: RequestInit,
+    token: string | null,
+  ): Promise<Response> {
     const headers = new Headers({ Accept: "application/json" });
     if (init.body) headers.set("Content-Type", "application/json");
-    const token = this.getAuthToken?.();
     if (token) headers.set("Authorization", `Bearer ${token}`);
     if (init.headers) {
       new Headers(init.headers).forEach((value, key) => {
@@ -311,10 +317,35 @@ export class LaunchApiClient {
       });
     }
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    return await fetch(`${this.baseUrl}${path}`, {
       ...init,
       headers,
     });
+  }
+
+  private async fetchJson<T>(
+    path: string,
+    init: RequestInit = {},
+  ): Promise<T> {
+    let token = this.getAuthToken?.() || null;
+    // The stored access token expired (or was cleared) but the API may have
+    // granted a refresh cookie — restore the session before the request.
+    if (!token && this.refreshAuthToken) {
+      token = await this.refreshAuthToken().catch(() => null);
+    }
+
+    let response = await this.sendRequest(path, init, token);
+
+    // One silent refresh + retry on a rejected token. Request bodies here are
+    // always strings, so re-sending is safe.
+    if (response.status === 401 && token && this.refreshAuthToken) {
+      const refreshedToken = await this.refreshAuthToken().catch(() => null);
+      if (refreshedToken && refreshedToken !== token) {
+        token = refreshedToken;
+        response = await this.sendRequest(path, init, token);
+      }
+    }
+
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       let message = text;
@@ -350,4 +381,5 @@ export class LaunchApiClient {
 export const launchApi = new LaunchApiClient({
   baseUrl: configuredLaunchApiBaseUrl,
   getAuthToken: getLaunchAuthToken,
+  refreshAuthToken: refreshLaunchSessionIfAvailable,
 });

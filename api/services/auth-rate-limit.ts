@@ -8,6 +8,7 @@ export type AuthRateLimitRoute =
   | 'auth:embed_bridge'
   | 'auth:embed_exchange'
   | 'auth:launch_exchange'
+  | 'auth:launch_refresh'
   | 'auth:page_share_exchange'
   | 'auth:signout'
   | 'auth:desktop-poll'
@@ -103,6 +104,16 @@ export const AUTH_ROUTE_RATE_LIMITS: Record<AuthRateLimitRoute, AuthRateLimitPol
     resource: '/auth/launch/exchange',
     limitMessage: 'Too many launch web sign-in exchanges. Please wait and try again.',
     unavailableMessage: 'Launch web sign-in exchange is temporarily unavailable while auth protections recover. Please try again shortly.',
+  },
+  'auth:launch_refresh': {
+    endpoint: 'auth:launch_refresh',
+    limit: 60,
+    windowMinutes: 5,
+    keySource: 'ip',
+    responseKind: 'json',
+    resource: '/auth/launch/refresh',
+    limitMessage: 'Too many launch session refresh attempts. Please wait and try again.',
+    unavailableMessage: 'Launch session refresh is temporarily unavailable while auth protections recover. Please try again shortly.',
   },
   'auth:page_share_exchange': {
     endpoint: 'auth:page_share_exchange',
