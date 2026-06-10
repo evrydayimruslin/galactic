@@ -10,6 +10,24 @@ This file tracks issues intentionally deferred while we land the launch PR
 sequence. It is not a backlog for everything in the repo; it is a scoped list
 of launch-relevant follow-ups discovered during implementation.
 
+## Phase 0 (2026-06-10)
+
+- **Deploy ordering requirement:** apply Supabase migration
+  `20260610120000_embed_bridge_consumption.sql` BEFORE (or with) the next API
+  Worker deploy. `/auth/launch/exchange` now fails closed (503) when the
+  bridge-consumption table is unreachable, so deploying the Worker against a
+  database without the table breaks launch sign-in.
+- Desktop teardown slice still pending: `/auth/embed/*` endpoints,
+  desktop OAuth polling, `?embed=1` X-Frame-Options skip, desktop release
+  workflows, tauri entries in `supabase/config.toml`, and the desktop
+  download surfaces in `api/handlers/app.ts` remain live until the dedicated
+  teardown pass.
+- Accepted-risk notes from the Phase 0 security review: the
+  `/auth/launch/refresh` Origin check passes requests with no Origin header
+  (cookie possession still required; browsers always send Origin on
+  cross-origin POSTs); the access JWT remains a localStorage bearer by
+  design — XSS hardening on the Pages origin is the operative defense.
+
 ## Deferred After PR1
 
 - Owned-domain cleanup:
