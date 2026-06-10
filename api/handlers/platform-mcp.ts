@@ -1,8 +1,8 @@
 // Platform MCP Handler — v4
 // Implements JSON-RPC 2.0 for the ul.* tool namespace
 // Endpoint: POST /mcp/platform
-// 19 tools: discover, command, routine, download, test, upload, set, memory, permissions, connect,
-// connections, logs, rate, call, job, auth.link, marketplace, codemode, wallet
+// 20 tools: discover, command, routine, download, test, upload, set, memory, permissions, grants,
+// connect, connections, logs, rate, call, job, auth.link, marketplace, codemode, wallet
 // + 27 backward-compat aliases for pre-consolidation tool names
 
 import { error, json } from "./response.ts";
@@ -152,6 +152,15 @@ import {
   executeRoutinePlatformAction,
   RoutinePlatformError,
 } from "../services/routine-platform.ts";
+import {
+  approvePendingGrant,
+  createGrant,
+  getUserGrantAutoApprove,
+  listGrantSummaries,
+  setGrantCap,
+  setGrantStatus,
+} from "../services/agent-grants.ts";
+import { RequestValidationError } from "../services/request-validation.ts";
 import type { PublicDiscoveryApp } from "../services/public-apps.ts";
 import type { GpuPricingDisplay } from "../services/gpu/pricing-display.ts";
 import type { GpuReliabilityStats } from "../services/gpu/reliability.ts";
@@ -2345,6 +2354,80 @@ const PLATFORM_TOOLS: MCPTool[] = [
     },
   },
 
+  // ── ul.grants (cross-Agent wiring) ──────────────────────────
+  {
+    name: "ul.grants",
+    description: "Manage cross-Agent wiring grants for the current user. " +
+      "A grant lets a caller Agent call a function on a target Agent on your behalf. " +
+      'action="list": show grants (filter by caller_app/target_app/status). ' +
+      'action="pending": show pending requests awaiting approval. ' +
+      'action="propose": create a raw grant (slot=null). ' +
+      'action="bind": create a slot-binding grant (requires slot). ' +
+      'action="approve": approve a pending grant_id (website-only unless you enable agent approval in settings). ' +
+      'action="revoke": revoke a grant_id. ' +
+      'action="set_cap": set a grant_id\'s monthly credit cap.',
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: [
+            "list",
+            "propose",
+            "bind",
+            "approve",
+            "revoke",
+            "set_cap",
+            "pending",
+          ],
+          description: "Wiring action.",
+        },
+        caller_app: {
+          type: "string",
+          description: "Caller Agent ID or slug (the Agent making the call).",
+        },
+        target_app: {
+          type: "string",
+          description: "Target Agent ID or slug (the Agent being called).",
+        },
+        target_function: {
+          type: "string",
+          description: "Function on the target Agent to grant access to.",
+        },
+        caller_function: {
+          type: "string",
+          description:
+            "Optional: scope the grant to only while this caller function runs.",
+        },
+        slot: {
+          type: "string",
+          description: "Import slot name. Required for bind.",
+        },
+        monthly_cap_credits: {
+          type: "number",
+          description:
+            "Optional monthly spend cap in credits. For propose/bind/approve/set_cap (null clears the cap).",
+        },
+        grant_id: {
+          type: "string",
+          description: "Grant ID. For approve/revoke/set_cap.",
+        },
+        status: {
+          type: "string",
+          enum: ["active", "pending", "revoked"],
+          description: "Status filter. For list.",
+        },
+      },
+      required: ["action"],
+    },
+  },
+
   // ── 8. ul.connect ──────────────────────────
   {
     name: "ul.connect",
@@ -3084,7 +3167,16 @@ When a discovery result includes \`matched_subject.next_action\`, prefer that ac
 
 Skills are a convention, not a separate primitive. An Agent MAY export a skills-index function, e.g. \`skills_index(args: {})\` returning \`{ skills: [{ id, name, description }] }\`, plus a reader \`skill_reader(args: { skill_id: string })\` returning \`{ id, content, format: "markdown" }\`. Full skill text is priced like any other function via per-function pricing (\`function_prices\` / \`free_calls\`). Generated skills.md function docs are always free.
 
-## Platform Tools (19)
+## Cross-Agent Wiring
+
+Agents can call one another on a user's behalf. A grant means: for this user, caller Agent A (optionally only while its function G runs) may call function F on target Agent B. Use \`ul.grants\` to manage these grants.
+
+- Cross-Agent calls are **default-deny**: an ungranted call is blocked and a pending request lands in the user's wiring inbox. Inspect it with \`ul.grants({ action: "pending" })\`.
+- \`ul.grants\` can \`propose\` raw grants or \`bind\` a developer-declared import slot — both only for Agents the user already controls (owns or has installed) and functions the user can already call. The runtime enforces this safety invariant; you cannot widen a user's reach.
+- **Approval defaults to website-only.** A connected agent (api_token) cannot \`approve\` a pending request unless the user has enabled agent grant approval in \`/settings\`. Otherwise direct the user to approve once on \`/agents/:id\` wiring. Revoking and proposing always work.
+- Spend is capped per grant via \`monthly_cap_credits\` (set at propose/approve or later with \`set_cap\`).
+
+## Platform Tools (20)
 
 ### ul.call({ app_id, function_name, args? })
 Execute any app's function through this single platform connection.
@@ -3179,6 +3271,16 @@ Access control for private apps.
 - \`action: "revoke"\` — Revoke access. No \`email\` = revoke ALL users.
 - \`action: "list"\` — List permissions. Filter by \`emails\` or \`functions\`.
 - \`action: "export"\` — Export audit data as JSON/CSV.
+
+### ul.grants({ action, caller_app?, target_app?, target_function?, caller_function?, slot?, monthly_cap_credits?, grant_id?, status? })
+Manage cross-Agent wiring grants for the current user. See **## Cross-Agent Wiring**.
+- \`action: "list"\` — List grants. Filter by \`caller_app\`, \`target_app\`, \`status\`.
+- \`action: "pending"\` — List pending requests awaiting approval (the wiring inbox).
+- \`action: "propose"\` — Create a raw grant (slot=null). Needs \`caller_app\`, \`target_app\`, \`target_function\`; optional \`caller_function\`, \`monthly_cap_credits\`.
+- \`action: "bind"\` — Bind an import \`slot\` (required) to a grant. Same fields as propose.
+- \`action: "approve"\` — Approve a pending \`grant_id\`. Connected agents may approve only when you enable agent grant approval in \`/settings\`; otherwise approve on \`/agents/:id\` wiring.
+- \`action: "revoke"\` — Revoke a \`grant_id\`.
+- \`action: "set_cap"\` — Set a \`grant_id\`'s \`monthly_cap_credits\` (omit/null clears the cap).
 
 ### ul.connect({ app_id, secrets })
 Save your own User Settings for an app.
@@ -4318,6 +4420,15 @@ async function handleToolsCall(
               `Invalid action: ${permAction}. Use grant|revoke|list|export`,
             );
         }
+        break;
+      }
+
+      // ── ul.grants (cross-Agent wiring) ──────────────
+      case "ul.grants": {
+        const callerIsApiToken = isApiToken(
+          request.headers.get("Authorization")?.slice(7) || "",
+        );
+        result = await executeGrants(userId, toolArgs, callerIsApiToken);
         break;
       }
 
@@ -9480,6 +9591,164 @@ async function executeSetSupabase(
   return { app_id: app.id, supabase: serverName, config_id: config.id };
 }
 
+// ── ul.grants (cross-Agent wiring) ─────────────────────────
+
+/**
+ * Manage cross-Agent wiring grants. The agent-grants service enforces the
+ * delegation-not-expansion safety invariant (the user must control the caller
+ * and be able to call the target itself), so callers — including connected
+ * agents authed by an api_token — can only wire Agents the user already
+ * controls. The single exception is approving a *pending* request: a connected
+ * agent may only do that when the user has enabled agent grant approval.
+ */
+async function executeGrants(
+  userId: string,
+  args: Record<string, unknown>,
+  callerIsApiToken: boolean,
+): Promise<unknown> {
+  const action = args.action as string | undefined;
+  if (!action) {
+    throw new ToolError(INVALID_PARAMS, "Missing required parameter: action");
+  }
+
+  const grantId = args.grant_id as string | undefined;
+  const monthlyCap = typeof args.monthly_cap_credits === "number"
+    ? (args.monthly_cap_credits as number)
+    : undefined;
+
+  try {
+    switch (action) {
+      case "list": {
+        const callerAppId = args.caller_app
+          ? await resolveAppIdForMarketplace(args.caller_app as string)
+          : undefined;
+        const targetAppId = args.target_app
+          ? await resolveAppIdForMarketplace(args.target_app as string)
+          : undefined;
+        const status = args.status as
+          | "active"
+          | "pending"
+          | "revoked"
+          | undefined;
+        const grants = await listGrantSummaries({
+          userId,
+          callerAppId,
+          targetAppId,
+          status,
+        });
+        return { grants };
+      }
+
+      case "pending": {
+        const pending = await listGrantSummaries({
+          userId,
+          status: "pending",
+        });
+        return { pending };
+      }
+
+      case "propose":
+      case "bind": {
+        const callerApp = args.caller_app as string | undefined;
+        const targetApp = args.target_app as string | undefined;
+        const targetFunction = args.target_function as string | undefined;
+        const slot = args.slot as string | undefined;
+        if (!callerApp || !targetApp || !targetFunction) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "caller_app, target_app, and target_function are required",
+          );
+        }
+        if (action === "bind" && !slot) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "bind requires slot (the import slot name to bind)",
+          );
+        }
+        const [callerAppId, targetAppId] = await Promise.all([
+          resolveAppIdForMarketplace(callerApp),
+          resolveAppIdForMarketplace(targetApp),
+        ]);
+        const grant = await createGrant(
+          userId,
+          {
+            callerAppId,
+            targetAppId,
+            targetFunction,
+            callerFunction: args.caller_function as string | undefined,
+            slot: action === "bind" ? slot : undefined,
+            monthlyCapCredits: monthlyCap,
+          },
+          "agent",
+        );
+        return { grant };
+      }
+
+      case "approve": {
+        if (!grantId) {
+          throw new ToolError(INVALID_PARAMS, "grant_id is required for approve");
+        }
+        // Approval gate: a connected agent (api_token) may only finalize a
+        // pending request when the user has opted into agent grant approval.
+        if (callerIsApiToken && !(await getUserGrantAutoApprove(userId))) {
+          throw new ToolError(
+            FORBIDDEN,
+            "Approving a pending grant from a connected agent is disabled. " +
+              "Approve it on the website (/agents/:id wiring) or enable agent " +
+              "grant approval in settings (/settings).",
+          );
+        }
+        const grant = await approvePendingGrant(userId, grantId, {
+          monthlyCapCredits: monthlyCap,
+        });
+        if (!grant) {
+          throw new ToolError(NOT_FOUND, `Grant not found: ${grantId}`);
+        }
+        return { grant };
+      }
+
+      case "revoke": {
+        if (!grantId) {
+          throw new ToolError(INVALID_PARAMS, "grant_id is required for revoke");
+        }
+        const grant = await setGrantStatus(userId, grantId, "revoked");
+        if (!grant) {
+          throw new ToolError(NOT_FOUND, `Grant not found: ${grantId}`);
+        }
+        return { grant };
+      }
+
+      case "set_cap": {
+        if (!grantId) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "grant_id is required for set_cap",
+          );
+        }
+        const grant = await setGrantCap(userId, grantId, monthlyCap ?? null);
+        if (!grant) {
+          throw new ToolError(NOT_FOUND, `Grant not found: ${grantId}`);
+        }
+        return { grant };
+      }
+
+      default:
+        throw new ToolError(
+          INVALID_PARAMS,
+          `Invalid action: ${action}. Use list|pending|propose|bind|approve|revoke|set_cap`,
+        );
+    }
+  } catch (err) {
+    if (err instanceof RequestValidationError) {
+      throw new ToolError(
+        err.status >= 500 ? INTERNAL_ERROR : VALIDATION_ERROR,
+        err.message,
+      );
+    }
+    throw err;
+  }
+}
+
 // ── ul.permissions.grant ─────────────────────────
 
 async function executePermissionsGrant(
@@ -14449,7 +14718,7 @@ export function handleSkills(request: Request): Response {
 Endpoint: \`POST /mcp/platform\`
 Protocol: JSON-RPC 2.0
 Namespace: \`ul.*\`
-19 tools + MCP Resources + 27 backward-compat aliases
+20 tools + MCP Resources + 27 backward-compat aliases
 
 ${buildPlatformDocs()}`;
 

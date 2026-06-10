@@ -187,11 +187,11 @@
     },
     {
       "exports": [
-        "listGrants",
-        "setGrantStatus"
+        "listGrants"
       ],
       "file": "services/agent-grants.ts",
       "types": [
+        "AppHandle",
         "CallerGrantBindings"
       ]
     },
@@ -1368,10 +1368,7 @@
         "buildSensitiveRouteRateLimitHeaders",
         "SENSITIVE_ROUTE_RATE_LIMITS"
       ],
-      "file": "services/sensitive-route-rate-limit.ts",
-      "types": [
-        "SensitiveRoute"
-      ]
+      "file": "services/sensitive-route-rate-limit.ts"
     },
     {
       "file": "services/session-revocation.ts",

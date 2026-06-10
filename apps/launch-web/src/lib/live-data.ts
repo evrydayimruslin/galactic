@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
+  AgentCallerTrustSummary,
+  AgentWiringView,
+} from "../../../../shared/contracts/agent-grants.ts";
+import type {
   LaunchAgentFunctionsResponse,
   LaunchApiKeyListResponse,
   LaunchByokSummaryResponse,
@@ -37,6 +41,8 @@ export interface LaunchRouteLiveData {
   agent?: LaunchAgentResponse;
   agentFunctions?: LaunchAgentFunctionsResponse;
   agentCallerPermissions?: LaunchCallerFunctionPermissionsResponse;
+  agentWiring?: AgentWiringView;
+  agentCallerTrust?: AgentCallerTrustSummary;
   wallet?: LaunchWalletResponse;
   walletDetail?: LaunchWalletDetailResponse;
   adminAgent?: LaunchAgentAdminResponse;
@@ -142,13 +148,29 @@ async function loadRouteData(
     case "agent": {
       const id = route.params.slug || "";
       if (!id) return {};
-      const [agent, agentFunctions, agentCallerPermissions] = await Promise
+      // Wiring + caller-trust require an account session; they degrade to
+      // undefined when signed out (the page renders an empty wiring state).
+      const [
+        agent,
+        agentFunctions,
+        agentCallerPermissions,
+        agentWiring,
+        agentCallerTrust,
+      ] = await Promise
         .all([
           launchApi.agent(id),
           optional(() => launchApi.agentFunctions(id)),
           optional(() => launchApi.agentCallerPermissions(id)),
+          optional(() => launchApi.agentWiring(id)),
+          optional(() => launchApi.agentCallerTrust(id)),
         ]);
-      return { agent, agentCallerPermissions, agentFunctions };
+      return {
+        agent,
+        agentCallerPermissions,
+        agentCallerTrust,
+        agentFunctions,
+        agentWiring,
+      };
     }
     case "library": {
       return { library: await launchApi.library() };

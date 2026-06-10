@@ -82,6 +82,14 @@ export const launchRoutes: LaunchRouteDefinition[] = [
       "POST /api/launch/agents/:id/functions/:functionName/run",
       "GET /api/launch/agents/:id/caller-permissions",
       "PATCH /api/launch/agents/:id/caller-permissions",
+      "GET /api/launch/agents/:id/wiring",
+      "GET /api/launch/agents/:id/caller-trust",
+      "GET /api/launch/grants",
+      "POST /api/launch/grants",
+      "PATCH /api/launch/grants/:id",
+      "POST /api/launch/grants/:id/approve",
+      "DELETE /api/launch/grants/:id",
+      "GET /api/launch/wiring/targets",
     ],
   },
   {
@@ -115,6 +123,8 @@ export const launchRoutes: LaunchRouteDefinition[] = [
       "GET /api/launch/inference-options",
       "GET /api/launch/agents/:id/caller-permissions",
       "PATCH /api/launch/agents/:id/caller-permissions",
+      "GET /api/launch/settings",
+      "PATCH /api/launch/settings",
     ],
   },
   {

@@ -1,4 +1,13 @@
 import type {
+  AgentCallerTrustSummary,
+  AgentGrantApproveRequest,
+  AgentGrantCreateRequest,
+  AgentGrantSummary,
+  AgentGrantUpdateRequest,
+  AgentWiringTarget,
+  AgentWiringView,
+} from "../../../../shared/contracts/agent-grants.ts";
+import type {
   LaunchAgentAdminSummary,
   LaunchAgentFunctionsResponse,
   LaunchAgentSummary,
@@ -71,6 +80,33 @@ export interface LaunchAgentAdminResponse {
 
 /** @deprecated Use LaunchAgentAdminResponse. */
 export type LaunchToolAdminResponse = LaunchAgentAdminResponse;
+
+export interface LaunchGrantListResponse {
+  grants: AgentGrantSummary[];
+  generatedAt?: string;
+}
+
+export interface LaunchWiringTargetsResponse {
+  targets: AgentWiringTarget[];
+  generatedAt?: string;
+}
+
+export interface LaunchGrantMutationResponse {
+  grant: AgentGrantSummary;
+  generatedAt?: string;
+}
+
+export interface LaunchSettingsResponse {
+  // When true the user's connected agent may approve cross-Agent wiring
+  // grants on their behalf; when false approvals happen here on the website.
+  agentGrantAutoApprove: boolean;
+}
+
+export interface LaunchGrantListQuery {
+  caller?: string;
+  target?: string;
+  status?: "active" | "pending" | "revoked";
+}
 
 export interface LaunchApiClientOptions {
   baseUrl?: string;
@@ -338,6 +374,91 @@ export class LaunchApiClient {
   /** @deprecated Use agentAdmin(). */
   toolAdmin(id: string): Promise<LaunchAgentAdminResponse> {
     return this.agentAdmin(id);
+  }
+
+  // Cross-Agent wiring (P5): the Agent's declared slots + their bindings, the
+  // raw grants it holds/receives, and the pending-approval inbox.
+  agentWiring(idOrSlug: string): Promise<AgentWiringView> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/wiring`,
+    );
+  }
+
+  // Egress-trust signal for the caller Agent shown at bind/approve time.
+  agentCallerTrust(idOrSlug: string): Promise<AgentCallerTrustSummary> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/caller-trust`,
+    );
+  }
+
+  listGrants(
+    query: LaunchGrantListQuery = {},
+  ): Promise<LaunchGrantListResponse> {
+    const params = new URLSearchParams();
+    if (query.caller) params.set("caller", query.caller);
+    if (query.target) params.set("target", query.target);
+    if (query.status) params.set("status", query.status);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.fetchJson(`/api/launch/grants${suffix}`);
+  }
+
+  createGrant(
+    request: AgentGrantCreateRequest,
+  ): Promise<LaunchGrantMutationResponse> {
+    return this.fetchJson("/api/launch/grants", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  approveGrant(
+    id: string,
+    request: AgentGrantApproveRequest = {},
+  ): Promise<LaunchGrantMutationResponse> {
+    return this.fetchJson(
+      `/api/launch/grants/${encodeURIComponent(id)}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  updateGrant(
+    id: string,
+    request: AgentGrantUpdateRequest,
+  ): Promise<LaunchGrantMutationResponse> {
+    return this.fetchJson(`/api/launch/grants/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(request),
+    });
+  }
+
+  // Revoking is a soft delete (status -> revoked); also used to deny pending.
+  revokeGrant(id: string): Promise<LaunchGrantMutationResponse> {
+    return this.fetchJson(`/api/launch/grants/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  }
+
+  wiringTargets(query?: string): Promise<LaunchWiringTargetsResponse> {
+    const params = new URLSearchParams();
+    if (query) params.set("query", query);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.fetchJson(`/api/launch/wiring/targets${suffix}`);
+  }
+
+  getLaunchSettings(): Promise<LaunchSettingsResponse> {
+    return this.fetchJson("/api/launch/settings");
+  }
+
+  updateLaunchSettings(
+    request: { agentGrantAutoApprove: boolean },
+  ): Promise<LaunchSettingsResponse> {
+    return this.fetchJson("/api/launch/settings", {
+      method: "PATCH",
+      body: JSON.stringify(request),
+    });
   }
 
   apiKeys(): Promise<LaunchApiKeyListResponse> {

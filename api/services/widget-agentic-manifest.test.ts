@@ -196,6 +196,43 @@ Deno.test("agentic widget manifest: rejects unsafe context/action shapes", () =>
   );
 });
 
+Deno.test("manifest imports: accepts declared slots, rejects malformed shapes", () => {
+  const valid = validateManifest(baseManifest({
+    imports: {
+      stock_source: {
+        description: "A source of stock levels",
+        signature: "getStock(sku: string) -> { qty: number }",
+        functions: ["getStock"],
+      },
+      crm: { description: "Customer records" },
+    },
+  }));
+  assertEquals(
+    valid.errors.filter((error) => error.path.startsWith("imports")),
+    [],
+  );
+
+  const invalid = validateManifest(baseManifest({
+    imports: {
+      bad_slot: { description: 42, functions: ["", 7] },
+    },
+  }));
+  assertEquals(
+    invalid.errors.some((error) => error.path === "imports.bad_slot.description"),
+    true,
+  );
+  assertEquals(
+    invalid.errors.some((error) => error.path === "imports.bad_slot.functions"),
+    true,
+  );
+
+  const notObject = validateManifest(baseManifest({ imports: ["nope"] }));
+  assertEquals(
+    notObject.errors.some((error) => error.path === "imports"),
+    true,
+  );
+});
+
 Deno.test("manifest external_functions: accepts read dependencies, rejects reserved write access", () => {
   const valid = validateManifest(baseManifest({
     external_functions: [

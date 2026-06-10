@@ -17,6 +17,7 @@ export interface AppManifest {
     access_policy?: ManifestAccessPolicy;
     permissions?: string[];
     external_functions?: ManifestExternalDependency[];
+    imports?: Record<string, ManifestSlotImport>;
     widgets?: WidgetDeclaration[];
     context_sources?: WidgetContextSourceDeclaration[];
     routines?: RoutineDeclaration[];
@@ -28,6 +29,11 @@ export interface ManifestExternalDependency {
     app: string;
     functions: string[];
     access?: 'read';
+}
+export interface ManifestSlotImport {
+    description?: string;
+    signature?: string;
+    functions?: string[];
 }
 export type ManifestHttpAuthMode = 'user' | 'public';
 export type ManifestHttpBillingMode = 'owner' | 'caller';

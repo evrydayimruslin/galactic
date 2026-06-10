@@ -6,6 +6,14 @@ import {
   useState,
 } from "react";
 
+import type {
+  AgentCallerTrustSummary,
+  AgentGrantSummary,
+  AgentImportSlot,
+  AgentWiringTarget,
+  AgentWiringView,
+} from "../../../../shared/contracts/agent-grants.ts";
+import { DEFAULT_GRANT_MONTHLY_CAP_CREDITS } from "../../../../shared/contracts/agent-grants.ts";
 import {
   LAUNCH_SCOPE_CONTRACT,
   type LaunchCallerFunctionPermissionsResponse,
@@ -28,7 +36,11 @@ import {
   type LaunchWalletTransaction,
 } from "../../../../shared/contracts/launch.ts";
 import type { LaunchPageProps } from "../App";
-import { getLaunchAuthDiagnostic, signOutLaunch } from "../lib/auth";
+import {
+  getLaunchAuthDiagnostic,
+  hasLaunchAuthToken,
+  signOutLaunch,
+} from "../lib/auth";
 import { launchApi } from "../lib/api";
 import {
   Avatar,
@@ -455,7 +467,7 @@ const adminTabs = [
 type AdminTabId = typeof adminTabs[number][0];
 type LibraryView = "installed" | "owned";
 type StoreKindFilter = "all" | AgentFixture["kind"];
-type AgentPageTabId = "details" | "functions";
+type AgentPageTabId = "details" | "functions" | "wiring";
 
 const visibilityOptions = [
   [
@@ -1285,6 +1297,13 @@ function AgentDetailSurface({
     setTab(agentTabFromSearch());
   }, [locationSearch]);
 
+  // Wiring is meaningful only when signed in and the Agent is the user's own
+  // (owner) or one they've installed. Public, signed-out views hide the tab.
+  const signedIn = hasLaunchAuthToken();
+  const wiringRelevant = signedIn &&
+    (tool.relationship === "owner" || tool.relationship === "installed");
+  const pendingCount = live.data.agentWiring?.pendingRequests.length ?? 0;
+
   const activateToolTab = (nextTab: AgentPageTabId) => {
     setTab(nextTab);
     syncSearchParams({ tab: nextTab === "functions" ? null : nextTab });
@@ -1359,6 +1378,18 @@ function AgentDetailSurface({
         >
           Details
         </button>
+        {wiringRelevant
+          ? (
+            <button
+              className={tab === "wiring" ? "active" : ""}
+              onClick={() => activateToolTab("wiring")}
+              type="button"
+            >
+              Wiring
+              {pendingCount > 0 ? <Pill tone="amber">{pendingCount}</Pill> : null}
+            </button>
+          )
+          : null}
       </div>
 
       <div className="tool-detail-layout">
@@ -1374,6 +1405,9 @@ function AgentDetailSurface({
             )
             : null}
           {tab === "details" ? <AgentDetailsPanel tool={tool} /> : null}
+          {tab === "wiring" && wiringRelevant
+            ? <AgentWiringPanel live={live} tool={tool} />
+            : null}
         </main>
         <aside className="tool-rail">
           <AgentTrustRail tool={tool} />
@@ -1584,6 +1618,578 @@ function PermissionControl({
             : "Saved"}
         </Button>
       </div>
+    </div>
+  );
+}
+
+function grantAppLabel(
+  app: { slug: string | null; name: string | null; id: string },
+): string {
+  return app.name || app.slug || `${app.id.slice(0, 8)}…`;
+}
+
+function CallerTrustChip(
+  { trust }: { trust?: AgentCallerTrustSummary | null },
+): ReactElement | null {
+  if (!trust) return null;
+  return (
+    <div className="caller-trust">
+      {trust.hasNetworkEgress
+        ? (
+          <Pill tone="amber">
+            This Agent can send data off-platform
+          </Pill>
+        )
+        : <Pill tone="green">No declared network egress</Pill>}
+      <Pill tone={trust.ownedByUser ? "green" : "default"}>
+        {trust.ownedByUser ? "Owned by you" : trust.visibility}
+      </Pill>
+      {trust.declaredPermissions.length > 0
+        ? (
+          <span className="caller-trust-perms">
+            {trust.declaredPermissions.map((perm) => (
+              <Mono key={perm}>{perm}</Mono>
+            ))}
+          </span>
+        )
+        : null}
+    </div>
+  );
+}
+
+// One-click default-deny inbox: pending cross-Agent requests awaiting the
+// user's approval. This is the heart of the wiring UX.
+function PendingInbox({
+  callerTrust,
+  live,
+  pending,
+}: {
+  callerTrust?: AgentCallerTrustSummary | null;
+  live: LaunchPageProps["live"];
+  pending: AgentGrantSummary[];
+}): ReactElement {
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const act = async (
+    grantId: string,
+    run: () => Promise<unknown>,
+  ) => {
+    setBusyId(grantId);
+    try {
+      await run();
+      live.reload();
+    } catch {
+      // Surface nothing destructive; the row stays so the user can retry.
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <Card className="wiring-inbox-card">
+      <div className="wiring-section-head">
+        <div>
+          <h3>Pending approvals</h3>
+          <p>
+            A call was denied by default and is waiting for you. Approve once to
+            wire it; deny to keep it blocked.
+          </p>
+        </div>
+        {pending.length > 0 ? <Pill tone="amber">{pending.length}</Pill> : null}
+      </div>
+      {pending.length === 0
+        ? (
+          <EmptyState icon="shield" title="No pending requests">
+            When another Agent tries to call this one without a grant, the
+            request lands here for one-click approval.
+          </EmptyState>
+        )
+        : (
+          <div className="wiring-row-list">
+            {pending.map((request) => (
+              <div className="wiring-pending-row" key={request.id}>
+                <div className="wiring-pending-main">
+                  <strong>
+                    <Mono>{grantAppLabel(request.callerApp)}</Mono>
+                    {" → "}
+                    <Mono>
+                      {grantAppLabel(request.targetApp)}.{request.targetFunction}
+                    </Mono>
+                  </strong>
+                  {request.callerFunction
+                    ? (
+                      <span className="muted-note">
+                        only while <Mono>{request.callerFunction}</Mono> runs
+                      </span>
+                    )
+                    : null}
+                  <CallerTrustChip trust={callerTrust} />
+                </div>
+                <div className="wiring-row-actions">
+                  <Button
+                    onClick={() =>
+                      act(request.id, () => launchApi.approveGrant(request.id))}
+                    size="sm"
+                  >
+                    {busyId === request.id ? "Working" : "Approve"}
+                  </Button>
+                  <Button
+                    onClick={() =>
+                      act(request.id, () => launchApi.revokeGrant(request.id))}
+                    size="sm"
+                    variant="secondary"
+                  >
+                    Deny
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+    </Card>
+  );
+}
+
+// A monthly-cap display with inline edit (updateGrant). null cap = uncapped.
+function GrantCapControl({
+  grant,
+  live,
+}: {
+  grant: AgentGrantSummary;
+  live: LaunchPageProps["live"];
+}): ReactElement {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(
+    grant.monthlyCapCredits != null ? String(grant.monthlyCapCredits) : "",
+  );
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    const trimmed = draft.trim();
+    const cap = trimmed === "" ? null : Number(trimmed);
+    try {
+      await launchApi.updateGrant(grant.id, {
+        monthlyCapCredits: cap != null && Number.isFinite(cap) ? cap : null,
+      });
+      setEditing(false);
+      live.reload();
+    } catch {
+      // Keep the editor open so the user can retry.
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <div className="wiring-cap">
+        <span className="muted-note">
+          {grant.monthlyCapCredits != null
+            ? `✦${formatCredits(grant.spentCreditsPeriod)} / ✦${
+              formatCredits(grant.monthlyCapCredits)
+            } this month`
+            : `✦${formatCredits(grant.spentCreditsPeriod)} spent · uncapped`}
+        </span>
+        <button
+          className="route-link"
+          onClick={() => setEditing(true)}
+          type="button"
+        >
+          Edit cap
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="wiring-cap editing">
+      <input
+        inputMode="numeric"
+        onChange={(event) => setDraft(event.target.value)}
+        placeholder={`uncapped (default ✦${
+          formatCredits(DEFAULT_GRANT_MONTHLY_CAP_CREDITS)
+        })`}
+        value={draft}
+      />
+      <Button onClick={save} size="sm">
+        {saving ? "Saving" : "Save cap"}
+      </Button>
+      <button
+        className="route-link"
+        onClick={() => setEditing(false)}
+        type="button"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
+// Bind a declared slot to an eligible target Agent + one of its functions.
+function SlotBindControl({
+  callerAppId,
+  live,
+  slot,
+  targets,
+}: {
+  callerAppId: string;
+  live: LaunchPageProps["live"];
+  slot: AgentImportSlot;
+  targets: AgentWiringTarget[];
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const [targetAppId, setTargetAppId] = useState("");
+  const [targetFunction, setTargetFunction] = useState("");
+  const [binding, setBinding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedTarget = targets.find((entry) => entry.app.id === targetAppId);
+  const eligibleTargets = slot.expectedFunctions.length > 0
+    ? targets.filter((entry) =>
+      entry.functions.some((fn) => slot.expectedFunctions.includes(fn.name))
+    )
+    : targets;
+
+  const bind = async () => {
+    if (!targetAppId || !targetFunction) return;
+    setBinding(true);
+    setError(null);
+    try {
+      await launchApi.createGrant({
+        callerAppId,
+        targetAppId,
+        targetFunction,
+        slot: slot.name,
+      });
+      setOpen(false);
+      setTargetAppId("");
+      setTargetFunction("");
+      live.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBinding(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <Button onClick={() => setOpen(true)} size="sm" variant="secondary">
+        Bind slot
+      </Button>
+    );
+  }
+
+  return (
+    <div className="slot-bind">
+      <label>
+        <span>Target Agent</span>
+        <select
+          onChange={(event) => {
+            setTargetAppId(event.target.value);
+            setTargetFunction("");
+          }}
+          value={targetAppId}
+        >
+          <option value="">Pick an Agent…</option>
+          {eligibleTargets.map((entry) => (
+            <option key={entry.app.id} value={entry.app.id}>
+              {grantAppLabel(entry.app)} · {entry.relationship}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Function</span>
+        <select
+          disabled={!selectedTarget}
+          onChange={(event) => setTargetFunction(event.target.value)}
+          value={targetFunction}
+        >
+          <option value="">Pick a function…</option>
+          {(selectedTarget?.functions ?? []).map((fn) => (
+            <option key={fn.name} value={fn.name}>{fn.name}</option>
+          ))}
+        </select>
+      </label>
+      {selectedTarget && selectedTarget.visibility === "private"
+        ? (
+          <Pill tone="amber">
+            Binds a published Agent to your private Agent
+          </Pill>
+        )
+        : null}
+      {error ? <p className="api-notice warning">{error}</p> : null}
+      <div className="wiring-row-actions">
+        <Button
+          onClick={bind}
+          size="sm"
+        >
+          {binding ? "Binding" : "Bind"}
+        </Button>
+        <button
+          className="route-link"
+          onClick={() => setOpen(false)}
+          type="button"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SlotCard({
+  callerAppId,
+  live,
+  slot,
+  targets,
+}: {
+  callerAppId: string;
+  live: LaunchPageProps["live"];
+  slot: AgentImportSlot;
+  targets: AgentWiringTarget[];
+}): ReactElement {
+  const unbind = async () => {
+    if (!slot.binding) return;
+    try {
+      await launchApi.revokeGrant(slot.binding.id);
+      live.reload();
+    } catch {
+      // Leave the binding visible; the user can retry the unbind.
+    }
+  };
+
+  return (
+    <div className="wiring-slot">
+      <div className="wiring-slot-head">
+        <div>
+          <strong>
+            <Mono>{slot.name}</Mono>
+          </strong>
+          {slot.description ? <span>{slot.description}</span> : null}
+          {slot.signature
+            ? <code className="wiring-slot-sig">{slot.signature}</code>
+            : null}
+          {slot.expectedFunctions.length > 0
+            ? (
+              <span className="muted-note">
+                expects {slot.expectedFunctions.join(", ")}
+              </span>
+            )
+            : null}
+        </div>
+        {slot.binding
+          ? (
+            <Button onClick={unbind} size="sm" variant="secondary">
+              Unbind
+            </Button>
+          )
+          : (
+            <SlotBindControl
+              callerAppId={callerAppId}
+              live={live}
+              slot={slot}
+              targets={targets}
+            />
+          )}
+      </div>
+      {slot.binding
+        ? (
+          <div className="wiring-slot-binding">
+            <span>
+              bound to{" "}
+              <Mono>
+                {grantAppLabel(slot.binding.targetApp)}.{slot.binding
+                  .targetFunction}
+              </Mono>
+            </span>
+            <GrantCapControl grant={slot.binding} live={live} />
+          </div>
+        )
+        : <span className="muted-note">Not bound yet.</span>}
+    </div>
+  );
+}
+
+// A raw outbound/inbound grant row (slot === null) with revoke + cap edit.
+function GrantRow({
+  direction,
+  grant,
+  live,
+}: {
+  direction: "outbound" | "inbound";
+  grant: AgentGrantSummary;
+  live: LaunchPageProps["live"];
+}): ReactElement {
+  const revoke = async () => {
+    try {
+      await launchApi.revokeGrant(grant.id);
+      live.reload();
+    } catch {
+      // Keep the row; revoke can be retried.
+    }
+  };
+
+  const counterparty = direction === "outbound"
+    ? grant.targetApp
+    : grant.callerApp;
+
+  return (
+    <div className="wiring-grant-row">
+      <div className="wiring-grant-main">
+        <strong>
+          {direction === "inbound"
+            ? <Mono>{grantAppLabel(counterparty)}</Mono>
+            : null}
+          {direction === "inbound" ? " → " : ""}
+          <Mono>
+            {grantAppLabel(grant.targetApp)}.{grant.targetFunction}
+          </Mono>
+        </strong>
+        {grant.callerFunction
+          ? (
+            <span className="muted-note">
+              only while <Mono>{grant.callerFunction}</Mono> runs
+            </span>
+          )
+          : null}
+        <GrantCapControl grant={grant} live={live} />
+      </div>
+      <Button onClick={revoke} size="sm" variant="secondary">
+        Revoke
+      </Button>
+    </div>
+  );
+}
+
+function AgentWiringPanel({
+  live,
+  tool,
+}: {
+  live: LaunchPageProps["live"];
+  tool: AgentDetailFixture;
+}): ReactElement {
+  const wiring = live.data.agentWiring;
+  const callerTrust = live.data.agentCallerTrust;
+  const [targets, setTargets] = useState<AgentWiringTarget[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    launchApi.wiringTargets()
+      .then((response) => {
+        if (!cancelled) setTargets(response.targets);
+      })
+      .catch(() => {
+        if (!cancelled) setTargets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tool.id]);
+
+  if (!wiring) {
+    return (
+      <div className="wiring-panel">
+        <EmptyState icon="shield" title="Wiring needs a live session">
+          Sign in and reload to bind this Agent's slots, review the grants it
+          holds, and approve pending requests.
+        </EmptyState>
+      </div>
+    );
+  }
+
+  return (
+    <div className="wiring-panel">
+      <PendingInbox
+        callerTrust={callerTrust}
+        live={live}
+        pending={wiring.pendingRequests}
+      />
+
+      <Card>
+        <div className="wiring-section-head">
+          <div>
+            <h3>Outbound — this Agent's slots</h3>
+            <p>
+              Bind each declared slot to a target Agent + function. Binding a
+              slot is a grant: it lets this Agent call the target on your behalf.
+            </p>
+          </div>
+        </div>
+        {wiring.slots.length === 0
+          ? (
+            <p className="muted-note">
+              This Agent declares no import slots.
+            </p>
+          )
+          : (
+            <div className="wiring-slot-list">
+              {wiring.slots.map((slot) => (
+                <SlotCard
+                  callerAppId={wiring.app.id}
+                  key={slot.name}
+                  live={live}
+                  slot={slot}
+                  targets={targets}
+                />
+              ))}
+            </div>
+          )}
+
+        <div className="wiring-subsection">
+          <p className="section-label">Raw outbound grants</p>
+          {wiring.outboundGrants.length === 0
+            ? (
+              <p className="muted-note">
+                No raw grants — this Agent only calls through bound slots.
+              </p>
+            )
+            : (
+              <div className="wiring-row-list">
+                {wiring.outboundGrants.map((grant) => (
+                  <GrantRow
+                    direction="outbound"
+                    grant={grant}
+                    key={grant.id}
+                    live={live}
+                  />
+                ))}
+              </div>
+            )}
+        </div>
+      </Card>
+
+      <Card>
+        <div className="wiring-section-head">
+          <div>
+            <h3>Inbound — Agents that call this one</h3>
+            <p>
+              Active grants letting other Agents call <Mono>{tool.slug}</Mono>.
+              Adjust the monthly cap or revoke access.
+            </p>
+          </div>
+        </div>
+        {wiring.inboundGrants.length === 0
+          ? (
+            <p className="muted-note">
+              No other Agent is wired to call this one.
+            </p>
+          )
+          : (
+            <div className="wiring-row-list">
+              {wiring.inboundGrants.map((grant) => (
+                <GrantRow
+                  direction="inbound"
+                  grant={grant}
+                  key={grant.id}
+                  live={live}
+                />
+              ))}
+            </div>
+          )}
+      </Card>
     </div>
   );
 }
@@ -2498,6 +3104,7 @@ export function SettingsFoundationPage(
           description="How your connected agent may call functions on Agents you install."
           title="Default permissions for installed Agents"
         />
+        <AgentGrantApprovalRow canManage={canManageKeys} live={live} />
       </SettingsCard>
 
       <div className="connect-agent-callout">
@@ -2980,6 +3587,93 @@ function PreferenceRow({
       </div>
       {control}
     </div>
+  );
+}
+
+function Toggle({
+  checked,
+  disabled,
+  onChange,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+}): ReactElement {
+  return (
+    <button
+      aria-checked={checked}
+      aria-disabled={disabled}
+      className={`launch-toggle${checked ? " on" : ""}`}
+      onClick={() => {
+        if (!disabled) onChange(!checked);
+      }}
+      role="switch"
+      type="button"
+    >
+      <span className="launch-toggle-knob" />
+    </button>
+  );
+}
+
+// Whether the user's connected agent may APPROVE cross-Agent wiring grants on
+// their behalf. Off by default: when off, approvals happen here on the website.
+function AgentGrantApprovalRow({
+  canManage,
+  live,
+}: {
+  canManage: boolean;
+  live: LaunchPageProps["live"];
+}): ReactElement {
+  const [autoApprove, setAutoApprove] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!canManage) return;
+    let cancelled = false;
+    launchApi.getLaunchSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        setAutoApprove(Boolean(settings.agentGrantAutoApprove));
+        setLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canManage, live]);
+
+  const toggle = async (next: boolean) => {
+    if (saving) return;
+    const previous = autoApprove;
+    setAutoApprove(next);
+    setSaving(true);
+    try {
+      const settings = await launchApi.updateLaunchSettings({
+        agentGrantAutoApprove: next,
+      });
+      setAutoApprove(Boolean(settings.agentGrantAutoApprove));
+    } catch {
+      setAutoApprove(previous);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <PreferenceRow
+      control={
+        <Toggle
+          checked={autoApprove}
+          disabled={!canManage || !loaded || saving}
+          onChange={toggle}
+        />
+      }
+      description="Let your connected agent approve cross-Agent wiring grants — off by default; when off, approvals happen here on the website."
+      title="Agent grant approval"
+    />
   );
 }
 
@@ -4070,7 +4764,7 @@ function libraryViewFromSearch(): LibraryView {
 
 function agentTabFromSearch(): AgentPageTabId {
   const tab = queryParam("tab");
-  if (tab === "details" || tab === "functions") return tab;
+  if (tab === "details" || tab === "functions" || tab === "wiring") return tab;
   return "functions";
 }
 

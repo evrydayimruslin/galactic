@@ -123,6 +123,39 @@ import {
   updateCallerFunctionPermissions,
 } from "../services/caller-function-permissions.ts";
 import { resolveManifestAccessPolicy } from "../services/access-policy.ts";
+import {
+  approvePendingGrant,
+  createGrant,
+  fetchAppHandles,
+  getGrant,
+  getUserGrantAutoApprove,
+  listGrantSummaries,
+  setGrantCap,
+  setGrantStatus,
+  setUserGrantAutoApprove,
+  toGrantSummary,
+} from "../services/agent-grants.ts";
+import {
+  buildCallerTrustSummary,
+  buildWiringView,
+  listEligibleTargets,
+} from "../services/agent-wiring.ts";
+import type {
+  AgentGrantApproveRequest,
+  AgentGrantCreateRequest,
+  AgentGrantStatus,
+  AgentGrantUpdateRequest,
+} from "../../shared/contracts/agent-grants.ts";
+import type { SensitiveRoute } from "../services/sensitive-route-rate-limit.ts";
+
+// Cross-Agent grant + settings mutations are sensitive. The SensitiveRoute enum
+// lives in sensitive-route-rate-limit.ts (outside this file's edit scope), so we
+// reuse the closest existing user-scoped settings-mutation key rather than
+// adding dedicated launch:grant_write / launch:settings_write keys. See the
+// orchestrator leftovers note.
+const LAUNCH_GRANT_WRITE_LIMIT: SensitiveRoute = "apps:user_settings_update";
+const LAUNCH_GRANT_SETTINGS_WRITE_LIMIT: SensitiveRoute =
+  "apps:user_settings_update";
 
 const APP_SELECT = [
   "id",
@@ -465,6 +498,35 @@ export async function handleLaunch(request: Request): Promise<Response> {
       return await handleLaunchByok(request, path, method);
     }
 
+    if (
+      path === "/api/launch/grants" ||
+      path.startsWith("/api/launch/grants/")
+    ) {
+      return await handleLaunchGrants(request, path, method);
+    }
+
+    if (path === "/api/launch/wiring/targets") {
+      return await handleLaunchWiringTargets(request, url, method);
+    }
+
+    if (path === "/api/launch/settings") {
+      return await handleLaunchSettings(request, method);
+    }
+
+    const agentWiringMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/wiring$/,
+    );
+    if (agentWiringMatch) {
+      return await handleLaunchAgentWiring(request, agentWiringMatch[1], method);
+    }
+
+    const callerTrustMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/caller-trust$/,
+    );
+    if (callerTrustMatch) {
+      return await handleLaunchCallerTrust(request, callerTrustMatch[1], method);
+    }
+
     if (path === "/api/launch/wallet/topup/intent") {
       if (method !== "POST") {
         return error("Method not allowed for launch wallet top-up intent", 405);
@@ -624,6 +686,11 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       functionRun: "/api/launch/agents/{id}/functions/{functionName}/run",
       callerPermissions: "/api/launch/agents/{id}/caller-permissions",
       agentPermissions: "/api/launch/agents/{id}/caller-permissions",
+      wiring: "/api/launch/agents/{id}/wiring",
+      callerTrust: "/api/launch/agents/{id}/caller-trust",
+      grants: "/api/launch/grants?caller={callerId}&target={targetId}&status={status}",
+      wiringTargets: "/api/launch/wiring/targets?q={query}",
+      settings: "/api/launch/settings",
       platformPrimitives: "/api/launch/platform-primitives?q={query}",
       leaderboard: "/api/launch/leaderboard?kind=builder&period=30d",
       wallet: "/api/launch/wallet",
@@ -1086,6 +1153,305 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               description: "Inference billing options",
               content: jsonContent({
                 $ref: "#/components/schemas/InferenceOptions",
+              }),
+            },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+          },
+        },
+      },
+      "/api/launch/grants": {
+        get: {
+          operationId: "listLaunchGrants",
+          summary: "List cross-Agent function grants for the account",
+          description:
+            "Account-session endpoint. Returns grant summaries joined with Agent handles. Optional caller/target params accept Agent ids or slugs; an unresolvable filter is omitted.",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            queryParam(
+              "caller",
+              { type: "string", maxLength: 200 },
+              "Filter by caller Agent id or slug",
+            ),
+            queryParam(
+              "target",
+              { type: "string", maxLength: 200 },
+              "Filter by target Agent id or slug",
+            ),
+            queryParam(
+              "status",
+              { type: "string", enum: ["active", "pending", "revoked"] },
+              "Filter by grant status",
+            ),
+          ],
+          responses: {
+            "200": {
+              description: "Grant summaries",
+              content: jsonContent({
+                $ref: "#/components/schemas/AgentGrantListResponse",
+              }),
+            },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+          },
+        },
+        post: {
+          operationId: "createLaunchGrant",
+          summary: "Create a cross-Agent function grant",
+          description:
+            "Account-session endpoint. Authorizes caller Agent A to call function F on target Agent B for the user. Enforces the delegation-not-expansion safety invariant server-side.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              $ref: "#/components/schemas/AgentGrantCreateRequest",
+            }),
+          },
+          responses: {
+            "201": {
+              description: "Created grant summary",
+              content: jsonContent({
+                type: "object",
+                required: ["grant"],
+                properties: {
+                  grant: { $ref: "#/components/schemas/AgentGrantSummary" },
+                },
+              }),
+            },
+            "401": { description: "Authentication required" },
+            "403": {
+              description:
+                "Account session required, or safety invariant violation",
+            },
+            "404": { description: "Caller or target Agent not found" },
+          },
+        },
+      },
+      "/api/launch/grants/{id}": {
+        patch: {
+          operationId: "updateLaunchGrant",
+          summary: "Update a grant cap or revoke it",
+          description:
+            "Account-session endpoint. Sets the monthly cap and/or revokes the grant.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "Grant id",
+          }],
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              $ref: "#/components/schemas/AgentGrantUpdateRequest",
+            }),
+          },
+          responses: {
+            "200": {
+              description: "Updated grant summary",
+              content: jsonContent({
+                type: "object",
+                required: ["grant"],
+                properties: {
+                  grant: { $ref: "#/components/schemas/AgentGrantSummary" },
+                },
+              }),
+            },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+            "404": { description: "Grant not found" },
+          },
+        },
+        delete: {
+          operationId: "revokeLaunchGrant",
+          summary: "Revoke a cross-Agent function grant",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "Grant id",
+          }],
+          responses: {
+            "200": {
+              description: "Grant revoked",
+              content: jsonContent({
+                type: "object",
+                required: ["ok"],
+                properties: { ok: { type: "boolean" } },
+              }),
+            },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+            "404": { description: "Grant not found" },
+          },
+        },
+      },
+      "/api/launch/grants/{id}/approve": {
+        post: {
+          operationId: "approveLaunchGrant",
+          summary: "Approve a pending grant request",
+          description:
+            "Account-session endpoint. Re-runs the safety invariant, flips pending to active, and optionally sets a monthly cap.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "Grant id",
+          }],
+          requestBody: {
+            required: false,
+            content: jsonContent({
+              $ref: "#/components/schemas/AgentGrantApproveRequest",
+            }),
+          },
+          responses: {
+            "200": {
+              description: "Approved grant summary",
+              content: jsonContent({
+                type: "object",
+                required: ["grant"],
+                properties: {
+                  grant: { $ref: "#/components/schemas/AgentGrantSummary" },
+                },
+              }),
+            },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+            "404": { description: "Grant not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/wiring": {
+        get: {
+          operationId: "getLaunchAgentWiring",
+          summary: "Inspect an Agent's cross-Agent wiring view",
+          description:
+            "Account-session endpoint. Returns the Agent's declared slots (with bindings), outbound/inbound grants, and the pending-request inbox.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Agent id or slug",
+          }],
+          responses: {
+            "200": {
+              description: "Agent wiring view",
+              content: jsonContent({
+                $ref: "#/components/schemas/AgentWiringView",
+              }),
+            },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+            "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/caller-trust": {
+        get: {
+          operationId: "getLaunchCallerTrust",
+          summary: "Inspect a caller Agent's egress-trust signals",
+          description:
+            "Account-session endpoint. Surfaces the caller's net-egress permissions, declared permissions, and code fingerprint (surface + warn, never block).",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Agent id or slug",
+          }],
+          responses: {
+            "200": {
+              description: "Caller trust summary",
+              content: jsonContent({
+                $ref: "#/components/schemas/AgentCallerTrustSummary",
+              }),
+            },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+            "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/wiring/targets": {
+        get: {
+          operationId: "listLaunchWiringTargets",
+          summary: "List Agents eligible as grant targets",
+          description:
+            "Account-session endpoint. Returns owned/installed Agents (with callable functions) the user could bind a slot or grant to.",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            queryParam(
+              "q",
+              { type: "string", maxLength: 200 },
+              "Optional query filtering by Agent name or function",
+            ),
+          ],
+          responses: {
+            "200": {
+              description: "Eligible wiring targets",
+              content: jsonContent({
+                type: "object",
+                required: ["targets", "generatedAt"],
+                properties: {
+                  targets: {
+                    type: "array",
+                    items: {
+                      $ref: "#/components/schemas/AgentWiringTarget",
+                    },
+                  },
+                  generatedAt: { type: "string", format: "date-time" },
+                },
+              }),
+            },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+          },
+        },
+      },
+      "/api/launch/settings": {
+        get: {
+          operationId: "getLaunchSettings",
+          summary: "Read account grant settings",
+          description:
+            "Account-session endpoint. Reports whether the connected agent may approve grants (vs only propose/revoke).",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            "200": {
+              description: "Account grant settings",
+              content: jsonContent({
+                $ref: "#/components/schemas/LaunchGrantSettings",
+              }),
+            },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+          },
+        },
+        patch: {
+          operationId: "updateLaunchSettings",
+          summary: "Update account grant settings",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              type: "object",
+              properties: {
+                agentGrantAutoApprove: { type: "boolean" },
+              },
+            }),
+          },
+          responses: {
+            "200": {
+              description: "Updated account grant settings",
+              content: jsonContent({
+                $ref: "#/components/schemas/LaunchGrantSettings",
               }),
             },
             "401": { description: "Authentication required" },
@@ -1705,6 +2071,184 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                 display: { type: "string" },
               },
             },
+            generatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        AgentHandle: {
+          type: "object",
+          required: ["id", "slug", "name"],
+          properties: {
+            id: { type: "string" },
+            slug: { type: ["string", "null"] },
+            name: { type: ["string", "null"] },
+          },
+        },
+        AgentGrantSummary: {
+          type: "object",
+          required: [
+            "id",
+            "callerApp",
+            "targetApp",
+            "targetFunction",
+            "mode",
+            "status",
+            "spentCreditsPeriod",
+            "periodStart",
+            "createdBy",
+            "updatedAt",
+          ],
+          properties: {
+            id: { type: "string" },
+            callerApp: { $ref: "#/components/schemas/AgentHandle" },
+            targetApp: { $ref: "#/components/schemas/AgentHandle" },
+            callerFunction: { type: ["string", "null"] },
+            slot: { type: ["string", "null"] },
+            targetFunction: { type: "string" },
+            mode: { type: "string", enum: ["call", "subscribe"] },
+            status: {
+              type: "string",
+              enum: ["active", "pending", "revoked"],
+            },
+            monthlyCapCredits: { type: ["number", "null"] },
+            spentCreditsPeriod: { type: "number" },
+            periodStart: { type: "string", format: "date-time" },
+            createdBy: {
+              type: "string",
+              enum: ["user", "agent", "developer_hint", "auto_request"],
+            },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        AgentGrantListResponse: {
+          type: "object",
+          required: ["grants", "generatedAt"],
+          properties: {
+            grants: {
+              type: "array",
+              items: { $ref: "#/components/schemas/AgentGrantSummary" },
+            },
+            generatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        AgentGrantCreateRequest: {
+          type: "object",
+          required: ["callerAppId", "targetAppId", "targetFunction"],
+          properties: {
+            callerAppId: { type: "string" },
+            targetAppId: { type: "string" },
+            targetFunction: { type: "string" },
+            callerFunction: { type: ["string", "null"] },
+            slot: { type: ["string", "null"] },
+            monthlyCapCredits: { type: ["number", "null"] },
+            constraints: { type: "object", additionalProperties: true },
+          },
+        },
+        AgentGrantApproveRequest: {
+          type: "object",
+          properties: {
+            monthlyCapCredits: { type: ["number", "null"] },
+          },
+        },
+        AgentGrantUpdateRequest: {
+          type: "object",
+          properties: {
+            monthlyCapCredits: { type: ["number", "null"] },
+            status: { type: "string", enum: ["active", "revoked"] },
+          },
+        },
+        AgentImportSlot: {
+          type: "object",
+          required: ["name", "expectedFunctions"],
+          properties: {
+            name: { type: "string" },
+            description: { type: ["string", "null"] },
+            signature: { type: ["string", "null"] },
+            expectedFunctions: { type: "array", items: { type: "string" } },
+            binding: {
+              oneOf: [
+                { $ref: "#/components/schemas/AgentGrantSummary" },
+                { type: "null" },
+              ],
+            },
+          },
+        },
+        AgentWiringTarget: {
+          type: "object",
+          required: ["app", "relationship", "visibility", "functions"],
+          properties: {
+            app: { $ref: "#/components/schemas/AgentHandle" },
+            relationship: {
+              type: "string",
+              enum: ["owned", "installed", "accessible"],
+            },
+            visibility: { type: "string" },
+            functions: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["name"],
+                properties: {
+                  name: { type: "string" },
+                  description: { type: ["string", "null"] },
+                },
+              },
+            },
+          },
+        },
+        AgentCallerTrustSummary: {
+          type: "object",
+          required: [
+            "app",
+            "visibility",
+            "ownedByUser",
+            "hasNetworkEgress",
+            "declaredPermissions",
+          ],
+          properties: {
+            app: { $ref: "#/components/schemas/AgentHandle" },
+            visibility: { type: "string" },
+            ownedByUser: { type: "boolean" },
+            hasNetworkEgress: { type: "boolean" },
+            declaredPermissions: { type: "array", items: { type: "string" } },
+            codeFingerprint: { type: ["string", "null"] },
+          },
+        },
+        AgentWiringView: {
+          type: "object",
+          required: [
+            "app",
+            "slots",
+            "outboundGrants",
+            "inboundGrants",
+            "pendingRequests",
+            "generatedAt",
+          ],
+          properties: {
+            app: { $ref: "#/components/schemas/AgentHandle" },
+            slots: {
+              type: "array",
+              items: { $ref: "#/components/schemas/AgentImportSlot" },
+            },
+            outboundGrants: {
+              type: "array",
+              items: { $ref: "#/components/schemas/AgentGrantSummary" },
+            },
+            inboundGrants: {
+              type: "array",
+              items: { $ref: "#/components/schemas/AgentGrantSummary" },
+            },
+            pendingRequests: {
+              type: "array",
+              items: { $ref: "#/components/schemas/AgentGrantSummary" },
+            },
+            generatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        LaunchGrantSettings: {
+          type: "object",
+          required: ["agentGrantAutoApprove", "generatedAt"],
+          properties: {
+            agentGrantAutoApprove: { type: "boolean" },
             generatedAt: { type: "string", format: "date-time" },
           },
         },
@@ -2461,6 +3005,289 @@ async function buildLaunchByokSummary(
     providers,
     generatedAt: new Date().toISOString(),
   };
+}
+
+// Grant management is sensitive and the FE is always an account session, so
+// api_token / routine_actor callers are rejected on every grant/wiring/settings
+// route (mirrors requireAccountSessionForByok).
+function requireAccountSessionForGrants(user: AuthUser): void {
+  if (user.authSource === "api_token" || user.authSource === "routine_actor") {
+    throw new RequestValidationError(
+      "Cross-Agent grant management requires an account session",
+      403,
+    );
+  }
+}
+
+// Resolve a uuid-or-slug locator to a concrete app id the user can address.
+// Owned takes precedence, then public/unlisted, then an installed Agent.
+async function resolveGrantAgentId(
+  user: AuthUser,
+  encodedLocator: string,
+): Promise<string | null> {
+  const resolved = await resolveLaunchRunnableTool(user, encodedLocator);
+  return resolved?.row.id ?? null;
+}
+
+// Resolve a caller/target filter param (uuid or slug) to an app id. Returns
+// undefined when the value is missing or unresolvable so the filter is omitted.
+async function resolveGrantFilterAppId(
+  value: string | null,
+): Promise<string | undefined> {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (isUuid(trimmed)) return trimmed;
+  try {
+    const row = await fetchToolByLocator(parseLocator(trimmed), {});
+    return row?.id;
+  } catch {
+    return undefined;
+  }
+}
+
+async function handleLaunchAgentWiring(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+): Promise<Response> {
+  if (method !== "GET") {
+    return error("Method not allowed for launch Agent wiring", 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForGrants(user);
+  const appId = await resolveGrantAgentId(user, encodedLocator);
+  if (!appId) return error("Agent not found", 404);
+  const view = await buildWiringView(user.id, appId);
+  if (!view) return error("Agent not found", 404);
+  return json(view);
+}
+
+async function handleLaunchCallerTrust(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+): Promise<Response> {
+  if (method !== "GET") {
+    return error("Method not allowed for launch caller trust", 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForGrants(user);
+  const appId = await resolveGrantAgentId(user, encodedLocator);
+  if (!appId) return error("Agent not found", 404);
+  const summary = await buildCallerTrustSummary(user.id, appId);
+  if (!summary) return error("Agent not found", 404);
+  return json(summary);
+}
+
+async function handleLaunchWiringTargets(
+  request: Request,
+  url: URL,
+  method: string,
+): Promise<Response> {
+  if (method !== "GET") {
+    return error("Method not allowed for launch wiring targets", 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForGrants(user);
+  const query = url.searchParams.get("q") || undefined;
+  const targets = await listEligibleTargets(user.id, { query });
+  return json({ targets, generatedAt: new Date().toISOString() });
+}
+
+async function handleLaunchSettings(
+  request: Request,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForGrants(user);
+
+  if (method === "GET") {
+    return json({
+      agentGrantAutoApprove: await getUserGrantAutoApprove(user.id),
+      generatedAt: new Date().toISOString(),
+    });
+  }
+
+  if (method === "PATCH") {
+    return await withSensitiveRouteRateLimit(
+      user.id,
+      LAUNCH_GRANT_SETTINGS_WRITE_LIMIT,
+      async () => {
+        const body = asRecord(await readJsonBody<unknown>(request)) || {};
+        if ("agentGrantAutoApprove" in body) {
+          if (typeof body.agentGrantAutoApprove !== "boolean") {
+            return error("agentGrantAutoApprove must be a boolean", 400);
+          }
+          await setUserGrantAutoApprove(user.id, body.agentGrantAutoApprove);
+        }
+        return json({
+          agentGrantAutoApprove: await getUserGrantAutoApprove(user.id),
+          generatedAt: new Date().toISOString(),
+        });
+      },
+    );
+  }
+
+  return error("Method not allowed for launch settings", 405);
+}
+
+async function handleLaunchGrants(
+  request: Request,
+  path: string,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForGrants(user);
+
+  if (path === "/api/launch/grants") {
+    if (method === "GET") {
+      const url = new URL(request.url);
+      const [callerAppId, targetAppId] = await Promise.all([
+        resolveGrantFilterAppId(url.searchParams.get("caller")),
+        resolveGrantFilterAppId(url.searchParams.get("target")),
+      ]);
+      const status = parseGrantStatusFilter(url.searchParams.get("status"));
+      const grants = await listGrantSummaries({
+        userId: user.id,
+        callerAppId,
+        targetAppId,
+        status,
+      });
+      return json({ grants, generatedAt: new Date().toISOString() });
+    }
+
+    if (method === "POST") {
+      return await withSensitiveRouteRateLimit(
+        user.id,
+        LAUNCH_GRANT_WRITE_LIMIT,
+        async () => {
+          const body = asRecord(await readJsonBody<unknown>(request)) || {};
+          const grant = await createGrant(
+            user.id,
+            body as unknown as AgentGrantCreateRequest,
+            "user",
+          );
+          const apps = await fetchAppHandles([
+            grant.callerAppId,
+            grant.targetAppId,
+          ]);
+          return json(
+            { grant: toGrantSummary(grant, apps) },
+            201,
+          );
+        },
+      );
+    }
+
+    return error("Method not allowed for launch grants", 405);
+  }
+
+  const approveMatch = path.match(
+    /^\/api\/launch\/grants\/([^/]+)\/approve$/,
+  );
+  if (approveMatch) {
+    if (method !== "POST") {
+      return error("Method not allowed for launch grant approval", 405);
+    }
+    const grantId = parseGrantId(approveMatch[1]);
+    return await withSensitiveRouteRateLimit(
+      user.id,
+      LAUNCH_GRANT_WRITE_LIMIT,
+      async () => {
+        const body = asRecord(await readJsonBody<unknown>(request)) || {};
+        const approveRequest = body as unknown as AgentGrantApproveRequest;
+        const grant = await approvePendingGrant(user.id, grantId, {
+          monthlyCapCredits: approveRequest.monthlyCapCredits,
+        });
+        if (!grant) return error("Grant not found", 404);
+        const apps = await fetchAppHandles([
+          grant.callerAppId,
+          grant.targetAppId,
+        ]);
+        return json({ grant: toGrantSummary(grant, apps) });
+      },
+    );
+  }
+
+  const grantMatch = path.match(/^\/api\/launch\/grants\/([^/]+)$/);
+  if (grantMatch) {
+    const grantId = parseGrantId(grantMatch[1]);
+
+    if (method === "PATCH") {
+      return await withSensitiveRouteRateLimit(
+        user.id,
+        LAUNCH_GRANT_WRITE_LIMIT,
+        async () => {
+          const body = asRecord(await readJsonBody<unknown>(request)) || {};
+          const update = body as unknown as AgentGrantUpdateRequest;
+          let grant = null;
+          let touched = false;
+          if (update.status === "revoked") {
+            grant = await setGrantStatus(user.id, grantId, "revoked");
+            touched = true;
+          }
+          if (update.monthlyCapCredits !== undefined) {
+            grant = await setGrantCap(
+              user.id,
+              grantId,
+              update.monthlyCapCredits,
+            );
+            touched = true;
+          }
+          if (!touched) {
+            // No-op PATCH: return the current row so callers still get a
+            // grant summary (or a 404 if the grant doesn't exist).
+            grant = await getGrant(user.id, grantId);
+          }
+          if (!grant) return error("Grant not found", 404);
+          const apps = await fetchAppHandles([
+            grant.callerAppId,
+            grant.targetAppId,
+          ]);
+          return json({ grant: toGrantSummary(grant, apps) });
+        },
+      );
+    }
+
+    if (method === "DELETE") {
+      return await withSensitiveRouteRateLimit(
+        user.id,
+        LAUNCH_GRANT_WRITE_LIMIT,
+        async () => {
+          const grant = await setGrantStatus(user.id, grantId, "revoked");
+          if (!grant) return error("Grant not found", 404);
+          return json({ ok: true });
+        },
+      );
+    }
+
+    return error("Method not allowed for launch grant", 405);
+  }
+
+  return error("Launch grant endpoint not found", 404);
+}
+
+function parseGrantId(value: string): string {
+  const id = decodeURIComponent(value).trim();
+  if (!isUuid(id)) {
+    throw new RequestValidationError("Invalid grant id");
+  }
+  return id;
+}
+
+function parseGrantStatusFilter(
+  value: string | null,
+): AgentGrantStatus | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (
+    trimmed === "active" || trimmed === "pending" || trimmed === "revoked"
+  ) {
+    return trimmed;
+  }
+  throw new RequestValidationError(
+    "status must be one of: active, pending, revoked",
+  );
 }
 
 async function handleLaunchInferenceOptions(

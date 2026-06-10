@@ -1902,3 +1902,310 @@ Deno.test("launch facade: legacy alias block 2", async () => {
     assertEquals(canonicalPerms.status, 401);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 4b: cross-Agent grant / wiring / settings facade endpoints.
+// ---------------------------------------------------------------------------
+
+function grantRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: '11111111-1111-4111-8111-111111111111',
+    user_id: 'user-1',
+    caller_app_id: 'caller-app-id',
+    caller_function: '',
+    slot: '',
+    target_app_id: 'target-app-id',
+    target_function: 'deploy',
+    mode: 'call',
+    status: 'active',
+    monthly_cap_credits: 5000,
+    spent_credits_period: 0,
+    period_start: '2026-06-01T00:00:00.000Z',
+    constraints: {},
+    created_by: 'user',
+    created_at: '2026-06-01T00:00:00.000Z',
+    updated_at: '2026-06-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+// Session-auth mock for grant routes: resolves the account session and serves
+// agent_function_grants + apps handle joins. No live DB required.
+function grantSessionMock(grants: Record<string, unknown>[] = []): typeof fetch {
+  return (async (input: Request | URL | string) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === 'https://supabase.test/auth/v1/user') {
+      return jsonResponse({
+        id: 'user-1',
+        email: 'founder@example.com',
+        user_metadata: {},
+      });
+    }
+    if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
+      return jsonResponse([{ id: 'user-1' }]);
+    }
+    if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
+      return jsonResponse([{ tier: 'free' }]);
+    }
+    if (url.includes('/rest/v1/agent_function_grants?')) {
+      return jsonResponse(grants);
+    }
+    if (url.includes('/rest/v1/apps?')) {
+      return jsonResponse([
+        { id: 'caller-app-id', slug: 'caller', name: 'Caller' },
+        { id: 'target-app-id', slug: 'target', name: 'Target' },
+      ]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+}
+
+Deno.test({
+  name: 'launch facade: grant, wiring, and settings routes require an account session',
+  // The api_token auth path constructs a supabase-js client whose auth
+  // auto-refresh interval cannot be stopped from test code.
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    await withLaunchEnv(
+      async () => {
+        const attempts: Array<{ path: string; init?: RequestInit }> = [
+          { path: '/api/launch/grants' },
+          {
+            path: '/api/launch/grants',
+            init: {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                callerAppId: 'caller-app-id',
+                targetAppId: 'target-app-id',
+                targetFunction: 'deploy',
+              }),
+            },
+          },
+          {
+            path: '/api/launch/grants/11111111-1111-4111-8111-111111111111',
+            init: {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status: 'revoked' }),
+            },
+          },
+          {
+            path: '/api/launch/grants/11111111-1111-4111-8111-111111111111',
+            init: { method: 'DELETE' },
+          },
+          {
+            path:
+              '/api/launch/grants/11111111-1111-4111-8111-111111111111/approve',
+            init: {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({}),
+            },
+          },
+          { path: '/api/launch/wiring/targets' },
+          { path: '/api/launch/agents/deploy-helper/wiring' },
+          { path: '/api/launch/agents/deploy-helper/caller-trust' },
+          { path: '/api/launch/settings' },
+          {
+            path: '/api/launch/settings',
+            init: {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ agentGrantAutoApprove: true }),
+            },
+          },
+        ];
+
+        for (const attempt of attempts) {
+          const init = attempt.init || {};
+          const response = await handleLaunch(
+            new Request(`https://ultralight.test${attempt.path}`, {
+              ...init,
+              headers: {
+                ...(init.headers || {}),
+                Authorization: `Bearer ${TEST_API_TOKEN}`,
+              },
+            }),
+          );
+          const body = await response.json() as { error?: string };
+
+          assertEquals(response.status, 403, `${attempt.init?.method || 'GET'} ${attempt.path}`);
+          assertStringIncludes(
+            body.error || '',
+            'account session',
+            attempt.path,
+          );
+        }
+      },
+      apiTokenAuthMock(),
+    );
+  },
+});
+
+Deno.test('launch facade: grants list returns AgentGrantListResponse shape', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request('https://ultralight.test/api/launch/grants', {
+          headers: { Authorization: 'Bearer browser-session-token' },
+        }),
+      );
+      const body = await response.json() as {
+        grants: Array<{
+          id: string;
+          status: string;
+          targetFunction: string;
+          callerApp: { id: string; name: string | null };
+          targetApp: { id: string; name: string | null };
+        }>;
+        generatedAt: string;
+      };
+
+      assertEquals(response.status, 200);
+      assertEquals(Array.isArray(body.grants), true);
+      assertEquals(typeof body.generatedAt, 'string');
+      assertEquals(body.grants.length, 1);
+      assertEquals(body.grants[0].id, '11111111-1111-4111-8111-111111111111');
+      assertEquals(body.grants[0].status, 'active');
+      assertEquals(body.grants[0].targetFunction, 'deploy');
+      // Agent handles are joined so the UI can render names without N lookups.
+      assertEquals(body.grants[0].callerApp.name, 'Caller');
+      assertEquals(body.grants[0].targetApp.name, 'Target');
+    },
+    grantSessionMock([grantRow()]),
+  );
+});
+
+Deno.test('launch facade: grants status filter rejects unknown values', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request(
+          'https://ultralight.test/api/launch/grants?status=bogus',
+          { headers: { Authorization: 'Bearer browser-session-token' } },
+        ),
+      );
+      const body = await response.json() as { error?: string };
+      assertEquals(response.status, 400);
+      assertStringIncludes(body.error || '', 'status must be one of');
+    },
+    grantSessionMock([grantRow()]),
+  );
+});
+
+Deno.test('launch facade: settings report the agentic-approval preference', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request('https://ultralight.test/api/launch/settings', {
+          headers: { Authorization: 'Bearer browser-session-token' },
+        }),
+      );
+      const body = await response.json() as {
+        agentGrantAutoApprove: boolean;
+        generatedAt: string;
+      };
+      assertEquals(response.status, 200);
+      assertEquals(typeof body.agentGrantAutoApprove, 'boolean');
+      assertEquals(typeof body.generatedAt, 'string');
+    },
+    (async (input: Request | URL | string) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === 'https://supabase.test/auth/v1/user') {
+        return jsonResponse({
+          id: 'user-1',
+          email: 'founder@example.com',
+          user_metadata: {},
+        });
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
+        return jsonResponse([{ id: 'user-1' }]);
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
+        return jsonResponse([{ tier: 'free' }]);
+      }
+      if (
+        url.includes('/rest/v1/users?') &&
+        url.includes('agent_grant_autoapprove')
+      ) {
+        return jsonResponse([{ agent_grant_autoapprove: true }]);
+      }
+      return jsonResponse([]);
+    }) as typeof fetch,
+  );
+});
+
+Deno.test('launch facade: status and openapi advertise grant/wiring routes', async () => {
+  await withLaunchEnv(async () => {
+    const statusResponse = await handleLaunch(
+      new Request('https://ultralight.test/api/launch/status'),
+    );
+    const status = await statusResponse.json() as {
+      apiRoutes: string[];
+      endpoints: Record<string, string | undefined>;
+    };
+    assertEquals(statusResponse.status, 200);
+    assertEquals(status.endpoints.grants !== undefined, true);
+    assertEquals(status.endpoints.wiring, '/api/launch/agents/{id}/wiring');
+    assertEquals(
+      status.endpoints.callerTrust,
+      '/api/launch/agents/{id}/caller-trust',
+    );
+    assertEquals(status.endpoints.wiringTargets, '/api/launch/wiring/targets?q={query}');
+    assertEquals(status.endpoints.settings, '/api/launch/settings');
+    assertEquals(status.apiRoutes.includes('GET /api/launch/grants'), true);
+    assertEquals(status.apiRoutes.includes('POST /api/launch/grants'), true);
+    assertEquals(
+      status.apiRoutes.includes('POST /api/launch/grants/:id/approve'),
+      true,
+    );
+    assertEquals(
+      status.apiRoutes.includes('DELETE /api/launch/grants/:id'),
+      true,
+    );
+    assertEquals(
+      status.apiRoutes.includes('GET /api/launch/agents/:id/wiring'),
+      true,
+    );
+    assertEquals(
+      status.apiRoutes.includes('GET /api/launch/agents/:id/caller-trust'),
+      true,
+    );
+    assertEquals(status.apiRoutes.includes('GET /api/launch/settings'), true);
+    assertEquals(status.apiRoutes.includes('PATCH /api/launch/settings'), true);
+
+    const openapiResponse = await handleLaunch(
+      new Request('https://ultralight.test/api/launch/openapi.json'),
+    );
+    const spec = await openapiResponse.json() as {
+      paths: Record<string, unknown>;
+      components?: { schemas?: Record<string, unknown> };
+    };
+    assertEquals(openapiResponse.status, 200);
+    assertEquals(Boolean(spec.paths['/api/launch/grants']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/grants/{id}']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/grants/{id}/approve']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/agents/{id}/wiring']), true);
+    assertEquals(
+      Boolean(spec.paths['/api/launch/agents/{id}/caller-trust']),
+      true,
+    );
+    assertEquals(Boolean(spec.paths['/api/launch/wiring/targets']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/settings']), true);
+    assertEquals(
+      Boolean(spec.components?.schemas?.AgentGrantSummary),
+      true,
+    );
+    assertEquals(
+      Boolean(spec.components?.schemas?.AgentGrantListResponse),
+      true,
+    );
+    assertEquals(Boolean(spec.components?.schemas?.AgentWiringView), true);
+    assertEquals(
+      Boolean(spec.components?.schemas?.AgentCallerTrustSummary),
+      true,
+    );
+  });
+});
