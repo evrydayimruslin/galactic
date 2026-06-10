@@ -101,6 +101,66 @@ export interface AgentGrantListResponse {
   generatedAt: string;
 }
 
+// Approve a pending request (pending -> active), optionally setting a cap.
+export interface AgentGrantApproveRequest {
+  monthlyCapCredits?: number | null;
+}
+
+export interface AgentGrantUpdateRequest {
+  // null = explicitly uncapped.
+  monthlyCapCredits?: number | null;
+  status?: "active" | "revoked";
+}
+
+// A developer-declared slot (manifest `imports`) shown in the wiring UI, with
+// its current binding (if the user has wired it) surfaced inline.
+export interface AgentImportSlot {
+  name: string;
+  description: string | null;
+  signature: string | null;
+  expectedFunctions: string[];
+  // The active grant bound to this slot, if any.
+  binding: AgentGrantSummary | null;
+}
+
+// An Agent the user could bind a slot to (owned, installed, or accessible),
+// with the functions eligible to fill it.
+export interface AgentWiringTarget {
+  app: { id: string; slug: string | null; name: string | null };
+  relationship: "owned" | "installed" | "accessible";
+  visibility: string;
+  functions: { name: string; description: string | null }[];
+}
+
+// Egress-trust signal shown at grant time: what the caller Agent can do with
+// the data it receives. The operator owns the trust decision (surface + warn,
+// not block — locked decision 4).
+export interface AgentCallerTrustSummary {
+  app: { id: string; slug: string | null; name: string | null };
+  visibility: string;
+  ownedByUser: boolean;
+  // Declared runtime permissions implying outbound data egress.
+  hasNetworkEgress: boolean;
+  declaredPermissions: string[];
+  codeFingerprint: string | null;
+}
+
+// The full wiring view for one Agent: its declared slots (+ bindings), the
+// raw grants it holds (outbound), and the grants pointing at it (inbound),
+// plus pending requests awaiting approval.
+export interface AgentWiringView {
+  app: { id: string; slug: string | null; name: string | null };
+  // Outbound: slots this Agent declares and the user can bind.
+  slots: AgentImportSlot[];
+  // Outbound: active raw grants (no slot) this Agent holds.
+  outboundGrants: AgentGrantSummary[];
+  // Inbound: active grants letting OTHER Agents call this one.
+  inboundGrants: AgentGrantSummary[];
+  // Pending requests (default-deny inbox) awaiting the user's approval.
+  pendingRequests: AgentGrantSummary[];
+  generatedAt: string;
+}
+
 // Signed caller-context claims (HMAC; minted server-side, verified at the
 // per-Agent MCP chokepoint). NOT signed with WORKER_SECRET — that secret is
 // exposed inside the sandbox and could be read by app code.

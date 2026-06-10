@@ -30,6 +30,12 @@ export interface AppManifest {
   // at deploy time so the runtime can authorize cross-Agent calls and so
   // Agent pages can surface which callers want access (P5 grant model).
   external_functions?: ManifestExternalDependency[];
+  // Abstract capability slots this Agent calls via ultralight.use("name").
+  // The developer declares a logical port (NOT a concrete target); the USER
+  // binds each slot to a function on an Agent they own/installed — including
+  // private Agents the developer could never name. These are hints that
+  // prepopulate the wiring UI; the binding (a grant) is the real authority.
+  imports?: Record<string, ManifestSlotImport>;
   widgets?: WidgetDeclaration[];
   context_sources?: WidgetContextSourceDeclaration[];
   routines?: RoutineDeclaration[];
@@ -47,6 +53,17 @@ export interface ManifestExternalDependency {
   // (P5); the runtime gate currently treats every dependency identically,
   // so the manifest must not record an authorization level nothing honors.
   access?: 'read';
+}
+
+export interface ManifestSlotImport {
+  // Human-readable description of what this slot needs ("a source of stock
+  // levels"). Shown in the wiring UI so the user knows what to bind.
+  description?: string;
+  // Optional expected call shape, e.g. "getStock(sku: string) -> { qty }".
+  // Used only to rank eligible targets in the picker; not enforced.
+  signature?: string;
+  // Optional hint of the function name(s) the slot expects on the target.
+  functions?: string[];
 }
 
 export type ManifestHttpAuthMode = 'user' | 'public';
@@ -977,6 +994,44 @@ function validateManifestExternalFunctions(
       });
     }
   });
+}
+
+function validateManifestImports(
+  value: unknown,
+  errors: ManifestValidationError[],
+): void {
+  if (value === undefined) return;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    errors.push({ path: 'imports', message: 'imports must be an object' });
+    return;
+  }
+
+  for (const [slotName, slot] of Object.entries(value)) {
+    const slotPath = `imports.${slotName}`;
+    if (!slotName.trim()) {
+      errors.push({ path: 'imports', message: 'slot names must be non-empty' });
+    }
+    if (!slot || typeof slot !== 'object' || Array.isArray(slot)) {
+      errors.push({ path: slotPath, message: 'slot must be an object' });
+      continue;
+    }
+    const entry = slot as Record<string, unknown>;
+    for (const field of ['description', 'signature']) {
+      if (entry[field] !== undefined && typeof entry[field] !== 'string') {
+        errors.push({ path: `${slotPath}.${field}`, message: `${field} must be a string` });
+      }
+    }
+    if (
+      entry.functions !== undefined &&
+      (!Array.isArray(entry.functions) ||
+        entry.functions.some((fn) => typeof fn !== 'string' || !fn.trim()))
+    ) {
+      errors.push({
+        path: `${slotPath}.functions`,
+        message: 'functions must be an array of non-empty strings',
+      });
+    }
+  }
 }
 
 function validateOptionalStringArray(
@@ -2437,6 +2492,7 @@ export function validateManifest(input: unknown): ManifestValidationResult {
   }
 
   validateManifestExternalFunctions(manifest.external_functions, errors);
+  validateManifestImports(manifest.imports, errors);
 
   if (
     manifest.env !== undefined &&

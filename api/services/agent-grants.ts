@@ -14,9 +14,16 @@ import {
   type AgentGrantCreateRequest,
   type AgentGrantOrigin,
   type AgentGrantResolution,
+  type AgentGrantSummary,
   type AgentSlotBinding,
   DEFAULT_GRANT_MONTHLY_CAP_CREDITS,
 } from "../../shared/contracts/agent-grants.ts";
+
+export interface AppHandle {
+  id: string;
+  slug: string | null;
+  name: string | null;
+}
 
 interface DbConfig {
   baseUrl: string;
@@ -539,4 +546,216 @@ export async function listGrants(input: {
   if (input.targetAppId) filters.push(`target_app_id=eq.${input.targetAppId}`);
   const rows = await dbGet(db, filters.join("&"));
   return rows.map(mapRow);
+}
+
+// Whether the user has opted the connected agent into APPROVING grants via
+// ul.grants (default false — the secure floor requires a website action).
+export async function getUserGrantAutoApprove(userId: string): Promise<boolean> {
+  const db = getDbConfig();
+  if (!db) return false;
+  try {
+    const response = await fetch(
+      `${db.baseUrl}/rest/v1/users?id=eq.${userId}&select=agent_grant_autoapprove&limit=1`,
+      { headers: db.headers },
+    );
+    if (!response.ok) return false;
+    const rows = await response.json().catch(() => []);
+    return Array.isArray(rows) && rows[0]?.agent_grant_autoapprove === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function setUserGrantAutoApprove(
+  userId: string,
+  value: boolean,
+): Promise<void> {
+  const db = getDbConfig();
+  if (!db) {
+    throw new RequestValidationError("Grant storage is not configured", 503);
+  }
+  const response = await fetch(
+    `${db.baseUrl}/rest/v1/users?id=eq.${userId}`,
+    {
+      method: "PATCH",
+      headers: { ...db.headers, Prefer: "return=minimal" },
+      body: JSON.stringify({ agent_grant_autoapprove: value }),
+    },
+  );
+  if (!response.ok) {
+    throw new RequestValidationError("Failed to update preference", 500);
+  }
+}
+
+export async function getGrant(
+  userId: string,
+  grantId: string,
+): Promise<AgentFunctionGrant | null> {
+  const db = getDbConfig();
+  if (!db) return null;
+  const rows = await dbGet(
+    db,
+    `user_id=eq.${userId}&id=eq.${grantId}&select=*&limit=1`,
+  );
+  return rows[0] ? mapRow(rows[0]) : null;
+}
+
+// Resolve {id, slug, name} for a set of app ids in one query, so grant lists
+// can render Agent names without N round-trips.
+export async function fetchAppHandles(
+  ids: string[],
+): Promise<Map<string, AppHandle>> {
+  const map = new Map<string, AppHandle>();
+  const unique = Array.from(new Set(ids.filter(Boolean)));
+  if (unique.length === 0) return map;
+  const db = getDbConfig();
+  if (!db) return map;
+  try {
+    const response = await fetch(
+      `${db.baseUrl}/rest/v1/apps?id=in.(${unique.join(",")})&select=id,slug,name`,
+      { headers: db.headers },
+    );
+    if (!response.ok) return map;
+    const rows = await response.json().catch(() => []);
+    if (Array.isArray(rows)) {
+      for (const row of rows as AppHandle[]) map.set(row.id, row);
+    }
+  } catch {
+    // Best-effort labels; callers fall back to ids.
+  }
+  return map;
+}
+
+function handleFor(map: Map<string, AppHandle>, id: string): AppHandle {
+  return map.get(id) ?? { id, slug: null, name: null };
+}
+
+export function toGrantSummary(
+  grant: AgentFunctionGrant,
+  apps: Map<string, AppHandle>,
+): AgentGrantSummary {
+  return {
+    id: grant.id,
+    callerApp: handleFor(apps, grant.callerAppId),
+    targetApp: handleFor(apps, grant.targetAppId),
+    callerFunction: grant.callerFunction,
+    slot: grant.slot,
+    targetFunction: grant.targetFunction,
+    mode: grant.mode,
+    status: grant.status,
+    monthlyCapCredits: grant.monthlyCapCredits,
+    spentCreditsPeriod: grant.spentCreditsPeriod,
+    periodStart: grant.periodStart,
+    createdBy: grant.createdBy,
+    updatedAt: grant.updatedAt,
+  };
+}
+
+// Grants joined with Agent handles, ready for the wiring UI / ul.grants.
+export async function listGrantSummaries(input: {
+  userId: string;
+  callerAppId?: string;
+  targetAppId?: string;
+  status?: "active" | "pending" | "revoked";
+}): Promise<AgentGrantSummary[]> {
+  const grants = (await listGrants(input)).filter(
+    (g) => !input.status || g.status === input.status,
+  );
+  const apps = await fetchAppHandles(
+    grants.flatMap((g) => [g.callerAppId, g.targetAppId]),
+  );
+  return grants.map((g) => toGrantSummary(g, apps));
+}
+
+// Approve a pending request: re-run the safety invariant (the row was
+// auto-created at call time; approval is the moment the user authorizes, so
+// re-verify the user still controls the caller and can call the target),
+// then flip pending -> active and set the cap.
+export async function approvePendingGrant(
+  userId: string,
+  grantId: string,
+  options: { monthlyCapCredits?: number | null } = {},
+): Promise<AgentFunctionGrant | null> {
+  const db = getDbConfig();
+  if (!db) {
+    throw new RequestValidationError("Grant storage is not configured", 503);
+  }
+  const grant = await getGrant(userId, grantId);
+  if (!grant) return null;
+  if (grant.status === "active") return grant;
+
+  const [callerApp, targetApp] = await Promise.all([
+    loadApp(db, grant.callerAppId),
+    loadApp(db, grant.targetAppId),
+  ]);
+  if (!callerApp || !targetApp) {
+    throw new RequestValidationError("Caller or target Agent not found", 404);
+  }
+  if (!(await userControlsCaller(db, userId, callerApp))) {
+    throw new RequestValidationError(
+      "You can only approve grants for Agents you own or have installed",
+      403,
+    );
+  }
+  if (!(await userCanCallTarget(db, userId, targetApp, grant.targetFunction))) {
+    throw new RequestValidationError(
+      "You cannot approve access to a function you cannot call yourself",
+      403,
+    );
+  }
+
+  const cap = options.monthlyCapCredits === undefined
+    ? (grant.monthlyCapCredits ?? DEFAULT_GRANT_MONTHLY_CAP_CREDITS)
+    : options.monthlyCapCredits;
+
+  return await patchGrant(db, userId, grantId, {
+    status: "active",
+    monthly_cap_credits: cap,
+    // Reset the spend window so an approval starts a fresh month.
+    spent_credits_period: 0,
+    period_start: new Date().toISOString(),
+  });
+}
+
+export async function setGrantCap(
+  userId: string,
+  grantId: string,
+  monthlyCapCredits: number | null,
+): Promise<AgentFunctionGrant | null> {
+  const db = getDbConfig();
+  if (!db) {
+    throw new RequestValidationError("Grant storage is not configured", 503);
+  }
+  if (
+    monthlyCapCredits !== null &&
+    (!Number.isFinite(monthlyCapCredits) || monthlyCapCredits < 0)
+  ) {
+    throw new RequestValidationError(
+      "monthlyCapCredits must be null or a non-negative number",
+    );
+  }
+  return await patchGrant(db, userId, grantId, {
+    monthly_cap_credits: monthlyCapCredits,
+  });
+}
+
+async function patchGrant(
+  db: DbConfig,
+  userId: string,
+  grantId: string,
+  patch: Record<string, unknown>,
+): Promise<AgentFunctionGrant | null> {
+  const response = await fetch(
+    `${db.baseUrl}/rest/v1/agent_function_grants?id=eq.${grantId}&user_id=eq.${userId}`,
+    {
+      method: "PATCH",
+      headers: { ...db.headers, Prefer: "return=representation" },
+      body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
+    },
+  );
+  if (!response.ok) {
+    throw new RequestValidationError("Failed to update grant", 500);
+  }
+  const rows = await response.json().catch(() => []);
+  return Array.isArray(rows) && rows[0] ? mapRow(rows[0] as AgentGrantRow) : null;
 }
