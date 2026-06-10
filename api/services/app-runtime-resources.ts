@@ -685,13 +685,6 @@ function collectManifestExternalFunctionDependencies(
   }
 }
 
-export function resolveManifestExternalFunctionDependencies(
-  app: Pick<RuntimeApp, "manifest">,
-): RuntimeAppCallDependency[] {
-  const byApp: RuntimeDependencyMap = new Map();
-  collectManifestExternalFunctionDependencies(app, byApp);
-  return flattenRuntimeAppCallDependencies(byApp);
-}
 
 function collectRoutineActorAppCallDependencies(
   caller: RuntimeCallerLike | undefined,

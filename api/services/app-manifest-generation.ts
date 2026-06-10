@@ -155,6 +155,17 @@ export function generateManifestFromParseResult(
   };
 }
 
+// Regenerated manifests must not silently drop the publisher's declared
+// cross-Agent dependencies — external_functions is an authorization-bearing
+// declaration, not derivable from source parsing.
+function carryForwardExternalFunctions(
+  existing: AppManifest | null,
+  generated: AppManifest,
+): AppManifest {
+  if (!existing || existing.external_functions === undefined) return generated;
+  return { ...generated, external_functions: existing.external_functions };
+}
+
 export function mergeManifestWithParseResult(
   app: ManifestAppIdentity,
   existingManifest: AppManifest | null,
@@ -167,7 +178,7 @@ export function mergeManifestWithParseResult(
   if (existingManifest?.type === 'mcp' && hasManifestFunctionContracts(existingManifest)) {
     if (!hasRichManifestDescriptions(existingManifest)) {
       return {
-        manifest: autoManifest,
+        manifest: carryForwardExternalFunctions(existingManifest, autoManifest),
         parseResult,
         source: 'generated',
       };
@@ -204,7 +215,7 @@ export function mergeManifestWithParseResult(
   }
 
   return {
-    manifest: autoManifest,
+    manifest: carryForwardExternalFunctions(existingManifest, autoManifest),
     parseResult,
     source: 'generated',
   };
@@ -231,11 +242,14 @@ export async function hydrateManifestForSource(input: {
   }
 
   return {
-    manifest: generateManifestFromParseResult(
-      input.app,
-      parseResult,
-      input.version,
-      { entryFileName: input.filename || 'index.ts' },
+    manifest: carryForwardExternalFunctions(
+      existingManifest,
+      generateManifestFromParseResult(
+        input.app,
+        parseResult,
+        input.version,
+        { entryFileName: input.filename || 'index.ts' },
+      ),
     ),
     parseResult,
     source: existingManifest ? 'merged' : 'generated',

@@ -27,7 +27,7 @@ export interface AppManifest {
 export interface ManifestExternalDependency {
     app: string;
     functions: string[];
-    access?: 'read' | 'write';
+    access?: 'read';
 }
 export type ManifestHttpAuthMode = 'user' | 'public';
 export type ManifestHttpBillingMode = 'owner' | 'caller';

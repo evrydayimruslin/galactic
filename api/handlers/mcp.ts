@@ -150,10 +150,13 @@ function appDisplayName(app: App): string {
   return app.name || app.slug || app.id;
 }
 
+// Skills.md is the auto-generated function documentation. Resource listing,
+// counts, skills.json, and resources/read must all agree, so this keys
+// strictly on generated content being present — app_type='skill' apps
+// without generated docs advertise nothing (their content ships through the
+// skills_index/skill_reader function convention instead).
 function hasSkillContext(app: App): boolean {
-  return Boolean(
-    app.skills_md?.trim() || (app.app_type === "skill" && app.storage_key),
-  );
+  return Boolean(app.skills_md?.trim());
 }
 
 function buildSkillsDiscoveryPayload(
@@ -1177,7 +1180,8 @@ async function handleResourcesRead(
   // Skills.md — auto-generated function documentation, always served in full
   const expectedSkillsUri = `ultralight://app/${appId}/skills.md`;
   if (uri === expectedSkillsUri) {
-    if (!hasSkillContext(app) || !app.skills_md) {
+    const skillsMd = hasSkillContext(app) ? app.skills_md : null;
+    if (!skillsMd) {
       return jsonRpcErrorResponse(
         id,
         -32002,
@@ -1188,7 +1192,7 @@ async function handleResourcesRead(
     const contents: MCPResourceContent[] = [{
       uri: uri,
       mimeType: "text/markdown",
-      text: app.skills_md,
+      text: skillsMd,
     }];
 
     return jsonRpcResponse(id, { contents });

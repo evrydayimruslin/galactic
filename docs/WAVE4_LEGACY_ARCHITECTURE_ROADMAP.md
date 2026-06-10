@@ -706,12 +706,12 @@ Implemented in this tranche:
   so the first-party widget declaration now points at the canonical
   `email_inbox` / `widget_email_inbox_data` contract instead of the legacy
   `widget_approval_queue` declaration
-- added
-  [scripts/checks/check-widget-contracts.mjs](../scripts/checks/check-widget-contracts.mjs)
-  and wired it into
+- added `scripts/checks/check-widget-contracts.mjs` and wired it into
   [.github/workflows/api-ci.yml](../.github/workflows/api-ci.yml)
   so first-party manifests cannot silently drift back to legacy widget
-  declarations
+  declarations (retired 2026-06-10 by the Phase 1 launch pivot — widgets
+  left the launch scope; see
+  [LAUNCH_PIVOT_DECISIONS.md](LAUNCH_PIVOT_DECISIONS.md))
 
 ### PR4.11 Browser And Desktop Auth Migration Cleanup
 

@@ -41,7 +41,8 @@ Rules:
   free (no per-call price) so callers can browse before buying.
 - `skill_reader` takes `{ skill_id }` and returns
   `{ id, content, format: "markdown" }`. Price it with standard per-function
-  pricing (`pricing_config.functions.skill_reader`) and grant free calls via
+  pricing — `ul.set({ function_prices: { skill_reader: ... } })`, stored as
+  `pricing_config.functions.skill_reader` — and grant free calls via
   `free_calls` if you want a preview allowance.
 - Store skill bodies however you like — inline strings, `ultralight.store`,
   or bundled data. The platform does not interpret them.

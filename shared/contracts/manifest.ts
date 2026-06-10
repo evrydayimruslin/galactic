@@ -43,7 +43,10 @@ export interface ManifestExternalDependency {
   app: string;
   // Function names on the target Agent this app wants to call.
   functions: string[];
-  access?: 'read' | 'write';
+  // 'write' is reserved until cross-Agent grants enforce the distinction
+  // (P5); the runtime gate currently treats every dependency identically,
+  // so the manifest must not record an authorization level nothing honors.
+  access?: 'read';
 }
 
 export type ManifestHttpAuthMode = 'user' | 'public';
@@ -966,13 +969,11 @@ function validateManifestExternalFunctions(
         message: 'functions must be a non-empty array of strings',
       });
     }
-    if (
-      dep.access !== undefined && dep.access !== 'read' &&
-      dep.access !== 'write'
-    ) {
+    if (dep.access !== undefined && dep.access !== 'read') {
       errors.push({
         path: `${depPath}.access`,
-        message: 'access must be "read" or "write"',
+        message:
+          'external_functions access "write" is reserved until cross-Agent grants land; omit or use "read"',
       });
     }
   });

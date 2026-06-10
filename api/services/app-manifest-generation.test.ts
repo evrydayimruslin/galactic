@@ -68,6 +68,55 @@ Deno.test("manifest generation: preserves rich uploaded manifests and merges mis
   assertExists(hydrated.manifest.functions?.addTask);
 });
 
+Deno.test("manifest generation: external_functions survive regeneration when descriptions are weak", async () => {
+  const externalFunctions = [
+    { app: "email-ops", functions: ["listDrafts"], access: "read" as const },
+  ];
+  // Placeholder-style descriptions force the regenerate branch, which must
+  // still carry forward the publisher's declared cross-Agent dependencies.
+  const hydrated = await hydrateManifestForSource({
+    app: { name: "Caller", slug: "caller" },
+    existingManifest: {
+      name: "Caller",
+      version: "1.0.0",
+      type: "mcp",
+      entry: { functions: "index.ts" },
+      external_functions: externalFunctions,
+      functions: {
+        run: { description: "Function run" },
+      },
+    },
+    sourceCode: "export async function run() { return { ok: true }; }",
+    filename: "index.ts",
+    version: "2.0.0",
+  });
+
+  assertEquals(hydrated.source, "generated");
+  assertEquals(hydrated.manifest.external_functions, externalFunctions);
+});
+
+Deno.test("manifest generation: external_functions survive full regeneration of non-mcp manifests", async () => {
+  const externalFunctions = [
+    { app: "crm", functions: ["logLead"] },
+  ];
+  const hydrated = await hydrateManifestForSource({
+    app: { name: "Caller", slug: "caller" },
+    existingManifest: {
+      name: "Caller",
+      version: "1.0.0",
+      type: "mcp",
+      entry: { functions: "index.ts" },
+      external_functions: externalFunctions,
+      // No functions map -> hydration falls through to full regeneration.
+    },
+    sourceCode: "export async function run() { return { ok: true }; }",
+    filename: "index.ts",
+    version: "2.0.0",
+  });
+
+  assertEquals(hydrated.manifest.external_functions, externalFunctions);
+});
+
 Deno.test("manifest generation: rebuilds stored manifest coverage from source when manifest.json is missing", async () => {
   const stored = await resolveStoredManifestCoverage({
     app: { name: "Search", slug: "search" },

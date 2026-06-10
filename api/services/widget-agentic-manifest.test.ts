@@ -195,3 +195,37 @@ Deno.test("agentic widget manifest: rejects unsafe context/action shapes", () =>
     true,
   );
 });
+
+Deno.test("manifest external_functions: accepts read dependencies, rejects reserved write access", () => {
+  const valid = validateManifest(baseManifest({
+    external_functions: [
+      { app: "email-ops", functions: ["listDrafts"], access: "read" },
+      { app: "crm", functions: ["logLead"] },
+    ],
+  }));
+  assertEquals(
+    valid.errors.filter((error) => error.path.startsWith("external_functions")),
+    [],
+  );
+
+  const invalid = validateManifest(baseManifest({
+    external_functions: [
+      { app: "crm", functions: ["logLead"], access: "write" },
+      { app: "", functions: [] },
+    ],
+  }));
+  assertEquals(
+    invalid.errors.some((error) => error.path === "external_functions.0.access"),
+    true,
+  );
+  assertEquals(
+    invalid.errors.some((error) => error.path === "external_functions.1.app"),
+    true,
+  );
+  assertEquals(
+    invalid.errors.some((error) =>
+      error.path === "external_functions.1.functions"
+    ),
+    true,
+  );
+});

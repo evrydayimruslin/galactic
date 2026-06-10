@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Launch-focused Ultralight web surface for external-agent tool install, discovery, widgets, and Light wallet.",
+  "description": "Launch-focused Ultralight web surface for Agent install, discovery, public Agent pages, and the wallet.",
   "engines": {
     "node": ">=20.0.0"
   },
