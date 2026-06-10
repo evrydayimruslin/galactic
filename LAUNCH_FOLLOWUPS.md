@@ -10,6 +10,37 @@ This file tracks issues intentionally deferred while we land the launch PR
 sequence. It is not a backlog for everything in the repo; it is a scoped list
 of launch-relevant follow-ups discovered during implementation.
 
+## Phase 4a (2026-06-10)
+
+- **AGENT_CALLER_SECRET** must be provisioned (wrangler secret) before
+  cross-Agent calls work in production. It signs the X-Ultralight-Caller
+  identity token and MUST be a server-only secret — deliberately distinct
+  from WORKER_SECRET, which is exposed inside the sandbox. Falls back to
+  ROUTINE_ACTOR_TOKEN_SECRET / SUPABASE_SERVICE_ROLE_KEY if unset.
+- **Deploy ordering:** apply migration
+  `20260610130000_agent_function_grants.sql` (table +
+  `increment_agent_grant_spend` RPC) before the API Worker deploy.
+- **Documented residuals (4c scope), not bugs:**
+  - AI inference cost incurred by a cross-Agent call is debited to the
+    user's wallet but is NOT yet counted against the per-grant monthly cap
+    (the dynamic-worker path surfaces `aiCostLight: 0`, shared with the
+    existing receipt display). The cap bounds the call's app+infra charge;
+    the user's wallet balance still bounds total AI spend. Plumb AI cost
+    into the cap when 4c adds attribution.
+  - The per-grant monthly cap is SOFT: the call that crosses the cap is
+    allowed (post-paid metering, no reservation), matching the existing
+    per-function budget semantics. Spend recording is now atomic
+    (no lost updates), so the cap trips correctly thereafter.
+  - Caller-context tokens have a `jti` but no consumption store, so a leaked
+    token is replayable within its 60s TTL (only ever asserts the caller's
+    own id for already-granted targets). Add a jti store in 4c if needed.
+  - Bypass closure (codemode, executeSDKTool/platform `ul.call`) + log
+    attribution (`caller_app_id` on mcp_call_logs) + access-policy caller
+    threading remain 4c.
+- **Grant-creation surface (web wiring UI, `ul.grants` agentic tool, the
+  pending-approval inbox, egress-trust display) is 4b** — 4a is the runtime
+  spine only.
+
 ## Phase 3 (2026-06-10)
 
 - **Tools → Agents alias windows:** the rename shipped with full backward

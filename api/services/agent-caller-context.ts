@@ -22,7 +22,10 @@ import {
 } from "../../shared/contracts/agent-grants.ts";
 
 const TOKEN_PREFIX = "ulc1.";
-const DEFAULT_TTL_SECONDS = 120;
+// Short-lived: a cross-Agent hop chain completes in well under a minute, and a
+// tight TTL bounds replay of a leaked token (jti consumption is a 4c
+// hardening). Generous enough for deep chains within the hop ceiling.
+const DEFAULT_TTL_SECONDS = 60;
 
 export class AgentCallerContextError extends Error {}
 

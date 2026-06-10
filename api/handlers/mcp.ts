@@ -93,8 +93,7 @@ import {
   createPendingGrantRequest,
   recordGrantSpend,
   resolveCallerGrant,
-  resolveCallerGrantDependencies,
-  resolveSlotBindings,
+  resolveCallerGrantBindings,
 } from "../services/agent-grants.ts";
 import {
   mintCallerContextToken,
@@ -1572,6 +1571,89 @@ async function handleToolsCall(
     );
   }
 
+  // Cross-Agent grant check (P5): when this call comes from another Agent
+  // (verified caller context present), the user grant is AUTHORITATIVE for the
+  // A→B hop — it does not additionally require the connected-agent policy. A
+  // call with no active grant is denied and a pending request is recorded so
+  // it surfaces in the user's approval inbox.
+  let callerGrantId: string | null = null;
+  if (callerContext.callerApp) {
+    const caller = callerContext.callerApp;
+    // An Agent never needs a grant to call its own functions.
+    if (caller.appId !== app.id) {
+      const resolution = await resolveCallerGrant({
+        userId,
+        callerAppId: caller.appId,
+        callerFunction: caller.callerFunction,
+        targetAppId: app.id,
+        targetFunction: rawName,
+      });
+      if (!resolution.allowed) {
+        // Only seed a pending request for a real function — never let a
+        // caller spam the approval inbox with bogus target function names.
+        const knownExports = Array.isArray(app.exports) ? app.exports : [];
+        if (
+          resolution.reason === "no_grant" && knownExports.length > 0 &&
+          !knownExports.includes(rawName)
+        ) {
+          return jsonRpcErrorResponse(id, INVALID_PARAMS, `Unknown tool: ${name}`);
+        }
+        let pendingRequestId = resolution.pendingRequestId ?? null;
+        if (resolution.reason === "no_grant") {
+          pendingRequestId = await createPendingGrantRequest({
+            userId,
+            callerAppId: caller.appId,
+            callerFunction: caller.callerFunction,
+            targetAppId: app.id,
+            targetFunction: rawName,
+          });
+        }
+        const message = resolution.reason === "cap_exceeded"
+          ? `This cross-Agent connection has reached its monthly credit cap for ${rawName}.`
+          : `Your connected Agent has not been granted permission to call ${rawName} on this Agent.`;
+        return jsonRpcErrorResponse(id, -32003, message, {
+          type: resolution.reason === "cap_exceeded"
+            ? "AGENT_GRANT_CAP_EXCEEDED"
+            : "AGENT_GRANT_REQUIRED",
+          callerAppId: caller.appId,
+          targetAppId: app.id,
+          functionName: rawName,
+          pendingRequestId,
+          configureUrl: buildCallerPermissionConfigureUrl(
+            requestBaseUrl(request),
+            app.id,
+            rawName,
+          ),
+        });
+      }
+      callerGrantId = resolution.grant?.id ?? null;
+    }
+  } else if (
+    callerUsesApiToken(callerContext) ||
+    callerUsesRoutineActorToken(callerContext)
+  ) {
+    // Direct call from the user's connected agent (no caller-Agent context):
+    // the existing always/ask/never policy governs.
+    const permission = await enforceCallerFunctionPermission({
+      userId,
+      appId: app.id,
+      functionName: rawName,
+      configureUrl: buildCallerPermissionConfigureUrl(
+        requestBaseUrl(request),
+        app.id,
+        rawName,
+      ),
+    });
+    if (!permission.allowed) {
+      return jsonRpcErrorResponse(
+        id,
+        permission.rpcCode,
+        permission.message,
+        permission.details,
+      );
+    }
+  }
+
   // Permission check: for private apps, verify non-owner has access to this function
   // Also enforce granular constraints (IP, time window, budget, expiry, arg whitelist) — Pro feature
   if (app.visibility === "private") {
@@ -1681,80 +1763,6 @@ async function handleToolsCall(
           );
         }
       }
-    }
-  }
-
-  // Cross-Agent grant check (P5): when this call comes from another Agent
-  // (verified caller context present), the user grant is AUTHORITATIVE for the
-  // A→B hop — it does not additionally require the connected-agent policy. A
-  // call with no active grant is denied and a pending request is recorded so
-  // it surfaces in the user's approval inbox.
-  let callerGrantId: string | null = null;
-  if (callerContext.callerApp) {
-    const caller = callerContext.callerApp;
-    // An Agent never needs a grant to call its own functions.
-    if (caller.appId !== app.id) {
-      const resolution = await resolveCallerGrant({
-        userId,
-        callerAppId: caller.appId,
-        callerFunction: caller.callerFunction,
-        targetAppId: app.id,
-        targetFunction: rawName,
-      });
-      if (!resolution.allowed) {
-        let pendingRequestId = resolution.pendingRequestId ?? null;
-        if (resolution.reason === "no_grant") {
-          pendingRequestId = await createPendingGrantRequest({
-            userId,
-            callerAppId: caller.appId,
-            callerFunction: caller.callerFunction,
-            targetAppId: app.id,
-            targetFunction: rawName,
-          });
-        }
-        const message = resolution.reason === "cap_exceeded"
-          ? `This cross-Agent connection has reached its monthly credit cap for ${rawName}.`
-          : `Your connected Agent has not been granted permission to call ${rawName} on this Agent.`;
-        return jsonRpcErrorResponse(id, -32003, message, {
-          type: resolution.reason === "cap_exceeded"
-            ? "AGENT_GRANT_CAP_EXCEEDED"
-            : "AGENT_GRANT_REQUIRED",
-          callerAppId: caller.appId,
-          targetAppId: app.id,
-          functionName: rawName,
-          pendingRequestId,
-          configureUrl: buildCallerPermissionConfigureUrl(
-            requestBaseUrl(request),
-            app.id,
-            rawName,
-          ),
-        });
-      }
-      callerGrantId = resolution.grant?.id ?? null;
-    }
-  } else if (
-    callerUsesApiToken(callerContext) ||
-    callerUsesRoutineActorToken(callerContext)
-  ) {
-    // Direct call from the user's connected agent (no caller-Agent context):
-    // the existing always/ask/never policy governs.
-    const permission = await enforceCallerFunctionPermission({
-      userId,
-      appId: app.id,
-      functionName: rawName,
-      configureUrl: buildCallerPermissionConfigureUrl(
-        requestBaseUrl(request),
-        app.id,
-        rawName,
-      ),
-    });
-    if (!permission.allowed) {
-      return jsonRpcErrorResponse(
-        id,
-        permission.rpcCode,
-        permission.message,
-        permission.details,
-      );
     }
   }
 
@@ -2409,16 +2417,18 @@ async function executeAppFunction(
     );
     // P5: a user's active cross-Agent grants (and slot bindings) let granted
     // calls be EXPRESSED in-sandbox even when the developer never declared
-    // them; the target still authorizes each call via the grant check.
+    // them; the target still authorizes each call via the grant check. One
+    // indexed read derives both the dependency set and the slot bindings.
     let grantDependencies: typeof manifestDependencies = [];
-    let slotBindings: Awaited<ReturnType<typeof resolveSlotBindings>> = [];
+    let slotBindings: Awaited<
+      ReturnType<typeof resolveCallerGrantBindings>
+    >["slots"] = [];
     let callerContextToken: string | undefined;
     if (userId && userId !== ANONYMOUS_USER_ID) {
       try {
-        [grantDependencies, slotBindings] = await Promise.all([
-          resolveCallerGrantDependencies(userId, app.id),
-          resolveSlotBindings(userId, app.id),
-        ]);
+        const bindings = await resolveCallerGrantBindings(userId, app.id);
+        grantDependencies = bindings.dependencies;
+        slotBindings = bindings.slots;
       } catch (err) {
         console.warn("[MCP] Failed to resolve cross-Agent grants:", err);
       }

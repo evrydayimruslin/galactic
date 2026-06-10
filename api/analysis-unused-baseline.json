@@ -19,6 +19,12 @@
       ]
     },
     {
+      "file": "handlers/agent-grants-enforcement.test.ts",
+      "files": [
+        "handlers/agent-grants-enforcement.test.ts"
+      ]
+    },
+    {
       "file": "handlers/app-referrals.test.ts",
       "files": [
         "handlers/app-referrals.test.ts"
@@ -184,7 +190,10 @@
         "listGrants",
         "setGrantStatus"
       ],
-      "file": "services/agent-grants.ts"
+      "file": "services/agent-grants.ts",
+      "types": [
+        "CallerGrantBindings"
+      ]
     },
     {
       "file": "services/agentic-interface-actions.ts",

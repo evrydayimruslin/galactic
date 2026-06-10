@@ -67,8 +67,9 @@ function mapRow(row: AgentGrantRow): AgentFunctionGrant {
     id: row.id,
     userId: row.user_id,
     callerAppId: row.caller_app_id,
-    callerFunction: row.caller_function,
-    slot: row.slot,
+    // '' sentinel (NOT NULL in the DB) surfaces as null = "any" on the contract.
+    callerFunction: row.caller_function ? row.caller_function : null,
+    slot: row.slot ? row.slot : null,
     targetAppId: row.target_app_id,
     targetFunction: row.target_function,
     mode: row.mode === "subscribe" ? "subscribe" : "call",
@@ -186,8 +187,10 @@ export async function resolveCallerGrant(input: {
   return { allowed: false, grant: null, reason: "no_grant" };
 }
 
-// Post-call: attribute the credits charged to the grant's monthly window,
-// resetting the window first if it has rolled into a new month.
+// Post-call: attribute the credits charged to the grant's monthly window via
+// an ATOMIC RPC. A single UPDATE avoids the lost-update race of a
+// read-modify-write — concurrent cross-Agent calls each increment correctly —
+// and resets the window in the same statement when the month has rolled.
 export async function recordGrantSpend(
   grantId: string,
   creditsCharged: number,
@@ -198,26 +201,15 @@ export async function recordGrantSpend(
   if (!db) return;
 
   try {
-    const rows = await dbGet(db, `id=eq.${grantId}&select=*&limit=1`);
-    const grant = rows[0] ? mapRow(rows[0]) : null;
-    if (!grant) return;
-
-    const rolled = !sameMonth(grant.periodStart, nowMs);
-    const nextSpent = (rolled ? 0 : grant.spentCreditsPeriod) + creditsCharged;
-    const body: Record<string, unknown> = {
-      spent_credits_period: nextSpent,
-      updated_at: new Date(nowMs).toISOString(),
-    };
-    if (rolled) body.period_start = new Date(nowMs).toISOString();
-
-    await fetch(
-      `${db.baseUrl}/rest/v1/agent_function_grants?id=eq.${grantId}`,
-      {
-        method: "PATCH",
-        headers: { ...db.headers, Prefer: "return=minimal" },
-        body: JSON.stringify(body),
-      },
-    );
+    await fetch(`${db.baseUrl}/rest/v1/rpc/increment_agent_grant_spend`, {
+      method: "POST",
+      headers: { ...db.headers, Prefer: "return=minimal" },
+      body: JSON.stringify({
+        p_grant_id: grantId,
+        p_amount: creditsCharged,
+        p_now: new Date(nowMs).toISOString(),
+      }),
+    });
   } catch (err) {
     // Spend accounting is best-effort; never block the (already-completed)
     // call on a metering write failure.
@@ -250,8 +242,9 @@ export async function createPendingGrantRequest(input: {
         body: JSON.stringify([{
           user_id: input.userId,
           caller_app_id: input.callerAppId,
-          caller_function: input.callerFunction,
-          slot: null,
+          // '' sentinel matches the NOT NULL columns + bare-column unique index.
+          caller_function: input.callerFunction ?? "",
+          slot: "",
           target_app_id: input.targetAppId,
           target_function: input.targetFunction,
           mode: "call",
@@ -271,51 +264,23 @@ export async function createPendingGrantRequest(input: {
 
 // ── Caller-side resolution (so granted calls can be EXPRESSED in-sandbox) ──
 
-// Active grants for (user, caller) become runtime dependencies, so the
-// in-sandbox ultralight.call gate (__ulAllowsAppCall) permits granted targets
-// even when the developer never declared them. Target-side still authorizes.
-export async function resolveCallerGrantDependencies(
-  userId: string,
-  callerAppId: string,
-): Promise<RuntimeAppCallDependency[]> {
-  const db = getDbConfig();
-  if (!db) return [];
-  try {
-    const rows = await dbGet(
-      db,
-      [
-        `user_id=eq.${userId}`,
-        `caller_app_id=eq.${callerAppId}`,
-        `status=eq.active`,
-        `mode=eq.call`,
-        `select=target_app_id,target_function`,
-        `limit=500`,
-      ].join("&"),
-    );
-    const byApp = new Map<string, Set<string>>();
-    for (const row of rows) {
-      const set = byApp.get(row.target_app_id) ?? new Set<string>();
-      set.add(row.target_function);
-      byApp.set(row.target_app_id, set);
-    }
-    return Array.from(byApp.entries()).map(([app, fns]) => ({
-      app,
-      functions: Array.from(fns).sort(),
-      access: "read" as const,
-    }));
-  } catch (err) {
-    console.warn("[AGENT-GRANTS] Failed to resolve caller dependencies:", err);
-    return [];
-  }
+export interface CallerGrantBindings {
+  // Active grants as runtime dependencies, so the in-sandbox ultralight.call
+  // gate (__ulAllowsAppCall) permits granted targets even when the developer
+  // never declared them. The target still authorizes every call.
+  dependencies: RuntimeAppCallDependency[];
+  // Logical port -> concrete target bindings for ultralight.use().
+  slots: AgentSlotBinding[];
 }
 
-// Slot bindings (logical port -> concrete target) for ultralight.use().
-export async function resolveSlotBindings(
+// Single active-grants read for (user, caller); derives BOTH the dependency
+// set and the slot bindings (avoids two round-trips on the hot path).
+export async function resolveCallerGrantBindings(
   userId: string,
   callerAppId: string,
-): Promise<AgentSlotBinding[]> {
+): Promise<CallerGrantBindings> {
   const db = getDbConfig();
-  if (!db) return [];
+  if (!db) return { dependencies: [], slots: [] };
   try {
     const rows = await dbGet(
       db,
@@ -324,29 +289,43 @@ export async function resolveSlotBindings(
         `caller_app_id=eq.${callerAppId}`,
         `status=eq.active`,
         `mode=eq.call`,
-        `slot=not.is.null`,
         `select=slot,target_app_id,target_function`,
         `limit=500`,
       ].join("&"),
     );
+
+    const byApp = new Map<string, Set<string>>();
     const bySlot = new Map<string, { app: string; fns: Set<string> }>();
     for (const row of rows) {
-      if (!row.slot) continue;
-      const entry = bySlot.get(row.slot) ??
-        { app: row.target_app_id, fns: new Set<string>() };
-      // A slot binds to exactly one target app; ignore conflicting rows.
-      if (entry.app !== row.target_app_id) continue;
-      entry.fns.add(row.target_function);
-      bySlot.set(row.slot, entry);
+      const set = byApp.get(row.target_app_id) ?? new Set<string>();
+      set.add(row.target_function);
+      byApp.set(row.target_app_id, set);
+
+      if (row.slot) {
+        const entry = bySlot.get(row.slot) ??
+          { app: row.target_app_id, fns: new Set<string>() };
+        // A slot binds to exactly one target app; ignore conflicting rows.
+        if (entry.app !== row.target_app_id) continue;
+        entry.fns.add(row.target_function);
+        bySlot.set(row.slot, entry);
+      }
     }
-    return Array.from(bySlot.entries()).map(([slot, entry]) => ({
-      slot,
-      targetAppId: entry.app,
-      functions: Array.from(entry.fns).sort(),
-    }));
+
+    return {
+      dependencies: Array.from(byApp.entries()).map(([app, fns]) => ({
+        app,
+        functions: Array.from(fns).sort(),
+        access: "read" as const,
+      })),
+      slots: Array.from(bySlot.entries()).map(([slot, entry]) => ({
+        slot,
+        targetAppId: entry.app,
+        functions: Array.from(entry.fns).sort(),
+      })),
+    };
   } catch (err) {
-    console.warn("[AGENT-GRANTS] Failed to resolve slot bindings:", err);
-    return [];
+    console.warn("[AGENT-GRANTS] Failed to resolve caller grant bindings:", err);
+    return { dependencies: [], slots: [] };
   }
 }
 
@@ -356,19 +335,35 @@ interface AppAccessRow {
   id: string;
   owner_id: string;
   visibility: string;
+  slug: string | null;
 }
 
 async function loadApp(
   db: DbConfig,
   appId: string,
 ): Promise<AppAccessRow | null> {
+  // deleted_at is null — never wire a soft-deleted Agent.
   const response = await fetch(
-    `${db.baseUrl}/rest/v1/apps?id=eq.${appId}&select=id,owner_id,visibility&limit=1`,
+    `${db.baseUrl}/rest/v1/apps?id=eq.${appId}&deleted_at=is.null&select=id,owner_id,visibility,slug&limit=1`,
     { headers: db.headers },
   );
   if (!response.ok) return null;
   const rows = await response.json().catch(() => []);
   return Array.isArray(rows) && rows[0] ? rows[0] as AppAccessRow : null;
+}
+
+// Grants store the RAW function name (no slug prefix), matching what the
+// runtime resolves at the chokepoint (toRawMcpFunctionName). Strip a leading
+// "<slug>_" so a prefixed input still matches at call time.
+function toRawFunctionName(
+  name: string,
+  slug: string | null | undefined,
+): string {
+  const trimmed = name.trim();
+  if (slug && trimmed.startsWith(`${slug}_`)) {
+    return trimmed.slice(slug.length + 1);
+  }
+  return trimmed;
 }
 
 async function userControlsCaller(
@@ -423,8 +418,8 @@ export async function createGrant(
 
   const callerAppId = request.callerAppId?.trim();
   const targetAppId = request.targetAppId?.trim();
-  const targetFunction = request.targetFunction?.trim();
-  if (!callerAppId || !targetAppId || !targetFunction) {
+  const rawTargetFunction = request.targetFunction?.trim();
+  if (!callerAppId || !targetAppId || !rawTargetFunction) {
     throw new RequestValidationError(
       "callerAppId, targetAppId, and targetFunction are required",
     );
@@ -441,6 +436,12 @@ export async function createGrant(
   ]);
   if (!callerApp) throw new RequestValidationError("Caller Agent not found", 404);
   if (!targetApp) throw new RequestValidationError("Target Agent not found", 404);
+
+  // Store the raw function name (matches runtime resolution).
+  const targetFunction = toRawFunctionName(rawTargetFunction, targetApp.slug);
+  const callerFunction = request.callerFunction
+    ? toRawFunctionName(request.callerFunction, callerApp.slug)
+    : "";
 
   // SAFETY INVARIANT — delegation, not expansion.
   if (!(await userControlsCaller(db, userId, callerApp))) {
@@ -463,8 +464,8 @@ export async function createGrant(
   const payload = {
     user_id: userId,
     caller_app_id: callerAppId,
-    caller_function: request.callerFunction?.trim() || null,
-    slot: request.slot?.trim() || null,
+    caller_function: callerFunction,
+    slot: request.slot?.trim() || "",
     target_app_id: targetAppId,
     target_function: targetFunction,
     mode: "call",

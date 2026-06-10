@@ -18,10 +18,13 @@ CREATE TABLE IF NOT EXISTS public.agent_function_grants (
   user_id uuid NOT NULL,
   -- The Agent that makes the call.
   caller_app_id uuid NOT NULL,
-  -- Narrow the grant to a single function of the caller; NULL = any function.
-  caller_function text,
-  -- Logical port name from the caller manifest's imports; NULL = raw grant.
-  slot text,
+  -- Narrow the grant to a single function of the caller; '' = any function.
+  -- (Empty-string sentinel, not NULL, so a plain unique index + PostgREST
+  -- on_conflict can dedupe these — an expression index over COALESCE() is not
+  -- inferrable by on_conflict.)
+  caller_function text NOT NULL DEFAULT '',
+  -- Logical port name from the caller manifest's imports; '' = raw grant.
+  slot text NOT NULL DEFAULT '',
   -- The Agent whose function is being called.
   target_app_id uuid NOT NULL,
   target_function text NOT NULL,
@@ -60,14 +63,15 @@ CREATE TABLE IF NOT EXISTS public.agent_function_grants (
 
 ALTER TABLE public.agent_function_grants OWNER TO postgres;
 
--- One row per (user, caller, caller_function, slot, target, target_function, mode).
--- COALESCE the nullable narrowing columns so NULL and '' collapse to one key.
+-- One row per (user, caller, caller_function, slot, target, target_function,
+-- mode). Plain bare-column index (the narrowing columns are NOT NULL DEFAULT
+-- '') so PostgREST on_conflict can infer it for upserts.
 CREATE UNIQUE INDEX IF NOT EXISTS agent_function_grants_unique
   ON public.agent_function_grants (
     user_id,
     caller_app_id,
-    COALESCE(caller_function, ''),
-    COALESCE(slot, ''),
+    caller_function,
+    slot,
     target_app_id,
     target_function,
     mode
@@ -88,3 +92,52 @@ CREATE INDEX IF NOT EXISTS agent_function_grants_target_idx
 ALTER TABLE public.agent_function_grants ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.agent_function_grants FROM PUBLIC, anon, authenticated;
 GRANT ALL ON TABLE public.agent_function_grants TO service_role;
+
+-- Atomic per-grant monthly spend accounting. A single UPDATE avoids the
+-- lost-update race of a read-modify-write: concurrent cross-Agent calls each
+-- increment correctly, and the monthly window resets in the same statement
+-- when period_start has rolled into a prior calendar month (UTC).
+CREATE OR REPLACE FUNCTION public.increment_agent_grant_spend(
+  p_grant_id uuid,
+  p_amount numeric,
+  p_now timestamptz DEFAULT now()
+) RETURNS numeric
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_new_spend numeric;
+BEGIN
+  IF p_amount IS NULL OR p_amount <= 0 THEN
+    SELECT spent_credits_period INTO v_new_spend
+    FROM public.agent_function_grants WHERE id = p_grant_id;
+    RETURN COALESCE(v_new_spend, 0);
+  END IF;
+
+  UPDATE public.agent_function_grants
+  SET
+    spent_credits_period = CASE
+      WHEN date_trunc('month', period_start AT TIME ZONE 'UTC')
+         = date_trunc('month', p_now AT TIME ZONE 'UTC')
+      THEN spent_credits_period + p_amount
+      ELSE p_amount
+    END,
+    period_start = CASE
+      WHEN date_trunc('month', period_start AT TIME ZONE 'UTC')
+         = date_trunc('month', p_now AT TIME ZONE 'UTC')
+      THEN period_start
+      ELSE p_now
+    END,
+    updated_at = p_now
+  WHERE id = p_grant_id
+  RETURNING spent_credits_period INTO v_new_spend;
+
+  RETURN COALESCE(v_new_spend, 0);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.increment_agent_grant_spend(uuid, numeric, timestamptz)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.increment_agent_grant_spend(uuid, numeric, timestamptz)
+  TO service_role;

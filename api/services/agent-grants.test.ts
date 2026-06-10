@@ -336,47 +336,33 @@ Deno.test("createGrant: rejects a self-referential grant", async () => {
   );
 });
 
-Deno.test("recordGrantSpend: rolls the window and resets spend across a month boundary", async () => {
-  let patchedBody: Record<string, unknown> | null = null;
+Deno.test("recordGrantSpend: delegates to the atomic increment RPC", async () => {
+  let rpcUrl: string | null = null;
+  let rpcBody: Record<string, unknown> | null = null;
   const handler: Handler = (url, init) => {
-    if (init?.method === "PATCH") {
-      patchedBody = JSON.parse(String(init.body));
-      return jsonResponse([]);
-    }
-    // GET the grant: period_start in April, spend 400.
-    return jsonResponse([
-      grantRow({
-        spent_credits_period: 400,
-        period_start: new Date(Date.UTC(2026, 3, 1)).toISOString(),
-      }),
-    ]);
+    rpcUrl = url.pathname;
+    rpcBody = JSON.parse(String(init?.body));
+    return jsonResponse(150);
   };
   await withMockedDb(handler, async () => {
     await recordGrantSpend("grant-1", 30, NOW);
-    assert(patchedBody !== null);
-    // Window rolled ⇒ spend resets to just this charge, period_start advances.
-    assertEquals(patchedBody?.spent_credits_period, 30);
-    assert(typeof patchedBody?.period_start === "string");
+    // Routes to the atomic RPC (not a racy read-modify-write PATCH).
+    assertEquals(rpcUrl, "/rest/v1/rpc/increment_agent_grant_spend");
+    assertEquals(rpcBody?.p_grant_id, "grant-1");
+    assertEquals(rpcBody?.p_amount, 30);
+    assert(typeof rpcBody?.p_now === "string");
   });
 });
 
-Deno.test("recordGrantSpend: accumulates within the same month", async () => {
-  let patchedBody: Record<string, unknown> | null = null;
-  const handler: Handler = (url, init) => {
-    if (init?.method === "PATCH") {
-      patchedBody = JSON.parse(String(init.body));
-      return jsonResponse([]);
-    }
-    return jsonResponse([
-      grantRow({
-        spent_credits_period: 120,
-        period_start: new Date(Date.UTC(2026, 5, 1)).toISOString(),
-      }),
-    ]);
+Deno.test("recordGrantSpend: ignores non-positive charges without hitting the DB", async () => {
+  let called = false;
+  const handler: Handler = () => {
+    called = true;
+    return jsonResponse(0);
   };
   await withMockedDb(handler, async () => {
-    await recordGrantSpend("grant-1", 30, NOW);
-    assertEquals(patchedBody?.spent_credits_period, 150);
-    assertEquals(patchedBody?.period_start, undefined);
+    await recordGrantSpend("grant-1", 0, NOW);
+    await recordGrantSpend("grant-1", -5, NOW);
+    assertEquals(called, false);
   });
 });
