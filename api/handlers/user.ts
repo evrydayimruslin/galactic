@@ -1019,7 +1019,10 @@ export async function handleUser(request: Request): Promise<Response> {
   // (requireAccountSessionForByok): agent API tokens and routine actors must
   // not be able to install or rotate the user's provider keys.
   if (path === "/api/user/byok" || path.startsWith("/api/user/byok/")) {
-    if (authSource === "api_token" || authSource === "routine_actor") {
+    if (
+      authSource === "api_token" || authSource === "routine_actor" ||
+      authSource === "sandbox_actor"
+    ) {
       return error("BYOK and inference settings require an account session", 403);
     }
   }

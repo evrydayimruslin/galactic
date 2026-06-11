@@ -187,3 +187,9 @@ export function callerUsesRoutineActorToken(
 ): boolean {
   return caller.authState === 'authenticated' && caller.authSource === 'routine_actor';
 }
+
+export function callerUsesSandboxActorToken(
+  caller: Pick<RequestCallerContext, 'authSource' | 'authState'>,
+): boolean {
+  return caller.authState === 'authenticated' && caller.authSource === 'sandbox_actor';
+}

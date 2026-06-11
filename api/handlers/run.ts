@@ -43,6 +43,7 @@ import {
   callerHasRequiredScope,
   callerUsesApiToken,
   callerUsesRoutineActorToken,
+  callerUsesSandboxActorToken,
   type RequestCallerContext,
   resolveRequestCallerContext,
 } from "../services/request-caller-context.ts";
@@ -176,7 +177,10 @@ export async function handleRun(
       return error("Token missing required scope: apps:call", 403);
     }
 
-    if (callerUsesApiToken(caller) || callerUsesRoutineActorToken(caller)) {
+    if (
+      callerUsesApiToken(caller) || callerUsesRoutineActorToken(caller) ||
+      callerUsesSandboxActorToken(caller)
+    ) {
       const permission = await enforceCallerFunctionPermission({
         userId,
         appId: app.id,

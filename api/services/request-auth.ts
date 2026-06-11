@@ -7,11 +7,19 @@ import {
   type RoutineActorTokenClaims,
   verifyRoutineActorToken,
 } from "./routine-auth.ts";
+import {
+  isSandboxActorToken,
+  verifySandboxActorToken,
+} from "./sandbox-actor.ts";
 import { getUserTier } from "./tier-enforcement.ts";
 import { getUserFromToken, isApiToken } from "./tokens.ts";
 
 export type RequestTokenSourcePolicy = "bearer_only" | "bearer_or_cookie";
-export type RequestAuthSource = "supabase" | "api_token" | "routine_actor";
+export type RequestAuthSource =
+  | "supabase"
+  | "api_token"
+  | "routine_actor"
+  | "sandbox_actor";
 
 export interface VerifiedSupabaseUser {
   id: string;
@@ -173,6 +181,26 @@ export async function authenticateRequest(
           : {}),
         capabilities: claims.capabilities,
       },
+    };
+  }
+
+  if (isSandboxActorToken(token)) {
+    const verified = await verifySandboxActorToken(token);
+    if (!verified) {
+      throw new Error("Invalid or expired sandbox actor token");
+    }
+    const { claims } = verified;
+    return {
+      id: claims.user_id,
+      email: claims.user_email,
+      tier: claims.user_tier || "free",
+      authSource: "sandbox_actor",
+      provisional: claims.provisional,
+      tokenId: claims.jti,
+      // ['*'] => unrestricted; otherwise the executing app + its declared deps.
+      tokenAppIds: claims.app_ids,
+      tokenFunctionNames: claims.function_names,
+      scopes: claims.scopes,
     };
   }
 

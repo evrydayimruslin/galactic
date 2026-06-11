@@ -14,6 +14,7 @@
 import type { ExecutionResult, RuntimeConfig } from "./sandbox.ts";
 import { consumeAiSpend } from "../services/ai-spend-tracker.ts";
 import { debitCloudOperation } from "../services/cloud-usage.ts";
+import { mintSandboxAuthToken } from "../services/sandbox-actor.ts";
 
 interface DynamicWorkerEntrypointExports {
   DatabaseBinding(
@@ -144,7 +145,20 @@ export async function executeInDynamicSandbox(
     const callBaseUrl = JSON.stringify(
       config.baseUrl || config.workerBaseUrl || "",
     );
-    const callAuthToken = JSON.stringify(config.authToken || "");
+    // SECURITY: never inject the caller's raw bearer. App code can read this
+    // value (e.g. globalThis.ultralight.call.toString()), so mint a short-lived
+    // token scoped to this app's allowed call targets instead. The user's real
+    // ul_ key never enters the sandbox.
+    const sandboxAuthToken = await mintSandboxAuthToken({
+      user: config.user,
+      appId: config.appId,
+      executionId: config.executionId,
+      hasBroadCallPermission: config.permissions.includes("app:call"),
+      dependencyAppIds: (config.appCallDependencies || [])
+        .map((dependency) => dependency.app)
+        .filter(Boolean),
+    });
+    const callAuthToken = JSON.stringify(sandboxAuthToken || "");
     const callerContextToken = JSON.stringify(config.callerContextToken || "");
     const slotBindingsJson = JSON.stringify(config.slotBindings || []);
     const callDependenciesJson = JSON.stringify(

@@ -999,11 +999,24 @@ Deno.test("sandbox: app call can use a declared read dependency", async () => {
     );
   }) as typeof fetch;
 
+  const prevEnv = globalThis.__env;
+  globalThis.__env = {
+    ...(prevEnv || {}),
+    AGENT_CALLER_SECRET: "sandbox-test-secret",
+  } as typeof globalThis.__env;
   try {
     const config = makeConfig({
       permissions: [],
       baseUrl: "https://api.example.test",
+      // The raw caller bearer; it must NEVER reach the inter-app call.
       authToken: "token-123",
+      user: {
+        id: "user-1",
+        email: "dev@example.com",
+        displayName: null,
+        avatarUrl: null,
+        tier: "free",
+      },
       appCallDependencies: [
         { app: "target-app", functions: ["readSummary"], access: "read" },
       ],
@@ -1019,9 +1032,12 @@ Deno.test("sandbox: app call can use a declared read dependency", async () => {
     assertEquals(result.success, true);
     assertEquals(result.result, { ok: true });
     assertEquals(capturedUrl, "https://api.example.test/mcp/target-app");
-    assertEquals(capturedAuth, "Bearer token-123");
+    // The leak fix: a short-lived scoped token is sent, never the raw bearer.
+    assert(capturedAuth.startsWith("Bearer ule_v1_"));
+    assert(!capturedAuth.includes("token-123"));
   } finally {
     globalThis.fetch = originalFetch;
+    globalThis.__env = prevEnv;
   }
 });
 
@@ -1060,11 +1076,23 @@ Deno.test("sandbox: app call can use a declared write dependency", async () => {
       { headers: { "Content-Type": "application/json" } },
     )) as typeof fetch;
 
+  const prevEnv = globalThis.__env;
+  globalThis.__env = {
+    ...(prevEnv || {}),
+    AGENT_CALLER_SECRET: "sandbox-test-secret",
+  } as typeof globalThis.__env;
   try {
     const config = makeConfig({
       permissions: [],
       baseUrl: "https://api.example.test",
       authToken: "token-123",
+      user: {
+        id: "user-1",
+        email: "dev@example.com",
+        displayName: null,
+        avatarUrl: null,
+        tier: "free",
+      },
       appCallDependencies: [
         { app: "target-app", functions: ["writeSummary"], access: "write" },
       ],
@@ -1081,6 +1109,7 @@ Deno.test("sandbox: app call can use a declared write dependency", async () => {
     assertEquals(result.result, { ok: true });
   } finally {
     globalThis.fetch = originalFetch;
+    globalThis.__env = prevEnv;
   }
 });
 

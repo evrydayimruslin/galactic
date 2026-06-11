@@ -13,6 +13,7 @@ import type { D1DataService } from "../services/d1-data.ts";
 import type { D1TestFixtureConfig } from "../services/d1-test-fixtures.ts";
 import type { CloudOperationMeteringContext } from "../services/cloud-usage.ts";
 import { buildEconomicIdempotencyKey } from "../services/economic-idempotency.ts";
+import { mintSandboxAuthToken } from "../services/sandbox-actor.ts";
 
 // User context passed to apps (subset of full user, safe to expose)
 export interface UserContext {
@@ -55,8 +56,13 @@ export interface RuntimeConfig {
     anonKey: string;
     serviceKey?: string;
   };
-  // Inter-app calls: base URL + auth token for calling other apps via MCP
+  // Inter-app calls: base URL for calling other apps via MCP.
   baseUrl?: string;
+  // The caller's raw bearer. SECURITY: this must NOT be injected into the
+  // sandbox — app code can read injected values (e.g. via .toString()). The
+  // runtime mints a short-lived, app-scoped sandbox actor token
+  // (mintSandboxAuthToken) for ultralight.call instead; this field is retained
+  // only as incoming request context and is no longer read by either sandbox.
   authToken?: string;
   appCallDependencies?: RuntimeAppCallDependency[];
   // Signed caller-context token (X-Ultralight-Caller) minted server-side so a
@@ -1641,6 +1647,20 @@ export async function executeInSandbox(
   const logs: LogEntry[] = [];
   let aiCostLight = 0;
 
+  // SECURITY: the SDK's inter-app call uses this bearer, not the caller's raw
+  // token. Mint a short-lived token scoped to this app's allowed call targets
+  // so the user's real key never reaches sandbox code. Null when anonymous,
+  // which trips the existing "missing authToken" guard in call().
+  const sandboxAuthToken = await mintSandboxAuthToken({
+    user: config.user,
+    appId: config.appId,
+    executionId: config.executionId,
+    hasBroadCallPermission: config.permissions.includes("app:call"),
+    dependencyAppIds: (config.appCallDependencies || [])
+      .map((dependency) => dependency.app)
+      .filter(Boolean),
+  });
+
   const capturedConsole = {
     log: (...items: unknown[]) => {
       const message = items.map(formatLogItem).join(" ");
@@ -2090,7 +2110,7 @@ export async function executeInSandbox(
             "app:call permission or a matching dependency is required",
           );
         }
-        if (!config.baseUrl || !config.authToken) {
+        if (!config.baseUrl || !sandboxAuthToken) {
           throw new Error(
             "Inter-app calls not available (missing baseUrl or authToken)",
           );
@@ -2121,7 +2141,7 @@ export async function executeInSandbox(
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "Authorization": `Bearer ${config.authToken}`,
+              "Authorization": `Bearer ${sandboxAuthToken}`,
             },
             body: JSON.stringify(rpcRequest),
           },

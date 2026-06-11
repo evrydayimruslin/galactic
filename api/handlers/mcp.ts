@@ -80,6 +80,7 @@ import {
   callerHasRequiredScope,
   callerUsesApiToken,
   callerUsesRoutineActorToken,
+  callerUsesSandboxActorToken,
   type RequestCallerContext,
   resolveRequestCallerContext,
 } from "../services/request-caller-context.ts";
@@ -1628,10 +1629,13 @@ async function handleToolsCall(
     }
   } else if (
     callerUsesApiToken(callerContext) ||
-    callerUsesRoutineActorToken(callerContext)
+    callerUsesRoutineActorToken(callerContext) ||
+    callerUsesSandboxActorToken(callerContext)
   ) {
     // Direct call from the user's connected agent (no caller-Agent context):
-    // the existing always/ask/never policy governs.
+    // the existing always/ask/never policy governs. A sandbox_actor with no
+    // caller context means app code bypassed the SDK's call() (which always
+    // attaches one), so subject it to the same per-function policy.
     const permission = await enforceCallerFunctionPermission({
       userId,
       appId: app.id,

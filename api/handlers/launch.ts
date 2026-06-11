@@ -3038,7 +3038,11 @@ async function buildLaunchByokSummary(
 // api_token / routine_actor callers are rejected on every grant/wiring/settings
 // route (mirrors requireAccountSessionForByok).
 function requireAccountSessionForGrants(user: AuthUser): void {
-  if (user.authSource === "api_token" || user.authSource === "routine_actor") {
+  if (
+    user.authSource === "api_token" ||
+    user.authSource === "routine_actor" ||
+    user.authSource === "sandbox_actor"
+  ) {
     throw new RequestValidationError(
       "Cross-Agent grant management requires an account session",
       403,
@@ -5519,7 +5523,11 @@ function toLaunchApiKeySummary(token: ApiToken): LaunchApiKeySummary {
 }
 
 function requireAccountSessionForApiKeys(user: AuthUser): void {
-  if (user.authSource === "api_token" || user.authSource === "routine_actor") {
+  if (
+    user.authSource === "api_token" ||
+    user.authSource === "routine_actor" ||
+    user.authSource === "sandbox_actor"
+  ) {
     throw new RequestValidationError(
       "API key management requires an account session",
       403,
@@ -5528,7 +5536,11 @@ function requireAccountSessionForApiKeys(user: AuthUser): void {
 }
 
 function requireAccountSessionForWalletFunding(user: AuthUser): void {
-  if (user.authSource === "api_token" || user.authSource === "routine_actor") {
+  if (
+    user.authSource === "api_token" ||
+    user.authSource === "routine_actor" ||
+    user.authSource === "sandbox_actor"
+  ) {
     throw new RequestValidationError(
       "Wallet funding requires an account session",
       403,
@@ -5537,7 +5549,11 @@ function requireAccountSessionForWalletFunding(user: AuthUser): void {
 }
 
 function requireAccountSessionForAgentPermissions(user: AuthUser): void {
-  if (user.authSource === "api_token" || user.authSource === "routine_actor") {
+  if (
+    user.authSource === "api_token" ||
+    user.authSource === "routine_actor" ||
+    user.authSource === "sandbox_actor"
+  ) {
     throw new RequestValidationError(
       "Agent permission management requires an account session",
       403,
@@ -5546,7 +5562,11 @@ function requireAccountSessionForAgentPermissions(user: AuthUser): void {
 }
 
 function requireAccountSessionForFunctionRun(user: AuthUser): void {
-  if (user.authSource === "api_token" || user.authSource === "routine_actor") {
+  if (
+    user.authSource === "api_token" ||
+    user.authSource === "routine_actor" ||
+    user.authSource === "sandbox_actor"
+  ) {
     throw new RequestValidationError(
       "Launch website function runs require an account session",
       403,
@@ -5555,7 +5575,11 @@ function requireAccountSessionForFunctionRun(user: AuthUser): void {
 }
 
 function requireAccountSessionForByok(user: AuthUser): void {
-  if (user.authSource === "api_token" || user.authSource === "routine_actor") {
+  if (
+    user.authSource === "api_token" ||
+    user.authSource === "routine_actor" ||
+    user.authSource === "sandbox_actor"
+  ) {
     throw new RequestValidationError(
       "BYOK and inference settings require an account session",
       403,
