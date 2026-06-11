@@ -305,7 +305,7 @@ export class LaunchApiClient {
         // Deprecated alias kept for one rename window.
         amount_light: request.amountCredits,
         method: request.method,
-        terms_accepted: request.termsAccepted ?? true,
+        terms_accepted: request.termsAccepted,
         ...(request.billingAddress !== undefined
           ? { billing_address: request.billingAddress }
           : {}),
@@ -534,7 +534,11 @@ export class LaunchApiClient {
         };
         message = String(parsed.error || parsed.message || text);
       } catch {
-        // Keep the raw text response.
+        // Non-JSON error body (e.g. an upstream HTML error page): never
+        // surface raw markup or page-sized bodies in UI error states.
+        if (/^\s*</.test(text) || text.length > 300) {
+          message = `Launch API request failed (${response.status})`;
+        }
       }
       if (response.status === 401) {
         if (token) {

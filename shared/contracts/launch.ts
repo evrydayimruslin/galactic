@@ -441,7 +441,9 @@ export interface LaunchWalletFundingQuoteResponse {
 
 export interface LaunchWalletFundingIntentRequest
   extends LaunchWalletFundingQuoteRequest {
-  termsAccepted?: true;
+  // Required and literally `true`: this is a consent record — callers must
+  // collect explicit acceptance, never default it.
+  termsAccepted: true;
   billingAddress?: unknown;
   returnUrl?: string;
 }

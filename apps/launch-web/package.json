@@ -19,6 +19,7 @@
   },
   "packageManager": "pnpm@10.28.2",
   "dependencies": {
+    "@stripe/stripe-js": "^9.8.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

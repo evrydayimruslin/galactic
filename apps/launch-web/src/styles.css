@@ -2825,6 +2825,32 @@ button {
   font-size: 12px;
 }
 
+.topup-payment-element {
+  margin: 4px 0;
+  /* Reserve space while Stripe's iframe loads so the card doesn't jump. */
+  min-height: 80px;
+}
+
+.topup-terms {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--ul-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.topup-terms input {
+  margin-top: 1px;
+  accent-color: var(--ul-text);
+}
+
+.launch-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .wallet-table-card {
   overflow: hidden;
 }

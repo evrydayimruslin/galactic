@@ -33,6 +33,7 @@ interface LaunchShellProps {
 interface ButtonProps {
   children: ReactNode;
   className?: string;
+  disabled?: boolean;
   href?: string;
   icon?: IconName;
   onClick?: () => void;
@@ -207,6 +208,7 @@ export function Card({
 export function Button({
   children,
   className = "",
+  disabled = false,
   href,
   icon,
   onClick,
@@ -228,7 +230,7 @@ export function Button({
     );
   }
   return (
-    <button className={classes} onClick={onClick} type="button">
+    <button className={classes} disabled={disabled} onClick={onClick} type="button">
       {content}
     </button>
   );

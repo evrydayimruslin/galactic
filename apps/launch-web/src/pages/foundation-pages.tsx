@@ -42,6 +42,7 @@ import {
   signOutLaunch,
 } from "../lib/auth";
 import { launchApi } from "../lib/api";
+import { getStripe, type Stripe, type StripeElements } from "../lib/stripe";
 import {
   Avatar,
   Button,
@@ -3230,7 +3231,7 @@ export function WalletFoundationPage(
         )
         : null}
       {tab === "topup"
-        ? <WalletTopUpPanel earnedCredits={totals.earned} />
+        ? <WalletTopUpPanel earnedCredits={totals.earned} live={live} />
         : null}
       {tab === "receipts"
         ? <WalletReceiptsPanel receipts={liveReceiptRows(receipts)} />
@@ -3490,15 +3491,112 @@ function WalletBalancePanel({
   );
 }
 
+// Checkout lifecycle for the top-up flow. The PaymentIntent (created at
+// "creating") locks the charged amount, so any amount/method change discards
+// the in-flight checkout back to "idle". Credits land asynchronously — the
+// Stripe webhook settles the deposit — so success states refetch the wallet on
+// a short schedule instead of assuming an instant balance bump.
+type TopUpPhase =
+  | "idle"
+  | "creating"
+  | "collecting"
+  | "confirming"
+  | "succeeded"
+  | "processing";
+
+const TOPUP_SUCCESS_MESSAGE =
+  "Payment received. Credits are added once Stripe confirms the charge — usually within seconds.";
+const TOPUP_PROCESSING_MESSAGE =
+  "Bank transfer initiated. Credits are added when the transfer settles (ACH can take a few business days).";
+const TOPUP_VERIFY_MESSAGE =
+  "Bank verification needed. Stripe will send two small deposits to your account — follow the emailed instructions to verify, and the transfer completes after that.";
+
+// Captured synchronously on first render — before any effect can reset state
+// or strip the URL — and replayed from state so a dev StrictMode remount
+// re-applies it after the amount-reset effect runs. Stripe appends these
+// params to the return_url on redirect-based flows.
+function readStripeRedirectOutcome():
+  | "succeeded"
+  | "processing"
+  | "failed"
+  | null {
+  const params = new URLSearchParams(window.location.search);
+  const redirectStatus = params.get("redirect_status");
+  if (!params.get("payment_intent_client_secret") || !redirectStatus) {
+    return null;
+  }
+  for (
+    const key of [
+      "payment_intent",
+      "payment_intent_client_secret",
+      "redirect_status",
+    ]
+  ) {
+    params.delete(key);
+  }
+  const remaining = params.toString();
+  window.history.replaceState(
+    {},
+    "",
+    window.location.pathname + (remaining ? `?${remaining}` : ""),
+  );
+  if (redirectStatus === "succeeded") return "succeeded";
+  if (redirectStatus === "processing") return "processing";
+  return "failed";
+}
+
+// A confirm can complete after the panel unmounts (tab switch, navigation
+// mid-payment). Record the in-flight/terminal state in sessionStorage so a
+// remounted panel restores the outcome — or warns that a charge may have
+// happened — instead of offering a fresh checkout as if nothing did.
+const TOPUP_PENDING_RESULT_KEY = "ul-topup-pending-result";
+
+function readPendingTopUpResult(): string | null {
+  try {
+    return sessionStorage.getItem(TOPUP_PENDING_RESULT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writePendingTopUpResult(value: string | null): void {
+  try {
+    if (value === null) sessionStorage.removeItem(TOPUP_PENDING_RESULT_KEY);
+    else sessionStorage.setItem(TOPUP_PENDING_RESULT_KEY, value);
+  } catch {
+    // Storage unavailable (private mode): the in-place UI still works.
+  }
+}
+
 function WalletTopUpPanel(
-  { earnedCredits }: { earnedCredits: number },
+  { earnedCredits, live }: {
+    earnedCredits: number;
+    live: LaunchPageProps["live"];
+  },
 ): ReactElement {
   const [method, setMethod] = useState<PaymentMethod>("card");
   const [creditsAmount, setCreditsAmount] = useState(10000);
-  const [checkoutState, setCheckoutState] = useState<
-    "idle" | "creating" | "ready" | "error"
-  >("idle");
-  const [checkoutMessage, setCheckoutMessage] = useState("");
+  const [phase, setPhase] = useState<TopUpPhase>("idle");
+  const [message, setMessage] = useState("");
+  const [messageIsError, setMessageIsError] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  // ACH microdeposit fallback: Stripe's hosted page for verifying the bank.
+  const [verificationUrl, setVerificationUrl] = useState<string | null>(null);
+  const [redirectOutcome] = useState(readStripeRedirectOutcome);
+  const [checkout, setCheckout] = useState<
+    {
+      clientSecret: string;
+      publishableKey: string;
+      // The server-computed quote locked into the PaymentIntent — the ONLY
+      // amount the Pay button may display once a checkout exists.
+      quote: {
+        baseDollars: number;
+        feeDollars: number;
+        feeNote: string;
+        totalDollars: number;
+      };
+    } | null
+  >(null);
   const [liveQuote, setLiveQuote] = useState<
     {
       baseDollars: number;
@@ -3508,15 +3606,39 @@ function WalletTopUpPanel(
     } | null
   >(null);
   const quote = liveQuote || quoteTopUp(creditsAmount, method);
+  // Once an intent exists its server-locked quote is authoritative; before
+  // that, prefer the live server quote over the local-formula fallback.
+  const shownQuote = checkout?.quote ?? quote;
   const presets = method === "earnings"
     ? [1000, 2500, 10000, 25000, Math.floor(earnedCredits)]
     : [1000, 2500, 10000, 25000, 50000];
 
-  useEffect(() => {
-    if (method === "earnings") {
-      setLiveQuote(null);
-      return;
+  const selectMethod = (next: PaymentMethod) => {
+    setMethod(next);
+    if (next !== "earnings") {
+      // Paid methods accept 1,000–500,000 credits; clamp an out-of-range
+      // carry-over from the earnings "Max" preset.
+      setCreditsAmount((value) => Math.min(500000, Math.max(1000, value)));
     }
+  };
+
+  const paymentElementRef = useRef<HTMLDivElement | null>(null);
+  const stripeRef = useRef<Stripe | null>(null);
+  const elementsRef = useRef<StripeElements | null>(null);
+  const reloadTimersRef = useRef<number[]>([]);
+  // Invalidation token: bumped whenever the user abandons/restarts a checkout
+  // so a stale in-flight intent-create or confirm result can't clobber the UI.
+  const seqRef = useRef(0);
+  // The PaymentIntent amount is fixed at creation; while a confirm is in
+  // flight the user may already have been charged, so lock the inputs instead
+  // of allowing a reset.
+  const inputsLocked = phase === "confirming";
+
+  useEffect(() => {
+    // Clear immediately so a slow response can never leave a PREVIOUS
+    // amount's quote on screen for the new selection.
+    setLiveQuote(null);
+    if (method === "earnings") return;
     let cancelled = false;
     launchApi.walletTopUpQuote({ amountCredits: creditsAmount, method })
       .then((response) => {
@@ -3536,27 +3658,267 @@ function WalletTopUpPanel(
     };
   }, [creditsAmount, method]);
 
-  const createTopUpIntent = async () => {
-    if (method === "earnings") {
-      setCheckoutState("ready");
-      setCheckoutMessage(
-        "Earnings transfer is not wired into the launch API yet.",
+  // Amount/method changed: the prepared PaymentIntent no longer matches, so
+  // drop the checkout and start over (inputs are locked during confirm, so a
+  // possibly-charged intent can never be silently discarded here).
+  useEffect(() => {
+    seqRef.current += 1;
+    setCheckout(null);
+    setPhase("idle");
+    setMessage("");
+    setMessageIsError(false);
+    setVerificationUrl(null);
+  }, [creditsAmount, method]);
+
+  // Mount the Stripe Payment Element once an intent exists. The container div
+  // renders whenever `checkout` is set, so this effect runs after it exists.
+  useEffect(() => {
+    if (!checkout) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const stripe = await getStripe(checkout.publishableKey);
+        if (cancelled) return;
+        if (!stripe) {
+          throw new Error(
+            "Stripe.js failed to load. Check your network or ad blocker and try again.",
+          );
+        }
+        if (!paymentElementRef.current) {
+          throw new Error("Payment form failed to initialize.");
+        }
+        const elements = stripe.elements({
+          clientSecret: checkout.clientSecret,
+          appearance: { theme: "stripe" },
+        });
+        const paymentElement = elements.create("payment");
+        // Gate "collecting" on the iframe actually rendering: an enabled Pay
+        // button over an empty box (e.g. consumed client secret) is a dead end.
+        paymentElement.on("ready", () => {
+          if (!cancelled) setPhase("collecting");
+        });
+        paymentElement.on("loaderror", (event) => {
+          if (cancelled) return;
+          setCheckout(null);
+          setPhase("idle");
+          setMessageIsError(true);
+          setMessage(
+            event.error?.message ||
+              "The payment form failed to load. Please try again.",
+          );
+        });
+        paymentElement.mount(paymentElementRef.current);
+        stripeRef.current = stripe;
+        elementsRef.current = elements;
+      } catch (err) {
+        if (cancelled) return;
+        setCheckout(null);
+        setPhase("idle");
+        setMessageIsError(true);
+        setMessage(err instanceof Error ? err.message : String(err));
+      }
+    })();
+    return () => {
+      cancelled = true;
+      elementsRef.current?.getElement("payment")?.destroy();
+      elementsRef.current = null;
+      stripeRef.current = null;
+    };
+  }, [checkout]);
+
+  // Restore an outcome that arrived outside this mount: a redirect return
+  // (card/ACH confirm inline under `redirect: "if_required"`, so this is
+  // defensive) or a confirm that resolved after the panel unmounted (the
+  // sessionStorage marker). Declared AFTER the amount-reset effect so the
+  // restored state survives the shared on-mount run order.
+  useEffect(() => {
+    const pending = redirectOutcome ?? readPendingTopUpResult();
+    if (!pending) return;
+    writePendingTopUpResult(null);
+    if (pending === "succeeded") {
+      setPhase("succeeded");
+      setMessageIsError(false);
+      setMessage(TOPUP_SUCCESS_MESSAGE);
+      scheduleWalletReloads();
+    } else if (pending === "processing") {
+      setPhase("processing");
+      setMessageIsError(false);
+      setMessage(TOPUP_PROCESSING_MESSAGE);
+      scheduleWalletReloads();
+    } else if (pending === "verify") {
+      setPhase("processing");
+      setMessageIsError(false);
+      setMessage(TOPUP_VERIFY_MESSAGE);
+    } else if (pending === "confirming") {
+      // The panel unmounted while a confirm was in flight — the charge may
+      // have completed. Warn before offering a fresh checkout.
+      setMessageIsError(false);
+      setMessage(
+        "A payment you started may still be processing. Check your balance before paying again.",
       );
+      scheduleWalletReloads();
+    } else {
+      setMessageIsError(true);
+      setMessage("Payment was not completed. You have not been charged.");
+    }
+  }, [redirectOutcome]);
+
+  useEffect(() => () => {
+    for (const timer of reloadTimersRef.current) clearTimeout(timer);
+  }, []);
+
+  const scheduleWalletReloads = () => {
+    for (const timer of reloadTimersRef.current) clearTimeout(timer);
+    reloadTimersRef.current = [3000, 8000, 20000].map((delay) =>
+      window.setTimeout(() => live.reload(), delay)
+    );
+  };
+
+  const startCheckout = async () => {
+    if (method === "earnings") {
+      setMessageIsError(false);
+      setMessage("Earnings transfer is not wired into the launch API yet.");
       return;
     }
-    setCheckoutState("creating");
+    if (!termsAccepted) {
+      setMessageIsError(true);
+      setMessage("Accept the Ultralight Terms to continue.");
+      return;
+    }
+    seqRef.current += 1;
+    const seq = seqRef.current;
+    setPhase("creating");
+    setMessageIsError(false);
+    setMessage("");
+    setVerificationUrl(null);
+    writePendingTopUpResult(null);
     try {
       const response = await launchApi.createWalletTopUpIntent({
         amountCredits: creditsAmount,
         method,
         termsAccepted: true,
       });
-      setCheckoutState("ready");
-      setCheckoutMessage(`PaymentIntent ${response.paymentIntentId} created.`);
+      if (seqRef.current !== seq) return;
+      // Phase advances to "collecting" once the Payment Element reports ready.
+      setCheckout({
+        clientSecret: response.clientSecret,
+        publishableKey: response.publishableKey,
+        quote: {
+          baseDollars: response.quote.baseAmountCents / 100,
+          feeDollars: response.quote.processingFeeCents / 100,
+          feeNote: response.quote.feeFormula,
+          totalDollars: response.quote.totalAmountCents / 100,
+        },
+      });
     } catch (err) {
-      setCheckoutState("error");
-      setCheckoutMessage(err instanceof Error ? err.message : String(err));
+      if (seqRef.current !== seq) return;
+      setPhase("idle");
+      setMessageIsError(true);
+      setMessage(err instanceof Error ? err.message : String(err));
     }
+  };
+
+  const confirmTopUpPayment = async () => {
+    const stripe = stripeRef.current;
+    const elements = elementsRef.current;
+    if (!stripe || !elements) return;
+    const seq = seqRef.current;
+    setPhase("confirming");
+    setMessageIsError(false);
+    setMessage("");
+    // If the panel unmounts before this resolves, the marker lets the next
+    // mount warn that a charge may have completed. Updated to the terminal
+    // outcome below (the setStates would be silent no-ops on a dead instance,
+    // but these writes still run).
+    writePendingTopUpResult("confirming");
+    try {
+      const result = await stripe.confirmPayment({
+        elements,
+        confirmParams: {
+          return_url: `${window.location.origin}/wallet?tab=topup`,
+        },
+        redirect: "if_required",
+      });
+      if (seqRef.current !== seq) return;
+      if (result.error) {
+        writePendingTopUpResult(null);
+        setPhase("collecting");
+        setMessageIsError(true);
+        setMessage(
+          result.error.message ||
+            "Payment failed. You have not been charged — please try again.",
+        );
+        return;
+      }
+      const status = result.paymentIntent?.status;
+      if (status === "succeeded") {
+        writePendingTopUpResult("succeeded");
+        setPhase("succeeded");
+        setMessageIsError(false);
+        setMessage(TOPUP_SUCCESS_MESSAGE);
+        setCheckout(null);
+        scheduleWalletReloads();
+      } else if (status === "processing") {
+        writePendingTopUpResult("processing");
+        setPhase("processing");
+        setMessageIsError(false);
+        setMessage(TOPUP_PROCESSING_MESSAGE);
+        setCheckout(null);
+        scheduleWalletReloads();
+      } else if (status === "requires_action") {
+        // ACH microdeposit fallback: the intent is NOT failed — Stripe needs
+        // the user to verify their bank account first. Treating this as a
+        // retryable error would invite a second, duplicate payment.
+        const nextAction = (result.paymentIntent?.next_action ?? null) as
+          | {
+            verify_with_microdeposits?: { hosted_verification_url?: string };
+          }
+          | null;
+        if (nextAction?.verify_with_microdeposits) {
+          writePendingTopUpResult("verify");
+          setPhase("processing");
+          setMessageIsError(false);
+          setMessage(TOPUP_VERIFY_MESSAGE);
+          setVerificationUrl(
+            nextAction.verify_with_microdeposits.hosted_verification_url ??
+              null,
+          );
+          setCheckout(null);
+        } else {
+          writePendingTopUpResult(null);
+          setPhase("collecting");
+          setMessageIsError(true);
+          setMessage(
+            "Additional verification is required to complete this payment. Please try again or use a different payment method.",
+          );
+        }
+      } else {
+        writePendingTopUpResult(null);
+        setPhase("collecting");
+        setMessageIsError(true);
+        setMessage(
+          `Payment not completed (status: ${status ?? "unknown"}). Please try again.`,
+        );
+      }
+    } catch (err) {
+      if (seqRef.current !== seq) return;
+      writePendingTopUpResult(null);
+      setPhase("collecting");
+      setMessageIsError(true);
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const resetForAnotherTopUp = () => {
+    seqRef.current += 1;
+    writePendingTopUpResult(null);
+    setCheckout(null);
+    setPhase("idle");
+    setMessage("");
+    setMessageIsError(false);
+    setTermsAccepted(false);
+    setVerificationUrl(null);
+    live.reload();
   };
 
   return (
@@ -3572,6 +3934,7 @@ function WalletTopUpPanel(
           {presets.map((amount) => (
             <button
               className={creditsAmount === amount ? "active" : ""}
+              disabled={inputsLocked}
               key={amount}
               onClick={() => setCreditsAmount(amount)}
               type="button"
@@ -3585,7 +3948,8 @@ function WalletTopUpPanel(
         <div className="payment-methods">
           <button
             className={method === "card" ? "active" : ""}
-            onClick={() => setMethod("card")}
+            disabled={inputsLocked}
+            onClick={() => selectMethod("card")}
             type="button"
           >
             <strong>Card</strong>
@@ -3593,7 +3957,8 @@ function WalletTopUpPanel(
           </button>
           <button
             className={method === "ach" ? "active" : ""}
-            onClick={() => setMethod("ach")}
+            disabled={inputsLocked}
+            onClick={() => selectMethod("ach")}
             type="button"
           >
             <strong>Bank (ACH)</strong>
@@ -3601,7 +3966,8 @@ function WalletTopUpPanel(
           </button>
           <button
             className={method === "earnings" ? "active" : ""}
-            onClick={() => setMethod("earnings")}
+            disabled={inputsLocked}
+            onClick={() => selectMethod("earnings")}
             type="button"
           >
             <strong>Transfer from earnings</strong>
@@ -3616,12 +3982,12 @@ function WalletTopUpPanel(
         </p>
         <QuoteLine
           label={method === "earnings" ? "From earnings" : "Base value"}
-          value={formatCurrency(quote.baseDollars)}
+          value={formatCurrency(shownQuote.baseDollars)}
         />
         <QuoteLine
           label="Processing fee"
-          muted={quote.feeNote}
-          value={formatCurrency(quote.feeDollars)}
+          muted={shownQuote.feeNote}
+          value={formatCurrency(shownQuote.feeDollars)}
         />
         <QuoteLine
           label="Rate"
@@ -3629,28 +3995,90 @@ function WalletTopUpPanel(
         />
         <div className="quote-total">
           <span>{method === "earnings" ? "Transfer" : "Total"}</span>
-          <strong>{formatCurrency(quote.totalDollars)}</strong>
+          <strong>{formatCurrency(shownQuote.totalDollars)}</strong>
         </div>
         <div className="quote-receive">
           <span>You receive</span>
           <strong>✦{creditsAmount.toLocaleString()}</strong>
         </div>
-        <Button onClick={createTopUpIntent} size="lg">
-          {checkoutState === "creating"
-            ? "Creating checkout"
-            : method === "earnings"
-            ? `Transfer ✦${creditsAmount.toLocaleString()}`
-            : `Pay ${formatCurrency(quote.totalDollars)}`}
-        </Button>
-        {checkoutMessage
+        {checkout
+          ? <div className="topup-payment-element" ref={paymentElementRef} />
+          : null}
+        {method !== "earnings" && phase !== "succeeded" &&
+            phase !== "processing"
+          ? (
+            <label className="topup-terms">
+              <input
+                checked={termsAccepted}
+                // Consent was recorded at intent creation; once a checkout
+                // exists, unchecking would only desync the UI from it.
+                disabled={inputsLocked || checkout !== null}
+                onChange={(event) => setTermsAccepted(event.target.checked)}
+                type="checkbox"
+              />
+              <span>
+                I agree to the Ultralight Terms of Service and authorize this
+                charge.
+              </span>
+            </label>
+          )
+          : null}
+        {phase === "succeeded" || phase === "processing"
+          ? (
+            <Button onClick={resetForAnotherTopUp} size="lg" variant="secondary">
+              Top up again
+            </Button>
+          )
+          : checkout
+          ? (
+            <Button
+              disabled={phase !== "collecting"}
+              onClick={confirmTopUpPayment}
+              size="lg"
+            >
+              {phase === "confirming"
+                ? "Processing payment…"
+                : phase === "collecting"
+                ? `Pay ${formatCurrency(shownQuote.totalDollars)}`
+                : "Preparing checkout…"}
+            </Button>
+          )
+          : (
+            <Button
+              disabled={phase === "creating" ||
+                (method !== "earnings" && !termsAccepted)}
+              onClick={startCheckout}
+              size="lg"
+            >
+              {phase === "creating"
+                ? "Preparing checkout…"
+                : method === "earnings"
+                ? `Transfer ✦${creditsAmount.toLocaleString()}`
+                : "Continue to payment"}
+            </Button>
+          )}
+        {message
           ? (
             <p
-              className={checkoutState === "error"
+              className={messageIsError
                 ? "settings-help error"
                 : "settings-help"}
+              role={messageIsError ? "alert" : "status"}
             >
-              {checkoutMessage}
+              {message}
             </p>
+          )
+          : null}
+        {verificationUrl
+          ? (
+            <a
+              className="route-link"
+              href={verificationUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              Verify your bank account
+            </a>
           )
           : null}
         <div className="secure-note">
