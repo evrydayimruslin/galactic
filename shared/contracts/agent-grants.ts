@@ -35,6 +35,9 @@ export interface AgentFunctionGrant {
   slot: string | null;
   targetAppId: string;
   targetFunction: string;
+  // Pub/sub selector (mode='subscribe'): the topic the emitter (callerAppId)
+  // publishes that delivers to targetFunction. Null for call grants.
+  topic: string | null;
   mode: AgentGrantMode;
   status: AgentGrantStatus;
   monthlyCapCredits: number | null;
@@ -76,6 +79,11 @@ export interface AgentGrantCreateRequest {
   targetFunction: string;
   callerFunction?: string | null;
   slot?: string | null;
+  // mode='subscribe' makes this a pub/sub subscription: callerAppId is the
+  // EMITTER, targetApp/targetFunction is the SUBSCRIBER + handler, topic is
+  // required. Defaults to 'call'.
+  mode?: AgentGrantMode;
+  topic?: string | null;
   monthlyCapCredits?: number | null;
   constraints?: Record<string, unknown>;
 }
@@ -87,6 +95,7 @@ export interface AgentGrantSummary {
   callerFunction: string | null;
   slot: string | null;
   targetFunction: string;
+  topic: string | null;
   mode: AgentGrantMode;
   status: AgentGrantStatus;
   monthlyCapCredits: number | null;
@@ -130,6 +139,9 @@ export interface AgentWiringTarget {
   relationship: "owned" | "installed" | "accessible";
   visibility: string;
   functions: { name: string; description: string | null }[];
+  // Topics this Agent declares it emits (manifest `emits`). When building a
+  // subscription, the user picks one of these as the trigger.
+  emits: string[];
 }
 
 // Egress-trust signal shown at grant time: what the caller Agent can do with
@@ -152,10 +164,18 @@ export interface AgentWiringView {
   app: { id: string; slug: string | null; name: string | null };
   // Outbound: slots this Agent declares and the user can bind.
   slots: AgentImportSlot[];
-  // Outbound: active raw grants (no slot) this Agent holds.
+  // Outbound: active raw CALL grants (no slot, mode='call') this Agent holds.
   outboundGrants: AgentGrantSummary[];
-  // Inbound: active grants letting OTHER Agents call this one.
+  // Inbound: active CALL grants letting OTHER Agents call this one.
   inboundGrants: AgentGrantSummary[];
+  // Topics this Agent declares it emits (manifest `emits`).
+  emits: string[];
+  // Inbound subscribe grants: events from OTHER Agents that trigger a function
+  // on this one. The user wired each (caller=emitter, target=this, topic).
+  subscriptions: AgentGrantSummary[];
+  // Outbound subscribe grants: this Agent's emitted events that trigger a
+  // function on another (caller=this, target=subscriber, topic).
+  publications: AgentGrantSummary[];
   // Pending requests (default-deny inbox) awaiting the user's approval.
   pendingRequests: AgentGrantSummary[];
   // Egress-trust for each DISTINCT caller Agent appearing in pendingRequests /
@@ -178,9 +198,53 @@ export interface AgentCallerContextClaims {
   callerFunction: string | null;
   // Cross-Agent call depth; incremented per server-side mint, capped.
   hop: number;
+  // 'subscribe' marks an event-delivery invocation (the chokepoint resolves a
+  // subscribe grant for callerApp=emitter + topic instead of a call grant).
+  mode?: AgentGrantMode;
+  topic?: string;
   issuedAt: number;
   expiresAt: number;
   jti: string;
 }
 
 export const AGENT_CALLER_CONTEXT_HEADER = "X-Ultralight-Caller";
+
+// Max events a single emit fans out to (subscriber count) — bounds amplification.
+export const MAX_EVENT_FANOUT = 100;
+// Max dispatch attempts before an event/delivery is marked failed.
+export const MAX_EVENT_DELIVERY_ATTEMPTS = 5;
+
+export type AgentEventStatus = "pending" | "delivering" | "delivered" | "failed";
+
+export interface AgentEvent {
+  id: string;
+  userId: string;
+  emitterAppId: string;
+  topic: string;
+  payload: Record<string, unknown>;
+  status: AgentEventStatus;
+  attempts: number;
+  emitHop: number;
+  createdAt: string;
+  dispatchedAt: string | null;
+}
+
+export type AgentEventDeliveryStatus = "pending" | "delivered" | "failed" | "denied";
+
+export interface AgentEventDelivery {
+  id: string;
+  eventId: string;
+  grantId: string;
+  subscriberAppId: string;
+  targetFunction: string;
+  status: AgentEventDeliveryStatus;
+  attempts: number;
+  receiptId: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
+}
+
+export interface AgentEmitRequest {
+  topic: string;
+  payload?: Record<string, unknown>;
+}

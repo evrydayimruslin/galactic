@@ -99,6 +99,10 @@ export interface MintCallerContextInput {
   // Hop of the INCOMING context (0 for a top-level user/agent call). The minted
   // token carries incomingHop + 1.
   incomingHop?: number;
+  // 'subscribe' marks an event-delivery context: the chokepoint resolves a
+  // subscribe grant (callerApp=emitter, topic) instead of a call grant.
+  mode?: "call" | "subscribe";
+  topic?: string;
   ttlSeconds?: number;
   nowMs?: number;
 }
@@ -125,6 +129,9 @@ export async function mintCallerContextToken(
     userId,
     callerFunction: input.callerFunction?.trim() || null,
     hop,
+    ...(input.mode === "subscribe"
+      ? { mode: "subscribe" as const, topic: input.topic?.trim() || "" }
+      : {}),
     issuedAt: nowSec,
     expiresAt: nowSec + ttl,
     jti: crypto.randomUUID(),
@@ -149,6 +156,10 @@ function parseClaims(value: unknown): AgentCallerContextClaims | null {
   if (typeof c.hop !== "number" || !Number.isFinite(c.hop) || c.hop < 1) {
     return null;
   }
+  if (c.mode !== undefined && c.mode !== "call" && c.mode !== "subscribe") {
+    return null;
+  }
+  if (c.topic !== undefined && typeof c.topic !== "string") return null;
   if (typeof c.issuedAt !== "number" || typeof c.expiresAt !== "number") {
     return null;
   }

@@ -2076,6 +2076,182 @@ function GrantRow({
   );
 }
 
+// One subscribe-grant row. A "subscription" is inbound (this Agent's function
+// reacts to an emitter's event); a "publication" is outbound (this Agent's
+// event triggers a subscriber). Both carry a cap + revoke.
+function SubscriptionRow({
+  kind,
+  grant,
+  live,
+}: {
+  kind: "subscription" | "publication";
+  grant: AgentGrantSummary;
+  live: LaunchPageProps["live"];
+}): ReactElement {
+  const revoke = async () => {
+    try {
+      await launchApi.revokeGrant(grant.id);
+      live.reload();
+    } catch {
+      // Keep the row; revoke can be retried.
+    }
+  };
+
+  return (
+    <div className="wiring-grant-row">
+      <div className="wiring-grant-main">
+        <strong>
+          {/* caller is always the emitter, target always the subscriber — only
+              the framing copy differs between the two lists. */}
+          <Mono>{grantAppLabel(grant.callerApp)}</Mono>
+          {" emits "}
+          <Mono>{grant.topic ?? "—"}</Mono>
+          {" → "}
+          <Mono>
+            {grantAppLabel(grant.targetApp)}.{grant.targetFunction}
+          </Mono>
+        </strong>
+        {kind === "subscription"
+          ? (
+            <CallerTrustChip
+              trust={live.data.agentWiring?.callerTrustByApp[grant.callerApp.id]}
+            />
+          )
+          : null}
+        <GrantCapControl grant={grant} live={live} />
+      </div>
+      <Button onClick={revoke} size="sm" variant="secondary">
+        Revoke
+      </Button>
+    </div>
+  );
+}
+
+// Build a subscription: pick an emitter + one of its declared topics, then a
+// handler function on THIS Agent. The resulting subscribe grant means "when the
+// emitter publishes the topic, call this Agent's handler".
+function SubscribeBuilder({
+  subscriberAppId,
+  subscriberFunctions,
+  emitters,
+  live,
+}: {
+  subscriberAppId: string;
+  subscriberFunctions: { name: string; description: string | null }[];
+  emitters: AgentWiringTarget[];
+  live: LaunchPageProps["live"];
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const [emitterAppId, setEmitterAppId] = useState("");
+  const [topic, setTopic] = useState("");
+  const [handler, setHandler] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedEmitter = emitters.find((e) => e.app.id === emitterAppId);
+
+  const subscribe = async () => {
+    if (!emitterAppId || !topic || !handler) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await launchApi.createGrant({
+        callerAppId: emitterAppId,
+        targetAppId: subscriberAppId,
+        targetFunction: handler,
+        mode: "subscribe",
+        topic,
+      });
+      setOpen(false);
+      setEmitterAppId("");
+      setTopic("");
+      setHandler("");
+      live.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (emitters.length === 0) {
+    return (
+      <p className="muted-note">
+        No Agent you control declares emitted events yet. An Agent advertises
+        topics with a manifest <Mono>emits</Mono> list.
+      </p>
+    );
+  }
+
+  if (!open) {
+    return (
+      <Button onClick={() => setOpen(true)} size="sm" variant="secondary">
+        Add subscription
+      </Button>
+    );
+  }
+
+  return (
+    <div className="slot-bind">
+      <label>
+        <span>Emitter Agent</span>
+        <select
+          onChange={(event) => {
+            setEmitterAppId(event.target.value);
+            setTopic("");
+          }}
+          value={emitterAppId}
+        >
+          <option value="">Pick an Agent…</option>
+          {emitters.map((entry) => (
+            <option key={entry.app.id} value={entry.app.id}>
+              {grantAppLabel(entry.app)} · {entry.relationship}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Topic</span>
+        <select
+          disabled={!selectedEmitter}
+          onChange={(event) => setTopic(event.target.value)}
+          value={topic}
+        >
+          <option value="">Pick a topic…</option>
+          {(selectedEmitter?.emits ?? []).map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Handler function</span>
+        <select
+          onChange={(event) => setHandler(event.target.value)}
+          value={handler}
+        >
+          <option value="">Pick a function…</option>
+          {subscriberFunctions.map((fn) => (
+            <option key={fn.name} value={fn.name}>{fn.name}</option>
+          ))}
+        </select>
+      </label>
+      {error ? <p className="api-notice warning">{error}</p> : null}
+      <div className="wiring-row-actions">
+        <Button onClick={subscribe} size="sm">
+          {saving ? "Subscribing" : "Subscribe"}
+        </Button>
+        <button
+          className="route-link"
+          onClick={() => setOpen(false)}
+          type="button"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AgentWiringPanel({
   live,
   tool,
@@ -2113,6 +2289,13 @@ function AgentWiringPanel({
       </div>
     );
   }
+
+  // For the subscription builder: any controlled Agent that declares emitted
+  // topics is an eligible event source, and this page Agent's own functions are
+  // the handler candidates.
+  const emitters = targets.filter((t) => t.emits.length > 0);
+  const subscriberFunctions =
+    targets.find((t) => t.app.id === wiring.app.id)?.functions ?? [];
 
   return (
     <div className="wiring-panel">
@@ -2204,6 +2387,88 @@ function AgentWiringPanel({
               ))}
             </div>
           )}
+      </Card>
+
+      <Card>
+        <div className="wiring-section-head">
+          <div>
+            <h3>Reactive events</h3>
+            <p>
+              Subscriptions let this Agent's functions react to events other
+              Agents emit. Each subscription is grant-gated and capped — only the
+              sources you wire here can trigger it.
+            </p>
+          </div>
+        </div>
+
+        {(wiring.emits ?? []).length > 0
+          ? (
+            <div className="wiring-subsection">
+              <p className="section-label">Topics this Agent emits</p>
+              <div className="capability-list">
+                {(wiring.emits ?? []).map((topic) => (
+                  <Pill key={topic} tone="default">{topic}</Pill>
+                ))}
+              </div>
+            </div>
+          )
+          : null}
+
+        <div className="wiring-subsection">
+          <div className="wiring-section-head">
+            <p className="section-label">
+              Subscriptions — events this Agent reacts to
+            </p>
+            <SubscribeBuilder
+              emitters={emitters}
+              live={live}
+              subscriberAppId={wiring.app.id}
+              subscriberFunctions={subscriberFunctions}
+            />
+          </div>
+          {(wiring.subscriptions ?? []).length === 0
+            ? (
+              <p className="muted-note">
+                This Agent reacts to no events yet.
+              </p>
+            )
+            : (
+              <div className="wiring-row-list">
+                {(wiring.subscriptions ?? []).map((grant) => (
+                  <SubscriptionRow
+                    grant={grant}
+                    key={grant.id}
+                    kind="subscription"
+                    live={live}
+                  />
+                ))}
+              </div>
+            )}
+        </div>
+
+        <div className="wiring-subsection">
+          <p className="section-label">
+            Publications — this Agent's events that trigger others
+          </p>
+          {(wiring.publications ?? []).length === 0
+            ? (
+              <p className="muted-note">
+                No other Agent reacts to this one's events.
+              </p>
+            )
+            : (
+              <div className="wiring-row-list">
+                {(wiring.publications ?? []).map((grant) => (
+                  <SubscriptionRow
+                    grant={grant}
+                    key={grant.id}
+                    kind="publication"
+                    live={live}
+                  />
+                ))}
+              </div>
+            )}
+        </div>
       </Card>
     </div>
   );

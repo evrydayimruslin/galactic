@@ -98,7 +98,37 @@ shared backend. Deferred capabilities stay dormant in the capability basin.
   `services/agent-function-permissions.ts` → caller-permissions naming.
 - **Phase 4:** P5 — manifest declaration + grant table/inbox/UI +
   caller-identity propagation + credit-denominated monthly caps + unified
-  enforcement (closing the `ul.codemode` bypass).
+  enforcement (closing the `ul.codemode` bypass). Shipped as sub-phases
+  4a (grant spine: identity, enforcement, caps, hop protection), 4b (wiring
+  read-models + facade + `ul.grants` + FE), 4c (unified enforcement across all
+  call paths incl. codemode).
+- **Phase 4.5:** P5 reactive layer — cross-Agent pub/sub event bus. An Agent
+  emits a topic (`ultralight.emit` in-sandbox, or `ul.emit` manually as an
+  owned Agent); the dispatch cron fans the event out to every Agent the user
+  wired a `mode='subscribe'` grant for. Reuses the grant spine: a subscribe
+  grant is `(caller=emitter, target=subscriber+handler, topic, mode='subscribe')`
+  under the same delegation-not-expansion invariant. Emitting is unprivileged;
+  receiving is grant-gated. Delivery is async (enqueue at emit → drain via
+  cron), billed to the user, capped per subscribe grant, and bounded by the
+  caller-context hop ceiling so reactive cascades terminate. New tables:
+  `agent_events`, `agent_event_deliveries` (idempotent per event+grant);
+  `agent_function_grants` gains a `topic` selector. Migration
+  `20260610190000_agent_event_bus.sql` must be applied at deploy.
+  - **Delivery semantics (deliberate):** AT-MOST-ONCE. The `(event, grant)`
+    unique row means each subscriber is invoked at most once per event; a
+    `failed` delivery is recorded on its row and rolled up to a `failed` event
+    (with `last_error`), but is NOT auto-retried — the handler may have run and
+    settled before erroring, so a blind retry could double-bill / double-act.
+    A mid-fan-out crash still completes UN-attempted subscribers (lease expires
+    → event re-scans → terminal delivery rows are skipped). Payload is bounded
+    to 32 KB; per-execution emits to 50; fan-out to `MAX_EVENT_FANOUT`.
+  - **Deferred hardening (post-launch followups):** (1) at-least-once delivery
+    with idempotent settlement, so transient subscriber failures retry without
+    double-billing (would retire the currently-dead `agent_event_deliveries.attempts`
+    column); (2) a per-user/emitter enqueue rate limit + a global per-user
+    monthly delivery ceiling, since uncapped subscribe grants
+    (`monthly_cap_credits=null`) otherwise bound breadth only by credit balance;
+    (3) an operator surface over `agent_event_deliveries.status='failed'/'denied'`.
 
 ## Known-state corrections this plan relies on (verified 2026-06-10)
 

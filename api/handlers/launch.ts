@@ -2089,9 +2089,13 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "id",
             "callerApp",
             "targetApp",
+            "callerFunction",
+            "slot",
             "targetFunction",
+            "topic",
             "mode",
             "status",
+            "monthlyCapCredits",
             "spentCreditsPeriod",
             "periodStart",
             "createdBy",
@@ -2104,6 +2108,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             callerFunction: { type: ["string", "null"] },
             slot: { type: ["string", "null"] },
             targetFunction: { type: "string" },
+            topic: { type: ["string", "null"] },
             mode: { type: "string", enum: ["call", "subscribe"] },
             status: {
               type: "string",
@@ -2139,6 +2144,8 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             targetFunction: { type: "string" },
             callerFunction: { type: ["string", "null"] },
             slot: { type: ["string", "null"] },
+            mode: { type: "string", enum: ["call", "subscribe"] },
+            topic: { type: ["string", "null"] },
             monthlyCapCredits: { type: ["number", "null"] },
             constraints: { type: "object", additionalProperties: true },
           },
@@ -2174,7 +2181,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
         },
         AgentWiringTarget: {
           type: "object",
-          required: ["app", "relationship", "visibility", "functions"],
+          required: ["app", "relationship", "visibility", "functions", "emits"],
           properties: {
             app: { $ref: "#/components/schemas/AgentHandle" },
             relationship: {
@@ -2193,6 +2200,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                 },
               },
             },
+            emits: { type: "array", items: { type: "string" } },
           },
         },
         AgentCallerTrustSummary: {
@@ -2220,7 +2228,11 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "slots",
             "outboundGrants",
             "inboundGrants",
+            "emits",
+            "subscriptions",
+            "publications",
             "pendingRequests",
+            "callerTrustByApp",
             "generatedAt",
           ],
           properties: {
@@ -2237,9 +2249,24 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               type: "array",
               items: { $ref: "#/components/schemas/AgentGrantSummary" },
             },
+            emits: { type: "array", items: { type: "string" } },
+            subscriptions: {
+              type: "array",
+              items: { $ref: "#/components/schemas/AgentGrantSummary" },
+            },
+            publications: {
+              type: "array",
+              items: { $ref: "#/components/schemas/AgentGrantSummary" },
+            },
             pendingRequests: {
               type: "array",
               items: { $ref: "#/components/schemas/AgentGrantSummary" },
+            },
+            callerTrustByApp: {
+              type: "object",
+              additionalProperties: {
+                $ref: "#/components/schemas/AgentCallerTrustSummary",
+              },
             },
             generatedAt: { type: "string", format: "date-time" },
           },

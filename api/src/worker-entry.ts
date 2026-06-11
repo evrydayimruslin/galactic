@@ -17,6 +17,7 @@ import {
 } from '../services/cloud-usage-reconciliation.ts';
 import { checkAndRunJobs as checkUserCronJobs } from '../services/cron.ts';
 import { runRoutineExecutorCycle } from '../services/routine-executor.ts';
+import { dispatchPendingEvents } from '../services/agent-events.ts';
 import { getEnv } from '../lib/env.ts';
 import { applyCorsHeaders, buildCorsPreflightResponse } from '../services/cors.ts';
 import { createServerLogger } from '../services/logging.ts';
@@ -210,6 +211,7 @@ async function runMinuteJobs(): Promise<void> {
     processGpuBuilds(),
     checkUserCronJobs(baseUrl), // user-facing cron scheduler
     runRoutineExecutorCycle({ baseUrl }), // platform-owned durable routines
+    dispatchPendingEvents(), // cross-Agent pub/sub event fan-out
   ]);
 
   for (const [i, result] of results.entries()) {
@@ -221,6 +223,7 @@ async function runMinuteJobs(): Promise<void> {
         'gpuBuildProcessor',
         'userCronScheduler',
         'routineExecutor',
+        'agentEventDispatch',
       ];
       cronLogger.error('Minute cron job failed', {
         job: names[i],

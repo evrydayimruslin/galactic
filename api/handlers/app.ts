@@ -555,6 +555,63 @@ export function createApp() {
       }
 
       // Internal TCP protocol endpoints — called by Dynamic Worker sandbox via fetch()
+      // Internal event emit (Phase 4.5 pub/sub). Auth is DOUBLE-gated:
+      // X-Worker-Secret proves an internal (sandbox/SELF) caller, and the
+      // signed X-Ultralight-Caller token proves the emitter app id + user
+      // unforgeably. App code cannot forge either, so the emitter/user can't
+      // be spoofed by sandbox JS.
+      if (path === "/api/events/emit" && method === "POST") {
+        const secret = request.headers.get("X-Worker-Secret");
+        if (!secret || secret !== getEnv("WORKER_SECRET")) {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 403,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        try {
+          const { verifyCallerContextToken } = await import(
+            "../services/agent-caller-context.ts"
+          );
+          const callerHeader = request.headers.get("X-Ultralight-Caller");
+          const verified = callerHeader
+            ? await verifyCallerContextToken(callerHeader)
+            : { claims: null };
+          if (!verified.claims) {
+            return new Response(
+              JSON.stringify({ error: "Invalid emitter context" }),
+              { status: 403, headers: { "Content-Type": "application/json" } },
+            );
+          }
+          const body = await request.json() as {
+            topic?: unknown;
+            payload?: unknown;
+          };
+          const { emitEvent } = await import("../services/agent-events.ts");
+          const out = await emitEvent({
+            userId: verified.claims.userId,
+            emitterAppId: verified.claims.callerAppId,
+            topic: typeof body.topic === "string" ? body.topic : "",
+            payload: (body.payload && typeof body.payload === "object")
+              ? body.payload as Record<string, unknown>
+              : {},
+            emitHop: verified.claims.hop,
+          });
+          return new Response(
+            JSON.stringify({
+              ok: !out.rejected,
+              event_id: out.eventId,
+              rejected: out.rejected ?? null,
+            }),
+            { headers: { "Content-Type": "application/json" } },
+          );
+        } catch (e: unknown) {
+          return new Response(
+            JSON.stringify({ error: e instanceof Error ? e.message : String(e) }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          );
+        }
+      }
+
       // Auth: X-Worker-Secret header (service-to-service, not user-facing)
       if (path === "/api/net/imap-fetch" && method === "POST") {
         const secret = request.headers.get("X-Worker-Secret");

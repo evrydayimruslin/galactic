@@ -1,8 +1,8 @@
 // Platform MCP Handler — v4
 // Implements JSON-RPC 2.0 for the ul.* tool namespace
 // Endpoint: POST /mcp/platform
-// 20 tools: discover, command, routine, download, test, upload, set, memory, permissions, grants,
-// connect, connections, logs, rate, call, job, auth.link, marketplace, codemode, wallet
+// 21 tools: discover, command, routine, download, test, upload, set, memory, permissions, grants,
+// emit, connect, connections, logs, rate, call, job, auth.link, marketplace, codemode, wallet
 // + 27 backward-compat aliases for pre-consolidation tool names
 
 import { error, json } from "./response.ts";
@@ -2363,6 +2363,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
       'action="pending": show pending requests awaiting approval. ' +
       'action="propose": create a raw grant (slot=null). ' +
       'action="bind": create a slot-binding grant (requires slot). ' +
+      'action="subscribe": wire an event subscription — when caller_app emits topic, call target_app.target_function (requires topic). ' +
       'action="approve": approve a pending grant_id (website-only unless you enable agent approval in settings). ' +
       'action="revoke": revoke a grant_id. ' +
       'action="set_cap": set a grant_id\'s monthly credit cap.',
@@ -2381,6 +2382,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
             "list",
             "propose",
             "bind",
+            "subscribe",
             "approve",
             "revoke",
             "set_cap",
@@ -2390,15 +2392,18 @@ const PLATFORM_TOOLS: MCPTool[] = [
         },
         caller_app: {
           type: "string",
-          description: "Caller Agent ID or slug (the Agent making the call).",
+          description:
+            "Caller Agent ID or slug. The Agent making the call (propose/bind) or EMITTING the event (subscribe).",
         },
         target_app: {
           type: "string",
-          description: "Target Agent ID or slug (the Agent being called).",
+          description:
+            "Target Agent ID or slug. The Agent being called (propose/bind) or whose function the event triggers (subscribe).",
         },
         target_function: {
           type: "string",
-          description: "Function on the target Agent to grant access to.",
+          description:
+            "Function on the target Agent to grant access to (or the handler invoked on each event, for subscribe).",
         },
         caller_function: {
           type: "string",
@@ -2408,6 +2413,10 @@ const PLATFORM_TOOLS: MCPTool[] = [
         slot: {
           type: "string",
           description: "Import slot name. Required for bind.",
+        },
+        topic: {
+          type: "string",
+          description: "Event topic. Required for subscribe.",
         },
         monthly_cap_credits: {
           type: "number",
@@ -2425,6 +2434,42 @@ const PLATFORM_TOOLS: MCPTool[] = [
         },
       },
       required: ["action"],
+    },
+  },
+
+  // ── ul.emit (publish a cross-Agent event) ──────────────────────────
+  {
+    name: "ul.emit",
+    description: "Publish an event as one of your own Agents. " +
+      "Every Agent the user wired a matching subscribe grant for (caller=this Agent, topic) " +
+      "has its handler invoked, async, billed to the user and capped by each subscribe grant. " +
+      "Emitting is unprivileged; only wired subscribers receive it. " +
+      "Useful for manually triggering a reactive workflow or testing a subscription. " +
+      "You may only emit as an Agent you OWN.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        app_id: {
+          type: "string",
+          description: "The emitting Agent (ID or slug). Must be one you own.",
+        },
+        topic: {
+          type: "string",
+          description: "Event topic (for example \"sale.created\").",
+        },
+        payload: {
+          type: "object",
+          description: "Event payload delivered to each subscriber's handler.",
+          additionalProperties: true,
+        },
+      },
+      required: ["app_id", "topic"],
     },
   },
 
@@ -3176,7 +3221,15 @@ Agents can call one another on a user's behalf. A grant means: for this user, ca
 - **Approval defaults to website-only.** A connected agent (api_token) cannot \`approve\` a pending request unless the user has enabled agent grant approval in \`/settings\`. Otherwise direct the user to approve once on \`/agents/:id\` wiring. Revoking and proposing always work.
 - Spend is capped per grant via \`monthly_cap_credits\` (set at propose/approve or later with \`set_cap\`).
 
-## Platform Tools (20)
+## Reactive Events (pub/sub)
+
+Agents can react to one another's events instead of being called directly. An Agent emits a topic (\`ultralight.emit("sale.created", payload)\` from its code, or \`ul.emit\` manually); every Agent the user wired a **subscribe** grant for has its handler invoked in response.
+
+- A subscribe grant is \`ul.grants({ action: "subscribe", caller_app: <emitter>, target_app: <subscriber>, target_function: <handler>, topic })\`. Same delegation-not-expansion invariant: the user must control the emitter and be able to call the handler.
+- Emitting is **unprivileged** — anyone's Agent can emit — but **receiving is grant-gated**: only the subscribers the user explicitly wired are invoked. One emit fans out to all matching subscribers.
+- Delivery is async (drained by a cron), billed to the user, and capped by each subscribe grant's \`monthly_cap_credits\`. Reactive cascades (a handler that itself emits) are bounded by the hop ceiling.
+
+## Platform Tools (21)
 
 ### ul.call({ app_id, function_name, args? })
 Execute any app's function through this single platform connection.
@@ -3272,15 +3325,22 @@ Access control for private apps.
 - \`action: "list"\` — List permissions. Filter by \`emails\` or \`functions\`.
 - \`action: "export"\` — Export audit data as JSON/CSV.
 
-### ul.grants({ action, caller_app?, target_app?, target_function?, caller_function?, slot?, monthly_cap_credits?, grant_id?, status? })
-Manage cross-Agent wiring grants for the current user. See **## Cross-Agent Wiring**.
+### ul.grants({ action, caller_app?, target_app?, target_function?, caller_function?, slot?, topic?, monthly_cap_credits?, grant_id?, status? })
+Manage cross-Agent wiring grants for the current user. See **## Cross-Agent Wiring** and **## Reactive Events**.
 - \`action: "list"\` — List grants. Filter by \`caller_app\`, \`target_app\`, \`status\`.
 - \`action: "pending"\` — List pending requests awaiting approval (the wiring inbox).
 - \`action: "propose"\` — Create a raw grant (slot=null). Needs \`caller_app\`, \`target_app\`, \`target_function\`; optional \`caller_function\`, \`monthly_cap_credits\`.
 - \`action: "bind"\` — Bind an import \`slot\` (required) to a grant. Same fields as propose.
+- \`action: "subscribe"\` — Wire an event subscription: when \`caller_app\` emits \`topic\` (required), call \`target_app\`.\`target_function\`. Optional \`monthly_cap_credits\`.
 - \`action: "approve"\` — Approve a pending \`grant_id\`. Connected agents may approve only when you enable agent grant approval in \`/settings\`; otherwise approve on \`/agents/:id\` wiring.
 - \`action: "revoke"\` — Revoke a \`grant_id\`.
 - \`action: "set_cap"\` — Set a \`grant_id\`'s \`monthly_cap_credits\` (omit/null clears the cap).
+
+### ul.emit({ app_id, topic, payload? })
+Publish a cross-Agent event as one of your own Agents. See **## Reactive Events**.
+- \`app_id\` must be an Agent you own (the emitter identity). \`topic\` names the event; \`payload\` is delivered to each subscriber.
+- Every Agent with a matching subscribe grant (caller=\`app_id\`, same \`topic\`) has its handler invoked async, billed to you and capped per grant.
+- Emitting is unprivileged; only wired subscribers receive it. Useful for manually triggering or testing a reactive workflow.
 
 ### ul.connect({ app_id, secrets })
 Save your own User Settings for an app.
@@ -4429,6 +4489,12 @@ async function handleToolsCall(
           request.headers.get("Authorization")?.slice(7) || "",
         );
         result = await executeGrants(userId, toolArgs, callerIsApiToken);
+        break;
+      }
+
+      // ── ul.emit (publish a cross-Agent event) ──────────────
+      case "ul.emit": {
+        result = await executeEmit(userId, toolArgs);
         break;
       }
 
@@ -9698,6 +9764,45 @@ async function executeGrants(
         return { grant };
       }
 
+      case "subscribe": {
+        // Wire an event subscription: when caller_app emits `topic`, invoke
+        // target_app.target_function. Same delegation-not-expansion invariant as
+        // a call grant (the user must control caller + be able to call target).
+        const callerApp = args.caller_app as string | undefined;
+        const targetApp = args.target_app as string | undefined;
+        const targetFunction = args.target_function as string | undefined;
+        const topic = typeof args.topic === "string" ? args.topic.trim() : "";
+        if (!callerApp || !targetApp || !targetFunction) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "caller_app (emitter), target_app (subscriber), and target_function (handler) are required",
+          );
+        }
+        if (!topic) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "topic is required for subscribe",
+          );
+        }
+        const [callerAppId, targetAppId] = await Promise.all([
+          resolveAppIdForMarketplace(callerApp),
+          resolveAppIdForMarketplace(targetApp),
+        ]);
+        const grant = await createGrant(
+          userId,
+          {
+            callerAppId,
+            targetAppId,
+            targetFunction,
+            mode: "subscribe",
+            topic,
+            monthlyCapCredits: monthlyCap,
+          },
+          "agent",
+        );
+        return { grant };
+      }
+
       case "approve": {
         if (!grantId) {
           throw new ToolError(INVALID_PARAMS, "grant_id is required for approve");
@@ -9749,7 +9854,7 @@ async function executeGrants(
       default:
         throw new ToolError(
           INVALID_PARAMS,
-          `Invalid action: ${action}. Use list|pending|propose|bind|approve|revoke|set_cap`,
+          `Invalid action: ${action}. Use list|pending|propose|bind|subscribe|approve|revoke|set_cap`,
         );
     }
   } catch (err) {
@@ -9760,6 +9865,59 @@ async function executeGrants(
       );
     }
     throw err;
+  }
+}
+
+// ── ul.emit (publish a cross-Agent event) ─────────────────────────
+
+/**
+ * Emit an event AS one of the user's own Agents. resolveApp enforces ownership,
+ * so a caller can only emit attributed to an Agent whose code they control — a
+ * connected agent can't spoof an emit from someone else's Agent. The event is
+ * enqueued and fanned out by the dispatch cron to every wired subscriber; this
+ * starts a fresh reactive chain (emitHop=1) bounded by the hop ceiling.
+ */
+async function executeEmit(
+  userId: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const appIdOrSlug = args.app_id as string | undefined;
+  const topic = typeof args.topic === "string" ? args.topic.trim() : "";
+  if (!appIdOrSlug) throw new ToolError(INVALID_PARAMS, "app_id is required");
+  if (!topic) throw new ToolError(INVALID_PARAMS, "topic is required");
+
+  const payload = (args.payload && typeof args.payload === "object" &&
+      !Array.isArray(args.payload))
+    ? args.payload as Record<string, unknown>
+    : {};
+
+  // Ownership check: you can only emit as an Agent you own.
+  const app = await resolveApp(userId, appIdOrSlug);
+
+  try {
+    const { emitEvent } = await import("../services/agent-events.ts");
+    const out = await emitEvent({
+      userId,
+      emitterAppId: app.id,
+      topic,
+      payload,
+      emitHop: 1,
+    });
+    return {
+      ok: !out.rejected,
+      event_id: out.eventId,
+      rejected: out.rejected ?? null,
+      emitter_app_id: app.id,
+      topic,
+    };
+  } catch (err) {
+    if (err instanceof RequestValidationError) {
+      throw new ToolError(VALIDATION_ERROR, err.message);
+    }
+    throw new ToolError(
+      INTERNAL_ERROR,
+      err instanceof Error ? err.message : "Failed to emit event",
+    );
   }
 }
 

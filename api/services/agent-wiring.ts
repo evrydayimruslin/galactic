@@ -67,6 +67,17 @@ function manifestFunctionList(
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Manifest `emits` -> declared topic list (deduped, non-empty strings).
+function manifestEmittedTopics(manifest: AppManifest | null): string[] {
+  const emits = manifest?.emits;
+  if (!Array.isArray(emits)) return [];
+  const seen = new Set<string>();
+  for (const t of emits) {
+    if (typeof t === "string" && t.trim()) seen.add(t.trim());
+  }
+  return Array.from(seen).sort();
+}
+
 function appHandle(row: AppRow): { id: string; slug: string | null; name: string | null } {
   return { id: row.id, slug: row.slug, name: row.name };
 }
@@ -199,13 +210,18 @@ export async function listEligibleTargets(
     row: AppRow,
     relationship: "owned" | "installed" | "accessible",
   ) => {
-    const functions = manifestFunctionList(parseManifest(row.manifest));
-    if (functions.length === 0) return;
+    const manifest = parseManifest(row.manifest);
+    const functions = manifestFunctionList(manifest);
+    const emits = manifestEmittedTopics(manifest);
+    // Keep an Agent that emits topics even if it exposes no callable functions —
+    // it's still a valid subscription source.
+    if (functions.length === 0 && emits.length === 0) return;
     targets.push({
       app: appHandle(row),
       relationship,
       visibility: row.visibility,
       functions,
+      emits,
     });
   };
   for (const row of owned) pushTarget(row, "owned");
@@ -218,7 +234,8 @@ export async function listEligibleTargets(
       t.functions.some((fn) =>
         fn.name.toLowerCase().includes(query) ||
         (fn.description || "").toLowerCase().includes(query)
-      )
+      ) ||
+      t.emits.some((topic) => topic.toLowerCase().includes(query))
     )
     : targets;
 
@@ -240,7 +257,9 @@ export async function buildWiringView(
   const row = await fetchApp(db, appId);
   if (!row) return null;
 
-  const slots = parseImportSlots(parseManifest(row.manifest));
+  const manifest = parseManifest(row.manifest);
+  const slots = parseImportSlots(manifest);
+  const emits = manifestEmittedTopics(manifest);
 
   const [outbound, inbound, pending] = await Promise.all([
     listGrantSummaries({ userId, callerAppId: appId, status: "active" }),
@@ -248,11 +267,21 @@ export async function buildWiringView(
     listGrantSummaries({ userId, status: "pending" }),
   ]);
 
-  // Bind each declared slot to its active outbound grant (if wired).
+  // Subscribe grants share the grants table but are a distinct wiring kind, so
+  // partition by mode: call-mode drives slots/raw-grants, subscribe-mode drives
+  // the publications/subscriptions views.
+  const outboundCall = outbound.filter((g) => g.mode !== "subscribe");
+  const inboundCall = inbound.filter((g) => g.mode !== "subscribe");
+
+  // Bind each declared slot to its active outbound CALL grant (if wired).
   for (const slot of slots) {
-    slot.binding = outbound.find((g) => g.slot === slot.name) ?? null;
+    slot.binding = outboundCall.find((g) => g.slot === slot.name) ?? null;
   }
-  const outboundGrants = outbound.filter((g) => g.slot === null);
+  const outboundGrants = outboundCall.filter((g) => g.slot === null);
+  // Outbound subscribe = this Agent is the EMITTER (caller); inbound subscribe =
+  // this Agent is the SUBSCRIBER whose function the event triggers (target).
+  const publications = outbound.filter((g) => g.mode === "subscribe");
+  const subscriptions = inbound.filter((g) => g.mode === "subscribe");
   const pendingRequests = pending.filter(
     (g) => g.callerApp.id === appId || g.targetApp.id === appId,
   );
@@ -261,7 +290,11 @@ export async function buildWiringView(
   // grants, so the UI warns about the agent that actually receives the data
   // (not the page agent). Resolved server-side to keep the inbox a single fetch.
   const callerIds = Array.from(
-    new Set([...pendingRequests, ...inbound].map((g) => g.callerApp.id)),
+    new Set(
+      [...pendingRequests, ...inboundCall, ...subscriptions].map((g) =>
+        g.callerApp.id
+      ),
+    ),
   );
   const callerTrustByApp: Record<string, AgentCallerTrustSummary> = {};
   await Promise.all(callerIds.map(async (callerId) => {
@@ -273,7 +306,10 @@ export async function buildWiringView(
     app: appHandle(row),
     slots,
     outboundGrants,
-    inboundGrants: inbound,
+    inboundGrants: inboundCall,
+    emits,
+    subscriptions,
+    publications,
     pendingRequests,
     callerTrustByApp,
     generatedAt: new Date().toISOString(),

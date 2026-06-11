@@ -38,6 +38,7 @@ interface AgentGrantRow {
   slot: string | null;
   target_app_id: string;
   target_function: string;
+  topic: string | null;
   mode: string;
   status: string;
   monthly_cap_credits: number | string | null;
@@ -79,6 +80,7 @@ function mapRow(row: AgentGrantRow): AgentFunctionGrant {
     slot: row.slot ? row.slot : null,
     targetAppId: row.target_app_id,
     targetFunction: row.target_function,
+    topic: row.topic ? row.topic : null,
     mode: row.mode === "subscribe" ? "subscribe" : "call",
     status: row.status === "pending"
       ? "pending"
@@ -194,6 +196,69 @@ export async function resolveCallerGrant(input: {
   return { allowed: false, grant: null, reason: "no_grant" };
 }
 
+// Pub/sub: resolve an event delivery against the SUBSCRIBE grant the chokepoint
+// trusts. Mirrors resolveCallerGrant but matches mode=subscribe + topic. The
+// "caller" is the EMITTER; the target is the subscriber's handler.
+export async function resolveSubscribeGrant(input: {
+  userId: string;
+  emitterAppId: string;
+  subscriberAppId: string;
+  targetFunction: string;
+  topic: string;
+  nowMs?: number;
+}): Promise<AgentGrantResolution> {
+  const db = getDbConfig();
+  if (!db) return { allowed: false, grant: null, reason: "no_grant" };
+  const nowMs = input.nowMs ?? Date.now();
+  const rows = await dbGet(
+    db,
+    [
+      `user_id=eq.${input.userId}`,
+      `caller_app_id=eq.${input.emitterAppId}`,
+      `target_app_id=eq.${input.subscriberAppId}`,
+      `target_function=eq.${encodeURIComponent(input.targetFunction)}`,
+      `topic=eq.${encodeURIComponent(input.topic)}`,
+      `mode=eq.subscribe`,
+      `select=*`,
+      `limit=10`,
+    ].join("&"),
+  );
+  const active = rows.map(mapRow).find((g) => g.status === "active");
+  if (!active) return { allowed: false, grant: null, reason: "no_grant" };
+  if (
+    active.monthlyCapCredits !== null &&
+    effectiveSpend(active, nowMs) >= active.monthlyCapCredits
+  ) {
+    return { allowed: false, grant: active, reason: "cap_exceeded" };
+  }
+  return { allowed: true, grant: active };
+}
+
+// Active subscribe grants that should receive an emitter's topic, for the
+// dispatcher's fan-out. Capped count bounds amplification per emit.
+export async function resolveSubscribers(input: {
+  userId: string;
+  emitterAppId: string;
+  topic: string;
+  limit?: number;
+}): Promise<AgentFunctionGrant[]> {
+  const db = getDbConfig();
+  if (!db) return [];
+  const rows = await dbGet(
+    db,
+    [
+      `user_id=eq.${input.userId}`,
+      `caller_app_id=eq.${input.emitterAppId}`,
+      `topic=eq.${encodeURIComponent(input.topic)}`,
+      `mode=eq.subscribe`,
+      `status=eq.active`,
+      `select=*`,
+      `limit=${Math.min(input.limit ?? 100, 500)}`,
+    ].join("&"),
+  );
+  return rows.map(mapRow);
+}
+
 // Post-call: attribute the credits charged to the grant's monthly window via
 // an ATOMIC RPC. A single UPDATE avoids the lost-update race of a
 // read-modify-write — concurrent cross-Agent calls each increment correctly —
@@ -237,7 +302,7 @@ export async function createPendingGrantRequest(input: {
   if (!db) return null;
   try {
     const response = await fetch(
-      `${db.baseUrl}/rest/v1/agent_function_grants?on_conflict=user_id,caller_app_id,caller_function,slot,target_app_id,target_function,mode`,
+      `${db.baseUrl}/rest/v1/agent_function_grants?on_conflict=user_id,caller_app_id,caller_function,slot,target_app_id,target_function,topic,mode`,
       {
         method: "POST",
         headers: {
@@ -254,6 +319,7 @@ export async function createPendingGrantRequest(input: {
           slot: "",
           target_app_id: input.targetAppId,
           target_function: input.targetFunction,
+          topic: "",
           mode: "call",
           status: "pending",
           created_by: "auto_request",
@@ -450,7 +516,20 @@ export async function createGrant(
     ? toRawFunctionName(request.callerFunction, callerApp.slug)
     : "";
 
-  // SAFETY INVARIANT — delegation, not expansion.
+  // Mode + topic. A subscribe grant authorizes the EMITTER (callerApp) to
+  // deliver `topic` events to the SUBSCRIBER's handler (target/targetFunction);
+  // a topic is required and only meaningful in subscribe mode.
+  const mode = request.mode === "subscribe" ? "subscribe" : "call";
+  const topic = mode === "subscribe" ? (request.topic?.trim() || "") : "";
+  if (mode === "subscribe" && !topic) {
+    throw new RequestValidationError(
+      "A subscribe grant requires a topic",
+    );
+  }
+
+  // SAFETY INVARIANT — delegation, not expansion. (Same for both modes: the
+  // user must control the caller/emitter and be able to call the target/
+  // subscriber handler that runs.)
   if (!(await userControlsCaller(db, userId, callerApp))) {
     throw new RequestValidationError(
       "You can only wire Agents you own or have installed",
@@ -483,7 +562,8 @@ export async function createGrant(
       `slot=eq.${encodeURIComponent(slot)}`,
       `target_app_id=eq.${targetAppId}`,
       `target_function=eq.${encodeURIComponent(targetFunction)}`,
-      `mode=eq.call`,
+      `topic=eq.${encodeURIComponent(topic)}`,
+      `mode=eq.${mode}`,
       `select=*`,
       `limit=1`,
     ].join("&"),
@@ -504,7 +584,8 @@ export async function createGrant(
     slot,
     target_app_id: targetAppId,
     target_function: targetFunction,
-    mode: "call",
+    topic,
+    mode,
     status: "active",
     monthly_cap_credits: cap,
     spent_credits_period: 0,
@@ -516,7 +597,7 @@ export async function createGrant(
   // Upsert: a fresh insert, or re-activating a pending/revoked pair (which
   // legitimately starts a clean spend window).
   const response = await fetch(
-    `${db.baseUrl}/rest/v1/agent_function_grants?on_conflict=user_id,caller_app_id,caller_function,slot,target_app_id,target_function,mode`,
+    `${db.baseUrl}/rest/v1/agent_function_grants?on_conflict=user_id,caller_app_id,caller_function,slot,target_app_id,target_function,topic,mode`,
     {
       method: "POST",
       headers: {
@@ -663,6 +744,7 @@ export function toGrantSummary(
     callerFunction: grant.callerFunction,
     slot: grant.slot,
     targetFunction: grant.targetFunction,
+    topic: grant.topic,
     mode: grant.mode,
     status: grant.status,
     monthlyCapCredits: grant.monthlyCapCredits,

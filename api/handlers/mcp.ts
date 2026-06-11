@@ -2922,6 +2922,117 @@ async function executeAppFunction(
 }
 
 // ============================================
+// EVENT DELIVERY (Phase 4.5 / P5 pub/sub)
+// ============================================
+
+// Invoke a subscriber's handler for a delivered event. The dispatcher has
+// ALREADY authorized (resolved the active subscribe grant + checked its cap),
+// so this reuses executeAppFunction's full billing / settlement / attribution /
+// recordGrantSpend path WITHOUT re-running the chokepoint — caller_app_id is
+// the emitter, the spend lands on the subscribe grant's monthly cap, and the
+// hop is carried so a handler that re-emits stays bounded.
+export async function executeEventDelivery(input: {
+  subscriberAppId: string;
+  targetFunction: string;
+  payload: Record<string, unknown>;
+  userId: string;
+  emitterAppId: string;
+  grantId: string;
+  hop: number;
+}): Promise<{ success: boolean; receiptId: string | null; error?: string }> {
+  const appsService = createAppsService();
+  const app = await appsService.findById(input.subscriberAppId);
+  if (!app || app.deleted_at) {
+    return { success: false, receiptId: null, error: "Subscriber Agent not found" };
+  }
+
+  let user: UserContext | null = null;
+  try {
+    const { createUserService } = await import("../services/user.ts");
+    const profile = await createUserService().getUser(input.userId);
+    if (profile) {
+      user = {
+        id: profile.id,
+        email: profile.email,
+        displayName: profile.display_name,
+        avatarUrl: profile.avatar_url,
+        tier: profile.tier,
+      };
+    }
+  } catch (err) {
+    console.warn("[EVENT-DELIVERY] Failed to load user context:", err);
+  }
+
+  const callerContext: RequestCallerContext = {
+    authState: "authenticated",
+    authSource: "routine_actor",
+    authUser: null,
+    userId: input.userId,
+    user,
+    userProfile: null,
+    userApiKey: null,
+    tokenAppIds: null,
+    tokenFunctionNames: null,
+    // The verified emitter identity drives attribution + the subscriber's own
+    // outbound caller-context (minted at hop + 1 inside executeAppFunction).
+    callerApp: {
+      appId: input.emitterAppId,
+      callerFunction: null,
+      hop: input.hop,
+    },
+  };
+
+  const response = await executeAppFunction(
+    crypto.randomUUID(),
+    input.targetFunction,
+    input.payload,
+    app,
+    input.userId,
+    user,
+    callerContext,
+    {
+      callerGrantId: input.grantId,
+      incomingHop: input.hop,
+      sessionId: undefined,
+    },
+  );
+
+  try {
+    const body = await response.json() as JsonRpcResponse;
+    if (body.error) {
+      return {
+        success: false,
+        receiptId: null,
+        error: body.error.message || "Delivery failed",
+      };
+    }
+    const receiptId = extractReceiptIdFromResult(body.result);
+    return { success: true, receiptId };
+  } catch {
+    return { success: false, receiptId: null, error: "Unreadable delivery response" };
+  }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function extractReceiptIdFromResult(result: unknown): string | null {
+  // executeAppFunction stamps the receipt id into the tool result content;
+  // best-effort extraction for delivery tracking (null is acceptable). Must be a
+  // uuid — the deliveries.receipt_id column rejects anything else, and a failed
+  // PATCH would otherwise leave the delivery row stuck 'pending'.
+  if (result && typeof result === "object") {
+    const r = result as Record<string, unknown>;
+    const candidate = typeof r.receiptId === "string"
+      ? r.receiptId
+      : typeof r.receipt_id === "string"
+      ? r.receipt_id
+      : null;
+    if (candidate && UUID_RE.test(candidate)) return candidate;
+  }
+  return null;
+}
+
+// ============================================
 // HELPERS
 // ============================================
 

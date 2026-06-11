@@ -36,6 +36,10 @@ export interface AppManifest {
   // private Agents the developer could never name. These are hints that
   // prepopulate the wiring UI; the binding (a grant) is the real authority.
   imports?: Record<string, ManifestSlotImport>;
+  // Pub/sub topics this Agent publishes via ultralight.emit(topic, payload).
+  // A hint that prepopulates the subscription UI; emitting is unprivileged —
+  // a subscriber only receives if the user wired a mode='subscribe' grant.
+  emits?: string[];
   widgets?: WidgetDeclaration[];
   context_sources?: WidgetContextSourceDeclaration[];
   routines?: RoutineDeclaration[];
@@ -2496,6 +2500,17 @@ export function validateManifest(input: unknown): ManifestValidationResult {
 
   validateManifestExternalFunctions(manifest.external_functions, errors);
   validateManifestImports(manifest.imports, errors);
+  if (manifest.emits !== undefined) {
+    if (
+      !Array.isArray(manifest.emits) ||
+      manifest.emits.some((t) => typeof t !== 'string' || !t.trim())
+    ) {
+      errors.push({
+        path: 'emits',
+        message: 'emits must be an array of non-empty topic strings',
+      });
+    }
+  }
 
   if (
     manifest.env !== undefined &&

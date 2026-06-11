@@ -264,6 +264,30 @@ globalThis.ultralight = {
     }
     return result;
   },
+  // Publish a pub/sub event. Unprivileged — a subscriber only receives it if
+  // the USER wired a subscribe grant. The signed caller context (asserting this
+  // app + user, unforgeably) identifies the emitter; the worker secret gates
+  // the internal endpoint. Capped per execution to bound emit storms.
+  async emit(topic, payload) {
+    if (!topic || typeof topic !== 'string') throw new Error('emit requires a topic string');
+    var __ctx = ${callerContextToken};
+    if (!__ctx) throw new Error('emit requires an authenticated user context');
+    globalThis.__emitCount = (globalThis.__emitCount || 0) + 1;
+    if (globalThis.__emitCount > 50) throw new Error('emit limit reached for this execution');
+    var __body = JSON.stringify({ topic: topic, payload: payload || {} });
+    // Fail fast on an oversized payload (the server enforces a 32KB payload cap
+    // authoritatively; this just avoids a wasted round-trip with a clearer error).
+    if (__body.length > 64 * 1024) throw new Error('emit payload too large (max 32KB)');
+    var e = globalThis.__rpcEnv;
+    var fetchFn = (e && e.SELF) ? e.SELF.fetch.bind(e.SELF) : fetch;
+    var resp = await fetchFn('https://internal/api/events/emit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Worker-Secret': ${netWorkerSecret}, 'X-Ultralight-Caller': __ctx },
+      body: __body
+    });
+    if (!resp.ok) { var t = await resp.text().catch(function() { return resp.statusText; }); throw new Error('emit failed (' + resp.status + '): ' + t); }
+    return await resp.json();
+  },
   // Resolve a logical slot (declared in this Agent's manifest imports) to the
   // concrete target the user wired it to. Only the granted functions are
   // exposed; each routes through ultralight.call (grant-gated at the target).
