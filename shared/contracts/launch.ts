@@ -204,6 +204,12 @@ export interface LaunchAgentInstallContext {
   publicToolUrl: string;
   installUrl: string;
   platformMcpUrl: string;
+  /** Dedicated MCP endpoint for this Agent (uuid-addressed). */
+  agentMcpUrl: string;
+  /** mcp.json snippet for the dedicated endpoint ($ULTRALIGHT_API_KEY placeholder). */
+  mcpConfigText: string;
+  /** Paste-into-agent prompt for this Agent ($ULTRALIGHT_API_KEY placeholder). */
+  connectPrompt: string;
   recommendedApiKey: LaunchApiKeyCreateRequest;
   agentHandoff: string[];
 }

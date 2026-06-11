@@ -286,6 +286,9 @@ Deno.test('launch facade: install can include tool-specific handoff', async () =
           selectedToolSlug: string;
           publicToolUrl: string;
           platformMcpUrl: string;
+          agentMcpUrl: string;
+          mcpConfigText: string;
+          connectPrompt: string;
           recommendedApiKey: {
             scopes?: string[];
             appIds?: string[];
@@ -304,6 +307,10 @@ Deno.test('launch facade: install can include tool-specific handoff', async () =
         body.toolInstall?.platformMcpUrl,
         'https://ultralight.test/mcp/platform',
       );
+      assertEquals(
+        body.toolInstall?.agentMcpUrl,
+        'https://ultralight.test/mcp/app-1',
+      );
       assertEquals(body.toolInstall?.recommendedApiKey.scopes, [
         'apps:call',
       ]);
@@ -312,6 +319,19 @@ Deno.test('launch facade: install can include tool-specific handoff', async () =
       assertStringIncludes(
         body.toolInstall?.agentHandoff.join('\n') || '',
         'receipt_id',
+      );
+      // The per-agent prompt installs the dedicated endpoint, named by slug.
+      assertStringIncludes(
+        body.toolInstall?.connectPrompt || '',
+        'claude mcp add --transport http --scope user deploy-helper https://ultralight.test/mcp/app-1',
+      );
+      assertStringIncludes(
+        body.toolInstall?.connectPrompt || '',
+        '"Authorization":"Bearer $ULTRALIGHT_API_KEY"',
+      );
+      assertStringIncludes(
+        body.toolInstall?.mcpConfigText || '',
+        '"deploy-helper"',
       );
     },
     async (input) => {

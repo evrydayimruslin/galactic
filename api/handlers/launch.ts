@@ -4452,6 +4452,33 @@ async function buildToolInstallContext(
     tool.publicUrl || `/agents/${encodeURIComponent(tool.slug)}`
   }`;
   const installUrl = `${baseUrl}/install?agent=${encodeURIComponent(tool.slug)}`;
+  // The dedicated endpoint is uuid-addressed: /mcp/:appId resolves ids only,
+  // and uuids stay unambiguous (slugs are only unique per owner).
+  const agentMcpUrl = `${baseUrl}/mcp/${tool.id}`;
+  const bearer = "Bearer $ULTRALIGHT_API_KEY";
+  const agentMcpConfig = {
+    mcpServers: {
+      [tool.slug]: {
+        url: agentMcpUrl,
+        headers: { Authorization: bearer },
+      },
+    },
+  };
+  const connectPrompt = [
+    `Set up the "${tool.name}" Agent from Ultralight for me, then start using it.`,
+    "",
+    `"${tool.name}" is an Agent hosted on Ultralight. Connect to it as a standalone MCP server; the API key below is scoped to this Agent only.`,
+    "",
+    "1. Install the MCP server (pick whichever works in your environment):",
+    `   - Claude Code: claude mcp add --transport http --scope user ${tool.slug} ${agentMcpUrl} --header "Authorization: ${bearer}"`,
+    `   - Any MCP config file: ${JSON.stringify(agentMcpConfig)}`,
+    "",
+    `2. Connect, then run tools/list to see what "${tool.name}" can do. ${publicToolUrl} documents pricing and trust.`,
+    "",
+    `3. Prove it works: pick its most representative read-only function and call it, then tell me in a few lines how you can use "${tool.name}" for me going forward.`,
+    "",
+    "Calls may spend credits from my Ultralight wallet: preserve receipt_id values and surface any credits-balance errors. Treat the API key as a secret: never echo it back, log it, or commit it anywhere.",
+  ].join("\n");
 
   return {
     agent: tool,
@@ -4463,6 +4490,9 @@ async function buildToolInstallContext(
     publicToolUrl,
     installUrl,
     platformMcpUrl,
+    agentMcpUrl,
+    mcpConfigText: JSON.stringify(agentMcpConfig, null, 2),
+    connectPrompt,
     recommendedApiKey: {
       name: `${tool.slug} connected agent`,
       expiresInDays: 90,
@@ -4471,7 +4501,7 @@ async function buildToolInstallContext(
     },
     agentHandoff: [
       `Inspect ${publicToolUrl} for pricing and trust.`,
-      `Use ${platformMcpUrl} as the Ultralight MCP endpoint with a bearer API key scoped to app ${tool.id}.`,
+      `Connect via this Agent's dedicated MCP endpoint ${agentMcpUrl} (or the platform endpoint ${platformMcpUrl}) with a bearer API key scoped to app ${tool.id}.`,
       `Call this Agent through MCP/API, then return ${publicToolUrl} when UI is useful.`,
       "Preserve receipt_id values and credits balance errors in the final agent response.",
     ],

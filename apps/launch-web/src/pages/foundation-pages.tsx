@@ -17,6 +17,7 @@ import { DEFAULT_GRANT_MONTHLY_CAP_CREDITS } from "../../../../shared/contracts/
 import {
   LAUNCH_SCOPE_CONTRACT,
   type LaunchCallerFunctionPermissionsResponse,
+  type LaunchApiKeyCreateResponse,
   type LaunchApiKeySummary,
   type LaunchByokProviderOption,
   type LaunchDeferredCapability,
@@ -27,6 +28,7 @@ import {
   type LaunchLeaderboardEntry,
   type LaunchMoneyAmount,
   type LaunchPublisherPublishRequirement,
+  type LaunchAgentInstallContext,
   type LaunchAgentRelationship,
   type LaunchAgentSummary,
   type LaunchTrustCard,
@@ -180,6 +182,56 @@ function mintConnectKey(): Promise<string> {
     expiresInDays: 90,
     name: connectKeyName(),
   }).then((response) => response.plaintextToken);
+}
+
+// Per-agent connect key: scoped to one Agent (appIds), so it can call that
+// Agent's dedicated MCP endpoint and nothing else.
+function mintAgentConnectKey(
+  agent: { id: string; slug: string },
+): Promise<string> {
+  const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const suffix = Math.random().toString(36).slice(2, 6);
+  return launchApi.createApiKey({
+    appIds: [agent.id],
+    expiresInDays: 90,
+    name: `${agent.slug} connect ${stamp} ${suffix}`,
+    scopes: ["apps:call"],
+  }).then((response) => response.plaintextToken);
+}
+
+// Local fallback mirroring the BE connectPrompt (buildToolInstallContext in
+// api/handlers/launch.ts) for when the live install context is unavailable.
+function buildAgentConnectPrompt(
+  agent: { id: string; slug: string; title: string },
+  key: string,
+): string {
+  const agentMcpUrl = `${apiOrigin}/mcp/${agent.id}`;
+  const config = JSON.stringify({
+    mcpServers: {
+      [agent.slug]: {
+        url: agentMcpUrl,
+        headers: { Authorization: `Bearer ${key}` },
+      },
+    },
+  });
+  const publicUrl = `${window.location.origin}/agents/${
+    encodeURIComponent(agent.slug)
+  }`;
+  return [
+    `Set up the "${agent.title}" Agent from Ultralight for me, then start using it.`,
+    "",
+    `"${agent.title}" is an Agent hosted on Ultralight. Connect to it as a standalone MCP server; the API key below is scoped to this Agent only.`,
+    "",
+    "1. Install the MCP server (pick whichever works in your environment):",
+    `   - Claude Code: claude mcp add --transport http --scope user ${agent.slug} ${agentMcpUrl} --header "Authorization: Bearer ${key}"`,
+    `   - Any MCP config file: ${config}`,
+    "",
+    `2. Connect, then run tools/list to see what "${agent.title}" can do. ${publicUrl} documents pricing and trust.`,
+    "",
+    `3. Prove it works: pick its most representative read-only function and call it, then tell me in a few lines how you can use "${agent.title}" for me going forward.`,
+    "",
+    "Calls may spend credits from my Ultralight wallet: preserve receipt_id values and surface any credits-balance errors. Treat the API key as a secret: never echo it back, log it, or commit it anywhere.",
+  ].join("\n");
 }
 
 function agentPreviewPath(tool: Pick<AgentDetailFixture, "slug">): string {
@@ -754,6 +806,11 @@ function AddToAgentButton({
       </RouteButton>
     );
   }
+  const buildPrompt = (key: string) => {
+    const promptTarget = liveInstallTargets(instructions)
+      .find((target) => target.target === "prompt") ?? installTargets[0];
+    return promptTarget.config(key);
+  };
   return (
     <>
       <Button
@@ -767,7 +824,9 @@ function AddToAgentButton({
       {open
         ? (
           <ConnectPromptModal
-            instructions={instructions}
+            buildPrompt={buildPrompt}
+            intro="This created a 90-day API key (full capability — your per-Agent permissions still govern every call) and baked it into the prompt below. The key is shown only here."
+            mint={mintConnectKey}
             navigate={navigate}
             onClose={() => setOpen(false)}
           />
@@ -778,28 +837,34 @@ function AddToAgentButton({
 }
 
 function ConnectPromptModal({
-  instructions,
+  buildPrompt,
+  intro,
+  mint,
   navigate,
   onClose,
 }: {
-  instructions?: LaunchInstallInstruction[];
+  buildPrompt: (key: string) => string;
+  intro: string;
+  mint: () => Promise<string>;
   navigate: (to: string) => void;
   onClose: () => void;
 }): ReactElement {
   const [prompt, setPrompt] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [autoCopied, setAutoCopied] = useState(false);
+  // Both StrictMode dev mounts must share ONE mint — a key is a server-side
+  // credential, so the effect cannot simply re-run.
+  const mintOnce = useRef<Promise<string> | null>(null);
 
   // Mint exactly once per modal open; the click that opened the modal is the
   // consent to create a key.
   useEffect(() => {
     let cancelled = false;
-    const promptTarget = liveInstallTargets(instructions)
-      .find((target) => target.target === "prompt") ?? installTargets[0];
-    mintConnectKey()
+    if (!mintOnce.current) mintOnce.current = mint();
+    mintOnce.current
       .then(async (token) => {
         if (cancelled) return;
-        const text = promptTarget.config(token);
+        const text = buildPrompt(token);
         setPrompt(text);
         try {
           await navigator.clipboard?.writeText(text);
@@ -836,10 +901,7 @@ function ConnectPromptModal({
               : "Creating your agent prompt"}
           </h2>
         </div>
-        <p>
-          {errorMessage ??
-            "This created a 90-day API key (full capability — your per-Agent permissions still govern every call) and baked it into the prompt below. The key is shown only here."}
-        </p>
+        <p>{errorMessage ?? intro}</p>
         {prompt
           ? <ConfigPreview code={prompt} title="agent-prompt.txt" wrap />
           : null}
@@ -1273,14 +1335,60 @@ export function AgentFoundationPage(
   }
   return (
     <AgentDetailSurface
-      // Reset per-agent UI state (tab, selected function, install toggle)
-      // when navigating between agent pages.
+      // Reset per-agent UI state (tab, selected function) when navigating
+      // between agent pages.
       key={tool.id}
       live={live}
       locationSearch={location.search}
       navigate={navigate}
       tool={tool}
     />
+  );
+}
+
+function AgentConnectButton({
+  agentInstall,
+  navigate,
+  tool,
+}: {
+  agentInstall?: LaunchAgentInstallContext | null;
+  navigate: (to: string) => void;
+  tool: AgentDetailFixture;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  // Signed out there is no key to mint — sign in and land back on this page.
+  if (!hasLaunchAuthToken()) {
+    return (
+      <Button
+        href={buildLaunchSignInUrl(`/agents/${tool.slug}`)}
+        icon="copy"
+        size="lg"
+      >
+        Add to your agent
+      </Button>
+    );
+  }
+  const buildPrompt = (key: string) =>
+    agentInstall?.connectPrompt
+      ? agentInstall.connectPrompt.replaceAll(apiKeyPlaceholder, key)
+      : buildAgentConnectPrompt(tool, key);
+  return (
+    <>
+      <Button icon="copy" onClick={() => setOpen(true)} size="lg">
+        Add to your agent
+      </Button>
+      {open
+        ? (
+          <ConnectPromptModal
+            buildPrompt={buildPrompt}
+            intro={`This created a 90-day API key scoped to ${tool.title} only and baked it into the prompt below. The key is shown only here.`}
+            mint={() => mintAgentConnectKey(tool)}
+            navigate={navigate}
+            onClose={() => setOpen(false)}
+          />
+        )
+        : null}
+    </>
   );
 }
 
@@ -1295,7 +1403,6 @@ function AgentDetailSurface({
   navigate: (to: string) => void;
   tool: AgentDetailFixture;
 }): ReactElement {
-  const [installed, setInstalled] = useState(false);
   const [tab, setTab] = useState<AgentPageTabId>(() => agentTabFromSearch());
   const [selectedFunctionName, setSelectedFunctionName] = useState(
     tool.functions[0]?.name || "",
@@ -1355,22 +1462,18 @@ function AgentDetailSurface({
               : null}
           </div>
           <div className="tool-header-actions">
-            <Button
-              icon={installed ? "check" : undefined}
-              onClick={() => setInstalled((value) => !value)}
-              size="lg"
-              variant={installed ? "secondary" : "primary"}
-            >
-              {installed ? "Installed" : "Install"}
-            </Button>
+            <AgentConnectButton
+              agentInstall={live.data.install?.agentInstall}
+              navigate={navigate}
+              tool={tool}
+            />
             <RouteButton
-              icon="copy"
               navigate={navigate}
               size="lg"
               to="/install"
               variant="secondary"
             >
-              Copy MCP config
+              Install guide
             </RouteButton>
           </div>
         </div>
@@ -4780,6 +4883,9 @@ function NewApiKeyModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [creating, setCreating] = useState(true);
   const onCreatedRef = useRef(onCreated);
+  // Both StrictMode dev mounts must share ONE create call — a key is a
+  // server-side credential, so the effect cannot simply re-run.
+  const createOnce = useRef<Promise<LaunchApiKeyCreateResponse> | null>(null);
 
   useEffect(() => {
     onCreatedRef.current = onCreated;
@@ -4787,11 +4893,14 @@ function NewApiKeyModal({
 
   useEffect(() => {
     let cancelled = false;
-    launchApi.createApiKey({
-      expiresInDays: 90,
-      name: `Launch web ${new Date().toLocaleDateString()}`,
-      scopes: ["apps:call"],
-    })
+    if (!createOnce.current) {
+      createOnce.current = launchApi.createApiKey({
+        expiresInDays: 90,
+        name: `Launch web ${new Date().toLocaleDateString()}`,
+        scopes: ["apps:call"],
+      });
+    }
+    createOnce.current
       .then((response) => {
         if (cancelled) return;
         setPlaintextToken(response.plaintextToken);

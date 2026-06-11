@@ -166,6 +166,7 @@ async function loadRouteData(
         agentCallerPermissions,
         agentWiring,
         agentCallerTrust,
+        install,
       ] = await Promise
         .all([
           launchApi.agent(id),
@@ -173,6 +174,8 @@ async function loadRouteData(
           optional(() => launchApi.agentCallerPermissions(id)),
           optional(() => launchApi.agentWiring(id)),
           optional(() => launchApi.agentCallerTrust(id)),
+          // Per-agent install context (dedicated MCP URL + connect prompt).
+          optional(() => launchApi.install({ agent: id })),
         ]);
       return {
         agent,
@@ -180,6 +183,7 @@ async function loadRouteData(
         agentCallerTrust,
         agentFunctions,
         agentWiring,
+        install,
       };
     }
     case "library": {
