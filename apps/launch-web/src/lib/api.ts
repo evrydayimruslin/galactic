@@ -123,6 +123,11 @@ export class LaunchApiAuthenticationError extends Error {
 const configuredLaunchApiBaseUrl =
   import.meta.env.VITE_LAUNCH_API_BASE_URL?.trim().replace(/\/$/u, "") || "";
 
+// Origin of the API worker — also the MCP host that install snippets point at.
+export function launchApiOrigin(): string {
+  return configuredLaunchApiBaseUrl || window.location.origin;
+}
+
 export interface LaunchLeaderboardRequest {
   period?: LaunchLeaderboardResponse["period"];
   limit?: number;

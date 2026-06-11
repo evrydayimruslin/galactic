@@ -114,6 +114,7 @@ export type LaunchCompatibilityApiRoute =
   typeof LAUNCH_COMPATIBILITY_API_ROUTES[number];
 
 export const LAUNCH_INSTALL_TARGETS = [
+  "prompt",
   "claude_code",
   "cursor",
   "codex",

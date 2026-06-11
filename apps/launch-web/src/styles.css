@@ -1085,6 +1085,40 @@ button {
   color: rgba(255, 255, 255, 0.5);
 }
 
+.config-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.config-copy:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #fff;
+}
+
+.config-preview.wrap pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.connect-modal {
+  width: min(640px, calc(100vw - 48px));
+}
+
+.connect-modal .config-preview pre {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 .config-preview pre {
   overflow-x: auto;
   margin: 0;

@@ -37,11 +37,12 @@ import {
 } from "../../../../shared/contracts/launch.ts";
 import type { LaunchPageProps } from "../App";
 import {
+  buildLaunchSignInUrl,
   getLaunchAuthDiagnostic,
   hasLaunchAuthToken,
   signOutLaunch,
 } from "../lib/auth";
-import { launchApi } from "../lib/api";
+import { launchApi, launchApiOrigin } from "../lib/api";
 import { getStripe, type Stripe, type StripeElements } from "../lib/stripe";
 import {
   Avatar,
@@ -84,7 +85,7 @@ interface AgentFixture {
 interface InstallTarget {
   config: (key: string) => string;
   description: string;
-  group: "MCP" | "Direct";
+  group: "Prompt" | "MCP" | "Direct";
   label: string;
   requiresApiKey: boolean;
   steps: string[];
@@ -129,7 +130,57 @@ interface AgentDetailFixture extends AgentFixture {
 }
 
 const apiKeyPlaceholder = "$ULTRALIGHT_API_KEY";
-const mcpUrl = "https://api.ultralight.dev/mcp/platform";
+// The MCP host is the API worker itself — derive it so snippets can never
+// drift to a stale hardcoded domain.
+const apiOrigin = launchApiOrigin();
+const mcpUrl = `${apiOrigin}/mcp/platform`;
+
+// Local fallback mirroring the BE `prompt` install instruction
+// (buildInstallInstructions in api/handlers/launch.ts) for when the live
+// instructions are unavailable.
+function buildConnectPrompt(key: string): string {
+  const claudeCodeAdd =
+    `claude mcp add --transport http --scope user ultralight ${mcpUrl} --header "Authorization: Bearer ${key}"`;
+  const genericConfig = JSON.stringify({
+    mcpServers: {
+      ultralight: { url: mcpUrl, headers: { Authorization: `Bearer ${key}` } },
+    },
+  });
+  return [
+    "Set up Ultralight for me, then start using it.",
+    "",
+    "Ultralight is one MCP server that gives you a library of Agents (apps) you can discover, call, and deploy, with unified auth and per-call payments.",
+    "",
+    "1. Install the MCP server (pick whichever works in your environment):",
+    `   - Claude Code: ${claudeCodeAdd}`,
+    `   - Any MCP config file: ${genericConfig}`,
+    `   - Automated installer: npx ultralightpro setup --token ${key}`,
+    "",
+    "2. Connect, then learn the platform: the server's initialize response carries the full platform guide. The same docs live at the ultralight://platform/skills.md MCP resource" +
+    ` and ${apiOrigin}/api/skills.`,
+    "",
+    '3. Prove it works: call ul.discover with {"scope":"library"} to list the Agents already installed on this account, then tell me in a few lines what you can now do for me.',
+    "",
+    "Treat the API key in this prompt as a secret: never echo it back, log it, or commit it anywhere.",
+  ].join("\n");
+}
+
+// Key names are unique per user; the suffix keeps repeat connects from 409ing.
+function connectKeyName(): string {
+  const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const suffix = Math.random().toString(36).slice(2, 6);
+  return `Agent connect ${stamp} ${suffix}`;
+}
+
+// Full-capability key (scopes omitted defaults to all): what a connected agent
+// may actually do at runtime stays governed by the user's per-Agent
+// permission policies, not the token.
+function mintConnectKey(): Promise<string> {
+  return launchApi.createApiKey({
+    expiresInDays: 90,
+    name: connectKeyName(),
+  }).then((response) => response.plaintextToken);
+}
 
 function agentPreviewPath(tool: Pick<AgentDetailFixture, "slug">): string {
   return `/agents/${encodeURIComponent(tool.slug)}`;
@@ -165,7 +216,22 @@ const primitives = [
 
 const installTargets: InstallTarget[] = [
   {
-    config: (key) => genericMcpConfig(key),
+    config: (key) => buildConnectPrompt(key),
+    description:
+      "One prompt that makes any agent install Ultralight itself and start using it.",
+    group: "Prompt",
+    label: "Agent prompt",
+    requiresApiKey: true,
+    steps: [
+      "Create an API key so the prompt carries a real credential.",
+      "Paste the prompt into any agent: Claude Code, Cursor, or anything MCP-capable.",
+      "The agent installs the MCP server, reads the platform guide, and reports what it can do.",
+    ],
+    target: "prompt",
+  },
+  {
+    config: (key) =>
+      `claude mcp add --transport http --scope user ultralight ${mcpUrl} --header "Authorization: Bearer ${key}"`,
     description:
       "Add Ultralight as a remote MCP server for an existing Claude Code workspace.",
     group: "MCP",
@@ -173,8 +239,8 @@ const installTargets: InstallTarget[] = [
     requiresApiKey: true,
     steps: [
       "Create an Ultralight API token from Settings.",
-      "Set ULTRALIGHT_API_KEY in your shell or Claude Code environment.",
-      "Add the remote MCP server with an Authorization header.",
+      "Run the command below with your token in place of the placeholder.",
+      "Run /mcp (or restart) so Claude Code picks up the ultralight server.",
     ],
     target: "claude_code",
   },
@@ -257,7 +323,7 @@ const installTargets: InstallTarget[] = [
   },
   {
     config: (key) =>
-      `curl "https://api.ultralight.dev/api/launch/status"\ncurl -H "Authorization: Bearer ${key}" \\\n  "https://api.ultralight.dev/api/launch/library"`,
+      `curl "${apiOrigin}/api/launch/status"\ncurl -H "Authorization: Bearer ${key}" \\\n  "${apiOrigin}/api/launch/library"`,
     description:
       "Call launch and platform endpoints directly with an Ultralight API token.",
     group: "Direct",
@@ -509,9 +575,14 @@ function liveInstallTargets(
 ): InstallTarget[] {
   if (!instructions || instructions.length === 0) return installTargets;
   return instructions.map((instruction) => ({
-    config: () => instruction.configText || "",
+    // Snippets arrive with the $ULTRALIGHT_API_KEY placeholder; substituting
+    // the caller's key lets a freshly minted token flow into every snippet.
+    config: (key) =>
+      (instruction.configText || "").replaceAll(apiKeyPlaceholder, key),
     description: instruction.description,
-    group: instruction.target === "cli" || instruction.target === "api"
+    group: instruction.target === "prompt"
+      ? "Prompt"
+      : instruction.target === "cli" || instruction.target === "api"
       ? "Direct"
       : "MCP",
     label: instruction.label,
@@ -656,10 +727,145 @@ function ApiNotice({
   return null;
 }
 
+function AddToAgentButton({
+  instructions,
+  navigate,
+  size = "lg",
+  variant,
+}: {
+  instructions?: LaunchInstallInstruction[];
+  navigate: (to: string) => void;
+  size?: "sm" | "md" | "lg";
+  variant?: "primary" | "secondary" | "ghost";
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  // Signed out there is no key to mint — route to the install page, which
+  // carries the sign-in CTA.
+  if (!hasLaunchAuthToken()) {
+    return (
+      <RouteButton
+        icon="copy"
+        navigate={navigate}
+        size={size}
+        to="/install"
+        variant={variant}
+      >
+        Add to agent
+      </RouteButton>
+    );
+  }
+  return (
+    <>
+      <Button
+        icon="copy"
+        onClick={() => setOpen(true)}
+        size={size}
+        variant={variant}
+      >
+        Add to agent
+      </Button>
+      {open
+        ? (
+          <ConnectPromptModal
+            instructions={instructions}
+            navigate={navigate}
+            onClose={() => setOpen(false)}
+          />
+        )
+        : null}
+    </>
+  );
+}
+
+function ConnectPromptModal({
+  instructions,
+  navigate,
+  onClose,
+}: {
+  instructions?: LaunchInstallInstruction[];
+  navigate: (to: string) => void;
+  onClose: () => void;
+}): ReactElement {
+  const [prompt, setPrompt] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [autoCopied, setAutoCopied] = useState(false);
+
+  // Mint exactly once per modal open; the click that opened the modal is the
+  // consent to create a key.
+  useEffect(() => {
+    let cancelled = false;
+    const promptTarget = liveInstallTargets(instructions)
+      .find((target) => target.target === "prompt") ?? installTargets[0];
+    mintConnectKey()
+      .then(async (token) => {
+        if (cancelled) return;
+        const text = promptTarget.config(token);
+        setPrompt(text);
+        try {
+          await navigator.clipboard?.writeText(text);
+          if (!cancelled) setAutoCopied(true);
+        } catch {
+          // Manual copy via the snippet button still works.
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setErrorMessage(err instanceof Error ? err.message : String(err));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mint once per open
+  }, []);
+
+  return (
+    <div className="settings-modal-backdrop">
+      <Card className="new-key-modal connect-modal">
+        <div className="modal-title-row">
+          <span className="target-icon">
+            <Icon name={errorMessage ? "key" : autoCopied ? "check" : "copy"} />
+          </span>
+          <h2>
+            {errorMessage
+              ? "Could not create a key"
+              : prompt
+              ? autoCopied
+                ? "Prompt copied — paste it into your agent"
+                : "Your agent prompt is ready"
+              : "Creating your agent prompt"}
+          </h2>
+        </div>
+        <p>
+          {errorMessage ??
+            "This created a 90-day API key (full capability — your per-Agent permissions still govern every call) and baked it into the prompt below. The key is shown only here."}
+        </p>
+        {prompt
+          ? <ConfigPreview code={prompt} title="agent-prompt.txt" wrap />
+          : null}
+        <div className="modal-actions">
+          <Button
+            onClick={() => {
+              onClose();
+              navigate("/install");
+            }}
+            size="sm"
+            variant="secondary"
+          >
+            Full install guide
+          </Button>
+          <Button onClick={onClose} size="sm">Done</Button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 export function HomeFoundationPage(
   { live, navigate }: LaunchPageProps,
 ): ReactElement {
   const homeTools = liveStoreAgents(live.data.store?.results).slice(0, 6);
+  const installInstructions = live.data.install?.instructions;
   return (
     <div className="launch-page-narrow home-page">
       <ApiNotice live={live} noun="launch data" />
@@ -673,14 +879,10 @@ export function HomeFoundationPage(
             auth and payments. Or deploy your own.
           </p>
           <div className="hero-actions left">
-            <RouteButton
-              icon="copy"
+            <AddToAgentButton
+              instructions={installInstructions}
               navigate={navigate}
-              size="lg"
-              to="/install"
-            >
-              Add to agent
-            </RouteButton>
+            />
             <RouteButton
               navigate={navigate}
               size="lg"
@@ -732,9 +934,10 @@ export function HomeFoundationPage(
             Point your connected agent at a single MCP server. It discovers the
             whole catalog, calls any Agent, and settles in credits.
           </p>
-          <RouteButton icon="copy" navigate={navigate} size="lg" to="/install">
-            Add to agent
-          </RouteButton>
+          <AddToAgentButton
+            instructions={installInstructions}
+            navigate={navigate}
+          />
         </div>
         <ConfigPreview />
       </section>
@@ -748,15 +951,11 @@ export function HomeFoundationPage(
           </p>
         </div>
         <div className="hero-actions left">
-          <RouteButton
-            icon="copy"
+          <AddToAgentButton
+            instructions={installInstructions}
             navigate={navigate}
-            size="lg"
-            to="/install"
             variant="secondary"
-          >
-            Add to agent
-          </RouteButton>
+          />
           <RouteButton
             navigate={navigate}
             size="lg"
@@ -773,15 +972,18 @@ export function HomeFoundationPage(
 
 export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
   const targets = liveInstallTargets(live.data.install?.instructions);
-  const firstTarget = targets[0]?.target || "claude_code";
+  const firstTarget = targets[0]?.target || "prompt";
   const [target, setTarget] = useState(firstTarget);
-  const signedIn = Boolean(live.data.apiKeys?.apiKeys?.length);
+  const [mintedKey, setMintedKey] = useState<string | null>(null);
+  const signedIn = hasLaunchAuthToken();
   const selected = targets.find((item) => item.target === target) ||
     targets[0] || installTargets[0];
-  // Always render the placeholder in snippets: the API only exposes key
-  // PREFIXES, and substituting one would produce a config that looks ready to
-  // run but holds a non-functional credential.
-  const key = apiKeyPlaceholder;
+  // The API only exposes key PREFIXES after creation, so snippets show the
+  // placeholder until a key is minted on this page — then the real token
+  // (held only in memory) flows into every snippet.
+  const key = mintedKey ?? apiKeyPlaceholder;
+  const promptTarget = targets.find((item) => item.target === "prompt") ??
+    installTargets[0];
 
   useEffect(() => {
     if (!targets.some((item) => item.target === target)) {
@@ -807,7 +1009,12 @@ export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
         ))}
       </div>
 
-      <KeyBanner signedIn={signedIn} />
+      <ConnectCta
+        keyLive={Boolean(mintedKey)}
+        onMinted={setMintedKey}
+        promptText={(value) => promptTarget.config(value)}
+        signedIn={signedIn}
+      />
 
       <div className="install-grid">
         <aside className="target-sidebar">
@@ -819,15 +1026,132 @@ export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
               <h2>{selected.label}</h2>
               <p>{selected.description}</p>
             </div>
-            {selected.requiresApiKey ? <Pill>requires API key</Pill> : null}
+            {selected.requiresApiKey && !mintedKey
+              ? <Pill>requires API key</Pill>
+              : null}
+            {mintedKey ? <Pill>key filled in</Pill> : null}
           </div>
           <ol className="install-steps">
             {selected.steps.map((step) => <li key={step}>{step}</li>)}
           </ol>
-          <ConfigPreview code={selected.config(key)} highlight={key} />
+          <ConfigPreview
+            code={selected.config(key)}
+            highlight={key}
+            title={snippetTitle(selected)}
+            wrap={selected.target === "prompt"}
+          />
         </section>
       </div>
     </div>
+  );
+}
+
+function snippetTitle(target: InstallTarget): string {
+  if (target.target === "prompt") return "agent-prompt.txt";
+  if (target.target === "claude_code" || target.group === "Direct") {
+    return "shell";
+  }
+  return "mcp.json";
+}
+
+function ConnectCta({
+  keyLive,
+  onMinted,
+  promptText,
+  signedIn,
+}: {
+  keyLive: boolean;
+  onMinted: (token: string) => void;
+  promptText: (key: string) => string;
+  signedIn: boolean;
+}): ReactElement {
+  const [status, setStatus] = useState<"idle" | "working" | "copied" | "ready" | "error">("idle");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const connect = () => {
+    if (status === "working") return;
+    setStatus("working");
+    setErrorMessage(null);
+    mintConnectKey()
+      .then(async (token) => {
+        onMinted(token);
+        try {
+          await navigator.clipboard?.writeText(promptText(token));
+          setStatus("copied");
+        } catch {
+          setStatus("ready");
+        }
+      })
+      .catch((err) => {
+        setErrorMessage(err instanceof Error ? err.message : String(err));
+        setStatus("error");
+      });
+  };
+
+  if (!signedIn) {
+    return (
+      <section className="key-banner connect-cta">
+        <span className="target-icon">
+          <Icon name="key" />
+        </span>
+        <div>
+          <h2>Connect your agent in one paste</h2>
+          <p>
+            Sign in, and one click creates an API key and copies a
+            ready-to-paste prompt that sets up your agent.
+          </p>
+        </div>
+        <Button href={buildLaunchSignInUrl("/install")} size="lg">
+          Sign in to connect
+        </Button>
+      </section>
+    );
+  }
+
+  if (keyLive) {
+    return (
+      <section className="key-banner signed-in connect-cta">
+        <span className="target-icon">
+          <Icon name="check" />
+        </span>
+        <div>
+          <h2>
+            {status === "copied"
+              ? "Prompt copied — paste it into your agent"
+              : "API key created"}
+          </h2>
+          <p>
+            Your new key is filled into every snippet below. It is shown only
+            on this page — copy what you need before leaving.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="key-banner signed-in connect-cta">
+      <span className="target-icon">
+        <Icon name="key" />
+      </span>
+      <div>
+        <h2>Connect your agent in one paste</h2>
+        <p>
+          One click creates a 90-day API key (full capability — your per-Agent
+          permissions still govern every call) and copies a ready-to-paste
+          prompt.
+          {errorMessage ? ` Could not create a key: ${errorMessage}` : ""}
+        </p>
+      </div>
+      <Button
+        disabled={status === "working"}
+        icon="copy"
+        onClick={connect}
+        size="lg"
+      >
+        {status === "working" ? "Creating key…" : "Create key & copy prompt"}
+      </Button>
+    </section>
   );
 }
 
@@ -4611,18 +4935,33 @@ function AgentOrbit(): ReactElement {
 function ConfigPreview({
   code,
   highlight,
+  title,
+  wrap = false,
 }: {
   code?: string;
   highlight?: string;
+  title?: string;
+  wrap?: boolean;
 }): ReactElement {
   const config = code ?? genericMcpConfig("$KEY");
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(config).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  };
   return (
-    <div className="config-preview">
+    <div className={wrap ? "config-preview wrap" : "config-preview"}>
       <div className="config-titlebar">
         <span style={{ background: "#ec6a5e" }} />
         <span style={{ background: "#f4bf4f" }} />
         <span style={{ background: "#61c554" }} />
-        <Mono>mcp.json</Mono>
+        <Mono>{title ?? "mcp.json"}</Mono>
+        <button className="config-copy" onClick={copy} type="button">
+          <Icon name={copied ? "check" : "copy"} />
+          {copied ? "Copied" : "Copy"}
+        </button>
       </div>
       <pre>
         <code>{highlight ? highlightSnippet(config, highlight) : config}</code>
@@ -4665,28 +5004,6 @@ function CompactAgentCard({ tool }: { tool: AgentFixture }): ReactElement {
   );
 }
 
-function KeyBanner({ signedIn }: { signedIn: boolean }): ReactElement {
-  return (
-    <section className={signedIn ? "key-banner signed-in" : "key-banner"}>
-      <span className="target-icon">
-        <Icon name="key" />
-      </span>
-      <div>
-        <h2>
-          {signedIn
-            ? "Add your API key to a snippet"
-            : "Sign in to create an API key"}
-        </h2>
-        <p>
-          Snippets show <Mono>{apiKeyPlaceholder}</Mono> — create a key in
-          Settings (the full token is revealed once, at creation) and paste it
-          in.
-        </p>
-      </div>
-    </section>
-  );
-}
-
 function TargetPicker({
   active,
   onPick,
@@ -4696,30 +5013,36 @@ function TargetPicker({
   onPick: (target: string) => void;
   targets?: InstallTarget[];
 }): ReactElement {
+  const groupLabels = {
+    Prompt: "One-prompt setup",
+    MCP: "Remote MCP servers",
+    Direct: "CLI and API",
+  } as const;
+  const groupIcons = { Prompt: "copy", MCP: "spark", Direct: "terminal" } as const;
   return (
     <div className="target-picker">
-      {(["MCP", "Direct"] as const).map((group) => (
-        <div key={group}>
-          <p className="section-label">
-            {group === "MCP" ? "Remote MCP servers" : "CLI and API"}
-          </p>
-          <div className="target-list">
-            {targets.filter((target) => target.group === group).map((
-              target,
-            ) => (
-              <button
-                className={active === target.target ? "active" : ""}
-                key={target.target}
-                onClick={() => onPick(target.target)}
-                type="button"
-              >
-                <Icon name={group === "MCP" ? "spark" : "terminal"} />
-                {target.label}
-              </button>
-            ))}
+      {(["Prompt", "MCP", "Direct"] as const).map((group) => {
+        const groupTargets = targets.filter((target) => target.group === group);
+        if (groupTargets.length === 0) return null;
+        return (
+          <div key={group}>
+            <p className="section-label">{groupLabels[group]}</p>
+            <div className="target-list">
+              {groupTargets.map((target) => (
+                <button
+                  className={active === target.target ? "active" : ""}
+                  key={target.target}
+                  onClick={() => onPick(target.target)}
+                  type="button"
+                >
+                  <Icon name={groupIcons[group]} />
+                  {target.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

@@ -4268,8 +4268,40 @@ function buildInstallInstructions(
       },
     },
   };
+  const claudeCodeAddCommand =
+    `claude mcp add --transport http --scope user ultralight ${mcpUrl} --header "Authorization: ${bearer}"`;
+  const connectPrompt = [
+    "Set up Ultralight for me, then start using it.",
+    "",
+    "Ultralight is one MCP server that gives you a library of Agents (apps) you can discover, call, and deploy, with unified auth and per-call payments.",
+    "",
+    "1. Install the MCP server (pick whichever works in your environment):",
+    `   - Claude Code: ${claudeCodeAddCommand}`,
+    `   - Any MCP config file: ${JSON.stringify(genericConfig)}`,
+    "   - Automated installer: npx ultralightpro setup --token $ULTRALIGHT_API_KEY",
+    "",
+    "2. Connect, then learn the platform: the server's initialize response carries the full platform guide. The same docs live at the ultralight://platform/skills.md MCP resource" +
+    ` and ${baseUrl}/api/skills.`,
+    "",
+    '3. Prove it works: call ul.discover with {"scope":"library"} to list the Agents already installed on this account, then tell me in a few lines what you can now do for me.',
+    "",
+    "Treat the API key in this prompt as a secret: never echo it back, log it, or commit it anywhere.",
+  ].join("\n");
 
   return [
+    {
+      target: "prompt",
+      label: "Agent prompt",
+      description:
+        "One prompt that makes any agent install Ultralight itself and start using it.",
+      steps: [
+        "Create an API key so the prompt carries a real credential.",
+        "Paste the prompt into any agent: Claude Code, Cursor, or anything MCP-capable.",
+        "The agent installs the MCP server, reads the platform guide, and reports what it can do.",
+      ],
+      configText: connectPrompt,
+      requiresApiKey: true,
+    },
     {
       target: "claude_code",
       label: "Claude Code",
@@ -4277,10 +4309,10 @@ function buildInstallInstructions(
         "Add Ultralight as a remote MCP server for an existing Claude Code workspace.",
       steps: [
         "Create an Ultralight API token from Settings.",
-        "Set ULTRALIGHT_API_KEY in your shell or Claude Code environment.",
-        `Add ${mcpUrl} as the ultralight remote MCP server with an Authorization header.`,
+        "Run the command below with your token in place of $ULTRALIGHT_API_KEY.",
+        "Run /mcp (or restart) so Claude Code picks up the ultralight server.",
       ],
-      configText: JSON.stringify(genericConfig, null, 2),
+      configText: claudeCodeAddCommand,
       requiresApiKey: true,
     },
     {

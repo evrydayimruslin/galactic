@@ -13713,6 +13713,7 @@ function jsonRpcErrorResponse(
 // ============================================
 
 export function handlePlatformMcpDiscovery(): Response {
+  const baseUrl = (getEnv("BASE_URL") || "").replace(/\/+$/, "");
   const discovery = {
     name: "Ultralight Platform",
     description:
@@ -13727,8 +13728,9 @@ export function handlePlatformMcpDiscovery(): Response {
       resources: { subscribe: false, listChanged: false },
     },
     tools_count: getPlatformTools().length,
-    resources_count: 2,
-    documentation: "https://ultralight-api.rgn4jz429m.workers.dev/docs/mcp",
+    // skills.md, library.md, memory.md, memory/kv — keep in sync with resources/list.
+    resources_count: 4,
+    documentation: `${baseUrl}/docs/mcp`,
   };
   return json(discovery);
 }

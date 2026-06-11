@@ -233,6 +233,7 @@ Deno.test('launch facade: install instructions expose MCP and CLI targets', asyn
     assertEquals(
       body.instructions.map((instruction) => instruction.target),
       [
+        'prompt',
         'claude_code',
         'cursor',
         'codex',
@@ -245,6 +246,20 @@ Deno.test('launch facade: install instructions expose MCP and CLI targets', asyn
     assertStringIncludes(
       body.instructions[0].configText || '',
       'https://ultralight.test/mcp/platform',
+    );
+    // The agent prompt must carry every install path plus first actions.
+    const promptInstruction = body.instructions.find((instruction) =>
+      instruction.target === 'prompt'
+    );
+    assertStringIncludes(promptInstruction?.configText || '', 'claude mcp add');
+    assertStringIncludes(
+      promptInstruction?.configText || '',
+      'npx ultralightpro setup --token $ULTRALIGHT_API_KEY',
+    );
+    assertStringIncludes(promptInstruction?.configText || '', 'ul.discover');
+    assertStringIncludes(
+      promptInstruction?.configText || '',
+      '"Authorization":"Bearer $ULTRALIGHT_API_KEY"',
     );
     const apiInstruction = body.instructions.find((instruction) => instruction.target === 'api');
     assertStringIncludes(

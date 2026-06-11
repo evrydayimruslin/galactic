@@ -743,7 +743,10 @@ export function createApp() {
       }
 
       // Platform Skills.md — plain HTTP access for any agent
-      if (path === "/api/skills" && method === "GET") {
+      // /docs/mcp is the documentation URL advertised in /.well-known/mcp.json.
+      if (
+        (path === "/api/skills" || path === "/docs/mcp") && method === "GET"
+      ) {
         return handleSkills(request);
       }
 
