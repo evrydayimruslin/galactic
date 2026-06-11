@@ -121,12 +121,14 @@ Deno.test('CLI: whoami uses REST GET /api/user, not MCP tool', async () => {
   assertStringIncludes(cliSource, "restGet('/api/user')", 'Missing restGet /api/user call in whoami');
 });
 
-Deno.test('CLI: version is 1.3.0', async () => {
+Deno.test('CLI: mod.ts VERSION is in sync with package.json', async () => {
   const cliSource = await Deno.readTextFile('./cli/mod.ts');
-  assertStringIncludes(cliSource, "const VERSION = '1.3.0'", 'CLI version should be 1.3.0');
-
   const pkgJson = JSON.parse(await Deno.readTextFile('./cli/package.json'));
-  assertEquals(pkgJson.version, '1.3.0', 'package.json version should be 1.3.0');
+  assertStringIncludes(
+    cliSource,
+    `const VERSION = '${pkgJson.version}'`,
+    `cli/mod.ts VERSION must match cli/package.json version (${pkgJson.version}) — bump both together`,
+  );
 });
 
 Deno.test('CLI: all expected commands are registered', async () => {

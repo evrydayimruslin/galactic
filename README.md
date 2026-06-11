@@ -251,6 +251,13 @@ routes must declare methods, use owner billing, and use app-scoped data:
 
 ## CLI Commands
 
+Install from npm ([`ultralightpro`](https://www.npmjs.com/package/ultralightpro)); `setup` also writes the Ultralight MCP server into Claude Code / Claude Desktop / Cursor configs:
+
+```bash
+npm install -g ultralightpro          # or one-off: npx ultralightpro <command>
+ultralight setup --token ul_xxx       # Authenticate + configure agent MCP connections
+```
+
 ```bash
 ultralight login --token ul_xxx       # Authenticate
 ultralight scaffold my-app            # Generate skeleton

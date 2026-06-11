@@ -1,7 +1,7 @@
 {
   "name": "ultralightpro",
-  "version": "1.3.0",
-  "description": "CLI for Ultralight - Serverless app platform with AI integration",
+  "version": "1.3.1",
+  "description": "Ultralight CLI — connect any MCP agent to the Ultralight platform, and build, deploy, and manage Agents from your shell",
   "type": "module",
   "bin": {
     "ultralight": "bin/ultralight.js"

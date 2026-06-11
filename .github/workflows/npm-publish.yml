@@ -1,0 +1,75 @@
+name: CLI npm Publish
+
+on:
+  push:
+    tags:
+      - 'cli-v*'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Dry run (pack only) or publish to npm for real.'
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - publish
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Verify and publish ultralightpro
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify version sync (package.json vs mod.ts)
+        id: version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if ! grep -Fq "const VERSION = '${PKG_VERSION}'" mod.ts; then
+            echo "cli/mod.ts VERSION does not match cli/package.json (${PKG_VERSION}) — bump both together." >&2
+            exit 1
+          fi
+          echo "version=${PKG_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches package version
+        if: github.event_name == 'push'
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#cli-v}"
+          if [ "${TAG_VERSION}" != "${{ steps.version.outputs.version }}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version ${{ steps.version.outputs.version }}." >&2
+            exit 1
+          fi
+
+      - name: Fail if version already on npm
+        run: |
+          if npm view "ultralightpro@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
+            echo "ultralightpro@${{ steps.version.outputs.version }} is already published — bump the version first." >&2
+            exit 1
+          fi
+
+      # prepublishOnly also copies this, but with `|| true` — copy loudly here
+      # so a missing skills.md fails the run instead of shipping without docs.
+      - name: Bundle platform skills doc
+        run: cp ../skills.md skills.md
+
+      - name: Pack (dry run)
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run'
+        run: npm publish --dry-run
+
+      - name: Publish to npm
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish')
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
