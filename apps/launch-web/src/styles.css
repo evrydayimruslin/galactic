@@ -2095,7 +2095,7 @@ button {
 
 .owned-tool-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   border-top: 1px solid var(--ul-border);
   border-bottom: 1px solid var(--ul-border);
   background: var(--ul-raised);

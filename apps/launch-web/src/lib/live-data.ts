@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   AgentCallerTrustSummary,
@@ -79,13 +79,23 @@ export function useLaunchRouteLiveData(
     [route.params],
   );
   const reload = useCallback(() => setVersion((value) => value + 1), []);
+  const identityRef = useRef("");
 
   useEffect(() => {
     let cancelled = false;
-    setState((current) => ({
-      data: current.data,
-      status: current.status === "idle" ? "loading" : current.status,
-    }));
+    // Navigating to a DIFFERENT route must drop the previous route's payload
+    // and report "loading" — otherwise pages render stale data (or definitive
+    // empty/not-found states) under the new URL while the fetch is in flight.
+    // A same-route reload() keeps the current data on screen.
+    const identity = `${routeKey}|${paramsKey}|${location.pathname}`;
+    const routeChanged = identity !== identityRef.current;
+    identityRef.current = identity;
+    setState((current) =>
+      routeChanged ? { data: {}, status: "loading" } : {
+        data: current.data,
+        status: current.status === "idle" ? "loading" : current.status,
+      }
+    );
 
     loadRouteData(location, route)
       .then((data) => {

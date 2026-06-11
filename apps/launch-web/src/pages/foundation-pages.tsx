@@ -63,6 +63,8 @@ import agentCodexUrl from "../assets/agents/agent-codex.png";
 import agentCursorUrl from "../assets/agents/agent-cursor.png";
 import agentOpenclawUrl from "../assets/agents/agent-openclaw.png";
 
+// `null` metric fields mean "no real data" — the platform doesn't report this
+// stat (yet). Render an honest gap (omit/—), never a fabricated number.
 interface AgentFixture {
   author: string;
   callPrice: number;
@@ -71,11 +73,11 @@ interface AgentFixture {
   free?: boolean;
   growth: number;
   id: string;
-  installs: number;
+  installs: number | null;
   kind: "gpu" | "http" | "markdown" | "mcp";
   name: string;
   slug: string;
-  spark: number[];
+  spark: number[] | null;
   summary: string;
 }
 
@@ -107,25 +109,25 @@ interface AgentFunctionFixture {
   args: string[];
   description: string;
   name: string;
-  p50: number;
+  p50: number | null;
   permission: "always" | "ask" | "never";
   price: number;
 }
 
 interface AgentDetailFixture extends AgentFixture {
-  callsPerDay: number;
+  callsPerDay: number | null;
   capabilities: AgentCapability[];
   functions: AgentFunctionFixture[];
   relationship: LaunchAgentRelationship;
-  runtime: string;
-  signer: string;
+  // Trust fields are null until the Agent publishes a signed trust card.
+  runtime: string | null;
+  signer: string | null;
   title: string;
-  updatedAt: string;
-  version: string;
+  updatedAt: string | null;
+  version: string | null;
   visibility: "public" | "private" | "unlisted";
 }
 
-const apiKeyMask = "ulk_live_••••••••••••4xN4";
 const apiKeyPlaceholder = "$ULTRALIGHT_API_KEY";
 const mcpUrl = "https://api.ultralight.dev/mcp/platform";
 
@@ -139,95 +141,6 @@ const orbitAgents = [
   { alt: "OpenClaw", className: "agent-three", src: agentOpenclawUrl },
   { alt: "Claude", className: "agent-four", src: agentClaudeUrl },
 ] as const;
-
-const discoverAgents: AgentFixture[] = [
-  {
-    author: "@kepler",
-    callPrice: 0.012,
-    category: "Weather",
-    color: "#7c3aed",
-    growth: 0.18,
-    id: "tool_8fa21c",
-    installs: 24803,
-    kind: "mcp",
-    name: "get_weather",
-    slug: "get_weather",
-    spark: [11, 13, 16, 12, 17, 21, 28],
-    summary: "Hyper-local weather, forecasts, and severe-weather alerts.",
-  },
-  {
-    author: "@anchor",
-    callPrice: 0.003,
-    category: "Finance",
-    color: "#0891b2",
-    growth: 0.06,
-    id: "tool_3b90de",
-    installs: 19402,
-    kind: "http",
-    name: "currency_convert",
-    slug: "currency_convert",
-    spark: [14, 15, 16, 15, 17, 18, 19],
-    summary: "Live FX across 180+ pairs with spot and historical rates.",
-  },
-  {
-    author: "stripe",
-    callPrice: 0.024,
-    category: "Payments",
-    color: "#635bff",
-    growth: 0.31,
-    id: "tool_st",
-    installs: 18204,
-    kind: "http",
-    name: "stripe.subscribe",
-    slug: "stripe_subscribe",
-    spark: [10, 9, 12, 16, 18, 22, 30],
-    summary: "Create subscriptions, meter usage, and return receipts.",
-  },
-  {
-    author: "@vellum",
-    callPrice: 0.018,
-    category: "Docs",
-    color: "#ea580c",
-    growth: 0.12,
-    id: "tool_pd",
-    installs: 15211,
-    kind: "mcp",
-    name: "pdf.parse",
-    slug: "pdf_parse",
-    spark: [12, 13, 14, 15, 16, 17, 19],
-    summary: "Layout-aware PDF text, table, and citation extraction.",
-  },
-  {
-    author: "@octo",
-    callPrice: 0.005,
-    category: "Code",
-    color: "#0a0a0a",
-    free: true,
-    growth: 0.09,
-    id: "tool_gh",
-    installs: 14093,
-    kind: "mcp",
-    name: "github.diff",
-    slug: "github_diff",
-    spark: [13, 14, 14, 15, 16, 16, 17],
-    summary: "Branch diff, review comments, and CI status summaries.",
-  },
-  {
-    author: "@cartography",
-    callPrice: 0.008,
-    category: "Maps",
-    color: "#10b981",
-    free: true,
-    growth: 0.21,
-    id: "tool_mp",
-    installs: 12705,
-    kind: "http",
-    name: "maps.route",
-    slug: "maps_route",
-    spark: [9, 10, 11, 12, 13, 15, 16],
-    summary: "Driving, walking, and transit ETAs for agent plans.",
-  },
-];
 
 const primitives = [
   [
@@ -249,75 +162,6 @@ const primitives = [
     "/wallet",
   ],
 ] as const;
-
-const builderLeaders: LeaderboardRow[] = [
-  {
-    rank: 1,
-    name: "@kepler",
-    color: "#7c3aed",
-    value: 4820.4,
-    eventCount: 268000,
-    featured: "get_weather",
-  },
-  {
-    rank: 2,
-    name: "stripe",
-    color: "#635bff",
-    value: 3910.2,
-    eventCount: 142000,
-    featured: "stripe.subscribe",
-  },
-  {
-    rank: 3,
-    name: "@anchor",
-    color: "#0891b2",
-    value: 2740.8,
-    eventCount: 198000,
-    featured: "currency_convert",
-  },
-  {
-    rank: 4,
-    name: "@vellum",
-    color: "#ea580c",
-    value: 1690.0,
-    eventCount: 64000,
-    featured: "pdf.parse",
-  },
-  {
-    rank: 5,
-    name: "@cartography",
-    color: "#10b981",
-    value: 1120.5,
-    eventCount: 88000,
-    featured: "maps.route",
-  },
-];
-
-const feeLeaders: LeaderboardRow[] = [
-  {
-    rank: 1,
-    name: "stripe",
-    color: "#635bff",
-    value: 1284.0,
-    eventCount: 5120,
-  },
-  {
-    rank: 2,
-    name: "@kepler",
-    color: "#7c3aed",
-    value: 942.6,
-    eventCount: 4380,
-  },
-  { rank: 3, name: "@octo", color: "#0a0a0a", value: 770.2, eventCount: 2010 },
-  {
-    rank: 4,
-    name: "@anchor",
-    color: "#0891b2",
-    value: 615.4,
-    eventCount: 3160,
-  },
-  { rank: 5, name: "@hex", color: "#22c55e", value: 402.1, eventCount: 1890 },
-];
 
 const installTargets: InstallTarget[] = [
   {
@@ -436,26 +280,6 @@ const externalLoop = [
   "Return results + receipts",
 ];
 
-const defaultCapabilities: AgentCapability[] = [
-  { kind: "read", text: "public source data" },
-  { kind: "net", text: "outbound HTTPS" },
-];
-
-const agentDetails: Record<string, AgentDetailFixture> = Object.fromEntries(
-  discoverAgents.map((tool) => {
-    const detail = createAgentDetail(tool);
-    return [detail.slug, detail];
-  }),
-);
-
-const installedLibrarySlugs = [
-  "currency_convert",
-  "pdf_parse",
-  "maps_route",
-  "github_diff",
-];
-const ownedLibrarySlugs = ["get_weather"];
-
 const adminTabs = [
   ["edit", "Edit"],
   ["pricing", "Pricing"],
@@ -488,50 +312,6 @@ const visibilityOptions = [
   ],
 ] as const;
 
-const adminSecrets = [
-  { key: "OPENWEATHER_API_KEY", set: true },
-  { key: "NOAA_TOKEN", set: true },
-  { key: "CACHE_TTL_SECONDS", set: false },
-] as const;
-
-const adminReceipts = [
-  {
-    caller: "@arbiter",
-    fn: "forecast",
-    light: 0.012,
-    status: "ok",
-    when: "1m",
-  },
-  { caller: "agent_7f", fn: "now", light: 0.004, status: "ok", when: "3m" },
-  {
-    caller: "@nimbus",
-    fn: "historical",
-    light: 0.018,
-    status: "ok",
-    when: "12m",
-  },
-  {
-    caller: "agent_2b",
-    fn: "alerts",
-    light: 0.006,
-    status: "error",
-    when: "28m",
-  },
-] as const;
-
-const adminLogs = [
-  { fn: "forecast", ms: 142, status: "ok", when: "1m" },
-  { fn: "now", ms: 68, status: "ok", when: "3m" },
-  {
-    fn: "alerts",
-    ms: 0,
-    note: "upstream 503 · api.openweather.com",
-    status: "error",
-    when: "28m",
-  },
-  { fn: "historical", ms: 280, status: "ok", when: "1h" },
-] as const;
-
 type WalletTabId = "balance" | "earnings" | "receipts" | "topup";
 type PaymentMethod = "ach" | "card" | "earnings";
 
@@ -544,7 +324,7 @@ interface LedgerRow {
 
 interface ReceiptRowFixture {
   fn: string;
-  latency: number;
+  latency: number | null;
   light: number;
   status: "error" | "ok";
   tool: string;
@@ -560,114 +340,13 @@ interface ApiKeyFixture {
   scopes: string;
 }
 
+// Zero-valued shape used until the live wallet loads — never demo numbers.
 const walletSummary = {
-  deposited: 815.0,
-  earned: 4820.402,
-  escrow: 26.0,
-  spendable: 1240.402,
+  deposited: 0,
+  earned: 0,
+  escrow: 0,
+  spendable: 0,
 };
-
-const walletLedger: LedgerRow[] = [
-  {
-    amount: -0.012,
-    detail: "get_weather · forecast",
-    kind: "call",
-    when: "2m",
-  },
-  {
-    amount: -0.002,
-    detail: "currency_convert · convert",
-    kind: "call",
-    when: "14m",
-  },
-  { amount: 2500, detail: "Top up · card", kind: "topup", when: "3h" },
-  { amount: -0.018, detail: "pdf.parse · extract", kind: "call", when: "6h" },
-  { amount: 2500, detail: "Earnings → Balance", kind: "transfer", when: "1d" },
-  { amount: -0.008, detail: "maps.route · route", kind: "call", when: "1d" },
-  {
-    amount: -50000,
-    detail: "Payout · Bank (ACH) ···4821",
-    kind: "payout",
-    when: "4d",
-  },
-];
-
-const walletEarnings: LedgerRow[] = [
-  {
-    amount: 248.0,
-    detail: "get_weather · forecast",
-    kind: "earning",
-    when: "5h",
-  },
-  {
-    amount: 120.4,
-    detail: "tweet.draft · compose",
-    kind: "earning",
-    when: "8h",
-  },
-  { amount: 40.0, detail: "radar.tile · render", kind: "earning", when: "1d" },
-  { amount: 192.0, detail: "get_weather · now", kind: "earning", when: "1d" },
-  { amount: 40.0, detail: "radar.tile · render", kind: "earning", when: "3d" },
-];
-
-const walletReceipts: ReceiptRowFixture[] = [
-  {
-    fn: "forecast",
-    latency: 142,
-    light: 0.012,
-    status: "ok",
-    tool: "get_weather",
-    when: "2m",
-  },
-  {
-    fn: "convert",
-    latency: 84,
-    light: 0.002,
-    status: "ok",
-    tool: "currency_convert",
-    when: "14m",
-  },
-  {
-    fn: "extract",
-    latency: 480,
-    light: 0.018,
-    status: "ok",
-    tool: "pdf.parse",
-    when: "1d",
-  },
-  {
-    fn: "route",
-    latency: 195,
-    light: 0.008,
-    status: "error",
-    tool: "maps.route",
-    when: "2d",
-  },
-];
-
-const apiKeys: ApiKeyFixture[] = [
-  {
-    created: "12 Apr",
-    lastUsed: "2m",
-    name: "Claude Code · laptop",
-    prefix: "ulk_live_••••4xN4",
-    scopes: "mcp · api",
-  },
-  {
-    created: "3 Mar",
-    lastUsed: "1d",
-    name: "CI deploy",
-    prefix: "ulk_live_••••9aQ2",
-    scopes: "cli",
-  },
-  {
-    created: "28 Feb",
-    lastUsed: "6d",
-    name: "Cursor",
-    prefix: "ulk_live_••••7bX1",
-    scopes: "mcp",
-  },
-];
 
 const byokProviderFixtures: LaunchByokProviderOption[] = [
   {
@@ -708,72 +387,72 @@ function liveAgentFixture(
     trustCard?: LaunchTrustCard;
   } = {},
 ): AgentDetailFixture {
-  const base = agentDetails[tool.slug] || createAgentDetail({
-    author: liveOwnerLabel(tool.owner),
-    callPrice: creditsValue(tool.pricing?.defaultCallPrice),
-    category: tool.tags?.[0] || tool.kind.toUpperCase(),
-    color: stableColor(tool.id),
-    free: creditsValue(tool.pricing?.defaultCallPrice) === 0,
-    growth: Math.max(0.03, Number(tool.relevance?.score || 0.08)),
-    id: tool.id,
-    installs: 0,
-    kind: tool.kind,
-    name: tool.name,
-    slug: tool.slug,
-    spark: stableSpark(tool.id),
-    summary: tool.description || "Agent published on Ultralight.",
-  });
   const permissions = new Map(
     (options.permissions?.permissions || []).map((
       entry,
     ) => [entry.functionName, entry.policy]),
   );
-  const functions = options.functions && options.functions.length > 0
-    ? options.functions.map((fn, index) => ({
-      args: inputArgs(fn.inputSchema),
-      description: fn.description || `Run ${fn.name}.`,
-      name: fn.name,
-      p50: base.functions[index]?.p50 || 120,
-      permission: permissions.get(fn.name) || fn.callerPermission?.policy ||
-        fn.agentPermission?.policy ||
-        base.functions[index]?.permission || "ask",
-      price: creditsValue(fn.pricing?.defaultCallPrice),
-    }))
-    : base.functions;
+  // Only real data: functions come from the live endpoint (or stay empty),
+  // metrics the platform doesn't report are null, and trust fields exist only
+  // when the Agent ships a trust card. Nothing here is fabricated.
+  const functions = (options.functions || []).map((fn) => ({
+    args: inputArgs(fn.inputSchema),
+    description: fn.description || `Run ${fn.name}.`,
+    name: fn.name,
+    p50: null,
+    permission: permissions.get(fn.name) || fn.callerPermission?.policy ||
+      fn.agentPermission?.policy || "ask" as const,
+    price: creditsValue(fn.pricing?.defaultCallPrice),
+  }));
   const trust = options.trustCard;
   const paidFunctionPrices = functions.map((fn) => fn.price).filter((price) =>
     price > 0
   );
   const callPrice = creditsValue(tool.pricing?.defaultCallPrice) ||
-    (paidFunctionPrices.length > 0
-      ? Math.min(...paidFunctionPrices)
-      : base.callPrice);
+    (paidFunctionPrices.length > 0 ? Math.min(...paidFunctionPrices) : 0);
 
   return {
-    ...base,
     author: liveOwnerLabel(tool.owner),
     callPrice,
-    category: tool.tags?.[0] || base.category,
-    color: base.color || stableColor(tool.id),
+    callsPerDay: null,
+    capabilities: trustCapabilities(trust),
+    category: tool.tags?.[0] || tool.kind.toUpperCase(),
+    color: stableColor(tool.id),
     free: callPrice === 0,
     functions,
+    growth: 0,
     id: tool.id,
+    installs: null,
     kind: tool.kind,
     name: tool.name,
     relationship: tool.relationship,
-    runtime: trust?.runtime || base.runtime,
-    signer: trust?.signer || base.signer,
+    runtime: trust?.runtime || null,
+    signer: trust?.signer || null,
     slug: tool.slug,
-    summary: tool.description || base.summary,
+    spark: null,
+    summary: tool.description || "Agent published on Ultralight.",
     title: titleizeAgentName(tool.name),
-    updatedAt: relativeTime(tool.updatedAt) || base.updatedAt,
-    version: trust?.version || base.version,
+    updatedAt: relativeTime(tool.updatedAt) || null,
+    version: trust?.version || null,
     visibility: tool.visibility,
   };
 }
 
+// Declared permissions from the signed trust card — the only honest source
+// for the capabilities list on a live Agent page.
+function trustCapabilities(trust?: LaunchTrustCard): AgentCapability[] {
+  return (trust?.permissions || []).map((permission) => ({
+    kind: permission.startsWith("net")
+      ? "net" as const
+      : permission.includes("write")
+      ? "write" as const
+      : "read" as const,
+    text: permission,
+  }));
+}
+
 function liveStoreAgents(tools?: LaunchAgentSummary[]): AgentFixture[] {
-  if (!tools || tools.length === 0) return discoverAgents;
+  if (!tools || tools.length === 0) return [];
   return tools.map((tool) => liveAgentFixture(tool));
 }
 
@@ -825,15 +504,6 @@ function stableColor(seed: string): string {
   return livePalette[hash % livePalette.length];
 }
 
-function stableSpark(seed: string): number[] {
-  let hash = 0;
-  for (const char of seed) hash = (hash * 33 + char.charCodeAt(0)) >>> 0;
-  return Array.from(
-    { length: 7 },
-    (_, index) => 8 + ((hash >> (index * 3)) & 15),
-  );
-}
-
 function liveInstallTargets(
   instructions?: LaunchInstallInstruction[],
 ): InstallTarget[] {
@@ -851,11 +521,8 @@ function liveInstallTargets(
   }));
 }
 
-function liveApiKeyFixtures(
-  keys?: LaunchApiKeySummary[],
-  useFallback = true,
-): ApiKeyFixture[] {
-  if (!keys || keys.length === 0) return useFallback ? apiKeys : [];
+function liveApiKeyFixtures(keys?: LaunchApiKeySummary[]): ApiKeyFixture[] {
+  if (!keys || keys.length === 0) return [];
   return keys.map((key) => ({
     created: shortDate(key.createdAt),
     id: key.id,
@@ -893,7 +560,7 @@ function liveWalletTotals(wallet?: LaunchWalletSummary): typeof walletSummary {
 }
 
 function liveLedgerRows(transactions?: LaunchWalletTransaction[]): LedgerRow[] {
-  if (!transactions || transactions.length === 0) return walletLedger;
+  if (!transactions || transactions.length === 0) return [];
   return transactions.map((entry) => ({
     amount: creditsValue(entry.amount),
     detail: entry.appName
@@ -905,7 +572,7 @@ function liveLedgerRows(transactions?: LaunchWalletTransaction[]): LedgerRow[] {
 }
 
 function liveEarningRows(earnings?: LaunchWalletEarningSummary[]): LedgerRow[] {
-  if (!earnings || earnings.length === 0) return walletEarnings;
+  if (!earnings || earnings.length === 0) return [];
   return earnings.map((entry) => ({
     amount: creditsValue(entry.amount),
     detail: `${entry.appId || "agent"} · ${entry.functionName || entry.reason}`,
@@ -917,10 +584,11 @@ function liveEarningRows(earnings?: LaunchWalletEarningSummary[]): LedgerRow[] {
 function liveReceiptRows(
   receipts?: LaunchWalletReceiptSummary[],
 ): ReceiptRowFixture[] {
-  if (!receipts || receipts.length === 0) return walletReceipts;
+  if (!receipts || receipts.length === 0) return [];
   return receipts.map((receipt) => ({
     fn: receipt.functionName || "run",
-    latency: 0,
+    // The wallet receipts endpoint doesn't report latency.
+    latency: null,
     light: creditsValue(receipt.total),
     status: receipt.success ? "ok" : "error",
     tool: receipt.appName || receipt.appId || "agent",
@@ -1037,21 +705,25 @@ export function HomeFoundationPage(
         <SharedCore />
       </section>
 
-      <Section
-        action={
-          <RouteLink navigate={navigate} to="/store">Browse all</RouteLink>
-        }
-        title="Agents shipping now"
-      >
-        <div className="home-tool-grid">
-          {homeTools.map((tool) => (
-            <CompactAgentCard
-              key={tool.id}
-              tool={tool}
-            />
-          ))}
-        </div>
-      </Section>
+      {homeTools.length > 0
+        ? (
+          <Section
+            action={
+              <RouteLink navigate={navigate} to="/store">Browse all</RouteLink>
+            }
+            title="Agents shipping now"
+          >
+            <div className="home-tool-grid">
+              {homeTools.map((tool) => (
+                <CompactAgentCard
+                  key={tool.id}
+                  tool={tool}
+                />
+              ))}
+            </div>
+          </Section>
+        )
+        : null}
 
       <section className="endpoint-section">
         <div>
@@ -1106,8 +778,10 @@ export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
   const signedIn = Boolean(live.data.apiKeys?.apiKeys?.length);
   const selected = targets.find((item) => item.target === target) ||
     targets[0] || installTargets[0];
-  const firstKey = live.data.apiKeys?.apiKeys[0]?.tokenPrefix || apiKeyMask;
-  const key = signedIn ? firstKey : apiKeyPlaceholder;
+  // Always render the placeholder in snippets: the API only exposes key
+  // PREFIXES, and substituting one would produce a config that looks ready to
+  // run but holds a non-functional credential.
+  const key = apiKeyPlaceholder;
 
   useEffect(() => {
     if (!targets.some((item) => item.target === target)) {
@@ -1118,15 +792,6 @@ export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
   return (
     <div className="launch-page install-page">
       <PageHeader
-        actions={
-          <Button
-            icon="key"
-            size="lg"
-            variant={signedIn ? "secondary" : "primary"}
-          >
-            {signedIn ? "Key loaded" : "Sign in"}
-          </Button>
-        }
         eyebrow="Install"
         intro="One remote MCP endpoint, or the CLI and API, lets any existing agent discover, call, and pay for Agents."
         title="Connect Ultralight to your agent."
@@ -1235,7 +900,9 @@ export function StoreFoundationPage(
                   <StoreAgentCard tool={tool} />
                 </button>
               ))
-              : <NoResults onClear={() => updateQuery("")} />}
+              : live.status === "idle" || live.status === "loading"
+              ? null
+              : <NoResults onClear={() => updateQuery("")} query={query} />}
           </div>
         </section>
         <aside className="store-sidebar">
@@ -1243,12 +910,12 @@ export function StoreFoundationPage(
           <Leaderboard
             title="Top builders"
             subtitle="By earned credits"
-            rows={builderRows.length > 0 ? builderRows : builderLeaders}
+            rows={builderRows}
           />
           <Leaderboard
             title="Fee credit"
             subtitle="Fee-waiver program"
-            rows={feeRows.length > 0 ? feeRows : feeLeaders}
+            rows={feeRows}
           />
         </aside>
       </div>
@@ -1259,17 +926,32 @@ export function StoreFoundationPage(
 export function AgentFoundationPage(
   { live, location, navigate, route }: LaunchPageProps,
 ): ReactElement {
-  const slug = route.params.slug || "get_weather";
+  const slug = route.params.slug || "";
+  // Live data only — an unavailable Agent renders the not-found state, never
+  // a demo fixture that could be mistaken for the real page.
   const tool = liveDetailAgent(
     live.data.agent?.agent ?? live.data.agent?.tool,
     live.data.agentFunctions?.functions,
     live.data.agentCallerPermissions,
     live.data.agent?.trustCard,
-  ) || agentDetails[slug];
+  );
 
-  if (!tool) return <AgentNotFoundPage navigate={navigate} slug={slug} />;
+  if (!tool) {
+    // Don't flash "not found" while the fetch is still in flight.
+    if (live.status === "idle" || live.status === "loading") {
+      return (
+        <div className="launch-page-narrow tool-page">
+          <ApiNotice live={live} noun="Agent details" />
+        </div>
+      );
+    }
+    return <AgentNotFoundPage navigate={navigate} slug={slug} />;
+  }
   return (
     <AgentDetailSurface
+      // Reset per-agent UI state (tab, selected function, install toggle)
+      // when navigating between agent pages.
+      key={tool.id}
       live={live}
       locationSearch={location.search}
       navigate={navigate}
@@ -1338,9 +1020,15 @@ function AgentDetailSurface({
           <p>{tool.summary}</p>
           <div className="tool-meta-row">
             <span>{tool.author.replace("@", "")}</span>
-            <span>{formatNumber(tool.installs)} installs</span>
-            <span>{formatNumber(tool.callsPerDay)} calls/day</span>
-            <span>updated {tool.updatedAt}</span>
+            {tool.installs !== null
+              ? <span>{formatNumber(tool.installs)} installs</span>
+              : null}
+            {tool.callsPerDay !== null
+              ? <span>{formatNumber(tool.callsPerDay)} calls/day</span>
+              : null}
+            {tool.updatedAt
+              ? <span>updated {tool.updatedAt}</span>
+              : null}
           </div>
           <div className="tool-header-actions">
             <Button
@@ -1433,6 +1121,19 @@ function AgentFunctionsPanel({
     tool.functions.find((fn) => fn.name === selectedFunctionName) ||
     tool.functions[0];
 
+  // Live agents expose only the functions the API reports — none yet means an
+  // honest empty state, not a synthesized placeholder function.
+  if (!selectedFunction) {
+    return (
+      <div className="functions-panel">
+        <EmptyState icon="grid" title="No callable functions yet">
+          This Agent has not published any functions, or they are still
+          loading.
+        </EmptyState>
+      </div>
+    );
+  }
+
   return (
     <div className="functions-panel">
       <div className="function-list">
@@ -1477,8 +1178,10 @@ function FunctionSandboxCard({
   const runFunction = async () => {
     setRunState("running");
     const data = new FormData(formRef.current || undefined);
+    // Send exactly what the form contains — never silently substitute demo
+    // values into a real (possibly paid) call.
     const args = Object.fromEntries(
-      fn.args.map((arg) => [arg, data.get(arg) || argDefault(arg)]),
+      fn.args.map((arg) => [arg, data.get(arg) ?? ""]),
     );
     try {
       const result = await launchApi.runAgentFunction(tool.id, fn.name, {
@@ -1515,11 +1218,7 @@ function FunctionSandboxCard({
           ? fn.args.map((arg) => (
             <label key={arg}>
               <span>{arg}</span>
-              <input
-                defaultValue={argDefault(arg)}
-                name={arg}
-                placeholder={argHint(arg)}
-              />
+              <input name={arg} placeholder={argHint(arg)} />
             </label>
           ))
           : <p className="muted-note">No arguments.</p>}
@@ -1543,7 +1242,9 @@ function FunctionSandboxCard({
                 ? "response · error"
                 : "response · receipt queued"}
             </p>
-            <pre>{JSON.stringify(response || functionResponse(tool.slug, fn.name), null, 2)}</pre>
+            {response
+              ? <pre>{JSON.stringify(response, null, 2)}</pre>
+              : null}
           </div>
         )
         : null}
@@ -2480,28 +2181,37 @@ function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement
     <div className="details-panel">
       <Card>
         <p className="section-label">Signed manifest</p>
-        <h3>{tool.signer}</h3>
+        <h3>{tool.signer ?? "Not signed yet"}</h3>
         <p>
           The public manifest advertises runtime, capabilities, pricing,
           receipts, and setup needs before any connected agent calls the Agent.
         </p>
         <div className="manifest-grid">
-          <MetaPair label="version" value={tool.version} />
-          <MetaPair label="runtime" value={tool.runtime} />
+          <MetaPair label="version" value={tool.version ?? "—"} />
+          <MetaPair label="runtime" value={tool.runtime ?? "—"} />
           <MetaPair label="receipts" value="enabled" />
           <MetaPair label="visibility" value={tool.visibility} />
         </div>
       </Card>
       <Card>
         <p className="section-label">Capabilities</p>
-        <div className="capability-list">
-          {tool.capabilities.map((capability) => (
-            <AgentCapabilityPill
-              capability={capability}
-              key={`${capability.kind}-${capability.text}`}
-            />
-          ))}
-        </div>
+        {tool.capabilities.length > 0
+          ? (
+            <div className="capability-list">
+              {tool.capabilities.map((capability) => (
+                <AgentCapabilityPill
+                  capability={capability}
+                  key={`${capability.kind}-${capability.text}`}
+                />
+              ))}
+            </div>
+          )
+          : (
+            <p className="muted-note">
+              This Agent has not published a trust card declaring its
+              capabilities yet.
+            </p>
+          )}
       </Card>
     </div>
   );
@@ -2512,6 +2222,7 @@ function AgentTrustRail({ tool }: { tool: AgentDetailFixture }): ReactElement {
   const minPrice = paidFunctions.length > 0
     ? Math.min(...paidFunctions.map((fn) => fn.price))
     : 0;
+  const signed = tool.signer !== null;
 
   return (
     <div className="tool-rail-stack">
@@ -2519,16 +2230,18 @@ function AgentTrustRail({ tool }: { tool: AgentDetailFixture }): ReactElement {
         <div className="trust-card-head">
           <Icon name="shield" />
           <div>
-            <h3>Ready to call</h3>
+            <h3>{signed ? "Ready to call" : "No trust card yet"}</h3>
             <p>
-              Signed manifest, receipts, and capability disclosure are live.
+              {signed
+                ? "Signed manifest, receipts, and capability disclosure are live."
+                : "This Agent has not published a signed trust card. Receipts still apply to every call."}
             </p>
           </div>
         </div>
         <div className="trust-meta">
-          <MetaPair label="signer" value={tool.signer} />
-          <MetaPair label="version" value={tool.version} />
-          <MetaPair label="runtime" value={tool.runtime} />
+          <MetaPair label="signer" value={tool.signer ?? "—"} />
+          <MetaPair label="version" value={tool.version ?? "—"} />
+          <MetaPair label="runtime" value={tool.runtime ?? "—"} />
         </div>
       </Card>
       <Card>
@@ -2543,7 +2256,14 @@ function AgentTrustRail({ tool }: { tool: AgentDetailFixture }): ReactElement {
             label="from"
             value={minPrice > 0 ? `✦${formatCredits(minPrice)}` : "Free"}
           />
-          <MetaPair label="calls/day" value={formatNumber(tool.callsPerDay)} />
+          {tool.callsPerDay !== null
+            ? (
+              <MetaPair
+                label="calls/day"
+                value={formatNumber(tool.callsPerDay)}
+              />
+            )
+            : null}
         </div>
       </Card>
       <Card>
@@ -2552,7 +2272,6 @@ function AgentTrustRail({ tool }: { tool: AgentDetailFixture }): ReactElement {
           <Avatar color={tool.color} name={tool.author} />
           <div>
             <strong>{tool.author}</strong>
-            <span>Builder rank #{builderRankFor(tool.author)}</span>
           </div>
         </div>
       </Card>
@@ -2621,17 +2340,13 @@ export function LibraryFoundationPage(
   { live, location, navigate }: LaunchPageProps,
 ): ReactElement {
   const [view, setView] = useState<LibraryView>(libraryViewFromSearch());
-  const useFixtureFallback = live.status !== "ready" && live.status !== "error";
-  const installedTools = live.data.library?.installed?.length
-    ? live.data.library.installed.map((tool) => liveAgentFixture(tool))
-    : useFixtureFallback
-    ? installedLibrarySlugs.map((slug) => agentDetails[slug]).filter(Boolean)
-    : [];
-  const ownedTools = live.data.library?.owned?.length
-    ? live.data.library.owned.map((tool) => liveAgentFixture(tool))
-    : useFixtureFallback
-    ? ownedLibrarySlugs.map((slug) => agentDetails[slug]).filter(Boolean)
-    : [];
+  const loading = live.status !== "ready" && live.status !== "error";
+  const installedTools = (live.data.library?.installed ?? []).map((tool) =>
+    liveAgentFixture(tool)
+  );
+  const ownedTools = (live.data.library?.owned ?? []).map((tool) =>
+    liveAgentFixture(tool)
+  );
   const count = view === "installed"
     ? installedTools.length
     : ownedTools.length;
@@ -2689,6 +2404,8 @@ export function LibraryFoundationPage(
                   <StoreAgentCard tool={tool} />
                 </button>
               ))
+              : loading
+              ? null
               : (
                 <EmptyState icon="key" title="Sign in to load your library">
                   The live library endpoint needs an account session before it
@@ -2703,6 +2420,8 @@ export function LibraryFoundationPage(
               ? ownedTools.map((tool) => (
                 <OwnedAgentCard key={tool.id} navigate={navigate} tool={tool} />
               ))
+              : loading
+              ? null
               : (
                 <EmptyState icon="key" title="Sign in to load owned Agents">
                   The live library endpoint needs an account session before it
@@ -2712,17 +2431,15 @@ export function LibraryFoundationPage(
           </div>
         )}
 
-      {useFixtureFallback && installedTools.length === 0 &&
+      {loading && installedTools.length === 0 &&
           ownedTools.length === 0
         ? (
           <div className="library-empty-grid">
             <LibraryEmptyCard
-              action="Deploy docs"
-              body="Ship your first Agent from the CLI and it appears here with installs, calls, and earnings."
+              body="Ship your first Agent from the CLI and it appears here."
               title="Agents you own"
             />
             <LibraryEmptyCard
-              action="Browse Store"
               body="Agents you install from the Store appear here, ready for your connected agent to call."
               title="Installed"
             />
@@ -2736,12 +2453,51 @@ export function LibraryFoundationPage(
 export function AdminFoundationPage(
   { live, location, navigate, route }: LaunchPageProps,
 ): ReactElement {
+  // Live data only — an inaccessible Agent shows an honest empty state, never
+  // a demo fixture posing as a manageable Agent.
   const tool = liveDetailAgent(
     live.data.adminAgent?.admin.agent ?? live.data.adminAgent?.admin.tool,
     live.data.agentFunctions?.functions,
     live.data.agentCallerPermissions,
     live.data.adminAgent?.trustCard,
-  ) || adminAgentFromRoute(route.params.id);
+  );
+  if (!tool) {
+    return (
+      <div className="launch-page-narrow admin-page">
+        <ApiNotice live={live} noun="Agent admin" />
+        {live.status === "idle" || live.status === "loading" ? null : (
+          <EmptyState icon="shield" title="Agent admin needs a live session">
+            Sign in as this Agent's owner to manage it. Nothing is shown here
+            without live data.
+          </EmptyState>
+        )}
+      </div>
+    );
+  }
+  return (
+    <AdminSurface
+      live={live}
+      locationSearch={location.search}
+      navigate={navigate}
+      routeId={route.params.id}
+      tool={tool}
+    />
+  );
+}
+
+function AdminSurface({
+  live,
+  locationSearch,
+  navigate,
+  routeId,
+  tool,
+}: {
+  live: LaunchPageProps["live"];
+  locationSearch: string;
+  navigate: (to: string) => void;
+  routeId?: string;
+  tool: AgentDetailFixture;
+}): ReactElement {
   const initialTab = adminTabFromSearch();
   const [tab, setTab] = useState<AdminTabId>(initialTab);
   const [visibility, setVisibility] = useState<AgentDetailFixture["visibility"]>(
@@ -2749,7 +2505,7 @@ export function AdminFoundationPage(
   );
   useEffect(() => {
     setTab(adminTabFromSearch());
-  }, [location.search, route.params.id]);
+  }, [locationSearch, routeId]);
   useEffect(() => {
     setVisibility(tool.visibility);
   }, [tool.id, tool.visibility]);
@@ -2807,9 +2563,16 @@ function OwnedAgentCard({
         </div>
       </div>
       <div className="owned-tool-metrics">
-        <MetricTile label="Installs" value={formatNumber(tool.installs)} />
-        <MetricTile label="Calls/day" value={formatNumber(tool.callsPerDay)} />
-        <MetricTile label="Earned 30d" value="✦297.6" />
+        <MetricTile
+          label="Installs"
+          value={tool.installs !== null ? formatNumber(tool.installs) : "—"}
+        />
+        <MetricTile
+          label="Calls/day"
+          value={tool.callsPerDay !== null
+            ? formatNumber(tool.callsPerDay)
+            : "—"}
+        />
       </div>
       <div className="owned-tool-actions">
         <RouteButton
@@ -2843,11 +2606,9 @@ function MetricTile(
 }
 
 function LibraryEmptyCard({
-  action,
   body,
   title,
 }: {
-  action: string;
   body: string;
   title: string;
 }): ReactElement {
@@ -2855,12 +2616,6 @@ function LibraryEmptyCard({
     <div className="library-empty-card">
       <strong>{title}: nothing yet</strong>
       <p>{body}</p>
-      <Button
-        size="sm"
-        variant={title === "Agents you own" ? "primary" : "secondary"}
-      >
-        {action}
-      </Button>
     </div>
   );
 }
@@ -2886,8 +2641,11 @@ function AdminHeader({
             </Pill>
           </div>
           <p>
-            {formatNumber(tool.installs)} installs ·{" "}
-            {formatNumber(tool.callsPerDay)} calls/day
+            {tool.installs !== null && tool.callsPerDay !== null
+              ? `${formatNumber(tool.installs)} installs · ${
+                formatNumber(tool.callsPerDay)
+              } calls/day`
+              : `${tool.kind} agent · ${tool.visibility}`}
           </p>
         </div>
       </div>
@@ -2926,7 +2684,7 @@ function AdminTabPanel({
     case "trust":
       return <AdminTrustPanel tool={tool} />;
     case "receipts":
-      return <AdminReceiptsPanel tool={tool} />;
+      return <AdminReceiptsPanel />;
     case "logs":
       return <AdminLogsPanel />;
     case "edit":
@@ -2964,9 +2722,11 @@ function AdminEditPanel({
         </AdminField>
         <AdminField label="Tags">
           <div className="admin-tags">
-            {["weather", "forecast", "noaa"].map((tag) => (
-              <span key={tag}>{tag}</span>
-            ))}
+            {/* category falls back to the agent kind when no tags exist —
+                don't present "MCP" as an authored tag. */}
+            {tool.category.toLowerCase() !== tool.kind
+              ? <span>{tool.category.toLowerCase()}</span>
+              : <span className="muted-note">no tags</span>}
           </div>
         </AdminField>
       </div>
@@ -3010,7 +2770,7 @@ function AdminPricingPanel(
               <span>✦</span>
               <input defaultValue={fn.price.toFixed(3)} />
             </label>
-            <Mono>{fn.p50}ms</Mono>
+            <Mono>{fn.p50 !== null ? `${fn.p50}ms` : "—"}</Mono>
           </div>
         ))}
       </div>
@@ -3028,18 +2788,11 @@ function AdminSecretsPanel(): ReactElement {
           cannot read them.
         </span>
       </div>
-      <div className="secret-list">
-        {adminSecrets.map((secret) => (
-          <Card className="secret-row" key={secret.key}>
-            <Icon name="key" />
-            <Mono>{secret.key}</Mono>
-            <span>{secret.set ? "•••••••• set" : "not set"}</span>
-            <Button size="sm" variant="secondary">
-              {secret.set ? "Rotate" : "Add"}
-            </Button>
-          </Card>
-        ))}
-      </div>
+      <EmptyState icon="key" title="Secrets are managed from your agent">
+        The website does not read or edit App Settings yet. Use{" "}
+        <Mono>ul.set</Mono> from a connected agent (or the CLI) to manage this
+        Agent's secrets.
+      </EmptyState>
     </div>
   );
 }
@@ -3051,7 +2804,11 @@ function AdminTrustPanel({ tool }: { tool: AgentDetailFixture }): ReactElement {
         <div className="trust-card-head">
           <Icon name="shield" />
           <div>
-            <h3>Signed manifest · receipts on</h3>
+            <h3>
+              {tool.signer !== null
+                ? "Signed manifest · receipts on"
+                : "No trust card yet"}
+            </h3>
             <p>
               Trust fields are what public Agent pages and connected agents
               inspect before calling.
@@ -3059,63 +2816,50 @@ function AdminTrustPanel({ tool }: { tool: AgentDetailFixture }): ReactElement {
           </div>
         </div>
         <div className="manifest-grid">
-          <MetaPair label="signer" value={tool.signer} />
-          <MetaPair label="version" value={`v${tool.version}`} />
-          <MetaPair label="runtime" value={tool.runtime} />
-          <MetaPair label="updated" value={`${tool.updatedAt} ago`} />
+          <MetaPair label="signer" value={tool.signer ?? "—"} />
+          <MetaPair
+            label="version"
+            value={tool.version ? `v${tool.version}` : "—"}
+          />
+          <MetaPair label="runtime" value={tool.runtime ?? "—"} />
+          <MetaPair
+            label="updated"
+            value={tool.updatedAt ? `${tool.updatedAt} ago` : "—"}
+          />
         </div>
       </Card>
       <Card>
         <p className="section-label">Declared capabilities</p>
-        <div className="capability-list">
-          {tool.capabilities.map((capability) => (
-            <AgentCapabilityPill
-              capability={capability}
-              key={`${capability.kind}-${capability.text}`}
-            />
-          ))}
-        </div>
+        {tool.capabilities.length > 0
+          ? (
+            <div className="capability-list">
+              {tool.capabilities.map((capability) => (
+                <AgentCapabilityPill
+                  capability={capability}
+                  key={`${capability.kind}-${capability.text}`}
+                />
+              ))}
+            </div>
+          )
+          : (
+            <p className="muted-note">
+              No trust card published yet — declared permissions appear here
+              after the next upload.
+            </p>
+          )}
       </Card>
     </div>
   );
 }
 
-function AdminReceiptsPanel(
-  { tool }: { tool: AgentDetailFixture },
-): ReactElement {
+function AdminReceiptsPanel(): ReactElement {
   return (
     <div className="admin-panel">
-      <div className="admin-receipt-metrics">
-        <MetricTile label="Revenue · 30d" value="✦297.6" />
-        <MetricTile
-          label="Calls · 30d"
-          value={formatNumber(tool.callsPerDay * 30)}
-        />
-      </div>
-      <div className="admin-table admin-receipts-table">
-        <div className="admin-table-head">
-          <span>Caller</span>
-          <span>Function</span>
-          <span>Earned</span>
-          <span>Status</span>
-          <span>When</span>
-        </div>
-        {adminReceipts.map((receipt) => (
-          <div
-            className="admin-table-row"
-            key={`${receipt.caller}-${receipt.when}`}
-          >
-            <span className="status-cell">
-              <span className={receipt.status === "error" ? "error" : ""} />
-              {receipt.caller}
-            </span>
-            <Mono>{receipt.fn}</Mono>
-            <span>✦{receipt.light.toFixed(3)}</span>
-            <Mono>{receipt.status}</Mono>
-            <Mono>{receipt.when}</Mono>
-          </div>
-        ))}
-      </div>
+      <EmptyState icon="wallet" title="Receipts live in your wallet">
+        Per-call earnings for this Agent appear on the Wallet page's Earnings
+        tab once calls come in. A per-Agent receipts view is not on the website
+        yet.
+      </EmptyState>
     </div>
   );
 }
@@ -3123,16 +2867,10 @@ function AdminReceiptsPanel(
 function AdminLogsPanel(): ReactElement {
   return (
     <div className="admin-panel admin-log-list">
-      <p className="section-label">Recent runs</p>
-      {adminLogs.map((log) => (
-        <div className="admin-log-row" key={`${log.fn}-${log.when}`}>
-          <span className={log.status === "error" ? "error" : ""} />
-          <Mono>{log.fn}</Mono>
-          {"note" in log && log.note ? <small>{log.note}</small> : <small />}
-          <Mono>{log.ms}ms</Mono>
-          <Mono>{log.when}</Mono>
-        </div>
-      ))}
+      <EmptyState icon="grid" title="Logs are available from your agent">
+        The website does not stream run logs yet. Use <Mono>ul.logs</Mono>{" "}
+        from a connected agent to inspect this Agent's recent runs and errors.
+      </EmptyState>
     </div>
   );
 }
@@ -3183,16 +2921,11 @@ export function WalletFoundationPage(
       <div className="wallet-hero">
         <WalletAmount
           label={showEarnings ? "Earned credits" : "Spendable credits"}
-          value={showEarnings ? totals.earned : totals.spendable}
+          value={wallet ? (showEarnings ? totals.earned : totals.spendable) : null}
         />
         <div className="wallet-hero-actions">
           {showEarnings
-            ? (
-              <>
-                <Button variant="secondary">Withdraw</Button>
-                <Button>Transfer to Balance</Button>
-              </>
-            )
+            ? null
             : tab === "topup"
             ? null
             : (
@@ -3247,8 +2980,6 @@ export function SettingsFoundationPage(
   { live, navigate }: LaunchPageProps,
 ): ReactElement {
   const canManageKeys = live.status !== "error";
-  const useKeyFixtureFallback = live.status !== "ready" &&
-    live.status !== "error";
   const [newKeyVisible, setNewKeyVisible] = useState(false);
   const [newAgentPermission, setNewAgentPermission] = useState<
     "always" | "ask" | "never"
@@ -3257,14 +2988,12 @@ export function SettingsFoundationPage(
     "always" | "ask" | "never"
   >("ask");
   const [visibleKeys, setVisibleKeys] = useState<ApiKeyFixture[]>(() =>
-    liveApiKeyFixtures(live.data.apiKeys?.apiKeys, useKeyFixtureFallback)
+    liveApiKeyFixtures(live.data.apiKeys?.apiKeys)
   );
 
   useEffect(() => {
-    setVisibleKeys(
-      liveApiKeyFixtures(live.data.apiKeys?.apiKeys, useKeyFixtureFallback),
-    );
-  }, [live.data.apiKeys, useKeyFixtureFallback]);
+    setVisibleKeys(liveApiKeyFixtures(live.data.apiKeys?.apiKeys));
+  }, [live.data.apiKeys]);
 
   const revokeKey = async (apiKey: ApiKeyFixture) => {
     if (!apiKey.id) return;
@@ -3273,7 +3002,7 @@ export function SettingsFoundationPage(
       setVisibleKeys((keys) => keys.filter((key) => key.id !== apiKey.id));
       live.reload();
     } catch {
-      // Keep the row visible; the fallback state remains usable without auth.
+      // Keep the row visible so the revoke can be retried.
     }
   };
 
@@ -3318,27 +3047,9 @@ export function SettingsFoundationPage(
         subtitle="Tokens your connected agents use to call Ultralight. New keys reveal once."
         title="API keys"
       >
-        <div className="api-key-primary">
-          <Icon name="key" />
-          <Mono>{canManageKeys ? apiKeyMask : "No account session"}</Mono>
-          {canManageKeys
-            ? (
-              <>
-                <Button size="sm" variant="secondary">Copy</Button>
-                <Button
-                  onClick={() => setNewKeyVisible(true)}
-                  size="sm"
-                  variant="secondary"
-                >
-                  Rotate & copy
-                </Button>
-              </>
-            )
-            : null}
-        </div>
         <p className="settings-help">
           {canManageKeys
-            ? "Rotating issues a new key and revokes the old one. Connected agents must be updated."
+            ? "Keys are shown by prefix only — the full token is revealed once, at creation."
             : "The live settings endpoint needs an account session before it can show or create API keys."}
         </p>
         <div className="api-key-list">
@@ -3425,8 +3136,17 @@ export function SettingsFoundationPage(
 }
 
 function WalletAmount(
-  { label, value }: { label: string; value: number },
+  { label, value }: { label: string; value: number | null },
 ): ReactElement {
+  // null = wallet not loaded yet; never show a fabricated ✦0.000 balance.
+  if (value === null) {
+    return (
+      <div className="wallet-amount">
+        <span>{label}</span>
+        <strong>—</strong>
+      </div>
+    );
+  }
   const [whole, fraction] = value.toFixed(3).split(".");
   return (
     <div className="wallet-amount">
@@ -3474,17 +3194,23 @@ function WalletBalancePanel({
       <Card className="wallet-ledger-card">
         <div className="wallet-section-head">
           <h2>Balance ledger</h2>
-          <Pill>infinite scroll</Pill>
+          <Pill>{ledger.length} entries</Pill>
         </div>
         <div className="wallet-ledger">
-          {ledger.map((row, index) => (
-            <WalletLedgerRow
-              first={index === 0}
-              key={`${row.detail}-${row.when}-${index}`}
-              row={row}
-            />
-          ))}
-          <WalletLoadingFooter />
+          {ledger.length > 0
+            ? ledger.map((row, index) => (
+              <WalletLedgerRow
+                first={index === 0}
+                key={`${row.detail}-${row.when}-${index}`}
+                row={row}
+              />
+            ))
+            : (
+              <EmptyState icon="wallet" title="No transactions yet">
+                Deposits, agent calls, and transfers appear here as they
+                happen.
+              </EmptyState>
+            )}
         </div>
       </Card>
     </div>
@@ -4103,21 +3829,30 @@ function WalletReceiptsPanel(
         <h2>Receipts</h2>
         <Pill>Agent calls</Pill>
       </div>
-      <div className="wallet-receipt-table">
-        <div className="wallet-table-head">
-          <span>Agent</span>
-          <span>Credits</span>
-          <span>Latency</span>
-          <span>Status</span>
-          <span>When</span>
-        </div>
-        {receipts.map((receipt, index) => (
-          <WalletReceiptRow
-            key={`${receipt.tool}-${receipt.when}-${index}`}
-            receipt={receipt}
-          />
-        ))}
-      </div>
+      {receipts.length > 0
+        ? (
+          <div className="wallet-receipt-table">
+            <div className="wallet-table-head">
+              <span>Agent</span>
+              <span>Credits</span>
+              <span>Latency</span>
+              <span>Status</span>
+              <span>When</span>
+            </div>
+            {receipts.map((receipt, index) => (
+              <WalletReceiptRow
+                key={`${receipt.tool}-${receipt.when}-${index}`}
+                receipt={receipt}
+              />
+            ))}
+          </div>
+        )
+        : (
+          <EmptyState icon="wallet" title="No receipts yet">
+            Every Agent call produces a receipt; they appear here as your
+            connected agents run functions.
+          </EmptyState>
+        )}
     </Card>
   );
 }
@@ -4132,13 +3867,12 @@ function WalletEarningsPanel(
           <Icon name="shield" />
         </span>
         <div>
-          <h3>Payouts ready</h3>
+          <h3>Payouts</h3>
           <p>
-            Stripe Connect payouts are enabled. Withdraw earned credits to your
-            bank or transfer to spendable balance.
+            Withdrawals run through Stripe Connect via <Mono>ul.wallet</Mono>
+            {" "}from a connected agent — a website payout flow is coming.
           </p>
         </div>
-        <Button size="sm">Withdraw earnings</Button>
       </Card>
       <Card className="wallet-ledger-card">
         <div className="wallet-section-head">
@@ -4146,14 +3880,19 @@ function WalletEarningsPanel(
           <Pill>creator income</Pill>
         </div>
         <div className="wallet-ledger">
-          {earnings.map((row, index) => (
-            <WalletLedgerRow
-              first={index === 0}
-              key={`${row.detail}-${row.when}-${index}`}
-              row={row}
-            />
-          ))}
-          <WalletLoadingFooter />
+          {earnings.length > 0
+            ? earnings.map((row, index) => (
+              <WalletLedgerRow
+                first={index === 0}
+                key={`${row.detail}-${row.when}-${index}`}
+                row={row}
+              />
+            ))
+            : (
+              <EmptyState icon="wallet" title="No earnings yet">
+                Per-call earnings from Agents you publish appear here.
+              </EmptyState>
+            )}
         </div>
       </Card>
     </div>
@@ -4199,22 +3938,13 @@ function WalletReceiptRow(
         </Mono>
       </span>
       <Mono>✦{receipt.light.toFixed(3)}</Mono>
-      <Mono>{receipt.latency}ms</Mono>
+      <Mono>{receipt.latency !== null ? `${receipt.latency}ms` : "—"}</Mono>
       <span
         className={receipt.status === "error" ? "mono error" : "mono positive"}
       >
         {receipt.status}
       </span>
       <Mono>{receipt.when}</Mono>
-    </div>
-  );
-}
-
-function WalletLoadingFooter(): ReactElement {
-  return (
-    <div className="wallet-loading-footer">
-      <span className="launch-spinner" />
-      <span>Loading more...</span>
     </div>
   );
 }
@@ -4764,8 +4494,9 @@ function NewApiKeyModal({
   }, []);
 
   const copyToken = () => {
-    const token = plaintextToken || apiKeyMask;
-    navigator.clipboard?.writeText(token).catch(() => {});
+    // Never copy a placeholder: only the real once-revealed token is useful.
+    if (!plaintextToken) return;
+    navigator.clipboard?.writeText(plaintextToken).catch(() => {});
   };
 
   return (
@@ -4792,7 +4523,7 @@ function NewApiKeyModal({
           <Mono>
             {creating
               ? "issuing..."
-              : errorMessage || plaintextToken || apiKeyMask}
+              : errorMessage || plaintextToken || "Token unavailable"}
           </Mono>
           <Button icon="copy" onClick={copyToken} size="sm" variant="secondary">
             Copy
@@ -4921,7 +4652,11 @@ function CompactAgentCard({ tool }: { tool: AgentFixture }): ReactElement {
       </div>
       <p>{tool.summary}</p>
       <div className="compact-tool-footer">
-        <Mono>{formatNumber(tool.installs)} installs</Mono>
+        <Mono>
+          {tool.installs !== null
+            ? `${formatNumber(tool.installs)} installs`
+            : tool.category}
+        </Mono>
         {free
           ? <span>Free</span>
           : <span>{formatCredits(tool.callPrice)}/call</span>}
@@ -4939,29 +4674,15 @@ function KeyBanner({ signedIn }: { signedIn: boolean }): ReactElement {
       <div>
         <h2>
           {signedIn
-            ? "Your API key is included below"
-            : "Sign in to drop your key into these snippets"}
+            ? "Add your API key to a snippet"
+            : "Sign in to create an API key"}
         </h2>
         <p>
-          {signedIn
-            ? (
-              <>
-                Copy any snippet and it is ready to run:{" "}
-                <Mono>{apiKeyMask}</Mono>.
-              </>
-            )
-            : (
-              <>
-                Until then they show{" "}
-                <Mono>{apiKeyPlaceholder}</Mono>; replace it with your own
-                token.
-              </>
-            )}
+          Snippets show <Mono>{apiKeyPlaceholder}</Mono> — create a key in
+          Settings (the full token is revealed once, at creation) and paste it
+          in.
         </p>
       </div>
-      <Button size="sm" variant={signedIn ? "secondary" : "primary"}>
-        {signedIn ? "Copy key" : "Sign in"}
-      </Button>
     </section>
   );
 }
@@ -5030,16 +4751,17 @@ function SearchControls({
 function RetrievalNote(
   { mode, query }: { mode?: string; query: string },
 ): ReactElement {
+  // Only claim a retrieval mode the API actually reported.
   if (!query) {
     return (
       <div className="retrieval-note">
-        Browsing all public Agents · {mode || "top by install"}
+        Browsing all public Agents{mode ? ` · ${mode}` : ""}
       </div>
     );
   }
   return (
     <div className="retrieval-note active">
-      <span /> {mode || "hybrid"} retrieval · semantic + lexical fallback
+      <span /> {mode ? `${mode} retrieval` : "Search results"}
     </div>
   );
 }
@@ -5057,12 +4779,18 @@ function StoreAgentCard({ tool }: { tool: AgentFixture }): ReactElement {
       </div>
       <p>{tool.summary}</p>
       <div className="store-card-meta">
-        <Mono>{formatNumber(tool.installs)} installs</Mono>
+        <Mono>
+          {tool.installs !== null
+            ? `${formatNumber(tool.installs)} installs`
+            : tool.category}
+        </Mono>
         {tool.free || tool.callPrice === 0
           ? <span>Free</span>
           : <span>{formatCredits(tool.callPrice)}/call</span>}
       </div>
-      <Sparkline points={tool.spark} growth={tool.growth} />
+      {tool.spark !== null
+        ? <Sparkline points={tool.spark} growth={tool.growth} />
+        : null}
     </Card>
   );
 }
@@ -5121,7 +4849,6 @@ function Leaderboard({
   subtitle: string;
   title: string;
 }): ReactElement {
-  const [period, setPeriod] = useState("30d");
   return (
     <Card className="leaderboard-card">
       <div className="leaderboard-head">
@@ -5129,42 +4856,46 @@ function Leaderboard({
           <h3>{title}</h3>
           <p>{subtitle}</p>
         </div>
-        <div className="mini-segments">
-          {["30d", "90d", "all"].map((option) => (
-            <button
-              className={period === option ? "active" : ""}
-              key={option}
-              onClick={() => setPeriod(option)}
-              type="button"
-            >
-              {option}
-            </button>
-          ))}
-        </div>
+        {/* Data is fetched for a fixed 30d window; don't offer period
+            switches that wouldn't change it. */}
+        <Mono>30d</Mono>
       </div>
       <div className="leaderboard-list">
-        {rows.map((row) => (
-          <div className="leader-row" key={`${title}-${row.rank}`}>
-            <Mono>{row.rank}</Mono>
-            <Avatar color={row.color} name={row.name} />
-            <span>
-              <strong>{row.name}</strong>
-              {row.featured ? <small>{row.featured}</small> : null}
-            </span>
-            <Mono>{formatCredits(row.value)}</Mono>
-          </div>
-        ))}
+        {rows.length > 0
+          ? rows.map((row) => (
+            <div className="leader-row" key={`${title}-${row.rank}`}>
+              <Mono>{row.rank}</Mono>
+              <Avatar color={row.color} name={row.name} />
+              <span>
+                <strong>{row.name}</strong>
+                {row.featured ? <small>{row.featured}</small> : null}
+              </span>
+              <Mono>{formatCredits(row.value)}</Mono>
+            </div>
+          ))
+          : <p className="muted-note">No entries yet.</p>}
       </div>
     </Card>
   );
 }
 
-function NoResults({ onClear }: { onClear: () => void }): ReactElement {
+function NoResults(
+  { onClear, query }: { onClear: () => void; query: string },
+): ReactElement {
+  if (!query) {
+    return (
+      <div className="store-empty">
+        <EmptyState icon="search" title="No Agents published yet">
+          The store is empty right now. Deploy an Agent with the CLI and it
+          appears here.
+        </EmptyState>
+      </div>
+    );
+  }
   return (
     <div className="store-empty">
       <EmptyState icon="search" title="No Agents match that yet">
-        Semantic search would fall back to lexical results here. Try broader
-        terms, or browse by kind.
+        Try broader terms, or browse by kind.
       </EmptyState>
       <Button onClick={onClear} size="sm" variant="secondary">
         Clear search
@@ -5211,233 +4942,6 @@ export function FoundationNotice(
   { children }: { children: ReactNode },
 ): ReactElement {
   return <EmptyState title="Ready for page port">{children}</EmptyState>;
-}
-
-function createAgentDetail(tool: AgentFixture): AgentDetailFixture {
-  const base: AgentDetailFixture = {
-    ...tool,
-    callsPerDay: Math.round(tool.installs * 1.48),
-    capabilities: defaultCapabilities,
-    functions: [
-      {
-        args: ["input"],
-        description: `Run the primary ${tool.name} action.`,
-        name: "run",
-        p50: 120,
-        permission: "ask",
-        price: tool.free ? 0 : tool.callPrice,
-      },
-    ],
-    relationship: "public",
-    runtime: tool.kind === "mcp" ? "deno · edge" : "worker · http",
-    signer: `${tool.author.replace("@", "")}.studio`,
-    title: titleizeAgentName(tool.name),
-    updatedAt: "4d",
-    version: "1.0.0",
-    visibility: "public",
-  };
-
-  const overrides: Record<string, Partial<AgentDetailFixture>> = {
-    currency_convert: {
-      callsPerDay: 9200,
-      capabilities: [
-        { kind: "read", text: "reference FX rates" },
-        { kind: "read", text: "user-supplied currency pair and amount" },
-        { kind: "net", text: "outbound HTTPS to rate provider" },
-      ],
-      functions: [
-        {
-          args: ["from", "to", "amount"],
-          description: "Spot-rate conversion between any pair.",
-          name: "convert",
-          p50: 84,
-          permission: "ask",
-          price: 0.002,
-        },
-        {
-          args: ["from", "to", "date"],
-          description: "End-of-day historical rate for a given date.",
-          name: "historical",
-          p50: 120,
-          permission: "ask",
-          price: 0.003,
-        },
-        {
-          args: [],
-          description: "List all supported currency pairs.",
-          name: "list_pairs",
-          p50: 40,
-          permission: "always",
-          price: 0,
-        },
-      ],
-      signer: "anchor.studio",
-      title: "Currency Convert",
-      updatedAt: "2d",
-      version: "1.12.0",
-    },
-    get_weather: {
-      callsPerDay: 38200,
-      capabilities: [
-        { kind: "read", text: "public weather data" },
-        { kind: "read", text: "user-supplied city or coordinates" },
-        { kind: "net", text: "outbound HTTPS to weather providers" },
-      ],
-      functions: [
-        {
-          args: ["city", "days"],
-          description: "Five-day hyperlocal forecast.",
-          name: "forecast",
-          p50: 142,
-          permission: "ask",
-          price: 0.012,
-        },
-        {
-          args: ["city"],
-          description: "Current temperature and conditions.",
-          name: "now",
-          p50: 68,
-          permission: "always",
-          price: 0.004,
-        },
-        {
-          args: ["city"],
-          description: "Active severe-weather alerts.",
-          name: "alerts",
-          p50: 92,
-          permission: "ask",
-          price: 0.006,
-        },
-        {
-          args: ["city", "date"],
-          description: "Look up any past day.",
-          name: "historical",
-          p50: 280,
-          permission: "ask",
-          price: 0.018,
-        },
-      ],
-      signer: "kepler.studio",
-      title: "Get Weather",
-      updatedAt: "4d",
-      version: "2.4.1",
-    },
-    github_diff: {
-      capabilities: [
-        { kind: "read", text: "repository branch metadata" },
-        { kind: "read", text: "CI status and pull request comments" },
-        { kind: "net", text: "outbound HTTPS to GitHub" },
-      ],
-      functions: [
-        {
-          args: ["repo", "base", "head"],
-          description: "Summarize changes between two refs.",
-          name: "diff",
-          p50: 210,
-          permission: "ask",
-          price: 0,
-        },
-        {
-          args: ["repo", "pull_request"],
-          description: "Read recent review comments and CI status.",
-          name: "review_context",
-          p50: 160,
-          permission: "ask",
-          price: 0,
-        },
-      ],
-      signer: "octo.tools",
-      title: "GitHub Diff",
-      updatedAt: "1d",
-      version: "0.9.4",
-    },
-    maps_route: {
-      capabilities: [
-        { kind: "read", text: "origin and destination text" },
-        { kind: "net", text: "outbound HTTPS to route provider" },
-      ],
-      functions: [
-        {
-          args: ["origin", "destination", "mode"],
-          description: "Return ETA, route distance, and transit mode.",
-          name: "route",
-          p50: 120,
-          permission: "ask",
-          price: 0,
-        },
-      ],
-      signer: "cartography.tools",
-      title: "Maps Route",
-      updatedAt: "3d",
-      version: "1.3.0",
-    },
-    pdf_parse: {
-      capabilities: [
-        { kind: "read", text: "uploaded PDF files" },
-        { kind: "read", text: "text, tables, and citations" },
-      ],
-      functions: [
-        {
-          args: ["file_url"],
-          description: "Extract layout-aware text and tables.",
-          name: "parse",
-          p50: 420,
-          permission: "ask",
-          price: 0.018,
-        },
-        {
-          args: ["file_url", "query"],
-          description: "Find cited spans that match a query.",
-          name: "cite",
-          p50: 300,
-          permission: "ask",
-          price: 0.012,
-        },
-      ],
-      signer: "vellum.tools",
-      title: "PDF Parse",
-      updatedAt: "5d",
-      version: "1.7.2",
-    },
-    stripe_subscribe: {
-      capabilities: [
-        { kind: "write", text: "create Stripe subscriptions" },
-        { kind: "read", text: "subscription and metering status" },
-        { kind: "net", text: "outbound HTTPS to Stripe" },
-      ],
-      functions: [
-        {
-          args: ["customer", "price_id"],
-          description: "Create a subscription and return a receipt.",
-          name: "create_subscription",
-          p50: 190,
-          permission: "ask",
-          price: 0.024,
-        },
-        {
-          args: ["subscription", "quantity"],
-          description: "Record metered usage for an active subscription.",
-          name: "meter_usage",
-          p50: 110,
-          permission: "ask",
-          price: 0.008,
-        },
-      ],
-      signer: "stripe.com",
-      title: "Stripe Subscribe",
-      updatedAt: "1d",
-      version: "3.2.0",
-    },
-  };
-
-  return { ...base, ...overrides[tool.slug] };
-}
-
-function adminAgentFromRoute(id?: string): AgentDetailFixture {
-  if (!id) return agentDetails.get_weather;
-  return Object.values(agentDetails).find((tool) =>
-    tool.id === id || tool.slug === id
-  ) || agentDetails.get_weather;
 }
 
 function queryParam(name: string): string {
@@ -5526,32 +5030,6 @@ function formatCurrency(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-function argDefault(arg: string): string {
-  const defaults: Record<string, string> = {
-    amount: "100",
-    base: "main",
-    city: "Tokyo",
-    customer: "cus_launch",
-    date: "2026-05-01",
-    days: "5",
-    destination: "SoHo",
-    file_url: "https://example.com/report.pdf",
-    from: "USD",
-    head: "feature",
-    input: "demo",
-    mode: "transit",
-    origin: "Brooklyn",
-    price_id: "price_agent_pro",
-    pull_request: "42",
-    quantity: "1",
-    query: "risk factors",
-    repo: "owner/repo",
-    subscription: "sub_launch",
-    to: "EUR",
-  };
-  return defaults[arg] || "";
-}
-
 function argHint(arg: string): string {
   const hints: Record<string, string> = {
     amount: "number",
@@ -5565,65 +5043,8 @@ function argHint(arg: string): string {
   return hints[arg] || "value";
 }
 
-function builderRankFor(author: string): string {
-  const row = builderLeaders.find((leader) => leader.name === author);
-  return row ? String(row.rank) : "12";
-}
-
 function formatAgentPrice(value: number): string {
   return value > 0 ? `✦${formatCredits(value)}` : "Free";
-}
-
-function functionResponse(slug: string, name: string): Record<string, unknown> {
-  const responses: Record<string, Record<string, unknown>> = {
-    "currency_convert.convert": {
-      amount: 100,
-      asOf: "2026-06-02T14:00Z",
-      from: "USD",
-      rate: 0.924,
-      result: 92.4,
-      to: "EUR",
-    },
-    "currency_convert.historical": {
-      date: "2026-05-01",
-      from: "USD",
-      rate: 0.918,
-      to: "EUR",
-    },
-    "currency_convert.list_pairs": {
-      count: 182,
-      sample: ["USD/EUR", "USD/JPY", "GBP/USD", "EUR/JPY"],
-    },
-    "get_weather.alerts": {
-      active: false,
-      alerts: [],
-      city: "Tokyo",
-    },
-    "get_weather.forecast": {
-      city: "Tokyo",
-      days: 5,
-      forecast: [
-        { day: "Mon", hi: 24, lo: 17, sky: "cloudy" },
-        { day: "Tue", hi: 23, lo: 16, sky: "rain" },
-      ],
-      unit: "C",
-    },
-    "get_weather.historical": {
-      city: "Tokyo",
-      conditions: "clear",
-      date: "2026-05-01",
-      tempC: 19,
-    },
-    "get_weather.now": {
-      city: "Tokyo",
-      conditions: "partly cloudy",
-      hi: 24,
-      lo: 15,
-      tempC: 17,
-    },
-  };
-  return responses[`${slug}.${name}`] ||
-    { ok: true, receipt: "rec_launch_demo" };
 }
 
 function titleizeAgentName(value: string): string {
