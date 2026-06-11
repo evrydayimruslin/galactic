@@ -116,6 +116,7 @@ import {
   resolveManifestEnvSchema,
 } from "../../shared/contracts/manifest.ts";
 import { getEnv } from "../lib/env.ts";
+import { resolveInternalMcpCall } from "../services/internal-mcp.ts";
 import { buildCorsHeaders } from "../services/cors.ts";
 import { buildSharedPageEntryUrl } from "../services/page-share-session.ts";
 import {
@@ -4116,14 +4117,22 @@ async function handleToolsCall(
                     arguments: args || {},
                   },
                 };
-                const callResponse = await fetch(`${baseUrl}/mcp/${appId}`, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${authToken}`,
-                  },
-                  body: JSON.stringify(rpcPayload),
+                // SELF binding: same-worker public-hostname fetch is blocked
+                // by the CDN (error 1042); helper validates + encodes the id.
+                const interfaceCall = resolveInternalMcpCall(appId, {
+                  baseUrl,
                 });
+                const callResponse = await interfaceCall.fetchFn(
+                  interfaceCall.url,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "Authorization": `Bearer ${authToken}`,
+                    },
+                    body: JSON.stringify(rpcPayload),
+                  },
+                );
                 if (!callResponse.ok) {
                   const errText = await callResponse.text().catch(() =>
                     callResponse.statusText
@@ -4171,14 +4180,22 @@ async function handleToolsCall(
                     arguments: args || {},
                   },
                 };
-                const callResponse = await fetch(`${baseUrl}/mcp/${appId}`, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${authToken}`,
-                  },
-                  body: JSON.stringify(rpcPayload),
+                // SELF binding: same-worker public-hostname fetch is blocked
+                // by the CDN (error 1042); helper validates + encodes the id.
+                const interfaceCall = resolveInternalMcpCall(appId, {
+                  baseUrl,
                 });
+                const callResponse = await interfaceCall.fetchFn(
+                  interfaceCall.url,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "Authorization": `Bearer ${authToken}`,
+                    },
+                    body: JSON.stringify(rpcPayload),
+                  },
+                );
                 if (!callResponse.ok) {
                   const errText = await callResponse.text().catch(() =>
                     callResponse.statusText
@@ -4580,7 +4597,19 @@ async function handleToolsCall(
           },
         };
 
-        const callResponse = await fetch(`${baseUrl}/mcp/${targetAppId}`, {
+        // Route through the SELF service binding: same-worker fetch() over the
+        // public hostname is blocked by the CDN (error 1042) and would bill a
+        // second request. The helper validates the target (rejects "platform"
+        // — an unmetered self-recursion outside the hop ceiling) and encodes
+        // the path segment.
+        if (targetAppId === "platform") {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "app_id must reference an app, not the platform endpoint",
+          );
+        }
+        const internalCall = resolveInternalMcpCall(targetAppId, { baseUrl });
+        const callResponse = await internalCall.fetchFn(internalCall.url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

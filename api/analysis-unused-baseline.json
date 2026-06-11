@@ -7,12 +7,6 @@
       "file": "handlers/auth.ts"
     },
     {
-      "file": "handlers/cron.ts",
-      "files": [
-        "handlers/cron.ts"
-      ]
-    },
-    {
       "exports": [
         "handleDraftUploadFiles"
       ],
@@ -448,35 +442,6 @@
       "file": "services/cors.ts",
       "types": [
         "CorsConfigInput"
-      ]
-    },
-    {
-      "exports": [
-        "createCronJob",
-        "createCronService",
-        "CRON_PRESETS",
-        "deleteAppCronJobs",
-        "deleteCronJob",
-        "describeCronExpression",
-        "executeCronJob",
-        "getAppCronJobs",
-        "getCronJob",
-        "getJobRunLogs",
-        "isValidCronExpression",
-        "loadCronJobs",
-        "saveCronJobs",
-        "shouldRunAt",
-        "startCronScheduler",
-        "stopCronScheduler",
-        "triggerCronJob",
-        "updateCronJob"
-      ],
-      "file": "services/cron.ts",
-      "types": [
-        "CronJob",
-        "CronJobCreateInput",
-        "CronRunLog",
-        "CronService"
       ]
     },
     {

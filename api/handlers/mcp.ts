@@ -18,13 +18,12 @@ import {
 import { getPermissionsForUser } from "./user.ts";
 import type { Tier } from "../../shared/contracts/runtime.ts";
 import { type UserContext } from "../runtime/sandbox.ts";
-import { createR2Service } from "../services/storage.ts";
 import {
   createRuntimeAIContext,
   createUnavailableAIService,
 } from "../services/runtime-ai.ts";
-import { getCodeCache } from "../services/codecache.ts";
 import { getPermissionCache } from "../services/permission-cache.ts";
+import { resolveInternalMcpCall } from "../services/internal-mcp.ts";
 import {
   createMemoryService,
   type MemoryService as MemoryServiceImpl,
@@ -68,7 +67,6 @@ import {
   buildMissingAppSecretsErrorDetails,
   buildMissingAppSecretsMessage,
   createAppD1Resources,
-  fetchAppEntryCode,
   resolveAppRuntimeEnvVars,
   resolveAppSupabaseConfig,
   resolveRuntimeAppCallDependencies,
@@ -2047,7 +2045,10 @@ async function executeSDKTool(
           },
         };
 
-        const callResponse = await fetch(`${baseUrl}/mcp/${targetAppId}`, {
+        // SELF binding: same-worker public-hostname fetch is blocked by the
+        // CDN (error 1042); helper validates + encodes the target id.
+        const internalCall = resolveInternalMcpCall(targetAppId, { baseUrl });
+        const callResponse = await internalCall.fetchFn(internalCall.url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -2320,61 +2321,27 @@ async function executeAppFunction(
       );
     }
 
-    const r2Service = createR2Service();
-
     // Phase 2C: Run independent setup tasks in parallel
-    // - Code fetch (R2, ~50-200ms on cache miss — the bottleneck)
     // - User profile for BYOK (~30ms)
     // - Env var decryption (CPU-only, ~0ms)
     // - Per-user secrets fetch (~30ms, conditional)
     // - Supabase config fetch (~30ms, conditional)
-
-    // --- Code fetch (check in-memory cache first, fall back to R2) ---
-    const codeCache = getCodeCache();
-    const cachedCode = codeCache.get(app.id, app.storage_key);
-
-    const codeFetchPromise = fetchAppEntryCode(
-      app,
-      {
-        r2Service,
-        codeCache,
-        onCacheMiss: () => {
-          console.log(
-            `[MCP] Code cache MISS for app ${app.id}, fetching from R2 (storage_key=${app.storage_key})...`,
-          );
-        },
-        onFileLoaded: (entryFile: string, fetched: string) => {
-          const hasGemma = fetched.includes("gemma");
-          const hasSub = fetched.includes("FROM subjects sub WHERE");
-          const hasOldS = fetched.includes("FROM subjects WHERE");
-          console.log(
-            `[MCP] Fetched ${app.storage_key}${entryFile} (${fetched.length} bytes) ` +
-              `gemma=${hasGemma} subAlias=${hasSub} oldSQL=${hasOldS}`,
-          );
-        },
-      },
-    );
-
-    if (cachedCode) {
-      console.log(
-        `[MCP] Code cache HIT for app ${app.id} (${codeCache.stats.hitRate} hit rate)`,
-      );
-    }
-
+    //
+    // NOTE: no R2 entry-code fetch here. The dynamic sandbox executes only
+    // the KV ESM bundle (esm:{appId}:latest) and errors with "Run rebuild
+    // first" when it's missing — the old per-call R2 read was dead weight.
     const runtimeEnvPromise = resolveAppRuntimeEnvVars(app, userId);
 
     // --- Supabase config fetch (conditional) ---
     const supabaseConfigPromise = resolveAppSupabaseConfig(app);
 
     // Await all parallel tasks
-    let code;
     let envResolution;
     let supabaseConfig;
     let d1DataService;
     try {
-      [code, envResolution, supabaseConfig, { d1DataService }] = await Promise
+      [envResolution, supabaseConfig, { d1DataService }] = await Promise
         .all([
-          codeFetchPromise,
           runtimeEnvPromise,
           supabaseConfigPromise,
           createAppD1Resources(app),
@@ -2384,10 +2351,6 @@ async function executeAppFunction(
         return jsonRpcErrorResponse(id, INVALID_REQUEST, err.message);
       }
       throw err;
-    }
-
-    if (!code) {
-      return jsonRpcErrorResponse(id, INTERNAL_ERROR, "App code not found");
     }
 
     const { envVars, missingRequiredSecrets } = envResolution;
@@ -2639,7 +2602,9 @@ async function executeAppFunction(
       userId,
       ownerId: app.owner_id,
       executionId,
-      code,
+      // Unused by the dynamic sandbox (it executes the KV ESM bundle); kept
+      // only to satisfy RuntimeConfig until the legacy Deno path is removed.
+      code: "",
       permissions,
       userApiKey: runtimeAI.userApiKey,
       aiUnavailableReason: runtimeAI.unavailableReason,

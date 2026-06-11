@@ -120,3 +120,27 @@ export function getEnv(key?: string): Env | string {
   if (typeof val === "string") return val;
   return "";
 }
+
+/**
+ * The SELF service binding (wrangler [[services]] -> this same worker) as a
+ * callable fetcher, or null when unbound (tests, misconfigured env).
+ *
+ * Internal worker-to-worker calls MUST use this instead of fetch()ing our own
+ * public hostname: same-worker self-fetch over the CDN is blocked (error
+ * 1042), and binding hops are free of per-request fees. Use synthetic URLs
+ * like https://internal/mcp/{appId} — routing is by pathname.
+ */
+export function getSelfFetcher(): ((
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>) | null {
+  const self = globalThis.__env?.SELF;
+  if (
+    self && typeof self === "object" &&
+    typeof (self as { fetch?: unknown }).fetch === "function"
+  ) {
+    const fetcher = self as { fetch: typeof fetch };
+    return fetcher.fetch.bind(fetcher);
+  }
+  return null;
+}

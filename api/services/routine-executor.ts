@@ -1,4 +1,5 @@
 import { getEnv } from "../lib/env.ts";
+import { resolveInternalMcpCall } from "./internal-mcp.ts";
 import type { RoutineBudgetDefaults } from "../../shared/contracts/routine.ts";
 import {
   createRoutineActorTokenForRun,
@@ -664,8 +665,15 @@ async function invokeRoutineHandler(
     tokenId: `routine-run-${run.id}-attempt-${run.attempt_count}`,
   });
 
-  const response = await options.fetchFn(
-    `${options.baseUrl.replace(/\/$/u, "")}/mcp/${composerAppId}`,
+  // SELF service binding when available: same-worker fetch() over the public
+  // hostname is blocked by the CDN (error 1042). options.fetchFn remains the
+  // test seam / fallback. The helper validates + encodes the composer id.
+  const internalCall = resolveInternalMcpCall(composerAppId, {
+    baseUrl: options.baseUrl,
+    fetchFn: options.fetchFn,
+  });
+  const response = await internalCall.fetchFn(
+    internalCall.url,
     {
       method: "POST",
       headers: {
@@ -699,6 +707,21 @@ async function invokeRoutineHandler(
     throw new Error(
       rpc.error.message || `Routine MCP error ${rpc.error.code ?? ""}`.trim(),
     );
+  }
+
+  // Execution failures surface as tool RESULTS with isError: true (the
+  // JSON-RPC layer succeeded; the handler did not). Without this check a
+  // failed handler — e.g. a never-built app's "Run rebuild first" — would be
+  // recorded as a SUCCEEDED run and never retried.
+  if (isRecord(rpc.result) && rpc.result.isError === true) {
+    const content = rpc.result.content;
+    const textBlock = Array.isArray(content)
+      ? content.find((entry) =>
+        isRecord(entry) && entry.type === "text" &&
+        typeof entry.text === "string"
+      ) as { text?: string } | undefined
+      : undefined;
+    throw new Error(textBlock?.text || "Routine handler failed");
   }
 
   const result = unwrapMcpToolResult(rpc.result);

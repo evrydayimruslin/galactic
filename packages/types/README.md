@@ -67,11 +67,6 @@ if (ultralight.isAuthenticated()) {
 }
 ```
 
-### Cron Jobs
-```typescript
-await ultralight.cron.register('daily', '0 9 * * *', 'myDailyTask');
-```
-
 ## Global Utilities
 
 These are also available globally:

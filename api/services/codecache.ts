@@ -126,7 +126,11 @@ let _instance: CodeCache | null = null;
 export function getCodeCache(): CodeCache {
   if (!_instance) {
     _instance = new CodeCache();
-    console.log('[CODE_CACHE] Initialized (max=1000, TTL=5m)');
+    // Honest log: DEFAULT_TTL_MS is 0, so every get() expires — caching is
+    // deliberately disabled until cross-isolate invalidation exists. (The MCP
+    // chokepoint no longer reads R2 code at all; remaining users are the app
+    // runner + upload invalidation.)
+    console.log('[CODE_CACHE] Initialized (max=1000, TTL=0 — disabled, always fetch fresh)');
   }
   return _instance;
 }

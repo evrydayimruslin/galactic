@@ -15,7 +15,6 @@ import {
   releaseExpiredCloudUsageHolds,
   type CloudUsageHoldReleaseJobResult,
 } from '../services/cloud-usage-reconciliation.ts';
-import { checkAndRunJobs as checkUserCronJobs } from '../services/cron.ts';
 import { runRoutineExecutorCycle } from '../services/routine-executor.ts';
 import { dispatchPendingEvents } from '../services/agent-events.ts';
 import { getEnv } from '../lib/env.ts';
@@ -209,7 +208,6 @@ async function runMinuteJobs(): Promise<void> {
     releaseExpiredCloudUsageHolds(),
     processNullEmbeddings(),
     processGpuBuilds(),
-    checkUserCronJobs(baseUrl), // user-facing cron scheduler
     runRoutineExecutorCycle({ baseUrl }), // platform-owned durable routines
     dispatchPendingEvents(), // cross-Agent pub/sub event fan-out
   ]);
@@ -221,7 +219,6 @@ async function runMinuteJobs(): Promise<void> {
         'cloudUsageHoldRelease',
         'embeddingProcessor',
         'gpuBuildProcessor',
-        'userCronScheduler',
         'routineExecutor',
         'agentEventDispatch',
       ];

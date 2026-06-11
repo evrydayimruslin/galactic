@@ -89,7 +89,7 @@ CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 # Cron triggers for scheduled worker
 [triggers]
 crons = [
-  "* * * * *",       # every minute: async cleanup, embedding processor, gpu builds, user cron scheduler
+  "* * * * *",       # every minute: async cleanup, holds, embeddings, gpu builds, routines, event dispatch
   "*/5 * * * *",     # every 5 min: D1 billing
   "0 * * * *",       # hourly: hosting billing, payout processor
   "*/30 * * * *",    # every 30 min: auto-healing

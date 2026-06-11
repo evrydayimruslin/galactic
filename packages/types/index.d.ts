@@ -46,52 +46,8 @@ declare global {
   const http: HttpUtils;
 }
 
-interface CronSDK {
-  register(name: string, schedule: string, handler: string): Promise<CronJob>;
-  unregister(name: string): Promise<void>;
-  update(name: string, updates: Partial<{
-    schedule: string;
-    handler: string;
-    enabled: boolean;
-  }>): Promise<CronJob>;
-  list(): Promise<CronJob[]>;
-  validate(expression: string): boolean;
-  describe(expression: string): string;
-  presets: CronPresets;
-}
 
-interface CronJob {
-  id: string;
-  appId: string;
-  name: string;
-  schedule: string;
-  handler: string;
-  enabled: boolean;
-  lastRunAt: string | null;
-  lastRunResult: 'success' | 'error' | null;
-  lastRunError: string | null;
-  lastRunDurationMs: number | null;
-  runCount: number;
-  errorCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
 
-interface CronPresets {
-  EVERY_MINUTE: '* * * * *';
-  EVERY_5_MINUTES: '*/5 * * * *';
-  EVERY_15_MINUTES: '*/15 * * * *';
-  EVERY_30_MINUTES: '*/30 * * * *';
-  EVERY_HOUR: '0 * * * *';
-  EVERY_6_HOURS: '0 */6 * * *';
-  EVERY_12_HOURS: '0 */12 * * *';
-  DAILY_MIDNIGHT: '0 0 * * *';
-  DAILY_9AM: '0 9 * * *';
-  DAILY_6PM: '0 18 * * *';
-  WEEKLY_SUNDAY: '0 0 * * 0';
-  WEEKLY_MONDAY: '0 0 * * 1';
-  MONTHLY_FIRST: '0 0 1 * *';
-}
 
 interface UltralightSDK {
   env: Readonly<Record<string, string>>;
@@ -109,7 +65,6 @@ interface UltralightSDK {
   remember(key: string, value: unknown): Promise<void>;
   recall<T = unknown>(key: string): Promise<T | null>;
   ai(request: AIRequest): Promise<AIResponse>;
-  cron: CronSDK;
 }
 
 interface LodashLike {
@@ -283,9 +238,6 @@ export {
   AIResponse,
   QueryOptions,
   QueryResult,
-  CronSDK,
-  CronJob,
-  CronPresets,
   LodashLike,
   DateFnsLike,
   SchemaBuilder,
