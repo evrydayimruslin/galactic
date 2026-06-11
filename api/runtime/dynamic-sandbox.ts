@@ -217,7 +217,7 @@ globalThis.ultralight = {
   recall(k) { if (!${
       config.permissions.includes("memory:read")
     }) return Promise.reject(new Error('memory:read permission not granted.')); const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.recall(k) : Promise.resolve(null); },
-  ai(r) { const e = globalThis.__rpcEnv; return e.AI ? e.AI.call(r) : Promise.resolve({ content: '', error: 'AI not available' }); },
+  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.resolve({ content: '', error: 'AI not available' }); return e.AI.call(r).then(function(resp){ try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
   async call(targetAppId, functionName, callArgs) {
     if (!targetAppId || !functionName) throw new Error('target app id and function name are required');
     if (!__ulAllowsAppCall(targetAppId, functionName)) {
@@ -354,16 +354,16 @@ export default {
           for (const k of Object.keys(appModule.default)) { if (typeof appModule.default[k] === 'function') available.push(k); }
         }
         return Response.json({
-          success: false, result: null, logs,
+          success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0,
           error: { type: 'FunctionNotFound', message: 'Function "' + fnName + '" not found. Available: ' + [...new Set(available)].join(', ') },
         });
       }
 
       const result = await targetFn(...fnArgs);
-      return Response.json({ success: true, result, logs });
+      return Response.json({ success: true, result, logs, aiCostLight: globalThis.__aiCostLight || 0 });
     } catch (err) {
       return Response.json({
-        success: false, result: null, logs,
+        success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0,
         error: { type: err.constructor?.name || 'Error', message: err.message || String(err) },
       });
     }
@@ -503,6 +503,10 @@ export default {
           message: string;
         }
       >;
+      // Credits actually debited for in-sandbox AI calls this execution
+      // (accumulated by the SDK ai() wrapper). Drives both the receipt and
+      // the cross-Agent grant monthly cap.
+      aiCostLight?: number;
       error?: { type: string; message: string };
     };
 
@@ -511,7 +515,7 @@ export default {
       result: data.result,
       logs: data.logs || [],
       durationMs: Date.now() - startTime,
-      aiCostLight: 0,
+      aiCostLight: typeof data.aiCostLight === "number" ? data.aiCostLight : 0,
       ...(data.error ? { error: data.error } : {}),
     };
   } catch (err) {

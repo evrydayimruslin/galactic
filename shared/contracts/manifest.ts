@@ -149,6 +149,9 @@ export interface ToolAccessPolicyPlanPayload {
   caller: {
     userId: string;
     authState?: 'authenticated' | 'anonymous';
+    // The calling Agent for a cross-Agent call (P5), or null/undefined for a
+    // direct user call. Lets a policy module deny or reprice per caller.
+    callerAppId?: string | null;
   };
   subject: {
     kind: ToolAccessPolicySubjectKind;

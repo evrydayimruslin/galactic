@@ -35,6 +35,9 @@ export interface AccessPolicySubject {
 export interface AccessPolicyCaller {
   userId: string;
   authState?: "authenticated" | "anonymous";
+  // The calling Agent for a cross-Agent call (P5), or null for a direct user
+  // call. A developer access_policy module can deny or reprice per caller.
+  callerAppId?: string | null;
 }
 
 export interface AccessPolicyContext {

@@ -102,6 +102,7 @@ export interface ToolAccessPolicyPlanPayload {
     caller: {
         userId: string;
         authState?: 'authenticated' | 'anonymous';
+        callerAppId?: string | null;
     };
     subject: {
         kind: ToolAccessPolicySubjectKind;

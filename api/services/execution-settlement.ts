@@ -147,6 +147,9 @@ export interface PreflightRuntimeCloudHoldParams {
   method: string;
   timeoutMs: number;
   callerAuthState?: "authenticated" | "anonymous";
+  // The calling Agent (P5) — exposed to the developer access_policy module so
+  // a target dev can deny or reprice specific cross-Agent callers.
+  callerAppId?: string | null;
   routineContext?: RoutineTraceContext | null;
 }
 
@@ -198,6 +201,8 @@ export interface LogExecutionResultParams {
   userId: string;
   appId?: string;
   appName?: string;
+  callerAppId?: string | null;
+  callChainDepth?: number | null;
   functionName: string;
   method: string;
   success: boolean;
@@ -249,6 +254,8 @@ export interface SettleAndLogGpuExecutionParams {
   functionName: string;
   inputArgs: Record<string, unknown>;
   method: string;
+  callerAppId?: string | null;
+  callChainDepth?: number | null;
   gpuResult: GpuExecuteResult;
   durationMs: number;
   sessionId?: string;
@@ -279,6 +286,9 @@ export interface SettleAndLogAppExecutionParams {
   userQuery?: string;
   infraCharge?: RuntimeInfraCharge | null;
   callerAuthState?: "authenticated" | "anonymous";
+  // Cross-Agent attribution (P5): the initiating Agent + call-chain depth.
+  callerAppId?: string | null;
+  callChainDepth?: number | null;
   runtimePricingPreflight?: RuntimeAppCallPricingPreflight | null;
   runtimeCloudSettlement?: RuntimeCloudSettlementForAppCall | null;
   routineContext?: RoutineTraceContext | null;
@@ -338,6 +348,7 @@ export async function preflightRuntimeCloudHold(
     caller: {
       userId: params.userId,
       authState: params.callerAuthState,
+      callerAppId: params.callerAppId ?? null,
     },
     subject: { kind: "function", id: params.functionName },
     input: params.inputArgs,
@@ -1029,6 +1040,8 @@ export function logExecutionResult(
     userId: params.userId,
     appId: params.appId,
     appName: params.appName,
+    callerAppId: params.callerAppId ?? null,
+    callChainDepth: params.callChainDepth ?? null,
     functionName: params.functionName,
     method: params.method,
     success: params.success,
@@ -1155,6 +1168,8 @@ export async function settleAndLogAppExecution(
     receiptId: params.receiptId,
     appId: params.app.id,
     appName: params.app.name || params.app.slug,
+    callerAppId: params.callerAppId ?? null,
+    callChainDepth: params.callChainDepth ?? null,
     functionName: params.functionName,
     method: params.method,
     success: params.success && !settlement.insufficientBalance,
@@ -1272,6 +1287,8 @@ export async function settleAndLogGpuExecution(
     receiptId: params.receiptId,
     appId: params.app.id,
     appName: params.app.name || params.app.slug,
+    callerAppId: params.callerAppId ?? null,
+    callChainDepth: params.callChainDepth ?? null,
     functionName: params.functionName,
     method: params.method,
     success: params.gpuResult.success,

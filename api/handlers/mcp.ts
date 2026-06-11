@@ -2506,6 +2506,7 @@ async function executeAppFunction(
       method: callMethod,
       timeoutMs,
       callerAuthState: "authenticated",
+      callerAppId: callerContext.callerApp?.appId ?? null,
       routineContext: meta?.routineContext,
     });
     if (cloudPreflight.insufficientBalance) {
@@ -2704,6 +2705,8 @@ async function executeAppFunction(
         sequenceNumber: nextSequenceNumber(meta?.sessionId),
         userQuery: meta?.userQuery,
         callerAuthState: "authenticated",
+        callerAppId: callerContext.callerApp?.appId ?? null,
+        callChainDepth: callerContext.callerApp?.hop ?? null,
         runtimePricingPreflight: cloudPreflight.pricing,
         runtimeCloudSettlement: cloudSettlement,
         routineContext: meta?.routineContext,

@@ -20,6 +20,10 @@ export interface McpCallLogEntry {
   userId: string;
   appId?: string;
   appName?: string;
+  // Cross-Agent attribution (P5): the Agent that INITIATED this call, and the
+  // call-chain depth. Null for direct user calls.
+  callerAppId?: string | null;
+  callChainDepth?: number | null;
   functionName: string;
   method: string;
   success: boolean;
@@ -131,6 +135,8 @@ export function buildMcpCallLogInsertPayload(
     user_id: entry.userId,
     app_id: entry.appId || null,
     app_name: entry.appName || null,
+    caller_app_id: entry.callerAppId ?? null,
+    call_chain_depth: entry.callChainDepth ?? null,
     function_name: entry.functionName,
     method: entry.method,
     success: entry.success,

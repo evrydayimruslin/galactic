@@ -10,6 +10,50 @@ This file tracks issues intentionally deferred while we land the launch PR
 sequence. It is not a backlog for everything in the repo; it is a scoped list
 of launch-relevant follow-ups discovered during implementation.
 
+## Phase 4c (2026-06-10)
+
+- **Deploy ordering:** apply migration
+  `20260610170000_mcp_call_logs_caller_attribution.sql` (adds
+  `mcp_call_logs.caller_app_id` + `call_chain_depth`) before/with the next
+  API Worker deploy. Both columns are nullable and additive; existing readers
+  use explicit column projections, so nothing breaks if the deploy precedes
+  the migration — but receipts won't carry attribution until it lands.
+- **codemode metering bypass (deferred — separate economic concern):**
+  `ul.codemode` invokes library-app functions in-process and runs NO
+  `preflightRuntimeCloudHold` / `settleAndLogAppExecution` / `recordGrantSpend`
+  (`api/handlers/platform-mcp.ts` codemode path, `api/runtime/dynamic-executor.ts`).
+  So library-app calls via codemode are currently free and unmetered — the
+  target developer earns nothing and infra isn't billed. 4c closed the
+  codemode *access* hole (see below) but NOT this metering hole, which is a
+  broad billing-semantics change (does an owned-app self-call get metered?
+  today no) needing its own product decision. Route the in-process path
+  through full settlement, or fall the dynamic path back to the metered HTTP
+  executor (`codemode-tools.ts buildToolFunctions`), as a follow-up.
+- **codemode access gate is bounded by design:** `codemode-access.ts`
+  filters the toolMap to drop non-owned-private functions the user no longer
+  holds a live `user_app_permission` for, plus any function with an explicit
+  connected-agent `never` policy. It deliberately does NOT apply the default
+  `ask` connected-agent gate (that gate governs individual external MCP calls;
+  codemode is recipe orchestration over the user's own library). Tightening
+  codemode to the full always/ask/never model is a product decision, not a
+  bug. The filter fails OPEN on a DB outage (availability over best-effort
+  tightening).
+- **`ul.call` is correctly NOT grant-gated (verified, not a hole):** both the
+  per-app SDK tool (`mcp.ts` `executeSDKTool` `ultralight.call`) and the
+  platform `ul.call` are platform RELAYS — the relaying app's code never
+  touches the target's response, so there is no cross-Agent data exposure.
+  The forwarded call carries the user token with no caller-context header, so
+  the TARGET's existing connected-agent gate (`enforceCallerFunctionPermission`)
+  governs it — the same protection a direct user call gets. Minting a caller
+  token here would WRONGLY convert a legitimate user relay into a
+  grant-required call. App CODE calling another Agent uses the in-sandbox
+  `ultralight.call` (grant-gated since 4a) — that path is unaffected.
+- **AI-cost-to-cap now closed:** the dynamic-worker sandbox accumulates real
+  in-sandbox AI debit (`cost_light`) and surfaces it in the `/execute`
+  response, so `recordGrantSpend` counts AI spend against the per-grant
+  monthly cap (previously the dynamic path hardcoded `aiCostLight: 0`, letting
+  AI-heavy targets evade the cap).
+
 ## Phase 4a (2026-06-10)
 
 - **AGENT_CALLER_SECRET** must be provisioned (wrangler secret) before

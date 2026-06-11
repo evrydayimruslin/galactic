@@ -5790,6 +5790,20 @@ async function handleToolsCall(
           );
         }
 
+        // P5: codemode invokes these functions in-process, bypassing the
+        // normal /mcp/:appId authorization. Drop entries the user is no longer
+        // allowed to call (a revoked non-owned-private grant, or an explicit
+        // "never" connected-agent policy) before building the recipe. Owned and
+        // accessible-public apps stay callable (codemode orchestrates the
+        // user's own library). Fails open on a DB outage.
+        {
+          const { filterCodemodeToolMapByAccess } = await import(
+            "../services/codemode-access.ts"
+          );
+          toolMap = await filterCodemodeToolMapByAccess(userId, toolMap);
+          toolMapForLogging = toolMap;
+        }
+
         // 2. Try Dynamic Worker path (in-process MCP calls)
         const hasLoader = !!globalThis.__env?.LOADER;
         let execResult: { result: unknown; error?: string; logs: string[] };
