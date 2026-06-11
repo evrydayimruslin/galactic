@@ -443,7 +443,8 @@ export class LaunchApiClient {
 
   wiringTargets(query?: string): Promise<LaunchWiringTargetsResponse> {
     const params = new URLSearchParams();
-    if (query) params.set("query", query);
+    // The facade reads ?q= for the target search filter.
+    if (query) params.set("q", query);
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return this.fetchJson(`/api/launch/wiring/targets${suffix}`);
   }

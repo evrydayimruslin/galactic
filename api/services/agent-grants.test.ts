@@ -318,6 +318,67 @@ Deno.test("createGrant: allows wiring an installed caller to a public target and
   });
 });
 
+Deno.test("createGrant: re-proposing an active grant never resets the spend window", async () => {
+  // A capped agent must not be able to launder its monthly cap by re-running
+  // createGrant with identical params (which previously merge-duplicated over
+  // its own active row and zeroed spent_credits_period).
+  let sawSpendResetInsert = false;
+  let patchedFields: Record<string, unknown> | null = null;
+  const handler: Handler = (url, init) => {
+    if (url.pathname.endsWith("/apps")) {
+      return jsonResponse([{
+        id: url.searchParams.get("id")?.includes("caller")
+          ? "app-caller"
+          : "app-target",
+        owner_id: "user-1",
+        visibility: "public",
+      }]);
+    }
+    if (url.pathname.endsWith("/user_app_library")) {
+      return jsonResponse([{ app_id: "app-caller" }]);
+    }
+    // The pre-check read: an ACTIVE grant with accumulated spend already exists.
+    if (url.pathname.endsWith("/agent_function_grants") && !init?.method) {
+      return jsonResponse([grantRow({
+        id: "grant-1",
+        caller_app_id: "app-caller",
+        target_app_id: "app-target",
+        target_function: "getStock",
+        status: "active",
+        spent_credits_period: 4000,
+        monthly_cap_credits: 5000,
+      })]);
+    }
+    if (url.pathname.endsWith("/agent_function_grants") && init?.method === "POST") {
+      const body = JSON.parse(String(init.body))[0];
+      if (body.spent_credits_period === 0) sawSpendResetInsert = true;
+      return jsonResponse([grantRow(body)]);
+    }
+    if (url.pathname.endsWith("/agent_function_grants") && init?.method === "PATCH") {
+      patchedFields = JSON.parse(String(init.body));
+      return jsonResponse([grantRow({
+        id: "grant-1",
+        status: "active",
+        spent_credits_period: 4000,
+      })]);
+    }
+    return jsonResponse([]);
+  };
+  await withMockedDb(handler, async () => {
+    const grant = await createGrant("user-1", {
+      callerAppId: "app-caller",
+      targetAppId: "app-target",
+      targetFunction: "getStock",
+    });
+    // The active row was PATCHed (cap only), not re-inserted with zeroed spend.
+    assertEquals(sawSpendResetInsert, false);
+    assert(patchedFields !== null);
+    assertEquals("spent_credits_period" in (patchedFields ?? {}), false);
+    assertEquals("period_start" in (patchedFields ?? {}), false);
+    assertEquals(grant.spentCreditsPeriod, 4000);
+  });
+});
+
 Deno.test("createGrant: rejects a self-referential grant", async () => {
   await withMockedDb(
     () => jsonResponse([]),

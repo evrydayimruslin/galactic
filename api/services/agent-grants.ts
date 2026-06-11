@@ -467,12 +467,41 @@ export async function createGrant(
   const cap = request.monthlyCapCredits === undefined
     ? DEFAULT_GRANT_MONTHLY_CAP_CREDITS
     : request.monthlyCapCredits; // null = explicitly uncapped
+  const slot = request.slot?.trim() || "";
+
+  // SPEND-WINDOW INTEGRITY — never let a re-propose launder the monthly cap.
+  // A capped agent calling createGrant with identical params would otherwise
+  // merge-duplicate over its own active row and reset spent_credits_period to
+  // 0. If an ACTIVE row already exists for this exact wiring, only update the
+  // safe mutable fields (cap/constraints) and leave the spend window intact.
+  const existing = await dbGet(
+    db,
+    [
+      `user_id=eq.${userId}`,
+      `caller_app_id=eq.${callerAppId}`,
+      `caller_function=eq.${encodeURIComponent(callerFunction)}`,
+      `slot=eq.${encodeURIComponent(slot)}`,
+      `target_app_id=eq.${targetAppId}`,
+      `target_function=eq.${encodeURIComponent(targetFunction)}`,
+      `mode=eq.call`,
+      `select=*`,
+      `limit=1`,
+    ].join("&"),
+  );
+  if (existing[0] && existing[0].status === "active") {
+    const patched = await patchGrant(db, userId, existing[0].id, {
+      monthly_cap_credits: cap,
+      constraints: request.constraints ?? existing[0].constraints ?? {},
+    });
+    if (patched) return patched;
+    return mapRow(existing[0]);
+  }
 
   const payload = {
     user_id: userId,
     caller_app_id: callerAppId,
     caller_function: callerFunction,
-    slot: request.slot?.trim() || "",
+    slot,
     target_app_id: targetAppId,
     target_function: targetFunction,
     mode: "call",
@@ -484,7 +513,8 @@ export async function createGrant(
     created_by: origin,
   };
 
-  // Upsert: re-granting a pending/revoked pair re-activates it.
+  // Upsert: a fresh insert, or re-activating a pending/revoked pair (which
+  // legitimately starts a clean spend window).
   const response = await fetch(
     `${db.baseUrl}/rest/v1/agent_function_grants?on_conflict=user_id,caller_app_id,caller_function,slot,target_app_id,target_function,mode`,
     {
@@ -510,28 +540,20 @@ export async function createGrant(
   return mapRow(rows[0] as AgentGrantRow);
 }
 
+// Revoke only. Activation must go through approvePendingGrant, which re-runs
+// the delegation-not-expansion safety invariant — a bare status flip would
+// skip that re-check and could re-activate a wiring the user no longer has
+// access to.
 export async function setGrantStatus(
   userId: string,
   grantId: string,
-  status: "active" | "revoked",
+  status: "revoked",
 ): Promise<AgentFunctionGrant | null> {
   const db = getDbConfig();
   if (!db) {
     throw new RequestValidationError("Grant storage is not configured", 503);
   }
-  const response = await fetch(
-    `${db.baseUrl}/rest/v1/agent_function_grants?id=eq.${grantId}&user_id=eq.${userId}`,
-    {
-      method: "PATCH",
-      headers: { ...db.headers, Prefer: "return=representation" },
-      body: JSON.stringify({ status, updated_at: new Date().toISOString() }),
-    },
-  );
-  if (!response.ok) {
-    throw new RequestValidationError("Failed to update grant", 500);
-  }
-  const rows = await response.json().catch(() => []);
-  return Array.isArray(rows) && rows[0] ? mapRow(rows[0] as AgentGrantRow) : null;
+  return await patchGrant(db, userId, grantId, { status });
 }
 
 export async function listGrants(input: {

@@ -39,10 +39,11 @@ interface AppRow {
   visibility: string;
   manifest: string | null;
   declared_permissions: unknown;
+  source_fingerprint: string | null;
 }
 
 const APP_SELECT =
-  "id,slug,name,owner_id,visibility,manifest,declared_permissions";
+  "id,slug,name,owner_id,visibility,manifest,declared_permissions,source_fingerprint";
 
 function parseManifest(raw: string | null): AppManifest | null {
   if (!raw) return null;
@@ -96,15 +97,41 @@ function parseImportSlots(manifest: AppManifest | null): AgentImportSlot[] {
     }));
 }
 
-// Permissions implying the caller can send received data off-platform — the
-// core egress signal surfaced at grant time (locked decision 4: warn, not block).
-const EGRESS_PERMISSIONS = new Set(["net:fetch", "net:connect"]);
-
 function declaredPermissionList(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.filter((p): p is string => typeof p === "string");
   }
   return [];
+}
+
+// Whether the caller can plausibly send received data off-platform. This is a
+// best-effort surface-and-warn signal (locked decision 4), and it deliberately
+// errs toward warning: DIRECT egress (net:*) and INDIRECT egress (app:call to
+// a downstream Agent, or a public http route that re-exposes data) all flip it
+// true. It is NOT a containment guarantee — ai:call content and bound-slot
+// fan-out can also move data, so a false here means "no DECLARED egress
+// surface", not "cannot exfiltrate".
+function detectNetworkEgress(
+  declared: string[],
+  manifest: AppManifest | null,
+): boolean {
+  if (declared.some((p) => p.startsWith("net:"))) return true;
+  // Calling another Agent can route data to a net-capable downstream.
+  if (declared.includes("app:call")) return true;
+  // A public http route re-exposes whatever the Agent serves on it.
+  const http = manifest?.http;
+  if (http) {
+    const defaultAuth = http.defaults?.auth;
+    const routes = http.routes ?? {};
+    const anyPublic = (defaultAuth === "public" &&
+      Object.keys(routes).length >= 0) ||
+      Object.values(routes).some((r) =>
+        (r?.auth ?? defaultAuth) === "public"
+      );
+    if (anyPublic && Object.keys(routes).length > 0) return true;
+    if (defaultAuth === "public" && Object.keys(routes).length > 0) return true;
+  }
+  return false;
 }
 
 export async function buildCallerTrustSummary(
@@ -121,31 +148,15 @@ export async function buildCallerTrustSummary(
     ? declaredPermissionList(row.declared_permissions)
     : declaredPermissionList(manifest?.permissions);
 
-  // Code fingerprint (if the platform recorded one) lets the operator confirm
-  // the caller's code hasn't silently changed under a granted wiring.
-  let codeFingerprint: string | null = null;
-  try {
-    const fp = await fetch(
-      `${db.baseUrl}/rest/v1/app_code_fingerprints?app_id=eq.${appId}&select=fingerprint&order=created_at.desc&limit=1`,
-      { headers: db.headers },
-    );
-    if (fp.ok) {
-      const rows = await fp.json().catch(() => []);
-      if (Array.isArray(rows) && rows[0]?.fingerprint) {
-        codeFingerprint = String(rows[0].fingerprint);
-      }
-    }
-  } catch {
-    // Fingerprint is advisory; absence is fine.
-  }
-
   return {
     app: appHandle(row),
     visibility: row.visibility,
     ownedByUser: row.owner_id === userId,
-    hasNetworkEgress: declared.some((p) => EGRESS_PERMISSIONS.has(p)),
+    hasNetworkEgress: detectNetworkEgress(declared, manifest),
     declaredPermissions: declared.sort(),
-    codeFingerprint,
+    // Computed at upload; lets the operator pin the caller's code revision and
+    // re-review if it changes under a live wiring.
+    codeFingerprint: row.source_fingerprint ?? null,
   };
 }
 
@@ -246,12 +257,25 @@ export async function buildWiringView(
     (g) => g.callerApp.id === appId || g.targetApp.id === appId,
   );
 
+  // Egress-trust for every distinct CALLER appearing in the inbox / inbound
+  // grants, so the UI warns about the agent that actually receives the data
+  // (not the page agent). Resolved server-side to keep the inbox a single fetch.
+  const callerIds = Array.from(
+    new Set([...pendingRequests, ...inbound].map((g) => g.callerApp.id)),
+  );
+  const callerTrustByApp: Record<string, AgentCallerTrustSummary> = {};
+  await Promise.all(callerIds.map(async (callerId) => {
+    const trust = await buildCallerTrustSummary(userId, callerId);
+    if (trust) callerTrustByApp[callerId] = trust;
+  }));
+
   return {
     app: appHandle(row),
     slots,
     outboundGrants,
     inboundGrants: inbound,
     pendingRequests,
+    callerTrustByApp,
     generatedAt: new Date().toISOString(),
   };
 }

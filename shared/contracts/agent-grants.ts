@@ -158,6 +158,10 @@ export interface AgentWiringView {
   inboundGrants: AgentGrantSummary[];
   // Pending requests (default-deny inbox) awaiting the user's approval.
   pendingRequests: AgentGrantSummary[];
+  // Egress-trust for each DISTINCT caller Agent appearing in pendingRequests /
+  // inboundGrants, keyed by caller app id. The inbox must show the actual
+  // caller's trust (it receives the data), not the page Agent's.
+  callerTrustByApp: Record<string, AgentCallerTrustSummary>;
   generatedAt: string;
 }
 

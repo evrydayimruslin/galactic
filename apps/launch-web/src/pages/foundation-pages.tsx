@@ -1660,11 +1660,13 @@ function CallerTrustChip(
 // One-click default-deny inbox: pending cross-Agent requests awaiting the
 // user's approval. This is the heart of the wiring UX.
 function PendingInbox({
-  callerTrust,
+  callerTrustByApp,
   live,
   pending,
 }: {
-  callerTrust?: AgentCallerTrustSummary | null;
+  // Trust keyed by CALLER app id — the inbox warns about the agent that
+  // receives the data, which for inbound requests is NOT the page agent.
+  callerTrustByApp: Record<string, AgentCallerTrustSummary>;
   live: LaunchPageProps["live"];
   pending: AgentGrantSummary[];
 }): ReactElement {
@@ -1723,7 +1725,9 @@ function PendingInbox({
                       </span>
                     )
                     : null}
-                  <CallerTrustChip trust={callerTrust} />
+                  <CallerTrustChip
+                    trust={callerTrustByApp[request.callerApp.id] ?? null}
+                  />
                 </div>
                 <div className="wiring-row-actions">
                   <Button
@@ -1829,11 +1833,15 @@ function GrantCapControl({
 // Bind a declared slot to an eligible target Agent + one of its functions.
 function SlotBindControl({
   callerAppId,
+  callerTrust,
   live,
   slot,
   targets,
 }: {
   callerAppId: string;
+  // The slot owner (= this page's Agent) is the caller that will receive the
+  // target's data — show its egress trust before the user wires it.
+  callerTrust?: AgentCallerTrustSummary | null;
   live: LaunchPageProps["live"];
   slot: AgentImportSlot;
   targets: AgentWiringTarget[];
@@ -1920,6 +1928,7 @@ function SlotBindControl({
           </Pill>
         )
         : null}
+      <CallerTrustChip trust={callerTrust} />
       {error ? <p className="api-notice warning">{error}</p> : null}
       <div className="wiring-row-actions">
         <Button
@@ -1942,11 +1951,13 @@ function SlotBindControl({
 
 function SlotCard({
   callerAppId,
+  callerTrust,
   live,
   slot,
   targets,
 }: {
   callerAppId: string;
+  callerTrust?: AgentCallerTrustSummary | null;
   live: LaunchPageProps["live"];
   slot: AgentImportSlot;
   targets: AgentWiringTarget[];
@@ -1989,6 +2000,7 @@ function SlotCard({
           : (
             <SlotBindControl
               callerAppId={callerAppId}
+              callerTrust={callerTrust}
               live={live}
               slot={slot}
               targets={targets}
@@ -2072,7 +2084,9 @@ function AgentWiringPanel({
   tool: AgentDetailFixture;
 }): ReactElement {
   const wiring = live.data.agentWiring;
-  const callerTrust = live.data.agentCallerTrust;
+  // The page Agent IS the caller for every outbound bind / raw grant, so its
+  // own trust summary is the right one to show in the bind flow.
+  const pageCallerTrust = live.data.agentCallerTrust;
   const [targets, setTargets] = useState<AgentWiringTarget[]>([]);
 
   useEffect(() => {
@@ -2103,7 +2117,7 @@ function AgentWiringPanel({
   return (
     <div className="wiring-panel">
       <PendingInbox
-        callerTrust={callerTrust}
+        callerTrustByApp={wiring.callerTrustByApp ?? {}}
         live={live}
         pending={wiring.pendingRequests}
       />
@@ -2129,6 +2143,7 @@ function AgentWiringPanel({
               {wiring.slots.map((slot) => (
                 <SlotCard
                   callerAppId={wiring.app.id}
+                  callerTrust={pageCallerTrust}
                   key={slot.name}
                   live={live}
                   slot={slot}
