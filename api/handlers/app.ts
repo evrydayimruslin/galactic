@@ -196,7 +196,12 @@ export function createApp() {
       if (path === "/" && method === "GET") {
         const launchWebBaseUrl = getEnv("LAUNCH_WEB_BASE_URL");
         if (!isEmbed && launchWebBaseUrl) {
-          return Response.redirect(launchWebBaseUrl, 302);
+          // Manual construction: Response.redirect() headers are immutable
+          // and the entrypoint sets security headers on every response.
+          return new Response(null, {
+            status: 302,
+            headers: { Location: launchWebBaseUrl },
+          });
         }
         return new Response(
           renderLayoutHTML({ initialView: "home", embed: isEmbed }),
@@ -277,7 +282,10 @@ export function createApp() {
       if (path === "/capabilities" && method === "GET") {
         const launchWebBaseUrl = getEnv("LAUNCH_WEB_BASE_URL");
         if (!isEmbed && launchWebBaseUrl) {
-          return Response.redirect(`${launchWebBaseUrl}/library`, 302);
+          return new Response(null, {
+            status: 302,
+            headers: { Location: `${launchWebBaseUrl}/library` },
+          });
         }
         return new Response(
           renderLayoutHTML({
