@@ -30,6 +30,7 @@ import {
   TermsPage,
 } from "./pages/foundation-pages";
 import { LaunchShell } from "./components/launch-chrome";
+import { SignInModalProvider } from "./components/sign-in-modal";
 import {
   exchangeLaunchBridgeToken,
   getLaunchAuthToken,
@@ -123,22 +124,24 @@ export function App(): ReactElement {
   }, [location.pathname, providerCodeMisrouted]);
 
   return (
-    <LaunchShell
-      accountRoutes={accountRoutes()}
-      activeRoute={route.definition.key}
-      navigate={navigate}
-      primaryRoutes={primaryRoutes()}
-      title={routeTitles[route.definition.key]}
-    >
-      {providerCodeMisrouted ? <MisroutedAuthCallbackPage /> : (
-        <RouteSwitch
-          live={live}
-          location={location}
-          route={route}
-          navigate={navigate}
-        />
-      )}
-    </LaunchShell>
+    <SignInModalProvider>
+      <LaunchShell
+        accountRoutes={accountRoutes()}
+        activeRoute={route.definition.key}
+        navigate={navigate}
+        primaryRoutes={primaryRoutes()}
+        title={routeTitles[route.definition.key]}
+      >
+        {providerCodeMisrouted ? <MisroutedAuthCallbackPage /> : (
+          <RouteSwitch
+            live={live}
+            location={location}
+            route={route}
+            navigate={navigate}
+          />
+        )}
+      </LaunchShell>
+    </SignInModalProvider>
   );
 }
 

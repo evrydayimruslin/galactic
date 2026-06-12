@@ -190,8 +190,14 @@ export function createApp() {
       // Detect embed mode (desktop app iframe)
       const isEmbed = url.searchParams.get("embed") === "1";
 
-      // Public homepage
+      // Public homepage. Browsers go to the launch site — the worker-served
+      // HTML is the legacy pre-pivot UI and only the desktop embed (iframe,
+      // ?embed=1) still uses it.
       if (path === "/" && method === "GET") {
+        const launchWebBaseUrl = getEnv("LAUNCH_WEB_BASE_URL");
+        if (!isEmbed && launchWebBaseUrl) {
+          return Response.redirect(launchWebBaseUrl, 302);
+        }
         return new Response(
           renderLayoutHTML({ initialView: "home", embed: isEmbed }),
           {
@@ -269,6 +275,10 @@ export function createApp() {
 
       // Capabilities (unified Library + Marketplace)
       if (path === "/capabilities" && method === "GET") {
+        const launchWebBaseUrl = getEnv("LAUNCH_WEB_BASE_URL");
+        if (!isEmbed && launchWebBaseUrl) {
+          return Response.redirect(`${launchWebBaseUrl}/library`, 302);
+        }
         return new Response(
           renderLayoutHTML({
             initialView: "dashboard",

@@ -1,4 +1,5 @@
 import {
+  Fragment,
   type ReactElement,
   type ReactNode,
   useEffect,
@@ -32,18 +33,22 @@ import {
   type LaunchAgentRelationship,
   type LaunchAgentSummary,
   type LaunchTrustCard,
+  type LaunchPayoutStatus,
   type LaunchWalletEarningSummary,
   type LaunchWalletReceiptSummary,
   type LaunchWalletSummary,
   type LaunchWalletTransaction,
 } from "../../../../shared/contracts/launch.ts";
+import {
+} from "../../../../shared/types/index.ts";
 import type { LaunchPageProps } from "../App";
 import {
-  buildLaunchSignInUrl,
   getLaunchAuthDiagnostic,
   hasLaunchAuthToken,
   signOutLaunch,
+  buildLaunchSignInUrl,
 } from "../lib/auth";
+import { useSignInModal } from "../components/sign-in-modal";
 import {
   launchApi,
   LaunchApiAuthenticationError,
@@ -112,6 +117,12 @@ interface AgentCapability {
   kind: "read" | "write" | "net";
   text: string;
 }
+
+const capabilityGlyphs: Record<AgentCapability["kind"], string> = {
+  net: "⇄",
+  read: "↘",
+  write: "↗",
+};
 
 interface AgentFunctionFixture {
   args: string[];
@@ -442,6 +453,7 @@ interface LedgerRow {
   amount: number;
   detail: string;
   kind: "call" | "earning" | "payout" | "topup" | "transfer";
+  tool?: string;
   when: string;
 }
 
@@ -705,6 +717,7 @@ function liveEarningRows(earnings?: LaunchWalletEarningSummary[]): LedgerRow[] {
     amount: creditsValue(entry.amount),
     detail: `${entry.appId || "agent"} · ${entry.functionName || entry.reason}`,
     kind: "earning",
+    tool: entry.appId || undefined,
     when: relativeTime(entry.createdAt) || "now",
   }));
 }
@@ -1043,6 +1056,7 @@ export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
   const [target, setTarget] = useState(firstTarget);
   const [mintedKey, setMintedKey] = useState<string | null>(null);
   const signedIn = hasLaunchAuthToken();
+  const openSignInModal = useSignInModal();
   const selected = targets.find((item) => item.target === target) ||
     targets[0] || installTargets[0];
   // The API only exposes key PREFIXES after creation, so snippets show the
@@ -1061,6 +1075,16 @@ export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
   return (
     <div className="launch-page install-page">
       <PageHeader
+        actions={
+          <Button
+            icon="key"
+            onClick={signedIn ? undefined : openSignInModal}
+            size="lg"
+            variant={signedIn ? "secondary" : "primary"}
+          >
+            {signedIn ? "Key loaded" : "Sign in"}
+          </Button>
+        }
         eyebrow="Install"
         intro="One remote MCP endpoint, or the CLI and API, lets any existing agent discover, call, and pay for Agents."
         title="Connect Ultralight to your agent."
@@ -1069,10 +1093,15 @@ export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
 
       <div className="install-loop">
         {externalLoop.map((step, index) => (
-          <span key={step}>
-            <Mono>{index + 1}</Mono>
-            {step}
-          </span>
+          <Fragment key={step}>
+            <span>
+              <Mono>{index + 1}</Mono>
+              {step}
+            </span>
+            {index < externalLoop.length - 1
+              ? <Icon name="arrow" size={13} />
+              : null}
+          </Fragment>
         ))}
       </div>
 
@@ -1443,6 +1472,16 @@ function AgentDetailSurface({
         <Mono>{tool.slug}</Mono>
       </button>
 
+      {tool.visibility === "unlisted"
+        ? (
+          <div className="unlisted-banner">
+            <Icon name="shield" size={13} />
+            Unlisted — visible only to people with the link. Not indexed in the
+            Store.
+          </div>
+        )
+        : null}
+
       <section className="public-tool-header">
         <Avatar color={tool.color} name={tool.author} />
         <div>
@@ -1589,6 +1628,7 @@ function AgentFunctionsPanel({
     </div>
   );
 }
+
 
 function FunctionSandboxCard({
   fn,
@@ -2881,23 +2921,16 @@ export function LibraryFoundationPage(
     <div className="launch-page-narrow library-page">
       <ApiNotice live={live} noun="library" />
       <div className="library-toolbar">
-        <div className="library-picker">
-          <button
-            className={view === "installed" ? "active" : ""}
-            onClick={() => selectView("installed")}
-            type="button"
-          >
-            Installed Agents
-          </button>
-          <button
-            className={view === "owned" ? "active" : ""}
-            onClick={() => selectView("owned")}
-            type="button"
-          >
-            Agents you own
-          </button>
-        </div>
-        <Mono>{count}</Mono>
+        <select
+          aria-label="Library view"
+          className="picker-select"
+          onChange={(event) => selectView(event.target.value as LibraryView)}
+          value={view}
+        >
+          <option value="installed">Installed tools</option>
+          <option value="owned">Tools you own</option>
+        </select>
+        <span className="library-count">{count}</span>
         <RouteButton
           icon="grid"
           navigate={navigate}
@@ -3101,11 +3134,12 @@ function OwnedAgentCard({
           Manage
         </RouteButton>
         <RouteButton
+          icon="external"
           navigate={navigate}
           to={agentPreviewPath(tool)}
           variant="secondary"
         >
-          Preview
+          Public page
         </RouteButton>
       </div>
     </Card>
@@ -3132,7 +3166,7 @@ function LibraryEmptyCard({
 }): ReactElement {
   return (
     <div className="library-empty-card">
-      <strong>{title}: nothing yet</strong>
+      <strong>{title} — nothing yet</strong>
       <p>{body}</p>
     </div>
   );
@@ -3169,11 +3203,12 @@ function AdminHeader({
       </div>
       <div className="admin-header-actions">
         <RouteButton
+          icon="external"
           navigate={navigate}
           to={agentPreviewPath(tool)}
           variant="secondary"
         >
-          Preview
+          View public page
         </RouteButton>
         <Button>Save changes</Button>
       </div>
@@ -3285,8 +3320,8 @@ function AdminPricingPanel(
           <div className="admin-table-row" key={fn.name}>
             <Mono>{fn.name}</Mono>
             <label>
-              <span>✦</span>
-              <input defaultValue={fn.price.toFixed(3)} />
+              <span>$</span>
+              <input defaultValue={(fn.price / 100).toFixed(4)} />
             </label>
             <Mono>{fn.p50 !== null ? `${fn.p50}ms` : "—"}</Mono>
           </div>
@@ -3488,7 +3523,12 @@ export function WalletFoundationPage(
         ? <WalletReceiptsPanel receipts={liveReceiptRows(receipts)} />
         : null}
       {tab === "earnings"
-        ? <WalletEarningsPanel earnings={liveEarningRows(earnings)} />
+        ? (
+          <WalletEarningsPanel
+            earnings={liveEarningRows(earnings)}
+            payoutStatus={wallet?.payoutStatus}
+          />
+        )
         : null}
     </div>
   );
@@ -3530,7 +3570,7 @@ export function SettingsFoundationPage(
       <div className="profile-strip">
         <Avatar color="#0a0a0a" name="@you" />
         <div>
-          <h1>{canManageKeys ? "Account" : "Not signed in"}</h1>
+          <h1>Profile</h1>
           <p>
             {canManageKeys
               ? "Launch account session"
@@ -3670,7 +3710,7 @@ function WalletAmount(
     <div className="wallet-amount">
       <span>{label}</span>
       <strong>
-        <small>✦</small>
+        <small>$</small>
         {Number(whole).toLocaleString()}
         <em>.{fraction}</em>
       </strong>
@@ -3692,10 +3732,16 @@ function WalletBalancePanel({
       <div className="wallet-metric-grid">
         <MetricTile
           label="Deposited"
-          value={`✦${formatNumber(totals.deposited)}`}
+          value={formatCreditFromLight(totals.deposited)}
         />
-        <MetricTile label="Earned" value={`✦${formatNumber(totals.earned)}`} />
-        <MetricTile label="Escrow" value={`✦${formatNumber(totals.escrow)}`} />
+        <MetricTile
+          label="Earned"
+          value={formatCreditFromLight(totals.earned)}
+        />
+        <MetricTile
+          label="Escrow"
+          value={formatCreditFromLight(totals.escrow)}
+        />
         {publishRequirement?.enabled
           ? (
             <MetricTile
@@ -4185,7 +4231,7 @@ function WalletTopUpPanel(
             >
               {amount === Math.floor(earnedCredits) && method === "earnings"
                 ? "Max"
-                : amount.toLocaleString()}
+                : formatCreditFromLight(amount)}
             </button>
           ))}
         </div>
@@ -4235,7 +4281,7 @@ function WalletTopUpPanel(
         />
         <QuoteLine
           label="Rate"
-          value={method === "earnings" ? "1:1 · no fee" : "✦100 / $1"}
+          value={method === "earnings" ? "1:1 · no fee" : "$1 credit / $1"}
         />
         <div className="quote-total">
           <span>{method === "earnings" ? "Transfer" : "Total"}</span>
@@ -4378,12 +4424,63 @@ function WalletReceiptsPanel(
   );
 }
 
-function WalletEarningsPanel(
-  { earnings }: { earnings: LedgerRow[] },
-): ReactElement {
+const payoutBannerFallback = {
+  action: "Withdraw earnings",
+  description:
+    "Stripe Connect payouts are enabled. Withdraw earned credits to your bank or transfer them to spendable balance.",
+  label: "Payouts ready",
+  tone: "green",
+} as const;
+
+function payoutBannerContent(payoutStatus?: LaunchPayoutStatus | null): {
+  action: string;
+  description: string;
+  label: string;
+  tone: "amber" | "green" | "neutral";
+} {
+  if (!payoutStatus) return payoutBannerFallback;
+  const tone = payoutStatus.kind === "ready"
+    ? "green"
+    : payoutStatus.kind === "onboarding"
+    ? "amber"
+    : "neutral";
+  const action = payoutStatus.kind === "ready"
+    ? "Withdraw earnings"
+    : payoutStatus.kind === "onboarding"
+    ? "Resume Stripe onboarding"
+    : "Connect payouts";
+  return {
+    action,
+    description: payoutStatus.description ||
+      payoutBannerFallback.description,
+    label: payoutStatus.label || payoutBannerFallback.label,
+    tone,
+  };
+}
+
+function WalletEarningsPanel({
+  earnings,
+  payoutStatus,
+}: {
+  earnings: LedgerRow[];
+  payoutStatus?: LaunchPayoutStatus | null;
+}): ReactElement {
+  const [toolFilter, setToolFilter] = useState("all");
+  const banner = payoutBannerContent(payoutStatus);
+  const tools = Array.from(
+    new Set(
+      earnings.map((row) => row.tool).filter((tool): tool is string =>
+        Boolean(tool)
+      ),
+    ),
+  );
+  const visibleEarnings = toolFilter === "all"
+    ? earnings
+    : earnings.filter((row) => row.tool === toolFilter);
+
   return (
     <div className="wallet-panel">
-      <Card className="payout-banner">
+      <Card className={`payout-banner payout-banner-${banner.tone}`}>
         <span className="target-icon">
           <Icon name="shield" />
         </span>
@@ -4398,7 +4495,24 @@ function WalletEarningsPanel(
       <Card className="wallet-ledger-card">
         <div className="wallet-section-head">
           <h2>Earnings ledger</h2>
-          <Pill>creator income</Pill>
+          <div className="wallet-earnings-controls">
+            {tools.length > 0
+              ? (
+                <select
+                  aria-label="Filter earnings by tool"
+                  className="admin-input earnings-tool-filter"
+                  onChange={(event) => setToolFilter(event.target.value)}
+                  value={toolFilter}
+                >
+                  <option value="all">All tools</option>
+                  {tools.map((tool) => (
+                    <option key={tool} value={tool}>{tool}</option>
+                  ))}
+                </select>
+              )
+              : null}
+            <Pill>creator income</Pill>
+          </div>
         </div>
         <div className="wallet-ledger">
           {earnings.length > 0
@@ -4426,21 +4540,20 @@ function WalletLedgerRow(
   const positive = row.amount > 0;
   const glyphs: Record<LedgerRow["kind"], string> = {
     call: "→",
-    earning: "✦",
+    earning: "$",
     payout: "↑",
     topup: "+",
     transfer: "⇄",
   };
   return (
     <div className={first ? "wallet-ledger-row first" : "wallet-ledger-row"}>
-      <Mono>{glyphs[row.kind]}</Mono>
+      <span className={`mono ledger-glyph ledger-glyph-${row.kind}`}>
+        {glyphs[row.kind]}
+      </span>
       <span>{row.detail}</span>
       <Mono>{row.when}</Mono>
       <span className={positive ? "mono positive" : "mono"}>
-        {positive ? "+" : "-"}✦{Math.abs(row.amount).toLocaleString(undefined, {
-          maximumFractionDigits: 3,
-          minimumFractionDigits: 3,
-        })}
+        {positive ? "+" : "-"}{formatCreditFromLight(Math.abs(row.amount))}
       </span>
     </div>
   );
@@ -5167,18 +5280,45 @@ function ConfigPreview({
         </button>
       </div>
       <pre>
-        <code>{highlight ? highlightSnippet(config, highlight) : config}</code>
+        <code>
+          {highlight
+            ? highlightSnippet(config, highlight)
+            : colorizeSnippet(config)}
+        </code>
       </pre>
     </div>
   );
 }
 
+function colorizeSnippet(text: string): ReactNode {
+  const nodes: ReactNode[] = [];
+  const pattern = /"[^"\n]*"/gu;
+  let cursor = 0;
+  let match = pattern.exec(text);
+  while (match) {
+    if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
+    const after = text.slice(match.index + match[0].length).trimStart();
+    nodes.push(
+      <span
+        className={after.startsWith(":") ? "json-key" : "json-string"}
+        key={match.index}
+      >
+        {match[0]}
+      </span>,
+    );
+    cursor = match.index + match[0].length;
+    match = pattern.exec(text);
+  }
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
+
 function highlightSnippet(text: string, highlight: string): ReactNode {
-  if (!highlight || !text.includes(highlight)) return text;
+  if (!highlight || !text.includes(highlight)) return colorizeSnippet(text);
   const parts = text.split(highlight);
   return parts.map((part, index) => (
     <span key={`${part}-${index}`}>
-      {part}
+      {colorizeSnippet(part)}
       {index < parts.length - 1 ? <mark>{highlight}</mark> : null}
     </span>
   ));
@@ -5297,10 +5437,7 @@ function StoreAgentCard({ tool }: { tool: AgentFixture }): ReactElement {
     <Card className="store-tool-card">
       <div className="store-card-title">
         <Avatar color={tool.color} name={tool.author} />
-        <div>
-          <h3>{tool.name}</h3>
-          <span>{tool.author}</span>
-        </div>
+        <h3>{tool.name}</h3>
         <Pill>{tool.kind}</Pill>
       </div>
       <p>{tool.summary}</p>
@@ -5328,14 +5465,14 @@ function Sparkline(
   const min = Math.min(...points);
   const range = max - min || 1;
   const polyline = points.map((value, index) => {
-    const x = (index / (points.length - 1)) * 74;
-    const y = 24 - ((value - min) / range) * 24;
+    const x = (index / (points.length - 1)) * 56;
+    const y = 15 - ((value - min) / range) * 14;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(" ");
   return (
     <svg
       className={growth > 0.1 ? "sparkline growing" : "sparkline"}
-      viewBox="0 0 74 28"
+      viewBox="0 0 56 16"
       aria-hidden="true"
     >
       <polyline points={polyline} />
@@ -5602,6 +5739,19 @@ function formatNumber(value: number): string {
   if (value >= 10_000) return `${Math.round(value / 1000)}k`;
   if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
   return String(value);
+}
+
+// Dollar-rendered credit amount (1 credit = 1 cent) — the wallet design
+// displays currency-styled values.
+function formatCreditFromLight(amountCents: number): string {
+  const dollars = amountCents / 100;
+  if (!Number.isFinite(dollars)) return "$0.00";
+  const abs = Math.abs(dollars);
+  const digits = abs > 0 && abs < 0.01 ? 4 : 2;
+  return `$${dollars.toLocaleString("en-US", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })}`;
 }
 
 function formatCredits(value: number): string {
