@@ -1659,6 +1659,21 @@ button {
 .store-tool-card > p {
   font-size: 12.5px;
   line-height: 1.45;
+  /* Reserve exactly three lines and clamp longer copy with an ellipsis, so
+     every card is the same height regardless of description length. */
+  display: -webkit-box;
+  height: calc(1.45em * 3);
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+/* Keep long names on one line so they don't add height either. */
+.store-card-title h3 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .store-card-title,
