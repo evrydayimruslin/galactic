@@ -45,18 +45,18 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     ],
   },
   {
-    key: "library",
-    path: "/agents",
-    label: "Agents",
-    nav: "primary",
-    apiRoutes: ["GET /api/launch/library"],
-  },
-  {
     key: "store",
     path: "/browse",
     label: "Browse",
     nav: "primary",
     apiRoutes: ["GET /api/launch/store", "GET /api/launch/leaderboard"],
+  },
+  {
+    key: "library",
+    path: "/agents",
+    label: "Agents",
+    nav: "primary",
+    apiRoutes: ["GET /api/launch/library"],
   },
   {
     key: "agent",

@@ -7,6 +7,7 @@ import {
 } from "react";
 
 import { hasLaunchAuthToken } from "../lib/auth";
+import { launchApiOrigin } from "../lib/api";
 import type { LaunchRouteDefinition, LaunchRouteKey } from "../lib/routes";
 import { AddToAgentButton } from "../pages/foundation-pages";
 import { useSignInModal } from "./sign-in-modal";
@@ -150,6 +151,13 @@ export function LaunchShell({
               <span>{route.label}</span>
             </button>
           ))}
+          <a
+            className="nav-item"
+            data-label="Resources"
+            href={`${launchApiOrigin()}/api/skills`}
+          >
+            <span>Resources</span>
+          </a>
         </nav>
         <div className="top-actions">
           {showTopBarAdd ? <AddToAgentButton size="sm" variant="ghost" /> : null}

@@ -875,13 +875,14 @@ export function HomeFoundationPage(
               instructions={installInstructions}
               label="Add to your agent"
             />
-            <Button
-              href={`${apiOrigin}/api/skills`}
+            <RouteButton
+              navigate={navigate}
               size="lg"
+              to="/browse"
               variant="secondary"
             >
-              Developer docs
-            </Button>
+              Browse agents
+            </RouteButton>
           </div>
         </div>
         <AgentOrbit />
