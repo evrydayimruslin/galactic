@@ -3163,15 +3163,57 @@ function AdminSurface({
 }): ReactElement {
   const initialTab = adminTabFromSearch();
   const [tab, setTab] = useState<AdminTabId>(initialTab);
+  const [name, setName] = useState(tool.name);
+  const [description, setDescription] = useState(tool.summary);
+  const [category, setCategory] = useState(tool.category);
   const [visibility, setVisibility] = useState<AgentDetailFixture["visibility"]>(
     tool.visibility,
   );
+  const [saveState, setSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+
   useEffect(() => {
     setTab(adminTabFromSearch());
   }, [locationSearch, routeId]);
+  // Re-seed the form when switching to a different Agent (or after a reload
+  // brings fresh values).
   useEffect(() => {
+    setName(tool.name);
+    setDescription(tool.summary);
+    setCategory(tool.category);
     setVisibility(tool.visibility);
-  }, [tool.id, tool.visibility]);
+    setSaveState("idle");
+  }, [tool.id]);
+
+  const dirty = name !== tool.name || description !== tool.summary ||
+    category !== tool.category || visibility !== tool.visibility;
+
+  const save = async () => {
+    if (!dirty || saveState === "saving") return;
+    // Only send the fields the user actually changed.
+    const fields: {
+      name?: string;
+      description?: string;
+      visibility?: AgentDetailFixture["visibility"];
+      category?: string;
+    } = {};
+    if (name.trim() !== tool.name) fields.name = name.trim();
+    if (description.trim() !== tool.summary) {
+      fields.description = description.trim();
+    }
+    if (category.trim() !== tool.category) fields.category = category.trim();
+    if (visibility !== tool.visibility) fields.visibility = visibility;
+
+    setSaveState("saving");
+    try {
+      await launchApi.updateAgent(tool.id, fields);
+      setSaveState("saved");
+      live.reload();
+    } catch {
+      setSaveState("error");
+    }
+  };
 
   const selectTab = (nextTab: AdminTabId) => {
     setTab(nextTab);
@@ -3181,7 +3223,14 @@ function AdminSurface({
   return (
     <div className="launch-page-narrow admin-page">
       <ApiNotice live={live} noun="Agent admin" />
-      <AdminHeader navigate={navigate} tool={tool} visibility={visibility} />
+      <AdminHeader
+        dirty={dirty}
+        navigate={navigate}
+        onSave={save}
+        saveState={saveState}
+        tool={tool}
+        visibility={visibility}
+      />
       {live.data.adminAgent?.admin.referral
         ? <ReferralLinkCard referral={live.data.adminAgent.admin.referral} />
         : null}
@@ -3202,7 +3251,13 @@ function AdminSurface({
         ))}
       </div>
       <AdminTabPanel
+        category={category}
+        description={description}
+        name={name}
         navigate={navigate}
+        setCategory={setCategory}
+        setDescription={setDescription}
+        setName={setName}
         setVisibility={setVisibility}
         tab={tab}
         tool={tool}
@@ -3276,11 +3331,17 @@ function LibraryEmptyCard({
 }
 
 function AdminHeader({
+  dirty,
   navigate,
+  onSave,
+  saveState,
   tool,
   visibility,
 }: {
+  dirty: boolean;
   navigate: (to: string) => void;
+  onSave: () => void;
+  saveState: "idle" | "saving" | "saved" | "error";
   tool: AgentDetailFixture;
   visibility: AgentDetailFixture["visibility"];
 }): ReactElement {
@@ -3313,20 +3374,40 @@ function AdminHeader({
         >
           View public page
         </RouteButton>
-        <Button>Save changes</Button>
+        <Button disabled={!dirty || saveState === "saving"} onClick={onSave}>
+          {saveState === "saving"
+            ? "Saving…"
+            : saveState === "error"
+            ? "Retry save"
+            : saveState === "saved" && !dirty
+            ? "Saved"
+            : "Save changes"}
+        </Button>
       </div>
     </section>
   );
 }
 
 function AdminTabPanel({
+  category,
+  description,
+  name,
   navigate,
+  setCategory,
+  setDescription,
+  setName,
   setVisibility,
   tab,
   tool,
   visibility,
 }: {
+  category: string;
+  description: string;
+  name: string;
   navigate: (to: string) => void;
+  setCategory: (value: string) => void;
+  setDescription: (value: string) => void;
+  setName: (value: string) => void;
   setVisibility: (visibility: AgentDetailFixture["visibility"]) => void;
   tab: AdminTabId;
   tool: AgentDetailFixture;
@@ -3347,8 +3428,13 @@ function AdminTabPanel({
     default:
       return (
         <AdminEditPanel
+          category={category}
+          description={description}
+          name={name}
+          setCategory={setCategory}
+          setDescription={setDescription}
+          setName={setName}
           setVisibility={setVisibility}
-          tool={tool}
           visibility={visibility}
         />
       );
@@ -3356,33 +3442,52 @@ function AdminTabPanel({
 }
 
 function AdminEditPanel({
+  category,
+  description,
+  name,
+  setCategory,
+  setDescription,
+  setName,
   setVisibility,
-  tool,
   visibility,
 }: {
+  category: string;
+  description: string;
+  name: string;
+  setCategory: (value: string) => void;
+  setDescription: (value: string) => void;
+  setName: (value: string) => void;
   setVisibility: (visibility: AgentDetailFixture["visibility"]) => void;
-  tool: AgentDetailFixture;
   visibility: AgentDetailFixture["visibility"];
 }): ReactElement {
   return (
     <div className="admin-panel admin-edit-panel">
       <AdminField label="Name">
-        <div className="admin-input mono">{tool.name}</div>
+        <input
+          className="admin-input mono"
+          onChange={(event) => setName(event.target.value)}
+          value={name}
+        />
       </AdminField>
       <AdminField label="Description">
-        <div className="admin-textarea">{tool.summary}</div>
+        <textarea
+          className="admin-textarea"
+          onChange={(event) => setDescription(event.target.value)}
+          rows={3}
+          value={description}
+        />
       </AdminField>
       <div className="admin-split-fields">
         <AdminField label="Category">
-          <div className="admin-input">{tool.category}</div>
+          <input
+            className="admin-input"
+            onChange={(event) => setCategory(event.target.value)}
+            value={category}
+          />
         </AdminField>
         <AdminField label="Tags">
           <div className="admin-tags">
-            {/* category falls back to the agent kind when no tags exist —
-                don't present "MCP" as an authored tag. */}
-            {tool.category.toLowerCase() !== tool.kind
-              ? <span>{tool.category.toLowerCase()}</span>
-              : <span className="muted-note">no tags</span>}
+            <span className="muted-note">managed from the CLI</span>
           </div>
         </AdminField>
       </div>

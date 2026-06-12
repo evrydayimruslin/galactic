@@ -502,6 +502,26 @@ export class LaunchApiClient {
     });
   }
 
+  /**
+   * Update an Agent's editable fields (owner only). Calls the platform app
+   * handler directly — same origin, same auth (authenticate()) as the launch
+   * facade, so it reuses every server-side validation + visibility gate.
+   */
+  updateAgent(
+    id: string,
+    fields: {
+      name?: string;
+      description?: string;
+      visibility?: "public" | "unlisted" | "private";
+      category?: string;
+    },
+  ): Promise<unknown> {
+    return this.fetchJson(`/api/apps/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(fields),
+    });
+  }
+
   apiKeys(): Promise<LaunchApiKeyListResponse> {
     return this.fetchJson("/api/launch/api-keys");
   }
