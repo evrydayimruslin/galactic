@@ -396,13 +396,13 @@ const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
   install: {
     label: "Install Ultralight",
     description: "Connect the Ultralight MCP/API layer to an existing agent.",
-    route: "/install",
+    route: "/",
     apiRoute: "GET /api/launch/install",
   },
   deploy: {
     label: "Deploy an Agent",
     description: "Ship deployable Agent code onto hosted Ultralight runtime.",
-    route: "/install",
+    route: "/",
     apiRoute: "GET /api/launch/install",
   },
   publish: {
@@ -412,15 +412,15 @@ const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
     apiRoute: "GET /api/launch/admin/agents/:id",
   },
   store: {
-    label: "Store",
+    label: "Browse",
     description: "Find public Agents.",
-    route: "/store",
+    route: "/browse",
     apiRoute: "GET /api/launch/store",
   },
   wallet: {
     label: "Credits wallet",
     description: "Manage spendable credits for installs, calls, and hosting.",
-    route: "/wallet",
+    route: "/account",
     apiRoute: "GET /api/launch/wallet",
   },
   pricing: {
@@ -438,7 +438,7 @@ const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
   api_keys: {
     label: "API keys",
     description: "Create API tokens for MCP, CLI, and direct API access.",
-    route: "/settings",
+    route: "/account",
     apiRoute: "GET /api/launch/api-keys",
   },
   owner_admin: {
