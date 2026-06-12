@@ -177,6 +177,80 @@ Deno.test("cloud operation debit applies R2/KV operation unit config", async () 
   }
 });
 
+Deno.test("cloud operation debits within one receipt get unique idempotency keys per call", async () => {
+  // Pins the repeated-operation billing semantics: cloud_usage_events
+  // enforces a UNIQUE idempotency key and the debit RPC dedups known keys by
+  // returning the prior response, so without a per-call discriminator every
+  // same-operation debit after the first in an execution was silently
+  // dropped (N store puts billed as one).
+  const previousEnv = globalThis.__env;
+  const keys: Array<string | null> = [];
+  globalThis.__env = {
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role",
+  } as unknown as typeof globalThis.__env;
+
+  const fetchFn = ((_input: string | URL | Request, init?: RequestInit) => {
+    const body = init?.body && typeof init.body === "string"
+      ? JSON.parse(init.body)
+      : {};
+    keys.push(body.p_idempotency_key ?? null);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify([{
+          event_id: "00000000-0000-0000-0000-000000000702",
+          old_balance: 10,
+          new_balance: 9.999,
+          amount_debited: 0.001,
+          deposit_debited: 0.001,
+          earned_debited: 0,
+        }]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  }) as typeof fetch;
+
+  const receiptId = `receipt-${crypto.randomUUID()}`;
+  const baseParams = {
+    payerUserId: "00000000-0000-0000-0000-000000000101",
+    appId: "00000000-0000-0000-0000-000000000201",
+    functionName: "syncFiles",
+    source: "storage",
+    resource: "r2_operation" as const,
+    operation: "put",
+    units: 1,
+    receiptId,
+  };
+
+  try {
+    await debitCloudOperation(baseParams, { fetchFn });
+    await debitCloudOperation(baseParams, { fetchFn });
+    await debitCloudOperation(baseParams, { fetchFn });
+    // A different operation type sequences independently.
+    await debitCloudOperation({ ...baseParams, operation: "get" }, { fetchFn });
+    // An explicit caller-supplied key passes through untouched.
+    await debitCloudOperation(
+      { ...baseParams, idempotencyKey: "explicit-key-1" },
+      { fetchFn },
+    );
+
+    assertEquals(keys.length, 5);
+    // First call keeps the legacy key shape (no discriminator suffix).
+    const first = String(keys[0]);
+    assertEquals(first.startsWith("cloud_operation:"), true);
+    assertEquals(first.includes(":c"), false);
+    // Every same-operation repeat gets a DISTINCT key.
+    assertEquals(new Set(keys.slice(0, 3)).size, 3);
+    assertEquals(String(keys[1]).startsWith(`${first}:c`), true);
+    assertEquals(String(keys[2]).startsWith(`${first}:c`), true);
+    // The other operation starts its own sequence with a legacy-shaped key.
+    assertEquals(String(keys[3]).endsWith(":get"), true);
+    assertEquals(keys[4], "explicit-key-1");
+  } finally {
+    globalThis.__env = previousEnv;
+  }
+});
+
 Deno.test("D1 usage debit emits exact read and write cloud usage events", async () => {
   const previousEnv = globalThis.__env;
   const calls: Array<{ url: string; body: Record<string, unknown> }> = [];

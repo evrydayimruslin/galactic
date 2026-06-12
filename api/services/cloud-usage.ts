@@ -281,6 +281,36 @@ export function calcD1WriteCloudUnits(
   return calcOperationCloudUnits(rowsWritten, rowsPerCloudUnit);
 }
 
+// Per-call discriminator for cloud-operation idempotency keys.
+//
+// The key's base parts (receipt, payer, app, function, source, resource,
+// operation) identify an operation TYPE, not a call — and cloud_usage_events
+// enforces a UNIQUE idempotency key, so without a discriminator every
+// same-type debit after the first within one execution was silently deduped
+// by the RPC (begin_economic_idempotent_operation returns the prior
+// response): an app doing N ultralight.store puts paid for one. Each call now
+// gets a sequence number; the first call keeps the legacy key shape so
+// single-op executions look identical to historical rows.
+//
+// The counter is in-process state: an execution runs inside one isolate
+// invocation, so per-isolate sequencing is unique per receipt. The epoch
+// suffix regenerates whenever the bounded map resets, so a reset mid-receipt
+// can never re-collide with keys already issued.
+const CLOUD_OP_SEQUENCE_MAX_ENTRIES = 50_000;
+let cloudOpSequenceEpoch = crypto.randomUUID().slice(0, 8);
+const cloudOpSequences = new Map<string, number>();
+
+function nextCloudOperationKey(baseKey: string | null): string | null {
+  if (!baseKey) return null;
+  if (cloudOpSequences.size >= CLOUD_OP_SEQUENCE_MAX_ENTRIES) {
+    cloudOpSequences.clear();
+    cloudOpSequenceEpoch = crypto.randomUUID().slice(0, 8);
+  }
+  const seq = cloudOpSequences.get(baseKey) ?? 0;
+  cloudOpSequences.set(baseKey, seq + 1);
+  return seq === 0 ? baseKey : `${baseKey}:c${cloudOpSequenceEpoch}-${seq}`;
+}
+
 export async function debitCloudOperation(
   params: DebitCloudOperationParams,
   deps?: CloudUsageDeps,
@@ -316,7 +346,7 @@ export async function debitCloudOperation(
     billingConfigVersion: params.billingConfigVersion ?? config.version,
     idempotencyKey: params.idempotencyKey ??
       (params.receiptId
-        ? buildEconomicIdempotencyKey("cloud_operation", [
+        ? nextCloudOperationKey(buildEconomicIdempotencyKey("cloud_operation", [
           params.receiptId,
           params.payerUserId,
           params.appId,
@@ -324,7 +354,7 @@ export async function debitCloudOperation(
           params.source,
           params.resource,
           params.operation,
-        ])
+        ]))
         : null),
     metadata: {
       ...(params.metadata ?? {}),

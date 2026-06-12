@@ -76,9 +76,17 @@ the amount and the ledger entry.
 | A cpuMs/subRequests kill loses tenant logs for that execution (spend accounting still settles via PR1) | per-execution | PR5 |
 | Tenant resource ceilings (apps 512 subrequests / codemode 128) are set conservatively but unverified against workerd accounting until the staging smoke | staging smoke gate | PR5 |
 | Event/delivery timestamps stamp pass-claim time, not per-row write time (audit columns only; billing uses receipts) | minutes | PR4 |
-| Repeated same-operation R2/KV debits per receipt collapse server-side (idempotency-key design); intended-vs-bug decision deferred | follow-up chip | PR5 |
 | `last_used_at` on api tokens updates per cache miss (≤60s granularity) | 60s | PR5 |
 | Pending-permission invites created in the sub-second window around a user's first contact resolve at next session establishment (≤~1h) instead of next request | ~1h, fail-closed | PR5 |
+
+## Resolved since packet creation
+
+- Repeated same-operation R2/KV debits per receipt no longer collapse: ruled
+  an undercharge bug (the debit RPC silently returned the first call's result
+  for duplicate idempotency keys). Each metered call now carries a per-call
+  key discriminator; semantics pinned by a test in
+  `api/services/cloud-usage.test.ts`. Note this raises metered storage charges
+  to their intended per-operation level.
 
 ## Post-launch register (tracked, not blocking)
 
