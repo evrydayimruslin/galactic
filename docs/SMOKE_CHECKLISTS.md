@@ -67,6 +67,41 @@ Run the auth redirect smoke once the staging Worker origin is live:
   --supabase-url https://vonlzcnwxbwaxlbngjre.supabase.co
 ```
 
+Run the durable-execution smoke (async dispatch → queue consumer → job
+poll). One green pass proves the EXEC_QUEUE producer, the `queue()` consumer
+(including `ctx.exports`/`LOADER` availability inside it — undocumented
+platform behavior we rely on), the queued→running claim, the loaded-isolate
+resource limits, and settlement:
+
+```bash
+node scripts/smoke/durable-exec-smoke.mjs \
+  --url https://ultralight-api-staging.rgn4jz429m.workers.dev \
+  --token "$ULTRALIGHT_TOKEN" \
+  --app <agent-id-or-slug> --function <functionName> \
+  --args '{}'
+```
+
+Exit 0 = full pass; exit 2 = spine worked but the function itself failed
+(verify that is expected for the chosen function).
+
+Manual durable-execution + interop checks (record outcomes in the release
+packet):
+
+- [ ] Event bus on Queues: wire two agents (subscribe grant on a topic),
+      `ultralight.emit` from the emitter, confirm the delivery lands in
+      seconds (not on the minute tick) and the delivery row records the
+      receipt. A failed handler must surface as a `failed` delivery + event.
+- [ ] SELF loopbacks: a `ul.call` between two agents and one routine
+      execution succeed on the deployed worker (no error 1042 / public-URL
+      fetch in the logs).
+- [ ] Stripe test-mode topup: card flow from launch-web → webhook →
+      balance credited; the topup checkbox links to /terms.
+- [ ] Session refresh: leave a launch-web tab open >1h (or expire the
+      access token manually) and confirm a silent refresh, not a logout.
+- [ ] Tenant limits sanity: one normal app run and one codemode run succeed
+      (limits not tripping legitimate work); optionally a busy-loop test app
+      to confirm the cpuMs kill surfaces as an execution failure.
+
 Run the broader API smoke with a staging bearer token:
 
 ```bash

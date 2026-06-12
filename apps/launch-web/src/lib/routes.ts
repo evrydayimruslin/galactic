@@ -14,7 +14,9 @@ export type LaunchRouteKey =
   | "wallet"
   | "settings"
   | "adminAgent"
-  | "authCallback";
+  | "authCallback"
+  | "terms"
+  | "privacy";
 
 export type LaunchRoutePath = LaunchPublicRoute | "/auth/callback";
 
@@ -144,6 +146,20 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     key: "authCallback",
     path: "/auth/callback",
     label: "Auth callback",
+    nav: "hidden",
+    apiRoutes: [],
+  },
+  {
+    key: "terms",
+    path: "/terms",
+    label: "Terms of Service",
+    nav: "hidden",
+    apiRoutes: [],
+  },
+  {
+    key: "privacy",
+    path: "/privacy",
+    label: "Privacy Policy",
     nav: "hidden",
     apiRoutes: [],
   },

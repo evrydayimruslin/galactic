@@ -244,6 +244,48 @@ Use the drill document to record:
 Do not mark backup/restore as complete from documentation alone. The launch
 scorecard should move only after a real restore has been executed and validated.
 
+## Durable Execution Rollout (one-time, before the first post-PR3/4 deploy)
+
+The Queues-based durable-execution spine (async function jobs) and the
+queue-driven event bus need one-time provisioning per Cloudflare account and
+one Supabase migration. `wrangler deploy` FAILS to attach consumers if the
+queues do not exist (the `API Deploy` workflow now provisions them
+idempotently, but first-time manual deploys must do this by hand):
+
+```bash
+# Production
+wrangler queues create ultralight-exec
+wrangler queues create ultralight-exec-dlq
+wrangler queues create ultralight-events
+wrangler queues create ultralight-events-dlq
+# Staging
+wrangler queues create ultralight-exec-staging
+wrangler queues create ultralight-exec-staging-dlq
+wrangler queues create ultralight-events-staging
+wrangler queues create ultralight-events-staging-dlq
+```
+
+Supabase: apply `supabase/migrations/20260611090000_async_jobs_durable_execution.sql`
+(async_jobs gains args/caller attribution/started_at + the queued status
+sweep index) via the normal `Supabase DB` workflow or `supabase db push`.
+
+Secrets (set per environment via `wrangler secret put`; see
+`api/.dev.vars.example` for the full local list):
+
+- `AGENT_CALLER_SECRET` — signs cross-Agent caller-context headers; grant
+  enforcement fails closed without it.
+- `ROUTINE_ACTOR_TOKEN_SECRET` / `WORKER_SECRET` — sign internal actor
+  tokens (routine + sandbox executions).
+
+Supabase Auth: confirm the PRODUCTION redirect URLs include the launch-web
+production origin (Auth → URL Configuration) before announcing — staging-only
+redirect lists are the classic silent login breaker.
+
+First deploy after provisioning: run the durable-execution smoke
+(`scripts/smoke/durable-exec-smoke.mjs`, see SMOKE_CHECKLISTS.md) BEFORE
+relying on async functions — `ctx.exports` availability inside `queue()` is
+undocumented platform behavior and must be proven once per environment.
+
 ## Normal Release Flow
 
 1. Merge release-ready work to `main`.

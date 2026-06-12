@@ -41,6 +41,8 @@ export const LAUNCH_PUBLIC_ROUTES = [
   "/wallet",
   "/settings",
   "/admin/agents/:id",
+  "/terms",
+  "/privacy",
 ] as const;
 
 export type LaunchPublicRoute = typeof LAUNCH_PUBLIC_ROUTES[number];

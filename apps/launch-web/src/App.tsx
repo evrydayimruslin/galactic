@@ -26,6 +26,8 @@ import {
   SettingsFoundationPage,
   StoreFoundationPage,
   WalletFoundationPage,
+  PrivacyPage,
+  TermsPage,
 } from "./pages/foundation-pages";
 import { LaunchShell } from "./components/launch-chrome";
 import {
@@ -60,6 +62,8 @@ const routeTitles: Record<LaunchRouteKey, string> = {
   settings: "Settings",
   adminAgent: "Agent admin",
   authCallback: "Signing in",
+  terms: "Terms of Service",
+  privacy: "Privacy Policy",
 };
 
 export function App(): ReactElement {
@@ -216,6 +220,10 @@ function RouteSwitch(
       );
     case "authCallback":
       return <AuthCallbackPage location={location} />;
+    case "terms":
+      return <TermsPage />;
+    case "privacy":
+      return <PrivacyPage />;
   }
 }
 

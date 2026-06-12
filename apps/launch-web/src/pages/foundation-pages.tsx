@@ -4261,8 +4261,11 @@ function WalletTopUpPanel(
                 type="checkbox"
               />
               <span>
-                I agree to the Ultralight Terms of Service and authorize this
-                charge.
+                I agree to the Ultralight{" "}
+                <a href="/terms" rel="noopener" target="_blank">
+                  Terms of Service
+                </a>{" "}
+                and authorize this charge.
               </span>
             </label>
           )
@@ -5605,4 +5608,101 @@ function formatCredits(value: number): string {
   if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
   if (value >= 1) return value.toFixed(1);
   return value.toFixed(3);
+}
+
+
+// ── Legal pages ─────────────────────────────────────────────────────────────
+// Plain-language launch versions, flagged for counsel review in the release
+// packet. The top-up consent checkbox links to /terms; keep billing language
+// in sync with the wallet flow.
+
+export function TermsPage(): ReactElement {
+  return (
+    <section className="foundation-page legal-page">
+      <h1>Terms of Service</h1>
+      <p className="legal-updated">Last updated: June 11, 2026</p>
+      <p>
+        Ultralight provides hosted agents: small programs you install, wire
+        together, and run, including functions that call AI models. By creating
+        an account or using the platform you agree to these terms.
+      </p>
+      <h2>Your account</h2>
+      <p>
+        You are responsible for activity under your account and for keeping
+        your sign-in method and API tokens secret. Revoke tokens you no longer
+        use from Settings.
+      </p>
+      <h2>Credits and billing</h2>
+      <p>
+        Paid usage is denominated in credits. Top-ups are charged at the
+        amount shown before you confirm, plus any fees stated at checkout.
+        Usage (AI inference, compute, storage) draws down your balance at the
+        rates shown on the platform; every charge is recorded against a
+        receipt you can inspect in your wallet. Credits are prepaid platform
+        usage, not money: they are non-transferable and, except where required
+        by law, unused credits are not refundable.
+      </p>
+      <h2>Your agents and data</h2>
+      <p>
+        You retain ownership of code and data you bring to the platform. You
+        grant us only the rights needed to host and execute it. Agents you
+        install may call other agents only through grants you approve, with
+        the spending caps you set.
+      </p>
+      <h2>Acceptable use</h2>
+      <p>
+        Do not use the platform for unlawful activity, to harm others, to
+        attempt to break tenant isolation, or to interfere with the service or
+        other users. We may suspend accounts that do.
+      </p>
+      <h2>Disclaimers</h2>
+      <p>
+        The service is provided "as is" during launch. AI model outputs are
+        probabilistic and may be wrong; you are responsible for reviewing
+        outputs before relying on them. To the maximum extent permitted by
+        law, our liability is limited to the amount you paid in the three
+        months before a claim.
+      </p>
+      <h2>Changes</h2>
+      <p>
+        We may update these terms; material changes will be announced on the
+        platform before they take effect. Questions: support@ultralight.run.
+      </p>
+    </section>
+  );
+}
+
+export function PrivacyPage(): ReactElement {
+  return (
+    <section className="foundation-page legal-page">
+      <h1>Privacy Policy</h1>
+      <p className="legal-updated">Last updated: June 11, 2026</p>
+      <h2>What we collect</h2>
+      <p>
+        Account details (email, display name, avatar) from your sign-in
+        provider; operational records of platform activity (executions,
+        receipts, balances, grants, tokens); and the code and data your agents
+        store. Payment card details are processed by Stripe and never touch
+        our servers.
+      </p>
+      <h2>How we use it</h2>
+      <p>
+        To run your agents, meter and bill usage, secure the platform, and
+        support you. Prompts sent to AI models go to the model provider you
+        selected (or your own key when you bring one); we do not sell your
+        data or use your agents' data to train models.
+      </p>
+      <h2>Where it lives</h2>
+      <p>
+        Data is stored with our infrastructure providers (Cloudflare,
+        Supabase, Stripe). Your agents' databases are isolated per agent.
+      </p>
+      <h2>Your choices</h2>
+      <p>
+        You can delete agents and their data, revoke tokens and grants, and
+        request account deletion at support@ultralight.run. Operational
+        billing records are retained as required for accounting.
+      </p>
+    </section>
+  );
 }

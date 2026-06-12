@@ -218,6 +218,9 @@ async function loadRouteData(
     }
     case "authCallback":
       return {};
+    case "terms":
+    case "privacy":
+      return {};
   }
 }
 

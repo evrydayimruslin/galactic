@@ -64,3 +64,19 @@ SUPABASE_MGMT_OAUTH_CLIENT_SECRET=
 # Inter-service auth
 TIER_CHANGE_SECRET=
 GPU_SECRET=
+# Signs cross-Agent caller-context headers (X-Ultralight-Caller). Required for
+# agent-to-agent grant enforcement.
+AGENT_CALLER_SECRET=
+# Signs routine/sandbox actor tokens (internal execution identities).
+# ROUTINE_ACTOR_TOKEN_SECRET falls back to WORKER_SECRET when unset.
+ROUTINE_ACTOR_TOKEN_SECRET=
+WORKER_SECRET=
+
+# Cloudflare Queues (durable execution + event bus) are BINDINGS, not vars —
+# provision once per account before the first deploy:
+#   wrangler queues create ultralight-exec
+#   wrangler queues create ultralight-exec-dlq
+#   wrangler queues create ultralight-events
+#   wrangler queues create ultralight-events-dlq
+#   (and the -staging variants for env.staging)
+# Local `wrangler dev` simulates them from wrangler.toml automatically.
