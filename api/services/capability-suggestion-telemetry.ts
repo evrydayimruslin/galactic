@@ -466,3 +466,38 @@ export async function installAcceptedSuggestionApp(
 
   return true;
 }
+
+// Remove an app from the user's library (the inverse of the install above).
+// Idempotent: removing a row that isn't there still succeeds.
+export async function removeAppFromUserLibrary(
+  userId: string,
+  appId: string,
+): Promise<boolean> {
+  const appUuid = asUuid(appId);
+  if (!appUuid) return false;
+  if (!supabaseReady()) return false;
+
+  const response = await fetch(
+    `${getEnv("SUPABASE_URL")}/rest/v1/user_app_library` +
+      `?user_id=eq.${userId}&app_id=eq.${appUuid}`,
+    {
+      method: "DELETE",
+      headers: dbHeaders("return=minimal"),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to remove app from library: ${await response.text()}`,
+    );
+  }
+
+  rebuildFunctionIndex(userId).catch((err) =>
+    suggestionTelemetryLogger.warn(
+      "Failed to rebuild function index after library removal",
+      { user_id: userId, app_id: appUuid, error: err },
+    )
+  );
+
+  return true;
+}

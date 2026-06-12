@@ -248,6 +248,16 @@ export class LaunchApiClient {
     );
   }
 
+  /** Remove an Agent from the signed-in user's library. Idempotent. */
+  uninstallAgent(
+    idOrSlug: string,
+  ): Promise<{ installed: boolean; agentId: string; slug: string }> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/install`,
+      { method: "DELETE" },
+    );
+  }
+
   // Poll a durable async execution (a run that returned { _async, job_id }).
   launchJob(jobId: string): Promise<LaunchJobStatusResponse> {
     return this.fetchJson(`/api/launch/jobs/${encodeURIComponent(jobId)}`);

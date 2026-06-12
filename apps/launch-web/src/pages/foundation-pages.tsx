@@ -1186,7 +1186,7 @@ function AgentConnectButton({
 function AgentInstallButton({ tool }: { tool: AgentDetailFixture }): ReactElement {
   const openSignIn = useSignInModal();
   const [state, setState] = useState<
-    "idle" | "installing" | "installed" | "error"
+    "idle" | "installing" | "installed" | "uninstalling" | "error"
   >(tool.relationship === "installed" ? "installed" : "idle");
 
   // Signed out there is no library to add to — prompt sign-in first.
@@ -1197,30 +1197,41 @@ function AgentInstallButton({ tool }: { tool: AgentDetailFixture }): ReactElemen
       </Button>
     );
   }
-  if (state === "installed") {
-    return (
-      <Button disabled icon="check" size="lg" variant="secondary">
-        Installed
-      </Button>
-    );
-  }
-  const install = () => {
-    if (state === "installing") return;
+
+  const locator = tool.slug || tool.id;
+  const busy = state === "installing" || state === "uninstalling";
+
+  const toggle = () => {
+    if (busy) return;
+    if (state === "installed") {
+      setState("uninstalling");
+      launchApi.uninstallAgent(locator)
+        .then(() => setState("idle"))
+        .catch(() => setState("installed"));
+      return;
+    }
     setState("installing");
-    launchApi.installAgent(tool.slug || tool.id)
+    launchApi.installAgent(locator)
       .then(() => setState("installed"))
       .catch(() => setState("error"));
   };
+
+  // Installed state doubles as the uninstall control (click to remove).
   return (
     <Button
-      disabled={state === "installing"}
-      icon="grid"
-      onClick={install}
+      className={state === "installed" ? "install-toggle is-installed" : "install-toggle"}
+      disabled={busy}
+      icon={state === "installed" ? "check" : "grid"}
+      onClick={toggle}
       size="lg"
       variant="secondary"
     >
       {state === "installing"
         ? "Installing…"
+        : state === "uninstalling"
+        ? "Removing…"
+        : state === "installed"
+        ? "Installed"
         : state === "error"
         ? "Retry install"
         : "Install"}
@@ -1243,9 +1254,35 @@ function AgentDetailSurface({
   const [selectedFunctionName, setSelectedFunctionName] = useState(
     tool.functions[0]?.name || "",
   );
+  const [fnMenuOpen, setFnMenuOpen] = useState(false);
+  const fnMenuRef = useRef<HTMLDivElement>(null);
+  const selectedFunction =
+    tool.functions.find((fn) => fn.name === selectedFunctionName) ||
+    tool.functions[0];
+
   useEffect(() => {
     setTab(agentTabFromSearch());
   }, [locationSearch]);
+
+  // The Functions tab doubles as a dropdown; close it on outside click / Escape.
+  // The ref wraps the trigger + menu so a trigger click toggles cleanly.
+  useEffect(() => {
+    if (!fnMenuOpen) return;
+    const onDown = (event: MouseEvent) => {
+      if (!fnMenuRef.current?.contains(event.target as Node)) {
+        setFnMenuOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFnMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [fnMenuOpen]);
 
   // Wiring is meaningful only when signed in and the Agent is the user's own
   // (owner) or one they've installed. Public, signed-out views hide the tab.
@@ -1300,23 +1337,56 @@ function AgentDetailSurface({
               : null}
           </div>
           <div className="tool-header-actions">
+            <AgentInstallButton tool={tool} />
             <AgentConnectButton
               agentInstall={live.data.install?.agentInstall}
               tool={tool}
             />
-            <AgentInstallButton tool={tool} />
           </div>
         </div>
       </section>
 
       <div className="tool-tabs" role="tablist" aria-label="Agent page sections">
-        <button
-          className={tab === "functions" ? "active" : ""}
-          onClick={() => activateToolTab("functions")}
-          type="button"
-        >
-          Functions
-        </button>
+        <div className="tool-tab-menu" ref={fnMenuRef}>
+          <button
+            aria-expanded={tab === "functions" && fnMenuOpen}
+            aria-haspopup="listbox"
+            className={tab === "functions" ? "active" : ""}
+            onClick={() => {
+              if (tab !== "functions") {
+                activateToolTab("functions");
+                setFnMenuOpen(true);
+              } else {
+                setFnMenuOpen((open) => !open);
+              }
+            }}
+            type="button"
+          >
+            Functions
+            {tool.functions.length > 0
+              ? (
+                <span
+                  aria-hidden="true"
+                  className={tab === "functions" && fnMenuOpen
+                    ? "picker-caret open"
+                    : "picker-caret"}
+                />
+              )
+              : null}
+          </button>
+          {tab === "functions" && fnMenuOpen && selectedFunction
+            ? (
+              <FunctionMenu
+                functions={tool.functions}
+                onPick={(name) => {
+                  setSelectedFunctionName(name);
+                  setFnMenuOpen(false);
+                }}
+                selected={selectedFunction}
+              />
+            )
+            : null}
+        </div>
         <button
           className={tab === "details" ? "active" : ""}
           onClick={() => activateToolTab("details")}
@@ -1335,8 +1405,7 @@ function AgentDetailSurface({
             ? (
               <AgentFunctionsPanel
                 live={live}
-                selectedFunctionName={selectedFunctionName}
-                setSelectedFunctionName={setSelectedFunctionName}
+                selectedFunction={selectedFunction}
                 tool={tool}
               />
             )
@@ -1359,19 +1428,13 @@ function AgentDetailSurface({
 
 function AgentFunctionsPanel({
   live,
-  selectedFunctionName,
-  setSelectedFunctionName,
+  selectedFunction,
   tool,
 }: {
   live: LaunchPageProps["live"];
-  selectedFunctionName: string;
-  setSelectedFunctionName: (name: string) => void;
+  selectedFunction: AgentFunctionFixture | undefined;
   tool: AgentDetailFixture;
 }): ReactElement {
-  const selectedFunction =
-    tool.functions.find((fn) => fn.name === selectedFunctionName) ||
-    tool.functions[0];
-
   // Live agents expose only the functions the API reports — none yet means an
   // honest empty state, not a synthesized placeholder function.
   if (!selectedFunction) {
@@ -1387,17 +1450,15 @@ function AgentFunctionsPanel({
 
   return (
     <div className="functions-panel">
-      <FunctionPicker
-        functions={tool.functions}
-        onPick={setSelectedFunctionName}
-        selected={selectedFunction}
-      />
       <FunctionSandboxCard fn={selectedFunction} live={live} tool={tool} />
     </div>
   );
 }
 
-function FunctionPicker({
+// The function list shown by the Functions tab dropdown. Outside-click / Escape
+// closing is owned by the parent (AgentDetailSurface) so a click on the tab
+// trigger toggles cleanly.
+function FunctionMenu({
   functions,
   onPick,
   selected,
@@ -1406,72 +1467,30 @@ function FunctionPicker({
   onPick: (name: string) => void;
   selected: AgentFunctionFixture;
 }): ReactElement {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Close on outside click / Escape so the menu behaves like a real dropdown.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
   return (
-    <div className="function-picker" ref={menuRef}>
-      <button
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        className="function-picker-trigger"
-        onClick={() => setOpen((value) => !value)}
-        type="button"
-      >
-        <span className="function-picker-current">
-          <Mono>{selected.name}</Mono>
-          <small>{selected.description}</small>
-        </span>
-        <span className={open ? "picker-caret open" : "picker-caret"} aria-hidden="true" />
-      </button>
-      {open
-        ? (
-          <div className="function-menu" role="listbox">
-            {functions.map((fn) => {
-              const active = fn.name === selected.name;
-              return (
-                <button
-                  aria-selected={active}
-                  className={active ? "active" : ""}
-                  key={fn.name}
-                  onClick={() => {
-                    onPick(fn.name);
-                    setOpen(false);
-                  }}
-                  role="option"
-                  type="button"
-                >
-                  <span className="function-menu-check" aria-hidden="true">
-                    {active ? <Icon name="check" size={14} /> : null}
-                  </span>
-                  <span className="function-menu-label">
-                    <Mono>{fn.name}</Mono>
-                    <small>{fn.description}</small>
-                  </span>
-                  <Mono>{formatAgentPrice(fn.price)}</Mono>
-                </button>
-              );
-            })}
-          </div>
-        )
-        : null}
+    <div className="function-menu tab-menu" role="listbox">
+      {functions.map((fn) => {
+        const active = fn.name === selected.name;
+        return (
+          <button
+            aria-selected={active}
+            className={active ? "active" : ""}
+            key={fn.name}
+            onClick={() => onPick(fn.name)}
+            role="option"
+            type="button"
+          >
+            <span className="function-menu-check" aria-hidden="true">
+              {active ? <Icon name="check" size={14} /> : null}
+            </span>
+            <span className="function-menu-label">
+              <Mono>{fn.name}</Mono>
+              <small>{fn.description}</small>
+            </span>
+            <Mono>{formatAgentPrice(fn.price)}</Mono>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1654,6 +1673,7 @@ function FunctionSandboxCard({
         )
         : null}
       <PermissionControl fn={fn} live={live} tool={tool} />
+      <FunctionWiring fn={fn} live={live} />
     </Card>
   );
 }
@@ -1724,6 +1744,121 @@ function PermissionControl({
             ? "Save"
             : "Saved"}
         </Button>
+      </div>
+    </div>
+  );
+}
+
+// Per-function slice of the agent's wiring, shown under the permission control:
+// who may call THIS function (inbound, incl. pending approvals) and which
+// functions fire when it runs (outbound). The Details tab keeps the full,
+// agent-wide wiring view.
+function FunctionWiring(
+  { fn, live }: { fn: AgentFunctionFixture; live: LaunchPageProps["live"] },
+): ReactElement | null {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const wiring = live.data.agentWiring;
+  // Wiring is account-scoped; signed-out / non-owner views have no data here.
+  if (!wiring) return null;
+
+  const inboundActive = wiring.inboundGrants.filter(
+    (grant) => grant.targetFunction === fn.name,
+  );
+  const inboundPending = wiring.pendingRequests.filter(
+    (grant) => grant.targetFunction === fn.name,
+  );
+  const outbound = wiring.outboundGrants.filter(
+    (grant) => grant.callerFunction === fn.name,
+  );
+
+  const act = async (grantId: string, run: () => Promise<unknown>) => {
+    setBusyId(grantId);
+    try {
+      await run();
+      live.reload();
+    } catch {
+      // Row stays so the action can be retried.
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="function-wiring">
+      <div className="function-wiring-col">
+        <p className="section-label">Agents that can call this function</p>
+        {inboundPending.length === 0 && inboundActive.length === 0
+          ? (
+            <p className="muted-note">
+              No other Agent is wired to call <Mono>{fn.name}</Mono> yet.
+            </p>
+          )
+          : (
+            <div className="wiring-row-list">
+              {inboundPending.map((request) => (
+                <div className="wiring-pending-row" key={request.id}>
+                  <div className="wiring-pending-main">
+                    <strong>
+                      <Mono>{grantAppLabel(request.callerApp)}</Mono>
+                      {" wants to call this"}
+                    </strong>
+                    <CallerTrustChip
+                      trust={wiring.callerTrustByApp[request.callerApp.id] ??
+                        null}
+                    />
+                  </div>
+                  <div className="wiring-row-actions">
+                    <Button
+                      onClick={() =>
+                        act(request.id, () =>
+                          launchApi.approveGrant(request.id))}
+                      size="sm"
+                    >
+                      {busyId === request.id ? "Working" : "Approve"}
+                    </Button>
+                    <Button
+                      onClick={() =>
+                        act(request.id, () => launchApi.revokeGrant(request.id))}
+                      size="sm"
+                      variant="secondary"
+                    >
+                      Deny
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              {inboundActive.map((grant) => (
+                <GrantRow
+                  direction="inbound"
+                  grant={grant}
+                  key={grant.id}
+                  live={live}
+                />
+              ))}
+            </div>
+          )}
+      </div>
+      <div className="function-wiring-col">
+        <p className="section-label">Functions called when this runs</p>
+        {outbound.length === 0
+          ? (
+            <p className="muted-note">
+              This function calls no other Agent directly. Wire outbound calls
+              from the Details tab.
+            </p>
+          )
+          : (
+            <div className="wiring-row-list">
+              {outbound.map((grant) => (
+                <GrantRow
+                  direction="outbound"
+                  grant={grant}
+                  key={grant.id}
+                  live={live}
+                />
+              ))}
+            </div>
+          )}
       </div>
     </div>
   );
@@ -2782,6 +2917,14 @@ export function LibraryFoundationPage(
               ))
               : loading
               ? null
+              : hasLaunchAuthToken()
+              ? (
+                <EmptyState icon="grid" title="No installed Agents yet">
+                  Agents you install appear here, ready for your connected agent
+                  to call. Browse the catalog to add one. (Agents you own show
+                  under “Agents you own”.)
+                </EmptyState>
+              )
               : (
                 <EmptyState icon="key" title="Sign in to load your library">
                   The live library endpoint needs an account session before it
@@ -2798,6 +2941,12 @@ export function LibraryFoundationPage(
               ))
               : loading
               ? null
+              : hasLaunchAuthToken()
+              ? (
+                <EmptyState icon="grid" title="No Agents you own yet">
+                  Ship your first Agent from the CLI and it appears here.
+                </EmptyState>
+              )
               : (
                 <EmptyState icon="key" title="Sign in to load owned Agents">
                   The live library endpoint needs an account session before it

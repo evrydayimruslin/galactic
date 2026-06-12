@@ -588,8 +588,12 @@ export async function handleLaunch(request: Request): Promise<Response> {
     const agentInstallMatch = path.match(
       /^\/api\/launch\/agents\/([^/]+)\/install$/,
     );
-    if (agentInstallMatch && method === "POST") {
-      return await handleLaunchAgentInstall(request, agentInstallMatch[1]);
+    if (agentInstallMatch && (method === "POST" || method === "DELETE")) {
+      return await handleLaunchAgentInstall(
+        request,
+        agentInstallMatch[1],
+        method,
+      );
     }
 
     if (method !== "GET") {
@@ -3169,23 +3173,39 @@ async function resolveGrantFilterAppId(
   }
 }
 
-// Add an Agent to the signed-in user's library (the website twin of an
-// ul.rate "like"). Idempotent: re-installing an already-installed Agent is a
-// no-op merge. Account session required — provisional/token actors can't own a
-// library.
+// Add/remove an Agent to/from the signed-in user's library (the website twin
+// of an ul.rate "like"/"none"). Idempotent in both directions. Account session
+// required — provisional/token actors can't own a library.
 async function handleLaunchAgentInstall(
   request: Request,
   encodedLocator: string,
+  method: string,
 ): Promise<Response> {
   const user = await requireLaunchUser(request);
   requireAccountSessionForGrants(user);
   const resolved = await resolveLaunchRunnableTool(user, encodedLocator);
   if (!resolved) return error("Agent not found", 404);
 
-  const { installAcceptedSuggestionApp } = await import(
+  const lib = await import(
     "../services/capability-suggestion-telemetry.ts"
   );
-  const installed = await installAcceptedSuggestionApp(
+  if (method === "DELETE") {
+    const removed = await lib.removeAppFromUserLibrary(
+      user.id,
+      resolved.row.id,
+    );
+    if (!removed) {
+      return error("Could not remove this Agent from your library", 502);
+    }
+    return json({
+      installed: false,
+      agentId: resolved.row.id,
+      slug: resolved.row.slug || resolved.row.id,
+      generatedAt: new Date().toISOString(),
+    });
+  }
+
+  const installed = await lib.installAcceptedSuggestionApp(
     user.id,
     resolved.row.id,
     "launch_web_install",

@@ -78,6 +78,7 @@ export const LAUNCH_API_ROUTES = [
   "GET /api/launch/agents/:id/functions",
   "POST /api/launch/agents/:id/functions/:functionName/run",
   "POST /api/launch/agents/:id/install",
+  "DELETE /api/launch/agents/:id/install",
   "GET /api/launch/agents/:id/caller-permissions",
   "PATCH /api/launch/agents/:id/caller-permissions",
   "GET /api/launch/admin/agents/:id",

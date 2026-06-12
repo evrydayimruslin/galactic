@@ -2035,6 +2035,45 @@ button {
   line-height: 1.35;
 }
 
+/* The Installed button doubles as the uninstall control — hint on hover. */
+.install-toggle.is-installed:hover {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+
+/* Functions tab is itself the dropdown trigger — anchor the menu to it. */
+.tool-tab-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.function-menu.tab-menu {
+  right: auto;
+  min-width: 340px;
+}
+
+/* Per-function wiring under the permission control: inbound | outbound. */
+.function-wiring {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ul-border);
+}
+
+.function-wiring-col {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+@media (max-width: 720px) {
+  .function-wiring {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .function-list,
 .function-sandbox-card {
   min-width: 0;
