@@ -33,6 +33,9 @@
 
 html {
   background: var(--ul-bg);
+  /* Disable the elastic rubber-band overscroll so scrolling past the top or
+     bottom never shifts the sticky header. */
+  overscroll-behavior: none;
 }
 
 body {
@@ -41,6 +44,7 @@ body {
   background: var(--ul-bg);
   color: var(--ul-text);
   font-family: var(--ul-font);
+  overscroll-behavior: none;
 }
 
 a {
