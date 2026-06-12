@@ -1843,8 +1843,7 @@ function FunctionWiring(
         {outbound.length === 0
           ? (
             <p className="muted-note">
-              This function calls no other Agent directly. Wire outbound calls
-              from the Details tab.
+              This function calls no other Agent directly yet.
             </p>
           )
           : (
@@ -1859,6 +1858,127 @@ function FunctionWiring(
               ))}
             </div>
           )}
+        <FunctionOutboundBind
+          callerAppId={wiring.app.id}
+          callerFunction={fn.name}
+          live={live}
+        />
+      </div>
+    </div>
+  );
+}
+
+// Per-function "wire a new outbound call": grants this function permission to
+// call a target Agent's function (callerFunction-scoped grant). The server
+// enforces the safety invariant — the user must be able to call the target.
+function FunctionOutboundBind({
+  callerAppId,
+  callerFunction,
+  live,
+}: {
+  callerAppId: string;
+  callerFunction: string;
+  live: LaunchPageProps["live"];
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const [targets, setTargets] = useState<AgentWiringTarget[]>([]);
+  const [targetAppId, setTargetAppId] = useState("");
+  const [targetFunction, setTargetFunction] = useState("");
+  const [binding, setBinding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Targets are fetched lazily the first time the control is opened.
+  useEffect(() => {
+    if (!open || targets.length > 0) return;
+    let cancelled = false;
+    launchApi.wiringTargets()
+      .then((response) => {
+        if (!cancelled) setTargets(response.targets);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open, targets.length]);
+
+  // Don't offer to wire a function to itself.
+  const eligibleTargets = targets.filter((entry) => entry.app.id !== callerAppId);
+  const selectedTarget = eligibleTargets.find((t) => t.app.id === targetAppId);
+
+  const bind = async () => {
+    if (!targetAppId || !targetFunction) return;
+    setBinding(true);
+    setError(null);
+    try {
+      await launchApi.createGrant({
+        callerAppId,
+        targetAppId,
+        targetFunction,
+        callerFunction,
+      });
+      setOpen(false);
+      setTargetAppId("");
+      setTargetFunction("");
+      live.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBinding(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <Button onClick={() => setOpen(true)} size="sm" variant="secondary">
+        Add outbound call
+      </Button>
+    );
+  }
+
+  return (
+    <div className="slot-bind">
+      <label>
+        <span>Target Agent</span>
+        <select
+          onChange={(event) => {
+            setTargetAppId(event.target.value);
+            setTargetFunction("");
+          }}
+          value={targetAppId}
+        >
+          <option value="">Pick an Agent…</option>
+          {eligibleTargets.map((entry) => (
+            <option key={entry.app.id} value={entry.app.id}>
+              {grantAppLabel(entry.app)} · {entry.relationship}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>Function</span>
+        <select
+          disabled={!selectedTarget}
+          onChange={(event) => setTargetFunction(event.target.value)}
+          value={targetFunction}
+        >
+          <option value="">Pick a function…</option>
+          {(selectedTarget?.functions ?? []).map((fn) => (
+            <option key={fn.name} value={fn.name}>{fn.name}</option>
+          ))}
+        </select>
+      </label>
+      {error ? <p className="api-notice warning">{error}</p> : null}
+      <div className="wiring-row-actions">
+        <Button onClick={bind} size="sm">
+          {binding ? "Wiring" : "Wire call"}
+        </Button>
+        <button
+          className="route-link"
+          onClick={() => setOpen(false)}
+          type="button"
+        >
+          Cancel
+        </button>
       </div>
     </div>
   );
@@ -2881,15 +3001,22 @@ export function LibraryFoundationPage(
     <div className="launch-page-narrow library-page">
       <ApiNotice live={live} noun="Agents" />
       <div className="library-toolbar">
-        <select
-          aria-label="Library view"
-          className="picker-select"
-          onChange={(event) => selectView(event.target.value as LibraryView)}
-          value={view}
-        >
-          <option value="installed">Installed Agents</option>
-          <option value="owned">Agents you own</option>
-        </select>
+        <div className="account-tabs" role="tablist" aria-label="Library view">
+          {([["installed", "Installed"], ["owned", "Owned"]] as const).map((
+            [id, label],
+          ) => (
+            <button
+              aria-selected={view === id}
+              className={view === id ? "active" : ""}
+              key={id}
+              onClick={() => selectView(id)}
+              role="tab"
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <span className="library-count">{count}</span>
         <RouteButton
           icon="grid"

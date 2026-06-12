@@ -2487,6 +2487,13 @@ button {
   margin-bottom: 18px;
 }
 
+/* The Installed/Owned tabs sit inline in the toolbar — drop the full-width
+   underline + bottom margin the tab bar carries elsewhere. */
+.library-toolbar .account-tabs {
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+
 .library-count {
   color: var(--ul-muted);
   font-size: 14px;
