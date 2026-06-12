@@ -932,7 +932,7 @@ export function HomeFoundationPage(
               to="/browse"
               variant="secondary"
             >
-              Browse
+              Browse agents
             </RouteButton>
           </div>
         </div>

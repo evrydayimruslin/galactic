@@ -97,16 +97,17 @@ export function LaunchShell({
           {navRoutes.map((route) => (
             <button
               className={navClass(activeRoute, route.key)}
+              data-label={route.label}
               key={route.key}
               onClick={() => navigate(route.path)}
               type="button"
             >
-              {route.label}
+              <span>{route.label}</span>
             </button>
           ))}
         </nav>
         <div className="top-actions">
-          <AddToAgentButton size="sm" />
+          <AddToAgentButton size="sm" variant="ghost" />
           {signedIn
             ? (
               <button
@@ -144,11 +145,12 @@ export function LaunchShell({
         {[...navRoutes, ...accountRoutes].map((route) => (
           <button
             className={navClass(activeRoute, route.key)}
+            data-label={route.label}
             key={route.key}
             onClick={() => navigate(route.path)}
             type="button"
           >
-            {route.label}
+            <span>{route.label}</span>
           </button>
         ))}
       </nav>
