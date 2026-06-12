@@ -96,12 +96,17 @@ button {
 
 /* Top-bar "Add to agent" is a quiet ghost action — highlight by colour only,
    no lift. */
+/* The top-bar "Add to agent" reads like a nav item: same font, size and
+   colour, highlighting by colour on hover. */
 .top-actions .launch-button {
+  color: #333;
+  font-size: 15.5px;
+  font-weight: 500;
   transition: color 160ms ease;
 }
 
 .top-actions .launch-button:hover {
-  transform: none;
+  background: transparent;
   color: var(--ul-text);
 }
 
@@ -162,7 +167,7 @@ button {
   display: inline-grid;
   justify-items: center;
   padding: 8px 10px;
-  color: var(--ul-secondary);
+  color: #333;
   font-size: 15.5px;
   font-weight: 500;
   text-decoration: none;
@@ -307,12 +312,8 @@ button {
   font-weight: 500;
   line-height: 1;
   text-decoration: none;
-  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
   white-space: nowrap;
-}
-
-.launch-button:hover {
-  transform: translateY(-1px);
 }
 
 .button-primary {
@@ -320,10 +321,20 @@ button {
   color: #fff;
 }
 
+/* Colour-only hover highlight, no movement. */
+.button-primary:hover {
+  background: #2a2a2a;
+}
+
 .button-secondary {
   border-color: var(--ul-border-strong);
   background: #fff;
   color: var(--ul-text);
+}
+
+.button-secondary:hover {
+  border-color: var(--ul-text);
+  background: var(--ul-hover);
 }
 
 .button-ghost {
@@ -1473,10 +1484,10 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 40px;
-  padding: 0 13px;
+  min-height: 44px;
+  padding: 0 18px;
   border: 1px solid var(--ul-border-strong);
-  border-radius: 10px;
+  border-radius: 999px;
   background: #fff;
 }
 

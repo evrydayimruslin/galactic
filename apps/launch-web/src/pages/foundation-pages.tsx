@@ -986,7 +986,6 @@ export function StoreFoundationPage(
     <div className="launch-page-narrow store-page">
       <ApiNotice live={live} noun="store Agents" />
       <section className="store-heading">
-        <h1>Agents your agent can call.</h1>
         <SearchControls query={query} setQuery={updateQuery} />
       </section>
 
