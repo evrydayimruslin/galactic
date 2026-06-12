@@ -77,14 +77,16 @@ button {
   padding: 0 28px;
   border-bottom: 0;
   box-shadow: none;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(8px);
-  transition: box-shadow 200ms ease;
+  /* Transparent at the top so the bar matches the page background exactly
+     (the shell has a faint top gradient). The frosted white, blur, and shadow
+     fade in only once the user scrolls. */
+  background: transparent;
+  transition: background 200ms ease, box-shadow 200ms ease;
 }
 
-/* No border at the top of the page; a very subtle grey shadow fades in once
-   the user scrolls. */
 .top-nav.scrolled {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
   box-shadow: 0 1px 16px rgba(10, 10, 10, 0.06);
 }
 
