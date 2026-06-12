@@ -3018,14 +3018,6 @@ export function LibraryFoundationPage(
           ))}
         </div>
         <span className="library-count">{count}</span>
-        <RouteButton
-          icon="grid"
-          navigate={navigate}
-          to="/browse"
-          variant="secondary"
-        >
-          Browse
-        </RouteButton>
       </div>
 
       {view === "installed"
@@ -3214,23 +3206,11 @@ function OwnedAgentCard({
           <p>{tool.summary}</p>
         </div>
       </div>
-      <div className="owned-tool-metrics">
-        <MetricTile
-          label="Installs"
-          value={tool.installs !== null ? formatNumber(tool.installs) : "—"}
-        />
-        <MetricTile
-          label="Calls/day"
-          value={tool.callsPerDay !== null
-            ? formatNumber(tool.callsPerDay)
-            : "—"}
-        />
-      </div>
       <div className="owned-tool-actions">
         <RouteButton
           navigate={navigate}
           to={`/admin/agents/${tool.id}`}
-          variant="primary"
+          variant="secondary"
         >
           Manage
         </RouteButton>
