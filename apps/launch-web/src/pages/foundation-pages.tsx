@@ -411,7 +411,7 @@ const adminTabs = [
 type AdminTabId = typeof adminTabs[number][0];
 type LibraryView = "installed" | "owned";
 type StoreKindFilter = "all" | AgentFixture["kind"];
-type AgentPageTabId = "details" | "functions" | "wiring";
+type AgentPageTabId = "details" | "functions";
 
 const visibilityOptions = [
   [
@@ -1183,6 +1183,51 @@ function AgentConnectButton({
   );
 }
 
+function AgentInstallButton({ tool }: { tool: AgentDetailFixture }): ReactElement {
+  const openSignIn = useSignInModal();
+  const [state, setState] = useState<
+    "idle" | "installing" | "installed" | "error"
+  >(tool.relationship === "installed" ? "installed" : "idle");
+
+  // Signed out there is no library to add to — prompt sign-in first.
+  if (!hasLaunchAuthToken()) {
+    return (
+      <Button icon="grid" onClick={openSignIn} size="lg" variant="secondary">
+        Install
+      </Button>
+    );
+  }
+  if (state === "installed") {
+    return (
+      <Button disabled icon="check" size="lg" variant="secondary">
+        Installed
+      </Button>
+    );
+  }
+  const install = () => {
+    if (state === "installing") return;
+    setState("installing");
+    launchApi.installAgent(tool.slug || tool.id)
+      .then(() => setState("installed"))
+      .catch(() => setState("error"));
+  };
+  return (
+    <Button
+      disabled={state === "installing"}
+      icon="grid"
+      onClick={install}
+      size="lg"
+      variant="secondary"
+    >
+      {state === "installing"
+        ? "Installing…"
+        : state === "error"
+        ? "Retry install"
+        : "Install"}
+    </Button>
+  );
+}
+
 function AgentDetailSurface({
   live,
   locationSearch,
@@ -1259,6 +1304,7 @@ function AgentDetailSurface({
               agentInstall={live.data.install?.agentInstall}
               tool={tool}
             />
+            <AgentInstallButton tool={tool} />
           </div>
         </div>
       </section>
@@ -1277,19 +1323,10 @@ function AgentDetailSurface({
           type="button"
         >
           Details
+          {wiringRelevant && pendingCount > 0
+            ? <Pill tone="amber">{pendingCount}</Pill>
+            : null}
         </button>
-        {wiringRelevant
-          ? (
-            <button
-              className={tab === "wiring" ? "active" : ""}
-              onClick={() => activateToolTab("wiring")}
-              type="button"
-            >
-              Wiring
-              {pendingCount > 0 ? <Pill tone="amber">{pendingCount}</Pill> : null}
-            </button>
-          )
-          : null}
       </div>
 
       <div className="tool-detail-layout single">
@@ -1304,9 +1341,15 @@ function AgentDetailSurface({
               />
             )
             : null}
-          {tab === "details" ? <AgentDetailsPanel tool={tool} /> : null}
-          {tab === "wiring" && wiringRelevant
-            ? <AgentWiringPanel live={live} tool={tool} />
+          {tab === "details"
+            ? (
+              <>
+                <AgentDetailsPanel tool={tool} />
+                {wiringRelevant
+                  ? <AgentWiringPanel live={live} tool={tool} />
+                  : null}
+              </>
+            )
             : null}
         </main>
       </div>
@@ -1854,10 +1897,10 @@ function GrantCapControl({
       <div className="wiring-cap">
         <span className="muted-note">
           {grant.monthlyCapCredits != null
-            ? `✦${formatCredits(grant.spentCreditsPeriod)} / ✦${
+            ? `${formatCredits(grant.spentCreditsPeriod)} / ${
               formatCredits(grant.monthlyCapCredits)
-            } this month`
-            : `✦${formatCredits(grant.spentCreditsPeriod)} spent · uncapped`}
+            } credits this month`
+            : `${formatCredits(grant.spentCreditsPeriod)} credits spent · uncapped`}
         </span>
         <button
           className="route-link"
@@ -1875,9 +1918,9 @@ function GrantCapControl({
       <input
         inputMode="numeric"
         onChange={(event) => setDraft(event.target.value)}
-        placeholder={`uncapped (default ✦${
+        placeholder={`uncapped (default ${
           formatCredits(DEFAULT_GRANT_MONTHLY_CAP_CREDITS)
-        })`}
+        } credits)`}
         value={draft}
       />
       <Button onClick={save} size="sm">
@@ -3517,7 +3560,7 @@ export function AccountFoundationPage(
 function WalletAmount(
   { label, value }: { label: string; value: number | null },
 ): ReactElement {
-  // null = wallet not loaded yet; never show a fabricated ✦0.000 balance.
+  // null = wallet not loaded yet; never show a fabricated 0.000-credit balance.
   if (value === null) {
     return (
       <div className="wallet-amount">
@@ -3569,9 +3612,9 @@ function WalletBalancePanel({
               label={publishRequirement.met
                 ? "Publish ready"
                 : "Publish minimum"}
-              value={`✦${
+              value={`${
                 formatNumber(creditsValue(publishRequirement.requiredBalance))
-              }`}
+              } credits`}
             />
           )
           : null}
@@ -4037,7 +4080,6 @@ function WalletTopUpPanel(
       <Card className="wallet-topup-card">
         <p className="section-label">Credits amount</p>
         <div className="light-input-shell">
-          <span>✦</span>
           <strong>{creditsAmount.toLocaleString()}</strong>
           <small>credits</small>
         </div>
@@ -4110,7 +4152,7 @@ function WalletTopUpPanel(
         </div>
         <div className="quote-receive">
           <span>You receive</span>
-          <strong>✦{creditsAmount.toLocaleString()}</strong>
+          <strong>{creditsAmount.toLocaleString()} credits</strong>
         </div>
         {checkout
           ? <div className="topup-payment-element" ref={paymentElementRef} />
@@ -4167,7 +4209,7 @@ function WalletTopUpPanel(
               {phase === "creating"
                 ? "Preparing checkout…"
                 : method === "earnings"
-                ? `Transfer ✦${creditsAmount.toLocaleString()}`
+                ? `Transfer ${creditsAmount.toLocaleString()} credits`
                 : "Continue to payment"}
             </Button>
           )}
@@ -4392,7 +4434,7 @@ function WalletReceiptRow(
           <em>·{receipt.fn}</em>
         </Mono>
       </span>
-      <Mono>✦{receipt.light.toFixed(3)}</Mono>
+      <Mono>{receipt.light.toFixed(3)} credits</Mono>
       <Mono>{receipt.latency !== null ? `${receipt.latency}ms` : "—"}</Mono>
       <span
         className={receipt.status === "error" ? "mono error" : "mono positive"}
@@ -4892,7 +4934,7 @@ function ByokBillingBanner({
         spendable
         {inference.credits.usable
           ? "."
-          : ` — below the ✦${inference.credits.minimumForPlatformInference} minimum for platform inference.`}
+          : ` — below the ${inference.credits.minimumForPlatformInference}-credit minimum for platform inference.`}
         {" "}
         <RouteLink navigate={navigate} to="/account?tab=balance">Manage wallet</RouteLink>
       </span>
@@ -5421,7 +5463,9 @@ function libraryViewFromSearch(): LibraryView {
 
 function agentTabFromSearch(): AgentPageTabId {
   const tab = queryParam("tab");
-  if (tab === "details" || tab === "functions" || tab === "wiring") return tab;
+  if (tab === "functions") return "functions";
+  // Wiring is now folded into Details, so legacy ?tab=wiring lands there too.
+  if (tab === "details" || tab === "wiring") return "details";
   return "functions";
 }
 
@@ -5496,7 +5540,7 @@ function argHint(arg: string): string {
 }
 
 function formatAgentPrice(value: number): string {
-  return value > 0 ? `✦${formatCredits(value)}` : "Free";
+  return value > 0 ? `${formatCredits(value)} credits` : "Free";
 }
 
 function titleizeAgentName(value: string): string {

@@ -67,6 +67,7 @@ export const launchRoutes: LaunchRouteDefinition[] = [
       "GET /api/launch/agents/:id",
       "GET /api/launch/agents/:id/functions",
       "POST /api/launch/agents/:id/functions/:functionName/run",
+      "POST /api/launch/agents/:id/install",
       "GET /api/launch/agents/:id/caller-permissions",
       "PATCH /api/launch/agents/:id/caller-permissions",
       "GET /api/launch/agents/:id/wiring",

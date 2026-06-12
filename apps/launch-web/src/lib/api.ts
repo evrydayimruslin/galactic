@@ -238,6 +238,16 @@ export class LaunchApiClient {
     return this.runAgentFunction(idOrSlug, functionName, request);
   }
 
+  /** Add an Agent to the signed-in user's library. Idempotent. */
+  installAgent(
+    idOrSlug: string,
+  ): Promise<{ installed: boolean; agentId: string; slug: string }> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/install`,
+      { method: "POST" },
+    );
+  }
+
   // Poll a durable async execution (a run that returned { _async, job_id }).
   launchJob(jobId: string): Promise<LaunchJobStatusResponse> {
     return this.fetchJson(`/api/launch/jobs/${encodeURIComponent(jobId)}`);

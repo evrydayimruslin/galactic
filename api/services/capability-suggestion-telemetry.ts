@@ -428,6 +428,7 @@ export async function recordCapabilityGapShortcoming(
 export async function installAcceptedSuggestionApp(
   userId: string,
   appId: string,
+  source = "ambient_suggestion_accept",
 ): Promise<boolean> {
   const appUuid = asUuid(appId);
   if (!appUuid) return false;
@@ -441,7 +442,7 @@ export async function installAcceptedSuggestionApp(
       body: JSON.stringify({
         user_id: userId,
         app_id: appUuid,
-        source: "ambient_suggestion_accept",
+        source,
       }),
     },
   );

@@ -585,6 +585,13 @@ export async function handleLaunch(request: Request): Promise<Response> {
       );
     }
 
+    const agentInstallMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/install$/,
+    );
+    if (agentInstallMatch && method === "POST") {
+      return await handleLaunchAgentInstall(request, agentInstallMatch[1]);
+    }
+
     if (method !== "GET") {
       return error("Launch API is read-only in this MVP facade", 405);
     }
@@ -3160,6 +3167,38 @@ async function resolveGrantFilterAppId(
   } catch {
     return undefined;
   }
+}
+
+// Add an Agent to the signed-in user's library (the website twin of an
+// ul.rate "like"). Idempotent: re-installing an already-installed Agent is a
+// no-op merge. Account session required — provisional/token actors can't own a
+// library.
+async function handleLaunchAgentInstall(
+  request: Request,
+  encodedLocator: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForGrants(user);
+  const resolved = await resolveLaunchRunnableTool(user, encodedLocator);
+  if (!resolved) return error("Agent not found", 404);
+
+  const { installAcceptedSuggestionApp } = await import(
+    "../services/capability-suggestion-telemetry.ts"
+  );
+  const installed = await installAcceptedSuggestionApp(
+    user.id,
+    resolved.row.id,
+    "launch_web_install",
+  );
+  if (!installed) {
+    return error("Could not add this Agent to your library", 502);
+  }
+  return json({
+    installed: true,
+    agentId: resolved.row.id,
+    slug: resolved.row.slug || resolved.row.id,
+    generatedAt: new Date().toISOString(),
+  });
 }
 
 async function handleLaunchAgentWiring(

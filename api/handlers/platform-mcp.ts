@@ -2177,11 +2177,11 @@ const PLATFORM_TOOLS: MCPTool[] = [
         calls_per_day: { description: "Rate limit per day. null = unlimited." },
         default_price_credits: {
           description:
-            "Price in credits (✦) per call. Supports fractions. null = free. Replaces default_price_light.",
+            "Price in credits per call. Supports fractions. null = free. Replaces default_price_light.",
         },
         default_price_light: {
           description:
-            "Deprecated alias of default_price_credits. Price in credits (✦) per call. Supports fractions. null = free.",
+            "Deprecated alias of default_price_credits. Price in credits per call. Supports fractions. null = free.",
         },
         default_free_calls: {
           type: "integer",
@@ -2755,16 +2755,16 @@ const PLATFORM_TOOLS: MCPTool[] = [
         },
         amount_light: {
           type: "number",
-          description: "Bid amount in credits (✦). Required for: bid.",
+          description: "Bid amount in credits. Required for: bid.",
         },
         price_light: {
           type: "number",
           description:
-            "Ask price in credits (✦). For: ask. Use null to remove ask price.",
+            "Ask price in credits. For: ask. Use null to remove ask price.",
         },
         floor_light: {
           type: "number",
-          description: "Minimum acceptable bid in credits (✦). For: ask.",
+          description: "Minimum acceptable bid in credits. For: ask.",
         },
         instant_buy: {
           type: "boolean",
@@ -2853,7 +2853,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
         amount_light: {
           type: "number",
           description:
-            `Amount in credits (✦). Required for: withdraw, estimate_fee, and convert_earnings unless all=true. Withdrawal minimum: ${MIN_WITHDRAWAL_LIGHT} (${
+            `Amount in credits. Required for: withdraw, estimate_fee, and convert_earnings unless all=true. Withdrawal minimum: ${MIN_WITHDRAWAL_LIGHT} (${
               formatLight(MIN_WITHDRAWAL_LIGHT)
             }).`,
         },
@@ -3369,7 +3369,7 @@ Link a provisional session to your real Ultralight account.
 - One-way and destructive: the provisional identity is absorbed. Use it once, early, when upgrading an anonymous session.
 
 ### ul.marketplace({ action, app_id?, bid_id?, amount_light?, price_light?, floor_light?, instant_buy?, message?, expires_in_hours?, note? })
-Acquire and sell Agents. Bids are escrowed from your credits (✦) balance; the platform fee is deducted on sale.
+Acquire and sell Agents. Bids are escrowed from your credits balance; the platform fee is deducted on sale.
 - Buyer: \`action: "bid"\` (\`amount_light\`), \`"acquire"\` (instant buy at ask), \`"cancel"\` your bid, \`"offers"\`/\`"history"\`/\`"listing"\` to inspect.
 - Seller: \`action: "ask"\` (\`price_light\`, optional \`floor_light\`, \`instant_buy\`), then \`"accept"\`/\`"reject"\` a \`bid_id\`.
 
@@ -3382,7 +3382,7 @@ Write ONE JavaScript recipe that chains ALL needed operations in a single call.
 Manage your wallet: balance, earnings, conversions, withdrawals, payouts.
 - \`status\`: balance + earnings + connect status. \`earnings\`: breakdown by app (\`period\`: 7d/30d/90d/all). \`payouts\`: payout history.
 - \`convert_earnings\` (\`amount_light\` or \`all: true\`, \`terms_accepted: true\`): move creator earnings into spendable balance. \`set_auto_add_earnings\` (\`enabled\`): auto-convert future earnings.
-- \`withdraw\` (\`amount_light\`, \`terms_accepted: true\`, min 5,000✦): schedules into the next monthly payout run. \`estimate_fee\`: preview the withdrawal fee first.
+- \`withdraw\` (\`amount_light\`, \`terms_accepted: true\`, min 5,000 credits): schedules into the next monthly payout run. \`estimate_fee\`: preview the withdrawal fee first.
 
 ## Building Apps
 
@@ -3462,8 +3462,8 @@ max_duration_ms: 30000     # Optional: execution timeout
 
 ### GPU Pricing Modes
 Set via \`ul.set({ gpu_pricing_config })\` or app settings:
-- **per_call** — Flat fee per invocation (e.g., 10✦/call)
-- **per_unit** — Fee per output unit extracted from result (e.g., 5✦/image)
+- **per_call** — Flat fee per invocation (e.g., 10 credits/call)
+- **per_unit** — Fee per output unit extracted from result (e.g., 5 credits/image)
 - **per_duration** — Developer fee per billed second and/or flat markup; compute pass-through is separate
 
 ## Agent Guidance
@@ -10678,7 +10678,7 @@ async function executeSetPricing(
     if (defaultPrice < 0 || defaultPrice > 10000) {
       throw new ToolError(
         INVALID_PARAMS,
-        "default_price_credits (default_price_light) must be 0-10000 (max ✦10,000 per call)",
+        "default_price_credits (default_price_light) must be 0-10000 (max 10,000 credits per call)",
       );
     }
     config.default_price_light = defaultPrice;
@@ -10759,7 +10759,7 @@ async function executeSetPricing(
   // Build a human-readable summary
   const parts: string[] = [];
   if (config.default_price_light) {
-    parts.push(`default: ${config.default_price_light}✦/call`);
+    parts.push(`default: ${config.default_price_light} credits/call`);
   }
   if (config.default_free_calls) {
     parts.push(`${config.default_free_calls} free calls per user`);
@@ -10770,10 +10770,10 @@ async function executeSetPricing(
   if (config.functions) {
     for (const [fn, val] of Object.entries(config.functions)) {
       if (typeof val === "number") {
-        parts.push(`${fn}: ${val}✦/call`);
+        parts.push(`${fn}: ${val} credits/call`);
       } else {
         const fp = val;
-        const fpParts = [`${fp.price_light}✦/call`];
+        const fpParts = [`${fp.price_light} credits/call`];
         if (fp.free_calls) fpParts.push(`${fp.free_calls} free`);
         parts.push(`${fn}: ${fpParts.join(", ")}`);
       }
