@@ -992,10 +992,10 @@ export function StoreFoundationPage(
     syncSearchParams({ q: nextQuery.trim() || null });
   };
   const storeTools = liveStoreAgents(live.data.store?.results);
-  const developerRows = topDeveloperRows(
-    live.data.builderLeaderboard?.entries,
-    live.data.feeLeaderboard?.entries,
+  const agentRows = waivedLeaderboardRows(
+    live.data.agentFeeLeaderboard?.entries,
   );
+  const builderRows = waivedLeaderboardRows(live.data.feeLeaderboard?.entries);
   const searching = query.trim().length > 0;
   const filteredTools = storeTools.filter((tool) =>
     !query ||
@@ -1037,11 +1037,7 @@ export function StoreFoundationPage(
         </section>
         {searching ? null : (
           <aside className="store-sidebar">
-            <Leaderboard
-              title="Top Developers"
-              subtitle="Earned + fee credits"
-              rows={developerRows}
-            />
+            <TopChart agentRows={agentRows} builderRows={builderRows} />
           </aside>
         )}
       </div>
@@ -1049,54 +1045,70 @@ export function StoreFoundationPage(
   );
 }
 
-// Consolidates the builder (earned credits) and fee-credit (fees waived)
-// leaderboards into one ranking. Both are credit-denominated developer
-// benefit, so a developer's value is earned + waived, with the waived share
-// called out on the row when present.
-function topDeveloperRows(
-  builders?: LaunchLeaderboardEntry[],
-  feeCredits?: LaunchLeaderboardEntry[],
+// Both Top charts rank by platform fees waived — the visibility reward for
+// developers actively spreading their tools via referral links. The ranking
+// basis is documented in the API reference, not restated on the card.
+function waivedLeaderboardRows(
+  entries?: LaunchLeaderboardEntry[],
 ): LeaderboardRow[] {
-  const entryName = (entry: LaunchLeaderboardEntry): string =>
-    entry.profileSlug
+  return (entries ?? []).map((entry) => ({
+    color: stableColor(entry.userId),
+    eventCount: entry.eventCount || 0,
+    name: entry.profileSlug
       ? `@${entry.profileSlug}`
-      : entry.displayName || `@${entry.userId.slice(0, 6)}`;
+      : entry.displayName || `@${entry.userId.slice(0, 6)}`,
+    rank: entry.rank,
+    value: creditsValue(entry.value),
+  }));
+}
 
-  const waivedByUser = new Map<string, LaunchLeaderboardEntry>();
-  for (const entry of feeCredits ?? []) {
-    waivedByUser.set(entry.userId, entry);
-  }
-
-  const rows: LeaderboardRow[] = (builders ?? []).map((entry) => {
-    const waivedEntry = waivedByUser.get(entry.userId);
-    waivedByUser.delete(entry.userId);
-    const waived = waivedEntry ? creditsValue(waivedEntry.value) : 0;
-    return {
-      color: stableColor(entry.userId),
-      eventCount: entry.eventCount || 0,
-      featured: waived > 0
-        ? `incl. ${formatCredits(waived)} fees waived`
-        : (entry.featuredAgent ?? entry.featuredTool)?.name,
-      name: entryName(entry),
-      rank: 0,
-      value: creditsValue(entry.value) + waived,
-    };
-  });
-
-  // Developers whose entire benefit is waived fees still rank.
-  for (const entry of waivedByUser.values()) {
-    rows.push({
-      color: stableColor(entry.userId),
-      eventCount: entry.eventCount || 0,
-      featured: "fees waived",
-      name: entryName(entry),
-      rank: 0,
-      value: creditsValue(entry.value),
-    });
-  }
-
-  rows.sort((a, b) => b.value - a.value);
-  return rows.map((row, index) => ({ ...row, rank: index + 1 }));
+function TopChart({
+  agentRows,
+  builderRows,
+}: {
+  agentRows: LeaderboardRow[];
+  builderRows: LeaderboardRow[];
+}): ReactElement {
+  const [tab, setTab] = useState<"agents" | "builders">("agents");
+  const rows = tab === "agents" ? agentRows : builderRows;
+  return (
+    <Card className="leaderboard-card">
+      <div className="leaderboard-head">
+        <div className="account-subtabs" role="tablist" aria-label="Top charts">
+          {([
+            ["agents", "Top Agents"],
+            ["builders", "Top Builders"],
+          ] as const).map(([id, label]) => (
+            <button
+              aria-selected={tab === id}
+              className={tab === id ? "active" : ""}
+              key={id}
+              onClick={() => setTab(id)}
+              role="tab"
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <Mono>30d</Mono>
+      </div>
+      <div className="leaderboard-list">
+        {rows.length > 0
+          ? rows.map((row) => (
+            <div className="leader-row" key={`${tab}-${row.rank}`}>
+              <Mono>{row.rank}</Mono>
+              <Avatar color={row.color} name={row.name} />
+              <span>
+                <strong>{row.name}</strong>
+              </span>
+              <Mono>{formatCredits(row.value)}</Mono>
+            </div>
+          ))
+          : <p className="muted-note">No entries yet.</p>}
+      </div>
+    </Card>
+  );
 }
 
 export function AgentFoundationPage(
@@ -3125,6 +3137,44 @@ export function AdminFoundationPage(
   );
 }
 
+// The publisher's referral link for this Agent. Customers who arrive through
+// it are permanently attributed to the publisher — platform fees on their
+// usage are waived, and the waived total drives the Browse Top charts.
+function ReferralLinkCard({
+  referral,
+}: {
+  referral: { url: string; slug: string; status: "active" | "disabled" };
+}): ReactElement {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(referral.url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    }).catch(() => {});
+  };
+  return (
+    <Card className="referral-card">
+      <div className="referral-card-main">
+        <p className="section-label">Referral link</p>
+        <p className="referral-blurb">
+          Share this link in your marketing. Customers who sign up through it
+          are attributed to you — platform fees on their usage of your Agents
+          are waived, and the waived total powers the Browse Top charts.
+        </p>
+        <Mono>{referral.url}</Mono>
+      </div>
+      <Button
+        icon={copied ? "check" : "copy"}
+        onClick={copy}
+        size="sm"
+        variant="secondary"
+      >
+        {copied ? "Copied" : "Copy link"}
+      </Button>
+    </Card>
+  );
+}
+
 function AdminSurface({
   live,
   locationSearch,
@@ -3159,6 +3209,9 @@ function AdminSurface({
     <div className="launch-page-narrow admin-page">
       <ApiNotice live={live} noun="Agent admin" />
       <AdminHeader navigate={navigate} tool={tool} visibility={visibility} />
+      {live.data.adminAgent?.admin.referral
+        ? <ReferralLinkCard referral={live.data.adminAgent.admin.referral} />
+        : null}
       <div
         className="admin-tabs"
         role="tablist"
@@ -5553,45 +5606,6 @@ function Sparkline(
     >
       <polyline points={polyline} />
     </svg>
-  );
-}
-
-function Leaderboard({
-  rows,
-  subtitle,
-  title,
-}: {
-  rows: LeaderboardRow[];
-  subtitle: string;
-  title: string;
-}): ReactElement {
-  return (
-    <Card className="leaderboard-card">
-      <div className="leaderboard-head">
-        <div>
-          <h3>{title}</h3>
-          <p>{subtitle}</p>
-        </div>
-        {/* Data is fetched for a fixed 30d window; don't offer period
-            switches that wouldn't change it. */}
-        <Mono>30d</Mono>
-      </div>
-      <div className="leaderboard-list">
-        {rows.length > 0
-          ? rows.map((row) => (
-            <div className="leader-row" key={`${title}-${row.rank}`}>
-              <Mono>{row.rank}</Mono>
-              <Avatar color={row.color} name={row.name} />
-              <span>
-                <strong>{row.name}</strong>
-                {row.featured ? <small>{row.featured}</small> : null}
-              </span>
-              <Mono>{formatCredits(row.value)}</Mono>
-            </div>
-          ))
-          : <p className="muted-note">No entries yet.</p>}
-      </div>
-    </Card>
   );
 }
 

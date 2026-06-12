@@ -1538,6 +1538,45 @@ button {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Top charts: the tab pills sit inside the card head. */
+.leaderboard-head .account-subtabs {
+  margin-bottom: 0;
+}
+
+/* Publisher referral link on the Manage page. */
+.referral-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.referral-card-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.referral-card-main .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.referral-blurb {
+  color: var(--ul-secondary);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .referral-card {
+    display: grid;
+    justify-items: start;
+  }
+}
+
 .store-results,
 .store-sidebar {
   min-width: 0;

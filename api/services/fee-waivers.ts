@@ -148,6 +148,22 @@ export interface FeeWaiverLeaderboardOptions {
   limit?: number;
 }
 
+export interface AgentFeeWaiverLeaderboardEntry {
+  rank: number;
+  app_id: string;
+  publisher_user_id: string;
+  fee_waived_light: number;
+  event_count: number;
+}
+
+export interface AgentFeeWaiverLeaderboard {
+  period: FeeWaiverLeaderboardPeriod;
+  since: string | null;
+  limit: number;
+  generated_at: string;
+  entries: AgentFeeWaiverLeaderboardEntry[];
+}
+
 function postgrestEq(value: string): string {
   return encodeURIComponent(`eq.${value}`);
 }
@@ -334,6 +350,67 @@ export async function getPublisherFeeWaiverCredit(
     publisher_user_id: publisherUserId,
     account: accountFromRow(accountRows[0] || null, publisherUserId),
     ledger: ledgerRows.map(ledgerFromRow),
+  };
+}
+
+// Per-Agent fees-waived ranking. Aggregated worker-side from
+// platform_fee_waiver_events (which carries app_id) so it ships without a new
+// DB function — replace with a grouped RPC when event volume warrants it.
+export async function getAgentFeeWaiverLeaderboard(
+  options: FeeWaiverLeaderboardOptions & FeeWaiverDeps = {},
+): Promise<AgentFeeWaiverLeaderboard> {
+  const period = options.period || "30d";
+  const limit = clampLimit(options.limit, DEFAULT_LEADERBOARD_LIMIT, MAX_LEADERBOARD_LIMIT);
+  const now = options.now?.() || new Date();
+  const since = sinceForPeriod(period, now);
+
+  const client = createSupabaseRestClient({ fetchFn: options.fetchFn });
+  const params = [
+    "select=app_id,publisher_user_id,fee_waived_light",
+    "fee_waived_light=gt.0",
+    "app_id=not.is.null",
+    ...(since ? [`created_at=gte.${encodeURIComponent(since)}`] : []),
+    "limit=10000",
+  ].join("&");
+  const response = await client.request(
+    `/rest/v1/platform_fee_waiver_events?${params}`,
+  );
+  const rows = await readRows<{
+    app_id: string;
+    publisher_user_id: string;
+    fee_waived_light: number | null;
+  }>(response, "Failed to fetch agent fee-waiver events");
+
+  const byApp = new Map<
+    string,
+    { publisher_user_id: string; fee_waived_light: number; event_count: number }
+  >();
+  for (const row of rows) {
+    const current = byApp.get(row.app_id) || {
+      publisher_user_id: row.publisher_user_id,
+      fee_waived_light: 0,
+      event_count: 0,
+    };
+    current.fee_waived_light += numeric(row.fee_waived_light);
+    current.event_count += 1;
+    byApp.set(row.app_id, current);
+  }
+
+  const entries = [...byApp.entries()]
+    .map(([appId, totals]) => ({ app_id: appId, ...totals }))
+    .sort((a, b) =>
+      b.fee_waived_light - a.fee_waived_light ||
+      a.app_id.localeCompare(b.app_id)
+    )
+    .slice(0, limit)
+    .map((entry, index) => ({ ...entry, rank: index + 1 }));
+
+  return {
+    period,
+    since,
+    limit,
+    generated_at: now.toISOString(),
+    entries,
   };
 }
 

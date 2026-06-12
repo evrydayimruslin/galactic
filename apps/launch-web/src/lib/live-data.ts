@@ -35,7 +35,7 @@ export interface LaunchRouteLiveData {
   byok?: LaunchByokSummaryResponse;
   inferenceOptions?: LaunchInferenceOptionsResponse;
   store?: LaunchStoreResponse;
-  builderLeaderboard?: LaunchLeaderboardResponse;
+  agentFeeLeaderboard?: LaunchLeaderboardResponse;
   feeLeaderboard?: LaunchLeaderboardResponse;
   library?: LaunchLibraryResponse;
   agent?: LaunchAgentResponse;
@@ -140,12 +140,14 @@ async function loadRouteData(
         limit: 24,
         query: search.get("q") || undefined,
       };
-      const [store, builderLeaderboard, feeLeaderboard] = await Promise.all([
+      const [store, agentFeeLeaderboard, feeLeaderboard] = await Promise.all([
         launchApi.store(request),
-        optional(() => launchApi.leaderboard("builder", { period: "30d", limit: 5 })),
+        optional(() =>
+          launchApi.leaderboard("agent_fee_credit", { period: "30d", limit: 5 })
+        ),
         optional(() => launchApi.leaderboard("fee_credit", { period: "30d", limit: 5 })),
       ]);
-      return { builderLeaderboard, feeLeaderboard, store };
+      return { agentFeeLeaderboard, feeLeaderboard, store };
     }
     case "agent": {
       const id = route.params.slug || "";

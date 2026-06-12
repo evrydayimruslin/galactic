@@ -162,6 +162,8 @@ export type LaunchAgentVisibility = typeof LAUNCH_AGENT_VISIBILITIES[number];
 export const LAUNCH_LEADERBOARD_KINDS = [
   "builder",
   "fee_credit",
+  // Per-Agent fees-waived ranking (the Browse "Top Agents" chart).
+  "agent_fee_credit",
 ] as const;
 
 export type LaunchLeaderboardKind = typeof LAUNCH_LEADERBOARD_KINDS[number];
@@ -618,6 +620,14 @@ export interface LaunchAgentAdminSummary {
   )[];
   receiptsUrl?: string | null;
   logsUrl?: string | null;
+  // The owner's referral link for this Agent. Customers who arrive through it
+  // are permanently attributed to the publisher (platform fees waived on their
+  // usage). Null when the link could not be loaded.
+  referral?: {
+    url: string;
+    slug: string;
+    status: "active" | "disabled";
+  } | null;
 }
 
 export interface LaunchTrustCard {

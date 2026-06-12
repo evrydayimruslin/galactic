@@ -6,9 +6,11 @@ import { handleRun } from "./run.ts";
 import { error, json } from "./response.ts";
 import { getEnv } from "../lib/env.ts";
 import {
+  getAgentFeeWaiverLeaderboard,
   getFeeWaiverLeaderboard,
   parseFeeWaiverLeaderboardQuery,
 } from "../services/fee-waivers.ts";
+import { getOrCreatePublisherReferralLink } from "../services/referrals.ts";
 import {
   isGpuSupportEnabled,
   sanitizeGpuTrustCard,
@@ -1909,13 +1911,16 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       "/api/launch/leaderboard": {
         get: {
           operationId: "getLaunchLeaderboard",
-          summary: "Get builder or fee-credit launch leaderboard",
+          summary:
+            "Get a launch leaderboard. The Top Agents (agent_fee_credit) and " +
+            "Top Builders (fee_credit) charts rank by platform fees waived — " +
+            "earned by bringing customers through publisher referral links.",
           parameters: [
             queryParam(
               "kind",
               {
                 type: "string",
-                enum: ["builder", "fee_credit"],
+                enum: ["builder", "fee_credit", "agent_fee_credit"],
                 default: "builder",
               },
               "Leaderboard kind",
@@ -3773,6 +3778,17 @@ async function handleLaunchToolAdmin(
     viewerId: user.id,
     installedIds: new Set<string>(),
   });
+  // The owner's referral link: customers who arrive through it are permanently
+  // attributed to the publisher (platform fees waived on their usage). Lazily
+  // created on first view; degrade to null rather than failing the admin page.
+  let referral: LaunchAgentAdminSummary["referral"] = null;
+  try {
+    const link = await getOrCreatePublisherReferralLink(row.id, user.id);
+    referral = { url: link.url, slug: link.slug, status: link.status };
+  } catch (err) {
+    console.warn("[LAUNCH] Failed to load owner referral link:", err);
+  }
+
   const admin: LaunchAgentAdminSummary = {
     agent: tool,
     // Deprecated alias kept for one rename window.
@@ -3787,6 +3803,7 @@ async function handleLaunchToolAdmin(
     ],
     receiptsUrl: `/admin/agents/${encodeURIComponent(row.id)}?tab=receipts`,
     logsUrl: `/admin/agents/${encodeURIComponent(row.id)}?tab=logs`,
+    referral,
   };
 
   return json({
@@ -4379,6 +4396,42 @@ function toLaunchWalletPayout(row: PayoutRow): LaunchWalletPayoutSummary {
 
 async function handleLaunchLeaderboard(url: URL): Promise<Response> {
   const kind = parseLeaderboardKind(url.searchParams.get("kind"));
+  if (kind === "agent_fee_credit") {
+    // Top Agents: per-Agent ranking by platform fees waived (publisher
+    // referral program) — the marketing-visibility reward for spreading tools.
+    const leaderboard = await getAgentFeeWaiverLeaderboard(
+      parseFeeWaiverLeaderboardQuery(normalizeLeaderboardUrl(url)),
+    );
+    const apps = await fetchAppsByIds(
+      leaderboard.entries.map((entry) => entry.app_id),
+    );
+    const appsById = new Map(apps.map((row) => [row.id, row]));
+    const response: LaunchLeaderboardResponse = {
+      kind,
+      period: leaderboard.period,
+      generatedAt: leaderboard.generated_at,
+      entries: leaderboard.entries.map((entry) => {
+        const app = appsById.get(entry.app_id);
+        const agent = {
+          id: entry.app_id,
+          slug: app?.slug || entry.app_id,
+          name: app?.name || app?.slug || entry.app_id,
+        };
+        return {
+          rank: entry.rank,
+          userId: entry.publisher_user_id,
+          displayName: agent.name,
+          profileSlug: null,
+          avatarUrl: null,
+          value: money(entry.fee_waived_light),
+          eventCount: entry.event_count,
+          featuredAgent: agent,
+          featuredTool: agent,
+        };
+      }),
+    };
+    return json(response);
+  }
   if (kind === "fee_credit") {
     const leaderboard = await getFeeWaiverLeaderboard(
       parseFeeWaiverLeaderboardQuery(normalizeLeaderboardUrl(url)),
@@ -5886,7 +5939,10 @@ function parseKind(value: string | null): LaunchAgentKind | "all" {
 function parseLeaderboardKind(value: string | null): LaunchLeaderboardKind {
   if (!value || value === "builder") return "builder";
   if (value === "fee_credit") return "fee_credit";
-  throw new RequestValidationError("kind must be one of: builder, fee_credit");
+  if (value === "agent_fee_credit") return "agent_fee_credit";
+  throw new RequestValidationError(
+    "kind must be one of: builder, fee_credit, agent_fee_credit",
+  );
 }
 
 function parseLeaderboardPeriod(value: string | null): "30d" | "90d" | "all" {
