@@ -40,7 +40,7 @@ source ~/.nvm/nvm.sh && nvm use
 ULTRALIGHT_TOKEN=... node scripts/smoke/run-release-smoke.mjs \
   --target staging \
   --url https://ultralight-api-staging.rgn4jz429m.workers.dev \
-  --supabase-url https://vonlzcnwxbwaxlbngjre.supabase.co \
+  --supabase-url https://uavjzycsltdnwblwutmb.supabase.co \
   --exercise-chat
 ```
 
@@ -64,7 +64,7 @@ Run the auth redirect smoke once the staging Worker origin is live:
 ```bash
 ./scripts/smoke/auth-redirect-smoke.sh \
   --url https://ultralight-api-staging.rgn4jz429m.workers.dev \
-  --supabase-url https://vonlzcnwxbwaxlbngjre.supabase.co
+  --supabase-url https://uavjzycsltdnwblwutmb.supabase.co
 ```
 
 Run the durable-execution smoke (async dispatch → queue consumer → job

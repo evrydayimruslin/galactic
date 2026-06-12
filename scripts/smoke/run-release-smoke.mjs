@@ -42,10 +42,9 @@ const defaultApiBase =
   target === 'production'
     ? 'https://ultralight-api.rgn4jz429m.workers.dev'
     : 'https://ultralight-api-staging.rgn4jz429m.workers.dev';
-const defaultSupabaseUrl =
-  target === 'production'
-    ? 'https://uavjzycsltdnwblwutmb.supabase.co'
-    : 'https://vonlzcnwxbwaxlbngjre.supabase.co';
+// Both workers share the prod Supabase project for launch (the dedicated
+// staging Supabase project is paused/unused — see wrangler.toml).
+const defaultSupabaseUrl = 'https://uavjzycsltdnwblwutmb.supabase.co';
 
 const apiBase = String(args.get('--url') || process.env.ULTRALIGHT_API_URL || defaultApiBase);
 const supabaseUrl = String(args.get('--supabase-url') || process.env.ULTRALIGHT_SUPABASE_URL || defaultSupabaseUrl);
