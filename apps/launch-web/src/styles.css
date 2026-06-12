@@ -2567,11 +2567,10 @@ button {
   margin-bottom: 18px;
 }
 
-/* The Installed/Owned tabs sit inline in the toolbar — drop the full-width
-   underline + bottom margin the tab bar carries elsewhere. */
-.library-toolbar .account-tabs {
+/* The Installed/Owned pill tabs sit inline in the toolbar — drop the bottom
+   margin the tab bar carries elsewhere. */
+.library-toolbar .account-subtabs {
   margin-bottom: 0;
-  border-bottom: 0;
 }
 
 .library-count {
@@ -4619,4 +4618,14 @@ button {
 
 .launch-toggle.on .launch-toggle-knob {
   transform: translateX(20px);
+}
+
+/* Browse uses a single typeface — the serif — across cards, search, charts,
+   and empty states (no mono/sans mixed in). */
+.store-card-title h3,
+.store-card-meta,
+.search-control input,
+.store-page .mono,
+.store-page .muted-note {
+  font-family: var(--ul-font);
 }

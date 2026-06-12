@@ -2982,7 +2982,7 @@ export function LibraryFoundationPage(
     <div className="launch-page-narrow library-page">
       <ApiNotice live={live} noun="Agents" />
       <div className="library-toolbar">
-        <div className="account-tabs" role="tablist" aria-label="Library view">
+        <div className="account-subtabs" role="tablist" aria-label="Library view">
           {([["installed", "Installed"], ["owned", "Owned"]] as const).map((
             [id, label],
           ) => (
@@ -3748,7 +3748,7 @@ export function AccountFoundationPage(
           : null}
       </div>
 
-      <div className="account-tabs" role="tablist" aria-label="Account sections">
+      <div className="account-subtabs" role="tablist" aria-label="Account sections">
         {([
           ["preferences", "Preferences"],
           ["balance", "Balance"],
