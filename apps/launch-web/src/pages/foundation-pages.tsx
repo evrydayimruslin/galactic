@@ -931,7 +931,7 @@ export function HomeFoundationPage(
               label="Add to your agent"
             />
             <Button
-              href={`${apiOrigin}/api/launch/openapi.json`}
+              href={`${apiOrigin}/api/skills`}
               size="lg"
               variant="secondary"
             >
@@ -1226,7 +1226,7 @@ function AgentDetailSurface({
         type="button"
       >
         {tool.relationship === "owner" ? "Agents" : "Browse"} /{" "}
-        <Mono>{tool.slug}</Mono>
+        {tool.title}
       </button>
 
       {tool.visibility === "unlisted"
@@ -1244,22 +1244,14 @@ function AgentDetailSurface({
         <div>
           <div className="tool-title-row">
             <h1>{tool.title}</h1>
-            <Pill>{tool.kind}</Pill>
-            <Pill tone={tool.visibility === "public" ? "green" : "amber"}>
-              {tool.visibility}
-            </Pill>
           </div>
           <p>{tool.summary}</p>
           <div className="tool-meta-row">
-            <span>{tool.author.replace("@", "")}</span>
             {tool.installs !== null
               ? <span>{formatNumber(tool.installs)} installs</span>
               : null}
             {tool.callsPerDay !== null
               ? <span>{formatNumber(tool.callsPerDay)} calls/day</span>
-              : null}
-            {tool.updatedAt
-              ? <span>updated {tool.updatedAt}</span>
               : null}
           </div>
           <div className="tool-header-actions">
@@ -1300,7 +1292,7 @@ function AgentDetailSurface({
           : null}
       </div>
 
-      <div className="tool-detail-layout">
+      <div className="tool-detail-layout single">
         <main className="tool-main-panel">
           {tab === "functions"
             ? (
@@ -1317,9 +1309,6 @@ function AgentDetailSurface({
             ? <AgentWiringPanel live={live} tool={tool} />
             : null}
         </main>
-        <aside className="tool-rail">
-          <AgentTrustRail tool={tool} />
-        </aside>
       </div>
     </div>
   );
@@ -1355,24 +1344,91 @@ function AgentFunctionsPanel({
 
   return (
     <div className="functions-panel">
-      <div className="function-list">
-        <p className="section-label">Functions ({tool.functions.length})</p>
-        {tool.functions.map((fn) => (
-          <button
-            className={selectedFunction.name === fn.name ? "active" : ""}
-            key={fn.name}
-            onClick={() => setSelectedFunctionName(fn.name)}
-            type="button"
-          >
-            <span>
-              <Mono>{fn.name}</Mono>
-              <small>{fn.description}</small>
-            </span>
-            <Mono>{formatAgentPrice(fn.price)}</Mono>
-          </button>
-        ))}
-      </div>
+      <FunctionPicker
+        functions={tool.functions}
+        onPick={setSelectedFunctionName}
+        selected={selectedFunction}
+      />
       <FunctionSandboxCard fn={selectedFunction} live={live} tool={tool} />
+    </div>
+  );
+}
+
+function FunctionPicker({
+  functions,
+  onPick,
+  selected,
+}: {
+  functions: AgentFunctionFixture[];
+  onPick: (name: string) => void;
+  selected: AgentFunctionFixture;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click / Escape so the menu behaves like a real dropdown.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="function-picker" ref={menuRef}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className="function-picker-trigger"
+        onClick={() => setOpen((value) => !value)}
+        type="button"
+      >
+        <span className="function-picker-current">
+          <Mono>{selected.name}</Mono>
+          <small>{selected.description}</small>
+        </span>
+        <span className={open ? "picker-caret open" : "picker-caret"} aria-hidden="true" />
+      </button>
+      {open
+        ? (
+          <div className="function-menu" role="listbox">
+            {functions.map((fn) => {
+              const active = fn.name === selected.name;
+              return (
+                <button
+                  aria-selected={active}
+                  className={active ? "active" : ""}
+                  key={fn.name}
+                  onClick={() => {
+                    onPick(fn.name);
+                    setOpen(false);
+                  }}
+                  role="option"
+                  type="button"
+                >
+                  <span className="function-menu-check" aria-hidden="true">
+                    {active ? <Icon name="check" size={14} /> : null}
+                  </span>
+                  <span className="function-menu-label">
+                    <Mono>{fn.name}</Mono>
+                    <small>{fn.description}</small>
+                  </span>
+                  <Mono>{formatAgentPrice(fn.price)}</Mono>
+                </button>
+              );
+            })}
+          </div>
+        )
+        : null}
     </div>
   );
 }
@@ -2483,20 +2539,51 @@ function AgentWiringPanel({
 }
 
 function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement {
+  const paidFunctions = tool.functions.filter((fn) => fn.price > 0);
+  const minPrice = paidFunctions.length > 0
+    ? Math.min(...paidFunctions.map((fn) => fn.price))
+    : 0;
+  const signed = tool.signer !== null;
+
   return (
     <div className="details-panel">
-      <Card>
-        <p className="section-label">Signed manifest</p>
-        <h3>{tool.signer ?? "Not signed yet"}</h3>
-        <p>
-          The public manifest advertises runtime, capabilities, pricing,
-          receipts, and setup needs before any connected agent calls the Agent.
-        </p>
-        <div className="manifest-grid">
+      <Card className="trust-card">
+        <div className="trust-card-head">
+          <Icon name="shield" />
+          <div>
+            <h3>{signed ? "Ready to call" : "No trust card yet"}</h3>
+            <p>
+              {signed
+                ? "Signed manifest, receipts, and capability disclosure are live."
+                : "This Agent has not published a signed trust card. Receipts still apply to every call."}
+            </p>
+          </div>
+        </div>
+        <div className="trust-meta">
+          <MetaPair label="signer" value={tool.signer ?? "—"} />
           <MetaPair label="version" value={tool.version ?? "—"} />
           <MetaPair label="runtime" value={tool.runtime ?? "—"} />
           <MetaPair label="receipts" value="enabled" />
           <MetaPair label="visibility" value={tool.visibility} />
+        </div>
+      </Card>
+      <Card>
+        <p className="section-label">Pricing</p>
+        <div className="pricing-line">
+          <strong>Free to install</strong>
+          <Mono>{paidFunctions.length} paid functions</Mono>
+        </div>
+        <div className="trust-meta">
+          <MetaPair label="metering" value="per call" />
+          <MetaPair label="from" value={formatAgentPrice(minPrice)} />
+          {tool.callsPerDay !== null
+            ? (
+              <MetaPair
+                label="calls/day"
+                value={formatNumber(tool.callsPerDay)}
+              />
+            )
+            : null}
         </div>
       </Card>
       <Card>
@@ -2518,59 +2605,6 @@ function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement
               capabilities yet.
             </p>
           )}
-      </Card>
-    </div>
-  );
-}
-
-function AgentTrustRail({ tool }: { tool: AgentDetailFixture }): ReactElement {
-  const paidFunctions = tool.functions.filter((fn) => fn.price > 0);
-  const minPrice = paidFunctions.length > 0
-    ? Math.min(...paidFunctions.map((fn) => fn.price))
-    : 0;
-  const signed = tool.signer !== null;
-
-  return (
-    <div className="tool-rail-stack">
-      <Card className="trust-card">
-        <div className="trust-card-head">
-          <Icon name="shield" />
-          <div>
-            <h3>{signed ? "Ready to call" : "No trust card yet"}</h3>
-            <p>
-              {signed
-                ? "Signed manifest, receipts, and capability disclosure are live."
-                : "This Agent has not published a signed trust card. Receipts still apply to every call."}
-            </p>
-          </div>
-        </div>
-        <div className="trust-meta">
-          <MetaPair label="signer" value={tool.signer ?? "—"} />
-          <MetaPair label="version" value={tool.version ?? "—"} />
-          <MetaPair label="runtime" value={tool.runtime ?? "—"} />
-        </div>
-      </Card>
-      <Card>
-        <p className="section-label">Pricing</p>
-        <div className="pricing-line">
-          <strong>Free to install</strong>
-          <Mono>{paidFunctions.length} paid functions</Mono>
-        </div>
-        <div className="trust-meta">
-          <MetaPair label="metering" value="per call" />
-          <MetaPair
-            label="from"
-            value={minPrice > 0 ? `✦${formatCredits(minPrice)}` : "Free"}
-          />
-          {tool.callsPerDay !== null
-            ? (
-              <MetaPair
-                label="calls/day"
-                value={formatNumber(tool.callsPerDay)}
-              />
-            )
-            : null}
-        </div>
       </Card>
       <Card>
         <p className="section-label">Owner</p>

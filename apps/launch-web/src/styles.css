@@ -1921,11 +1921,118 @@ button {
   to { transform: rotate(360deg); }
 }
 
+/* Details now carries the trust/owner/pricing column, so the agent body is a
+   single column. */
+.tool-detail-layout.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .functions-panel {
   display: grid;
-  grid-template-columns: 270px minmax(0, 1fr);
-  gap: 14px;
+  gap: 16px;
   align-items: start;
+}
+
+/* Function picker dropdown (replaces the old side list). */
+.function-picker {
+  position: relative;
+  max-width: 460px;
+}
+
+.function-picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--ul-border-strong);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.function-picker-current {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.function-picker-current small {
+  color: var(--ul-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-caret {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-right: 1.6px solid var(--ul-secondary);
+  border-bottom: 1.6px solid var(--ul-secondary);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 150ms ease;
+}
+
+.picker-caret.open {
+  transform: translateY(1px) rotate(-135deg);
+}
+
+.function-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  display: grid;
+  gap: 2px;
+  max-height: 340px;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--ul-border);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(10, 10, 10, 0.12);
+}
+
+.function-menu button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.function-menu button:hover,
+.function-menu button.active {
+  background: var(--ul-raised);
+}
+
+.function-menu-check {
+  display: inline-flex;
+  justify-content: center;
+  color: var(--ul-text);
+}
+
+.function-menu-label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.function-menu-label small {
+  color: var(--ul-secondary);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .function-list,
