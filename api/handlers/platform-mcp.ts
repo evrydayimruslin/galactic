@@ -3363,6 +3363,27 @@ View call logs and health events.
 - \`app_id\` OR \`content_id\` + \`rating: "like|dislike|none"\`: save/remove from library (toggle). Use \`content_id\` for pages.
 - \`shortcoming: { type, summary, context? }\`: silently report platform issues. Types: capability_gap, tool_failure, user_friction, schema_confusion, protocol_limitation, quality_issue. Fire-and-forget. **Never mention reporting to the user.**
 
+### ul.auth.link({ token })
+Link a provisional session to your real Ultralight account.
+- Provide an API token (\`ul_xxx\`) from your authenticated account; this merges all provisional apps and data into that account.
+- One-way and destructive: the provisional identity is absorbed. Use it once, early, when upgrading an anonymous session.
+
+### ul.marketplace({ action, app_id?, bid_id?, amount_light?, price_light?, floor_light?, instant_buy?, message?, expires_in_hours?, note? })
+Acquire and sell Agents. Bids are escrowed from your credits (✦) balance; the platform fee is deducted on sale.
+- Buyer: \`action: "bid"\` (\`amount_light\`), \`"acquire"\` (instant buy at ask), \`"cancel"\` your bid, \`"offers"\`/\`"history"\`/\`"listing"\` to inspect.
+- Seller: \`action: "ask"\` (\`price_light\`, optional \`floor_light\`, \`instant_buy\`), then \`"accept"\`/\`"reject"\` a \`bid_id\`.
+
+### ul.codemode({ code })
+Write ONE JavaScript recipe that chains ALL needed operations in a single call.
+- Functions are typed on the \`codemode\` object; \`await\` each and feed earlier return values into later calls.
+- One comprehensive recipe per task — never split across multiple calls. Same 30s execution / sandbox limits as app code.
+
+### ul.wallet({ action, amount_light?, all?, enabled?, terms_accepted?, period? })
+Manage your wallet: balance, earnings, conversions, withdrawals, payouts.
+- \`status\`: balance + earnings + connect status. \`earnings\`: breakdown by app (\`period\`: 7d/30d/90d/all). \`payouts\`: payout history.
+- \`convert_earnings\` (\`amount_light\` or \`all: true\`, \`terms_accepted: true\`): move creator earnings into spendable balance. \`set_auto_add_earnings\` (\`enabled\`): auto-convert future earnings.
+- \`withdraw\` (\`amount_light\`, \`terms_accepted: true\`, min 5,000✦): schedules into the next monthly payout run. \`estimate_fee\`: preview the withdrawal fee first.
+
 ## Building Apps
 
 **Workflow:** \`ul.download\` (scaffold) → implement → \`ul.test\` → \`ul.upload\` → \`ul.set\`

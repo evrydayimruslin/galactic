@@ -48,16 +48,16 @@ Periods: `7d`, `30d`, `90d`, `all`. Returns: `period_earned_light`, per-app brea
 
 ### Withdraw Earnings
 ```
-ul.wallet({ action: "withdraw", amount_light: 40000 })
+ul.wallet({ action: "withdraw", amount_light: 5000 })
 ```
-- Minimum: 40,000✦ (~$50)
+- Minimum: 5,000✦ (~$50)
 - Requires Stripe Connect onboarding (completed via Settings UI)
-- 14-day hold before funds release to bank
-- Stripe fee: 2.9% + $0.30
+- Scheduled into the next eligible monthly payout run
+- Stripe payout fee: 0.25% + $0.25
 
 Preview fees before withdrawing:
 ```
-ul.wallet({ action: "estimate_fee", amount_light: 40000 })
+ul.wallet({ action: "estimate_fee", amount_light: 5000 })
 ```
 
 ### View Payout History
@@ -168,7 +168,7 @@ OAuth application management for third-party integrations:
 - Check balance first: `ul.wallet({ action: "status" })`
 
 ### "Cannot withdraw"
-- Minimum withdrawal: 40,000✦
+- Minimum withdrawal: 5,000✦
 - Stripe Connect must be onboarded (Settings → Earnings → Set Up Payouts)
 - Check status: `ul.wallet({ action: "status" })` — look at `connect.payouts_enabled`
 
