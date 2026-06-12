@@ -1,5 +1,4 @@
 import {
-  Fragment,
   type ReactElement,
   type ReactNode,
   useEffect,
@@ -263,22 +262,16 @@ const orbitAgents = [
 
 const primitives = [
   [
-    "install",
-    "Install Ultralight",
-    "Connect the MCP/API layer to an existing agent.",
-    "/install",
-  ],
-  [
     "discover",
     "Discover Agents",
     "Find public Agents your connected agent can call.",
-    "/store",
+    "/browse",
   ],
   [
     "wallet",
     "Credits wallet",
     "Spendable credits for installs, calls, hosting.",
-    "/wallet",
+    "/account?tab=balance",
   ],
 ] as const;
 
@@ -406,14 +399,6 @@ const installTargets: InstallTarget[] = [
   },
 ];
 
-const externalLoop = [
-  "Install MCP / CLI / API",
-  "Discover Agents + primitives",
-  "Inspect pricing + trust",
-  "Call through MCP / API",
-  "Return results + receipts",
-];
-
 const adminTabs = [
   ["edit", "Edit"],
   ["pricing", "Pricing"],
@@ -446,7 +431,6 @@ const visibilityOptions = [
   ],
 ] as const;
 
-type WalletTabId = "balance" | "earnings" | "receipts" | "topup";
 type PaymentMethod = "ach" | "card" | "earnings";
 
 interface LedgerRow {
@@ -797,31 +781,26 @@ function ApiNotice({
   return null;
 }
 
-function AddToAgentButton({
+export function AddToAgentButton({
   instructions,
-  navigate,
+  label = "Add to agent",
   size = "lg",
   variant,
 }: {
   instructions?: LaunchInstallInstruction[];
-  navigate: (to: string) => void;
+  label?: string;
   size?: "sm" | "md" | "lg";
   variant?: "primary" | "secondary" | "ghost";
 }): ReactElement {
   const [open, setOpen] = useState(false);
-  // Signed out there is no key to mint — route to the install page, which
-  // carries the sign-in CTA.
+  const openSignIn = useSignInModal();
+  // Signed out there is no key to mint — prompt sign-in first; the same button
+  // mints the key + copies the prompt once a session exists.
   if (!hasLaunchAuthToken()) {
     return (
-      <RouteButton
-        icon="copy"
-        navigate={navigate}
-        size={size}
-        to="/install"
-        variant={variant}
-      >
-        Add to agent
-      </RouteButton>
+      <Button icon="copy" onClick={openSignIn} size={size} variant={variant}>
+        {label}
+      </Button>
     );
   }
   const buildPrompt = (key: string) => {
@@ -837,7 +816,7 @@ function AddToAgentButton({
         size={size}
         variant={variant}
       >
-        Add to agent
+        {label}
       </Button>
       {open
         ? (
@@ -845,7 +824,6 @@ function AddToAgentButton({
             buildPrompt={buildPrompt}
             intro="This created a 90-day API key (full capability — your per-Agent permissions still govern every call) and baked it into the prompt below. The key is shown only here."
             mint={mintConnectKey}
-            navigate={navigate}
             onClose={() => setOpen(false)}
           />
         )
@@ -858,13 +836,11 @@ function ConnectPromptModal({
   buildPrompt,
   intro,
   mint,
-  navigate,
   onClose,
 }: {
   buildPrompt: (key: string) => string;
   intro: string;
   mint: () => Promise<string>;
-  navigate: (to: string) => void;
   onClose: () => void;
 }): ReactElement {
   const [prompt, setPrompt] = useState<string | null>(null);
@@ -924,16 +900,6 @@ function ConnectPromptModal({
           ? <ConfigPreview code={prompt} title="agent-prompt.txt" wrap />
           : null}
         <div className="modal-actions">
-          <Button
-            onClick={() => {
-              onClose();
-              navigate("/install");
-            }}
-            size="sm"
-            variant="secondary"
-          >
-            Full install guide
-          </Button>
           <Button onClick={onClose} size="sm">Done</Button>
         </div>
       </Card>
@@ -959,17 +925,14 @@ export function HomeFoundationPage(
             auth and payments. Or deploy your own.
           </p>
           <div className="hero-actions left">
-            <AddToAgentButton
-              instructions={installInstructions}
-              navigate={navigate}
-            />
+            <AddToAgentButton instructions={installInstructions} />
             <RouteButton
               navigate={navigate}
               size="lg"
-              to="/store"
+              to="/browse"
               variant="secondary"
             >
-              Browse Store
+              Browse
             </RouteButton>
           </div>
         </div>
@@ -991,7 +954,7 @@ export function HomeFoundationPage(
         ? (
           <Section
             action={
-              <RouteLink navigate={navigate} to="/store">Browse all</RouteLink>
+              <RouteLink navigate={navigate} to="/browse">Browse all</RouteLink>
             }
             title="Agents shipping now"
           >
@@ -1014,10 +977,7 @@ export function HomeFoundationPage(
             Point your connected agent at a single MCP server. It discovers the
             whole catalog, calls any Agent, and settles in credits.
           </p>
-          <AddToAgentButton
-            instructions={installInstructions}
-            navigate={navigate}
-          />
+          <AddToAgentButton instructions={installInstructions} />
         </div>
         <ConfigPreview />
       </section>
@@ -1033,221 +993,19 @@ export function HomeFoundationPage(
         <div className="hero-actions left">
           <AddToAgentButton
             instructions={installInstructions}
-            navigate={navigate}
             variant="secondary"
           />
           <RouteButton
             navigate={navigate}
             size="lg"
-            to="/store"
+            to="/browse"
             variant="ghost"
           >
-            Browse Store
+            Browse
           </RouteButton>
         </div>
       </section>
     </div>
-  );
-}
-
-export function InstallFoundationPage({ live }: LaunchPageProps): ReactElement {
-  const targets = liveInstallTargets(live.data.install?.instructions);
-  const firstTarget = targets[0]?.target || "prompt";
-  const [target, setTarget] = useState(firstTarget);
-  const [mintedKey, setMintedKey] = useState<string | null>(null);
-  const signedIn = hasLaunchAuthToken();
-  const openSignInModal = useSignInModal();
-  const selected = targets.find((item) => item.target === target) ||
-    targets[0] || installTargets[0];
-  // The API only exposes key PREFIXES after creation, so snippets show the
-  // placeholder until a key is minted on this page — then the real token
-  // (held only in memory) flows into every snippet.
-  const key = mintedKey ?? apiKeyPlaceholder;
-  const promptTarget = targets.find((item) => item.target === "prompt") ??
-    installTargets[0];
-
-  useEffect(() => {
-    if (!targets.some((item) => item.target === target)) {
-      setTarget(firstTarget);
-    }
-  }, [firstTarget, target, targets]);
-
-  return (
-    <div className="launch-page install-page">
-      <PageHeader
-        actions={
-          <Button
-            icon="key"
-            onClick={signedIn ? undefined : openSignInModal}
-            size="lg"
-            variant={signedIn ? "secondary" : "primary"}
-          >
-            {signedIn ? "Key loaded" : "Sign in"}
-          </Button>
-        }
-        eyebrow="Install"
-        intro="One remote MCP endpoint, or the CLI and API, lets any existing agent discover, call, and pay for Agents."
-        title="Connect Ultralight to your agent."
-      />
-      <ApiNotice live={live} noun="install instructions" />
-
-      <div className="install-loop">
-        {externalLoop.map((step, index) => (
-          <Fragment key={step}>
-            <span>
-              <Mono>{index + 1}</Mono>
-              {step}
-            </span>
-            {index < externalLoop.length - 1
-              ? <Icon name="arrow" size={13} />
-              : null}
-          </Fragment>
-        ))}
-      </div>
-
-      <ConnectCta
-        keyLive={Boolean(mintedKey)}
-        onMinted={setMintedKey}
-        promptText={(value) => promptTarget.config(value)}
-        signedIn={signedIn}
-      />
-
-      <div className="install-grid">
-        <aside className="target-sidebar">
-          <TargetPicker active={target} onPick={setTarget} targets={targets} />
-        </aside>
-        <section className="target-panel">
-          <div className="target-heading">
-            <div>
-              <h2>{selected.label}</h2>
-              <p>{selected.description}</p>
-            </div>
-            {selected.requiresApiKey && !mintedKey
-              ? <Pill>requires API key</Pill>
-              : null}
-            {mintedKey ? <Pill>key filled in</Pill> : null}
-          </div>
-          <ol className="install-steps">
-            {selected.steps.map((step) => <li key={step}>{step}</li>)}
-          </ol>
-          <ConfigPreview
-            code={selected.config(key)}
-            highlight={key}
-            title={snippetTitle(selected)}
-            wrap={selected.target === "prompt"}
-          />
-        </section>
-      </div>
-    </div>
-  );
-}
-
-function snippetTitle(target: InstallTarget): string {
-  if (target.target === "prompt") return "agent-prompt.txt";
-  if (target.target === "claude_code" || target.group === "Direct") {
-    return "shell";
-  }
-  return "mcp.json";
-}
-
-function ConnectCta({
-  keyLive,
-  onMinted,
-  promptText,
-  signedIn,
-}: {
-  keyLive: boolean;
-  onMinted: (token: string) => void;
-  promptText: (key: string) => string;
-  signedIn: boolean;
-}): ReactElement {
-  const [status, setStatus] = useState<"idle" | "working" | "copied" | "ready" | "error">("idle");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  const connect = () => {
-    if (status === "working") return;
-    setStatus("working");
-    setErrorMessage(null);
-    mintConnectKey()
-      .then(async (token) => {
-        onMinted(token);
-        try {
-          await navigator.clipboard?.writeText(promptText(token));
-          setStatus("copied");
-        } catch {
-          setStatus("ready");
-        }
-      })
-      .catch((err) => {
-        setErrorMessage(err instanceof Error ? err.message : String(err));
-        setStatus("error");
-      });
-  };
-
-  if (!signedIn) {
-    return (
-      <section className="key-banner connect-cta">
-        <span className="target-icon">
-          <Icon name="key" />
-        </span>
-        <div>
-          <h2>Connect your agent in one paste</h2>
-          <p>
-            Sign in, and one click creates an API key and copies a
-            ready-to-paste prompt that sets up your agent.
-          </p>
-        </div>
-        <Button href={buildLaunchSignInUrl("/install")} size="lg">
-          Sign in to connect
-        </Button>
-      </section>
-    );
-  }
-
-  if (keyLive) {
-    return (
-      <section className="key-banner signed-in connect-cta">
-        <span className="target-icon">
-          <Icon name="check" />
-        </span>
-        <div>
-          <h2>
-            {status === "copied"
-              ? "Prompt copied — paste it into your agent"
-              : "API key created"}
-          </h2>
-          <p>
-            Your new key is filled into every snippet below. It is shown only
-            on this page — copy what you need before leaving.
-          </p>
-        </div>
-      </section>
-    );
-  }
-
-  return (
-    <section className="key-banner signed-in connect-cta">
-      <span className="target-icon">
-        <Icon name="key" />
-      </span>
-      <div>
-        <h2>Connect your agent in one paste</h2>
-        <p>
-          One click creates a 90-day API key (full capability — your per-Agent
-          permissions still govern every call) and copies a ready-to-paste
-          prompt.
-          {errorMessage ? ` Could not create a key: ${errorMessage}` : ""}
-        </p>
-      </div>
-      <Button
-        disabled={status === "working"}
-        icon="copy"
-        onClick={connect}
-        size="lg"
-      >
-        {status === "working" ? "Creating key…" : "Create key & copy prompt"}
-      </Button>
-    </section>
   );
 }
 
@@ -1382,11 +1140,9 @@ export function AgentFoundationPage(
 
 function AgentConnectButton({
   agentInstall,
-  navigate,
   tool,
 }: {
   agentInstall?: LaunchAgentInstallContext | null;
-  navigate: (to: string) => void;
   tool: AgentDetailFixture;
 }): ReactElement {
   const [open, setOpen] = useState(false);
@@ -1417,7 +1173,6 @@ function AgentConnectButton({
             buildPrompt={buildPrompt}
             intro={`This created a 90-day API key scoped to ${tool.title} only and baked it into the prompt below. The key is shown only here.`}
             mint={() => mintAgentConnectKey(tool)}
-            navigate={navigate}
             onClose={() => setOpen(false)}
           />
         )
@@ -1464,11 +1219,11 @@ function AgentDetailSurface({
         className="back-link"
         onClick={() =>
           navigate(
-            tool.relationship === "owner" ? "/library?view=owned" : "/store",
+            tool.relationship === "owner" ? "/agents?view=owned" : "/browse",
           )}
         type="button"
       >
-        {tool.relationship === "owner" ? "Library" : "Store"} /{" "}
+        {tool.relationship === "owner" ? "Agents" : "Browse"} /{" "}
         <Mono>{tool.slug}</Mono>
       </button>
 
@@ -1508,17 +1263,8 @@ function AgentDetailSurface({
           <div className="tool-header-actions">
             <AgentConnectButton
               agentInstall={live.data.install?.agentInstall}
-              navigate={navigate}
               tool={tool}
             />
-            <RouteButton
-              navigate={navigate}
-              size="lg"
-              to="/install"
-              variant="secondary"
-            >
-              Install guide
-            </RouteButton>
           </div>
         </div>
       </section>
@@ -2878,8 +2624,8 @@ function AgentNotFoundPage({
     <>
       <PageHeader
         actions={
-          <RouteButton navigate={navigate} size="lg" to="/store">
-            Back to Store
+          <RouteButton navigate={navigate} size="lg" to="/browse">
+            Back to Browse
           </RouteButton>
         }
         eyebrow="Agent preview"
@@ -2919,7 +2665,7 @@ export function LibraryFoundationPage(
 
   return (
     <div className="launch-page-narrow library-page">
-      <ApiNotice live={live} noun="library" />
+      <ApiNotice live={live} noun="Agents" />
       <div className="library-toolbar">
         <select
           aria-label="Library view"
@@ -2927,17 +2673,17 @@ export function LibraryFoundationPage(
           onChange={(event) => selectView(event.target.value as LibraryView)}
           value={view}
         >
-          <option value="installed">Installed tools</option>
-          <option value="owned">Tools you own</option>
+          <option value="installed">Installed Agents</option>
+          <option value="owned">Agents you own</option>
         </select>
         <span className="library-count">{count}</span>
         <RouteButton
           icon="grid"
           navigate={navigate}
-          to="/store"
+          to="/browse"
           variant="secondary"
         >
-          Browse Store
+          Browse
         </RouteButton>
       </div>
 
@@ -3443,101 +3189,15 @@ function AdminField({
   );
 }
 
-export function WalletFoundationPage(
-  { live, location }: LaunchPageProps,
-): ReactElement {
-  const [tab, setTab] = useState<WalletTabId>(walletTabFromSearch());
-  const showEarnings = tab === "earnings";
-  const totals = liveWalletTotals(live.data.wallet?.wallet);
-  const wallet = live.data.wallet?.wallet;
-  const transactions = live.data.walletDetail?.kind === "transactions"
-    ? live.data.walletDetail.items
-    : wallet?.recentTransactions;
-  const receipts = live.data.walletDetail?.kind === "receipts"
-    ? live.data.walletDetail.items
-    : wallet?.recentReceipts;
-  const earnings = live.data.walletDetail?.kind === "earnings"
-    ? live.data.walletDetail.items
-    : wallet?.recentEarnings;
-  useEffect(() => {
-    setTab(walletTabFromSearch());
-  }, [location.search]);
+type AccountTabId = "preferences" | "balance" | "earnings";
 
-  const selectTab = (nextTab: WalletTabId) => {
-    setTab(nextTab);
-    syncSearchParams({ tab: nextTab === "balance" ? null : nextTab });
-  };
-
-  return (
-    <div className="launch-page-narrow wallet-page">
-      <ApiNotice live={live} noun="wallet" />
-      <div className="wallet-hero">
-        <WalletAmount
-          label={showEarnings ? "Earned credits" : "Spendable credits"}
-          value={wallet ? (showEarnings ? totals.earned : totals.spendable) : null}
-        />
-        <div className="wallet-hero-actions">
-          {showEarnings
-            ? null
-            : tab === "topup"
-            ? null
-            : (
-              <Button icon="wallet" onClick={() => selectTab("topup")}>
-                Add credits
-              </Button>
-            )}
-        </div>
-      </div>
-
-      <div className="wallet-tabs" role="tablist" aria-label="Wallet sections">
-        {[
-          ["balance", "Balance"],
-          ["topup", "Top up"],
-          ["receipts", "Receipts"],
-          ["earnings", "Earnings"],
-        ].map(([id, label]) => (
-          <button
-            className={tab === id ? "active" : ""}
-            key={id}
-            onClick={() => selectTab(id as WalletTabId)}
-            type="button"
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {tab === "balance"
-        ? (
-          <WalletBalancePanel
-            ledger={liveLedgerRows(transactions)}
-            publishRequirement={wallet?.publishRequirement}
-            totals={totals}
-          />
-        )
-        : null}
-      {tab === "topup"
-        ? <WalletTopUpPanel earnedCredits={totals.earned} live={live} />
-        : null}
-      {tab === "receipts"
-        ? <WalletReceiptsPanel receipts={liveReceiptRows(receipts)} />
-        : null}
-      {tab === "earnings"
-        ? (
-          <WalletEarningsPanel
-            earnings={liveEarningRows(earnings)}
-            payoutStatus={wallet?.payoutStatus}
-          />
-        )
-        : null}
-    </div>
-  );
-}
-
-export function SettingsFoundationPage(
-  { live, navigate }: LaunchPageProps,
+export function AccountFoundationPage(
+  { live, location, navigate }: LaunchPageProps,
 ): ReactElement {
   const canManageKeys = live.status !== "error";
+  const [tab, setTab] = useState<AccountTabId>(accountTabFromSearch());
+
+  // Settings (Preferences tab) state.
   const [newKeyVisible, setNewKeyVisible] = useState(false);
   const [newAgentPermission, setNewAgentPermission] = useState<
     "always" | "ask" | "never"
@@ -3549,9 +3209,41 @@ export function SettingsFoundationPage(
     liveApiKeyFixtures(live.data.apiKeys?.apiKeys)
   );
 
+  // Wallet (Balance tab) state. Top up now lives behind the + Add funds button,
+  // and receipts are a secondary view of the balance ledger. Initial values
+  // honour legacy /wallet?tab=receipts|topup deep links.
+  const [balanceView, setBalanceView] = useState<"transactions" | "receipts">(
+    () => (queryParam("tab") === "receipts" ? "receipts" : "transactions"),
+  );
+  const [showTopUp, setShowTopUp] = useState(
+    () => queryParam("tab") === "topup",
+  );
+
+  useEffect(() => {
+    setTab(accountTabFromSearch());
+  }, [location.search]);
+
   useEffect(() => {
     setVisibleKeys(liveApiKeyFixtures(live.data.apiKeys?.apiKeys));
   }, [live.data.apiKeys]);
+
+  const totals = liveWalletTotals(live.data.wallet?.wallet);
+  const wallet = live.data.wallet?.wallet;
+  const transactions = live.data.walletDetail?.kind === "transactions"
+    ? live.data.walletDetail.items
+    : wallet?.recentTransactions;
+  const receipts = live.data.walletDetail?.kind === "receipts"
+    ? live.data.walletDetail.items
+    : wallet?.recentReceipts;
+  const earnings = live.data.walletDetail?.kind === "earnings"
+    ? live.data.walletDetail.items
+    : wallet?.recentEarnings;
+
+  const selectTab = (nextTab: AccountTabId) => {
+    setTab(nextTab);
+    setShowTopUp(false);
+    syncSearchParams({ tab: nextTab === "preferences" ? null : nextTab });
+  };
 
   const revokeKey = async (apiKey: ApiKeyFixture) => {
     if (!apiKey.id) return;
@@ -3565,16 +3257,16 @@ export function SettingsFoundationPage(
   };
 
   return (
-    <div className="launch-page-narrow settings-page">
-      <ApiNotice live={live} noun="settings" />
+    <div className="launch-page-narrow account-page">
+      <ApiNotice live={live} noun="account" />
       <div className="profile-strip">
         <Avatar color="#0a0a0a" name="@you" />
         <div>
-          <h1>Profile</h1>
+          <h1>Account</h1>
           <p>
             {canManageKeys
               ? "Launch account session"
-              : "Complete Google sign-in to manage keys"}
+              : "Complete Google sign-in to manage your account"}
           </p>
         </div>
         {canManageKeys
@@ -3594,89 +3286,182 @@ export function SettingsFoundationPage(
           : null}
       </div>
 
-      <SettingsCard
-        action={canManageKeys
-          ? (
-            <Button onClick={() => setNewKeyVisible(true)} size="sm">
-              Create key
-            </Button>
-          )
-          : null}
-        subtitle="Tokens your connected agents use to call Ultralight. New keys reveal once."
-        title="API keys"
-      >
-        <p className="settings-help">
-          {canManageKeys
-            ? "Keys are shown by prefix only — the full token is revealed once, at creation."
-            : "The live settings endpoint needs an account session before it can show or create API keys."}
-        </p>
-        <div className="api-key-list">
-          {visibleKeys.length > 0
-            ? visibleKeys.map((key) => (
-              <ApiKeyRow
-                key={key.id || key.prefix}
-                apiKey={key}
-                onRevoke={revokeKey}
-              />
-            ))
-            : (
-              <EmptyState icon="key" title="Sign in to load API keys">
-                Once the launch session is active, your real agent keys will
-                appear here.
-              </EmptyState>
-            )}
-        </div>
-      </SettingsCard>
-
-      <ByokSettingsCard live={live} navigate={navigate} />
-
-      <SettingsCard
-        subtitle="Launch-safe defaults for how your connected agent may call Agent functions."
-        title="Preferences"
-      >
-        <PreferenceRow
-          control={
-            <PermissionSelect
-              onChange={setNewAgentPermission}
-              value={newAgentPermission}
-            />
-          }
-          description="How your connected agent may call functions on Agents you deploy."
-          title="Default permissions for new Agents"
-        />
-        <PreferenceRow
-          control={
-            <PermissionSelect
-              onChange={setInstalledPermission}
-              value={installedPermission}
-            />
-          }
-          description="How your connected agent may call functions on Agents you install."
-          title="Default permissions for installed Agents"
-        />
-        <AgentGrantApprovalRow canManage={canManageKeys} live={live} />
-      </SettingsCard>
-
-      <div className="connect-agent-callout">
-        <span className="target-icon">
-          <Icon name="copy" />
-        </span>
-        <div>
-          <strong>Connecting an agent?</strong>
-          <p>
-            Use Add to agent. It bundles your API key into install instructions
-            without exposing it in the page.
-          </p>
-        </div>
-        <RouteButton
-          icon="copy"
-          navigate={navigate}
-          to="/install"
-          variant="secondary"
-        >
-          Add to agent
-        </RouteButton>
+      <div className="account-tabs" role="tablist" aria-label="Account sections">
+        {([
+          ["preferences", "Preferences"],
+          ["balance", "Balance"],
+          ["earnings", "Earnings"],
+        ] as const).map(([id, label]) => (
+          <button
+            aria-selected={tab === id}
+            className={tab === id ? "active" : ""}
+            key={id}
+            onClick={() => selectTab(id)}
+            role="tab"
+            type="button"
+          >
+            {label}
+          </button>
+        ))}
       </div>
+
+      {tab === "preferences"
+        ? (
+          <>
+            <SettingsCard
+              action={canManageKeys
+                ? (
+                  <Button onClick={() => setNewKeyVisible(true)} size="sm">
+                    Create key
+                  </Button>
+                )
+                : null}
+              subtitle="Tokens your connected agents use to call Ultralight. New keys reveal once."
+              title="API keys"
+            >
+              <p className="settings-help">
+                {canManageKeys
+                  ? "Keys are shown by prefix only — the full token is revealed once, at creation."
+                  : "The live settings endpoint needs an account session before it can show or create API keys."}
+              </p>
+              <div className="api-key-list">
+                {visibleKeys.length > 0
+                  ? visibleKeys.map((key) => (
+                    <ApiKeyRow
+                      key={key.id || key.prefix}
+                      apiKey={key}
+                      onRevoke={revokeKey}
+                    />
+                  ))
+                  : (
+                    <EmptyState icon="key" title="Sign in to load API keys">
+                      Once the launch session is active, your real agent keys
+                      will appear here.
+                    </EmptyState>
+                  )}
+              </div>
+            </SettingsCard>
+
+            <ByokSettingsCard live={live} navigate={navigate} />
+
+            <SettingsCard
+              subtitle="Launch-safe defaults for how your connected agent may call Agent functions."
+              title="Preferences"
+            >
+              <PreferenceRow
+                control={
+                  <PermissionSelect
+                    onChange={setNewAgentPermission}
+                    value={newAgentPermission}
+                  />
+                }
+                description="How your connected agent may call functions on Agents you deploy."
+                title="Default permissions for new Agents"
+              />
+              <PreferenceRow
+                control={
+                  <PermissionSelect
+                    onChange={setInstalledPermission}
+                    value={installedPermission}
+                  />
+                }
+                description="How your connected agent may call functions on Agents you install."
+                title="Default permissions for installed Agents"
+              />
+              <AgentGrantApprovalRow canManage={canManageKeys} live={live} />
+            </SettingsCard>
+
+            <div className="connect-agent-callout">
+              <span className="target-icon">
+                <Icon name="copy" />
+              </span>
+              <div>
+                <strong>Connecting an agent?</strong>
+                <p>
+                  Use Add to agent. It bundles your API key into install
+                  instructions without exposing it in the page.
+                </p>
+              </div>
+              <AddToAgentButton size="md" variant="secondary" />
+            </div>
+          </>
+        )
+        : null}
+
+      {tab === "balance"
+        ? (
+          <>
+            <div className="wallet-hero">
+              <WalletAmount
+                label="Spendable credits"
+                value={wallet ? totals.spendable : null}
+              />
+              <div className="wallet-hero-actions">
+                <Button
+                  onClick={() => setShowTopUp((open) => !open)}
+                  variant={showTopUp ? "secondary" : "primary"}
+                >
+                  {showTopUp ? "Close" : "+ Add funds"}
+                </Button>
+              </div>
+            </div>
+
+            {showTopUp
+              ? <WalletTopUpPanel earnedCredits={totals.earned} live={live} />
+              : (
+                <>
+                  <div
+                    className="account-subtabs"
+                    role="tablist"
+                    aria-label="Balance view"
+                  >
+                    {([
+                      ["transactions", "Transactions"],
+                      ["receipts", "Receipts"],
+                    ] as const).map(([id, label]) => (
+                      <button
+                        aria-selected={balanceView === id}
+                        className={balanceView === id ? "active" : ""}
+                        key={id}
+                        onClick={() => setBalanceView(id)}
+                        role="tab"
+                        type="button"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {balanceView === "transactions"
+                    ? (
+                      <WalletBalancePanel
+                        ledger={liveLedgerRows(transactions)}
+                        publishRequirement={wallet?.publishRequirement}
+                        totals={totals}
+                      />
+                    )
+                    : <WalletReceiptsPanel receipts={liveReceiptRows(receipts)} />}
+                </>
+              )}
+          </>
+        )
+        : null}
+
+      {tab === "earnings"
+        ? (
+          <>
+            <div className="wallet-hero">
+              <WalletAmount
+                label="Earned credits"
+                value={wallet ? totals.earned : null}
+              />
+            </div>
+            <WalletEarningsPanel
+              earnings={liveEarningRows(earnings)}
+              payoutStatus={wallet?.payoutStatus}
+            />
+          </>
+        )
+        : null}
 
       {newKeyVisible
         ? (
@@ -4125,7 +3910,7 @@ function WalletTopUpPanel(
       const result = await stripe.confirmPayment({
         elements,
         confirmParams: {
-          return_url: `${window.location.origin}/wallet?tab=topup`,
+          return_url: `${window.location.origin}/account?tab=balance`,
         },
         redirect: "if_required",
       });
@@ -5073,7 +4858,7 @@ function ByokBillingBanner({
           ? "."
           : ` — below the ✦${inference.credits.minimumForPlatformInference} minimum for platform inference.`}
         {" "}
-        <RouteLink navigate={navigate} to="/wallet">Manage wallet</RouteLink>
+        <RouteLink navigate={navigate} to="/account?tab=balance">Manage wallet</RouteLink>
       </span>
     </div>
   );
@@ -5347,49 +5132,6 @@ function CompactAgentCard({ tool }: { tool: AgentFixture }): ReactElement {
   );
 }
 
-function TargetPicker({
-  active,
-  onPick,
-  targets = installTargets,
-}: {
-  active: string;
-  onPick: (target: string) => void;
-  targets?: InstallTarget[];
-}): ReactElement {
-  const groupLabels = {
-    Prompt: "One-prompt setup",
-    MCP: "Remote MCP servers",
-    Direct: "CLI and API",
-  } as const;
-  const groupIcons = { Prompt: "copy", MCP: "spark", Direct: "terminal" } as const;
-  return (
-    <div className="target-picker">
-      {(["Prompt", "MCP", "Direct"] as const).map((group) => {
-        const groupTargets = targets.filter((target) => target.group === group);
-        if (groupTargets.length === 0) return null;
-        return (
-          <div key={group}>
-            <p className="section-label">{groupLabels[group]}</p>
-            <div className="target-list">
-              {groupTargets.map((target) => (
-                <button
-                  className={active === target.target ? "active" : ""}
-                  key={target.target}
-                  onClick={() => onPick(target.target)}
-                  type="button"
-                >
-                  <Icon name={groupIcons[group]} />
-                  {target.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 function SearchControls({
   query,
   setQuery,
@@ -5648,11 +5390,18 @@ function adminTabFromSearch(): AdminTabId {
   return adminTabs.some(([id]) => id === tab) ? tab as AdminTabId : "edit";
 }
 
-function walletTabFromSearch(): WalletTabId {
+function accountTabFromSearch(): AccountTabId {
   const tab = queryParam("tab");
-  return ["balance", "earnings", "receipts", "topup"].includes(tab)
-    ? tab as WalletTabId
-    : "balance";
+  // Tolerate legacy /wallet?tab=… deep links (topup/transactions/receipts/
+  // payouts) so redirected URLs land on the right merged-account tab.
+  if (tab === "earnings" || tab === "payouts") return "earnings";
+  if (
+    tab === "balance" || tab === "transactions" || tab === "receipts" ||
+    tab === "topup"
+  ) {
+    return "balance";
+  }
+  return "preferences";
 }
 
 function quoteTopUp(creditsAmount: number, method: PaymentMethod): {

@@ -1,7 +1,8 @@
 import { type ReactElement, type ReactNode, useId } from "react";
 
-import { hasLaunchAuthToken, signOutLaunch } from "../lib/auth";
+import { hasLaunchAuthToken } from "../lib/auth";
 import type { LaunchRouteDefinition, LaunchRouteKey } from "../lib/routes";
+import { AddToAgentButton } from "../pages/foundation-pages";
 import { useSignInModal } from "./sign-in-modal";
 
 export type IconName =
@@ -81,11 +82,6 @@ export function LaunchShell({
   const navRoutes = primaryRoutes.filter((route) => route.key !== "home");
   const signedIn = hasLaunchAuthToken();
   const openSignInModal = useSignInModal();
-  const handleSignOut = () => {
-    void signOutLaunch().finally(() => {
-      window.location.href = "/";
-    });
-  };
 
   return (
     <div className="launch-shell">
@@ -110,14 +106,17 @@ export function LaunchShell({
           ))}
         </nav>
         <div className="top-actions">
-          <Button icon="copy" onClick={() => navigate("/install")} size="sm">
-            Add to agent
-          </Button>
+          <AddToAgentButton size="sm" />
           {signedIn
             ? (
-              <Button onClick={handleSignOut} size="sm" variant="ghost">
-                Sign out
-              </Button>
+              <button
+                aria-label="Account"
+                className="avatar-button"
+                onClick={() => navigate("/account")}
+                type="button"
+              >
+                <Avatar name="@you" />
+              </button>
             )
             : (
               <button
@@ -136,9 +135,7 @@ export function LaunchShell({
           <Icon name="menu" />
         </button>
         <span className="mobile-title">{title}</span>
-        <Button icon="copy" onClick={() => navigate("/install")} size="sm">
-          Add
-        </Button>
+        <AddToAgentButton label="Add" size="sm" />
       </header>
 
       <main className="launch-main">{children}</main>

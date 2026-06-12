@@ -134,14 +134,6 @@ async function loadRouteData(
       ]);
       return { status, install, platformPrimitives: primitives, store };
     }
-    case "install": {
-      const agent = search.get("agent") || search.get("tool") || undefined;
-      const [install, apiKeys] = await Promise.all([
-        launchApi.install({ agent }),
-        optional(() => launchApi.apiKeys()),
-      ]);
-      return { install, apiKeys };
-    }
     case "store": {
       const request: LaunchStoreRequest = {
         kind: storeKind(search.get("kind")),
@@ -189,21 +181,18 @@ async function loadRouteData(
     case "library": {
       return { library: await launchApi.library() };
     }
-    case "wallet": {
-      const detailKind = walletDetailKind(search.get("tab"));
-      const [wallet, walletDetail] = await Promise.all([
-        launchApi.wallet(),
-        optional(() => launchApi.walletDetail(detailKind, { limit: 25 })),
-      ]);
-      return { wallet, walletDetail };
-    }
     case "settings": {
-      const [apiKeys, byok, inferenceOptions] = await Promise.all([
-        launchApi.apiKeys(),
-        optional(() => launchApi.byok()),
-        optional(() => launchApi.inferenceOptions()),
-      ]);
-      return { apiKeys, byok, inferenceOptions };
+      // The account page merges wallet + settings, so it loads both payloads.
+      const detailKind = walletDetailKind(search.get("tab"), search.get("view"));
+      const [apiKeys, byok, inferenceOptions, wallet, walletDetail] =
+        await Promise.all([
+          launchApi.apiKeys(),
+          optional(() => launchApi.byok()),
+          optional(() => launchApi.inferenceOptions()),
+          optional(() => launchApi.wallet()),
+          optional(() => launchApi.walletDetail(detailKind, { limit: 25 })),
+        ]);
+      return { apiKeys, byok, inferenceOptions, wallet, walletDetail };
     }
     case "adminAgent": {
       const id = route.params.id || "";
@@ -236,9 +225,11 @@ function storeKind(value: string | null): LaunchStoreRequest["kind"] {
   return value === "mcp" || value === "http" ? value : "all";
 }
 
-function walletDetailKind(tab: string | null): "transactions" | "receipts" | "earnings" | "payouts" {
-  if (tab === "receipts" || tab === "earnings" || tab === "payouts") {
-    return tab;
-  }
+function walletDetailKind(
+  tab: string | null,
+  view: string | null,
+): "transactions" | "receipts" | "earnings" | "payouts" {
+  if (tab === "earnings") return "earnings";
+  if (view === "receipts") return "receipts";
   return "transactions";
 }

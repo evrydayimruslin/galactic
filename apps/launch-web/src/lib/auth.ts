@@ -267,7 +267,7 @@ export function normalizeLocalPath(value: string | null | undefined): string {
     !value || !value.startsWith("/") || value.startsWith("//") ||
     value.includes("\\")
   ) {
-    return "/settings";
+    return "/account";
   }
   return value;
 }

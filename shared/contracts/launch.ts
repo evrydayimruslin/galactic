@@ -34,12 +34,10 @@ export type LaunchDeferredCapability =
 
 export const LAUNCH_PUBLIC_ROUTES = [
   "/",
-  "/install",
-  "/library",
-  "/store",
+  "/agents",
+  "/browse",
   "/agents/:slug",
-  "/wallet",
-  "/settings",
+  "/account",
   "/admin/agents/:id",
   "/terms",
   "/privacy",
@@ -49,6 +47,11 @@ export type LaunchPublicRoute = typeof LAUNCH_PUBLIC_ROUTES[number];
 
 export const LAUNCH_COMPATIBILITY_PUBLIC_ROUTES = [
   "/discover",
+  "/install",
+  "/library",
+  "/store",
+  "/wallet",
+  "/settings",
   "/tools/:slug",
   "/admin/tools/:id",
 ] as const;

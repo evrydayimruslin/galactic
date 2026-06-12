@@ -7,11 +7,9 @@ import {
 
 export type LaunchRouteKey =
   | "home"
-  | "install"
   | "library"
   | "store"
   | "agent"
-  | "wallet"
   | "settings"
   | "adminAgent"
   | "authCallback"
@@ -47,29 +45,16 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     ],
   },
   {
-    key: "install",
-    path: "/install",
-    label: "Install",
-    nav: "primary",
-    apiRoutes: [
-      "GET /api/launch/install",
-      "GET /api/launch/api-keys",
-      "POST /api/launch/api-keys",
-      "GET /api/launch/status",
-      "GET /api/launch/openapi.json",
-    ],
-  },
-  {
     key: "library",
-    path: "/library",
-    label: "Library",
+    path: "/agents",
+    label: "Agents",
     nav: "primary",
     apiRoutes: ["GET /api/launch/library"],
   },
   {
     key: "store",
-    path: "/store",
-    label: "Store",
+    path: "/browse",
+    label: "Browse",
     nav: "primary",
     apiRoutes: ["GET /api/launch/store", "GET /api/launch/leaderboard"],
   },
@@ -95,9 +80,9 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     ],
   },
   {
-    key: "wallet",
-    path: "/wallet",
-    label: "Wallet",
+    key: "settings",
+    path: "/account",
+    label: "Account",
     nav: "account",
     apiRoutes: [
       "GET /api/launch/wallet",
@@ -107,14 +92,6 @@ export const launchRoutes: LaunchRouteDefinition[] = [
       "GET /api/launch/wallet/payouts",
       "GET /api/launch/wallet/topup/quote",
       "POST /api/launch/wallet/topup/intent",
-    ],
-  },
-  {
-    key: "settings",
-    path: "/settings",
-    label: "Settings",
-    nav: "account",
-    apiRoutes: [
       "GET /api/launch/api-keys",
       "POST /api/launch/api-keys",
       "DELETE /api/launch/api-keys/:id",
@@ -193,7 +170,15 @@ export function launchApiRoutes(): readonly LaunchApiRoute[] {
 function normalizePath(pathname: string): string {
   if (!pathname || pathname === "/") return "/";
   const cleanPath = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
-  if (cleanPath === "/discover") return "/store";
+  // Library -> Agents, Store -> Browse, and the merged Wallet+Settings ->
+  // Account rename. Legacy inbound paths stay routable for one compatibility
+  // window (mirrors LAUNCH_COMPATIBILITY_PUBLIC_ROUTES).
+  if (cleanPath === "/discover" || cleanPath === "/store") return "/browse";
+  if (cleanPath === "/library") return "/agents";
+  if (cleanPath === "/wallet" || cleanPath === "/settings") return "/account";
+  // The Install page is retired — the add-to-agent flow is now a modal opened
+  // from the "Add to agent" button. Legacy /install links fall back to home.
+  if (cleanPath === "/install") return "/";
   // Tools -> Agents rename: legacy inbound paths stay routable for one
   // compatibility window (mirrors LAUNCH_COMPATIBILITY_PUBLIC_ROUTES).
   if (cleanPath.startsWith("/tools/")) {

@@ -2810,7 +2810,8 @@ button {
 }
 
 .wallet-page,
-.settings-page {
+.settings-page,
+.account-page {
   width: min(100%, 860px);
 }
 
@@ -2865,7 +2866,8 @@ button {
   gap: 8px;
 }
 
-.wallet-tabs {
+.wallet-tabs,
+.account-tabs {
   display: flex;
   gap: 4px;
   margin-bottom: 22px;
@@ -2873,7 +2875,8 @@ button {
   border-bottom: 1px solid var(--ul-border);
 }
 
-.wallet-tabs button {
+.wallet-tabs button,
+.account-tabs button {
   margin-bottom: -1px;
   padding: 9px 11px;
   border: 0;
@@ -2886,9 +2889,66 @@ button {
   white-space: nowrap;
 }
 
-.wallet-tabs .active {
+.wallet-tabs .active,
+.account-tabs .active {
   border-bottom-color: var(--ul-text);
   color: var(--ul-text);
+}
+
+/* The account tab bar carries the page heading weight, so give it more room. */
+.account-tabs button {
+  padding: 10px 14px;
+  font-size: 14px;
+}
+
+/* Secondary Transactions / Receipts switch inside the Balance tab. */
+.account-subtabs {
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: 18px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--ul-subtle, rgba(10, 10, 10, 0.04));
+}
+
+.account-subtabs button {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ul-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.account-subtabs .active {
+  background: var(--ul-surface, #fff);
+  box-shadow: 0 1px 2px rgba(10, 10, 10, 0.08);
+  color: var(--ul-text);
+}
+
+/* Avatar button replaces the top-bar Sign out action. */
+.avatar-button {
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease;
+}
+
+.avatar-button:hover .avatar {
+  box-shadow: 0 0 0 3px var(--ul-subtle, rgba(10, 10, 10, 0.08));
+}
+
+.avatar-button .avatar {
+  width: 30px;
+  height: 30px;
+  font-size: 13px;
+  transition: box-shadow 0.15s ease;
 }
 
 .wallet-panel {

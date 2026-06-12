@@ -18,14 +18,12 @@ import {
   useLaunchRouteLiveData,
 } from "./lib/live-data";
 import {
+  AccountFoundationPage,
   AdminFoundationPage,
   AgentFoundationPage,
   HomeFoundationPage,
-  InstallFoundationPage,
   LibraryFoundationPage,
-  SettingsFoundationPage,
   StoreFoundationPage,
-  WalletFoundationPage,
   PrivacyPage,
   TermsPage,
 } from "./pages/foundation-pages";
@@ -55,12 +53,10 @@ export interface LaunchPageProps {
 
 const routeTitles: Record<LaunchRouteKey, string> = {
   home: "Home",
-  install: "Install",
-  library: "Library",
-  store: "Store",
+  library: "Agents",
+  store: "Browse",
   agent: "Agent",
-  wallet: "Wallet",
-  settings: "Settings",
+  settings: "Account",
   adminAgent: "Agent admin",
   authCallback: "Signing in",
   terms: "Terms of Service",
@@ -158,15 +154,6 @@ function RouteSwitch(
           navigate={navigate}
         />
       );
-    case "install":
-      return (
-        <InstallFoundationPage
-          live={live}
-          location={location}
-          route={route}
-          navigate={navigate}
-        />
-      );
     case "library":
       return (
         <LibraryFoundationPage
@@ -194,18 +181,9 @@ function RouteSwitch(
           navigate={navigate}
         />
       );
-    case "wallet":
-      return (
-        <WalletFoundationPage
-          live={live}
-          location={location}
-          route={route}
-          navigate={navigate}
-        />
-      );
     case "settings":
       return (
-        <SettingsFoundationPage
+        <AccountFoundationPage
           live={live}
           location={location}
           route={route}
