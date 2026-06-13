@@ -3323,6 +3323,23 @@ button {
   width: min(100%, 860px);
 }
 
+/* 100% serif typography on the account page: neutralize the mono/sans utility
+   fonts (data numbers, section labels, pills, metric-tile values, table heads,
+   the earnings filter select) so the whole page renders in the serif family.
+   Scoped under .account-page so Store/Agent/Home/leaderboard/admin are
+   unaffected. tabular-nums keeps the ledger number columns from jittering. */
+.account-page .mono,
+.account-page .eyebrow,
+.account-page .section-label,
+.account-page .pill,
+.account-page .metric-tile .mono,
+.account-page .metric-tile .section-label,
+.account-page .wallet-table-head,
+.account-page .admin-input {
+  font-family: var(--ul-font);
+  font-variant-numeric: tabular-nums;
+}
+
 .wallet-hero {
   display: flex;
   align-items: flex-end;
