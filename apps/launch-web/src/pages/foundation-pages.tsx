@@ -31,6 +31,7 @@ import {
   type LaunchAgentInstallContext,
   type LaunchAgentRelationship,
   type LaunchAgentSummary,
+  type LaunchInterfaceSummary,
   type LaunchTrustCard,
   type LaunchPayoutStatus,
   type LaunchWalletEarningSummary,
@@ -53,6 +54,10 @@ import {
   launchApiOrigin,
   LaunchApiRequestError,
 } from "../lib/api";
+import {
+  attachInterfaceBridge,
+  clampInterfaceHeight,
+} from "../lib/interface-bridge";
 import { getStripe, type Stripe, type StripeElements } from "../lib/stripe";
 import {
   Avatar,
@@ -135,6 +140,8 @@ interface AgentDetailFixture extends AgentFixture {
   callsPerDay: number | null;
   capabilities: AgentCapability[];
   functions: AgentFunctionFixture[];
+  // Sandboxed HTML interfaces the agent ships; empty for agents without any.
+  interfaces: LaunchInterfaceSummary[];
   relationship: LaunchAgentRelationship;
   // Trust fields are null until the Agent publishes a signed trust card.
   runtime: string | null;
@@ -394,7 +401,7 @@ const adminTabs = [
 
 type AdminTabId = typeof adminTabs[number][0];
 type LibraryView = "installed" | "owned";
-type AgentPageTabId = "details" | "functions";
+type AgentPageTabId = "details" | "functions" | "interface";
 
 const visibilityOptions = [
   [
@@ -525,6 +532,7 @@ function liveAgentFixture(
     growth: 0,
     id: tool.id,
     installs: null,
+    interfaces: tool.interfaces || [],
     kind: tool.kind,
     name: tool.name,
     relationship: tool.relationship,
@@ -1272,6 +1280,14 @@ function AgentDetailSurface({
     (tool.relationship === "owner" || tool.relationship === "installed");
   const pendingCount = live.data.agentWiring?.pendingRequests.length ?? 0;
 
+  // The Interface tab exists only when the facade reports renderable
+  // interfaces (the feature kill switch): a stale ?tab=interface deep link
+  // on an agent without any lands on Functions instead.
+  const hasInterfaces = tool.interfaces.length > 0;
+  const effectiveTab = tab === "interface" && !hasInterfaces
+    ? "functions"
+    : tab;
+
   const activateToolTab = (nextTab: AgentPageTabId) => {
     setTab(nextTab);
     syncSearchParams({ tab: nextTab === "functions" ? null : nextTab });
@@ -1330,11 +1346,11 @@ function AgentDetailSurface({
       <div className="tool-tabs" role="tablist" aria-label="Agent page sections">
         <div className="tool-tab-menu" ref={fnMenuRef}>
           <button
-            aria-expanded={tab === "functions" && fnMenuOpen}
+            aria-expanded={effectiveTab === "functions" && fnMenuOpen}
             aria-haspopup="listbox"
-            className={tab === "functions" ? "active" : ""}
+            className={effectiveTab === "functions" ? "active" : ""}
             onClick={() => {
-              if (tab !== "functions") {
+              if (effectiveTab !== "functions") {
                 activateToolTab("functions");
                 setFnMenuOpen(true);
               } else {
@@ -1348,14 +1364,14 @@ function AgentDetailSurface({
               ? (
                 <span
                   aria-hidden="true"
-                  className={tab === "functions" && fnMenuOpen
+                  className={effectiveTab === "functions" && fnMenuOpen
                     ? "picker-caret open"
                     : "picker-caret"}
                 />
               )
               : null}
           </button>
-          {tab === "functions" && fnMenuOpen && selectedFunction
+          {effectiveTab === "functions" && fnMenuOpen && selectedFunction
             ? (
               <FunctionMenu
                 functions={tool.functions}
@@ -1368,8 +1384,19 @@ function AgentDetailSurface({
             )
             : null}
         </div>
+        {hasInterfaces
+          ? (
+            <button
+              className={effectiveTab === "interface" ? "active" : ""}
+              onClick={() => activateToolTab("interface")}
+              type="button"
+            >
+              Interface
+            </button>
+          )
+          : null}
         <button
-          className={tab === "details" ? "active" : ""}
+          className={effectiveTab === "details" ? "active" : ""}
           onClick={() => activateToolTab("details")}
           type="button"
         >
@@ -1382,7 +1409,7 @@ function AgentDetailSurface({
 
       <div className="tool-detail-layout single">
         <main className="tool-main-panel">
-          {tab === "functions"
+          {effectiveTab === "functions"
             ? (
               <AgentFunctionsPanel
                 live={live}
@@ -1391,7 +1418,10 @@ function AgentDetailSurface({
               />
             )
             : null}
-          {tab === "details"
+          {effectiveTab === "interface" && hasInterfaces
+            ? <AgentInterfacePanel signedIn={signedIn} tool={tool} />
+            : null}
+          {effectiveTab === "details"
             ? (
               <>
                 <AgentDetailsPanel tool={tool} />
@@ -1476,6 +1506,199 @@ function FunctionMenu({
   );
 }
 
+
+function AgentInterfacePanel({
+  signedIn,
+  tool,
+}: {
+  signedIn: boolean;
+  tool: AgentDetailFixture;
+}): ReactElement {
+  const [selectedId, setSelectedId] = useState(tool.interfaces[0]?.id || "");
+  const selected = tool.interfaces.find((iface) => iface.id === selectedId) ||
+    tool.interfaces[0];
+  if (!selected) {
+    return (
+      <div className="functions-panel">
+        <EmptyState icon="grid" title="No interface available">
+          This Agent has not published an interface.
+        </EmptyState>
+      </div>
+    );
+  }
+  return (
+    <div className="functions-panel">
+      {tool.interfaces.length > 1
+        ? (
+          <div
+            className="account-subtabs"
+            role="tablist"
+            aria-label="Interfaces"
+          >
+            {tool.interfaces.map((iface) => (
+              <button
+                aria-selected={iface.id === selected.id}
+                className={iface.id === selected.id ? "active" : ""}
+                key={iface.id}
+                onClick={() => setSelectedId(iface.id)}
+                role="tab"
+                type="button"
+              >
+                {iface.label}
+              </button>
+            ))}
+          </div>
+        )
+        : null}
+      {/* key remounts the surface (iframe + bridge + spend) per interface. */}
+      <InterfaceSurfaceCard
+        iface={selected}
+        key={selected.id}
+        signedIn={signedIn}
+        tool={tool}
+      />
+    </div>
+  );
+}
+
+function InterfaceSurfaceCard({
+  iface,
+  signedIn,
+  tool,
+}: {
+  iface: LaunchInterfaceSummary;
+  signedIn: boolean;
+  tool: AgentDetailFixture;
+}): ReactElement {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [connected, setConnected] = useState(false);
+  const [stalled, setStalled] = useState(false);
+  // Bumped by the retry button: remounts the iframe and re-arms the bridge.
+  const [reloadKey, setReloadKey] = useState(0);
+  const [height, setHeight] = useState(() =>
+    clampInterfaceHeight(iface.minHeight ?? 320)
+  );
+  const [spend, setSpend] = useState({ calls: 0, credits: 0 });
+
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    return attachInterfaceBridge({
+      iframe,
+      context: {
+        agent: { id: tool.id, slug: tool.slug, name: tool.title },
+        interfaceId: iface.id,
+        signedIn,
+        minHeight: iface.minHeight ?? null,
+      },
+      allowlist: iface.functions,
+      runFunction: async (functionName, args) => {
+        try {
+          const response = await launchApi.runAgentFunction(
+            tool.id,
+            functionName,
+            { args },
+          );
+          return {
+            success: response.success !== false && !response.error,
+            result: response.result,
+            receiptId: response.receiptId ?? null,
+            error: response.error ?? null,
+          };
+        } catch (err) {
+          if (err instanceof LaunchApiAuthenticationError) {
+            return {
+              success: false,
+              error: {
+                type: "SIGN_IN_REQUIRED",
+                message: "Sign in on this page to use functions.",
+              },
+            };
+          }
+          return {
+            success: false,
+            error: {
+              type: "RUN_FAILED",
+              message: err instanceof Error
+                ? err.message
+                : "Function call failed.",
+            },
+          };
+        }
+      },
+      onConnected: () => setConnected(true),
+      onResize: setHeight,
+      onCall: (functionName) => {
+        const price =
+          tool.functions.find((fn) => fn.name === functionName)?.price || 0;
+        setSpend((prev) => ({
+          calls: prev.calls + 1,
+          credits: prev.credits + price,
+        }));
+      },
+    });
+    // tool.functions feeds only display pricing; identity churn on it must
+    // not tear down a connected bridge.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [iface.id, iface.url, signedIn, reloadKey, tool.id]);
+
+  // A bridge-less interface never says hello — surface that instead of an
+  // indefinite spinner.
+  useEffect(() => {
+    if (connected) return;
+    const timer = setTimeout(() => setStalled(true), 12_000);
+    return () => clearTimeout(timer);
+  }, [connected, reloadKey]);
+
+  return (
+    <div className="interface-panel">
+      <iframe
+        className="interface-frame"
+        key={reloadKey}
+        ref={iframeRef}
+        referrerPolicy="no-referrer"
+        sandbox="allow-scripts allow-forms"
+        src={iface.url}
+        style={{ height: `${height}px` }}
+        title={`${tool.title} — ${iface.label}`}
+      />
+      <div className="interface-status">
+        {!connected && !stalled ? <span>Loading interface…</span> : null}
+        {!connected && stalled
+          ? (
+            <>
+              <span>
+                The interface has not connected — it may not include the
+                Ultralight bridge.
+              </span>
+              <button
+                className="interface-reload"
+                onClick={() => {
+                  setStalled(false);
+                  setReloadKey((key) => key + 1);
+                }}
+                type="button"
+              >
+                Reload
+              </button>
+            </>
+          )
+          : null}
+        {connected && !signedIn && iface.functions.length > 0
+          ? <span>Sign in to use this interface's functions.</span>
+          : null}
+        {connected && spend.calls > 0
+          ? (
+            <span>
+              {spend.calls} call{spend.calls === 1 ? "" : "s"} ·{" "}
+              {formatAgentPrice(spend.credits)} this session
+            </span>
+          )
+          : null}
+      </div>
+    </div>
+  );
+}
 
 function FunctionSandboxCard({
   fn,
@@ -5761,6 +5984,7 @@ function libraryViewFromSearch(): LibraryView {
 function agentTabFromSearch(): AgentPageTabId {
   const tab = queryParam("tab");
   if (tab === "functions") return "functions";
+  if (tab === "interface") return "interface";
   // Wiring is now folded into Details, so legacy ?tab=wiring lands there too.
   if (tab === "details" || tab === "wiring") return "details";
   return "functions";

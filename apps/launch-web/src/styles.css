@@ -2028,6 +2028,40 @@ button {
   align-items: start;
 }
 
+/* Sandboxed developer interface (Interface tab). */
+.interface-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.interface-frame {
+  width: 100%;
+  border: 1px solid var(--ul-border-strong);
+  border-radius: 12px;
+  background: #fff;
+  display: block;
+}
+
+.interface-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 18px;
+  color: var(--ul-secondary);
+  font-size: 12.5px;
+}
+
+.interface-reload {
+  padding: 4px 12px;
+  border: 1px solid var(--ul-border-strong);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ul-text);
+  cursor: pointer;
+  font-family: var(--ul-font);
+  font-size: 12.5px;
+}
+
 /* Function picker dropdown (replaces the old side list). */
 .function-picker {
   position: relative;
