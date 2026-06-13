@@ -1,9 +1,10 @@
 {
-  "name": "ultralightpro",
-  "version": "1.3.1",
-  "description": "Ultralight CLI — connect any MCP agent to the Ultralight platform, and build, deploy, and manage Agents from your shell",
+  "name": "ultralightagent",
+  "version": "2.0.0",
+  "description": "Ultralight — local stdio MCP bridge + CLI. Connect any computer-access agent (Claude Code, Claude Desktop, Cursor) to the Ultralight platform, with local filesystem tools, plus build/deploy/manage Agents from your shell.",
   "type": "module",
   "bin": {
+    "ultralightagent": "bin/ultralight.js",
     "ultralight": "bin/ultralight.js"
   },
   "scripts": {
@@ -13,24 +14,35 @@
   },
   "keywords": [
     "ultralight",
-    "ultralightpro",
+    "ultralightagent",
     "serverless",
     "cli",
     "mcp",
     "ai",
     "agent",
     "model-context-protocol",
+    "mcp-bridge",
+    "stdio",
     "tool-discovery",
     "mcp-server"
   ],
   "author": "Ultralight",
   "license": "MIT",
-  "homepage": "https://api.ultralightagent.com",
+  "homepage": "https://ultralightagent.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/evrydayimruslin/ultralight.git",
+    "directory": "cli"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
   "engines": {
     "node": ">=18.0.0"
   },
   "files": [
     "bin/",
+    "lib/",
     "scripts/",
     "mod.ts",
     "api.ts",

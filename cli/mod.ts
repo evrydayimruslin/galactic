@@ -1,7 +1,7 @@
 #!/usr/bin/env -S deno run --allow-net --allow-read --allow-write --allow-env
 
 /**
- * Ultralight CLI v1.3.0
+ * Ultralight v2.0.0
  * Command-line interface for managing Ultralight apps
  *
  * All platform MCP tools use the `ul.*` namespace.
@@ -39,7 +39,7 @@ import { ApiClient } from './api.ts';
 import { colors } from './colors.ts';
 import { createCliLogger } from './logging.ts';
 
-const VERSION = '1.3.1';
+const VERSION = '2.0.0';
 const cliLogger = createCliLogger('CLI');
 const writeStderr = (line: string): void => console.error(line);
 
@@ -208,7 +208,7 @@ ${colors.dim('EXAMPLES')}
   ultralight permissions grant my-app user@email.com
 
 ${colors.dim('DOCUMENTATION')}
-  https://ultralight.dev/docs/cli
+  https://ultralightagent.com/docs/cli
 `);
 }
 
@@ -423,7 +423,7 @@ if (ultralight.isAuthenticated()) {
 
 ## Learn More
 
-- [Ultralight Documentation](https://ultralight.dev/docs)
+- [Ultralight Documentation](https://ultralightagent.com/docs)
 - [SDK Types](https://www.npmjs.com/package/@ultralightpro/types)
 `;
 
@@ -611,7 +611,7 @@ export async function myServerFunction(args: { key: string }) {
 
 ## Learn More
 
-- [Ultralight Documentation](https://ultralight.dev/docs)
+- [Ultralight Documentation](https://ultralightagent.com/docs)
 - [SDK Types](https://www.npmjs.com/package/@ultralightpro/types)
 `;
 
@@ -2306,7 +2306,7 @@ ${colors.dim('COMMANDS')}
 
 ${colors.dim('EXAMPLES')}
   ultralight config get api_url
-  ultralight config set api_url https://custom.ultralight.dev
+  ultralight config set api_url https://api.custom.example
   ultralight config list
 `);
   }

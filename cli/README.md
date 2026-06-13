@@ -1,8 +1,8 @@
-# ultralightpro — Ultralight CLI
+# ultralightagent — Ultralight local MCP bridge + CLI
 
-Connect any MCP-capable agent (Claude Code, Claude Desktop, Cursor, Codex, …) to [Ultralight](https://ultralight.dev), and build, deploy, and manage Ultralight Agents from your shell.
+Connect any computer-access agent (Claude Code, Claude Desktop, Cursor, …) to [Ultralight](https://ultralightagent.com), and build, deploy, and manage Ultralight Agents from your shell.
 
-Ultralight is one remote MCP server that gives your agent a library of Agents (apps) it can discover, call, and deploy — with unified auth and per-call payments.
+Ultralight is one platform MCP server that gives your agent a library of Agents (apps) it can discover, call, and deploy — with unified auth and per-call payments. This package installs a **local stdio MCP bridge** that proxies to that platform, plus local **filesystem tools** so the agent can work with source on your machine.
 
 ## Quick start
 
@@ -10,74 +10,72 @@ Ultralight is one remote MCP server that gives your agent a library of Agents (a
 2. Run setup:
 
 ```bash
-npx ultralightpro setup --token ul_your_api_key
+npx ultralightagent setup --token ul_your_api_key
 ```
 
-`setup` validates the token, saves it to `~/.ultralight/config.json`, and writes the Ultralight MCP server into every agent config it finds — Claude Code (`.claude.json` / `.claude/mcp.json`), Claude Desktop, and Cursor — plus registers the Claude Code plugin. It runs in pure Node.js; no other dependencies.
+`setup` validates the token, saves it to `~/.ultralight/config.json`, and writes a **stdio** MCP server entry into every agent config it finds — Claude Code (`.claude.json` / `.claude/mcp.json`), Claude Desktop, and Cursor — plus registers the Claude Code plugin. It runs in pure Node.js.
 
-Prefer manual configuration? Add the remote MCP server yourself:
+Prefer manual configuration? Add the bridge yourself:
 
 ```json
 {
   "mcpServers": {
     "ultralight": {
-      "url": "https://api.ultralightagent.com/mcp/platform",
-      "headers": { "Authorization": "Bearer ul_your_api_key" }
+      "command": "npx",
+      "args": ["-y", "ultralightagent", "mcp"]
     }
   }
 }
 ```
 
-Once connected, your agent's `initialize` response carries the full platform guide; it can list its tools (`ul.discover`, `ul.call`, `ul.upload`, …) and start working immediately.
+The bridge reads your token from `~/.ultralight/config.json` (so it is **not** duplicated into client config files). Set `ULTRALIGHT_TOKEN` to override.
+
+## How the MCP connection works
+
+The Ultralight platform MCP runs server-side; there's nothing to "run locally." The bridge is a thin **stdio ↔ HTTP proxy**:
+
+- On `tools/list`, it fetches the platform's catalog and re-advertises it **verbatim** (so it never drifts from the platform), then appends the `local.*` filesystem tools.
+- On `tools/call`, platform tools (`ul.*`, per-app functions) are forwarded to `https://api.ultralightagent.com/mcp/platform` with your `ul_` Bearer token; `local.*` tools run on your machine.
+
+stdio works in every desktop MCP client, including ones that can't speak the platform's bare HTTP-POST endpoint.
+
+### Local filesystem tools
+
+Scoped to the working directory the agent launches the bridge in (override with `ULTRALIGHT_FS_ROOT`); paths that escape the root are rejected.
+
+- `local.read_file` / `local.write_file` — read source before `ul.upload`; write source returned by `ul.download`.
+- `local.list_dir` / `local.make_dir` — inspect and scaffold.
 
 ## Developer commands
 
-Most commands wrap the platform's `ul.*` MCP tools, so the shell and your agent share one backend. Build/deploy commands run on [Deno](https://deno.land); `setup` and `login` work without it.
+Most commands wrap the platform's `ul.*` MCP tools, so the shell and your agent share one backend. `setup` and the `mcp` bridge run in pure Node.js; build/deploy commands run on [Deno](https://deno.land).
 
 ```bash
-# Setup
-ultralight setup --token ul_xxx       # Authenticate + write agent MCP configs
-ultralight login --token ul_xxx       # Authenticate only
-ultralight whoami                     # Show current user
+# Setup & bridge (pure Node — no Deno needed)
+ultralightagent setup --token ul_xxx     # Authenticate + write agent MCP configs
+ultralightagent mcp                       # Run the stdio MCP bridge (clients launch this)
 
-# Build & deploy
-ultralight scaffold my-app            # Generate a structured app skeleton
-ultralight test . -f hello            # Test functions in the platform sandbox
-ultralight lint . --strict            # Validate platform conventions
-ultralight upload .                   # Deploy (new app or version)
-ultralight download my-app            # Fetch deployed source
-
-# Manage
-ultralight apps list                  # Your apps
-ultralight set pricing my-app --default 5   # Price per call, in credits (✦)
-ultralight permissions grant my-app user@example.com
-ultralight draft publish my-app
-
-# Use
-ultralight discover "weather API"     # Search the App Store
-ultralight run my-app hello '{"n":1}' # Call a deployed function
-ultralight logs my-app --limit 20
-ultralight health
+# Build, deploy, manage & use (require Deno)
+ultralightagent login --token ul_xxx      # Authenticate only
+ultralightagent whoami                    # Show current user
+ultralightagent scaffold my-app           # Generate a structured app skeleton
+ultralightagent test . -f hello           # Test functions in the platform sandbox
+ultralightagent upload .                  # Deploy (new app or version)
+ultralightagent download my-app           # Fetch deployed source
+ultralightagent apps list
+ultralightagent set pricing my-app --default 5   # Price per call, in credits (✦)
+ultralightagent discover "weather API"    # Search the App Store
+ultralightagent run my-app hello '{"n":1}'
 ```
 
-Run `ultralight help` for the full reference.
-
-## CLI vs MCP connection
-
-These are two doors into the same platform:
-
-- **MCP connection** — what your *agent* uses: the remote server URL plus a bearer key. `setup` writes this for you; the website's "Add to agent" flow produces a paste-into-agent prompt that does the equivalent.
-- **CLI commands** — what *you* use in a shell to build, deploy, and administer Agents.
-
-Both authenticate with the same `ul_` API keys and talk to the same endpoint.
+Run `ultralightagent help` for the full reference.
 
 ## Configuration
 
 - Credentials and defaults live in `~/.ultralight/config.json`.
-- `ultralight config` shows current settings.
-- API keys are created in the Ultralight web app and can be scoped (per-app, per-function) and expiring; treat them as secrets.
+- API keys are created in the Ultralight web app and can be scoped and expiring; treat them as secrets.
 
 ## Documentation
 
 - Platform guide (the same skills doc your agent reads over MCP) ships in this package as `skills.md`, and is served at `GET /api/skills`.
-- Full docs: https://ultralight.dev/docs/cli
+- Full docs: https://ultralightagent.com/docs/cli

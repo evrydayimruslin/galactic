@@ -17,6 +17,14 @@ import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+function getVersion() {
+  try {
+    return JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 const API_URL = process.env.ULTRALIGHT_API_URL || 'https://api.ultralightagent.com';
 const DENO_INSTALL_URL = 'https://raw.githubusercontent.com/evrydayimruslin/ultralight/main/cli/mod.ts';
 const DENO_BIN_NAME = platform() === 'win32' ? 'deno.exe' : 'deno';
@@ -351,14 +359,12 @@ function registerPlugin(token, apiUrl) {
     // 1. Write plugin.json
     writeJSON(join(pluginBase, '.claude-plugin', 'plugin.json'), PLUGIN_JSON);
 
-    // 2. Write .mcp.json (flat format — standard for external plugins)
+    // 2. Write .mcp.json (flat format — standard for external plugins).
+    // stdio entry → launches the local bridge; token comes from ~/.ultralight.
     const mcpConfig = {
       ultralight: {
-        type: 'http',
-        url: `${apiUrl}/mcp/platform`,
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
+        command: 'npx',
+        args: ['-y', `ultralightagent@${getVersion()}`, 'mcp'],
       },
     };
     writeJSON(join(pluginBase, '.mcp.json'), mcpConfig);
@@ -447,8 +453,8 @@ ${c.dim('WHAT IT DOES')}
   6. Outputs connection info so your agent can use tools immediately
 
 ${c.dim('EXAMPLES')}
-  npx ultralightpro setup --token ul_abc123...
-  ultralight setup -t ul_abc123...
+  npx ultralightagent setup --token ul_abc123...
+  ultralightagent setup -t ul_abc123...
 `);
     return;
   }
@@ -466,7 +472,7 @@ ${c.dim('Get a token:')}
   4. Create a new token
 
 ${c.dim('Then run:')}
-  ${c.cyan('npx ultralightpro setup --token <your-token>')}
+  ${c.cyan('npx ultralightagent setup --token <your-token>')}
 `);
     return;
   }
@@ -513,12 +519,13 @@ ${c.dim('Then run:')}
   const appData = process.env.APPDATA || '';
   const mcpEndpoint = `${API_URL}/mcp/platform`;
 
+  // Write a STDIO entry: clients launch the local bridge (`ultralightagent mcp`),
+  // which proxies to the remote platform MCP. stdio works in every desktop MCP
+  // client (unlike the bare HTTP-POST endpoint), and the token is NOT embedded
+  // here — the bridge reads it from ~/.ultralight/config.json (written above).
   const mcpEntry = {
-    url: mcpEndpoint,
-    transport: 'http-post',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-    },
+    command: 'npx',
+    args: ['-y', `ultralightagent@${getVersion()}`, 'mcp'],
   };
 
   const configTargets = [
@@ -577,18 +584,23 @@ ${c.dim('Then run:')}
   console.log(`  ${c.dim('Restart:')}  Restart Claude Code / Claude Desktop for native MCP tools`);
   console.log('');
 
-  // Agent bridge — structured output so the running agent can use tools immediately
+  // Agent bridge — structured output so the running agent can use tools
+  // immediately. The token is deliberately NOT printed (it would land in
+  // terminal scrollback / captured CI logs); the curl examples read it from
+  // ~/.ultralight/config.json at call time via Node (guaranteed available).
+  const tokenFromConfig =
+    '$(node -e "process.stdout.write(JSON.parse(require(\'fs\').readFileSync(require(\'os\').homedir()+\'/.ultralight/config.json\',\'utf8\')).auth.token)")';
   console.log(`--- ULTRALIGHT AGENT BRIDGE ---
 MCP_ENDPOINT=${mcpEndpoint}
-AUTH_HEADER=Bearer ${token}
+Your API token is saved in ~/.ultralight/config.json (not printed here).
 
 To call Ultralight tools in this session, POST JSON-RPC 2.0 to the endpoint above.
 
 List available tools:
-curl -s -X POST "${mcpEndpoint}" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+curl -s -X POST "${mcpEndpoint}" -H "Authorization: Bearer ${tokenFromConfig}" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
 Call a tool (example — discover apps):
-curl -s -X POST "${mcpEndpoint}" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ul.discover","arguments":{"scope":"appstore","query":"hello"}}}'
+curl -s -X POST "${mcpEndpoint}" -H "Authorization: Bearer ${tokenFromConfig}" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ul.discover","arguments":{"scope":"appstore","query":"hello"}}}'
 
 MCP is configured for future sessions. Tools activate natively on next agent restart.
 --- END ULTRALIGHT AGENT BRIDGE ---`);
@@ -605,29 +617,38 @@ async function main() {
     return;
   }
 
+  // MCP bridge runs in pure Node.js — no Deno needed. This is the stdio MCP
+  // server that desktop agents launch; it proxies to the remote platform MCP.
+  if (command === 'mcp' || command === 'serve') {
+    const { runMcpBridge } = await import('../lib/mcp-bridge.mjs');
+    await runMcpBridge();
+    return;
+  }
+
   // Version / help
   if (command === '--version' || command === '-v' || command === 'version') {
-    console.log('1.3.0');
+    console.log(getVersion());
     return;
   }
 
   if (!command || command === '--help' || command === '-h') {
     console.log(`
-${c.bold('Ultralight CLI')} ${c.dim('v1.3.0')}
+${c.bold('Ultralight')} ${c.dim('v' + getVersion())}
 
-${c.dim('QUICK START')}
-  ultralight setup --token <token>    Set up Ultralight (no extra dependencies)
+${c.dim('QUICK START')} ${c.dim('(pure Node — no extra runtime)')}
+  ultralightagent setup --token <token>   Authenticate + wire up your MCP clients
+  ultralightagent mcp                      Run the local stdio MCP bridge (clients launch this)
 
 ${c.dim('FULL CLI')}
   Other commands (scaffold, upload, test, etc.) require the Deno runtime.
   Install Deno: ${c.cyan('curl -fsSL https://deno.land/install.sh | sh')}
 
-  ultralight scaffold     Generate a new app skeleton
-  ultralight upload       Deploy an app
-  ultralight test         Test functions without deploying
-  ultralight discover     Search the App Store
-  ultralight apps         Manage your apps
-  ultralight --help       Show all commands (requires Deno)
+  ultralightagent scaffold     Generate a new app skeleton
+  ultralightagent upload       Deploy an app
+  ultralightagent test         Test functions without deploying
+  ultralightagent discover     Search the App Store
+  ultralightagent apps         Manage your apps
+  ultralightagent --help       Show all commands (requires Deno)
 `);
     return;
   }
