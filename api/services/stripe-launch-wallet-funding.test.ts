@@ -31,6 +31,7 @@ Deno.test("stripe launch wallet funding: card intent params carry gross-up metad
     "Ultralight credits funding (✦10.0K)",
   );
   assertEquals(params.get("payment_method_types[0]"), "card");
+  assertEquals(params.get("payment_method_types[1]"), "link");
   assertEquals(
     params.get("payment_method_options[card][request_three_d_secure]"),
     "automatic",

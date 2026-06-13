@@ -92,7 +92,11 @@ export function buildLaunchWalletPaymentIntentParams(
   });
 
   if (input.quote.method === "card") {
+    // Card + Stripe Link (Link rides card rails, so card fee gross-up applies).
+    // Link must also be enabled in the Stripe Dashboard (Settings → Payment
+    // methods → Link) for it to surface in the PaymentElement.
     params.set("payment_method_types[0]", "card");
+    params.set("payment_method_types[1]", "link");
     params.set(
       "payment_method_options[card][request_three_d_secure]",
       "automatic",

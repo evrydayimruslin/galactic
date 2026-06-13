@@ -3566,17 +3566,6 @@ function OwnedAgentCard({
   );
 }
 
-function MetricTile(
-  { label, value }: { label: string; value: string },
-): ReactElement {
-  return (
-    <div className="metric-tile">
-      <p className="section-label">{label}</p>
-      <Mono>{value}</Mono>
-    </div>
-  );
-}
-
 function LibraryEmptyCard({
   body,
   title,
@@ -4132,8 +4121,6 @@ export function AccountFoundationPage(
               : (
                 <WalletBalancePanel
                   rows={mergeWalletRows(transactions, receipts)}
-                  publishRequirement={wallet?.publishRequirement}
-                  totals={totals}
                 />
               )}
           </>
@@ -4202,42 +4189,12 @@ function WalletAmount(
 
 function WalletBalancePanel({
   rows,
-  publishRequirement,
-  totals,
 }: {
   rows: WalletRow[];
-  publishRequirement?: LaunchPublisherPublishRequirement | null;
-  totals: typeof walletSummary;
 }): ReactElement {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   return (
     <div className="wallet-panel">
-      <div className="wallet-metric-grid">
-        <MetricTile
-          label="Deposited"
-          value={formatCreditFromLight(totals.deposited)}
-        />
-        <MetricTile
-          label="Earned"
-          value={formatCreditFromLight(totals.earned)}
-        />
-        <MetricTile
-          label="Escrow"
-          value={formatCreditFromLight(totals.escrow)}
-        />
-        {publishRequirement?.enabled
-          ? (
-            <MetricTile
-              label={publishRequirement.met
-                ? "Publish ready"
-                : "Publish minimum"}
-              value={formatCreditFromLight(
-                creditsValue(publishRequirement.requiredBalance),
-              )}
-            />
-          )
-          : null}
-      </div>
       <Card className="wallet-ledger-card">
         <div className="wallet-section-head">
           <h2>Balance ledger</h2>
