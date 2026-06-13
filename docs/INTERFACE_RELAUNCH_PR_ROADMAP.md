@@ -1,8 +1,11 @@
 # Interface Relaunch — PR Implementation Roadmap
 
-Status: **planned, not started** (2026-06-12). Design + decisions:
-`docs/INTERFACE_RELAUNCH_INVESTIGATION.md` (locked: multiple interfaces via manifest
-`interfaces[]`; the other §8 items adopted as working assumptions).
+Status: **PR1–PR6 IMPLEMENTED** (2026-06-12, commits `b4a005c` `89d10e7` `cc23741`
+`56b466a` `4055628` + PR6). Remaining: deploy actions in RELEASE_RUNBOOK.md
+("Interfaces Rollout") — staging smoke + demo-agent upload + production tag.
+Design + decisions: `docs/INTERFACE_RELAUNCH_INVESTIGATION.md` (locked: multiple
+interfaces via manifest `interfaces[]`; the other §8 items adopted as working
+assumptions).
 Pattern follows `docs/DURABLE_EXECUTION_ROADMAP.md`: six PRs, each independently landable and
 gated; PR1–PR4 are user-invisible, PR5 flips the feature on, PR6 hardens and ships.
 

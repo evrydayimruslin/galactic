@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Interface Demo</title>
+<!-- The Ultralight bridge snippet, verbatim from
+     ultralight-spec/conventions/interfaces.md -->
+<script>
+(function () {
+  var port = null, queue = [], pending = {}, nextId = 1;
+  function flush() {
+    if (!port) return;
+    while (queue.length) {
+      var item = queue.shift(), id = nextId++;
+      pending[id] = item;
+      port.postMessage({ type: "call", id: id, functionName: item.fn, args: item.args || {} });
+    }
+  }
+  window.ul = {
+    context: null,
+    call: function (fn, args) {
+      return new Promise(function (resolve, reject) {
+        queue.push({ fn: fn, args: args, resolve: resolve, reject: reject });
+        flush();
+      });
+    },
+    resize: function (height) {
+      if (port) port.postMessage({ type: "resize", height: height });
+    },
+  };
+  window.addEventListener("message", function (event) {
+    var d = event.data;
+    if (!d || d.type !== "ul-interface-connect" || !event.ports || !event.ports[0]) return;
+    port = event.ports[0];
+    window.ul.context = d.context;
+    port.onmessage = function (e) {
+      var m = e.data;
+      if (!m || m.type !== "result" || !(m.id in pending)) return;
+      var item = pending[m.id];
+      delete pending[m.id];
+      if (m.success) item.resolve(m.result);
+      else {
+        var err = new Error((m.error && m.error.message) || "Call failed");
+        err.code = m.error && m.error.type;
+        item.reject(err);
+      }
+    };
+    flush();
+    document.dispatchEvent(new CustomEvent("ul-ready"));
+  });
+  parent.postMessage({ type: "ul-interface-hello" }, "*");
+})();
+</script>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 20px; color: #1c1c1c; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.sub { color: #777; font-size: 13px; margin: 0 0 16px; }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
+  input { padding: 7px 10px; border: 1px solid #d5d5d5; border-radius: 8px; font-size: 13px; }
+  button { padding: 7px 14px; border: 1px solid #1c1c1c; border-radius: 8px; background: #1c1c1c; color: #fff; font-size: 13px; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  pre { background: #f6f6f4; border: 1px solid #e5e5e2; border-radius: 8px; padding: 10px; font-size: 12px; white-space: pre-wrap; min-height: 36px; }
+  .hint { color: #9a6700; font-size: 12.5px; }
+</style>
+</head>
+<body>
+  <h1>Interface Demo</h1>
+  <p class="sub">Static HTML in a sandbox, calling Agent functions over the bridge.</p>
+  <div class="hint" id="signin-hint" hidden>You are signed out — calls will ask you to sign in.</div>
+
+  <div class="row">
+    <input id="name" placeholder="Your name" value="Ada">
+    <button id="greet" disabled>get_greeting</button>
+  </div>
+  <div class="row">
+    <input id="count" type="number" min="1" max="10" value="2" style="width:70px">
+    <span>d</span>
+    <input id="sides" type="number" min="2" max="100" value="6" style="width:70px">
+    <button id="roll" disabled>roll_dice</button>
+  </div>
+  <pre id="out">Connecting to the host page…</pre>
+
+<script>
+  var out = document.getElementById("out");
+  function fit() {
+    // Measure after layout settles — scrollHeight read mid-parse or
+    // mid-layout undershoots badly.
+    requestAnimationFrame(function () {
+      ul.resize(document.body.scrollHeight + 40);
+    });
+  }
+  function show(value) {
+    out.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    fit();
+  }
+  function run(fn, args) {
+    show("Calling " + fn + "…");
+    ul.call(fn, args)
+      .then(show)
+      .catch(function (err) { show("[" + (err.code || "ERROR") + "] " + err.message); });
+  }
+  function init() {
+    document.getElementById("greet").disabled = false;
+    document.getElementById("roll").disabled = false;
+    document.getElementById("signin-hint").hidden = Boolean(ul.context && ul.context.signedIn);
+    show("Connected. Agent: " + (ul.context && ul.context.agent ? ul.context.agent.name : "?"));
+  }
+  // The host can connect while the document is still parsing, so ul-ready
+  // may have fired before this script ran — check ul.context directly.
+  if (window.ul && ul.context) init();
+  else document.addEventListener("ul-ready", init);
+  window.addEventListener("load", fit);
+  document.getElementById("greet").addEventListener("click", function () {
+    run("get_greeting", { name: document.getElementById("name").value });
+  });
+  document.getElementById("roll").addEventListener("click", function () {
+    run("roll_dice", {
+      count: Number(document.getElementById("count").value),
+      sides: Number(document.getElementById("sides").value),
+    });
+  });
+</script>
+</body>
+</html>

@@ -23,6 +23,8 @@ const INTERFACE_KEY_PREFIX = "interfaces/";
 
 export interface R2BucketLike {
   get(key: string): Promise<{ body: ReadableStream | null } | null>;
+  // Metadata-only lookup (cheaper than get) — used for HEAD requests.
+  head(key: string): Promise<object | null>;
 }
 
 export interface InterfaceWorkerEnv {
@@ -50,8 +52,14 @@ export function buildContentSecurityPolicy(frameAncestors: string): string {
   return [
     "sandbox allow-scripts allow-forms",
     "default-src 'none'",
+    "base-uri 'none'",
     "script-src 'unsafe-inline'",
     "style-src 'unsafe-inline' https:",
+    // https: image/font sources permit GET-beacon exfiltration by a
+    // malicious interface — accepted: the only data in the frame is the
+    // developer's own function results plus public agent metadata (see
+    // LAUNCH_RELEASE_PACKET accepted risks), and remote images/fonts are a
+    // legitimate need under the 1 MiB single-file cap.
     "img-src data: blob: https:",
     "font-src data: https:",
     "form-action 'none'",
@@ -115,12 +123,29 @@ export async function handleInterfaceRequest(
   const target = parseInterfacePath(url.pathname);
   if (!target) return errorResponse(404, "Not found");
 
+  if (request.method === "HEAD") {
+    // Metadata-only: never pull the body for HEAD.
+    const exists = await env.R2_BUCKET.head(target.key);
+    if (!exists) return errorResponse(404, "Not found");
+    return new Response(null, {
+      status: 200,
+      headers: buildContentHeaders(env.FRAME_ANCESTORS ?? ""),
+    });
+  }
+
   const object = await env.R2_BUCKET.get(target.key);
   if (!object) return errorResponse(404, "Not found");
 
-  const headers = buildContentHeaders(env.FRAME_ANCESTORS ?? "");
-  if (request.method === "HEAD") {
-    return new Response(null, { status: 200, headers });
-  }
-  return new Response(object.body, { status: 200, headers });
+  // Zero-price render metering (PR6): one structured line per serve, visible
+  // via `wrangler tail` and Workers analytics. Deliberately NOT wired to
+  // billing — the dormant widget_pulls basin is the upgrade path if renders
+  // ever become chargeable.
+  console.log(
+    `[INTERFACE-SERVE] GET ${url.pathname} env=${env.ENVIRONMENT ?? "unknown"}`,
+  );
+
+  return new Response(object.body, {
+    status: 200,
+    headers: buildContentHeaders(env.FRAME_ANCESTORS ?? ""),
+  });
 }

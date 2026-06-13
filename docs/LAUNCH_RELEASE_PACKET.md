@@ -78,6 +78,12 @@ the amount and the ledger entry.
 | Event/delivery timestamps stamp pass-claim time, not per-row write time (audit columns only; billing uses receipts) | minutes | PR4 |
 | `last_used_at` on api tokens updates per cache miss (≤60s granularity) | 60s | PR5 |
 | Pending-permission invites created in the sub-second window around a user's first contact resolve at next session establishment (≤~1h) instead of next request | ~1h, fail-closed | PR5 |
+| Interface CSP allows `img-src`/`font-src https:` — a malicious interface can GET-beacon out data it holds; bounded because the frame only ever holds the developer's own function results plus public agent metadata (network is otherwise denied; the bridge allowlist is the real boundary) | adversarial review 2026-06-12 | Interfaces PR6 |
+| A phishing-shaped interface captures typed-in text only by sending it to the agent's OWN allowlisted functions — the same trust boundary as calling the agent at all; `form-action 'none'` + no network close every other path | by design | Interfaces PR6 |
+| Orphaned content-addressed interface artifacts (`interfaces/{appId}/{hash}.html`) are never garbage-collected | $0.015/GB-mo R2 storage | Interfaces PR2 |
+| Interface renders are unmetered for billing (serve log line + Workers analytics only); the dormant `widget_pulls` basin is the pre-built knob if renders ever become chargeable | ~$0 marginal to 1M renders/mo | Interfaces PR6 |
+| No per-interface review queue: interfaces ship under the agent's existing listing/visibility curation | revisit at launch review | Interfaces PR6 |
+| Counsel note: interfaces render developer-authored content on our pages — confirm /terms UGC language covers it before announce | legal review | Interfaces PR6 |
 
 ## Resolved since packet creation
 

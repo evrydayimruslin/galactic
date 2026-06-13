@@ -23,6 +23,9 @@ function fakeEnv(
         const body = new Response(objects[key]).body;
         return Promise.resolve({ body });
       },
+      head(key: string) {
+        return Promise.resolve(key in objects ? {} : null);
+      },
     },
     FRAME_ANCESTORS: "https://launch.example",
     ...vars,
@@ -84,6 +87,7 @@ Deno.test("interfaces worker: serves stored HTML with the full security header s
   const csp = response.headers.get("Content-Security-Policy") ?? "";
   assertStringIncludes(csp, "sandbox allow-scripts allow-forms");
   assertStringIncludes(csp, "default-src 'none'");
+  assertStringIncludes(csp, "base-uri 'none'");
   assertStringIncludes(csp, "form-action 'none'");
   assertStringIncludes(csp, "frame-ancestors https://launch.example");
 });
@@ -113,6 +117,9 @@ Deno.test("interfaces worker: invalid paths 404 without touching storage", async
   const env: InterfaceWorkerEnv = {
     R2_BUCKET: {
       get() {
+        throw new Error("storage must not be reached for invalid paths");
+      },
+      head() {
         throw new Error("storage must not be reached for invalid paths");
       },
     },

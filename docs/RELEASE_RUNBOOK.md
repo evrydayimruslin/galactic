@@ -286,6 +286,39 @@ First deploy after provisioning: run the durable-execution smoke
 relying on async functions — `ctx.exports` availability inside `queue()` is
 undocumented platform behavior and must be proven once per environment.
 
+## Interfaces Rollout (one-time, first deploy of the interfaces worker)
+
+The Interfaces feature (docs/INTERFACE_RELAUNCH_PR_ROADMAP.md) adds a 4th
+deployable: the `interfaces-worker/` sandbox worker
+(`ultralight-interfaces` / `ultralight-interfaces-staging`), deployed by
+`.github/workflows/interfaces-worker-deploy.yml` (staging on `main` push,
+production on `v*` tags — same env-scoped Cloudflare secrets as the API).
+No new queues, secrets, or migrations.
+
+One-time checks per environment:
+
+1. After the worker's first deploy, run the serving smoke (negative-path
+   posture needs no fixtures):
+   ```bash
+   node scripts/smoke/interface-serve-smoke.mjs \
+     --url https://ultralight-interfaces-staging.rgn4jz429m.workers.dev
+   ```
+2. Upload the demo agent (`examples/interface-demo/` — manifest + index.ts +
+   interfaces/playground.html) with a real account, open its agent page,
+   and confirm: Interface tab renders, the frame connects (buttons enable),
+   a signed-out call returns SIGN_IN_REQUIRED inside the frame, a signed-in
+   call returns a result and increments the session-spend line. Then re-run
+   the smoke with `--app <appId> --hash <stamped hash>` (hash is in the
+   stored manifest) to assert the full positive-path header suite.
+3. Config sanity: `INTERFACE_SANDBOX_BASE_URL` (api/wrangler.toml, both
+   envs) must point at the matching worker host — the facade fails closed
+   (no interfaces anywhere) when unset, which is also the rollback lever.
+   `FRAME_ANCESTORS` (interfaces-worker/wrangler.toml) must list the
+   launch-web origin(s) or every embed renders blank.
+
+Render metering is log-only (`[INTERFACE-SERVE]` via `wrangler tail` +
+Workers analytics). Developer docs: ultralight-spec/conventions/interfaces.md.
+
 ## Normal Release Flow
 
 1. Merge release-ready work to `main`.

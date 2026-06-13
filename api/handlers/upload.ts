@@ -1019,10 +1019,16 @@ export async function handleUpload(request: Request): Promise<Response> {
         }
 
         // Read storage soft-cap status before uploading; request-size limits still apply.
-        const totalUploadBytes = filesToUpload.reduce(
+        // Interface artifacts are extra R2 writes — they count toward quota
+        // and recorded storage like any other uploaded byte.
+        const interfaceArtifactBytes = interfaceArtifacts.reduce(
           (sum, f) => sum + f.content.byteLength,
           0,
         );
+        const totalUploadBytes = filesToUpload.reduce(
+          (sum, f) => sum + f.content.byteLength,
+          0,
+        ) + interfaceArtifactBytes;
         const quotaCheck = await checkStorageQuota(userId, totalUploadBytes, {
           mode: "fail_closed",
           resource: "app upload",
@@ -1098,11 +1104,11 @@ export async function handleUpload(request: Request): Promise<Response> {
         });
         log("success", "App record created");
 
-        // Record live storage usage for billing.
+        // Record live storage usage for billing (interface artifacts included).
         const totalSizeBytes = filesToUpload.reduce(
           (sum, f) => sum + f.content.byteLength,
           0,
-        );
+        ) + interfaceArtifactBytes;
         await recordUploadStorage(userId, appId, version, totalSizeBytes);
 
         // D1 provisioning — SYNCHRONOUS, eager (not fire-and-forget)
@@ -1822,10 +1828,11 @@ export async function handleUploadFiles(
   }
 
   // Read storage soft-cap status before upload; product storage caps do not block.
+  // Interface artifacts are extra R2 writes — count them like bundle bytes.
   const totalUploadSizeBytes = pipeline.filesToUpload.reduce(
     (sum, f) => sum + f.content.byteLength,
     0,
-  );
+  ) + interfaceArtifacts.reduce((sum, f) => sum + f.content.byteLength, 0);
   const uploadQuotaCheck = await checkStorageQuota(
     userId,
     totalUploadSizeBytes,

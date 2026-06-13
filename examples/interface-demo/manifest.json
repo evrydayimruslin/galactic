@@ -1,0 +1,34 @@
+{
+  "name": "Interface Demo",
+  "version": "1.0.0",
+  "description": "Reference Agent showing a sandboxed Interface calling functions through the bridge.",
+  "type": "mcp",
+  "entry": { "functions": "index.ts" },
+  "functions": {
+    "get_greeting": {
+      "description": "Returns a greeting for a name.",
+      "parameters": {
+        "name": { "type": "string", "description": "Who to greet", "required": false }
+      },
+      "returns": { "type": "object", "description": "Greeting payload" }
+    },
+    "roll_dice": {
+      "description": "Rolls dice and returns the results.",
+      "parameters": {
+        "count": { "type": "number", "description": "How many dice (1-10)", "required": false },
+        "sides": { "type": "number", "description": "Sides per die (2-100)", "required": false }
+      },
+      "returns": { "type": "object", "description": "Roll results" }
+    }
+  },
+  "interfaces": [
+    {
+      "id": "playground",
+      "label": "Playground",
+      "description": "Try the demo functions from a sandboxed interface.",
+      "entry": "interfaces/playground.html",
+      "functions": ["get_greeting", "roll_dice"],
+      "min_height": 360
+    }
+  ]
+}
