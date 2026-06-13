@@ -84,7 +84,7 @@ survival; types artifact current.
   - Stamp the server-derived hash into the stored manifest entry (`interfaces[i].hash`) —
     developer-supplied `hash` values are ignored/overwritten.
 - Garbage collection of orphaned `interfaces/` objects: explicitly deferred (storage is
-  $0.015/GB-mo noise); note in LAUNCH_FOLLOWUPS.md.
+  $0.015/GB-mo noise); recorded in the PR6 accepted-risks entry of LAUNCH_RELEASE_PACKET.md.
 
 **Tests:** upload with valid interface → R2 copy + hash stamped; missing entry → 4xx; oversize →
 4xx; re-upload identical file → same key, no error; regeneration keeps `interfaces` + hashes

@@ -64,6 +64,12 @@ import {
   upsertManifestUploadFile,
 } from "../services/app-manifest-generation.ts";
 import {
+  InterfaceArtifactError,
+  type InterfaceArtifactFile,
+  interfaceArtifactPrefixForApp,
+  prepareInterfaceArtifacts,
+} from "../services/interface-artifacts.ts";
+import {
   buildVersionMetadataEntry,
   buildVersionTrustMetadata,
 } from "../services/trust.ts";
@@ -929,47 +935,75 @@ export async function handleUpload(request: Request): Promise<Response> {
         // - index.tsx (IIFE bundle) - for MCP sandbox execution
         // - index.esm.js (ESM bundle) - for browser UI rendering
         // - _source_index.tsx - original source for generate-docs
+        const preparedFiles = bundleUsed
+          ? [
+            // Upload IIFE bundled code as the entry file (for MCP sandbox)
+            {
+              name: normalizedEntryName,
+              content: new TextEncoder().encode(bundledCode),
+              contentType: getContentType(normalizedEntryName),
+            },
+            // Upload ESM bundled code for browser UI rendering
+            ...(esmBundledCode
+              ? [{
+                name: normalizedEntryName.replace(
+                  /\.(tsx?|jsx?)$/,
+                  ".esm.js",
+                ),
+                content: new TextEncoder().encode(esmBundledCode),
+                contentType: "application/javascript",
+              }]
+              : []),
+            // Upload original entry file with _source_ prefix for generate-docs parsing
+            // This preserves the original TypeScript code with export statements
+            {
+              name: `_source_${normalizedEntryName}`,
+              content: new TextEncoder().encode(entryFile.content),
+              contentType: getContentType(normalizedEntryName),
+            },
+            // Also upload original files for reference/debugging
+            ...validatedFiles
+              .filter((f) => f.name !== entryFile.name)
+              .map((f) => ({
+                name: normalizeFileName(f.name),
+                content: new TextEncoder().encode(f.content),
+                contentType: getContentType(f.name),
+              })),
+          ]
+          : validatedFiles.map((f) => ({
+            name: normalizeFileName(f.name),
+            content: new TextEncoder().encode(f.content),
+            contentType: getContentType(f.name),
+          }));
+
+        // Interfaces: validate declared entries against the exact bytes that
+        // ship, stamp server-derived hashes into the manifest BEFORE it is
+        // persisted (R2 manifest.json + apps.manifest), and stage
+        // content-addressed copies for the dedicated serving prefix.
+        let interfaceArtifacts: InterfaceArtifactFile[] = [];
+        try {
+          const interfacePrep = await prepareInterfaceArtifacts({
+            manifest,
+            files: preparedFiles,
+          });
+          if (interfacePrep) {
+            manifest = interfacePrep.manifest;
+            interfaceArtifacts = interfacePrep.artifacts;
+            log(
+              "info",
+              `Prepared ${interfaceArtifacts.length} interface artifact(s)`,
+            );
+          }
+        } catch (interfaceErr) {
+          if (interfaceErr instanceof InterfaceArtifactError) {
+            log("error", interfaceErr.message);
+            return error(interfaceErr.message, 400);
+          }
+          throw interfaceErr;
+        }
+
         const filesToUpload = upsertManifestUploadFile(
-          bundleUsed
-            ? [
-              // Upload IIFE bundled code as the entry file (for MCP sandbox)
-              {
-                name: normalizedEntryName,
-                content: new TextEncoder().encode(bundledCode),
-                contentType: getContentType(normalizedEntryName),
-              },
-              // Upload ESM bundled code for browser UI rendering
-              ...(esmBundledCode
-                ? [{
-                  name: normalizedEntryName.replace(
-                    /\.(tsx?|jsx?)$/,
-                    ".esm.js",
-                  ),
-                  content: new TextEncoder().encode(esmBundledCode),
-                  contentType: "application/javascript",
-                }]
-                : []),
-              // Upload original entry file with _source_ prefix for generate-docs parsing
-              // This preserves the original TypeScript code with export statements
-              {
-                name: `_source_${normalizedEntryName}`,
-                content: new TextEncoder().encode(entryFile.content),
-                contentType: getContentType(normalizedEntryName),
-              },
-              // Also upload original files for reference/debugging
-              ...validatedFiles
-                .filter((f) => f.name !== entryFile.name)
-                .map((f) => ({
-                  name: normalizeFileName(f.name),
-                  content: new TextEncoder().encode(f.content),
-                  contentType: getContentType(f.name),
-                })),
-            ]
-            : validatedFiles.map((f) => ({
-              name: normalizeFileName(f.name),
-              content: new TextEncoder().encode(f.content),
-              contentType: getContentType(f.name),
-            })),
+          preparedFiles,
           manifest,
           (manifestJson) => ({
             name: "manifest.json",
@@ -999,6 +1033,19 @@ export async function handleUpload(request: Request): Promise<Response> {
         log("info", "Uploading to storage...");
         const storageKey = `apps/${appId}/${version}/`;
         await r2Service.uploadFiles(storageKey, filesToUpload);
+        if (interfaceArtifacts.length > 0) {
+          // Content-addressed, so re-writes are idempotent; this must succeed
+          // before the app record exists or the manifest would point at
+          // hashes the sandbox worker can never serve.
+          await r2Service.uploadFiles(
+            interfaceArtifactPrefixForApp(appId),
+            interfaceArtifacts,
+          );
+          log(
+            "success",
+            `Stored ${interfaceArtifacts.length} interface artifact(s)`,
+          );
+        }
         log("success", "Upload complete");
 
         // Store ESM bundle in KV for Dynamic Worker loading (in-process MCP calls)
@@ -1495,45 +1542,69 @@ export async function handleDraftUpload(
         const r2Service = createR2Service();
 
         // Prepare files for upload
+        const preparedDraftFiles = bundleUsed
+          ? [
+            {
+              name: normalizedEntryName,
+              content: new TextEncoder().encode(bundledCode),
+              contentType: getContentType(normalizedEntryName),
+            },
+            // Upload ESM bundle for browser rendering
+            ...(esmBundledCode
+              ? [{
+                name: normalizedEntryName.replace(
+                  /\.(tsx?|jsx?)$/,
+                  ".esm.js",
+                ),
+                content: new TextEncoder().encode(esmBundledCode),
+                contentType: "application/javascript",
+              }]
+              : []),
+            // Upload original entry file with _source_ prefix for generate-docs parsing
+            {
+              name: `_source_${normalizedEntryName}`,
+              content: new TextEncoder().encode(entryFile.content),
+              contentType: getContentType(normalizedEntryName),
+            },
+            ...validatedFiles
+              .filter((f) => f.name !== entryFile.name)
+              .map((f) => ({
+                name: normalizeFileName(f.name),
+                content: new TextEncoder().encode(f.content),
+                contentType: getContentType(f.name),
+              })),
+          ]
+          : validatedFiles.map((f) => ({
+            name: normalizeFileName(f.name),
+            content: new TextEncoder().encode(f.content),
+            contentType: getContentType(f.name),
+          }));
+
+        // Interfaces: stamp hashes into the draft manifest and stage
+        // content-addressed artifacts (shared with live versions — keys are
+        // content-derived, so draft and publish converge automatically).
+        let draftManifest = manifestHydration.manifest;
+        let draftInterfaceArtifacts: InterfaceArtifactFile[] = [];
+        try {
+          const interfacePrep = await prepareInterfaceArtifacts({
+            manifest: draftManifest,
+            files: preparedDraftFiles,
+          });
+          if (interfacePrep) {
+            draftManifest = interfacePrep.manifest;
+            draftInterfaceArtifacts = interfacePrep.artifacts;
+          }
+        } catch (interfaceErr) {
+          if (interfaceErr instanceof InterfaceArtifactError) {
+            log("error", interfaceErr.message);
+            return error(interfaceErr.message, 400);
+          }
+          throw interfaceErr;
+        }
+
         const filesToUpload = upsertManifestUploadFile(
-          bundleUsed
-            ? [
-              {
-                name: normalizedEntryName,
-                content: new TextEncoder().encode(bundledCode),
-                contentType: getContentType(normalizedEntryName),
-              },
-              // Upload ESM bundle for browser rendering
-              ...(esmBundledCode
-                ? [{
-                  name: normalizedEntryName.replace(
-                    /\.(tsx?|jsx?)$/,
-                    ".esm.js",
-                  ),
-                  content: new TextEncoder().encode(esmBundledCode),
-                  contentType: "application/javascript",
-                }]
-                : []),
-              // Upload original entry file with _source_ prefix for generate-docs parsing
-              {
-                name: `_source_${normalizedEntryName}`,
-                content: new TextEncoder().encode(entryFile.content),
-                contentType: getContentType(normalizedEntryName),
-              },
-              ...validatedFiles
-                .filter((f) => f.name !== entryFile.name)
-                .map((f) => ({
-                  name: normalizeFileName(f.name),
-                  content: new TextEncoder().encode(f.content),
-                  contentType: getContentType(f.name),
-                })),
-            ]
-            : validatedFiles.map((f) => ({
-              name: normalizeFileName(f.name),
-              content: new TextEncoder().encode(f.content),
-              contentType: getContentType(f.name),
-            })),
-          manifestHydration.manifest,
+          preparedDraftFiles,
+          draftManifest,
           (manifestJson) => ({
             name: "manifest.json",
             content: new TextEncoder().encode(manifestJson),
@@ -1545,6 +1616,16 @@ export async function handleDraftUpload(
         log("info", "Uploading draft to storage...");
         const draftStorageKey = `apps/${appId}/draft/`;
         await r2Service.uploadFiles(draftStorageKey, filesToUpload);
+        if (draftInterfaceArtifacts.length > 0) {
+          await r2Service.uploadFiles(
+            interfaceArtifactPrefixForApp(appId),
+            draftInterfaceArtifacts,
+          );
+          log(
+            "success",
+            `Stored ${draftInterfaceArtifacts.length} interface artifact(s)`,
+          );
+        }
         log("success", "Draft upload complete");
 
         // Update app record with draft info
@@ -1679,8 +1760,32 @@ export async function handleUploadFiles(
     description: validatedOptions.description,
   });
 
-  const manifest = pipeline.manifest;
+  let manifest = pipeline.manifest;
   const exports = pipeline.exports;
+
+  // Interfaces: stamp hashes and stage content-addressed artifacts. Throws
+  // InterfaceArtifactError (status 400) — programmatic callers surface it
+  // like any other upload validation failure.
+  let interfaceArtifacts: InterfaceArtifactFile[] = [];
+  const interfacePrep = await prepareInterfaceArtifacts({
+    manifest,
+    files: pipeline.filesToUpload,
+  });
+  if (interfacePrep) {
+    manifest = interfacePrep.manifest;
+    interfaceArtifacts = interfacePrep.artifacts;
+    // Replace the pipeline's manifest.json with the stamped manifest so the
+    // stored bundle matches the DB record.
+    pipeline.filesToUpload = upsertManifestUploadFile(
+      pipeline.filesToUpload,
+      manifest,
+      (manifestJson) => ({
+        name: "manifest.json",
+        content: new TextEncoder().encode(manifestJson),
+        contentType: "application/json",
+      }),
+    );
+  }
 
   // Generate app identity
   const appId = crypto.randomUUID();
@@ -1735,6 +1840,12 @@ export async function handleUploadFiles(
   const r2Service = createR2Service();
   const storageKey = `apps/${appId}/${version}/`;
   await r2Service.uploadFiles(storageKey, pipeline.filesToUpload);
+  if (interfaceArtifacts.length > 0) {
+    await r2Service.uploadFiles(
+      interfaceArtifactPrefixForApp(appId),
+      interfaceArtifacts,
+    );
+  }
 
   if (globalThis.__env?.CODE_CACHE?.put && pipeline.esmBundledCode) {
     await globalThis.__env.CODE_CACHE.put(
@@ -2102,42 +2213,58 @@ export async function handleDraftUploadFiles(
   const r2Service = createR2Service();
 
   // Prepare files for upload
+  const preparedDraftFiles = bundleUsed
+    ? [
+      {
+        name: normalizedEntryName,
+        content: new TextEncoder().encode(bundledCode),
+        contentType: getContentType(normalizedEntryName),
+      },
+      // Upload ESM bundle for browser rendering
+      ...(esmBundledCode
+        ? [{
+          name: normalizedEntryName.replace(/\.(tsx?|jsx?)$/, ".esm.js"),
+          content: new TextEncoder().encode(esmBundledCode),
+          contentType: "application/javascript",
+        }]
+        : []),
+      // Upload original entry file with _source_ prefix for generate-docs parsing
+      {
+        name: `_source_${normalizedEntryName}`,
+        content: new TextEncoder().encode(entryFile.content),
+        contentType: getContentType(normalizedEntryName),
+      },
+      ...validatedFiles
+        .filter((f) => f.name !== entryFile.name)
+        .map((f) => ({
+          name: normalizeFileName(f.name),
+          content: new TextEncoder().encode(f.content),
+          contentType: getContentType(f.name),
+        })),
+    ]
+    : validatedFiles.map((f) => ({
+      name: normalizeFileName(f.name),
+      content: new TextEncoder().encode(f.content),
+      contentType: getContentType(f.name),
+    }));
+
+  // Interfaces: stamp hashes into the draft manifest and stage
+  // content-addressed artifacts. InterfaceArtifactError (status 400)
+  // propagates to the programmatic caller like other validation failures.
+  let draftManifest = manifestHydration.manifest;
+  let draftInterfaceArtifacts: InterfaceArtifactFile[] = [];
+  const interfacePrep = await prepareInterfaceArtifacts({
+    manifest: draftManifest,
+    files: preparedDraftFiles,
+  });
+  if (interfacePrep) {
+    draftManifest = interfacePrep.manifest;
+    draftInterfaceArtifacts = interfacePrep.artifacts;
+  }
+
   const filesToUpload = upsertManifestUploadFile(
-    bundleUsed
-      ? [
-        {
-          name: normalizedEntryName,
-          content: new TextEncoder().encode(bundledCode),
-          contentType: getContentType(normalizedEntryName),
-        },
-        // Upload ESM bundle for browser rendering
-        ...(esmBundledCode
-          ? [{
-            name: normalizedEntryName.replace(/\.(tsx?|jsx?)$/, ".esm.js"),
-            content: new TextEncoder().encode(esmBundledCode),
-            contentType: "application/javascript",
-          }]
-          : []),
-        // Upload original entry file with _source_ prefix for generate-docs parsing
-        {
-          name: `_source_${normalizedEntryName}`,
-          content: new TextEncoder().encode(entryFile.content),
-          contentType: getContentType(normalizedEntryName),
-        },
-        ...validatedFiles
-          .filter((f) => f.name !== entryFile.name)
-          .map((f) => ({
-            name: normalizeFileName(f.name),
-            content: new TextEncoder().encode(f.content),
-            contentType: getContentType(f.name),
-          })),
-      ]
-      : validatedFiles.map((f) => ({
-        name: normalizeFileName(f.name),
-        content: new TextEncoder().encode(f.content),
-        contentType: getContentType(f.name),
-      })),
-    manifestHydration.manifest,
+    preparedDraftFiles,
+    draftManifest,
     (manifestJson) => ({
       name: "manifest.json",
       content: new TextEncoder().encode(manifestJson),
@@ -2149,6 +2276,16 @@ export async function handleDraftUploadFiles(
   log("info", "Uploading draft to storage...");
   const draftStorageKey = `apps/${appId}/draft/`;
   await r2Service.uploadFiles(draftStorageKey, filesToUpload);
+  if (draftInterfaceArtifacts.length > 0) {
+    await r2Service.uploadFiles(
+      interfaceArtifactPrefixForApp(appId),
+      draftInterfaceArtifacts,
+    );
+    log(
+      "success",
+      `Stored ${draftInterfaceArtifacts.length} interface artifact(s)`,
+    );
+  }
   log("success", "Draft upload complete");
 
   // Update app record with draft info
