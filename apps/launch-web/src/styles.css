@@ -212,6 +212,206 @@ button {
   font-weight: 500;
 }
 
+/* Sign-in modal (rendered by SignInModalProvider). Without these rules the
+   modal renders as an unstyled in-flow block below the fold — i.e. clicking
+   "Sign in" appears to do nothing. */
+.signin-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(10, 10, 10, 0.28);
+  backdrop-filter: blur(6px);
+  animation: signin-fade 0.15s ease-out;
+}
+
+.signin-modal {
+  position: relative;
+  width: min(100%, 380px);
+  padding: 30px 28px 24px;
+  border: 1px solid var(--ul-border);
+  border-radius: 18px;
+  background: var(--ul-bg);
+  box-shadow: var(--ul-shadow);
+  animation: signin-rise 0.18s ease-out;
+}
+
+.signin-handle {
+  display: none;
+}
+
+.signin-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ul-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.signin-close:hover {
+  background: var(--ul-hover);
+  color: var(--ul-text);
+}
+
+.signin-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  text-align: center;
+}
+
+.signin-heading {
+  font-family: var(--ul-font);
+  font-size: 18px;
+  color: var(--ul-text);
+}
+
+.signin-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.signin-google {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--ul-text);
+  color: #fff;
+  font-family: var(--ul-sans);
+  font-size: 14.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.05s;
+}
+
+.signin-google:hover {
+  opacity: 0.9;
+}
+
+.signin-google:active {
+  transform: translateY(1px);
+}
+
+.signin-google.authenticating {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.signin-secondary {
+  width: 100%;
+  padding: 11px 16px;
+  border: 1px solid var(--ul-border);
+  border-radius: 11px;
+  background: var(--ul-bg);
+  color: var(--ul-secondary);
+  font-family: var(--ul-sans);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.signin-secondary:hover {
+  background: var(--ul-hover);
+}
+
+.signin-note {
+  color: var(--ul-muted);
+  font-family: var(--ul-sans);
+  font-size: 12.5px;
+}
+
+.signin-spinner {
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: signin-spin 0.7s linear infinite;
+}
+
+@keyframes signin-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes signin-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes signin-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 560px) {
+  .signin-backdrop {
+    place-items: end center;
+    padding: 0;
+  }
+
+  .signin-modal {
+    width: 100%;
+    padding-top: 12px;
+    border-radius: 20px 20px 0 0;
+    animation: signin-sheet 0.2s ease-out;
+  }
+
+  .signin-handle {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 8px;
+  }
+
+  .signin-handle span {
+    width: 36px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--ul-border-strong);
+  }
+
+  @keyframes signin-sheet {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+}
+
 .mobile-nav,
 .bottom-nav {
   display: none;
