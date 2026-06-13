@@ -3355,19 +3355,6 @@ button {
   line-height: 1;
 }
 
-.wallet-amount small {
-  margin-right: 3px;
-  font-size: 26px;
-  font-weight: 500;
-}
-
-.wallet-amount em {
-  color: var(--ul-muted);
-  font-size: 20px;
-  font-style: normal;
-  font-weight: 500;
-}
-
 .wallet-hero-actions {
   display: flex;
   flex-wrap: wrap;
@@ -4577,10 +4564,6 @@ button {
 
   .wallet-amount strong {
     font-size: 34px;
-  }
-
-  .wallet-amount small {
-    font-size: 22px;
   }
 
   .wallet-metric-grid,

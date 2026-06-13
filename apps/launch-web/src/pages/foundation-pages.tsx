@@ -4078,7 +4078,7 @@ export function AccountFoundationPage(
           <>
             <div className="wallet-hero">
               <WalletAmount
-                label="Spendable credits"
+                label="Spendable balance"
                 value={wallet ? totals.spendable : null}
               />
               <div className="wallet-hero-actions">
@@ -4136,7 +4136,7 @@ export function AccountFoundationPage(
           <>
             <div className="wallet-hero">
               <WalletAmount
-                label="Earned credits"
+                label="Earned balance"
                 value={wallet ? totals.earned : null}
               />
             </div>
@@ -4175,14 +4175,17 @@ function WalletAmount(
       </div>
     );
   }
-  const [whole, fraction] = value.toFixed(3).split(".");
+  // Ledger stores "Light" (100 = $1); display the real dollar value, uniform
+  // size/color — no x100, no smaller/greyer cents.
+  const dollars = value / 100;
   return (
     <div className="wallet-amount">
       <span>{label}</span>
       <strong>
-        <small>$</small>
-        {Number(whole).toLocaleString()}
-        <em>.{fraction}</em>
+        {`$${dollars.toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`}
       </strong>
     </div>
   );
@@ -4218,9 +4221,9 @@ function WalletBalancePanel({
               label={publishRequirement.met
                 ? "Publish ready"
                 : "Publish minimum"}
-              value={`${
-                formatNumber(creditsValue(publishRequirement.requiredBalance))
-              } credits`}
+              value={formatCreditFromLight(
+                creditsValue(publishRequirement.requiredBalance),
+              )}
             />
           )
           : null}
@@ -4684,10 +4687,9 @@ function WalletTopUpPanel(
   return (
     <div className="wallet-topup-grid">
       <Card className="wallet-topup-card">
-        <p className="section-label">Credits amount</p>
+        <p className="section-label">Amount</p>
         <div className="light-input-shell">
-          <strong>{creditsAmount.toLocaleString()}</strong>
-          <small>credits</small>
+          <strong>{formatCreditFromLight(creditsAmount)}</strong>
         </div>
         <div className="amount-presets">
           {presets.map((amount) => (
@@ -4748,17 +4750,13 @@ function WalletTopUpPanel(
           muted={shownQuote.feeNote}
           value={formatCurrency(shownQuote.feeDollars)}
         />
-        <QuoteLine
-          label="Rate"
-          value={method === "earnings" ? "1:1 · no fee" : "$1 credit / $1"}
-        />
         <div className="quote-total">
           <span>{method === "earnings" ? "Transfer" : "Total"}</span>
           <strong>{formatCurrency(shownQuote.totalDollars)}</strong>
         </div>
         <div className="quote-receive">
           <span>You receive</span>
-          <strong>{creditsAmount.toLocaleString()} credits</strong>
+          <strong>{formatCreditFromLight(creditsAmount)}</strong>
         </div>
         {checkout
           ? <div className="topup-payment-element" ref={paymentElementRef} />
