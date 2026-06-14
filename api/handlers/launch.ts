@@ -4148,6 +4148,9 @@ async function handleLaunchWalletTopUpIntent(
       paymentIntentId: intent.paymentIntentId,
       clientSecret: intent.clientSecret,
       stripeCustomerId: intent.stripeCustomerId,
+      // Returned so the client can pre-fill the PaymentElement, which lets Stripe
+      // Link recognize the returning user and show the one-tap flow.
+      email,
       quote: withLaunchFundingCreditsAliases(intent.quote),
       billingAddress: billingProfile
         ? publicBillingAddress(billingProfile)

@@ -488,6 +488,8 @@ export interface LaunchWalletFundingIntentResponse {
   paymentIntentId: string;
   clientSecret: string;
   stripeCustomerId: string;
+  /** Buyer email, so the client can pre-fill the PaymentElement for Stripe Link. */
+  email?: string;
   quote: LaunchWalletFundingFeeSummary;
   billingAddress?: unknown;
   generatedAt: string;

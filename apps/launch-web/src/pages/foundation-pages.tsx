@@ -4322,6 +4322,7 @@ function WalletTopUpPanel(
     {
       clientSecret: string;
       publishableKey: string;
+      email?: string;
       // The server-computed quote locked into the PaymentIntent — the ONLY
       // amount the Pay button may display once a checkout exists.
       quote: {
@@ -4426,7 +4427,13 @@ function WalletTopUpPanel(
           clientSecret: checkout.clientSecret,
           appearance: { theme: "stripe" },
         });
-        const paymentElement = elements.create("payment");
+        const paymentElement = elements.create("payment", {
+          // Pre-fill the buyer's email so Stripe Link recognizes returning
+          // users and offers the one-tap flow instead of the sign-up form.
+          defaultValues: checkout.email
+            ? { billingDetails: { email: checkout.email } }
+            : undefined,
+        });
         // Gate "collecting" on the iframe actually rendering: an enabled Pay
         // button over an empty box (e.g. consumed client secret) is a dead end.
         paymentElement.on("ready", () => {
@@ -4538,6 +4545,7 @@ function WalletTopUpPanel(
       setCheckout({
         clientSecret: response.clientSecret,
         publishableKey: response.publishableKey,
+        email: response.email,
         quote: {
           baseDollars: response.quote.baseAmountCents / 100,
           feeDollars: response.quote.processingFeeCents / 100,
@@ -4685,17 +4693,8 @@ function WalletTopUpPanel(
             onClick={() => selectMethod("card")}
             type="button"
           >
-            <strong>Card</strong>
-            <span>2.9% + $0.30 gross-up</span>
-          </button>
-          <button
-            className={method === "ach" ? "active" : ""}
-            disabled={inputsLocked}
-            onClick={() => selectMethod("ach")}
-            type="button"
-          >
-            <strong>Bank (ACH)</strong>
-            <span>0.8% gross-up, capped at $5</span>
+            <strong>Pay with Link</strong>
+            <span>Card or bank · 2.9% + $0.30</span>
           </button>
           <button
             className={method === "earnings" ? "active" : ""}
