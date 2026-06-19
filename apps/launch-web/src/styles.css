@@ -2069,12 +2069,14 @@ button {
 }
 
 .public-tool-header {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
   max-width: 760px;
   margin-bottom: 28px;
+}
+
+/* Owner handle shown after the agent name in the public header. */
+.tool-owner {
+  color: var(--ul-muted);
+  font-size: 15px;
 }
 
 .public-tool-header > .avatar {

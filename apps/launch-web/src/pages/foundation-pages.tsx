@@ -1372,10 +1372,10 @@ function AgentDetailSurface({
         : null}
 
       <section className="public-tool-header">
-        <Avatar color={tool.color} name={tool.author} />
         <div>
           <div className="tool-title-row">
             <h1>{tool.title}</h1>
+            <span className="tool-owner">{tool.author}</span>
           </div>
           <p>{tool.summary}</p>
           <div className="tool-meta-row">
@@ -3164,7 +3164,6 @@ function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement
       <Card>
         <p className="section-label">Owner</p>
         <div className="owner-row">
-          <Avatar color={tool.color} name={tool.author} />
           <div>
             <strong>{tool.author}</strong>
           </div>
@@ -3553,7 +3552,6 @@ function OwnedAgentCard({
   return (
     <Card className="owned-tool-card">
       <div className="owned-tool-main">
-        <Avatar color={tool.color} name={tool.author} />
         <div>
           <h3>{tool.title}</h3>
           <p>{tool.summary}</p>
@@ -6140,7 +6138,6 @@ function CompactAgentCard({ tool }: { tool: AgentFixture }): ReactElement {
   return (
     <Card className="compact-tool-card">
       <div className="compact-tool-title">
-        <Avatar color={tool.color} name={tool.author} />
         <Mono>{tool.name}</Mono>
       </div>
       <p>{tool.summary}</p>
@@ -6186,7 +6183,6 @@ function StoreAgentCard({ tool }: { tool: AgentFixture }): ReactElement {
   return (
     <Card className="store-tool-card">
       <div className="store-card-title">
-        <Avatar color={tool.color} name={tool.author} />
         <h3>{tool.name}</h3>
       </div>
       <p>{tool.summary}</p>
