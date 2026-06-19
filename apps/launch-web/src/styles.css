@@ -3972,11 +3972,33 @@ button {
   line-height: 1.45;
 }
 
+/* The account name is its own section card at the top of Preferences. */
+.account-name-card {
+  padding: 15px 16px;
+  margin-bottom: 16px;
+}
+
+.account-name-card .section-label {
+  margin: 0 0 7px;
+}
+
 .profile-strip {
   display: flex;
   align-items: center;
   gap: 13px;
-  margin-bottom: 18px;
+}
+
+/* Balance / Earnings figure, framed as a subsection rather than a page hero. */
+.wallet-amount-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.wallet-amount-card .wallet-amount strong {
+  font-size: 34px;
 }
 
 .profile-strip .avatar {

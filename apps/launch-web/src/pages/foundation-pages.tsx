@@ -3970,9 +3970,11 @@ function ProfileStrip({ canManage }: { canManage: boolean }): ReactElement {
   };
 
   return (
-    <div className="profile-strip">
-      <div className="profile-identity">
-        {editing
+    <Card className="account-name-card">
+      <p className="section-label">Account</p>
+      <div className="profile-strip">
+        <div className="profile-identity">
+          {editing
           ? (
             <form
               className="profile-name-edit"
@@ -4018,12 +4020,13 @@ function ProfileStrip({ canManage }: { canManage: boolean }): ReactElement {
                 : null}
             </div>
           )}
-        {!canManage
-          ? <p>Complete Google sign-in to manage your account</p>
-          : null}
-        {error ? <p className="profile-name-error">{error}</p> : null}
+          {!canManage
+            ? <p>Complete Google sign-in to manage your account</p>
+            : null}
+          {error ? <p className="profile-name-error">{error}</p> : null}
+        </div>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -4092,7 +4095,6 @@ export function AccountFoundationPage(
   return (
     <div className="launch-page-narrow account-page">
       <ApiNotice live={live} noun="account" />
-      <ProfileStrip canManage={canManageKeys} />
 
       <div className="account-subtabs" role="tablist" aria-label="Account sections">
         {([
@@ -4116,6 +4118,7 @@ export function AccountFoundationPage(
       {tab === "preferences"
         ? (
           <>
+            <ProfileStrip canManage={canManageKeys} />
             <SettingsCard
               action={canManageKeys
                 ? (
@@ -4243,7 +4246,7 @@ export function AccountFoundationPage(
       {tab === "balance"
         ? (
           <>
-            <div className="wallet-hero">
+            <Card className="wallet-amount-card">
               <WalletAmount
                 label="Spendable balance"
                 value={wallet ? totals.spendable : null}
@@ -4256,7 +4259,7 @@ export function AccountFoundationPage(
                   {showTopUp ? "Close" : "+ Add funds"}
                 </Button>
               </div>
-            </div>
+            </Card>
 
             <WalletBalancePanel
               rows={mergeWalletRows(transactions, receipts)}
@@ -4301,12 +4304,12 @@ export function AccountFoundationPage(
       {tab === "earnings"
         ? (
           <>
-            <div className="wallet-hero">
+            <Card className="wallet-amount-card">
               <WalletAmount
                 label="Earned balance"
                 value={wallet ? totals.earned : null}
               />
-            </div>
+            </Card>
             <WalletEarningsPanel
               earnings={liveEarningRows(earnings)}
               payoutStatus={wallet?.payoutStatus}
