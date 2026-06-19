@@ -101,6 +101,9 @@ export interface LaunchSettingsResponse {
   // When true the user's connected agent may approve cross-Agent wiring
   // grants on their behalf; when false approvals happen here on the website.
   agentGrantAutoApprove: boolean;
+  // Account display name (also the public author label on published Agents).
+  // null when the user hasn't set one.
+  displayName?: string | null;
 }
 
 export interface LaunchGrantListQuery {
@@ -494,7 +497,11 @@ export class LaunchApiClient {
   }
 
   updateLaunchSettings(
-    request: { agentGrantAutoApprove: boolean },
+    request: {
+      agentGrantAutoApprove?: boolean;
+      // Empty string clears the override back to the default label.
+      displayName?: string | null;
+    },
   ): Promise<LaunchSettingsResponse> {
     return this.fetchJson("/api/launch/settings", {
       method: "PATCH",

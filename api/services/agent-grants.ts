@@ -690,6 +690,49 @@ export async function setUserGrantAutoApprove(
   }
 }
 
+// The account display name doubles as the user's public author label on
+// published Agents (see OWNER_SELECT), so it lives on the same users row.
+export async function getUserDisplayName(
+  userId: string,
+): Promise<string | null> {
+  const db = getDbConfig();
+  if (!db) return null;
+  try {
+    const response = await fetch(
+      `${db.baseUrl}/rest/v1/users?id=eq.${userId}&select=display_name&limit=1`,
+      { headers: db.headers },
+    );
+    if (!response.ok) return null;
+    const rows = await response.json().catch(() => []);
+    const value = Array.isArray(rows) ? rows[0]?.display_name : null;
+    return typeof value === "string" && value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setUserDisplayName(
+  userId: string,
+  value: string | null,
+): Promise<void> {
+  const db = getDbConfig();
+  if (!db) {
+    throw new RequestValidationError("Account storage is not configured", 503);
+  }
+  const response = await fetch(
+    `${db.baseUrl}/rest/v1/users?id=eq.${userId}`,
+    {
+      method: "PATCH",
+      headers: { ...db.headers, Prefer: "return=minimal" },
+      // An empty name clears the override and falls back to the default label.
+      body: JSON.stringify({ display_name: value }),
+    },
+  );
+  if (!response.ok) {
+    throw new RequestValidationError("Failed to update display name", 500);
+  }
+}
+
 export async function getGrant(
   userId: string,
   grantId: string,

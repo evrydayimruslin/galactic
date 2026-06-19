@@ -132,10 +132,12 @@ import {
   createGrant,
   fetchAppHandles,
   getGrant,
+  getUserDisplayName,
   getUserGrantAutoApprove,
   listGrantSummaries,
   setGrantCap,
   setGrantStatus,
+  setUserDisplayName,
   setUserGrantAutoApprove,
   toGrantSummary,
 } from "../services/agent-grants.ts";
@@ -1492,6 +1494,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               type: "object",
               properties: {
                 agentGrantAutoApprove: { type: "boolean" },
+                displayName: { type: ["string", "null"] },
               },
             }),
           },
@@ -2360,6 +2363,10 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           required: ["agentGrantAutoApprove", "generatedAt"],
           properties: {
             agentGrantAutoApprove: { type: "boolean" },
+            displayName: {
+              type: ["string", "null"],
+              description: "Account display name, or null when unset.",
+            },
             generatedAt: { type: "string", format: "date-time" },
           },
         },
@@ -3320,6 +3327,7 @@ async function handleLaunchSettings(
   if (method === "GET") {
     return json({
       agentGrantAutoApprove: await getUserGrantAutoApprove(user.id),
+      displayName: await getUserDisplayName(user.id),
       generatedAt: new Date().toISOString(),
     });
   }
@@ -3336,8 +3344,24 @@ async function handleLaunchSettings(
           }
           await setUserGrantAutoApprove(user.id, body.agentGrantAutoApprove);
         }
+        if ("displayName" in body) {
+          if (
+            body.displayName !== null && typeof body.displayName !== "string"
+          ) {
+            return error("displayName must be a string or null", 400);
+          }
+          const trimmed = typeof body.displayName === "string"
+            ? body.displayName.trim()
+            : "";
+          if (trimmed.length > 80) {
+            return error("displayName must be 80 characters or fewer", 400);
+          }
+          // Empty string clears the override back to the default label.
+          await setUserDisplayName(user.id, trimmed.length > 0 ? trimmed : null);
+        }
         return json({
           agentGrantAutoApprove: await getUserGrantAutoApprove(user.id),
+          displayName: await getUserDisplayName(user.id),
           generatedAt: new Date().toISOString(),
         });
       },

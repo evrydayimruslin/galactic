@@ -7,7 +7,6 @@ import {
 } from "react";
 
 import { hasLaunchAuthToken } from "../lib/auth";
-import { launchApiOrigin } from "../lib/api";
 import type { LaunchRouteDefinition, LaunchRouteKey } from "../lib/routes";
 import { AddToAgentButton } from "../pages/foundation-pages";
 import { useSignInModal } from "./sign-in-modal";
@@ -16,6 +15,7 @@ export type IconName =
   | "arrow"
   | "check"
   | "copy"
+  | "edit"
   | "external"
   | "grid"
   | "key"
@@ -151,27 +151,19 @@ export function LaunchShell({
               <span>{route.label}</span>
             </button>
           ))}
-          <a
-            className="nav-item"
-            data-label="Resources"
-            href={`${launchApiOrigin()}/api/skills`}
+          <button
+            className={navClass(activeRoute, "settings")}
+            data-label="Profile"
+            onClick={() => navigate("/account")}
+            type="button"
           >
-            <span>Resources</span>
-          </a>
+            <span>Profile</span>
+          </button>
         </nav>
         <div className="top-actions">
-          {showTopBarAdd ? <AddToAgentButton size="sm" variant="ghost" /> : null}
+          <AddToAgentButton size="sm" variant={showTopBarAdd ? "primary" : "ghost"} />
           {signedIn
-            ? (
-              <button
-                aria-label="Account"
-                className="avatar-button"
-                onClick={() => navigate("/account")}
-                type="button"
-              >
-                <Avatar name="@you" />
-              </button>
-            )
+            ? null
             : (
               <button
                 className="signin-link"
@@ -341,6 +333,8 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }): Re
       return <svg {...common}><path d="m5 12 5 5L20 7" /></svg>;
     case "copy":
       return <svg {...common}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>;
+    case "edit":
+      return <svg {...common}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>;
     case "external":
       return <svg {...common}><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" /></svg>;
     case "grid":

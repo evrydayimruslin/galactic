@@ -678,6 +678,14 @@ function liveWalletTotals(wallet?: LaunchWalletSummary): typeof walletSummary {
   };
 }
 
+// The ledger persists deposit rows server-side as "Light deposit" /
+// "Light deposit refund" / "Light deposit dispute" — "Light" is the internal
+// accounting unit and shouldn't surface in the UI. Relabel at display time so
+// existing rows read cleanly without a data migration.
+function cleanLedgerDescription(description: string): string {
+  return description.replace(/\bLight deposit\b/gi, "Deposit");
+}
+
 // Merge the two disjoint streams — billing transactions (hosting/chat/top-up
 // charges) and agent-call receipts — into one list, newest first. They share
 // no key, so we keep each row's provenance distinct rather than fuzzy-joining.
@@ -692,8 +700,8 @@ function mergeWalletRows(
     when: relativeTime(entry.createdAt) || "now",
     amount: creditsValue(entry.amount),
     detail: entry.appName
-      ? `${entry.appName} · ${entry.description}`
-      : entry.description,
+      ? `${entry.appName} · ${cleanLedgerDescription(entry.description)}`
+      : cleanLedgerDescription(entry.description),
     kind: ledgerKind(entry.category, entry.type),
   }));
   const receiptRows: WalletRow[] = (receipts || []).map((receipt) => {
@@ -3904,6 +3912,119 @@ function AdminField({
 
 type AccountTabId = "preferences" | "balance" | "earnings";
 
+// Account header: avatar + an inline-editable display name. The name persists
+// to the account (and doubles as the public author label on published Agents).
+function ProfileStrip({ canManage }: { canManage: boolean }): ReactElement {
+  const [name, setName] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!canManage) return;
+    let cancelled = false;
+    launchApi.getLaunchSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        setName(settings.displayName ?? null);
+        setLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canManage]);
+
+  const trimmedName = name?.trim() || "";
+  const headingLabel = canManage && trimmedName ? trimmedName : "Account";
+  const avatarName = trimmedName || "@you";
+
+  const startEdit = () => {
+    setDraft(trimmedName);
+    setError(null);
+    setEditing(true);
+  };
+
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const settings = await launchApi.updateLaunchSettings({
+        displayName: draft.trim(),
+      });
+      setName(settings.displayName ?? null);
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="profile-strip">
+      <Avatar color="#0a0a0a" name={avatarName} />
+      <div className="profile-identity">
+        {editing
+          ? (
+            <form
+              className="profile-name-edit"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void save();
+              }}
+            >
+              <input
+                aria-label="Display name"
+                autoFocus
+                maxLength={80}
+                onChange={(event) => setDraft(event.currentTarget.value)}
+                placeholder="Your name"
+                value={draft}
+              />
+              <Button onClick={() => void save()} size="sm">
+                {saving ? "Saving" : "Save"}
+              </Button>
+              <Button
+                onClick={() => setEditing(false)}
+                size="sm"
+                variant="secondary"
+              >
+                Cancel
+              </Button>
+            </form>
+          )
+          : (
+            <div className="profile-name-row">
+              <h1>{headingLabel}</h1>
+              {canManage && loaded
+                ? (
+                  <button
+                    aria-label="Edit name"
+                    className="profile-name-edit-btn"
+                    onClick={startEdit}
+                    type="button"
+                  >
+                    <Icon name="edit" size={14} />
+                  </button>
+                )
+                : null}
+            </div>
+          )}
+        {!canManage
+          ? <p>Complete Google sign-in to manage your account</p>
+          : null}
+        {error ? <p className="profile-name-error">{error}</p> : null}
+      </div>
+    </div>
+  );
+}
+
 export function AccountFoundationPage(
   { live, location, navigate }: LaunchPageProps,
 ): ReactElement {
@@ -3969,32 +4090,7 @@ export function AccountFoundationPage(
   return (
     <div className="launch-page-narrow account-page">
       <ApiNotice live={live} noun="account" />
-      <div className="profile-strip">
-        <Avatar color="#0a0a0a" name="@you" />
-        <div>
-          <h1>Account</h1>
-          <p>
-            {canManageKeys
-              ? "Launch account session"
-              : "Complete Google sign-in to manage your account"}
-          </p>
-        </div>
-        {canManageKeys
-          ? (
-            <Button
-              onClick={() => {
-                void signOutLaunch().finally(() => {
-                  window.location.href = "/";
-                });
-              }}
-              size="sm"
-              variant="secondary"
-            >
-              Sign out
-            </Button>
-          )
-          : null}
-      </div>
+      <ProfileStrip canManage={canManageKeys} />
 
       <div className="account-subtabs" role="tablist" aria-label="Account sections">
         {([
@@ -4026,7 +4122,12 @@ export function AccountFoundationPage(
                   </Button>
                 )
                 : null}
+              collapsible
+              defaultExpanded={false}
               subtitle="Tokens your connected agents use to call Ultralight. New keys reveal once."
+              summary={visibleKeys.length > 0
+                ? <Pill>{visibleKeys.length} keys</Pill>
+                : null}
               title="API keys"
             >
               <p className="settings-help">
@@ -4081,6 +4182,28 @@ export function AccountFoundationPage(
               <AgentGrantApprovalRow canManage={canManageKeys} live={live} />
             </SettingsCard>
 
+            <SettingsCard
+              subtitle="Build on Ultralight — the full platform guide, tool reference, and SDK globals."
+              title="Developer"
+            >
+              <a
+                className="settings-doc-link"
+                href={`${launchApiOrigin()}/api/skills`}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <Icon name="terminal" />
+                <div>
+                  <strong>Platform docs</strong>
+                  <span>
+                    Skills.md — building guide, agent conventions, and resource
+                    URIs.
+                  </span>
+                </div>
+                <Icon name="external" />
+              </a>
+            </SettingsCard>
+
             <div className="connect-agent-callout">
               <span className="target-icon">
                 <Icon name="copy" />
@@ -4094,6 +4217,24 @@ export function AccountFoundationPage(
               </div>
               <AddToAgentButton size="md" variant="secondary" />
             </div>
+
+            {canManageKeys
+              ? (
+                <div className="account-signout-row">
+                  <Button
+                    onClick={() => {
+                      void signOutLaunch().finally(() => {
+                        window.location.href = "/";
+                      });
+                    }}
+                    size="sm"
+                    variant="secondary"
+                  >
+                    Sign out
+                  </Button>
+                </div>
+              )
+              : null}
           </>
         )
         : null}
@@ -5158,24 +5299,57 @@ function QuoteLine(
 function SettingsCard({
   action,
   children,
+  collapsible = false,
+  defaultExpanded = true,
   subtitle,
+  summary,
   title,
 }: {
   action?: ReactNode;
   children: ReactNode;
+  collapsible?: boolean;
+  defaultExpanded?: boolean;
   subtitle?: string;
+  summary?: ReactNode;
   title: string;
 }): ReactElement {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const showBody = !collapsible || expanded;
+  const heading = (
+    <div className="settings-card-heading">
+      <h2>{title}</h2>
+      {subtitle ? <p>{subtitle}</p> : null}
+    </div>
+  );
   return (
     <Card className="settings-card">
       <div className="settings-card-head">
-        <div>
-          <h2>{title}</h2>
-          {subtitle ? <p>{subtitle}</p> : null}
+        {collapsible
+          ? (
+            <button
+              aria-expanded={expanded}
+              className="settings-card-toggle"
+              onClick={() => setExpanded((open) => !open)}
+              type="button"
+            >
+              <span
+                className={expanded
+                  ? "settings-card-chevron open"
+                  : "settings-card-chevron"}
+                aria-hidden="true"
+              >
+                ▸
+              </span>
+              {heading}
+            </button>
+          )
+          : heading}
+        <div className="settings-card-head-actions">
+          {summary}
+          {action}
         </div>
-        {action}
       </div>
-      <div className="settings-card-body">{children}</div>
+      {showBody ? <div className="settings-card-body">{children}</div> : null}
     </Card>
   );
 }
@@ -5351,47 +5525,14 @@ function ByokSettingsCard({
   const providers = live.data.byok
     ? live.data.byok.providers
     : byokProviderFixtures;
-  const [selectedProvider, setSelectedProvider] = useState("");
-  const [apiKeyDraft, setApiKeyDraft] = useState("");
-  const [modelDraft, setModelDraft] = useState("");
-  const [validateOnSave, setValidateOnSave] = useState(true);
-  const [formState, setFormState] = useState<"idle" | "saving" | "error">(
-    "idle",
-  );
+  const [formState, setFormState] = useState<"idle" | "error">("idle");
   const [formMessage, setFormMessage] = useState("");
   const [busyProvider, setBusyProvider] = useState<string | null>(null);
-
-  const providerId = providers.some((option) => option.id === selectedProvider)
-    ? selectedProvider
-    : providers[0]?.id || "";
-  const activeOption = providers.find((option) => option.id === providerId);
-
-  const saveProviderKey = async () => {
-    if (formState === "saving") return;
-    if (!providerId || !apiKeyDraft.trim()) {
-      setFormState("error");
-      setFormMessage("Pick a provider and paste an API key first.");
-      return;
-    }
-    setFormState("saving");
-    setFormMessage("");
-    try {
-      const response = await launchApi.upsertByokProvider(providerId, {
-        apiKey: apiKeyDraft.trim(),
-        ...(modelDraft.trim() ? { model: modelDraft.trim() } : {}),
-        validate: validateOnSave,
-      });
-      // Stored keys are never displayed again; drop the draft immediately.
-      setApiKeyDraft("");
-      setModelDraft("");
-      setFormState("idle");
-      setFormMessage(response.message);
-      live.reload();
-    } catch (err) {
-      setFormState("error");
-      setFormMessage(err instanceof Error ? err.message : String(err));
-    }
-  };
+  // Which provider's key modal is open (null = closed). Each provider gets its
+  // own button rather than a shared dropdown.
+  const [modalProvider, setModalProvider] = useState<
+    LaunchByokProviderOption | null
+  >(null);
 
   const runProviderAction = async (
     provider: string,
@@ -5425,105 +5566,30 @@ function ByokSettingsCard({
       />
       {canManageKeys
         ? (
-          <>
-            <div className="byok-provider-list">
-              {providers.map((option) => (
-                <ByokProviderRow
-                  busy={busyProvider === option.id}
-                  key={option.id}
-                  onRemove={() =>
-                    runProviderAction(
-                      option.id,
-                      () => launchApi.deleteByokProvider(option.id),
-                    )}
-                  onSetPrimary={() =>
-                    runProviderAction(
-                      option.id,
-                      () => launchApi.setByokPrimary(option.id),
-                    )}
-                  option={option}
-                />
-              ))}
-            </div>
-            <form
-              className="arg-grid byok-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void saveProviderKey();
-              }}
-            >
-              <label>
-                <span>provider</span>
-                <select
-                  onChange={(event) =>
-                    setSelectedProvider(event.currentTarget.value)}
-                  value={providerId}
-                >
-                  {providers.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>API key</span>
-                <input
-                  autoComplete="new-password"
-                  onChange={(event) =>
-                    setApiKeyDraft(event.currentTarget.value)}
-                  placeholder={activeOption?.apiKeyPrefix
-                    ? `${activeOption.apiKeyPrefix}...`
-                    : "paste key"}
-                  type="password"
-                  value={apiKeyDraft}
-                />
-              </label>
-              <label>
-                <span>model (optional)</span>
-                <input
-                  onChange={(event) => setModelDraft(event.currentTarget.value)}
-                  placeholder={activeOption?.defaultModel || "provider default"}
-                  value={modelDraft}
-                />
-              </label>
-            </form>
-            <div className="byok-form-footer">
-              <label className="byok-validate">
-                <input
-                  checked={validateOnSave}
-                  onChange={(event) =>
-                    setValidateOnSave(event.currentTarget.checked)}
-                  type="checkbox"
-                />
-                Validate key on save
-              </label>
-              <Button onClick={() => void saveProviderKey()} size="sm">
-                {formState === "saving"
-                  ? "Saving"
-                  : activeOption?.configured
-                  ? "Update key"
-                  : "Add key"}
-              </Button>
-            </div>
-            <p className="settings-help">
-              Keys are sent once, stored encrypted, and used server-side only.
-              {activeOption?.apiKeyUrl
-                ? (
-                  <>
-                    {" "}
-                    <a
-                      href={activeOption.apiKeyUrl}
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      Get a {activeOption.name} key
-                    </a>
-                  </>
-                )
-                : null}
-            </p>
-          </>
+          <div className="byok-provider-list">
+            {providers.map((option) => (
+              <ByokProviderRow
+                busy={busyProvider === option.id}
+                key={option.id}
+                onConfigure={() => {
+                  setFormState("idle");
+                  setFormMessage("");
+                  setModalProvider(option);
+                }}
+                onRemove={() =>
+                  runProviderAction(
+                    option.id,
+                    () => launchApi.deleteByokProvider(option.id),
+                  )}
+                onSetPrimary={() =>
+                  runProviderAction(
+                    option.id,
+                    () => launchApi.setByokPrimary(option.id),
+                  )}
+                option={option}
+              />
+            ))}
+          </div>
         )
         : (
           <EmptyState icon="key" title="Sign in to manage model keys">
@@ -5542,17 +5608,166 @@ function ByokSettingsCard({
           </p>
         )
         : null}
+      {modalProvider
+        ? (
+          <ByokKeyModal
+            onClose={() => setModalProvider(null)}
+            onSaved={(message) => {
+              setModalProvider(null);
+              setFormState("idle");
+              setFormMessage(message);
+              live.reload();
+            }}
+            provider={modalProvider}
+          />
+        )
+        : null}
     </SettingsCard>
+  );
+}
+
+// Per-provider key entry. A single provider is locked in by the row that
+// opened it, so there's no provider picker here — just the key + optional model.
+function ByokKeyModal({
+  onClose,
+  onSaved,
+  provider,
+}: {
+  onClose: () => void;
+  onSaved: (message: string) => void;
+  provider: LaunchByokProviderOption;
+}): ReactElement {
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
+  const [modelDraft, setModelDraft] = useState(provider.model || "");
+  const [validateOnSave, setValidateOnSave] = useState(true);
+  const [state, setState] = useState<"idle" | "saving" | "error">("idle");
+  const [message, setMessage] = useState("");
+
+  const save = async () => {
+    if (state === "saving") return;
+    if (!apiKeyDraft.trim()) {
+      setState("error");
+      setMessage("Paste an API key first.");
+      return;
+    }
+    setState("saving");
+    setMessage("");
+    try {
+      const response = await launchApi.upsertByokProvider(provider.id, {
+        apiKey: apiKeyDraft.trim(),
+        ...(modelDraft.trim() ? { model: modelDraft.trim() } : {}),
+        validate: validateOnSave,
+      });
+      onSaved(response.message);
+    } catch (err) {
+      setState("error");
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <div
+      className="settings-modal-backdrop"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      role="presentation"
+    >
+      <Card className="new-key-modal byok-key-modal">
+        <div className="modal-title-row">
+          <span className="target-icon">
+            <Icon name="key" />
+          </span>
+          <h2>
+            {provider.configured
+              ? `Update ${provider.name} key`
+              : `Add ${provider.name} key`}
+          </h2>
+        </div>
+        <p>Keys are sent once, stored encrypted, and used server-side only.</p>
+        <form
+          className="byok-modal-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
+        >
+          <label>
+            <span>API key</span>
+            <input
+              autoComplete="new-password"
+              autoFocus
+              onChange={(event) => setApiKeyDraft(event.currentTarget.value)}
+              placeholder={provider.apiKeyPrefix
+                ? `${provider.apiKeyPrefix}...`
+                : "paste key"}
+              type="password"
+              value={apiKeyDraft}
+            />
+          </label>
+          <label>
+            <span>model (optional)</span>
+            <input
+              onChange={(event) => setModelDraft(event.currentTarget.value)}
+              placeholder={provider.defaultModel || "provider default"}
+              value={modelDraft}
+            />
+          </label>
+        </form>
+        <label className="byok-validate">
+          <input
+            checked={validateOnSave}
+            onChange={(event) => setValidateOnSave(event.currentTarget.checked)}
+            type="checkbox"
+          />
+          Validate key on save
+        </label>
+        {message
+          ? (
+            <p
+              className={state === "error"
+                ? "settings-help error"
+                : "settings-help"}
+            >
+              {message}
+            </p>
+          )
+          : null}
+        {provider.apiKeyUrl
+          ? (
+            <p className="settings-help">
+              <a href={provider.apiKeyUrl} rel="noreferrer" target="_blank">
+                Get a {provider.name} key
+              </a>
+            </p>
+          )
+          : null}
+        <div className="modal-actions">
+          <Button onClick={onClose} size="sm" variant="secondary">
+            Cancel
+          </Button>
+          <Button onClick={() => void save()} size="sm">
+            {state === "saving"
+              ? "Saving"
+              : provider.configured
+              ? "Update key"
+              : "Add key"}
+          </Button>
+        </div>
+      </Card>
+    </div>
   );
 }
 
 function ByokProviderRow({
   busy,
+  onConfigure,
   onRemove,
   onSetPrimary,
   option,
 }: {
   busy: boolean;
+  onConfigure: () => void;
   onRemove: () => void;
   onSetPrimary: () => void;
   option: LaunchByokProviderOption;
@@ -5579,6 +5794,13 @@ function ByokProviderRow({
           </Button>
         )
         : null}
+      <Button
+        onClick={onConfigure}
+        size="sm"
+        variant={option.configured ? "secondary" : "primary"}
+      >
+        {option.configured ? "Update key" : "Add key"}
+      </Button>
       {option.configured
         ? (
           <Button onClick={onRemove} size="sm" variant="ghost">
