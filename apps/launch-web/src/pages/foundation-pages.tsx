@@ -4236,7 +4236,7 @@ export function AccountFoundationPage(
           <>
             <Card className="wallet-amount-card">
               <WalletAmount
-                label="Spendable balance"
+                label="Balance remaining"
                 value={wallet ? totals.spendable : null}
               />
               <div className="wallet-hero-actions">
@@ -4294,7 +4294,7 @@ export function AccountFoundationPage(
           <>
             <Card className="wallet-amount-card">
               <WalletAmount
-                label="Earned balance"
+                label="Earnings available"
                 value={wallet ? totals.earned : null}
               />
             </Card>
@@ -4325,26 +4325,18 @@ function WalletAmount(
   { label, value }: { label: string; value: number | null },
 ): ReactElement {
   // null = wallet not loaded yet; never show a fabricated 0.000-credit balance.
-  // The visible subheader is intentionally dropped — `label` stays as the
-  // accessible name so the bare figure keeps its context for screen readers.
-  if (value === null) {
-    return (
-      <div aria-label={label} className="wallet-amount">
-        <strong>—</strong>
-      </div>
-    );
-  }
   // Ledger stores "Light" (100 = $1); display the real dollar value, uniform
   // size/color — no x100, no smaller/greyer cents.
-  const dollars = value / 100;
+  const figure = value === null
+    ? "—"
+    : `$${(value / 100).toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
   return (
-    <div aria-label={label} className="wallet-amount">
-      <strong>
-        {`$${dollars.toLocaleString("en-US", {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })}`}
-      </strong>
+    <div className="wallet-amount">
+      <p className="section-label">{label}</p>
+      <strong>{figure}</strong>
     </div>
   );
 }

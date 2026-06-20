@@ -4005,6 +4005,23 @@ button {
   font-size: 34px;
 }
 
+/* The figure's label sits tight above the number (the grid gap handles spacing). */
+.wallet-amount .section-label {
+  margin: 0;
+}
+
+/* Every profile section header reads like the "ACCOUNT" label (which renders via
+   .card p: 14px, --ul-secondary, uppercase, 600). Match it exactly. */
+.account-page .settings-card-head h2,
+.account-page .wallet-section-head h2,
+.account-page .payout-banner h3 {
+  color: var(--ul-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 .profile-strip .avatar {
   width: 42px;
   height: 42px;
