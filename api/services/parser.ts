@@ -15,6 +15,13 @@ let _ts: TSModule | null = null;
 
 async function loadTs(): Promise<TSModule> {
   if (_ts) return _ts;
+  // The TS compiler references Node globals (__filename/__dirname) at import
+  // time; they don't exist in the Workers runtime. Polyfill before importing so
+  // a parse that runs before the bundler doesn't crash with
+  // "__filename is not defined" (mirrors the polyfill in bundler.ts).
+  const g = globalThis as unknown as { __filename?: string; __dirname?: string };
+  if (typeof g.__filename === "undefined") g.__filename = "/worker.js";
+  if (typeof g.__dirname === "undefined") g.__dirname = "/";
   const module = await import('typescript') as TSLazyModule;
   _ts = module.default ?? module;
   return _ts;

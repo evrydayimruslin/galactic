@@ -2318,7 +2318,7 @@ ${colors.dim('EXAMPLES')}
 
 async function collectFiles(dir: string): Promise<Array<{ name: string; content: string; size: number }>> {
   const files: Array<{ name: string; content: string; size: number }> = [];
-  const allowedExtensions = ['.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.css'];
+  const allowedExtensions = ['.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.css', '.html'];
   const ignoreDirs = ['node_modules', '.git', 'dist', 'build', '.ultralight'];
 
   async function walk(path: string, base: string) {

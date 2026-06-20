@@ -85,7 +85,8 @@ export class ApiClient {
       if (response.status === 429) {
         throw new Error('Rate limit exceeded. Please wait and try again.');
       }
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
+      const errBody = await response.text().catch(() => '');
+      throw new Error(`API error: ${response.status} ${response.statusText} — ${errBody}`);
     }
 
     const rpcResponse = await response.json() as JsonRpcResponse;
@@ -250,7 +251,8 @@ export class ApiClient {
       if (response.status === 429) {
         throw new Error('Rate limit exceeded. Please wait and try again.');
       }
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
+      const errBody = await response.text().catch(() => '');
+      throw new Error(`API error: ${response.status} ${response.statusText} — ${errBody}`);
     }
 
     const rpcResponse = await response.json() as JsonRpcResponse;
