@@ -1367,6 +1367,20 @@ export function formatLight(amount: number): string {
   return sign + "\u2726" + formatted;
 }
 
+/**
+ * Format an internal Light amount as a user-facing dollar string ($X,XXX.XX).
+ * Use this in any message shown to users \u2014 never leak the internal \u2726/Light unit.
+ * Locale-independent (manual thousands separators) for Workers/Deno runtimes.
+ */
+export function formatDollarsFromLight(light: number): string {
+  const dollars = (Number(light) || 0) / LIGHT_PER_DOLLAR_CANONICAL;
+  const sign = dollars < 0 ? "-" : "";
+  const fixed = Math.abs(dollars).toFixed(2);
+  const [whole, cents] = fixed.split(".");
+  const withCommas = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${sign}$${withCommas}.${cents}`;
+}
+
 const PLATFORM_LIMITS = {
   max_apps: Infinity,
   weekly_call_limit: 50_000,

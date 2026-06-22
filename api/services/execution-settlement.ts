@@ -3,7 +3,7 @@ import { getEnv } from "../lib/env.ts";
 import { type BillingConfig, getBillingConfig } from "./billing-config.ts";
 import type { App } from "../../shared/types/index.ts";
 import {
-  formatLight,
+  formatDollarsFromLight,
   LIGHT_PER_DOLLAR_DESKTOP,
 } from "../../shared/types/index.ts";
 import type {
@@ -1657,7 +1657,7 @@ function buildInsufficientSettlement(
 
 function buildCallerLightRequiredMessage(amountLight: number): string {
   return `Insufficient credits balance. This call requires ${
-    formatLight(amountLight)
+    formatDollarsFromLight(amountLight)
   }. Add credits to your wallet or add creator earnings to balance and try again.`;
 }
 
@@ -1665,13 +1665,13 @@ function buildCallerInfraFallbackLightRequiredMessage(
   amountLight: number,
 ): string {
   return `The app owner cannot sponsor this free call right now. You can continue by paying ${
-    formatLight(amountLight)
+    formatDollarsFromLight(amountLight)
   } for infrastructure from your credits balance.`;
 }
 
 function buildOwnerSponsorLightRequiredMessage(amountLight: number): string {
   return `This free call requires ${
-    formatLight(amountLight)
+    formatDollarsFromLight(amountLight)
   } of credits-backed sponsorship. Add credits to your wallet or add creator earnings to balance to call this app.`;
 }
 

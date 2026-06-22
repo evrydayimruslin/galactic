@@ -39,7 +39,7 @@ import { ApiClient } from './api.ts';
 import { colors } from './colors.ts';
 import { createCliLogger } from './logging.ts';
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const cliLogger = createCliLogger('CLI');
 const writeStderr = (line: string): void => console.error(line);
 
@@ -916,6 +916,7 @@ ${colors.dim('EXAMPLES')}
   if (files.length === 0) {
     throw new Error('No valid files found in directory');
   }
+  assertInterfaceEntriesPresent(files);
 
   // Check if this is an existing app (has .ultralightrc.json or --app-id)
   let appId: string | undefined = parsed['app-id'] as string | undefined;
@@ -1721,6 +1722,7 @@ async function draft(args: string[], client: ApiClient, _config: Config) {
       if (files.length === 0) {
         throw new Error('No valid files found in directory');
       }
+      assertInterfaceEntriesPresent(files);
 
       console.log(colors.dim(`Uploading new version for ${appId}...`));
 
@@ -2346,6 +2348,39 @@ async function collectFiles(dir: string): Promise<Array<{ name: string; content:
 
   await walk(dir, '');
   return files;
+}
+
+// Fail loudly before upload if the manifest declares an interface whose entry
+// file isn't in the collected set. The original bug was a SILENT drop of .html
+// files ("Uploading 2 files" with no interface), surfacing only as a broken
+// agent later. This mirrors the server-side check in interface-artifacts.ts so
+// the developer catches it locally with a clear, file-named message.
+function assertInterfaceEntriesPresent(
+  files: Array<{ name: string; content: string; size: number }>,
+): void {
+  const manifestFile = files.find((f) => f.name === 'manifest.json');
+  if (!manifestFile) return;
+  let manifest: { interfaces?: Array<{ id?: string; entry?: string }> };
+  try {
+    manifest = JSON.parse(manifestFile.content);
+  } catch {
+    return; // A malformed manifest is reported by the server's parser.
+  }
+  const interfaces = manifest.interfaces;
+  if (!Array.isArray(interfaces) || interfaces.length === 0) return;
+  const names = new Set(files.map((f) => f.name));
+  for (const iface of interfaces) {
+    const entry = iface?.entry;
+    if (entry && !names.has(entry)) {
+      throw new Error(
+        `Interface "${iface.id ?? entry}" declares entry "${entry}" but that ` +
+          `file is not in the upload. Check the path and that it has an allowed ` +
+          `extension (.html). Collected files: ${
+            files.map((f) => f.name).join(', ')
+          }`,
+      );
+    }
+  }
 }
 
 // Run main

@@ -220,7 +220,7 @@ Deno.test("publisher readiness: Platform MCP ul.set version returns structured m
         assertExists(payload.error);
         assertStringIncludes(
           payload.error.message || "",
-          "Publishing requires at least ✦1000",
+          "Publishing requires at least $10.00",
         );
         assertEquals(payload.error.data?.required_light, 1000);
         assertEquals(payload.error.data?.current_balance_light, 100);

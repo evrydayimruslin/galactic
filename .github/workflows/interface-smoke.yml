@@ -1,0 +1,55 @@
+name: Interface Deploy Smoke
+
+# End-to-end guard for the interface deploy+render happy-path (A6). It uploads
+# the reference interface agent through ul.upload and asserts the .html is
+# bundled, the launch facade exposes the interface, and the sandbox worker
+# serves it — the exact path that silently broke before (CLI dropped .html;
+# server TS-parser crashed) while test:full stayed green.
+#
+# Runs on a schedule and on changes to the surfaces that can break it. The agent
+# stays PRIVATE (never goes live). Idempotent: ULTRALIGHT_SMOKE_APP_ID re-versions
+# one fixed private app instead of creating a new one each run.
+#
+# OWNER ACTION: add the repo secret ULTRALIGHT_TOKEN (an upload-scoped token on a
+# dedicated test account with a small balance). Until it exists this workflow
+# no-ops instead of failing, so it is safe to land before the secret is set.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily at 08:00 UTC.
+    - cron: '0 8 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'api/**'
+      - 'cli/**'
+      - 'shared/**'
+      - 'scripts/smoke/interface-deploy-smoke.mjs'
+      - 'examples/interface-demo/**'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Interface deploy+render smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run interface deploy smoke
+        env:
+          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN }}
+          ULTRALIGHT_SMOKE_APP_ID: ${{ secrets.ULTRALIGHT_SMOKE_APP_ID }}
+          ULTRALIGHT_API_URL: ${{ vars.ULTRALIGHT_API_URL || 'https://api.ultralightagent.com' }}
+        run: |
+          if [ -z "$ULTRALIGHT_TOKEN" ]; then
+            echo "::warning::ULTRALIGHT_TOKEN secret not set — skipping interface smoke. Add the secret to enable it."
+            exit 0
+          fi
+          node scripts/smoke/interface-deploy-smoke.mjs

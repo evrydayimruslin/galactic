@@ -109,7 +109,7 @@ Deno.test("tier enforcement: publish gate blocks on low balance first", async ()
 
         assertEquals(
           result,
-          "Publishing requires at least ✦1000 spendable credits before a non-private tool can go live. Current balance: ✦100. Add credits from Wallet to go live.",
+          "Publishing requires at least $10.00 in spendable credits before a non-private tool can go live. Current balance: $1.00. Add credits from Wallet to go live.",
         );
         assertEquals(
           calls.some((url) => url.includes("/rest/v1/user_billing_addresses?")),

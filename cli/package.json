@@ -1,6 +1,6 @@
 {
   "name": "ultralightagent",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Ultralight — local stdio MCP bridge + CLI. Connect any computer-access agent (Claude Code, Claude Desktop, Cursor) to the Ultralight platform, with local filesystem tools, plus build/deploy/manage Agents from your shell.",
   "type": "module",
   "bin": {

@@ -84,7 +84,10 @@ import {
   sanitizeGpuTrustCard,
 } from "../services/gpu/feature-flag.ts";
 import { getEnv } from "../lib/env.ts";
-import { formatLight } from "../../shared/types/index.ts";
+import {
+  formatDollarsFromLight,
+  formatLight,
+} from "../../shared/types/index.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
 
 function renderLayoutHTML(
@@ -5232,7 +5235,7 @@ async function handlePublishedPage(
       } catch {
         // Not authenticated — show a paywall message
         return new Response(
-          `<!DOCTYPE html><html><head><title>Paid Content</title><style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8f9fa}div{text-align:center;max-width:480px;padding:2rem}.icon{font-size:3rem;margin-bottom:1rem}h1{margin:0 0 .5rem;font-size:1.5rem}p{color:#666;line-height:1.6}.price{font-size:1.25rem;font-weight:600;color:#333;margin:1rem 0}</style></head><body><div><div class="icon">&#128176;</div><h1>Paid Page</h1><p class="price">✦${contentRow.price_light} per view</p><p>Sign in and have enough credits to view this page. The fee is transferred directly to the page owner.</p></div></body></html>`,
+          `<!DOCTYPE html><html><head><title>Paid Content</title><style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8f9fa}div{text-align:center;max-width:480px;padding:2rem}.icon{font-size:3rem;margin-bottom:1rem}h1{margin:0 0 .5rem;font-size:1.5rem}p{color:#666;line-height:1.6}.price{font-size:1.25rem;font-weight:600;color:#333;margin:1rem 0}</style></head><body><div><div class="icon">&#128176;</div><h1>Paid Page</h1><p class="price">${formatDollarsFromLight(contentRow.price_light)} per view</p><p>Sign in and have enough credits to view this page. The fee is transferred directly to the page owner.</p></div></body></html>`,
           { status: 402, headers: { "Content-Type": "text/html" } },
         );
       }
@@ -5269,7 +5272,7 @@ async function handlePublishedPage(
             if (!rows || rows.length === 0) {
               // Insufficient balance
               return new Response(
-                `<!DOCTYPE html><html><head><title>Insufficient Balance</title><style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8f9fa}div{text-align:center;max-width:480px;padding:2rem}.icon{font-size:3rem;margin-bottom:1rem}h1{margin:0 0 .5rem;font-size:1.5rem}p{color:#666;line-height:1.6}.price{font-size:1.25rem;font-weight:600;color:#333;margin:1rem 0}</style></head><body><div><div class="icon">&#9888;</div><h1>Insufficient Balance</h1><p class="price">This page costs ✦${contentRow.price_light}</p><p>Add credits from Wallet to view this page.</p></div></body></html>`,
+                `<!DOCTYPE html><html><head><title>Insufficient Balance</title><style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8f9fa}div{text-align:center;max-width:480px;padding:2rem}.icon{font-size:3rem;margin-bottom:1rem}h1{margin:0 0 .5rem;font-size:1.5rem}p{color:#666;line-height:1.6}.price{font-size:1.25rem;font-weight:600;color:#333;margin:1rem 0}</style></head><body><div><div class="icon">&#9888;</div><h1>Insufficient Balance</h1><p class="price">This page costs ${formatDollarsFromLight(contentRow.price_light)}</p><p>Add credits from Wallet to view this page.</p></div></body></html>`,
                 { status: 402, headers: { "Content-Type": "text/html" } },
               );
             }

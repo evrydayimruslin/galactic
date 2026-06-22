@@ -13,7 +13,7 @@ redesign for going live.
 
 | Track | State |
 |---|---|
-| **A. Interface deploy pipeline** | core **fixed & verified end-to-end**; CI wiring + CLI republish remain |
+| **A. Interface deploy pipeline** | ✅ A1–A9 done. A6 smoke-CI + A8 guard + A9 dollars shipped; CLI bumped v2.1.0. Owner actions: add `ULTRALIGHT_TOKEN` secret, dispatch npm publish |
 | **B. Interface tab-bar UX** | ✅ **shipped & verified live** (`711b3f1`, on `app-exbg0f`) |
 | **C. Buyer billing foundation** | ✅ **shipped** — C1 label (`711b3f1`) + C2 address capture (`4729d66`, API+web) |
 | **D. Per-transaction sales tax** | ✅ **shipped** (manual rate table; D0–D3). Inert until the business adds its real nexus rates to `SALES_TAX_RATE_TABLE` |
@@ -77,28 +77,38 @@ Nothing previously deployed an interface agent and asserted it renders.
 - **Asserts:** `.html` bundled → `ul.upload` succeeds → launch facade returns the interface (url+functions) → worker serves the artifact (200/text-html) → **interface survives re-version**.
 - **Shipped:** committed `a523c9e`; validated green against prod.
 
-### A6 ⬜ Wire the smoke into CI
-- **Work:** add `ULTRALIGHT_TOKEN` repo secret (dedicated test account, small balance); run on a schedule + on `api/**` / `cli/**` / `shared/**` changes; cleanup strategy (delete the test app after, or a fixed `--app-id` now that re-version is fixed).
-- **Acceptance:** CI run deploys the demo, asserts render, and tears down; red on any pipeline regression.
-- **Deps:** A1–A5. **Owner action:** provision the test-account token secret.
+### A6 ✅ Wire the smoke into CI
+Shipped `.github/workflows/interface-smoke.yml`: runs the deploy+render smoke on
+a daily schedule and on `api/**` / `cli/**` / `shared/**` / smoke-script changes.
+Idempotent via `ULTRALIGHT_SMOKE_APP_ID` (re-versions one fixed private app); the
+agent never goes live. **Inert until the owner adds the `ULTRALIGHT_TOKEN` repo
+secret** (upload-scoped test account) — the job no-ops with a warning instead of
+failing, so it's safe to land first.
+- **Owner action:** add repo secret `ULTRALIGHT_TOKEN` (+ optional `ULTRALIGHT_SMOKE_APP_ID`).
 
-### A7 ⬜ Republish the `ultralightagent` npm CLI
-The published package predates A1/A3 — so `npx ultralightagent` still **can't
-upload an interface agent** (live user-facing breakage).
-- **Work:** confirm the npm bundle builds from `cli/`; bump version; publish via `npm-publish.yml` (needs the granular automation token on the `ultralightagent` npm account, 2FA-bypass); verify the published artifact contains the `.html` fix.
-- **Acceptance:** `npx ultralightagent@latest upload <interface agent>` succeeds end-to-end.
-- **Deps:** **gated on A6 green.**
+### A7 ✅/⬜ Republish the `ultralightagent` npm CLI
+Bumped `cli` to **v2.1.0** (package.json + `mod.ts` VERSION synced — the
+`.html` upload fix + error-body surfacing + the new A8 interface-entry guard).
+- **Owner action (publish itself):** dispatch `npm-publish.yml` with `mode=publish`
+  (needs the granular automation token on the `ultralightagent` npm account).
+- **Acceptance:** `npx ultralightagent@latest upload <interface agent>` succeeds.
 
-### A8 ⬜ Upload guard: fail loudly on a missing interface entry file
-The `.html` drop was *silent* ("Uploading 2 files"). Add a pre-upload guard.
-- **Files:** `cli/mod.ts` (post-`collectFiles`) and/or `api/services/interface-artifacts.ts` (already errors server-side; mirror client-side).
-- **Acceptance:** uploading a manifest whose `interfaces[].entry` isn't in the collected set fails with a clear message naming the file.
+### A8 ✅ Upload guard: fail loudly on a missing interface entry file
+Added `assertInterfaceEntriesPresent` in `cli/mod.ts`, called in `upload` and
+`draft` after `collectFiles`. Reads `manifest.json`, and for each
+`interfaces[].entry` not in the collected files throws a clear error naming the
+file + listing what was collected (mirrors the server-side check in
+`interface-artifacts.ts`). Guards the original silent `.html` drop.
 
-### A9 ⬜ Format money in user-facing errors (kill `✦` Light leak)
-Errors surfaced internal Light units (`Current balance: ✦807.9K`) after all the
-work to show dollars.
-- **Files:** publish-gate + funding error strings (`api/services/tier-enforcement.ts`, `api/handlers/launch.ts`), wherever `light` values are interpolated into messages.
-- **Acceptance:** no user-facing error string contains `✦` / raw `_light`; all money rendered as dollars.
+### A9 ✅ Format money in user-facing errors (kill `✦` Light leak)
+Added `formatDollarsFromLight()` (shared/types) and swapped the internal `✦`/Light
+unit for dollars in user-facing money strings: the publish-balance gate
+(`tier-enforcement.ts`), the call-cost insufficient messages
+(`execution-settlement.ts` — also used by the tax-preflight rejection), and the
+paid-content paywall pages (`app.ts`). Tests updated to the dollar strings.
+- **Out of A9 scope (left intentionally):** marketplace ask/bid price displays
+  and the developer's `default_price_light` validation (a light-denominated API
+  field), and internal/admin debug strings — none are buyer balance/cost errors.
 
 ---
 
@@ -176,24 +186,39 @@ rates before any tax is collected.**
 
 ---
 
-## Track E — Seller Connect publish gate (parallel)
+## Track E — Seller Connect publish gate ✅ SHIPPED (commit 52ef7a2)
 
-### E1 ⬜ Split the publish gate by visibility
-- **Files:** `api/services/tier-enforcement.ts` (`checkPublisherPublishReadiness`, ~`:210`) — `unlisted` → min-balance only; `public/published` → `payouts_enabled` from `users.stripe_connect_payouts_enabled`. Remove the `hasCurrentBillingAddress` requirement; add reason `stripe_connect_required`. Update enforcement at `requirePlatformPublishReadiness` (`api/handlers/platform-mcp.ts`), `api/handlers/upload.ts`, `api/handlers/apps.ts` (visibility change).
-- **Acceptance:** unlisting needs only min-balance; publishing-public needs Connect payouts enabled; the old billing-address dead-end is gone.
+### E1 ✅ Split the publish gate by visibility
+`checkPublisherPublishReadiness(userId, {visibility, appConnectGateExempt})`:
+dropped the billing-address requirement; `public`/`published` require
+`users.stripe_connect_payouts_enabled` (new block reason
+`connect_payouts_required`); `unlisted` needs only the min-balance. Threaded
+through all 7 call sites + 3 wrappers (apps.ts, platform-mcp.ts, upload.ts;
+executeSetVisibility readiness moved AFTER resolveApp to read the app row).
 
-### E2 ⬜ Extend Connect status read
-- **Files:** `api/services/stripe-connect.ts` (`getAccountStatus`) — also read `individual/company.address`, `individual.verification.status`, `requirements.currently_due`.
-- **Acceptance:** we capture the verified seller address and can surface pending onboarding requirements.
+### E2 ✅ Extend Connect status read
+`getAccountStatus` reads `requirements.currently_due/past_due/disabled_reason`,
+`individual/company.verification.status` + `address`; GET `/api/user/connect/status`
+surfaces them (live, no new columns).
 
-### E3 ⬜ Website "Set up payouts to publish" flow
-The onboarding **endpoint already exists** (`POST /api/user/connect/onboard`,
-`api/handlers/user.ts:3843`) — this completes the "website payout flow is coming."
-- **Files:** `apps/launch-web` — Earnings/publish surface: CTA → onboard endpoint → Stripe hosted onboarding → return to `?connect=complete`; show `requirements.currently_due` while pending; gate the public toggle on `payouts_enabled`.
-- **Acceptance:** a user can set up Connect from the site and then publish-public.
+### E3 ✅ Website "Set up payouts to publish" flow
+FE `PayoutsBanner` (Earnings tab) fetches connect status and shows a real CTA →
+`POST /api/user/connect/onboard` → Stripe hosted onboarding. **Fixed the onboard
+return URL** (was `BASE_URL` = the API origin, which 404s on the FE) →
+`LAUNCH_WEB_BASE_URL/account?tab=earnings&connect=complete`. Admin `save()`
+surfaces the gate message. Added `api.ts` `connectStatus`/`startConnectOnboarding`.
 
-### E4 ⬜ Grandfather existing public agents
-- **Acceptance:** the new gate doesn't retro-unpublish anything already public.
+### E4 ✅ Grandfather existing public agents
+Explicit `apps.connect_gate_exempt` boolean (migration
+`20260622120000_connect_gate_grandfather.sql` adds it + backfills
+`WHERE visibility='public'`). Chosen over a publish-date cutoff — a date can't
+tell an existing public app from a new one created the same day. Every
+currently-public app is exempt; every app made public afterwards must connect.
+**DEPLOY ORDER: apply this migration BEFORE the API deploy.**
+
+**Also folded sales tax into the preflight reservation:** `preflightRuntimeCloudHold`
+now requires the buyer to afford appCharge + tax up front (releases the infra
+hold + rejects if not), eliminating best-effort under-collection.
 
 ---
 

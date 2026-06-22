@@ -3,7 +3,7 @@
 // Enforces visibility checks, legacy publish balance gating, and app-count guardrails.
 
 import {
-  formatLight,
+  formatDollarsFromLight,
   type Tier,
   TIER_LIMITS,
 } from "../../shared/types/index.ts";
@@ -204,9 +204,9 @@ export async function checkPublisherPublishReadiness(
       const block: PublishReadinessBlock = {
         reason: "insufficient_publish_balance",
         message: `Publishing requires at least ${
-          formatLight(requiredLight)
-        } spendable credits before a non-private tool can go live. Current balance: ${
-          formatLight(balance)
+          formatDollarsFromLight(requiredLight)
+        } in spendable credits before a non-private tool can go live. Current balance: ${
+          formatDollarsFromLight(balance)
         }. ${nextAction}`,
         requiredLight,
         currentBalanceLight: balance,
