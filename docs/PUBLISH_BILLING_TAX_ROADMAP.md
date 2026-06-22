@@ -14,9 +14,9 @@ redesign for going live.
 | Track | State |
 |---|---|
 | **A. Interface deploy pipeline** | core **fixed & verified end-to-end**; CI wiring + CLI republish remain |
-| **B. Interface tab-bar UX** | designed/approved, not started (now unblocked — a live demo agent exists) |
-| **C. Buyer billing foundation** | decided, not started |
-| **D. Per-transaction sales tax** | decided, not started; live rate 🔒 on a tax-registration decision |
+| **B. Interface tab-bar UX** | ✅ **shipped & verified live** (`711b3f1`, on `app-exbg0f`) |
+| **C. Buyer billing foundation** | ✅ **shipped** — C1 label (`711b3f1`) + C2 address capture (`4729d66`, API+web) |
+| **D. Per-transaction sales tax** | C2 dep satisfied; live rate 🔒 on a tax-registration decision |
 | **E. Seller Connect publish gate** | decided, not started |
 
 Three real bugs were found and fixed this session by actually trying to ship an
@@ -104,28 +104,47 @@ work to show dollars.
 
 ## Track B — Interface tab-bar UX (approved: "fix dropdowns + align")
 
-### B1 ⬜ Functions/Interface dropdown alignment + clarity
-Functions is a tab-bar dropdown (`.picker-caret`); Interface/Details are plain
-tabs; multiple interfaces use in-panel pills — three inconsistent patterns.
-- **Work:** align the Functions caret baseline/spacing; make **Interface a matching dropdown when `tool.interfaces.length > 1`** (lift the interface selection out of `AgentInterfacePanel`'s in-panel pills into the tab bar, mirroring Functions); keep a plain tab for a single interface.
-- **Files:** `apps/launch-web/src/pages/foundation-pages.tsx` (`AgentDetailSurface` tab bar, `AgentInterfacePanel`), `apps/launch-web/src/styles.css` (`.picker-caret`, `.tool-tabs`).
-- **Verify:** mock a 2-interface agent locally for the tab-bar UI; then re-upload the demo with a 2nd interface and confirm on `app-e47q9p`. (Unblocked — A4 means re-versioning now keeps interfaces.)
-- **Acceptance:** all tab-bar controls share one alignment/affordance; multi-interface selectable from the tab bar.
+### B1 ✅ Functions/Interface dropdown alignment + clarity
+Shipped (commit `711b3f1`). Replaced the verbose `FunctionMenu` with a compact
+`TabSelectMenu` (name + price, check on the selected row — no per-row
+description wall). Interface is now a matching tab-bar dropdown when
+`tool.interfaces.length > 1` (selection lifted out of `AgentInterfacePanel`'s
+in-panel pills); a single interface stays a plain tab. Dropdown triggers are
+`inline-flex` so the caret centres next to the label; opening one menu closes
+the other; outside-click/Escape close both.
+- **Verified:** live on `app-exbg0f` (Story Builder, 7 functions) — compact
+  220px menu renders name+price with a check on the selected function.
 
 ---
 
 ## Track C — Buyer billing foundation
 
-### C1 ⬜ Neutral pay-button label (FE only)
-- **Files:** `apps/launch-web/src/pages/foundation-pages.tsx` (`WalletTopUpPanel`, the `Pay with Link` method button ~`:4901`) — drop `LinkMark` + "Pay with Link" → "Pay by card".
-- **No BE change:** `automatic_payment_methods` (card + Link) unchanged; Link still surfaces inside the PaymentElement.
-- **Acceptance:** the button reads "Pay by card"; Link autofill still works for returning users.
+### C1 ✅ Neutral pay-button label (FE only)
+Shipped (commit `711b3f1`). The method button now reads "Pay by card / Card or
+Link"; removed the green `LinkMark` SVG + dead `.method-link` CSS.
+`automatic_payment_methods` (card + Link) unchanged — Link still surfaces inside
+the PaymentElement and autofills for returning users.
 
-### C2 ⬜ Capture buyer tax location at top-up
-- **FE:** enable address collection in the top-up PaymentElement (`apps/launch-web/src/pages/foundation-pages.tsx:4626`, add `fields.billingDetails.address`). Link autofills; card adds fields.
-- **BE:** in the deposit webhook (`payment_intent.succeeded` → `finalizeLightDeposit`, `api/services/stripe-deposits.ts`), retrieve the PI with `expand:['payment_method','latest_charge']`, read `billing_details.address`, upsert into `user_billing_addresses` (`api/services/billing-addresses.ts`) as `source: "wallet_funding"`, `is_current`. (`wallet_funding` source already exists.)
-- **Acceptance:** after a top-up, the user has a current billing address from Stripe; works for Link and card.
-- **Deps:** none. **Prerequisite for D.**
+### C2 ✅ Capture buyer tax location at top-up
+Shipped (commit `4729d66`; API + launch-web).
+- **FE:** added a Stripe **AddressElement** (billing mode) below the
+  PaymentElement in the top-up flow (`foundation-pages.tsx`,
+  `addressElementRef`). In the same Elements group, Stripe attaches its address
+  to the payment method's `billing_details` on `confirmPayment` — no confirm
+  change needed. Link autofills it; new card buyers fill it once; phone
+  suppressed.
+- **BE:** after `finalizeLightDeposit`, the webhook retrieves the funding charge
+  (`captureFundingBillingAddressFromCharge` in `api/services/stripe-customers.ts`
+  — the PaymentIntent only references `latest_charge` by id) and upserts
+  `billing_details.address` into `user_billing_addresses` as
+  `source: "wallet_funding"`. Best-effort (never fails the deposit) +
+  idempotent (skips when the address matches the stored current one).
+- **Acceptance:** after a top-up, the user has a current billing address from
+  Stripe; works for Link and card. **Prerequisite for D — now satisfied.**
+- **Note:** chosen over PaymentElement `fields.billingDetails.address` because
+  that option can only *hide* fields, not force full-address collection; the
+  AddressElement is the documented way to collect (and Link-autofill) a complete
+  billing address.
 
 ---
 
