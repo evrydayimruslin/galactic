@@ -83,6 +83,13 @@ import {
   resolveAppEnvSchema,
 } from "../services/app-settings.ts";
 import {
+  InterfaceArtifactError,
+  type InterfaceArtifactFile,
+  interfaceArtifactPrefixForApp,
+  prepareInterfaceArtifacts,
+} from "../services/interface-artifacts.ts";
+import { upsertManifestUploadFile } from "../services/app-manifest-generation.ts";
+import {
   buildPerUserSettingsStatus,
   validatePerUserSettingsValues,
 } from "../services/user-app-settings.ts";
@@ -6587,9 +6594,48 @@ async function executeUpload(
       throw err;
     }
 
+    // Interfaces: stamp hashes + stage content-addressed artifacts on the
+    // version-update path too, mirroring new-app uploads (handleUploadFiles).
+    // Without this, re-versioning an interface agent persists an unstamped
+    // manifest and the launch facade drops the interface (interfaceSummaries
+    // skips interfaces that lack a server-stamped hash).
+    let interfaceArtifacts: InterfaceArtifactFile[] = [];
+    try {
+      const interfacePrep = await prepareInterfaceArtifacts({
+        manifest: pipeline.manifest,
+        files: pipeline.filesToUpload,
+      });
+      if (interfacePrep) {
+        pipeline.manifest = interfacePrep.manifest;
+        interfaceArtifacts = interfacePrep.artifacts;
+        pipeline.filesToUpload = upsertManifestUploadFile(
+          pipeline.filesToUpload,
+          pipeline.manifest,
+          (manifestJson) => ({
+            name: "manifest.json",
+            content: new TextEncoder().encode(manifestJson),
+            contentType: "application/json",
+          }),
+        );
+      }
+    } catch (interfaceErr) {
+      if (interfaceErr instanceof InterfaceArtifactError) {
+        throw new ToolError(VALIDATION_ERROR, interfaceErr.message);
+      }
+      throw interfaceErr;
+    }
+
     const r2Service = createR2Service();
     const storageKey = `apps/${app.id}/${newVersion}/`;
     await r2Service.uploadFiles(storageKey, pipeline.filesToUpload);
+    if (interfaceArtifacts.length > 0) {
+      // Content-addressed (idempotent re-writes); must land before the app row
+      // references these hashes.
+      await r2Service.uploadFiles(
+        interfaceArtifactPrefixForApp(app.id),
+        interfaceArtifacts,
+      );
+    }
 
     // Update app: add version, manifest, exports
     // Auto-set as live when uploading by name (developer iteration flow)

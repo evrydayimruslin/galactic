@@ -147,7 +147,24 @@ if (iface?.url) {
   }
 }
 
-// 4. (opt-in) a function actually runs — via the agent's own MCP endpoint,
+// 4. Re-version guard: re-upload the same files as a NEW version (same app-id)
+// and assert the interface SURVIVES. Re-versioning used to persist an unstamped
+// manifest and drop the interface — this is the regression that bug fixed.
+if (id) {
+  try {
+    await callTool('ul.upload', { files, name: 'Interface Demo (smoke)', visibility: 'private', app_id: id });
+    const after = await fetch(`${apiBase}/api/launch/agents/${id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).then((r) => r.json());
+    const agent2 = after.agent || after.tool || {};
+    const iface2 = (agent2.interfaces || [])[0] || null;
+    check('interface survives re-version', Boolean(iface2?.url), `interfaces after re-upload: ${JSON.stringify(agent2.interfaces ?? null)}`);
+  } catch (err) {
+    check('interface survives re-version', false, String(err?.message || err));
+  }
+}
+
+// 5. (opt-in) a function actually runs — via the agent's own MCP endpoint,
 // which an API token CAN call (the launch-web /functions/:fn/run path requires
 // a browser account session, so it 403s for tokens). Best-effort/informational:
 // it costs a function call and is not part of the deploy+render pass/fail gate.
