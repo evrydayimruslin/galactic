@@ -146,6 +146,26 @@ export interface LaunchLeaderboardRequest {
   limit?: number;
 }
 
+/** Stripe Connect payout-account status (from /api/user/connect/status). */
+export interface LaunchConnectStatus {
+  connected: boolean;
+  onboarded: boolean;
+  payouts_enabled: boolean;
+  account_id: string | null;
+  country: string | null;
+  default_currency: string | null;
+  verification_status?: string | null;
+  requirements_currently_due?: string[];
+  requirements_past_due?: string[];
+  requirements_disabled_reason?: string | null;
+  withdrawable_earnings_light?: number;
+}
+
+export interface LaunchConnectOnboardResponse {
+  onboarding_url: string;
+  account_id: string;
+}
+
 export class LaunchApiClient {
   private readonly baseUrl: string;
   private readonly getAuthToken?: () => string | null;
@@ -353,6 +373,19 @@ export class LaunchApiClient {
           ? { billing_address: request.billingAddress }
           : {}),
       }),
+    });
+  }
+
+  /** Seller Stripe Connect payout-account status. */
+  connectStatus(): Promise<LaunchConnectStatus> {
+    return this.fetchJson("/api/user/connect/status");
+  }
+
+  /** Start (or resume) Stripe Connect onboarding; returns a hosted link URL. */
+  startConnectOnboarding(): Promise<LaunchConnectOnboardResponse> {
+    return this.fetchJson("/api/user/connect/onboard", {
+      method: "POST",
+      body: JSON.stringify({}),
     });
   }
 

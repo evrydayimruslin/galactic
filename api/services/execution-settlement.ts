@@ -466,6 +466,54 @@ export async function preflightRuntimeCloudHold(
       },
     }, deps);
 
+    // Fold per-transaction sales tax into the upfront reservation. The infra
+    // hold reserves only infra; the app charge + tax are paid at settlement.
+    // Without this check a buyer who can afford the app charge but not the tax
+    // would complete the sale and then under-collect tax (the settlement debit
+    // is best-effort). Here we require — before the call runs — that the balance
+    // remaining after the infra hold covers appCharge + tax; if not, we release
+    // the hold and reject. Gated on a configured rate (zero hot-path cost when
+    // tax is off) and on an authoritative paid charge (hold.appChargeLight is
+    // post-free-quota, so free/self/sponsored calls are naturally exempt).
+    if (isSalesTaxConfigured() && hold.appChargeLight > 0) {
+      const resolveTaxLocation = deps?.resolveBuyerTaxLocationFn ??
+        resolveBuyerTaxLocation;
+      const buyer = await resolveTaxLocation(params.userId);
+      const taxLight = computeSalesTaxLight(
+        hold.appChargeLight,
+        resolveSalesTaxRateBps(buyer?.location ?? null),
+      );
+      if (taxLight > 0 && hold.newBalance < hold.appChargeLight + taxLight) {
+        await releaseCloudUsageHold({ holdId: hold.holdId }, deps).catch(
+          (releaseErr) =>
+            console.error(
+              "[SALES-TAX] Failed to release hold after tax shortfall:",
+              releaseErr,
+            ),
+        );
+        const requiredLight = hold.appChargeLight + taxLight;
+        return {
+          hold: null,
+          pricing: basePricing,
+          billingConfig,
+          insufficientBalance: true,
+          insufficientBalanceCode: "caller_light_required",
+          insufficientBalanceMessage: buildCallerLightRequiredMessage(
+            requiredLight,
+          ),
+          metadata: {
+            ...accessDecision.metadata,
+            billing_config_version: billingConfig.version,
+            app_price_light: hold.appPriceLight,
+            app_charge_light: hold.appChargeLight,
+            sales_tax_light: taxLight,
+            required_with_tax_light: requiredLight,
+            free_call_limit: freeCallLimit,
+          },
+        };
+      }
+    }
+
     return {
       hold,
       pricing: {

@@ -3983,6 +3983,25 @@ button {
   line-height: 1.45;
 }
 
+.payout-banner-body .launch-button {
+  margin-top: 9px;
+}
+
+.admin-save-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.admin-save-error p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ul-secondary);
+}
+
 /* The account name is its own section card at the top of Preferences. */
 .account-name-card {
   padding: 15px 16px;

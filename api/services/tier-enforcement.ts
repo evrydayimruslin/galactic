@@ -8,15 +8,23 @@ import {
   TIER_LIMITS,
 } from "../../shared/types/index.ts";
 import { getEnv } from "../lib/env.ts";
-import { hasCurrentBillingAddress } from "./billing-addresses.ts";
 import { getBillingConfig } from "./billing-config.ts";
 
 type Visibility = "private" | "unlisted" | "public";
 
+export interface PublishReadinessOptions {
+  /** Target visibility of the publish action. Only "public" requires Connect. */
+  visibility?: Visibility | "published";
+  /** apps.connect_gate_exempt — agents that were already public when the gate
+   *  shipped are grandfathered and skip the Connect-payouts requirement. New
+   *  public agents default to non-exempt and must connect. */
+  appConnectGateExempt?: boolean;
+}
+
 export type PublishReadinessBlockReason =
   | "billing_check_unavailable"
   | "insufficient_publish_balance"
-  | "billing_address_required";
+  | "connect_payouts_required";
 
 export interface PublishReadinessBlock {
   reason: PublishReadinessBlockReason;
@@ -101,11 +109,15 @@ export function checkVisibilityAllowed(
 
 /**
  * Publish readiness gate.
- * When enabled in billing config, publishing requires a configurable spendable
- * Light balance and a current billing address for tax-location records.
+ * When enabled in billing config, any non-private listing requires a
+ * configurable minimum spendable Light balance (covers infra/compute), and
+ * publishing PUBLICLY additionally requires Stripe Connect payouts to be set
+ * up (so the seller can receive earnings). Unlisted needs only the balance.
+ * Pre-gate public agents are grandfathered via appConnectGateExempt.
  */
 export async function checkPublisherPublishReadiness(
   userId: string,
+  options: PublishReadinessOptions = {},
 ): Promise<PublishReadinessResult> {
   const billingConfig = await getBillingConfig();
   const requiredLight = billingConfig.publisherMinPublishBalanceLight;
@@ -146,7 +158,7 @@ export async function checkPublisherPublishReadiness(
     const response = await fetch(
       `${supabaseUrl}/rest/v1/users?id=eq.${
         encodeURIComponent(userId)
-      }&select=balance_light`,
+      }&select=balance_light,stripe_connect_payouts_enabled`,
       {
         headers: {
           "apikey": supabaseKey,
@@ -180,7 +192,10 @@ export async function checkPublisherPublishReadiness(
     }
 
     const rows = await response.json() as Array<
-      { balance_light: number | null }
+      {
+        balance_light: number | null;
+        stripe_connect_payouts_enabled: boolean | null;
+      }
     >;
     const balance = rows[0]?.balance_light ?? 0;
 
@@ -207,26 +222,36 @@ export async function checkPublisherPublishReadiness(
       };
     }
 
-    if (!(await hasCurrentBillingAddress(userId))) {
-      const nextAction = "Save a billing address before going live.";
-      const block: PublishReadinessBlock = {
-        reason: "billing_address_required",
-        message:
-          `Publishing requires a saved billing address after meeting the ${
-            formatLight(requiredLight)
-          } minimum. Current balance: ${formatLight(balance)}. ${nextAction}`,
-        requiredLight,
-        currentBalanceLight: balance,
-        nextAction,
-        status: 402,
-      };
-      return {
-        allowed: false,
-        requiredLight,
-        currentBalanceLight: balance,
-        nextAction,
-        block,
-      };
+    // Public listings require Stripe Connect payouts to be set up (so the
+    // seller can actually receive earnings). Unlisted needs only the balance
+    // minimum above. Pre-gate public agents are grandfathered so the new
+    // requirement never retro-unpublishes an existing public agent.
+    const effectiveVisibility = options.visibility === "published"
+      ? "public"
+      : options.visibility;
+    const grandfathered = options.appConnectGateExempt === true;
+    if (effectiveVisibility === "public" && !grandfathered) {
+      const payoutsEnabled = rows[0]?.stripe_connect_payouts_enabled === true;
+      if (!payoutsEnabled) {
+        const nextAction =
+          "Set up Stripe Connect payouts from Earnings to publish publicly.";
+        const block: PublishReadinessBlock = {
+          reason: "connect_payouts_required",
+          message:
+            `Publishing publicly requires Stripe Connect payouts so you can receive earnings. ${nextAction}`,
+          requiredLight,
+          currentBalanceLight: balance,
+          nextAction,
+          status: 402,
+        };
+        return {
+          allowed: false,
+          requiredLight,
+          currentBalanceLight: balance,
+          nextAction,
+          block,
+        };
+      }
     }
 
     return {
@@ -259,8 +284,9 @@ export async function checkPublisherPublishReadiness(
 
 export async function assertPublisherPublishReadiness(
   userId: string,
+  options: PublishReadinessOptions = {},
 ): Promise<PublishReadinessResult> {
-  const readiness = await checkPublisherPublishReadiness(userId);
+  const readiness = await checkPublisherPublishReadiness(userId, options);
   if (!readiness.allowed && readiness.block) {
     throw new PublishReadinessError(readiness.block);
   }
@@ -272,8 +298,9 @@ export async function assertPublisherPublishReadiness(
  */
 export async function checkPublishDeposit(
   userId: string,
+  options: PublishReadinessOptions = {},
 ): Promise<string | null> {
-  const readiness = await checkPublisherPublishReadiness(userId);
+  const readiness = await checkPublisherPublishReadiness(userId, options);
   return readiness.allowed ? null : readiness.block?.message ?? null;
 }
 

@@ -150,6 +150,10 @@ export interface App {
    *  state machine on ToolDetailView. */
   is_installed?: boolean;
   visibility: "private" | "unlisted" | "public";
+  /** True for agents that were already public when the Stripe Connect publish
+   *  gate shipped (backfilled once). Exempt agents keep publishing publicly
+   *  without Connect; new public agents are not exempt. */
+  connect_gate_exempt?: boolean;
   download_access: "owner" | "public";
   current_version: string;
   versions: string[];

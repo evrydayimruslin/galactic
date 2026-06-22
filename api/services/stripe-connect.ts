@@ -20,6 +20,22 @@ export interface ConnectAccountStatus {
   charges_enabled?: boolean;
   country?: string;
   default_currency?: string;
+  // E2 — verification state, outstanding onboarding requirements, and the
+  // verified seller address (captured from the Connect account once submitted).
+  verification_status?: string | null;
+  requirements_currently_due?: string[];
+  requirements_past_due?: string[];
+  requirements_disabled_reason?: string | null;
+  address?: ConnectAccountAddress | null;
+}
+
+export interface ConnectAccountAddress {
+  line1?: string | null;
+  line2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postal_code?: string | null;
+  country?: string | null;
 }
 
 export interface PayoutEstimate {
@@ -236,7 +252,25 @@ export async function getAccountStatus(
     payouts_enabled: boolean;
     country: string;
     default_currency: string;
+    requirements?: {
+      currently_due?: string[] | null;
+      past_due?: string[] | null;
+      disabled_reason?: string | null;
+    } | null;
+    individual?: {
+      address?: ConnectAccountAddress | null;
+      verification?: { status?: string | null } | null;
+    } | null;
+    company?: {
+      address?: ConnectAccountAddress | null;
+      verification?: { status?: string | null } | null;
+    } | null;
   };
+
+  // Express/Custom accounts return `requirements`, `individual`, and `company`
+  // on the account object by default (no expand needed). business_type decides
+  // which of individual/company is populated.
+  const party = account.individual ?? account.company ?? null;
 
   return {
     account_id: account.id,
@@ -246,6 +280,11 @@ export async function getAccountStatus(
     charges_enabled: account.charges_enabled,
     country: account.country,
     default_currency: account.default_currency,
+    verification_status: party?.verification?.status ?? null,
+    requirements_currently_due: account.requirements?.currently_due ?? [],
+    requirements_past_due: account.requirements?.past_due ?? [],
+    requirements_disabled_reason: account.requirements?.disabled_reason ?? null,
+    address: party?.address ?? null,
   };
 }
 

@@ -36,6 +36,7 @@ import {
 import {
   checkPublisherPublishReadiness,
   isPublishReadinessError,
+  type PublishReadinessOptions,
   publishReadinessErrorPayload,
 } from "../services/tier-enforcement.ts";
 import {
@@ -6155,8 +6156,11 @@ class ToolError extends Error {
   }
 }
 
-async function requirePlatformPublishReadiness(userId: string): Promise<void> {
-  const readiness = await checkPublisherPublishReadiness(userId);
+async function requirePlatformPublishReadiness(
+  userId: string,
+  options: PublishReadinessOptions = {},
+): Promise<void> {
+  const readiness = await checkPublisherPublishReadiness(userId, options);
   if (!readiness.allowed && readiness.block) {
     throw new ToolError(
       readiness.block.status >= 500 ? INTERNAL_ERROR : INVALID_PARAMS,
@@ -6644,7 +6648,10 @@ async function executeUpload(
     const gapId = args.gap_id as string | undefined;
     const autoLive = args._auto_live || (!args.app_id && args.name); // name-based lookup = auto-live
     if (autoLive && app.visibility !== "private") {
-      await requirePlatformPublishReadiness(userId);
+      await requirePlatformPublishReadiness(userId, {
+        visibility: app.visibility,
+        appConnectGateExempt: app.connect_gate_exempt,
+      });
     }
     const versionTrust = await buildVersionTrustMetadata({
       appId: app.id,
@@ -9384,7 +9391,10 @@ async function executeSetVersion(
   }
 
   if (app.visibility !== "private") {
-    await requirePlatformPublishReadiness(userId);
+    await requirePlatformPublishReadiness(userId, {
+      visibility: app.visibility,
+      appConnectGateExempt: app.connect_gate_exempt,
+    });
   }
 
   const previousVersion = app.current_version;
@@ -9509,14 +9519,18 @@ async function executeSetVisibility(
   // Map 'published' → 'public' for DB storage (DB uses 'public')
   const dbVisibility = visibility === "published" ? "public" : visibility;
 
-  // Gate: configured publisher minimum balance rule.
-  if (dbVisibility !== "private") {
-    await requirePlatformPublishReadiness(userId);
-  }
-
   const app = await resolveApp(userId, appIdOrSlug);
   const previousVisibility = app.visibility;
   const appsService = createAppsService();
+
+  // Gate: publisher minimum balance + (for public) Stripe Connect payouts.
+  // Resolved AFTER the app so we can grandfather pre-gate public agents.
+  if (dbVisibility !== "private") {
+    await requirePlatformPublishReadiness(userId, {
+      visibility: dbVisibility as "public" | "unlisted",
+      appConnectGateExempt: app.connect_gate_exempt,
+    });
+  }
 
   // Gate: GPU apps must be 'live' before publishing
   if (dbVisibility !== "private" && app.runtime === "gpu") {

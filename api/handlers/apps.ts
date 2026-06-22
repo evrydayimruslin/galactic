@@ -52,6 +52,7 @@ import {
   checkPublisherPublishReadiness,
   checkVisibilityAllowed,
   getUserTier,
+  type PublishReadinessOptions,
   publishReadinessErrorPayload,
 } from "../services/tier-enforcement.ts";
 import {
@@ -108,8 +109,9 @@ const callLogLogger = createServerLogger("CALL-LOG");
 
 async function publisherPublishReadinessResponse(
   userId: string,
+  options: PublishReadinessOptions = {},
 ): Promise<Response | null> {
-  const readiness = await checkPublisherPublishReadiness(userId);
+  const readiness = await checkPublisherPublishReadiness(userId, options);
   if (readiness.allowed || !readiness.block) return null;
   return json(
     publishReadinessErrorPayload(readiness.block),
@@ -1982,6 +1984,10 @@ async function handleUpdateApp(
           if (app.visibility !== "private") {
             const readinessError = await publisherPublishReadinessResponse(
               user.id,
+              {
+                visibility: app.visibility,
+                appConnectGateExempt: app.connect_gate_exempt,
+              },
             );
             if (readinessError) return readinessError;
           }
@@ -2037,6 +2043,10 @@ async function handleUpdateApp(
         if (filteredUpdates.visibility !== "private") {
           const readinessError = await publisherPublishReadinessResponse(
             user.id,
+            {
+              visibility: filteredUpdates.visibility as "public" | "unlisted",
+              appConnectGateExempt: app.connect_gate_exempt,
+            },
           );
           if (readinessError) return readinessError;
         }
@@ -3247,7 +3257,10 @@ async function handlePublishDraft(
       if (visibilityErr) {
         return error(`Cannot publish: ${visibilityErr}`, 403);
       }
-      const readinessError = await publisherPublishReadinessResponse(user.id);
+      const readinessError = await publisherPublishReadinessResponse(user.id, {
+        visibility: app.visibility,
+        appConnectGateExempt: app.connect_gate_exempt,
+      });
       if (readinessError) return readinessError;
 
       // Layer 2: Originality gate (publish only)

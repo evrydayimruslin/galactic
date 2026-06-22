@@ -33,7 +33,6 @@ import {
   type LaunchAgentSummary,
   type LaunchInterfaceSummary,
   type LaunchTrustCard,
-  type LaunchPayoutStatus,
   type LaunchWalletEarningSummary,
   type LaunchWalletReceiptSummary,
   type LaunchWalletSummary,
@@ -53,6 +52,7 @@ import {
   LaunchApiAuthenticationError,
   launchApiOrigin,
   LaunchApiRequestError,
+  type LaunchConnectStatus,
 } from "../lib/api";
 import {
   attachInterfaceBridge,
@@ -3496,6 +3496,7 @@ function AdminSurface({
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     setTab(adminTabFromSearch());
@@ -3530,12 +3531,20 @@ function AdminSurface({
     if (visibility !== tool.visibility) fields.visibility = visibility;
 
     setSaveState("saving");
+    setSaveError(null);
     try {
       await launchApi.updateAgent(tool.id, fields);
       setSaveState("saved");
       live.reload();
-    } catch {
+    } catch (err) {
       setSaveState("error");
+      // Surface the server's message — notably the publish gate's
+      // "set up Stripe Connect payouts to publish publicly" guidance.
+      setSaveError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Couldn't save changes. Please try again.",
+      );
     }
   };
 
@@ -3555,6 +3564,14 @@ function AdminSurface({
         tool={tool}
         visibility={visibility}
       />
+      {saveState === "error" && saveError
+        ? (
+          <Card className="admin-save-error">
+            <Icon name="shield" />
+            <p>{saveError}</p>
+          </Card>
+        )
+        : null}
       {live.data.adminAgent?.admin.referral
         ? <ReferralLinkCard referral={live.data.adminAgent.admin.referral} />
         : null}
@@ -4361,10 +4378,7 @@ export function AccountFoundationPage(
                 value={wallet ? totals.earned : null}
               />
             </Card>
-            <WalletEarningsPanel
-              earnings={liveEarningRows(earnings)}
-              payoutStatus={wallet?.payoutStatus}
-            />
+            <WalletEarningsPanel earnings={liveEarningRows(earnings)} />
           </>
         )
         : null}
@@ -5106,49 +5120,107 @@ function WalletTopUpPanel(
   );
 }
 
-const payoutBannerFallback = {
-  action: "Withdraw earnings",
-  description:
-    "Stripe Connect payouts are enabled. Withdraw earned credits to your bank or transfer them to spendable balance.",
-  label: "Payouts ready",
-  tone: "green",
-} as const;
+function PayoutsBanner(): ReactElement {
+  const [connect, setConnect] = useState<LaunchConnectStatus | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [redirecting, setRedirecting] = useState(false);
 
-function payoutBannerContent(payoutStatus?: LaunchPayoutStatus | null): {
-  action: string;
-  description: string;
-  label: string;
-  tone: "amber" | "green" | "neutral";
-} {
-  if (!payoutStatus) return payoutBannerFallback;
-  const tone = payoutStatus.kind === "ready"
+  useEffect(() => {
+    let cancelled = false;
+    launchApi.connectStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setConnect(status);
+          setState("ready");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setState("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const startOnboarding = async () => {
+    if (redirecting) return;
+    setRedirecting(true);
+    try {
+      const { onboarding_url } = await launchApi.startConnectOnboarding();
+      window.location.href = onboarding_url;
+    } catch {
+      setRedirecting(false);
+    }
+  };
+
+  const payoutsReady = connect?.payouts_enabled === true;
+  const hasAccount = connect?.connected === true;
+  const dueCount = connect?.requirements_currently_due?.length ?? 0;
+  // Treat an errored status read like "not set up" so the CTA still shows.
+  const tone = state === "loading"
+    ? "neutral"
+    : payoutsReady
     ? "green"
-    : payoutStatus.kind === "onboarding"
+    : hasAccount
     ? "amber"
     : "neutral";
-  const action = payoutStatus.kind === "ready"
-    ? "Withdraw earnings"
-    : payoutStatus.kind === "onboarding"
-    ? "Resume Stripe onboarding"
-    : "Connect payouts";
-  return {
-    action,
-    description: payoutStatus.description ||
-      payoutBannerFallback.description,
-    label: payoutStatus.label || payoutBannerFallback.label,
-    tone,
-  };
+
+  return (
+    <Card className={`payout-banner payout-banner-${tone}`}>
+      <span className="target-icon">
+        <Icon name="shield" />
+      </span>
+      <div className="payout-banner-body">
+        <h3>Payouts</h3>
+        {state === "loading"
+          ? <p>Checking your payout account…</p>
+          : payoutsReady
+          ? (
+            <p>
+              Stripe Connect payouts are set up. Withdraw earned credits via{" "}
+              <Mono>ul.wallet</Mono> from a connected agent.
+            </p>
+          )
+          : hasAccount
+          ? (
+            <p>
+              Finish setting up Stripe Connect to receive payouts{dueCount > 0
+                ? ` — ${dueCount} step${dueCount === 1 ? "" : "s"} left`
+                : ""}. Required before an agent can be published publicly.
+            </p>
+          )
+          : (
+            <p>
+              Set up Stripe Connect payouts to receive earnings — and to publish
+              an agent publicly.
+            </p>
+          )}
+        {!payoutsReady && state !== "loading"
+          ? (
+            <Button
+              disabled={redirecting}
+              onClick={() => void startOnboarding()}
+              size="sm"
+            >
+              {redirecting
+                ? "Redirecting…"
+                : hasAccount
+                ? "Resume payout setup"
+                : "Set up payouts"}
+            </Button>
+          )
+          : null}
+      </div>
+    </Card>
+  );
 }
 
 function WalletEarningsPanel({
   earnings,
-  payoutStatus,
 }: {
   earnings: LedgerRow[];
-  payoutStatus?: LaunchPayoutStatus | null;
 }): ReactElement {
   const [toolFilter, setToolFilter] = useState("all");
-  const banner = payoutBannerContent(payoutStatus);
   const tools = Array.from(
     new Set(
       earnings.map((row) => row.tool).filter((tool): tool is string =>
@@ -5162,18 +5234,7 @@ function WalletEarningsPanel({
 
   return (
     <div className="wallet-panel">
-      <Card className={`payout-banner payout-banner-${banner.tone}`}>
-        <span className="target-icon">
-          <Icon name="shield" />
-        </span>
-        <div>
-          <h3>Payouts</h3>
-          <p>
-            Withdrawals run through Stripe Connect via <Mono>ul.wallet</Mono>
-            {" "}from a connected agent — a website payout flow is coming.
-          </p>
-        </div>
-      </Card>
+      <PayoutsBanner />
       <Card className="wallet-ledger-card">
         <div className="wallet-section-head">
           <h2>Earnings ledger</h2>

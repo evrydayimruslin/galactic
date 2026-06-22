@@ -11,6 +11,50 @@ import {
   settleCallerAppCharge,
 } from "./execution-settlement.ts";
 import { __setSalesTaxRateTableForTest } from "./sales-tax.ts";
+import { invalidateBillingConfigCache } from "./billing-config.ts";
+
+const HOLD_ROW = {
+  hold_id: "00000000-0000-0000-0000-000000000601",
+  payer_user_id: "user_tax",
+  sponsor_user_id: null,
+  app_price_light: 100,
+  app_charge_light: 100,
+  free_call: false,
+  free_call_count: null,
+  free_call_limit: 0,
+  old_balance: 0,
+  new_balance: 0,
+  held_amount_light: 0.06,
+  held_deposit_light: 0.06,
+  held_earned_light: 0,
+};
+
+function holdFetch(
+  newBalance: number,
+  onRelease: () => void,
+): typeof fetch {
+  return ((input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.includes("/rpc/create_app_call_runtime_cloud_hold")) {
+      return Promise.resolve(
+        Response.json([{ ...HOLD_ROW, new_balance: newBalance }]),
+      );
+    }
+    if (url.includes("/rpc/release_cloud_usage_hold")) {
+      onRelease();
+      return Promise.resolve(
+        Response.json([{
+          hold_id: HOLD_ROW.hold_id,
+          released_amount_light: HOLD_ROW.held_amount_light,
+        }]),
+      );
+    }
+    if (url.includes("/platform_billing_config")) {
+      return Promise.resolve(Response.json([{ id: "singleton", version: 1 }]));
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+}
 
 const TEST_ENV = {
   SUPABASE_URL: "https://supabase.test",
@@ -258,6 +302,80 @@ Deno.test("settleAppCall does not tax a buyer in an unconfigured location", asyn
       assertEquals(debitCalled, false);
     } finally {
       __setSalesTaxRateTableForTest();
+    }
+  });
+});
+
+Deno.test("preflightRuntimeCloudHold rejects when balance can't cover app charge + tax", async () => {
+  await withMockedEnv(async () => {
+    invalidateBillingConfigCache();
+    __setSalesTaxRateTableForTest({ US: { states: { CA: 1000 } } }); // 10%
+    try {
+      let released = false;
+      // appCharge 100, tax 10 → need 110; only 105 left after the infra hold.
+      const result = await preflightRuntimeCloudHold({
+        app: createTestApp({ default_price_light: 100 }),
+        userId: "user_tax",
+        functionName: "run",
+        inputArgs: {},
+        method: "run",
+        timeoutMs: 30_000,
+        callerAuthState: "authenticated",
+      }, {
+        resolveBuyerTaxLocationFn: () =>
+          Promise.resolve({
+            location: { country: "US", state: "CA" },
+            addressId: "addr_ca",
+            version: 1,
+          }),
+        fetchFn: holdFetch(105, () => {
+          released = true;
+        }),
+      });
+
+      assertEquals(result.insufficientBalance, true);
+      assertEquals(result.insufficientBalanceCode, "caller_light_required");
+      assertEquals(result.metadata.sales_tax_light, 10);
+      assertEquals(released, true);
+    } finally {
+      __setSalesTaxRateTableForTest();
+      invalidateBillingConfigCache();
+    }
+  });
+});
+
+Deno.test("preflightRuntimeCloudHold allows when balance covers app charge + tax", async () => {
+  await withMockedEnv(async () => {
+    invalidateBillingConfigCache();
+    __setSalesTaxRateTableForTest({ US: { states: { CA: 1000 } } });
+    try {
+      let released = false;
+      const result = await preflightRuntimeCloudHold({
+        app: createTestApp({ default_price_light: 100 }),
+        userId: "user_tax",
+        functionName: "run",
+        inputArgs: {},
+        method: "run",
+        timeoutMs: 30_000,
+        callerAuthState: "authenticated",
+      }, {
+        resolveBuyerTaxLocationFn: () =>
+          Promise.resolve({
+            location: { country: "US", state: "CA" },
+            addressId: "addr_ca",
+            version: 1,
+          }),
+        fetchFn: holdFetch(500, () => {
+          released = true;
+        }),
+      });
+
+      assertEquals(result.insufficientBalance, false);
+      assertEquals(result.hold?.appChargeLight, 100);
+      assertEquals(released, false);
+    } finally {
+      __setSalesTaxRateTableForTest();
+      invalidateBillingConfigCache();
     }
   });
 });

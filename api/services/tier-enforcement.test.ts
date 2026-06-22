@@ -80,7 +80,7 @@ Deno.test("tier enforcement: publish gate bypasses when disabled by billing conf
   });
 });
 
-Deno.test("tier enforcement: publish gate checks balance before address", async () => {
+Deno.test("tier enforcement: publish gate blocks on low balance first", async () => {
   await runSerial(async () => {
     const calls: string[] = [];
 
@@ -120,70 +120,114 @@ Deno.test("tier enforcement: publish gate checks balance before address", async 
   });
 });
 
-Deno.test("tier enforcement: publish gate requires billing address with sufficient balance", async () => {
+function payoutsBillingConfig(): Response {
+  return Response.json([{
+    id: "singleton",
+    version: 22,
+    publish_deposit_enabled: true,
+    publisher_min_publish_balance_light: 1000,
+  }]);
+}
+
+Deno.test("tier enforcement: public publish requires Connect payouts even with balance", async () => {
   await runSerial(async () => {
     await withMockedEnvAndFetch(
       async (input) => {
         const url = String(input);
-
         if (url.includes("/platform_billing_config")) {
-          return Response.json([{
-            id: "singleton",
-            version: 22,
-            publish_deposit_enabled: true,
-            publisher_min_publish_balance_light: 1000,
-          }]);
+          return payoutsBillingConfig();
         }
-
         if (url.includes("/rest/v1/users?")) {
-          return Response.json([{ balance_light: 1250 }]);
+          return Response.json([
+            { balance_light: 1250, stripe_connect_payouts_enabled: false },
+          ]);
         }
-
-        if (url.includes("/rest/v1/user_billing_addresses?")) {
-          return Response.json([]);
-        }
-
         throw new Error(`Unexpected fetch: ${url}`);
       },
       async () => {
-        const result = await checkPublishDeposit("user-1");
-
-        assertEquals(
-          result,
-          "Publishing requires a saved billing address after meeting the ✦1000 minimum. Current balance: ✦1250. Save a billing address before going live.",
-        );
+        const readiness = await checkPublisherPublishReadiness("user-1", {
+          visibility: "public",
+        });
+        assertEquals(readiness.allowed, false);
+        assertEquals(readiness.block?.reason, "connect_payouts_required");
+        assertEquals(readiness.block?.status, 402);
       },
     );
   });
 });
 
-Deno.test("tier enforcement: publish gate passes with balance and billing address", async () => {
+Deno.test("tier enforcement: public publish passes when Connect payouts enabled", async () => {
   await runSerial(async () => {
     await withMockedEnvAndFetch(
       async (input) => {
         const url = String(input);
-
         if (url.includes("/platform_billing_config")) {
-          return Response.json([{
-            id: "singleton",
-            version: 22,
-            publish_deposit_enabled: true,
-            publisher_min_publish_balance_light: 1000,
-          }]);
+          return payoutsBillingConfig();
         }
-
         if (url.includes("/rest/v1/users?")) {
-          return Response.json([{ balance_light: 1250 }]);
+          return Response.json([
+            { balance_light: 1250, stripe_connect_payouts_enabled: true },
+          ]);
         }
-
-        if (url.includes("/rest/v1/user_billing_addresses?")) {
-          return Response.json([{ id: "billing-address-1" }]);
-        }
-
         throw new Error(`Unexpected fetch: ${url}`);
       },
       async () => {
-        assertEquals(await checkPublishDeposit("user-1"), null);
+        const readiness = await checkPublisherPublishReadiness("user-1", {
+          visibility: "public",
+        });
+        assertEquals(readiness.allowed, true);
+        assertEquals(readiness.block, undefined);
+      },
+    );
+  });
+});
+
+Deno.test("tier enforcement: unlisted needs only balance, not Connect payouts", async () => {
+  await runSerial(async () => {
+    await withMockedEnvAndFetch(
+      async (input) => {
+        const url = String(input);
+        if (url.includes("/platform_billing_config")) {
+          return payoutsBillingConfig();
+        }
+        if (url.includes("/rest/v1/users?")) {
+          return Response.json([
+            { balance_light: 1250, stripe_connect_payouts_enabled: false },
+          ]);
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+      async () => {
+        const readiness = await checkPublisherPublishReadiness("user-1", {
+          visibility: "unlisted",
+        });
+        assertEquals(readiness.allowed, true);
+      },
+    );
+  });
+});
+
+Deno.test("tier enforcement: pre-gate public agents are grandfathered past Connect", async () => {
+  await runSerial(async () => {
+    await withMockedEnvAndFetch(
+      async (input) => {
+        const url = String(input);
+        if (url.includes("/platform_billing_config")) {
+          return payoutsBillingConfig();
+        }
+        if (url.includes("/rest/v1/users?")) {
+          return Response.json([
+            { balance_light: 1250, stripe_connect_payouts_enabled: false },
+          ]);
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+      async () => {
+        const readiness = await checkPublisherPublishReadiness("user-1", {
+          visibility: "public",
+          appConnectGateExempt: true,
+        });
+        assertEquals(readiness.allowed, true);
       },
     );
   });

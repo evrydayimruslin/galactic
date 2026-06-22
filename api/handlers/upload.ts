@@ -1752,7 +1752,12 @@ export async function handleUploadFiles(
     );
     if (visibilityErr) throw new Error(visibilityErr);
 
-    await assertPublisherPublishReadiness(userId);
+    // New app (handleUploadFiles always mints a fresh app id), so it is never
+    // grandfathered (connect_gate_exempt defaults false) — a new public app
+    // must set up Stripe Connect payouts.
+    await assertPublisherPublishReadiness(userId, {
+      visibility: requestedVisibility,
+    });
   }
 
   // ── Run shared pipeline (manifest, entry, exports, bundle, safety, migrations) ──

@@ -3925,12 +3925,15 @@ export async function handleUser(request: Request): Promise<Response> {
             });
           }
 
-          const BASE_URL = getEnv("BASE_URL");
+          // Return to the launch WEBSITE (not the API worker). BASE_URL is the
+          // API origin; the hosted-onboarding return must land on the FE.
+          const WEB_BASE_URL = getEnv("LAUNCH_WEB_BASE_URL") ||
+            getEnv("BASE_URL");
 
           const link = await createOnboardingLink(
             accountId,
-            `${BASE_URL}/wallet?connect=complete`,
-            `${BASE_URL}/wallet?connect=refresh`,
+            `${WEB_BASE_URL}/account?tab=earnings&connect=complete`,
+            `${WEB_BASE_URL}/account?tab=earnings&connect=refresh`,
           );
 
           return json({
@@ -4070,6 +4073,14 @@ export async function handleUser(request: Request): Promise<Response> {
           default_currency: connectStatus.default_currency || null,
           is_cross_border: connectStatus.country !== undefined &&
             connectStatus.country !== "US",
+          // E2 — outstanding onboarding requirements + verification so the FE
+          // can show what's still needed before payouts go live.
+          verification_status: connectStatus.verification_status ?? null,
+          requirements_currently_due: connectStatus.requirements_currently_due ??
+            [],
+          requirements_past_due: connectStatus.requirements_past_due ?? [],
+          requirements_disabled_reason:
+            connectStatus.requirements_disabled_reason ?? null,
           withdrawable_earnings_light: withdrawableEarnings,
         });
       } catch (stripeErr) {
