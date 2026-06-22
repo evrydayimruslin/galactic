@@ -1302,21 +1302,41 @@ function AgentDetailSurface({
     tool.functions.find((fn) => fn.name === selectedFunctionName) ||
     tool.functions[0];
 
+  // Interface selection lives here (not in the panel) so the Interface tab can
+  // be a dropdown — matching the Functions tab — when there's more than one.
+  const [selectedInterfaceId, setSelectedInterfaceId] = useState(
+    tool.interfaces[0]?.id || "",
+  );
+  const [intMenuOpen, setIntMenuOpen] = useState(false);
+  const intMenuRef = useRef<HTMLDivElement>(null);
+  const selectedInterface =
+    tool.interfaces.find((iface) => iface.id === selectedInterfaceId) ||
+    tool.interfaces[0];
+  const multiInterface = tool.interfaces.length > 1;
+
   useEffect(() => {
     setTab(agentTabFromSearch());
   }, [locationSearch]);
 
-  // The Functions tab doubles as a dropdown; close it on outside click / Escape.
-  // The ref wraps the trigger + menu so a trigger click toggles cleanly.
+  // The Functions and (multi-)Interface tabs double as dropdowns; close the
+  // open one on outside click / Escape. Each ref wraps its trigger + menu so a
+  // trigger click toggles cleanly.
   useEffect(() => {
-    if (!fnMenuOpen) return;
+    if (!fnMenuOpen && !intMenuOpen) return;
     const onDown = (event: MouseEvent) => {
-      if (!fnMenuRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (fnMenuOpen && !fnMenuRef.current?.contains(target)) {
         setFnMenuOpen(false);
+      }
+      if (intMenuOpen && !intMenuRef.current?.contains(target)) {
+        setIntMenuOpen(false);
       }
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFnMenuOpen(false);
+      if (event.key === "Escape") {
+        setFnMenuOpen(false);
+        setIntMenuOpen(false);
+      }
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -1324,7 +1344,7 @@ function AgentDetailSurface({
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [fnMenuOpen]);
+  }, [fnMenuOpen, intMenuOpen]);
 
   // Wiring is meaningful only when signed in and the Agent is the user's own
   // (owner) or one they've installed. Public, signed-out views hide the tab.
@@ -1391,6 +1411,7 @@ function AgentDetailSurface({
             aria-haspopup="listbox"
             className={effectiveTab === "functions" ? "active" : ""}
             onClick={() => {
+              setIntMenuOpen(false);
               if (effectiveTab !== "functions") {
                 activateToolTab("functions");
                 setFnMenuOpen(true);
@@ -1400,7 +1421,7 @@ function AgentDetailSurface({
             }}
             type="button"
           >
-            Functions
+            <span>Functions</span>
             {tool.functions.length > 0
               ? (
                 <span
@@ -1414,31 +1435,82 @@ function AgentDetailSurface({
           </button>
           {effectiveTab === "functions" && fnMenuOpen && selectedFunction
             ? (
-              <FunctionMenu
-                functions={tool.functions}
+              <TabSelectMenu
+                items={tool.functions.map((fn) => ({
+                  id: fn.name,
+                  label: <Mono>{fn.name}</Mono>,
+                  meta: <Mono>{formatAgentPrice(fn.price)}</Mono>,
+                }))}
                 onPick={(name) => {
                   setSelectedFunctionName(name);
                   setFnMenuOpen(false);
                 }}
-                selected={selectedFunction}
+                selectedId={selectedFunction.name}
               />
             )
             : null}
         </div>
         {hasInterfaces
-          ? (
-            <button
-              className={effectiveTab === "interface" ? "active" : ""}
-              onClick={() => activateToolTab("interface")}
-              type="button"
-            >
-              Interface
-            </button>
-          )
+          ? (multiInterface
+            ? (
+              <div className="tool-tab-menu" ref={intMenuRef}>
+                <button
+                  aria-expanded={effectiveTab === "interface" && intMenuOpen}
+                  aria-haspopup="listbox"
+                  className={effectiveTab === "interface" ? "active" : ""}
+                  onClick={() => {
+                    setFnMenuOpen(false);
+                    if (effectiveTab !== "interface") {
+                      activateToolTab("interface");
+                      setIntMenuOpen(true);
+                    } else {
+                      setIntMenuOpen((open) => !open);
+                    }
+                  }}
+                  type="button"
+                >
+                  <span>Interface</span>
+                  <span
+                    aria-hidden="true"
+                    className={effectiveTab === "interface" && intMenuOpen
+                      ? "picker-caret open"
+                      : "picker-caret"}
+                  />
+                </button>
+                {effectiveTab === "interface" && intMenuOpen && selectedInterface
+                  ? (
+                    <TabSelectMenu
+                      items={tool.interfaces.map((iface) => ({
+                        id: iface.id,
+                        label: iface.label,
+                      }))}
+                      onPick={(id) => {
+                        setSelectedInterfaceId(id);
+                        setIntMenuOpen(false);
+                      }}
+                      selectedId={selectedInterface.id}
+                    />
+                  )
+                  : null}
+              </div>
+            )
+            : (
+              <button
+                className={effectiveTab === "interface" ? "active" : ""}
+                onClick={() => activateToolTab("interface")}
+                type="button"
+              >
+                Interface
+              </button>
+            ))
           : null}
         <button
           className={effectiveTab === "details" ? "active" : ""}
-          onClick={() => activateToolTab("details")}
+          onClick={() => {
+            setFnMenuOpen(false);
+            setIntMenuOpen(false);
+            activateToolTab("details");
+          }}
           type="button"
         >
           Details
@@ -1460,7 +1532,13 @@ function AgentDetailSurface({
             )
             : null}
           {effectiveTab === "interface" && hasInterfaces
-            ? <AgentInterfacePanel signedIn={signedIn} tool={tool} />
+            ? (
+              <AgentInterfacePanel
+                selected={selectedInterface}
+                signedIn={signedIn}
+                tool={tool}
+              />
+            )
             : null}
           {effectiveTab === "details"
             ? (
@@ -1510,36 +1588,38 @@ function AgentFunctionsPanel({
 // The function list shown by the Functions tab dropdown. Outside-click / Escape
 // closing is owned by the parent (AgentDetailSurface) so a click on the tab
 // trigger toggles cleanly.
-function FunctionMenu({
-  functions,
+// Compact selector shared by the Functions and Interface tab dropdowns: a
+// scannable list of names (the selected item's full detail lives in the panel
+// below, so the menu stays tight instead of repeating every description).
+function TabSelectMenu({
+  items,
   onPick,
-  selected,
+  selectedId,
 }: {
-  functions: AgentFunctionFixture[];
-  onPick: (name: string) => void;
-  selected: AgentFunctionFixture;
+  items: Array<{ id: string; label: ReactNode; meta?: ReactNode }>;
+  onPick: (id: string) => void;
+  selectedId: string;
 }): ReactElement {
   return (
-    <div className="function-menu tab-menu" role="listbox">
-      {functions.map((fn) => {
-        const active = fn.name === selected.name;
+    <div className="tab-select-menu" role="listbox">
+      {items.map((item) => {
+        const active = item.id === selectedId;
         return (
           <button
             aria-selected={active}
             className={active ? "active" : ""}
-            key={fn.name}
-            onClick={() => onPick(fn.name)}
+            key={item.id}
+            onClick={() => onPick(item.id)}
             role="option"
             type="button"
           >
-            <span className="function-menu-check" aria-hidden="true">
-              {active ? <Icon name="check" size={14} /> : null}
+            <span className="tab-select-check" aria-hidden="true">
+              {active ? <Icon name="check" size={13} /> : null}
             </span>
-            <span className="function-menu-label">
-              <Mono>{fn.name}</Mono>
-              <small>{fn.description}</small>
-            </span>
-            <Mono>{formatAgentPrice(fn.price)}</Mono>
+            <span className="tab-select-label">{item.label}</span>
+            {item.meta != null
+              ? <span className="tab-select-meta">{item.meta}</span>
+              : null}
           </button>
         );
       })}
@@ -1548,16 +1628,17 @@ function FunctionMenu({
 }
 
 
+// Interface selection now lives in the tab bar (the Interface tab is a dropdown
+// when there's more than one), so the panel just renders the chosen surface.
 function AgentInterfacePanel({
+  selected,
   signedIn,
   tool,
 }: {
+  selected: LaunchInterfaceSummary | undefined;
   signedIn: boolean;
   tool: AgentDetailFixture;
 }): ReactElement {
-  const [selectedId, setSelectedId] = useState(tool.interfaces[0]?.id || "");
-  const selected = tool.interfaces.find((iface) => iface.id === selectedId) ||
-    tool.interfaces[0];
   if (!selected) {
     return (
       <div className="functions-panel">
@@ -1569,28 +1650,6 @@ function AgentInterfacePanel({
   }
   return (
     <div className="functions-panel">
-      {tool.interfaces.length > 1
-        ? (
-          <div
-            className="account-subtabs"
-            role="tablist"
-            aria-label="Interfaces"
-          >
-            {tool.interfaces.map((iface) => (
-              <button
-                aria-selected={iface.id === selected.id}
-                className={iface.id === selected.id ? "active" : ""}
-                key={iface.id}
-                onClick={() => setSelectedId(iface.id)}
-                role="tab"
-                type="button"
-              >
-                {iface.label}
-              </button>
-            ))}
-          </div>
-        )
-        : null}
       {/* key remounts the surface (iframe + bridge + spend) per interface. */}
       <InterfaceSurfaceCard
         iface={selected}
@@ -4460,21 +4519,6 @@ function writePendingTopUpResult(value: string | null): void {
 }
 
 // Stripe Link mark — green rounded square with the Link chevron.
-function LinkMark(): ReactElement {
-  return (
-    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 28 18" width="28">
-      <rect fill="#00D66F" height="18" rx="5" width="28" />
-      <path
-        d="M11 5.5l3.2 3.5-3.2 3.5"
-        stroke="#0E2A47"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="2.2"
-      />
-    </svg>
-  );
-}
-
 function WalletTopUpPanel(
   { earnedCredits, live }: {
     earnedCredits: number;
@@ -4901,10 +4945,8 @@ function WalletTopUpPanel(
             onClick={() => selectMethod("card")}
             type="button"
           >
-            <strong className="method-link">
-              <LinkMark />
-              Pay with Link
-            </strong>
+            <strong>Pay by card</strong>
+            <span>Card or Link</span>
           </button>
           <button
             className={method === "earnings" ? "active" : ""}

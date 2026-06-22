@@ -2323,57 +2323,64 @@ button {
   transform: translateY(1px) rotate(-135deg);
 }
 
-.function-menu {
+/* Compact tab dropdown (Functions / multi-Interface): scannable name + price,
+   no per-row descriptions — the selected item's detail lives in the panel. */
+.tab-select-menu {
   position: absolute;
   z-index: 20;
   top: calc(100% + 6px);
   left: 0;
-  right: 0;
+  min-width: 220px;
+  max-width: 360px;
   display: grid;
-  gap: 2px;
-  max-height: 340px;
-  padding: 6px;
+  gap: 1px;
+  max-height: 320px;
+  padding: 5px;
   overflow-y: auto;
   border: 1px solid var(--ul-border);
-  border-radius: 12px;
+  border-radius: 11px;
   background: #fff;
-  box-shadow: 0 12px 32px rgba(10, 10, 10, 0.12);
+  box-shadow: var(--ul-shadow);
 }
 
-.function-menu button {
+.tab-select-menu button {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  gap: 10px;
+  grid-template-columns: 15px minmax(0, 1fr) auto;
+  gap: 9px;
   align-items: center;
-  padding: 9px 10px;
+  padding: 7px 9px;
   border: 0;
   border-radius: 8px;
   background: transparent;
+  color: var(--ul-text);
   cursor: pointer;
   text-align: left;
 }
 
-.function-menu button:hover,
-.function-menu button.active {
+.tab-select-menu button:hover,
+.tab-select-menu button.active {
   background: var(--ul-raised);
 }
 
-.function-menu-check {
+.tab-select-check {
   display: inline-flex;
   justify-content: center;
   color: var(--ul-text);
 }
 
-.function-menu-label {
-  display: grid;
-  gap: 2px;
+.tab-select-label {
   min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.function-menu-label small {
-  color: var(--ul-secondary);
+.tab-select-meta {
+  flex-shrink: 0;
+  color: var(--ul-muted);
   font-size: 12px;
-  line-height: 1.35;
+  white-space: nowrap;
 }
 
 /* The Installed button doubles as the uninstall control — hint on hover. */
@@ -2388,9 +2395,12 @@ button {
   display: inline-flex;
 }
 
-.function-menu.tab-menu {
-  right: auto;
-  min-width: 340px;
+/* The dropdown trigger is itself a tab; lay it out inline-flex so the caret
+   sits centred next to the label instead of riding the text baseline. */
+.tool-tab-menu > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 /* Per-function wiring under the permission control: inbound | outbound. */
@@ -3797,13 +3807,6 @@ button {
 
 .wallet-quote-col .secure-note {
   padding: 0 2px;
-}
-
-/* "Pay with Link" option label — Link mark inline with the text, no subtext. */
-.payment-methods .method-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
 }
 
 /* Editable top-up amount field (custom amounts, not just presets). */
