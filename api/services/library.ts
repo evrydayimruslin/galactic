@@ -63,7 +63,7 @@ export async function writeUserMemory(
     throw new Error(
       `memory.md exceeds ${MEMORY_MAX_BYTES / 1024}KB limit (${
         (bytes.length / 1024).toFixed(1)
-      }KB). Trim content or use ul.memory.remember for structured data.`,
+      }KB). Trim content or use gx.memory.remember for structured data.`,
     );
   }
 

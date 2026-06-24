@@ -2067,7 +2067,7 @@ Protocol: JSON-RPC 2.0
 
 **Call a tool (example — discover apps):**
 \`\`\`json
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ul.discover","arguments":{"scope":"appstore","query":"productivity"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"gx.discover","arguments":{"scope":"appstore","query":"productivity"}}}
 \`\`\`
 
 **Read a resource (example — your memory):**
@@ -2099,7 +2099,7 @@ These are curated apps from the Ultralight marketplace. Each works instantly —
 ## What to do next
 
 After connecting:
-1. Try listing available tools by calling \`tools/list\` on the MCP endpoint, or use \`ul.discover\` to search the app store.
+1. Try listing available tools by calling \`tools/list\` on the MCP endpoint, or use \`gx.discover\` to search the app store.
 2. Look at what I'm currently working on or interested in.
 3. Suggest 2-3 apps from the list above that seem most relevant to me and briefly explain why.
 4. Offer to connect them so I can start using them.

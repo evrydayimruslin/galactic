@@ -2445,7 +2445,7 @@ async function executeAppFunction(
                   job_id: jobId,
                   status: "queued",
                   message:
-                    `Execution queued. Poll with ultralight.job({ job_id: "${jobId}" }) on this connection (ul.job on the platform MCP) to get the result.`,
+                    `Execution queued. Poll with ultralight.job({ job_id: "${jobId}" }) on this connection (gx.job on the platform MCP) to get the result.`,
                 }),
               }],
               structuredContent: {

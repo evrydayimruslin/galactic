@@ -220,7 +220,7 @@ export function buildMissingAppSecretsMessage(
 ): string {
   return `Missing required secrets: ${
     missingSecrets.join(", ")
-  }. Use ul.secrets to provide them.`;
+  }. Use gx.secrets to provide them.`;
 }
 
 export function buildMissingAppSecretsErrorDetails(
@@ -242,7 +242,7 @@ export function buildMissingAppSecretsErrorDetails(
     app_id: appId,
     message: diagnostics.message,
     remediation: diagnostics.remediation,
-    hint: `Call ul.secrets with app_id="${appId}" and provide: ${
+    hint: `Call gx.secrets with app_id="${appId}" and provide: ${
       missingSecrets.join(", ")
     }`,
     connect_command: diagnostics.connect_command,

@@ -6,7 +6,7 @@ import { handlePlatformMcp, handleSkills } from "./platform-mcp.ts";
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 
 const CORE_GUIDANCE = [
-  "Post Ultralight URLs only when the link helps the user's current action",
+  "Post Galactic URLs only when the link helps the user's current action",
   "`/install`",
   "`/wallet`",
   "`/settings`",
@@ -18,7 +18,7 @@ const CORE_GUIDANCE = [
   "`skills_index(args: {})`",
   "`skill_reader(args: { skill_id: string })`",
   "Generated skills.md function docs are always free",
-  "`ul.download({ name, description, policy: true })`",
+  "`gx.download({ name, description, policy: true })`",
   "custom code path for functions",
   "default_price_credits",
 ];
