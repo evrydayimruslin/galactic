@@ -9,8 +9,8 @@ import {
 
 Deno.test("platform alias telemetry: maps ul.execute to ul.codemode", () => {
   assertEquals(PLATFORM_MCP_ALIAS_MAP["ul.execute"], {
-    canonicalTool: "ul.codemode",
-    replacement: 'ul.codemode({ code })',
+    canonicalTool: "gx.codemode",
+    replacement: 'gx.codemode({ code })',
   });
 });
 
@@ -52,6 +52,6 @@ Deno.test("platform alias telemetry: explicit alias names can be disabled indivi
 Deno.test("platform alias telemetry: retired message points callers at canonical replacements when available", () => {
   assertEquals(
     buildPlatformMcpAliasRetiredMessage("ul.execute"),
-    'The tool alias "ul.execute" has been retired. Use ul.codemode({ code }) instead.',
+    'The tool alias "ul.execute" has been retired. Use gx.codemode({ code }) instead.',
   );
 });

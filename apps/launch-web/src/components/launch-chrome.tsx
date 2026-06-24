@@ -357,9 +357,8 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }): Re
 
 export function Wordmark(): ReactElement {
   return (
-    <span className="wordmark">
+    <span aria-label="Galactic" className="wordmark" role="img">
       <span aria-hidden="true" className="wordmark-mark" />
-      <span>Galactic</span>
     </span>
   );
 }

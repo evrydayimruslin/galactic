@@ -39,7 +39,7 @@ import { ApiClient } from './api.ts';
 import { colors } from './colors.ts';
 import { createCliLogger } from './logging.ts';
 
-const VERSION = '2.1.0';
+const VERSION = '2.2.1';
 const cliLogger = createCliLogger('CLI');
 const writeStderr = (line: string): void => console.error(line);
 

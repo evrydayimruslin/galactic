@@ -1,6 +1,6 @@
 {
   "name": "galacticconnection",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Galactic — local stdio MCP bridge + CLI. Connect any computer-access agent (Claude Code, Claude Desktop, Cursor) to the Galactic platform, with local filesystem tools, plus build/deploy/manage Agents from your shell.",
   "type": "module",
   "bin": {

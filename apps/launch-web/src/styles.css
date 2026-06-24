@@ -146,8 +146,8 @@ button {
 
 .wordmark-mark {
   display: inline-block;
-  width: 20px;
-  height: 20px;
+  width: 30px;
+  height: 30px;
   background-color: currentColor;
   -webkit-mask: url("/galactic-mark.svg") center / contain no-repeat;
   mask: url("/galactic-mark.svg") center / contain no-repeat;

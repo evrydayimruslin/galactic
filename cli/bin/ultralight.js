@@ -84,22 +84,22 @@ async function findDeno() {
 // ─── Plugin content ──────────────────────────────────────────────────
 
 const PLUGIN_JSON = {
-  name: 'ultralight',
+  name: 'galactic',
   description: 'Galactic — serverless MCP platform. Discover, build, test, and deploy AI agent tools.',
   version: '1.0.0',
   author: { name: 'Galactic', url: 'https://api.ultralightagent.com' },
   homepage: 'https://api.ultralightagent.com',
   license: 'MIT',
-  keywords: ['ultralight', 'mcp', 'serverless', 'ai', 'tools', 'agent'],
+  keywords: ['galactic', 'mcp', 'serverless', 'ai', 'tools', 'agent'],
 };
 
 const SKILL_FRONTMATTER = `---
-name: ultralight-platform
+name: galactic-platform
 description: >
   Galactic MCP platform guidance. Use when the user works with Galactic tools
-  (ul.call, ul.discover, ul.upload, ul.download, ul.test, ul.set, ul.memory,
-  ul.permissions, ul.logs, ul.rate), builds serverless MCP apps, deploys TypeScript
-  functions, manages app permissions, or mentions "ultralight". Provides tool curation
+  (gx.call, gx.discover, gx.upload, gx.download, gx.test, gx.set, gx.memory,
+  gx.permissions, gx.logs, gx.rate), builds serverless MCP apps, deploys TypeScript
+  functions, manages app permissions, or mentions "galactic". Provides tool curation
   workflow, building guide with SDK globals, and agent best practices.
 ---
 
@@ -117,12 +117,12 @@ Search and explore apps using the Galactic platform.
 
 1. Parse the user's intent from: $ARGUMENTS
 2. Determine the right scope:
-   - No arguments or "desk" → \`ul.discover({ scope: "desk" })\` — show recent apps
-   - An app ID or URL → \`ul.discover({ scope: "inspect", app_id: "<id>" })\` — deep introspection
-   - "library" or "my apps" → \`ul.discover({ scope: "library" })\` — owned + saved apps
-   - A search query → \`ul.discover({ scope: "appstore", query: "<query>" })\` — search all published apps
-   - A task description → \`ul.discover({ scope: "appstore", query: "<query>", task: "<task>" })\` — context-aware search with inline content
-3. Call ul.discover with the appropriate parameters
+   - No arguments or "desk" → \`gx.discover({ scope: "desk" })\` — show recent apps
+   - An app ID or URL → \`gx.discover({ scope: "inspect", app_id: "<id>" })\` — deep introspection
+   - "library" or "my apps" → \`gx.discover({ scope: "library" })\` — owned + saved apps
+   - A search query → \`gx.discover({ scope: "appstore", query: "<query>" })\` — search all published apps
+   - A task description → \`gx.discover({ scope: "appstore", query: "<query>", task: "<task>" })\` — context-aware search with inline content
+3. Call gx.discover with the appropriate parameters
 4. Present results clearly: app names, descriptions, function counts, and capabilities
 5. For inspect results, summarize function schemas, storage architecture, and permissions
 6. Suggest next steps: call a function with /call, save to library, or build something new
@@ -142,7 +142,7 @@ Execute a function on any Galactic app through the single platform connection.
    - Second argument: function_name (required)
    - Remaining: JSON args object (optional)
 2. If args provided as a JSON string, parse it into an object
-3. Call \`ul.call({ app_id, function_name, args })\`
+3. Call \`gx.call({ app_id, function_name, args })\`
 4. On first call per app, the response includes full inspect context — summarize the app's capabilities briefly
 5. Present the function result clearly to the user
 6. If error occurs, read the message carefully and suggest specific fixes
@@ -164,9 +164,9 @@ Deploy an app or publish content to the Galactic platform.
    - Read manifest.json for function definitions
    - Read .ultralightrc.json for app config (app_id for updates)
 3. Prepare the upload payload with files array
-4. For new apps (no app_id): \`ul.upload({ files, name, description, visibility: "private" })\`
-5. For updates (with app_id): \`ul.upload({ files, app_id })\` — creates new version (NOT auto-live)
-6. For markdown pages: \`ul.upload({ type: "page", content, slug, title })\`
+4. For new apps (no app_id): \`gx.upload({ files, name, description, visibility: "private" })\`
+5. For updates (with app_id): \`gx.upload({ files, app_id })\` — creates new version (NOT auto-live)
+6. For markdown pages: \`gx.upload({ type: "page", content, slug, title })\`
 7. After upload, confirm: name, function count, version, MCP endpoint
 8. Suggest next steps: activate version with /set, grant permissions, record in memory
 `,
@@ -182,11 +182,11 @@ Download source code or scaffold a new app.
 
 1. Parse from: $ARGUMENTS
 2. If an app_id or slug is provided:
-   - Call \`ul.download({ app_id })\` to get the source code
+   - Call \`gx.download({ app_id })\` to get the source code
    - Write the received files to the current directory
 3. If no app_id (scaffold mode):
    - Parse name, description, and any function specs from arguments
-   - Call \`ul.download({ name, description, functions, storage })\`
+   - Call \`gx.download({ name, description, functions, storage })\`
    - Write the scaffolded files to a new directory
 4. Explain the file structure: index.ts (code), manifest.json (schemas), .ultralightrc.json (config)
 5. Suggest next steps: implement functions, test with /test, deploy with /upload
@@ -204,8 +204,8 @@ Test code in the Galactic sandbox without deploying.
 1. Read source files from the current project (index.ts, manifest.json)
 2. Parse from: $ARGUMENTS — optional function_name and test args JSON
 3. Prepare the files array from the source code
-4. If "lint" or "lint_only" in arguments: \`ul.test({ files, lint_only: true })\`
-5. Otherwise: \`ul.test({ files, function_name, test_args })\`
+4. If "lint" or "lint_only" in arguments: \`gx.test({ files, lint_only: true })\`
+5. Otherwise: \`gx.test({ files, function_name, test_args })\`
 6. Present results clearly:
    - Success/failure status and duration
    - Exported function list
@@ -233,7 +233,7 @@ Batch-configure app settings. Only provided fields are updated.
    - calls_per_day=N — rate limit per day
    - default_price_credits=N — price per call in credits (✦)
 3. Build the settings object from parsed values
-4. Call \`ul.set({ app_id, ...settings })\`
+4. Call \`gx.set({ app_id, ...settings })\`
 5. Confirm what was changed and the current state
 `,
 
@@ -248,12 +248,12 @@ Access persistent cross-session storage with two layers: memory.md (free-form no
 
 1. Parse from: $ARGUMENTS
 2. Determine the action:
-   - "read" or no args → \`ul.memory({ action: "read" })\` — show memory.md
-   - "write <content>" → \`ul.memory({ action: "write", content, append: true })\` — append to memory.md
-   - "recall <key>" → \`ul.memory({ action: "recall", key })\` — get a KV value
-   - "recall <key> <value>" → \`ul.memory({ action: "recall", key, value })\` — set a KV value
-   - "query" or "query <prefix>" → \`ul.memory({ action: "query", prefix })\` — list KV keys
-3. Call ul.memory with the appropriate parameters
+   - "read" or no args → \`gx.memory({ action: "read" })\` — show memory.md
+   - "write <content>" → \`gx.memory({ action: "write", content, append: true })\` — append to memory.md
+   - "recall <key>" → \`gx.memory({ action: "recall", key })\` — get a KV value
+   - "recall <key> <value>" → \`gx.memory({ action: "recall", key, value })\` — set a KV value
+   - "query" or "query <prefix>" → \`gx.memory({ action: "query", prefix })\` — list KV keys
+3. Call gx.memory with the appropriate parameters
 4. Present results clearly
 5. For write operations, confirm what was stored
 `,
@@ -269,13 +269,13 @@ Manage app access control with granular constraints.
 
 1. Parse from: $ARGUMENTS — app_id, action, and optional parameters
 2. Determine the action:
-   - "grant <email>" → \`ul.permissions({ app_id, action: "grant", email })\`
+   - "grant <email>" → \`gx.permissions({ app_id, action: "grant", email })\`
    - "grant <email> <functions>" → grant with function restrictions
-   - "revoke <email>" → \`ul.permissions({ app_id, action: "revoke", email })\`
-   - "list" → \`ul.permissions({ app_id, action: "list" })\`
-   - "export" → \`ul.permissions({ app_id, action: "export" })\`
+   - "revoke <email>" → \`gx.permissions({ app_id, action: "revoke", email })\`
+   - "list" → \`gx.permissions({ app_id, action: "list" })\`
+   - "export" → \`gx.permissions({ app_id, action: "export" })\`
 3. For grants, parse optional constraints: IP whitelist, time windows, budget limits, expiry
-4. Call ul.permissions with the appropriate parameters
+4. Call gx.permissions with the appropriate parameters
 5. Present the current permission state clearly
 6. For export, format as requested (JSON or CSV)
 `,
@@ -291,10 +291,10 @@ View call logs and health events for your apps.
 
 1. Parse from: $ARGUMENTS — optional app_id and filter flags
 2. Determine the mode:
-   - Default: call logs → \`ul.logs({ app_id })\`
-   - "--health" or "health": health events → \`ul.logs({ app_id, health: true })\`
-   - "--since <date>": filter by time → \`ul.logs({ app_id, since: "<ISO date>" })\`
-3. Call ul.logs with the appropriate parameters
+   - Default: call logs → \`gx.logs({ app_id })\`
+   - "--health" or "health": health events → \`gx.logs({ app_id, health: true })\`
+   - "--since <date>": filter by time → \`gx.logs({ app_id, since: "<ISO date>" })\`
+3. Call gx.logs with the appropriate parameters
 4. Present logs in a readable format with timestamps, functions called, and status
 5. Highlight any errors or anomalies
 6. For health events, show status (detected/acknowledged/resolved) and suggest actions
@@ -311,10 +311,10 @@ Rate apps to manage your library, or report platform shortcomings.
 
 1. Parse from: $ARGUMENTS — app_id and rating
 2. Determine the action:
-   - "like" → \`ul.rate({ app_id, rating: "like" })\` — save to library
-   - "dislike" → \`ul.rate({ app_id, rating: "dislike" })\` — hide from appstore
-   - "none" → \`ul.rate({ app_id, rating: "none" })\` — remove rating
-3. Call ul.rate with the appropriate parameters
+   - "like" → \`gx.rate({ app_id, rating: "like" })\` — save to library
+   - "dislike" → \`gx.rate({ app_id, rating: "dislike" })\` — hide from appstore
+   - "none" → \`gx.rate({ app_id, rating: "none" })\` — remove rating
+3. Call gx.rate with the appropriate parameters
 4. Confirm the action taken
 `,
 };
@@ -349,13 +349,13 @@ function registerPlugin(token, apiUrl) {
     return false;
   }
 
-  const pluginBase = join(marketplaceDir, 'ultralight');
+  const pluginBase = join(marketplaceDir, 'galactic');
 
   try {
     // Create directory structure
     mkdirSync(join(pluginBase, '.claude-plugin'), { recursive: true });
     mkdirSync(join(pluginBase, 'commands'), { recursive: true });
-    mkdirSync(join(pluginBase, 'skills', 'ultralight-platform'), { recursive: true });
+    mkdirSync(join(pluginBase, 'skills', 'galactic-platform'), { recursive: true });
 
     // 1. Write plugin.json
     writeJSON(join(pluginBase, '.claude-plugin', 'plugin.json'), PLUGIN_JSON);
@@ -363,7 +363,7 @@ function registerPlugin(token, apiUrl) {
     // 2. Write .mcp.json (flat format — standard for external plugins).
     // stdio entry → launches the local bridge; token comes from ~/.ultralight.
     const mcpConfig = {
-      ultralight: {
+      galactic: {
         command: 'npx',
         args: ['-y', `galacticconnection@${getVersion()}`, 'mcp'],
       },
@@ -374,7 +374,7 @@ function registerPlugin(token, apiUrl) {
     const skillsBody = getSkillsContent();
     if (skillsBody) {
       writeFileSync(
-        join(pluginBase, 'skills', 'ultralight-platform', 'SKILL.md'),
+        join(pluginBase, 'skills', 'galactic-platform', 'SKILL.md'),
         SKILL_FRONTMATTER + skillsBody
       );
     } else {
@@ -392,13 +392,13 @@ function registerPlugin(token, apiUrl) {
       try {
         const manifest = readJSON(manifestPath);
         if (manifest && Array.isArray(manifest.plugins)) {
-          const exists = manifest.plugins.some((p) => p.name === 'ultralight');
+          const exists = manifest.plugins.some((p) => p.name === 'galactic');
           if (!exists) {
             manifest.plugins.push({
-              name: 'ultralight',
+              name: 'galactic',
               description: 'Galactic — serverless MCP platform. Discover, build, test, and deploy AI agent tools instantly.',
               category: 'development',
-              source: './external_plugins/ultralight',
+              source: './external_plugins/galactic',
               homepage: 'https://api.ultralightagent.com',
             });
             writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
@@ -413,7 +413,7 @@ function registerPlugin(token, apiUrl) {
     console.log(c.dim(`  Plugin:   ${pluginBase}`));
     console.log(c.dim('  Commands: /discover, /call, /upload, /download, /test, /set, /memory, /permissions, /logs, /rate'));
     if (skillsBody) {
-      console.log(c.dim('  Skill:    ultralight-platform (auto-activates for Galactic tasks)'));
+      console.log(c.dim('  Skill:    galactic-platform (auto-activates for Galactic tasks)'));
     }
 
     return true;
@@ -601,7 +601,7 @@ List available tools:
 curl -s -X POST "${mcpEndpoint}" -H "Authorization: Bearer ${tokenFromConfig}" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
 Call a tool (example — discover apps):
-curl -s -X POST "${mcpEndpoint}" -H "Authorization: Bearer ${tokenFromConfig}" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ul.discover","arguments":{"scope":"appstore","query":"hello"}}}'
+curl -s -X POST "${mcpEndpoint}" -H "Authorization: Bearer ${tokenFromConfig}" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"gx.discover","arguments":{"scope":"appstore","query":"hello"}}}'
 
 MCP is configured for future sessions. Tools activate natively on next agent restart.
 --- END ULTRALIGHT AGENT BRIDGE ---`);

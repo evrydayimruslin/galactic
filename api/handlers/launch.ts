@@ -4551,14 +4551,14 @@ function buildInstallInstructions(
   const bearer = "Bearer $ULTRALIGHT_API_KEY";
   const genericConfig = {
     mcpServers: {
-      ultralight: {
+      galactic: {
         url: mcpUrl,
         headers: { Authorization: bearer },
       },
     },
   };
   const claudeCodeAddCommand =
-    `claude mcp add --transport http --scope user ultralight ${mcpUrl} --header "Authorization: ${bearer}"`;
+    `claude mcp add --transport http --scope user galactic ${mcpUrl} --header "Authorization: ${bearer}"`;
   const connectPrompt = [
     "Set up Galactic for me, then start using it.",
     "",
@@ -4599,7 +4599,7 @@ function buildInstallInstructions(
       steps: [
         "Create an Galactic API token from Settings.",
         "Run the command below with your token in place of $ULTRALIGHT_API_KEY.",
-        "Run /mcp (or restart) so Claude Code picks up the ultralight server.",
+        "Run /mcp (or restart) so Claude Code picks up the galactic server.",
       ],
       configText: claudeCodeAddCommand,
       requiresApiKey: true,
@@ -4611,7 +4611,7 @@ function buildInstallInstructions(
         "Install the Galactic MCP server in Cursor's MCP configuration.",
       steps: [
         "Open Cursor MCP settings.",
-        "Add the ultralight server entry below.",
+        "Add the galactic server entry below.",
         "Reload Cursor so it can discover Galactic Agents.",
       ],
       configText: JSON.stringify(genericConfig, null, 2),
@@ -4624,11 +4624,11 @@ function buildInstallInstructions(
         "Connect Codex to the same remote MCP endpoint used by other agents.",
       steps: [
         "Create an Galactic API token.",
-        "Add a remote MCP server named ultralight.",
+        "Add a remote MCP server named galactic.",
         "Use the platform MCP endpoint and Authorization header below.",
       ],
       configText:
-        `[mcp_servers.ultralight]\nurl = "${mcpUrl}"\nheaders = { Authorization = "${bearer}" }`,
+        `[mcp_servers.galactic]\nurl = "${mcpUrl}"\nheaders = { Authorization = "${bearer}" }`,
       requiresApiKey: true,
     },
     {
@@ -4672,7 +4672,7 @@ function buildInstallInstructions(
         "Run galactic upload . from a deployable Agent directory.",
       ],
       configText:
-        "npm install -g galacticconnection\nultralight login --token <your-token>\nultralight upload .",
+        "npm install -g galacticconnection\ngalactic login --token <your-token>\ngalactic upload .",
       requiresApiKey: true,
     },
     {
