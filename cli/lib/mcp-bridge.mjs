@@ -67,7 +67,8 @@ const LEGACY_API_URLS = new Set([
 ]);
 
 function loadAuth() {
-  let token = process.env.ULTRALIGHT_TOKEN || process.env.ULTRALIGHT_API_TOKEN || null;
+  let token = process.env.GALACTIC_TOKEN || process.env.ULTRALIGHT_TOKEN ||
+    process.env.ULTRALIGHT_API_TOKEN || null;
   let apiUrl = process.env.ULTRALIGHT_API_URL || null;
   try {
     const cfg = JSON.parse(readFileSync(join(homedir(), '.ultralight', 'config.json'), 'utf-8'));

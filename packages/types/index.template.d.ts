@@ -23,6 +23,8 @@ export type * from './generated/shared/contracts/widget';
 
 declare global {
   const ultralight: UltralightSDK;
+  /** Galactic SDK namespace — alias of `ultralight`. Prefer `galactic.*` in new code. */
+  const galactic: UltralightSDK;
   const _: LodashLike;
   const uuid: {
     v4(): string;

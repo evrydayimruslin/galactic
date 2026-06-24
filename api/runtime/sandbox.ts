@@ -2546,6 +2546,10 @@ export async function executeInSandbox(
         // Set up globalThis properties BEFORE bundled code runs
         // This is critical because bundled code captures these at module init time
         globalThis.ultralight = ultralight;
+        // Galactic rename: galactic.* is the new SDK namespace, aliased to the
+        // same object so galactic.ai()/galactic.call()/... === ultralight.*.
+        // ultralight.* stays a permanent alias — every deployed app keeps working.
+        globalThis.galactic = ultralight;
         globalThis.uuid = uuid;
         globalThis._ = _;
         globalThis.console = console;

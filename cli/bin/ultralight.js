@@ -25,7 +25,8 @@ function getVersion() {
   }
 }
 
-const API_URL = process.env.ULTRALIGHT_API_URL || 'https://api.ultralightagent.com';
+const API_URL = process.env.GALACTIC_API_URL || process.env.ULTRALIGHT_API_URL ||
+  'https://api.ultralightagent.com';
 const DENO_INSTALL_URL = 'https://raw.githubusercontent.com/evrydayimruslin/ultralight/main/cli/mod.ts';
 const DENO_BIN_NAME = platform() === 'win32' ? 'deno.exe' : 'deno';
 

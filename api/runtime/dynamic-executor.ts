@@ -115,8 +115,10 @@ globalThis.ultralight = {
   remember(k, v) { return globalThis.__rpcEnv.MEMORY?.remember(k, v) || Promise.resolve(); },
   recall(k) { return globalThis.__rpcEnv.MEMORY?.recall(k) || Promise.resolve(null); },
   ai(r) { return globalThis.__rpcEnv.AI?.call(r) || Promise.resolve({ content: '', error: 'AI not available' }); },
-  call() { throw new Error('ultralight.call() not available in codemode sandbox'); },
+  call() { throw new Error('galactic.call() not available in codemode sandbox'); },
 };
+// Galactic rename: galactic.* is the new SDK namespace (alias of ultralight.*).
+globalThis.galactic = globalThis.ultralight;
 `;
 
   // Build modules map: setup + recipe entry + isolated user recipe + bundles

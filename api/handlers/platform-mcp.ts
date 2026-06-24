@@ -1545,7 +1545,8 @@ const PLATFORM_TOOLS: MCPTool[] = [
       'scope="desk": last 5 used apps (check first). ' +
       'scope="inspect": deep introspection of one app. ' +
       'scope="library": your owned+saved apps. ' +
-      'scope="appstore": all published apps. Add surfaces=["command_card"] to reveal dashboard-ready surfaces.',
+      'scope="appstore": all published apps. Add surfaces=["command_card"] to reveal dashboard-ready surfaces. ' +
+      'scope="tools": list additional platform tools not shown in tools/list (still callable by name).',
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -1557,7 +1558,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
       properties: {
         scope: {
           type: "string",
-          enum: ["desk", "inspect", "library", "appstore"],
+          enum: ["desk", "inspect", "library", "appstore", "tools"],
           description: "Discovery scope.",
         },
         app_id: {
@@ -2482,11 +2483,17 @@ const PLATFORM_TOOLS: MCPTool[] = [
     },
   },
 
-  // ── 8. ul.connect ──────────────────────────
+  // ── 8. ul.secrets ──────────────────────────
+  // Per-user credentials/secrets for an installed app. Replaces ul.connect +
+  // ul.connections (both kept as backward-compat aliases). Save mode when
+  // `secrets` is present; inspect/list mode otherwise.
   {
-    name: "ul.connect",
-    description: "Save your per-user User Settings for an installed app. " +
-      "Use this for secrets or credentials that belong to the current user, not the app owner.",
+    name: "ul.secrets",
+    description:
+      "Save or inspect your per-user credentials/secrets for an installed app. " +
+      "With `secrets`: save values (use null to remove one) — requires app_id. " +
+      "With only `app_id`: show that app's required settings and which are configured. " +
+      "With no args: list the apps you have connected.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -2500,31 +2507,8 @@ const PLATFORM_TOOLS: MCPTool[] = [
         secrets: {
           type: "object",
           description:
-            "Map of User Setting keys to values. Use null to remove a saved value.",
+            "Map of setting keys to values to save. Use null to remove a saved value. Omit to inspect instead of save.",
           additionalProperties: true,
-        },
-      },
-      required: ["app_id", "secrets"],
-    },
-  },
-
-  // ── 9. ul.connections ──────────────────────────
-  {
-    name: "ul.connections",
-    description: "Inspect saved per-user User Settings. " +
-      "Without app_id: list apps you have connected. With app_id: show the required User Settings and which ones are configured.",
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        app_id: {
-          type: "string",
-          description: "Optional app ID or slug to inspect one app.",
         },
       },
     },
@@ -2891,37 +2875,114 @@ const PLATFORM_TOOLS: MCPTool[] = [
   },
 ];
 
-function getPlatformTools(): MCPTool[] {
-  if (isGpuSupportEnabled()) return PLATFORM_TOOLS;
+// Tools advertised in tools/list by default ("lite" launch manifest). Every
+// other ul.* tool stays callable by name via the tools/call switch and is
+// listed by ul.discover({ scope: "tools" }) — this trims the agent-facing
+// surface + context cost without removing any capability. ul.auth.link is
+// surfaced separately (provisional sessions only). Disable lite with
+// PLATFORM_MCP_LITE=0 to restore the full manifest.
+const LAUNCH_CORE_TOOLS = new Set<string>([
+  "ul.discover",
+  "ul.call",
+  "ul.job",
+  "ul.upload",
+  "ul.test",
+  "ul.set",
+  "ul.memory",
+  "ul.secrets",
+  "ul.grants",
+  "ul.codemode",
+]);
 
-  return PLATFORM_TOOLS.map((tool) => {
-    const cloned = JSON.parse(JSON.stringify(tool)) as MCPTool;
-    const properties = cloned.inputSchema?.properties as
-      | Record<string, unknown>
-      | undefined;
+function isPlatformMcpLiteEnabled(): boolean {
+  const raw = (getEnv("PLATFORM_MCP_LITE") || "").trim().toLowerCase();
+  // Default ON for launch; explicit 0/false/off restores the full manifest.
+  return raw !== "0" && raw !== "false" && raw !== "off";
+}
 
-    if (cloned.name === "ul.download" && properties) {
-      const runtime = properties.runtime as {
-        enum?: string[];
-        description?: string;
-      } | undefined;
-      if (runtime?.enum) {
-        runtime.enum = runtime.enum.filter((value) => value !== "gpu");
-      }
-      if (runtime) {
-        runtime.description =
-          "Scaffold runtime. Currently only deno is enabled.";
-      }
-      delete properties.gpu_type;
-      delete properties.base;
+// Non-core tools hidden from tools/list under lite mode (still callable by
+// name). ul.auth.link is excluded here — it's provisional-only and surfaced
+// directly in the lite manifest for provisional sessions.
+function getDemotedPlatformTools(): MCPTool[] {
+  return PLATFORM_TOOLS.filter(
+    (tool) => !LAUNCH_CORE_TOOLS.has(tool.name) && tool.name !== "ul.auth.link",
+  );
+}
+
+function stripGpuFromTool(tool: MCPTool): MCPTool {
+  const cloned = JSON.parse(JSON.stringify(tool)) as MCPTool;
+  const properties = cloned.inputSchema?.properties as
+    | Record<string, unknown>
+    | undefined;
+
+  if (cloned.name === "ul.download" && properties) {
+    const runtime = properties.runtime as {
+      enum?: string[];
+      description?: string;
+    } | undefined;
+    if (runtime?.enum) {
+      runtime.enum = runtime.enum.filter((value) => value !== "gpu");
     }
-
-    if (cloned.name === "ul.set" && properties) {
-      delete properties.gpu_pricing_config;
+    if (runtime) {
+      runtime.description = "Scaffold runtime. Currently only deno is enabled.";
     }
+    delete properties.gpu_type;
+    delete properties.base;
+  }
 
-    return cloned;
-  });
+  if (cloned.name === "ul.set" && properties) {
+    delete properties.gpu_pricing_config;
+  }
+
+  return cloned;
+}
+
+export function getPlatformTools(options?: { provisional?: boolean }): MCPTool[] {
+  const provisional = options?.provisional ?? false;
+
+  let tools: MCPTool[];
+  if (isPlatformMcpLiteEnabled()) {
+    // Core launch set, plus ul.auth.link for provisional sessions that need it.
+    tools = PLATFORM_TOOLS.filter(
+      (tool) =>
+        LAUNCH_CORE_TOOLS.has(tool.name) ||
+        (provisional && tool.name === "ul.auth.link"),
+    );
+  } else {
+    // Full manifest, minus ul.auth.link for already-authenticated sessions.
+    tools = PLATFORM_TOOLS.filter(
+      (tool) => tool.name !== "ul.auth.link" || provisional,
+    );
+  }
+
+  if (isGpuSupportEnabled()) return tools;
+  return tools.map(stripGpuFromTool);
+}
+
+// Progressive disclosure for the lite manifest: list the platform tools that
+// are not advertised in tools/list so an agent can still find + call them.
+function executeDiscoverTools(): {
+  tools: Array<{ name: string; description: string }>;
+  note: string;
+} {
+  if (!isPlatformMcpLiteEnabled()) {
+    return {
+      tools: [],
+      note:
+        "All platform tools are advertised in tools/list; none are hidden.",
+    };
+  }
+  const tools = getDemotedPlatformTools().map((tool) => ({
+    name: tool.name,
+    description: typeof tool.description === "string" ? tool.description : "",
+  }));
+  return {
+    tools,
+    note:
+      "These platform tools are not listed in tools/list (to keep the default " +
+      "surface small) but are fully callable by name via tools/call — pass the " +
+      "tool name and its arguments exactly as documented.",
+  };
 }
 
 function stripGpuPlatformDocs(docs: string): string {
@@ -3146,7 +3207,7 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
       case "notifications/initialized":
         return new Response(null, { status: 202 });
       case "tools/list":
-        return handleToolsList(id);
+        return handleToolsList(id, user.provisional);
       case "tools/call":
         return await handleToolsCall(id, params, userId, user, request);
       case "resources/list":
@@ -3351,16 +3412,12 @@ Publish a cross-Agent event as one of your own Agents. See **## Reactive Events*
 - Every Agent with a matching subscribe grant (caller=\`app_id\`, same \`topic\`) has its handler invoked async, billed to you and capped per grant.
 - Emitting is unprivileged; only wired subscribers receive it. Useful for manually triggering or testing a reactive workflow.
 
-### ul.connect({ app_id, secrets })
-Save your own User Settings for an app.
-- Use this for per-user credentials like API keys, IMAP logins, inbox passwords, or webhook tokens.
-- This is distinct from owner-managed App Settings on the developer dashboard.
-- Provide \`secrets\` as an object: \`{ "KEY": "value" }\`. Use \`null\` to remove a saved value.
-
-### ul.connections({ app_id? })
-Inspect saved User Settings connections.
-- Without \`app_id\`: list every app where you have saved User Settings.
-- With \`app_id\`: show which required User Settings are declared and which ones are configured.
+### ul.secrets({ app_id?, secrets? })
+Save or inspect your own per-user credentials/secrets for an app. (Replaces ul.connect/ul.connections, still accepted as aliases.)
+- Use this for per-user credentials like API keys, IMAP logins, inbox passwords, or webhook tokens. Distinct from owner-managed App Settings on the developer dashboard.
+- Save: pass \`secrets\` as an object \`{ "KEY": "value" }\` (use \`null\` to remove a value). Requires \`app_id\`.
+- Inspect one app: pass only \`app_id\` to see which required settings are declared and configured.
+- List: pass no args to list every app where you have saved settings.
 
 ### ul.logs({ app_id?, emails?, functions?, since?, health?, status?, resolve_event_id?, limit? })
 View call logs and health events.
@@ -3787,7 +3844,7 @@ async function handleInitialize(
       resources: { subscribe: false, listChanged: false },
     },
     serverInfo: {
-      name: "Ultralight Platform",
+      name: "Galactic Platform",
       version: "3.0.0",
     },
     instructions: instructions,
@@ -3802,7 +3859,7 @@ function handleResourcesList(id: JsonRpcRequestId, _userId: string): Response {
   const resources: MCPResourceDescriptor[] = [
     {
       uri: "ultralight://platform/skills.md",
-      name: "Ultralight Platform — Skills & Usage Guide",
+      name: "Galactic Platform — Skills & Usage Guide",
       description:
         "Complete documentation for all ul.* platform tools: uploading apps, discovery strategy, permissions, settings, and how per-app MCP resources work.",
       mimeType: "text/markdown",
@@ -3975,10 +4032,13 @@ async function handleResourcesRead(
   return jsonRpcErrorResponse(id, NOT_FOUND, `Resource not found: ${uri}`);
 }
 
-function handleToolsList(id: JsonRpcRequestId): Response {
+function handleToolsList(
+  id: JsonRpcRequestId,
+  provisional = false,
+): Response {
   return jsonRpcResponse(
     id,
-    { tools: getPlatformTools() } as MCPToolsListResponse,
+    { tools: getPlatformTools({ provisional }) } as MCPToolsListResponse,
   );
 }
 
@@ -3994,7 +4054,14 @@ async function handleToolsCall(
     return jsonRpcErrorResponse(id, INVALID_PARAMS, "Missing tool name");
   }
 
-  const { name, arguments: args } = callParams;
+  const { name: requestedName, arguments: args } = callParams;
+  // Galactic rename: `gx.*` is the new primary tool prefix; `ul.*` (and the
+  // pre-consolidation aliases) stay as permanent aliases so no existing agent
+  // breaks. Normalize `gx.foo` → `ul.foo` (the canonical name the dispatch
+  // switch keys on) so both prefixes route to the same handler.
+  const name = requestedName.startsWith("gx.")
+    ? "ul." + requestedName.slice(3)
+    : requestedName;
 
   // Extract agent meta (_user_query, _session_id) before passing to tool handlers
   const { extractCallMeta } = await import("../services/call-logger.ts");
@@ -4090,10 +4157,13 @@ async function handleToolsCall(
           case "appstore":
             result = await executeDiscoverAppstore(userId, toolArgs);
             break;
+          case "tools":
+            result = executeDiscoverTools();
+            break;
           default:
             throw new ToolError(
               INVALID_PARAMS,
-              `Invalid scope: ${scope}. Use desk|inspect|library|appstore`,
+              `Invalid scope: ${scope}. Use desk|inspect|library|appstore|tools`,
             );
         }
         break;
@@ -4775,6 +4845,16 @@ async function handleToolsCall(
         }
         break;
       }
+
+      // ── 8. ul.secrets ──────────────
+      // Save mode when `secrets` is present; inspect/list mode otherwise.
+      case "ul.secrets":
+        if (toolArgs.secrets !== undefined) {
+          result = await executeConnect(userId, toolArgs);
+        } else {
+          result = await executeConnections(userId, toolArgs);
+        }
+        break;
 
       // ── Backward-compat aliases ──────────────
       case "ul.discover.desk":
@@ -6318,6 +6398,7 @@ async function executeUpload(
       // Validate GPU config if present (new config overrides existing)
       let gpuConfig: {
         gpu_type: string;
+        version?: string;
         base?: string;
         python?: string;
         max_duration_ms?: number;
@@ -7126,9 +7207,10 @@ async function executeUpload(
         } catch { /* non-fatal */ }
       }
 
-      // Generate app identity
+      // Generate app identity. Version comes from ultralight.gpu.yaml `version:`
+      // when declared (parity with a Deno app's manifest.json), else 1.0.0.
       const appId = crypto.randomUUID();
-      const version = "1.0.0";
+      const version = gpuConfig?.version || "1.0.0";
       const { generateSlug } = await import("./upload.ts");
       const slug = generateSlug();
       const appName = (args.name as string) || slug;
@@ -13841,7 +13923,7 @@ function jsonRpcErrorResponse(
 export function handlePlatformMcpDiscovery(): Response {
   const baseUrl = (getEnv("BASE_URL") || "").replace(/\/+$/, "");
   const discovery = {
-    name: "Ultralight Platform",
+    name: "Galactic Platform",
     description:
       "MCP-first app hosting. Upload, configure, discover, manage permissions, and view logs.",
     transport: {
