@@ -96,7 +96,7 @@ function buildConnectCommand(appId: string, keys: string[]): string | null {
   const placeholderMap = Object.fromEntries(
     keys.map((key) => [key, `<${key}>`]),
   );
-  return `ul.secrets({ app_id: "${appId}", secrets: ${
+  return `gx.secrets({ app_id: "${appId}", secrets: ${
     JSON.stringify(placeholderMap)
   } })`;
 }
@@ -138,7 +138,7 @@ export function buildAppSecretDiagnostics(
           missingRequired.join(", ")
         }.`,
       remediation:
-        "Provide the missing secrets with ul.secrets before running the app.",
+        "Provide the missing secrets with gx.secrets before running the app.",
       connect_command: buildConnectCommand(input.appId, missingRequired),
     };
   }
@@ -266,6 +266,6 @@ export function buildAppAccessRequiredDiagnostics(
     message:
       `This ${accessType} app requires a valid share before you can inspect or connect it.`,
     remediation:
-      `Ask the owner to grant access, then retry ul.discover({ scope: "inspect", app_id: "${appId}" }) or ul.secrets({ app_id: "${appId}", secrets: { ... } }).`,
+      `Ask the owner to grant access, then retry gx.discover({ scope: "inspect", app_id: "${appId}" }) or gx.secrets({ app_id: "${appId}", secrets: { ... } }).`,
   };
 }

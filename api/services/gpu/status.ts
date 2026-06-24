@@ -125,7 +125,7 @@ export function buildGpuStatusDiagnostics(
     ...details,
     app_id: options.appId,
     inspect_command: options.appId
-      ? `ul.discover({ scope: "inspect", app_id: "${options.appId}" })`
+      ? `gx.discover({ scope: "inspect", app_id: "${options.appId}" })`
       : null,
   };
 }

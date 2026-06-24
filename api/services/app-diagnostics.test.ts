@@ -6,7 +6,7 @@ import {
   buildAppSharingDiagnostics,
 } from "./app-diagnostics.ts";
 
-Deno.test("app diagnostics: secret diagnostics point users to ul.secrets when required keys are missing", () => {
+Deno.test("app diagnostics: secret diagnostics point users to gx.secrets when required keys are missing", () => {
   const diagnostics = buildAppSecretDiagnostics({
     appId: "app-123",
     declaredKeys: ["USER_TOKEN", "OPTIONAL_BASE_URL"],
@@ -26,9 +26,9 @@ Deno.test("app diagnostics: secret diagnostics point users to ul.secrets when re
     message:
       "Per-user settings are incomplete. Missing required keys: USER_TOKEN.",
     remediation:
-      "Provide the missing secrets with ul.secrets before running the app.",
+      "Provide the missing secrets with gx.secrets before running the app.",
     connect_command:
-      'ul.secrets({ app_id: "app-123", secrets: {"USER_TOKEN":"<USER_TOKEN>"} })',
+      'gx.secrets({ app_id: "app-123", secrets: {"USER_TOKEN":"<USER_TOKEN>"} })',
   });
 });
 
@@ -94,6 +94,6 @@ Deno.test("app diagnostics: access required diagnostics explain how to retry", (
     message:
       "This private app requires a valid share before you can inspect or connect it.",
     remediation:
-      'Ask the owner to grant access, then retry ul.discover({ scope: "inspect", app_id: "app-123" }) or ul.secrets({ app_id: "app-123", secrets: { ... } }).',
+      'Ask the owner to grant access, then retry gx.discover({ scope: "inspect", app_id: "app-123" }) or gx.secrets({ app_id: "app-123", secrets: { ... } }).',
   });
 });

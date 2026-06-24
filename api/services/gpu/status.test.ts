@@ -41,7 +41,7 @@ Deno.test("gpu status: exposes structured diagnostics for inspect and runtime er
       remediation: "Wait for the build to finish, then try again.",
       app_id: "app-123",
       inspect_command:
-        'ul.discover({ scope: "inspect", app_id: "app-123" })',
+        'gx.discover({ scope: "inspect", app_id: "app-123" })',
     },
   );
 });

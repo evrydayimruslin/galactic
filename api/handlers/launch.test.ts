@@ -256,7 +256,7 @@ Deno.test('launch facade: install instructions expose MCP and CLI targets', asyn
       promptInstruction?.configText || '',
       'npx ultralightagent setup --token $ULTRALIGHT_API_KEY',
     );
-    assertStringIncludes(promptInstruction?.configText || '', 'ul.discover');
+    assertStringIncludes(promptInstruction?.configText || '', 'gx.discover');
     assertStringIncludes(
       promptInstruction?.configText || '',
       '"Authorization":"Bearer $ULTRALIGHT_API_KEY"',

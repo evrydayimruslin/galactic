@@ -4572,7 +4572,7 @@ function buildInstallInstructions(
     "2. Connect, then learn the platform: the server's initialize response carries the full platform guide. The same docs live at the ultralight://platform/skills.md MCP resource" +
     ` and ${baseUrl}/api/skills.`,
     "",
-    '3. Prove it works: call ul.discover with {"scope":"library"} to list the Agents already installed on this account, then tell me in a few lines what you can now do for me.',
+    '3. Prove it works: call gx.discover with {"scope":"library"} to list the Agents already installed on this account, then tell me in a few lines what you can now do for me.',
     "",
     "Treat the API key in this prompt as a secret: never echo it back, log it, or commit it anywhere.",
   ].join("\n");

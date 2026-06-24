@@ -1665,7 +1665,7 @@ async function handleGetAppInstructions(
     sections.push(
       `## Connect & Use\n\n` +
         `**Option A — If already connected to Ultralight:**\n` +
-        `ul.call({ app_id: "${appId}", function_name: "${firstFn}", args: {} })\n\n` +
+        `gx.call({ app_id: "${appId}", function_name: "${firstFn}", args: {} })\n\n` +
         `**Option B — Direct MCP (any HTTP agent):**\n` +
         `POST ${baseUrl}/mcp/${appId}\n` +
         `Authorization: Bearer {TOKEN}\n` +
