@@ -200,7 +200,7 @@ The platform itself is an MCP server at `POST /mcp/platform`:
 | `ul.permissions({ action: "revoke", ... })` | Revoke access |
 | `ul.permissions({ action: "list", ... })` | List granted users |
 | `ul.like` / `ul.dislike` | Community signal (saves to library) |
-| `ul.connect` | Store per-user secrets for an app |
+| `ul.secrets` | Store/inspect per-user secrets for an app |
 
 Full documentation: [`skills.md`](skills.md)
 

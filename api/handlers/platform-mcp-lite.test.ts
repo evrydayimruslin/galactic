@@ -1,0 +1,72 @@
+import { assertEquals } from 'https://deno.land/std@0.210.0/assert/assert_equals.ts';
+import { assert } from 'https://deno.land/std@0.210.0/assert/assert.ts';
+
+import { getPlatformTools } from './platform-mcp.ts';
+
+// The launch-core set advertised by the lite manifest (must match
+// LAUNCH_CORE_TOOLS in platform-mcp.ts).
+const CORE = [
+  'ul.call',
+  'ul.codemode',
+  'ul.discover',
+  'ul.grants',
+  'ul.job',
+  'ul.memory',
+  'ul.secrets',
+  'ul.set',
+  'ul.test',
+  'ul.upload',
+].sort();
+
+function withEnv<T>(env: Record<string, string>, fn: () => T): T {
+  const prev = globalThis.__env;
+  globalThis.__env = env as typeof globalThis.__env;
+  try {
+    return fn();
+  } finally {
+    globalThis.__env = prev;
+  }
+}
+
+function names(provisional = false): string[] {
+  return getPlatformTools({ provisional }).map((t) => t.name).sort();
+}
+
+Deno.test('lite manifest (default ON) advertises only the launch-core tools', () => {
+  withEnv({}, () => {
+    assertEquals(names(), CORE);
+    // Demoted tools are hidden from tools/list.
+    assert(!names().includes('ul.marketplace'));
+    assert(!names().includes('ul.wallet'));
+    assert(!names().includes('ul.routine'));
+    // ul.auth.link is provisional-only — hidden for authenticated sessions.
+    assert(!names().includes('ul.auth.link'));
+    // PR1: legacy names are gone from the advertised list.
+    assert(!names().includes('ul.connect'));
+    assert(!names().includes('ul.connections'));
+  });
+});
+
+Deno.test('lite manifest adds ul.auth.link for provisional sessions', () => {
+  withEnv({}, () => {
+    assert(names(true).includes('ul.auth.link'));
+    // Still no demoted tools.
+    assert(!names(true).includes('ul.marketplace'));
+  });
+});
+
+Deno.test('PLATFORM_MCP_LITE=0 restores the full manifest', () => {
+  withEnv({ PLATFORM_MCP_LITE: '0' }, () => {
+    const full = names();
+    assert(full.includes('ul.marketplace'));
+    assert(full.includes('ul.wallet'));
+    assert(full.includes('ul.routine'));
+    assert(full.includes('ul.secrets'));
+    // ul.auth.link still gated to provisional even with lite off.
+    assert(!full.includes('ul.auth.link'));
+    assert(names(true).includes('ul.auth.link'));
+    // PR1: legacy connect/connections never advertised, even in full mode.
+    assert(!full.includes('ul.connect'));
+    assert(!full.includes('ul.connections'));
+  });
+});

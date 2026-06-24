@@ -37,8 +37,8 @@ specific alias names once staging telemetry is quiet.
 | `ul.permissions.revoke` | `ul.permissions({ app_id, action: "revoke", ... })` | None once telemetry is quiet |
 | `ul.permissions.list` | `ul.permissions({ app_id, action: "list" })` | None once telemetry is quiet |
 | `ul.permissions.export` | `ul.permissions({ app_id, action: "export", format?, since?, until?, limit? })` | None once telemetry is quiet |
-| `ul.connect` | `ul.connect({ app_id, secrets })` | None once telemetry is quiet |
-| `ul.connections` | `ul.connections({ app_id? })` | None once telemetry is quiet |
+| `ul.connect` | `ul.secrets({ app_id, secrets })` | None once telemetry is quiet |
+| `ul.connections` | `ul.secrets({ app_id? })` | None once telemetry is quiet |
 | `ul.memory.read` | `ul.memory({ action: "read", owner_email? })` | None once telemetry is quiet |
 | `ul.memory.write` | `ul.memory({ action: "write", content, append? })` | None once telemetry is quiet |
 | `ul.memory.append` | `ul.memory({ action: "write", content, append: true })` | None once telemetry is quiet |

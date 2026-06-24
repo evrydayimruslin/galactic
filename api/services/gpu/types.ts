@@ -113,6 +113,9 @@ export const GPU_BASE_PROFILES: GpuBaseProfile[] = ['python-cuda', 'torch-cuda']
 export interface GpuConfig {
   runtime: 'gpu';
   gpu_type: GpuType;
+  /** Declared app version (semver x.y.z). Optional; new apps default to 1.0.0.
+   *  Parity with a Deno app's manifest.json `version`. */
+  version?: string;
   /** Platform-managed base image profile. Defaults to "python-cuda". */
   base?: GpuBaseProfile;
   /** Python version. Defaults to "3.11". */

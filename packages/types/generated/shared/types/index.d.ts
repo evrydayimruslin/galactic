@@ -1,8 +1,8 @@
 export { isAgenticInterfaceSpec, validateAgenticInterfaceSpec, } from "../contracts/agentic-interface.ts";
 export type * from "../contracts/agentic-interface.ts";
 export type * from "../contracts/command-turn.ts";
-export declare const ACTIVE_BYOK_PROVIDER_IDS: readonly ["openrouter", "openai", "deepseek", "nvidia", "google", "xai"];
-export declare const LEGACY_BYOK_PROVIDER_IDS: readonly ["anthropic", "moonshot"];
+export declare const ACTIVE_BYOK_PROVIDER_IDS: readonly ["openrouter", "openai", "deepseek", "nvidia", "google", "xai", "moonshot", "zai"];
+export declare const LEGACY_BYOK_PROVIDER_IDS: readonly ["anthropic"];
 export type ActiveBYOKProvider = typeof ACTIVE_BYOK_PROVIDER_IDS[number];
 export type LegacyBYOKProvider = typeof LEGACY_BYOK_PROVIDER_IDS[number];
 export type BYOKProvider = ActiveBYOKProvider | LegacyBYOKProvider;
@@ -94,6 +94,10 @@ export interface App {
      *  state machine on ToolDetailView. */
     is_installed?: boolean;
     visibility: "private" | "unlisted" | "public";
+    /** True for agents that were already public when the Stripe Connect publish
+     *  gate shipped (backfilled once). Exempt agents keep publishing publicly
+     *  without Connect; new public agents are not exempt. */
+    connect_gate_exempt?: boolean;
     download_access: "owner" | "public";
     current_version: string;
     versions: string[];
@@ -928,6 +932,12 @@ export declare function calcGrossWithStripeFee(desiredCents: number): number;
  * Examples: ✦42, ✦2,500, ✦14.5K, ✦2.05M, ✦1.30B
  */
 export declare function formatLight(amount: number): string;
+/**
+ * Format an internal Light amount as a user-facing dollar string ($X,XXX.XX).
+ * Use this in any message shown to users \u2014 never leak the internal \u2726/Light unit.
+ * Locale-independent (manual thousands separators) for Workers/Deno runtimes.
+ */
+export declare function formatDollarsFromLight(light: number): string;
 export declare const TIER_LIMITS: {
     readonly free: {
         readonly max_apps: number;

@@ -155,7 +155,7 @@ Deno.test("app runtime resources: runtime env reports missing required per-user 
   assertEquals(result.missingRequiredSecrets, ["USER_TOKEN"]);
   assertEquals(
     buildMissingAppSecretsMessage(result.missingRequiredSecrets),
-    "Missing required secrets: USER_TOKEN. Use ul.connect to provide them.",
+    "Missing required secrets: USER_TOKEN. Use ul.secrets to provide them.",
   );
   assertEquals(
     buildMissingAppSecretsErrorDetails(
@@ -170,10 +170,10 @@ Deno.test("app runtime resources: runtime env reports missing required per-user 
       message:
         "Per-user settings are incomplete. Missing required keys: USER_TOKEN.",
       remediation:
-        "Provide the missing secrets with ul.connect before running the app.",
-      hint: 'Call ul.connect with app_id="app-123" and provide: USER_TOKEN',
+        "Provide the missing secrets with ul.secrets before running the app.",
+      hint: 'Call ul.secrets with app_id="app-123" and provide: USER_TOKEN',
       connect_command:
-        'ul.connect({ app_id: "app-123", secrets: {"USER_TOKEN":"<USER_TOKEN>"} })',
+        'ul.secrets({ app_id: "app-123", secrets: {"USER_TOKEN":"<USER_TOKEN>"} })',
     },
   );
 });

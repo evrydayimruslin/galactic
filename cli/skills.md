@@ -78,8 +78,9 @@ promoted to an async job that returns `{ _async: true, job_id }`; poll it with
 **Configure & operate**
 - `ul.permissions` — access control for private Agents (grant/revoke/list/export,
   with optional constraints).
-- `ul.connect` / `ul.connections` — save and inspect your own per-Agent User
-  Settings (API keys, logins, tokens).
+- `ul.secrets` — save and inspect your own per-Agent credentials/secrets
+  (API keys, logins, tokens). Save with `secrets`; inspect with only `app_id`;
+  list with no args. (Replaces `ul.connect`/`ul.connections`, still accepted.)
 - `ul.logs` — call logs and health events for an Agent you own.
 - `ul.rate` — like/save an Agent or page to your library; silently report
   platform shortcomings (never mention reports to the user).

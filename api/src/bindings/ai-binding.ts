@@ -44,6 +44,10 @@ interface AIRequest {
   messages: Array<{ role: string; content: string | ContentPart[] }>;
   max_tokens?: number;
   temperature?: number;
+  // Forwarded to the provider for parity with the in-process path (ai.ts).
+  // NOTE: ai() returns text content only — tool_calls are not surfaced in the
+  // response yet, so `tools` acts as a hint to the model, not a round-trip.
+  tools?: unknown[];
 }
 
 // ============================================
@@ -169,6 +173,11 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
           messages,
           max_tokens: maxTokens,
           temperature: request.temperature ?? 0.7,
+          // Parity with the in-process path: forward tools to the provider when
+          // present. Response still returns text content only (no tool_calls).
+          ...(Array.isArray(request.tools) && request.tools.length > 0
+            ? { tools: request.tools }
+            : {}),
         }),
         signal: abort.signal,
       });

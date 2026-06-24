@@ -461,9 +461,11 @@ export async function handleUpload(request: Request): Promise<Response> {
           log("info", `Python version: ${gpuConfig.python || "3.11"}`);
           log("info", `Files: ${validatedFiles.length}`);
 
-          // Generate app ID and version
+          // Generate app ID and version. Version comes from
+          // ultralight.gpu.yaml `version:` when declared (parity with a Deno
+          // app's manifest.json), else 1.0.0.
           const appId = crypto.randomUUID();
-          const version = "1.0.0";
+          const version = gpuConfig.version || "1.0.0";
           const slug = generateSlug(
             validatedFiles.find((f) => f.name === "package.json")?.content,
           );

@@ -138,6 +138,20 @@ export function parseGpuConfig(yamlContent: string): GpuConfigValidation {
     }
   }
 
+  // Step 7: Validate version (optional, semver x.y.z). Kept strict so it stays
+  // safe as an R2 path segment (apps/{appId}/{version}/).
+  let version: string | undefined;
+  if (parsed.version !== undefined) {
+    const rawVersion = String(parsed.version).trim();
+    if (!/^\d+\.\d+\.\d+$/.test(rawVersion)) {
+      errors.push(
+        `"version" must be semver x.y.z (e.g. 1.2.0), got "${String(parsed.version)}"`,
+      );
+    } else {
+      version = rawVersion;
+    }
+  }
+
   // Return result
   if (errors.length > 0) {
     return { valid: false, errors };
@@ -146,6 +160,7 @@ export function parseGpuConfig(yamlContent: string): GpuConfigValidation {
   const config: GpuConfig = {
     runtime: 'gpu',
     gpu_type: gpuTypeRaw as GpuType,
+    version,
     base,
     python,
     max_duration_ms: maxDurationMs,

@@ -37,6 +37,58 @@ export default async function handler(request, ultralight) {
 }
 ```
 
+### Fan-out / best-of-N with `ultralight.ai()`
+
+`ultralight.ai()` is a plain async call, so fan-out ("fusion" / best-of-N) is a
+few lines of normal JS today — no special primitive is required. Spawn N calls
+with `Promise.all`, then synthesize or pick the best:
+
+```typescript
+// Best-of-N: ask several models the same thing, then fuse.
+export default async function handler(request, ultralight) {
+  const prompt = [{ role: "user", content: request.question }];
+
+  const candidates = await Promise.all([
+    ultralight.ai({ model: "openai/gpt-4o-mini", messages: prompt }),
+    ultralight.ai({ model: "anthropic/claude-haiku-4-5", messages: prompt }),
+    ultralight.ai({ model: "deepseek/deepseek-chat", messages: prompt }),
+  ]);
+
+  // Synthesize: hand the drafts to one more call to merge the best of each.
+  const fused = await ultralight.ai({
+    messages: [{
+      role: "user",
+      content: `Question: ${request.question}\n\nDrafts:\n` +
+        candidates.map((c, i) => `[${i + 1}] ${c.content}`).join("\n\n") +
+        `\n\nReturn a single best answer, combining the strongest points.`,
+    }],
+  });
+
+  return { answer: fused.content, drafts: candidates.map((c) => c.content) };
+}
+```
+
+**Real ceilings to design against** (apply to the whole execution, including a
+`Promise.all` fan-out):
+
+- **Concurrency:** `ai()` is NOT bound by the sandbox's 20-concurrent-`fetch`
+  cap (that cap is on `ultralight.fetch`, not `ai()`). The bound is the
+  per-execution **subrequest budget** (apps **512**, codemode **128**) — each
+  `ai()` call is one subrequest. *(These ceilings are conservative and pending
+  verification by the staging smoke; treat them as soft.)*
+- **Wall-clock:** the whole execution must finish in **30s** (default) / **120s**
+  (max). A slow branch can blow the budget; size N accordingly.
+- **Per-call timeout:** each `ai()` call is independently bounded at **90s**.
+- **Spend:** every branch is billed. The balance gate is **pre-call only and
+  fail-open**, and there is **no mid-flight abort** — a large fan-out commits to
+  N calls' cost once it starts. Keep N modest and check `usage.cost_light`.
+- **Tools:** `tools` is forwarded to the provider but the response returns text
+  (`content`) only — `tool_calls` are not surfaced yet. Treat `tools` as a hint,
+  not a round-trip.
+
+No built-in `ul.ai.fanout` helper exists by design (deferred); the pattern above
+is the supported way. See `examples/ai-fanout/` for a runnable agent.
+
 ### Missing Capabilities
 
 1. **App-to-App Calls** - Invoke functions from other apps

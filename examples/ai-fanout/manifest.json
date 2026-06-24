@@ -1,0 +1,22 @@
+{
+  "name": "AI Fan-out",
+  "version": "1.0.0",
+  "type": "mcp",
+  "description": "Reference Agent: fan out one prompt across several models in parallel with Promise.all, then synthesize a single best answer ('best-of-N' / fusion). Shows the supported way to build fusion on Ultralight — no special primitive required.",
+  "entry": { "functions": "index.ts" },
+  "permissions": ["ai:call"],
+  "functions": {
+    "best_of_n": {
+      "description": "Fan a question out across several models in parallel, then fuse the drafts into one best answer. Returns the fused answer plus each draft and the total Light spent.",
+      "parameters": {
+        "question": { "type": "string", "description": "The question to answer", "required": true },
+        "models": {
+          "type": "array",
+          "description": "Optional list of model ids to fan out across (defaults to 3). Capped at 6 to respect the per-execution budget.",
+          "required": false
+        }
+      },
+      "returns": { "type": "object", "description": "{ answer, drafts, total_cost_light }" }
+    }
+  }
+}

@@ -64,12 +64,12 @@ export const PLATFORM_MCP_ALIAS_MAP: Record<string, PlatformMcpAliasInfo> = {
     replacement: 'ul.permissions({ app_id, action: "export", format?, since?, until?, limit? })',
   },
   'ul.connect': {
-    canonicalTool: 'ul.connect',
-    replacement: 'ul.connect({ app_id, secrets })',
+    canonicalTool: 'ul.secrets',
+    replacement: 'ul.secrets({ app_id, secrets })',
   },
   'ul.connections': {
-    canonicalTool: 'ul.connections',
-    replacement: 'ul.connections({ app_id? })',
+    canonicalTool: 'ul.secrets',
+    replacement: 'ul.secrets({ app_id? })',
   },
   'ul.memory.read': {
     canonicalTool: 'ul.memory',
