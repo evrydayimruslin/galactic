@@ -2,7 +2,6 @@ import {
   type ReactElement,
   type ReactNode,
   useEffect,
-  useId,
   useState,
 } from "react";
 
@@ -357,36 +356,10 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }): Re
 }
 
 export function Wordmark(): ReactElement {
-  const maskId = `wm${useId().replace(/:/gu, "")}`;
   return (
     <span className="wordmark">
-      <svg
-        aria-hidden="true"
-        className="wordmark-mark"
-        shapeRendering="geometricPrecision"
-        viewBox="44 56 168 144"
-      >
-        <mask
-          height="256"
-          id={maskId}
-          maskUnits="userSpaceOnUse"
-          width="256"
-          x="0"
-          y="0"
-        >
-          <rect fill="black" height="256" width="256" x="0" y="0" />
-          <circle cx="128" cy="116.02" fill="white" r="84" />
-          <circle cx="128" cy="98.02" fill="black" r="72.24" />
-        </mask>
-        <circle
-          cx="128"
-          cy="116.02"
-          fill="currentColor"
-          mask={`url(#${maskId})`}
-          r="84"
-        />
-      </svg>
-      <span>Ultralight</span>
+      <span aria-hidden="true" className="wordmark-mark" />
+      <span>Galactic</span>
     </span>
   );
 }

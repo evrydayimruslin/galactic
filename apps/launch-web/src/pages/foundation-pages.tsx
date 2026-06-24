@@ -170,9 +170,9 @@ function buildConnectPrompt(key: string): string {
     },
   });
   return [
-    "Set up Ultralight for me, then start using it.",
+    "Set up Galactic for me, then start using it.",
     "",
-    "Ultralight is one MCP server that gives you a library of Agents (apps) you can discover, call, and deploy, with unified auth and per-call payments.",
+    "Galactic is one MCP server that gives you a library of Agents (apps) you can discover, call, and deploy, with unified auth and per-call payments.",
     "",
     "1. Install the MCP server (pick whichever works in your environment):",
     `   - Claude Code: ${claudeCodeAdd}`,
@@ -239,9 +239,9 @@ function buildAgentConnectPrompt(
     encodeURIComponent(agent.slug)
   }`;
   return [
-    `Set up the "${agent.title}" Agent from Ultralight for me, then start using it.`,
+    `Set up the "${agent.title}" Agent from Galactic for me, then start using it.`,
     "",
-    `"${agent.title}" is an Agent hosted on Ultralight. Connect to it as a standalone MCP server; the API key below is scoped to this Agent only.`,
+    `"${agent.title}" is an Agent hosted on Galactic. Connect to it as a standalone MCP server; the API key below is scoped to this Agent only.`,
     "",
     "1. Install the MCP server (pick whichever works in your environment):",
     `   - Claude Code: claude mcp add --transport http --scope user ${agent.slug} ${agentMcpUrl} --header "Authorization: Bearer ${key}"`,
@@ -251,7 +251,7 @@ function buildAgentConnectPrompt(
     "",
     `3. Prove it works: pick its most representative read-only function and call it, then tell me in a few lines how you can use "${agent.title}" for me going forward.`,
     "",
-    "Calls may spend credits from my Ultralight wallet: preserve receipt_id values and surface any credits-balance errors. Treat the API key as a secret: never echo it back, log it, or commit it anywhere.",
+    "Calls may spend credits from my Galactic wallet: preserve receipt_id values and surface any credits-balance errors. Treat the API key as a secret: never echo it back, log it, or commit it anywhere.",
   ].join("\n");
 }
 
@@ -270,7 +270,7 @@ const installTargets: InstallTarget[] = [
   {
     config: (key) => buildConnectPrompt(key),
     description:
-      "One prompt that makes any agent install Ultralight itself and start using it.",
+      "One prompt that makes any agent install Galactic itself and start using it.",
     group: "Prompt",
     label: "Agent prompt",
     requiresApiKey: true,
@@ -285,12 +285,12 @@ const installTargets: InstallTarget[] = [
     config: (key) =>
       `claude mcp add --transport http --scope user ultralight ${mcpUrl} --header "Authorization: Bearer ${key}"`,
     description:
-      "Add Ultralight as a remote MCP server for an existing Claude Code workspace.",
+      "Add Galactic as a remote MCP server for an existing Claude Code workspace.",
     group: "MCP",
     label: "Claude Code",
     requiresApiKey: true,
     steps: [
-      "Create an Ultralight API token from Settings.",
+      "Create an Galactic API token from Settings.",
       "Run the command below with your token in place of the placeholder.",
       "Run /mcp (or restart) so Claude Code picks up the ultralight server.",
     ],
@@ -299,14 +299,14 @@ const installTargets: InstallTarget[] = [
   {
     config: (key) => genericMcpConfig(key),
     description:
-      "Install the Ultralight MCP server in Cursor's MCP configuration.",
+      "Install the Galactic MCP server in Cursor's MCP configuration.",
     group: "MCP",
     label: "Cursor",
     requiresApiKey: true,
     steps: [
       "Open Cursor MCP settings.",
       "Add the ultralight server entry below.",
-      "Reload Cursor so your connected agent can discover Ultralight Agents.",
+      "Reload Cursor so your connected agent can discover Galactic Agents.",
     ],
     target: "cursor",
   },
@@ -319,7 +319,7 @@ const installTargets: InstallTarget[] = [
     label: "Codex",
     requiresApiKey: true,
     steps: [
-      "Create an Ultralight API token.",
+      "Create an Galactic API token.",
       "Add a remote MCP server named ultralight.",
       "Use the platform MCP endpoint and Authorization header below.",
     ],
@@ -333,13 +333,13 @@ const installTargets: InstallTarget[] = [
         2,
       ),
     description:
-      "Register Ultralight as a remote MCP server for OpenAI agent runtimes that support MCP tools.",
+      "Register Galactic as a remote MCP server for OpenAI agent runtimes that support MCP tools.",
     group: "MCP",
     label: "OpenAI Remote MCP",
     requiresApiKey: true,
     steps: [
       "Use the platform MCP endpoint as the server URL.",
-      "Pass your Ultralight API token as a bearer Authorization header.",
+      "Pass your Galactic API token as a bearer Authorization header.",
       "Allow your connected agent to list available Agents before calling specific ones.",
     ],
     target: "openai_remote_mcp",
@@ -353,7 +353,7 @@ const installTargets: InstallTarget[] = [
     requiresApiKey: true,
     steps: [
       "Copy the server configuration into your agent's MCP config.",
-      "Replace the API token placeholder with an Ultralight API token.",
+      "Replace the API token placeholder with an Galactic API token.",
       "Restart the agent or refresh its tool registry.",
     ],
     target: "generic_mcp",
@@ -362,7 +362,7 @@ const installTargets: InstallTarget[] = [
     config: (key) =>
       `npm install -g ultralightagent\nultralight login --token ${key}\nultralight upload .`,
     description:
-      "Use the Ultralight CLI to login, upload, test, and run deployed Agents.",
+      "Use the Galactic CLI to login, upload, test, and run deployed Agents.",
     group: "Direct",
     label: "CLI",
     requiresApiKey: true,
@@ -377,7 +377,7 @@ const installTargets: InstallTarget[] = [
     config: (key) =>
       `curl "${apiOrigin}/api/launch/status"\ncurl -H "Authorization: Bearer ${key}" \\\n  "${apiOrigin}/api/launch/library"`,
     description:
-      "Call launch and platform endpoints directly with an Ultralight API token.",
+      "Call launch and platform endpoints directly with an Galactic API token.",
     group: "Direct",
     label: "Direct API",
     requiresApiKey: true,
@@ -561,7 +561,7 @@ function liveAgentFixture(
     signer: trust?.signer || null,
     slug: tool.slug,
     spark: null,
-    summary: tool.description || "Agent published on Ultralight.",
+    summary: tool.description || "Agent published on Galactic.",
     title: titleizeAgentName(tool.name),
     updatedAt: relativeTime(tool.updatedAt) || null,
     version: trust?.version || null,
@@ -915,6 +915,213 @@ function ConnectPromptModal({
   );
 }
 
+// --- Lightweight first-party markdown renderer for the platform SDK docs. ---
+// /api/skills is authored by us (buildPlatformDocs), so this only needs to cover
+// the constructs it emits: headings, GFM tables, fenced code, lists, bold,
+// inline code, links, and rules. The source is HTML-escaped up front, so the
+// rendered output is injection-safe.
+function escapeDocsHtml(value: string): string {
+  return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+}
+
+function renderDocsInline(value: string): string {
+  const codes: string[] = [];
+  let out = value.replace(/`([^`]+)`/gu, (_match, code: string) => {
+    codes.push(code);
+    return ` ${codes.length - 1} `;
+  });
+  out = out.replace(
+    /\[([^\]]+)\]\(([^)\s]+)\)/gu,
+    (_match, text: string, url: string) =>
+      `<a href="${url}" target="_blank" rel="noreferrer">${text}</a>`,
+  );
+  out = out.replace(/\*\*([^*]+)\*\*/gu, "<strong>$1</strong>");
+  out = out.replace(
+    / (\d+) /gu,
+    (_match, index: string) => `<code>${codes[Number(index)]}</code>`,
+  );
+  return out;
+}
+
+function renderDocsMarkdown(markdown: string): string {
+  const lines = escapeDocsHtml(markdown).replace(/\r\n/gu, "\n").split("\n");
+  let html = "";
+  let index = 0;
+  let paragraph: string[] = [];
+  const flush = (): void => {
+    if (paragraph.length) {
+      html += `<p>${renderDocsInline(paragraph.join(" "))}</p>`;
+      paragraph = [];
+    }
+  };
+  const isSeparator = (line: string | undefined): boolean =>
+    Boolean(line) && line!.includes("-") && /^\s*\|?[\s:|-]+\|?\s*$/u.test(line!);
+  const splitCells = (line: string): string[] =>
+    line.trim().replace(/^\|/u, "").replace(/\|$/u, "").split("|").map((cell) =>
+      cell.trim()
+    );
+  while (index < lines.length) {
+    const line = lines[index];
+    if (/^\s*```/u.test(line)) {
+      flush();
+      index += 1;
+      const buffer: string[] = [];
+      while (index < lines.length && !/^\s*```/u.test(lines[index])) {
+        buffer.push(lines[index]);
+        index += 1;
+      }
+      index += 1;
+      html += `<pre><code>${buffer.join("\n")}</code></pre>`;
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*)$/u);
+    if (heading) {
+      flush();
+      const level = heading[1].length;
+      html += `<h${level}>${renderDocsInline(heading[2])}</h${level}>`;
+      index += 1;
+      continue;
+    }
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/u.test(line)) {
+      flush();
+      html += "<hr/>";
+      index += 1;
+      continue;
+    }
+    if (line.includes("|") && isSeparator(lines[index + 1])) {
+      flush();
+      const header = splitCells(line);
+      index += 2;
+      let table = `<table><thead><tr>${
+        header.map((cell) => `<th>${renderDocsInline(cell)}</th>`).join("")
+      }</tr></thead><tbody>`;
+      while (
+        index < lines.length && lines[index].includes("|") && lines[index].trim()
+      ) {
+        table += `<tr>${
+          splitCells(lines[index]).map((cell) => `<td>${renderDocsInline(cell)}</td>`)
+            .join("")
+        }</tr>`;
+        index += 1;
+      }
+      html += `${table}</tbody></table>`;
+      continue;
+    }
+    if (/^\s*[-*]\s+/u.test(line)) {
+      flush();
+      let list = "<ul>";
+      while (index < lines.length && /^\s*[-*]\s+/u.test(lines[index])) {
+        list += `<li>${renderDocsInline(lines[index].replace(/^\s*[-*]\s+/u, ""))}</li>`;
+        index += 1;
+      }
+      html += `${list}</ul>`;
+      continue;
+    }
+    if (/^\s*\d+\.\s+/u.test(line)) {
+      flush();
+      let list = "<ol>";
+      while (index < lines.length && /^\s*\d+\.\s+/u.test(lines[index])) {
+        list += `<li>${renderDocsInline(lines[index].replace(/^\s*\d+\.\s+/u, ""))}</li>`;
+        index += 1;
+      }
+      html += `${list}</ol>`;
+      continue;
+    }
+    if (!line.trim()) {
+      flush();
+      index += 1;
+      continue;
+    }
+    paragraph.push(line.trim());
+    index += 1;
+  }
+  flush();
+  return html;
+}
+
+function DocsModal({ onClose }: { onClose: () => void }): ReactElement {
+  const [html, setHtml] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${launchApiOrigin()}/api/skills`)
+      .then((response) =>
+        response.ok
+          ? response.text()
+          : Promise.reject(new Error(`HTTP ${response.status}`))
+      )
+      .then((markdown) => {
+        if (!cancelled) setHtml(renderDocsMarkdown(markdown));
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return (
+    <div
+      className="settings-modal-backdrop"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      role="presentation"
+    >
+      <Card className="docs-modal">
+        <div className="modal-title-row">
+          <span className="target-icon"><Icon name="terminal" /></span>
+          <h2>Developer docs — the Galactic SDK reference</h2>
+        </div>
+        <p className="docs-modal-intro">
+          The single source every MCP- and CLI-connected agent reads to build on
+          Galactic — capabilities, platform tools, and recipes. Served live from
+          {" "}
+          <code>/api/skills</code>.
+        </p>
+        {errorMessage
+          ? <p>Could not load the docs: {errorMessage}</p>
+          : html
+          ? (
+            <div
+              className="docs-markdown"
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
+          )
+          : <p>Loading the SDK reference…</p>}
+        <div className="modal-actions">
+          <Button onClick={onClose} size="sm">Done</Button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function DeveloperDocsButton(
+  { label = "Developers", size = "lg", variant = "ghost" }: {
+    label?: string;
+    size?: "sm" | "md" | "lg";
+    variant?: "primary" | "secondary" | "ghost";
+  },
+): ReactElement {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button
+        icon="terminal"
+        onClick={() => setOpen(true)}
+        size={size}
+        variant={variant}
+      >
+        {label}
+      </Button>
+      {open ? <DocsModal onClose={() => setOpen(false)} /> : null}
+    </>
+  );
+}
+
 export function HomeFoundationPage(
   { live, navigate }: LaunchPageProps,
 ): ReactElement {
@@ -929,7 +1136,7 @@ export function HomeFoundationPage(
             Connect once.<br />Access every tool.
           </h1>
           <p>
-            Add Ultralight to your agent so it can call any tool published to
+            Add Galactic to your agent so it can call any tool published to
             the platform, with your auth, payments, and preferences in one
             place. Pay per call. Nothing to subscribe to.
           </p>
@@ -946,6 +1153,7 @@ export function HomeFoundationPage(
             >
               Browse agents
             </RouteButton>
+            <DeveloperDocsButton />
           </div>
         </div>
         <AgentOrbit />
@@ -1773,7 +1981,7 @@ function InterfaceSurfaceCard({
             <>
               <span>
                 The interface has not connected — it may not include the
-                Ultralight bridge.
+                Galactic bridge.
               </span>
               <button
                 className="interface-reload"
@@ -4203,11 +4411,11 @@ export function AccountFoundationPage(
                 : null}
               collapsible
               defaultExpanded={false}
-              subtitle="Tokens your connected agents use to call Ultralight. New keys reveal once."
+              subtitle="Tokens your connected agents use to call Galactic. New keys reveal once."
               summary={visibleKeys.length > 0
                 ? <Pill>{visibleKeys.length} keys</Pill>
                 : null}
-              title="Ultralight Auth Keys"
+              title="Galactic Auth Keys"
             >
               <p className="settings-help">
                 {canManageKeys
@@ -4266,7 +4474,7 @@ export function AccountFoundationPage(
             <SettingsCard
               collapsible
               defaultExpanded={false}
-              subtitle="Build on Ultralight — the full platform guide, tool reference, and SDK globals."
+              subtitle="Build on Galactic — the full platform guide, tool reference, and SDK globals."
               title="Developer"
             >
               <a
@@ -4805,7 +5013,7 @@ function WalletTopUpPanel(
     }
     if (!termsAccepted) {
       setMessageIsError(true);
-      setMessage("Accept the Ultralight Terms to continue.");
+      setMessage("Accept the Galactic Terms to continue.");
       return;
     }
     seqRef.current += 1;
@@ -5047,7 +5255,7 @@ function WalletTopUpPanel(
                 type="checkbox"
               />
               <span>
-                I agree to the Ultralight{" "}
+                I agree to the Galactic{" "}
                 <a href="/terms" rel="noopener" target="_blank">
                   Terms of Service
                 </a>{" "}
@@ -6137,7 +6345,7 @@ function ValueProps(): ReactElement {
     [
       "04",
       "Yours to leave with",
-      "Switch agents tomorrow and everything comes with you. Ultralight belongs to you, not to any one platform.",
+      "Switch agents tomorrow and everything comes with you. Galactic belongs to you, not to any one platform.",
     ],
   ] as const;
   return (
@@ -6600,7 +6808,7 @@ export function TermsPage(): ReactElement {
       <h1>Terms of Service</h1>
       <p className="legal-updated">Last updated: June 11, 2026</p>
       <p>
-        Ultralight provides hosted agents: small programs you install, wire
+        Galactic provides hosted agents: small programs you install, wire
         together, and run, including functions that call AI models. By creating
         an account or using the platform you agree to these terms.
       </p>

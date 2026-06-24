@@ -1,4 +1,4 @@
-// Ultralight Layout — Complete Rewrite
+// Galactic Layout — Complete Rewrite
 // World-class light-mode UI with white/black monochrome design language
 
 export function getLayoutHTML(options: {
@@ -16,7 +16,7 @@ export function getLayoutHTML(options: {
   gpuSupportEnabled?: boolean;
 }): string {
   const {
-    title = "Ultralight",
+    title = "Galactic",
     activeAppId,
     initialView,
     appCode,
@@ -43,7 +43,7 @@ export function getLayoutHTML(options: {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title} - Ultralight</title>
+  <title>${title} - Galactic</title>
   <meta name="description" content="Deploy tools that existing agents can install, run, compose, and pay for with Light.">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%230a0a0a'/%3E%3Cstop offset='100%25' stop-color='%23333333'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M6 4 L6 22 Q6 28 12 28 L12 28 L12 4 L17 4 L17 28 Q17 28 20 28 Q26 28 26 22 L26 4 L21 4 L21 22 Q21 24 20 24 L12 24 Q10.5 24 10.5 22 L10.5 4 Z' fill='url(%23g)'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -2784,7 +2784,7 @@ export function getLayoutHTML(options: {
   <nav class="top-nav"${embed ? ' style="display:none"' : ""}>
     <div class="nav-left">
       <a href="/" id="navLogoLink" class="nav-logo" style="text-decoration:none;font-size:20px;">
-        Ultralight
+        Galactic
       </a>
     </div>
     <div class="nav-right">
@@ -2831,7 +2831,7 @@ export function getLayoutHTML(options: {
          ========================================== -->
     <div id="homeView"${initialView !== "home" ? ' style="display:none;"' : ""}>
       <section class="hero">
-        <div class="hero-eyebrow">Ultralight</div>
+        <div class="hero-eyebrow">Galactic</div>
         <h1>Tools for the agents you already use</h1>
         <p class="hero-subcopy">Connect Claude Code, Codex, Cursor, or any MCP-capable agent once. Deploy tools that inherit auth, Light billing, composability, widgets, and marketplace distribution.</p>
         <div class="hero-actions" style="margin-top:var(--space-4);">
@@ -3011,10 +3011,10 @@ export function getLayoutHTML(options: {
 
       <!-- Footer -->
       <footer style="max-width:820px;margin:0 auto;padding:var(--space-8) var(--space-6);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--text-muted);">
-        <span>&copy; 2026 Ultralight</span>
+        <span>&copy; 2026 Galactic</span>
         <div style="display:flex;gap:var(--space-4);">
           <a href="https://www.npmjs.com/package/ultralightpro-sdk" target="_blank" style="color:var(--text-muted);transition:color 0.15s;" onmouseover="this.style.color='var(--text-secondary)'" onmouseout="this.style.color='var(--text-muted)'">SDK Reference</a>
-          <a href="https://www.npmjs.com/package/ultralightagent" target="_blank" style="color:var(--text-muted);transition:color 0.15s;" onmouseover="this.style.color='var(--text-secondary)'" onmouseout="this.style.color='var(--text-muted)'">CLI Tool</a>
+          <a href="https://www.npmjs.com/package/galacticconnection" target="_blank" style="color:var(--text-muted);transition:color 0.15s;" onmouseover="this.style.color='var(--text-secondary)'" onmouseout="this.style.color='var(--text-muted)'">CLI Tool</a>
           <a href="/api" style="color:var(--text-muted);transition:color 0.15s;" onmouseover="this.style.color='var(--text-secondary)'" onmouseout="this.style.color='var(--text-muted)'">API / MCP</a>
         </div>
       </footer>
@@ -5746,7 +5746,7 @@ export function getLayoutHTML(options: {
         ]);
 
         // Use dynamic template, fall back to minimal hardcoded string
-        var template = "I'd like you to set up Ultralight, the instant MCP app platform.\\nRun: npx ultralightagent setup --token {TOKEN}";
+        var template = "I'd like you to set up Galactic, the instant MCP app platform.\\nRun: npx galacticconnection setup --token {TOKEN}";
         if (templateRes.ok) {
           try {
             var templateData = await templateRes.json();
@@ -5788,7 +5788,7 @@ export function getLayoutHTML(options: {
       ]);
 
       // Use dynamic template, fall back to minimal hardcoded string
-      var template = "I'd like you to set up Ultralight, the instant MCP app platform.\\nRun: npx ultralightagent setup --token {TOKEN}";
+      var template = "I'd like you to set up Galactic, the instant MCP app platform.\\nRun: npx galacticconnection setup --token {TOKEN}";
       if (templateRes.ok) {
         try {
           var templateData = await templateRes.json();
@@ -6763,7 +6763,7 @@ export function getLayoutHTML(options: {
         }
         const app = await res.json();
 
-        document.title = (app.name || app.slug) + ' - Ultralight';
+        document.title = (app.name || app.slug) + ' - Galactic';
 
         // Store current app data for editing
         window._currentApp = app;
@@ -8810,7 +8810,7 @@ export function getLayoutHTML(options: {
               '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>' +
               'Connect Supabase Account' +
             '</button>' +
-            '<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">Authorize Ultralight to auto-wire your Supabase projects. No more copy-pasting keys.</p>' +
+            '<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">Authorize Galactic to auto-wire your Supabase projects. No more copy-pasting keys.</p>' +
           '</div>';
         }
 

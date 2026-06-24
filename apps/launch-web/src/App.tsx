@@ -301,7 +301,7 @@ function MisroutedAuthCallbackPage(): ReactElement {
         <h1>Sign-in callback landed on the web app.</h1>
         <p>
           The account provider returned an OAuth code here instead of sending it
-          through the Ultralight API callback, so no launch session was created.
+          through the Galactic API callback, so no launch session was created.
         </p>
       </div>
     </div>

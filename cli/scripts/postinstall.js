@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 
 /**
- * Post-install script for ultralightagent.
+ * Post-install script for galacticconnection.
  * Simple success message — setup + the MCP bridge run in pure Node.js.
  */
 
 console.log(`
-✓ ultralightagent installed.
+✓ galacticconnection installed.
 
 Connect your agent (writes Claude Code / Claude Desktop / Cursor MCP configs):
-  ultralightagent setup --token <your-api-key>
+  galacticconnection setup --token <your-api-key>
 
-This wires up a local stdio MCP bridge (ultralightagent mcp) that proxies to the
-Ultralight platform and adds local filesystem tools. Create an API key from the
-Ultralight web app — "Add to agent" mints one and copies a ready-to-paste prompt
+This wires up a local stdio MCP bridge (galacticconnection mcp) that proxies to the
+Galactic platform and adds local filesystem tools. Create an API key from the
+Galactic web app — "Add to agent" mints one and copies a ready-to-paste prompt
 that runs this same setup for you.
 
-  ultralightagent --help                   Show all commands
+  galacticconnection --help                   Show all commands
 `);

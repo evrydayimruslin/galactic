@@ -1,5 +1,5 @@
 /**
- * Agent Flow Tests for Ultralight Platform
+ * Agent Flow Tests for Galactic Platform
  *
  * SPEC-DRIVEN: These tests define the IDEAL agent experience.
  * Tests that fail represent gaps to be built. Tests that pass confirm correctness.
@@ -529,7 +529,7 @@ Deno.test({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        client_name: 'Ultralight Spec Test',
+        client_name: 'Galactic Spec Test',
         redirect_uris: ['http://localhost:9999/callback'],
       }),
     });

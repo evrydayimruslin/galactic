@@ -1,16 +1,16 @@
-# ultralightagent — Ultralight local MCP bridge + CLI
+# galacticconnection — Galactic local MCP bridge + CLI
 
-Connect any computer-access agent (Claude Code, Claude Desktop, Cursor, …) to [Ultralight](https://ultralightagent.com), and build, deploy, and manage Ultralight Agents from your shell.
+Connect any computer-access agent (Claude Code, Claude Desktop, Cursor, …) to [Galactic](https://ultralightagent.com), and build, deploy, and manage Galactic Agents from your shell.
 
-Ultralight is one platform MCP server that gives your agent a library of Agents (apps) it can discover, call, and deploy — with unified auth and per-call payments. This package installs a **local stdio MCP bridge** that proxies to that platform, plus local **filesystem tools** so the agent can work with source on your machine.
+Galactic is one platform MCP server that gives your agent a library of Agents (apps) it can discover, call, and deploy — with unified auth and per-call payments. This package installs a **local stdio MCP bridge** that proxies to that platform, plus local **filesystem tools** so the agent can work with source on your machine.
 
 ## Quick start
 
-1. Create an API key in the Ultralight web app (the **Add to agent** button mints one for you).
+1. Create an API key in the Galactic web app (the **Add to agent** button mints one for you).
 2. Run setup:
 
 ```bash
-npx ultralightagent setup --token ul_your_api_key
+npx galacticconnection setup --token ul_your_api_key
 ```
 
 `setup` validates the token, saves it to `~/.ultralight/config.json`, and writes a **stdio** MCP server entry into every agent config it finds — Claude Code (`.claude.json` / `.claude/mcp.json`), Claude Desktop, and Cursor — plus registers the Claude Code plugin. It runs in pure Node.js.
@@ -22,7 +22,7 @@ Prefer manual configuration? Add the bridge yourself:
   "mcpServers": {
     "ultralight": {
       "command": "npx",
-      "args": ["-y", "ultralightagent", "mcp"]
+      "args": ["-y", "galacticconnection", "mcp"]
     }
   }
 }
@@ -32,7 +32,7 @@ The bridge reads your token from `~/.ultralight/config.json` (so it is **not** d
 
 ## How the MCP connection works
 
-The Ultralight platform MCP runs server-side; there's nothing to "run locally." The bridge is a thin **stdio ↔ HTTP proxy**:
+The Galactic platform MCP runs server-side; there's nothing to "run locally." The bridge is a thin **stdio ↔ HTTP proxy**:
 
 - On `tools/list`, it fetches the platform's catalog and re-advertises it **verbatim** (so it never drifts from the platform), then appends the `local.*` filesystem tools.
 - On `tools/call`, platform tools (`ul.*`, per-app functions) are forwarded to `https://api.ultralightagent.com/mcp/platform` with your `ul_` Bearer token; `local.*` tools run on your machine.
@@ -52,28 +52,28 @@ Most commands wrap the platform's `ul.*` MCP tools, so the shell and your agent 
 
 ```bash
 # Setup & bridge (pure Node — no Deno needed)
-ultralightagent setup --token ul_xxx     # Authenticate + write agent MCP configs
-ultralightagent mcp                       # Run the stdio MCP bridge (clients launch this)
+galacticconnection setup --token ul_xxx     # Authenticate + write agent MCP configs
+galacticconnection mcp                       # Run the stdio MCP bridge (clients launch this)
 
 # Build, deploy, manage & use (require Deno)
-ultralightagent login --token ul_xxx      # Authenticate only
-ultralightagent whoami                    # Show current user
-ultralightagent scaffold my-app           # Generate a structured app skeleton
-ultralightagent test . -f hello           # Test functions in the platform sandbox
-ultralightagent upload .                  # Deploy (new app or version)
-ultralightagent download my-app           # Fetch deployed source
-ultralightagent apps list
-ultralightagent set pricing my-app --default 5   # Price per call, in credits (✦)
-ultralightagent discover "weather API"    # Search the App Store
-ultralightagent run my-app hello '{"n":1}'
+galacticconnection login --token ul_xxx      # Authenticate only
+galacticconnection whoami                    # Show current user
+galacticconnection scaffold my-app           # Generate a structured app skeleton
+galacticconnection test . -f hello           # Test functions in the platform sandbox
+galacticconnection upload .                  # Deploy (new app or version)
+galacticconnection download my-app           # Fetch deployed source
+galacticconnection apps list
+galacticconnection set pricing my-app --default 5   # Price per call, in credits (✦)
+galacticconnection discover "weather API"    # Search the App Store
+galacticconnection run my-app hello '{"n":1}'
 ```
 
-Run `ultralightagent help` for the full reference.
+Run `galacticconnection help` for the full reference.
 
 ## Configuration
 
 - Credentials and defaults live in `~/.ultralight/config.json`.
-- API keys are created in the Ultralight web app and can be scoped and expiring; treat them as secrets.
+- API keys are created in the Galactic web app and can be scoped and expiring; treat them as secrets.
 
 ## Documentation
 

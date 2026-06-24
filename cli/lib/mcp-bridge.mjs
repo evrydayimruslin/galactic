@@ -1,7 +1,7 @@
 /**
- * Ultralight local MCP bridge (stdio ↔ HTTP).
+ * Galactic local MCP bridge (stdio ↔ HTTP).
  *
- * The Ultralight platform MCP is server-side code on the Worker; there is no
+ * The Galactic platform MCP is server-side code on the Worker; there is no
  * portable MCP server to run locally. This bridge is a thin stdio MCP server
  * that a computer-access agent (Claude Code, Claude Desktop, Cursor, …) mounts,
  * and which forwards every tools/call to the remote platform endpoint
@@ -176,7 +176,7 @@ async function rpc(apiUrl, token, method, params) {
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     const hint = res.status === 401
-      ? ' — token invalid or expired; run `ultralightagent setup --token ul_...`'
+      ? ' — token invalid or expired; run `galacticconnection setup --token ul_...`'
       : '';
     throw new Error(`platform ${method} failed: HTTP ${res.status}${hint}${body ? ` — ${body.slice(0, 300)}` : ''}`);
   }
@@ -287,8 +287,8 @@ export async function runMcpBridge() {
 
   if (!token) {
     process.stderr.write(
-      '[ultralightagent] No API token found — serving local filesystem tools only. ' +
-        'Run `ultralightagent setup --token ul_...` (or set ULTRALIGHT_TOKEN) to enable platform tools.\n',
+      '[galacticconnection] No API token found — serving local filesystem tools only. ' +
+        'Run `galacticconnection setup --token ul_...` (or set ULTRALIGHT_TOKEN) to enable platform tools.\n',
     );
   }
 
@@ -306,7 +306,7 @@ export async function runMcpBridge() {
       remoteToolsCache = normalizeRemoteTools(result?.tools);
       return remoteToolsCache;
     } catch (err) {
-      process.stderr.write(`[ultralightagent] Could not load platform tools (will retry on next tools/list): ${err.message}\n`);
+      process.stderr.write(`[galacticconnection] Could not load platform tools (will retry on next tools/list): ${err.message}\n`);
       return [];
     }
   }
@@ -334,7 +334,7 @@ export async function runMcpBridge() {
       }
       if (!token) {
         return {
-          content: [{ type: 'text', text: 'Not authenticated. Run `ultralightagent setup --token ul_...` to enable platform tools.' }],
+          content: [{ type: 'text', text: 'Not authenticated. Run `galacticconnection setup --token ul_...` to enable platform tools.' }],
           isError: true,
         };
       }
@@ -352,7 +352,7 @@ export async function runMcpBridge() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   process.stderr.write(
-    `[ultralightagent] MCP bridge ready — ${token ? 'authenticated' : 'local-only'}; ` +
+    `[galacticconnection] MCP bridge ready — ${token ? 'authenticated' : 'local-only'}; ` +
       `api=${apiUrl}; fs-root=${FS_ROOT}\n`,
   );
 }

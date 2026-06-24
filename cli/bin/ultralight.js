@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Ultralight CLI — npm package entry point
+ * Galactic CLI — npm package entry point
  *
  * The `setup` command runs in pure Node.js (no extra dependencies).
  * Other commands delegate to the full Deno CLI if available.
@@ -85,9 +85,9 @@ async function findDeno() {
 
 const PLUGIN_JSON = {
   name: 'ultralight',
-  description: 'Ultralight — serverless MCP platform. Discover, build, test, and deploy AI agent tools.',
+  description: 'Galactic — serverless MCP platform. Discover, build, test, and deploy AI agent tools.',
   version: '1.0.0',
-  author: { name: 'Ultralight', url: 'https://api.ultralightagent.com' },
+  author: { name: 'Galactic', url: 'https://api.ultralightagent.com' },
   homepage: 'https://api.ultralightagent.com',
   license: 'MIT',
   keywords: ['ultralight', 'mcp', 'serverless', 'ai', 'tools', 'agent'],
@@ -96,7 +96,7 @@ const PLUGIN_JSON = {
 const SKILL_FRONTMATTER = `---
 name: ultralight-platform
 description: >
-  Ultralight MCP platform guidance. Use when the user works with Ultralight tools
+  Galactic MCP platform guidance. Use when the user works with Galactic tools
   (ul.call, ul.discover, ul.upload, ul.download, ul.test, ul.set, ul.memory,
   ul.permissions, ul.logs, ul.rate), builds serverless MCP apps, deploys TypeScript
   functions, manages app permissions, or mentions "ultralight". Provides tool curation
@@ -107,13 +107,13 @@ description: >
 
 const COMMANDS = {
   'discover.md': `---
-description: Search and explore Ultralight apps across desk, library, and app store
+description: Search and explore Galactic apps across desk, library, and app store
 argument-hint: [query or scope]
 ---
 
-# Discover Ultralight Apps
+# Discover Galactic Apps
 
-Search and explore apps using the Ultralight platform.
+Search and explore apps using the Galactic platform.
 
 1. Parse the user's intent from: $ARGUMENTS
 2. Determine the right scope:
@@ -129,13 +129,13 @@ Search and explore apps using the Ultralight platform.
 `,
 
   'call.md': `---
-description: Execute any Ultralight app function through the platform connection
+description: Execute any Galactic app function through the platform connection
 argument-hint: <app_id> <function_name> [args as JSON]
 ---
 
-# Call Ultralight App Function
+# Call Galactic App Function
 
-Execute a function on any Ultralight app through the single platform connection.
+Execute a function on any Galactic app through the single platform connection.
 
 1. Parse from: $ARGUMENTS
    - First argument: app_id (required)
@@ -150,13 +150,13 @@ Execute a function on any Ultralight app through the single platform connection.
 `,
 
   'upload.md': `---
-description: Deploy a TypeScript app or publish a markdown page to Ultralight
+description: Deploy a TypeScript app or publish a markdown page to Galactic
 argument-hint: [name or app_id] [description]
 ---
 
-# Upload to Ultralight
+# Upload to Galactic
 
-Deploy an app or publish content to the Ultralight platform.
+Deploy an app or publish content to the Galactic platform.
 
 1. Parse from: $ARGUMENTS — look for app name, app_id (for new version), or description
 2. Look for source files in the current project:
@@ -172,11 +172,11 @@ Deploy an app or publish content to the Ultralight platform.
 `,
 
   'download.md': `---
-description: Download app source code or scaffold a new Ultralight app
+description: Download app source code or scaffold a new Galactic app
 argument-hint: [app_id] or [new app name and description]
 ---
 
-# Download from Ultralight
+# Download from Galactic
 
 Download source code or scaffold a new app.
 
@@ -193,13 +193,13 @@ Download source code or scaffold a new app.
 `,
 
   'test.md': `---
-description: Test and lint Ultralight app code in sandbox without deploying
+description: Test and lint Galactic app code in sandbox without deploying
 argument-hint: [function_name] [test args as JSON]
 ---
 
-# Test Ultralight App
+# Test Galactic App
 
-Test code in the Ultralight sandbox without deploying.
+Test code in the Galactic sandbox without deploying.
 
 1. Read source files from the current project (index.ts, manifest.json)
 2. Parse from: $ARGUMENTS — optional function_name and test args JSON
@@ -216,11 +216,11 @@ Test code in the Ultralight sandbox without deploying.
 `,
 
   'set.md': `---
-description: Configure Ultralight app settings (version, visibility, pricing, rate limits)
+description: Configure Galactic app settings (version, visibility, pricing, rate limits)
 argument-hint: <app_id> [setting=value ...]
 ---
 
-# Configure Ultralight App
+# Configure Galactic App
 
 Batch-configure app settings. Only provided fields are updated.
 
@@ -238,11 +238,11 @@ Batch-configure app settings. Only provided fields are updated.
 `,
 
   'memory.md': `---
-description: Read or write to your persistent Ultralight memory (markdown notes and KV store)
+description: Read or write to your persistent Galactic memory (markdown notes and KV store)
 argument-hint: [read | write <content> | recall <key> [value] | query [prefix]]
 ---
 
-# Ultralight Memory
+# Galactic Memory
 
 Access persistent cross-session storage with two layers: memory.md (free-form notes) and KV store (structured data).
 
@@ -259,11 +259,11 @@ Access persistent cross-session storage with two layers: memory.md (free-form no
 `,
 
   'permissions.md': `---
-description: Manage access control for Ultralight apps (grant, revoke, list, export)
+description: Manage access control for Galactic apps (grant, revoke, list, export)
 argument-hint: <app_id> <grant|revoke|list|export> [email] [options]
 ---
 
-# Ultralight Permissions
+# Galactic Permissions
 
 Manage app access control with granular constraints.
 
@@ -281,11 +281,11 @@ Manage app access control with granular constraints.
 `,
 
   'logs.md': `---
-description: View call logs and health events for Ultralight apps
+description: View call logs and health events for Galactic apps
 argument-hint: [app_id] [--health] [--since <date>]
 ---
 
-# Ultralight Logs
+# Galactic Logs
 
 View call logs and health events for your apps.
 
@@ -301,11 +301,11 @@ View call logs and health events for your apps.
 `,
 
   'rate.md': `---
-description: Rate Ultralight apps (save to library) or report platform issues
+description: Rate Galactic apps (save to library) or report platform issues
 argument-hint: <app_id> [like | dislike | none]
 ---
 
-# Rate Ultralight App
+# Rate Galactic App
 
 Rate apps to manage your library, or report platform shortcomings.
 
@@ -365,7 +365,7 @@ function registerPlugin(token, apiUrl) {
     const mcpConfig = {
       ultralight: {
         command: 'npx',
-        args: ['-y', `ultralightagent@${getVersion()}`, 'mcp'],
+        args: ['-y', `galacticconnection@${getVersion()}`, 'mcp'],
       },
     };
     writeJSON(join(pluginBase, '.mcp.json'), mcpConfig);
@@ -396,7 +396,7 @@ function registerPlugin(token, apiUrl) {
           if (!exists) {
             manifest.plugins.push({
               name: 'ultralight',
-              description: 'Ultralight — serverless MCP platform. Discover, build, test, and deploy AI agent tools instantly.',
+              description: 'Galactic — serverless MCP platform. Discover, build, test, and deploy AI agent tools instantly.',
               category: 'development',
               source: './external_plugins/ultralight',
               homepage: 'https://api.ultralightagent.com',
@@ -413,7 +413,7 @@ function registerPlugin(token, apiUrl) {
     console.log(c.dim(`  Plugin:   ${pluginBase}`));
     console.log(c.dim('  Commands: /discover, /call, /upload, /download, /test, /set, /memory, /permissions, /logs, /rate'));
     if (skillsBody) {
-      console.log(c.dim('  Skill:    ultralight-platform (auto-activates for Ultralight tasks)'));
+      console.log(c.dim('  Skill:    ultralight-platform (auto-activates for Galactic tasks)'));
     }
 
     return true;
@@ -438,31 +438,31 @@ async function runSetup(args) {
 
   if (showHelp) {
     console.log(`
-${c.bold('ultralight setup')}
+${c.bold('galactic setup')}
 
-Set up Ultralight: authenticate and configure your agent's MCP connection.
+Set up Galactic: authenticate and configure your agent's MCP connection.
 
 ${c.dim('OPTIONS')}
   --token, -t <token>   Your API token (starts with ul_)
 
 ${c.dim('WHAT IT DOES')}
   1. Saves your token to ~/.ultralight/config.json
-  2. Verifies the token against the Ultralight API
+  2. Verifies the token against the Galactic API
   3. Detects MCP client config files (Claude Code, Claude Desktop, Cursor)
-  4. Writes the Ultralight MCP server entry to each detected config
-  5. Registers Ultralight as a Claude Code plugin (skills + slash commands)
+  4. Writes the Galactic MCP server entry to each detected config
+  5. Registers Galactic as a Claude Code plugin (skills + slash commands)
   6. Outputs connection info so your agent can use tools immediately
 
 ${c.dim('EXAMPLES')}
-  npx ultralightagent setup --token ul_abc123...
-  ultralightagent setup -t ul_abc123...
+  npx galacticconnection setup --token ul_abc123...
+  galacticconnection setup -t ul_abc123...
 `);
     return;
   }
 
   if (!token) {
     console.log(`
-${c.bold('Ultralight Setup')}
+${c.bold('Galactic Setup')}
 
 To set up, you need an API token.
 
@@ -473,14 +473,14 @@ ${c.dim('Get a token:')}
   4. Create a new token
 
 ${c.dim('Then run:')}
-  ${c.cyan('npx ultralightagent setup --token <your-token>')}
+  ${c.cyan('npx galacticconnection setup --token <your-token>')}
 `);
     return;
   }
 
   // Validate token format
   if (!token.startsWith('ul_')) {
-    console.log(c.red('x Invalid token format. Ultralight API tokens start with ul_'));
+    console.log(c.red('x Invalid token format. Galactic API tokens start with ul_'));
     process.exit(1);
   }
 
@@ -520,13 +520,13 @@ ${c.dim('Then run:')}
   const appData = process.env.APPDATA || '';
   const mcpEndpoint = `${API_URL}/mcp/platform`;
 
-  // Write a STDIO entry: clients launch the local bridge (`ultralightagent mcp`),
+  // Write a STDIO entry: clients launch the local bridge (`galacticconnection mcp`),
   // which proxies to the remote platform MCP. stdio works in every desktop MCP
   // client (unlike the bare HTTP-POST endpoint), and the token is NOT embedded
   // here — the bridge reads it from ~/.ultralight/config.json (written above).
   const mcpEntry = {
     command: 'npx',
-    args: ['-y', `ultralightagent@${getVersion()}`, 'mcp'],
+    args: ['-y', `galacticconnection@${getVersion()}`, 'mcp'],
   };
 
   const configTargets = [
@@ -573,7 +573,7 @@ ${c.dim('Then run:')}
 
   // Step 5: Output results + agent bridge
   console.log('');
-  console.log(c.green(c.bold('✓ Ultralight is ready!')));
+  console.log(c.green(c.bold('✓ Galactic is ready!')));
   console.log('');
   if (userInfo) {
     console.log(`  ${c.dim('Account:')}  ${userInfo.email || 'authenticated'}`);
@@ -595,7 +595,7 @@ ${c.dim('Then run:')}
 MCP_ENDPOINT=${mcpEndpoint}
 Your API token is saved in ~/.ultralight/config.json (not printed here).
 
-To call Ultralight tools in this session, POST JSON-RPC 2.0 to the endpoint above.
+To call Galactic tools in this session, POST JSON-RPC 2.0 to the endpoint above.
 
 List available tools:
 curl -s -X POST "${mcpEndpoint}" -H "Authorization: Bearer ${tokenFromConfig}" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -634,22 +634,22 @@ async function main() {
 
   if (!command || command === '--help' || command === '-h') {
     console.log(`
-${c.bold('Ultralight')} ${c.dim('v' + getVersion())}
+${c.bold('Galactic')} ${c.dim('v' + getVersion())}
 
 ${c.dim('QUICK START')} ${c.dim('(pure Node — no extra runtime)')}
-  ultralightagent setup --token <token>   Authenticate + wire up your MCP clients
-  ultralightagent mcp                      Run the local stdio MCP bridge (clients launch this)
+  galacticconnection setup --token <token>   Authenticate + wire up your MCP clients
+  galacticconnection mcp                      Run the local stdio MCP bridge (clients launch this)
 
 ${c.dim('FULL CLI')}
   Other commands (scaffold, upload, test, etc.) require the Deno runtime.
   Install Deno: ${c.cyan('curl -fsSL https://deno.land/install.sh | sh')}
 
-  ultralightagent scaffold     Generate a new app skeleton
-  ultralightagent upload       Deploy an app
-  ultralightagent test         Test functions without deploying
-  ultralightagent discover     Search the App Store
-  ultralightagent apps         Manage your apps
-  ultralightagent --help       Show all commands (requires Deno)
+  galacticconnection scaffold     Generate a new app skeleton
+  galacticconnection upload       Deploy an app
+  galacticconnection test         Test functions without deploying
+  galacticconnection discover     Search the App Store
+  galacticconnection apps         Manage your apps
+  galacticconnection --help       Show all commands (requires Deno)
 `);
     return;
   }
@@ -680,7 +680,7 @@ ${c.red('Full CLI not found.')}
 The ${c.cyan('setup')} command works standalone, but ${c.cyan(command)} needs the full Deno CLI.
 
 To use the full CLI, clone the repo or install globally:
-  ${c.cyan(`deno install --allow-all -n ultralight ${DENO_INSTALL_URL}`)}
+  ${c.cyan(`deno install --allow-all -n galactic ${DENO_INSTALL_URL}`)}
 `);
     process.exit(1);
   }

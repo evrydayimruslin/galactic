@@ -402,14 +402,14 @@ class LaunchServiceUnavailableError extends Error {
 
 const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
   install: {
-    label: "Install Ultralight",
-    description: "Connect the Ultralight MCP/API layer to an existing agent.",
+    label: "Install Galactic",
+    description: "Connect the Galactic MCP/API layer to an existing agent.",
     route: "/",
     apiRoute: "GET /api/launch/install",
   },
   deploy: {
     label: "Deploy an Agent",
-    description: "Ship deployable Agent code onto hosted Ultralight runtime.",
+    description: "Ship deployable Agent code onto hosted Galactic runtime.",
     route: "/",
     apiRoute: "GET /api/launch/install",
   },
@@ -758,7 +758,7 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       website: "/",
     },
     externalAgentLoop: [
-      "Install Ultralight MCP, CLI, or direct API access.",
+      "Install Galactic MCP, CLI, or direct API access.",
       "Browse the store for relevant Agents and platform primitives.",
       "Inspect Agent functions, pricing, and trust.",
       "Call Agents through MCP/API and return public Agent links when UI matters.",
@@ -910,11 +910,11 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
   return {
     openapi: "3.1.0",
     info: {
-      title: "Ultralight Launch API",
+      title: "Galactic Launch API",
       description:
-        "Launch-scoped API facade for existing agents to install, discover, inspect, compose, and pay for Ultralight Agents.",
+        "Launch-scoped API facade for existing agents to install, discover, inspect, compose, and pay for Galactic Agents.",
       version: LAUNCH_MVP_VERSION,
-      contact: { name: "Ultralight", url: baseUrl },
+      contact: { name: "Galactic", url: baseUrl },
     },
     servers: [{ url: baseUrl, description: "Configured launch API origin" }],
     security: [{ bearerAuth: [] }, {}],
@@ -1984,7 +1984,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       "/mcp/platform": {
         post: {
           operationId: "callPlatformMcp",
-          summary: "Call the Ultralight platform MCP JSON-RPC endpoint",
+          summary: "Call the Galactic platform MCP JSON-RPC endpoint",
           description:
             "Use JSON-RPC 2.0 methods such as initialize, tools/list, and tools/call. Requires bearer auth for user-specific tools.",
           security: [{ bearerAuth: [] }],
@@ -4560,14 +4560,14 @@ function buildInstallInstructions(
   const claudeCodeAddCommand =
     `claude mcp add --transport http --scope user ultralight ${mcpUrl} --header "Authorization: ${bearer}"`;
   const connectPrompt = [
-    "Set up Ultralight for me, then start using it.",
+    "Set up Galactic for me, then start using it.",
     "",
-    "Ultralight is one MCP server that gives you a library of Agents (apps) you can discover, call, and deploy, with unified auth and per-call payments.",
+    "Galactic is one MCP server that gives you a library of Agents (apps) you can discover, call, and deploy, with unified auth and per-call payments.",
     "",
     "1. Install the MCP server (pick whichever works in your environment):",
     `   - Claude Code: ${claudeCodeAddCommand}`,
     `   - Any MCP config file: ${JSON.stringify(genericConfig)}`,
-    "   - Automated installer: npx ultralightagent setup --token $ULTRALIGHT_API_KEY",
+    "   - Automated installer: npx galacticconnection setup --token $ULTRALIGHT_API_KEY",
     "",
     "2. Connect, then learn the platform: the server's initialize response carries the full platform guide. The same docs live at the ultralight://platform/skills.md MCP resource" +
     ` and ${baseUrl}/api/skills.`,
@@ -4582,7 +4582,7 @@ function buildInstallInstructions(
       target: "prompt",
       label: "Agent prompt",
       description:
-        "One prompt that makes any agent install Ultralight itself and start using it.",
+        "One prompt that makes any agent install Galactic itself and start using it.",
       steps: [
         "Create an API key so the prompt carries a real credential.",
         "Paste the prompt into any agent: Claude Code, Cursor, or anything MCP-capable.",
@@ -4595,9 +4595,9 @@ function buildInstallInstructions(
       target: "claude_code",
       label: "Claude Code",
       description:
-        "Add Ultralight as a remote MCP server for an existing Claude Code workspace.",
+        "Add Galactic as a remote MCP server for an existing Claude Code workspace.",
       steps: [
-        "Create an Ultralight API token from Settings.",
+        "Create an Galactic API token from Settings.",
         "Run the command below with your token in place of $ULTRALIGHT_API_KEY.",
         "Run /mcp (or restart) so Claude Code picks up the ultralight server.",
       ],
@@ -4608,11 +4608,11 @@ function buildInstallInstructions(
       target: "cursor",
       label: "Cursor",
       description:
-        "Install the Ultralight MCP server in Cursor's MCP configuration.",
+        "Install the Galactic MCP server in Cursor's MCP configuration.",
       steps: [
         "Open Cursor MCP settings.",
         "Add the ultralight server entry below.",
-        "Reload Cursor so it can discover Ultralight Agents.",
+        "Reload Cursor so it can discover Galactic Agents.",
       ],
       configText: JSON.stringify(genericConfig, null, 2),
       requiresApiKey: true,
@@ -4623,7 +4623,7 @@ function buildInstallInstructions(
       description:
         "Connect Codex to the same remote MCP endpoint used by other agents.",
       steps: [
-        "Create an Ultralight API token.",
+        "Create an Galactic API token.",
         "Add a remote MCP server named ultralight.",
         "Use the platform MCP endpoint and Authorization header below.",
       ],
@@ -4635,10 +4635,10 @@ function buildInstallInstructions(
       target: "openai_remote_mcp",
       label: "OpenAI Remote MCP",
       description:
-        "Register Ultralight as a remote MCP server for OpenAI agent runtimes that support MCP tools.",
+        "Register Galactic as a remote MCP server for OpenAI agent runtimes that support MCP tools.",
       steps: [
         "Use the platform MCP endpoint as the server URL.",
-        "Pass your Ultralight API token as a bearer Authorization header.",
+        "Pass your Galactic API token as a bearer Authorization header.",
         "Allow your connected agent to list available Agents before calling specific ones.",
       ],
       configText: JSON.stringify(
@@ -4655,7 +4655,7 @@ function buildInstallInstructions(
         "Use the standard remote MCP server declaration for any compatible agent.",
       steps: [
         "Copy the server configuration into your agent's MCP config.",
-        "Replace the API token placeholder with an Ultralight API token.",
+        "Replace the API token placeholder with an Galactic API token.",
         "Restart your connected agent or refresh its MCP tool list.",
       ],
       configText: JSON.stringify(genericConfig, null, 2),
@@ -4665,21 +4665,21 @@ function buildInstallInstructions(
       target: "cli",
       label: "CLI",
       description:
-        "Use the existing Ultralight CLI to login, upload, test, and run deployed Agents.",
+        "Use the existing Galactic CLI to login, upload, test, and run deployed Agents.",
       steps: [
-        "Install the ultralightagent package or use the local CLI during development.",
-        "Run ultralight login --token <your-token>.",
-        "Run ultralight upload . from a deployable Agent directory.",
+        "Install the galacticconnection package or use the local CLI during development.",
+        "Run galactic login --token <your-token>.",
+        "Run galactic upload . from a deployable Agent directory.",
       ],
       configText:
-        "npm install -g ultralightagent\nultralight login --token <your-token>\nultralight upload .",
+        "npm install -g galacticconnection\nultralight login --token <your-token>\nultralight upload .",
       requiresApiKey: true,
     },
     {
       target: "api",
       label: "Direct API",
       description:
-        "Call launch and platform endpoints directly with an Ultralight API token.",
+        "Call launch and platform endpoints directly with an Galactic API token.",
       steps: [
         "Create an API token from Settings.",
         "Send Authorization: Bearer <token> on authenticated API requests.",
@@ -4754,9 +4754,9 @@ async function buildToolInstallContext(
     },
   };
   const connectPrompt = [
-    `Set up the "${tool.name}" Agent from Ultralight for me, then start using it.`,
+    `Set up the "${tool.name}" Agent from Galactic for me, then start using it.`,
     "",
-    `"${tool.name}" is an Agent hosted on Ultralight. Connect to it as a standalone MCP server; the API key below is scoped to this Agent only.`,
+    `"${tool.name}" is an Agent hosted on Galactic. Connect to it as a standalone MCP server; the API key below is scoped to this Agent only.`,
     "",
     "1. Install the MCP server (pick whichever works in your environment):",
     `   - Claude Code: claude mcp add --transport http --scope user ${tool.slug} ${agentMcpUrl} --header "Authorization: ${bearer}"`,
@@ -4766,7 +4766,7 @@ async function buildToolInstallContext(
     "",
     `3. Prove it works: pick its most representative read-only function and call it, then tell me in a few lines how you can use "${tool.name}" for me going forward.`,
     "",
-    "Calls may spend credits from my Ultralight wallet: preserve receipt_id values and surface any credits-balance errors. Treat the API key as a secret: never echo it back, log it, or commit it anywhere.",
+    "Calls may spend credits from my Galactic wallet: preserve receipt_id values and surface any credits-balance errors. Treat the API key as a secret: never echo it back, log it, or commit it anywhere.",
   ].join("\n");
 
   return {
@@ -5784,7 +5784,7 @@ function primitiveEmbeddingText(
   metadata: PrimitiveMetadata,
 ): string {
   return [
-    `Ultralight platform primitive: ${primitive}`,
+    `Galactic platform primitive: ${primitive}`,
     metadata.label,
     metadata.description,
     metadata.route ? `Website route ${metadata.route}` : "",

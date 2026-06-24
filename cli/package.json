@@ -1,11 +1,11 @@
 {
-  "name": "ultralightagent",
-  "version": "2.1.0",
-  "description": "Ultralight — local stdio MCP bridge + CLI. Connect any computer-access agent (Claude Code, Claude Desktop, Cursor) to the Ultralight platform, with local filesystem tools, plus build/deploy/manage Agents from your shell.",
+  "name": "galacticconnection",
+  "version": "2.2.0",
+  "description": "Galactic — local stdio MCP bridge + CLI. Connect any computer-access agent (Claude Code, Claude Desktop, Cursor) to the Galactic platform, with local filesystem tools, plus build/deploy/manage Agents from your shell.",
   "type": "module",
   "bin": {
-    "ultralightagent": "bin/ultralight.js",
-    "ultralight": "bin/ultralight.js"
+    "galacticconnection": "bin/ultralight.js",
+    "galactic": "bin/ultralight.js"
   },
   "scripts": {
     "build": "echo 'CLI is Deno-native. Use: deno task cli:install'",
@@ -13,8 +13,8 @@
     "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [
-    "ultralight",
-    "ultralightagent",
+    "galactic",
+    "galacticconnection",
     "serverless",
     "cli",
     "mcp",
@@ -26,7 +26,7 @@
     "tool-discovery",
     "mcp-server"
   ],
-  "author": "Ultralight",
+  "author": "Galactic",
   "license": "MIT",
   "homepage": "https://ultralightagent.com",
   "repository": {

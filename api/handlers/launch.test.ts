@@ -254,7 +254,7 @@ Deno.test('launch facade: install instructions expose MCP and CLI targets', asyn
     assertStringIncludes(promptInstruction?.configText || '', 'claude mcp add');
     assertStringIncludes(
       promptInstruction?.configText || '',
-      'npx ultralightagent setup --token $ULTRALIGHT_API_KEY',
+      'npx galacticconnection setup --token $ULTRALIGHT_API_KEY',
     );
     assertStringIncludes(promptInstruction?.configText || '', 'gx.discover');
     assertStringIncludes(

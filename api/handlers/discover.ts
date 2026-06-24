@@ -1771,12 +1771,12 @@ function handleOpenApiSpec(): Response {
   const spec = {
     openapi: "3.1.0",
     info: {
-      title: "Ultralight Discovery API",
+      title: "Galactic Discovery API",
       description:
-        "Semantic search across the Ultralight MCP app ecosystem. Find agent-callable tools by natural language query. Every result includes an mcp_endpoint for direct JSON-RPC 2.0 access.",
+        "Semantic search across the Galactic MCP app ecosystem. Find agent-callable tools by natural language query. Every result includes an mcp_endpoint for direct JSON-RPC 2.0 access.",
       version: "1.0.0",
       contact: {
-        name: "Ultralight",
+        name: "Galactic",
         url: "https://api.ultralightagent.com",
       },
     },
@@ -2009,7 +2009,7 @@ function handleOpenApiSpec(): Response {
           type: "http",
           scheme: "bearer",
           description:
-            "Ultralight API token (ul_xxx) or OAuth 2.1 token. Obtain via POST /oauth/token or create in your Ultralight dashboard settings.",
+            "Galactic API token (ul_xxx) or OAuth 2.1 token. Obtain via POST /oauth/token or create in your Galactic dashboard settings.",
         },
       },
     },
@@ -2037,14 +2037,14 @@ function getOnboardingTemplate(): {
   const TEMPLATE_UPDATED = "2026-03-11T12:00:00Z";
 
   const template =
-    `I'd like you to set up Ultralight, a platform that gives you access to instant MCP apps — tools you can use right now, or build and deploy yourself.
+    `I'd like you to set up Galactic, a platform that gives you access to instant MCP apps — tools you can use right now, or build and deploy yourself.
 
-## Connect to Ultralight
+## Connect to Galactic
 
 ### Option A: Desktop / CLI agents (Claude Code, Cursor, terminals)
 
 Run this command:
-npx ultralightagent setup --token {TOKEN}
+npx galacticconnection setup --token {TOKEN}
 {SESSION_NOTE}
 This installs MCP config, registers Skills + slash commands, and outputs an agent bridge for immediate use. MCP tools activate natively on next session restart.
 
@@ -2081,11 +2081,11 @@ This works with ChatGPT Custom Actions, Gemini Extensions, open-source web agent
 \`\`\`
 GET https://api.ultralightagent.com/api/skills
 \`\`\`
-Returns the full Skills.md — tool reference, building guide, SDK globals, resource URIs, and agent conventions. Fetch this to understand how to build and use Ultralight tools.
+Returns the full Skills.md — tool reference, building guide, SDK globals, resource URIs, and agent conventions. Fetch this to understand how to build and use Galactic tools.
 
 ## Recommended Apps
 
-These are curated apps from the Ultralight marketplace. Each works instantly — just ask to connect one:
+These are curated apps from the Galactic marketplace. Each works instantly — just ask to connect one:
 
 1. **Smart Budget** (ID: d2109945-e720-4e0c-9f6f-5bff5c2a6358) — Track spending, manage budgets, and get financial insights by telling your agent about transactions.
 2. **Fitness Tracker** (ID: 242ea64e-89f2-4339-93b0-66b3281f6d87) — Log meals, workouts, and body metrics. AI-powered calorie estimation from food descriptions.
@@ -2104,7 +2104,7 @@ After connecting:
 3. Suggest 2-3 apps from the list above that seem most relevant to me and briefly explain why.
 4. Offer to connect them so I can start using them.
 5. Ask what else I'd want my agent to help with — there are more apps in the full marketplace, or I can build and deploy my own custom tools.
-6. All my data (tools, memory, storage) is portable — it works across any agent that connects to Ultralight.`;
+6. All my data (tools, memory, storage) is portable — it works across any agent that connects to Galactic.`;
 
   return {
     template,

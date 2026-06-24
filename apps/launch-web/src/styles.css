@@ -146,9 +146,11 @@ button {
 
 .wordmark-mark {
   display: inline-block;
-  width: 19px;
-  height: 16px;
-  transform: translateY(-1px);
+  width: 20px;
+  height: 20px;
+  background-color: currentColor;
+  -webkit-mask: url("/galactic-mark.svg") center / contain no-repeat;
+  mask: url("/galactic-mark.svg") center / contain no-repeat;
 }
 
 .desktop-nav,
@@ -4566,6 +4568,95 @@ button {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+
+/* Developer docs modal: renders the live /api/skills SDK reference. */
+.docs-modal {
+  width: min(100%, 920px);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.12);
+}
+
+.docs-modal-intro {
+  margin-bottom: 12px;
+  color: var(--ul-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.docs-markdown {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 10px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--ul-text);
+}
+
+.docs-markdown h1,
+.docs-markdown h2,
+.docs-markdown h3,
+.docs-markdown h4 {
+  margin: 1.4em 0 0.5em;
+  line-height: 1.25;
+}
+.docs-markdown h1 { font-size: 1.45em; }
+.docs-markdown h2 {
+  font-size: 1.25em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--ul-border);
+}
+.docs-markdown h3 { font-size: 1.1em; }
+.docs-markdown h4 { font-size: 1em; color: var(--ul-secondary); }
+.docs-markdown p { margin: 0.6em 0; }
+.docs-markdown ul,
+.docs-markdown ol { margin: 0.5em 0; padding-left: 1.4em; }
+.docs-markdown li { margin: 0.25em 0; }
+.docs-markdown a { color: var(--ul-blue); }
+.docs-markdown code {
+  font-family: var(--ul-mono);
+  font-size: 0.86em;
+  padding: 0.1em 0.35em;
+  border: 1px solid var(--ul-border);
+  border-radius: 4px;
+  background: var(--ul-hover);
+}
+.docs-markdown pre {
+  margin: 0.7em 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--ul-border);
+  border-radius: 8px;
+  background: var(--ul-raised);
+}
+.docs-markdown pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.85em;
+}
+.docs-markdown table {
+  width: 100%;
+  margin: 0.8em 0;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+.docs-markdown th,
+.docs-markdown td {
+  padding: 6px 10px;
+  border: 1px solid var(--ul-border);
+  text-align: left;
+  vertical-align: top;
+}
+.docs-markdown th { background: var(--ul-hover); font-weight: 600; }
+.docs-markdown hr {
+  margin: 1.2em 0;
+  border: 0;
+  border-top: 1px solid var(--ul-border);
 }
 
 /* BYOK key modal: "Remove key" sits left, Cancel/Save stay right. */

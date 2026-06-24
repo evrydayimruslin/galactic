@@ -1,19 +1,19 @@
 #!/usr/bin/env -S deno run --allow-net --allow-read --allow-write --allow-env
 
 /**
- * Ultralight v2.0.0
- * Command-line interface for managing Ultralight apps
+ * Galactic v2.0.0
+ * Command-line interface for managing Galactic apps
  *
  * All platform MCP tools use the `ul.*` namespace.
  * Per-app MCP calls go to POST /mcp/{appId}.
  * User REST API lives at GET/PATCH /api/user.
  *
  * Usage:
- *   ultralight <command> [options]
+ *   galactic <command> [options]
  *
  * Commands:
- *   setup           Set up Ultralight: authenticate + configure MCP connection
- *   login           Authenticate with Ultralight
+ *   setup           Set up Galactic: authenticate + configure MCP connection
+ *   login           Authenticate with Galactic
  *   logout          Clear stored credentials
  *   whoami          Show current user
  *   scaffold        Generate a structured app skeleton (ul.download scaffold mode)
@@ -31,7 +31,7 @@
  *   logs            View MCP call logs (ul.logs)
  *   health          App health monitoring (ul.health)
  *
- * Run `ultralight <command> --help` for more information on a command.
+ * Run `galactic <command> --help` for more information on a command.
  */
 
 import { parseArgs, getConfig, saveConfig, clearConfig, type Config } from './config.ts';
@@ -78,7 +78,7 @@ async function main() {
   }
 
   if (args[0] === '--version' || args[0] === '-v') {
-    console.log(`ultralight v${VERSION}`);
+    console.log(`galactic v${VERSION}`);
     return;
   }
 
@@ -88,7 +88,7 @@ async function main() {
   if (!commands[command]) {
     cliLogger.warn('Unknown command requested', { command });
     writeStderr(colors.red(`Unknown command: ${command}`));
-    writeStderr(`Run ${colors.cyan('ultralight help')} for available commands.`);
+    writeStderr(`Run ${colors.cyan('galactic help')} for available commands.`);
     Deno.exit(1);
   }
 
@@ -151,14 +151,14 @@ async function callPlatformScaffold(client: ApiClient, args: ToolArgs) {
 
 async function help(_args: string[], _client: ApiClient, _config: Config) {
   console.log(`
-${colors.bold('Ultralight CLI')} v${VERSION}
+${colors.bold('Galactic CLI')} v${VERSION}
 
 ${colors.dim('USAGE')}
-  ultralight <command> [options]
+  galactic <command> [options]
 
 ${colors.dim('SETUP')}
-  ${colors.cyan('setup')}              Set up Ultralight: authenticate + configure MCP connection
-  ${colors.cyan('login')}              Authenticate with Ultralight (token only)
+  ${colors.cyan('setup')}              Set up Galactic: authenticate + configure MCP connection
+  ${colors.cyan('login')}              Authenticate with Galactic (token only)
   ${colors.cyan('logout')}             Clear stored credentials
   ${colors.cyan('whoami')}             Show current user
 
@@ -189,23 +189,23 @@ ${colors.dim('OTHER')}
   ${colors.cyan('version')}            Show version
 
 ${colors.dim('BUILD WORKFLOW')}
-  1. ${colors.cyan('ultralight scaffold my-app')}        Generate skeleton
+  1. ${colors.cyan('galactic scaffold my-app')}        Generate skeleton
   2. Fill in function implementations
-  3. ${colors.cyan('ultralight test .')}                  Verify functions work
-  4. ${colors.cyan('ultralight lint .')}                  Validate conventions
-  5. ${colors.cyan('ultralight upload .')}                Deploy
+  3. ${colors.cyan('galactic test .')}                  Verify functions work
+  4. ${colors.cyan('galactic lint .')}                  Validate conventions
+  5. ${colors.cyan('galactic upload .')}                Deploy
 
 ${colors.dim('EXAMPLES')}
-  ultralight scaffold my-app --storage supabase
-  ultralight test . --function hello '{"name":"World"}'
-  ultralight lint . --strict
-  ultralight upload . --name "My App"
-  ultralight discover "weather API"
-  ultralight run my-app hello '{"name": "World"}'
-  ultralight logs my-app --limit 20
-  ultralight health
-  ultralight set version my-app 2.0.0
-  ultralight permissions grant my-app user@email.com
+  galactic scaffold my-app --storage supabase
+  galactic test . --function hello '{"name":"World"}'
+  galactic lint . --strict
+  galactic upload . --name "My App"
+  galactic discover "weather API"
+  galactic run my-app hello '{"name": "World"}'
+  galactic logs my-app --limit 20
+  galactic health
+  galactic set version my-app 2.0.0
+  galactic permissions grant my-app user@email.com
 
 ${colors.dim('DOCUMENTATION')}
   https://ultralightagent.com/docs/cli
@@ -213,7 +213,7 @@ ${colors.dim('DOCUMENTATION')}
 }
 
 async function version(_args: string[], _client: ApiClient, _config: Config) {
-  console.log(`ultralight v${VERSION}`);
+  console.log(`galactic v${VERSION}`);
 }
 
 // ============================================
@@ -228,17 +228,17 @@ async function init(args: string[], _client: ApiClient, _config: Config) {
 
   if (parsed.help) {
     console.log(`
-${colors.bold('ultralight init')} [name]
+${colors.bold('galactic init')} [name]
 
-Create a new Ultralight app project with TypeScript types and starter template.
-This is an offline command — use ${colors.cyan('ultralight scaffold')} for server-generated skeletons.
+Create a new Galactic app project with TypeScript types and starter template.
+This is an offline command — use ${colors.cyan('galactic scaffold')} for server-generated skeletons.
 
 ${colors.dim('OPTIONS')}
   --react, -r     Use React template instead of basic TypeScript
 
 ${colors.dim('EXAMPLES')}
-  ultralight init my-app          # Create basic TypeScript app
-  ultralight init my-app --react  # Create React app
+  galactic init my-app          # Create basic TypeScript app
+  galactic init my-app --react  # Create React app
 
 ${colors.dim('WHAT IT CREATES')}
   my-app/
@@ -279,9 +279,9 @@ ${colors.dim('WHAT IT CREATES')}
   console.log(colors.green('\n✓ Project created successfully!\n'));
   console.log(`${colors.dim('Next steps:')}`);
   console.log(`  cd ${projectName}`);
-  console.log(`  ${colors.cyan('ultralight test .')}       # verify`);
-  console.log(`  ${colors.cyan('ultralight lint .')}       # validate`);
-  console.log(`  ${colors.cyan('ultralight upload .')}     # deploy`);
+  console.log(`  ${colors.cyan('galactic test .')}       # verify`);
+  console.log(`  ${colors.cyan('galactic lint .')}       # validate`);
+  console.log(`  ${colors.cyan('galactic upload .')}     # deploy`);
   console.log('');
 }
 
@@ -305,7 +305,7 @@ export function hello(args: { name?: string }) {
  * @returns AI response
  */
 export async function ask(args: { question: string }) {
-  const response = await ultralight.ai({
+  const response = await galactic.ai({
     messages: [{ role: 'user', content: args.question }],
   });
   return { answer: response.content };
@@ -317,7 +317,7 @@ export async function ask(args: { question: string }) {
  * @param args.content - Note content
  */
 export async function saveNote(args: { title: string; content: string }) {
-  await ultralight.store(\`notes/\${args.title}\`, {
+  await galactic.store(\`notes/\${args.title}\`, {
     content: args.content,
     createdAt: new Date().toISOString(),
   });
@@ -329,7 +329,7 @@ export async function saveNote(args: { title: string; content: string }) {
  * @param args.title - Note title to load
  */
 export async function getNote(args: { title: string }) {
-  const data = await ultralight.load(\`notes/\${args.title}\`);
+  const data = await galactic.load(\`notes/\${args.title}\`);
   return { title: args.title, data: data };
 }
 
@@ -338,7 +338,7 @@ export async function getNote(args: { title: string }) {
  * @returns Array of note titles
  */
 export async function listNotes() {
-  const keys = await ultralight.list('notes/');
+  const keys = await galactic.list('notes/');
   return { notes: keys.map(k => k.replace('notes/', '')) };
 }
 `;
@@ -371,19 +371,19 @@ export async function listNotes() {
   // README.md
   const readme = `# ${dir}
 
-An Ultralight app.
+An Galactic app.
 
 ## Development
 
 \`\`\`bash
-ultralight test .       # Test functions in sandbox
-ultralight lint .       # Validate conventions
+galactic test .       # Test functions in sandbox
+galactic lint .       # Validate conventions
 \`\`\`
 
 ## Deploy
 
 \`\`\`bash
-ultralight upload .
+galactic upload .
 \`\`\`
 
 ## Function Pattern
@@ -408,22 +408,22 @@ The \`ultralight\` global is available in all functions:
 
 \`\`\`typescript
 // Data storage
-await ultralight.store('key', value);
-await ultralight.load('key');
-await ultralight.list('prefix/');
+await galactic.store('key', value);
+await galactic.load('key');
+await galactic.list('prefix/');
 
 // AI (requires BYOK in Settings)
-await ultralight.ai({ messages: [{ role: 'user', content: 'Hi' }] });
+await galactic.ai({ messages: [{ role: 'user', content: 'Hi' }] });
 
 // User context
-if (ultralight.isAuthenticated()) {
-  const user = ultralight.user;
+if (galactic.isAuthenticated()) {
+  const user = galactic.user;
 }
 \`\`\`
 
 ## Learn More
 
-- [Ultralight Documentation](https://ultralightagent.com/docs)
+- [Galactic Documentation](https://ultralightagent.com/docs)
 - [SDK Types](https://www.npmjs.com/package/@ultralightpro/types)
 `;
 
@@ -450,7 +450,7 @@ import ReactDOM from 'react-dom/client';
 /**
  * Main App Component
  */
-function App({ sdk }: UltralightProps) {
+function App({ sdk }: GalacticProps) {
   const [notes, setNotes] = useState<string[]>([]);
   const [newNote, setNewNote] = useState('');
   const [loading, setLoading] = useState(true);
@@ -509,25 +509,25 @@ function App({ sdk }: UltralightProps) {
 }
 
 /**
- * Ultralight entry point
+ * Galactic entry point
  * This function is called when the app loads
  */
-const UltralightApp: UltralightApp = (container, sdk) => {
+const GalacticApp: GalacticApp = (container, sdk) => {
   const root = ReactDOM.createRoot(container);
   root.render(<App sdk={sdk} />);
 };
 
-export default UltralightApp;
+export default GalacticApp;
 
 // Also export server-side functions for MCP
 // Note: MCP functions use single-args-object pattern
 export async function getNotes() {
-  const keys = await ultralight.list('notes/');
+  const keys = await galactic.list('notes/');
   return { notes: keys.map(k => k.replace('notes/', '')) };
 }
 
 export async function saveNote(args: { title: string; content: string }) {
-  await ultralight.store(\`notes/\${args.title}\`, {
+  await galactic.store(\`notes/\${args.title}\`, {
     title: args.title,
     content: args.content,
     createdAt: new Date().toISOString(),
@@ -571,29 +571,29 @@ export async function saveNote(args: { title: string; content: string }) {
   // README.md
   const readme = `# ${dir}
 
-A React app running on Ultralight.
+A React app running on Galactic.
 
 ## Development
 
 \`\`\`bash
-ultralight test .       # Test functions in sandbox
-ultralight lint .       # Validate conventions
+galactic test .       # Test functions in sandbox
+galactic lint .       # Validate conventions
 \`\`\`
 
 ## Deploy
 
 \`\`\`bash
-ultralight upload .
+galactic upload .
 \`\`\`
 
 ## How It Works
 
 This app exports a default function that receives:
 - \`container\`: The DOM element to render into
-- \`sdk\`: The Ultralight SDK (\`ultralight\` global)
+- \`sdk\`: The Galactic SDK (\`ultralight\` global)
 
 \`\`\`tsx
-const App: UltralightApp = (container, sdk) => {
+const App: GalacticApp = (container, sdk) => {
   const root = ReactDOM.createRoot(container);
   root.render(<MyComponent sdk={sdk} />);
 };
@@ -605,13 +605,13 @@ You can also export server-side functions for MCP:
 \`\`\`typescript
 // Must use single-args-object pattern
 export async function myServerFunction(args: { key: string }) {
-  return { data: await ultralight.load(args.key) };
+  return { data: await galactic.load(args.key) };
 }
 \`\`\`
 
 ## Learn More
 
-- [Ultralight Documentation](https://ultralightagent.com/docs)
+- [Galactic Documentation](https://ultralightagent.com/docs)
 - [SDK Types](https://www.npmjs.com/package/@ultralightpro/types)
 `;
 
@@ -641,9 +641,9 @@ async function login(args: string[], _client: ApiClient, config: Config) {
 
   if (parsed.help) {
     console.log(`
-${colors.bold('ultralight login')}
+${colors.bold('galactic login')}
 
-Authenticate with Ultralight using an API token.
+Authenticate with Galactic using an API token.
 
 ${colors.dim('OPTIONS')}
   --token, -t <token>   Your API token (create one in User Settings → API Tokens)
@@ -653,8 +653,8 @@ ${colors.dim('TOKEN TYPES')}
   JWT Token             Short-lived session token (from browser)
 
 ${colors.dim('EXAMPLES')}
-  ultralight login --token ul_abc123...   # Use API token (recommended)
-  ultralight login                         # Show instructions
+  galactic login --token ul_abc123...   # Use API token (recommended)
+  galactic login                         # Show instructions
 `);
     return;
   }
@@ -689,7 +689,7 @@ ${colors.bold('How to get an API token:')}
   2. Sign in and click your profile icon
   3. Go to ${colors.cyan('Settings → API Tokens')}
   4. Create a new token and copy it
-  5. Run: ${colors.cyan('ultralight login --token <your-token>')}
+  5. Run: ${colors.cyan('galactic login --token <your-token>')}
 
 ${colors.dim('API tokens start with ul_ and can be used for CLI and API access.')}
 `);
@@ -703,30 +703,30 @@ async function setup(args: string[], _client: ApiClient, config: Config) {
 
   if (parsed.help) {
     console.log(`
-${colors.bold('ultralight setup')}
+${colors.bold('galactic setup')}
 
-Set up Ultralight: authenticate and configure your agent's MCP connection.
+Set up Galactic: authenticate and configure your agent's MCP connection.
 
 ${colors.dim('OPTIONS')}
   --token, -t <token>   Your API token (starts with ul_)
 
 ${colors.dim('WHAT IT DOES')}
   1. Saves your token to ~/.ultralight/config.json
-  2. Verifies the token against the Ultralight API
+  2. Verifies the token against the Galactic API
   3. Detects MCP client config files (Claude Code, Claude Desktop, Cursor)
-  4. Writes the Ultralight MCP server entry to each detected config
-  5. Your agent can use Ultralight immediately after restarting
+  4. Writes the Galactic MCP server entry to each detected config
+  5. Your agent can use Galactic immediately after restarting
 
 ${colors.dim('EXAMPLES')}
-  ultralight setup --token ul_abc123...
-  ultralight setup -t ul_abc123...
+  galactic setup --token ul_abc123...
+  galactic setup -t ul_abc123...
 `);
     return;
   }
 
   if (!parsed.token) {
     console.log(`
-${colors.bold('Ultralight Setup')}
+${colors.bold('Galactic Setup')}
 
 To set up, you need an API token.
 
@@ -737,7 +737,7 @@ ${colors.dim('Get a token:')}
   4. Create a new token
 
 ${colors.dim('Then run:')}
-  ${colors.cyan('ultralight setup --token <your-token>')}
+  ${colors.cyan('galactic setup --token <your-token>')}
 
 Or get the full setup command from ${colors.cyan(config.api_url)} — click "Connect" on the homepage.
 `);
@@ -748,7 +748,7 @@ Or get the full setup command from ${colors.cyan(config.api_url)} — click "Con
 
   // Validate token format
   if (!token.startsWith('ul_')) {
-    console.log(colors.red('✗ Invalid token format. Ultralight API tokens start with ul_'));
+    console.log(colors.red('✗ Invalid token format. Galactic API tokens start with ul_'));
     return;
   }
 
@@ -813,7 +813,7 @@ Or get the full setup command from ${colors.cyan(config.api_url)} — click "Con
         existingConfig = {};
       }
 
-      // Merge in Ultralight server entry
+      // Merge in Galactic server entry
       const servers = (existingConfig[configTarget.key] || {}) as Record<string, unknown>;
       servers['ultralight'] = mcpEntry;
       existingConfig[configTarget.key] = servers;
@@ -843,7 +843,7 @@ Or get the full setup command from ${colors.cyan(config.api_url)} — click "Con
     console.log(colors.dim('    Cursor:         .cursor/mcp.json'));
   } else {
     console.log('');
-    console.log(colors.green(colors.bold('✓ Ultralight is ready!')));
+    console.log(colors.green(colors.bold('✓ Galactic is ready!')));
     console.log('');
     console.log(`  ${colors.dim('Platform tools:')} 10 tools (discover, build, test, deploy, call, and more)`);
     if (userInfo) {
@@ -885,11 +885,11 @@ async function upload(args: string[], client: ApiClient, _config: Config) {
 
   if (parsed.help) {
     console.log(`
-${colors.bold('ultralight upload')} [directory]
+${colors.bold('galactic upload')} [directory]
 
 Upload source code to create a new app or update an existing one (ul.upload).
 No app_id → creates new app (v1.0.0, set live automatically).
-With app_id → creates new version (NOT set live — use: ultralight set version).
+With app_id → creates new version (NOT set live — use: galactic set version).
 
 ${colors.dim('ARGUMENTS')}
   directory             Directory to upload (default: current directory)
@@ -902,10 +902,10 @@ ${colors.dim('OPTIONS')}
   --app-id, -a          Existing app ID or slug (auto-detected from .ultralightrc.json)
 
 ${colors.dim('EXAMPLES')}
-  ultralight upload                       # Upload current directory as new app
-  ultralight upload ./my-app              # Upload specific directory
-  ultralight upload --name "My App"       # With custom name
-  ultralight upload -a my-slug            # New version of existing app
+  galactic upload                       # Upload current directory as new app
+  galactic upload ./my-app              # Upload specific directory
+  galactic upload --name "My App"       # With custom name
+  galactic upload -a my-slug            # New version of existing app
 `);
     return;
   }
@@ -966,7 +966,7 @@ ${colors.dim('EXAMPLES')}
   if (result.slug) console.log(`  Slug:     ${result.slug}`);
   if (result.version) console.log(`  Version:  ${result.version}`);
   if (result.exports) console.log(`  Exports:  ${(result.exports as string[]).join(', ')}`);
-  if (result.is_live !== undefined) console.log(`  Live:     ${result.is_live ? colors.green('yes') : colors.yellow('no — use: ultralight set version')}`);
+  if (result.is_live !== undefined) console.log(`  Live:     ${result.is_live ? colors.green('yes') : colors.yellow('no — use: galactic set version')}`);
   if (result.mcp_endpoint) console.log(`  MCP:      ${colors.cyan(String(result.mcp_endpoint))}`);
 }
 
@@ -983,7 +983,7 @@ async function downloadCmd(args: string[], client: ApiClient, _config: Config) {
 
   if (parsed.help) {
     console.log(`
-${colors.bold('ultralight download')} <app-id>
+${colors.bold('galactic download')} <app-id>
 
 Download source code for an app (ul.download). Respects download_access settings.
 
@@ -992,16 +992,16 @@ ${colors.dim('OPTIONS')}
   --output, -o <dir>    Output directory (default: ./<slug>)
 
 ${colors.dim('EXAMPLES')}
-  ultralight download my-app
-  ultralight download my-app --version 1.0.0
-  ultralight download my-app -o ./downloaded
+  galactic download my-app
+  galactic download my-app --version 1.0.0
+  galactic download my-app -o ./downloaded
 `);
     return;
   }
 
   const appId = parsed._[0] as string;
   if (!appId) {
-    throw new Error('Usage: ultralight download <app-id>');
+    throw new Error('Usage: galactic download <app-id>');
   }
 
   const toolArgs: Record<string, unknown> = { app_id: appId };
@@ -1050,9 +1050,9 @@ async function testCmd(args: string[], client: ApiClient, _config: Config) {
 
   if (parsed.help) {
     console.log(`
-${colors.bold('ultralight test')} [directory] [options]
+${colors.bold('galactic test')} [directory] [options]
 
-Test your app functions in the Ultralight sandbox without deploying (ul.test).
+Test your app functions in the Galactic sandbox without deploying (ul.test).
 Supports all sandbox globals (fetch, crypto, lodash, dateFns, etc).
 
 ${colors.dim('OPTIONS')}
@@ -1060,8 +1060,8 @@ ${colors.dim('OPTIONS')}
   --json                 Output raw JSON result
 
 ${colors.dim('EXAMPLES')}
-  ultralight test . --function hello '{"name":"World"}'
-  ultralight test ./my-app -f process '{"data":[1,2]}'
+  galactic test . --function hello '{"name":"World"}'
+  galactic test ./my-app -f process '{"data":[1,2]}'
 `);
     return;
   }
@@ -1151,9 +1151,9 @@ async function lint(args: string[], client: ApiClient, _config: Config) {
 
   if (parsed.help) {
     console.log(`
-${colors.bold('ultralight lint')} [directory]
+${colors.bold('galactic lint')} [directory]
 
-Validate source code and manifest against Ultralight conventions via ul.test({ lint_only: true }).
+Validate source code and manifest against Galactic conventions via ul.test({ lint_only: true }).
 Checks: single-args-object, no-shorthand-return, function-count, manifest sync, permissions.
 
 ${colors.dim('OPTIONS')}
@@ -1161,8 +1161,8 @@ ${colors.dim('OPTIONS')}
   --json          Output raw JSON result
 
 ${colors.dim('EXAMPLES')}
-  ultralight lint .
-  ultralight lint ./my-app --strict
+  galactic lint .
+  galactic lint ./my-app --strict
 `);
     return;
   }
@@ -1227,9 +1227,9 @@ async function scaffold(args: string[], client: ApiClient, _config: Config) {
 
   if (parsed.help) {
     console.log(`
-${colors.bold('ultralight scaffold')} <name>
+${colors.bold('galactic scaffold')} <name>
 
-Generate a properly structured app skeleton following all Ultralight conventions via ul.download.
+Generate a properly structured app skeleton following all Galactic conventions via ul.download.
 Returns index.ts + manifest.json + migrations/001_initial.sql with correct patterns.
 
 ${colors.dim('OPTIONS')}
@@ -1237,16 +1237,16 @@ ${colors.dim('OPTIONS')}
   --storage <none|d1|kv|supabase>  Storage type (default: d1)
 
 ${colors.dim('EXAMPLES')}
-  ultralight scaffold my-app
-  ultralight scaffold weather-api -d "Get weather data" --storage none
-  ultralight scaffold my-db-app --storage d1
+  galactic scaffold my-app
+  galactic scaffold weather-api -d "Get weather data" --storage none
+  galactic scaffold my-db-app --storage d1
 `);
     return;
   }
 
   const name = parsed._[0] as string;
   if (!name) {
-    throw new Error('Usage: ultralight scaffold <name>');
+    throw new Error('Usage: galactic scaffold <name>');
   }
 
   // Check if directory exists
@@ -1264,7 +1264,7 @@ ${colors.dim('EXAMPLES')}
 
   const result = await callPlatformScaffold(client, {
     name: name,
-    description: parsed.description || `${name} — an Ultralight MCP app`,
+    description: parsed.description || `${name} — an Galactic MCP app`,
     storage: parsed.storage || 'd1',
   });
 
@@ -1305,9 +1305,9 @@ ${colors.dim('EXAMPLES')}
   console.log();
   console.log(colors.dim('Build workflow:'));
   console.log(`  cd ${name}`);
-  console.log(`  ${colors.cyan('ultralight test .')}       # verify`);
-  console.log(`  ${colors.cyan('ultralight lint .')}       # validate`);
-  console.log(`  ${colors.cyan('ultralight upload .')}     # deploy`);
+  console.log(`  ${colors.cyan('galactic test .')}       # verify`);
+  console.log(`  ${colors.cyan('galactic lint .')}       # validate`);
+  console.log(`  ${colors.cyan('galactic upload .')}     # deploy`);
 }
 
 // ============================================
@@ -1355,7 +1355,7 @@ async function apps(args: string[], client: ApiClient, _config: Config) {
     case 'get': {
       const appId = subArgs[0];
       if (!appId) {
-        throw new Error('Usage: ultralight apps get <app-id>');
+        throw new Error('Usage: galactic apps get <app-id>');
       }
 
       const result = await client.callTool('ul.download', {
@@ -1369,7 +1369,7 @@ async function apps(args: string[], client: ApiClient, _config: Config) {
     case 'delete': {
       const appId = subArgs[0];
       if (!appId) {
-        throw new Error('Usage: ultralight apps delete <app-id>');
+        throw new Error('Usage: galactic apps delete <app-id>');
       }
 
       const parsed = parseArgs(subArgs.slice(1), {
@@ -1391,9 +1391,9 @@ async function apps(args: string[], client: ApiClient, _config: Config) {
 
     default:
       console.log(`
-${colors.bold('ultralight apps')} <command>
+${colors.bold('galactic apps')} <command>
 
-Manage your Ultralight apps.
+Manage your Galactic apps.
 
 ${colors.dim('COMMANDS')}
   list, ls        List your apps (ul.discover scope=library)
@@ -1401,8 +1401,8 @@ ${colors.dim('COMMANDS')}
   delete <app>    Delete an app
 
 ${colors.dim('EXAMPLES')}
-  ultralight apps list
-  ultralight apps get my-app
+  galactic apps list
+  galactic apps get my-app
 `);
   }
 }
@@ -1420,7 +1420,7 @@ async function setCmd(args: string[], client: ApiClient, _config: Config) {
       const appId = subArgs[0];
       const ver = subArgs[1];
       if (!appId || !ver) {
-        throw new Error('Usage: ultralight set version <app-id> <version>');
+        throw new Error('Usage: galactic set version <app-id> <version>');
       }
       await callPlatformSet(client, appId, { version: ver });
       console.log(colors.green(`✓ Live version set to ${ver}`));
@@ -1431,7 +1431,7 @@ async function setCmd(args: string[], client: ApiClient, _config: Config) {
       const appId = subArgs[0];
       const vis = subArgs[1];
       if (!appId || !vis) {
-        throw new Error('Usage: ultralight set visibility <app-id> <private|unlisted|published>');
+        throw new Error('Usage: galactic set visibility <app-id> <private|unlisted|published>');
       }
       await callPlatformSet(client, appId, { visibility: vis });
       console.log(colors.green(`✓ Visibility set to ${vis}`));
@@ -1446,7 +1446,7 @@ async function setCmd(args: string[], client: ApiClient, _config: Config) {
       });
       const appId = parsed._[0] as string || parsed.app as string;
       if (!appId) {
-        throw new Error('Usage: ultralight set ratelimit <app-id> [--per-minute N] [--per-day N]');
+        throw new Error('Usage: galactic set ratelimit <app-id> [--per-minute N] [--per-day N]');
       }
       const toolArgs: ToolArgs = {};
       if (parsed['per-minute'] !== undefined) toolArgs.calls_per_minute = parsed['per-minute'];
@@ -1462,7 +1462,7 @@ async function setCmd(args: string[], client: ApiClient, _config: Config) {
       });
       const appId = parsed._[0] as string;
       if (!appId) {
-        throw new Error('Usage: ultralight set pricing <app-id> --default <credits>');
+        throw new Error('Usage: galactic set pricing <app-id> --default <credits>');
       }
       const toolArgs: ToolArgs = {};
       if (parsed.default !== undefined) toolArgs.default_price_credits = parsed.default;
@@ -1475,7 +1475,7 @@ async function setCmd(args: string[], client: ApiClient, _config: Config) {
       const appId = subArgs[0];
       const serverName = subArgs[1];
       if (!appId) {
-        throw new Error('Usage: ultralight set supabase <app-id> <server-name|null>');
+        throw new Error('Usage: galactic set supabase <app-id> <server-name|null>');
       }
       await callPlatformSet(client, appId, {
         supabase_server: serverName === 'null' ? null : serverName,
@@ -1488,7 +1488,7 @@ async function setCmd(args: string[], client: ApiClient, _config: Config) {
       const appId = subArgs[0];
       const access = subArgs[1];
       if (!appId || !access) {
-        throw new Error('Usage: ultralight set download-access <app-id> <owner|public>');
+        throw new Error('Usage: galactic set download-access <app-id> <owner|public>');
       }
       await callPlatformSet(client, appId, { download_access: access });
       console.log(colors.green(`✓ Download access set to ${access}`));
@@ -1497,7 +1497,7 @@ async function setCmd(args: string[], client: ApiClient, _config: Config) {
 
     default:
       console.log(`
-${colors.bold('ultralight set')} <setting> <app-id> <value>
+${colors.bold('galactic set')} <setting> <app-id> <value>
 
 Configure app settings.
 
@@ -1510,12 +1510,12 @@ ${colors.dim('SETTINGS')}
   download-access <app> <owner|public> Set download access (ul.set)
 
 ${colors.dim('EXAMPLES')}
-  ultralight set version my-app 2.0.0
-  ultralight set visibility my-app published
-  ultralight set ratelimit my-app --per-minute 60 --per-day 10000
-  ultralight set pricing my-app --default 5
-  ultralight set supabase my-app my-db
-  ultralight set download-access my-app public
+  galactic set version my-app 2.0.0
+  galactic set visibility my-app published
+  galactic set ratelimit my-app --per-minute 60 --per-day 10000
+  galactic set pricing my-app --default 5
+  galactic set supabase my-app my-db
+  galactic set download-access my-app public
 `);
   }
 }
@@ -1538,7 +1538,7 @@ async function permissions(args: string[], client: ApiClient, _config: Config) {
       const appId = parsed._[0] as string;
       const email = parsed._[1] as string;
       if (!appId || !email) {
-        throw new Error('Usage: ultralight permissions grant <app-id> <email> [--functions fn1,fn2] [--expires ISO]');
+        throw new Error('Usage: galactic permissions grant <app-id> <email> [--functions fn1,fn2] [--expires ISO]');
       }
 
       const toolArgs: ToolArgs = { app_id: appId, email: email };
@@ -1571,7 +1571,7 @@ async function permissions(args: string[], client: ApiClient, _config: Config) {
 
       const appId = parsed._[0] as string;
       if (!appId) {
-        throw new Error('Usage: ultralight permissions revoke <app-id> [email] [--functions fn1,fn2]');
+        throw new Error('Usage: galactic permissions revoke <app-id> [email] [--functions fn1,fn2]');
       }
 
       const toolArgs: ToolArgs = { app_id: appId };
@@ -1590,7 +1590,7 @@ async function permissions(args: string[], client: ApiClient, _config: Config) {
     case 'ls': {
       const appId = subArgs[0];
       if (!appId) {
-        throw new Error('Usage: ultralight permissions list <app-id>');
+        throw new Error('Usage: galactic permissions list <app-id>');
       }
 
       const result = await callPlatformPermissions(client, 'list', { app_id: appId });
@@ -1631,7 +1631,7 @@ async function permissions(args: string[], client: ApiClient, _config: Config) {
 
       const appId = parsed._[0] as string;
       if (!appId) {
-        throw new Error('Usage: ultralight permissions export <app-id> [--format json|csv] [--since ISO] [--limit N]');
+        throw new Error('Usage: galactic permissions export <app-id> [--format json|csv] [--since ISO] [--limit N]');
       }
 
       const toolArgs: ToolArgs = { app_id: appId };
@@ -1651,7 +1651,7 @@ async function permissions(args: string[], client: ApiClient, _config: Config) {
 
     default:
       console.log(`
-${colors.bold('ultralight permissions')} <command>
+${colors.bold('galactic permissions')} <command>
 
 Manage app permissions.
 
@@ -1676,11 +1676,11 @@ ${colors.dim('OPTIONS (export)')}
   --limit <N>                   Max entries (default: 500)
 
 ${colors.dim('EXAMPLES')}
-  ultralight permissions grant my-app user@email.com
-  ultralight permissions grant my-app user@email.com --functions search,analyze --expires 2025-12-31T00:00:00Z
-  ultralight permissions revoke my-app user@email.com
-  ultralight permissions list my-app
-  ultralight permissions export my-app --format csv --since 2025-01-01T00:00:00Z
+  galactic permissions grant my-app user@email.com
+  galactic permissions grant my-app user@email.com --functions search,analyze --expires 2025-12-31T00:00:00Z
+  galactic permissions revoke my-app user@email.com
+  galactic permissions list my-app
+  galactic permissions export my-app --format csv --since 2025-01-01T00:00:00Z
 `);
   }
 }
@@ -1737,14 +1737,14 @@ async function draft(args: string[], client: ApiClient, _config: Config) {
       if (result.version) console.log(`  Version: ${result.version}`);
       if (result.exports) console.log(`  Exports: ${(result.exports as string[]).join(', ')}`);
       console.log();
-      console.log(`Set live: ${colors.cyan(`ultralight set version ${appId} ${result.version}`)}`);
+      console.log(`Set live: ${colors.cyan(`galactic set version ${appId} ${result.version}`)}`);
       break;
     }
 
     case 'status': {
       const appId = subArgs[0];
       if (!appId) {
-        throw new Error('Usage: ultralight draft status <app-id>');
+        throw new Error('Usage: galactic draft status <app-id>');
       }
 
       // Show app versions via download info
@@ -1757,7 +1757,7 @@ async function draft(args: string[], client: ApiClient, _config: Config) {
       const appId = subArgs[0];
       const ver = subArgs[1];
       if (!appId) {
-        throw new Error('Usage: ultralight draft publish <app-id> [version]');
+        throw new Error('Usage: galactic draft publish <app-id> [version]');
       }
 
       if (ver) {
@@ -1765,14 +1765,14 @@ async function draft(args: string[], client: ApiClient, _config: Config) {
         console.log(colors.green(`✓ Version ${ver} set live`));
       } else {
         console.log(colors.yellow('Specify which version to set live:'));
-        console.log(`  ${colors.cyan(`ultralight set version ${appId} <version>`)}`);
+        console.log(`  ${colors.cyan(`galactic set version ${appId} <version>`)}`);
       }
       break;
     }
 
     default:
       console.log(`
-${colors.bold('ultralight draft')} <command>
+${colors.bold('galactic draft')} <command>
 
 Manage app versions.
 
@@ -1785,9 +1785,9 @@ ${colors.dim('OPTIONS (upload)')}
   --app-id, -a <id>   App ID or slug (auto-detected from .ultralightrc.json)
 
 ${colors.dim('EXAMPLES')}
-  ultralight draft upload .
-  ultralight draft upload . --app-id my-app
-  ultralight draft publish my-app 2.0.0
+  galactic draft upload .
+  galactic draft upload . --app-id my-app
+  galactic draft publish my-app 2.0.0
 `);
   }
 }
@@ -1804,18 +1804,18 @@ async function docs(args: string[], client: ApiClient, _config: Config) {
     case 'generate': {
       const appId = subArgs[0];
       if (!appId) {
-        throw new Error('Usage: ultralight docs generate <app-id>');
+        throw new Error('Usage: galactic docs generate <app-id>');
       }
 
       console.log(colors.dim('Documentation is auto-generated on upload.'));
-      console.log(`To regenerate, re-upload: ${colors.cyan(`ultralight upload . --app-id ${appId}`)}`);
+      console.log(`To regenerate, re-upload: ${colors.cyan(`galactic upload . --app-id ${appId}`)}`);
       break;
     }
 
     case 'get': {
       const appId = subArgs[0];
       if (!appId) {
-        throw new Error('Usage: ultralight docs get <app-id>');
+        throw new Error('Usage: galactic docs get <app-id>');
       }
 
       // Download source to get skills.md
@@ -1833,7 +1833,7 @@ async function docs(args: string[], client: ApiClient, _config: Config) {
 
     default:
       console.log(`
-${colors.bold('ultralight docs')} <command>
+${colors.bold('galactic docs')} <command>
 
 Manage app documentation (Skills.md).
 
@@ -1842,7 +1842,7 @@ ${colors.dim('COMMANDS')}
   get <app>       Get documentation content
 
 ${colors.dim('EXAMPLES')}
-  ultralight docs get my-app
+  galactic docs get my-app
 `);
   }
 }
@@ -1859,7 +1859,7 @@ async function run(args: string[], client: ApiClient, _config: Config) {
 
   if (parsed.help || args.length < 2) {
     console.log(`
-${colors.bold('ultralight run')} <app> <function> [args]
+${colors.bold('galactic run')} <app> <function> [args]
 
 Execute a function on a deployed app via its MCP endpoint (POST /mcp/{appId}).
 
@@ -1872,9 +1872,9 @@ ${colors.dim('OPTIONS')}
   --json      Output raw JSON result
 
 ${colors.dim('EXAMPLES')}
-  ultralight run my-app hello
-  ultralight run my-app greet '{"name": "World"}'
-  ultralight run my-app search '{"query": "test"}' --json
+  galactic run my-app hello
+  galactic run my-app greet '{"name": "World"}'
+  galactic run my-app search '{"query": "test"}' --json
 `);
     return;
   }
@@ -1962,7 +1962,7 @@ async function discover(args: string[], client: ApiClient, _config: Config) {
 
   if (parsed.help) {
     console.log(`
-${colors.bold('ultralight discover')} [query]
+${colors.bold('galactic discover')} [query]
 
 Search the App Store for MCP tools by natural language via ul.discover({ scope: "appstore", ... }).
 Uses semantic search with composite ranking (similarity + community signal + native capability).
@@ -1974,11 +1974,11 @@ ${colors.dim('OPTIONS')}
   --library           Search your library instead (ul.discover scope=library)
 
 ${colors.dim('EXAMPLES')}
-  ultralight discover "weather API"
-  ultralight discover "send email notifications" --limit 20
-  ultralight discover --featured
-  ultralight discover --desk
-  ultralight discover --library "notes"
+  galactic discover "weather API"
+  galactic discover "send email notifications" --limit 20
+  galactic discover --featured
+  galactic discover --desk
+  galactic discover --library "notes"
 `);
     return;
   }
@@ -2067,15 +2067,15 @@ ${colors.dim('EXAMPLES')}
 
   if (!searchQuery) {
     console.log(`
-${colors.bold('ultralight discover')} [query]
+${colors.bold('galactic discover')} [query]
 
 Search the App Store for MCP tools by natural language.
 
 ${colors.dim('EXAMPLES')}
-  ultralight discover "weather API"
-  ultralight discover "send email notifications"
-  ultralight discover --featured
-  ultralight discover --desk
+  galactic discover "weather API"
+  galactic discover "send email notifications"
+  galactic discover --featured
+  galactic discover --desk
 `);
     return;
   }
@@ -2122,7 +2122,7 @@ async function logsCmd(args: string[], client: ApiClient, _config: Config) {
 
   if (parsed.help) {
     console.log(`
-${colors.bold('ultralight logs')} <app-id>
+${colors.bold('galactic logs')} <app-id>
 
 View MCP call logs for an app you own (ul.logs).
 
@@ -2134,17 +2134,17 @@ ${colors.dim('OPTIONS')}
   --json                   Output raw JSON
 
 ${colors.dim('EXAMPLES')}
-  ultralight logs my-app
-  ultralight logs my-app --limit 20
-  ultralight logs my-app --emails user@email.com
-  ultralight logs my-app --functions search,analyze --since 2025-01-01T00:00:00Z
+  galactic logs my-app
+  galactic logs my-app --limit 20
+  galactic logs my-app --emails user@email.com
+  galactic logs my-app --functions search,analyze --since 2025-01-01T00:00:00Z
 `);
     return;
   }
 
   const appId = parsed._[0] as string;
   if (!appId) {
-    throw new Error('Usage: ultralight logs <app-id>');
+    throw new Error('Usage: galactic logs <app-id>');
   }
 
   const toolArgs: Record<string, unknown> = { app_id: appId };
@@ -2195,7 +2195,7 @@ async function health(args: string[], client: ApiClient, _config: Config) {
 
   if (parsed.help) {
     console.log(`
-${colors.bold('ultralight health')} [app-id]
+${colors.bold('galactic health')} [app-id]
 
 View health events and error reports for your apps (ul.health).
 The platform auto-detects failing functions (>50% error rate) and records events.
@@ -2207,10 +2207,10 @@ ${colors.dim('OPTIONS')}
   --json                  Output raw JSON
 
 ${colors.dim('EXAMPLES')}
-  ultralight health                          # Check all your apps
-  ultralight health my-app                   # Check specific app
-  ultralight health --status all             # Show all events including resolved
-  ultralight health --resolve <event-id>     # Mark event as resolved
+  galactic health                          # Check all your apps
+  galactic health my-app                   # Check specific app
+  galactic health --status all             # Show all events including resolved
+  galactic health --resolve <event-id>     # Mark event as resolved
 `);
     return;
   }
@@ -2273,7 +2273,7 @@ async function configCmd(args: string[], _client: ApiClient, config: Config) {
         const value = configMap[key];
         console.log(value !== undefined ? JSON.stringify(value, null, 2) : colors.dim('(not set)'));
       } else {
-        throw new Error('Usage: ultralight config get <key>');
+        throw new Error('Usage: galactic config get <key>');
       }
       break;
     }
@@ -2281,7 +2281,7 @@ async function configCmd(args: string[], _client: ApiClient, config: Config) {
     case 'set': {
       const [key, value] = subArgs;
       if (!key || !value) {
-        throw new Error('Usage: ultralight config set <key> <value>');
+        throw new Error('Usage: galactic config set <key> <value>');
       }
 
       configMap[key] = value;
@@ -2297,7 +2297,7 @@ async function configCmd(args: string[], _client: ApiClient, config: Config) {
 
     default:
       console.log(`
-${colors.bold('ultralight config')} <command>
+${colors.bold('galactic config')} <command>
 
 Manage CLI configuration.
 
@@ -2307,9 +2307,9 @@ ${colors.dim('COMMANDS')}
   list              Show all config
 
 ${colors.dim('EXAMPLES')}
-  ultralight config get api_url
-  ultralight config set api_url https://api.custom.example
-  ultralight config list
+  galactic config get api_url
+  galactic config set api_url https://api.custom.example
+  galactic config list
 `);
   }
 }

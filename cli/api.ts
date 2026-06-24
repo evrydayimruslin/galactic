@@ -1,5 +1,5 @@
 /**
- * API Client for Ultralight Platform MCP
+ * API Client for Galactic Platform MCP
  *
  * Communicates with the platform MCP endpoint using JSON-RPC 2.0
  */
@@ -56,7 +56,7 @@ export class ApiClient {
    */
   async callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (!this.token) {
-      throw new Error('Not logged in. Run: ultralight login');
+      throw new Error('Not logged in. Run: galactic login');
     }
 
     const request: JsonRpcRequest = {
@@ -80,7 +80,7 @@ export class ApiClient {
 
     if (!response.ok) {
       if (response.status === 401) {
-        throw new Error('Authentication expired. Run: ultralight login');
+        throw new Error('Authentication expired. Run: galactic login');
       }
       if (response.status === 429) {
         throw new Error('Rate limit exceeded. Please wait and try again.');
@@ -128,7 +128,7 @@ export class ApiClient {
    */
   async listTools(): Promise<Array<{ name: string; description: string }>> {
     if (!this.token) {
-      throw new Error('Not logged in. Run: ultralight login');
+      throw new Error('Not logged in. Run: galactic login');
     }
 
     const request: JsonRpcRequest = {
@@ -196,7 +196,7 @@ export class ApiClient {
    */
   async restGet(path: string): Promise<Record<string, unknown>> {
     if (!this.token) {
-      throw new Error('Not logged in. Run: ultralight login');
+      throw new Error('Not logged in. Run: galactic login');
     }
 
     const response = await fetch(`${this.apiUrl}${path}`, {
@@ -209,7 +209,7 @@ export class ApiClient {
 
     if (!response.ok) {
       if (response.status === 401) {
-        throw new Error('Authentication expired. Run: ultralight login');
+        throw new Error('Authentication expired. Run: galactic login');
       }
       throw new Error(`API error: ${response.status} ${response.statusText}`);
     }
@@ -222,7 +222,7 @@ export class ApiClient {
    */
   async callAppTool(appId: string, toolName: string, args?: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (!this.token) {
-      throw new Error('Not logged in. Run: ultralight login');
+      throw new Error('Not logged in. Run: galactic login');
     }
 
     const request: JsonRpcRequest = {
@@ -246,7 +246,7 @@ export class ApiClient {
 
     if (!response.ok) {
       if (response.status === 401) {
-        throw new Error('Authentication expired. Run: ultralight login');
+        throw new Error('Authentication expired. Run: galactic login');
       }
       if (response.status === 429) {
         throw new Error('Rate limit exceeded. Please wait and try again.');
@@ -291,7 +291,7 @@ export class ApiClient {
    */
   async listAppTools(appId: string): Promise<Array<{ name: string; description: string }>> {
     if (!this.token) {
-      throw new Error('Not logged in. Run: ultralight login');
+      throw new Error('Not logged in. Run: galactic login');
     }
 
     const request: JsonRpcRequest = {
