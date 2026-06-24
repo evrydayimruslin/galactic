@@ -2181,14 +2181,23 @@ export async function executeInSandbox(
         return result;
       },
 
-      // PAYMENTS - In-app purchases via internal ledger transfers
-      // Charges the calling user and credits the app owner. Feeless.
+      // PAYMENTS — in-app purchases via the internal ledger.
+      // Charges the calling user and credits the app owner NET of the 15%
+      // platform fee — waived to 0% when the buyer is the developer's own
+      // attributed customer. This is the SAME fee + referral path as per-call
+      // pricing (reason "in_app_purchase" is a first-class monetization kind in
+      // transfer_light). to_balance reflects the net credit; platform_fee /
+      // fee_waived expose the split.
       charge: async (
         amountLight: number,
         reason?: string,
-      ): Promise<
-        { success: boolean; from_balance: number; to_balance: number }
-      > => {
+      ): Promise<{
+        success: boolean;
+        from_balance: number;
+        to_balance: number;
+        platform_fee: number;
+        fee_waived: number;
+      }> => {
         if (!config.user) {
           throw new Error(
             "Authentication required. User must be signed in to make purchases.",
@@ -2255,9 +2264,12 @@ export async function executeInSandbox(
           throw new Error("Payment transfer failed");
         }
 
-        const rows = await transferRes.json() as Array<
-          { from_new_balance: number; to_new_balance: number }
-        >;
+        const rows = await transferRes.json() as Array<{
+          from_new_balance: number;
+          to_new_balance: number;
+          platform_fee?: number;
+          fee_waived?: number;
+        }>;
         if (!rows || rows.length === 0) {
           throw new Error(
             `Insufficient balance. This purchase costs ${
@@ -2270,6 +2282,8 @@ export async function executeInSandbox(
           success: true,
           from_balance: rows[0].from_new_balance,
           to_balance: rows[0].to_new_balance,
+          platform_fee: rows[0].platform_fee ?? 0,
+          fee_waived: rows[0].fee_waived ?? 0,
         };
       },
 
