@@ -159,6 +159,9 @@ export interface RuntimeCloudHoldParams {
     "version" | "workerMsPerCloudUnit" | "cloudUnitLightPer1k"
   >;
   metadata?: Record<string, unknown>;
+  // Free Mode: when true the hold refuses (raises free_mode_blocked) before any
+  // debit if this call would charge the caller. See docs/FREE_MODE_DESIGN.md.
+  freeMode?: boolean;
 }
 
 export interface RuntimeCloudHoldResult extends CloudUsageHoldResult {
@@ -530,6 +533,10 @@ export async function createRuntimeCloudHold(
         params.functionName,
         params.source,
       ]),
+    // Only send p_free_mode when it's actually on, so a 16-arg call still matches
+    // the function across the migration boundary (the new fn fills the default).
+    // This removes any API-vs-migration deploy-ordering constraint.
+    ...(params.freeMode ? { p_free_mode: true } : {}),
   }, deps);
 
   const payerUserId = requiredString(row.payer_user_id, "payer_user_id");

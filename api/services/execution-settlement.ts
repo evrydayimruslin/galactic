@@ -28,6 +28,8 @@ import {
   type RuntimeCloudHoldResult,
   settleRuntimeCloudHold,
 } from "./cloud-usage.ts";
+import { FREE_MODE_BALANCE_LIGHT } from "../../shared/contracts/ai.ts";
+import { functionUsesInference, isFreeModeEnabled } from "./free-mode.ts";
 import { recordRoutineCallContribution } from "./routine-rollups.ts";
 import {
   type RoutineTraceContext,
@@ -121,7 +123,9 @@ export interface AppCallSettlementResult {
     | "caller_light_required"
     | "owner_sponsor_light_required"
     | "access_policy_denied"
-    | "access_policy_error";
+    | "access_policy_error"
+    | "free_mode_paid_blocked"
+    | "free_mode_ai_requires_byok";
   insufficientBalanceMessage?: string;
   receiptId?: string;
   metadata: Record<string, unknown>;
@@ -163,6 +167,11 @@ export interface PreflightRuntimeCloudHoldParams {
   // a target dev can deny or reprice specific cross-Agent callers.
   callerAppId?: string | null;
   routineContext?: RoutineTraceContext | null;
+  // Free Mode signals from the caller context (Phase 0). freeMode is the raw
+  // balance-below-threshold state; the enforcement flag (isFreeModeEnabled) is
+  // applied here so callers just pass the state through.
+  freeMode?: boolean;
+  byokPresent?: boolean;
 }
 
 export interface RuntimeCloudPreflightResult {
@@ -439,6 +448,35 @@ export async function preflightRuntimeCloudHold(
     };
   }
 
+  const freeModeActive = isFreeModeEnabled() && Boolean(params.freeMode);
+
+  // Free Mode AI gate (D2/D5): an inference function needs a BYOK key, since the
+  // caller has no credits to spend on platform inference. Block the whole call
+  // before the hold — the function never runs, so galactic.ai() is never reached.
+  if (
+    freeModeActive &&
+    !params.byokPresent &&
+    functionUsesInference(params.app.manifest, params.functionName)
+  ) {
+    return {
+      hold: null,
+      pricing: basePricing,
+      billingConfig,
+      insufficientBalance: true,
+      insufficientBalanceCode: "free_mode_ai_requires_byok",
+      insufficientBalanceMessage: buildFreeModeAiRequiresByokMessage(),
+      metadata: {
+        ...accessDecision.metadata,
+        billing_config_version: billingConfig.version,
+        app_price_light: appPriceLight,
+        app_charge_light: accessDecision.chargeLight,
+        free_call_limit: freeCallLimit,
+        free_mode: true,
+        uses_inference: true,
+      },
+    };
+  }
+
   try {
     const hold = await createRuntimeCloudHold({
       callerUserId: params.userId,
@@ -449,6 +487,7 @@ export async function preflightRuntimeCloudHold(
       source: params.method,
       timeoutMs: params.timeoutMs,
       appPriceLight,
+      freeMode: freeModeActive,
       freeCallLimit,
       freeCallCounterKey: accessDecision.freeQuotaCounterKey,
       expiresAt: new Date(Date.now() + params.timeoutMs + 60_000).toISOString(),
@@ -544,6 +583,26 @@ export async function preflightRuntimeCloudHold(
       },
     };
   } catch (err) {
+    // Free Mode paid-call block (D6/D7): the hold refused before any debit
+    // because this call would charge the caller. Map to the dedicated verdict.
+    if (isFreeModeBlocked(err)) {
+      return {
+        hold: null,
+        pricing: basePricing,
+        billingConfig,
+        insufficientBalance: true,
+        insufficientBalanceCode: "free_mode_paid_blocked",
+        insufficientBalanceMessage: buildFreeModePaidBlockedMessage(),
+        metadata: {
+          ...accessDecision.metadata,
+          billing_config_version: billingConfig.version,
+          app_price_light: appPriceLight,
+          app_charge_light: accessDecision.chargeLight,
+          free_call_limit: freeCallLimit,
+          free_mode: true,
+        },
+      };
+    }
     const ownerSponsored = params.userId !== params.app.owner_id &&
       appPriceLight <= 0;
     const callerFallbackRequired = isCallerInfraFallbackLightRequired(err);
@@ -1673,6 +1732,23 @@ function buildOwnerSponsorLightRequiredMessage(amountLight: number): string {
   return `This free call requires ${
     formatDollarsFromLight(amountLight)
   } of credits-backed sponsorship. Add credits to your wallet or add creator earnings to balance to call this app.`;
+}
+
+function buildFreeModePaidBlockedMessage(): string {
+  return `Free mode is active because your balance is under ${
+    formatDollarsFromLight(FREE_MODE_BALANCE_LIGHT)
+  }. This function charges credits, so it is unavailable — add credits to your wallet to use paid functions.`;
+}
+
+function buildFreeModeAiRequiresByokMessage(): string {
+  return `Free mode is active because your balance is under ${
+    formatDollarsFromLight(FREE_MODE_BALANCE_LIGHT)
+  }. AI functions need your own provider key here — add a BYOK key in Settings, or add credits to your wallet.`;
+}
+
+function isFreeModeBlocked(err: unknown): boolean {
+  return err instanceof CloudUsageRpcError &&
+    /free_mode_blocked/i.test(err.message);
 }
 
 function isCallerInfraFallbackLightRequired(err: unknown): boolean {

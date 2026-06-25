@@ -2017,7 +2017,9 @@ async function executeSDKTool(
 
         // Make the AI call
         try {
-          const runtimeAI = await createRuntimeAIContext(callerContext.user);
+          const runtimeAI = await createRuntimeAIContext(callerContext.user, {
+            freeMode: callerContext.freeMode,
+          });
           result = await runtimeAI.aiService.call({
             messages: aiMessages,
             model: args.model as string | undefined,
@@ -2573,7 +2575,7 @@ async function executeAppFunction(
       ? 120_000
       : 30_000;
     const runtimeAI = permissions.includes("ai:call")
-      ? await createRuntimeAIContext(user)
+      ? await createRuntimeAIContext(user, { freeMode: callerContext.freeMode })
       : {
         route: null,
         resolvedRoute: null,
@@ -2627,6 +2629,8 @@ async function executeAppFunction(
       callerAuthState: "authenticated",
       callerAppId: callerContext.callerApp?.appId ?? null,
       routineContext: meta?.routineContext,
+      freeMode: callerContext.freeMode,
+      byokPresent: callerContext.byokPresent,
     });
     if (cloudPreflight.insufficientBalance) {
       const widgetBalanceMessage = widgetPull

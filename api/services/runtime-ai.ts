@@ -3,6 +3,7 @@ import { CHAT_MIN_BALANCE_LIGHT } from "../../shared/contracts/ai.ts";
 import type { RuntimeAIRoute } from "../runtime/sandbox.ts";
 import { createAIService } from "./ai.ts";
 import { checkChatBalance, deductChatCost } from "./chat-billing.ts";
+import { isFreeModeEnabled } from "./free-mode.ts";
 import { selectInferenceModel } from "./inference-client.ts";
 import {
   InferenceRouteError,
@@ -133,6 +134,10 @@ function routeErrorMessage(error: unknown): string {
 export interface CreateRuntimeAIContextOptions {
   resolveRoute?: typeof resolveInferenceRoute;
   checkBalance?: typeof checkChatBalance;
+  // Free Mode (caller balance below threshold): when set, the credits-route
+  // balance gate fails CLOSED — a balance-read error denies inference rather
+  // than proceeding un-gated, so a $0 user can never spend. See FREE_MODE_DESIGN.
+  freeMode?: boolean;
 }
 
 export async function createRuntimeAIContext(
@@ -180,8 +185,23 @@ export async function createRuntimeAIContext(
           };
         }
       } catch (balanceError) {
-        // FAIL OPEN: the gate protects against known-insufficient balances;
-        // availability wins on infra errors. If the billing read is
+        // Free Mode: FAIL CLOSED. We already believe the caller is below the
+        // threshold, so a balance-read failure must not let inference through —
+        // deny instead of relying on post-hoc allow-partial debiting.
+        if (isFreeModeEnabled() && options.freeMode) {
+          const message =
+            "Platform inference is unavailable in free mode. Add a BYOK " +
+            "provider key in Settings, or add credits to your wallet.";
+          return {
+            route: null,
+            resolvedRoute: null,
+            aiService: createUnavailableAIService(message),
+            userApiKey: null,
+            unavailableReason: message,
+          };
+        }
+        // FAIL OPEN (normal): the gate protects against known-insufficient
+        // balances; availability wins on infra errors. If the billing read is
         // unavailable we proceed un-gated — post-hoc debiting in
         // createRoutedRuntimeAIService still applies.
         console.warn(

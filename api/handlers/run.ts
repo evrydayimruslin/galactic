@@ -433,7 +433,7 @@ export async function handleRun(
     // ── Deno Sandbox Path ──
     const permissions = resolveStrictManifestPermissions(app).permissions;
     const runtimeAI = permissions.includes("ai:call")
-      ? await createRuntimeAIContext(user)
+      ? await createRuntimeAIContext(user, { freeMode: caller.freeMode })
       : {
         route: null,
         resolvedRoute: null,
@@ -466,6 +466,8 @@ export async function handleRun(
       timeoutMs,
       callerAuthState: caller.authState,
       routineContext,
+      freeMode: caller.freeMode,
+      byokPresent: caller.byokPresent,
     });
     if (cloudPreflight.insufficientBalance) {
       return json(

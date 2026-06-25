@@ -918,3 +918,91 @@ Deno.test("buildExecutionTelemetry estimates size and cost from the serialized r
   assert(telemetry.responseSizeBytes > 0);
   assert(telemetry.executionCostEstimateLight > 0);
 });
+
+Deno.test("free mode: preflight blocks an inference function without BYOK", async () => {
+  await withMockedEnv(async () => {
+    invalidateBillingConfigCache();
+    (globalThis as typeof globalThis & { __env?: Record<string, unknown> })
+      .__env!.FREE_MODE = "1";
+    const result = await preflightRuntimeCloudHold({
+      app: {
+        ...createTestApp({ default_price_light: 0 }),
+        manifest: JSON.stringify({
+          permissions: ["ai:call"],
+          functions: { chat: { uses_inference: true } },
+        }),
+      } as unknown as Parameters<typeof preflightRuntimeCloudHold>[0]["app"],
+      userId: "user_free",
+      functionName: "chat",
+      inputArgs: {},
+      method: "run",
+      timeoutMs: 30_000,
+      callerAuthState: "authenticated",
+      freeMode: true,
+      byokPresent: false,
+    });
+    assertEquals(result.insufficientBalance, true);
+    assertEquals(result.insufficientBalanceCode, "free_mode_ai_requires_byok");
+  });
+});
+
+Deno.test("free mode: an inference function WITH BYOK is not gated", async () => {
+  await withMockedEnv(async () => {
+    invalidateBillingConfigCache();
+    (globalThis as typeof globalThis & { __env?: Record<string, unknown> })
+      .__env!.FREE_MODE = "1";
+    const result = await preflightRuntimeCloudHold({
+      app: {
+        ...createTestApp({ default_price_light: 0 }),
+        manifest: JSON.stringify({
+          permissions: ["ai:call"],
+          functions: { chat: { uses_inference: true } },
+        }),
+      } as unknown as Parameters<typeof preflightRuntimeCloudHold>[0]["app"],
+      userId: "user_free",
+      functionName: "chat",
+      inputArgs: {},
+      method: "run",
+      timeoutMs: 30_000,
+      callerAuthState: "authenticated",
+      freeMode: true,
+      byokPresent: true,
+    }, {
+      // Free, owner-sponsored call -> the hold succeeds; the AI gate must not fire.
+      fetchFn: holdFetch(5000, () => {}),
+    });
+    assertEquals(result.insufficientBalance, false);
+  });
+});
+
+Deno.test("free mode: a hold free_mode_blocked maps to free_mode_paid_blocked", async () => {
+  await withMockedEnv(async () => {
+    invalidateBillingConfigCache();
+    (globalThis as typeof globalThis & { __env?: Record<string, unknown> })
+      .__env!.FREE_MODE = "1";
+    const result = await preflightRuntimeCloudHold({
+      app: createTestApp({ default_price_light: 50 }),
+      userId: "user_free",
+      functionName: "run",
+      inputArgs: {},
+      method: "run",
+      timeoutMs: 30_000,
+      callerAuthState: "authenticated",
+      freeMode: true,
+      byokPresent: false,
+    }, {
+      fetchFn: async (input) => {
+        const url = String(input);
+        if (url.includes("/rpc/create_app_call_runtime_cloud_hold")) {
+          return new Response("free_mode_blocked: paid call requires credits", {
+            status: 400,
+            headers: { "Content-Type": "text/plain" },
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+    });
+    assertEquals(result.insufficientBalance, true);
+    assertEquals(result.insufficientBalanceCode, "free_mode_paid_blocked");
+  });
+});

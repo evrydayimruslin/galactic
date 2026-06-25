@@ -103,6 +103,10 @@ export function generateManifestFromParseResult(
   options: { entryFileName?: string } = {},
 ): AppManifest {
   const functions: Record<string, ManifestFunction> = {};
+  // For apps that can run inference at all, record uses_inference explicitly
+  // (true AND false) so the Free Mode AI gate can tell "analyzed, no AI" from
+  // "old manifest, unknown". Apps without ai:call never write the flag.
+  const appHasInference = parseResult.permissions.includes('ai:call');
 
   for (const fn of parseResult.functions) {
     const parameters: Record<string, ManifestParameter> = {};
@@ -135,7 +139,7 @@ export function generateManifestFromParseResult(
         } as ManifestReturn)
         : undefined,
       examples: fn.examples.length > 0 ? fn.examples : undefined,
-      ...(fn.usesInference ? { uses_inference: true } : {}),
+      ...(appHasInference ? { uses_inference: Boolean(fn.usesInference) } : {}),
     };
   }
 
@@ -218,12 +222,16 @@ export function mergeManifestWithParseResult(
     }
 
     // uses_inference is upload-derived (Free Mode signal); overlay it so the
-    // derived value wins even on developer-authored manifests. True is sticky —
-    // a function can't shed the flag by omission or by declaring it false.
-    for (const fn of parseResult.functions) {
-      const target = mergedManifest.functions?.[fn.name];
-      if (target && (fn.usesInference || target.uses_inference)) {
-        target.uses_inference = true;
+    // derived value wins even on developer-authored manifests. For ai:call apps
+    // it's written explicitly (true AND false) for per-function precision; true
+    // is sticky — a function can't shed the flag by omission or by declaring false.
+    if (mergedManifest.permissions?.includes('ai:call')) {
+      for (const fn of parseResult.functions) {
+        const target = mergedManifest.functions?.[fn.name];
+        if (target) {
+          target.uses_inference = Boolean(fn.usesInference) ||
+            target.uses_inference === true;
+        }
       }
     }
 

@@ -582,7 +582,9 @@ export async function handleHttpEndpoint(
       ? await resolveHttpBillingRuntimeUser(app.owner_id, caller, httpRuntime)
       : (httpRuntime.payerUserId === user?.id ? user : null);
     const runtimeAI = httpPermissions.includes("ai:call")
-      ? await createRuntimeAIContext(billingRuntimeUser)
+      ? await createRuntimeAIContext(billingRuntimeUser, {
+        freeMode: caller.freeMode,
+      })
       : {
         route: null,
         resolvedRoute: null,
@@ -610,6 +612,8 @@ export async function handleHttpEndpoint(
       timeoutMs,
       callerAuthState: caller.authState,
       routineContext,
+      freeMode: caller.freeMode,
+      byokPresent: caller.byokPresent,
     });
     if (cloudPreflight.insufficientBalance) {
       return finalize(

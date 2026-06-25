@@ -146,7 +146,7 @@ Deno.test("free mode: deriveCallerEconomicState — reports BYOK presence", () =
 
 // ── Manifest flag ─────────────────────────────────────────────────────
 
-Deno.test("free mode: manifest records uses_inference only on inference functions", async () => {
+Deno.test("free mode: AI apps record uses_inference explicitly per function", async () => {
   const result = await parseTypeScript(`
     export async function summarize(text: string) {
       return (await galactic.ai({ messages: [{ role: "user", content: text }] })).content;
@@ -158,6 +158,20 @@ Deno.test("free mode: manifest records uses_inference only on inference function
     result,
     "1.0.0",
   );
+  // The app declares ai:call, so every function gets an explicit flag — this is
+  // what lets the Phase 1 gate tell "analyzed, no AI" from "old manifest".
   assertEquals(manifest.functions?.summarize?.uses_inference, true);
-  assertEquals(manifest.functions?.echo?.uses_inference, undefined);
+  assertEquals(manifest.functions?.echo?.uses_inference, false);
+});
+
+Deno.test("free mode: non-AI apps omit the uses_inference flag", async () => {
+  const result = await parseTypeScript(`
+    export async function add(a: number, b: number) { return a + b; }
+  `);
+  const manifest = generateManifestFromParseResult(
+    { name: "App", slug: "app" },
+    result,
+    "1.0.0",
+  );
+  assertEquals(manifest.functions?.add?.uses_inference, undefined);
 });
