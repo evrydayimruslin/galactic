@@ -38,6 +38,7 @@ import {
   isFreeModeEnabled,
   isFunctionBlockedInFreeMode,
 } from "../services/free-mode.ts";
+import { peekCallerUsage } from "../services/cloud-usage.ts";
 import { executeGpuFunction } from "../services/gpu/executor.ts";
 import { acquireGpuSlot } from "../services/gpu/concurrency.ts";
 import {
@@ -1520,12 +1521,18 @@ async function handleToolsList(
   // free-mode caller would be blocked from calling (paid, or AI without BYOK),
   // so the agent never lists them as callable. Self-calls (owner) pass through.
   if (isFreeModeEnabled() && callerContext?.freeMode) {
+    // Peek the caller's free-allowance counters so priced functions they can
+    // still run for free stay visible (Phase 3). One read per tools/list; a
+    // failure falls back to conservative "priced == hidden" (usage = null).
+    const usage = await peekCallerUsage(app.id, callerContext.userId)
+      .catch(() => null);
     const visible = tools.filter((tool) =>
       tool.name.startsWith("ultralight.") ||
       !isFunctionBlockedInFreeMode(
         app,
         toRawMcpFunctionName(app.slug, tool.name),
         { userId: callerContext.userId, byokPresent: callerContext.byokPresent },
+        usage,
       )
     );
     tools.length = 0;

@@ -12,6 +12,7 @@ import {
   debitCloudOperation,
   debitCloudUsage,
   debitD1Usage,
+  peekCallerUsage,
   recordCloudUsageEvent,
   releaseCloudUsageHold,
   settleCloudUsageHold,
@@ -665,6 +666,78 @@ Deno.test("cloud usage RPC failures surface status and RPC name", async () => {
 
     assertEquals(error.rpc, "debit_cloud_usage");
     assertEquals(error.status, 400);
+  } finally {
+    globalThis.__env = previousEnv;
+  }
+});
+
+Deno.test("peekCallerUsage maps the peek RPC rows to a counter->count map", async () => {
+  const previousEnv = globalThis.__env;
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  globalThis.__env = {
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role",
+  } as unknown as typeof globalThis.__env;
+
+  const fetchFn = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.toString()
+      : input.url;
+    const body = init?.body && typeof init.body === "string"
+      ? JSON.parse(init.body)
+      : {};
+    calls.push({ url, body });
+    return Promise.resolve(
+      new Response(
+        JSON.stringify([
+          { counter_key: "__app__", call_count: 4 },
+          { counter_key: "metered", call_count: 1 },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  }) as typeof fetch;
+
+  try {
+    const usage = await peekCallerUsage(
+      "00000000-0000-0000-0000-000000000201",
+      "00000000-0000-0000-0000-000000000102",
+      { fetchFn },
+    );
+    assertEquals(
+      calls[0].url,
+      "https://supabase.example/rest/v1/rpc/peek_app_caller_usage",
+    );
+    assertEquals(calls[0].body.p_app_id, "00000000-0000-0000-0000-000000000201");
+    assertEquals(calls[0].body.p_user_id, "00000000-0000-0000-0000-000000000102");
+    assertEquals(usage.get("__app__"), 4);
+    assertEquals(usage.get("metered"), 1);
+    assertEquals(usage.get("missing"), undefined);
+  } finally {
+    globalThis.__env = previousEnv;
+  }
+});
+
+Deno.test("peekCallerUsage returns an empty map when the caller has no counters", async () => {
+  const previousEnv = globalThis.__env;
+  globalThis.__env = {
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role",
+  } as unknown as typeof globalThis.__env;
+
+  const fetchFn = (() =>
+    Promise.resolve(
+      new Response("[]", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )) as typeof fetch;
+
+  try {
+    const usage = await peekCallerUsage("app", "user", { fetchFn });
+    assertEquals(usage.size, 0);
   } finally {
     globalThis.__env = previousEnv;
   }

@@ -4490,6 +4490,38 @@ button {
   background: var(--ul-raised);
 }
 
+/* Free Mode notice on the balance tab — amber accent to read as a soft alert,
+   not an error (docs/FREE_MODE_DESIGN.md). */
+.free-mode-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--ul-amber);
+  border-radius: 11px;
+  background: var(--ul-raised);
+}
+
+.free-mode-banner-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.free-mode-banner strong {
+  font-size: 13px;
+  color: var(--ul-amber-deep);
+}
+
+.free-mode-banner p {
+  margin: 2px 0 0;
+  color: var(--ul-secondary);
+  font-size: 11.5px;
+}
+
+.free-mode-banner .launch-button {
+  flex: none;
+}
+
 .connect-agent-callout div {
   min-width: 0;
   flex: 1;

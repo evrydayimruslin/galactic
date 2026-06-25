@@ -721,6 +721,13 @@ export interface LaunchWalletSummary {
   depositBalance?: LaunchMoneyAmount;
   earnedBalance?: LaunchMoneyAmount;
   escrowBalance?: LaunchMoneyAmount;
+  /**
+   * Free Mode is active for this account: the platform enforces no-spend mode
+   * because the spendable balance is under the threshold (docs/FREE_MODE_DESIGN.md).
+   * Server-driven — only true when the platform actually enforces it (the
+   * FREE_MODE flag is on), so the UI never claims a mode that isn't in effect.
+   */
+  freeMode?: boolean;
   canTopUp: boolean;
   topUpUrl?: string | null;
   transactionsUrl?: string | null;

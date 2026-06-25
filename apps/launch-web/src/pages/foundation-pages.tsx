@@ -4545,6 +4545,14 @@ export function AccountFoundationPage(
               </div>
             </Card>
 
+            {wallet?.freeMode
+              ? (
+                <FreeModeBanner
+                  onAddFunds={() => setShowTopUp(true)}
+                />
+              )
+              : null}
+
             <WalletBalancePanel
               rows={mergeWalletRows(transactions, receipts)}
             />
@@ -4630,6 +4638,31 @@ function WalletAmount(
     <div className="wallet-amount">
       <p className="section-label">{label}</p>
       <strong>{figure}</strong>
+    </div>
+  );
+}
+
+// Shown on the balance tab when the server reports Free Mode is active (balance
+// under $0.25 and the platform is enforcing no-spend mode). Mirrors the
+// agent-facing notice (free-mode.ts) so the wallet and the agent tell the same
+// story. The threshold is stated in dollars — the internal Light unit never
+// surfaces in the UI.
+function FreeModeBanner(
+  { onAddFunds }: { onAddFunds: () => void },
+): ReactElement {
+  return (
+    <div className="free-mode-banner" role="status">
+      <div className="free-mode-banner-body">
+        <strong>Free mode is on</strong>
+        <p>
+          Your balance is under $0.25, so paid and AI agent calls are paused —
+          free functions still work. Add funds to restore full access, or set a
+          BYOK provider key to keep using AI features.
+        </p>
+      </div>
+      <Button onClick={onAddFunds} size="sm" variant="primary">
+        Add funds
+      </Button>
     </div>
   );
 }

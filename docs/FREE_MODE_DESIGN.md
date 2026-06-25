@@ -140,20 +140,22 @@ When `freeMode`, inject a short notice into discovery results / the platform ins
 - [x] Tests: 6 added to `free-mode-enforcement.test.ts` (predicate × all branches incl. owner-exempt, codemode drop, notice content). Full suite **1022/0**; typecheck clean.
 - **Note:** skills.md is stored-at-upload, so filtering is serve-time (banner prepend); the prose function docs aren't surgically stripped (fragile) — the banner + the hard `tools/list` filter + the Phase 1 execution gate cover "can't call." Per-function free-allowance surfacing waits on Phase 3's peek RPC (priced+allowance functions are hidden in discovery but still execute).
 
-### Phase 3 — Allowance honoring (discovery) + edges
-- [ ] `peek_caller_usage` read-only RPC → discovery **shows** functions with free allowance remaining (aligns discovery with Phase-1 execution).
-- [ ] `runtime_policy` (module access-policy) functions: classify via sandboxed `evaluateAccessPolicy`, or exclude from Free Mode.
-- [ ] launch-web wallet "Free Mode" state + top-up CTA.
-- **Acceptance:** allowance-backed free functions are both surfaced and callable; module-priced functions handled deterministically.
+### Phase 3 — Allowance honoring (discovery) + edges — ✅ SHIPPED (2026-06-25), inert behind `FREE_MODE`
+- [x] **Peek RPC** `peek_app_caller_usage(p_app_id, p_user_id)` (migration `20260626000000`) — read-only, `STABLE`, `SECURITY DEFINER`, service-role only; returns `(counter_key, call_count)` rows. `peekCallerUsage()` in `cloud-usage.ts` maps them to `counter_key -> count`.
+- [x] **Allowance-aware discovery** — `isFunctionBlockedInFreeMode()` takes an optional `usage` map; a priced function with free-call headroom left (`count < free_calls`, counter key mirrors `getStaticSubjectFreeQuotaCounterKey` — `__app__` for app-scope, else the fn name) **stays visible**. Both discovery sites prefetch once per call: `mcp.ts` tools/list and `platform-mcp.ts` inspect. Peek failure → `usage = null` → conservative "priced == hidden" (the Phase-2 behaviour).
+- [x] **Module access policies** (`access_policy.mode === "module"`, dynamic call-time pricing) — **excluded from Free Mode discovery** (the whole app's functions are hidden) rather than running the sandboxed policy per function. The Phase-1 hold gate still evaluates the module precisely if an agent calls one anyway; this only affects what's *suggested*, and it fails safe toward blocking. Owners always see their own.
+- [x] **launch-web wallet "Free Mode" state + CTA** — `LaunchWalletSummary.freeMode` (server-driven: `isFreeModeEnabled() && balance < FREE_MODE_BALANCE_LIGHT`, so the UI never claims a mode that isn't enforced). The balance tab renders `FreeModeBanner` (amber accent, dollars-only copy mirroring `freeModeNotice`) with an "Add funds" button that opens the top-up panel.
+- **Acceptance:** allowance-backed free functions are both surfaced and callable; module-priced functions handled deterministically (hidden in discovery, precisely gated at execution).
+- **Tests:** 6 added to `free-mode-enforcement.test.ts` (allowance remaining/exhausted, no-usage conservatism, app-scope counter, module-policy hide + owner-exempt) + 2 to `cloud-usage.test.ts` (peek RPC mapping + empty). Suite 1030/0.
 
 ---
 
 ## 6. Gaps & risks
-1. **No read-only allowance peek** — Phase-1 execution honors allowances (in-hold), but discovery can't surface them until Phase 3. Temporary mismatch: execution allows what discovery hid (safe direction).
+1. ~~**No read-only allowance peek**~~ — **resolved in Phase 3** (`peek_app_caller_usage`): discovery now surfaces priced functions with free-call headroom, aligning it with in-hold execution. Peek-failure still falls back to the safe direction (hide).
 2. **Per-function detection is heuristic** — transitive reachability over the bundle; conservative default `true`. Over-blocks rather than under-blocks (acceptable per D2). Re-derived only on (re)upload.
 3. **`codemode` bypasses billing** in production (pre-existing) — mitigated by D4 (drop in Free Mode).
 4. **Detection regex** matches `ultralight.ai(` only — fixed in Phase 0; until then `galactic.*`-authored apps may ship without `ai:call`/`uses_inference` (they then fail at runtime rather than upload).
-5. **Module access-policy functions** can't be statically classified — Phase 3.
+5. **Module access-policy functions** can't be statically classified — **handled in Phase 3** by excluding them from Free Mode discovery (hidden), while execution evaluates the module precisely. Trade-off: a module-priced app whose functions are actually free is still hidden in Free Mode (safety over availability; module-policy apps are rare).
 6. **Threshold change** ($0.50 → $0.25 inference floor) is a user-visible behavior change (intended, D3) — call it out in release notes.
 
 ## 7. Fail-open / fail-closed policy (D5)

@@ -15,6 +15,7 @@ import {
   isFreeModeEnabled,
   isFunctionBlockedInFreeMode,
 } from "../services/free-mode.ts";
+import { peekCallerUsage } from "../services/cloud-usage.ts";
 import { walletUrl } from "../lib/urls.ts";
 import { createAppsService } from "../services/apps.ts";
 import { createR2Service, type R2Service } from "../services/storage.ts";
@@ -12433,13 +12434,17 @@ async function executeDiscoverInspect(
     returns: fschema?.returns || null,
   }));
   // Free Mode: hide functions the caller would be blocked from calling, so
-  // inspect doesn't suggest paid/AI functions the agent can't use.
+  // inspect doesn't suggest paid/AI functions the agent can't use. Peek the
+  // caller's free-allowance counters (Phase 3) so priced functions they can
+  // still run for free stay listed; a peek failure falls back to conservative
+  // "priced == hidden" (usage = null).
   if (isFreeModeEnabled() && econ.freeMode) {
+    const usage = await peekCallerUsage(app.id, userId).catch(() => null);
     functions = functions.filter((fn) =>
       !isFunctionBlockedInFreeMode(app, fn.name, {
         userId,
         byokPresent: econ.byokPresent,
-      })
+      }, usage)
     );
   }
   const widgets = manifest

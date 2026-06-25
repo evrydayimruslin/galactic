@@ -100,7 +100,11 @@ import type {
 import { createUserService } from "../services/user.ts";
 import { validateAPIKey } from "../services/ai.ts";
 import { checkChatBalance } from "../services/chat-billing.ts";
-import { CHAT_MIN_BALANCE_LIGHT } from "../../shared/contracts/ai.ts";
+import {
+  CHAT_MIN_BALANCE_LIGHT,
+  FREE_MODE_BALANCE_LIGHT,
+} from "../../shared/contracts/ai.ts";
+import { isFreeModeEnabled } from "../services/free-mode.ts";
 import { isValidModelId } from "../services/model-validation.ts";
 import {
   type BillingAddressInput,
@@ -3958,6 +3962,9 @@ async function handleLaunchWallet(request: Request): Promise<Response> {
     depositBalance: money(numeric(row.deposit_balance_light)),
     earnedBalance: money(numeric(row.earned_balance_light)),
     escrowBalance: money(numeric(row.escrow_light)),
+    // Only surface Free Mode when the platform actually enforces it, so the UI
+    // never claims a no-spend mode that isn't in effect (docs/FREE_MODE_DESIGN.md).
+    freeMode: isFreeModeEnabled() && balance < FREE_MODE_BALANCE_LIGHT,
     canTopUp: true,
     publishRequirement: {
       enabled: billingConfig.publishDepositEnabled,

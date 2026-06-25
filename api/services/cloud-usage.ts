@@ -571,6 +571,38 @@ export async function createRuntimeCloudHold(
   };
 }
 
+/**
+ * Read-only peek of a caller's free-allowance counters for one app (Free Mode
+ * Phase 3, docs/FREE_MODE_DESIGN.md). Returns a map of counter_key -> call_count
+ * so discovery can tell whether a priced function still has free-call headroom
+ * for this caller. No mutation, no hold — purely informational.
+ *
+ * Fails by returning an empty map only via the caller's `.catch()`; on an RPC
+ * error this throws `CloudUsageRpcError` like every other RPC here, leaving the
+ * fail-open decision to the discovery callers (which treat "no usage data" as
+ * "no allowance granted" — the conservative Phase-2 behaviour).
+ */
+export async function peekCallerUsage(
+  appId: string,
+  userId: string,
+  deps?: CloudUsageDeps,
+): Promise<Map<string, number>> {
+  const payload = await callCloudUsageRpc("peek_app_caller_usage", {
+    p_app_id: appId,
+    p_user_id: userId,
+  }, deps);
+  const map = new Map<string, number>();
+  const rows = Array.isArray(payload) ? payload : [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const key = (row as RpcRow).counter_key;
+    if (typeof key !== "string") continue;
+    const count = Number((row as RpcRow).call_count);
+    map.set(key, Number.isFinite(count) ? count : 0);
+  }
+  return map;
+}
+
 export async function settleRuntimeCloudHold(
   params: RuntimeCloudHoldSettlementParams,
   deps?: CloudUsageDeps,

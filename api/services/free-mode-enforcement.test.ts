@@ -160,6 +160,81 @@ Deno.test("free mode: the owner (self-call) is never filtered", () => {
   }));
 });
 
+// ── Phase 3: free-allowance honoring (peek RPC) ───────────────────────
+
+const ALLOWANCE_APP = {
+  owner_id: "owner-1",
+  pricing_config: {
+    default_price_light: 0,
+    free_calls_scope: "function",
+    functions: { metered: { price_light: 10, free_calls: 3 } },
+  },
+  manifest: JSON.stringify({ permissions: [], functions: { metered: {} } }),
+} as unknown as Parameters<typeof isFunctionBlockedInFreeMode>[0];
+
+Deno.test("free mode: a priced function with free-allowance left stays visible", () => {
+  // 2 of 3 free calls used -> the next call is free -> not blocked.
+  const usage = new Map([["metered", 2]]);
+  assert(!isFunctionBlockedInFreeMode(ALLOWANCE_APP, "metered", callerNoByok, usage));
+});
+
+Deno.test("free mode: a priced function with its allowance exhausted is hidden", () => {
+  // 3 of 3 used -> the next call would charge -> blocked.
+  const usage = new Map([["metered", 3]]);
+  assert(isFunctionBlockedInFreeMode(ALLOWANCE_APP, "metered", callerNoByok, usage));
+});
+
+Deno.test("free mode: without usage data a priced+allowance function stays hidden", () => {
+  // No peek result -> we can't prove headroom -> conservative (Phase-2) hide.
+  assert(isFunctionBlockedInFreeMode(ALLOWANCE_APP, "metered", callerNoByok));
+  assert(isFunctionBlockedInFreeMode(ALLOWANCE_APP, "metered", callerNoByok, null));
+});
+
+Deno.test("free mode: app-scope allowance reads the shared __app__ counter", () => {
+  const appScoped = {
+    owner_id: "owner-1",
+    pricing_config: {
+      default_price_light: 10,
+      default_free_calls: 5,
+      free_calls_scope: "app",
+    },
+    manifest: JSON.stringify({ permissions: [], functions: { a: {}, b: {} } }),
+  } as unknown as Parameters<typeof isFunctionBlockedInFreeMode>[0];
+  // 4 shared calls used across the app -> still one free call left for any fn.
+  const withHeadroom = new Map([["__app__", 4]]);
+  assert(!isFunctionBlockedInFreeMode(appScoped, "a", callerNoByok, withHeadroom));
+  assert(!isFunctionBlockedInFreeMode(appScoped, "b", callerNoByok, withHeadroom));
+  // 5 used -> shared allowance spent -> every function is now paid.
+  const spent = new Map([["__app__", 5]]);
+  assert(isFunctionBlockedInFreeMode(appScoped, "a", callerNoByok, spent));
+  assert(isFunctionBlockedInFreeMode(appScoped, "b", callerNoByok, spent));
+});
+
+// ── Phase 3: module access policies (dynamic pricing) ─────────────────
+
+const MODULE_POLICY_APP = {
+  owner_id: "owner-1",
+  pricing_config: { default_price_light: 0, functions: {} },
+  manifest: JSON.stringify({
+    access_policy: { mode: "module", module: "policies/access.ts" },
+    functions: { anything: {}, alsoFree: {} },
+  }),
+} as unknown as Parameters<typeof isFunctionBlockedInFreeMode>[0];
+
+Deno.test("free mode: module-priced apps are hidden even when statically free", () => {
+  // Price is decided at call time by dev code; we can't classify it cheaply at
+  // discovery, so every function of the app is hidden (fail-safe).
+  assert(isFunctionBlockedInFreeMode(MODULE_POLICY_APP, "anything", callerNoByok));
+  assert(isFunctionBlockedInFreeMode(MODULE_POLICY_APP, "alsoFree", callerNoByok));
+});
+
+Deno.test("free mode: the owner still sees their own module-priced functions", () => {
+  assert(!isFunctionBlockedInFreeMode(MODULE_POLICY_APP, "anything", {
+    userId: "owner-1",
+    byokPresent: false,
+  }));
+});
+
 // ── Platform tools: codemode drop + the agent notice ──────────────────
 
 Deno.test("free mode: getPlatformTools drops gx.codemode only in free mode", () => {
