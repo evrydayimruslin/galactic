@@ -83,13 +83,18 @@ Deno.test("OpenRouter keys: decrypts encrypted platform-managed entries", async 
   });
 });
 
-Deno.test("OpenRouter keys: rejects legacy plaintext entries at runtime", async () => {
+Deno.test("OpenRouter keys: auto-migrates legacy plaintext entries to encrypted on read", async () => {
   await runSerial(async () => {
     const methods: string[] = [];
+    let patchBody: Record<string, unknown> | null = null;
 
     await withMockedEnvAndFetch(async (_input, init) => {
       const method = init?.method || "GET";
       methods.push(method);
+      if (method === "PATCH") {
+        patchBody = JSON.parse(String(init?.body));
+        return new Response(null, { status: 204 });
+      }
 
       return jsonResponse([{
         byok_keys: {
@@ -104,14 +109,26 @@ Deno.test("OpenRouter keys: rejects legacy plaintext entries at runtime", async 
         },
       }]);
     }, async () => {
-      await assertRejects(
-        () => getStoredOpenRouterKey("user-1"),
-        Error,
-        "Legacy plaintext OpenRouter key entry is unsupported at runtime",
-      );
-    });
+      // Returns the usable key AND migrates it to encrypted at rest. Assert
+      // inside the mocked-env block so decryptApiKey can read BYOK_ENCRYPTION_KEY.
+      const key = await getStoredOpenRouterKey("user-1");
+      assertEquals(key, "or-legacy-key");
 
-    assertEquals(methods, ["GET"]);
+      assertEquals(methods, ["GET", "PATCH"]);
+      assert(patchBody !== null);
+      const byokKeys = (patchBody as {
+        byok_keys: Record<string, Record<string, unknown>>;
+      }).byok_keys;
+      const migrated = byokKeys._platform_openrouter;
+      assertEquals(typeof migrated.key, "undefined");
+      assertEquals(migrated.managed_by_platform, true);
+      assertEquals(
+        await decryptApiKey(migrated.encrypted_key as string),
+        "or-legacy-key",
+      );
+      // The migration merge preserves other providers' keys untouched.
+      assertEquals(byokKeys.openai.encrypted_key, "keep-existing-provider");
+    });
   });
 });
 

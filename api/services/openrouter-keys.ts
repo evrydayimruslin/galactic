@@ -174,7 +174,28 @@ export async function getStoredOpenRouterKey(userId: string): Promise<string | n
   }
 
   if (entry && typeof entry === 'object' && typeof (entry as { key?: unknown }).key === 'string') {
-    throw new Error('Legacy plaintext OpenRouter key entry is unsupported at runtime; run the secret crypto audit/backfill.');
+    // Legacy plaintext entry. Lazily migrate it to canonical encryption — the
+    // same transformation as the crypto backfill (encrypt in place, drop the
+    // plaintext) — then use it. Best-effort: a write failure never blocks
+    // inference; we return the usable key and retry the migration next read.
+    const { key: legacyPlaintext, ...rest } = entry as { key: string; [k: string]: unknown };
+    try {
+      const upgraded: StoredByokKeys = {
+        ...byokKeys,
+        [PLATFORM_OR_KEY]: {
+          ...rest,
+          encrypted_key: await encryptApiKey(legacyPlaintext),
+          managed_by_platform: true,
+          added_at: typeof rest.added_at === 'string' ? rest.added_at : new Date().toISOString(),
+          provisioned_at: typeof rest.provisioned_at === 'string' ? rest.provisioned_at : new Date().toISOString(),
+        },
+      };
+      await patchUserByokKeys(userId, upgraded);
+      console.log(`[OR-KEYS] Auto-migrated legacy plaintext platform key to encrypted for user ${userId}`);
+    } catch (err) {
+      console.error(`[OR-KEYS] Failed to auto-migrate legacy plaintext key for ${userId} (using plaintext this call):`, err);
+    }
+    return legacyPlaintext;
   }
 
   return null;
