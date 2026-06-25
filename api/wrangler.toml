@@ -85,6 +85,12 @@ INTERFACE_SANDBOX_BASE_URL = "https://interfaces.ultralightagent.com"
 ENVIRONMENT = "production"
 CORS_ALLOWED_ORIGINS = "https://api.ultralightagent.com,https://ultralightagent.com"
 GPU_SUPPORT_ENABLED = "false"
+# Free Mode (docs/FREE_MODE_DESIGN.md): when a wallet balance is under $0.25,
+# only free/self/owner-sponsored functions run, AI functions need a BYOK key,
+# and paid functions are hidden + blocked before any debit. Enabled for launch.
+# Requires migration 20260625000000_free_mode_hold_gate (the p_free_mode hold
+# arg) to be applied first — it ships ahead of the API via the supabase-db CI.
+FREE_MODE = "1"
 SUPABASE_URL = "https://uavjzycsltdnwblwutmb.supabase.co"
 CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 # Optional rollout knob for Wave 4 alias retirement:
@@ -153,6 +159,9 @@ INTERFACE_SANDBOX_BASE_URL = "https://ultralight-interfaces-staging.rgn4jz429m.w
 ENVIRONMENT = "staging"
 CORS_ALLOWED_ORIGINS = "https://ultralight-api-staging.rgn4jz429m.workers.dev,https://staging.ultralight-launch-web.pages.dev,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5178,http://127.0.0.1:5178"
 GPU_SUPPORT_ENABLED = "false"
+# Mirror production: Free Mode on in staging so the staging smoke exercises the
+# paid-call/AI-without-BYOK gates before production promotion.
+FREE_MODE = "1"
 SUPABASE_URL = "https://uavjzycsltdnwblwutmb.supabase.co"
 CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 # Optional rollout knob for Wave 4 alias retirement:

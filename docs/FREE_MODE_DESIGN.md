@@ -130,6 +130,7 @@ When `freeMode`, inject a short notice into discovery results / the platform ins
 - [x] **New leaf module** `api/services/free-mode.ts` (`isFreeModeEnabled` + `functionUsesInference`); manifest writer now records `uses_inference` explicitly (true AND false) for `ai:call` apps so the gate has per-function precision.
 - [x] Tests: `free-mode-enforcement.test.ts` (6) + 3 preflight tests in `execution-settlement.test.ts` (paid→`free_mode_paid_blocked` mapping, AI blocked w/o BYOK, AI allowed w/ BYOK). Full suite 1016/0; typecheck clean.
 - **To activate:** set `FREE_MODE=1` in the API worker env (after the migration applies).
+- **✅ ENABLED FOR LAUNCH (2026-06-25):** `FREE_MODE = "1"` set in `api/wrangler.toml` `[vars]` (production) and `[env.staging.vars]` (staging, so the staging smoke exercises the gates before promotion). Migration `20260625000000` ships ahead of the API via the supabase-db CI in the promotion chain, so the `p_free_mode` arg is present before the flag flips. **Release-note required (gap §6.6):** the platform-inference floor drops $0.50 → $0.25.
 
 ### Phase 2 — Don't suggest + agent awareness — ✅ SHIPPED (2026-06-24), inert behind `FREE_MODE`
 - [x] **Per-app `tools/list` filter** (`mcp.ts` `handleToolsList`): `callerContext` threaded in; hides functions where `isFunctionBlockedInFreeMode(app, fn, caller)` (paid, or `uses_inference && !byok`); self-calls (owner) unaffected. The `app` already carries `pricing_config`/`manifest`/`owner_id` (no extra load).
