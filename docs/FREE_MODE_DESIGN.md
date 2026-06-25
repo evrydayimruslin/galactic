@@ -131,12 +131,14 @@ When `freeMode`, inject a short notice into discovery results / the platform ins
 - [x] Tests: `free-mode-enforcement.test.ts` (6) + 3 preflight tests in `execution-settlement.test.ts` (paid→`free_mode_paid_blocked` mapping, AI blocked w/o BYOK, AI allowed w/ BYOK). Full suite 1016/0; typecheck clean.
 - **To activate:** set `FREE_MODE=1` in the API worker env (after the migration applies).
 
-### Phase 2 — Don't suggest + agent awareness
-- [ ] Filter per-app `tools/list` (`mcp.ts:1465`) for free-mode callers (drop paid + `uses_inference && !byok`); load `pricing_config` + `uses_inference` there.
-- [ ] `skills.md` serve-time strip/annotate (`docgen.ts:136` path) + Free-Mode banner.
-- [ ] Emit `free_mode` + explanation + top-up URL to the agent.
-- [ ] Drop `gx.codemode` from the free-mode tool set.
-- **Acceptance:** an agent in Free Mode never sees a paid/blocked function as callable and is told why + how to top up.
+### Phase 2 — Don't suggest + agent awareness — ✅ SHIPPED (2026-06-24), inert behind `FREE_MODE`
+- [x] **Per-app `tools/list` filter** (`mcp.ts` `handleToolsList`): `callerContext` threaded in; hides functions where `isFunctionBlockedInFreeMode(app, fn, caller)` (paid, or `uses_inference && !byok`); self-calls (owner) unaffected. The `app` already carries `pricing_config`/`manifest`/`owner_id` (no extra load).
+- [x] **Shared predicate** `isFunctionBlockedInFreeMode()` + the agent notice `freeModeNotice()` in `free-mode.ts`, reused by every surface (one source of truth). `walletUrl()` added to `lib/urls.ts` (derives the site origin from `CANONICAL_BASE`).
+- [x] **Platform-MCP economic state** (the deferred Phase-0 item): the platform MCP uses its own auth path, so the dispatch now does **one** `getUser` read + `deriveCallerEconomicState` — **only when `isFreeModeEnabled()`** (no extra cost otherwise), fails open. Threaded into initialize / tools/list / tools/call.
+- [x] **Drop `gx.codemode`** in free mode (`getPlatformTools({ freeMode })`) **and** refuse its execution (the dispatch case) — closes the in-process billing-bypass loophole, not just hides it.
+- [x] **Agent awareness**: `freeModeNotice` (threshold + top-up URL, dollars only) prepended to the `initialize` instructions, and to the served skills doc on `gx.discover scope:"inspect"`. Inspect also filters its structured `functions` array.
+- [x] Tests: 6 added to `free-mode-enforcement.test.ts` (predicate × all branches incl. owner-exempt, codemode drop, notice content). Full suite **1022/0**; typecheck clean.
+- **Note:** skills.md is stored-at-upload, so filtering is serve-time (banner prepend); the prose function docs aren't surgically stripped (fragile) — the banner + the hard `tools/list` filter + the Phase 1 execution gate cover "can't call." Per-function free-allowance surfacing waits on Phase 3's peek RPC (priced+allowance functions are hidden in discovery but still execute).
 
 ### Phase 3 — Allowance honoring (discovery) + edges
 - [ ] `peek_caller_usage` read-only RPC → discovery **shows** functions with free allowance remaining (aligns discovery with Phase-1 execution).

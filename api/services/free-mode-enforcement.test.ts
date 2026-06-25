@@ -10,8 +10,14 @@
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 
-import { functionUsesInference, isFreeModeEnabled } from "./free-mode.ts";
+import {
+  freeModeNotice,
+  functionUsesInference,
+  isFreeModeEnabled,
+  isFunctionBlockedInFreeMode,
+} from "./free-mode.ts";
 import { createRuntimeAIContext } from "./runtime-ai.ts";
+import { getPlatformTools } from "../handlers/platform-mcp.ts";
 
 function withEnv<T>(
   env: Record<string, unknown>,
@@ -106,4 +112,66 @@ Deno.test("free mode: route gate is not engaged when the flag is off", async () 
     );
     assert(proceeded);
   });
+});
+
+// ── Discovery filter predicate (tools/list + inspect) ─────────────────
+
+const DISCOVERY_APP = {
+  owner_id: "owner-1",
+  pricing_config: {
+    default_price_light: 0,
+    functions: { paidFn: 10 },
+  },
+  manifest: JSON.stringify({
+    permissions: ["ai:call"],
+    functions: {
+      aiFn: { uses_inference: true },
+      plainFn: { uses_inference: false },
+    },
+  }),
+} as unknown as Parameters<typeof isFunctionBlockedInFreeMode>[0];
+
+const callerNoByok = { userId: "caller-1", byokPresent: false };
+
+Deno.test("free mode: discovery hides a paid function", () => {
+  assert(isFunctionBlockedInFreeMode(DISCOVERY_APP, "paidFn", callerNoByok));
+});
+
+Deno.test("free mode: discovery keeps a free, non-AI function", () => {
+  assert(!isFunctionBlockedInFreeMode(DISCOVERY_APP, "plainFn", callerNoByok));
+});
+
+Deno.test("free mode: discovery hides an AI function without BYOK, keeps it with BYOK", () => {
+  assert(isFunctionBlockedInFreeMode(DISCOVERY_APP, "aiFn", callerNoByok));
+  assert(!isFunctionBlockedInFreeMode(DISCOVERY_APP, "aiFn", {
+    userId: "caller-1",
+    byokPresent: true,
+  }));
+});
+
+Deno.test("free mode: the owner (self-call) is never filtered", () => {
+  assert(!isFunctionBlockedInFreeMode(DISCOVERY_APP, "paidFn", {
+    userId: "owner-1",
+    byokPresent: false,
+  }));
+  assert(!isFunctionBlockedInFreeMode(DISCOVERY_APP, "aiFn", {
+    userId: "owner-1",
+    byokPresent: false,
+  }));
+});
+
+// ── Platform tools: codemode drop + the agent notice ──────────────────
+
+Deno.test("free mode: getPlatformTools drops gx.codemode only in free mode", () => {
+  const normal = getPlatformTools({ freeMode: false }).map((t) => t.name);
+  const free = getPlatformTools({ freeMode: true }).map((t) => t.name);
+  assert(normal.includes("gx.codemode"));
+  assert(!free.includes("gx.codemode"));
+});
+
+Deno.test("free mode: the agent notice states the threshold and a top-up URL", () => {
+  const notice = freeModeNotice("https://example.test/account");
+  assert(notice.includes("$0.25"));
+  assert(notice.includes("https://example.test/account"));
+  assert(/free mode/i.test(notice));
 });

@@ -8,6 +8,14 @@
 import { error, json } from "./response.ts";
 import { authenticate } from "./auth.ts";
 import { isApiToken, validateToken } from "../services/tokens.ts";
+import { createUserService } from "../services/user.ts";
+import { deriveCallerEconomicState } from "../services/request-caller-context.ts";
+import {
+  freeModeNotice,
+  isFreeModeEnabled,
+  isFunctionBlockedInFreeMode,
+} from "../services/free-mode.ts";
+import { walletUrl } from "../lib/urls.ts";
 import { createAppsService } from "../services/apps.ts";
 import { createR2Service, type R2Service } from "../services/storage.ts";
 import { checkInMemoryLimit, checkRateLimit } from "../services/ratelimit.ts";
@@ -2946,7 +2954,9 @@ function advertiseGxName(tool: MCPTool): MCPTool {
   return { ...tool, name: gxToolName(tool.name) };
 }
 
-export function getPlatformTools(options?: { provisional?: boolean }): MCPTool[] {
+export function getPlatformTools(
+  options?: { provisional?: boolean; freeMode?: boolean },
+): MCPTool[] {
   const provisional = options?.provisional ?? false;
 
   let tools: MCPTool[];
@@ -2965,6 +2975,12 @@ export function getPlatformTools(options?: { provisional?: boolean }): MCPTool[]
   }
 
   if (!isGpuSupportEnabled()) tools = tools.map(stripGpuFromTool);
+  // Free Mode: drop codemode from the advertised set — it runs app functions
+  // in-process, bypassing the per-call billing path, so it's not offered to a
+  // free-mode caller (the dispatch also refuses it; see handleToolsCall).
+  if (options?.freeMode) {
+    tools = tools.filter((tool) => tool.name !== "ul.codemode");
+  }
   // Advertise the canonical gx.* prefix outward. ul.* stays the internal
   // registration name + a permanent input alias (dispatch normalizes gx.→ul.),
   // so this only changes the names agents SEE in tools/list, never breaks callers.
@@ -3100,6 +3116,7 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
   // Authenticate
   let userId: string;
   let user: UserContext;
+  let econ = deriveCallerEconomicState(null);
   try {
     const authUser = await authenticate(request);
     userId = authUser.id;
@@ -3130,6 +3147,15 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
       tier: toTier(authUser.tier),
       provisional: authUser.provisional || false,
     };
+
+    // Free Mode (Phase 2): this MCP has its own auth path and doesn't load the
+    // profile — derive the caller's economic state here, and only when
+    // enforcement is on (avoids an extra read otherwise). Fails open.
+    if (isFreeModeEnabled()) {
+      econ = deriveCallerEconomicState(
+        await createUserService().getUser(userId).catch(() => null),
+      );
+    }
   } catch (authErr) {
     const message = authErr instanceof Error
       ? authErr.message
@@ -3208,7 +3234,7 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
     switch (rpcMethod) {
       case "initialize": {
         const sessionId = crypto.randomUUID();
-        const response = await handleInitialize(id, userId);
+        const response = await handleInitialize(id, userId, econ.freeMode);
         const initHeaders = new Headers(response.headers);
         initHeaders.set("Mcp-Session-Id", sessionId);
         return new Response(response.body, {
@@ -3219,9 +3245,9 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
       case "notifications/initialized":
         return new Response(null, { status: 202 });
       case "tools/list":
-        return handleToolsList(id, user.provisional);
+        return handleToolsList(id, user.provisional, econ.freeMode);
       case "tools/call":
-        return await handleToolsCall(id, params, userId, user, request);
+        return await handleToolsCall(id, params, userId, user, request, econ);
       case "resources/list":
         return handleResourcesList(id, userId);
       case "resources/read":
@@ -3866,6 +3892,7 @@ ${platformDocs}`;
 async function handleInitialize(
   id: JsonRpcRequestId,
   userId: string,
+  freeMode = false,
 ): Promise<Response> {
   // Fetch desk + library context (best-effort, graceful degradation)
   let instructions: string;
@@ -3878,6 +3905,12 @@ async function handleInitialize(
       '## Your Apps\n\nCould not load apps. Use `gx.discover({ scope: "desk" })` to see your recent apps.',
       "",
     );
+  }
+
+  // Free Mode (D-tell): prepend the notice so the agent knows on connect why
+  // paid/AI tools are missing and what to tell the user.
+  if (freeMode) {
+    instructions = `${freeModeNotice(walletUrl())}\n\n${instructions}`;
   }
 
   const result: MCPServerInfo = {
@@ -4078,10 +4111,11 @@ async function handleResourcesRead(
 function handleToolsList(
   id: JsonRpcRequestId,
   provisional = false,
+  freeMode = false,
 ): Response {
   return jsonRpcResponse(
     id,
-    { tools: getPlatformTools({ provisional }) } as MCPToolsListResponse,
+    { tools: getPlatformTools({ provisional, freeMode }) } as MCPToolsListResponse,
   );
 }
 
@@ -4091,6 +4125,10 @@ async function handleToolsCall(
   userId: string,
   user: UserContext,
   request: Request,
+  econ: { freeMode: boolean; byokPresent: boolean } = {
+    freeMode: false,
+    byokPresent: false,
+  },
 ): Promise<Response> {
   const callParams = params as MCPToolCallRequest | undefined;
   if (!callParams?.name) {
@@ -4192,7 +4230,7 @@ async function handleToolsCall(
                 'scope="inspect" requires app_id',
               );
             }
-            result = await executeDiscoverInspect(userId, toolArgs);
+            result = await executeDiscoverInspect(userId, toolArgs, econ);
             break;
           case "library":
             result = await executeDiscoverLibrary(userId, toolArgs);
@@ -4812,7 +4850,7 @@ async function handleToolsCall(
           try {
             const inspectData = await executeDiscoverInspect(userId, {
               app_id: targetAppId,
-            });
+            }, econ);
             markAppContextSent(mcpSessionId, targetAppId);
             result = {
               _first_call_context: inspectData,
@@ -4906,7 +4944,7 @@ async function handleToolsCall(
         break;
       case "ul.discover.inspect":
         logAliasUsage(name);
-        result = await executeDiscoverInspect(userId, toolArgs);
+        result = await executeDiscoverInspect(userId, toolArgs, econ);
         break;
       case "ul.discover.library":
         logAliasUsage(name);
@@ -5906,6 +5944,16 @@ async function handleToolsCall(
       case "ul.execute": { // backward compat alias
         if (name === "ul.execute") {
           logAliasUsage(name);
+        }
+        // Free Mode: codemode runs app functions in-process, bypassing the
+        // per-call billing gate, so it's refused (and dropped from tools/list).
+        if (isFreeModeEnabled() && econ.freeMode) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            `codemode is unavailable in free mode. Add credits at ${
+              walletUrl()
+            } to use it.`,
+          );
         }
         const recipeCode = toolArgs.code as string;
         if (!recipeCode) {
@@ -12312,6 +12360,10 @@ async function executeDiscoverDesk(userId: string): Promise<unknown> {
 async function executeDiscoverInspect(
   userId: string,
   args: Record<string, unknown>,
+  econ: { freeMode: boolean; byokPresent: boolean } = {
+    freeMode: false,
+    byokPresent: false,
+  },
 ): Promise<unknown> {
   const appIdOrSlug = args.app_id as string;
   if (!appIdOrSlug) throw new ToolError(INVALID_PARAMS, "app_id is required");
@@ -12372,7 +12424,7 @@ async function executeDiscoverInspect(
   // ── 1. Function schemas from manifest ──
   const manifest = parseAppManifest(app.manifest);
   const manifestFunctions = manifest?.functions || {};
-  const functions = Object.entries(manifestFunctions).map((
+  let functions = Object.entries(manifestFunctions).map((
     [fname, fschema],
   ) => ({
     name: fname,
@@ -12380,6 +12432,16 @@ async function executeDiscoverInspect(
     parameters: fschema?.parameters || {},
     returns: fschema?.returns || null,
   }));
+  // Free Mode: hide functions the caller would be blocked from calling, so
+  // inspect doesn't suggest paid/AI functions the agent can't use.
+  if (isFreeModeEnabled() && econ.freeMode) {
+    functions = functions.filter((fn) =>
+      !isFunctionBlockedInFreeMode(app, fn.name, {
+        userId,
+        byokPresent: econ.byokPresent,
+      })
+    );
+  }
   const widgets = manifest
     ? buildWidgetIndexForApp({
       id: app.id,
@@ -12601,7 +12663,12 @@ async function executeDiscoverInspect(
   });
 
   // ── 6. Skills.md (full content) ──
-  const skillsMd = app.skills_md || null;
+  let skillsMd = app.skills_md || null;
+  // Free Mode: prepend the notice so the served skills doc tells the agent the
+  // priced/AI functions it lists are unavailable + how to top up.
+  if (skillsMd && isFreeModeEnabled() && econ.freeMode && app.owner_id !== userId) {
+    skillsMd = `${freeModeNotice(walletUrl())}\n\n${skillsMd}`;
+  }
 
   // ── 7. Cached app summary from last agent session ──
   let cachedSummary: string | null = null;

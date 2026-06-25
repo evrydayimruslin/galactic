@@ -9,6 +9,14 @@
 
 export const CANONICAL_BASE = 'https://api.ultralightagent.com';
 
+/** The launch-web site origin (the root domain — the API lives on `api.`). */
+export const SITE_BASE = CANONICAL_BASE.replace('://api.', '://');
+
+/** Wallet / account page where a user adds credits (Free Mode top-up link). */
+export function walletUrl(): string {
+  return `${SITE_BASE}/account`;
+}
+
 /** Canonical public store page URL for an app (by id or slug). */
 export function appStoreUrl(idOrSlug: string): string {
   return `${CANONICAL_BASE}/app/${idOrSlug}`;

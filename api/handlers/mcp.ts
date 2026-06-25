@@ -34,6 +34,10 @@ import {
   permissionSetAllowsFunction,
   toRawMcpFunctionName,
 } from "../services/mcp-function-names.ts";
+import {
+  isFreeModeEnabled,
+  isFunctionBlockedInFreeMode,
+} from "../services/free-mode.ts";
 import { executeGpuFunction } from "../services/gpu/executor.ts";
 import { acquireGpuSlot } from "../services/gpu/concurrency.ts";
 import {
@@ -1112,7 +1116,7 @@ export async function handleMcp(
         return new Response(null, { status: 202 });
 
       case "tools/list":
-        return await handleToolsList(id, app, params, userId);
+        return await handleToolsList(id, app, params, userId, callerContext);
 
       case "tools/call":
         return await handleToolsCall(
@@ -1434,6 +1438,7 @@ async function handleToolsList(
   app: App,
   params?: { cursor?: string },
   callerUserId?: string,
+  callerContext?: RequestCallerContext,
 ): Promise<Response> {
   if (app.runtime === "gpu" && !isGpuSupportEnabled()) {
     return jsonRpcErrorResponse(
@@ -1509,6 +1514,22 @@ async function handleToolsList(
       tools.length = 0;
       tools.push(...filteredTools);
     }
+  }
+
+  // Free Mode discovery filter (docs/FREE_MODE_DESIGN.md): hide functions a
+  // free-mode caller would be blocked from calling (paid, or AI without BYOK),
+  // so the agent never lists them as callable. Self-calls (owner) pass through.
+  if (isFreeModeEnabled() && callerContext?.freeMode) {
+    const visible = tools.filter((tool) =>
+      tool.name.startsWith("ultralight.") ||
+      !isFunctionBlockedInFreeMode(
+        app,
+        toRawMcpFunctionName(app.slug, tool.name),
+        { userId: callerContext.userId, byokPresent: callerContext.byokPresent },
+      )
+    );
+    tools.length = 0;
+    tools.push(...visible);
   }
 
   // Add SDK tools (always included)
