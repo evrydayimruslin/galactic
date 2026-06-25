@@ -68,19 +68,33 @@ if (token) {
 } else {
   record("/auth/user", "SKIP", "auth (needs --token)", "");
 }
-// 5. Inference route resolves (provider keys wired) — best-effort.
+// 5. CRITICAL: platform inference actually ROUTES (not just "models list").
+//    /chat/models loading is necessary but NOT sufficient — a key can be present
+//    yet unusable (legacy-plaintext entry, missing DeepSeek key, etc.). The
+//    authoritative signal is chat-preflight.ok for the DEFAULT model.
 if (token) {
   const r = await get("/debug/chat-preflight", authHeaders);
-  const ok = r.status === 200 && r.body?.ok === true;
-  record("/debug/chat-preflight", ok ? "OK" : "WARN", "inference route resolves", ok ? (r.body?.route?.upstream_provider || "") : `status ${r.status}`);
+  if (r.status === 200 && r.body?.ok === true) {
+    record("inference route (default model)", "OK", "platform AI routes", `${r.body?.model || ""} → ${r.body?.route?.upstream_provider || "?"}`);
+  } else {
+    const failed = Array.isArray(r.body?.checks)
+      ? r.body.checks.filter((c) => c && c.ok === false).map((c) => `${c.check}: ${c.result || ""}`)
+      : [];
+    record("inference route (default model)", "FAIL", "platform AI is BROKEN",
+      failed.length ? failed.join("  |  ") : `status ${r.status}`);
+  }
+} else {
+  record("inference route (default model)", "SKIP", "inference (needs --token)", "");
 }
-// 6. Stripe configured — WARN-only (test keys are expected for now).
+// 6. Stripe — WARN/SKIP only (test keys are expected; wallet route is session-gated).
 if (token) {
   const r = await get("/api/launch/wallet/topup/quote?amount_credits=2500&method=card", authHeaders);
   if (r.status === 200) {
     record("Stripe top-up quote", "OK", "STRIPE_* configured", "responds — verify TEST vs LIVE in the Stripe dashboard");
   } else if (r.status === 503) {
     record("Stripe top-up quote", "WARN", "STRIPE_* MISSING", "503 not-configured — top-ups will not work");
+  } else if (r.status === 403) {
+    record("Stripe top-up quote", "SKIP", "Stripe (session-gated)", "wallet route needs a browser session — verify keys via the Stripe/Cloudflare dashboard");
   } else {
     record("Stripe top-up quote", "WARN", "STRIPE_* (unclear)", `status ${r.status}`);
   }
