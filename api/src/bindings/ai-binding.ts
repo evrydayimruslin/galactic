@@ -170,7 +170,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
           headers: {
             'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://api.ultralightagent.com',
+            'HTTP-Referer': 'https://api.connectgalactic.com',
             'X-Title': 'Galactic',
           },
           body: JSON.stringify({

@@ -77,13 +77,15 @@ max_retries = 3
 dead_letter_queue = "ultralight-events-dlq"
 
 [vars]
-BASE_URL = "https://api.ultralightagent.com"
-LAUNCH_WEB_BASE_URL = "https://ultralightagent.com"
+BASE_URL = "https://api.connectgalactic.com"
+LAUNCH_WEB_BASE_URL = "https://connectgalactic.com"
 # Interfaces sandbox worker origin (interfaces-worker/) — explicit config,
 # never derived from the request Host. Unset disables interface exposure.
-INTERFACE_SANDBOX_BASE_URL = "https://interfaces.ultralightagent.com"
+INTERFACE_SANDBOX_BASE_URL = "https://interfaces.connectgalactic.com"
 ENVIRONMENT = "production"
-CORS_ALLOWED_ORIGINS = "https://api.ultralightagent.com,https://ultralightagent.com"
+# New primary domain is connectgalactic.com; the old ultralightagent.com origins
+# stay listed so they keep working during the cutover (remove later).
+CORS_ALLOWED_ORIGINS = "https://api.connectgalactic.com,https://connectgalactic.com,https://api.ultralightagent.com,https://ultralightagent.com"
 GPU_SUPPORT_ENABLED = "false"
 # Free Mode (docs/FREE_MODE_DESIGN.md): when a wallet balance is under $0.25,
 # only free/self/owner-sponsored functions run, AI functions need a BYOK key,

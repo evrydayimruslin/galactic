@@ -28,8 +28,9 @@ bucket_name = "ultralight-apps"
 [vars]
 ENVIRONMENT = "production"
 # Space-separated CSP frame-ancestors source list: which pages may embed
-# interfaces. Unset/empty fails closed to 'none'.
-FRAME_ANCESTORS = "https://ultralightagent.com"
+# interfaces. Unset/empty fails closed to 'none'. New primary domain is
+# connectgalactic.com; the old origin stays during cutover (remove later).
+FRAME_ANCESTORS = "https://connectgalactic.com https://ultralightagent.com"
 
 [env.staging]
 name = "ultralight-interfaces-staging"
