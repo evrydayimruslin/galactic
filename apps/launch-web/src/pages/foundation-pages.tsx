@@ -58,7 +58,12 @@ import {
   attachInterfaceBridge,
   clampInterfaceHeight,
 } from "../lib/interface-bridge";
-import { getStripe, type Stripe, type StripeElements } from "../lib/stripe";
+import {
+  getStripe,
+  type Stripe,
+  type StripeAddressElement,
+  type StripeElements,
+} from "../lib/stripe";
 import {
   Avatar,
   Button,
@@ -5111,12 +5116,21 @@ function WalletTopUpPanel(
     : [1000, 2500, 10000, 25000, 50000];
 
   const paymentElementRef = useRef<HTMLDivElement | null>(null);
+  // Billing-address fields: shown only for non-Link methods (card). Mounted on
+  // demand from the Payment Element's change event — never left mounted-empty
+  // for Link, which provides the address itself and would otherwise be blocked
+  // at confirm by an incomplete hidden field.
+  const addressElementRef = useRef<HTMLDivElement | null>(null);
   const stripeRef = useRef<Stripe | null>(null);
   const elementsRef = useRef<StripeElements | null>(null);
   const reloadTimersRef = useRef<number[]>([]);
   // Invalidation token: bumped whenever the user abandons/restarts a checkout
   // so a stale in-flight intent-create or confirm result can't clobber the UI.
   const seqRef = useRef(0);
+  // The currently-prepared (uncaptured) PaymentIntent id. Set when a checkout
+  // is prepared, cleared on a terminal outcome. Used to cancel the abandoned
+  // intent when the amount changes or the modal closes (see cancel wiring).
+  const preparedPiRef = useRef<string | null>(null);
   // The PaymentIntent amount is fixed at creation; while a confirm is in
   // flight the user may already have been charged, so lock the inputs instead
   // of allowing a reset.
@@ -5163,6 +5177,13 @@ function WalletTopUpPanel(
       phaseRef.current === "confirming"
     ) {
       return;
+    }
+    // The previously prepared intent is now superseded (amount changed / re-arm)
+    // — cancel it so abandoned PaymentIntents don't pile up. Best-effort.
+    const stalePi = preparedPiRef.current;
+    if (stalePi) {
+      preparedPiRef.current = null;
+      void launchApi.cancelWalletTopUp(stalePi).catch(() => {});
     }
     seqRef.current += 1;
     setCheckout(null);
@@ -5232,15 +5253,40 @@ function WalletTopUpPanel(
         });
         paymentElement.mount(paymentElementRef.current);
 
-        // The standalone billing-address fields were removed to keep the
-        // checkout compact. Stripe Link returning buyers autofill a FULL
-        // address, which lands on the charge's billing_details and is captured
-        // for consumption-time tax by the deposit webhook
-        // (captureFundingBillingAddressFromCharge). NOTE: a raw-card buyer
-        // (no Link) only provides postal_code + country here, which the current
-        // all-or-nothing capture (billingDetailsToInput) treats as "no
-        // address" — a known gap to close before sales tax goes live. Tax is
-        // not live yet, so this is forward-looking only.
+        // Billing address: collect FULL address for card (non-Link) payers in
+        // the UI, but never for Link — Link supplies the address itself, and an
+        // empty mounted address field would block confirm. So we mount the
+        // AddressElement on demand based on the Payment Element's selected
+        // method, defaulting to unmounted (Link confirm is never blocked; the
+        // worst case is a card buyer who provides postal-only, which is safe).
+        // Both Link's autofilled address and the card AddressElement land on
+        // the charge billing_details, captured by the deposit webhook
+        // (captureFundingBillingAddressFromCharge) for consumption-time tax.
+        // Create + mount the address fields ONLY while a non-Link method is
+        // selected, and DESTROY them otherwise. Destroying (not just hiding)
+        // removes the element from the Elements group, so an empty/incomplete
+        // address can never block a Link confirm. Recreated fresh when the
+        // buyer switches back to a card. Default is unmounted, so Link is never
+        // blocked even if no change event fires.
+        let addressElement: StripeAddressElement | null = null;
+        const syncAddressVisibility = (methodType?: string) => {
+          const showAddress = !!methodType && methodType !== "link";
+          if (showAddress && !addressElement && addressElementRef.current) {
+            addressElement = elements.create("address", {
+              mode: "billing",
+              autocomplete: { mode: "automatic" },
+              fields: { phone: "never" },
+            });
+            addressElement.mount(addressElementRef.current);
+          } else if (!showAddress && addressElement) {
+            addressElement.destroy();
+            addressElement = null;
+          }
+        };
+        paymentElement.on("change", (event) => {
+          if (!cancelled) syncAddressVisibility(event.value?.type);
+        });
+
         stripeRef.current = stripe;
         elementsRef.current = elements;
       } catch (err) {
@@ -5253,6 +5299,7 @@ function WalletTopUpPanel(
     })();
     return () => {
       cancelled = true;
+      elementsRef.current?.getElement("address")?.destroy();
       elementsRef.current?.getElement("payment")?.destroy();
       elementsRef.current = null;
       stripeRef.current = null;
@@ -5298,6 +5345,15 @@ function WalletTopUpPanel(
 
   useEffect(() => () => {
     for (const timer of reloadTimersRef.current) clearTimeout(timer);
+    // Modal closed/navigated away with a prepared-but-unpaid intent: cancel it.
+    // Never cancel one that is being charged or already terminal.
+    const pi = preparedPiRef.current;
+    if (
+      pi && phaseRef.current !== "confirming" &&
+      phaseRef.current !== "succeeded" && phaseRef.current !== "processing"
+    ) {
+      void launchApi.cancelWalletTopUp(pi).catch(() => {});
+    }
   }, []);
 
   const scheduleWalletReloads = () => {
@@ -5322,7 +5378,15 @@ function WalletTopUpPanel(
         method: "card",
         termsAccepted: true,
       });
-      if (seqRef.current !== seq) return;
+      if (seqRef.current !== seq) {
+        // Superseded while in flight: this intent is now orphaned — cancel it.
+        void launchApi.cancelWalletTopUp(response.paymentIntentId).catch(
+          () => {},
+        );
+        return;
+      }
+      // Track the prepared intent so it can be cancelled if abandoned.
+      preparedPiRef.current = response.paymentIntentId;
       // Phase advances to "collecting" once the Payment Element reports ready.
       setCheckout({
         clientSecret: response.clientSecret,
@@ -5385,6 +5449,8 @@ function WalletTopUpPanel(
       }
       const status = result.paymentIntent?.status;
       if (status === "succeeded") {
+        // Paid — never cancel this intent.
+        preparedPiRef.current = null;
         writePendingTopUpResult("succeeded");
         setPhase("succeeded");
         setMessageIsError(false);
@@ -5392,6 +5458,8 @@ function WalletTopUpPanel(
         setCheckout(null);
         scheduleWalletReloads();
       } else if (status === "processing") {
+        // In-flight settlement — never cancel this intent.
+        preparedPiRef.current = null;
         writePendingTopUpResult("processing");
         setPhase("processing");
         setMessageIsError(false);
@@ -5408,6 +5476,8 @@ function WalletTopUpPanel(
           }
           | null;
         if (nextAction?.verify_with_microdeposits) {
+          // Awaiting bank verification — never cancel this intent.
+          preparedPiRef.current = null;
           writePendingTopUpResult("verify");
           setPhase("processing");
           setMessageIsError(false);
@@ -5445,6 +5515,9 @@ function WalletTopUpPanel(
   const resetForAnotherTopUp = () => {
     seqRef.current += 1;
     writePendingTopUpResult(null);
+    // The prior intent was paid (we only reach here from the thank-you screen);
+    // drop the ref so re-arming doesn't try to cancel it.
+    preparedPiRef.current = null;
     setCheckout(null);
     setPhase("idle");
     phaseRef.current = "idle";
@@ -5577,7 +5650,13 @@ function WalletTopUpPanel(
           <strong>{formatCreditFromLight(creditsAmount)}</strong>
         </div>
         {checkout
-          ? <div className="topup-payment-element" ref={paymentElementRef} />
+          ? (
+            <>
+              <div className="topup-payment-element" ref={paymentElementRef} />
+              {/* Mounted only for card (non-Link) payers; see the mount effect. */}
+              <div className="topup-address-element" ref={addressElementRef} />
+            </>
+          )
           : null}
         {method !== "earnings"
           ? (

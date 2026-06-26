@@ -119,8 +119,10 @@ import {
 } from "../services/stripe-customers.ts";
 import {
   createLaunchWalletPaymentIntent,
+  LAUNCH_WALLET_DEPOSIT_TYPE,
   LaunchWalletFundingError,
 } from "../services/stripe-launch-wallet-funding.ts";
+import { markLightDepositFailed } from "../services/stripe-deposits.ts";
 import {
   LAUNCH_WALLET_FUNDING_PRESETS,
   normalizeLaunchFundingAmountLight,
@@ -585,6 +587,13 @@ export async function handleLaunch(request: Request): Promise<Response> {
         return error("Method not allowed for launch wallet top-up intent", 405);
       }
       return await handleLaunchWalletTopUpIntent(request);
+    }
+
+    if (path === "/api/launch/wallet/topup/cancel") {
+      if (method !== "POST") {
+        return error("Method not allowed for launch wallet top-up cancel", 405);
+      }
+      return await handleLaunchWalletTopUpCancel(request);
     }
 
     const agentPermissionsMatch = path.match(
@@ -4440,6 +4449,91 @@ async function handleLaunchWalletTopUpIntent(
       err instanceof Error ? err.message : "Wallet top-up failed",
       500,
     );
+  }
+}
+
+// Best-effort cleanup of an abandoned/superseded wallet PaymentIntent. The
+// checkout auto-prepares on modal open and re-prepares when the amount changes,
+// so buyers leave behind uncaptured intents (+ pending deposit rows). The
+// client calls this on amount-change and on close to cancel the stale intent.
+// Never throws to the client — failed cleanup must not surface in the funding
+// UI, and an abandoned intent never charges (Stripe also auto-expires it).
+async function handleLaunchWalletTopUpCancel(
+  request: Request,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  try {
+    const body = asRecord(await readJsonBody<unknown>(request)) || {};
+    const paymentIntentId = typeof body.payment_intent_id === "string"
+      ? body.payment_intent_id.trim()
+      : "";
+    if (!paymentIntentId.startsWith("pi_")) {
+      return json({ ok: false, reason: "invalid_payment_intent_id" });
+    }
+    const stripeSecretKey = getEnv("STRIPE_SECRET_KEY");
+    if (!stripeSecretKey) {
+      return json({ ok: true, reason: "stripe_unconfigured" });
+    }
+
+    // Verify ownership via the intent metadata (stamped at creation) before
+    // touching it, so a caller can't cancel another account's intent.
+    const piRes = await fetch(
+      `https://api.stripe.com/v1/payment_intents/${
+        encodeURIComponent(paymentIntentId)
+      }`,
+      { headers: { "Authorization": `Bearer ${stripeSecretKey}` } },
+    );
+    if (!piRes.ok) return json({ ok: true, reason: "not_found" });
+    const pi = await piRes.json() as {
+      id: string;
+      status?: string;
+      metadata?: Record<string, string>;
+    };
+    if (pi.metadata?.user_id !== user.id) {
+      return error("Payment intent does not belong to this account", 403);
+    }
+    // Scope strictly to wallet top-up intents — never touch another funding
+    // flow's intent even if it carries this user's id.
+    if (pi.metadata?.type !== LAUNCH_WALLET_DEPOSIT_TYPE) {
+      return json({ ok: true, reason: "not_topup" });
+    }
+
+    // Only cancel intents that have not progressed toward a charge — never
+    // touch one that is confirming/processing/succeeded.
+    const cancelable = pi.status === "requires_payment_method" ||
+      pi.status === "requires_confirmation";
+    if (cancelable) {
+      await fetch(
+        `https://api.stripe.com/v1/payment_intents/${
+          encodeURIComponent(paymentIntentId)
+        }/cancel`,
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${stripeSecretKey}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({ cancellation_reason: "abandoned" })
+            .toString(),
+        },
+      );
+      // Only clear the pending row when we actually cancelled — never mark a row
+      // failed for an intent that has progressed to (or toward) a charge; the
+      // webhook finalizer owns those.
+      await markLightDepositFailed({
+        userId: user.id,
+        stripeEventId: `client_cancel:${paymentIntentId}`,
+        stripePaymentIntentId: paymentIntentId,
+        fundingMethod: pi.metadata?.funding_method || "launch_card_gross_up",
+        failureCode: "abandoned",
+        failureMessage: "Top-up checkout abandoned or amount changed.",
+      }).catch(() => null);
+    }
+
+    return json({ ok: true, canceled: cancelable });
+  } catch (err) {
+    console.error("[LAUNCH] Wallet top-up cancel failed:", err);
+    return json({ ok: false });
   }
 }
 

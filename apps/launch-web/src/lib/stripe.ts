@@ -24,4 +24,8 @@ export function getStripe(publishableKey: string): Promise<Stripe | null> {
   return instance;
 }
 
-export type { Stripe, StripeElements } from "@stripe/stripe-js";
+export type {
+  Stripe,
+  StripeAddressElement,
+  StripeElements,
+} from "@stripe/stripe-js";

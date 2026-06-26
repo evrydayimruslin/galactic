@@ -402,6 +402,20 @@ export class LaunchApiClient {
     });
   }
 
+  /**
+   * Best-effort cancel of an abandoned/superseded top-up PaymentIntent (the
+   * checkout auto-prepares on open and re-prepares on amount change). Fire and
+   * forget — the caller ignores the result.
+   */
+  cancelWalletTopUp(
+    paymentIntentId: string,
+  ): Promise<{ ok: boolean; canceled?: boolean }> {
+    return this.fetchJson("/api/launch/wallet/topup/cancel", {
+      method: "POST",
+      body: JSON.stringify({ payment_intent_id: paymentIntentId }),
+    });
+  }
+
   /** Seller Stripe Connect payout-account status. */
   connectStatus(): Promise<LaunchConnectStatus> {
     return this.fetchJson("/api/user/connect/status");
