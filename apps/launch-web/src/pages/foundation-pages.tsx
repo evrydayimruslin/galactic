@@ -1820,8 +1820,8 @@ function AgentFunctionsPanel({
           ? (
             <div className="preference-row">
               <div>
-                <strong>Function calls AI</strong>
-                <span>{inferenceSummary}</span>
+                <strong>This function uses AI</strong>
+                <span>Current model: {inferenceSummary}</span>
               </div>
               <Button
                 onClick={() => setModal("inference")}
