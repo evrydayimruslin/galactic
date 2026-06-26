@@ -6647,10 +6647,14 @@ function NewApiKeyModal({
     };
   }, []);
 
+  const [copied, setCopied] = useState(false);
   const copyToken = () => {
     // Never copy a placeholder: only the real once-revealed token is useful.
     if (!plaintextToken) return;
-    navigator.clipboard?.writeText(plaintextToken).catch(() => {});
+    navigator.clipboard?.writeText(plaintextToken).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
   };
 
   return (
@@ -6685,8 +6689,13 @@ function NewApiKeyModal({
               ? "issuing..."
               : errorMessage || plaintextToken || "Token unavailable"}
           </Mono>
-          <Button icon="copy" onClick={copyToken} size="sm" variant="secondary">
-            Copy
+          <Button
+            icon={copied ? "check" : "copy"}
+            onClick={copyToken}
+            size="sm"
+            variant="secondary"
+          >
+            {copied ? "Copied" : "Copy"}
           </Button>
         </div>
         <div className="modal-actions">
