@@ -44,9 +44,9 @@ Deno.test("stripe processing fees: ACH quote passes through capped direct debit 
 
 Deno.test("stripe processing fees: launch top-up amount must be a supported integer", () => {
   assertThrows(
-    () => quoteLaunchWalletFunding({ amountLight: 999, method: "card" }),
+    () => quoteLaunchWalletFunding({ amountLight: 99, method: "card" }),
     RequestValidationError,
-    "amount_credits must be at least 1000",
+    "amount_credits must be at least 100",
   );
   assertThrows(
     () => quoteLaunchWalletFunding({ amountLight: 1_000.5, method: "ach" }),

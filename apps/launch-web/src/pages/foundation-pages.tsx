@@ -5034,8 +5034,10 @@ function WalletTopUpPanel(
     onClose?: () => void;
   },
 ): ReactElement {
-  const [method, setMethod] = useState<PaymentMethod>("card");
-  const [creditsAmount, setCreditsAmount] = useState(10000);
+  // Card + Link only in this modal. The method toggle (and "Transfer from
+  // earnings") was removed for a single-purpose checkout, so method is fixed.
+  const [method] = useState<PaymentMethod>("card");
+  const [creditsAmount, setCreditsAmount] = useState(1000);
   // Editable dollar amount. amountText is the free-typing buffer; while focused
   // we don't reformat it (avoids cursor jumps), and we keep it in sync when a
   // preset or method change moves creditsAmount.
@@ -5056,11 +5058,21 @@ function WalletTopUpPanel(
     amountFocused.current = false;
     const dollars = parseFloat(amountText);
     const light = Number.isFinite(dollars) ? Math.round(dollars * 100) : 1000;
-    const clamped = Math.min(500000, Math.max(1000, light));
+    // $1 floor (100 Light): removes the old $10 gate while staying above
+    // Stripe's hard minimum once the processing fee is grossed up.
+    const clamped = Math.min(500000, Math.max(100, light));
     setCreditsAmount(clamped);
     setAmountText(dollarsText(clamped));
   };
   const [phase, setPhase] = useState<TopUpPhase>("idle");
+  // Latest phase, readable from the debounced auto-prepare timer (whose closure
+  // would otherwise see a stale value) so it never recreates a checkout over a
+  // terminal/confirming screen.
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  // Bumped by "Top up again" to re-run the auto-prepare effect even though the
+  // amount is unchanged.
+  const [prepareNonce, setPrepareNonce] = useState(0);
   const [message, setMessage] = useState("");
   const [messageIsError, setMessageIsError] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -5098,17 +5110,7 @@ function WalletTopUpPanel(
     ? [1000, 2500, 10000, 25000, Math.floor(earnedCredits)]
     : [1000, 2500, 10000, 25000, 50000];
 
-  const selectMethod = (next: PaymentMethod) => {
-    setMethod(next);
-    if (next !== "earnings") {
-      // Paid methods accept 1,000–500,000 credits; clamp an out-of-range
-      // carry-over from the earnings "Max" preset.
-      setCreditsAmount((value) => Math.min(500000, Math.max(1000, value)));
-    }
-  };
-
   const paymentElementRef = useRef<HTMLDivElement | null>(null);
-  const addressElementRef = useRef<HTMLDivElement | null>(null);
   const stripeRef = useRef<Stripe | null>(null);
   const elementsRef = useRef<StripeElements | null>(null);
   const reloadTimersRef = useRef<number[]>([]);
@@ -5144,17 +5146,46 @@ function WalletTopUpPanel(
     };
   }, [creditsAmount, method]);
 
-  // Amount/method changed: the prepared PaymentIntent no longer matches, so
-  // drop the checkout and start over (inputs are locked during confirm, so a
-  // possibly-charged intent can never be silently discarded here).
+  // Prepare the checkout as soon as the modal opens — and re-prepare whenever
+  // the amount settles — so the Stripe form and the Link wallet appear
+  // immediately instead of behind a separate "Continue to payment" step. The
+  // prior PaymentIntent no longer matches a changed amount, so it's dropped and
+  // recreated. Debounced so typing an amount doesn't spawn a PaymentIntent per
+  // keystroke. Consent (terms) is enforced at Pay, not here — creating the
+  // intent does not charge the card. Inputs are locked during confirm, so the
+  // amount can't change mid-charge.
   useEffect(() => {
+    // Don't prepare a fresh checkout over a restored confirmation screen (a
+    // redirect return or a confirm that resolved while unmounted): those set a
+    // terminal phase, and this component early-returns the thank-you view.
+    if (
+      phaseRef.current === "succeeded" || phaseRef.current === "processing" ||
+      phaseRef.current === "confirming"
+    ) {
+      return;
+    }
     seqRef.current += 1;
     setCheckout(null);
-    setPhase("idle");
     setMessage("");
     setMessageIsError(false);
     setVerificationUrl(null);
-  }, [creditsAmount, method]);
+    setPhase("creating");
+    const timer = window.setTimeout(() => {
+      // Re-check via the ref: the restore effect may have set a terminal phase
+      // after this timer was scheduled.
+      if (
+        phaseRef.current === "succeeded" || phaseRef.current === "processing" ||
+        phaseRef.current === "confirming"
+      ) {
+        return;
+      }
+      void startCheckout();
+    }, 450);
+    return () => clearTimeout(timer);
+    // startCheckout closes over the current amount; re-run on amount change and
+    // when "Top up again" bumps the nonce.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creditsAmount, prepareNonce]);
 
   // Mount the Stripe Payment Element once an intent exists. The container div
   // renders whenever `checkout` is set, so this effect runs after it exists.
@@ -5201,21 +5232,15 @@ function WalletTopUpPanel(
         });
         paymentElement.mount(paymentElementRef.current);
 
-        // C2 — collect the buyer's billing address so consumption-time sales
-        // tax can be computed against it. In billing mode within the same
-        // Elements group, Stripe attaches this address to the payment method's
-        // billing_details on confirm (which the deposit webhook then captures).
-        // Stripe Link autofills it for returning buyers; new card buyers fill
-        // it once. phone is suppressed — we only need the postal address.
-        if (addressElementRef.current) {
-          const addressElement = elements.create("address", {
-            mode: "billing",
-            autocomplete: { mode: "automatic" },
-            fields: { phone: "never" },
-          });
-          addressElement.mount(addressElementRef.current);
-        }
-
+        // The standalone billing-address fields were removed to keep the
+        // checkout compact. Stripe Link returning buyers autofill a FULL
+        // address, which lands on the charge's billing_details and is captured
+        // for consumption-time tax by the deposit webhook
+        // (captureFundingBillingAddressFromCharge). NOTE: a raw-card buyer
+        // (no Link) only provides postal_code + country here, which the current
+        // all-or-nothing capture (billingDetailsToInput) treats as "no
+        // address" — a known gap to close before sales tax goes live. Tax is
+        // not live yet, so this is forward-looking only.
         stripeRef.current = stripe;
         elementsRef.current = elements;
       } catch (err) {
@@ -5283,16 +5308,6 @@ function WalletTopUpPanel(
   };
 
   const startCheckout = async () => {
-    if (method === "earnings") {
-      setMessageIsError(false);
-      setMessage("Earnings transfer is not wired into the launch API yet.");
-      return;
-    }
-    if (!termsAccepted) {
-      setMessageIsError(true);
-      setMessage("Accept the Galactic Terms to continue.");
-      return;
-    }
     seqRef.current += 1;
     const seq = seqRef.current;
     setPhase("creating");
@@ -5303,7 +5318,8 @@ function WalletTopUpPanel(
     try {
       const response = await launchApi.createWalletTopUpIntent({
         amountCredits: creditsAmount,
-        method,
+        // Card-only modal (the method toggle was removed).
+        method: "card",
         termsAccepted: true,
       });
       if (seqRef.current !== seq) return;
@@ -5328,6 +5344,14 @@ function WalletTopUpPanel(
   };
 
   const confirmTopUpPayment = async () => {
+    // Consent gate lives here (not at intent creation) because the checkout is
+    // prepared automatically on open: the card is only charged once the buyer
+    // has accepted the Terms and clicked Pay.
+    if (!termsAccepted) {
+      setMessageIsError(true);
+      setMessage("Accept the Galactic Terms to continue.");
+      return;
+    }
     const stripe = stripeRef.current;
     const elements = elementsRef.current;
     if (!stripe || !elements) return;
@@ -5423,10 +5447,14 @@ function WalletTopUpPanel(
     writePendingTopUpResult(null);
     setCheckout(null);
     setPhase("idle");
+    phaseRef.current = "idle";
     setMessage("");
     setMessageIsError(false);
     setTermsAccepted(false);
     setVerificationUrl(null);
+    // Re-arm the auto-prepare effect (the amount is unchanged) so the form +
+    // Link wallet reappear for another top-up.
+    setPrepareNonce((n) => n + 1);
     live.reload();
   };
 
@@ -5493,7 +5521,7 @@ function WalletTopUpPanel(
   }
 
   return (
-    <div className={`wallet-topup-grid${checkout ? " is-paying" : ""}`}>
+    <div className="wallet-topup-grid">
       <Card className="wallet-topup-card">
         <p className="section-label">Amount</p>
         <div className="light-input-shell">
@@ -5520,31 +5548,9 @@ function WalletTopUpPanel(
               onClick={() => setCreditsAmount(amount)}
               type="button"
             >
-              {amount === Math.floor(earnedCredits) && method === "earnings"
-                ? "Max"
-                : formatCreditFromLight(amount)}
+              {formatPresetDollars(amount)}
             </button>
           ))}
-        </div>
-        <div className="payment-methods">
-          <button
-            className={method === "card" ? "active" : ""}
-            disabled={inputsLocked}
-            onClick={() => selectMethod("card")}
-            type="button"
-          >
-            <strong>Pay by card</strong>
-            <span>Card or Link</span>
-          </button>
-          <button
-            className={method === "earnings" ? "active" : ""}
-            disabled={inputsLocked}
-            onClick={() => selectMethod("earnings")}
-            type="button"
-          >
-            <strong>Transfer from earnings</strong>
-            <span>Instant, no fee</span>
-          </button>
         </div>
       </Card>
 
@@ -5571,24 +5577,16 @@ function WalletTopUpPanel(
           <strong>{formatCreditFromLight(creditsAmount)}</strong>
         </div>
         {checkout
-          ? (
-            <>
-              <div className="topup-payment-element" ref={paymentElementRef} />
-              <div
-                className="topup-address-element"
-                ref={addressElementRef}
-              />
-            </>
-          )
+          ? <div className="topup-payment-element" ref={paymentElementRef} />
           : null}
         {method !== "earnings"
           ? (
             <label className="topup-terms">
               <input
                 checked={termsAccepted}
-                // Consent was recorded at intent creation; once a checkout
-                // exists, unchecking would only desync the UI from it.
-                disabled={inputsLocked || checkout !== null}
+                // The checkout is prepared on open, so the box must stay
+                // checkable; only lock it once a charge is in flight.
+                disabled={inputsLocked}
                 onChange={(event) => setTermsAccepted(event.target.checked)}
                 type="checkbox"
               />
@@ -5605,7 +5603,7 @@ function WalletTopUpPanel(
         {checkout
           ? (
             <Button
-              disabled={phase !== "collecting"}
+              disabled={phase !== "collecting" || !termsAccepted}
               onClick={confirmTopUpPayment}
               size="lg"
             >
@@ -5618,16 +5616,11 @@ function WalletTopUpPanel(
           )
           : (
             <Button
-              disabled={phase === "creating" ||
-                (method !== "earnings" && !termsAccepted)}
+              disabled={phase === "creating"}
               onClick={startCheckout}
               size="lg"
             >
-              {phase === "creating"
-                ? "Preparing checkout…"
-                : method === "earnings"
-                ? `Transfer ${formatCreditFromLight(creditsAmount)}`
-                : "Continue to payment"}
+              {phase === "creating" ? "Preparing checkout…" : "Retry"}
             </Button>
           )}
         {message
@@ -7228,6 +7221,17 @@ function formatCreditFromLight(amountCents: number): string {
   return `$${dollars.toLocaleString("en-US", {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
+  })}`;
+}
+
+// Preset chips: whole dollars without trailing cents ($10, $25, $100), but
+// keep cents if a preset is ever a non-round amount.
+function formatPresetDollars(light: number): string {
+  const dollars = light / 100;
+  if (!Number.isFinite(dollars)) return "$0";
+  return `$${dollars.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
   })}`;
 }
 

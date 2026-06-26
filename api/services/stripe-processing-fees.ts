@@ -8,7 +8,9 @@ import { lightToUsdCents } from "./billing-config.ts";
 import { RequestValidationError } from "./request-validation.ts";
 
 export const LAUNCH_WALLET_LIGHT_PER_DOLLAR = LIGHT_PER_DOLLAR_CANONICAL;
-export const LAUNCH_WALLET_MIN_TOPUP_LIGHT = 1_000;
+// $1.00 floor (100 Light). Low enough to remove the old $10 gate, but safely
+// above Stripe's hard $0.50 minimum once the processing fee is grossed up.
+export const LAUNCH_WALLET_MIN_TOPUP_LIGHT = 100;
 export const LAUNCH_WALLET_MAX_TOPUP_LIGHT = 500_000;
 export const LAUNCH_WALLET_FUNDING_PRESETS: LaunchWalletFundingPreset[] = [
   { light: 1_000, label: "1,000 credits" },

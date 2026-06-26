@@ -3651,8 +3651,8 @@ button {
 
 .wallet-topup-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 36px;
+  grid-template-columns: 1fr;
+  gap: 16px;
   align-items: start;
 }
 
@@ -3852,8 +3852,10 @@ button {
 
 .topup-modal {
   position: relative;
-  width: min(900px, 100%);
-  padding: 28px;
+  /* Single-column vertical checkout — keep it narrow so the content isn't
+     floating in a wide modal with big side margins. */
+  width: min(460px, 100%);
+  padding: 20px;
   border: 1px solid var(--ul-border);
   border-radius: 18px;
   background: var(--ul-bg);
@@ -3907,14 +3909,6 @@ button {
 .topup-terms input {
   margin-top: 1px;
   accent-color: var(--ul-text);
-}
-
-/* Payment step: the Stripe Payment Element / Link wallet needs more room than
-   the 320px summary column. Collapse the grid to one centered column so the
-   element renders at a comfortable width instead of cramped. */
-.wallet-topup-grid.is-paying {
-  grid-template-columns: minmax(0, 480px);
-  justify-content: center;
 }
 
 /* Post-payment confirmation / thank-you screen (replaces the checkout form). */
