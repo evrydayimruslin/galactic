@@ -38,6 +38,7 @@ import {
   LAUNCH_SCOPE_CONTRACT,
   type LaunchCallerFunctionPermissionsResponse,
   type LaunchCallerFunctionPermissionsUpdateRequest,
+  type LaunchFunctionInferenceResponse,
   type LaunchApiKeyCreateRequest,
   type LaunchApiKeySummary,
   type LaunchApiRoute,
@@ -105,7 +106,7 @@ import {
   CHAT_MIN_BALANCE_LIGHT,
   FREE_MODE_BALANCE_LIGHT,
 } from "../../shared/contracts/ai.ts";
-import { isFreeModeEnabled } from "../services/free-mode.ts";
+import { functionUsesInference, isFreeModeEnabled } from "../services/free-mode.ts";
 import { isValidModelId } from "../services/model-validation.ts";
 import {
   type BillingAddressInput,
@@ -131,6 +132,11 @@ import {
   listCallerFunctionPermissions,
   updateCallerFunctionPermissions,
 } from "../services/caller-function-permissions.ts";
+import {
+  clearFunctionInferenceOverride,
+  listFunctionInferenceOverrides,
+  setFunctionInferenceOverride,
+} from "../services/function-inference-overrides.ts";
 import { resolveManifestAccessPolicy } from "../services/access-policy.ts";
 import {
   approvePendingGrant,
@@ -609,6 +615,17 @@ export async function handleLaunch(request: Request): Promise<Response> {
       return await handleLaunchAgentInstall(
         request,
         agentInstallMatch[1],
+        method,
+      );
+    }
+
+    const inferenceOverrideMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/function-inference$/,
+    );
+    if (inferenceOverrideMatch) {
+      return await handleLaunchFunctionInferenceOverride(
+        request,
+        inferenceOverrideMatch[1],
         method,
       );
     }
@@ -4009,6 +4026,148 @@ async function handleLaunchToolAgentPermissionsUpdate(
   );
 }
 
+// Per-(installer, app, function) galactic.ai() provider+model override.
+// GET lists overrides; PUT sets one (provider 'galactic'/'light' => credits, else
+// a configured BYOK provider); DELETE clears one (?functionName=).
+async function handleLaunchFunctionInferenceOverride(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForByok(user);
+  const resolved = await resolveAgentPermissionTool(user, encodedLocator);
+  if (!resolved) return error("Agent not found", 404);
+  const appId = resolved.row.id;
+  const functionNames = extractFunctionNames(resolved.row);
+
+  if (method === "PUT" || method === "POST") {
+    const body = asRecord(await readJsonBody<unknown>(request)) || {};
+    const functionName = typeof body.functionName === "string"
+      ? body.functionName.trim()
+      : typeof body.function_name === "string"
+      ? (body.function_name as string).trim()
+      : "";
+    if (!functionName) return error("functionName is required", 400);
+    // Throws RequestValidationError(400) on bad slug format (top-level catch).
+    const model = normalizeLaunchByokModel(body.model);
+    if (!model) return error("model is required", 400);
+
+    const providerRaw = typeof body.provider === "string"
+      ? body.provider.trim()
+      : "";
+    const providerKind = providerRaw.toLowerCase();
+    if (
+      providerRaw === "" || providerKind === "galactic" ||
+      providerKind === "light"
+    ) {
+      await setFunctionInferenceOverride({
+        userId: user.id,
+        appId,
+        functionName,
+        billingMode: "light",
+        provider: null,
+        model,
+        allowedFunctionNames: functionNames,
+      });
+    } else {
+      const entry = resolveLaunchByokProvider(providerRaw);
+      if (!entry) {
+        return error(
+          "Unsupported provider. Use 'galactic' or a configured BYOK provider.",
+          400,
+        );
+      }
+      const profile = await userService.getUser(user.id);
+      const configured = profile?.byok_configs.some(
+        (config) => config.provider === entry.provider && config.has_key,
+      );
+      if (!configured) {
+        return error(
+          `${entry.info.name} is not configured for this account`,
+          409,
+        );
+      }
+      await setFunctionInferenceOverride({
+        userId: user.id,
+        appId,
+        functionName,
+        billingMode: "byok",
+        provider: entry.provider,
+        model,
+        allowedFunctionNames: functionNames,
+      });
+    }
+    return json(
+      await buildLaunchFunctionInferenceResponse(
+        user,
+        resolved.row,
+        resolved.installedIds,
+      ),
+    );
+  }
+
+  if (method === "DELETE") {
+    const functionName =
+      new URL(request.url).searchParams.get("functionName")?.trim() || "";
+    if (!functionName) {
+      return error("functionName query parameter is required", 400);
+    }
+    await clearFunctionInferenceOverride({ userId: user.id, appId, functionName });
+    return json(
+      await buildLaunchFunctionInferenceResponse(
+        user,
+        resolved.row,
+        resolved.installedIds,
+      ),
+    );
+  }
+
+  if (method === "GET") {
+    return json(
+      await buildLaunchFunctionInferenceResponse(
+        user,
+        resolved.row,
+        resolved.installedIds,
+      ),
+    );
+  }
+
+  return error("Method not allowed for function inference override", 405);
+}
+
+async function buildLaunchFunctionInferenceResponse(
+  user: AuthUser,
+  row: LaunchAppRow,
+  installedIds: Set<string>,
+): Promise<LaunchFunctionInferenceResponse> {
+  const owners = await fetchOwnerMap([row.owner_id]);
+  const tool = toLaunchAgentSummary(row, {
+    owners,
+    viewerId: user.id,
+    installedIds,
+  });
+  const handle = {
+    id: tool.id,
+    slug: tool.slug,
+    name: tool.name,
+    relationship: tool.relationship,
+    publicUrl: tool.publicUrl,
+    adminUrl: tool.adminUrl,
+  };
+  const overrides = await listFunctionInferenceOverrides({
+    userId: user.id,
+    appId: row.id,
+    functionNames: extractFunctionNames(row),
+  });
+  return {
+    agent: handle,
+    tool: handle,
+    overrides,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 async function handleLaunchWallet(request: Request): Promise<Response> {
   const user = await requireLaunchUser(request);
   const db = getDbConfig();
@@ -5268,6 +5427,16 @@ async function buildLaunchFunctionSummaries(
       permission,
     ]),
   );
+  const overrides = viewerId
+    ? await listFunctionInferenceOverrides({
+      userId: viewerId,
+      appId: row.id,
+      functionNames: names,
+    })
+    : null;
+  const overrideByFunction = new Map(
+    (overrides || []).map((entry) => [entry.functionName, entry]),
+  );
   const accessPolicy = accessPolicySummaryForTool(row);
 
   return names.map((name) => {
@@ -5282,6 +5451,8 @@ async function buildLaunchFunctionSummaries(
       callerPermission: permissionByFunction.get(name) || null,
       // Deprecated alias kept for one rename window.
       agentPermission: permissionByFunction.get(name) || null,
+      inferenceOverride: overrideByFunction.get(name) || null,
+      usesInference: functionUsesInference(manifest, name),
     };
   });
 }

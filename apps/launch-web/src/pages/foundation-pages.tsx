@@ -134,6 +134,10 @@ interface AgentFunctionFixture {
   p50: number | null;
   permission: "always" | "ask" | "never";
   price: number;
+  usesInference?: boolean;
+  inferenceOverride?:
+    | { billingMode: "light" | "byok"; provider: string | null; model: string | null }
+    | null;
 }
 
 interface AgentDetailFixture extends AgentFixture {
@@ -533,6 +537,14 @@ function liveAgentFixture(
     permission: permissions.get(fn.name) || fn.callerPermission?.policy ||
       fn.agentPermission?.policy || "ask" as const,
     price: creditsValue(fn.pricing?.defaultCallPrice),
+    usesInference: fn.usesInference ?? false,
+    inferenceOverride: fn.inferenceOverride
+      ? {
+        billingMode: fn.inferenceOverride.billingMode,
+        provider: fn.inferenceOverride.provider,
+        model: fn.inferenceOverride.model,
+      }
+      : null,
   }));
   const trust = options.trustCard;
   const paidFunctionPrices = functions.map((fn) => fn.price).filter((price) =>
@@ -1792,6 +1804,16 @@ function AgentFunctionsPanel({
     <div className="functions-panel">
       <FunctionSandboxCard fn={selectedFunction} live={live} tool={tool} />
       <PermissionControl fn={selectedFunction} live={live} tool={tool} />
+      {selectedFunction.usesInference
+        ? (
+          <FunctionInferenceControl
+            fn={selectedFunction}
+            key={selectedFunction.name}
+            live={live}
+            tool={tool}
+          />
+        )
+        : null}
       <FunctionWiring fn={selectedFunction} live={live} />
     </div>
   );
@@ -2256,6 +2278,116 @@ function PermissionControl({
             ? "Retry"
             : dirty
             ? "Save"
+            : "Saved"}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+// Per-function galactic.ai() provider+model override. The viewer pins which
+// provider (Galactic AI = credits, or one of their BYOK keys) and model this
+// function's galactic.ai() calls use. Unset => the default fallback chain
+// (dev per-call model > the viewer's global platform model > deepseek-v4).
+function FunctionInferenceControl({
+  fn,
+  live,
+  tool,
+}: {
+  fn: AgentFunctionFixture;
+  live: LaunchPageProps["live"];
+  tool: AgentDetailFixture;
+}): ReactElement {
+  const byokProviders =
+    (live.data.byok ? live.data.byok.providers : byokProviderFixtures)
+      .filter((option) => option.configured);
+  const galacticDefault = live.data.inferenceOptions?.platformModel ||
+    GALACTIC_DEFAULT_MODEL;
+  const providerOptions = [
+    { value: "galactic", label: "Galactic AI", defaultModel: galacticDefault },
+    ...byokProviders.map((option) => ({
+      value: option.id,
+      label: option.name,
+      defaultModel: option.model || option.defaultModel || "",
+    })),
+  ];
+  const defaultModelFor = (value: string) =>
+    providerOptions.find((option) => option.value === value)?.defaultModel ||
+    galacticDefault;
+
+  const initialProvider = fn.inferenceOverride
+    ? (fn.inferenceOverride.billingMode === "byok"
+      ? (fn.inferenceOverride.provider || "galactic")
+      : "galactic")
+    : "galactic";
+  const initialModel = fn.inferenceOverride?.model ||
+    defaultModelFor(initialProvider);
+  const [provider, setProvider] = useState(initialProvider);
+  const [model, setModel] = useState(initialModel);
+  const [savedProvider, setSavedProvider] = useState(initialProvider);
+  const [savedModel, setSavedModel] = useState(initialModel);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "error">(
+    "idle",
+  );
+  const dirty = provider !== savedProvider ||
+    model.trim() !== savedModel.trim();
+
+  return (
+    <Card className="permission-control">
+      <div>
+        <strong>Galactic AI model</strong>
+        <span>
+          Which provider and model galactic.ai() uses for this function. Galactic
+          AI bills credits; a BYOK provider uses your own key.
+        </span>
+      </div>
+      <div className="permission-actions">
+        <select
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            setProvider(value);
+            setModel(defaultModelFor(value));
+          }}
+          value={provider}
+        >
+          {providerOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <input
+          onChange={(event) => setModel(event.currentTarget.value)}
+          placeholder={defaultModelFor(provider)}
+          value={model}
+        />
+        <Button
+          onClick={async () => {
+            if (!dirty || !model.trim()) return;
+            setSaveState("saving");
+            try {
+              await launchApi.updateAgentFunctionInference(tool.id, fn.name, {
+                provider,
+                model: model.trim(),
+              });
+              setSavedProvider(provider);
+              setSavedModel(model.trim());
+              setModel(model.trim());
+              setSaveState("idle");
+              live.reload();
+            } catch {
+              setSaveState("error");
+            }
+          }}
+          size="sm"
+          variant={dirty ? "primary" : "secondary"}
+        >
+          {saveState === "saving"
+            ? "Saving"
+            : saveState === "error"
+            ? "Retry"
+            : dirty
+            ? "Save model"
             : "Saved"}
         </Button>
       </div>

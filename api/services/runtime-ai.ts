@@ -1,4 +1,9 @@
-import type { AIRequest, AIResponse, ChatUsage } from "../../shared/contracts/ai.ts";
+import type {
+  AIRequest,
+  AIResponse,
+  ChatUsage,
+  InferenceRoutePreference,
+} from "../../shared/contracts/ai.ts";
 import { CHAT_MIN_BALANCE_LIGHT } from "../../shared/contracts/ai.ts";
 import type { RuntimeAIRoute } from "../runtime/sandbox.ts";
 import { createAIService } from "./ai.ts";
@@ -138,6 +143,9 @@ export interface CreateRuntimeAIContextOptions {
   // balance gate fails CLOSED — a balance-read error denies inference rather
   // than proceeding un-gated, so a $0 user can never spend. See FREE_MODE_DESIGN.
   freeMode?: boolean;
+  // Per-(installer, app, function) route override → a resolveInferenceRoute
+  // selection. null/undefined = no override → the default fallback chain.
+  inferenceSelection?: InferenceRoutePreference | null;
 }
 
 export async function createRuntimeAIContext(
@@ -162,6 +170,7 @@ export async function createRuntimeAIContext(
     const route = await resolveRoute({
       userId: user.id,
       userEmail: user.email,
+      selection: options.inferenceSelection ?? null,
     });
 
     // Pre-call balance gate for credits-billed routes (BYOK routes set

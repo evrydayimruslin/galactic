@@ -18,6 +18,8 @@ import type {
   LaunchByokMutationResponse,
   LaunchCallerFunctionPermissionsResponse,
   LaunchCallerFunctionPermissionsUpdateRequest,
+  LaunchFunctionInferenceOverrideRequest,
+  LaunchFunctionInferenceResponse,
   LaunchByokPrimaryRequest,
   LaunchByokSummaryResponse,
   LaunchByokUpsertRequest,
@@ -312,6 +314,28 @@ export class LaunchApiClient {
       {
         method: "PATCH",
         body: JSON.stringify(request),
+      },
+    );
+  }
+
+  agentFunctionInference(
+    idOrSlug: string,
+  ): Promise<LaunchFunctionInferenceResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/function-inference`,
+    );
+  }
+
+  updateAgentFunctionInference(
+    idOrSlug: string,
+    functionName: string,
+    request: LaunchFunctionInferenceOverrideRequest,
+  ): Promise<LaunchFunctionInferenceResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/function-inference`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ functionName, ...request }),
       },
     );
   }

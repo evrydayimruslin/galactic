@@ -82,6 +82,9 @@ export const LAUNCH_API_ROUTES = [
   "DELETE /api/launch/agents/:id/install",
   "GET /api/launch/agents/:id/caller-permissions",
   "PATCH /api/launch/agents/:id/caller-permissions",
+  "GET /api/launch/agents/:id/function-inference",
+  "PUT /api/launch/agents/:id/function-inference",
+  "DELETE /api/launch/agents/:id/function-inference",
   "GET /api/launch/admin/agents/:id",
   "GET /api/launch/agents/:id/wiring",
   "GET /api/launch/agents/:id/caller-trust",
@@ -329,6 +332,10 @@ export interface LaunchFunctionSummary {
   callerPermission?: LaunchCallerFunctionPermissionSummary | null;
   /** @deprecated Use callerPermission. */
   agentPermission?: LaunchCallerFunctionPermissionSummary | null;
+  /** The viewer's per-function galactic.ai() provider+model override, if set. */
+  inferenceOverride?: LaunchFunctionInferenceOverrideSummary | null;
+  /** Whether this function calls galactic.ai() (gates the model picker UI). */
+  usesInference?: boolean;
 }
 
 export type LaunchAgentHandle = Pick<
@@ -409,6 +416,30 @@ export interface LaunchCallerFunctionPermissionsResponse {
   tool: LaunchAgentHandle;
   defaultPolicy: LaunchCallerFunctionPolicy;
   permissions: LaunchCallerFunctionPermissionSummary[];
+  generatedAt: string;
+}
+
+/** Per-(viewer, app, function) galactic.ai() override. provider null = Galactic AI (credits). */
+export interface LaunchFunctionInferenceOverrideSummary {
+  appId: string;
+  functionName: string;
+  billingMode: "light" | "byok";
+  provider: string | null;
+  model: string | null;
+  updatedAt?: string | null;
+}
+
+/** PUT body (alongside functionName): provider 'galactic'/'light' => credits, else a BYOK provider id. */
+export interface LaunchFunctionInferenceOverrideRequest {
+  provider: string;
+  model?: string;
+}
+
+export interface LaunchFunctionInferenceResponse {
+  agent: LaunchAgentHandle;
+  /** @deprecated Use agent. */
+  tool: LaunchAgentHandle;
+  overrides: LaunchFunctionInferenceOverrideSummary[];
   generatedAt: string;
 }
 

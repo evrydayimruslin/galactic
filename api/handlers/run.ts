@@ -18,6 +18,7 @@ import {
   createRuntimeAIContext,
   createUnavailableAIService,
 } from "../services/runtime-ai.ts";
+import { resolveFunctionInferenceOverride } from "../services/function-inference-overrides.ts";
 import { executeGpuFunction } from "../services/gpu/executor.ts";
 import { acquireGpuSlot } from "../services/gpu/concurrency.ts";
 import { buildGpuNotReadyMessage } from "../services/gpu/status.ts";
@@ -432,8 +433,20 @@ export async function handleRun(
 
     // ── Deno Sandbox Path ──
     const permissions = resolveStrictManifestPermissions(app).permissions;
-    const runtimeAI = permissions.includes("ai:call")
-      ? await createRuntimeAIContext(user, { freeMode: caller.freeMode })
+    const usesAi = permissions.includes("ai:call");
+    // Per-function provider/model override for this installer's galactic.ai().
+    const inferenceSelection = usesAi
+      ? await resolveFunctionInferenceOverride({
+        userId,
+        appId: app.id,
+        functionName,
+      })
+      : null;
+    const runtimeAI = usesAi
+      ? await createRuntimeAIContext(user, {
+        freeMode: caller.freeMode,
+        inferenceSelection,
+      })
       : {
         route: null,
         resolvedRoute: null,

@@ -13,6 +13,7 @@ import {
   createRuntimeAIContext,
   createUnavailableAIService,
 } from "../services/runtime-ai.ts";
+import { resolveFunctionInferenceOverride } from "../services/function-inference-overrides.ts";
 import { checkAndIncrementWeeklyCalls } from "../services/weekly-calls.ts";
 import { executeGpuFunction } from "../services/gpu/executor.ts";
 import { acquireGpuSlot } from "../services/gpu/concurrency.ts";
@@ -581,9 +582,20 @@ export async function handleHttpEndpoint(
     const billingRuntimeUser = httpPermissions.includes("ai:call")
       ? await resolveHttpBillingRuntimeUser(app.owner_id, caller, httpRuntime)
       : (httpRuntime.payerUserId === user?.id ? user : null);
+    // Per-function override keyed on the INSTALLER/payer (not the billing user,
+    // which may be the app owner). The selection is the installer's choice; the
+    // route still resolves keys/balance for billingRuntimeUser.
+    const inferenceSelection = httpPermissions.includes("ai:call")
+      ? await resolveFunctionInferenceOverride({
+        userId: httpRuntime.payerUserId,
+        appId: app.id,
+        functionName,
+      })
+      : null;
     const runtimeAI = httpPermissions.includes("ai:call")
       ? await createRuntimeAIContext(billingRuntimeUser, {
         freeMode: caller.freeMode,
+        inferenceSelection,
       })
       : {
         route: null,

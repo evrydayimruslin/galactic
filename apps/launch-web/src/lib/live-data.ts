@@ -176,6 +176,8 @@ async function loadRouteData(
         agentWiring,
         agentCallerTrust,
         install,
+        byok,
+        inferenceOptions,
       ] = await Promise
         .all([
           launchApi.agent(id),
@@ -185,6 +187,10 @@ async function loadRouteData(
           optional(() => launchApi.agentCallerTrust(id)),
           // Per-agent install context (dedicated MCP URL + connect prompt).
           optional(() => launchApi.install({ agent: id })),
+          // Loaded so the per-function inference control can list the viewer's
+          // providers (Galactic AI + their configured BYOK keys).
+          optional(() => launchApi.byok()),
+          optional(() => launchApi.inferenceOptions()),
         ]);
       return {
         agent,
@@ -192,6 +198,8 @@ async function loadRouteData(
         agentCallerTrust,
         agentFunctions,
         agentWiring,
+        byok,
+        inferenceOptions,
         install,
       };
     }

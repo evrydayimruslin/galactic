@@ -22,6 +22,7 @@ import {
   createRuntimeAIContext,
   createUnavailableAIService,
 } from "../services/runtime-ai.ts";
+import { resolveFunctionInferenceOverride } from "../services/function-inference-overrides.ts";
 import { getPermissionCache } from "../services/permission-cache.ts";
 import { resolveInternalMcpCall } from "../services/internal-mcp.ts";
 import {
@@ -2602,8 +2603,18 @@ async function executeAppFunction(
       : permissions.includes("ai:call")
       ? 120_000
       : 30_000;
+    const inferenceSelection = permissions.includes("ai:call")
+      ? await resolveFunctionInferenceOverride({
+        userId,
+        appId: app.id,
+        functionName,
+      })
+      : null;
     const runtimeAI = permissions.includes("ai:call")
-      ? await createRuntimeAIContext(user, { freeMode: callerContext.freeMode })
+      ? await createRuntimeAIContext(user, {
+        freeMode: callerContext.freeMode,
+        inferenceSelection,
+      })
       : {
         route: null,
         resolvedRoute: null,
