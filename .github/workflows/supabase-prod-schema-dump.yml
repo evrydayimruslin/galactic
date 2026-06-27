@@ -1,0 +1,54 @@
+name: Supabase Prod Schema Dump
+
+# Manual, read-only capture of production's TRUE schema (DDL) as a build
+# artifact. Used to re-baseline the migration files when prod has drifted from
+# them (the original baseline `db pull` did not capture everything faithfully).
+# Runs `supabase db dump` on the runner (Docker is available there), so no local
+# Docker is required. The artifact is the schema only — no rows, no secrets.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-prod-schema-dump
+  cancel-in-progress: false
+
+jobs:
+  dump:
+    name: Dump production schema
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PRODUCTION_PROJECT_ID }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_PRODUCTION_DB_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link production
+        run: supabase link --project-ref "$SUPABASE_PROJECT_ID" -p "$SUPABASE_DB_PASSWORD" --workdir .
+
+      - name: Dump schema (DDL) and roles
+        run: |
+          set -euo pipefail
+          supabase db dump --linked -f prod_schema.sql
+          supabase db dump --linked --role-only -f prod_roles.sql || true
+          echo "prod_schema.sql: $(wc -l < prod_schema.sql) lines"
+          echo "prod_roles.sql:  $(wc -l < prod_roles.sql 2>/dev/null || echo 0) lines"
+
+      - name: Upload schema artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-schema
+          path: |
+            prod_schema.sql
+            prod_roles.sql
+          retention-days: 3
+          if-no-files-found: error
