@@ -3925,6 +3925,8 @@ button {
   display: flex;
   align-items: flex-start;
   gap: 8px;
+  /* Nudge the consent line up 1px. */
+  margin-top: -1px;
   color: var(--ul-secondary);
   font-size: 12px;
   line-height: 1.4;
