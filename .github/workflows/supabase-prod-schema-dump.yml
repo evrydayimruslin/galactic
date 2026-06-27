@@ -45,6 +45,12 @@ jobs:
       - name: Link ${{ github.event.inputs.environment }}
         run: supabase link --project-ref "$SUPABASE_PROJECT_ID" -p "$SUPABASE_DB_PASSWORD" --workdir .
 
+      - name: Migration history (what this project records as applied)
+        run: |
+          echo "::group::supabase migration list --linked (${{ github.event.inputs.environment }})"
+          supabase migration list --linked --workdir . || true
+          echo "::endgroup::"
+
       - name: Dump schema (DDL) and roles
         run: |
           set -euo pipefail
