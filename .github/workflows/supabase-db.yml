@@ -73,13 +73,22 @@ jobs:
       # Drift gate: after pushing, the linked staging DB must match the checked-in
       # migrations exactly. A non-empty diff means someone changed staging schema
       # out-of-band (e.g. the SQL editor) — fail so it gets captured as a migration.
+      # Note: `db diff` reads the password from SUPABASE_DB_PASSWORD (it does NOT
+      # accept -p like `db push`). A tool/connection error is reported but does NOT
+      # fail the deploy — only a real schema diff does.
       - name: Check for staging schema drift
         run: |
-          set -euo pipefail
-          DIFF="$(supabase db diff --linked --schema public -p "$SUPABASE_DB_PASSWORD" --workdir . || true)"
-          if [ -n "${DIFF// /}" ] && ! printf '%s' "$DIFF" | grep -qiE 'no schema changes found'; then
-            echo "::error::Staging schema drift detected — capture it as a migration in supabase/migrations/." >&2
-            printf '%s\n' "$DIFF"
-            exit 1
+          set -uo pipefail
+          if ! DIFF="$(supabase db diff --linked --schema public --workdir . 2>diff.err)"; then
+            echo "::warning::Drift check could not run (db diff failed); skipping gate this run." >&2
+            sed 's/^/[db diff] /' diff.err >&2 || true
+            exit 0
           fi
-          echo "No staging schema drift."
+          # Strip whitespace/newlines to test for an effectively-empty diff.
+          if printf '%s' "$DIFF" | grep -qiE 'no schema changes found' || [ -z "${DIFF//[$'\n\t ']/}" ]; then
+            echo "No staging schema drift."
+            exit 0
+          fi
+          echo "::error::Staging schema drift detected — capture it as a migration in supabase/migrations/." >&2
+          printf '%s\n' "$DIFF"
+          exit 1
