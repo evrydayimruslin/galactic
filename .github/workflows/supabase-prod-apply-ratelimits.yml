@@ -54,12 +54,16 @@ jobs:
       - name: Repair history — mark 20260516120000 reverted
         run: supabase migration repair --status reverted 20260516120000 --linked --workdir . -p "$SUPABASE_DB_PASSWORD"
 
+      # --include-all: 20260516120000 sorts before prod's last-applied migration,
+      # so db push treats it as an out-of-order insertion and skips it without
+      # this flag. The set is {20260516120000 (repaired to reverted above),
+      # 20260627000000 (genuinely pending)} — both verified idempotent + additive.
       - name: Dry-run push (preview what will apply)
-        run: supabase db push --linked --dry-run --workdir . -p "$SUPABASE_DB_PASSWORD"
+        run: supabase db push --linked --include-all --dry-run --workdir . -p "$SUPABASE_DB_PASSWORD"
 
       - name: Apply push
         if: ${{ github.event.inputs.mode == 'apply' }}
-        run: supabase db push --linked --workdir . -p "$SUPABASE_DB_PASSWORD" --yes
+        run: supabase db push --linked --include-all --workdir . -p "$SUPABASE_DB_PASSWORD" --yes
 
       - name: Migration status (after)
         run: supabase migration list --linked --workdir . || true
