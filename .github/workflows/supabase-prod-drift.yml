@@ -31,9 +31,10 @@ jobs:
       SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PRODUCTION_PROJECT_ID }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_PRODUCTION_DB_PASSWORD }}
       SUPABASE_ENV_NAME: production
-      # Report-only while prod's hand-built schema is being reconciled into the
-      # migration files: the nightly logs any diff but won't fail/email. Flip
-      # back to blocking (remove this) once prod and the migrations match.
+      # Report-only by design: prod intentionally runs a CURATED SUBSET of the
+      # launch surface, so it will always differ from the full migration set. The
+      # nightly logs the diff for visibility but won't fail/email. Treat the diff
+      # as a "prod vs full-product delta" report, not a pass/fail gate.
       DRIFT_REPORT_ONLY: "1"
 
     steps:

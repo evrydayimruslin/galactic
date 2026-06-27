@@ -47,8 +47,10 @@ jobs:
       SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PRODUCTION_PROJECT_ID }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_PRODUCTION_DB_PASSWORD }}
       SUPABASE_ENV_NAME: production
-      # Report-only while prod's hand-built schema is being reconciled into the
-      # migration files. Flip back to blocking (remove this) once they match.
+      # Report-only by design: prod intentionally runs a CURATED SUBSET of the
+      # launch surface (deferred features like routines/agentic-interfaces have no
+      # prod schema), so prod will always differ from the full migration set. The
+      # drift check logs the diff for visibility but must not block prod deploys.
       DRIFT_REPORT_ONLY: "1"
 
     steps:
