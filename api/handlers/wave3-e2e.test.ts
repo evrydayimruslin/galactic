@@ -1638,3 +1638,115 @@ export async function echo(args = {}) {
     }
   },
 });
+
+Deno.test({
+  name:
+    "rollback: gx.set repoints the live runnable bundle (fast path + R2 rebuild fallback)",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async (t) => {
+    const harness = new Wave3Harness();
+    const restore = harness.install();
+
+    const appId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const V1_BUNDLE = "/* esm v1 */ export const __v = 'v1-runtime-bundle';";
+    const V2_BUNDLE = "/* esm v2 */ export const __v = 'v2-runtime-bundle';";
+
+    const callSet = async (version: string): Promise<JsonRecord> => {
+      const response = await handlePlatformMcp(
+        new Request("https://wave3.ultralight.test/mcp/platform", {
+          method: "POST",
+          headers: authHeaders(OWNER_TOKEN),
+          body: JSON.stringify(
+            rpcRequest("tools/call", {
+              name: "ul.set",
+              arguments: { app_id: appId, version },
+            }),
+          ),
+        }),
+      );
+      return await parseJson(response);
+    };
+
+    try {
+      harness.seedUser(
+        { id: OWNER_ID, email: OWNER_EMAIL, display_name: "Owner" },
+        OWNER_TOKEN,
+      );
+
+      // Seed v1.0.0. Its runtime bundle is the sentinel V1_BUNDLE; R2 holds a
+      // real entry file so executeSetVersion can extract exports.
+      harness.seedApp(
+        {
+          id: appId,
+          owner_id: OWNER_ID,
+          slug: "rollback-app",
+          name: "Rollback App",
+          description: "Proves gx.set swaps the live runnable bundle",
+          visibility: "private",
+          storage_key: `apps/${appId}/1.0.0/`,
+          exports: ["run"],
+          manifest: null,
+        },
+        "export function run() { return 'v1'; }",
+        "index.js",
+        V1_BUNDLE,
+      );
+
+      // Promote to "live on v2" the way an upload would, and add a
+      // fallback-only v3 whose per-version KV bundle is intentionally absent.
+      const row = harness.apps.find((a) => a.id === appId)!;
+      row.current_version = "2.0.0";
+      row.versions = ["1.0.0", "2.0.0", "3.0.0"];
+      // v2: per-version KV bundle present (fast path), R2 entry file present.
+      harness.codeCache.put(`esm:${appId}:2.0.0`, V2_BUNDLE);
+      harness.codeCache.put(`esm:${appId}:latest`, V2_BUNDLE); // runtime serves v2
+      harness.r2.put(
+        `apps/${appId}/2.0.0/index.js`,
+        new TextEncoder().encode("export function run(){return 'v2';}"),
+      );
+      // v3: NO esm:{id}:3.0.0 in KV — forces the R2 _source_ rebuild fallback.
+      harness.r2.put(
+        `apps/${appId}/3.0.0/_source_index.ts`,
+        new TextEncoder().encode(
+          "export function run() { return { marker: 'v3-fallback-marker' }; }",
+        ),
+      );
+
+      await t.step(
+        "fast path: set version=1.0.0 copies the retained per-version bundle to :latest",
+        async () => {
+          // Precondition: the runtime is serving v2.
+          assertEquals(harness.codeCache.read(`esm:${appId}:latest`), V2_BUNDLE);
+
+          const payload = await callSet("1.0.0");
+          const result = expectToolSuccess(payload);
+          assertEquals(result.live_version, "1.0.0");
+
+          // The bundle the runtime loads is now v1 — the actual rollback.
+          assertEquals(harness.codeCache.read(`esm:${appId}:latest`), V1_BUNDLE);
+        },
+      );
+
+      await t.step(
+        "fallback: set version=3.0.0 rebuilds ESM from R2 when the per-version bundle is missing",
+        async () => {
+          assertEquals(harness.codeCache.read(`esm:${appId}:3.0.0`), null);
+
+          const payload = await callSet("3.0.0");
+          const result = expectToolSuccess(payload);
+          assertEquals(result.live_version, "3.0.0");
+
+          const live = harness.codeCache.read(`esm:${appId}:latest`);
+          assertExists(live);
+          // Rebuilt from R2 source — the marker survives bundling.
+          assert(live!.includes("v3-fallback-marker"));
+          // Backfilled so future swaps hit the fast path.
+          assertEquals(harness.codeCache.read(`esm:${appId}:3.0.0`), live);
+        },
+      );
+    } finally {
+      restore();
+    }
+  },
+});

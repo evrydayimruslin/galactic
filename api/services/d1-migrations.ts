@@ -187,8 +187,9 @@ export async function runMigrations(
  *
  * Rules:
  * - Every CREATE TABLE (except system tables starting with _) must have user_id TEXT NOT NULL
- * - No DROP TABLE or DROP INDEX (destructive — must be explicit)
- * - No PRAGMA statements (security risk)
+ * - No DROP TABLE; no ALTER TABLE ... DROP COLUMN (destructive, breaks rollback compatibility)
+ * - No PRAGMA / ATTACH DATABASE (security risk)
+ * - DROP INDEX, RENAME, and DELETE FROM are warned (non-additive / mutate data at deploy)
  */
 export function validateMigrationSchema(sql: string): SchemaValidationResult {
   const errors: string[] = [];
@@ -229,6 +230,22 @@ export function validateMigrationSchema(sql: string): SchemaValidationResult {
   // Check for destructive operations
   if (/DROP\s+TABLE/i.test(normalized)) {
     errors.push('DROP TABLE is not allowed in migrations. Remove the statement and create a new migration if restructuring.');
+  }
+
+  // Non-additive schema changes break rollback compatibility: an older code
+  // version promoted via gx.set may still reference a column a later migration
+  // removed or renamed. Keep migrations additive.
+  if (/ALTER\s+TABLE[\s\S]*?DROP\s+COLUMN/i.test(normalized)) {
+    errors.push('ALTER TABLE ... DROP COLUMN is not allowed in migrations. Dropping a column breaks older code versions if they are rolled back to. Keep migrations additive.');
+  }
+  if (/DROP\s+INDEX/i.test(normalized)) {
+    warnings.push('DROP INDEX in a migration is irreversible at the schema level — prefer leaving indexes in place or replacing them within the same migration.');
+  }
+  if (/\bRENAME\b/i.test(normalized)) {
+    warnings.push('RENAME (TABLE/COLUMN) is a non-additive change; older code rolled back via gx.set will reference the old name. Prefer add-new + backfill + (later) remove.');
+  }
+  if (/DELETE\s+FROM/i.test(normalized)) {
+    warnings.push('DELETE FROM in a migration mutates user data at deploy time and cannot be undone by a code rollback. Confirm this is intentional.');
   }
 
   // Check for PRAGMA

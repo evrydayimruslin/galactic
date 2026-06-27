@@ -7044,10 +7044,15 @@ async function executeUpload(
     );
     try {
       await globalThis.__env.CODE_CACHE.put(
-        `esm:${app.id}:${newVersion}`,
+        `esm:${app.id}:${newVersion}`, // always retain the versioned bundle
         kvBundle,
       );
-      await globalThis.__env.CODE_CACHE.put(`esm:${app.id}:latest`, kvBundle);
+      // Only repoint the live pointer when this version is actually going live.
+      // A non-live version upload (existing app, no _auto_live) must NOT silently
+      // become the running bundle — promotion happens via gx.set (executeSetVersion).
+      if (autoLive) {
+        await globalThis.__env.CODE_CACHE.put(`esm:${app.id}:latest`, kvBundle);
+      }
       platformUploadLogger.info("Updated KV cache for uploaded version", {
         app_id: app.id,
         version: newVersion,
@@ -9665,6 +9670,72 @@ async function executeSetVersion(
     r2Service,
   );
 
+  // ── Repoint the live runnable bundle to the target version ──
+  // This is the step that makes set.version actually change EXECUTED code.
+  // The runtime loads app code solely from esm:{appId}:latest, so promoting a
+  // version means rewriting that key. Fast path: copy the retained per-version
+  // bundle esm:{appId}:{version}. Fallback: rebuild the ESM from the version's
+  // R2 _source_* (some versions written by rebuild/publish paths never wrote a
+  // per-version key). Done BEFORE the DB update so a resolution failure throws
+  // and leaves current_version on the still-live previous version — the DB
+  // pointer and the runnable bundle can never diverge via this path.
+  if (!globalThis.__env?.CODE_CACHE) {
+    throw new ToolError(
+      VALIDATION_ERROR,
+      "CODE_CACHE binding unavailable; cannot set live version",
+    );
+  }
+  {
+    const versionedKey = `esm:${app.id}:${version}`;
+    let esmBundle = await globalThis.__env.CODE_CACHE.get(versionedKey);
+
+    if (!esmBundle) {
+      // Fallback: rebuild ESM from this version's R2 source (mirrors the proven
+      // rebuild pattern in api/handlers/apps.ts).
+      const candidateEntries = ["index.tsx", "index.ts", "index.jsx", "index.js"];
+      let sourceCode: string | null = null;
+      let entryFileName = "";
+      for (const candidate of candidateEntries) {
+        try {
+          sourceCode = await r2Service.fetchTextFile(
+            `${newStorageKey}_source_${candidate}`,
+          );
+          entryFileName = candidate;
+          break;
+        } catch { /* try next candidate */ }
+      }
+      if (!sourceCode || !entryFileName) {
+        throw new ToolError(
+          VALIDATION_ERROR,
+          `Cannot set version ${version} live: no KV bundle and no R2 source ` +
+            `(_source_index.*) found for that version. Re-upload it.`,
+        );
+      }
+      const { bundleCodeESM } = await import("../services/bundler.ts");
+      const bundleResult = await bundleCodeESM(
+        [{ name: entryFileName, content: sourceCode }],
+        entryFileName,
+      );
+      // bundleCodeESM returns the ESM output in `.code` (not `.esmCode`).
+      if (!bundleResult.success || !bundleResult.code) {
+        throw new ToolError(
+          VALIDATION_ERROR,
+          `Cannot set version ${version} live: rebuild failed: ${
+            (bundleResult.errors || []).join(", ")
+          }`,
+        );
+      }
+      esmBundle = bundleResult.code;
+      // Backfill the missing per-version key so future swaps hit the fast path.
+      try {
+        await globalThis.__env.CODE_CACHE.put(versionedKey, esmBundle);
+      } catch { /* best-effort backfill */ }
+    }
+
+    // Repoint the live pointer. Fatal: if this fails we must NOT advance the DB.
+    await globalThis.__env.CODE_CACHE.put(`esm:${app.id}:latest`, esmBundle);
+  }
+
   // Update app
   const appsService = createAppsService();
   await appsService.update(app.id, {
@@ -9676,6 +9747,13 @@ async function executeSetVersion(
       : {}),
   });
   await recordLiveAppStorage(userId, app.id, version, liveStorageBytes);
+
+  // Invalidate in-memory R2 code cache so the HTTP/entry-file path re-reads
+  // this version's source (coherent with the KV swap above).
+  {
+    const { getCodeCache } = await import("../services/codecache.ts");
+    getCodeCache().invalidate(app.id);
+  }
 
   // Load skills from this version's R2 artifacts
   try {
