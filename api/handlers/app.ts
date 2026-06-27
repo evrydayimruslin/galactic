@@ -434,7 +434,7 @@ export function createApp() {
         const cacheStats = getCodeCache().stats;
         return json({
           status: "ok",
-          version: "0.3.7",
+          version: "0.3.8",
           deployed: new Date().toISOString(),
           cache: cacheStats,
         });

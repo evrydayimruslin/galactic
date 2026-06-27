@@ -3760,6 +3760,11 @@ button {
   background: transparent;
 }
 
+/* Nudge the "Order summary" heading down a few px from the amount section. */
+.wallet-quote-card .section-label {
+  margin-top: 5px;
+}
+
 .quote-line,
 .quote-total,
 .quote-receive {

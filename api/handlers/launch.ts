@@ -123,6 +123,7 @@ import {
   LaunchWalletFundingError,
 } from "../services/stripe-launch-wallet-funding.ts";
 import { markLightDepositFailed } from "../services/stripe-deposits.ts";
+import { getSupabaseEnv } from "../services/user-supabase-configs.ts";
 import {
   LAUNCH_WALLET_FUNDING_PRESETS,
   normalizeLaunchFundingAmountLight,
@@ -594,6 +595,16 @@ export async function handleLaunch(request: Request): Promise<Response> {
         return error("Method not allowed for launch wallet top-up cancel", 405);
       }
       return await handleLaunchWalletTopUpCancel(request);
+    }
+
+    if (path === "/api/launch/wallet/topup/update-amount") {
+      if (method !== "POST") {
+        return error(
+          "Method not allowed for launch wallet top-up amount update",
+          405,
+        );
+      }
+      return await handleLaunchWalletTopUpUpdateAmount(request);
     }
 
     const agentPermissionsMatch = path.match(
@@ -4534,6 +4545,152 @@ async function handleLaunchWalletTopUpCancel(
   } catch (err) {
     console.error("[LAUNCH] Wallet top-up cancel failed:", err);
     return json({ ok: false });
+  }
+}
+
+// Update an existing top-up PaymentIntent's amount in place (instead of
+// creating a new one) when the buyer changes the dollar amount. This keeps the
+// same clientSecret, so the mounted Payment Element + Link wallet stay put
+// rather than reloading on every amount change. Only valid while the intent is
+// still collecting a payment method.
+async function handleLaunchWalletTopUpUpdateAmount(
+  request: Request,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForWalletFunding(user);
+  try {
+    const body = asRecord(await readJsonBody<unknown>(request)) || {};
+    const paymentIntentId = typeof body.payment_intent_id === "string"
+      ? body.payment_intent_id.trim()
+      : "";
+    if (!paymentIntentId.startsWith("pi_")) {
+      return error("A valid payment_intent_id is required", 400);
+    }
+    const amountCredits = normalizeLaunchFundingAmountLight(
+      body.amount_credits ?? body.amountCredits,
+    );
+    const stripeSecretKey = getEnv("STRIPE_SECRET_KEY");
+    if (!stripeSecretKey) {
+      return error("Stripe wallet funding is not configured yet.", 503);
+    }
+
+    const piRes = await fetch(
+      `https://api.stripe.com/v1/payment_intents/${
+        encodeURIComponent(paymentIntentId)
+      }`,
+      { headers: { "Authorization": `Bearer ${stripeSecretKey}` } },
+    );
+    if (!piRes.ok) return error("Payment intent not found", 404);
+    const pi = await piRes.json() as {
+      status?: string;
+      customer?: string | null;
+      metadata?: Record<string, string>;
+    };
+    if (
+      pi.metadata?.user_id !== user.id ||
+      pi.metadata?.type !== LAUNCH_WALLET_DEPOSIT_TYPE
+    ) {
+      return error("Payment intent does not belong to this account", 403);
+    }
+    // Once the intent is confirming/charged it can't be re-priced; the client
+    // falls back to creating a fresh intent.
+    if (
+      pi.status !== "requires_payment_method" &&
+      pi.status !== "requires_confirmation"
+    ) {
+      return error("Payment intent can no longer be updated", 409);
+    }
+
+    const quote = quoteLaunchWalletFunding({
+      amountLight: amountCredits,
+      method: "card",
+    });
+
+    const params = new URLSearchParams({
+      amount: String(quote.totalAmountCents),
+      "metadata[amount_cents]": String(quote.totalAmountCents),
+      "metadata[base_amount_cents]": String(quote.baseAmountCents),
+      "metadata[processing_fee_cents]": String(quote.processingFeeCents),
+      "metadata[light_amount]": String(quote.amountLight),
+    });
+    const updRes = await fetch(
+      `https://api.stripe.com/v1/payment_intents/${
+        encodeURIComponent(paymentIntentId)
+      }`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${stripeSecretKey}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: params.toString(),
+      },
+    );
+    if (!updRes.ok) {
+      console.error(
+        "[LAUNCH] Wallet top-up amount update failed:",
+        await updRes.text(),
+      );
+      return error("Couldn't update the amount. Please try again.", 502);
+    }
+
+    // Re-price the pending deposit row IN PLACE. recordPendingLightDeposit's
+    // upsert COALESCEs requested_amount_cents (existing-wins), so it would NOT
+    // change it on a re-price — leaving a stale requested amount that makes the
+    // webhook finalizer mislabel a fully-paid lower amount as
+    // "partially_succeeded". PATCH the pending row directly so the requested
+    // amount matches what will actually be charged. Best-effort; never blocks
+    // the response (the PI metadata.light_amount, updated above, is what
+    // actually drives the credited amount).
+    try {
+      const { SUPABASE_URL: sbUrl, SUPABASE_SERVICE_ROLE_KEY: sbKey } =
+        getSupabaseEnv();
+      const patchRes = await fetch(
+        `${sbUrl}/rest/v1/light_deposits?stripe_payment_intent_id=eq.${
+          encodeURIComponent(paymentIntentId)
+        }&status=eq.pending`,
+        {
+          method: "PATCH",
+          headers: {
+            "apikey": sbKey,
+            "Authorization": `Bearer ${sbKey}`,
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+          },
+          body: JSON.stringify({
+            requested_amount_cents: quote.totalAmountCents,
+            requested_light: quote.amountLight,
+          }),
+        },
+      );
+      // Surface a silent failure: if this PATCH doesn't land, the pending row
+      // keeps its stale requested amount and the finalizer can mislabel a
+      // lowered-amount deposit as partially_succeeded.
+      if (!patchRes.ok) {
+        console.error(
+          "[LAUNCH] Re-price pending deposit PATCH failed:",
+          patchRes.status,
+          await patchRes.text().catch(() => ""),
+        );
+      }
+    } catch (patchErr) {
+      console.error(
+        "[LAUNCH] Failed to re-price pending deposit row:",
+        patchErr,
+      );
+    }
+
+    return json({
+      success: true,
+      quote: withLaunchFundingCreditsAliases(quote),
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    if (err instanceof RequestValidationError) {
+      return error(err.message, err.status);
+    }
+    console.error("[LAUNCH] Wallet top-up amount update error:", err);
+    return error("Couldn't update the amount", 500);
   }
 }
 

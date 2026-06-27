@@ -416,6 +416,32 @@ export class LaunchApiClient {
     });
   }
 
+  /**
+   * Re-price an existing top-up PaymentIntent in place when the buyer changes
+   * the amount — keeps the same clientSecret so the mounted Payment Element +
+   * Link wallet don't reload. Returns the new server-locked quote.
+   */
+  updateWalletTopUpAmount(
+    paymentIntentId: string,
+    amountCredits: number,
+  ): Promise<{
+    success: boolean;
+    quote: {
+      baseAmountCents: number;
+      processingFeeCents: number;
+      feeFormula: string;
+      totalAmountCents: number;
+    };
+  }> {
+    return this.fetchJson("/api/launch/wallet/topup/update-amount", {
+      method: "POST",
+      body: JSON.stringify({
+        payment_intent_id: paymentIntentId,
+        amount_credits: amountCredits,
+      }),
+    });
+  }
+
   /** Seller Stripe Connect payout-account status. */
   connectStatus(): Promise<LaunchConnectStatus> {
     return this.fetchJson("/api/user/connect/status");
