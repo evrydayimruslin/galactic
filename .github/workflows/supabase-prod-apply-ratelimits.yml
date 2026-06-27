@@ -1,0 +1,65 @@
+name: Supabase Prod Apply Rate Limits
+
+# One-shot, surgical reconciliation: prod's history table falsely records the
+# HTTP rate-limits migration (20260516120000) as applied while its objects are
+# absent. This repairs that history entry to "reverted" and re-applies the
+# migration (verified idempotent + additive). Also picks up the genuinely-pending
+# 20260627000000 (function_inference_overrides), whose table already exists on
+# prod, so that is a no-op + history-honesty fix.
+#
+# Run mode=dryrun first (previews the plan), then mode=apply to execute.
+# Uses the production secrets already stored in GitHub — no local credentials.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dryrun (preview only) or apply'
+        type: choice
+        options:
+          - dryrun
+          - apply
+        default: dryrun
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-prod-apply-ratelimits
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Apply http_rate_limits to production (${{ github.event.inputs.mode }})
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PRODUCTION_PROJECT_ID }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_PRODUCTION_DB_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link production
+        run: supabase link --project-ref "$SUPABASE_PROJECT_ID" -p "$SUPABASE_DB_PASSWORD" --workdir .
+
+      - name: Migration status (before)
+        run: supabase migration list --linked --workdir . || true
+
+      - name: Repair history — mark 20260516120000 reverted
+        run: supabase migration repair --status reverted 20260516120000 --linked --workdir . -p "$SUPABASE_DB_PASSWORD"
+
+      - name: Dry-run push (preview what will apply)
+        run: supabase db push --linked --dry-run --workdir . -p "$SUPABASE_DB_PASSWORD"
+
+      - name: Apply push
+        if: ${{ github.event.inputs.mode == 'apply' }}
+        run: supabase db push --linked --workdir . -p "$SUPABASE_DB_PASSWORD" --yes
+
+      - name: Migration status (after)
+        run: supabase migration list --linked --workdir . || true
