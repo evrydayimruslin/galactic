@@ -28,7 +28,7 @@ Deno.test("stripe launch wallet funding: card intent params carry gross-up metad
   assertEquals(params.get("currency"), "usd");
   assertEquals(
     params.get("description"),
-    "Galactic credits funding (✦10.0K)",
+    "Galactic credits funding ($100.00)",
   );
   // Card + Link explicitly, no automatic_payment_methods / exclusions (those
   // let the Element surface Bank + Klarna).
@@ -74,7 +74,7 @@ Deno.test("stripe launch wallet funding: ACH intent params use Bank direct debit
   assertEquals(params.get("amount"), "100500");
   assertEquals(
     params.get("description"),
-    "Galactic credits funding (✦100.0K)",
+    "Galactic credits funding ($1,000.00)",
   );
   assertEquals(params.get("payment_method_types[0]"), "us_bank_account");
   assertEquals(

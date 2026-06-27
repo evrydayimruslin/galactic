@@ -1,4 +1,3 @@
-import { formatLight } from "../../shared/types/index.ts";
 import { getEnv } from "../lib/env.ts";
 import {
   type BillingConfig,
@@ -109,7 +108,12 @@ export function buildWireTransferPaymentIntentParams(
     "payment_method_options[customer_balance][bank_transfer][type]":
       WIRE_TRANSFER_BANK_TRANSFER_TYPE,
     confirm: "true",
-    description: `Galactic wire funding (${formatLight(lightAmount)})`,
+    description: `Galactic wire funding (${
+      (lightAmount / 100).toLocaleString("en-US", {
+        style: "currency",
+        currency: "USD",
+      })
+    })`,
     "metadata[user_id]": input.userId,
     "metadata[amount_cents]": String(input.amountCents),
     "metadata[light_amount]": String(lightAmount),

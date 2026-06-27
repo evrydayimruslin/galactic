@@ -1,4 +1,3 @@
-import { formatLight } from "../../shared/types/index.ts";
 import { getEnv } from "../lib/env.ts";
 import {
   type BillingConfig,
@@ -68,7 +67,12 @@ export function buildWalletExpressPaymentIntentParams(
     amount: String(input.amountCents),
     currency: "usd",
     customer: input.stripeCustomerId,
-    description: `Galactic Light funding (${formatLight(lightAmount)})`,
+    description: `Galactic credits funding (${
+      (lightAmount / 100).toLocaleString("en-US", {
+        style: "currency",
+        currency: "USD",
+      })
+    })`,
     "payment_method_types[0]": "card",
     "payment_method_options[card][request_three_d_secure]": "automatic",
     "metadata[user_id]": input.userId,

@@ -1,4 +1,3 @@
-import { formatLight } from "../../shared/types/index.ts";
 import type {
   LaunchWalletFundingFeeSummary,
   LaunchWalletFundingMethod,
@@ -72,7 +71,10 @@ export function buildLaunchWalletPaymentIntentParams(
     currency: "usd",
     customer: input.stripeCustomerId,
     description: `Galactic credits funding (${
-      formatLight(input.quote.amountLight)
+      (input.quote.baseAmountCents / 100).toLocaleString("en-US", {
+        style: "currency",
+        currency: "USD",
+      })
     })`,
     "metadata[user_id]": input.userId,
     "metadata[amount_cents]": String(input.quote.totalAmountCents),
