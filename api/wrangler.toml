@@ -164,7 +164,8 @@ GPU_SUPPORT_ENABLED = "false"
 # Mirror production: Free Mode on in staging so the staging smoke exercises the
 # paid-call/AI-without-BYOK gates before production promotion.
 FREE_MODE = "1"
-SUPABASE_URL = "https://uavjzycsltdnwblwutmb.supabase.co"
+# Isolated staging Supabase project (previously pointed at the prod project).
+SUPABASE_URL = "https://mtekfhozmsboxizxxxyn.supabase.co"
 CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 # Optional rollout knob for Wave 4 alias retirement:
 # PLATFORM_MCP_DISABLED_ALIASES = "removable"

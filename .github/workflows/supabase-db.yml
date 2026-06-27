@@ -45,7 +45,11 @@ jobs:
     name: Deploy staging schema
     runs-on: ubuntu-latest
     needs: validate
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_target == 'staging'
+    # Auto-deploy staging on merges to main (when migrations change), and still
+    # allow an explicit manual run via workflow_dispatch.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_target == 'staging')
     environment: staging
     concurrency:
       group: supabase-staging-db
@@ -65,3 +69,17 @@ jobs:
 
       - name: Push staging migrations
         run: bash ./scripts/supabase/deploy-linked.sh
+
+      # Drift gate: after pushing, the linked staging DB must match the checked-in
+      # migrations exactly. A non-empty diff means someone changed staging schema
+      # out-of-band (e.g. the SQL editor) — fail so it gets captured as a migration.
+      - name: Check for staging schema drift
+        run: |
+          set -euo pipefail
+          DIFF="$(supabase db diff --linked --schema public -p "$SUPABASE_DB_PASSWORD" --workdir . || true)"
+          if [ -n "${DIFF// /}" ] && ! printf '%s' "$DIFF" | grep -qiE 'no schema changes found'; then
+            echo "::error::Staging schema drift detected — capture it as a migration in supabase/migrations/." >&2
+            printf '%s\n' "$DIFF"
+            exit 1
+          fi
+          echo "No staging schema drift."
