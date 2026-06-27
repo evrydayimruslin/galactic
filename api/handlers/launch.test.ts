@@ -254,12 +254,12 @@ Deno.test('launch facade: install instructions expose MCP and CLI targets', asyn
     assertStringIncludes(promptInstruction?.configText || '', 'claude mcp add');
     assertStringIncludes(
       promptInstruction?.configText || '',
-      'npx galacticconnection setup --token $ULTRALIGHT_API_KEY',
+      'npx galacticconnection setup --token $GALACTIC_API_KEY',
     );
     assertStringIncludes(promptInstruction?.configText || '', 'gx.discover');
     assertStringIncludes(
       promptInstruction?.configText || '',
-      '"Authorization":"Bearer $ULTRALIGHT_API_KEY"',
+      '"Authorization":"Bearer $GALACTIC_API_KEY"',
     );
     // First-contact UX: the prompt must drive a real orientation (build+deploy,
     // not "a few lines") rather than a terse capability list.
@@ -338,7 +338,7 @@ Deno.test('launch facade: install can include tool-specific handoff', async () =
       );
       assertStringIncludes(
         body.toolInstall?.connectPrompt || '',
-        '"Authorization":"Bearer $ULTRALIGHT_API_KEY"',
+        '"Authorization":"Bearer $GALACTIC_API_KEY"',
       );
       assertStringIncludes(
         body.toolInstall?.mcpConfigText || '',

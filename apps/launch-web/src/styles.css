@@ -3829,7 +3829,8 @@ button {
 }
 
 .wallet-quote-col .secure-note {
-  padding: 0 2px;
+  /* Centered under the full-width Pay button. */
+  justify-content: center;
 }
 
 /* Editable top-up amount field (custom amounts, not just presets). */

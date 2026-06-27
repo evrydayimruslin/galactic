@@ -161,7 +161,7 @@ interface AgentDetailFixture extends AgentFixture {
   visibility: "public" | "private" | "unlisted";
 }
 
-const apiKeyPlaceholder = "$ULTRALIGHT_API_KEY";
+const apiKeyPlaceholder = "$GALACTIC_API_KEY";
 // The MCP host is the API worker itself — derive it so snippets can never
 // drift to a stale hardcoded domain.
 const apiOrigin = launchApiOrigin();
@@ -172,26 +172,26 @@ const mcpUrl = `${apiOrigin}/mcp/platform`;
 // instructions are unavailable.
 function buildConnectPrompt(key: string): string {
   const claudeCodeAdd =
-    `claude mcp add --transport http --scope user ultralight ${mcpUrl} --header "Authorization: Bearer ${key}"`;
+    `claude mcp add --transport http --scope user galactic ${mcpUrl} --header "Authorization: Bearer ${key}"`;
   const genericConfig = JSON.stringify({
     mcpServers: {
-      ultralight: { url: mcpUrl, headers: { Authorization: `Bearer ${key}` } },
+      galactic: { url: mcpUrl, headers: { Authorization: `Bearer ${key}` } },
     },
   });
   return [
-    "Set up Galactic for me, then start using it.",
+    "Set up Galactic for me, then orient me to it.",
     "",
-    "Galactic is one MCP server that gives you a library of Agents (apps) you can discover, call, and deploy, with unified auth and per-call payments.",
+    "Galactic is one MCP connection that opens onto a growing library and public marketplace of Agents (apps) you can discover and run, plus everything you need to build and deploy new ones — with unified auth and per-call payments handled through this single connection.",
     "",
     "1. Install the MCP server (pick whichever works in your environment):",
     `   - Claude Code: ${claudeCodeAdd}`,
     `   - Any MCP config file: ${genericConfig}`,
-    `   - Automated installer: npx ultralightagent setup --token ${key}`,
+    `   - Automated installer: npx galacticconnection setup --token ${key}`,
     "",
-    "2. Connect, then learn the platform: the server's initialize response carries the full platform guide. The same docs live at the ultralight://platform/skills.md MCP resource" +
-    ` and ${apiOrigin}/api/skills.`,
+    "2. Connect, then learn the platform: the server's initialize response carries the full platform guide, including a first-contact directive for how to orient me on this first connection. The same docs are also served at " +
+    `${apiOrigin}/api/skills.`,
     "",
-    '3. Prove it works: call ul.discover with {"scope":"library"} to list the Agents already installed on this account, then tell me in a few lines what you can now do for me.',
+    `3. Take a look around, then give me a real orientation — not a few lines. Call gx.discover with {"scope":"library"} to see the Agents already on this account, and {"scope":"appstore"} to sample what's published in the wider marketplace. Then follow the first-contact directive in your platform guide and write me an informative, structured first message. If for any reason that directive isn't in the guide, cover it yourself: explain how Galactic works (discover, call, build, deploy), tell me plainly that you can build and deploy new Agents for me — not only find and run existing ones — and invite me to ask you how to use or build anything. Lead with one or two real Agents you actually found, so it's concrete, not a generic pitch. Be my guide to it.`,
     "",
     "Treat the API key in this prompt as a secret: never echo it back, log it, or commit it anywhere.",
   ].join("\n");
@@ -292,16 +292,16 @@ const installTargets: InstallTarget[] = [
   },
   {
     config: (key) =>
-      `claude mcp add --transport http --scope user ultralight ${mcpUrl} --header "Authorization: Bearer ${key}"`,
+      `claude mcp add --transport http --scope user galactic ${mcpUrl} --header "Authorization: Bearer ${key}"`,
     description:
       "Add Galactic as a remote MCP server for an existing Claude Code workspace.",
     group: "MCP",
     label: "Claude Code",
     requiresApiKey: true,
     steps: [
-      "Create an Galactic API token from Settings.",
+      "Create a Galactic API token from Settings.",
       "Run the command below with your token in place of the placeholder.",
-      "Run /mcp (or restart) so Claude Code picks up the ultralight server.",
+      "Run /mcp (or restart) so Claude Code picks up the galactic server.",
     ],
     target: "claude_code",
   },
@@ -314,22 +314,22 @@ const installTargets: InstallTarget[] = [
     requiresApiKey: true,
     steps: [
       "Open Cursor MCP settings.",
-      "Add the ultralight server entry below.",
+      "Add the galactic server entry below.",
       "Reload Cursor so your connected agent can discover Galactic Agents.",
     ],
     target: "cursor",
   },
   {
     config: (key) =>
-      `[mcp_servers.ultralight]\nurl = "${mcpUrl}"\nheaders = { Authorization = "Bearer ${key}" }`,
+      `[mcp_servers.galactic]\nurl = "${mcpUrl}"\nheaders = { Authorization = "Bearer ${key}" }`,
     description:
       "Connect Codex to the same remote MCP endpoint used by other agents.",
     group: "MCP",
     label: "Codex",
     requiresApiKey: true,
     steps: [
-      "Create an Galactic API token.",
-      "Add a remote MCP server named ultralight.",
+      "Create a Galactic API token.",
+      "Add a remote MCP server named galactic.",
       "Use the platform MCP endpoint and Authorization header below.",
     ],
     target: "codex",
@@ -369,16 +369,16 @@ const installTargets: InstallTarget[] = [
   },
   {
     config: (key) =>
-      `npm install -g ultralightagent\nultralight login --token ${key}\nultralight upload .`,
+      `npm install -g galacticconnection\ngalactic login --token ${key}\ngalactic upload .`,
     description:
       "Use the Galactic CLI to login, upload, test, and run deployed Agents.",
     group: "Direct",
     label: "CLI",
     requiresApiKey: true,
     steps: [
-      "Install the ultralightagent package.",
-      "Run ultralight login --token <your-token>.",
-      "Run ultralight upload . from a deployable Agent directory.",
+      "Install the galacticconnection package.",
+      "Run galactic login --token <your-token>.",
+      "Run galactic upload . from a deployable Agent directory.",
     ],
     target: "cli",
   },
@@ -7148,7 +7148,7 @@ function genericMcpConfig(key: string): string {
   return JSON.stringify(
     {
       mcpServers: {
-        ultralight: {
+        galactic: {
           headers: { Authorization: `Bearer ${key}` },
           url: mcpUrl,
         },

@@ -5049,7 +5049,7 @@ function buildInstallInstructions(
 ): LaunchInstallInstruction[] {
   const baseUrl = publicBaseUrl(request);
   const mcpUrl = `${baseUrl}/mcp/platform`;
-  const bearer = "Bearer $ULTRALIGHT_API_KEY";
+  const bearer = "Bearer $GALACTIC_API_KEY";
   const genericConfig = {
     mcpServers: {
       galactic: {
@@ -5068,10 +5068,10 @@ function buildInstallInstructions(
     "1. Install the MCP server (pick whichever works in your environment):",
     `   - Claude Code: ${claudeCodeAddCommand}`,
     `   - Any MCP config file: ${JSON.stringify(genericConfig)}`,
-    "   - Automated installer: npx galacticconnection setup --token $ULTRALIGHT_API_KEY",
+    "   - Automated installer: npx galacticconnection setup --token $GALACTIC_API_KEY",
     "",
-    "2. Connect, then learn the platform: the server's initialize response carries the full platform guide, including a first-contact directive for how to orient me on this first connection. The same docs live at the ultralight://platform/skills.md MCP resource" +
-    ` and ${baseUrl}/api/skills.`,
+    "2. Connect, then learn the platform: the server's initialize response carries the full platform guide, including a first-contact directive for how to orient me on this first connection. The same docs are also served at " +
+    `${baseUrl}/api/skills.`,
     "",
     `3. Take a look around, then give me a real orientation — not a few lines. Call gx.discover with {"scope":"library"} to see the Agents already on this account, and {"scope":"appstore"} to sample what's published in the wider marketplace. Then follow the first-contact directive in your platform guide and write me an informative, structured first message. If for any reason that directive isn't in the guide, cover it yourself: explain how Galactic works (discover, call, build, deploy), tell me plainly that you can build and deploy new Agents for me — not only find and run existing ones — and invite me to ask you how to use or build anything. Lead with one or two real Agents you actually found, so it's concrete, not a generic pitch. Be my guide to it.`,
     "",
@@ -5099,7 +5099,7 @@ function buildInstallInstructions(
         "Add Galactic as a remote MCP server for an existing Claude Code workspace.",
       steps: [
         "Create an Galactic API token from Settings.",
-        "Run the command below with your token in place of $ULTRALIGHT_API_KEY.",
+        "Run the command below with your token in place of $GALACTIC_API_KEY.",
         "Run /mcp (or restart) so Claude Code picks up the galactic server.",
       ],
       configText: claudeCodeAddCommand,
@@ -5245,7 +5245,7 @@ async function buildToolInstallContext(
   // The dedicated endpoint is uuid-addressed: /mcp/:appId resolves ids only,
   // and uuids stay unambiguous (slugs are only unique per owner).
   const agentMcpUrl = `${baseUrl}/mcp/${tool.id}`;
-  const bearer = "Bearer $ULTRALIGHT_API_KEY";
+  const bearer = "Bearer $GALACTIC_API_KEY";
   const agentMcpConfig = {
     mcpServers: {
       [tool.slug]: {
