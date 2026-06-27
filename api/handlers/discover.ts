@@ -1777,12 +1777,12 @@ function handleOpenApiSpec(): Response {
       version: "1.0.0",
       contact: {
         name: "Galactic",
-        url: "https://api.ultralightagent.com",
+        url: "https://connectgalactic.com",
       },
     },
     servers: [
       {
-        url: "https://api.ultralightagent.com",
+        url: "https://api.connectgalactic.com",
         description: "Production",
       },
     ],
@@ -2053,7 +2053,7 @@ This installs MCP config, registers Skills + slash commands, and outputs an agen
 No install needed — connect directly via HTTP:
 
 \`\`\`
-Endpoint: https://api.ultralightagent.com/mcp/platform
+Endpoint: https://api.connectgalactic.com/mcp/platform
 Authorization: Bearer {TOKEN}
 Method: POST
 Content-Type: application/json
@@ -2079,7 +2079,7 @@ This works with ChatGPT Custom Actions, Gemini Extensions, open-source web agent
 
 **Platform docs & building conventions** (no auth needed):
 \`\`\`
-GET https://api.ultralightagent.com/api/skills
+GET https://api.connectgalactic.com/api/skills
 \`\`\`
 Returns the full Skills.md — tool reference, building guide, SDK globals, resource URIs, and agent conventions. Fetch this to understand how to build and use Galactic tools.
 

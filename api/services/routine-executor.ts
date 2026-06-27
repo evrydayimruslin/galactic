@@ -929,7 +929,7 @@ export async function runRoutineExecutorCycle(
     60 * 60 * 1000,
   );
   const baseUrl = options.baseUrl || getEnv("BASE_URL") ||
-    "https://api.ultralightagent.com";
+    "https://api.connectgalactic.com";
   const fetchFn = options.fetchFn || fetch;
   const clock = options.clock || (() => new Date());
 

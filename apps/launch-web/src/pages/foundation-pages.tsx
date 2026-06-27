@@ -2160,7 +2160,7 @@ function FunctionSandboxCard({
         setResponse({
           job_id: jobId,
           note:
-            "Still running. The job continues server-side — check back or poll ul.job from your agent.",
+            "Still running. The job continues server-side — check back or poll gx.job from your agent.",
         });
         setRunState("queued");
         return;
@@ -4343,7 +4343,7 @@ function AdminSecretsPanel(): ReactElement {
       </div>
       <EmptyState icon="key" title="Secrets are managed from your agent">
         The website does not read or edit App Settings yet. Use{" "}
-        <Mono>ul.set</Mono> from a connected agent (or the CLI) to manage this
+        <Mono>gx.set</Mono> from a connected agent (or the CLI) to manage this
         Agent's secrets.
       </EmptyState>
     </div>
@@ -4421,7 +4421,7 @@ function AdminLogsPanel(): ReactElement {
   return (
     <div className="admin-panel admin-log-list">
       <EmptyState icon="grid" title="Logs are available from your agent">
-        The website does not stream run logs yet. Use <Mono>ul.logs</Mono>{" "}
+        The website does not stream run logs yet. Use <Mono>gx.logs</Mono>{" "}
         from a connected agent to inspect this Agent's recent runs and errors.
       </EmptyState>
     </div>
@@ -5681,7 +5681,7 @@ function PayoutsBanner(): ReactElement {
           ? (
             <p>
               Stripe Connect payouts are set up. Withdraw earned credits via{" "}
-              <Mono>ul.wallet</Mono> from a connected agent.
+              <Mono>gx.wallet</Mono> from a connected agent.
             </p>
           )
           : hasAccount

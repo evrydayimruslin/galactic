@@ -164,7 +164,7 @@ export async function handleChatStream(request: Request): Promise<Response> {
     chatLogger.info("Blocked provisional user from chat", { user_id: user.id });
     return json({
       error:
-        "Chat requires a full account. Sign in at api.ultralightagent.com",
+        "Chat requires a full account. Sign in at connectgalactic.com",
     }, 403);
   }
 

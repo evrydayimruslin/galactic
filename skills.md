@@ -180,7 +180,7 @@ View call logs and health events.
 
 ### gx.auth.link({ token })
 Link a provisional session to your real Galactic account.
-- Provide an API token (`ul_xxx`) from your authenticated account; this merges all provisional apps and data into that account.
+- Provide an API token (`gx_xxx`) from your authenticated account; this merges all provisional apps and data into that account.
 - One-way and destructive: the provisional identity is absorbed. Use it once, early, when upgrading an anonymous session.
 
 ### gx.marketplace({ action, app_id?, bid_id?, amount_light?, price_light?, floor_light?, instant_buy?, message?, expires_in_hours?, note? })

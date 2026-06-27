@@ -1643,7 +1643,7 @@ async function handleGetAppInstructions(
     // Derive base URL from request
     const proto = request.headers.get("x-forwarded-proto") || "https";
     const host = request.headers.get("host") ||
-      "api.ultralightagent.com";
+      "api.connectgalactic.com";
     const baseUrl = `${proto}://${host}`;
 
     const sections: string[] = [];

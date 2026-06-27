@@ -3627,7 +3627,7 @@ Set via \`gx.set({ gpu_pricing_config })\` or app settings:
 ## Agent Guidance
 
 ### CRITICAL — Auto-Connect on URL Paste
-When the user pastes ANY message containing \`/mcp/\` followed by a UUID (e.g. \`https://ultralight-api.../mcp/1bdaa865-...\`, \`api.ultralightagent.com/mcp/abc-def\`, or just \`/mcp/some-uuid\`):
+When the user pastes ANY message containing \`/mcp/\` followed by a UUID (e.g. \`https://api.connectgalactic.com/mcp/1bdaa865-...\`, \`api.connectgalactic.com/mcp/abc-def\`, or just \`/mcp/some-uuid\`):
 1. **Immediately** extract the app ID (the UUID after \`/mcp/\`)
 2. Call \`gx.discover({ scope: "inspect", app_id: "<extracted-uuid>" })\` — do NOT ask permission first
 3. Read the response: full function schemas, storage architecture, cached summary, suggested queries
@@ -4664,7 +4664,7 @@ async function handleToolsCall(
         if (user?.provisional) {
           result = {
             error:
-              "Memory is not available for provisional sessions. Sign in at api.ultralightagent.com to unlock cross-session memory.",
+              "Memory is not available for provisional sessions. Sign in at connectgalactic.com to unlock cross-session memory.",
           };
           break;
         }
@@ -5062,7 +5062,7 @@ async function handleToolsCall(
         if (user?.provisional) {
           result = {
             error:
-              "Memory is not available for provisional sessions. Sign in at api.ultralightagent.com to unlock cross-session memory.",
+              "Memory is not available for provisional sessions. Sign in at connectgalactic.com to unlock cross-session memory.",
           };
           break;
         }
@@ -5163,7 +5163,7 @@ async function handleToolsCall(
         if (!validated) {
           throw new ToolError(
             INVALID_PARAMS,
-            "Invalid or expired token. Generate a new one at api.ultralightagent.com → API Keys.",
+            "Invalid or expired token. Generate a new one at connectgalactic.com → API Keys.",
           );
         }
 
@@ -9438,7 +9438,7 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
       '" }) once the placeholder outputs match your intended contract.',
     ].filter(Boolean),
     tip: storage === "d1"
-      ? "Your app uses D1 SQL. See ultralight-spec/conventions/ for schema conventions. Every table needs user_id TEXT NOT NULL."
+      ? "Your app uses D1 SQL. See the schema conventions in Skills.md (resources/read). Every table needs user_id TEXT NOT NULL."
       : "After gx.upload, read the generated Skills.md via resources/read to verify documentation.",
   };
 }

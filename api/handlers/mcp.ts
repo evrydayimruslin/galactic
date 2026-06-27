@@ -1091,7 +1091,7 @@ export async function handleMcp(
       return jsonRpcErrorResponse(
         rpcRequest.id,
         RATE_LIMITED,
-        `Provisional account daily limit reached (50 calls/day). Sign in at api.ultralightagent.com to unlock full access.`,
+        `Provisional account daily limit reached (50 calls/day). Sign in at connectgalactic.com to unlock full access.`,
       );
     }
   }

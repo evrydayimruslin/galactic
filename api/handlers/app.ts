@@ -437,7 +437,7 @@ export function createApp() {
         const cacheStats = getCodeCache().stats;
         return json({
           status: "ok",
-          version: "0.3.17",
+          version: "0.3.18",
           deployed: new Date().toISOString(),
           cache: cacheStats,
         });
@@ -5711,7 +5711,7 @@ function renderMarkdownPage(
 <article>
 ${metaHeader}
 ${html}
-<div class="footer">Published with <a href="https://api.ultralightagent.com">Galactic</a></div>
+<div class="footer">Published with <a href="https://connectgalactic.com">Galactic</a></div>
 </article>
 </body>
 </html>`;

@@ -7,7 +7,7 @@
 // When a vanity domain lands, change CANONICAL_BASE and every consumer
 // updates in lockstep — no scattering of hardcoded URLs across handlers.
 
-export const CANONICAL_BASE = 'https://api.ultralightagent.com';
+export const CANONICAL_BASE = 'https://api.connectgalactic.com';
 
 /** The launch-web site origin (the root domain — the API lives on `api.`). */
 export const SITE_BASE = CANONICAL_BASE.replace('://api.', '://');

@@ -577,7 +577,7 @@ function buildGpuInsufficientBalanceMessage(totalCharge: number): string {
   return `Insufficient balance. This GPU function costs ~${
     formatLight(totalCharge)
   } per call. ` +
-    `Add credits or add creator earnings to balance from the wallet at https://api.ultralightagent.com/wallet.`;
+    `Add credits or add creator earnings to balance from the wallet at https://connectgalactic.com/wallet.`;
 }
 
 async function fetchUserBalanceLight(
