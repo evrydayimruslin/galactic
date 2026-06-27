@@ -5060,16 +5060,17 @@ function WalletTopUpPanel(
     setAmountText(cleaned);
     const dollars = parseFloat(cleaned);
     if (Number.isFinite(dollars)) {
-      setCreditsAmount(Math.min(500000, Math.round(dollars * 100)));
+      // Upper bound is the Stripe-safe max (mirrors server
+      // LAUNCH_WALLET_MAX_TOPUP_LIGHT), not the old $5,000 cap.
+      setCreditsAmount(Math.min(97_000_000, Math.round(dollars * 100)));
     }
   };
   const onAmountBlur = () => {
     amountFocused.current = false;
     const dollars = parseFloat(amountText);
     const light = Number.isFinite(dollars) ? Math.round(dollars * 100) : 1000;
-    // $1 floor (100 Light): removes the old $10 gate while staying above
-    // Stripe's hard minimum once the processing fee is grossed up.
-    const clamped = Math.min(500000, Math.max(100, light));
+    // $1 floor (100 Light); upper bound is the Stripe-safe max (no $5,000 cap).
+    const clamped = Math.min(97_000_000, Math.max(100, light));
     setCreditsAmount(clamped);
     setAmountText(dollarsText(clamped));
   };

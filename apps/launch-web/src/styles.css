@@ -3701,12 +3701,15 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  /* Nudge the whole pill row down 1px. */
+  margin-top: 1px;
 }
 
 .amount-presets button {
   /* Asymmetric vertical padding (same total height) nudges the serif glyphs
-     down ~2px so they read centered in the pill. */
-  padding: 8px 13px 4px;
+     down so they read centered; top 7.5 / bottom 4.5 sits the label ~1.5px
+     low (0.5px higher than the previous 8/4). */
+  padding: 7.5px 13px 4.5px;
   border: 1px solid var(--ul-border);
   border-radius: 999px;
   background: #fff;

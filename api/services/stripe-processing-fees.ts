@@ -11,7 +11,11 @@ export const LAUNCH_WALLET_LIGHT_PER_DOLLAR = LIGHT_PER_DOLLAR_CANONICAL;
 // $1.00 floor (100 Light). Low enough to remove the old $10 gate, but safely
 // above Stripe's hard $0.50 minimum once the processing fee is grossed up.
 export const LAUNCH_WALLET_MIN_TOPUP_LIGHT = 100;
-export const LAUNCH_WALLET_MAX_TOPUP_LIGHT = 500_000;
+// No business cap on top-ups (the old $5,000 limit is removed). The only bound
+// is Stripe's hard per-charge maximum for USD ($999,999.99); we cap the base so
+// the grossed-up total can never exceed it (which would fail at confirm).
+// 97,000,000 Light = $970,000 base → grossed-up total stays under $999,999.99.
+export const LAUNCH_WALLET_MAX_TOPUP_LIGHT = 97_000_000;
 export const LAUNCH_WALLET_FUNDING_PRESETS: LaunchWalletFundingPreset[] = [
   { light: 1_000, label: "1,000 credits" },
   { light: 2_500, label: "2,500 credits", recommended: true },
