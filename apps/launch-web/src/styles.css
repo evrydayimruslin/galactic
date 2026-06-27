@@ -3660,6 +3660,12 @@ button {
 .wallet-quote-card {
   display: grid;
   gap: 12px;
+  /* Flat, flush column — no nested card chrome — so every section/label/value
+     aligns to the same left edge (the modal padding). */
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
 }
 
 .light-input-shell {
@@ -3751,7 +3757,7 @@ button {
 }
 
 .wallet-quote-card {
-  background: var(--ul-raised);
+  background: transparent;
 }
 
 .quote-line,
@@ -3820,6 +3826,14 @@ button {
   font-family: var(--ul-font);
   font-size: 22px;
   font-weight: 600;
+}
+
+/* The Newsreader serif sits a hair high in the input box; nudge the glyphs
+   down 1px so they read as vertically centered. */
+.light-input-shell .amount-currency,
+.light-input-shell .amount-field {
+  position: relative;
+  top: 1px;
 }
 
 .light-input-shell .amount-field {

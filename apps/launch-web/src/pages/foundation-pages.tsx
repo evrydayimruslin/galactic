@@ -5645,10 +5645,6 @@ function WalletTopUpPanel(
           <span>{method === "earnings" ? "Transfer" : "Total"}</span>
           <strong>{formatCurrency(shownQuote.totalDollars)}</strong>
         </div>
-        <div className="quote-receive">
-          <span>You receive</span>
-          <strong>{formatCreditFromLight(creditsAmount)}</strong>
-        </div>
         {checkout
           ? (
             <>
