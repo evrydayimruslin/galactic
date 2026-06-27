@@ -3921,6 +3921,14 @@ button {
   margin: 4px 0 0;
 }
 
+/* Link payers never get the address fields mounted, leaving an empty div that
+   adds its margin + grid gaps between the Link wallet and the Terms line.
+   Collapse it when empty (it reappears once an address element mounts for a
+   card payer). */
+.topup-address-element:empty {
+  display: none;
+}
+
 .topup-terms {
   display: flex;
   align-items: flex-start;
