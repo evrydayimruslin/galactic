@@ -25,7 +25,7 @@ export interface LegacyAuthTransportLogInput {
 
 export function classifyLegacyAuthTokenShape(token: string | null | undefined): LegacyAuthTokenShape {
   if (!token) return 'missing';
-  if (token.startsWith('ul_')) return 'api_token';
+  if (token.startsWith('gx_') || token.startsWith('ul_')) return 'api_token';
   if (/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) return 'jwt';
   return 'opaque';
 }

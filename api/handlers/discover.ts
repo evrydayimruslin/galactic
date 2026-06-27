@@ -2009,7 +2009,7 @@ function handleOpenApiSpec(): Response {
           type: "http",
           scheme: "bearer",
           description:
-            "Galactic API token (ul_xxx) or OAuth 2.1 token. Obtain via POST /oauth/token or create in your Galactic dashboard settings.",
+            "Galactic API token (gx_xxx) or OAuth 2.1 token. Obtain via POST /oauth/token or create in your Galactic dashboard settings.",
         },
       },
     },

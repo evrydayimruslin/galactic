@@ -252,7 +252,10 @@ export function createApp() {
         try {
           // Validate API token
           const authHeader = request.headers.get("Authorization");
-          if (!authHeader?.startsWith("Bearer ul_")) {
+          if (
+            !authHeader?.startsWith("Bearer gx_") &&
+            !authHeader?.startsWith("Bearer ul_")
+          ) {
             return new Response("Unauthorized", { status: 401 });
           }
           const { validateToken } = await import("../services/tokens.ts");
@@ -434,7 +437,7 @@ export function createApp() {
         const cacheStats = getCodeCache().stats;
         return json({
           status: "ok",
-          version: "0.3.15",
+          version: "0.3.16",
           deployed: new Date().toISOString(),
           cache: cacheStats,
         });
@@ -903,16 +906,16 @@ export function createApp() {
         });
 
         // Check format
-        const hasPrefix = token.startsWith("ul_");
+        const hasPrefix = token.startsWith("gx_") || token.startsWith("ul_");
         steps.push({
           step: "prefix",
-          result: `Starts with "ul_": ${hasPrefix} (got "${
+          result: `Starts with "gx_"/"ul_": ${hasPrefix} (got "${
             token.substring(0, 4)
           }")`,
           ok: hasPrefix,
         });
         if (!hasPrefix) {
-          return json({ ok: false, error: "Not a ul_ token", steps }, 401);
+          return json({ ok: false, error: "Not a gx_/ul_ token", steps }, 401);
         }
 
         steps.push({
@@ -1934,7 +1937,7 @@ button{cursor:pointer;border:none;border-radius:8px;font-size:13px;font-weight:6
 <div style="font-size:48px">&#9881;</div>
 <h2>${appName}</h2>
 <p>Enter your Galactic API token to access this app's dashboard. Your token stays in the browser only.</p>
-<input type="password" id="token-input" class="token-input" placeholder="ul_..." />
+<input type="password" id="token-input" class="token-input" placeholder="gx_..." />
 <button class="btn-primary" onclick="submitToken()">Connect</button>
 </div>
 

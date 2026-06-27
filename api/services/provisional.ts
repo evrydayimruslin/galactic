@@ -28,7 +28,7 @@ function withStatus(message: string, status: number): Error & { status: number }
 
 export interface ProvisionalCreateResult {
   id: string;
-  token: string;     // Plaintext token (ul_xxx), shown once
+  token: string;     // Plaintext token (gx_xxx), shown once
   tokenId: string;
 }
 

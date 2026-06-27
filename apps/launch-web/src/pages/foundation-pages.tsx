@@ -179,9 +179,9 @@ function buildConnectPrompt(key: string): string {
     },
   });
   return [
-    "Set up Galactic for me, then orient me to it.",
+    "Set up Galactic for me, then show me what it can do.",
     "",
-    "Galactic is one MCP connection that opens onto a growing library and public marketplace of Agents (apps) you can discover and run, plus everything you need to build and deploy new ones — with unified auth and per-call payments handled through this single connection.",
+    "Galactic is one MCP connection that opens onto a growing collection and public marketplace of Agents (apps) you can discover and run, plus everything you need to build and deploy new ones — with unified auth and per-call payments handled through this single connection.",
     "",
     "1. Install the MCP server (pick whichever works in your environment):",
     `   - Claude Code: ${claudeCodeAdd}`,

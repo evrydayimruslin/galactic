@@ -106,8 +106,17 @@ function usersTable() {
   return getSupabase().from('users' as never) as any;
 }
 
-// Token prefix for easy identification
-const TOKEN_PREFIX = 'ul_';
+// Token prefix for easy identification. New keys are minted as `gx_`; the
+// legacy `ul_` prefix is still ACCEPTED (deprecated) so existing keys keep
+// working. Both are 3 chars + 32 hex = 35 chars total.
+const TOKEN_PREFIX = 'gx_';
+const LEGACY_TOKEN_PREFIX = 'ul_';
+
+/** True if the token carries a current (`gx_`) or legacy (`ul_`) API-key prefix. */
+function hasApiTokenPrefix(token: string): boolean {
+  return token.startsWith(TOKEN_PREFIX) ||
+    token.startsWith(LEGACY_TOKEN_PREFIX);
+}
 
 export interface ApiToken {
   id: string;
@@ -418,7 +427,7 @@ export async function revokeAllTokens(userId: string): Promise<number> {
  */
 export async function revokeByToken(token: string): Promise<boolean> {
   // Quick format check
-  if (!token.startsWith(TOKEN_PREFIX) || token.length !== 35) {
+  if (!hasApiTokenPrefix(token) || token.length !== 35) {
     return false;
   }
 
@@ -514,8 +523,8 @@ export async function validateToken(
   clientIp?: string
 ): Promise<ValidatedToken | null> {
   // Quick format check
-  if (!token.startsWith(TOKEN_PREFIX)) {
-    console.log(`[TOKEN] Rejected: missing prefix "ul_" — got "${token.substring(0, 6)}..."`);
+  if (!hasApiTokenPrefix(token)) {
+    console.log(`[TOKEN] Rejected: missing prefix "gx_"/"ul_" — got "${token.substring(0, 6)}..."`);
     return null;
   }
   if (token.length !== 35) {
@@ -751,5 +760,5 @@ export async function getUserFromToken(token: string, clientIp?: string): Promis
  * Check if a string looks like an API token (vs JWT)
  */
 export function isApiToken(authValue: string): boolean {
-  return authValue.startsWith(TOKEN_PREFIX);
+  return hasApiTokenPrefix(authValue);
 }
