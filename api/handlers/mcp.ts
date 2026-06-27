@@ -190,7 +190,7 @@ function buildSkillsDiscoveryPayload(
     app_id: appId,
     app_name: appDisplayName(app),
     description: app.description,
-    skills_md_resource_uri: `ultralight://app/${appId}/skills.md`,
+    skills_md_resource_uri: `galactic://app/${appId}/skills.md`,
     note:
       "Full skill documentation can be read for free from the skills.md resource.",
   };
@@ -1175,7 +1175,7 @@ function handleInitialize(
     // Skills.md not yet generated — use description + resource directive
     instructions = (app.description ||
       `${app.name || app.slug} — an Galactic MCP server.`) +
-      `\n\nRead the ultralight://app/${appId}/manifest.json resource for function definitions and schemas.`;
+      `\n\nRead the galactic://app/${appId}/manifest.json resource for function definitions and schemas.`;
   }
 
   const result: MCPServerInfo = {
@@ -1207,14 +1207,14 @@ function handleResourcesList(
   // Skills.md is auto-generated function documentation, served free in full.
   if (hasSkillContext(app)) {
     resources.push({
-      uri: `ultralight://app/${appId}/skills.json`,
+      uri: `galactic://app/${appId}/skills.json`,
       name: `${app.name || app.slug} — Skill Metadata`,
       description:
         "Machine-readable pointer to the free skills.md documentation resource.",
       mimeType: "application/json",
     });
     resources.push({
-      uri: `ultralight://app/${appId}/skills.md`,
+      uri: `galactic://app/${appId}/skills.md`,
       name: `${app.name || app.slug} — Skills & Usage Guide`,
       description:
         "Auto-generated usage documentation for this app's functions. Always served in full, free of charge.",
@@ -1224,7 +1224,7 @@ function handleResourcesList(
 
   // Phase 1B: Manifest — structured function schemas + app metadata
   resources.push({
-    uri: `ultralight://app/${appId}/manifest.json`,
+    uri: `galactic://app/${appId}/manifest.json`,
     name: `${app.name || app.slug} — App Manifest`,
     description:
       "Function definitions, parameter schemas, and app configuration. Machine-readable complement to skills.md.",
@@ -1233,10 +1233,10 @@ function handleResourcesList(
 
   // Phase 2A: Storage — browsable app data
   resources.push({
-    uri: `ultralight://app/${appId}/data`,
+    uri: `galactic://app/${appId}/data`,
     name: `${app.name || app.slug} — Stored Data`,
     description:
-      "List of all storage keys for this app. Read individual keys at ultralight://app/{appId}/data/{key}.",
+      "List of all storage keys for this app. Read individual keys at galactic://app/{appId}/data/{key}.",
     mimeType: "application/json",
   });
 
@@ -1265,7 +1265,7 @@ async function handleResourcesRead(
   }
 
   // Skills.md — auto-generated function documentation, always served in full
-  const expectedSkillsUri = `ultralight://app/${appId}/skills.md`;
+  const expectedSkillsUri = `galactic://app/${appId}/skills.md`;
   if (uri === expectedSkillsUri) {
     const skillsMd = hasSkillContext(app) ? app.skills_md : null;
     if (!skillsMd) {
@@ -1285,7 +1285,7 @@ async function handleResourcesRead(
     return jsonRpcResponse(id, { contents });
   }
 
-  const expectedSkillsJsonUri = `ultralight://app/${appId}/skills.json`;
+  const expectedSkillsJsonUri = `galactic://app/${appId}/skills.json`;
   if (uri === expectedSkillsJsonUri) {
     if (!hasSkillContext(app)) {
       return jsonRpcErrorResponse(
@@ -1309,7 +1309,7 @@ async function handleResourcesRead(
   }
 
   // Phase 1B: Manifest — structured function schemas + runtime metadata
-  if (uri === `ultralight://app/${appId}/manifest.json`) {
+  if (uri === `galactic://app/${appId}/manifest.json`) {
     let manifest: Record<string, unknown> = {};
     if (app.manifest) {
       try {
@@ -1336,7 +1336,7 @@ async function handleResourcesRead(
   }
 
   // Phase 2A: Storage key listing
-  if (uri === `ultralight://app/${appId}/data`) {
+  if (uri === `galactic://app/${appId}/data`) {
     if (!userId) {
       return jsonRpcErrorResponse(
         id,
@@ -1377,7 +1377,7 @@ async function handleResourcesRead(
   }
 
   // Phase 2A: Individual storage key read
-  const dataPrefix = `ultralight://app/${appId}/data/`;
+  const dataPrefix = `galactic://app/${appId}/data/`;
   if (uri.startsWith(dataPrefix)) {
     if (!userId) {
       return jsonRpcErrorResponse(

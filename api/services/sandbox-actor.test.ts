@@ -215,10 +215,10 @@ Deno.test("sandbox actor: expired token fails verification", async () => {
 });
 
 Deno.test("sandbox actor: prefix does not collide with ul_ or routine/caller tokens", () => {
-  assert(isSandboxActorToken("ule_v1_abc.def"));
+  assert(isSandboxActorToken("gxe_v1_abc.def"));
   assert(!isSandboxActorToken("ul_apikey"));
-  assert(!isSandboxActorToken("ulr_v1_routine.sig"));
-  assert(!isSandboxActorToken("ulc1.caller.sig"));
+  assert(!isSandboxActorToken("gxr_v1_routine.sig"));
+  assert(!isSandboxActorToken("gxc1.caller.sig"));
 });
 
 Deno.test("sandbox actor: authenticateRequest resolves user + app scope", async () => {

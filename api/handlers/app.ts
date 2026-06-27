@@ -437,7 +437,7 @@ export function createApp() {
         const cacheStats = getCodeCache().stats;
         return json({
           status: "ok",
-          version: "0.3.16",
+          version: "0.3.17",
           deployed: new Date().toISOString(),
           cache: cacheStats,
         });
@@ -1963,7 +1963,7 @@ button{cursor:pointer;border:none;border-radius:8px;font-size:13px;font-weight:6
 
 <script>
 var APP_ID = ${JSON.stringify(appId)};
-var STORAGE_KEY = "ul_token_" + APP_ID;
+var STORAGE_KEY = "gx_token_" + APP_ID;
 var TOKEN = sessionStorage.getItem(STORAGE_KEY) || "";
 var TOOL_PREFIX = "";
 var TOOLS = ${toolDefs};

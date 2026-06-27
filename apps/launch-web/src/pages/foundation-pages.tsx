@@ -7259,7 +7259,7 @@ export function TermsPage(): ReactElement {
       <h2>Changes</h2>
       <p>
         We may update these terms; material changes will be announced on the
-        platform before they take effect. Questions: support@ultralight.run.
+        platform before they take effect. Questions: support@connectgalactic.com.
       </p>
     </section>
   );
@@ -7293,7 +7293,7 @@ export function PrivacyPage(): ReactElement {
       <h2>Your choices</h2>
       <p>
         You can delete agents and their data, revoke tokens and grants, and
-        request account deletion at support@ultralight.run. Operational
+        request account deletion at support@connectgalactic.com. Operational
         billing records are retained as required for accounting.
       </p>
     </section>

@@ -2072,7 +2072,7 @@ Protocol: JSON-RPC 2.0
 
 **Read a resource (example — your memory):**
 \`\`\`json
-{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"ultralight://platform/memory.md"}}
+{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"galactic://platform/memory.md"}}
 \`\`\`
 
 This works with ChatGPT Custom Actions, Gemini Extensions, open-source web agents, or any system that can POST JSON over HTTPS.

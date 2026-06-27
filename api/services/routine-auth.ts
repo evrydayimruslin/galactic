@@ -4,7 +4,7 @@ import type {
   RoutineCapabilityAccess,
 } from "../../shared/contracts/routine.ts";
 
-export const ROUTINE_ACTOR_TOKEN_PREFIX = "ulr_v1_";
+export const ROUTINE_ACTOR_TOKEN_PREFIX = "gxr_v1_";
 
 const DEFAULT_TTL_SECONDS = 10 * 60;
 const MAX_TTL_SECONDS = 60 * 60;

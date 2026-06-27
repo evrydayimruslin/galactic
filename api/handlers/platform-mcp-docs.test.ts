@@ -142,7 +142,7 @@ Deno.test("platform docs guidance is shared by initialize, resources/read, and G
     const resourcePayload = await readJsonRpc(
       await handlePlatformMcp(
         platformRequest("resources/read", {
-          uri: "ultralight://platform/skills.md",
+          uri: "galactic://platform/skills.md",
         }),
       ),
     );

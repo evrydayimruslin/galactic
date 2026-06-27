@@ -21,7 +21,7 @@ import {
   MAX_AGENT_CALL_HOP_DEPTH,
 } from "../../shared/contracts/agent-grants.ts";
 
-const TOKEN_PREFIX = "ulc1.";
+const TOKEN_PREFIX = "gxc1.";
 // Short-lived: a cross-Agent hop chain completes in well under a minute, and a
 // tight TTL bounds replay of a leaked token (jti consumption is a 4c
 // hardening). Generous enough for deep chains within the hop ceiling.

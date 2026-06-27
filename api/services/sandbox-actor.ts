@@ -26,7 +26,7 @@
 
 import { getEnv } from "../lib/env.ts";
 
-export const SANDBOX_ACTOR_TOKEN_PREFIX = "ule_v1_";
+export const SANDBOX_ACTOR_TOKEN_PREFIX = "gxe_v1_";
 const CLAIM_TYPE = "ultralight.sandbox_actor";
 const DEFAULT_TTL_SECONDS = 5 * 60;
 const MAX_TTL_SECONDS = 15 * 60;

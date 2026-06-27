@@ -190,7 +190,7 @@ Deno.test('MCP serves full skills_md for free with no preview gating', async () 
     const resourcePayload = await parseJson(
       await handleMcp(
         mcpRequest('resources/read', {
-          uri: `ultralight://app/${APP_ID}/skills.md`,
+          uri: `galactic://app/${APP_ID}/skills.md`,
         }),
         APP_ID,
       ),
@@ -205,7 +205,7 @@ Deno.test('MCP serves full skills_md for free with no preview gating', async () 
     const discoveryPayload = await parseJson(
       await handleMcp(
         mcpRequest('resources/read', {
-          uri: `ultralight://app/${APP_ID}/skills.json`,
+          uri: `galactic://app/${APP_ID}/skills.json`,
         }),
         APP_ID,
       ),
@@ -217,7 +217,7 @@ Deno.test('MCP serves full skills_md for free with no preview gating', async () 
     assertEquals(discovery.app_id, APP_ID);
     assertEquals(
       discovery.skills_md_resource_uri,
-      `ultralight://app/${APP_ID}/skills.md`,
+      `galactic://app/${APP_ID}/skills.md`,
     );
   } finally {
     cleanup();

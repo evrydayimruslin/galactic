@@ -1033,7 +1033,7 @@ Deno.test("sandbox: app call can use a declared read dependency", async () => {
     assertEquals(result.result, { ok: true });
     assertEquals(capturedUrl, "https://api.example.test/mcp/target-app");
     // The leak fix: a short-lived scoped token is sent, never the raw bearer.
-    assert(capturedAuth.startsWith("Bearer ule_v1_"));
+    assert(capturedAuth.startsWith("Bearer gxe_v1_"));
     assert(!capturedAuth.includes("token-123"));
   } finally {
     globalThis.fetch = originalFetch;

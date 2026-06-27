@@ -226,7 +226,7 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
       mcpCalls[0].url,
       "https://api.example.test/mcp/composer-app-1",
     );
-    assert(mcpCalls[0].auth?.startsWith("Bearer ulr_v1_"));
+    assert(mcpCalls[0].auth?.startsWith("Bearer gxr_v1_"));
     const claimPatch = dbCalls.find((call) =>
       call.table === "user_routines" &&
       call.method === "PATCH" &&

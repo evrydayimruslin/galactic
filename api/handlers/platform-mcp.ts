@@ -3982,31 +3982,31 @@ async function handleInitialize(
 function handleResourcesList(id: JsonRpcRequestId, _userId: string): Response {
   const resources: MCPResourceDescriptor[] = [
     {
-      uri: "ultralight://platform/skills.md",
+      uri: "galactic://platform/skills.md",
       name: "Galactic Platform — Skills & Usage Guide",
       description:
         "Complete documentation for all ul.* platform tools: uploading apps, discovery strategy, permissions, settings, and how per-app MCP resources work.",
       mimeType: "text/markdown",
     },
     {
-      uri: "ultralight://platform/library.md",
+      uri: "galactic://platform/library.md",
       name: "Your App Library",
       description:
         'All your owned and saved apps with their capabilities. Equivalent to gx.discover({ scope: "library" }) with no query.',
       mimeType: "text/markdown",
     },
     {
-      uri: "ultralight://platform/memory.md",
+      uri: "galactic://platform/memory.md",
       name: "Your Cross-Session Memory",
       description:
         "Persistent markdown notes, preferences, and project context. Maintained across all apps and sessions via gx.memory.",
       mimeType: "text/markdown",
     },
     {
-      uri: "ultralight://platform/memory/kv",
+      uri: "galactic://platform/memory/kv",
       name: "Memory Key-Value Store",
       description:
-        "Cross-app structured key-value memory. Lists all keys. Read individual keys at ultralight://platform/memory/kv/{key}.",
+        "Cross-app structured key-value memory. Lists all keys. Read individual keys at galactic://platform/memory/kv/{key}.",
       mimeType: "application/json",
     },
   ];
@@ -4033,7 +4033,7 @@ async function handleResourcesRead(
     );
   }
 
-  if (uri === "ultralight://platform/skills.md") {
+  if (uri === "galactic://platform/skills.md") {
     // Return platform docs (same content as initialize instructions, minus user-specific sections)
     const platformDocs =
       `# Galactic Platform MCP — Skills\n\n${buildPlatformDocs()}`;
@@ -4045,7 +4045,7 @@ async function handleResourcesRead(
     return jsonRpcResponse(id, { contents });
   }
 
-  if (uri === "ultralight://platform/library.md") {
+  if (uri === "galactic://platform/library.md") {
     // Serve the user's compiled Library.md from R2
     const r2Service = createR2Service();
     let libraryMd: string | null = null;
@@ -4073,7 +4073,7 @@ async function handleResourcesRead(
   }
 
   // User's cross-session memory markdown
-  if (uri === "ultralight://platform/memory.md") {
+  if (uri === "galactic://platform/memory.md") {
     const r2Service = createR2Service();
     let memoryMd: string | null = null;
     try {
@@ -4094,7 +4094,7 @@ async function handleResourcesRead(
   }
 
   // Memory KV: list all keys
-  if (uri === "ultralight://platform/memory/kv") {
+  if (uri === "galactic://platform/memory/kv") {
     const memoryService = createMemoryService();
     try {
       const entries = await memoryService.query(userId, {
@@ -4120,7 +4120,7 @@ async function handleResourcesRead(
   }
 
   // Memory KV: read one key
-  const kvPrefix = "ultralight://platform/memory/kv/";
+  const kvPrefix = "galactic://platform/memory/kv/";
   if (uri.startsWith(kvPrefix)) {
     const key = decodeURIComponent(uri.slice(kvPrefix.length));
     if (!key) {
