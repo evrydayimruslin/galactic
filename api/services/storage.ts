@@ -68,9 +68,19 @@ export class R2Service {
   }
 
   async listFiles(prefix: string): Promise<string[]> {
-    await this.meter("list", prefix);
-    const listed = await this.bucket.list({ prefix });
-    return listed.objects.map((o) => o.key);
+    // Paginate: R2 list() returns at most 1000 keys per page. Returning only the
+    // first page silently drops files — for open-code verification that would let
+    // a >1000-object version's unverified files escape the hash comparison. Each
+    // page is a separate R2 list op, so meter once per page.
+    const keys: string[] = [];
+    let cursor: string | undefined;
+    do {
+      await this.meter("list", prefix);
+      const listed = await this.bucket.list(cursor ? { prefix, cursor } : { prefix });
+      for (const o of listed.objects) keys.push(o.key);
+      cursor = listed.truncated ? listed.cursor : undefined;
+    } while (cursor);
+    return keys;
   }
 
   static getAppStorageKey(appId: string, version: string): string {

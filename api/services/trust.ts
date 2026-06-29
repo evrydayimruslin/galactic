@@ -151,6 +151,37 @@ export function signWithTrustSecret(message: string): Promise<string> {
   return hmacSha256Hex(message);
 }
 
+// Constant-time equality for two hex digests (avoid leaking position of the
+// first mismatching byte). Lengths are public; content comparison is timed-safe.
+function timingSafeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// Recompute the HMAC over the stored metadata (minus its signature) and confirm
+// it matches the embedded signature — i.e. the artifact_hashes / description_hash
+// / manifest_hash the platform published for this version were signed by THIS
+// platform and have not been altered since. The signature is symmetric (HMAC),
+// so only the platform (holder of the trust secret) can run this check; an Agent
+// gets the verdict via gx.verify rather than verifying the signature itself.
+export async function verifyVersionTrustSignature(
+  metadata: VersionTrustMetadata | null | undefined,
+): Promise<boolean> {
+  if (!metadata?.signature?.signature) return false;
+  if (metadata.signature.algorithm !== "HMAC-SHA256") return false;
+  const { signature, ...unsigned } = metadata;
+  try {
+    const expected = await hmacSha256Hex(canonicalJson(unsigned));
+    return timingSafeEqualHex(expected, signature.signature);
+  } catch {
+    // Fail-closed secret resolution (non-dev without TRUST_SIGNING_SECRET) =>
+    // cannot verify => not valid.
+    return false;
+  }
+}
+
 export function getManifestPermissions(manifest: AppManifest | string | null | undefined): string[] {
   const parsed = parseAppManifest(manifest);
   if (!Array.isArray(parsed?.permissions)) return [];

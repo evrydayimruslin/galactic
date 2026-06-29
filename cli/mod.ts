@@ -61,6 +61,7 @@ const commands: Record<string, (args: string[], client: ApiClient, config: Confi
   lint,
   scaffold,
   run,
+  verify: verifyCmd,
   discover,
   logs: logsCmd,
   health,
@@ -178,6 +179,7 @@ ${colors.dim('MANAGE')}
 
 ${colors.dim('USE')}
   ${colors.cyan('run')} <app> <fn>     Execute a deployed app function
+  ${colors.cyan('verify')} <app>       Verify integrity + open code before calling (gx.verify)
   ${colors.cyan('discover')} <query>   Search the App Store for MCP tools
   ${colors.cyan('logs')} <app>         View MCP call logs (gx.logs)
   ${colors.cyan('health')} [app]       View app health events (gx.health)
@@ -846,7 +848,7 @@ Or get the full setup command from ${colors.cyan(config.api_url)} — click "Con
     console.log('');
     console.log(colors.green(colors.bold('✓ Galactic is ready!')));
     console.log('');
-    console.log(`  ${colors.dim('Platform tools:')} 10 tools (discover, build, test, deploy, call, and more)`);
+    console.log(`  ${colors.dim('Platform tools:')} discover, build, test, deploy, call, verify, and more`);
     if (userInfo) {
       console.log(`  ${colors.dim('Account:')}        ${userInfo.email || 'authenticated'}`);
       console.log(`  ${colors.dim('Tier:')}           ${userInfo.tier || 'free'}`);
@@ -1025,6 +1027,118 @@ ${colors.dim('EXAMPLES')}
   console.log();
   console.log(colors.green(`✓ Downloaded ${downloadFiles.length} files to ${outputDir}/`));
   if (result.version) console.log(`  Version: ${result.version}`);
+}
+
+// ============================================
+// VERIFY COMMAND — uses gx.verify (+ gx.download for open code)
+// ============================================
+
+async function sha256HexLocal(content: string): Promise<string> {
+  const bytes = new TextEncoder().encode(content);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function verifyCmd(args: string[], client: ApiClient, _config: Config) {
+  const parsed = parseArgs(args, {
+    boolean: ['help', 'no-download'],
+    alias: { h: 'help' },
+  });
+
+  if (parsed.help) {
+    console.log(`
+${colors.bold('galactic verify')} <app-id>
+
+Verify an Agent's integrity BEFORE calling it (gx.verify). Always reflects the LIVE
+deployed version. Shows the platform-signed verdict: does the executing bundle match
+its signed attestation, is the published signature valid, and — for open-code Agents —
+does every downloadable source file match the signed hashes (recomputed LOCALLY here,
+not taken on trust).
+
+${colors.dim('OPTIONS')}
+  --no-download         Skip the open-code download + local re-hash step
+
+${colors.dim('EXAMPLES')}
+  galactic verify weather-api
+`);
+    return;
+  }
+
+  const appId = parsed._[0] as string;
+  if (!appId) throw new Error('Usage: galactic verify <app-id>');
+
+  console.log(colors.dim(`Verifying ${appId}...`));
+  const verdict = await client.callTool('gx.verify', { app_id: appId });
+  const integrity = (verdict.integrity ?? {}) as Record<string, unknown>;
+  const verified = verdict.verified === true;
+  const openCode = verdict.open_code === true;
+
+  console.log();
+  console.log(verified ? colors.green('✓ VERIFIED') : colors.red('✗ NOT VERIFIED'));
+  console.log(`  ${String(verdict.name ?? appId)} @ ${String(verdict.version ?? '?')}`);
+  const bundleStatus = String(integrity.executed_bundle_status ?? 'unknown');
+  console.log(
+    `  Executed bundle: ${
+      integrity.executed_bundle_ok ? colors.green(bundleStatus) : colors.red(bundleStatus)
+    }`,
+  );
+  console.log(
+    `  Published signature: ${
+      integrity.published_signature_valid ? colors.green('valid') : colors.red('invalid/absent')
+    }`,
+  );
+  console.log(
+    `  Signer: ${String(integrity.signer ?? '—')}${
+      integrity.signed_at ? ' @ ' + String(integrity.signed_at) : ''
+    }`,
+  );
+  console.log(`  Open code: ${openCode ? colors.green('yes') : colors.dim('no')}`);
+  if (verdict.guidance) console.log(colors.dim(`  ${String(verdict.guidance)}`));
+
+  if (!openCode || parsed['no-download']) return;
+
+  console.log();
+  console.log(colors.dim('Open code — downloading + recomputing each file hash locally...'));
+  // Pin the download to the EXACT version the verdict resolved, so a concurrent
+  // deploy can't make us hash a different version than we verified.
+  const dlArgs: Record<string, unknown> = { app_id: appId };
+  if (verdict.version) dlArgs.version = verdict.version;
+  const dl = await client.callTool('gx.download', dlArgs);
+  const files = (dl.files as Array<{ path: string; content: string }>) || [];
+  const ver = (dl.verification ?? {}) as Record<string, unknown>;
+  const claims = new Map<string, { sha256?: string; matches?: boolean }>();
+  for (const f of (ver.files as Array<Record<string, unknown>>) || []) {
+    claims.set(String(f.path), { sha256: f.sha256 as string, matches: f.matches as boolean });
+  }
+
+  let allOk = files.length > 0;
+  for (const file of files) {
+    const localHash = await sha256HexLocal(file.content);
+    const claim = claims.get(file.path);
+    // The bytes must (a) recompute to the platform's stated sha256 [pure, no
+    // secret] AND (b) match the signed published hash [platform attestation].
+    const recomputeOk = !!claim?.sha256 && localHash === claim.sha256;
+    const signedOk = claim?.matches === true;
+    const ok = recomputeOk && signedOk;
+    if (!ok) allOk = false;
+    console.log(`  ${ok ? colors.green('✓') : colors.red('✗')} ${file.path}`);
+    if (claim && !recomputeOk) {
+      console.log(colors.dim(`      local ${localHash.slice(0, 12)}… ≠ stated ${String(claim.sha256 ?? '').slice(0, 12)}…`));
+    } else if (claim && !signedOk) {
+      console.log(colors.dim(`      bytes do not match the signed published hash`));
+    } else if (!claim) {
+      console.log(colors.dim(`      no published hash for this file`));
+    }
+  }
+
+  console.log();
+  console.log(
+    allOk && verified
+      ? colors.green('✓ Open-code verified: every file matches the signed source and the executing bundle is attested.')
+      : colors.red('✗ Open-code check did not fully pass — inspect the files above.'),
+  );
 }
 
 // ============================================

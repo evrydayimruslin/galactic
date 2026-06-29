@@ -202,6 +202,13 @@ import {
   putLiveExecutedBundle,
 } from "../services/executed-bundle.ts";
 import {
+  buildVerificationVerdict,
+  getVersionTrust,
+  matchFilesAgainstHashes,
+  readVersionSourceFiles,
+  recordVerification,
+} from "../services/code-verification.ts";
+import {
   buildMarketplaceListingSummary,
   type MarketplaceListingSummary,
   type MarketplaceListingSummaryListing,
@@ -2666,6 +2673,34 @@ const PLATFORM_TOOLS: MCPTool[] = [
     },
   },
 
+  // ── ul.verify (open-code / integrity check before calling) ──────────────
+  {
+    name: "ul.verify",
+    description:
+      "Verify an Agent's integrity BEFORE you call it. Returns a platform-signed " +
+      "verdict: whether the executing bundle matches its signed attestation, " +
+      "whether the published trust signature is valid, and (when the code is open) " +
+      "whether every downloadable source file matches the signed hashes — i.e. " +
+      "'the code you can read is the code that runs'. Pair with gx.download to read " +
+      "the source yourself.",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        app_id: {
+          type: "string",
+          description: "App ID or slug of the Agent to verify.",
+        },
+      },
+      required: ["app_id"],
+    },
+  },
+
   // ── 13. ul.job ──────────────────────────
   {
     name: "ul.job",
@@ -2898,6 +2933,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
 const LAUNCH_CORE_TOOLS = new Set<string>([
   "ul.discover",
   "ul.call",
+  "ul.verify",
   "ul.job",
   "ul.upload",
   "ul.test",
@@ -4923,6 +4959,12 @@ async function handleToolsCall(
             result: unwrappedResult,
           };
         }
+        break;
+      }
+
+      // ── ul.verify (open-code / integrity verdict) ──────────────
+      case "ul.verify": {
+        result = await executeVerify(userId, toolArgs);
         break;
       }
 
@@ -7795,6 +7837,12 @@ export async function executeDownload(
   if (!app) app = await appsService.findBySlug(userId, appIdOrSlug);
   if (!app) throw new ToolError(NOT_FOUND, `App not found: ${appIdOrSlug}`);
 
+  // Never disclose the existence/source of a PRIVATE app to a non-owner, even if
+  // download_access was set to "public" independently of visibility (the HTTP
+  // download route already enforces this; the MCP path must too).
+  if (app.owner_id !== userId && app.visibility === "private") {
+    throw new ToolError(NOT_FOUND, `App not found: ${appIdOrSlug}`);
+  }
   // Check download access
   if (app.owner_id !== userId && app.download_access !== "public") {
     throw new ToolError(
@@ -7804,30 +7852,33 @@ export async function executeDownload(
   }
 
   const version = (args.version as string) || app.current_version;
-  const storageKey = `apps/${app.id}/${version}/`;
-  const r2Service = createR2Service();
 
-  // List all files in this version
-  const fileKeys = await r2Service.listFiles(storageKey);
-  const files: Array<{ path: string; content: string }> = [];
+  // Single shared source reader (also used by gx.verify), so the bytes hashed
+  // here are exactly the bytes verify attests to.
+  const sourceFiles = await readVersionSourceFiles(app.id, version);
+  // Strip the internal sourceKey from the public payload (matching uses it).
+  const files = sourceFiles.map(({ path, content }) => ({ path, content }));
 
-  for (const key of fileKeys) {
-    // Skip bundled files, only return source
-    const relativePath = key.replace(storageKey, "");
-    if (
-      relativePath.startsWith("_source_") || !relativePath.includes("_source_")
-    ) {
-      try {
-        const content = await r2Service.fetchTextFile(key);
-        const cleanPath = relativePath.replace("_source_", "");
-        // Skip internal artifacts
-        if (
-          ["skills.md", "library.txt", "embedding.json"].includes(cleanPath)
-        ) continue;
-        files.push({ path: cleanPath, content });
-      } catch { /* skip unreadable */ }
-    }
-  }
+  // Open-code verification: per-file SHA256 of the EXACT returned bytes, matched
+  // against the signed published artifact_hashes. The sha256 values let a client
+  // independently recompute + confirm the bytes (no platform secret needed);
+  // published_sha256 + matches is the platform's attestation that those bytes
+  // equal what was signed at publish time.
+  const trust = getVersionTrust(app, version);
+  const matched = await matchFilesAgainstHashes(sourceFiles, trust?.artifact_hashes ?? {});
+  const verification = {
+    algorithm: "sha256" as const,
+    signed: !!trust?.signature?.signature,
+    signer: trust?.signature.signer ?? null,
+    signed_at: trust?.signature.signed_at ?? null,
+    all_match: matched.all_match,
+    files: matched.files,
+    note: trust
+      ? "Recompute each file's SHA-256 and confirm it equals `sha256`; " +
+        "`matches` attests the bytes equal the signed artifact_hashes. Use gx.verify " +
+        "for the full signed verdict (incl. executed-bundle integrity)."
+      : "No signed trust metadata for this version — hashes are advisory only.",
+  };
 
   return {
     app_id: app.id,
@@ -7835,7 +7886,46 @@ export async function executeDownload(
     version,
     files,
     file_count: files.length,
+    verification,
   };
+}
+
+// ── ul.verify ────────────────────────────────────
+// Pre-call trust check: returns a platform-signed integrity + open-code verdict
+// and records the verified-read (Phase 4 ranking signal). Available for any
+// discoverable Agent — verify reveals only hashes + a verdict, never the source
+// or secrets, so it is NOT gated by download_access (unlike gx.download).
+async function executeVerify(
+  userId: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const appIdOrSlug = args.app_id as string;
+  if (!appIdOrSlug) throw new ToolError(INVALID_PARAMS, "app_id is required");
+
+  const appsService = createAppsService();
+  let app: App | null = await appsService.findById(appIdOrSlug);
+  if (!app) app = await appsService.findBySlug(userId, appIdOrSlug);
+  if (!app) throw new ToolError(NOT_FOUND, `App not found: ${appIdOrSlug}`);
+  // Don't leak the existence/integrity of a private Agent to a non-owner.
+  if (app.owner_id !== userId && app.visibility === "private") {
+    throw new ToolError(NOT_FOUND, `App not found: ${appIdOrSlug}`);
+  }
+
+  // Verify always reflects the LIVE running version (the only one with an
+  // executed-bundle attestation); a per-version executed verdict isn't producible.
+  const verdict = await buildVerificationVerdict(app);
+  // Best-effort telemetry — never blocks the verdict. Skip suspended Agents:
+  // they can't actually be called, so they should not earn the verified-read
+  // ranking signal.
+  if (!app.hosting_suspended) {
+    await recordVerification({
+      appId: app.id,
+      userId,
+      version: verdict.version,
+      verdict,
+    });
+  }
+  return verdict;
 }
 
 // ── ul.test ──────────────────────────────────────
