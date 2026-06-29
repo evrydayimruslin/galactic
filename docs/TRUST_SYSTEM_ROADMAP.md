@@ -150,3 +150,17 @@ version. Phase 4 ties it together; it should land last so ranking only consumes 
 - **`open_code` ranking weight**: boost the *composite* (open **+ hash-verified + positive
   verified-reads**), never mere downloadability — open ≠ safe.
 - **Connect snapshot refresh cadence** + which fields (capabilities/requirements) we retain.
+
+## 7. Phase 3 implementation follow-ups (deferred)
+
+- **Async-call flagging (medium):** `gx.call` on an async function returns a job envelope with no
+  `receipt_id`; `gx.job` later returns `execution_id`, which is NOT the `mcp_call_logs.id` a flag
+  needs — so the whole async-function class can't be flagged, biasing the signal toward sync apps.
+  Fix: have the queue consumer persist the run's `receiptId` on the job row, return it from
+  `gx.job`'s completed/failed branches, and attach the same `_flag` nudge in the async path.
+- **Outer-throw receipt (low):** a platform-internal throw after the sandbox returns yields no
+  `receipt_id`, so those (rare) failures can't be flagged negative. App-logic failures ARE caught
+  and flaggable. Fix: hoist `receiptId` before the try so the outer catch can attach it.
+- **Phase 4 must gate the flag signal:** count a flag toward ranking only with a real **paid** call
+  (already enforced at write: `call_charge_light > 0`), weight **distinct flaggers** by account
+  trust (residual second-account Sybil), and never render `app_call_flags.note` as a public review.
