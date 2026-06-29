@@ -1,3 +1,5 @@
+import type { HealthWindows } from "../types/index.ts";
+
 export const LAUNCH_MVP_VERSION = "launch-mvp-v1" as const;
 
 export const LAUNCH_INCLUDED_CAPABILITIES = [
@@ -722,6 +724,12 @@ export interface LaunchTrustCard {
     visibility: LaunchAgentVisibility;
     download_access: string | null;
   };
+  // Open code: source is downloadable + hash-verifiable via gx.verify.
+  open_code: boolean;
+  // Identity: publisher's Stripe Connect account has payouts enabled.
+  publisher_verified: boolean;
+  // Binary call-success health over rolling windows (self + free calls excluded).
+  health: HealthWindows;
   reliability?: unknown;
   execution_receipts: {
     enabled: true;

@@ -118,6 +118,9 @@ export interface VersionTrustMetadata {
   version: string;
   runtime: "deno" | "gpu" | string;
   manifest_hash: string | null;
+  // sha256 of the canonical {app description + per-function descriptions} — the
+  // attestation subject for description-accuracy. Optional: legacy versions omit it.
+  description_hash?: string;
   artifact_hash: string;
   artifact_hashes: Record<string, string>;
   storage_key?: string;
@@ -126,6 +129,17 @@ export interface VersionTrustMetadata {
   required_secrets: string[];
   per_user_secrets: string[];
   signature: VersionTrustSignature;
+}
+
+// Binary trust-card health (no yellow — "no_data" is distinct from red, used when
+// a window has too few paid calls to judge). Computed per rolling window from
+// mcp_call_logs, excluding owner/self + free calls.
+export type HealthStatus = "green" | "red" | "no_data";
+export interface HealthWindows {
+  "1h": HealthStatus;
+  "24h": HealthStatus;
+  "7d": HealthStatus;
+  "30d": HealthStatus;
 }
 
 export type AppGpuStatus =

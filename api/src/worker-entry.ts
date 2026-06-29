@@ -18,6 +18,8 @@ import {
 import { runRoutineExecutorCycle } from '../services/routine-executor.ts';
 import { isRoutinesEnabled } from '../services/routines-feature-flag.ts';
 import { dispatchPendingEvents } from '../services/agent-events.ts';
+import { refreshAppHealthView } from '../services/app-health.ts';
+import { reconcileConnectVerification } from '../services/connect-verification.ts';
 import { getEnv } from '../lib/env.ts';
 import { applyCorsHeaders, buildCorsPreflightResponse } from '../services/cors.ts';
 import { createServerLogger } from '../services/logging.ts';
@@ -207,11 +209,22 @@ export default {
         ctx.waitUntil(runMinuteJobs());
         break;
 
-      // Every 5 minutes: D1 billing cycle
+      // Every 5 minutes: D1 billing cycle + trust health view refresh.
+      // Health is refreshed at 5-min cadence (not 30) so the rolling 1h window
+      // — whose now()-1h boundary freezes at refresh time — stays honest rather
+      // than lagging up to half its own width.
       case '*/5 * * * *':
         ctx.waitUntil(
           runD1BillingCycle().catch(err =>
             cronLogger.error('D1 billing cron failed', {
+              schedule: event.cron,
+              error: err,
+            })
+          )
+        );
+        ctx.waitUntil(
+          refreshAppHealthView().catch(err =>
+            cronLogger.error('App health refresh cron failed', {
               schedule: event.cron,
               error: err,
             })
@@ -318,11 +331,15 @@ async function runHourlyJobs(): Promise<void> {
     processHostingBilling(),
     processHeldPayouts(),
     expireMarketplaceBids(),
+    // Backstop the account.updated webhook: re-pull live Connect status for
+    // connected sellers whose snapshot has gone stale, so a "verified" badge
+    // can't strand true after Stripe disables payouts with no fresh webhook.
+    reconcileConnectVerification(),
   ]);
 
   for (const [i, result] of results.entries()) {
     if (result.status === 'rejected') {
-      const names = ['hostingBilling', 'payoutProcessor', 'marketplaceBidExpiry'];
+      const names = ['hostingBilling', 'payoutProcessor', 'marketplaceBidExpiry', 'connectVerificationReconcile'];
       cronLogger.error('Hourly cron job failed', {
         job: names[i],
         error: result.reason,

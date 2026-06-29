@@ -1,8 +1,9 @@
-import type { App, VersionMetadata, VersionTrustMetadata } from "../../shared/types/index.ts";
+import type { App, HealthWindows, VersionMetadata, VersionTrustMetadata } from "../../shared/types/index.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
 import { getManifestEnvVars } from "../../shared/contracts/manifest.ts";
 import { getEnv } from "../lib/env.ts";
 import { parseAppManifest, resolveAppEnvSchema } from "./app-settings.ts";
+import { emptyHealth } from "./app-health.ts";
 
 export interface TrustArtifactFile {
   name: string;
@@ -54,6 +55,18 @@ export interface TrustCard {
     visibility: App["visibility"];
     download_access: App["download_access"];
   };
+  // Open code: the source is downloadable (download_access === "public"), so an
+  // Agent can read it AND verify each file against the signed artifact_hashes via
+  // gx.verify before calling. Mere downloadability is not safety — it gains
+  // ranking weight only when combined with hash-verified reads (Phase 4).
+  open_code: boolean;
+  // Identity: true iff the publisher's Stripe Connect account has payouts
+  // enabled (a real, KYC'd, payable entity stands behind this Agent). Derived,
+  // never the raw Connect snapshot.
+  publisher_verified: boolean;
+  // Binary call-success health over rolling windows, owner-self + free calls
+  // excluded. "no_data" when a window has too few paid calls to judge.
+  health: HealthWindows;
   reliability?: unknown;
   execution_receipts: {
     enabled: true;
@@ -309,7 +322,7 @@ export function getLatestVersionTrust(app: Pick<App, "current_version" | "versio
 
 export function buildAppTrustCard(
   app: Pick<App, "current_version" | "runtime" | "manifest" | "version_metadata" | "visibility" | "download_access" | "env_schema">,
-  options: { reliability?: unknown } = {},
+  options: { reliability?: unknown; publisher_verified?: boolean; health?: HealthWindows } = {},
 ): TrustCard {
   const trust = getLatestVersionTrust(app as Pick<App, "current_version" | "version_metadata">);
   const manifest = parseAppManifest(app.manifest);
@@ -350,6 +363,9 @@ export function buildAppTrustCard(
       visibility: app.visibility,
       download_access: app.download_access,
     },
+    open_code: app.download_access === "public",
+    publisher_verified: options.publisher_verified ?? false,
+    health: options.health ?? emptyHealth(),
     ...(options.reliability !== undefined ? { reliability: options.reliability } : {}),
     execution_receipts: {
       enabled: true,

@@ -21,6 +21,7 @@ import {
   revokeToken,
 } from "../services/tokens.ts";
 import { createAppsService } from "../services/apps.ts";
+import { verifiedFromStripeAccount } from "../services/connect-verification.ts";
 import { decryptEnvVar, encryptEnvVar } from "../services/envvars.ts";
 import { unsuspendContent } from "../services/hosting-billing.ts";
 import { getEnv } from "../lib/env.ts";
@@ -609,16 +610,31 @@ export async function handleUser(request: Request): Promise<Response> {
 
         // Handle account.updated (Connect onboarding status changes)
         if (event.type === "account.updated") {
+          // The event payload IS the full Stripe Account object. Capture the
+          // maximum Connect signal (requirements, capabilities, verification,
+          // business_profile, …) into an internal-only snapshot — NEVER
+          // serialized to a public trust card; only the strict, derived
+          // stripe_connect_verified boolean leaves the backend.
           const account = event.data.object as {
             id: string;
             details_submitted?: boolean;
             payouts_enabled?: boolean;
+            requirements?: {
+              currently_due?: string[] | null;
+              past_due?: string[] | null;
+              disabled_reason?: string | null;
+            } | null;
+            [key: string]: unknown;
           };
 
           if (account.id) {
+            // Strict verification: payable AND in good standing. A
+            // payouts_enabled account with outstanding/overdue requirements or a
+            // disabled_reason is NOT verified — the badge must not over-state.
+            const verified = verifiedFromStripeAccount(account);
             const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } =
               getSupabaseEnv();
-            await fetch(
+            const patchRes = await fetch(
               `${SUPABASE_URL}/rest/v1/users?stripe_connect_account_id=eq.${account.id}`,
               {
                 method: "PATCH",
@@ -632,15 +648,37 @@ export async function handleUser(request: Request): Promise<Response> {
                   stripe_connect_onboarded: account.details_submitted || false,
                   stripe_connect_payouts_enabled: account.payouts_enabled ||
                     false,
+                  stripe_connect_verified: verified,
+                  stripe_connect_snapshot: account,
+                  stripe_connect_synced_at: new Date().toISOString(),
                 }),
               },
             );
+            // A trust/identity write must fail toward retry, never silently drop:
+            // a swallowed failure could strand a stale verified=true after Stripe
+            // disabled payouts. PostgREST 4xx/5xx does NOT reject the promise, and
+            // the handler returns 200 even when handled stays false — so on a
+            // failed write we THROW, which marks the event failed and surfaces a
+            // 500, prompting Stripe to redeliver the same account.updated event.
+            if (!patchRes.ok) {
+              const detail = await patchRes.text().catch(() => patchRes.statusText);
+              stripeLogger.error("Failed to persist Connect account state", {
+                event_id: event.id,
+                account_id: account.id,
+                status: patchRes.status,
+                detail,
+              });
+              throw new Error(
+                `Connect account persist failed (${patchRes.status})`,
+              );
+            }
             handled = true;
             stripeLogger.info("Updated Stripe Connect account state", {
               event_id: event.id,
               account_id: account.id,
               payouts_enabled: account.payouts_enabled || false,
               details_submitted: account.details_submitted || false,
+              verified,
             });
           }
         }

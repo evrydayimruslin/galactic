@@ -16,6 +16,7 @@ import {
   sanitizeGpuTrustCard,
 } from "../services/gpu/feature-flag.ts";
 import { buildAppTrustCard } from "../services/trust.ts";
+import { emptyHealth, getAppHealth } from "../services/app-health.ts";
 import { RequestValidationError } from "../services/request-validation.ts";
 import { createEmbeddingService } from "../services/embedding.ts";
 import { getRecentCalls } from "../services/call-logger.ts";
@@ -3836,7 +3837,7 @@ async function handleLaunchTool(
     agent: tool,
     // Deprecated alias kept for one rename window.
     tool,
-    trustCard: buildLaunchTrustCard(row),
+    trustCard: await buildLaunchTrustCard(row),
     generatedAt: new Date().toISOString(),
   });
 }
@@ -3990,7 +3991,7 @@ async function handleLaunchToolAdmin(
 
   return json({
     admin,
-    trustCard: buildLaunchTrustCard(row),
+    trustCard: await buildLaunchTrustCard(row),
     generatedAt: new Date().toISOString(),
   });
 }
@@ -6043,24 +6044,79 @@ function normalizeVisibility(
   return "private";
 }
 
-function buildLaunchTrustCard(row: LaunchAppRow): LaunchTrustCard {
-  return sanitizeGpuTrustCard(buildAppTrustCard({
-    current_version: row.current_version || "",
-    runtime: row.runtime === "gpu" && !isGpuSupportEnabled()
-      ? "deno"
-      : row.runtime || "deno",
-    manifest: typeof row.manifest === "string"
-      ? row.manifest
-      : row.manifest
-      ? JSON.stringify(row.manifest)
-      : null,
-    version_metadata: Array.isArray(row.version_metadata)
-      ? row.version_metadata as never
-      : [],
-    visibility: normalizeVisibility(row.visibility),
-    download_access: row.download_access || "owner",
-    env_schema: row.env_schema || {},
-  } as never) as LaunchTrustCard);
+async function buildLaunchTrustCard(row: LaunchAppRow): Promise<LaunchTrustCard> {
+  // Two external trust signals fetched in parallel: the publisher's Connect
+  // verification (persisted boolean, kept fresh by the account.updated webhook —
+  // no live Stripe call per page load) and the Agent's binary call health.
+  const [publisherVerified, healthMap] = await Promise.all([
+    isPublisherVerified(row.owner_id),
+    getAppHealth([row.id]),
+  ]);
+  return sanitizeGpuTrustCard(buildAppTrustCard(
+    {
+      current_version: row.current_version || "",
+      runtime: row.runtime === "gpu" && !isGpuSupportEnabled()
+        ? "deno"
+        : row.runtime || "deno",
+      manifest: typeof row.manifest === "string"
+        ? row.manifest
+        : row.manifest
+        ? JSON.stringify(row.manifest)
+        : null,
+      version_metadata: Array.isArray(row.version_metadata)
+        ? row.version_metadata as never
+        : [],
+      visibility: normalizeVisibility(row.visibility),
+      download_access: row.download_access || "owner",
+      env_schema: row.env_schema || {},
+    } as never,
+    {
+      publisher_verified: publisherVerified,
+      health: healthMap.get(row.id) ?? emptyHealth(),
+    },
+  ) as LaunchTrustCard);
+}
+
+// A verified snapshot older than this is treated as unverified (fail closed).
+// The hourly reconcile cron refreshes any seller whose snapshot has crossed a
+// 12h staleness threshold (effective per-seller refresh ~12-13h), so a
+// legitimately verified seller stays well inside this 48h window; if reconcile
+// stalls, badges degrade to unverified rather than stranding a stale "verified".
+const PUBLISHER_VERIFIED_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+
+// publisher_verified := the owner's Stripe Connect account is payable AND in
+// good standing (strict stripe_connect_verified, distilled by the webhook +
+// reconcile cron) AND that signal is fresh. Reads persisted columns, never the
+// live Stripe API. Every failure direction resolves to false (unverified).
+async function isPublisherVerified(
+  ownerId: string | null | undefined,
+): Promise<boolean> {
+  if (!ownerId) return false;
+  try {
+    const db = getDbConfig();
+    const rows = await dbGet<{
+      stripe_connect_verified: boolean | null;
+      stripe_connect_synced_at: string | null;
+    }>(
+      db,
+      "users",
+      {
+        id: `eq.${ownerId}`,
+        select: "stripe_connect_verified,stripe_connect_synced_at",
+        limit: "1",
+      },
+    );
+    const row = rows[0];
+    if (row?.stripe_connect_verified !== true) return false;
+    const syncedAt = row.stripe_connect_synced_at
+      ? Date.parse(row.stripe_connect_synced_at)
+      : NaN;
+    if (!Number.isFinite(syncedAt)) return false;
+    return Date.now() - syncedAt <= PUBLISHER_VERIFIED_MAX_AGE_MS;
+  } catch (err) {
+    console.warn("[LAUNCH] publisher_verified lookup failed:", err);
+    return false;
+  }
 }
 
 function shouldHideGpu(row: LaunchAppRow): boolean {
