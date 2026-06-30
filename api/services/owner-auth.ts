@@ -28,22 +28,15 @@ const MAX_TTL_SECONDS = 5 * 60;
 export class OwnerActorTokenError extends Error {}
 
 function getSigningSecret(): string {
-  for (
-    const key of [
-      "OWNER_ACTOR_TOKEN_SECRET",
-      // Server-only fallbacks. Deliberately NOT WORKER_SECRET (sandbox-exposed):
-      // signing with a sandbox-readable secret would let app code forge a token.
-      "AGENT_CALLER_SECRET",
-      "ROUTINE_ACTOR_TOKEN_SECRET",
-      "SUPABASE_SERVICE_ROLE_KEY",
-    ]
-  ) {
-    const value = getEnv(key);
-    if (value && value.trim()) return value.trim();
-  }
-  throw new OwnerActorTokenError(
-    "Owner actor token signing secret is not configured",
-  );
+  // Require a DEDICATED secret — no fallback to the other token systems' keys
+  // (AGENT_CALLER_SECRET / ROUTINE_ACTOR_TOKEN_SECRET / SUPABASE_SERVICE_ROLE_KEY).
+  // The owner-actor token is the most privileged of them; sharing a signing key
+  // would collapse key separation. Deliberately NOT WORKER_SECRET either (it is
+  // sandbox-readable). Unset => the whole owner-admin surface stays inert: mint
+  // and verify both fail closed.
+  const value = getEnv("OWNER_ACTOR_TOKEN_SECRET");
+  if (value && value.trim()) return value.trim();
+  throw new OwnerActorTokenError("OWNER_ACTOR_TOKEN_SECRET is not configured");
 }
 
 // base64url + HMAC-SHA256 + constant-time compare — mirrors sandbox-actor.ts,

@@ -78,11 +78,16 @@ function installHarness(platformOwnerId: string | undefined): {
   };
 }
 
-function config(userId: string, ownerId: string): RuntimeConfig {
+function config(
+  userId: string,
+  ownerId: string,
+  allowPlatformAdmin = false,
+): RuntimeConfig {
   return {
     appId: "app_admin_gate",
     userId,
     ownerId,
+    allowPlatformAdmin,
     executionId: "exec_admin_gate",
     code: "",
     permissions: [],
@@ -99,13 +104,29 @@ function config(userId: string, ownerId: string): RuntimeConfig {
   } as unknown as RuntimeConfig;
 }
 
-Deno.test("ADMIN gate: wired when the platform owner runs their OWN Agent", async () => {
+Deno.test("ADMIN gate: wired when the platform owner runs their OWN published Agent", async () => {
   const h = installHarness(OWNER);
   try {
-    await executeInDynamicSandbox(config(OWNER, OWNER), "noop", []);
+    await executeInDynamicSandbox(config(OWNER, OWNER, true), "noop", []);
     assert(
       h.captured.envKeys.includes("ADMIN"),
-      "ADMIN must be wired for an owner-owned execution",
+      "ADMIN must be wired for an owner-owned published execution",
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+Deno.test("ADMIN gate: NOT wired for an ephemeral/test execution (no allowPlatformAdmin) even as owner-own-app", async () => {
+  // The gx.test / ephemeral-code executor runs untrusted code with
+  // ownerId === userId but never sets allowPlatformAdmin. The owner testing such
+  // code must NOT reach platform admin (the confused-deputy guard).
+  const h = installHarness(OWNER);
+  try {
+    await executeInDynamicSandbox(config(OWNER, OWNER, false), "noop", []);
+    assert(
+      !h.captured.envKeys.includes("ADMIN"),
+      "ADMIN must NOT be wired without the allowPlatformAdmin opt-in",
     );
   } finally {
     h.restore();
@@ -115,7 +136,7 @@ Deno.test("ADMIN gate: wired when the platform owner runs their OWN Agent", asyn
 Deno.test("ADMIN gate: NOT wired when the owner runs a THIRD-PARTY Agent", async () => {
   const h = installHarness(OWNER);
   try {
-    await executeInDynamicSandbox(config(OWNER, OTHER_OWNER), "noop", []);
+    await executeInDynamicSandbox(config(OWNER, OTHER_OWNER, true), "noop", []);
     assert(
       !h.captured.envKeys.includes("ADMIN"),
       "ADMIN must NOT be wired when the Agent is owned by someone else",
@@ -128,7 +149,7 @@ Deno.test("ADMIN gate: NOT wired when the owner runs a THIRD-PARTY Agent", async
 Deno.test("ADMIN gate: NOT wired for a non-owner user", async () => {
   const h = installHarness(OWNER);
   try {
-    await executeInDynamicSandbox(config(NON_OWNER, NON_OWNER), "noop", []);
+    await executeInDynamicSandbox(config(NON_OWNER, NON_OWNER, true), "noop", []);
     assert(
       !h.captured.envKeys.includes("ADMIN"),
       "ADMIN must NOT be wired for a non-owner",
@@ -141,7 +162,7 @@ Deno.test("ADMIN gate: NOT wired for a non-owner user", async () => {
 Deno.test("ADMIN gate: NOT wired when PLATFORM_OWNER_USER_ID is unconfigured", async () => {
   const h = installHarness(undefined);
   try {
-    await executeInDynamicSandbox(config(OWNER, OWNER), "noop", []);
+    await executeInDynamicSandbox(config(OWNER, OWNER, true), "noop", []);
     assert(
       !h.captured.envKeys.includes("ADMIN"),
       "ADMIN must NOT be wired when no platform owner is configured",

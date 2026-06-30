@@ -29,6 +29,12 @@ export interface RuntimeConfig {
   appId: string;
   userId: string;
   ownerId: string;
+  // Default-DENY capability for the owner-only ADMIN binding (platform-defaults
+  // curation). The runtime wires ADMIN only when this is true AND the executing
+  // user is the platform owner running their OWN app. Set ONLY by the genuine
+  // per-app published execution path — never by the gx.test / ephemeral-code
+  // executor — so the owner testing untrusted code can't reach platform admin.
+  allowPlatformAdmin?: boolean;
   // The app's DB current_version. When set, the executed-bundle verify rejects a
   // live bundle whose signed attestation is for a different (e.g. downgraded)
   // version. Optional: paths that don't supply it skip the version check.

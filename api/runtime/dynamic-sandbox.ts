@@ -566,13 +566,17 @@ export default {
       });
     }
 
-    // Platform administration (owner-only). Wired ONLY when the platform owner
-    // runs one of their OWN Agents (userId === ownerId === PLATFORM_OWNER_USER_ID)
-    // so a third-party Agent the owner happens to run can never reach it. The
-    // binding mints the owner-actor token host-side and routes through the same
-    // authenticateInternalAdmin chokepoint — no god-mode key enters the sandbox.
+    // Platform administration (owner-only). Wired ONLY when (a) this is a genuine
+    // published-app execution that opted in (allowPlatformAdmin — NOT the gx.test
+    // / ephemeral-code path, so the owner testing untrusted code can't reach it),
+    // AND (b) the platform owner is running one of their OWN Agents (userId ===
+    // ownerId === PLATFORM_OWNER_USER_ID, so a third-party Agent the owner happens
+    // to run can never reach it). The binding mints the owner-actor token
+    // host-side and routes through authenticateInternalAdmin — no god-mode key
+    // enters the sandbox.
     const platformOwnerId = getEnv("PLATFORM_OWNER_USER_ID").trim();
     if (
+      config.allowPlatformAdmin === true &&
       platformOwnerId &&
       config.userId === platformOwnerId &&
       config.ownerId === platformOwnerId &&

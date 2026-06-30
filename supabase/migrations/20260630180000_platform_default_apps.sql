@@ -49,6 +49,12 @@ CREATE INDEX IF NOT EXISTS "idx_platform_default_apps_active"
 -- Platform policy, not user data: lock the public PostgREST roles out entirely;
 -- only service_role (which bypasses RLS) reads/writes it.
 ALTER TABLE "public"."platform_default_apps" ENABLE ROW LEVEL SECURITY;
+-- Defense in depth beyond RLS: explicitly strip the inherited baseline grants to
+-- the public PostgREST roles, so a future permissive policy, an RLS-disable for a
+-- backfill, or a view/matview over this table (matviews can't carry RLS) cannot
+-- silently world-expose the curated set + added_by ids. Only service_role (which
+-- bypasses RLS) reads/writes it.
+REVOKE ALL ON TABLE "public"."platform_default_apps" FROM PUBLIC, "anon", "authenticated";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "public"."platform_default_apps" TO "service_role";
 
 -- One-time bootstrap: seed the registry from the apps the legacy name-matched
