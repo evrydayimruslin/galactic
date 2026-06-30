@@ -59,9 +59,10 @@ export async function onRequestGet(context: PagesContext): Promise<Response> {
     : params.slug || "";
 
   // Always serve the SPA shell so the client app hydrates for human visitors.
-  const shell = await env.ASSETS.fetch(
-    new Request(new URL("/index.html", url).toString(), request),
-  );
+  // Fetch the original request: Pages applies _redirects (/* -> /index.html 200)
+  // and returns the shell at 200. (Fetching "/index.html" directly would 308 to
+  // "/" via Pages' canonicalization.)
+  const shell = await env.ASSETS.fetch(request);
 
   let agent: AgentSummary | null = null;
   if (slug) {
