@@ -312,7 +312,9 @@ export async function getOrCreatePublisherReferralLink(
   throw new Error("Failed to create unique referral link");
 }
 
-async function fetchActiveReferralLinkBySlug(
+// Read-only resolve of a referral slug -> active link (incl. app_id). Used by
+// the social-crawler preview path, which must NOT record a landing.
+export async function fetchActiveReferralLinkBySlug(
   slug: string,
   deps?: ReferralDeps,
 ): Promise<ReferralLinkRow | null> {

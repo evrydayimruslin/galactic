@@ -80,6 +80,81 @@ Deno.test("app router: referral landing records visitor and redirects to app", a
   }
 });
 
+Deno.test("app router: referral bot preview renders OG card WITHOUT recording a landing", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  let landingPosts = 0;
+
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.test",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    BASE_URL: "https://ul.test",
+  } as typeof globalThis.__env;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const method = init?.method || "GET";
+    if (
+      method === "GET" &&
+      url.startsWith("https://supabase.test/rest/v1/publisher_referral_links")
+    ) {
+      return jsonResponse([{
+        id: "11111111-1111-4111-8111-111111111111",
+        app_id: "22222222-2222-4222-8222-222222222222",
+        publisher_user_id: "33333333-3333-4333-8333-333333333333",
+        slug: "abc123",
+        status: "active",
+        created_at: "2026-05-18T12:00:00Z",
+      }]);
+    }
+    if (
+      method === "GET" &&
+      url.startsWith("https://supabase.test/rest/v1/apps")
+    ) {
+      return jsonResponse([{
+        id: "22222222-2222-4222-8222-222222222222",
+        slug: "story-builder",
+        name: "Story Builder",
+        description: "Create fictional worlds.",
+        visibility: "public",
+      }]);
+    }
+    if (method === "POST") {
+      landingPosts++;
+      throw new Error("bot preview must not POST (no landing/grant)");
+    }
+    throw new Error(`Unexpected fetch ${method} ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const app = createApp();
+    const response = await app.handle(
+      new Request("https://ul.test/r/abc123", {
+        headers: { "user-agent": "facebookexternalhit/1.1" },
+        redirect: "manual",
+      }),
+    );
+
+    assertEquals(response.status, 200);
+    assertStringIncludes(
+      response.headers.get("content-type") || "",
+      "text/html",
+    );
+    const html = await response.text();
+    assertStringIncludes(
+      html,
+      'content="https://ul.test/og/22222222-2222-4222-8222-222222222222.png"',
+    );
+    assertStringIncludes(html, "Story Builder: Galactic Agent");
+    assertStringIncludes(html, 'name="twitter:card" content="summary_large_image"');
+    assertEquals(landingPosts, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
+});
+
 Deno.test("app router: terms page includes fee-waiver policy copy", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnv = globalThis.__env;
