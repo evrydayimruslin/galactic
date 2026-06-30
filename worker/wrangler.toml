@@ -23,6 +23,11 @@ id = "d348ee797036460faf4b3e014921f0b0"
 
 [vars]
 ENVIRONMENT = "production"
-# Set DATA_TENANT_ENFORCE = "1" to require a valid tenant token on every data
-# call (reject if absent/invalid). Leave unset during rollout; flip to "1" once
-# logs confirm tokens validate end-to-end.
+# Require a valid per-tenant token on every data call (reject if absent/invalid),
+# so a leaked WORKER_SECRET alone can't forge cross-tenant access. Tenant-token
+# coverage is 100% — every /data/* call funnels through createWorkerAppDataService
+# → workerFetch, which always sets X-Tenant-Token (api/services/appdata.ts).
+# PRECONDITION: a real (non-default) DATA_TENANT_SECRET must be set on BOTH this
+# worker AND the API worker, identical — otherwise the production footgun guard
+# (src/index.ts) refuses to serve (503). Takes effect on `cd worker && wrangler deploy`.
+DATA_TENANT_ENFORCE = "1"
