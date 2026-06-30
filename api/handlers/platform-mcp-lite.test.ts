@@ -16,6 +16,7 @@ const CORE = [
   'gx.set',
   'gx.test',
   'gx.upload',
+  'gx.verify',
 ].sort();
 
 function withEnv<T>(env: Record<string, string>, fn: () => T): T {
