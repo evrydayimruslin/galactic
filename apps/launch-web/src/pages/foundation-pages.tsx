@@ -160,7 +160,10 @@ interface AgentDetailFixture extends AgentFixture {
   // Phase 4 trust chips — derived from the signed trust card (default off).
   publisherVerified: boolean;
   openCode: boolean;
+  // signedManifest attests the published SOURCE only ("Source signed").
+  // executedIntegrity is the real runtime claim (running bytes vs signature).
   signedManifest: boolean;
+  executedIntegrity: LaunchTrustCard["executed_integrity"];
   health: LaunchTrustCard["health"] | null;
   title: string;
   updatedAt: string | null;
@@ -588,6 +591,7 @@ function liveAgentFixture(
     publisherVerified: trust?.publisher_verified ?? false,
     openCode: trust?.open_code ?? false,
     signedManifest: trust?.signed_manifest ?? false,
+    executedIntegrity: trust?.executed_integrity ?? "unknown",
     health: trust?.health ?? null,
     slug: tool.slug,
     spark: null,
@@ -3668,9 +3672,11 @@ function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement
   const minPrice = paidFunctions.length > 0
     ? Math.min(...paidFunctions.map((fn) => fn.price))
     : 0;
-  // Drive the headline from the same signal as the Integrity chip so they can't
-  // contradict (a signed manifest is what "Ready to call" actually means).
+  // Headline reflects what's provable. A signed SOURCE manifest means "ready to
+  // call" (capabilities disclosed, receipts on); it does NOT mean the running
+  // code is verified — that's the executedIntegrity chip / gx.verify.
   const signed = tool.signedManifest;
+  const runtimeVerified = tool.executedIntegrity === "verified";
 
   return (
     <div className="details-panel">
@@ -3681,7 +3687,9 @@ function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement
             <h3>{signed ? "Ready to call" : "No trust card yet"}</h3>
             <p>
               {signed
-                ? "Signed manifest, receipts, and capability disclosure are live."
+                ? runtimeVerified
+                  ? "Running code is verified against its signature; receipts and capability disclosure are live."
+                  : "Source is signed and receipts + capability disclosure are live. Run gx.verify to confirm the running code matches."
                 : "This Agent has not published a signed trust card. Receipts still apply to every call."}
             </p>
           </div>
@@ -3697,8 +3705,14 @@ function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement
           <Pill tone={tool.publisherVerified ? "green" : "default"}>
             {tool.publisherVerified ? "Verified publisher" : "Publisher unverified"}
           </Pill>
-          <Pill tone={tool.signedManifest ? "green" : "default"}>
-            {tool.signedManifest ? "Integrity signed" : "Unsigned"}
+          <Pill tone={runtimeVerified ? "green" : "default"}>
+            {runtimeVerified
+              ? "Runtime verified"
+              : tool.executedIntegrity === "unverified"
+              ? "Runtime unverified"
+              : tool.signedManifest
+              ? "Source signed"
+              : "Unsigned"}
           </Pill>
           <Pill tone={tool.openCode ? "green" : "default"}>
             {tool.openCode ? "Open code" : "Closed source"}

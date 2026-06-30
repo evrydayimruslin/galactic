@@ -169,9 +169,12 @@ Deno.test("trust: publisher_verified + health default safe and honor options", (
     // deno-lint-ignore no-explicit-any
   } as any;
 
-  // No options => conservative defaults (unverified, no health claimed).
+  // No options => conservative defaults (unverified, no health claimed). Runtime
+  // integrity is "unknown" until a surface pays the KV read to check — never
+  // green from mere source signing.
   const bare = buildAppTrustCard(app);
   assertEquals(bare.publisher_verified, false);
+  assertEquals(bare.executed_integrity, "unknown");
   assertEquals(bare.health, {
     "1h": "no_data",
     "24h": "no_data",
@@ -183,9 +186,11 @@ Deno.test("trust: publisher_verified + health default safe and honor options", (
   const enriched = buildAppTrustCard(app, {
     publisher_verified: true,
     health: { "1h": "green", "24h": "green", "7d": "red", "30d": "no_data" },
+    executed_integrity: "verified",
   });
   assertEquals(enriched.publisher_verified, true);
   assertEquals(enriched.health["7d"], "red");
+  assertEquals(enriched.executed_integrity, "verified");
 });
 
 Deno.test("trust: diffs manifest functions permissions and secrets", () => {

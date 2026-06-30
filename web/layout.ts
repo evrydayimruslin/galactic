@@ -3858,7 +3858,7 @@ export function getLayoutHTML(options: {
       var scopeText = labels.length > 0 ? labels.slice(0, 3).join(', ') : 'No broad access';
       var extraCount = labels.length > 3 ? ' +' + (labels.length - 3) : '';
       return '<div class="marketplace-trust-row">' +
-        '<span class="trust-status ' + (signed ? 'ok' : 'warn') + '">' + (signed ? 'Signed' : 'Legacy') + '</span>' +
+        '<span class="trust-status ' + (signed ? 'ok' : 'warn') + '">' + (signed ? 'Source signed' : 'Legacy') + '</span>' +
         '<span class="marketplace-trust-text">' + escapeHtml(scopeText + extraCount) + '</span>' +
       '</div>';
     }

@@ -16,6 +16,7 @@ import {
   sanitizeGpuTrustCard,
 } from "../services/gpu/feature-flag.ts";
 import { buildAppTrustCard } from "../services/trust.ts";
+import { resolveExecutedIntegrity } from "../services/executed-bundle.ts";
 import { emptyHealth, getAppHealth } from "../services/app-health.ts";
 import { RequestValidationError } from "../services/request-validation.ts";
 import { createEmbeddingService } from "../services/embedding.ts";
@@ -2682,6 +2683,10 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           properties: {
             schema_version: { type: "integer", const: 1 },
             signed_manifest: { type: "boolean" },
+            executed_integrity: {
+              type: "string",
+              enum: ["verified", "unverified", "unknown"],
+            },
             signer: { type: ["string", "null"] },
             signed_at: { type: ["string", "null"], format: "date-time" },
             version: { type: ["string", "null"] },
@@ -6050,9 +6055,12 @@ async function buildLaunchTrustCard(row: LaunchAppRow): Promise<LaunchTrustCard>
   // Two external trust signals fetched in parallel: the publisher's Connect
   // verification (persisted boolean, kept fresh by the account.updated webhook —
   // no live Stripe call per page load) and the Agent's binary call health.
-  const [publisherVerified, healthMap] = await Promise.all([
+  const [publisherVerified, healthMap, executedIntegrity] = await Promise.all([
     isPublisherVerified(row.owner_id),
     getAppHealth([row.id]),
+    // Single-agent detail surface: report REAL runtime integrity (executing
+    // bundle vs signature), not just publish-time source signing.
+    resolveExecutedIntegrity(row.id),
   ]);
   return sanitizeGpuTrustCard(buildAppTrustCard(
     {
@@ -6075,6 +6083,7 @@ async function buildLaunchTrustCard(row: LaunchAppRow): Promise<LaunchTrustCard>
     {
       publisher_verified: publisherVerified,
       health: healthMap.get(row.id) ?? emptyHealth(),
+      executed_integrity: executedIntegrity,
     },
   ) as LaunchTrustCard);
 }

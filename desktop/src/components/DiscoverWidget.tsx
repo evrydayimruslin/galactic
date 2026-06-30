@@ -239,7 +239,7 @@ export default function DiscoverWidget({
         <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
           signed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
         }`}>
-          {signed ? 'Signed' : 'Legacy'}
+          {signed ? 'Source signed' : 'Legacy'}
         </span>
         <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
           {accessText}{extra}

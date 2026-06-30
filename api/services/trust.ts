@@ -1,5 +1,8 @@
 import type { App, HealthWindows, VersionMetadata, VersionTrustMetadata } from "../../shared/types/index.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
+// Type-only import (erased at runtime) — avoids a runtime cycle with
+// executed-bundle.ts, which imports signing helpers from this file.
+import type { ExecutedIntegrity } from "./executed-bundle.ts";
 import { getManifestEnvVars } from "../../shared/contracts/manifest.ts";
 import { getEnv } from "../lib/env.ts";
 import { parseAppManifest, resolveAppEnvSchema } from "./app-settings.ts";
@@ -29,7 +32,16 @@ export interface ManifestDiff {
 
 export interface TrustCard {
   schema_version: 1;
+  // signed_manifest attests the published SOURCE manifest only (a publish-time
+  // HMAC over the source artifacts). It does NOT verify the bundle that actually
+  // executes — executed_integrity does. Surfaces must label this "source signed",
+  // never imply runtime integrity from it alone.
   signed_manifest: boolean;
+  // Runtime integrity: does the bundle that EXECUTES match its signed
+  // attestation? "verified"/"unverified" on the single-app detail surface that
+  // pays one KV read to check; "unknown" on cheap batch surfaces (discovery)
+  // that don't — in which case gx.verify is the authoritative runtime check.
+  executed_integrity: ExecutedIntegrity;
   signer: string | null;
   signed_at: string | null;
   version: string | null;
@@ -353,7 +365,14 @@ export function getLatestVersionTrust(app: Pick<App, "current_version" | "versio
 
 export function buildAppTrustCard(
   app: Pick<App, "current_version" | "runtime" | "manifest" | "version_metadata" | "visibility" | "download_access" | "env_schema">,
-  options: { reliability?: unknown; publisher_verified?: boolean; health?: HealthWindows } = {},
+  options: {
+    reliability?: unknown;
+    publisher_verified?: boolean;
+    health?: HealthWindows;
+    // Precomputed runtime-integrity verdict (resolveExecutedIntegrity). Omitted
+    // on cheap/batch surfaces, which leave it "unknown".
+    executed_integrity?: ExecutedIntegrity;
+  } = {},
 ): TrustCard {
   const trust = getLatestVersionTrust(app as Pick<App, "current_version" | "version_metadata">);
   const manifest = parseAppManifest(app.manifest);
@@ -371,6 +390,7 @@ export function buildAppTrustCard(
   return {
     schema_version: 1,
     signed_manifest: !!trust?.signature && !!trust.manifest_hash,
+    executed_integrity: options.executed_integrity ?? "unknown",
     signer: trust?.signature.signer || null,
     signed_at: trust?.signature.signed_at || null,
     version: app.current_version || trust?.version || null,

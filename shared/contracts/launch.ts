@@ -707,7 +707,12 @@ export interface LaunchAgentAdminSummary {
 
 export interface LaunchTrustCard {
   schema_version: 1;
+  // Attests the published SOURCE manifest only — label "source signed", never
+  // imply the running code is verified. executed_integrity is the runtime claim.
   signed_manifest: boolean;
+  // Does the EXECUTING bundle match its signed attestation? "verified"/
+  // "unverified" on the detail surface; "unknown" on cheap batch surfaces.
+  executed_integrity: "verified" | "unverified" | "unknown";
   signer: string | null;
   signed_at: string | null;
   version: string | null;

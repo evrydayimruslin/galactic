@@ -63,6 +63,7 @@ import {
 import { hasValidPageShareSession } from "../services/page-share-session.ts";
 import { fetchAppEntryCode } from "../services/app-runtime-resources.ts";
 import { buildAppTrustCard, type TrustCard } from "../services/trust.ts";
+import { resolveExecutedIntegrity } from "../services/executed-bundle.ts";
 import {
   buildMarketplaceListingSummary,
   type MarketplaceListingSummary,
@@ -2376,8 +2377,13 @@ async function handlePublicAppPage(
       console.warn("[PublicAppPage] Failed to fetch marketplace summary:", err);
     }
 
+    // Single-app surface: pay one KV read to report REAL runtime integrity
+    // (the executing bundle vs its signed attestation), not just source signing.
+    const executedIntegrity = await resolveExecutedIntegrity(app.id);
     const trustCard = sanitizeGpuTrustCard(
-      buildAppTrustCard({ ...app, env_schema: {} }),
+      buildAppTrustCard({ ...app, env_schema: {} }, {
+        executed_integrity: executedIntegrity,
+      }),
     );
     const html = getPublicAppPageHTML(app, ownerName, baseUrl, {
       isEmbed,
@@ -2572,21 +2578,34 @@ function getPublicAppPageHTML(
     trustCard && !isGpuSupportEnabled() && trustCard.runtime === "gpu"
       ? "deno"
       : trustCard?.runtime || "deno";
+  // Headline status reflects what we can actually prove. Prefer the runtime
+  // verdict (the executing bundle matches its signature); fall back to source
+  // signing — explicitly labelled "Source signed" so it never implies the
+  // running code is verified.
+  const runtimeVerified = trustCard?.executed_integrity === "verified";
+  const trustStatusTone = runtimeVerified
+    ? "ok"
+    : (trustCard?.signed_manifest ? "ok" : "warn");
+  const trustStatusLabel = runtimeVerified
+    ? "Runtime verified"
+    : (trustCard?.signed_manifest ? "Source signed" : "Unsigned Legacy");
+  const runtimeIntegrityLabel = trustCard?.executed_integrity === "verified"
+    ? "Verified"
+    : trustCard?.executed_integrity === "unverified"
+    ? "Unverified"
+    : "Not checked";
   const trustCardHtml = trustCard
     ? `
     <section class="section trust-section">
       <div class="trust-header">
         <div class="section-title">Trust & Runtime</div>
-        <span class="trust-status ${
-      trustCard.signed_manifest ? "ok" : "warn"
-    }">${
-      trustCard.signed_manifest ? "Signed Manifest" : "Unsigned Legacy"
-    }</span>
+        <span class="trust-status ${trustStatusTone}">${trustStatusLabel}</span>
       </div>
       <div class="trust-grid">
         <div><span>Runtime</span><strong>${
       escapeHtml(trustRuntime)
     }</strong></div>
+        <div><span>Running code</span><strong>${runtimeIntegrityLabel}</strong></div>
         <div><span>Version</span><strong>${
       escapeHtml(trustCard.version || version)
     }</strong></div>
