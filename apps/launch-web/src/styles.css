@@ -2857,11 +2857,6 @@ button {
   margin-bottom: 0;
 }
 
-.library-count {
-  color: var(--ul-muted);
-  font-size: 14px;
-}
-
 .library-toolbar .launch-button {
   margin-left: auto;
 }

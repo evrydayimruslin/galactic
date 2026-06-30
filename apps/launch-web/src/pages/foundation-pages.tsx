@@ -3842,9 +3842,6 @@ export function LibraryFoundationPage(
   const ownedTools = (live.data.library?.owned ?? []).map((tool) =>
     liveAgentFixture(tool)
   );
-  const count = view === "installed"
-    ? installedTools.length
-    : ownedTools.length;
   useEffect(() => {
     setView(libraryViewFromSearch());
   }, [location.search]);
@@ -3874,7 +3871,6 @@ export function LibraryFoundationPage(
             </button>
           ))}
         </div>
-        <span className="library-count">{count}</span>
       </div>
 
       {view === "installed"
