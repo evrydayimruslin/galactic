@@ -35,6 +35,8 @@ import type {
   LaunchJobStatusResponse,
   LaunchLeaderboardKind,
   LaunchLeaderboardResponse,
+  LaunchFolderMemberMutationResponse,
+  LaunchFolderMutationResponse,
   LaunchLibraryResponse,
   LaunchPlatformPrimitiveSuggestion,
   LaunchStoreRequest,
@@ -201,6 +203,44 @@ export class LaunchApiClient {
 
   library(): Promise<LaunchLibraryResponse> {
     return this.fetchJson("/api/launch/library");
+  }
+
+  createFolder(
+    scope: "owned" | "installed",
+    name: string,
+  ): Promise<LaunchFolderMutationResponse> {
+    return this.fetchJson("/api/launch/folders", {
+      method: "POST",
+      body: JSON.stringify({ scope, name }),
+    });
+  }
+
+  renameFolder(
+    id: string,
+    name: string,
+  ): Promise<LaunchFolderMutationResponse> {
+    return this.fetchJson(`/api/launch/folders/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  deleteFolder(id: string): Promise<{ ok: boolean }> {
+    return this.fetchJson(`/api/launch/folders/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  }
+
+  /** Move an Agent into a folder, or out of all folders (folderId: null). */
+  setAgentFolder(
+    scope: "owned" | "installed",
+    appId: string,
+    folderId: string | null,
+  ): Promise<LaunchFolderMemberMutationResponse> {
+    return this.fetchJson("/api/launch/folders/members", {
+      method: "PUT",
+      body: JSON.stringify({ scope, app_id: appId, folder_id: folderId }),
+    });
   }
 
   store(request: LaunchStoreRequest = {}): Promise<LaunchStoreResponse> {

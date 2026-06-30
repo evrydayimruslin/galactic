@@ -3797,6 +3797,21 @@ async function handleLaunchDiscover(
 
 async function handleLaunchLibrary(request: Request): Promise<Response> {
   const user = await requireLaunchUser(request);
+  // Folders are a non-critical overlay on the library. If the folder tables are
+  // missing (migration not yet applied — e.g. the API deploys a beat ahead of
+  // the migration) or a read fails transiently, degrade to "no folders" rather
+  // than failing the whole Agents page. Scoped to this read path: the folder
+  // write handlers keep the strict fetchFolders so a real DB fault surfaces.
+  const softFolders = (scope: LaunchFolderScope) =>
+    fetchFolders(user.id, scope).catch((err) => {
+      console.warn(`fetchFolders(${scope}) failed; degrading to none`, err);
+      return [] as LaunchFolderRow[];
+    });
+  const softMembers = (scope: LaunchFolderScope) =>
+    fetchFolderMembers(user.id, scope).catch((err) => {
+      console.warn(`fetchFolderMembers(${scope}) failed; degrading`, err);
+      return new Map<string, string>();
+    });
   const [
     ownedRows,
     installedIds,
@@ -3807,10 +3822,10 @@ async function handleLaunchLibrary(request: Request): Promise<Response> {
   ] = await Promise.all([
     fetchOwnedApps(user.id),
     fetchInstalledIds(user.id),
-    fetchFolders(user.id, "owned"),
-    fetchFolders(user.id, "installed"),
-    fetchFolderMembers(user.id, "owned"),
-    fetchFolderMembers(user.id, "installed"),
+    softFolders("owned"),
+    softFolders("installed"),
+    softMembers("owned"),
+    softMembers("installed"),
   ]);
   const installedRows = await fetchAppsByIds(
     Array.from(installedIds).filter((appId) =>

@@ -31,6 +31,7 @@ import {
   type LaunchAgentInstallContext,
   type LaunchAgentRelationship,
   type LaunchAgentSummary,
+  type LaunchFolder,
   type LaunchInterfaceSummary,
   type LaunchTrustCard,
   type LaunchWalletEarningSummary,
@@ -3835,27 +3836,171 @@ export function LibraryFoundationPage(
   { live, location, navigate }: LaunchPageProps,
 ): ReactElement {
   const [view, setView] = useState<LibraryView>(libraryViewFromSearch());
+  const [busy, setBusy] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
   const loading = live.status !== "ready" && live.status !== "error";
-  const installedTools = (live.data.library?.installed ?? []).map((tool) =>
-    liveAgentFixture(tool)
-  );
-  const ownedTools = (live.data.library?.owned ?? []).map((tool) =>
-    liveAgentFixture(tool)
-  );
+
   useEffect(() => {
     setView(libraryViewFromSearch());
   }, [location.search]);
 
+  const scope: LibraryView = view;
+  const library = live.data.library;
+  const rawAgents =
+    (scope === "installed" ? library?.installed : library?.owned) ?? [];
+  const folders =
+    (scope === "installed"
+      ? library?.folders?.installed
+      : library?.folders?.owned) ?? [];
+
   const selectView = (nextView: LibraryView) => {
     setView(nextView);
+    setFolderError(null);
     syncSearchParams({ view: nextView === "installed" ? null : nextView });
   };
+
+  const runFolderOp = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setFolderError(null);
+    try {
+      await fn();
+      live.reload();
+    } catch (err) {
+      setFolderError(
+        err instanceof Error ? err.message : "Something went wrong",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleNewFolder = () => {
+    const name = window.prompt("New folder name")?.trim();
+    if (name) void runFolderOp(() => launchApi.createFolder(scope, name));
+  };
+  const handleRenameFolder = (id: string, current: string) => {
+    const name = window.prompt("Rename folder", current)?.trim();
+    if (name && name !== current) {
+      void runFolderOp(() => launchApi.renameFolder(id, name));
+    }
+  };
+  const handleDeleteFolder = (id: string, name: string) => {
+    if (
+      window.confirm(
+        `Delete the folder “${name}”? Its Agents move back to Uncategorized.`,
+      )
+    ) {
+      void runFolderOp(() => launchApi.deleteFolder(id));
+    }
+  };
+  const handleMoveAgent = (appId: string, folderId: string | null) => {
+    void runFolderOp(() => launchApi.setAgentFolder(scope, appId, folderId));
+  };
+
+  // Group the tab's Agents by folder. folderId comes from the raw library data
+  // (liveAgentFixture drops it). An Agent with no folder — or whose folder no
+  // longer exists — falls into "Uncategorized".
+  const folderIds = new Set(folders.map((folder) => folder.id));
+  const byFolder = new Map<string, LaunchAgentSummary[]>();
+  const uncategorized: LaunchAgentSummary[] = [];
+  for (const agent of rawAgents) {
+    const fid = agent.folderId && folderIds.has(agent.folderId)
+      ? agent.folderId
+      : null;
+    if (fid) {
+      byFolder.set(fid, [...(byFolder.get(fid) ?? []), agent]);
+    } else {
+      uncategorized.push(agent);
+    }
+  }
+  const hasAny = rawAgents.length > 0 || folders.length > 0;
+
+  const renderCard = (agent: LaunchAgentSummary) => {
+    const fixture = liveAgentFixture(agent);
+    return (
+      <div className="library-card" key={agent.id}>
+        {scope === "installed"
+          ? (
+            <button
+              className="tool-card-button"
+              onClick={() => navigate(`/agents/${fixture.slug}`)}
+              type="button"
+            >
+              <StoreAgentCard tool={fixture} />
+            </button>
+          )
+          : <OwnedAgentCard navigate={navigate} tool={fixture} />}
+        {folders.length > 0
+          ? (
+            <select
+              aria-label="Move to folder"
+              className="folder-move-select"
+              disabled={busy}
+              onChange={(event) =>
+                handleMoveAgent(agent.id, event.target.value || null)}
+              value={agent.folderId && folderIds.has(agent.folderId)
+                ? agent.folderId
+                : ""}
+            >
+              <option value="">Uncategorized</option>
+              {folders.map((folder) => (
+                <option key={folder.id} value={folder.id}>{folder.name}</option>
+              ))}
+            </select>
+          )
+          : null}
+      </div>
+    );
+  };
+
+  const renderSection = (
+    key: string,
+    title: string,
+    agents: LaunchAgentSummary[],
+    folder?: LaunchFolder,
+  ) => (
+    <section className="library-folder-section" key={key}>
+      <div className="library-folder-header">
+        <h3>{title}</h3>
+        <span className="library-folder-count">{agents.length}</span>
+        {folder
+          ? (
+            <span className="library-folder-actions">
+              <button
+                className="link-button"
+                disabled={busy}
+                onClick={() => handleRenameFolder(folder.id, folder.name)}
+                type="button"
+              >
+                Rename
+              </button>
+              <button
+                className="link-button"
+                disabled={busy}
+                onClick={() => handleDeleteFolder(folder.id, folder.name)}
+                type="button"
+              >
+                Delete
+              </button>
+            </span>
+          )
+          : null}
+      </div>
+      {agents.length > 0
+        ? <div className="library-installed-grid">{agents.map(renderCard)}</div>
+        : <p className="library-folder-empty">No Agents in this folder yet.</p>}
+    </section>
+  );
 
   return (
     <div className="launch-page-narrow library-page">
       <ApiNotice live={live} noun="Agents" />
       <div className="library-toolbar">
-        <div className="account-subtabs" role="tablist" aria-label="Library view">
+        <div
+          className="account-subtabs"
+          role="tablist"
+          aria-label="Library view"
+        >
           {([["installed", "Installed"], ["owned", "Owned"]] as const).map((
             [id, label],
           ) => (
@@ -3871,65 +4016,69 @@ export function LibraryFoundationPage(
             </button>
           ))}
         </div>
+        {hasLaunchAuthToken()
+          ? (
+            <button
+              className="link-button library-new-folder"
+              disabled={busy}
+              onClick={handleNewFolder}
+              type="button"
+            >
+              + New folder
+            </button>
+          )
+          : null}
       </div>
 
-      {view === "installed"
+      {folderError
+        ? <p className="library-folder-error" role="alert">{folderError}</p>
+        : null}
+
+      {hasAny
         ? (
-          <div className="library-installed-grid">
-            {installedTools.length > 0
-              ? installedTools.map((tool) => (
-                <button
-                  className="tool-card-button"
-                  key={tool.id}
-                  onClick={() => navigate(`/agents/${tool.slug}`)}
-                  type="button"
-                >
-                  <StoreAgentCard tool={tool} />
-                </button>
-              ))
-              : loading
-              ? null
-              : hasLaunchAuthToken()
-              ? (
-                <EmptyState icon="grid" title="No installed Agents yet">
-                  Agents you install appear here, ready for your connected agent
-                  to call. Browse the catalog to add one. (Agents you own show
-                  under “Agents you own”.)
-                </EmptyState>
+          <div className="library-folders">
+            {folders.map((folder) =>
+              renderSection(
+                folder.id,
+                folder.name,
+                byFolder.get(folder.id) ?? [],
+                folder,
               )
-              : (
-                <EmptyState icon="key" title="Sign in to load your library">
-                  The live library endpoint needs an account session before it
-                  can show installed Agents.
-                </EmptyState>
-              )}
+            )}
+            {renderSection(
+              "__uncategorized",
+              folders.length > 0
+                ? "Uncategorized"
+                : scope === "installed"
+                ? "Installed"
+                : "Owned",
+              uncategorized,
+            )}
           </div>
         )
+        : loading
+        ? null
+        : hasLaunchAuthToken()
+        ? (
+          <EmptyState
+            icon="grid"
+            title={scope === "installed"
+              ? "No installed Agents yet"
+              : "No Agents you own yet"}
+          >
+            {scope === "installed"
+              ? "Agents you install appear here, ready for your connected agent to call. Browse the catalog to add one."
+              : "Ship your first Agent from the CLI and it appears here."}
+          </EmptyState>
+        )
         : (
-          <div className="owned-tool-list">
-            {ownedTools.length > 0
-              ? ownedTools.map((tool) => (
-                <OwnedAgentCard key={tool.id} navigate={navigate} tool={tool} />
-              ))
-              : loading
-              ? null
-              : hasLaunchAuthToken()
-              ? (
-                <EmptyState icon="grid" title="No Agents you own yet">
-                  Ship your first Agent from the CLI and it appears here.
-                </EmptyState>
-              )
-              : (
-                <EmptyState icon="key" title="Sign in to load owned Agents">
-                  The live library endpoint needs an account session before it
-                  can show Agents you own.
-                </EmptyState>
-              )}
-          </div>
+          <EmptyState icon="key" title="Sign in to load your library">
+            The live library endpoint needs an account session before it can show
+            your Agents.
+          </EmptyState>
         )}
 
-      {loading && installedTools.length === 0 &&
-          ownedTools.length === 0
+      {loading && !hasAny
         ? (
           <div className="library-empty-grid">
             <LibraryEmptyCard

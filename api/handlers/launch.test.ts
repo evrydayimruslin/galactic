@@ -2481,3 +2481,197 @@ Deno.test('launch facade: queued job reports queued (never failed) with no resul
     completed_at: null,
   }]));
 });
+
+// ---- Library folders (Phase 2) ---------------------------------------------
+
+const FOLDER_APP_ID = '11111111-1111-4111-8111-111111111111';
+const FOLDER_ID = '22222222-2222-4222-8222-222222222222';
+
+type CapturedFolderReq = { url: string; method: string; body: unknown };
+
+function folderSessionMock(
+  captured: CapturedFolderReq[],
+  opts: {
+    existingFolders?: Array<{ id: string; name: string; position: number }>;
+    folderPostStatus?: number;
+    memberPostStatus?: number;
+  } = {},
+): typeof fetch {
+  return (async (input: Request | URL | string, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const method = init?.method ||
+      (input instanceof Request ? input.method : 'GET');
+    const rawBody = init?.body;
+    const parsedBody = typeof rawBody === 'string' ? JSON.parse(rawBody) : null;
+    if (url === 'https://supabase.test/auth/v1/user') {
+      return jsonResponse({
+        id: 'user-1',
+        email: 'founder@example.com',
+        user_metadata: {},
+      });
+    }
+    if (url.includes('/rest/v1/users?')) {
+      return jsonResponse([{
+        id: 'user-1',
+        email: 'founder@example.com',
+        tier: 'free',
+        provisional: false,
+        last_active_at: null,
+      }]);
+    }
+    if (url.startsWith('https://supabase.test/rest/v1/library_folders')) {
+      captured.push({ url, method, body: parsedBody });
+      if (method === 'GET') return jsonResponse(opts.existingFolders ?? []);
+      if (method === 'POST') {
+        return jsonResponse([{
+          id: FOLDER_ID,
+          name: (parsedBody as { name?: string })?.name ?? 'Folder',
+          position: (parsedBody as { position?: number })?.position ?? 0,
+        }], opts.folderPostStatus ?? 201);
+      }
+      if (method === 'PATCH') {
+        return jsonResponse([{ id: FOLDER_ID, name: 'Renamed', position: 0 }]);
+      }
+      if (method === 'DELETE') return jsonResponse([{ id: FOLDER_ID }]);
+    }
+    if (
+      url.startsWith('https://supabase.test/rest/v1/library_folder_members')
+    ) {
+      captured.push({ url, method, body: parsedBody });
+      if (method === 'GET') return jsonResponse([]);
+      return jsonResponse([], opts.memberPostStatus ?? 200);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+}
+
+function browserFolderRequest(
+  path: string,
+  method: string,
+  body?: unknown,
+): Request {
+  return new Request(`https://ultralight.test${path}`, {
+    method,
+    headers: {
+      Authorization: 'Bearer browser-session-token',
+      'Content-Type': 'application/json',
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+Deno.test('launch folders: create stamps the session owner, ignoring the body', async () => {
+  const captured: CapturedFolderReq[] = [];
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        browserFolderRequest('/api/launch/folders', 'POST', {
+          scope: 'owned',
+          name: 'Tools',
+          owner_user_id: 'attacker-user',
+        }),
+      );
+      assertEquals(response.status, 201);
+      const post = captured.find((c) => c.method === 'POST');
+      const body = post?.body as Record<string, unknown> | undefined;
+      // The owner is taken from the authenticated session, never the request body.
+      assertEquals(body?.owner_user_id, 'user-1');
+      assertEquals(body?.scope, 'owned');
+      assertEquals(body?.name, 'Tools');
+    },
+    folderSessionMock(captured),
+  );
+});
+
+Deno.test('launch folders: organizing requires an account session', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request('https://ultralight.test/api/launch/folders', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${TEST_API_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ scope: 'owned', name: 'Tools' }),
+        }),
+      );
+      assertEquals(response.status, 403);
+    },
+    apiTokenAuthMock(),
+  );
+});
+
+Deno.test('launch folders: move and uncategorize stay owner-scoped', async () => {
+  const captured: CapturedFolderReq[] = [];
+  await withLaunchEnv(
+    async () => {
+      const move = await handleLaunch(
+        browserFolderRequest('/api/launch/folders/members', 'PUT', {
+          scope: 'owned',
+          app_id: FOLDER_APP_ID,
+          folder_id: FOLDER_ID,
+        }),
+      );
+      assertEquals(move.status, 200);
+      const post = captured.find((c) => c.method === 'POST');
+      assertEquals(
+        (post?.body as Record<string, unknown>)?.owner_user_id,
+        'user-1',
+      );
+
+      const clear = await handleLaunch(
+        browserFolderRequest('/api/launch/folders/members', 'PUT', {
+          scope: 'owned',
+          app_id: FOLDER_APP_ID,
+          folder_id: null,
+        }),
+      );
+      assertEquals(clear.status, 200);
+      const del = captured.find((c) => c.method === 'DELETE');
+      assertStringIncludes(del?.url ?? '', 'owner_user_id=eq.user-1');
+      assertStringIncludes(del?.url ?? '', `app_id=eq.${FOLDER_APP_ID}`);
+    },
+    folderSessionMock(captured),
+  );
+});
+
+Deno.test('launch folders: rename and delete filter by owner in the query', async () => {
+  const captured: CapturedFolderReq[] = [];
+  await withLaunchEnv(
+    async () => {
+      const rename = await handleLaunch(
+        browserFolderRequest(`/api/launch/folders/${FOLDER_ID}`, 'PATCH', {
+          name: 'Renamed',
+        }),
+      );
+      assertEquals(rename.status, 200);
+      const patch = captured.find((c) => c.method === 'PATCH');
+      assertStringIncludes(patch?.url ?? '', 'owner_user_id=eq.user-1');
+      assertStringIncludes(patch?.url ?? '', `id=eq.${FOLDER_ID}`);
+
+      const del = await handleLaunch(
+        browserFolderRequest(`/api/launch/folders/${FOLDER_ID}`, 'DELETE'),
+      );
+      assertEquals(del.status, 200);
+      const delReq = captured.find((c) => c.method === 'DELETE');
+      assertStringIncludes(delReq?.url ?? '', 'owner_user_id=eq.user-1');
+      assertStringIncludes(delReq?.url ?? '', `id=eq.${FOLDER_ID}`);
+    },
+    folderSessionMock(captured),
+  );
+});
+
+Deno.test('launch folders: a non-uuid folder id is a 404, not a query', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        browserFolderRequest('/api/launch/folders/not-a-uuid', 'PATCH', {
+          name: 'x',
+        }),
+      );
+      assertEquals(response.status, 404);
+    },
+    folderSessionMock([]),
+  );
+});
