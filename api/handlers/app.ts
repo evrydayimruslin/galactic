@@ -5736,11 +5736,17 @@ ${html}
 </html>`;
 }
 
-function escapeHtml(str: string): string {
+// Escape for safe interpolation into HTML text AND double/single-quoted
+// attributes. Quotes MUST be escaped — agent name/description are arbitrary
+// user free text and are injected into content="..." OG/meta attributes, so
+// missing quote-escaping is an attribute-breakout (stored XSS) vector.
+export function escapeHtml(str: string): string {
   return str
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // ============================================
