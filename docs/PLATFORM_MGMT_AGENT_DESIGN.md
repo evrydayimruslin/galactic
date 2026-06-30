@@ -1,5 +1,17 @@
 # Platform-Management Agents — Design & Plan
 
+> **⚠️ Pilot architecture revised (PR #40).** The Phase-1 owner-auth substrate
+> below (a platform `PLATFORM_OWNER_USER_ID`, a `gxo_` owner-actor token, a
+> host-side `ADMIN` runtime binding, and an `/api/admin/internal/defaults`
+> endpoint) was **dropped** in favor of a simpler model: the Defaults Manager is
+> **just a normal private Agent** — its functions are owner-only because it is
+> private, and it stores the defaults list in its **own app-data**. The platform's
+> signup seeding reads that list from the Agent named by the `DEFAULTS_SOURCE_APP`
+> config. No platform-level owner/admin/credential. This also removed the one HIGH
+> finding's entire surface (the gx.test confused-deputy). The sections below are
+> retained as design history; the PR is the authoritative description of the
+> shipped model.
+
 > **Status:** Design approved (forward-only model, 2026-06-30). **Phase 0 (remove Installed/Owned tab counts) shipped.** Phases 1–3 pending.
 > **Pilot:** pre-install defaults, curated by a *private owner agent* — the first instance of a reusable pattern: **"internal platform API exposed as a regular private agent."**
 > Produced by a grounded multi-agent design pass; `file:line` anchors reflect the repo at time of writing.

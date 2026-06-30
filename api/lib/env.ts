@@ -70,6 +70,12 @@ export interface Env {
   ANALYTICS_PEPPER_V1: string;
   ANALYTICS_PEPPER_VERSION: string;
   CHAT_CAPTURE_PEPPER: string;
+  // Slug of the private "Defaults Manager" Agent whose stored list provides the
+  // pre-install default Agents seeded into new accounts (services/request-auth.ts
+  // provisionDefaultApps reads its app-data). Unset => no defaults are seeded.
+  // Not an authority — it just names which app feeds the starter list; the Agent
+  // is owner-only because it is private.
+  DEFAULTS_SOURCE_APP: string;
 
   // Index signature for dynamic access
   [key: string]: unknown;

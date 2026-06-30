@@ -348,48 +348,123 @@ export async function ensureUserExists(
   );
 }
 
-const DEFAULT_APP_NAMES = [
-  "Memory Wiki",
-  "email-ops",
-  "Private Tutor",
-  "Smart Budget",
-  "Recipe Box",
-  "Reading List",
-];
+interface DefaultRef {
+  app_id: string;
+  badge?: string | null;
+}
 
-async function provisionDefaultApps(userId: string): Promise<void> {
+// Resolve the platform's pre-install default set from the private "Defaults
+// Manager" Agent named by DEFAULTS_SOURCE_APP. That Agent stores the list in its
+// OWN app-data (via ultralight.store('defaults', ...)); we read it here with the
+// service role. This is the ONLY coupling to it — no special auth, no platform-
+// owner identity, no admin credential: the Agent's functions are owner-only
+// simply because the Agent is private. Returns [] (=> no seeding) when the
+// pointer is unset, the Agent is missing, or the list is empty/unreadable.
+async function readSourceDefaults(): Promise<DefaultRef[]> {
+  const slug = getEnv("DEFAULTS_SOURCE_APP").trim();
+  if (!slug) return [];
   const supabaseUrl = getEnv("SUPABASE_URL");
   const serviceKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
   const headers = {
-    "apikey": serviceKey,
-    "Authorization": `Bearer ${serviceKey}`,
+    apikey: serviceKey,
+    Authorization: `Bearer ${serviceKey}`,
+  };
+  // The source Agent's app-data is keyed by (app id, owner id) — resolve both.
+  const appRes = await fetch(
+    `${supabaseUrl}/rest/v1/apps?slug=eq.${encodeURIComponent(slug)}` +
+      `&deleted_at=is.null&select=id,owner_id&limit=1`,
+    { headers },
+  );
+  if (!appRes.ok) return [];
+  const app =
+    (await appRes.json() as Array<{ id: string; owner_id: string }>)[0];
+  if (!app?.id || !app?.owner_id) return [];
+  // Read the Agent's stored list straight from R2 (the same object
+  // ultralight.store writes: apps/{appId}/users/{ownerId}/data/defaults.json).
+  try {
+    const obj = await getEnv().R2_BUCKET.get(
+      `apps/${app.id}/users/${app.owner_id}/data/defaults.json`,
+    );
+    if (!obj) return [];
+    const parsed = JSON.parse(await obj.text());
+    const list = (parsed?.value ?? parsed) as unknown;
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((item): DefaultRef | null => {
+        if (typeof item === "string") return { app_id: item };
+        if (
+          item && typeof item === "object" &&
+          typeof (item as { app_id?: unknown }).app_id === "string"
+        ) {
+          const ref = item as { app_id: string; badge?: string | null };
+          return { app_id: ref.app_id, badge: ref.badge ?? null };
+        }
+        return null;
+      })
+      .filter((x): x is DefaultRef => !!x && !!x.app_id.trim());
+  } catch {
+    return [];
+  }
+}
+
+// Seed a brand-new account's library from the pre-install defaults the owner
+// curates via their private Defaults Manager Agent (see readSourceDefaults).
+// FORWARD-ONLY: runs once, at account creation (see ensureUserExists), and only
+// ever writes the NEW user's rows. Validates each Agent is still live +
+// installable before seeding it. `deps.readSourceDefaults` is injectable for
+// tests so the seeding logic can be exercised without R2.
+export async function provisionDefaultApps(
+  userId: string,
+  deps: { readSourceDefaults?: () => Promise<DefaultRef[]> } = {},
+): Promise<void> {
+  const refs = await (deps.readSourceDefaults ?? readSourceDefaults)();
+  const appIds = Array.from(
+    new Set(refs.map((r) => r.app_id.trim()).filter(Boolean)),
+  );
+  if (appIds.length === 0) return;
+
+  const supabaseUrl = getEnv("SUPABASE_URL");
+  const serviceKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const headers = {
+    apikey: serviceKey,
+    Authorization: `Bearer ${serviceKey}`,
     "Content-Type": "application/json",
   };
 
-  const namesFilter = DEFAULT_APP_NAMES.map((name) => `"${name}"`).join(",");
+  // Validate each is still a live, installable (public/unlisted) Agent. Guards
+  // against a default pointing at an app unpublished or deleted after it was
+  // added — seeding a private/deleted app would drop an unusable row into the
+  // new user's library.
   const appsRes = await fetch(
-    `${supabaseUrl}/rest/v1/apps?name=in.(${namesFilter})&deleted_at=is.null&select=id,name`,
+    `${supabaseUrl}/rest/v1/apps` +
+      `?id=in.(${appIds.join(",")})` +
+      `&deleted_at=is.null&visibility=in.(public,unlisted)&select=id`,
     { headers },
   );
   if (!appsRes.ok) return;
-  const apps = await appsRes.json() as Array<{ id: string; name: string }>;
-  if (apps.length === 0) return;
+  const liveApps = await appsRes.json() as Array<{ id: string }>;
+  const liveIds = new Set(liveApps.map((a) => a.id));
+  const seedIds = appIds.filter((id) => liveIds.has(id));
+  if (seedIds.length === 0) return;
 
-  for (const app of apps) {
-    await fetch(`${supabaseUrl}/rest/v1/app_likes`, {
-      method: "POST",
-      headers: { ...headers, "Prefer": "resolution=merge-duplicates" },
-      body: JSON.stringify({ user_id: userId, app_id: app.id, positive: true }),
-    });
-    await fetch(`${supabaseUrl}/rest/v1/user_app_library`, {
-      method: "POST",
-      headers: { ...headers, "Prefer": "resolution=merge-duplicates" },
-      body: JSON.stringify({
-        user_id: userId,
-        app_id: app.id,
-        source: "default",
-      }),
-    });
+  // One batched, idempotent upsert into the user's library. source='default'.
+  // No app_likes write — likes are earned, not seeded.
+  const rows = seedIds.map((appId) => ({
+    user_id: userId,
+    app_id: appId,
+    source: "default",
+  }));
+  const insertRes = await fetch(`${supabaseUrl}/rest/v1/user_app_library`, {
+    method: "POST",
+    headers: { ...headers, "Prefer": "resolution=merge-duplicates" },
+    body: JSON.stringify(rows),
+  });
+  if (!insertRes.ok) {
+    console.error(
+      "[AUTH] Default-app seeding upsert failed:",
+      insertRes.status,
+      (await insertRes.text()).slice(0, 200),
+    );
   }
 }
 

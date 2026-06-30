@@ -111,6 +111,11 @@ CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 # Optional rollout knob for Wave 4 alias retirement:
 # PLATFORM_MCP_DISABLED_ALIASES = "removable"
 # or a comma-separated subset such as "ul.execute,ul.lint"
+# Pre-install defaults (docs/PLATFORM_MGMT_AGENT_DESIGN.md): the slug of the
+# private "Defaults Manager" Agent whose stored list seeds new accounts. Unset =>
+# no defaults are seeded. Not an authority — just the data source for the starter
+# list; the Agent's functions are owner-only because it is private.
+# DEFAULTS_SOURCE_APP = "platform-defaults"
 
 [env.staging]
 # Staging gets its own worker script name (`ultralight-api-staging`) and its
