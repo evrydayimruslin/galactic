@@ -253,6 +253,36 @@ export class AppsService {
   }
 
   /**
+   * Does ANY app (across all owners) already use this slug?
+   * Used to mint globally-unique slugs at create time. The DB constraint is
+   * only per-owner unique, but the public resolver (fetchToolByLocator) does a
+   * global `slug=eq` lookup, so new slugs must be globally unique to resolve
+   * unambiguously.
+   */
+  async slugExists(slug: string): Promise<boolean> {
+    const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
+    url.searchParams.set("slug", `eq.${slug}`);
+    url.searchParams.set("select", "id");
+    url.searchParams.set("limit", "1");
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Slug existence check failed: ${error}`);
+    }
+
+    const results = await response.json() as Array<{ id: string }>;
+    return results.length > 0;
+  }
+
+  /**
    * List public apps
    */
   async listPublic(limit = 100): Promise<PublicDiscoveryApp[]> {

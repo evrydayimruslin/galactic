@@ -467,10 +467,13 @@ export async function handleUpload(request: Request): Promise<Response> {
           // app's manifest.json), else 1.0.0.
           const appId = crypto.randomUUID();
           const version = gpuConfig.version || "1.0.0";
-          const slug = generateSlug(
-            validatedFiles.find((f) => f.name === "package.json")?.content,
-          );
-          const appName = providedName || slug;
+          // Legible, globally-unique slug derived from the display name.
+          const resolvedName = providedName ||
+            parsePackageName(
+              validatedFiles.find((f) => f.name === "package.json")?.content,
+            ) || null;
+          const slug = await generateUniqueSlug(resolvedName);
+          const appName = resolvedName || slug;
           const appDescription = providedDescription || null;
 
           // Initialize services
@@ -751,9 +754,10 @@ export async function handleUpload(request: Request): Promise<Response> {
         if (providedAppType === "skill") {
           const appId = crypto.randomUUID();
           const version = "1.0.0";
-          const slug = generateSlug();
-          const appName = providedName ||
-            validatedFiles[0]?.name.replace(/\.\w+$/, "") || slug;
+          const resolvedName = providedName ||
+            validatedFiles[0]?.name.replace(/\.\w+$/, "") || null;
+          const slug = await generateUniqueSlug(resolvedName);
+          const appName = resolvedName || slug;
           // Summary: first 200 chars of the primary .md file content
           const mdFile = validatedFiles.find((f) => f.name.endsWith(".md")) ||
             validatedFiles[0];
@@ -914,11 +918,13 @@ export async function handleUpload(request: Request): Promise<Response> {
         // Generate app ID and version
         const appId = crypto.randomUUID();
         const version = manifest?.version || "1.0.0";
-        // Use manifest name, provided name, or generate slug
-        const slug = generateSlug(
-          validatedFiles.find((f) => f.name === "package.json")?.content,
-        );
-        const appName = manifest?.name || providedName || slug;
+        // Legible, globally-unique slug from the resolved display name.
+        const resolvedName = manifest?.name || providedName ||
+          parsePackageName(
+            validatedFiles.find((f) => f.name === "package.json")?.content,
+          ) || null;
+        const slug = await generateUniqueSlug(resolvedName);
+        const appName = resolvedName || slug;
         // Form field description takes precedence over manifest
         const appDescription = providedDescription || manifest?.description ||
           null;
@@ -1268,23 +1274,63 @@ function extractExports(code: string): string[] {
   return [...new Set(exports)]; // Deduplicate
 }
 
-/**
- * Generate slug from package.json or fallback
- */
-export function generateSlug(packageJson?: string): string {
-  if (packageJson) {
-    try {
-      const pkg = JSON.parse(packageJson);
-      if (pkg.name) {
-        return pkg.name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-      }
-    } catch {
-      // Ignore parse error
-    }
+/** Parse the `name` field out of a package.json string, if present. */
+export function parsePackageName(packageJson?: string): string | null {
+  if (!packageJson) return null;
+  try {
+    const pkg = JSON.parse(packageJson);
+    return typeof pkg?.name === "string" && pkg.name.trim() ? pkg.name : null;
+  } catch {
+    return null;
   }
+}
 
-  // Fallback: random slug
-  return `app-${Math.random().toString(36).slice(2, 8)}`;
+/** Max characters of the human portion of a slug, before any `-N` suffix.
+ * The slug is concatenated into MCP tool names as `${slug}_${functionName}`,
+ * which many MCP clients cap at 64 chars — so the human base is budgeted to
+ * leave room for the function name. */
+const SLUG_BASE_MAX = 30;
+
+/**
+ * Slugify a display name into the legible base of a public URL slug
+ * (e.g. "Story Builder" -> "story-builder"). Returns "" when the name has no
+ * usable alphanumerics, so callers can fall back to a random slug.
+ */
+export function slugifyName(name: string): string {
+  return name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "") // strip diacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-") // non-alphanumerics -> single hyphen
+    .replace(/^-+|-+$/g, "") // trim leading/trailing hyphens
+    .slice(0, SLUG_BASE_MAX)
+    .replace(/-+$/g, ""); // trim a hyphen left dangling by the slice
+}
+
+/**
+ * Mint a legible, globally-unique slug for a NEW app from its display name.
+ * - "Story Builder" -> "story-builder" (or "story-builder-2" on collision).
+ * - Empty/garbage names fall back to the random `app-xxxx` form.
+ * Uniqueness is checked globally (across all owners) because the public
+ * resolver does a global `slug=eq` lookup. NOTE: the check + insert is not
+ * transactional, so a rare concurrent create of the same name across two
+ * owners can still race to the same slug; the per-owner DB constraint still
+ * prevents same-owner duplicates.
+ */
+export async function generateUniqueSlug(
+  name?: string | null,
+): Promise<string> {
+  const base = name ? slugifyName(name) : "";
+  if (!base) return `app-${Math.random().toString(36).slice(2, 8)}`;
+
+  const appsService = createAppsService();
+  let candidate = base;
+  for (let i = 2; i <= 50; i++) {
+    if (!(await appsService.slugExists(candidate))) return candidate;
+    candidate = `${base}-${i}`;
+  }
+  // Extreme contention fallback — keep it unique-ish without an unbounded loop.
+  return `${base}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
 function getContentType(filename: string): string {
@@ -1801,11 +1847,12 @@ export async function handleUploadFiles(
   // Generate app identity
   const appId = crypto.randomUUID();
   const version = manifest?.version || "1.0.0";
-  const slug = validatedOptions.slug ||
-    generateSlug(
+  const resolvedName = manifest?.name || validatedOptions.name ||
+    parsePackageName(
       validatedFiles.find((f) => f.name === "package.json")?.content,
-    );
-  const appName = manifest?.name || validatedOptions.name || slug;
+    ) || null;
+  const slug = validatedOptions.slug || await generateUniqueSlug(resolvedName);
+  const appName = resolvedName || slug;
   const appDescription = validatedOptions.description ||
     manifest?.description || null;
   const appType = manifest?.type || null;

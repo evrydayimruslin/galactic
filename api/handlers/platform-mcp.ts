@@ -7519,9 +7519,10 @@ async function executeUpload(
       // when declared (parity with a Deno app's manifest.json), else 1.0.0.
       const appId = crypto.randomUUID();
       const version = gpuConfig?.version || "1.0.0";
-      const { generateSlug } = await import("./upload.ts");
-      const slug = generateSlug();
-      const appName = (args.name as string) || slug;
+      const { generateUniqueSlug } = await import("./upload.ts");
+      const resolvedName = (args.name as string) || null;
+      const slug = await generateUniqueSlug(resolvedName);
+      const appName = resolvedName || slug;
       const appDescription = (args.description as string) || null;
       const gpuManifest = generateGpuManifest({
         name: appName,
