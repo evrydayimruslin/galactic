@@ -209,6 +209,11 @@ import {
   recordVerification,
 } from "../services/code-verification.ts";
 import { type FlagStatus, recordCallFlag } from "../services/call-flags.ts";
+import { emptyHealth, getAppHealth, isRecentlyHealthy } from "../services/app-health.ts";
+import {
+  buildCallerPermissionConfigureUrl,
+  enforceCallerFunctionPermission,
+} from "../services/caller-function-permissions.ts";
 import {
   buildMarketplaceListingSummary,
   type MarketplaceListingSummary,
@@ -4918,7 +4923,44 @@ async function handleToolsCall(
             "app_id must reference an app, not the platform endpoint",
           );
         }
-        const internalCall = resolveInternalMcpCall(targetAppId, { baseUrl });
+
+        // Resolve the target to its UUID so (a) the permission gate and the
+        // actual call reference the SAME app identity, and (b) slug inputs route
+        // correctly (the per-app handler resolves by UUID only).
+        const targetUuid = await resolveAppIdForMarketplace(targetAppId);
+
+        // Bind gx.call to the user's connected-agent permission policy. The
+        // per-app handler only enforces for api/actor tokens, so a gateway call
+        // on a SESSION token would otherwise bypass the always/ask/never the
+        // user set. Enforce here for non-api-token callers; api-token gx.calls
+        // are already gated downstream (don't double-enforce). The "always"
+        // policy is health-gated: it auto-allows ONLY when the target is
+        // recently healthy, otherwise it degrades to "ask".
+        if (!isApiToken(authToken)) {
+          const callPermission = await enforceCallerFunctionPermission({
+            userId,
+            appId: targetUuid,
+            functionName: targetFn,
+            configureUrl: buildCallerPermissionConfigureUrl(
+              baseUrl,
+              targetUuid,
+              targetFn,
+            ),
+            resolveTargetHealthGreen: async () => {
+              const map = await getAppHealth([targetUuid]);
+              return isRecentlyHealthy(map.get(targetUuid) ?? emptyHealth());
+            },
+          });
+          if (!callPermission.allowed) {
+            throw new ToolError(
+              callPermission.rpcCode,
+              callPermission.message,
+              callPermission.details,
+            );
+          }
+        }
+
+        const internalCall = resolveInternalMcpCall(targetUuid, { baseUrl });
         const callResponse = await internalCall.fetchFn(internalCall.url, {
           method: "POST",
           headers: {

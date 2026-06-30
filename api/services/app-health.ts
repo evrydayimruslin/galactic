@@ -23,6 +23,16 @@ export function emptyHealth(): HealthWindows {
   return { "1h": "no_data", "24h": "no_data", "7d": "no_data", "30d": "no_data" };
 }
 
+// "Recently healthy" for a pre-call gate: the freshest window with a verdict is
+// green. A now-broken Agent (24h red) is NOT healthy even on a stale 7d green;
+// no_data (unproven) is NOT healthy either — both fail the gate so the call asks.
+export function isRecentlyHealthy(h: HealthWindows): boolean {
+  if (h["24h"] === "green") return true;
+  if (h["24h"] === "red") return false;
+  if (h["7d"] === "green") return true;
+  return false;
+}
+
 function deriveStatus(calls: number, ok: number, payers: number): HealthStatus {
   const c = Number(calls);
   const o = Number(ok);

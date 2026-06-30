@@ -4032,6 +4032,7 @@ async function handleLaunchToolAgentPermissionsUpdate(
     userId: user.id,
     appId: resolved.row.id,
     defaultPolicy: body.defaultPolicy ?? body.default_policy,
+    defaultHealthGate: body.defaultHealthGate ?? body.default_health_gate,
     permissions: body.permissions as
       | LaunchCallerFunctionPermissionsUpdateRequest["permissions"]
       | undefined,
@@ -5658,6 +5659,7 @@ async function buildLaunchCallerPermissionsResponse(
     // Deprecated alias kept for one rename window.
     tool: handle,
     defaultPolicy: permissions.defaultPolicy,
+    defaultHealthGate: permissions.defaultHealthGate,
     permissions: permissions.permissions,
     generatedAt: new Date().toISOString(),
   };

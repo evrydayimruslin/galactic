@@ -142,6 +142,7 @@ import {
   buildCallerPermissionConfigureUrl,
   enforceCallerFunctionPermission,
 } from "../services/caller-function-permissions.ts";
+import { emptyHealth, getAppHealth, isRecentlyHealthy } from "../services/app-health.ts";
 
 // ============================================
 // MEMORY SERVICE (lazy singleton)
@@ -1704,6 +1705,10 @@ async function handleToolsCall(
         app.id,
         rawName,
       ),
+      resolveTargetHealthGreen: async () => {
+        const map = await getAppHealth([app.id]);
+        return isRecentlyHealthy(map.get(app.id) ?? emptyHealth());
+      },
     });
     if (!permission.allowed) {
       return jsonRpcErrorResponse(

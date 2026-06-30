@@ -65,7 +65,26 @@ Deno.test("agent function permissions: default ask blocks external execution", a
   );
 });
 
-Deno.test("agent function permissions: explicit always allows execution", async () => {
+function alwaysPolicy(healthGate: boolean): typeof fetch {
+  return (async (input: Request | URL | string) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.includes("/rest/v1/user_agent_permission_defaults?")) {
+      return jsonResponse([{ user_id: "user-1", default_policy: "ask" }]);
+    }
+    if (url.includes("/rest/v1/user_agent_function_permissions?")) {
+      return jsonResponse([{
+        app_id: "app-1",
+        function_name: "deploy",
+        policy: "always",
+        health_gate: healthGate,
+        updated_at: "2026-06-06T15:00:00.000Z",
+      }]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+}
+
+Deno.test("agent function permissions: ungated always allows execution", async () => {
   await withEnv(
     async () => {
       const result = await enforceCallerFunctionPermission({
@@ -74,28 +93,71 @@ Deno.test("agent function permissions: explicit always allows execution", async 
         functionName: "deploy",
         configureUrl: "https://ultralight.test/settings",
       });
-
       assertEquals(result.allowed, true);
       if (result.allowed) {
         assertEquals(result.resolution.policy, "always");
-        assertEquals(result.resolution.source, "explicit");
+        assertEquals(result.resolution.healthGate, false);
       }
     },
-    async (input) => {
-      const url = input instanceof Request ? input.url : String(input);
-      if (url.includes("/rest/v1/user_agent_permission_defaults?")) {
-        return jsonResponse([{ user_id: "user-1", default_policy: "ask" }]);
-      }
-      if (url.includes("/rest/v1/user_agent_function_permissions?")) {
-        return jsonResponse([{
-          app_id: "app-1",
-          function_name: "deploy",
-          policy: "always",
-          updated_at: "2026-06-06T15:00:00.000Z",
-        }]);
-      }
-      return jsonResponse([]);
+    alwaysPolicy(false),
+  );
+});
+
+Deno.test("agent function permissions: health-gated always allows a healthy target", async () => {
+  await withEnv(
+    async () => {
+      const result = await enforceCallerFunctionPermission({
+        userId: "user-1",
+        appId: "app-1",
+        functionName: "deploy",
+        configureUrl: "https://ultralight.test/settings",
+        resolveTargetHealthGreen: async () => true,
+      });
+      assertEquals(result.allowed, true);
     },
+    alwaysPolicy(true),
+  );
+});
+
+Deno.test("agent function permissions: health-gated always asks when target is NOT healthy", async () => {
+  await withEnv(
+    async () => {
+      const result = await enforceCallerFunctionPermission({
+        userId: "user-1",
+        appId: "app-1",
+        functionName: "deploy",
+        configureUrl: "https://ultralight.test/settings",
+        resolveTargetHealthGreen: async () => false,
+      });
+      assertEquals(result.allowed, false);
+      if (!result.allowed) {
+        assertEquals(result.errorType, "AGENT_PERMISSION_REQUIRED");
+        assertEquals(result.details.type, "permission_required");
+        assertEquals(result.details.policy, "ask");
+        // The block is tagged as health-gate-driven, not an explicit ask.
+        assertEquals(
+          (result.details as { reason?: string }).reason,
+          "health_gate",
+        );
+      }
+    },
+    alwaysPolicy(true),
+  );
+});
+
+Deno.test("agent function permissions: health-gated always with NO resolver fails closed (asks)", async () => {
+  await withEnv(
+    async () => {
+      const result = await enforceCallerFunctionPermission({
+        userId: "user-1",
+        appId: "app-1",
+        functionName: "deploy",
+        configureUrl: "https://ultralight.test/settings",
+        // no resolveTargetHealthGreen => treated as not-green => ask
+      });
+      assertEquals(result.allowed, false);
+    },
+    alwaysPolicy(true),
   );
 });
 

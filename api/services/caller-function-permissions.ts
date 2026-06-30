@@ -21,9 +21,12 @@ interface DbConfig {
   headers: HeadersInit;
 }
 
+export const DEFAULT_CALLER_FUNCTION_HEALTH_GATE = true;
+
 interface CallerPermissionDefaultRow {
   user_id: string;
   default_policy: string | null;
+  default_health_gate?: boolean | null;
   updated_at?: string | null;
 }
 
@@ -31,12 +34,14 @@ interface CallerFunctionPermissionRow {
   app_id: string;
   function_name: string;
   policy: string | null;
+  health_gate?: boolean | null;
   updated_at?: string | null;
 }
 
 export interface CallerFunctionPermissionResolution
   extends LaunchCallerFunctionPermissionSummary {
   defaultPolicy: LaunchCallerFunctionPolicy;
+  defaultHealthGate: boolean;
 }
 
 export interface CallerFunctionPermissionListInput {
@@ -49,10 +54,13 @@ export interface CallerFunctionPermissionUpdateInput {
   userId: string;
   appId: string;
   defaultPolicy?: unknown;
+  defaultHealthGate?: unknown;
   permissions?: Array<{
     functionName?: unknown;
     function_name?: unknown;
     policy?: unknown;
+    healthGate?: unknown;
+    health_gate?: unknown;
   }>;
   allowedFunctionNames?: string[];
 }
@@ -62,6 +70,10 @@ export interface CallerFunctionPermissionEnforcementInput {
   appId: string;
   functionName: string;
   configureUrl: string;
+  // Lazily resolves whether the TARGET is recently healthy (green). Only invoked
+  // when the resolved policy is "always" AND its health gate is on, so health is
+  // never fetched for "ask"/"never" or ungated "always".
+  resolveTargetHealthGreen?: () => Promise<boolean>;
 }
 
 export type CallerFunctionPermissionEnforcement =
@@ -94,6 +106,11 @@ export function normalizeCallerFunctionPolicy(
   );
 }
 
+export function normalizeHealthGate(value: unknown, field = "healthGate"): boolean {
+  if (typeof value === "boolean") return value;
+  throw new RequestValidationError(`${field} must be a boolean`);
+}
+
 export function buildCallerPermissionConfigureUrl(
   baseUrl: string,
   appId: string,
@@ -116,10 +133,8 @@ export async function resolveCallerFunctionPermission(
     functionName: string;
   },
 ): Promise<CallerFunctionPermissionResolution> {
-  const { defaultPolicy, permissionRows } = await fetchPermissionState(
-    input.userId,
-    input.appId,
-  );
+  const { defaultPolicy, defaultHealthGate, permissionRows } =
+    await fetchPermissionState(input.userId, input.appId);
   const explicit = permissionRows.find((row) =>
     row.function_name === input.functionName
   );
@@ -128,18 +143,22 @@ export async function resolveCallerFunctionPermission(
       appId: input.appId,
       functionName: input.functionName,
       policy: normalizeStoredPolicy(explicit.policy),
+      healthGate: explicit.health_gate ?? defaultHealthGate,
       source: "explicit",
       updatedAt: explicit.updated_at || null,
       defaultPolicy,
+      defaultHealthGate,
     };
   }
   return {
     appId: input.appId,
     functionName: input.functionName,
     policy: defaultPolicy,
+    healthGate: defaultHealthGate,
     source: "default",
     updatedAt: null,
     defaultPolicy,
+    defaultHealthGate,
   };
 }
 
@@ -148,14 +167,12 @@ export async function listCallerFunctionPermissions(
 ): Promise<
   Pick<
     LaunchCallerFunctionPermissionsResponse,
-    "defaultPolicy" | "permissions"
+    "defaultPolicy" | "defaultHealthGate" | "permissions"
   >
 > {
   const functionNames = uniqueFunctionNames(input.functionNames);
-  const { defaultPolicy, permissionRows } = await fetchPermissionState(
-    input.userId,
-    input.appId,
-  );
+  const { defaultPolicy, defaultHealthGate, permissionRows } =
+    await fetchPermissionState(input.userId, input.appId);
   const explicitByFunction = new Map(
     permissionRows.map((row) => [row.function_name, row]),
   );
@@ -166,12 +183,13 @@ export async function listCallerFunctionPermissions(
       appId: input.appId,
       functionName,
       policy: explicit ? normalizeStoredPolicy(explicit.policy) : defaultPolicy,
+      healthGate: explicit ? (explicit.health_gate ?? defaultHealthGate) : defaultHealthGate,
       source: explicit ? "explicit" : "default",
       updatedAt: explicit?.updated_at || null,
     } satisfies LaunchCallerFunctionPermissionSummary;
   });
 
-  return { defaultPolicy, permissions };
+  return { defaultPolicy, defaultHealthGate, permissions };
 }
 
 export async function updateCallerFunctionPermissions(
@@ -185,18 +203,24 @@ export async function updateCallerFunctionPermissions(
     );
   }
 
-  if (input.defaultPolicy !== undefined) {
-    const defaultPolicy = normalizeCallerFunctionPolicy(
-      input.defaultPolicy,
-      "defaultPolicy",
-    );
+  if (input.defaultPolicy !== undefined || input.defaultHealthGate !== undefined) {
+    const row: Record<string, unknown> = { user_id: input.userId };
+    if (input.defaultPolicy !== undefined) {
+      row.default_policy = normalizeCallerFunctionPolicy(
+        input.defaultPolicy,
+        "defaultPolicy",
+      );
+    }
+    if (input.defaultHealthGate !== undefined) {
+      row.default_health_gate = normalizeHealthGate(
+        input.defaultHealthGate,
+        "defaultHealthGate",
+      );
+    }
     await dbWrite(
       db,
       "/rest/v1/user_agent_permission_defaults?on_conflict=user_id",
-      [{
-        user_id: input.userId,
-        default_policy: defaultPolicy,
-      }],
+      [row],
       "Failed to update agent permission default",
     );
   }
@@ -216,12 +240,17 @@ export async function updateCallerFunctionPermissions(
         `Unknown function for this Agent: ${functionName}`,
       );
     }
-    return {
+    const row: Record<string, unknown> = {
       user_id: input.userId,
       app_id: input.appId,
       function_name: functionName,
       policy: normalizeCallerFunctionPolicy(entry.policy),
     };
+    const healthGate = entry.healthGate ?? entry.health_gate;
+    if (healthGate !== undefined) {
+      row.health_gate = normalizeHealthGate(healthGate, "healthGate");
+    }
+    return row;
   });
   if (rows.length === 0) return;
 
@@ -237,30 +266,73 @@ export async function enforceCallerFunctionPermission(
   input: CallerFunctionPermissionEnforcementInput,
 ): Promise<CallerFunctionPermissionEnforcement> {
   const resolution = await resolveCallerFunctionPermission(input);
+
   if (resolution.policy === "always") {
+    // Health gate: an "always" policy auto-allows ONLY when the target is
+    // recently healthy. Unproven (no_data) or failing (red) degrades to "ask".
+    if (resolution.healthGate) {
+      const green = input.resolveTargetHealthGreen
+        ? await input.resolveTargetHealthGreen()
+        : false;
+      if (!green) {
+        return buildAskBlock(input, resolution, true);
+      }
+    }
     return { allowed: true, resolution };
   }
 
-  const isAsk = resolution.policy === "ask";
-  const message = isAsk
-    ? `Your connected agent needs permission to call ${input.functionName}.`
-    : `Connected agents are not allowed to call ${input.functionName}.`;
-  const details = {
-    type: isAsk ? "permission_required" : "permission_denied",
-    policy: resolution.policy,
+  if (resolution.policy === "ask") {
+    return buildAskBlock(input, resolution, false);
+  }
+
+  // never
+  const message =
+    `Connected agents are not allowed to call ${input.functionName}.`;
+  const details: CallerPermissionBlock = {
+    type: "permission_denied",
+    policy: "never",
     appId: input.appId,
     functionName: input.functionName,
     message,
     configureUrl: input.configureUrl,
     source: resolution.source,
     updatedAt: resolution.updatedAt || null,
-  } as CallerPermissionBlock;
-
+  };
   return {
     allowed: false,
     httpStatus: 403,
     rpcCode: CALLER_FUNCTION_PERMISSION_RPC_CODE,
-    errorType: isAsk ? "AGENT_PERMISSION_REQUIRED" : "AGENT_PERMISSION_DENIED",
+    errorType: "AGENT_PERMISSION_DENIED",
+    message,
+    details,
+    resolution,
+  };
+}
+
+function buildAskBlock(
+  input: CallerFunctionPermissionEnforcementInput,
+  resolution: CallerFunctionPermissionResolution,
+  fromHealthGate: boolean,
+): Extract<CallerFunctionPermissionEnforcement, { allowed: false }> {
+  const message = fromHealthGate
+    ? `${input.functionName} has not been recently healthy, so your approval is required before calling it.`
+    : `Your connected agent needs permission to call ${input.functionName}.`;
+  const details: CallerPermissionBlock = {
+    type: "permission_required",
+    policy: "ask",
+    appId: input.appId,
+    functionName: input.functionName,
+    message,
+    configureUrl: input.configureUrl,
+    source: resolution.source,
+    updatedAt: resolution.updatedAt || null,
+    ...(fromHealthGate ? { reason: "health_gate" as const } : {}),
+  };
+  return {
+    allowed: false,
+    httpStatus: 403,
+    rpcCode: CALLER_FUNCTION_PERMISSION_RPC_CODE,
+    errorType: "AGENT_PERMISSION_REQUIRED",
     message,
     details,
     resolution,
@@ -302,12 +374,14 @@ async function fetchPermissionState(
   appId: string,
 ): Promise<{
   defaultPolicy: LaunchCallerFunctionPolicy;
+  defaultHealthGate: boolean;
   permissionRows: CallerFunctionPermissionRow[];
 }> {
   const db = getDbConfig();
   if (!db) {
     return {
       defaultPolicy: DEFAULT_CALLER_FUNCTION_POLICY,
+      defaultHealthGate: DEFAULT_CALLER_FUNCTION_HEALTH_GATE,
       permissionRows: [],
     };
   }
@@ -319,7 +393,7 @@ async function fetchPermissionState(
         "user_agent_permission_defaults",
         {
           user_id: `eq.${userId}`,
-          select: "user_id,default_policy,updated_at",
+          select: "user_id,default_policy,default_health_gate,updated_at",
           limit: "1",
         },
       ),
@@ -329,19 +403,22 @@ async function fetchPermissionState(
         {
           user_id: `eq.${userId}`,
           app_id: `eq.${appId}`,
-          select: "app_id,function_name,policy,updated_at",
+          select: "app_id,function_name,policy,health_gate,updated_at",
           limit: "500",
         },
       ),
     ]);
     return {
       defaultPolicy: normalizeStoredPolicy(defaultRows[0]?.default_policy),
+      defaultHealthGate: defaultRows[0]?.default_health_gate ??
+        DEFAULT_CALLER_FUNCTION_HEALTH_GATE,
       permissionRows,
     };
   } catch (err) {
     console.warn("[CALLER-PERMISSIONS] Falling back to ask policy:", err);
     return {
       defaultPolicy: DEFAULT_CALLER_FUNCTION_POLICY,
+      defaultHealthGate: DEFAULT_CALLER_FUNCTION_HEALTH_GATE,
       permissionRows: [],
     };
   }

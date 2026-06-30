@@ -403,6 +403,9 @@ export interface LaunchCallerFunctionPermissionSummary {
   appId: string;
   functionName: string;
   policy: LaunchCallerFunctionPolicy;
+  // When policy is "always", auto-allow ONLY if the target is recently healthy;
+  // otherwise the call degrades to "ask". Ignored for "ask"/"never".
+  healthGate: boolean;
   source: LaunchCallerFunctionPermissionSource;
   updatedAt?: string | null;
 }
@@ -410,6 +413,7 @@ export interface LaunchCallerFunctionPermissionSummary {
 export interface LaunchCallerFunctionPermissionUpdate {
   functionName: string;
   policy: LaunchCallerFunctionPolicy;
+  healthGate?: boolean;
 }
 
 export interface LaunchCallerFunctionPermissionsResponse {
@@ -417,6 +421,7 @@ export interface LaunchCallerFunctionPermissionsResponse {
   /** @deprecated Use agent. */
   tool: LaunchAgentHandle;
   defaultPolicy: LaunchCallerFunctionPolicy;
+  defaultHealthGate: boolean;
   permissions: LaunchCallerFunctionPermissionSummary[];
   generatedAt: string;
 }
@@ -447,6 +452,7 @@ export interface LaunchFunctionInferenceResponse {
 
 export interface LaunchCallerFunctionPermissionsUpdateRequest {
   defaultPolicy?: LaunchCallerFunctionPolicy;
+  defaultHealthGate?: boolean;
   permissions?: LaunchCallerFunctionPermissionUpdate[];
 }
 
@@ -459,6 +465,9 @@ export interface LaunchCallerPermissionRequired {
   configureUrl: string;
   source?: LaunchCallerFunctionPermissionSource;
   updatedAt?: string | null;
+  // Set when an "always" policy was downgraded to "ask" because the target was
+  // not recently healthy (no_data or red), rather than an explicit "ask".
+  reason?: "health_gate";
 }
 
 export interface LaunchCallerPermissionDenied {

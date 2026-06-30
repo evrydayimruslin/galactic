@@ -9,6 +9,7 @@ import {
   deriveHealthWindows,
   emptyHealth,
   getAppHealth,
+  isRecentlyHealthy,
 } from "./app-health.ts";
 
 const ALL_NO_DATA = {
@@ -28,6 +29,15 @@ function row(overrides: Record<string, number>) {
     ...overrides,
   };
 }
+
+Deno.test("app-health: isRecentlyHealthy is freshest-window green (no_data/red => not healthy)", () => {
+  const H = (o: Record<string, string> = {}) => ({ "1h": "no_data", "24h": "no_data", "7d": "no_data", "30d": "no_data", ...o }) as ReturnType<typeof emptyHealth>;
+  assertEquals(isRecentlyHealthy(H({ "24h": "green" })), true);
+  assertEquals(isRecentlyHealthy(H({ "24h": "red", "7d": "green" })), false); // now-broken
+  assertEquals(isRecentlyHealthy(H({ "7d": "green" })), true); // 24h no_data, 7d green
+  assertEquals(isRecentlyHealthy(H()), false); // unproven
+  assertEquals(isRecentlyHealthy(H({ "7d": "red" })), false);
+});
 
 Deno.test("app-health: empty default is all no_data", () => {
   assertEquals(emptyHealth(), { ...ALL_NO_DATA });

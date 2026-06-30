@@ -138,6 +138,8 @@ interface AgentFunctionFixture {
   name: string;
   p50: number | null;
   permission: "always" | "ask" | "never";
+  // When permission is "always", auto-allow only when the target is recently healthy.
+  healthGate: boolean;
   price: number;
   usesInference?: boolean;
   inferenceOverride?:
@@ -534,8 +536,9 @@ function liveAgentFixture(
   const permissions = new Map(
     (options.permissions?.permissions || []).map((
       entry,
-    ) => [entry.functionName, entry.policy]),
+    ) => [entry.functionName, entry]),
   );
+  const defaultHealthGate = options.permissions?.defaultHealthGate ?? true;
   // Only real data: functions come from the live endpoint (or stay empty),
   // metrics the platform doesn't report are null, and trust fields exist only
   // when the Agent ships a trust card. Nothing here is fabricated.
@@ -544,8 +547,9 @@ function liveAgentFixture(
     description: fn.description || `Run ${fn.name}.`,
     name: fn.name,
     p50: null,
-    permission: permissions.get(fn.name) || fn.callerPermission?.policy ||
+    permission: permissions.get(fn.name)?.policy || fn.callerPermission?.policy ||
       fn.agentPermission?.policy || "ask" as const,
+    healthGate: permissions.get(fn.name)?.healthGate ?? defaultHealthGate,
     price: creditsValue(fn.pricing?.defaultCallPrice),
     usesInference: fn.usesInference ?? false,
     inferenceOverride: fn.inferenceOverride
@@ -2457,6 +2461,7 @@ function FunctionSettingsModal({
   onClose: () => void;
 }): ReactElement {
   const [permission, setPermission] = useState(fn.permission);
+  const [healthGate, setHealthGate] = useState(fn.healthGate);
   const [state, setState] = useState<"idle" | "saving" | "error">("idle");
   const options = [
     ["always", "Always"],
@@ -2470,9 +2475,9 @@ function FunctionSettingsModal({
     if (state === "saving") return;
     setState("saving");
     try {
-      if (permission !== fn.permission) {
+      if (permission !== fn.permission || healthGate !== fn.healthGate) {
         await launchApi.updateAgentCallerPermissions(tool.id, {
-          permissions: [{ functionName: fn.name, policy: permission }],
+          permissions: [{ functionName: fn.name, policy: permission, healthGate }],
         });
         live.reload();
       }
@@ -2515,6 +2520,34 @@ function FunctionSettingsModal({
             ))}
           </div>
         </div>
+        {permission === "always"
+          ? (
+            <div className="preference-row">
+              <div>
+                <strong>Auto-allow only when healthy</strong>
+                <span>
+                  Unproven or recently failing Agents fall back to ask.
+                </span>
+              </div>
+              <div className="mini-segments">
+                <button
+                  className={healthGate ? "active" : ""}
+                  onClick={() => setHealthGate(true)}
+                  type="button"
+                >
+                  On
+                </button>
+                <button
+                  className={!healthGate ? "active" : ""}
+                  onClick={() => setHealthGate(false)}
+                  type="button"
+                >
+                  Off
+                </button>
+              </div>
+            </div>
+          )
+          : null}
         <FunctionWiring fn={fn} live={live} />
         <div className="modal-actions byok-modal-actions">
           <div className="modal-actions-right">
