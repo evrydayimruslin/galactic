@@ -83,6 +83,10 @@ LAUNCH_WEB_BASE_URL = "https://connectgalactic.com"
 # never derived from the request Host. Unset disables interface exposure.
 INTERFACE_SANDBOX_BASE_URL = "https://interfaces.connectgalactic.com"
 ENVIRONMENT = "production"
+# Executed-bundle integrity: enforce blocks a call when the running ESM bundle
+# does not match its signed attestation (bad_signature / hash_mismatch only;
+# legacy unsigned + deploy-skew never block). observe = log only; off = skip.
+EXECUTED_BUNDLE_VERIFY = "enforce"
 # New primary domain is connectgalactic.com; the old ultralightagent.com origins
 # stay listed so they keep working during the cutover (remove later).
 CORS_ALLOWED_ORIGINS = "https://api.connectgalactic.com,https://connectgalactic.com,https://api.ultralightagent.com,https://ultralightagent.com"
@@ -159,6 +163,8 @@ BASE_URL = "https://ultralight-api-staging.rgn4jz429m.workers.dev"
 LAUNCH_WEB_BASE_URL = "https://staging.ultralight-launch-web.pages.dev"
 INTERFACE_SANDBOX_BASE_URL = "https://ultralight-interfaces-staging.rgn4jz429m.workers.dev"
 ENVIRONMENT = "staging"
+# Executed-bundle integrity enforcement (see [vars] above).
+EXECUTED_BUNDLE_VERIFY = "enforce"
 CORS_ALLOWED_ORIGINS = "https://ultralight-api-staging.rgn4jz429m.workers.dev,https://staging.ultralight-launch-web.pages.dev,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5178,http://127.0.0.1:5178"
 GPU_SUPPORT_ENABLED = "false"
 # Routines are a deferred capability with no prod schema; staging has the full
