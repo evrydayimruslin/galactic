@@ -282,6 +282,12 @@
       ]
     },
     {
+      "file": "services/call-flags.ts",
+      "types": [
+        "FlagResult"
+      ]
+    },
+    {
       "exports": [
         "summarizeReceiptCloudEvents"
       ],
@@ -293,8 +299,10 @@
     {
       "exports": [
         "CALLER_FUNCTION_PERMISSION_RPC_CODE",
+        "DEFAULT_CALLER_FUNCTION_HEALTH_GATE",
         "DEFAULT_CALLER_FUNCTION_POLICY",
         "normalizeCallerFunctionPolicy",
+        "normalizeHealthGate",
         "resolveCallerFunctionPermission"
       ],
       "file": "services/caller-function-permissions.ts",
@@ -371,6 +379,15 @@
       ]
     },
     {
+      "file": "services/code-verification.ts",
+      "types": [
+        "DownloadedFile",
+        "FileHashMatch",
+        "FileMatchResult",
+        "VerificationVerdict"
+      ]
+    },
+    {
       "exports": [
         "CodeCache"
       ],
@@ -428,6 +445,13 @@
       "types": [
         "CommandSuggestionSetResult",
         "RecordCommandSuggestionSetInput"
+      ]
+    },
+    {
+      "file": "services/connect-verification.ts",
+      "types": [
+        "ConnectReconcileResult",
+        "ConnectVerificationInput"
       ]
     },
     {
@@ -505,6 +529,16 @@
     },
     {
       "exports": [
+        "DATA_TENANT_DEV_SECRET"
+      ],
+      "file": "services/data-tenant-token.ts",
+      "types": [
+        "DataTenantClaims",
+        "VerifyDataTenantResult"
+      ]
+    },
+    {
+      "exports": [
         "enhanceWithAI"
       ],
       "file": "services/docgen.ts",
@@ -569,6 +603,14 @@
       "file": "services/esbuild-wasm-deno-check-stub.ts",
       "files": [
         "services/esbuild-wasm-deno-check-stub.ts"
+      ]
+    },
+    {
+      "file": "services/executed-bundle.ts",
+      "types": [
+        "BundleVerifyResult",
+        "ExecutedBundleBackfillResult",
+        "ExecutedBundleVerifyMode"
       ]
     },
     {
@@ -1213,6 +1255,12 @@
       ]
     },
     {
+      "exports": [
+        "ROUTINES_FLAG_ENV"
+      ],
+      "file": "services/routines-feature-flag.ts"
+    },
+    {
       "file": "services/routines.ts",
       "types": [
         "NormalizedRoutineCapabilityInput",
@@ -1424,11 +1472,15 @@
       ]
     },
     {
+      "file": "services/trust-ranking.ts",
+      "types": [
+        "RankableApp"
+      ]
+    },
+    {
       "exports": [
-        "canonicalJson",
-        "getLatestVersionTrust",
-        "getManifestEntrypoints",
-        "sha256Hex"
+        "buildDescriptionHashInput",
+        "getManifestEntrypoints"
       ],
       "file": "services/trust.ts",
       "types": [
@@ -1485,6 +1537,13 @@
       "file": "services/weekly-calls.ts",
       "types": [
         "WeeklyCallResult"
+      ]
+    },
+    {
+      "file": "src/bindings/outbound-policy.ts",
+      "types": [
+        "GuardedFetchOptions",
+        "OutboundVerdict"
       ]
     }
   ]

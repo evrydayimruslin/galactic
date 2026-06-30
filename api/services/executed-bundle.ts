@@ -20,7 +20,12 @@
 // (legacy, not yet republished) is grandfathered (no_attestation) in every mode.
 
 import { getEnv } from "../lib/env.ts";
-import { canonicalJson, sha256Hex, signWithTrustSecret } from "./trust.ts";
+import {
+  canonicalJson,
+  type ExecutedIntegrity,
+  sha256Hex,
+  signWithTrustSecret,
+} from "./trust.ts";
 
 function liveKey(appId: string): string {
   return `esm:${appId}:latest`;
@@ -185,7 +190,9 @@ export function executedBundleVerifyMode(): ExecutedBundleVerifyMode {
 // AFTER the backfill confirms zero legitimate no_attestation bundles remain;
 // then no_attestation becomes a hard block under enforce. Mirrors the
 // observe->enforce rollout of EXECUTED_BUNDLE_VERIFY itself.
-export function executedBundleRequireAttestation(): boolean {
+// Internal-only (read by handleExecutedBundleVerdict); not part of the module's
+// public surface.
+function executedBundleRequireAttestation(): boolean {
   const raw = (getEnv("EXECUTED_BUNDLE_REQUIRE_ATTESTATION") || "").toLowerCase();
   return raw === "1" || raw === "true";
 }
@@ -323,11 +330,6 @@ export function handleExecutedBundleVerdict(
 }
 
 // ── Trust-card integrity signal ──────────────────────────────────────────────
-// Tri-state runtime-integrity result for a single app, surfaced on trust cards
-// so a green chip reflects the EXECUTING bundle, not just the presence of a
-// publish-time source signature.
-export type ExecutedIntegrity = "verified" | "unverified" | "unknown";
-
 // Affordable one-app runtime-integrity check, used by surfaces that build a
 // trust card for a SINGLE app (the public Agent page) and can pay one KV read.
 // Loads the live bundle + attestation and verifies the bytes against their

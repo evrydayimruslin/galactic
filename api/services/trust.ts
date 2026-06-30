@@ -1,8 +1,10 @@
 import type { App, HealthWindows, VersionMetadata, VersionTrustMetadata } from "../../shared/types/index.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
-// Type-only import (erased at runtime) — avoids a runtime cycle with
-// executed-bundle.ts, which imports signing helpers from this file.
-import type { ExecutedIntegrity } from "./executed-bundle.ts";
+
+// Runtime-integrity tri-state surfaced on trust cards. Defined here (the trust
+// module) so executed-bundle.ts — which already imports signing helpers from
+// this file — can import it in that same direction, avoiding an import cycle.
+export type ExecutedIntegrity = "verified" | "unverified" | "unknown";
 import { getManifestEnvVars } from "../../shared/contracts/manifest.ts";
 import { getEnv } from "../lib/env.ts";
 import { parseAppManifest, resolveAppEnvSchema } from "./app-settings.ts";
