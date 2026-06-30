@@ -11,6 +11,7 @@ import {
   isSandboxActorToken,
   verifySandboxActorToken,
 } from "./sandbox-actor.ts";
+import { isOwnerActorToken } from "./owner-auth.ts";
 import { getUserFromToken, isApiToken } from "./tokens.ts";
 
 export type RequestTokenSourcePolicy = "bearer_only" | "bearer_or_cookie";
@@ -142,6 +143,15 @@ export async function authenticateRequest(
   const token = extractRequestAccessToken(request, policy);
   if (!token) {
     throw new Error("Missing or invalid authorization header");
+  }
+
+  // Owner-actor tokens (gxo_) are minted host-side ONLY for the internal
+  // platform-admin path and are accepted ONLY by authenticateInternalAdmin
+  // (services/owner-auth.ts). Reject them on every route that goes through the
+  // central authenticator — incl. /mcp/platform and account-session routes — so
+  // a leaked owner token is inert outside /api/admin/internal/*.
+  if (isOwnerActorToken(token)) {
+    throw new Error("Owner actor tokens are not valid on this route");
   }
 
   if (isRoutineActorToken(token)) {

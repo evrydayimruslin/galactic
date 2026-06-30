@@ -70,6 +70,13 @@ export interface Env {
   ANALYTICS_PEPPER_V1: string;
   ANALYTICS_PEPPER_VERSION: string;
   CHAT_CAPTURE_PEPPER: string;
+  // Platform owner identity + the dedicated signing secret for owner-actor
+  // tokens (gxo_) used by the owner's private platform-management agents.
+  // PLATFORM_OWNER_USER_ID is a non-secret UUID ([vars]); OWNER_ACTOR_TOKEN_SECRET
+  // is a secret (wrangler secret put) and must NOT be WORKER_SECRET, which is
+  // sandbox-readable — see services/owner-auth.ts.
+  PLATFORM_OWNER_USER_ID: string;
+  OWNER_ACTOR_TOKEN_SECRET: string;
 
   // Index signature for dynamic access
   [key: string]: unknown;
