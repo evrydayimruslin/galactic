@@ -115,7 +115,7 @@ CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 # private "Defaults Manager" Agent whose stored list seeds new accounts. Unset =>
 # no defaults are seeded. Not an authority — just the data source for the starter
 # list; the Agent's functions are owner-only because it is private.
-# DEFAULTS_SOURCE_APP = "platform-defaults"
+DEFAULTS_SOURCE_APP = "app-5vyb54"
 
 [env.staging]
 # Staging gets its own worker script name (`ultralight-api-staging`) and its
