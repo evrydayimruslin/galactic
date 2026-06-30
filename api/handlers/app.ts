@@ -6,7 +6,7 @@ import { handleRun } from "./run.ts";
 import { handleAuth } from "./auth.ts";
 import { authenticate } from "./auth.ts";
 import { appStoreUrl, deepLinkAppUrl, downloadUrl } from "../lib/urls.ts";
-import { handleApps } from "./apps.ts";
+import { handleApps, handleOgCard } from "./apps.ts";
 import { handleUser } from "./user.ts";
 import { handleLaunch } from "./launch.ts";
 import { handleMcp, handleMcpDiscovery } from "./mcp.ts";
@@ -1313,6 +1313,15 @@ export function createApp() {
         const appId = path.slice(5); // Remove '/app/'
         if (appId && !appId.includes("/")) {
           return handlePublicAppPage(request, appId);
+        }
+      }
+
+      // Rendered OG share card image - GET /og/:appId.png (public agents only)
+      if (path.startsWith("/og/") && method === "GET") {
+        const file = path.slice(4); // Remove '/og/'
+        const appId = file.endsWith(".png") ? file.slice(0, -4) : file;
+        if (appId && !appId.includes("/")) {
+          return handleOgCard(request, appId);
         }
       }
 
@@ -2629,9 +2638,12 @@ function getPublicAppPageHTML(
   `
     : "";
 
-  // OpenGraph prefers the first screenshot over the icon — richer previews
-  // in Slack/iMessage/Twitter when apps have visual content.
-  const ogImage = hasScreenshots
+  // Public agents get the rendered share card (swirl + name + description);
+  // others fall back to the first screenshot, then the icon. handleOgCard 302s
+  // to the icon if the card hasn't been rendered yet, so this always resolves.
+  const ogImage = app.visibility === "public"
+    ? `${baseUrl}/og/${app.id}.png`
+    : hasScreenshots
     ? `${baseUrl}/api/apps/${app.id}/screenshots/0`
     : `${baseUrl}/api/apps/${app.id}/icon`;
 
@@ -2677,7 +2689,7 @@ function getPublicAppPageHTML(
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${appName} — Galactic</title>
 <meta name="description" content="${metaDescEscaped}">
-${isEmbed ? '<meta name="robots" content="noindex">' : ""}
+${isEmbed || isUnlisted ? '<meta name="robots" content="noindex">' : ""}
 
 <!-- OpenGraph / social share previews -->
 <meta property="og:type" content="website">
@@ -2686,7 +2698,7 @@ ${isEmbed ? '<meta name="robots" content="noindex">' : ""}
 <meta property="og:description" content="${metaDescEscaped}">
 <meta property="og:url" content="${escapeHtml(shareUrl)}">
 <meta property="og:image" content="${escapeHtml(ogImage)}">
-<meta name="twitter:card" content="summary">
+<meta name="twitter:card" content="${app.visibility === "public" ? "summary_large_image" : "summary"}">
 <meta name="twitter:title" content="${appName}">
 <meta name="twitter:description" content="${metaDescEscaped}">
 <meta name="twitter:image" content="${escapeHtml(ogImage)}">

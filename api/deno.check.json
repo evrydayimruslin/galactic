@@ -1,5 +1,7 @@
 {
   "imports": {
+    "@resvg/resvg-wasm": "npm:@resvg/resvg-wasm@2.6.2",
+    "@resvg/resvg-wasm/index_bg.wasm": "./services/resvg-wasm-deno-check-stub.ts",
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.103.2",
     "esbuild-wasm": "npm:esbuild-wasm@0.24.2",
     "esbuild-wasm/esbuild.wasm": "./services/esbuild-wasm-deno-check-stub.ts",

@@ -25,6 +25,7 @@
   },
   "imports": {
     "@std/": "https://deno.land/std@0.210.0/",
+    "@resvg/resvg-wasm": "npm:@resvg/resvg-wasm@2.6.2",
     "esbuild-wasm": "npm:esbuild-wasm@0.24.2",
     "typescript": "npm:typescript@5.9.3",
     "yaml": "npm:yaml@2.8.3",

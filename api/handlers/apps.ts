@@ -7,6 +7,8 @@ import { createAppsService } from "../services/apps.ts";
 import { createR2Service, type R2Service } from "../services/storage.ts";
 import { getCodeCache } from "../services/codecache.ts";
 import { bundleCode } from "../services/bundler.ts";
+import { ogCardKey, renderAgentOgCard } from "../services/og-card.ts";
+import { scheduleCaptureTask } from "../services/chat-capture.ts";
 import { parseTypeScript, toSkillsParsed } from "../services/parser.ts";
 import {
   generateManifestFromParseResult,
@@ -2253,6 +2255,15 @@ async function handleUpdateApp(
       }
 
       const updatedApp = await appsService.update(appId, filteredUpdates);
+      // Re-render the OG share card when a field shown on it changed (incl. a
+      // private->public flip). No-op for non-public agents (gated in the renderer).
+      if (
+        updatedApp.name !== app.name ||
+        updatedApp.description !== app.description ||
+        updatedApp.visibility !== app.visibility
+      ) {
+        scheduleCaptureTask(renderAgentOgCard(updatedApp, { reason: "edit" }));
+      }
       if (requestedLiveVersion && liveVersionStorageBytes !== null) {
         await recordUploadStorage(
           user.id,
@@ -2519,6 +2530,49 @@ async function handleGetIcon(
   } catch (err) {
     console.error("Failed to get icon:", err);
     return error("Failed to get icon", 500);
+  }
+}
+
+/**
+ * Serve the rendered per-agent OG share card — GET /og/:appId.png
+ *
+ * Public agents only (the card is the crawlable social preview). The PNG is
+ * pre-rendered to R2 on edit/publish by services/og-card.ts. If it hasn't been
+ * rendered yet, 302 to the icon so og:image always resolves to something. Short
+ * max-age bounds staleness after a re-render without needing an ETag (the key
+ * is stable and overwritten in place).
+ */
+export async function handleOgCard(
+  request: Request,
+  appId: string,
+): Promise<Response> {
+  try {
+    const { app } = await resolvePublicAppAccess(request, appId, {
+      allowPrivateOwner: false,
+    });
+    if (!app || app.visibility !== "public") {
+      return error("Not found", 404);
+    }
+
+    let png: Uint8Array;
+    try {
+      png = await createR2Service().fetchFile(ogCardKey(appId));
+    } catch {
+      return new Response(null, {
+        status: 302,
+        headers: { "Location": `/api/apps/${appId}/icon` },
+      });
+    }
+
+    return new Response(toResponseBody(png), {
+      headers: {
+        "Content-Type": "image/png",
+        "Cache-Control": "public, max-age=300",
+      },
+    });
+  } catch (err) {
+    console.error("Failed to get OG card:", err);
+    return error("Failed to get OG card", 500);
   }
 }
 
@@ -3475,6 +3529,12 @@ async function handlePublishDraft(
     }
     await appsService.update(appId, updateFields);
     await recordUploadStorage(user.id, appId, newVersion, publishedSizeBytes);
+
+    // The card embeds name+description, which a code publish can change via the
+    // manifest — re-render (no-op for non-public agents).
+    scheduleCaptureTask(
+      renderAgentOgCard({ ...app, ...updateFields }, { reason: "publish" }),
+    );
 
     // Invalidate code cache so next request fetches new version
     getCodeCache().invalidate(appId);

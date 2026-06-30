@@ -8,6 +8,8 @@
 import { error, json } from "./response.ts";
 import { authenticate } from "./auth.ts";
 import { isApiToken, validateToken } from "../services/tokens.ts";
+import { renderAgentOgCard } from "../services/og-card.ts";
+import { scheduleCaptureTask } from "../services/chat-capture.ts";
 import { createUserService } from "../services/user.ts";
 import { deriveCallerEconomicState } from "../services/request-caller-context.ts";
 import {
@@ -10188,6 +10190,15 @@ async function executeSetVisibility(
   await appsService.update(
     app.id,
     updatePayload as { visibility: "private" | "unlisted" | "public" },
+  );
+
+  // Re-render the OG share card on a visibility change (e.g. private->public).
+  // No-op for non-public agents (gated in the renderer).
+  scheduleCaptureTask(
+    renderAgentOgCard(
+      { ...app, visibility: dbVisibility },
+      { reason: "set-visibility" },
+    ),
   );
 
   // If going TO published for the first time: set first_published_at

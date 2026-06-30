@@ -1202,6 +1202,12 @@
       "file": "services/request-validation.ts"
     },
     {
+      "file": "services/resvg-wasm-deno-check-stub.ts",
+      "files": [
+        "services/resvg-wasm-deno-check-stub.ts"
+      ]
+    },
+    {
       "exports": [
         "routineActorTokenInputFromStoredRun"
       ],
