@@ -7,12 +7,15 @@ name: Interface Deploy Smoke
 # server TS-parser crashed) while test:full stayed green.
 #
 # Runs on a schedule and on changes to the surfaces that can break it. The agent
-# stays PRIVATE (never goes live). Idempotent: ULTRALIGHT_SMOKE_APP_ID re-versions
-# one fixed private app instead of creating a new one each run.
+# stays PRIVATE (never goes live). Idempotent: GALACTIC_SMOKE_APP_ID re-versions
+# one fixed private app instead of creating a new one each run. Without that
+# secret the smoke now FAILS CLOSED — it will not silently mint a new app, which
+# is what accumulated dozens of duplicate "Interface Demo" agents.
 #
-# OWNER ACTION: add the repo secret ULTRALIGHT_TOKEN (an upload-scoped token on a
-# dedicated test account with a small balance). Until it exists this workflow
-# no-ops instead of failing, so it is safe to land before the secret is set.
+# OWNER ACTION: add two repo secrets —
+#   ULTRALIGHT_TOKEN       an upload-scoped token (ideally a dedicated test account)
+#   GALACTIC_SMOKE_APP_ID  id of the one fixed private "Interface Demo" fixture
+# Until ULTRALIGHT_TOKEN exists this workflow no-ops instead of failing.
 
 on:
   workflow_dispatch:
@@ -44,11 +47,11 @@ jobs:
 
       - name: Run interface deploy smoke
         env:
-          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN }}
-          ULTRALIGHT_SMOKE_APP_ID: ${{ secrets.ULTRALIGHT_SMOKE_APP_ID }}
-          ULTRALIGHT_API_URL: ${{ vars.ULTRALIGHT_API_URL || 'https://api.ultralightagent.com' }}
+          GALACTIC_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN }}
+          GALACTIC_SMOKE_APP_ID: ${{ secrets.GALACTIC_SMOKE_APP_ID }}
+          GALACTIC_API_URL: ${{ vars.GALACTIC_API_URL || 'https://api.connectgalactic.com' }}
         run: |
-          if [ -z "$ULTRALIGHT_TOKEN" ]; then
+          if [ -z "$GALACTIC_TOKEN" ]; then
             echo "::warning::ULTRALIGHT_TOKEN secret not set — skipping interface smoke. Add the secret to enable it."
             exit 0
           fi

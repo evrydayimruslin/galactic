@@ -14,13 +14,18 @@
 //   5. (opt-in --exercise-run, costs a function call) a bridge function runs
 //
 // Usage:
-//   ULTRALIGHT_TOKEN=ul_... node scripts/smoke/interface-deploy-smoke.mjs \
-//     [--url https://api.ultralightagent.com] [--app-id <id>] \
-//     [--dir examples/interface-demo] [--exercise-run]
+//   GALACTIC_TOKEN=gx_... node scripts/smoke/interface-deploy-smoke.mjs \
+//     [--url https://api.connectgalactic.com] [--app-id <id>] \
+//     [--dir examples/interface-demo] [--exercise-run] [--allow-create]
 //
-// --app-id (or ULTRALIGHT_SMOKE_APP_ID) keeps it idempotent: re-uploads a new
+// --app-id (or GALACTIC_SMOKE_APP_ID) keeps it idempotent: re-uploads a new
 // VERSION of the same PRIVATE app instead of creating a new one every run.
 // The token needs upload scope; the agent stays private (never goes live).
+//
+// FAIL-CLOSED: with no app id resolved the smoke ABORTS instead of minting a
+// fresh app — silently creating a new "Interface Demo" every run is exactly the
+// bug that accumulated dozens of duplicates. Pass --allow-create only for the
+// one-time bootstrap of the fixed fixture (then set GALACTIC_SMOKE_APP_ID).
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
@@ -30,15 +35,35 @@ import { parseArgs } from '../analysis/_shared.mjs';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = parseArgs(process.argv.slice(2));
 const apiBase = String(
-  args.get('--url') || process.env.ULTRALIGHT_API_URL || 'https://api.ultralightagent.com',
+  args.get('--url') || process.env.GALACTIC_API_URL || process.env.ULTRALIGHT_API_URL ||
+    'https://api.connectgalactic.com',
 ).replace(/\/$/, '');
-const token = String(args.get('--token') || process.env.ULTRALIGHT_TOKEN || '').trim();
-const appId = String(args.get('--app-id') || process.env.ULTRALIGHT_SMOKE_APP_ID || '').trim();
+const token = String(
+  args.get('--token') || process.env.GALACTIC_TOKEN || process.env.ULTRALIGHT_TOKEN || '',
+).trim();
+const appId = String(
+  args.get('--app-id') || process.env.GALACTIC_SMOKE_APP_ID ||
+    process.env.ULTRALIGHT_SMOKE_APP_ID || '',
+).trim();
 const dir = String(args.get('--dir') || 'examples/interface-demo').trim();
 const exerciseRun = args.has('--exercise-run');
+const allowCreate = args.has('--allow-create');
 
 if (!token) {
-  console.error('interface-deploy-smoke requires ULTRALIGHT_TOKEN (upload-scoped) or --token');
+  console.error('interface-deploy-smoke requires GALACTIC_TOKEN (upload-scoped) or --token');
+  process.exit(2);
+}
+
+// Fail-closed: never silently mint a new app. Without a fixed app id every run
+// creates a duplicate "Interface Demo" (the manifest name wins server-side, so
+// even a distinct --name does not separate them). Require an explicit opt-in to
+// create, which is only ever used once to seed GALACTIC_SMOKE_APP_ID.
+if (!appId && !allowCreate) {
+  console.error(
+    'interface-deploy-smoke: no app id resolved (set GALACTIC_SMOKE_APP_ID or pass --app-id).\n' +
+    'Refusing to create a new app — that is the duplicate-Interface-Demo bug.\n' +
+    'For the one-time fixture bootstrap, re-run with --allow-create.',
+  );
   process.exit(2);
 }
 
