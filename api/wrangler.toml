@@ -111,11 +111,11 @@ CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 # Optional rollout knob for Wave 4 alias retirement:
 # PLATFORM_MCP_DISABLED_ALIASES = "removable"
 # or a comma-separated subset such as "ul.execute,ul.lint"
-# Platform-management agents (docs/PLATFORM_MGMT_AGENT_DESIGN.md): the auth user
-# id of the platform owner whose private agents may mutate platform-wide state
-# (e.g. the pre-install defaults registry). Unset => the internal-admin surface
-# is inert (fail-closed). Not a secret — set it to the owner's user id here.
-# PLATFORM_OWNER_USER_ID = "00000000-0000-0000-0000-000000000000"
+# Pre-install defaults (docs/PLATFORM_MGMT_AGENT_DESIGN.md): the slug of the
+# private "Defaults Manager" Agent whose stored list seeds new accounts. Unset =>
+# no defaults are seeded. Not an authority — just the data source for the starter
+# list; the Agent's functions are owner-only because it is private.
+# DEFAULTS_SOURCE_APP = "platform-defaults"
 
 [env.staging]
 # Staging gets its own worker script name (`ultralight-api-staging`) and its
@@ -219,11 +219,6 @@ crons = [
 #     MUST be a server-only secret; deliberately distinct from WORKER_SECRET
 #     (which is exposed inside the sandbox). Falls back to
 #     ROUTINE_ACTOR_TOKEN_SECRET / SUPABASE_SERVICE_ROLE_KEY if unset.
-#   OWNER_ACTOR_TOKEN_SECRET — HMAC key for owner-actor tokens (gxo_) that the
-#     owner's private platform-management agents use (services/owner-auth.ts).
-#     MUST be a server-only secret; deliberately NOT WORKER_SECRET (sandbox-
-#     readable). Falls back to AGENT_CALLER_SECRET / ROUTINE_ACTOR_TOKEN_SECRET /
-#     SUPABASE_SERVICE_ROLE_KEY if unset. Pair with the PLATFORM_OWNER_USER_ID var.
 #   RUNPOD_API_KEY
 #   GPU_SUPPORT_ENABLED=true|false
 #   RUNPOD_TEMPLATE_ID

@@ -1,30 +1,30 @@
 {
   "name": "Defaults Manager",
   "version": "1.0.0",
-  "description": "Owner-only platform Agent: curate the pre-install default Agents that NEW accounts are seeded with. Reaches platform state via the host-side ADMIN binding (wired only when the platform owner runs their own Agent). Deploy PRIVATE.",
+  "description": "Owner-only Agent: curate the pre-install default Agents that NEW accounts are seeded with. A normal PRIVATE Agent — its functions are owner-only because it is private, and it stores the list in its own app-data. Point DEFAULTS_SOURCE_APP at this Agent's slug. Deploy PRIVATE.",
   "type": "mcp",
   "entry": { "functions": "index.ts" },
-  "permissions": [],
+  "permissions": ["storage:read", "storage:write"],
   "functions": {
     "list_defaults": {
-      "description": "List the current platform default-install Agents (the set new accounts are seeded with), including whether each is still live and installable.",
+      "description": "List the current pre-install default Agents (the set new accounts are seeded with).",
       "parameters": {},
-      "returns": { "type": "object", "description": "The current defaults registry" }
+      "returns": { "type": "object", "description": "The current defaults list" }
     },
     "add_default": {
-      "description": "Add (or re-enable) an Agent as a platform default by its app id. The Agent must be public or unlisted. Affects FUTURE signups only — existing users are never modified.",
+      "description": "Add an Agent (by app id) to the pre-install defaults. Affects FUTURE signups only — existing users are never modified. The Agent should be public or unlisted (the platform re-validates installability at seed time).",
       "parameters": {
         "app_id": { "type": "string", "description": "The app id (uuid) of the Agent to add as a default", "required": true },
         "badge": { "type": "string", "description": "Optional neutral provenance label shown on the seeded card (e.g. 'Starter'). Not a trust signal.", "required": false }
       },
-      "returns": { "type": "object", "description": "The added default entry" }
+      "returns": { "type": "object", "description": "The updated defaults list" }
     },
     "remove_default": {
-      "description": "Remove an Agent from the platform defaults by its app id. Stops FUTURE seeding; existing users who already have it keep it.",
+      "description": "Remove an Agent from the pre-install defaults by its app id. Stops FUTURE seeding; existing users who already have it keep it.",
       "parameters": {
         "app_id": { "type": "string", "description": "The app id (uuid) of the Agent to remove from defaults", "required": true }
       },
-      "returns": { "type": "object", "description": "Removal confirmation" }
+      "returns": { "type": "object", "description": "The updated defaults list" }
     }
   }
 }

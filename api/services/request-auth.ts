@@ -11,7 +11,6 @@ import {
   isSandboxActorToken,
   verifySandboxActorToken,
 } from "./sandbox-actor.ts";
-import { isOwnerActorToken } from "./owner-auth.ts";
 import { getUserFromToken, isApiToken } from "./tokens.ts";
 
 export type RequestTokenSourcePolicy = "bearer_only" | "bearer_or_cookie";
@@ -143,15 +142,6 @@ export async function authenticateRequest(
   const token = extractRequestAccessToken(request, policy);
   if (!token) {
     throw new Error("Missing or invalid authorization header");
-  }
-
-  // Owner-actor tokens (gxo_) are minted host-side ONLY for the internal
-  // platform-admin path and are accepted ONLY by authenticateInternalAdmin
-  // (services/owner-auth.ts). Reject them on every route that goes through the
-  // central authenticator — incl. /mcp/platform and account-session routes — so
-  // a leaked owner token is inert outside /api/admin/internal/*.
-  if (isOwnerActorToken(token)) {
-    throw new Error("Owner actor tokens are not valid on this route");
   }
 
   if (isRoutineActorToken(token)) {
@@ -358,52 +348,107 @@ export async function ensureUserExists(
   );
 }
 
-// Seed a brand-new account's library from the id-keyed platform default-install
-// registry (platform_default_apps). FORWARD-ONLY: this runs once, at account
-// creation (see ensureUserExists), and only ever writes the NEW user's rows —
-// there is no backfill/broadcast into existing users anywhere. Keyed on app_id
-// (stable across versions), so it can't silently shrink on a rename the way the
-// old name-matched constant did. Exported for direct testing.
-export async function provisionDefaultApps(userId: string): Promise<void> {
+interface DefaultRef {
+  app_id: string;
+  badge?: string | null;
+}
+
+// Resolve the platform's pre-install default set from the private "Defaults
+// Manager" Agent named by DEFAULTS_SOURCE_APP. That Agent stores the list in its
+// OWN app-data (via ultralight.store('defaults', ...)); we read it here with the
+// service role. This is the ONLY coupling to it — no special auth, no platform-
+// owner identity, no admin credential: the Agent's functions are owner-only
+// simply because the Agent is private. Returns [] (=> no seeding) when the
+// pointer is unset, the Agent is missing, or the list is empty/unreadable.
+async function readSourceDefaults(): Promise<DefaultRef[]> {
+  const slug = getEnv("DEFAULTS_SOURCE_APP").trim();
+  if (!slug) return [];
   const supabaseUrl = getEnv("SUPABASE_URL");
   const serviceKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
   const headers = {
-    "apikey": serviceKey,
-    "Authorization": `Bearer ${serviceKey}`,
+    apikey: serviceKey,
+    Authorization: `Bearer ${serviceKey}`,
+  };
+  // The source Agent's app-data is keyed by (app id, owner id) — resolve both.
+  const appRes = await fetch(
+    `${supabaseUrl}/rest/v1/apps?slug=eq.${encodeURIComponent(slug)}` +
+      `&deleted_at=is.null&select=id,owner_id&limit=1`,
+    { headers },
+  );
+  if (!appRes.ok) return [];
+  const app =
+    (await appRes.json() as Array<{ id: string; owner_id: string }>)[0];
+  if (!app?.id || !app?.owner_id) return [];
+  // Read the Agent's stored list straight from R2 (the same object
+  // ultralight.store writes: apps/{appId}/users/{ownerId}/data/defaults.json).
+  try {
+    const obj = await getEnv().R2_BUCKET.get(
+      `apps/${app.id}/users/${app.owner_id}/data/defaults.json`,
+    );
+    if (!obj) return [];
+    const parsed = JSON.parse(await obj.text());
+    const list = (parsed?.value ?? parsed) as unknown;
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((item): DefaultRef | null => {
+        if (typeof item === "string") return { app_id: item };
+        if (
+          item && typeof item === "object" &&
+          typeof (item as { app_id?: unknown }).app_id === "string"
+        ) {
+          const ref = item as { app_id: string; badge?: string | null };
+          return { app_id: ref.app_id, badge: ref.badge ?? null };
+        }
+        return null;
+      })
+      .filter((x): x is DefaultRef => !!x && !!x.app_id.trim());
+  } catch {
+    return [];
+  }
+}
+
+// Seed a brand-new account's library from the pre-install defaults the owner
+// curates via their private Defaults Manager Agent (see readSourceDefaults).
+// FORWARD-ONLY: runs once, at account creation (see ensureUserExists), and only
+// ever writes the NEW user's rows. Validates each Agent is still live +
+// installable before seeding it. `deps.readSourceDefaults` is injectable for
+// tests so the seeding logic can be exercised without R2.
+export async function provisionDefaultApps(
+  userId: string,
+  deps: { readSourceDefaults?: () => Promise<DefaultRef[]> } = {},
+): Promise<void> {
+  const refs = await (deps.readSourceDefaults ?? readSourceDefaults)();
+  const appIds = Array.from(
+    new Set(refs.map((r) => r.app_id.trim()).filter(Boolean)),
+  );
+  if (appIds.length === 0) return;
+
+  const supabaseUrl = getEnv("SUPABASE_URL");
+  const serviceKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const headers = {
+    apikey: serviceKey,
+    Authorization: `Bearer ${serviceKey}`,
     "Content-Type": "application/json",
   };
 
-  // 1. Active registry entries (enabled, not retired), in display order.
-  const registryRes = await fetch(
-    `${supabaseUrl}/rest/v1/platform_default_apps` +
-      `?enabled=eq.true&removed_at=is.null&select=app_id&order=position.asc`,
-    { headers },
-  );
-  if (!registryRes.ok) return;
-  const registry = await registryRes.json() as Array<{ app_id: string }>;
-  const registryIds = registry.map((r) => r.app_id).filter(Boolean);
-  if (registryIds.length === 0) return;
-
-  // 2. Validate each is still a live, installable (public/unlisted) Agent.
-  // Guards against an app unpublished or deleted after being added: seeding a
-  // private/deleted app would drop an unusable row into the new user's library.
+  // Validate each is still a live, installable (public/unlisted) Agent. Guards
+  // against a default pointing at an app unpublished or deleted after it was
+  // added — seeding a private/deleted app would drop an unusable row into the
+  // new user's library.
   const appsRes = await fetch(
     `${supabaseUrl}/rest/v1/apps` +
-      `?id=in.(${registryIds.join(",")})` +
+      `?id=in.(${appIds.join(",")})` +
       `&deleted_at=is.null&visibility=in.(public,unlisted)&select=id`,
     { headers },
   );
   if (!appsRes.ok) return;
   const liveApps = await appsRes.json() as Array<{ id: string }>;
   const liveIds = new Set(liveApps.map((a) => a.id));
-  // Preserve registry (position) order; keep only the still-installable ones.
-  const seedIds = registryIds.filter((id) => liveIds.has(id));
+  const seedIds = appIds.filter((id) => liveIds.has(id));
   if (seedIds.length === 0) return;
 
-  // 3. One batched, idempotent upsert into the user's library. source='default'.
-  // NO app_likes write — that fabricated a positive like on every signup,
-  // inflating each default's like-count. The installed signal is
-  // user_app_library; likes are earned, not seeded.
+  // One batched, idempotent upsert into the user's library. source='default'.
+  // No app_likes write — likes are earned, not seeded.
   const rows = seedIds.map((appId) => ({
     user_id: userId,
     app_id: appId,

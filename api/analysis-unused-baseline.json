@@ -1039,16 +1039,6 @@
     },
     {
       "exports": [
-        "OwnerActorTokenError"
-      ],
-      "file": "services/owner-auth.ts",
-      "types": [
-        "CreatedOwnerActorToken",
-        "OwnerActorTokenClaims"
-      ]
-    },
-    {
-      "exports": [
         "clearPageShareSessionCookie",
         "getPageShareCookiePath",
         "issuePageShareSession"
@@ -1118,12 +1108,6 @@
         "getSupabaseAdminHeaders"
       ],
       "file": "services/platform-clients/supabase-rest.ts"
-    },
-    {
-      "file": "services/platform-defaults.ts",
-      "types": [
-        "DefaultAppEntry"
-      ]
     },
     {
       "exports": [

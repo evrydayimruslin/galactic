@@ -27,7 +27,6 @@ import {
 } from "./internal-proxy.ts";
 import { handleTierChange } from "./tier.ts";
 import { handleAdmin } from "./admin.ts";
-import { handleInternalAdmin } from "./admin-internal.ts";
 import { handleDeveloper } from "./developer.ts";
 import {
   handleCapabilitySuggestionEventTelemetry,
@@ -755,13 +754,6 @@ export function createApp() {
       // Tier change route (service-to-service, secured by secret)
       if (path === "/api/tier/change" && method === "POST") {
         return handleTierChange(request);
-      }
-
-      // Internal platform-admin routes — owner-actor gated (distinct from the
-      // service-role /api/admin gate below). MUST match before the /api/admin
-      // catch so it isn't swallowed by the service-role handler.
-      if (path.startsWith("/api/admin/internal/")) {
-        return handleInternalAdmin(request);
       }
 
       // Admin routes (service-to-service, secured by service-role key)

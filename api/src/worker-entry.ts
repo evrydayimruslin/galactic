@@ -37,7 +37,6 @@ export { MemoryBinding } from './bindings/memory-binding.ts';
 export { NetworkBinding } from './bindings/network-binding.ts';
 export { EventsBinding } from './bindings/events-binding.ts';
 export { OutboundBinding } from './bindings/outbound-binding.ts';
-export { AdminBinding } from './bindings/admin-binding.ts';
 
 // ============================================
 // SECURITY & CORS HEADERS

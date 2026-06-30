@@ -2790,12 +2790,6 @@ async function executeAppFunction(
       appId: app.id,
       userId,
       ownerId: app.owner_id,
-      // Genuine published-app execution → eligible for the owner-only ADMIN
-      // binding (the dynamic-sandbox gate still requires the user to BE the
-      // platform owner running their own app). The gx.test executor builds its
-      // own config WITHOUT this flag, so testing untrusted code can never reach
-      // platform admin.
-      allowPlatformAdmin: true,
       expectedVersion: app.current_version || undefined,
       executionId,
       // Unused by the dynamic sandbox (it executes the KV ESM bundle); kept

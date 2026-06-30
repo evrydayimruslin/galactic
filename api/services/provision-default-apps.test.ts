@@ -1,7 +1,8 @@
-// Slice A regression tests for the id-keyed default-install seeding
-// (provisionDefaultApps). Forward-only model: seeds only the new user's library
-// from platform_default_apps, validated live+installable, in one batched upsert,
-// and never writes app_likes.
+// Tests for default-install seeding (provisionDefaultApps). The defaults come
+// from the owner's private Defaults Manager Agent (injected here via
+// readSourceDefaults so the seeding logic is exercised without R2). Forward-only:
+// seeds only the new user's library, validated live+installable, one batched
+// upsert, never app_likes.
 
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import { provisionDefaultApps } from "./request-auth.ts";
@@ -50,17 +51,9 @@ const APP_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const APP_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const APP_PRIVATE = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
-Deno.test("provisionDefaultApps: seeds the library by app_id, keeping only live+installable, in one batched upsert", async () => {
+Deno.test("provisionDefaultApps: seeds the library from the source list, keeping only live+installable, in one batched upsert", async () => {
   await withFetch((url, init) => {
     const method = init?.method ?? "GET";
-    if (url.includes("/rest/v1/platform_default_apps") && method === "GET") {
-      // Registry returns three, in position order. APP_PRIVATE will be filtered.
-      return Response.json([
-        { app_id: APP_A },
-        { app_id: APP_B },
-        { app_id: APP_PRIVATE },
-      ]);
-    }
     if (url.includes("/rest/v1/apps") && method === "GET") {
       // Validation: only A and B are live + public/unlisted (PRIVATE excluded).
       return Response.json([{ id: APP_A }, { id: APP_B }]);
@@ -70,7 +63,14 @@ Deno.test("provisionDefaultApps: seeds the library by app_id, keeping only live+
     }
     throw new Error(`unexpected fetch: ${method} ${url}`);
   }, async (calls) => {
-    await provisionDefaultApps("user-1");
+    await provisionDefaultApps("user-1", {
+      readSourceDefaults: () =>
+        Promise.resolve([
+          { app_id: APP_A, badge: "Starter" },
+          { app_id: APP_B },
+          { app_id: APP_PRIVATE },
+        ]),
+    });
 
     // Never fabricates a like on signup.
     assertEquals(
@@ -78,15 +78,21 @@ Deno.test("provisionDefaultApps: seeds the library by app_id, keeping only live+
       false,
     );
 
-    // Validation query is keyed on id (not name) and filters installable.
+    // Validation query is keyed on id and filters installable.
     const appsQuery = calls.find((c) =>
       c.url.includes("/rest/v1/apps") && c.method === "GET"
     );
     assertEquals(Boolean(appsQuery), true);
-    assertEquals(appsQuery!.url.includes("visibility=in.(public,unlisted)"), true);
-    assertEquals(appsQuery!.url.includes(`id=in.(${APP_A},${APP_B},${APP_PRIVATE})`), true);
+    assertEquals(
+      appsQuery!.url.includes("visibility=in.(public,unlisted)"),
+      true,
+    );
+    assertEquals(
+      appsQuery!.url.includes(`id=in.(${APP_A},${APP_B},${APP_PRIVATE})`),
+      true,
+    );
 
-    // Exactly one batched upsert, only the installable ids, registry order kept.
+    // Exactly one batched upsert, only the installable ids.
     const lib = calls.filter((c) =>
       c.url.includes("/rest/v1/user_app_library") && c.method === "POST"
     );
@@ -101,36 +107,28 @@ Deno.test("provisionDefaultApps: seeds the library by app_id, keeping only live+
   });
 });
 
-Deno.test("provisionDefaultApps: empty registry seeds nothing", async () => {
-  await withFetch((url, init) => {
-    const method = init?.method ?? "GET";
-    if (url.includes("/rest/v1/platform_default_apps") && method === "GET") {
-      return Response.json([]);
-    }
-    throw new Error(`unexpected fetch: ${method} ${url}`);
+Deno.test("provisionDefaultApps: empty source list seeds nothing (no fetches)", async () => {
+  await withFetch(() => {
+    throw new Error("no fetch expected for an empty source list");
   }, async (calls) => {
-    await provisionDefaultApps("user-1");
-    // No apps validation, no library write — and definitely no app_likes.
-    assertEquals(calls.filter((c) => c.method === "POST").length, 0);
-    assertEquals(
-      calls.some((c) => c.url.includes("/rest/v1/apps")),
-      false,
-    );
+    await provisionDefaultApps("user-1", {
+      readSourceDefaults: () => Promise.resolve([]),
+    });
+    assertEquals(calls.length, 0);
   });
 });
 
-Deno.test("provisionDefaultApps: every registry app unpublished -> no library write", async () => {
+Deno.test("provisionDefaultApps: every source app unpublished -> no library write", async () => {
   await withFetch((url, init) => {
     const method = init?.method ?? "GET";
-    if (url.includes("/rest/v1/platform_default_apps") && method === "GET") {
-      return Response.json([{ app_id: APP_A }]);
-    }
     if (url.includes("/rest/v1/apps") && method === "GET") {
       return Response.json([]); // none currently live/installable
     }
     throw new Error(`unexpected fetch: ${method} ${url}`);
   }, async (calls) => {
-    await provisionDefaultApps("user-1");
+    await provisionDefaultApps("user-1", {
+      readSourceDefaults: () => Promise.resolve([{ app_id: APP_A }]),
+    });
     assertEquals(
       calls.some((c) => c.url.includes("/rest/v1/user_app_library")),
       false,

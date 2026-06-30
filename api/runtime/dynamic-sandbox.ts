@@ -12,7 +12,6 @@
 // By the time app.js captures globalThis.ultralight, the SDK is ready.
 
 import type { ExecutionResult, RuntimeConfig } from "./sandbox.ts";
-import { getEnv } from "../lib/env.ts";
 import { consumeAiSpend } from "../services/ai-spend-tracker.ts";
 import { debitCloudOperation } from "../services/cloud-usage.ts";
 import { mintSandboxAuthToken } from "../services/sandbox-actor.ts";
@@ -89,11 +88,6 @@ interface DynamicWorkerEntrypointExports {
   EventsBinding(input: {
     props: {
       callerContextToken: string;
-    };
-  }): unknown;
-  AdminBinding(input: {
-    props: {
-      ownerUserId: string;
     };
   }): unknown;
   OutboundBinding(input: {
@@ -354,27 +348,6 @@ globalThis.ultralight = {
     if (JSON.stringify(payload || {}).length > 64 * 1024) throw new Error('emit payload too large (max 32KB)');
     return await e.EVENTS.emit(topic, payload || {});
   },
-  // Owner-only platform administration (e.g. the pre-install defaults registry).
-  // Present ONLY when the platform owner runs one of their OWN Agents — the host
-  // wires the ADMIN binding under that gate and mints the owner-actor token, so
-  // app code never sees a credential. Routes to /api/admin/internal/* host-side.
-  admin: {
-    defaultsList() {
-      var e = globalThis.__rpcEnv;
-      if (!e || !e.ADMIN) throw new Error('platform admin is not available (owner only)');
-      return e.ADMIN.defaultsList();
-    },
-    defaultsAdd(appId, badge) {
-      var e = globalThis.__rpcEnv;
-      if (!e || !e.ADMIN) throw new Error('platform admin is not available (owner only)');
-      return e.ADMIN.defaultsAdd(appId, badge);
-    },
-    defaultsRemove(appId) {
-      var e = globalThis.__rpcEnv;
-      if (!e || !e.ADMIN) throw new Error('platform admin is not available (owner only)');
-      return e.ADMIN.defaultsRemove(appId);
-    },
-  },
   // Resolve a logical slot (declared in this Agent's manifest imports) to the
   // concrete target the user wired it to. Only the granted functions are
   // exposed; each routes through ultralight.call (grant-gated at the target).
@@ -563,27 +536,6 @@ export default {
     if (config.callerContextToken && ctx?.exports?.EventsBinding) {
       bindings.EVENTS = ctx.exports.EventsBinding({
         props: { callerContextToken: config.callerContextToken },
-      });
-    }
-
-    // Platform administration (owner-only). Wired ONLY when (a) this is a genuine
-    // published-app execution that opted in (allowPlatformAdmin — NOT the gx.test
-    // / ephemeral-code path, so the owner testing untrusted code can't reach it),
-    // AND (b) the platform owner is running one of their OWN Agents (userId ===
-    // ownerId === PLATFORM_OWNER_USER_ID, so a third-party Agent the owner happens
-    // to run can never reach it). The binding mints the owner-actor token
-    // host-side and routes through authenticateInternalAdmin — no god-mode key
-    // enters the sandbox.
-    const platformOwnerId = getEnv("PLATFORM_OWNER_USER_ID").trim();
-    if (
-      config.allowPlatformAdmin === true &&
-      platformOwnerId &&
-      config.userId === platformOwnerId &&
-      config.ownerId === platformOwnerId &&
-      ctx?.exports?.AdminBinding
-    ) {
-      bindings.ADMIN = ctx.exports.AdminBinding({
-        props: { ownerUserId: config.userId },
       });
     }
 
