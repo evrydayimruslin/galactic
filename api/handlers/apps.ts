@@ -2542,10 +2542,23 @@ async function handleGetIcon(
  * max-age bounds staleness after a re-render without needing an ETag (the key
  * is stable and overwritten in place).
  */
+const OG_APP_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const OG_ICON_EXTS: ReadonlyArray<readonly [string, string]> = [
+  ["png", "image/png"],
+  ["jpg", "image/jpeg"],
+  ["webp", "image/webp"],
+];
+
 export async function handleOgCard(
   request: Request,
   appId: string,
 ): Promise<Response> {
+  // og:image URLs always carry the UUID app id; reject junk before hitting the
+  // DB (a non-UUID would be a Postgres error -> 500).
+  if (!OG_APP_ID_RE.test(appId)) {
+    return error("Not found", 404);
+  }
   try {
     const { app } = await resolvePublicAppAccess(request, appId, {
       allowPrivateOwner: false,
@@ -2554,19 +2567,40 @@ export async function handleOgCard(
       return error("Not found", 404);
     }
 
-    let png: Uint8Array;
+    const r2 = createR2Service();
+
+    // 1. The rendered per-agent card (present once the agent has been
+    //    created-public / published / edited so the render hook has fired).
     try {
-      png = await createR2Service().fetchFile(ogCardKey(appId));
-    } catch {
-      return new Response(null, {
-        status: 302,
-        headers: { "Location": `/api/apps/${appId}/icon` },
+      const png = await r2.fetchFile(ogCardKey(appId));
+      return new Response(toResponseBody(png), {
+        headers: {
+          "Content-Type": "image/png",
+          "Cache-Control": "public, max-age=300",
+        },
       });
+    } catch { /* not rendered yet — fall through */ }
+
+    // 2. The agent's uploaded icon, if any.
+    for (const [ext, contentType] of OG_ICON_EXTS) {
+      try {
+        const bytes = await r2.fetchFile(`apps/${appId}/icon.${ext}`);
+        return new Response(toResponseBody(bytes), {
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": "public, max-age=300",
+          },
+        });
+      } catch { /* try next extension */ }
     }
 
-    return new Response(toResponseBody(png), {
+    // 3. Generic Galactic card — so og:image is never a broken link, even for
+    //    agents that pre-date the renderer and have no icon.
+    const base = getEnv("LAUNCH_WEB_BASE_URL") || "https://connectgalactic.com";
+    return new Response(null, {
+      status: 302,
       headers: {
-        "Content-Type": "image/png",
+        "Location": `${base}/og.png`,
         "Cache-Control": "public, max-age=300",
       },
     });
