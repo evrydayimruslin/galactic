@@ -4016,7 +4016,7 @@ export function LibraryFoundationPage(
                     {currentFolderId
                       ? (
                         <button
-                          className="library-card-menu-item"
+                          className="library-card-menu-item library-card-menu-danger"
                           onClick={() => {
                             setMenuFor(null);
                             handleMoveAgent(agent.id, null);
