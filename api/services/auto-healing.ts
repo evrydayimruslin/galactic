@@ -38,7 +38,9 @@ interface FailingFunction {
   common_error: string;
   error_samples: Array<{
     error_message: string;
-    input_args: unknown;
+    // Redacted to a type-shape (keys + value types, never values) so the raw
+    // end-user input never lands in the owner-readable app_health_events.error_sample.
+    input_shape: unknown;
     created_at: string;
   }>;
 }
@@ -167,6 +169,41 @@ export async function runAutoHealing(): Promise<AutoHealingReport> {
   return report;
 }
 
+// Reduce an arbitrary input value to a redacted TYPE-SHAPE — top-level keys and
+// value types, never the values themselves — so failing-call diagnostics can be
+// shown to the app owner without leaking the end-user's raw inputs. Depth- and
+// key-capped; fails safe to "unknown".
+function shapeOfValue(value: unknown, depth = 0): unknown {
+  try {
+    if (value === null) return "null";
+    if (value === undefined) return "undefined";
+    if (Array.isArray(value)) {
+      if (depth >= 2) return "array";
+      return {
+        _type: "array",
+        length: value.length,
+        of: value.length ? shapeOfValue(value[0], depth + 1) : "unknown",
+      };
+    }
+    if (typeof value === "object") {
+      if (depth >= 2) return "object";
+      const shape: Record<string, unknown> = {};
+      for (
+        const key of Object.keys(value as Record<string, unknown>).slice(0, 30)
+      ) {
+        shape[key] = shapeOfValue(
+          (value as Record<string, unknown>)[key],
+          depth + 1,
+        );
+      }
+      return shape;
+    }
+    return typeof value; // "string" | "number" | "boolean" | ...
+  } catch {
+    return "unknown";
+  }
+}
+
 // ============================================
 // STEP 1: DETECT FAILING FUNCTIONS
 // ============================================
@@ -203,7 +240,7 @@ async function detectFailingFunctions(
     total: number;
     failed: number;
     errors: Map<string, number>;
-    samples: Array<{ error_message: string; input_args: unknown; created_at: string }>;
+    samples: Array<{ error_message: string; input_shape: unknown; created_at: string }>;
   }>();
 
   for (const log of logs) {
@@ -230,7 +267,7 @@ async function detectFailingFunctions(
       if (entry.samples.length < 5) {
         entry.samples.push({
           error_message: errMsg,
-          input_args: log.input_args,
+          input_shape: shapeOfValue(log.input_args),
           created_at: log.created_at,
         });
       }

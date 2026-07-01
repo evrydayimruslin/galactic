@@ -150,7 +150,12 @@ export function buildMcpCallLogInsertPayload(
     method: entry.method,
     success: entry.success,
     duration_ms: entry.durationMs || null,
-    error_message: entry.errorMessage || null,
+    // Bounded: error_message is owner-readable (call log + gx.logs + common_error),
+    // and a developer controls its content (`throw new Error(...)`). Cap it so it
+    // can't be used as a high-bandwidth channel to echo raw user data back to the owner.
+    error_message: entry.errorMessage
+      ? String(entry.errorMessage).slice(0, 2000)
+      : null,
     source: entry.source || "direct",
     // Rich telemetry
     input_args: truncateForStorage(entry.inputArgs),

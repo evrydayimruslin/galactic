@@ -215,6 +215,10 @@ crons = [
 #   OPENROUTER_API_KEY
 #   DEEPSEEK_API_KEY
 #   BYOK_ENCRYPTION_KEY
+#   DATA_TENANT_SECRET — per-tenant proof signing secret for the ultralight-data
+#     worker. MUST be identical to the data worker's DATA_TENANT_SECRET and be a
+#     non-default value, or the data worker refuses to serve in production
+#     (fail-closed). See docs/DATA_WORKER_RELIGHT.md.
 #   AGENT_CALLER_SECRET — HMAC key for cross-Agent caller-context tokens (P5).
 #     MUST be a server-only secret; deliberately distinct from WORKER_SECRET
 #     (which is exposed inside the sandbox). Falls back to
