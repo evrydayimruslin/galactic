@@ -1,4 +1,4 @@
-import type { EnvSchemaEntry } from './env.ts';
+import type { EnvCredential, EnvSchemaEntry } from './env.ts';
 import { validateEnvVarKey } from './env.ts';
 import type { MCPJsonSchema, MCPTool, MCPToolAnnotations } from './mcp.ts';
 import type {
@@ -51,6 +51,26 @@ export interface AppManifest {
   env?: Record<string, ManifestEnvVar>;
   env_vars?: Record<string, ManifestEnvVar>;
   http?: ManifestHttpConfig;
+  // Outbound network allowlist. In Phase 2 this becomes default-deny: with
+  // net:fetch granted, the Agent's code may reach ONLY these hosts. Surfaced to
+  // the user before install, and the only destinations a vaulted per-user
+  // credential may be sent to.
+  network?: ManifestNetworkConfig;
+}
+
+export interface ManifestNetworkConfig {
+  allowed_destinations?: ManifestNetworkDestination[];
+}
+
+export interface ManifestNetworkDestination {
+  // Hostname the Agent may reach: a bare host ("api.openai.com"), a subdomain
+  // wildcard ("*.example.com"), optionally with a port ("imap.gmail.com:993").
+  // No scheme, path, or query. Matched case-insensitively.
+  host: string;
+  // Human label + reason shown to the user before install ("OpenAI API — used
+  // to generate taglines").
+  label?: string;
+  description?: string;
 }
 
 export interface ManifestExternalDependency {
@@ -275,6 +295,11 @@ export interface ManifestEnvVar {
   input?: EnvSchemaEntry['input'];
   placeholder?: string;
   help?: string;
+  // Marks this secret as a CREDENTIAL: the platform attaches it to outbound
+  // requests to `credential.destination` in the parent isolate and never
+  // injects the plaintext into the sandbox (Phase 3 vault). destination must be
+  // declared in network.allowed_destinations.
+  credential?: EnvCredential;
 }
 
 export interface ManifestValidationResult {
@@ -296,6 +321,78 @@ export function humanizeEnvVarKey(key: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+const DEST_LABEL_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+
+// A destination host for the outbound allowlist / credential binding: a bare
+// hostname, optionally a "*." subdomain wildcard, optionally a ":port". No
+// scheme, path, or query. Returns the canonical (lowercased) host, or null.
+function normalizeDestinationHost(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim().toLowerCase();
+  if (
+    !raw || raw.includes('://') || raw.includes('/') || raw.includes('?') ||
+    raw.includes(' ') || raw.includes('@')
+  ) {
+    return null;
+  }
+
+  let host = raw;
+  let port = '';
+  const colon = raw.indexOf(':');
+  if (colon !== -1) {
+    host = raw.slice(0, colon);
+    port = raw.slice(colon + 1);
+    const portNum = Number(port);
+    if (!/^\d{1,5}$/.test(port) || portNum < 1 || portNum > 65535) return null;
+  }
+
+  const bare = host.startsWith('*.') ? host.slice(2) : host;
+  if (!bare || !bare.includes('.')) return null;
+  if (!bare.split('.').every((label) => DEST_LABEL_RE.test(label))) return null;
+
+  return port ? `${host}:${port}` : host;
+}
+
+function normalizeEnvCredential(value: unknown): EnvCredential | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const destination = normalizeDestinationHost(raw.destination);
+  const inject = raw.inject;
+  if (!destination || !inject || typeof inject !== 'object') return undefined;
+  const i = inject as Record<string, unknown>;
+
+  if (i.as === 'bearer') {
+    return { destination, inject: { as: 'bearer' } };
+  }
+  if (i.as === 'header' && typeof i.name === 'string' && i.name.trim()) {
+    return {
+      destination,
+      inject: {
+        as: 'header',
+        name: i.name.trim(),
+        prefix: typeof i.prefix === 'string' ? i.prefix : undefined,
+      },
+    };
+  }
+  if (i.as === 'basic') {
+    return {
+      destination,
+      inject: {
+        as: 'basic',
+        username_env: typeof i.username_env === 'string'
+          ? i.username_env
+          : undefined,
+      },
+    };
+  }
+  if (i.as === 'query' && typeof i.name === 'string' && i.name.trim()) {
+    return { destination, inject: { as: 'query', name: i.name.trim() } };
+  }
+  return undefined;
 }
 
 function normalizeEnvScope(value: unknown): EnvSchemaEntry['scope'] {
@@ -373,6 +470,7 @@ function normalizeManifestEnvVarEntry(
     input: normalizeEnvInput(raw.input, key, description),
     placeholder: typeof raw.placeholder === 'string' ? raw.placeholder : undefined,
     help: typeof raw.help === 'string' ? raw.help : undefined,
+    credential: normalizeEnvCredential(raw.credential),
   };
 }
 
@@ -421,6 +519,7 @@ export function manifestEnvVarsToEnvSchema(
       input: normalizeEnvInput(value.input, key, value.description),
       placeholder: value.placeholder,
       help: value.help,
+      credential: value.credential,
     };
   }
   return schema;
@@ -452,6 +551,7 @@ export function normalizeEnvSchema(
       input: normalizeEnvInput(entry.input, key, description),
       placeholder: typeof entry.placeholder === 'string' ? entry.placeholder : undefined,
       help: typeof entry.help === 'string' ? entry.help : undefined,
+      credential: normalizeEnvCredential(entry.credential),
     };
   }
 
@@ -2495,6 +2595,161 @@ function validateManifestAccessPolicy(
   }
 }
 
+// Validates manifest.network and normalizes allowed_destinations in place to the
+// canonical object form. Returns the set of declared (canonical) hosts so the
+// env-var loop can cross-check credential.destination against it.
+function validateManifestNetwork(
+  value: unknown,
+  errors: ManifestValidationError[],
+): Set<string> {
+  const hosts = new Set<string>();
+  if (value === undefined) return hosts;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    errors.push({ path: 'network', message: 'network must be an object' });
+    return hosts;
+  }
+
+  const net = value as Record<string, unknown>;
+  if (net.allowed_destinations === undefined) return hosts;
+  if (!Array.isArray(net.allowed_destinations)) {
+    errors.push({
+      path: 'network.allowed_destinations',
+      message: 'allowed_destinations must be an array',
+    });
+    return hosts;
+  }
+
+  const normalized: ManifestNetworkDestination[] = [];
+  net.allowed_destinations.forEach((entry, index) => {
+    const path = `network.allowed_destinations.${index}`;
+    const raw = typeof entry === 'string' ? { host: entry } : entry;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      errors.push({
+        path,
+        message: 'destination must be a host string or an object with a host',
+      });
+      return;
+    }
+    const r = raw as Record<string, unknown>;
+    const host = normalizeDestinationHost(r.host);
+    if (!host) {
+      errors.push({
+        path: `${path}.host`,
+        message:
+          'host must be a bare hostname (optionally "*.domain" or ":port"), with no scheme, path, or query',
+      });
+      return;
+    }
+    if (hosts.has(host)) {
+      errors.push({ path: `${path}.host`, message: `duplicate destination "${host}"` });
+      return;
+    }
+    if (r.label !== undefined && typeof r.label !== 'string') {
+      errors.push({ path: `${path}.label`, message: 'label must be a string' });
+    }
+    if (r.description !== undefined && typeof r.description !== 'string') {
+      errors.push({
+        path: `${path}.description`,
+        message: 'description must be a string',
+      });
+    }
+    hosts.add(host);
+    normalized.push({
+      host,
+      label: typeof r.label === 'string' ? r.label : undefined,
+      description: typeof r.description === 'string' ? r.description : undefined,
+    });
+  });
+
+  net.allowed_destinations = normalized;
+  return hosts;
+}
+
+// Validates an env var's optional credential binding. destination must be an
+// exact host declared in network.allowed_destinations (declare the specific host
+// even if you also declare a wildcard), and inject must be a supported shape.
+function validateEnvCredential(
+  value: unknown,
+  path: string,
+  allowedHosts: Set<string>,
+  errors: ManifestValidationError[],
+): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    errors.push({ path, message: 'credential must be an object' });
+    return;
+  }
+  const c = value as Record<string, unknown>;
+
+  const destination = normalizeDestinationHost(c.destination);
+  if (!destination) {
+    errors.push({
+      path: `${path}.destination`,
+      message: 'destination must be a bare hostname (no scheme or path)',
+    });
+  } else if (!allowedHosts.has(destination)) {
+    errors.push({
+      path: `${path}.destination`,
+      message:
+        `destination "${destination}" must be declared in network.allowed_destinations`,
+    });
+  }
+
+  if (!c.inject || typeof c.inject !== 'object' || Array.isArray(c.inject)) {
+    errors.push({
+      path: `${path}.inject`,
+      message: 'inject is required and must be an object',
+    });
+    return;
+  }
+  const inject = c.inject as Record<string, unknown>;
+  switch (inject.as) {
+    case 'bearer':
+      break;
+    case 'header':
+      if (
+        typeof inject.name !== 'string' ||
+        !HTTP_HEADER_NAME_RE.test(inject.name.trim())
+      ) {
+        errors.push({
+          path: `${path}.inject.name`,
+          message: 'header inject requires a valid header name',
+        });
+      }
+      if (inject.prefix !== undefined && typeof inject.prefix !== 'string') {
+        errors.push({
+          path: `${path}.inject.prefix`,
+          message: 'prefix must be a string',
+        });
+      }
+      break;
+    case 'basic':
+      if (
+        inject.username_env !== undefined &&
+        typeof inject.username_env !== 'string'
+      ) {
+        errors.push({
+          path: `${path}.inject.username_env`,
+          message: 'username_env must be a string',
+        });
+      }
+      break;
+    case 'query':
+      if (typeof inject.name !== 'string' || !inject.name.trim()) {
+        errors.push({
+          path: `${path}.inject.name`,
+          message: 'query inject requires a name',
+        });
+      }
+      break;
+    default:
+      errors.push({
+        path: `${path}.inject.as`,
+        message: 'inject.as must be one of: bearer, header, basic, query',
+      });
+  }
+}
+
 export function validateManifest(input: unknown): ManifestValidationResult {
   const errors: ManifestValidationError[] = [];
   const warnings: string[] = [];
@@ -2749,6 +3004,7 @@ export function validateManifest(input: unknown): ManifestValidationResult {
     errors,
     warnings,
   );
+  const allowedNetworkHosts = validateManifestNetwork(manifest.network, errors);
 
   const rawEnvVars = {
     ...((manifest.env && typeof manifest.env === 'object' &&
@@ -2861,6 +3117,13 @@ export function validateManifest(input: unknown): ManifestValidationResult {
         message: 'help must be a string',
       });
     }
+
+    validateEnvCredential(
+      envVar.credential,
+      `env_vars.${key}.credential`,
+      allowedNetworkHosts,
+      errors,
+    );
   }
 
   if (errors.length > 0) {

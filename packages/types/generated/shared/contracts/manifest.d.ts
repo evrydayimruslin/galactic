@@ -1,4 +1,4 @@
-import type { EnvSchemaEntry } from './env.ts';
+import type { EnvCredential, EnvSchemaEntry } from './env.ts';
 import type { MCPTool, MCPToolAnnotations } from './mcp.ts';
 import type { RoutineDeclaration } from './routine.ts';
 import type { WidgetContextSourceDeclaration, WidgetDeclaration, WidgetGenerationHints } from './widget.ts';
@@ -26,6 +26,15 @@ export interface AppManifest {
     env?: Record<string, ManifestEnvVar>;
     env_vars?: Record<string, ManifestEnvVar>;
     http?: ManifestHttpConfig;
+    network?: ManifestNetworkConfig;
+}
+export interface ManifestNetworkConfig {
+    allowed_destinations?: ManifestNetworkDestination[];
+}
+export interface ManifestNetworkDestination {
+    host: string;
+    label?: string;
+    description?: string;
 }
 export interface ManifestExternalDependency {
     app: string;
@@ -190,6 +199,7 @@ export interface ManifestEnvVar {
     input?: EnvSchemaEntry['input'];
     placeholder?: string;
     help?: string;
+    credential?: EnvCredential;
 }
 export interface ManifestValidationResult {
     valid: boolean;

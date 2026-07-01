@@ -13,6 +13,25 @@ export interface EnvSchemaEntry {
   input?: 'text' | 'password' | 'email' | 'number' | 'url' | 'textarea';
   placeholder?: string;
   help?: string;
+  // When set, this secret is a CREDENTIAL the platform uses on the Agent's
+  // behalf against a declared destination — the plaintext is never injected
+  // into the sandbox (the Phase 3 vault). See EnvCredential.
+  credential?: EnvCredential;
+}
+
+// How the platform attaches a vaulted credential to an outbound request. The
+// secret value is applied in the parent isolate and never returned to app code.
+export type EnvCredentialInjection =
+  | { as: 'bearer' }
+  | { as: 'header'; name: string; prefix?: string }
+  | { as: 'basic'; username_env?: string }
+  | { as: 'query'; name: string };
+
+export interface EnvCredential {
+  // Host the credential may be sent to. MUST match a
+  // network.allowed_destinations host declared in the app manifest.
+  destination: string;
+  inject: EnvCredentialInjection;
 }
 
 export const ENV_VAR_LIMITS: EnvVarLimits = {
