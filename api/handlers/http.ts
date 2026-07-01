@@ -15,6 +15,7 @@ import {
 } from "../services/runtime-ai.ts";
 import { resolveFunctionInferenceOverride } from "../services/function-inference-overrides.ts";
 import { checkAndIncrementWeeklyCalls } from "../services/weekly-calls.ts";
+import { getManifestAllowedDestinations } from "../services/trust.ts";
 import { executeGpuFunction } from "../services/gpu/executor.ts";
 import { acquireGpuSlot } from "../services/gpu/concurrency.ts";
 import { buildGpuNotReadyMessage } from "../services/gpu/status.ts";
@@ -698,6 +699,7 @@ export async function handleHttpEndpoint(
         executionId: crypto.randomUUID(),
         code,
         permissions: httpPermissions,
+        allowedDestinations: getManifestAllowedDestinations(app.manifest),
         userApiKey: runtimeAI.userApiKey,
         aiUnavailableReason: runtimeAI.unavailableReason,
         aiRoute: runtimeAI.route,

@@ -81,6 +81,7 @@ import {
   resolveStrictManifestPermissions,
   SupabaseConfigMigrationRequiredError,
 } from "../services/app-runtime-resources.ts";
+import { getManifestAllowedDestinations } from "../services/trust.ts";
 import {
   ANONYMOUS_USER_ID,
   callerHasAppAccess,
@@ -2796,6 +2797,7 @@ async function executeAppFunction(
       // only to satisfy RuntimeConfig until the legacy Deno path is removed.
       code: "",
       permissions,
+      allowedDestinations: getManifestAllowedDestinations(app.manifest),
       userApiKey: runtimeAI.userApiKey,
       aiUnavailableReason: runtimeAI.unavailableReason,
       aiRoute: runtimeAI.route,

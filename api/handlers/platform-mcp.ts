@@ -197,6 +197,7 @@ import {
   buildVersionMetadataEntry,
   buildVersionTrustMetadata,
   generateGpuManifest,
+  getManifestAllowedDestinations,
 } from "../services/trust.ts";
 import {
   type BundleAttestation,
@@ -8319,6 +8320,26 @@ async function executeTest(
     });
   }
 
+  // gx.test enforces the SAME default-deny egress as production: pull the
+  // declared allowlist from the test bundle's manifest.json so testing a fetch/
+  // net agent requires declaring network.allowed_destinations, exactly like a
+  // published run. (The tester runs their OWN code as themselves — no other
+  // user's data is in scope — but keeping parity avoids "works in test, blocked
+  // in prod" surprises.)
+  let testAllowedDestinations: string[] = [];
+  const manifestFile = files.find((f) =>
+    f.path === "manifest.json" || f.path.endsWith("/manifest.json")
+  );
+  if (manifestFile) {
+    try {
+      testAllowedDestinations = getManifestAllowedDestinations(
+        JSON.parse(manifestFile.content),
+      );
+    } catch {
+      // Invalid/absent manifest JSON — no declared destinations (default-deny).
+    }
+  }
+
   // Execute in Dynamic Worker sandbox — avoids `new Function()` restriction on CF Workers
   const { executeInDynamicSandbox } = await import(
     "../runtime/dynamic-sandbox.ts"
@@ -8346,6 +8367,7 @@ async function executeTest(
         executionId: crypto.randomUUID(),
         code: bundledCode,
         permissions: ["memory:read", "memory:write", "net:fetch"],
+        allowedDestinations: testAllowedDestinations,
         userApiKey: null,
         user: user,
         appDataService: appDataService,
@@ -9391,14 +9413,11 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
   }
 
   const detectedPerms: string[] = permissions || [];
-  if (
-    !detectedPerms.includes("net:fetch") &&
-    (description.toLowerCase().includes("api") ||
-      description.toLowerCase().includes("fetch") ||
-      description.toLowerCase().includes("http"))
-  ) {
-    detectedPerms.push("net:fetch");
-  }
+  // net:fetch is no longer inferred from description keywords. Outbound access
+  // is granted by declaring network.allowed_destinations in the manifest
+  // (default-deny egress, Phase 2): the sandbox enables globalOutbound from that
+  // declaration, so a silent keyword-based grant would be misleading and would
+  // grant a capability the user never saw declared.
   if (
     !detectedPerms.includes("ai:call") &&
     (description.toLowerCase().includes("ai") ||

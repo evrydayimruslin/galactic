@@ -5,11 +5,14 @@
 
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { connect } from 'cloudflare:sockets';
-import { isBlockedHost } from './outbound-policy.ts';
+import { hostInAllowlist, isBlockedHost } from './outbound-policy.ts';
 
 interface NetworkBindingProps {
   userId: string;
   appId: string;
+  // Default-deny destination allowlist (manifest network allowed_destinations).
+  // IMAP/SMTP entries carry a port, e.g. "imap.gmail.com:993".
+  allowedDestinations: string[];
 }
 
 interface FetchedEmail {
@@ -31,11 +34,22 @@ const dec = new TextDecoder();
 // egress policy (outbound-policy.ts) so the IMAP/SMTP socket path gets the SAME
 // coverage as raw fetch — loopback/RFC1918/CGNAT/link-local/metadata + IPv6 +
 // integer/hex encodings — instead of the old weaker prefix check.
-function validateTarget(hostname: string, port: number): void {
+function validateTarget(
+  hostname: string,
+  port: number,
+  allowlist: readonly string[],
+): void {
   if (isBlockedHost(hostname)) {
     throw new Error("Connections to internal/private networks are not allowed");
   }
   if (port === 25) throw new Error("Port 25 blocked. Use 465 or 587.");
+  // Default-deny: the host:port must be declared in the app's manifest
+  // network.allowed_destinations (e.g. "imap.gmail.com:993").
+  if (!hostInAllowlist(hostname, String(port), allowlist)) {
+    throw new Error(
+      `Destination ${hostname}:${port} is not in the app's declared network.allowed_destinations`,
+    );
+  }
 }
 
 // ── IMAP Protocol Helpers ──
@@ -163,7 +177,7 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
     host: string, port: number, user: string, pass: string,
     lastUid: number, businessEmail: string, processedFlag: string, limit: number,
   ): Promise<{ emails: FetchedEmail[]; maxUid: number; hasMore: boolean }> {
-    validateTarget(host, port);
+    validateTarget(host, port, this.ctx.props.allowedDestinations ?? []);
     const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
     const lr = new LineReader(socket.readable);
     const writer = socket.writable.getWriter();
@@ -279,7 +293,7 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
     host: string, port: number, user: string, pass: string,
     from: string, fromName: string, to: string, subject: string, body: string, inReplyTo?: string,
   ): Promise<{ success: boolean; error?: string }> {
-    validateTarget(host, port);
+    validateTarget(host, port, this.ctx.props.allowedDestinations ?? []);
     const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
     const lr = new LineReader(socket.readable);
     const writer = socket.writable.getWriter();

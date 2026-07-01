@@ -36,6 +36,9 @@ export interface RuntimeConfig {
   executionId: string;
   code: string;
   permissions: string[];
+  // Default-deny egress allowlist (manifest network.allowed_destinations as
+  // canonical hosts). Undefined is treated as [] in the sandbox — no outbound.
+  allowedDestinations?: string[];
   userApiKey: string | null;
   aiRoute?: RuntimeAIRoute | null;
   // Why env.AI is unavailable when aiRoute is null (balance gate, no user,
