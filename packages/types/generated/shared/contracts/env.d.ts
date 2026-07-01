@@ -12,6 +12,24 @@ export interface EnvSchemaEntry {
     input?: 'text' | 'password' | 'email' | 'number' | 'url' | 'textarea';
     placeholder?: string;
     help?: string;
+    credential?: EnvCredential;
+}
+export type EnvCredentialInjection = {
+    as: 'bearer';
+} | {
+    as: 'header';
+    name: string;
+    prefix?: string;
+} | {
+    as: 'basic';
+    username_env?: string;
+} | {
+    as: 'query';
+    name: string;
+};
+export interface EnvCredential {
+    destination: string;
+    inject: EnvCredentialInjection;
 }
 export declare const ENV_VAR_LIMITS: EnvVarLimits;
 export declare function validateEnvVarKey(key: string): {
