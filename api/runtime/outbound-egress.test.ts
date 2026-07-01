@@ -228,3 +228,69 @@ Deno.test("guardedFetch: redirect loops terminate at the hop cap", async () => {
   assert(resp.status >= 300 && resp.status < 400);
   assertEquals(calls, 4, "should fetch initial + maxRedirects hops then stop");
 });
+
+// ── Default-deny destination allowlist (Phase 2) ────────────────────────────
+
+Deno.test("egress allowlist: [] blocks everything, even public hosts (default-deny)", () => {
+  for (const url of ["https://example.com", "https://api.openai.com/v1/chat"]) {
+    assertEquals(
+      evaluateOutbound(url, []).allowed,
+      false,
+      `expected blocked under empty allowlist: ${url}`,
+    );
+  }
+});
+
+Deno.test("egress allowlist: only declared hosts are reachable (exfil to attacker blocked)", () => {
+  const allow = ["api.openai.com", "*.example.com", "imap.gmail.com:993"];
+  assertEquals(evaluateOutbound("https://api.openai.com/v1", allow).allowed, true);
+  assertEquals(evaluateOutbound("https://data.example.com/x", allow).allowed, true);
+  // The exfiltration path — an undeclared attacker host — is now blocked.
+  assertEquals(
+    evaluateOutbound("https://attacker.tld/collect", allow).allowed,
+    false,
+  );
+  // Wildcard matches subdomains only, not the apex or look-alikes.
+  assertEquals(evaluateOutbound("https://example.com", allow).allowed, false);
+  assertEquals(
+    evaluateOutbound("https://example.com.evil.tld", allow).allowed,
+    false,
+  );
+});
+
+Deno.test("egress allowlist: SSRF block still applies even to a declared private host", () => {
+  assertEquals(
+    evaluateOutbound("http://169.254.169.254/latest/meta-data", [
+      "169.254.169.254",
+    ]).allowed,
+    false,
+  );
+});
+
+Deno.test("egress allowlist: a port-bearing entry requires an exact port match", () => {
+  // "imap.gmail.com:993" is for the net.* socket path; a port-less fetch to the
+  // same host does NOT match it.
+  assertEquals(
+    evaluateOutbound("https://imap.gmail.com/x", ["imap.gmail.com:993"]).allowed,
+    false,
+  );
+});
+
+Deno.test("egress allowlist: null/undefined = SSRF-only (legacy callers unaffected)", () => {
+  assertEquals(evaluateOutbound("https://attacker.tld", null).allowed, true);
+  assertEquals(evaluateOutbound("https://attacker.tld").allowed, true);
+});
+
+Deno.test("egress allowlist: guardedFetch enforces the allowlist and 403s undeclared hosts", async () => {
+  let fetched = 0;
+  const resp = await guardedFetch(
+    new Request("https://attacker.tld/collect", { method: "POST", body: "x" }),
+    () => {
+      fetched++;
+      return Promise.resolve(new Response("ok"));
+    },
+    { allowlist: ["api.openai.com"] },
+  );
+  assertEquals(resp.status, 403);
+  assertEquals(fetched, 0, "blocked request must never reach fetchImpl");
+});

@@ -202,6 +202,29 @@ export function getManifestPermissions(manifest: AppManifest | string | null | u
   return [...new Set(parsed.permissions.filter((permission) => typeof permission === "string"))];
 }
 
+// Canonical outbound hosts an app has declared in network.allowed_destinations.
+// Tolerates the pre-Phase-1 (no network) and string-form manifests; returns the
+// deduped, lowercased host list used as the sandbox egress allowlist.
+export function getManifestAllowedDestinations(
+  manifest: AppManifest | string | null | undefined,
+): string[] {
+  const parsed = parseAppManifest(manifest);
+  const dests = parsed?.network?.allowed_destinations;
+  if (!Array.isArray(dests)) return [];
+  const hosts: string[] = [];
+  for (const dest of dests) {
+    const host = typeof dest === "string"
+      ? dest
+      : (dest && typeof dest === "object"
+        ? (dest as { host?: unknown }).host
+        : undefined);
+    if (typeof host === "string" && host.trim()) {
+      hosts.push(host.trim().toLowerCase());
+    }
+  }
+  return [...new Set(hosts)];
+}
+
 export function getManifestEntrypoints(manifest: AppManifest | string | null | undefined): string[] {
   const parsed = parseAppManifest(manifest);
   const entrypoints: string[] = [];

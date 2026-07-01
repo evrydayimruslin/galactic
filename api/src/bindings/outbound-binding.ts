@@ -16,12 +16,16 @@ import { guardedFetch } from "./outbound-policy.ts";
 interface OutboundBindingProps {
   appId: string;
   userId: string;
+  // Default-deny destination allowlist (the app's manifest network
+  // allowed_destinations). [] = no outbound reachable.
+  allowedDestinations: string[];
 }
 
 export class OutboundBinding
   extends WorkerEntrypoint<unknown, OutboundBindingProps> {
   override fetch(request: Request): Promise<Response> {
     return guardedFetch(request, fetch, {
+      allowlist: this.ctx.props.allowedDestinations ?? [],
       // Only the host + reason are logged — never the full URL, which can carry
       // tenant data in the path/query.
       onBlock: (reason, host) => {

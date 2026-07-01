@@ -83,6 +83,7 @@ interface DynamicWorkerEntrypointExports {
     props: {
       userId: string;
       appId: string;
+      allowedDestinations: string[];
     };
   }): unknown;
   EventsBinding(input: {
@@ -94,6 +95,7 @@ interface DynamicWorkerEntrypointExports {
     props: {
       appId: string;
       userId: string;
+      allowedDestinations: string[];
     };
   }): unknown;
 }
@@ -540,12 +542,22 @@ export default {
     }
 
     // Network (net:connect): IMAP/SMTP sessions run entirely host-side in the
+    // Default-deny egress allowlist from the manifest (FAIL CLOSED: undefined
+    // config => [] => nothing reachable). Shared by the NET (IMAP/SMTP) binding
+    // and the raw-fetch OutboundBinding; a non-empty allowlist also enables
+    // globalOutbound even without an explicit net:fetch permission.
+    const allowedDestinations = config.allowedDestinations ?? [];
+
     // NetworkBinding via cloudflare:sockets — no worker secret in app code.
     if (
       config.permissions.includes("net:connect") && ctx?.exports?.NetworkBinding
     ) {
       bindings.NET = ctx.exports.NetworkBinding({
-        props: { userId: config.userId, appId: config.appId },
+        props: {
+          userId: config.userId,
+          appId: config.appId,
+          allowedDestinations,
+        },
       });
     }
 
@@ -563,7 +575,8 @@ export default {
     // 5. Create Dynamic Worker
     const hasOutboundNetwork = config.permissions.includes("net:connect") ||
       config.permissions.includes("net:fetch") ||
-      hasInterAppCall;
+      hasInterAppCall ||
+      allowedDestinations.length > 0;
     const loadConfig: Parameters<typeof loader.load>[0] = {
       compatibilityDate: "2026-03-01",
       mainModule: "wrapper.js",
@@ -594,7 +607,11 @@ export default {
     // fetch, so they are unaffected by this.)
     if (hasOutboundNetwork && ctx?.exports?.OutboundBinding) {
       loadConfig.globalOutbound = ctx.exports.OutboundBinding({
-        props: { appId: config.appId, userId: config.userId },
+        props: {
+          appId: config.appId,
+          userId: config.userId,
+          allowedDestinations,
+        },
       });
     }
     const worker = loader.load(loadConfig);

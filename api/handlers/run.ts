@@ -38,6 +38,7 @@ import {
   resolveStrictManifestPermissions,
   SupabaseConfigMigrationRequiredError,
 } from "../services/app-runtime-resources.ts";
+import { getManifestAllowedDestinations } from "../services/trust.ts";
 import { buildGpuStatusDiagnostics } from "../services/gpu/status.ts";
 import {
   callerHasAppAccess,
@@ -547,6 +548,7 @@ export async function handleRun(
         executionId: crypto.randomUUID(),
         code,
         permissions,
+        allowedDestinations: getManifestAllowedDestinations(app.manifest),
         userApiKey: runtimeAI.userApiKey,
         aiUnavailableReason: runtimeAI.unavailableReason,
         aiRoute: runtimeAI.route,

@@ -122,8 +122,52 @@ export function isBlockedHost(rawHost: string): boolean {
   return false;
 }
 
+// Match a request host (+ optional port) against the app's declared destination
+// allowlist. Entries are canonical hosts from the manifest: "host", "*.domain",
+// or "host:port". A port-less entry matches any port; a port-bearing entry
+// requires an exact port match. Exported so the IMAP/SMTP socket path
+// (network-binding.ts) shares one matcher with raw fetch.
+export function hostInAllowlist(
+  host: string,
+  port: string,
+  allowlist: readonly string[],
+): boolean {
+  let h = host.trim().toLowerCase();
+  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1); // IPv6 literal
+  if (h.length > 1 && h.endsWith(".")) h = h.slice(0, -1); // rooted FQDN
+  const p = String(port ?? "");
+
+  for (const raw of allowlist) {
+    const entry = raw.trim().toLowerCase();
+    if (!entry) continue;
+    let pattern = entry;
+    let patternPort = "";
+    const colon = entry.indexOf(":");
+    if (colon !== -1) {
+      pattern = entry.slice(0, colon);
+      patternPort = entry.slice(colon + 1);
+    }
+    if (patternPort && patternPort !== p) continue;
+    if (pattern.startsWith("*.")) {
+      const suffix = pattern.slice(1); // ".example.com"
+      if (h.length > suffix.length && h.endsWith(suffix)) return true;
+    } else if (h === pattern) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Pure policy — exported for exhaustive unit testing independent of the runtime.
-export function evaluateOutbound(rawUrl: string): OutboundVerdict {
+//
+// allowlist semantics (default-deny): when `allowlist` is an array (the sandbox
+// path — even []), the destination host MUST be declared or it is blocked; [] =
+// nothing reachable. `undefined`/`null` = no allowlist enforcement (legacy /
+// internal callers), SSRF checks only.
+export function evaluateOutbound(
+  rawUrl: string,
+  allowlist?: readonly string[] | null,
+): OutboundVerdict {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -135,6 +179,12 @@ export function evaluateOutbound(rawUrl: string): OutboundVerdict {
   }
   if (isBlockedHost(url.hostname)) {
     return { allowed: false, reason: `destination not allowed: ${url.hostname}` };
+  }
+  if (allowlist && !hostInAllowlist(url.hostname, url.port, allowlist)) {
+    return {
+      allowed: false,
+      reason: `destination not in allowlist: ${url.hostname}`,
+    };
   }
   return { allowed: true };
 }
@@ -156,6 +206,9 @@ function safeOrigin(rawUrl: string): string {
 
 export interface GuardedFetchOptions {
   maxRedirects?: number;
+  // Default-deny destination allowlist, re-checked on every redirect hop. See
+  // evaluateOutbound for the null-vs-[] semantics.
+  allowlist?: readonly string[] | null;
   onBlock?: (reason: string, host: string) => void;
 }
 
@@ -189,7 +242,7 @@ export async function guardedFetch(
   const startOrigin = safeOrigin(url);
 
   for (let hop = 0;; hop++) {
-    const verdict = evaluateOutbound(url);
+    const verdict = evaluateOutbound(url, options.allowlist);
     if (!verdict.allowed) {
       let host = "";
       try {

