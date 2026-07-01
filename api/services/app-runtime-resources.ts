@@ -1,5 +1,8 @@
 import type { App } from "../../shared/types/index.ts";
-import type { EnvSchemaEntry } from "../../shared/contracts/env.ts";
+import type {
+  EnvSchemaEntry,
+  ResolvedCredential,
+} from "../../shared/contracts/env.ts";
 import type { WidgetDependencyDeclaration } from "../../shared/contracts/widget.ts";
 import { getEnv } from "../lib/env.ts";
 import { buildAppSecretDiagnostics } from "./app-diagnostics.ts";
@@ -87,7 +90,13 @@ interface UserAppSecretRow {
 }
 
 export interface ResolvedAppRuntimeEnv {
+  // Universal (developer-owned) vars only. Injected into the sandbox as
+  // ultralight.env. Per-user secrets are NOT here — they are vaulted in
+  // `credentials` and never enter the sandbox (Phase 3).
   envVars: Record<string, string>;
+  // Per-user secrets, decrypted, keyed by env var name. Consumed HOST-SIDE only
+  // (the CredentialBinding / NET binding); never stringified into the sandbox.
+  credentials: Record<string, ResolvedCredential>;
   envSchema: Record<string, EnvSchemaEntry>;
   missingRequiredSecrets: string[];
 }
@@ -260,6 +269,16 @@ export async function resolveAppRuntimeEnvVars(
   const envVars = await resolveAppEnvVars(app, deps);
   const envSchema = resolveAppEnvSchema(app);
   const perUserEntries = getScopedEnvSchemaEntries(envSchema, "per_user");
+  // Per-user secrets are decrypted into this PARENT-SIDE map and NEVER merged
+  // into envVars (which is stringified into the sandbox). They reach app code
+  // only via host-side bindings that use them by key without returning the value.
+  const credentials: Record<string, ResolvedCredential> = {};
+  // Airtight invariant: a key declared per_user must NEVER appear in the sandbox
+  // env, even if an app-level env_vars default exists for it — per-user values
+  // are credentials, full stop.
+  for (const { key } of perUserEntries) {
+    delete envVars[key];
+  }
 
   if (perUserEntries.length > 0 && userId) {
     const supabaseUrl = deps?.supabaseUrl ?? getEnv("SUPABASE_URL");
@@ -283,7 +302,10 @@ export async function resolveAppRuntimeEnvVars(
 
       for (const secret of userSecrets) {
         try {
-          envVars[secret.key] = await decryptEnvVarFn(secret.value_encrypted);
+          credentials[secret.key] = {
+            value: await decryptEnvVarFn(secret.value_encrypted),
+            credential: envSchema[secret.key]?.credential,
+          };
         } catch (err) {
           logger.error("Failed to decrypt per-user secret", {
             app_id: app.id,
@@ -305,9 +327,9 @@ export async function resolveAppRuntimeEnvVars(
   const missingRequiredSecrets = perUserEntries
     .filter(({ entry }) => entry.required)
     .map(({ key }) => key)
-    .filter((key) => !envVars[key]);
+    .filter((key) => !credentials[key]);
 
-  return { envVars, envSchema, missingRequiredSecrets };
+  return { envVars, credentials, envSchema, missingRequiredSecrets };
 }
 
 export async function resolveAppSupabaseConfig(

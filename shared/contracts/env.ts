@@ -34,6 +34,14 @@ export interface EnvCredential {
   inject: EnvCredentialInjection;
 }
 
+// A per-user secret resolved for HOST-SIDE use: the decrypted value (kept in the
+// parent isolate — never injected into the sandbox) plus its optional credential
+// binding. Keyed by env var name in the runtime credentials map (Phase 3 vault).
+export interface ResolvedCredential {
+  value: string;
+  credential?: EnvCredential;
+}
+
 export const ENV_VAR_LIMITS: EnvVarLimits = {
   max_vars_per_app: 50,
   max_key_length: 64,

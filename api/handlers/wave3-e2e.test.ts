@@ -1469,7 +1469,11 @@ export async function echo(args = {}) {
           const mcpPayload = await parseJson(mcpResponse);
           const mcpResult = expectToolSuccess(mcpPayload);
           assertEquals(mcpResult.owner, "owner-secret-value");
-          assertEquals(mcpResult.user, "user-secret-value");
+          // Phase 3: the per-user secret is VAULTED — connected (the missing-
+          // secret gate cleared, so the call runs) and usable via the credential
+          // binding, but NOT readable from ultralight.env. Consistent across all
+          // three surfaces (parity preserved, now for the secure behavior).
+          assertEquals(mcpResult.user, null);
           assertEquals(mcpResult.probe, "mcp-after");
           assertEquals(mcpResult.caller, OWNER_EMAIL);
 
@@ -1492,7 +1496,7 @@ export async function echo(args = {}) {
           );
           assertEquals(
             (runPayload.result as JsonRecord).user,
-            "user-secret-value",
+            null,
           );
           assertEquals((runPayload.result as JsonRecord).probe, "run-after");
 
@@ -1510,7 +1514,7 @@ export async function echo(args = {}) {
           const httpPayload = await parseJson(httpResponse);
           assertEquals(httpResponse.status, 200);
           assertEquals(httpPayload.owner, "owner-secret-value");
-          assertEquals(httpPayload.user, "user-secret-value");
+          assertEquals(httpPayload.user, null);
           assertEquals(httpPayload.probe, "http-after");
           assertEquals(httpPayload.requestPath, "/inspect");
         },

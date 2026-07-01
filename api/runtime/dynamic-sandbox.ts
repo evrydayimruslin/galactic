@@ -12,6 +12,7 @@
 // By the time app.js captures globalThis.ultralight, the SDK is ready.
 
 import type { ExecutionResult, RuntimeConfig } from "./sandbox.ts";
+import type { ResolvedCredential } from "../../shared/contracts/env.ts";
 import { consumeAiSpend } from "../services/ai-spend-tracker.ts";
 import { debitCloudOperation } from "../services/cloud-usage.ts";
 import { mintSandboxAuthToken } from "../services/sandbox-actor.ts";
@@ -96,6 +97,14 @@ interface DynamicWorkerEntrypointExports {
       appId: string;
       userId: string;
       allowedDestinations: string[];
+    };
+  }): unknown;
+  CredentialBinding(input: {
+    props: {
+      appId: string;
+      userId: string;
+      allowedDestinations: string[];
+      credentials: Record<string, ResolvedCredential>;
     };
   }): unknown;
 }
@@ -365,6 +374,17 @@ globalThis.ultralight = {
     });
     return api;
   },
+  // Authenticated fetch (Phase 3 vault): attach a vaulted per-user credential to
+  // an outbound request BY KEY. The secret value is applied host-side in the
+  // parent isolate — app code never receives it — and only reaches the
+  // credential's declared destination. Returns the Response.
+  async fetch(credentialKey, url, init) {
+    var e = globalThis.__rpcEnv;
+    if (!e || !e.CREDENTIALS) {
+      throw new Error('No vaulted credentials are configured for this Agent.');
+    }
+    return await e.CREDENTIALS.authenticatedFetch(credentialKey, url, init || {});
+  },
   // net:connect — high-level protocol methods run host-side in the NET RPC
   // binding (cloudflare:sockets). No worker secret is exposed to app code.
   net: ${
@@ -611,6 +631,23 @@ export default {
           appId: config.appId,
           userId: config.userId,
           allowedDestinations,
+        },
+      });
+    }
+    // Phase 3 credential vault: per-user secrets never enter the sandbox. This
+    // parent-side binding attaches a vaulted secret to an outbound request BY
+    // KEY (app names it, never sees the value) and forwards via guardedFetch.
+    // Added to `bindings` (loadConfig.env) before load below.
+    if (
+      config.credentials && Object.keys(config.credentials).length > 0 &&
+      ctx?.exports?.CredentialBinding
+    ) {
+      bindings.CREDENTIALS = ctx.exports.CredentialBinding({
+        props: {
+          appId: config.appId,
+          userId: config.userId,
+          allowedDestinations,
+          credentials: config.credentials,
         },
       });
     }

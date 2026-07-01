@@ -31,6 +31,10 @@ export interface EnvCredential {
     destination: string;
     inject: EnvCredentialInjection;
 }
+export interface ResolvedCredential {
+    value: string;
+    credential?: EnvCredential;
+}
 export declare const ENV_VAR_LIMITS: EnvVarLimits;
 export declare function validateEnvVarKey(key: string): {
     valid: boolean;

@@ -24,7 +24,7 @@ function installSandboxHarness(): {
   restore: () => void;
 } {
   const captured: CapturedLoad = { setup: "", envKeys: [] };
-  const constructed = { events: false, net: false };
+  const constructed = { events: false, net: false, cred: false };
 
   const prevEnv = globalThis.__env;
   const prevCtx = globalThis.__ctx;
@@ -85,6 +85,11 @@ function installSandboxHarness(): {
         remove: () => Promise.resolve(),
         list: () => Promise.resolve([]),
       }),
+      // deno-lint-ignore no-explicit-any
+      CredentialBinding: (_input: any) => {
+        constructed.cred = true;
+        return { authenticatedFetch: () => Promise.resolve(new Response("ok")) };
+      },
     },
     waitUntil: (p: Promise<unknown>) => {
       p.catch(() => {});
@@ -188,6 +193,56 @@ Deno.test("dynamic sandbox: emit + net route through host-side RPC bindings", as
     );
     assert(harness.constructed.events, "EventsBinding was not constructed");
     assert(harness.constructed.net, "NetworkBinding was not constructed");
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("dynamic sandbox: per-user credential values never enter the sandbox source (Phase 3 vault)", async () => {
+  const harness = installSandboxHarness();
+  try {
+    const PER_USER = "TOPSECRET_PER_USER_VALUE_9x2q";
+    const config = {
+      ...baseConfig(),
+      permissions: ["net:fetch"],
+      envVars: { UNIVERSAL_VAR: "safe-universal-value" },
+      allowedDestinations: ["api.openai.com"],
+      credentials: {
+        OPENAI_KEY: {
+          value: PER_USER,
+          credential: {
+            destination: "api.openai.com",
+            inject: { as: "bearer" },
+          },
+        },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as unknown as RuntimeConfig;
+
+    const result = await executeInDynamicSandbox(config, "noop", []);
+    assertEquals(result.success, true);
+
+    // Headline Phase 3 guarantee: the per-user secret VALUE is absent from the
+    // sandbox source — not in ultralight.env, not anywhere.
+    assert(
+      !harness.captured.setup.includes(PER_USER),
+      "per-user credential value leaked into sandbox setup source",
+    );
+    // Universal (developer-owned) vars ARE still injected as ultralight.env.
+    assert(
+      harness.captured.setup.includes("safe-universal-value"),
+      "universal env var was not injected into the sandbox",
+    );
+    // The credential is reachable only via the host-side CredentialBinding.
+    assert(
+      harness.captured.envKeys.includes("CREDENTIALS"),
+      "CredentialBinding not passed to the loaded isolate",
+    );
+    assert(harness.constructed.cred, "CredentialBinding was not constructed");
+    assert(
+      harness.captured.setup.includes("e.CREDENTIALS.authenticatedFetch"),
+      "ultralight.fetch does not route through the CredentialBinding",
+    );
   } finally {
     harness.restore();
   }

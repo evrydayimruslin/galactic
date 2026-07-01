@@ -407,7 +407,7 @@ export async function handleRun(
       );
     }
 
-    const { envVars, missingRequiredSecrets } = envResolution;
+    const { envVars, credentials, missingRequiredSecrets } = envResolution;
     if (missingRequiredSecrets.length > 0) {
       return json(
         {
@@ -560,6 +560,7 @@ export async function handleRun(
           call: (request: AIRequest, apiKey: string) => Promise<AIResponse>;
         },
         envVars,
+        credentials,
         supabase: supabaseConfig,
         baseUrl,
         authToken: caller.authToken,
