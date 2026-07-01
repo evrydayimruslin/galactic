@@ -81,7 +81,7 @@ Deno.test("app runtime resources: entry code fetch probes supported files and ca
   assertEquals(cached, "export const ok = true;");
 });
 
-Deno.test("app runtime resources: runtime env merges per-user secrets over universal env vars", async () => {
+Deno.test("app runtime resources: per-user secrets are vaulted in credentials, never in the sandbox env (Phase 3)", async () => {
   const fetchCalls: string[] = [];
 
   const result = await resolveAppRuntimeEnvVars(
@@ -123,10 +123,15 @@ Deno.test("app runtime resources: runtime env merges per-user secrets over unive
   assertEquals(fetchCalls, [
     "https://supabase.example/rest/v1/user_app_secrets?user_id=eq.user-123&app_id=eq.app-123&select=key,value_encrypted",
   ]);
+  // Sandbox env holds ONLY universal (developer) vars. SHARED_TOKEN is declared
+  // per_user, so even its app-level default is excluded — no per-user value here.
   assertEquals(result.envVars, {
     APP_ONLY: "app:enc-app-only",
-    SHARED_TOKEN: "user:enc-user-override",
-    USER_TOKEN: "user:enc-user-token",
+  });
+  // The user's per-user secrets are vaulted parent-side, keyed by name.
+  assertEquals(result.credentials, {
+    USER_TOKEN: { value: "user:enc-user-token", credential: undefined },
+    SHARED_TOKEN: { value: "user:enc-user-override", credential: undefined },
   });
   assertEquals(result.missingRequiredSecrets, []);
 });

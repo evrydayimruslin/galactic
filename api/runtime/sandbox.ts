@@ -8,6 +8,7 @@ import type {
 } from "../../shared/types/index.ts";
 import { formatLight } from "../../shared/types/index.ts";
 import type { AIRequest, AIResponse } from "../../shared/contracts/ai.ts";
+import type { ResolvedCredential } from "../../shared/contracts/env.ts";
 import type { BillingConfig } from "../services/billing-config.ts";
 import type { D1DataService } from "../services/d1-data.ts";
 import type { D1TestFixtureConfig } from "../services/d1-test-fixtures.ts";
@@ -39,6 +40,10 @@ export interface RuntimeConfig {
   // Default-deny egress allowlist (manifest network.allowed_destinations as
   // canonical hosts). Undefined is treated as [] in the sandbox — no outbound.
   allowedDestinations?: string[];
+  // Per-user secrets, decrypted, keyed by env var name (Phase 3 vault). Consumed
+  // ONLY host-side by the CredentialBinding / NET binding — NEVER stringified
+  // into the sandbox. The sandbox references these by key, never by value.
+  credentials?: Record<string, ResolvedCredential>;
   userApiKey: string | null;
   aiRoute?: RuntimeAIRoute | null;
   // Why env.AI is unavailable when aiRoute is null (balance gate, no user,

@@ -2530,7 +2530,7 @@ async function executeAppFunction(
       throw err;
     }
 
-    const { envVars, missingRequiredSecrets } = envResolution;
+    const { envVars, credentials, missingRequiredSecrets } = envResolution;
 
     // Convert args object to array (positional arguments)
     // For now, pass as single object argument
@@ -2809,6 +2809,7 @@ async function executeAppFunction(
         call: (request: AIRequest, apiKey: string) => Promise<AIResponse>;
       },
       envVars,
+      credentials,
       supabase: supabaseConfig,
       baseUrl,
       authToken: meta?.authToken,

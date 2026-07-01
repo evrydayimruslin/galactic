@@ -379,7 +379,7 @@ export async function handleHttpEndpoint(
       }
       throw err;
     }
-    const { envVars, missingRequiredSecrets } = envResolution;
+    const { envVars, credentials, missingRequiredSecrets } = envResolution;
 
     if (missingRequiredSecrets.length > 0) {
       return finalize(
@@ -714,6 +714,7 @@ export async function handleHttpEndpoint(
           ) => Promise<import("../../shared/types/index.ts").AIResponse>;
         },
         envVars,
+        credentials,
         supabase: supabaseConfig,
         baseUrl,
         authToken: caller.authToken,
