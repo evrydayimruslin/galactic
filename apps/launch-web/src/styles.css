@@ -2922,7 +2922,8 @@ button {
 .library-folders {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 34px;
+  margin-top: 14px;
 }
 
 .library-folder-section {
@@ -2950,9 +2951,8 @@ button {
   color: var(--ul-text-muted, #6b7280);
 }
 
-.library-folder-actions {
-  display: inline-flex;
-  gap: 12px;
+.library-folder-menu {
+  position: relative;
   margin-left: auto;
 }
 

@@ -3839,18 +3839,22 @@ export function LibraryFoundationPage(
   const [busy, setBusy] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [folderMenuFor, setFolderMenuFor] = useState<string | null>(null);
   const loading = live.status !== "ready" && live.status !== "error";
 
   useEffect(() => {
     setView(libraryViewFromSearch());
   }, [location.search]);
 
-  // Close the per-card folder menu on any outside click or Escape.
+  // Close any open card / folder menu on an outside click or Escape.
   useEffect(() => {
-    if (!menuFor) return;
-    const close = () => setMenuFor(null);
+    if (!menuFor && !folderMenuFor) return;
+    const close = () => {
+      setMenuFor(null);
+      setFolderMenuFor(null);
+    };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuFor(null);
+      if (event.key === "Escape") close();
     };
     document.addEventListener("click", close);
     document.addEventListener("keydown", onKey);
@@ -3858,7 +3862,7 @@ export function LibraryFoundationPage(
       document.removeEventListener("click", close);
       document.removeEventListener("keydown", onKey);
     };
-  }, [menuFor]);
+  }, [menuFor, folderMenuFor]);
 
   const scope: LibraryView = view;
   const library = live.data.library;
@@ -4064,24 +4068,65 @@ export function LibraryFoundationPage(
         <span className="library-folder-count">{agents.length}</span>
         {folder
           ? (
-            <span className="library-folder-actions">
+            <div
+              className="library-folder-menu"
+              onClick={(event) => event.stopPropagation()}
+            >
               <button
-                className="link-button"
+                aria-expanded={folderMenuFor === folder.id}
+                aria-haspopup="menu"
+                aria-label="Folder actions"
+                className="library-card-menu-trigger"
                 disabled={busy}
-                onClick={() => handleRenameFolder(folder.id, folder.name)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setFolderMenuFor(
+                    folderMenuFor === folder.id ? null : folder.id,
+                  );
+                }}
                 type="button"
               >
-                Rename
+                <svg
+                  aria-hidden="true"
+                  fill="currentColor"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle cx="12" cy="5" r="1.8" />
+                  <circle cx="12" cy="12" r="1.8" />
+                  <circle cx="12" cy="19" r="1.8" />
+                </svg>
               </button>
-              <button
-                className="link-button"
-                disabled={busy}
-                onClick={() => handleDeleteFolder(folder.id, folder.name)}
-                type="button"
-              >
-                Delete
-              </button>
-            </span>
+              {folderMenuFor === folder.id
+                ? (
+                  <div className="library-card-menu-popover" role="menu">
+                    <button
+                      className="library-card-menu-item"
+                      onClick={() => {
+                        setFolderMenuFor(null);
+                        handleRenameFolder(folder.id, folder.name);
+                      }}
+                      role="menuitem"
+                      type="button"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      className="library-card-menu-item library-card-menu-danger"
+                      onClick={() => {
+                        setFolderMenuFor(null);
+                        handleDeleteFolder(folder.id, folder.name);
+                      }}
+                      role="menuitem"
+                      type="button"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                )
+                : null}
+            </div>
           )
           : null}
       </div>
