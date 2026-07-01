@@ -3991,7 +3991,7 @@ export function LibraryFoundationPage(
                     {folders.length > 0
                       ? (
                         <p className="library-card-menu-label">
-                          Move to folder
+                          Folder
                         </p>
                       )
                       : null}
@@ -4024,7 +4024,7 @@ export function LibraryFoundationPage(
                           role="menuitem"
                           type="button"
                         >
-                          Remove from folder
+                          Remove
                         </button>
                       )
                       : null}
@@ -4134,11 +4134,7 @@ export function LibraryFoundationPage(
             )}
             {renderSection(
               "__uncategorized",
-              folders.length > 0
-                ? "Uncategorized"
-                : scope === "installed"
-                ? "Installed"
-                : "Owned",
+              "Your Agents",
               uncategorized,
             )}
           </div>
