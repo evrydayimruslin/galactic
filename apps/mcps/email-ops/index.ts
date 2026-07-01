@@ -497,103 +497,35 @@ async function sendViaSMTP(
   body: string,
   inReplyTo?: string,
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  const host = ultralight.env.SMTP_HOST;
-  const port = parseInt(ultralight.env.SMTP_PORT || '465');
-  const user = ultralight.env.SMTP_USER;
-  const pass = ultralight.env.SMTP_PASS;
-  const fromAddr = ultralight.env.BUSINESS_EMAIL || user;
+  const fromAddr = ultralight.env.BUSINESS_EMAIL || ultralight.env.SMTP_USER;
   const bizName = ultralight.env.BUSINESS_NAME || 'Hotel';
+  const port = parseInt(ultralight.env.SMTP_PORT || '465');
 
-  if (!host || !user || !pass || !fromAddr) {
-    return { success: false, error: 'SMTP credentials not configured' };
+  if (!ultralight.env.SMTP_HOST || !fromAddr) {
+    return {
+      success: false,
+      error: 'SMTP not configured — connect SMTP_HOST / SMTP_USER / SMTP_PASS',
+    };
   }
 
-  const socket = await openTlsSocket(host, port);
-  const lr = new LineReader(socket.readable);
-  const writer = socket.writable.getWriter();
-
-  async function send(cmd: string): Promise<string> {
-    await writer.write(enc.encode(cmd + '\r\n'));
-    return await lr.readLine();
-  }
-
-  try {
-    // Read greeting
-    const greeting = await lr.readLine();
-    if (!greeting.startsWith('220')) throw new Error('SMTP greeting failed: ' + greeting);
-
-    // EHLO
-    let resp = await send('EHLO api.ultralightagent.com');
-    // Read multi-line EHLO response
-    while (resp.charAt(3) === '-') resp = await lr.readLine();
-
-    // AUTH LOGIN
-    resp = await send('AUTH LOGIN');
-    if (!resp.startsWith('334')) throw new Error('AUTH not supported: ' + resp);
-    resp = await send(btoa(user));
-    if (!resp.startsWith('334')) throw new Error('AUTH user failed: ' + resp);
-    resp = await send(btoa(pass));
-    if (!resp.startsWith('235')) throw new Error('AUTH failed: ' + resp);
-
-    // MAIL FROM
-    resp = await send('MAIL FROM:<' + fromAddr + '>');
-    if (!resp.startsWith('250')) throw new Error('MAIL FROM failed: ' + resp);
-
-    // RCPT TO
-    resp = await send('RCPT TO:<' + to + '>');
-    if (!resp.startsWith('250')) throw new Error('RCPT TO failed: ' + resp);
-
-    // DATA
-    resp = await send('DATA');
-    if (!resp.startsWith('354')) throw new Error('DATA failed: ' + resp);
-
-    // Build email
-    const domain = fromAddr.split('@')[1] || 'api.ultralightagent.com';
-    const messageId = '<' + crypto.randomUUID() + '@' + domain + '>';
-    const boundary = '----=_Part_' + crypto.randomUUID().replace(/-/g, '');
-    const htmlBody = body.replace(/\n/g, '<br>');
-
-    let headers = 'From: ' + bizName + ' <' + fromAddr + '>\r\n';
-    headers += 'To: ' + to + '\r\n';
-    headers += 'Subject: ' + subject + '\r\n';
-    headers += 'Date: ' + new Date().toUTCString() + '\r\n';
-    headers += 'Message-ID: ' + messageId + '\r\n';
-    headers += 'MIME-Version: 1.0\r\n';
-    if (inReplyTo) {
-      headers += 'In-Reply-To: ' + inReplyTo + '\r\n';
-      headers += 'References: ' + inReplyTo + '\r\n';
-    }
-    headers += 'Content-Type: multipart/alternative; boundary="' + boundary + '"\r\n';
-
-    let msg = headers + '\r\n';
-    msg += '--' + boundary + '\r\n';
-    msg += 'Content-Type: text/plain; charset=UTF-8\r\n\r\n';
-    msg += body + '\r\n';
-    msg += '--' + boundary + '\r\n';
-    msg += 'Content-Type: text/html; charset=UTF-8\r\n\r\n';
-    msg += htmlBody + '\r\n';
-    msg += '--' + boundary + '--\r\n';
-
-    // Escape leading dots (SMTP transparency)
-    msg = msg.replace(/\r\n\./g, '\r\n..');
-
-    await writer.write(enc.encode(msg + '\r\n.\r\n'));
-    resp = await lr.readLine();
-    if (!resp.startsWith('250')) throw new Error('Send failed: ' + resp);
-
-    await send('QUIT');
-    return { success: true, messageId };
-  } catch (error: unknown) {
-    return { success: false, error: getErrorMessage(error) };
-  } finally {
-    lr.releaseLock();
-    try {
-      writer.releaseLock();
-    } catch {}
-    try {
-      socket.close();
-    } catch {}
-  }
+  // Phase 3b: host/user/pass are passed as per-user credential KEYS. The NET
+  // binding runs the entire SMTP session host-side; the password never enters
+  // app code and can only reach the user's own configured SMTP host.
+  const result = await net.smtpSend(
+    'SMTP_HOST',
+    port,
+    'SMTP_USER',
+    'SMTP_PASS',
+    fromAddr,
+    bizName,
+    to,
+    subject,
+    body,
+    inReplyTo || '',
+  );
+  return result.success
+    ? { success: true }
+    : { success: false, error: result.error };
 }
 
 // ── IMAP Helpers ──
@@ -949,8 +881,6 @@ export async function check_inbox(
           host: ultralight.env.IMAP_HOST,
           port: ultralight.env.IMAP_PORT,
           user: ultralight.env.IMAP_USER,
-          hasPass: !!ultralight.env.IMAP_PASS,
-          passLength: (ultralight.env.IMAP_PASS || '').length,
           businessEmail,
           lastUid,
           smtpHost: ultralight.env.SMTP_HOST,
@@ -959,17 +889,18 @@ export async function check_inbox(
       };
     }
 
-    // Fetch unseen emails via high-level IMAP RPC (entire TCP session in one call)
-    const host = ultralight.env.IMAP_HOST;
-    const user = ultralight.env.IMAP_USER;
-    const pass = ultralight.env.IMAP_PASS;
-    if (!host || !user || !pass) throw new Error('IMAP credentials not configured');
+    // Fetch unseen emails via high-level IMAP RPC (entire TCP session in one
+    // call). Phase 3b: host/user/pass are passed as per-user credential KEYS —
+    // the NET binding resolves them host-side; the password never enters app code.
+    if (!ultralight.env.IMAP_HOST || !ultralight.env.IMAP_USER) {
+      throw new Error('IMAP not configured — connect IMAP_HOST / IMAP_USER / IMAP_PASS');
+    }
 
     const result = await net.imapFetchUnseen(
-      host,
+      'IMAP_HOST',
       parseInt(ultralight.env.IMAP_PORT || '993'),
-      user,
-      pass,
+      'IMAP_USER',
+      'IMAP_PASS',
       lastUid,
       businessEmail,
       '$ULProcessed',
@@ -986,7 +917,6 @@ export async function check_inbox(
           host: ultralight.env.IMAP_HOST,
           port: ultralight.env.IMAP_PORT,
           user: ultralight.env.IMAP_USER,
-          hasPass: !!ultralight.env.IMAP_PASS,
           businessEmail,
         },
         imapResult: {

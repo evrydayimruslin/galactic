@@ -5,14 +5,17 @@
 
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { connect } from 'cloudflare:sockets';
-import { hostInAllowlist, isBlockedHost } from './outbound-policy.ts';
+import { isBlockedHost } from './outbound-policy.ts';
+import type { ResolvedCredential } from '../../../shared/contracts/env.ts';
 
 interface NetworkBindingProps {
   userId: string;
   appId: string;
-  // Default-deny destination allowlist (manifest network allowed_destinations).
-  // IMAP/SMTP entries carry a port, e.g. "imap.gmail.com:993".
-  allowedDestinations: string[];
+  // Per-user values (host/user/pass etc.), decrypted, keyed by env var name.
+  // net.* resolves host/user/pass from these BY KEY — the sandbox never passes a
+  // raw host, so a developer cannot redirect the user's password to a host of
+  // their choosing; it only ever reaches one of the user's own configured hosts.
+  credentials: Record<string, ResolvedCredential>;
 }
 
 interface FetchedEmail {
@@ -34,22 +37,15 @@ const dec = new TextDecoder();
 // egress policy (outbound-policy.ts) so the IMAP/SMTP socket path gets the SAME
 // coverage as raw fetch — loopback/RFC1918/CGNAT/link-local/metadata + IPv6 +
 // integer/hex encodings — instead of the old weaker prefix check.
-function validateTarget(
-  hostname: string,
-  port: number,
-  allowlist: readonly string[],
-): void {
+function validateTarget(hostname: string, port: number): void {
   if (isBlockedHost(hostname)) {
     throw new Error("Connections to internal/private networks are not allowed");
   }
   if (port === 25) throw new Error("Port 25 blocked. Use 465 or 587.");
-  // Default-deny: the host:port must be declared in the app's manifest
-  // network.allowed_destinations (e.g. "imap.gmail.com:993").
-  if (!hostInAllowlist(hostname, String(port), allowlist)) {
-    throw new Error(
-      `Destination ${hostname}:${port} is not in the app's declared network.allowed_destinations`,
-    );
-  }
+  // No allowlist here: the host is resolved from a per-user credential KEY (the
+  // user's own configured server), not a sandbox-supplied string, so the egress
+  // allowlist that constrains raw fetch() is unnecessary and would wrongly block
+  // the user's arbitrary mail host. SSRF (internal/private) is still enforced.
 }
 
 // ── IMAP Protocol Helpers ──
@@ -168,16 +164,32 @@ function parseEmail(raw: string): Omit<FetchedEmail, 'uid'> {
 // ── Network Binding ──
 
 export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProps> {
+  // Resolve a per-user value by KEY from host-side props. The sandbox passes key
+  // names (never raw host/user/pass), so app code never sees the secret and a
+  // developer cannot point the connection at a host they choose.
+  private resolveCredential(key: string): string {
+    const entry = this.ctx.props.credentials?.[key];
+    if (!entry) {
+      throw new Error(
+        `Unknown credential "${key}" — connect it (per_user) before using net.*`,
+      );
+    }
+    return entry.value;
+  }
 
   /**
    * Fetch unseen emails from an IMAP server in a single TCP session.
+   * host/user/pass are per-user credential KEYS, resolved host-side.
    * Returns parsed emails and marks them with a custom flag.
    */
   async imapFetchUnseen(
-    host: string, port: number, user: string, pass: string,
+    hostKey: string, port: number, userKey: string, passKey: string,
     lastUid: number, businessEmail: string, processedFlag: string, limit: number,
   ): Promise<{ emails: FetchedEmail[]; maxUid: number; hasMore: boolean }> {
-    validateTarget(host, port, this.ctx.props.allowedDestinations ?? []);
+    const host = this.resolveCredential(hostKey);
+    const user = this.resolveCredential(userKey);
+    const pass = this.resolveCredential(passKey);
+    validateTarget(host, port);
     const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
     const lr = new LineReader(socket.readable);
     const writer = socket.writable.getWriter();
@@ -290,10 +302,13 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
    * Send an email via SMTP in a single TCP session.
    */
   async smtpSend(
-    host: string, port: number, user: string, pass: string,
+    hostKey: string, port: number, userKey: string, passKey: string,
     from: string, fromName: string, to: string, subject: string, body: string, inReplyTo?: string,
   ): Promise<{ success: boolean; error?: string }> {
-    validateTarget(host, port, this.ctx.props.allowedDestinations ?? []);
+    const host = this.resolveCredential(hostKey);
+    const user = this.resolveCredential(userKey);
+    const pass = this.resolveCredential(passKey);
+    validateTarget(host, port);
     const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
     const lr = new LineReader(socket.readable);
     const writer = socket.writable.getWriter();

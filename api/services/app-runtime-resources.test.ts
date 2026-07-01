@@ -81,7 +81,7 @@ Deno.test("app runtime resources: entry code fetch probes supported files and ca
   assertEquals(cached, "export const ok = true;");
 });
 
-Deno.test("app runtime resources: per-user secrets are vaulted in credentials, never in the sandbox env (Phase 3)", async () => {
+Deno.test("app runtime resources: secret/config split — secrets vaulted, per-user config readable (3b)", async () => {
   const fetchCalls: string[] = [];
 
   const result = await resolveAppRuntimeEnvVars(
@@ -89,11 +89,11 @@ Deno.test("app runtime resources: per-user secrets are vaulted in credentials, n
       id: "app-123",
       env_vars: {
         APP_ONLY: "enc-app-only",
-        SHARED_TOKEN: "enc-app-shared",
+        APP_REGION: "enc-app-shared",
       },
       env_schema: {
-        USER_TOKEN: { scope: "per_user", required: true },
-        SHARED_TOKEN: { scope: "per_user", required: false },
+        USER_TOKEN: { scope: "per_user", input: "password", required: true },
+        APP_REGION: { scope: "per_user", required: false },
         APP_ONLY: { scope: "universal", required: false },
       },
       manifest: null,
@@ -110,7 +110,7 @@ Deno.test("app runtime resources: per-user secrets are vaulted in credentials, n
         return new Response(
           JSON.stringify([
             { key: "USER_TOKEN", value_encrypted: "enc-user-token" },
-            { key: "SHARED_TOKEN", value_encrypted: "enc-user-override" },
+            { key: "APP_REGION", value_encrypted: "enc-user-override" },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
@@ -123,15 +123,18 @@ Deno.test("app runtime resources: per-user secrets are vaulted in credentials, n
   assertEquals(fetchCalls, [
     "https://supabase.example/rest/v1/user_app_secrets?user_id=eq.user-123&app_id=eq.app-123&select=key,value_encrypted",
   ]);
-  // Sandbox env holds ONLY universal (developer) vars. SHARED_TOKEN is declared
-  // per_user, so even its app-level default is excluded — no per-user value here.
+  // Secret/config split (3b): the SECRET (input:password) is vaulted only; the
+  // non-secret per-user CONFIG (APP_REGION) is ALSO readable in the sandbox env
+  // (user value overrides the app default). Universal vars are readable as always.
   assertEquals(result.envVars, {
     APP_ONLY: "app:enc-app-only",
+    APP_REGION: "user:enc-user-override",
   });
-  // The user's per-user secrets are vaulted parent-side, keyed by name.
+  // ALL per-user values are resolvable host-side by key (net.* + CredentialBinding);
+  // the SECRET (USER_TOKEN) exists ONLY here — never in envVars above.
   assertEquals(result.credentials, {
     USER_TOKEN: { value: "user:enc-user-token", credential: undefined },
-    SHARED_TOKEN: { value: "user:enc-user-override", credential: undefined },
+    APP_REGION: { value: "user:enc-user-override", credential: undefined },
   });
   assertEquals(result.missingRequiredSecrets, []);
 });

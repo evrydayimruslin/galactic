@@ -269,15 +269,19 @@ export async function resolveAppRuntimeEnvVars(
   const envVars = await resolveAppEnvVars(app, deps);
   const envSchema = resolveAppEnvSchema(app);
   const perUserEntries = getScopedEnvSchemaEntries(envSchema, "per_user");
-  // Per-user secrets are decrypted into this PARENT-SIDE map and NEVER merged
-  // into envVars (which is stringified into the sandbox). They reach app code
-  // only via host-side bindings that use them by key without returning the value.
+  // All per-user values are resolved into this PARENT-SIDE map (host-side net.*
+  // and the CredentialBinding resolve them by key). Non-secret CONFIG is ALSO
+  // copied into envVars (readable) below; SECRETS live only here.
   const credentials: Record<string, ResolvedCredential> = {};
-  // Airtight invariant: a key declared per_user must NEVER appear in the sandbox
-  // env, even if an app-level env_vars default exists for it — per-user values
-  // are credentials, full stop.
-  for (const { key } of perUserEntries) {
-    delete envVars[key];
+  // Secret/config split: a per-user var is a VAULTED SECRET iff input:"password"
+  // or it declares a credential binding; otherwise it is readable CONFIG (host,
+  // port, the user's email, etc.), injected into the sandbox like a universal var.
+  const isVaultedSecret = (entry: EnvSchemaEntry): boolean =>
+    entry.input === "password" || !!entry.credential;
+  // Remove any app-level default for a per-user SECRET key — secrets must never
+  // sit in the sandbox env, even as a developer default.
+  for (const { key, entry } of perUserEntries) {
+    if (isVaultedSecret(entry)) delete envVars[key];
   }
 
   if (perUserEntries.length > 0 && userId) {
@@ -302,10 +306,14 @@ export async function resolveAppRuntimeEnvVars(
 
       for (const secret of userSecrets) {
         try {
-          credentials[secret.key] = {
-            value: await decryptEnvVarFn(secret.value_encrypted),
-            credential: envSchema[secret.key]?.credential,
-          };
+          const value = await decryptEnvVarFn(secret.value_encrypted);
+          const entry = envSchema[secret.key];
+          credentials[secret.key] = { value, credential: entry?.credential };
+          // Non-secret per-user CONFIG (host/port/email/name) is readable in the
+          // sandbox env, like a universal var. Actual SECRETS stay vaulted-only.
+          if (entry && !isVaultedSecret(entry)) {
+            envVars[secret.key] = value;
+          }
         } catch (err) {
           logger.error("Failed to decrypt per-user secret", {
             app_id: app.id,

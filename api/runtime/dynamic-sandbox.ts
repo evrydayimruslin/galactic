@@ -84,7 +84,7 @@ interface DynamicWorkerEntrypointExports {
     props: {
       userId: string;
       appId: string;
-      allowedDestinations: string[];
+      credentials: Record<string, ResolvedCredential>;
     };
   }): unknown;
   EventsBinding(input: {
@@ -390,15 +390,15 @@ globalThis.ultralight = {
   net: ${
       config.permissions.includes("net:connect")
         ? `{
-    async imapFetchUnseen(host, port, user, pass, lastUid, businessEmail, processedFlag, limit) {
+    async imapFetchUnseen(hostKey, port, userKey, passKey, lastUid, businessEmail, processedFlag, limit) {
       var e = globalThis.__rpcEnv;
       if (!e || !e.NET) throw new Error('net:connect not available');
-      return await e.NET.imapFetchUnseen(host, port, user, pass, lastUid || 0, businessEmail || '', processedFlag || '$ULProcessed', limit || 20);
+      return await e.NET.imapFetchUnseen(hostKey, port, userKey, passKey, lastUid || 0, businessEmail || '', processedFlag || '$ULProcessed', limit || 20);
     },
-    async smtpSend(host, port, user, pass, from, fromName, to, subject, body, inReplyTo) {
+    async smtpSend(hostKey, port, userKey, passKey, from, fromName, to, subject, body, inReplyTo) {
       var e = globalThis.__rpcEnv;
       if (!e || !e.NET) throw new Error('net:connect not available');
-      return await e.NET.smtpSend(host, port, user, pass, from, fromName || '', to, subject, body, inReplyTo || '');
+      return await e.NET.smtpSend(hostKey, port, userKey, passKey, from, fromName || '', to, subject, body, inReplyTo || '');
     },
     connectTls() { throw new Error('Low-level sockets not available. Use ultralight.net.imapFetchUnseen() or .smtpSend().'); },
   }`
@@ -576,7 +576,7 @@ export default {
         props: {
           userId: config.userId,
           appId: config.appId,
-          allowedDestinations,
+          credentials: config.credentials ?? {},
         },
       });
     }
