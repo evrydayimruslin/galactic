@@ -172,6 +172,38 @@ export interface LaunchConnectOnboardResponse {
   account_id: string;
 }
 
+// Per-user settings status for an Agent (GET /api/launch/agents/:id/settings).
+// Values are NEVER returned — only whether each declared key is configured.
+export interface LaunchAgentSettingItem {
+  key: string;
+  label: string;
+  description: string | null;
+  help: string | null;
+  input: string;
+  placeholder: string | null;
+  required: boolean;
+  configured: boolean;
+  updated_at: string | null;
+}
+
+export interface LaunchAgentSettingsResponse {
+  app_id: string;
+  settings: LaunchAgentSettingItem[];
+  connected_keys: string[];
+  missing_required: string[];
+  fully_connected: boolean;
+}
+
+export interface LaunchAgentSettingsUpdateResponse {
+  success: boolean;
+  keys_saved?: string[];
+  keys_removed?: string[];
+  connected_keys: string[];
+  missing_required: string[];
+  fully_connected: boolean;
+  errors?: string[];
+}
+
 export class LaunchApiClient {
   private readonly baseUrl: string;
   private readonly getAuthToken?: () => string | null;
@@ -376,6 +408,29 @@ export class LaunchApiClient {
       {
         method: "PUT",
         body: JSON.stringify({ functionName, ...request }),
+      },
+    );
+  }
+
+  // The viewing user's own per-user secrets/config for this Agent. The response
+  // reports connected status per key, never a value.
+  agentSettings(idOrSlug: string): Promise<LaunchAgentSettingsResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/settings`,
+    );
+  }
+
+  // Write per-user secrets/config. Values go straight to the vault; pass null to
+  // clear a key. Only declared per-user keys are accepted.
+  updateAgentSettings(
+    idOrSlug: string,
+    values: Record<string, string | null>,
+  ): Promise<LaunchAgentSettingsUpdateResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/settings`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ values }),
       },
     );
   }

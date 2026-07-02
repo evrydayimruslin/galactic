@@ -5716,3 +5716,79 @@ button {
 .store-page .muted-note {
   font-family: var(--ul-font);
 }
+
+/* Phase 4 — Capabilities & connections */
+.connection-dest {
+  border: 1px solid var(--ul-border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-top: 12px;
+}
+.connection-dest-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.connection-transparent {
+  font-size: 0.85rem;
+  color: var(--ul-muted);
+}
+.connection-general {
+  margin-top: 18px;
+}
+.connection-sublabel {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ul-secondary);
+  margin: 0 0 4px;
+}
+.connection-field {
+  margin-top: 12px;
+}
+.connection-field label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.92rem;
+  margin-bottom: 6px;
+}
+.connection-req {
+  font-size: 0.72rem;
+  color: var(--ul-red);
+}
+.connection-connected {
+  font-size: 0.72rem;
+  color: var(--ul-green-deep);
+}
+.connection-field input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--ul-border-strong);
+  border-radius: 8px;
+  font-family: var(--ul-sans);
+  font-size: 0.95rem;
+  background: var(--ul-bg);
+  color: var(--ul-text);
+  box-sizing: border-box;
+}
+.connection-field input:disabled {
+  background: var(--ul-raised);
+  color: var(--ul-muted);
+}
+.connection-note {
+  font-size: 0.8rem;
+  color: var(--ul-muted);
+  margin: 6px 0 0;
+}
+.connection-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+.connection-message {
+  font-size: 0.85rem;
+  color: var(--ul-secondary);
+}

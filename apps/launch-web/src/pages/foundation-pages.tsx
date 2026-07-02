@@ -33,6 +33,7 @@ import {
   type LaunchAgentSummary,
   type LaunchFolder,
   type LaunchInterfaceSummary,
+  type LaunchNetworkDisclosure,
   type LaunchTrustCard,
   type LaunchWalletEarningSummary,
   type LaunchWalletReceiptSummary,
@@ -151,6 +152,9 @@ interface AgentFunctionFixture {
 interface AgentDetailFixture extends AgentFixture {
   callsPerDay: number | null;
   capabilities: AgentCapability[];
+  // Phase 4: outbound destinations + the per-user secrets bound to each, plus
+  // unbound "general" settings. Null until the Agent publishes a trust card.
+  networkDisclosure: LaunchNetworkDisclosure | null;
   functions: AgentFunctionFixture[];
   // Sandboxed HTML interfaces the agent ships; empty for agents without any.
   interfaces: LaunchInterfaceSummary[];
@@ -576,6 +580,7 @@ function liveAgentFixture(
     callPrice,
     callsPerDay: null,
     capabilities: trustCapabilities(trust),
+    networkDisclosure: trust?.network_disclosure ?? null,
     category: tool.tags?.[0] || tool.kind.toUpperCase(),
     color: stableColor(tool.id),
     free: callPrice === 0,
@@ -3668,6 +3673,194 @@ function AgentWiringPanel({
   );
 }
 
+// Phase 4: the "Capabilities & connections" card on the details tab. Renders the
+// outbound destinations, the per-user secrets bound to each (as write-only secure
+// inputs with the enforced "only sent to X" assurance), and the unbound general
+// settings. Values are never rendered back — only connected status.
+function AgentConnectionsCard(
+  { tool }: { tool: AgentDetailFixture },
+): ReactElement | null {
+  const disclosure = tool.networkDisclosure;
+  const destinations = disclosure?.destinations ?? [];
+  const general = disclosure?.general_settings ?? [];
+  const hasInputs = destinations.some((d) => d.credentials.length > 0) ||
+    general.length > 0;
+  const hasAnything = destinations.length > 0 || general.length > 0 ||
+    tool.capabilities.length > 0;
+
+  const [connected, setConnected] = useState<Set<string>>(new Set());
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [status, setStatus] = useState<
+    "idle" | "loading" | "saving" | "locked"
+  >("idle");
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!hasInputs) return;
+    let cancelled = false;
+    setStatus("loading");
+    launchApi.agentSettings(tool.id)
+      .then((res) => {
+        if (cancelled) return;
+        setConnected(new Set(res.connected_keys));
+        setStatus("idle");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setStatus("locked");
+        setMessage(
+          err instanceof LaunchApiAuthenticationError
+            ? "Sign in and install this Agent to connect your own keys."
+            : "Install this Agent to connect your own keys.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tool.id, hasInputs]);
+
+  if (!hasAnything) return null;
+
+  const noPending = Object.values(values).every((v) => v.trim().length === 0);
+
+  const onSave = async () => {
+    const pending = Object.entries(values).filter(([, v]) =>
+      v.trim().length > 0
+    );
+    if (pending.length === 0) return;
+    setStatus("saving");
+    setMessage(null);
+    try {
+      const res = await launchApi.updateAgentSettings(
+        tool.id,
+        Object.fromEntries(pending),
+      );
+      setConnected(new Set(res.connected_keys));
+      setValues({});
+      setStatus("idle");
+      setMessage("Saved.");
+    } catch (err) {
+      setStatus("idle");
+      setMessage(
+        err instanceof LaunchApiRequestError ? err.message : "Could not save.",
+      );
+    }
+  };
+
+  const field = (
+    key: string,
+    label: string,
+    required: boolean,
+    opts: { secret: boolean; host?: string | null; note?: string | null },
+  ): ReactElement => {
+    const isSet = connected.has(key);
+    const disabled = status === "locked" || status === "saving";
+    return (
+      <div className="connection-field" key={key}>
+        <label>
+          <span>{label}</span>
+          {required ? <span className="connection-req">required</span> : null}
+          {isSet
+            ? (
+              <span className="connection-connected">
+                {opts.secret ? "connected" : "set"}
+              </span>
+            )
+            : null}
+        </label>
+        <input
+          type={opts.secret ? "password" : "text"}
+          autoComplete="off"
+          placeholder={isSet ? "•••••••• (enter a new value to replace)" : "Enter value"}
+          value={values[key] ?? ""}
+          disabled={disabled}
+          onChange={(event) =>
+            setValues((prev) => ({ ...prev, [key]: event.target.value }))}
+        />
+        {opts.host
+          ? (
+            <p className="connection-note">
+              Only ever sent to <Mono>{opts.host}</Mono>.
+            </p>
+          )
+          : opts.note
+          ? <p className="connection-note">{opts.note}</p>
+          : null}
+      </div>
+    );
+  };
+
+  return (
+    <Card>
+      <p className="section-label">Capabilities &amp; connections</p>
+      {tool.capabilities.length > 0
+        ? (
+          <div className="capability-list">
+            {tool.capabilities.map((capability) => (
+              <AgentCapabilityPill
+                capability={capability}
+                key={`${capability.kind}-${capability.text}`}
+              />
+            ))}
+          </div>
+        )
+        : null}
+
+      {destinations.map((dest) => (
+        <div className="connection-dest" key={dest.host}>
+          <div className="connection-dest-head">
+            <Mono>{dest.host}</Mono>
+            {dest.label ? <strong>{dest.label}</strong> : null}
+            {dest.credentials.length === 0
+              ? <span className="connection-transparent">no credentials sent</span>
+              : null}
+          </div>
+          {dest.description
+            ? <p className="connection-note">{dest.description}</p>
+            : null}
+          {dest.credentials.map((cred) =>
+            field(cred.key, cred.label, cred.required, {
+              secret: true,
+              host: dest.host,
+            })
+          )}
+        </div>
+      ))}
+
+      {general.length > 0
+        ? (
+          <div className="connection-general">
+            <p className="connection-sublabel">App settings</p>
+            {general.map((setting) =>
+              field(setting.key, setting.label, setting.required, {
+                secret: setting.secret,
+                note: setting.description,
+              })
+            )}
+          </div>
+        )
+        : null}
+
+      {hasInputs
+        ? (
+          <div className="connection-actions">
+            <button
+              type="button"
+              onClick={() => void onSave()}
+              disabled={status === "locked" || status === "saving" || noPending}
+            >
+              {status === "saving" ? "Saving…" : "Save connections"}
+            </button>
+            {message
+              ? <span className="connection-message">{message}</span>
+              : null}
+          </div>
+        )
+        : null}
+    </Card>
+  );
+}
+
 function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement {
   const paidFunctions = tool.functions.filter((fn) => fn.price > 0);
   const minPrice = paidFunctions.length > 0
@@ -3743,26 +3936,7 @@ function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement
             : null}
         </div>
       </Card>
-      <Card>
-        <p className="section-label">Capabilities</p>
-        {tool.capabilities.length > 0
-          ? (
-            <div className="capability-list">
-              {tool.capabilities.map((capability) => (
-                <AgentCapabilityPill
-                  capability={capability}
-                  key={`${capability.kind}-${capability.text}`}
-                />
-              ))}
-            </div>
-          )
-          : (
-            <p className="muted-note">
-              This Agent has not published a trust card declaring its
-              capabilities yet.
-            </p>
-          )}
-      </Card>
+      <AgentConnectionsCard tool={tool} />
       <Card>
         <p className="section-label">Owner</p>
         <div className="owner-row">

@@ -91,6 +91,8 @@ export const LAUNCH_API_ROUTES = [
   "GET /api/launch/agents/:id/function-inference",
   "PUT /api/launch/agents/:id/function-inference",
   "DELETE /api/launch/agents/:id/function-inference",
+  "GET /api/launch/agents/:id/settings",
+  "PUT /api/launch/agents/:id/settings",
   "GET /api/launch/admin/agents/:id",
   "GET /api/launch/agents/:id/wiring",
   "GET /api/launch/agents/:id/caller-trust",
