@@ -317,14 +317,6 @@
         { "name": "admin_notes", "type": "string", "required": false }
       ]
     },
-    "db_browse": {
-      "description": "Run raw SQL queries against the resort database. Read-only by default. Auto-applies LIMIT 100 if none specified.",
-      "parameters": [
-        { "name": "sql", "type": "string", "required": true },
-        { "name": "params", "type": "array", "required": false },
-        { "name": "mode", "type": "string", "required": false, "description": "read (default) | write" }
-      ]
-    },
     "db_tables": {
       "description": "List all resort database tables with row counts",
       "parameters": []

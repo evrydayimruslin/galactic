@@ -1,19 +1,18 @@
 // Email-Ops — Galactic MCP App (v2: IMAP/SMTP Direct)
 //
 // Version-controlled email thread system. Connects directly to hotel mailbox
-// via IMAP (inbound) and SMTP (outbound) using ultralight.net TCP/TLS sockets.
+// via IMAP (inbound) and SMTP (outbound) using galactic.net TCP/TLS sockets.
 // Every action (draft, edit, regenerate, send, followup) creates a version.
 //
 // Tables: conversations, versions, conventions, imap_sync_state
-// AI: ultralight.ai() with google/gemini-3-flash-preview
-// Network: IMAP/SMTP via ultralight.net.connectTls (Cloudflare Workers TCP sockets)
+// AI: galactic.ai() with google/gemini-3-flash-preview
+// Network: IMAP/SMTP via galactic.net.connectTls (Cloudflare Workers TCP sockets)
 // Widgets: widget_email_inbox_ui (full deck app), widget_email_faqs_ui (FAQ editor)
 // Permissions: ai:call, net:fetch, net:connect
 
-const ultralight = (globalThis as typeof globalThis & { ultralight: any }).ultralight;
+const galactic = (globalThis as any).galactic;
 const AI_MODEL = 'google/gemini-3-flash-preview';
 
-type SqlValue = string | number | boolean | null;
 type ConversationClassification =
   | 'inquiry'
   | 'booking_request'
@@ -55,10 +54,6 @@ interface MaxVersionRow {
 
 interface SyncStateRow {
   last_uid: number | null;
-}
-
-interface CountRow {
-  cnt: number;
 }
 
 interface ConversationRow {
@@ -257,7 +252,7 @@ const DRAFT_VERSION_TYPES = new Set<VersionType>([
 ]);
 
 function getNetApi(): UltralightNetApi | null {
-  return (ultralight as unknown as { net?: UltralightNetApi }).net || null;
+  return (galactic as unknown as { net?: UltralightNetApi }).net || null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -382,11 +377,8 @@ function parseConversationVersions(versions: VersionRow[]): ParsedVersionRow[] {
 function now(): string {
   return new Date().toISOString();
 }
-function uid(): string {
-  return ultralight.user.id;
-}
 function uname(): string {
-  return ultralight.user.name || ultralight.user.email || 'admin';
+  return galactic.user.name || galactic.user.email || 'admin';
 }
 function esc(s: string): string {
   if (!s) return '';
@@ -403,10 +395,9 @@ function stripHtml(html: string): string {
 }
 
 async function getConventionsText(): Promise<string> {
-  const rows = await ultralight.db.all(
-    'SELECT key, value, category FROM conventions WHERE user_id = ?',
-    [uid()],
-  ) as ConventionRow[];
+  const rows = await galactic.db.select('conventions', {
+    columns: ['key', 'value', 'category'],
+  }) as ConventionRow[];
   return rows.length > 0
     ? rows.map((convention) =>
       (convention.category ? '[' + convention.category + '] ' : '') + convention.key + ': ' +
@@ -416,10 +407,10 @@ async function getConventionsText(): Promise<string> {
 }
 
 async function nextVersionNum(conversationId: string): Promise<number> {
-  const row = await ultralight.db.first(
-    'SELECT MAX(version_num) as mx FROM versions WHERE conversation_id = ? AND user_id = ?',
-    [conversationId, uid()],
-  ) as MaxVersionRow | null;
+  const row = await galactic.db.first('versions', {
+    columns: [{ fn: 'max', column: 'version_num', as: 'mx' }],
+    where: { conversation_id: conversationId },
+  }) as MaxVersionRow | null;
   return (row?.mx || 0) + 1;
 }
 
@@ -428,10 +419,10 @@ async function nextVersionNum(conversationId: string): Promise<number> {
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-// Socket connector — tries ultralight.net first, falls back to Deno/CF Workers globals
+// Socket connector — tries galactic.net first, falls back to Deno/CF Workers globals
 async function openTlsSocket(hostname: string, port: number): Promise<TlsSocket> {
   const net = getNetApi();
-  // Try ultralight.net (SDK-provided, works in both CF Workers and Deno sandboxes)
+  // Try galactic.net (SDK-provided, works in both CF Workers and Deno sandboxes)
   if (net?.connectTls) {
     return await net.connectTls(hostname, port);
   }
@@ -497,11 +488,11 @@ async function sendViaSMTP(
   body: string,
   inReplyTo?: string,
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  const fromAddr = ultralight.env.BUSINESS_EMAIL || ultralight.env.SMTP_USER;
-  const bizName = ultralight.env.BUSINESS_NAME || 'Hotel';
-  const port = parseInt(ultralight.env.SMTP_PORT || '465');
+  const fromAddr = galactic.env.BUSINESS_EMAIL || galactic.env.SMTP_USER;
+  const bizName = galactic.env.BUSINESS_NAME || 'Hotel';
+  const port = parseInt(galactic.env.SMTP_PORT || '465');
 
-  if (!ultralight.env.SMTP_HOST || !fromAddr) {
+  if (!galactic.env.SMTP_HOST || !fromAddr) {
     return {
       success: false,
       error: 'SMTP not configured — connect SMTP_HOST / SMTP_USER / SMTP_PASS',
@@ -545,10 +536,10 @@ interface ImapConnection {
 }
 
 async function createImapConnection(): Promise<ImapConnection> {
-  const host = ultralight.env.IMAP_HOST;
-  const port = parseInt(ultralight.env.IMAP_PORT || '993');
-  const user = ultralight.env.IMAP_USER;
-  const pass = ultralight.env.IMAP_PASS;
+  const host = galactic.env.IMAP_HOST;
+  const port = parseInt(galactic.env.IMAP_PORT || '993');
+  const user = galactic.env.IMAP_USER;
+  const pass = galactic.env.IMAP_PASS;
 
   if (!host || !user || !pass) throw new Error('IMAP credentials not configured');
 
@@ -860,7 +851,7 @@ export async function check_inbox(
   args: { debug?: boolean; config_only?: boolean },
 ): Promise<unknown> {
   try {
-    const businessEmail = (ultralight.env.BUSINESS_EMAIL || ultralight.env.IMAP_USER || '')
+    const businessEmail = (galactic.env.BUSINESS_EMAIL || galactic.env.IMAP_USER || '')
       .toLowerCase();
     const net = getNetApi();
     if (!net?.imapFetchUnseen) {
@@ -868,23 +859,22 @@ export async function check_inbox(
     }
 
     // Get last processed UID from DB
-    const syncRow = await ultralight.db.first(
-      'SELECT last_uid FROM imap_sync_state WHERE user_id = ?',
-      [uid()],
-    ) as SyncStateRow | null;
+    const syncRow = await galactic.db.first('imap_sync_state', {
+      columns: ['last_uid'],
+    }) as SyncStateRow | null;
     const lastUid = syncRow?.last_uid || 0;
 
     // Config-only mode: return immediately without IMAP call
     if (args.config_only) {
       return {
         config: {
-          host: ultralight.env.IMAP_HOST,
-          port: ultralight.env.IMAP_PORT,
-          user: ultralight.env.IMAP_USER,
+          host: galactic.env.IMAP_HOST,
+          port: galactic.env.IMAP_PORT,
+          user: galactic.env.IMAP_USER,
           businessEmail,
           lastUid,
-          smtpHost: ultralight.env.SMTP_HOST,
-          smtpPort: ultralight.env.SMTP_PORT,
+          smtpHost: galactic.env.SMTP_HOST,
+          smtpPort: galactic.env.SMTP_PORT,
         },
       };
     }
@@ -892,13 +882,13 @@ export async function check_inbox(
     // Fetch unseen emails via high-level IMAP RPC (entire TCP session in one
     // call). Phase 3b: host/user/pass are passed as per-user credential KEYS —
     // the NET binding resolves them host-side; the password never enters app code.
-    if (!ultralight.env.IMAP_HOST || !ultralight.env.IMAP_USER) {
+    if (!galactic.env.IMAP_HOST || !galactic.env.IMAP_USER) {
       throw new Error('IMAP not configured — connect IMAP_HOST / IMAP_USER / IMAP_PASS');
     }
 
     const result = await net.imapFetchUnseen(
       'IMAP_HOST',
-      parseInt(ultralight.env.IMAP_PORT || '993'),
+      parseInt(galactic.env.IMAP_PORT || '993'),
       'IMAP_USER',
       'IMAP_PASS',
       lastUid,
@@ -914,9 +904,9 @@ export async function check_inbox(
         debug: true,
         lastUid,
         config: {
-          host: ultralight.env.IMAP_HOST,
-          port: ultralight.env.IMAP_PORT,
-          user: ultralight.env.IMAP_USER,
+          host: galactic.env.IMAP_HOST,
+          port: galactic.env.IMAP_PORT,
+          user: galactic.env.IMAP_USER,
           businessEmail,
         },
         imapResult: {
@@ -933,10 +923,12 @@ export async function check_inbox(
     }
 
     if (!result.emails || result.emails.length === 0) {
-      await ultralight.db.run(
-        'INSERT INTO imap_sync_state (user_id, last_uid, last_check) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET last_check = ?',
-        [uid(), lastUid, now(), now()],
-      );
+      const checkTs = now();
+      await galactic.db.upsert('imap_sync_state', {
+        values: { last_uid: lastUid, last_check: checkTs },
+        onConflict: ['user_id'],
+        set: { last_check: checkTs },
+      });
       return { success: true, processed: 0, message: 'No new emails' };
     }
 
@@ -966,10 +958,12 @@ export async function check_inbox(
     }
 
     // Update sync state
-    await ultralight.db.run(
-      'INSERT INTO imap_sync_state (user_id, last_uid, last_check) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET last_uid = MAX(imap_sync_state.last_uid, ?), last_check = ?',
-      [uid(), result.maxUid, now(), result.maxUid, now()],
-    );
+    const syncTs = now();
+    await galactic.db.upsert('imap_sync_state', {
+      values: { last_uid: result.maxUid, last_check: syncTs },
+      onConflict: ['user_id'],
+      set: { last_uid: { op: 'max', value: result.maxUid }, last_check: syncTs },
+    });
 
     return {
       success: true,
@@ -1179,10 +1173,15 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
 
   if (inReplyTo) {
     // Try to match by message_id stored on a sent version
-    existingConvo = await ultralight.db.first(
-      'SELECT c.* FROM conversations c JOIN versions v ON v.conversation_id = c.id WHERE v.resend_id = ? AND c.user_id = ?',
-      [inReplyTo, uid()],
-    ) as ConversationRow | null;
+    existingConvo = await galactic.db.first('conversations', {
+      joins: [{
+        table: 'versions',
+        as: 'v',
+        type: 'inner',
+        on: { fromColumn: 'id', foreignColumn: 'conversation_id' },
+      }],
+      where: { 'v.resend_id': inReplyTo },
+    }) as ConversationRow | null;
   }
   if (!existingConvo) {
     // Match by guest email + similar subject. Do the subject comparison in JS
@@ -1194,10 +1193,14 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       (s || '').replace(/^(Re|Fwd|Fw):\s*/gi, '').trim().toLowerCase();
     const cleanSubject = normalize(subject);
     if (cleanSubject) {
-      const recent = await ultralight.db.all(
-        'SELECT * FROM conversations WHERE user_id = ? AND (guest_email = ? OR guest_email = ?) AND status != ? ORDER BY updated_at DESC LIMIT 20',
-        [uid(), guestEmail, from, 'discarded'],
-      ) as ConversationRow[];
+      const recent = await galactic.db.select('conversations', {
+        where: {
+          _or: [{ guest_email: guestEmail }, { guest_email: from }],
+          status: { ne: 'discarded' },
+        },
+        orderBy: { column: 'updated_at', dir: 'desc' },
+        limit: 20,
+      }) as ConversationRow[];
       existingConvo = recent.find((conversation) => {
         const n = normalize(conversation.subject);
         return n && (n.includes(cleanSubject) || cleanSubject.includes(n));
@@ -1212,10 +1215,16 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
     // ── Followup in existing thread ──
     const vNum = await nextVersionNum(existingConvo.id);
     const vId = crypto.randomUUID();
-    await ultralight.db.run(
-      'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [vId, existingConvo.id, uid(), vNum, 'inbound', originalBody, guestEmail, inboundMeta, ts],
-    );
+    await galactic.db.insert('versions', {
+      id: vId,
+      conversation_id: existingConvo.id,
+      version_num: vNum,
+      type: 'inbound',
+      body: originalBody,
+      actor: guestEmail,
+      metadata: inboundMeta,
+      created_at: ts,
+    });
 
     // Skip AI draft for internal / booking_confirmation / spam followups —
     // admin can trigger a manual draft via conversation_act('generate_draft').
@@ -1224,14 +1233,15 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
     );
     if (!skipAutoDraft) {
       // Get full thread for context (cleaned bodies for AI input quality)
-      const allVersions = await ultralight.db.all(
-        'SELECT type, body, actor FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num',
-        [existingConvo.id, uid()],
-      ) as Array<Pick<VersionRow, 'type' | 'body' | 'actor'>>;
+      const allVersions = await galactic.db.select('versions', {
+        columns: ['type', 'body', 'actor'],
+        where: { conversation_id: existingConvo.id },
+        orderBy: 'version_num',
+      }) as Array<Pick<VersionRow, 'type' | 'body' | 'actor'>>;
       const threadContext = formatThreadContext(allVersions, true);
 
       // AI draft followup
-      const aiResp = await ultralight.ai({
+      const aiResp = await galactic.ai({
         model: AI_MODEL,
         messages: [
           {
@@ -1252,27 +1262,23 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       );
 
       const draftVId = crypto.randomUUID();
-      await ultralight.db.run(
-        'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, model, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [
-          draftVId,
-          existingConvo.id,
-          uid(),
-          vNum + 1,
-          'auto_draft',
-          parsed.draft_body,
-          'ai',
-          AI_MODEL,
-          JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [] }),
-          ts,
-        ],
-      );
+      await galactic.db.insert('versions', {
+        id: draftVId,
+        conversation_id: existingConvo.id,
+        version_num: vNum + 1,
+        type: 'auto_draft',
+        body: parsed.draft_body,
+        actor: 'ai',
+        model: AI_MODEL,
+        metadata: JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [] }),
+        created_at: ts,
+      });
     }
 
-    await ultralight.db.run(
-      'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      ['active', ts, existingConvo.id, uid()],
-    );
+    await galactic.db.update('conversations', {
+      set: { status: 'active', updated_at: ts },
+      where: { id: existingConvo.id },
+    });
 
     if (args.method) {
       return {
@@ -1294,7 +1300,7 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
 
   // Fast-path classification: deterministic rules for internal / OTA emails
   // that don't need AI classification or drafting.
-  const businessEmail = ((ultralight.env.BUSINESS_EMAIL as string) || '').toLowerCase();
+  const businessEmail = ((galactic.env.BUSINESS_EMAIL as string) || '').toLowerCase();
   const businessDomain = businessEmail.split('@')[1] || '';
 
   // Internal staff emails from the same domain
@@ -1319,36 +1325,28 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       from,
     );
 
-    await ultralight.db.run(
-      'INSERT INTO conversations (id, user_id, guest_email, guest_name, subject, language, classification, status, message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        convoId,
-        uid(),
-        guestEmail,
-        guestName,
-        subject,
-        lang,
-        classification,
-        'active',
-        messageId || null,
-        ts,
-        ts,
-      ],
-    );
-    await ultralight.db.run(
-      'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        crypto.randomUUID(),
-        convoId,
-        uid(),
-        1,
-        'inbound',
-        originalBody,
-        guestEmail,
-        inboundMeta,
-        ts,
-      ],
-    );
+    await galactic.db.insert('conversations', {
+      id: convoId,
+      guest_email: guestEmail,
+      guest_name: guestName,
+      subject,
+      language: lang,
+      classification,
+      status: 'active',
+      message_id: messageId || null,
+      created_at: ts,
+      updated_at: ts,
+    });
+    await galactic.db.insert('versions', {
+      id: crypto.randomUUID(),
+      conversation_id: convoId,
+      version_num: 1,
+      type: 'inbound',
+      body: originalBody,
+      actor: guestEmail,
+      metadata: inboundMeta,
+      created_at: ts,
+    });
     if (args.method) return { statusCode: 200, body: { received: true, conversation_id: convoId } };
     return {
       success: true,
@@ -1360,7 +1358,7 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   }
 
   // ── AI classify + draft ──
-  const aiResp = await ultralight.ai({
+  const aiResp = await galactic.ai({
     model: AI_MODEL,
     messages: [
       {
@@ -1414,46 +1412,47 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   }
 
   // Create conversation
-  await ultralight.db.run(
-    'INSERT INTO conversations (id, user_id, guest_email, guest_name, subject, language, classification, status, message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [
-      convoId,
-      uid(),
-      guestEmail,
-      guestName,
-      subject,
-      parsed.language,
-      parsed.classification,
-      'active',
-      messageId || null,
-      ts,
-      ts,
-    ],
-  );
+  await galactic.db.insert('conversations', {
+    id: convoId,
+    guest_email: guestEmail,
+    guest_name: guestName,
+    subject,
+    language: parsed.language,
+    classification: parsed.classification,
+    status: 'active',
+    message_id: messageId || null,
+    created_at: ts,
+    updated_at: ts,
+  });
 
   // Version 1: inbound (original body for admin reference, extracted emails in metadata)
-  await ultralight.db.run(
-    'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [crypto.randomUUID(), convoId, uid(), 1, 'inbound', originalBody, guestEmail, inboundMeta, ts],
-  );
+  await galactic.db.insert('versions', {
+    id: crypto.randomUUID(),
+    conversation_id: convoId,
+    version_num: 1,
+    type: 'inbound',
+    body: originalBody,
+    actor: guestEmail,
+    metadata: inboundMeta,
+    created_at: ts,
+  });
 
   // Version 2: auto_draft (if should_reply)
   if (parsed.should_reply && parsed.draft_body) {
-    await ultralight.db.run(
-      'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, model, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        crypto.randomUUID(),
-        convoId,
-        uid(),
-        2,
-        'auto_draft',
-        parsed.draft_body,
-        'ai',
-        AI_MODEL,
-        JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [], priority: parsed.priority }),
-        ts,
-      ],
-    );
+    await galactic.db.insert('versions', {
+      id: crypto.randomUUID(),
+      conversation_id: convoId,
+      version_num: 2,
+      type: 'auto_draft',
+      body: parsed.draft_body,
+      actor: 'ai',
+      model: AI_MODEL,
+      metadata: JSON.stringify({
+        knowledge_gaps: parsed.knowledge_gaps || [],
+        priority: parsed.priority,
+      }),
+      created_at: ts,
+    });
   }
 
   if (args.method) return { statusCode: 200, body: { received: true, conversation_id: convoId } };
@@ -1494,20 +1493,22 @@ export async function conversation_act(args: {
   const { conversation_id, action, body: inputBody, prompt, to: toOverride } = args;
   if (!conversation_id || !action) throw new Error('conversation_id and action are required');
 
-  const convo = await ultralight.db.first(
-    'SELECT * FROM conversations WHERE id = ? AND user_id = ?',
-    [conversation_id, uid()],
-  ) as ConversationRow | null;
+  const convo = await galactic.db.first('conversations', {
+    where: { id: conversation_id },
+  }) as ConversationRow | null;
   if (!convo) throw new Error('Conversation not found');
 
   const ts = now();
   const actor = uname();
 
   // Get latest draft version
-  const latestDraft = await ultralight.db.first(
-    'SELECT * FROM versions WHERE conversation_id = ? AND user_id = ? AND type IN (?, ?, ?, ?) ORDER BY version_num DESC LIMIT 1',
-    [conversation_id, uid(), 'auto_draft', 'regeneration', 'manual_edit', 'followup_draft'],
-  ) as VersionRow | null;
+  const latestDraft = await galactic.db.first('versions', {
+    where: {
+      conversation_id,
+      type: { in: ['auto_draft', 'regeneration', 'manual_edit', 'followup_draft'] },
+    },
+    orderBy: { column: 'version_num', dir: 'desc' },
+  }) as VersionRow | null;
 
   if (action === 'send') {
     const bodyToSend = inputBody || latestDraft?.body;
@@ -1523,30 +1524,28 @@ export async function conversation_act(args: {
     const staffReplied = await checkSentFolder(recipient);
     if (staffReplied) {
       const vNum = await nextVersionNum(conversation_id);
-      await ultralight.db.run(
-        "INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, metadata, created_at) VALUES (?, ?, ?, ?, 'discarded', ?, 'system', ?, ?)",
-        [
-          crypto.randomUUID(),
-          conversation_id,
-          uid(),
-          vNum,
-          bodyToSend,
-          JSON.stringify({ reason: 'staff_already_replied' }),
-          ts,
-        ],
-      );
-      await ultralight.db.run(
-        'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-        ['resolved', ts, conversation_id, uid()],
-      );
+      await galactic.db.insert('versions', {
+        id: crypto.randomUUID(),
+        conversation_id,
+        version_num: vNum,
+        type: 'discarded',
+        body: bodyToSend,
+        actor: 'system',
+        metadata: JSON.stringify({ reason: 'staff_already_replied' }),
+        created_at: ts,
+      });
+      await galactic.db.update('conversations', {
+        set: { status: 'resolved', updated_at: ts },
+        where: { id: conversation_id },
+      });
       return { success: true, action: 'skipped', reason: 'staff_already_replied', conversation_id };
     }
 
     const vNum = await nextVersionNum(conversation_id);
-    const isSentBefore = !!(await ultralight.db.first(
-      "SELECT id FROM versions WHERE conversation_id = ? AND user_id = ? AND type IN ('sent', 'followup_sent')",
-      [conversation_id, uid()],
-    ));
+    const isSentBefore = !!(await galactic.db.first('versions', {
+      columns: ['id'],
+      where: { conversation_id, type: { in: ['sent', 'followup_sent'] } },
+    }));
     const vType = isSentBefore ? 'followup_sent' : 'sent';
 
     // Send via SMTP through hotel's mail server
@@ -1563,48 +1562,40 @@ export async function conversation_act(args: {
     const sendMeta = recipient !== convo.guest_email
       ? JSON.stringify({ sent_to: recipient })
       : null;
-    await ultralight.db.run(
-      'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, resend_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        crypto.randomUUID(),
-        conversation_id,
-        uid(),
-        vNum,
-        vType,
-        bodyToSend,
-        actor,
-        result.messageId || null,
-        sendMeta,
-        ts,
-      ],
-    );
-    await ultralight.db.run(
-      'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      ['resolved', ts, conversation_id, uid()],
-    );
+    await galactic.db.insert('versions', {
+      id: crypto.randomUUID(),
+      conversation_id,
+      version_num: vNum,
+      type: vType,
+      body: bodyToSend,
+      actor,
+      resend_id: result.messageId || null,
+      metadata: sendMeta,
+      created_at: ts,
+    });
+    await galactic.db.update('conversations', {
+      set: { status: 'resolved', updated_at: ts },
+      where: { id: conversation_id },
+    });
 
     return { success: true, action: 'sent', conversation_id, to: recipient };
   }
 
   if (action === 'discard') {
-    await ultralight.db.run(
-      'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      ['discarded', ts, conversation_id, uid()],
-    );
+    await galactic.db.update('conversations', {
+      set: { status: 'discarded', updated_at: ts },
+      where: { id: conversation_id },
+    });
     const vNum = await nextVersionNum(conversation_id);
-    await ultralight.db.run(
-      'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        crypto.randomUUID(),
-        conversation_id,
-        uid(),
-        vNum,
-        'discarded',
-        latestDraft?.body || '',
-        actor,
-        ts,
-      ],
-    );
+    await galactic.db.insert('versions', {
+      id: crypto.randomUUID(),
+      conversation_id,
+      version_num: vNum,
+      type: 'discarded',
+      body: latestDraft?.body || '',
+      actor,
+      created_at: ts,
+    });
     return { success: true, action: 'discarded', conversation_id };
   }
 
@@ -1612,20 +1603,25 @@ export async function conversation_act(args: {
     if (convo.status !== 'discarded') {
       throw new Error('Only discarded conversations can be restored');
     }
-    await ultralight.db.run(
-      'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      ['active', ts, conversation_id, uid()],
-    );
+    await galactic.db.update('conversations', {
+      set: { status: 'active', updated_at: ts },
+      where: { id: conversation_id },
+    });
     return { success: true, action: 'restored', conversation_id };
   }
 
   if (action === 'save_edit') {
     if (!inputBody) throw new Error('body is required for save_edit');
     const vNum = await nextVersionNum(conversation_id);
-    await ultralight.db.run(
-      'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), conversation_id, uid(), vNum, 'manual_edit', inputBody, actor, ts],
-    );
+    await galactic.db.insert('versions', {
+      id: crypto.randomUUID(),
+      conversation_id,
+      version_num: vNum,
+      type: 'manual_edit',
+      body: inputBody,
+      actor,
+      created_at: ts,
+    });
     return { success: true, action: 'saved', conversation_id, version_num: vNum };
   }
 
@@ -1634,16 +1630,17 @@ export async function conversation_act(args: {
     const conventionsText = await getConventionsText();
 
     // Get full thread for context
-    const allVersions = await ultralight.db.all(
-      'SELECT type, body, actor FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num',
-      [conversation_id, uid()],
-    ) as Array<Pick<VersionRow, 'type' | 'body' | 'actor'>>;
+    const allVersions = await galactic.db.select('versions', {
+      columns: ['type', 'body', 'actor'],
+      where: { conversation_id },
+      orderBy: 'version_num',
+    }) as Array<Pick<VersionRow, 'type' | 'body' | 'actor'>>;
     const inboundBodies = allVersions.filter((version) => version.type === 'inbound').map((
       version,
     ) => version.body).join('\n---\n');
     const currentDraft = latestDraft?.body || '';
 
-    const aiResp = await ultralight.ai({
+    const aiResp = await galactic.ai({
       model: AI_MODEL,
       messages: [
         {
@@ -1662,22 +1659,18 @@ export async function conversation_act(args: {
     const parsed = parseDraftResponse(aiResp.content, aiResp.content || currentDraft);
 
     const vNum = await nextVersionNum(conversation_id);
-    await ultralight.db.run(
-      'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, actor_prompt, model, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        crypto.randomUUID(),
-        conversation_id,
-        uid(),
-        vNum,
-        'regeneration',
-        parsed.draft_body,
-        'ai',
-        regenPrompt,
-        AI_MODEL,
-        JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [] }),
-        ts,
-      ],
-    );
+    await galactic.db.insert('versions', {
+      id: crypto.randomUUID(),
+      conversation_id,
+      version_num: vNum,
+      type: 'regeneration',
+      body: parsed.draft_body,
+      actor: 'ai',
+      actor_prompt: regenPrompt,
+      model: AI_MODEL,
+      metadata: JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [] }),
+      created_at: ts,
+    });
 
     return {
       success: true,
@@ -1699,7 +1692,7 @@ export async function conversation_act(args: {
     const instruction = prompt
       ? prompt
       : 'Translate the following text to English. If the text is already in English, translate it to Japanese instead. Output ONLY the translation — no commentary, no quoting, no language label.';
-    const aiResp = await ultralight.ai({
+    const aiResp = await galactic.ai({
       model: AI_MODEL,
       messages: [
         { role: 'system', content: instruction },
@@ -1717,10 +1710,11 @@ export async function conversation_act(args: {
     // should_reply=false). Reuses the same conventions + thread-context + cache
     // as the auto-draft pipeline. Optional `prompt` lets admin steer the draft.
     const conventionsText = await getConventionsText();
-    const allVersions = await ultralight.db.all(
-      'SELECT type, body, actor FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num',
-      [conversation_id, uid()],
-    ) as Array<Pick<VersionRow, 'type' | 'body' | 'actor'>>;
+    const allVersions = await galactic.db.select('versions', {
+      columns: ['type', 'body', 'actor'],
+      where: { conversation_id },
+      orderBy: 'version_num',
+    }) as Array<Pick<VersionRow, 'type' | 'body' | 'actor'>>;
 
     // Prefer cleaned bodies for AI input (same cleanEmailBody used by receive_email)
     const threadContext = formatThreadContext(allVersions, true);
@@ -1756,7 +1750,7 @@ export async function conversation_act(args: {
           cleanEmailBody(version.body || '').cleaned
         ).join('\n---\n').substring(0, 2000);
 
-    const aiResp = await ultralight.ai({
+    const aiResp = await galactic.ai({
       model: AI_MODEL,
       messages: [
         { role: 'system', content: systemPrompt, cache_control: { type: 'ephemeral' } },
@@ -1773,29 +1767,28 @@ export async function conversation_act(args: {
     if (!parsed.draft_body) throw new Error('Draft generation failed: no draft_body in response');
 
     const vNum = await nextVersionNum(conversation_id);
-    await ultralight.db.run(
-      'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, actor_prompt, model, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        crypto.randomUUID(),
-        conversation_id,
-        uid(),
-        vNum,
-        isFollowup ? 'followup_draft' : 'auto_draft',
-        parsed.draft_body,
-        'ai',
-        prompt || null,
-        AI_MODEL,
-        JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [], manual_trigger: true }),
-        ts,
-      ],
-    );
+    await galactic.db.insert('versions', {
+      id: crypto.randomUUID(),
+      conversation_id,
+      version_num: vNum,
+      type: isFollowup ? 'followup_draft' : 'auto_draft',
+      body: parsed.draft_body,
+      actor: 'ai',
+      actor_prompt: prompt || null,
+      model: AI_MODEL,
+      metadata: JSON.stringify({
+        knowledge_gaps: parsed.knowledge_gaps || [],
+        manual_trigger: true,
+      }),
+      created_at: ts,
+    });
 
     // Nudge the conversation back to active if it was resolved/archived
     if (convo.status !== 'active') {
-      await ultralight.db.run(
-        'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-        ['active', ts, conversation_id, uid()],
-      );
+      await galactic.db.update('conversations', {
+        set: { status: 'active', updated_at: ts },
+        where: { id: conversation_id },
+      });
     }
 
     return {
@@ -1813,13 +1806,14 @@ export async function conversation_act(args: {
     if (prompt) {
       // AI-generated followup
       const conventionsText = await getConventionsText();
-      const allVersions = await ultralight.db.all(
-        'SELECT type, body FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num',
-        [conversation_id, uid()],
-      ) as Array<Pick<VersionRow, 'type' | 'body'>>;
+      const allVersions = await galactic.db.select('versions', {
+        columns: ['type', 'body'],
+        where: { conversation_id },
+        orderBy: 'version_num',
+      }) as Array<Pick<VersionRow, 'type' | 'body'>>;
       const threadContext = formatThreadContext(allVersions, false);
 
-      const aiResp = await ultralight.ai({
+      const aiResp = await galactic.ai({
         model: AI_MODEL,
         messages: [
           {
@@ -1835,25 +1829,21 @@ export async function conversation_act(args: {
       });
 
       const vNum = await nextVersionNum(conversation_id);
-      await ultralight.db.run(
-        'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, actor_prompt, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [
-          crypto.randomUUID(),
-          conversation_id,
-          uid(),
-          vNum,
-          'followup_draft',
-          aiResp.content || '',
-          'ai',
-          prompt,
-          AI_MODEL,
-          ts,
-        ],
-      );
-      await ultralight.db.run(
-        'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-        ['active', ts, conversation_id, uid()],
-      );
+      await galactic.db.insert('versions', {
+        id: crypto.randomUUID(),
+        conversation_id,
+        version_num: vNum,
+        type: 'followup_draft',
+        body: aiResp.content || '',
+        actor: 'ai',
+        actor_prompt: prompt,
+        model: AI_MODEL,
+        created_at: ts,
+      });
+      await galactic.db.update('conversations', {
+        set: { status: 'active', updated_at: ts },
+        where: { id: conversation_id },
+      });
       return {
         success: true,
         action: 'followup_drafted',
@@ -1863,14 +1853,19 @@ export async function conversation_act(args: {
     } else if (inputBody) {
       // Manual followup draft
       const vNum = await nextVersionNum(conversation_id);
-      await ultralight.db.run(
-        'INSERT INTO versions (id, conversation_id, user_id, version_num, type, body, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [crypto.randomUUID(), conversation_id, uid(), vNum, 'followup_draft', inputBody, actor, ts],
-      );
-      await ultralight.db.run(
-        'UPDATE conversations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-        ['active', ts, conversation_id, uid()],
-      );
+      await galactic.db.insert('versions', {
+        id: crypto.randomUUID(),
+        conversation_id,
+        version_num: vNum,
+        type: 'followup_draft',
+        body: inputBody,
+        actor,
+        created_at: ts,
+      });
+      await galactic.db.update('conversations', {
+        set: { status: 'active', updated_at: ts },
+        where: { id: conversation_id },
+      });
       return { success: true, action: 'followup_drafted', conversation_id };
     }
     throw new Error('prompt or body required for followup_draft');
@@ -1887,16 +1882,15 @@ export async function conversation_history(args: { conversation_id: string }): P
   const { conversation_id } = args;
   if (!conversation_id) throw new Error('conversation_id is required');
 
-  const convo = await ultralight.db.first(
-    'SELECT * FROM conversations WHERE id = ? AND user_id = ?',
-    [conversation_id, uid()],
-  ) as ConversationRow | null;
+  const convo = await galactic.db.first('conversations', {
+    where: { id: conversation_id },
+  }) as ConversationRow | null;
   if (!convo) throw new Error('Conversation not found');
 
-  const versions = await ultralight.db.all(
-    'SELECT * FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num ASC',
-    [conversation_id, uid()],
-  ) as VersionRow[];
+  const versions = await galactic.db.select('versions', {
+    where: { conversation_id },
+    orderBy: { column: 'version_num', dir: 'asc' },
+  }) as VersionRow[];
 
   return {
     conversation: convo,
@@ -1915,34 +1909,46 @@ export async function conversations_list(args: {
 }): Promise<unknown> {
   const { status, limit, search } = args;
 
-  let sql =
-    'SELECT c.*, (SELECT COUNT(*) FROM versions v WHERE v.conversation_id = c.id AND v.user_id = c.user_id) as version_count FROM conversations c WHERE c.user_id = ?';
-  const params: SqlValue[] = [uid()];
-
-  if (status) {
-    sql += ' AND c.status = ?';
-    params.push(status);
-  }
+  const where: Record<string, unknown> = {};
+  if (status) where.status = status;
   if (search) {
-    sql += ' AND (c.guest_email LIKE ? OR c.subject LIKE ?)';
-    params.push('%' + search + '%', '%' + search + '%');
+    where._or = [
+      { guest_email: { like: '%' + search + '%' } },
+      { subject: { like: '%' + search + '%' } },
+    ];
   }
 
-  sql += ' ORDER BY c.updated_at DESC LIMIT ?';
-  params.push(limit || 50);
+  const convos = await galactic.db.select('conversations', {
+    where,
+    orderBy: { column: 'updated_at', dir: 'desc' },
+    limit: limit || 50,
+  }) as ConversationRow[];
 
-  const convos = await ultralight.db.all(sql, params) as ConversationWithVersionCountRow[];
+  // Version counts per conversation (was a correlated subquery — now one
+  // grouped query merged in JS).
+  const versionCounts: Record<string, number> = {};
+  if (convos.length > 0) {
+    const countRows = await galactic.db.select('versions', {
+      columns: ['conversation_id', { fn: 'count', as: 'version_count' }],
+      where: { conversation_id: { in: convos.map((c) => c.id) } },
+      groupBy: ['conversation_id'],
+    }) as Array<{ conversation_id: string; version_count: number }>;
+    for (const row of countRows) {
+      versionCounts[row.conversation_id] = row.version_count;
+    }
+  }
 
   // Get latest version for each conversation
   const result: Array<
     ConversationWithVersionCountRow & { latest_version: LatestVersionPreviewRow | null }
   > = [];
   for (const c of convos) {
-    const latest = await ultralight.db.first(
-      'SELECT type, body, actor, created_at FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num DESC LIMIT 1',
-      [c.id, uid()],
-    ) as LatestVersionPreviewRow | null;
-    result.push({ ...c, latest_version: latest });
+    const latest = await galactic.db.first('versions', {
+      columns: ['type', 'body', 'actor', 'created_at'],
+      where: { conversation_id: c.id },
+      orderBy: { column: 'version_num', dir: 'desc' },
+    }) as LatestVersionPreviewRow | null;
+    result.push({ ...c, version_count: versionCounts[c.id] || 0, latest_version: latest });
   }
 
   return { conversations: result, total: result.length };
@@ -1955,20 +1961,17 @@ export async function conversations_list(args: {
 export async function conventions_get(args: { key?: string; category?: string }): Promise<unknown> {
   const { key, category } = args;
   if (key) {
-    const row = await ultralight.db.first(
-      'SELECT * FROM conventions WHERE user_id = ? AND key = ?',
-      [uid(), key],
-    ) as ConventionRow | null;
+    const row = await galactic.db.first('conventions', {
+      where: { key },
+    }) as ConventionRow | null;
     return row || { message: 'Convention not found: ' + key };
   }
-  let sql = 'SELECT * FROM conventions WHERE user_id = ?';
-  const params: SqlValue[] = [uid()];
-  if (category) {
-    sql += ' AND category = ?';
-    params.push(category);
-  }
-  sql += ' ORDER BY category, key';
-  return { conventions: await ultralight.db.all(sql, params) as ConventionRow[] };
+  return {
+    conventions: await galactic.db.select('conventions', {
+      ...(category ? { where: { category } } : {}),
+      orderBy: ['category', 'key'],
+    }) as ConventionRow[],
+  };
 }
 
 export async function conventions_set(
@@ -1977,22 +1980,26 @@ export async function conventions_set(
   const { key, value, category } = args;
   if (!key || !value) throw new Error('key and value are required');
   const ts = now();
-  const existing = await ultralight.db.first(
-    'SELECT id FROM conventions WHERE user_id = ? AND key = ?',
-    [uid(), key],
-  ) as Pick<ConventionRow, 'id'> | null;
+  const existing = await galactic.db.first('conventions', {
+    columns: ['id'],
+    where: { key },
+  }) as Pick<ConventionRow, 'id'> | null;
   if (existing) {
-    await ultralight.db.run(
-      'UPDATE conventions SET value = ?, category = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      [value, category || 'general', ts, existing.id, uid()],
-    );
+    await galactic.db.update('conventions', {
+      set: { value, category: category || 'general', updated_at: ts },
+      where: { id: existing.id },
+    });
     return { success: true, action: 'updated', key };
   }
   const id = crypto.randomUUID();
-  await ultralight.db.run(
-    'INSERT INTO conventions (id, user_id, key, value, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [id, uid(), key, value, category || 'general', ts, ts],
-  );
+  await galactic.db.insert('conventions', {
+    id,
+    key,
+    value,
+    category: category || 'general',
+    created_at: ts,
+    updated_at: ts,
+  });
   return { success: true, action: 'created', key, id };
 }
 
@@ -2002,21 +2009,26 @@ export async function conventions_set(
 // ============================================
 
 export async function approvals_list(args: { status?: string; limit?: number }): Promise<unknown> {
-  const convos = await ultralight.db.all(
-    'SELECT * FROM conversations WHERE user_id = ? AND status = ? ORDER BY updated_at DESC LIMIT ?',
-    [uid(), 'active', args.limit || 20],
-  ) as ConversationRow[];
+  const convos = await galactic.db.select('conversations', {
+    where: { status: 'active' },
+    orderBy: { column: 'updated_at', dir: 'desc' },
+    limit: args.limit || 20,
+  }) as ConversationRow[];
 
   const approvals: ApprovalBridgeRow[] = [];
   for (const c of convos) {
-    const latestDraft = await ultralight.db.first(
-      "SELECT * FROM versions WHERE conversation_id = ? AND user_id = ? AND type IN ('auto_draft','regeneration','manual_edit','followup_draft') ORDER BY version_num DESC LIMIT 1",
-      [c.id, uid()],
-    ) as VersionRow | null;
-    const inbound = await ultralight.db.first(
-      "SELECT body FROM versions WHERE conversation_id = ? AND user_id = ? AND type = 'inbound' ORDER BY version_num DESC LIMIT 1",
-      [c.id, uid()],
-    ) as Pick<VersionRow, 'body'> | null;
+    const latestDraft = await galactic.db.first('versions', {
+      where: {
+        conversation_id: c.id,
+        type: { in: ['auto_draft', 'regeneration', 'manual_edit', 'followup_draft'] },
+      },
+      orderBy: { column: 'version_num', dir: 'desc' },
+    }) as VersionRow | null;
+    const inbound = await galactic.db.first('versions', {
+      columns: ['body'],
+      where: { conversation_id: c.id, type: 'inbound' },
+      orderBy: { column: 'version_num', dir: 'desc' },
+    }) as Pick<VersionRow, 'body'> | null;
 
     if (latestDraft) {
       const meta = parseVersionMetadata(latestDraft.metadata);
@@ -2078,12 +2090,11 @@ export async function approvals_act(
 // ============================================
 
 export async function widget_email_inbox_ui(args: {}): Promise<unknown> {
-  const countResult = await ultralight.db.first(
-    "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'active'",
-    [uid()],
-  ) as CountRow | null;
+  const activeCount = await galactic.db.count('conversations', {
+    where: { status: 'active' },
+  });
   return {
-    meta: { title: 'Email Approvals', icon: '📧', badge_count: countResult?.cnt || 0 },
+    meta: { title: 'Email Approvals', icon: '📧', badge_count: activeCount || 0 },
     app_html: DECK_UI_HTML,
     version: '5.0',
   };
@@ -2096,43 +2107,41 @@ export async function widget_email_inbox_data(
   const cardView = args.data_view || args.card_id || '';
 
   if (cardView === 'inbox_volume') {
-    const activeCnt = await ultralight.db.first(
-      "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'active'",
-      [uid()],
-    ) as CountRow | null;
-    const resolvedCnt = await ultralight.db.first(
-      "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'resolved'",
-      [uid()],
-    ) as CountRow | null;
-    const discardedCnt = await ultralight.db.first(
-      "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'discarded'",
-      [uid()],
-    ) as CountRow | null;
+    const activeCnt = await galactic.db.count('conversations', {
+      where: { status: 'active' },
+    });
+    const resolvedCnt = await galactic.db.count('conversations', {
+      where: { status: 'resolved' },
+    });
+    const discardedCnt = await galactic.db.count('conversations', {
+      where: { status: 'discarded' },
+    });
     return {
       card_id: 'inbox_volume',
-      meta: { title: 'Inbox Volume', icon: 'EO', badge_count: activeCnt?.cnt || 0, status: 'live' },
+      meta: { title: 'Inbox Volume', icon: 'EO', badge_count: activeCnt || 0, status: 'live' },
       body: {
         kind: 'metric',
-        metric: activeCnt?.cnt || 0,
+        metric: activeCnt || 0,
         label: 'drafts awaiting your review',
       },
-      footer: `${resolvedCnt?.cnt || 0} resolved - ${discardedCnt?.cnt || 0} discarded`,
+      footer: `${resolvedCnt || 0} resolved - ${discardedCnt || 0} discarded`,
       updated_at: new Date().toISOString(),
     };
   }
 
   if (cardView === 'drafts_queue') {
-    const activeCnt = await ultralight.db.first(
-      "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'active'",
-      [uid()],
-    ) as CountRow | null;
-    const convos = await ultralight.db.all(
-      'SELECT guest_name, guest_email, subject, updated_at FROM conversations WHERE user_id = ? AND status = ? ORDER BY updated_at DESC LIMIT 4',
-      [uid(), 'active'],
-    ) as Pick<ConversationRow, 'guest_name' | 'guest_email' | 'subject' | 'updated_at'>[];
+    const activeCnt = await galactic.db.count('conversations', {
+      where: { status: 'active' },
+    });
+    const convos = await galactic.db.select('conversations', {
+      columns: ['guest_name', 'guest_email', 'subject', 'updated_at'],
+      where: { status: 'active' },
+      orderBy: { column: 'updated_at', dir: 'desc' },
+      limit: 4,
+    }) as Pick<ConversationRow, 'guest_name' | 'guest_email' | 'subject' | 'updated_at'>[];
     return {
       card_id: 'drafts_queue',
-      meta: { title: 'Drafts Queue', icon: 'EO', badge_count: activeCnt?.cnt || 0, status: 'live' },
+      meta: { title: 'Drafts Queue', icon: 'EO', badge_count: activeCnt || 0, status: 'live' },
       body: {
         kind: 'list',
         rows: convos.map((conversation) => [
@@ -2141,23 +2150,38 @@ export async function widget_email_inbox_data(
           conversation.updated_at,
         ]),
       },
-      footer: `${activeCnt?.cnt || 0} active drafts`,
+      footer: `${activeCnt || 0} active drafts`,
       updated_at: new Date().toISOString(),
     };
   }
 
   // Active conversations with their full version history
-  const convos = await ultralight.db.all(
-    'SELECT * FROM conversations WHERE user_id = ? AND status = ? ORDER BY updated_at DESC LIMIT 50',
-    [uid(), view === 'archive' ? 'resolved' : view === 'discarded' ? 'discarded' : 'active'],
-  ) as ConversationRow[];
+  const convos = await galactic.db.select('conversations', {
+    where: {
+      status: view === 'archive' ? 'resolved' : view === 'discarded' ? 'discarded' : 'active',
+    },
+    orderBy: { column: 'updated_at', dir: 'desc' },
+    limit: 50,
+  }) as ConversationRow[];
 
   const items: EmailInboxItem[] = [];
   for (const c of convos) {
-    const versions = await ultralight.db.all(
-      'SELECT id, version_num, type, body, actor, actor_prompt, model, metadata, resend_id, created_at FROM versions WHERE conversation_id = ? AND user_id = ? ORDER BY version_num ASC',
-      [c.id, uid()],
-    ) as VersionRow[];
+    const versions = await galactic.db.select('versions', {
+      columns: [
+        'id',
+        'version_num',
+        'type',
+        'body',
+        'actor',
+        'actor_prompt',
+        'model',
+        'metadata',
+        'resend_id',
+        'created_at',
+      ],
+      where: { conversation_id: c.id },
+      orderBy: { column: 'version_num', dir: 'asc' },
+    }) as VersionRow[];
 
     const parsedVersions = parseConversationVersions(versions);
 
@@ -2188,26 +2212,23 @@ export async function widget_email_inbox_data(
   }
 
   // Counts per status
-  const activeCnt = await ultralight.db.first(
-    "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'active'",
-    [uid()],
-  ) as CountRow | null;
-  const resolvedCnt = await ultralight.db.first(
-    "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'resolved'",
-    [uid()],
-  ) as CountRow | null;
-  const discardedCnt = await ultralight.db.first(
-    "SELECT COUNT(*) as cnt FROM conversations WHERE user_id = ? AND status = 'discarded'",
-    [uid()],
-  ) as CountRow | null;
+  const activeCnt = await galactic.db.count('conversations', {
+    where: { status: 'active' },
+  });
+  const resolvedCnt = await galactic.db.count('conversations', {
+    where: { status: 'resolved' },
+  });
+  const discardedCnt = await galactic.db.count('conversations', {
+    where: { status: 'discarded' },
+  });
 
   return {
-    meta: { title: 'Email Approvals', icon: '📧', badge_count: activeCnt?.cnt || 0 },
+    meta: { title: 'Email Approvals', icon: '📧', badge_count: activeCnt || 0 },
     items,
     counts: {
-      active: activeCnt?.cnt || 0,
-      resolved: resolvedCnt?.cnt || 0,
-      discarded: discardedCnt?.cnt || 0,
+      active: activeCnt || 0,
+      resolved: resolvedCnt || 0,
+      discarded: discardedCnt || 0,
     },
   };
 }
@@ -2223,10 +2244,9 @@ export async function widget_approval_queue(args: {}): Promise<unknown> {
 // ============================================
 
 export async function widget_email_faqs_ui(args: {}): Promise<unknown> {
-  const conventions = await ultralight.db.all(
-    'SELECT * FROM conventions WHERE user_id = ? ORDER BY category, key',
-    [uid()],
-  ) as ConventionRow[];
+  const conventions = await galactic.db.select('conventions', {
+    orderBy: ['category', 'key'],
+  }) as ConventionRow[];
   return {
     meta: { title: 'Email FAQs', icon: '📋', badge_count: conventions.length },
     app_html: FAQS_UI_HTML,
@@ -2235,16 +2255,21 @@ export async function widget_email_faqs_ui(args: {}): Promise<unknown> {
 }
 
 export async function widget_email_faqs_data(args: {}): Promise<unknown> {
-  const conventions = await ultralight.db.all(
-    "SELECT * FROM conventions WHERE user_id = ? AND category != '_deleted' ORDER BY category, key",
-    [uid()],
-  ) as ConventionRow[];
+  const conventions = await galactic.db.select('conventions', {
+    where: { category: { ne: '_deleted' } },
+    orderBy: ['category', 'key'],
+  }) as ConventionRow[];
 
   // Aggregate knowledge gaps from recent versions
-  const recentGaps = await ultralight.db.all(
-    "SELECT metadata FROM versions WHERE user_id = ? AND metadata IS NOT NULL AND type IN ('auto_draft', 'regeneration') ORDER BY created_at DESC LIMIT 100",
-    [uid()],
-  ) as Array<Pick<VersionRow, 'metadata'>>;
+  const recentGaps = await galactic.db.select('versions', {
+    columns: ['metadata'],
+    where: {
+      metadata: { isNull: false },
+      type: { in: ['auto_draft', 'regeneration'] },
+    },
+    orderBy: { column: 'created_at', dir: 'desc' },
+    limit: 100,
+  }) as Array<Pick<VersionRow, 'metadata'>>;
 
   const gapCounts: Record<string, number> = {};
   for (const row of recentGaps) {

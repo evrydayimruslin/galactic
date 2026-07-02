@@ -2,7 +2,7 @@
 // Track spending, manage budgets, and get financial insights.
 // Storage: Galactic D1 (transactions, budgets)
 
-const ultralight = (globalThis as any).ultralight;
+const galactic = (globalThis as any).galactic;
 
 // ── ADD TRANSACTION ──
 
@@ -20,10 +20,16 @@ export async function add(args: {
   const now = new Date().toISOString();
   const cat = category.toLowerCase().trim();
 
-  await ultralight.db.run(
-    'INSERT INTO transactions (id, user_id, amount, category, description, date, type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, ultralight.user.id, amount, cat, description || '', txDate, txType, now, now]
-  );
+  await galactic.db.insert('transactions', {
+    id,
+    amount,
+    category: cat,
+    description: description || '',
+    date: txDate,
+    type: txType,
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -48,22 +54,21 @@ export async function list(args: {
   const monthStart = targetMonth + '-01';
   const monthEnd = targetMonth + '-31';
 
-  let sql = 'SELECT * FROM transactions WHERE user_id = ? AND date >= ? AND date <= ?';
-  const params: any[] = [ultralight.user.id, monthStart, monthEnd];
-
+  const where: Record<string, unknown> = {
+    date: { gte: monthStart, lte: monthEnd },
+  };
   if (category) {
-    sql += ' AND category = ?';
-    params.push(category.toLowerCase().trim());
+    where.category = category.toLowerCase().trim();
   }
   if (type) {
-    sql += ' AND type = ?';
-    params.push(type);
+    where.type = type;
   }
 
-  sql += ' ORDER BY date DESC LIMIT ?';
-  params.push(limit || 50);
-
-  const transactions = await ultralight.db.all(sql, params);
+  const transactions = await galactic.db.select('transactions', {
+    where,
+    orderBy: { column: 'date', dir: 'desc' },
+    limit: limit || 50,
+  });
 
   const total = transactions.reduce((sum: number, t: any) => {
     return t.type === 'income' ? sum + t.amount : sum - t.amount;
@@ -87,10 +92,16 @@ export async function summary(args: {
   const monthStart = targetMonth + '-01';
   const monthEnd = targetMonth + '-31';
 
-  const byCategory = await ultralight.db.all(
-    'SELECT category, type, COUNT(*) as count, SUM(amount) as total FROM transactions WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY category, type',
-    [ultralight.user.id, monthStart, monthEnd]
-  );
+  const byCategory = await galactic.db.select('transactions', {
+    columns: [
+      'category',
+      'type',
+      { fn: 'count', as: 'count' },
+      { fn: 'sum', column: 'amount', as: 'total' },
+    ],
+    where: { date: { gte: monthStart, lte: monthEnd } },
+    groupBy: ['category', 'type'],
+  });
 
   const categoryMap: Record<string, { spent: number; income: number; count: number }> = {};
   let totalSpent = 0;
@@ -115,10 +126,9 @@ export async function summary(args: {
   // Check budgets for warnings
   const budgetWarnings: Array<{ category: string; limit: number; spent: number }> = [];
   for (const cat of Object.keys(categoryMap)) {
-    const budgetData = await ultralight.db.first(
-      'SELECT * FROM budgets WHERE user_id = ? AND category = ?',
-      [ultralight.user.id, cat]
-    );
+    const budgetData = await galactic.db.first('budgets', {
+      where: { category: cat },
+    });
     if (budgetData && budgetData.limit_amount) {
       if (categoryMap[cat].spent > budgetData.limit_amount * 0.8) {
         budgetWarnings.push({
@@ -160,32 +170,33 @@ export async function budget(args: {
     const now = new Date().toISOString();
     const per = period || 'monthly';
 
-    const existing = await ultralight.db.first(
-      'SELECT id FROM budgets WHERE user_id = ? AND category = ?',
-      [ultralight.user.id, cat]
-    );
+    const existing = await galactic.db.first('budgets', {
+      columns: ['id'],
+      where: { category: cat },
+    });
 
     if (existing) {
-      await ultralight.db.run(
-        'UPDATE budgets SET limit_amount = ?, period = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-        [limit_amount || 0, per, now, existing.id, ultralight.user.id]
-      );
+      await galactic.db.update('budgets', {
+        set: { limit_amount: limit_amount || 0, period: per, updated_at: now },
+        where: { id: existing.id },
+      });
     } else {
       const id = crypto.randomUUID();
-      await ultralight.db.run(
-        'INSERT INTO budgets (id, user_id, category, limit_amount, period, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [id, ultralight.user.id, cat, limit_amount || 0, per, now, now]
-      );
+      await galactic.db.insert('budgets', {
+        id,
+        category: cat,
+        limit_amount: limit_amount || 0,
+        period: per,
+        created_at: now,
+        updated_at: now,
+      });
     }
 
     return { success: true, budget: { category: cat, limit_amount: limit_amount || 0, period: per, updated_at: now } };
   }
 
   // Otherwise, view budgets
-  const budgets = await ultralight.db.all(
-    'SELECT * FROM budgets WHERE user_id = ?',
-    [ultralight.user.id]
-  );
+  const budgets = await galactic.db.select('budgets');
 
   if (budgets.length === 0) {
     return { budgets: [], message: 'No budgets set yet. Use budget with category and limit_amount to set one.' };
@@ -203,23 +214,44 @@ export async function status(args?: {}): Promise<unknown> {
   const monthStart = currentMonth + '-01';
   const monthEnd = currentMonth + '-31';
 
-  const txSummary = await ultralight.db.first(
-    'SELECT COUNT(*) as count, COALESCE(SUM(CASE WHEN type = \'expense\' THEN amount ELSE 0 END), 0) as total_spent, COALESCE(SUM(CASE WHEN type = \'income\' THEN amount ELSE 0 END), 0) as total_income, COUNT(DISTINCT category) as categories_used FROM transactions WHERE user_id = ? AND date >= ? AND date <= ?',
-    [ultralight.user.id, monthStart, monthEnd]
-  );
+  // SUM(CASE WHEN type=... ) is not expressible — one grouped select on type, folded in JS.
+  const byType = await galactic.db.select('transactions', {
+    columns: [
+      'type',
+      { fn: 'count', as: 'count' },
+      { fn: 'sum', column: 'amount', as: 'total' },
+    ],
+    where: { date: { gte: monthStart, lte: monthEnd } },
+    groupBy: ['type'],
+  });
 
-  const budgetCount = await ultralight.db.first(
-    'SELECT COUNT(*) as count FROM budgets WHERE user_id = ?',
-    [ultralight.user.id]
-  );
+  let transactionCount = 0;
+  let totalSpent = 0;
+  let totalIncome = 0;
+  for (const row of byType) {
+    transactionCount += row.count;
+    if (row.type === 'income') {
+      totalIncome += row.total ?? 0;
+    } else if (row.type === 'expense') {
+      totalSpent += row.total ?? 0;
+    }
+  }
+
+  const categoriesUsed = await galactic.db.count('transactions', {
+    where: { date: { gte: monthStart, lte: monthEnd } },
+    column: 'category',
+    distinct: true,
+  });
+
+  const budgetCount = await galactic.db.count('budgets');
 
   return {
     current_month: currentMonth,
-    transaction_count: txSummary?.count || 0,
-    total_spent: txSummary?.total_spent || 0,
-    total_income: txSummary?.total_income || 0,
-    net: (txSummary?.total_income || 0) - (txSummary?.total_spent || 0),
-    categories_used: txSummary?.categories_used || 0,
-    budgets_set: budgetCount?.count || 0,
+    transaction_count: transactionCount,
+    total_spent: totalSpent,
+    total_income: totalIncome,
+    net: totalIncome - totalSpent,
+    categories_used: categoriesUsed || 0,
+    budgets_set: budgetCount || 0,
   };
 }

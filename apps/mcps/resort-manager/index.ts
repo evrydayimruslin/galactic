@@ -4,39 +4,15 @@
 // rooms, ski rentals/lessons, golf tee times, restaurant,
 // store, guidelines, email agent, and admin approval queue.
 //
-// Storage: Galactic D1 (14 tables across 3 migrations)
-// AI: ultralight.ai() for email classification + reply drafting
+// Storage: Galactic D1 (14 tables across 3 migrations) via the scoped
+//          structured API (galactic.db.select/first/count/insert/update/
+//          delete/upsert/batch). Per-user scoping is injected host-side —
+//          app code never touches user_id.
+// AI: galactic.ai() for email classification + reply drafting
 // Network: Resend API for outbound email
 // Permissions: ai:call, net:fetch
 
-const ultralight = globalThis.ultralight;
-
-type SqlValue = string | number | null;
-
-interface SqlStatement {
-  sql: string;
-  params: SqlValue[];
-}
-
-interface CountRow {
-  cnt: number;
-}
-
-interface NamedCountRow {
-  count: number;
-}
-
-interface TotalRow {
-  total: number;
-}
-
-interface RevenueRow {
-  rev: number;
-}
-
-interface CoversRow {
-  covers: number;
-}
+const galactic = (globalThis as any).galactic;
 
 interface RoomRow {
   id: string;
@@ -246,8 +222,49 @@ function normalizeGuestName(name: string): string {
   return name.trim().replace(/\s+/g, ' ');
 }
 
-function uid(): string {
-  return ultralight.user.id;
+// Day-after helper for date-range filters. All timestamps in this app are ISO
+// strings (nowISO), so `DATE(col) = d` translates to `col >= d AND col < d+1day`
+// under plain string comparison.
+function nextDayISO(date: string): string {
+  const d = new Date(date + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().split('T')[0];
+}
+
+// Structured-where range equivalent of `DATE(col) = date`.
+function dayRange(date: string): { gte: string; lt: string } {
+  return { gte: date, lt: nextDayISO(date) };
+}
+
+// D1 caps bound parameters per statement, so bulk inserts are chunked.
+function chunkRows<T>(rows: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < rows.length; i += size) {
+    chunks.push(rows.slice(i, i + size));
+  }
+  return chunks;
+}
+
+// Guest lookup filter — explicit allowlist of the only two filter columns this
+// app supports. Anything else throws instead of being interpolated.
+type GuestFilter =
+  | { field: 'room_number'; value: string }
+  | { field: 'guest_name'; value: string };
+
+function guestScope(filter: GuestFilter): Record<string, unknown> {
+  switch (filter.field) {
+    case 'room_number':
+      return { room_number: filter.value };
+    case 'guest_name':
+      return { guest_name: { like: '%' + filter.value + '%' } };
+    default:
+      throw new Error('Unknown guest filter: ' + (filter as { field: string }).field);
+  }
+}
+
+function buildGuestFilter(room_number: string | undefined, guest_name: string | undefined): GuestFilter {
+  if (room_number) return { field: 'room_number', value: room_number };
+  return { field: 'guest_name', value: normalizeGuestName(guest_name!) };
 }
 
 // ============================================
@@ -263,12 +280,9 @@ export async function rooms_initialize(args: {
   const { tier_map, price_map } = args;
 
   // Check if already initialized
-  const existing: CountRow | null = await ultralight.db.first(
-    'SELECT COUNT(*) as cnt FROM rooms WHERE user_id = ?',
-    [uid()]
-  );
-  if (existing && existing.cnt > 0) {
-    return { success: false, message: 'Rooms already initialized. Found ' + existing.cnt + ' rooms.', total_rooms: existing.cnt };
+  const existingCount: number = await galactic.db.count('rooms');
+  if (existingCount > 0) {
+    return { success: false, message: 'Rooms already initialized. Found ' + existingCount + ' rooms.', total_rooms: existingCount };
   }
 
   // Default tier assignment: Twin (01-20), Corner King (21-28), Junior Suite (29-33), Onsen Suite (34-37)
@@ -289,7 +303,7 @@ export async function rooms_initialize(args: {
   const prices = price_map || defaultPrices;
 
   const now = nowISO();
-  const statements: SqlStatement[] = [];
+  const rows: Record<string, unknown>[] = [];
   const tierCounts: Record<string, number> = {};
 
   for (let building = 4; building <= 8; building++) {
@@ -301,18 +315,29 @@ export async function rooms_initialize(args: {
 
       tierCounts[tier] = (tierCounts[tier] || 0) + 1;
 
-      statements.push({
-        sql: 'INSERT INTO rooms (id, user_id, room_number, building, floor_room, tier, listed_price, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        params: [crypto.randomUUID(), uid(), roomNumber, building, room, tier, price, 'available', now, now],
+      rows.push({
+        id: crypto.randomUUID(),
+        room_number: roomNumber,
+        building: building,
+        floor_room: room,
+        tier: tier,
+        listed_price: price,
+        status: 'available',
+        created_at: now,
+        updated_at: now,
       });
     }
   }
 
-  await ultralight.db.batch(statements);
+  // Bulk seed: one insert op per chunk (values array = bulk insert), chunked
+  // to stay under D1's bound-parameter limit per statement.
+  await galactic.db.batch(
+    chunkRows(rows, 8).map((values) => ({ op: 'insert', table: 'rooms', values })),
+  );
 
   return {
     success: true,
-    total_rooms: statements.length,
+    total_rooms: rows.length,
     by_tier: tierCounts,
     prices: prices,
   };
@@ -330,36 +355,27 @@ export async function rooms_list(args: {
 }): Promise<unknown> {
   const { status, tier, building, check_in, check_out, room_number } = args;
 
-  let sql = 'SELECT * FROM rooms WHERE user_id = ?';
-  const params: SqlValue[] = [uid()];
+  const where: Record<string, unknown> = {};
+  if (room_number) where.room_number = room_number;
+  if (status) where.status = status;
+  if (tier) where.tier = tier;
+  if (building) where.building = building;
 
-  if (room_number) {
-    sql += ' AND room_number = ?';
-    params.push(room_number);
-  }
-  if (status) {
-    sql += ' AND status = ?';
-    params.push(status);
-  }
-  if (tier) {
-    sql += ' AND tier = ?';
-    params.push(tier);
-  }
-  if (building) {
-    sql += ' AND building = ?';
-    params.push(building);
-  }
-
-  sql += ' ORDER BY room_number ASC';
-
-  let rooms: RoomRow[] = await ultralight.db.all(sql, params);
+  let rooms: RoomRow[] = await galactic.db.select('rooms', {
+    where,
+    orderBy: { column: 'room_number', dir: 'asc' },
+  });
 
   // Filter by date availability if requested
   if (check_in && check_out) {
-    const booked: RoomNumberRow[] = await ultralight.db.all(
-      'SELECT DISTINCT room_number FROM room_reservations WHERE user_id = ? AND status != ? AND check_in_date < ? AND check_out_date > ?',
-      [uid(), 'cancelled', check_out, check_in]
-    );
+    const booked: RoomNumberRow[] = await galactic.db.select('room_reservations', {
+      columns: ['room_number'],
+      where: {
+        status: { ne: 'cancelled' },
+        check_in_date: { lt: check_out },
+        check_out_date: { gt: check_in },
+      },
+    });
     const bookedSet = new Set(booked.map((reservation) => reservation.room_number));
     rooms = rooms.filter((room) => !bookedSet.has(room.room_number));
   }
@@ -388,19 +404,23 @@ export async function rooms_book(args: {
   }
 
   // Verify room exists
-  const room: RoomRow | null = await ultralight.db.first(
-    'SELECT * FROM rooms WHERE user_id = ? AND room_number = ?',
-    [uid(), room_number]
-  );
+  const room: RoomRow | null = await galactic.db.first('rooms', {
+    where: { room_number: room_number },
+  });
   if (!room) {
     throw new Error('Room ' + room_number + ' not found');
   }
 
   // Check for conflicts
-  const conflict: Pick<RoomReservationRow, 'id' | 'guest_name' | 'check_in_date' | 'check_out_date'> | null = await ultralight.db.first(
-    'SELECT id, guest_name, check_in_date, check_out_date FROM room_reservations WHERE user_id = ? AND room_number = ? AND status != ? AND check_in_date < ? AND check_out_date > ?',
-    [uid(), room_number, 'cancelled', check_out_date, check_in_date]
-  );
+  const conflict: Pick<RoomReservationRow, 'id' | 'guest_name' | 'check_in_date' | 'check_out_date'> | null = await galactic.db.first('room_reservations', {
+    columns: ['id', 'guest_name', 'check_in_date', 'check_out_date'],
+    where: {
+      room_number: room_number,
+      status: { ne: 'cancelled' },
+      check_in_date: { lt: check_out_date },
+      check_out_date: { gt: check_in_date },
+    },
+  });
   if (conflict) {
     throw new Error('Room ' + room_number + ' is already booked from ' + conflict.check_in_date + ' to ' + conflict.check_out_date + ' by ' + conflict.guest_name);
   }
@@ -409,10 +429,23 @@ export async function rooms_book(args: {
   const now = nowISO();
   const name = normalizeGuestName(guest_name);
 
-  await ultralight.db.run(
-    'INSERT INTO room_reservations (id, user_id, room_number, guest_name, num_guests, nights_staying, check_in_date, check_out_date, group_name, payment_method, payment_status, payment_amount, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, uid(), room_number, name, num_guests || 1, nights_staying || 1, check_in_date, check_out_date, group_name || null, payment_method || null, 'unpaid', payment_amount || 0, 'confirmed', notes || null, now, now]
-  );
+  await galactic.db.insert('room_reservations', {
+    id: id,
+    room_number: room_number,
+    guest_name: name,
+    num_guests: num_guests || 1,
+    nights_staying: nights_staying || 1,
+    check_in_date: check_in_date,
+    check_out_date: check_out_date,
+    group_name: group_name || null,
+    payment_method: payment_method || null,
+    payment_status: 'unpaid',
+    payment_amount: payment_amount || 0,
+    status: 'confirmed',
+    notes: notes || null,
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -449,17 +482,14 @@ export async function rooms_update(args: {
   const { reservation_id } = args;
   if (!reservation_id) throw new Error('reservation_id is required');
 
-  const existing: RoomReservationRow | null = await ultralight.db.first(
-    'SELECT * FROM room_reservations WHERE id = ? AND user_id = ?',
-    [reservation_id, uid()]
-  );
+  const existing: RoomReservationRow | null = await galactic.db.first('room_reservations', {
+    where: { id: reservation_id },
+  });
   if (!existing) throw new Error('Reservation not found: ' + reservation_id);
 
   const now = nowISO();
-  const setClauses: string[] = ['updated_at = ?'];
-  const params: SqlValue[] = [now];
 
-  const fields: Record<string, SqlValue | undefined> = {
+  const fields: Record<string, string | number | null | undefined> = {
     room_number: args.room_number,
     check_in_date: args.check_in_date,
     check_out_date: args.check_out_date,
@@ -474,23 +504,21 @@ export async function rooms_update(args: {
     notes: args.notes,
   };
 
+  const set: Record<string, string | number | null> = { updated_at: now };
   for (const [key, val] of Object.entries(fields)) {
     if (val !== undefined) {
-      setClauses.push(key + ' = ?');
-      params.push(val);
+      set[key] = val;
     }
   }
 
-  params.push(reservation_id, uid());
-  await ultralight.db.run(
-    'UPDATE room_reservations SET ' + setClauses.join(', ') + ' WHERE id = ? AND user_id = ?',
-    params
-  );
+  await galactic.db.update('room_reservations', {
+    set,
+    where: { id: reservation_id },
+  });
 
-  const updated: RoomReservationRow | null = await ultralight.db.first(
-    'SELECT * FROM room_reservations WHERE id = ? AND user_id = ?',
-    [reservation_id, uid()]
-  );
+  const updated: RoomReservationRow | null = await galactic.db.first('room_reservations', {
+    where: { id: reservation_id },
+  });
 
   return { success: true, reservation: updated };
 }
@@ -503,30 +531,32 @@ export async function rooms_checkin(args: {
   const { reservation_id } = args;
   if (!reservation_id) throw new Error('reservation_id is required');
 
-  const res: RoomReservationRow | null = await ultralight.db.first(
-    'SELECT * FROM room_reservations WHERE id = ? AND user_id = ?',
-    [reservation_id, uid()]
-  );
+  const res: RoomReservationRow | null = await galactic.db.first('room_reservations', {
+    where: { id: reservation_id },
+  });
   if (!res) throw new Error('Reservation not found: ' + reservation_id);
   if (res.status === 'checked_in') throw new Error('Guest already checked in');
 
   const now = nowISO();
 
-  await ultralight.db.batch([
+  await galactic.db.batch([
     {
-      sql: 'UPDATE room_reservations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      params: ['checked_in', now, reservation_id, uid()],
+      op: 'update',
+      table: 'room_reservations',
+      set: { status: 'checked_in', updated_at: now },
+      where: { id: reservation_id },
     },
     {
-      sql: 'UPDATE rooms SET status = ?, current_reservation_id = ?, updated_at = ? WHERE room_number = ? AND user_id = ?',
-      params: ['occupied', reservation_id, now, res.room_number, uid()],
+      op: 'update',
+      table: 'rooms',
+      set: { status: 'occupied', current_reservation_id: reservation_id, updated_at: now },
+      where: { room_number: res.room_number },
     },
   ]);
 
-  const room: RoomRow | null = await ultralight.db.first(
-    'SELECT * FROM rooms WHERE room_number = ? AND user_id = ?',
-    [res.room_number, uid()]
-  );
+  const room: RoomRow | null = await galactic.db.first('rooms', {
+    where: { room_number: res.room_number },
+  });
 
   return {
     success: true,
@@ -543,50 +573,53 @@ export async function rooms_checkout(args: {
   const { reservation_id } = args;
   if (!reservation_id) throw new Error('reservation_id is required');
 
-  const res: RoomReservationRow | null = await ultralight.db.first(
-    'SELECT * FROM room_reservations WHERE id = ? AND user_id = ?',
-    [reservation_id, uid()]
-  );
+  const res: RoomReservationRow | null = await galactic.db.first('room_reservations', {
+    where: { id: reservation_id },
+  });
   if (!res) throw new Error('Reservation not found: ' + reservation_id);
 
   const now = nowISO();
 
-  await ultralight.db.batch([
+  await galactic.db.batch([
     {
-      sql: 'UPDATE room_reservations SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      params: ['checked_out', now, reservation_id, uid()],
+      op: 'update',
+      table: 'room_reservations',
+      set: { status: 'checked_out', updated_at: now },
+      where: { id: reservation_id },
     },
     {
-      sql: 'UPDATE rooms SET status = ?, current_reservation_id = NULL, updated_at = ? WHERE room_number = ? AND user_id = ?',
-      params: ['available', now, res.room_number, uid()],
+      op: 'update',
+      table: 'rooms',
+      set: { status: 'available', current_reservation_id: null, updated_at: now },
+      where: { room_number: res.room_number },
     },
   ]);
 
   // Gather all unpaid items for this room/guest
-  const unpaidRooms: PaymentAmountRow[] = await ultralight.db.all(
-    'SELECT id, payment_amount FROM room_reservations WHERE user_id = ? AND room_number = ? AND payment_status = ? AND id = ?',
-    [uid(), res.room_number, 'unpaid', reservation_id]
-  );
-  const unpaidSki: PaymentAmountRow[] = await ultralight.db.all(
-    'SELECT id, payment_amount FROM ski_rentals WHERE user_id = ? AND room_number = ? AND payment_status = ?',
-    [uid(), res.room_number, 'unpaid']
-  );
-  const unpaidLessons: PaymentAmountRow[] = await ultralight.db.all(
-    'SELECT id, payment_amount FROM ski_lessons WHERE user_id = ? AND room_number = ? AND payment_status = ?',
-    [uid(), res.room_number, 'unpaid']
-  );
-  const unpaidGolf: PaymentAmountRow[] = await ultralight.db.all(
-    'SELECT id, payment_amount FROM tee_times WHERE user_id = ? AND room_number = ? AND payment_status = ?',
-    [uid(), res.room_number, 'unpaid']
-  );
-  const unpaidRestaurant: Pick<PaymentAmountRow, 'id'>[] = await ultralight.db.all(
-    'SELECT id FROM restaurant_reservations WHERE user_id = ? AND room_number = ? AND payment_status = ?',
-    [uid(), res.room_number, 'unpaid']
-  );
-  const unpaidStore: PaymentAmountRow[] = await ultralight.db.all(
-    'SELECT id, payment_amount FROM store_transactions WHERE user_id = ? AND room_number = ? AND payment_status = ?',
-    [uid(), res.room_number, 'unpaid']
-  );
+  const unpaidRooms: PaymentAmountRow[] = await galactic.db.select('room_reservations', {
+    columns: ['id', 'payment_amount'],
+    where: { room_number: res.room_number, payment_status: 'unpaid', id: reservation_id },
+  });
+  const unpaidSki: PaymentAmountRow[] = await galactic.db.select('ski_rentals', {
+    columns: ['id', 'payment_amount'],
+    where: { room_number: res.room_number, payment_status: 'unpaid' },
+  });
+  const unpaidLessons: PaymentAmountRow[] = await galactic.db.select('ski_lessons', {
+    columns: ['id', 'payment_amount'],
+    where: { room_number: res.room_number, payment_status: 'unpaid' },
+  });
+  const unpaidGolf: PaymentAmountRow[] = await galactic.db.select('tee_times', {
+    columns: ['id', 'payment_amount'],
+    where: { room_number: res.room_number, payment_status: 'unpaid' },
+  });
+  const unpaidRestaurant: Pick<PaymentAmountRow, 'id'>[] = await galactic.db.select('restaurant_reservations', {
+    columns: ['id'],
+    where: { room_number: res.room_number, payment_status: 'unpaid' },
+  });
+  const unpaidStore: PaymentAmountRow[] = await galactic.db.select('store_transactions', {
+    columns: ['id', 'payment_amount'],
+    where: { room_number: res.room_number, payment_status: 'unpaid' },
+  });
 
   const unpaid_items = {
     room: { count: unpaidRooms.length, subtotal: sumPaymentAmounts(unpaidRooms) },
@@ -609,6 +642,11 @@ export async function rooms_checkout(args: {
 // 2. SKI — Equipment, Rentals, Lessons
 // ============================================
 
+// Computed column (qty_total - qty_rented) is derived in JS now.
+function withAvailability<T extends { qty_total: number; qty_rented: number }>(eq: T): T & { qty_available: number } {
+  return { ...eq, qty_available: eq.qty_total - eq.qty_rented };
+}
+
 // ── SKI INVENTORY ──
 
 export async function ski_inventory(args: {
@@ -617,19 +655,18 @@ export async function ski_inventory(args: {
 }): Promise<unknown> {
   const { category, available_only } = args;
 
-  let sql = 'SELECT *, (qty_total - qty_rented) as qty_available FROM ski_equipment WHERE user_id = ?';
-  const params: SqlValue[] = [uid()];
+  const where: Record<string, unknown> = {};
+  if (category) where.category = category.toLowerCase().trim();
 
-  if (category) {
-    sql += ' AND category = ?';
-    params.push(category.toLowerCase().trim());
-  }
+  const rows: SkiEquipmentRow[] = await galactic.db.select('ski_equipment', {
+    where,
+    orderBy: ['category', 'brand', 'size'],
+  });
+
+  let equipment = rows.map(withAvailability);
   if (available_only) {
-    sql += ' AND (qty_total - qty_rented) > 0';
+    equipment = equipment.filter((eq) => eq.qty_available > 0);
   }
-
-  sql += ' ORDER BY category, brand, size';
-  const equipment: SkiEquipmentRow[] = await ultralight.db.all(sql, params);
 
   return { equipment: equipment, total: equipment.length };
 }
@@ -652,33 +689,39 @@ export async function ski_equipment_manage(args: {
   if (action === 'add') {
     if (!category) throw new Error('category is required when adding equipment');
     const id = crypto.randomUUID();
-    await ultralight.db.run(
-      'INSERT INTO ski_equipment (id, user_id, category, brand, product, size, gender, qty_total, qty_rented, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, uid(), category.toLowerCase().trim(), brand || null, product || null, size || null, gender || null, qty_total || 0, 0, now, now]
-    );
-    const created: SkiEquipmentRow | null = await ultralight.db.first('SELECT *, (qty_total - qty_rented) as qty_available FROM ski_equipment WHERE id = ? AND user_id = ?', [id, uid()]);
-    return { success: true, equipment: created };
+    await galactic.db.insert('ski_equipment', {
+      id: id,
+      category: category.toLowerCase().trim(),
+      brand: brand || null,
+      product: product || null,
+      size: size || null,
+      gender: gender || null,
+      qty_total: qty_total || 0,
+      qty_rented: 0,
+      created_at: now,
+      updated_at: now,
+    });
+    const created: SkiEquipmentRow | null = await galactic.db.first('ski_equipment', { where: { id: id } });
+    return { success: true, equipment: created ? withAvailability(created) : null };
   }
 
   if (action === 'update') {
     if (!equipment_id) throw new Error('equipment_id is required for update');
 
-    const setClauses: string[] = ['updated_at = ?'];
-    const params: SqlValue[] = [now];
-    if (category !== undefined) { setClauses.push('category = ?'); params.push(category.toLowerCase().trim()); }
-    if (brand !== undefined) { setClauses.push('brand = ?'); params.push(brand); }
-    if (product !== undefined) { setClauses.push('product = ?'); params.push(product); }
-    if (size !== undefined) { setClauses.push('size = ?'); params.push(size); }
-    if (gender !== undefined) { setClauses.push('gender = ?'); params.push(gender); }
-    if (qty_total !== undefined) { setClauses.push('qty_total = ?'); params.push(qty_total); }
+    const set: Record<string, string | number | null> = { updated_at: now };
+    if (category !== undefined) set.category = category.toLowerCase().trim();
+    if (brand !== undefined) set.brand = brand;
+    if (product !== undefined) set.product = product;
+    if (size !== undefined) set.size = size;
+    if (gender !== undefined) set.gender = gender;
+    if (qty_total !== undefined) set.qty_total = qty_total;
 
-    params.push(equipment_id, uid());
-    await ultralight.db.run(
-      'UPDATE ski_equipment SET ' + setClauses.join(', ') + ' WHERE id = ? AND user_id = ?',
-      params
-    );
-    const updated: SkiEquipmentRow | null = await ultralight.db.first('SELECT *, (qty_total - qty_rented) as qty_available FROM ski_equipment WHERE id = ? AND user_id = ?', [equipment_id, uid()]);
-    return { success: true, equipment: updated };
+    await galactic.db.update('ski_equipment', {
+      set,
+      where: { id: equipment_id },
+    });
+    const updated: SkiEquipmentRow | null = await galactic.db.first('ski_equipment', { where: { id: equipment_id } });
+    return { success: true, equipment: updated ? withAvailability(updated) : null };
   }
 
   throw new Error('action must be "add" or "update"');
@@ -702,10 +745,10 @@ export async function ski_rent(args: {
 
   // Validate availability for all items
   for (const eqId of equipment_ids) {
-    const eq: Pick<SkiEquipmentRow, 'id' | 'category' | 'qty_total' | 'qty_rented'> | null = await ultralight.db.first(
-      'SELECT id, category, qty_total, qty_rented FROM ski_equipment WHERE id = ? AND user_id = ?',
-      [eqId, uid()]
-    );
+    const eq: Pick<SkiEquipmentRow, 'id' | 'category' | 'qty_total' | 'qty_rented'> | null = await galactic.db.first('ski_equipment', {
+      columns: ['id', 'category', 'qty_total', 'qty_rented'],
+      where: { id: eqId },
+    });
     if (!eq) throw new Error('Equipment not found: ' + eqId);
     if (eq.qty_total - eq.qty_rented <= 0) {
       throw new Error('Equipment ' + eqId + ' (' + eq.category + ') is not available');
@@ -716,33 +759,59 @@ export async function ski_rent(args: {
   const now = nowISO();
   const name = normalizeGuestName(guest_name);
 
-  const statements: SqlStatement[] = [];
+  const ops: Record<string, unknown>[] = [];
 
   // Create rental
-  statements.push({
-    sql: 'INSERT INTO ski_rentals (id, user_id, guest_name, room_number, tohoku_pass, status, payment_method, payment_status, payment_amount, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    params: [rentalId, uid(), name, room_number || null, tohoku_pass ? 1 : 0, 'active', payment_method || null, 'unpaid', payment_amount || 0, now, now],
+  ops.push({
+    op: 'insert',
+    table: 'ski_rentals',
+    values: {
+      id: rentalId,
+      guest_name: name,
+      room_number: room_number || null,
+      tohoku_pass: tohoku_pass ? 1 : 0,
+      status: 'active',
+      payment_method: payment_method || null,
+      payment_status: 'unpaid',
+      payment_amount: payment_amount || 0,
+      created_at: now,
+      updated_at: now,
+    },
   });
 
   // Create junction rows and increment qty_rented
   for (const eqId of equipment_ids) {
-    statements.push({
-      sql: 'INSERT INTO ski_rental_items (id, user_id, rental_id, equipment_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      params: [crypto.randomUUID(), uid(), rentalId, eqId, now, now],
+    ops.push({
+      op: 'insert',
+      table: 'ski_rental_items',
+      values: {
+        id: crypto.randomUUID(),
+        rental_id: rentalId,
+        equipment_id: eqId,
+        created_at: now,
+        updated_at: now,
+      },
     });
-    statements.push({
-      sql: 'UPDATE ski_equipment SET qty_rented = qty_rented + 1, updated_at = ? WHERE id = ? AND user_id = ?',
-      params: [now, eqId, uid()],
+    ops.push({
+      op: 'update',
+      table: 'ski_equipment',
+      set: { qty_rented: { op: 'increment', value: 1 }, updated_at: now },
+      where: { id: eqId },
     });
   }
 
-  await ultralight.db.batch(statements);
+  await galactic.db.batch(ops);
 
   // Fetch the items for the response
-  const items: SkiEquipmentRow[] = await ultralight.db.all(
-    'SELECT e.* FROM ski_equipment e INNER JOIN ski_rental_items ri ON ri.equipment_id = e.id AND ri.user_id = e.user_id WHERE ri.rental_id = ? AND ri.user_id = ?',
-    [rentalId, uid()]
-  );
+  const items: SkiEquipmentRow[] = await galactic.db.select('ski_equipment', {
+    joins: [{
+      table: 'ski_rental_items',
+      as: 'ri',
+      type: 'inner',
+      on: { fromColumn: 'id', foreignColumn: 'equipment_id' },
+    }],
+    where: { 'ri.rental_id': rentalId },
+  });
 
   return {
     success: true,
@@ -760,34 +829,48 @@ export async function ski_return(args: {
   const { rental_id } = args;
   if (!rental_id) throw new Error('rental_id is required');
 
-  const rental: { id: string; status: string } | null = await ultralight.db.first(
-    'SELECT * FROM ski_rentals WHERE id = ? AND user_id = ?',
-    [rental_id, uid()]
-  );
+  const rental: { id: string; status: string } | null = await galactic.db.first('ski_rentals', {
+    where: { id: rental_id },
+  });
   if (!rental) throw new Error('Rental not found: ' + rental_id);
   if (rental.status === 'returned') throw new Error('Rental already returned');
 
-  const items: EquipmentIdRow[] = await ultralight.db.all(
-    'SELECT equipment_id FROM ski_rental_items WHERE rental_id = ? AND user_id = ?',
-    [rental_id, uid()]
-  );
-
-  const now = nowISO();
-  const statements: SqlStatement[] = [];
-
-  statements.push({
-    sql: 'UPDATE ski_rentals SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-    params: ['returned', now, rental_id, uid()],
+  const items: EquipmentIdRow[] = await galactic.db.select('ski_rental_items', {
+    columns: ['equipment_id'],
+    where: { rental_id: rental_id },
   });
 
+  const now = nowISO();
+  const ops: Record<string, unknown>[] = [];
+
+  ops.push({
+    op: 'update',
+    table: 'ski_rentals',
+    set: { status: 'returned', updated_at: now },
+    where: { id: rental_id },
+  });
+
+  // Decrement qty_rented, clamped at 0 (was MAX(0, qty_rented - 1) per item).
+  const returnCounts = new Map<string, number>();
   for (const item of items) {
-    statements.push({
-      sql: 'UPDATE ski_equipment SET qty_rented = MAX(0, qty_rented - 1), updated_at = ? WHERE id = ? AND user_id = ?',
-      params: [now, item.equipment_id, uid()],
+    returnCounts.set(item.equipment_id, (returnCounts.get(item.equipment_id) || 0) + 1);
+  }
+  if (returnCounts.size > 0) {
+    const equipmentRows: Pick<SkiEquipmentRow, 'id' | 'qty_rented'>[] = await galactic.db.select('ski_equipment', {
+      columns: ['id', 'qty_rented'],
+      where: { id: { in: Array.from(returnCounts.keys()) } },
     });
+    for (const eq of equipmentRows) {
+      ops.push({
+        op: 'update',
+        table: 'ski_equipment',
+        set: { qty_rented: Math.max(0, eq.qty_rented - (returnCounts.get(eq.id) || 0)), updated_at: now },
+        where: { id: eq.id },
+      });
+    }
   }
 
-  await ultralight.db.batch(statements);
+  await galactic.db.batch(ops);
 
   return { success: true, rental_id: rental_id, returned_items: items.length };
 }
@@ -817,10 +900,23 @@ export async function ski_book_lesson(args: {
   const now = nowISO();
   const name = normalizeGuestName(guest_name);
 
-  await ultralight.db.run(
-    'INSERT INTO ski_lessons (id, user_id, lesson_date, lesson_time, duration_minutes, instructor, guest_name, room_number, num_students, skill_level, payment_method, payment_status, payment_amount, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, uid(), lesson_date, lesson_time, duration_minutes || 60, instructor || null, name, room_number || null, num_students || 1, skill_level || null, payment_method || null, 'unpaid', payment_amount || 0, notes || null, now, now]
-  );
+  await galactic.db.insert('ski_lessons', {
+    id: id,
+    lesson_date: lesson_date,
+    lesson_time: lesson_time,
+    duration_minutes: duration_minutes || 60,
+    instructor: instructor || null,
+    guest_name: name,
+    room_number: room_number || null,
+    num_students: num_students || 1,
+    skill_level: skill_level || null,
+    payment_method: payment_method || null,
+    payment_status: 'unpaid',
+    payment_amount: payment_amount || 0,
+    notes: notes || null,
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -837,24 +933,18 @@ export async function ski_lessons_list(args: {
 }): Promise<unknown> {
   const { date, instructor, guest_name } = args;
 
-  let sql = 'SELECT * FROM ski_lessons WHERE user_id = ?';
-  const params: SqlValue[] = [uid()];
+  const where: Record<string, unknown> = {};
+  if (date) where.lesson_date = date;
+  if (instructor) where.instructor = instructor;
+  if (guest_name) where.guest_name = { like: '%' + normalizeGuestName(guest_name) + '%' };
 
-  if (date) {
-    sql += ' AND lesson_date = ?';
-    params.push(date);
-  }
-  if (instructor) {
-    sql += ' AND instructor = ?';
-    params.push(instructor);
-  }
-  if (guest_name) {
-    sql += ' AND guest_name LIKE ?';
-    params.push('%' + normalizeGuestName(guest_name) + '%');
-  }
-
-  sql += ' ORDER BY lesson_date ASC, lesson_time ASC';
-  const lessons: LessonRow[] = await ultralight.db.all(sql, params);
+  const lessons: LessonRow[] = await galactic.db.select('ski_lessons', {
+    where,
+    orderBy: [
+      { column: 'lesson_date', dir: 'asc' },
+      { column: 'lesson_time', dir: 'asc' },
+    ],
+  });
 
   return { lessons: lessons, total: lessons.length };
 }
@@ -887,23 +977,44 @@ export async function golf_book_tee(args: {
   const now = nowISO();
   const name = normalizeGuestName(guest_name);
 
-  const statements: SqlStatement[] = [];
+  const ops: Record<string, unknown>[] = [];
 
-  statements.push({
-    sql: 'INSERT INTO tee_times (id, user_id, tee_date, tee_time, guest_name, room_number, starting_hole, num_in_party, payment_method, payment_status, payment_amount, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    params: [teeId, uid(), tee_date, tee_time, name, room_number || null, starting_hole || 1, num_in_party || 1, payment_method || null, 'unpaid', payment_amount || 0, notes || null, now, now],
+  ops.push({
+    op: 'insert',
+    table: 'tee_times',
+    values: {
+      id: teeId,
+      tee_date: tee_date,
+      tee_time: tee_time,
+      guest_name: name,
+      room_number: room_number || null,
+      starting_hole: starting_hole || 1,
+      num_in_party: num_in_party || 1,
+      payment_method: payment_method || null,
+      payment_status: 'unpaid',
+      payment_amount: payment_amount || 0,
+      notes: notes || null,
+      created_at: now,
+      updated_at: now,
+    },
   });
 
   if (cart_ids && cart_ids.length > 0) {
-    for (const cartId of cart_ids) {
-      statements.push({
-        sql: 'INSERT INTO tee_time_carts (id, user_id, tee_time_id, cart_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-        params: [crypto.randomUUID(), uid(), teeId, cartId, now, now],
-      });
-    }
+    // Bulk insert: one op, values array.
+    ops.push({
+      op: 'insert',
+      table: 'tee_time_carts',
+      values: cart_ids.map((cartId) => ({
+        id: crypto.randomUUID(),
+        tee_time_id: teeId,
+        cart_id: cartId,
+        created_at: now,
+        updated_at: now,
+      })),
+    });
   }
 
-  await ultralight.db.batch(statements);
+  await galactic.db.batch(ops);
 
   return {
     success: true,
@@ -921,16 +1032,13 @@ export async function golf_availability(args: {
   const { date, starting_hole } = args;
   if (!date) throw new Error('date is required');
 
-  let sql = 'SELECT * FROM tee_times WHERE user_id = ? AND tee_date = ?';
-  const params: SqlValue[] = [uid(), date];
+  const where: Record<string, unknown> = { tee_date: date };
+  if (starting_hole) where.starting_hole = starting_hole;
 
-  if (starting_hole) {
-    sql += ' AND starting_hole = ?';
-    params.push(starting_hole);
-  }
-
-  sql += ' ORDER BY tee_time ASC';
-  const booked: TeeTimeRow[] = await ultralight.db.all(sql, params);
+  const booked: TeeTimeRow[] = await galactic.db.select('tee_times', {
+    where,
+    orderBy: { column: 'tee_time', dir: 'asc' },
+  });
 
   // Generate all possible tee times (every 10 minutes from 06:00 to 16:00)
   const allTimes: string[] = [];
@@ -955,22 +1063,14 @@ export async function golf_cancel(args: {
   const { tee_time_id } = args;
   if (!tee_time_id) throw new Error('tee_time_id is required');
 
-  const tee: TeeTimeRow | null = await ultralight.db.first(
-    'SELECT * FROM tee_times WHERE id = ? AND user_id = ?',
-    [tee_time_id, uid()]
-  );
+  const tee: TeeTimeRow | null = await galactic.db.first('tee_times', {
+    where: { id: tee_time_id },
+  });
   if (!tee) throw new Error('Tee time not found: ' + tee_time_id);
 
-  const now = nowISO();
-  await ultralight.db.batch([
-    {
-      sql: 'DELETE FROM tee_time_carts WHERE tee_time_id = ? AND user_id = ?',
-      params: [tee_time_id, uid()],
-    },
-    {
-      sql: 'DELETE FROM tee_times WHERE id = ? AND user_id = ?',
-      params: [tee_time_id, uid()],
-    },
+  await galactic.db.batch([
+    { op: 'delete', table: 'tee_time_carts', where: { tee_time_id: tee_time_id } },
+    { op: 'delete', table: 'tee_times', where: { id: tee_time_id } },
   ]);
 
   return { success: true, cancelled: tee };
@@ -1003,10 +1103,21 @@ export async function restaurant_book(args: {
   const now = nowISO();
   const name = normalizeGuestName(guest_name);
 
-  await ultralight.db.run(
-    'INSERT INTO restaurant_reservations (id, user_id, res_date, res_time, num_people, set_menu, allergies, guest_name, room_number, payment_method, payment_status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, uid(), res_date, res_time, num_people || 1, set_menu || null, allergies || null, name, room_number || null, payment_method || null, 'unpaid', notes || null, now, now]
-  );
+  await galactic.db.insert('restaurant_reservations', {
+    id: id,
+    res_date: res_date,
+    res_time: res_time,
+    num_people: num_people || 1,
+    set_menu: set_menu || null,
+    allergies: allergies || null,
+    guest_name: name,
+    room_number: room_number || null,
+    payment_method: payment_method || null,
+    payment_status: 'unpaid',
+    notes: notes || null,
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -1021,10 +1132,10 @@ export async function restaurant_today(args: {
 }): Promise<unknown> {
   const date = args.date || todayISO();
 
-  const reservations: RestaurantReservationRow[] = await ultralight.db.all(
-    'SELECT * FROM restaurant_reservations WHERE user_id = ? AND res_date = ? ORDER BY res_time ASC',
-    [uid(), date]
-  );
+  const reservations: RestaurantReservationRow[] = await galactic.db.select('restaurant_reservations', {
+    where: { res_date: date },
+    orderBy: { column: 'res_time', dir: 'asc' },
+  });
 
   const totalCovers = reservations.reduce((sum, reservation) => sum + (reservation.num_people || 0), 0);
 
@@ -1039,16 +1150,14 @@ export async function restaurant_cancel(args: {
   const { reservation_id } = args;
   if (!reservation_id) throw new Error('reservation_id is required');
 
-  const res: RestaurantReservationRow | null = await ultralight.db.first(
-    'SELECT * FROM restaurant_reservations WHERE id = ? AND user_id = ?',
-    [reservation_id, uid()]
-  );
+  const res: RestaurantReservationRow | null = await galactic.db.first('restaurant_reservations', {
+    where: { id: reservation_id },
+  });
   if (!res) throw new Error('Restaurant reservation not found: ' + reservation_id);
 
-  await ultralight.db.run(
-    'DELETE FROM restaurant_reservations WHERE id = ? AND user_id = ?',
-    [reservation_id, uid()]
-  );
+  await galactic.db.delete('restaurant_reservations', {
+    where: { id: reservation_id },
+  });
 
   return { success: true, cancelled: res };
 }
@@ -1071,10 +1180,9 @@ export async function store_sell(args: {
 
   if (!product_id) throw new Error('product_id is required');
 
-  const product: StoreProductRow | null = await ultralight.db.first(
-    'SELECT * FROM store_products WHERE id = ? AND user_id = ?',
-    [product_id, uid()]
-  );
+  const product: StoreProductRow | null = await galactic.db.first('store_products', {
+    where: { id: product_id },
+  });
   if (!product) throw new Error('Product not found: ' + product_id);
 
   const qty = quantity || 1;
@@ -1086,14 +1194,28 @@ export async function store_sell(args: {
   const now = nowISO();
   const amount = payment_amount !== undefined ? payment_amount : product.price * qty;
 
-  await ultralight.db.batch([
+  await galactic.db.batch([
     {
-      sql: 'INSERT INTO store_transactions (id, user_id, product_id, quantity, guest_name, room_number, payment_method, payment_status, payment_amount, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      params: [txId, uid(), product_id, qty, guest_name ? normalizeGuestName(guest_name) : null, room_number || null, payment_method || null, 'unpaid', amount, now, now],
+      op: 'insert',
+      table: 'store_transactions',
+      values: {
+        id: txId,
+        product_id: product_id,
+        quantity: qty,
+        guest_name: guest_name ? normalizeGuestName(guest_name) : null,
+        room_number: room_number || null,
+        payment_method: payment_method || null,
+        payment_status: 'unpaid',
+        payment_amount: amount,
+        created_at: now,
+        updated_at: now,
+      },
     },
     {
-      sql: 'UPDATE store_products SET qty_available = qty_available - ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      params: [qty, now, product_id, uid()],
+      op: 'update',
+      table: 'store_products',
+      set: { qty_available: { op: 'increment', value: -qty }, updated_at: now },
+      where: { id: product_id },
     },
   ]);
 
@@ -1111,19 +1233,14 @@ export async function store_inventory(args: {
 }): Promise<unknown> {
   const { category, low_stock_only } = args;
 
-  let sql = 'SELECT * FROM store_products WHERE user_id = ?';
-  const params: SqlValue[] = [uid()];
+  const where: Record<string, unknown> = {};
+  if (category) where.category = category.toLowerCase().trim();
+  if (low_stock_only) where.qty_available = { lt: 5 };
 
-  if (category) {
-    sql += ' AND category = ?';
-    params.push(category.toLowerCase().trim());
-  }
-  if (low_stock_only) {
-    sql += ' AND qty_available < 5';
-  }
-
-  sql += ' ORDER BY category, name';
-  const products: StoreProductRow[] = await ultralight.db.all(sql, params);
+  const products: StoreProductRow[] = await galactic.db.select('store_products', {
+    where,
+    orderBy: ['category', 'name'],
+  });
 
   return { products: products, total: products.length };
 }
@@ -1145,31 +1262,37 @@ export async function store_manage(args: {
   if (action === 'add') {
     if (!name) throw new Error('name is required when adding a product');
     const id = crypto.randomUUID();
-    await ultralight.db.run(
-      'INSERT INTO store_products (id, user_id, name, category, brand, price, qty_available, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, uid(), name, category ? category.toLowerCase().trim() : null, brand || null, price || 0, qty_add || 0, now, now]
-    );
-    const created: StoreProductRow | null = await ultralight.db.first('SELECT * FROM store_products WHERE id = ? AND user_id = ?', [id, uid()]);
+    await galactic.db.insert('store_products', {
+      id: id,
+      name: name,
+      category: category ? category.toLowerCase().trim() : null,
+      brand: brand || null,
+      price: price || 0,
+      qty_available: qty_add || 0,
+      created_at: now,
+      updated_at: now,
+    });
+    const created: StoreProductRow | null = await galactic.db.first('store_products', { where: { id: id } });
     return { success: true, product: created };
   }
 
   if (action === 'restock') {
     if (!product_id || !qty_add) throw new Error('product_id and qty_add are required for restock');
-    await ultralight.db.run(
-      'UPDATE store_products SET qty_available = qty_available + ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      [qty_add, now, product_id, uid()]
-    );
-    const updated: StoreProductRow | null = await ultralight.db.first('SELECT * FROM store_products WHERE id = ? AND user_id = ?', [product_id, uid()]);
+    await galactic.db.update('store_products', {
+      set: { qty_available: { op: 'increment', value: qty_add }, updated_at: now },
+      where: { id: product_id },
+    });
+    const updated: StoreProductRow | null = await galactic.db.first('store_products', { where: { id: product_id } });
     return { success: true, product: updated };
   }
 
   if (action === 'update_price') {
     if (!product_id || price === undefined) throw new Error('product_id and price are required for update_price');
-    await ultralight.db.run(
-      'UPDATE store_products SET price = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      [price, now, product_id, uid()]
-    );
-    const updated: StoreProductRow | null = await ultralight.db.first('SELECT * FROM store_products WHERE id = ? AND user_id = ?', [product_id, uid()]);
+    await galactic.db.update('store_products', {
+      set: { price: price, updated_at: now },
+      where: { id: product_id },
+    });
+    const updated: StoreProductRow | null = await galactic.db.first('store_products', { where: { id: product_id } });
     return { success: true, product: updated };
   }
 
@@ -1186,26 +1309,28 @@ export async function store_sales(args: {
 }): Promise<unknown> {
   const { date, guest_name, product_id, limit } = args;
 
-  let sql = 'SELECT t.*, p.name as product_name, p.category as product_category FROM store_transactions t LEFT JOIN store_products p ON p.id = t.product_id AND p.user_id = t.user_id WHERE t.user_id = ?';
-  const params: SqlValue[] = [uid()];
+  const where: Record<string, unknown> = {};
+  if (date) where.created_at = dayRange(date);
+  if (guest_name) where.guest_name = { like: '%' + normalizeGuestName(guest_name) + '%' };
+  if (product_id) where.product_id = product_id;
 
-  if (date) {
-    sql += ' AND DATE(t.created_at) = ?';
-    params.push(date);
-  }
-  if (guest_name) {
-    sql += ' AND t.guest_name LIKE ?';
-    params.push('%' + normalizeGuestName(guest_name) + '%');
-  }
-  if (product_id) {
-    sql += ' AND t.product_id = ?';
-    params.push(product_id);
-  }
+  const transactions: StoreTransactionRow[] = await galactic.db.select('store_transactions', {
+    columns: [
+      '*',
+      { table: 'p', column: 'name', as: 'product_name' },
+      { table: 'p', column: 'category', as: 'product_category' },
+    ],
+    joins: [{
+      table: 'store_products',
+      as: 'p',
+      type: 'left',
+      on: { fromColumn: 'product_id', foreignColumn: 'id' },
+    }],
+    where,
+    orderBy: { column: 'created_at', dir: 'desc' },
+    limit: limit || 50,
+  });
 
-  sql += ' ORDER BY t.created_at DESC LIMIT ?';
-  params.push(limit || 50);
-
-  const transactions: StoreTransactionRow[] = await ultralight.db.all(sql, params);
   const totalRevenue = transactions.reduce((sum, transaction) => sum + (transaction.payment_amount || 0), 0);
 
   return { transactions: transactions, total_revenue: totalRevenue, count: transactions.length };
@@ -1238,51 +1363,55 @@ export async function guest_summary(args: {
 
   if (room_number) {
     if (want('room')) {
-      room = await ultralight.db.first(
-        'SELECT * FROM rooms WHERE user_id = ? AND room_number = ?',
-        [uid(), room_number]
-      );
+      room = await galactic.db.first('rooms', {
+        where: { room_number: room_number },
+      });
     }
-    reservation = await ultralight.db.first(
-      'SELECT * FROM room_reservations WHERE user_id = ? AND room_number = ? AND status IN (?, ?) ORDER BY check_in_date DESC LIMIT 1',
-      [uid(), room_number, 'confirmed', 'checked_in']
-    );
+    reservation = await galactic.db.first('room_reservations', {
+      where: { room_number: room_number, status: { in: ['confirmed', 'checked_in'] } },
+      orderBy: { column: 'check_in_date', dir: 'desc' },
+    });
   }
 
-  // Build filter
-  const filterCol = room_number ? 'room_number' : 'guest_name';
-  const filterVal = room_number || normalizeGuestName(guest_name!);
-  const filterOp = room_number ? '= ?' : 'LIKE ?';
-  const filterParam = room_number ? filterVal : '%' + filterVal + '%';
+  // Build filter (allowlisted: room_number equality or guest_name LIKE)
+  const filter = buildGuestFilter(room_number, guest_name);
 
   if (!reservation && guest_name) {
-    reservation = await ultralight.db.first(
-      'SELECT * FROM room_reservations WHERE user_id = ? AND guest_name LIKE ? AND status IN (?, ?) ORDER BY check_in_date DESC LIMIT 1',
-      [uid(), '%' + normalizeGuestName(guest_name) + '%', 'confirmed', 'checked_in']
-    );
+    reservation = await galactic.db.first('room_reservations', {
+      where: {
+        guest_name: { like: '%' + normalizeGuestName(guest_name) + '%' },
+        status: { in: ['confirmed', 'checked_in'] },
+      },
+      orderBy: { column: 'check_in_date', dir: 'desc' },
+    });
   }
 
   // Only fetch detailed sections if requested
-  const ski_rentals = want('ski_rentals') ? await ultralight.db.all(
-    'SELECT * FROM ski_rentals WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' ORDER BY created_at DESC LIMIT 20',
-    [uid(), filterParam]
-  ) as PaymentAmountRow[] : [];
-  const ski_lessons = want('ski_lessons') ? await ultralight.db.all(
-    'SELECT * FROM ski_lessons WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' ORDER BY lesson_date DESC LIMIT 20',
-    [uid(), filterParam]
-  ) as PaymentAmountRow[] : [];
-  const golf_tee_times = want('tee_times') ? await ultralight.db.all(
-    'SELECT * FROM tee_times WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' ORDER BY tee_date DESC LIMIT 20',
-    [uid(), filterParam]
-  ) as PaymentAmountRow[] : [];
-  const restaurant = want('restaurant') ? await ultralight.db.all(
-    'SELECT * FROM restaurant_reservations WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' ORDER BY res_date DESC LIMIT 20',
-    [uid(), filterParam]
-  ) as RestaurantReservationRow[] : [];
-  const store = want('store') ? await ultralight.db.all(
-    'SELECT * FROM store_transactions WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' ORDER BY created_at DESC LIMIT 20',
-    [uid(), filterParam]
-  ) as PaymentAmountRow[] : [];
+  const ski_rentals = want('ski_rentals') ? await galactic.db.select('ski_rentals', {
+    where: guestScope(filter),
+    orderBy: { column: 'created_at', dir: 'desc' },
+    limit: 20,
+  }) as PaymentAmountRow[] : [];
+  const ski_lessons = want('ski_lessons') ? await galactic.db.select('ski_lessons', {
+    where: guestScope(filter),
+    orderBy: { column: 'lesson_date', dir: 'desc' },
+    limit: 20,
+  }) as PaymentAmountRow[] : [];
+  const golf_tee_times = want('tee_times') ? await galactic.db.select('tee_times', {
+    where: guestScope(filter),
+    orderBy: { column: 'tee_date', dir: 'desc' },
+    limit: 20,
+  }) as PaymentAmountRow[] : [];
+  const restaurant = want('restaurant') ? await galactic.db.select('restaurant_reservations', {
+    where: guestScope(filter),
+    orderBy: { column: 'res_date', dir: 'desc' },
+    limit: 20,
+  }) as RestaurantReservationRow[] : [];
+  const store = want('store') ? await galactic.db.select('store_transactions', {
+    where: guestScope(filter),
+    orderBy: { column: 'created_at', dir: 'desc' },
+    limit: 20,
+  }) as PaymentAmountRow[] : [];
 
   // Always calculate unpaid total (lightweight — uses counts if full data not fetched)
   let total_unpaid = 0;
@@ -1298,13 +1427,13 @@ export async function guest_summary(args: {
     if (ski_rentals.length || ski_lessons.length || golf_tee_times.length || store.length) {
       total_unpaid += sumUnpaid(ski_rentals) + sumUnpaid(ski_lessons) + sumUnpaid(golf_tee_times) + sumUnpaid(store);
     } else {
-      // Fetch just unpaid totals via aggregate queries
+      // Fetch just unpaid totals via aggregate queries (COALESCE -> ?? in JS)
       const unpaidSum = async (table: string) => {
-        const row: TotalRow | null = await ultralight.db.first(
-          'SELECT COALESCE(SUM(payment_amount), 0) as total FROM ' + table + ' WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' AND payment_status = ?',
-          [uid(), filterParam, 'unpaid']
-        );
-        return row?.total || 0;
+        const row: { total: number | null } | null = await galactic.db.first(table, {
+          columns: [{ fn: 'sum', column: 'payment_amount', as: 'total' }],
+          where: { ...guestScope(filter), payment_status: 'unpaid' },
+        });
+        return row?.total ?? 0;
       };
       total_unpaid += await unpaidSum('ski_rentals') + await unpaidSum('ski_lessons') + await unpaidSum('tee_times') + await unpaidSum('store_transactions');
     }
@@ -1344,18 +1473,19 @@ export async function guest_billing(args: {
     throw new Error('Either room_number or guest_name is required');
   }
 
-  const filterCol = room_number ? 'room_number' : 'guest_name';
-  const filterOp = room_number ? '= ?' : 'LIKE ?';
-  const filterParam = room_number || '%' + normalizeGuestName(guest_name!) + '%';
+  const filter = buildGuestFilter(room_number, guest_name);
 
   if (!itemized) {
     // Totals-only mode (default) — fast aggregate queries, minimal response
     const sumFrom = async (table: string) => {
-      const row: (NamedCountRow & TotalRow) | null = await ultralight.db.first(
-        'SELECT COUNT(*) as count, COALESCE(SUM(payment_amount), 0) as total FROM ' + table + ' WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' AND payment_status = ?',
-        [uid(), filterParam, payStatus]
-      );
-      return { count: row?.count || 0, subtotal: row?.total || 0 };
+      const row: { count: number; total: number | null } | null = await galactic.db.first(table, {
+        columns: [
+          { fn: 'count', as: 'count' },
+          { fn: 'sum', column: 'payment_amount', as: 'total' },
+        ],
+        where: { ...guestScope(filter), payment_status: payStatus },
+      });
+      return { count: row?.count || 0, subtotal: row?.total ?? 0 };
     };
 
     const rooms = await sumFrom('room_reservations');
@@ -1373,30 +1503,27 @@ export async function guest_billing(args: {
   }
 
   // Itemized mode — full line items
-  const roomItems: PaymentAmountRow[] = await ultralight.db.all(
-    'SELECT id, room_number, guest_name, payment_amount, payment_status FROM room_reservations WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' AND payment_status = ? LIMIT 50',
-    [uid(), filterParam, payStatus]
-  );
-  const skiItems: PaymentAmountRow[] = await ultralight.db.all(
-    'SELECT id, room_number, guest_name, payment_amount, payment_status FROM ski_rentals WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' AND payment_status = ? LIMIT 50',
-    [uid(), filterParam, payStatus]
-  );
-  const lessonItems: PaymentAmountRow[] = await ultralight.db.all(
-    'SELECT id, room_number, guest_name, payment_amount, payment_status FROM ski_lessons WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' AND payment_status = ? LIMIT 50',
-    [uid(), filterParam, payStatus]
-  );
-  const golfItems: PaymentAmountRow[] = await ultralight.db.all(
-    'SELECT id, room_number, guest_name, payment_amount, payment_status FROM tee_times WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' AND payment_status = ? LIMIT 50',
-    [uid(), filterParam, payStatus]
-  );
-  const restItems: Pick<PaymentAmountRow, 'id' | 'payment_status'>[] = await ultralight.db.all(
-    'SELECT id, room_number, guest_name, payment_status FROM restaurant_reservations WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' AND payment_status = ? LIMIT 50',
-    [uid(), filterParam, payStatus]
-  );
-  const storeItems: PaymentAmountRow[] = await ultralight.db.all(
-    'SELECT id, room_number, guest_name, payment_amount, payment_status FROM store_transactions WHERE user_id = ? AND ' + filterCol + ' ' + filterOp + ' AND payment_status = ? LIMIT 50',
-    [uid(), filterParam, payStatus]
-  );
+  const itemColumns = ['id', 'room_number', 'guest_name', 'payment_amount', 'payment_status'];
+  const itemWhere = { ...guestScope(filter), payment_status: payStatus };
+
+  const roomItems: PaymentAmountRow[] = await galactic.db.select('room_reservations', {
+    columns: itemColumns, where: itemWhere, limit: 50,
+  });
+  const skiItems: PaymentAmountRow[] = await galactic.db.select('ski_rentals', {
+    columns: itemColumns, where: itemWhere, limit: 50,
+  });
+  const lessonItems: PaymentAmountRow[] = await galactic.db.select('ski_lessons', {
+    columns: itemColumns, where: itemWhere, limit: 50,
+  });
+  const golfItems: PaymentAmountRow[] = await galactic.db.select('tee_times', {
+    columns: itemColumns, where: itemWhere, limit: 50,
+  });
+  const restItems: Pick<PaymentAmountRow, 'id' | 'payment_status'>[] = await galactic.db.select('restaurant_reservations', {
+    columns: ['id', 'room_number', 'guest_name', 'payment_status'], where: itemWhere, limit: 50,
+  });
+  const storeItems: PaymentAmountRow[] = await galactic.db.select('store_transactions', {
+    columns: itemColumns, where: itemWhere, limit: 50,
+  });
 
   return {
     rooms: { items: roomItems, subtotal: sumPaymentAmounts(roomItems) },
@@ -1417,44 +1544,61 @@ export async function report_daily(args: {
   const date = args.date || todayISO();
 
   // Occupancy
-  const totalRooms: CountRow | null = await ultralight.db.first('SELECT COUNT(*) as cnt FROM rooms WHERE user_id = ?', [uid()]);
-  const occupiedRooms: CountRow | null = await ultralight.db.first('SELECT COUNT(*) as cnt FROM rooms WHERE user_id = ? AND status = ?', [uid(), 'occupied']);
-  const total = totalRooms ? totalRooms.cnt : 0;
-  const occupied = occupiedRooms ? occupiedRooms.cnt : 0;
+  const total: number = await galactic.db.count('rooms');
+  const occupied: number = await galactic.db.count('rooms', { where: { status: 'occupied' } });
 
   // Check-ins and check-outs for this date
-  const checkIns: RoomReservationRow[] = await ultralight.db.all(
-    'SELECT * FROM room_reservations WHERE user_id = ? AND check_in_date = ? AND status IN (?, ?)',
-    [uid(), date, 'confirmed', 'checked_in']
-  );
-  const checkOuts: RoomReservationRow[] = await ultralight.db.all(
-    'SELECT * FROM room_reservations WHERE user_id = ? AND check_out_date = ? AND status IN (?, ?)',
-    [uid(), date, 'checked_in', 'checked_out']
-  );
+  const checkIns: RoomReservationRow[] = await galactic.db.select('room_reservations', {
+    where: { check_in_date: date, status: { in: ['confirmed', 'checked_in'] } },
+  });
+  const checkOuts: RoomReservationRow[] = await galactic.db.select('room_reservations', {
+    where: { check_out_date: date, status: { in: ['checked_in', 'checked_out'] } },
+  });
 
   // Active ski rentals
-  const activeRentals: CountRow | null = await ultralight.db.first('SELECT COUNT(*) as cnt FROM ski_rentals WHERE user_id = ? AND status = ?', [uid(), 'active']);
+  const activeRentals: number = await galactic.db.count('ski_rentals', { where: { status: 'active' } });
 
   // Today's lessons
-  const lessons: LessonRow[] = await ultralight.db.all('SELECT * FROM ski_lessons WHERE user_id = ? AND lesson_date = ? ORDER BY lesson_time', [uid(), date]);
+  const lessons: LessonRow[] = await galactic.db.select('ski_lessons', {
+    where: { lesson_date: date },
+    orderBy: 'lesson_time',
+  });
 
   // Today's tee times
-  const teeTimes: TeeTimeRow[] = await ultralight.db.all('SELECT * FROM tee_times WHERE user_id = ? AND tee_date = ? ORDER BY tee_time', [uid(), date]);
+  const teeTimes: TeeTimeRow[] = await galactic.db.select('tee_times', {
+    where: { tee_date: date },
+    orderBy: 'tee_time',
+  });
 
-  // Restaurant covers
-  const restRow: CoversRow | null = await ultralight.db.first('SELECT COALESCE(SUM(num_people), 0) as covers FROM restaurant_reservations WHERE user_id = ? AND res_date = ?', [uid(), date]);
+  // Restaurant covers (COALESCE -> ?? in JS)
+  const restRow: { covers: number | null } | null = await galactic.db.first('restaurant_reservations', {
+    columns: [{ fn: 'sum', column: 'num_people', as: 'covers' }],
+    where: { res_date: date },
+  });
+  const restaurantCovers = restRow?.covers ?? 0;
 
-  // Store revenue today
-  const storeRow: { revenue: number } | null = await ultralight.db.first('SELECT COALESCE(SUM(payment_amount), 0) as revenue FROM store_transactions WHERE user_id = ? AND DATE(created_at) = ?', [uid(), date]);
+  // Store revenue today (DATE(created_at) = date -> range in JS)
+  const storeRow: { revenue: number | null } | null = await galactic.db.first('store_transactions', {
+    columns: [{ fn: 'sum', column: 'payment_amount', as: 'revenue' }],
+    where: { created_at: dayRange(date) },
+  });
+  const storeRevenue = storeRow?.revenue ?? 0;
 
   // Pending approvals
-  const pendingRow: CountRow | null = await ultralight.db.first('SELECT COUNT(*) as cnt FROM approval_queue WHERE user_id = ? AND status = ?', [uid(), 'pending']);
+  const pendingApprovals: number = await galactic.db.count('approval_queue', { where: { status: 'pending' } });
 
-  // Revenue by service today
-  const roomRev: RevenueRow | null = await ultralight.db.first('SELECT COALESCE(SUM(payment_amount), 0) as rev FROM room_reservations WHERE user_id = ? AND payment_status = ? AND DATE(updated_at) = ?', [uid(), 'paid', date]);
-  const skiRev: RevenueRow | null = await ultralight.db.first('SELECT COALESCE(SUM(payment_amount), 0) as rev FROM ski_rentals WHERE user_id = ? AND payment_status = ? AND DATE(updated_at) = ?', [uid(), 'paid', date]);
-  const lessonRev: RevenueRow | null = await ultralight.db.first('SELECT COALESCE(SUM(payment_amount), 0) as rev FROM ski_lessons WHERE user_id = ? AND payment_status = ? AND DATE(updated_at) = ?', [uid(), 'paid', date]);
-  const golfRev: RevenueRow | null = await ultralight.db.first('SELECT COALESCE(SUM(payment_amount), 0) as rev FROM tee_times WHERE user_id = ? AND payment_status = ? AND DATE(updated_at) = ?', [uid(), 'paid', date]);
+  // Revenue by service today (DATE(updated_at) = date -> range in JS)
+  const paidRevenue = async (table: string): Promise<number> => {
+    const row: { rev: number | null } | null = await galactic.db.first(table, {
+      columns: [{ fn: 'sum', column: 'payment_amount', as: 'rev' }],
+      where: { payment_status: 'paid', updated_at: dayRange(date) },
+    });
+    return row?.rev ?? 0;
+  };
+  const roomRev = await paidRevenue('room_reservations');
+  const skiRev = await paidRevenue('ski_rentals');
+  const lessonRev = await paidRevenue('ski_lessons');
+  const golfRev = await paidRevenue('tee_times');
 
   return {
     date: date,
@@ -1466,19 +1610,19 @@ export async function report_daily(args: {
     },
     check_ins: checkIns,
     check_outs: checkOuts,
-    ski_rentals_active: activeRentals ? activeRentals.cnt : 0,
+    ski_rentals_active: activeRentals,
     lessons_today: lessons,
     tee_times_today: teeTimes,
-    restaurant_covers: restRow ? restRow.covers : 0,
-    store_revenue: storeRow ? storeRow.revenue : 0,
-    pending_approvals: pendingRow ? pendingRow.cnt : 0,
+    restaurant_covers: restaurantCovers,
+    store_revenue: storeRevenue,
+    pending_approvals: pendingApprovals,
     revenue_today: {
-      rooms: roomRev ? roomRev.rev : 0,
-      ski: skiRev ? skiRev.rev : 0,
-      lessons: lessonRev ? lessonRev.rev : 0,
-      golf: golfRev ? golfRev.rev : 0,
-      store: storeRow ? storeRow.revenue : 0,
-      total: (roomRev ? roomRev.rev : 0) + (skiRev ? skiRev.rev : 0) + (lessonRev ? lessonRev.rev : 0) + (golfRev ? golfRev.rev : 0) + (storeRow ? storeRow.revenue : 0),
+      rooms: roomRev,
+      ski: skiRev,
+      lessons: lessonRev,
+      golf: golfRev,
+      store: storeRevenue,
+      total: roomRev + skiRev + lessonRev + golfRev + storeRevenue,
     },
   };
 }
@@ -1492,41 +1636,53 @@ export async function report_revenue(args: {
   const { start_date, end_date } = args;
   if (!start_date || !end_date) throw new Error('start_date and end_date are required');
 
-  const roomRev: RevenueRow | null = await ultralight.db.first('SELECT COALESCE(SUM(payment_amount), 0) as rev FROM room_reservations WHERE user_id = ? AND check_in_date >= ? AND check_in_date <= ?', [uid(), start_date, end_date]);
-  const skiRev: RevenueRow | null = await ultralight.db.first('SELECT COALESCE(SUM(payment_amount), 0) as rev FROM ski_rentals WHERE user_id = ? AND DATE(created_at) >= ? AND DATE(created_at) <= ?', [uid(), start_date, end_date]);
-  const lessonRev: RevenueRow | null = await ultralight.db.first('SELECT COALESCE(SUM(payment_amount), 0) as rev FROM ski_lessons WHERE user_id = ? AND lesson_date >= ? AND lesson_date <= ?', [uid(), start_date, end_date]);
-  const golfRev: RevenueRow | null = await ultralight.db.first('SELECT COALESCE(SUM(payment_amount), 0) as rev FROM tee_times WHERE user_id = ? AND tee_date >= ? AND tee_date <= ?', [uid(), start_date, end_date]);
-  const storeRev: RevenueRow | null = await ultralight.db.first('SELECT COALESCE(SUM(payment_amount), 0) as rev FROM store_transactions WHERE user_id = ? AND DATE(created_at) >= ? AND DATE(created_at) <= ?', [uid(), start_date, end_date]);
+  // DATE(col) BETWEEN start AND end -> col >= start AND col < end+1day (ISO strings)
+  const createdRange = { gte: start_date, lt: nextDayISO(end_date) };
 
-  // By payment method
-  const byMethod: Array<{ payment_method: string | null; total: number }> = await ultralight.db.all(
-    'SELECT payment_method, SUM(payment_amount) as total FROM room_reservations WHERE user_id = ? AND check_in_date >= ? AND check_in_date <= ? AND payment_method IS NOT NULL GROUP BY payment_method',
-    [uid(), start_date, end_date]
-  );
+  const revenueSum = async (table: string, where: Record<string, unknown>): Promise<number> => {
+    const row: { rev: number | null } | null = await galactic.db.first(table, {
+      columns: [{ fn: 'sum', column: 'payment_amount', as: 'rev' }],
+      where,
+    });
+    return row?.rev ?? 0;
+  };
 
-  // Unpaid total
-  const unpaidRow: TotalRow | null = await ultralight.db.first(
-    'SELECT COALESCE(SUM(payment_amount), 0) as total FROM room_reservations WHERE user_id = ? AND check_in_date >= ? AND check_in_date <= ? AND payment_status = ?',
-    [uid(), start_date, end_date, 'unpaid']
-  );
+  const rooms = await revenueSum('room_reservations', { check_in_date: { gte: start_date, lte: end_date } });
+  const ski = await revenueSum('ski_rentals', { created_at: createdRange });
+  const lessons = await revenueSum('ski_lessons', { lesson_date: { gte: start_date, lte: end_date } });
+  const golf = await revenueSum('tee_times', { tee_date: { gte: start_date, lte: end_date } });
+  const store = await revenueSum('store_transactions', { created_at: createdRange });
+
+  // By payment method (GROUP BY)
+  const byMethod: Array<{ payment_method: string | null; total: number }> = await galactic.db.select('room_reservations', {
+    columns: ['payment_method', { fn: 'sum', column: 'payment_amount', as: 'total' }],
+    where: {
+      check_in_date: { gte: start_date, lte: end_date },
+      payment_method: { isNull: false },
+    },
+    groupBy: ['payment_method'],
+  });
+
+  // Unpaid total (COALESCE -> ?? in JS)
+  const unpaidRow: { total: number | null } | null = await galactic.db.first('room_reservations', {
+    columns: [{ fn: 'sum', column: 'payment_amount', as: 'total' }],
+    where: {
+      check_in_date: { gte: start_date, lte: end_date },
+      payment_status: 'unpaid',
+    },
+  });
 
   const methodMap: Record<string, number> = {};
   for (const m of byMethod) {
     methodMap[m.payment_method || 'unknown'] = m.total;
   }
 
-  const rooms = roomRev ? roomRev.rev : 0;
-  const ski = skiRev ? skiRev.rev : 0;
-  const lessons = lessonRev ? lessonRev.rev : 0;
-  const golf = golfRev ? golfRev.rev : 0;
-  const store = storeRev ? storeRev.rev : 0;
-
   return {
     period: { start: start_date, end: end_date },
     by_service: { rooms: rooms, ski_rentals: ski, ski_lessons: lessons, golf: golf, store: store },
     by_payment_method: methodMap,
     total: rooms + ski + lessons + golf + store,
-    unpaid: unpaidRow ? unpaidRow.total : 0,
+    unpaid: unpaidRow?.total ?? 0,
   };
 }
 
@@ -1543,23 +1699,19 @@ export async function guidelines_get(args: {
   const { key, category } = args;
 
   if (key) {
-    const row: GuidelineRow | null = await ultralight.db.first(
-      'SELECT * FROM guidelines WHERE user_id = ? AND key = ?',
-      [uid(), key]
-    );
+    const row: GuidelineRow | null = await galactic.db.first('guidelines', {
+      where: { key: key },
+    });
     return { guidelines: row ? [row] : [], total: row ? 1 : 0 };
   }
 
-  let sql = 'SELECT * FROM guidelines WHERE user_id = ?';
-  const params: SqlValue[] = [uid()];
+  const where: Record<string, unknown> = {};
+  if (category) where.category = category;
 
-  if (category) {
-    sql += ' AND category = ?';
-    params.push(category);
-  }
-
-  sql += ' ORDER BY category, key';
-  const rows: GuidelineRow[] = await ultralight.db.all(sql, params);
+  const rows: GuidelineRow[] = await galactic.db.select('guidelines', {
+    where,
+    orderBy: ['category', 'key'],
+  });
 
   return { guidelines: rows, total: rows.length };
 }
@@ -1575,22 +1727,29 @@ export async function guidelines_set(args: {
   if (!key || !value) throw new Error('key and value are required');
 
   const now = nowISO();
-  const existing: Pick<GuidelineRow, 'id'> | null = await ultralight.db.first(
-    'SELECT id FROM guidelines WHERE user_id = ? AND key = ?',
-    [uid(), key]
-  );
+  const existing: Pick<GuidelineRow, 'id'> | null = await galactic.db.first('guidelines', {
+    columns: ['id'],
+    where: { key: key },
+  });
 
   if (existing) {
-    await ultralight.db.run(
-      'UPDATE guidelines SET value = ?, category = COALESCE(?, category), updated_at = ? WHERE id = ? AND user_id = ?',
-      [value, category || null, now, existing.id, uid()]
-    );
+    // COALESCE(?, category) -> only touch category when one was provided
+    const set: Record<string, string | null> = { value: value, updated_at: now };
+    if (category) set.category = category;
+    await galactic.db.update('guidelines', {
+      set,
+      where: { id: existing.id },
+    });
   } else {
     const id = crypto.randomUUID();
-    await ultralight.db.run(
-      'INSERT INTO guidelines (id, user_id, key, value, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [id, uid(), key, value, category || null, now, now]
-    );
+    await galactic.db.insert('guidelines', {
+      id: id,
+      key: key,
+      value: value,
+      category: category || null,
+      created_at: now,
+      updated_at: now,
+    });
   }
 
   return { success: true, guideline: { key: key, value: value, category: category || null } };
@@ -1604,10 +1763,9 @@ export async function guidelines_remove(args: {
   const { key } = args;
   if (!key) throw new Error('key is required');
 
-  await ultralight.db.run(
-    'DELETE FROM guidelines WHERE user_id = ? AND key = ?',
-    [uid(), key]
-  );
+  await galactic.db.delete('guidelines', {
+    where: { key: key },
+  });
 
   return { success: true, removed: true, key: key };
 }
@@ -1637,34 +1795,38 @@ export async function email_process(args: {
   const results: Array<Record<string, unknown>> = [];
 
   // Load guidelines for AI context
-  const allGuidelines: Pick<GuidelineRow, 'key' | 'value' | 'category'>[] = await ultralight.db.all(
-    'SELECT key, value, category FROM guidelines WHERE user_id = ?',
-    [uid()]
-  );
+  const allGuidelines: Pick<GuidelineRow, 'key' | 'value' | 'category'>[] = await galactic.db.select('guidelines', {
+    columns: ['key', 'value', 'category'],
+  });
   const guidelinesText = allGuidelines.map((guideline) => guideline.key + ': ' + guideline.value).join('\n');
 
   // Check room availability for context
-  const availableRooms: CountRow | null = await ultralight.db.first(
-    'SELECT COUNT(*) as cnt FROM rooms WHERE user_id = ? AND status = ?',
-    [uid(), 'available']
-  );
+  const availableRooms: number = await galactic.db.count('rooms', { where: { status: 'available' } });
 
   for (const email of emails) {
     // 1. Log inbound email
     const emailId = crypto.randomUUID();
-    await ultralight.db.run(
-      'INSERT INTO email_log (id, user_id, direction, from_address, to_address, subject, body_text, thread_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [emailId, uid(), 'inbound', email.from, email.to || null, email.subject, email.body, email.thread_id || null, 'processing', now, now]
-    );
+    await galactic.db.insert('email_log', {
+      id: emailId,
+      direction: 'inbound',
+      from_address: email.from,
+      to_address: email.to || null,
+      subject: email.subject,
+      body_text: email.body,
+      thread_id: email.thread_id || null,
+      status: 'processing',
+      created_at: now,
+      updated_at: now,
+    });
 
     try {
       // 2. AI Classification
-      const classifyResponse = await ultralight.ai({
+      const classifyResponse = await galactic.ai({
         model: 'openai/gpt-4o',
         messages: [
           {
             role: 'system',
-            content: 'You are an email classifier for a ski/golf resort. Classify this email and decide whether it needs a reply.\n\nResort guidelines:\n' + guidelinesText + '\n\nAvailable rooms: ' + (availableRooms ? availableRooms.cnt : 0) + '\n\nRespond with JSON only:\n{\n  "classification": "reservation_request|cancellation|inquiry|complaint|confirmation|spam|other",\n  "should_reply": true/false,\n  "reason": "brief explanation",\n  "priority": "high|normal|low",\n  "db_changes": [\n    { "table": "table_name", "action": "insert|update|delete", "data": {}, "reason": "why this change" }\n  ]\n}'
+            content: 'You are an email classifier for a ski/golf resort. Classify this email and decide whether it needs a reply.\n\nResort guidelines:\n' + guidelinesText + '\n\nAvailable rooms: ' + availableRooms + '\n\nRespond with JSON only:\n{\n  "classification": "reservation_request|cancellation|inquiry|complaint|confirmation|spam|other",\n  "should_reply": true/false,\n  "reason": "brief explanation",\n  "priority": "high|normal|low",\n  "db_changes": [\n    { "table": "table_name", "action": "insert|update|delete", "data": {}, "reason": "why this change" }\n  ]\n}'
           },
           {
             role: 'user',
@@ -1683,24 +1845,24 @@ export async function email_process(args: {
       }
 
       // Update email log with classification
-      await ultralight.db.run(
-        'UPDATE email_log SET classification = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-        [classification.classification, 'queued', now, emailId, uid()]
-      );
+      await galactic.db.update('email_log', {
+        set: { classification: classification.classification, status: 'queued', updated_at: now },
+        where: { id: emailId },
+      });
 
       // 3. If should reply, draft a response
       if (classification.should_reply) {
         // Look up guest data if we can identify them
         let guestContext = '';
-        const guestReservation: Pick<RoomReservationRow, 'guest_name' | 'room_number' | 'check_in_date' | 'check_out_date'> | null = await ultralight.db.first(
-          'SELECT * FROM room_reservations WHERE user_id = ? AND status IN (?, ?) ORDER BY check_in_date DESC LIMIT 1',
-          [uid(), 'confirmed', 'checked_in']
-        );
+        const guestReservation: Pick<RoomReservationRow, 'guest_name' | 'room_number' | 'check_in_date' | 'check_out_date'> | null = await galactic.db.first('room_reservations', {
+          where: { status: { in: ['confirmed', 'checked_in'] } },
+          orderBy: { column: 'check_in_date', dir: 'desc' },
+        });
         if (guestReservation) {
           guestContext = '\nGuest context: ' + guestReservation.guest_name + ' in room ' + guestReservation.room_number + ', check-in: ' + guestReservation.check_in_date + ', check-out: ' + guestReservation.check_out_date;
         }
 
-        const draftResponse = await ultralight.ai({
+        const draftResponse = await galactic.ai({
           model: 'openai/gpt-4o',
           messages: [
             {
@@ -1718,32 +1880,40 @@ export async function email_process(args: {
 
         // Queue email reply approval
         const approvalId = crypto.randomUUID();
-        await ultralight.db.run(
-          'INSERT INTO approval_queue (id, user_id, type, status, priority, title, summary, payload, original_email_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [approvalId, uid(), 'email_reply', 'pending', classification.priority || 'normal',
-            'Reply to: ' + email.subject,
-            'From ' + email.from + ' — ' + classification.reason,
-            JSON.stringify({ to: email.from, subject: 'Re: ' + email.subject, draft_body: draftBody, original_body: email.body }),
-            emailId, now, now]
-        );
+        await galactic.db.insert('approval_queue', {
+          id: approvalId,
+          type: 'email_reply',
+          status: 'pending',
+          priority: classification.priority || 'normal',
+          title: 'Reply to: ' + email.subject,
+          summary: 'From ' + email.from + ' — ' + classification.reason,
+          payload: JSON.stringify({ to: email.from, subject: 'Re: ' + email.subject, draft_body: draftBody, original_body: email.body }),
+          original_email_id: emailId,
+          created_at: now,
+          updated_at: now,
+        });
 
-        await ultralight.db.run(
-          'UPDATE email_log SET approval_id = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-          [approvalId, now, emailId, uid()]
-        );
+        await galactic.db.update('email_log', {
+          set: { approval_id: approvalId, updated_at: now },
+          where: { id: emailId },
+        });
 
         results.push({ email_id: emailId, classification: classification.classification, action: 'reply_queued', approval_id: approvalId });
       } else {
         // Queue skip notification
         const approvalId = crypto.randomUUID();
-        await ultralight.db.run(
-          'INSERT INTO approval_queue (id, user_id, type, status, priority, title, summary, payload, original_email_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [approvalId, uid(), 'email_skip', 'pending', 'low',
-            'Skip: ' + email.subject,
-            classification.reason,
-            JSON.stringify({ from: email.from, subject: email.subject, reason: classification.reason, original_body: email.body }),
-            emailId, now, now]
-        );
+        await galactic.db.insert('approval_queue', {
+          id: approvalId,
+          type: 'email_skip',
+          status: 'pending',
+          priority: 'low',
+          title: 'Skip: ' + email.subject,
+          summary: classification.reason,
+          payload: JSON.stringify({ from: email.from, subject: email.subject, reason: classification.reason, original_body: email.body }),
+          original_email_id: emailId,
+          created_at: now,
+          updated_at: now,
+        });
 
         results.push({ email_id: emailId, classification: classification.classification, action: 'skip_queued', approval_id: approvalId });
       }
@@ -1752,21 +1922,25 @@ export async function email_process(args: {
       if (classification.db_changes && classification.db_changes.length > 0) {
         for (const change of classification.db_changes) {
           const changeApprovalId = crypto.randomUUID();
-          await ultralight.db.run(
-            'INSERT INTO approval_queue (id, user_id, type, status, priority, title, summary, payload, original_email_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [changeApprovalId, uid(), 'db_change', 'pending', classification.priority || 'normal',
-              'DB: ' + change.action + ' ' + change.table,
-              change.reason,
-              JSON.stringify(change),
-              emailId, now, now]
-          );
+          await galactic.db.insert('approval_queue', {
+            id: changeApprovalId,
+            type: 'db_change',
+            status: 'pending',
+            priority: classification.priority || 'normal',
+            title: 'DB: ' + change.action + ' ' + change.table,
+            summary: change.reason,
+            payload: JSON.stringify(change),
+            original_email_id: emailId,
+            created_at: now,
+            updated_at: now,
+          });
         }
       }
     } catch (err) {
-      await ultralight.db.run(
-        'UPDATE email_log SET status = ?, error_message = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-        ['failed', err instanceof Error ? err.message : String(err), now, emailId, uid()]
-      );
+      await galactic.db.update('email_log', {
+        set: { status: 'failed', error_message: err instanceof Error ? err.message : String(err), updated_at: now },
+        where: { id: emailId },
+      });
       results.push({ email_id: emailId, action: 'error', error: err instanceof Error ? err.message : String(err) });
     }
   }
@@ -1786,9 +1960,9 @@ export async function email_send(args: {
 
   if (!to || !subject || !body) throw new Error('to, subject, and body are required');
 
-  const apiKey = ultralight.env.RESEND_API_KEY;
-  const fromAddress = ultralight.env.RESORT_EMAIL_ADDRESS || 'resort@resend.dev';
-  const resortName = ultralight.env.RESORT_NAME || 'Resort';
+  const apiKey = galactic.env.RESEND_API_KEY;
+  const fromAddress = galactic.env.RESORT_EMAIL_ADDRESS || 'resort@resend.dev';
+  const resortName = galactic.env.RESORT_NAME || 'Resort';
 
   if (!apiKey) {
     throw new Error('RESEND_API_KEY not configured. Set it via ul.set env vars.');
@@ -1812,17 +1986,34 @@ export async function email_send(args: {
   const emailId = crypto.randomUUID();
 
   if (response.ok) {
-    await ultralight.db.run(
-      'INSERT INTO email_log (id, user_id, direction, from_address, to_address, subject, body_html, in_reply_to, status, sent_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [emailId, uid(), 'outbound', fromAddress, to, subject, body, in_reply_to || null, 'sent', now, now, now]
-    );
+    await galactic.db.insert('email_log', {
+      id: emailId,
+      direction: 'outbound',
+      from_address: fromAddress,
+      to_address: to,
+      subject: subject,
+      body_html: body,
+      in_reply_to: in_reply_to || null,
+      status: 'sent',
+      sent_at: now,
+      created_at: now,
+      updated_at: now,
+    });
     return { success: true, email_id: emailId, to: to, subject: subject };
   } else {
     const errBody = await response.text();
-    await ultralight.db.run(
-      'INSERT INTO email_log (id, user_id, direction, from_address, to_address, subject, body_html, status, error_message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [emailId, uid(), 'outbound', fromAddress, to, subject, body, 'failed', errBody, now, now]
-    );
+    await galactic.db.insert('email_log', {
+      id: emailId,
+      direction: 'outbound',
+      from_address: fromAddress,
+      to_address: to,
+      subject: subject,
+      body_html: body,
+      status: 'failed',
+      error_message: errBody,
+      created_at: now,
+      updated_at: now,
+    });
     throw new Error('Email send failed: ' + errBody);
   }
 }
@@ -1836,28 +2027,30 @@ export async function email_log_list(args: {
 }): Promise<unknown> {
   const { direction, status, limit } = args;
 
-  let sql = 'SELECT id, direction, from_address, to_address, subject, classification, status, sent_at, created_at FROM email_log WHERE user_id = ?';
-  const params: SqlValue[] = [uid()];
+  const where: Record<string, unknown> = {};
+  if (direction) where.direction = direction;
+  if (status) where.status = status;
 
-  if (direction) {
-    sql += ' AND direction = ?';
-    params.push(direction);
-  }
-  if (status) {
-    sql += ' AND status = ?';
-    params.push(status);
-  }
-
-  sql += ' ORDER BY created_at DESC LIMIT ?';
-  params.push(limit || 50);
-
-  const emails = await ultralight.db.all(sql, params);
+  const emails = await galactic.db.select('email_log', {
+    columns: ['id', 'direction', 'from_address', 'to_address', 'subject', 'classification', 'status', 'sent_at', 'created_at'],
+    where,
+    orderBy: { column: 'created_at', dir: 'desc' },
+    limit: limit || 50,
+  });
   return { emails: emails, total: emails.length };
 }
 
 // ============================================
 // 9. APPROVAL QUEUE
 // ============================================
+
+// Tables this app owns — the ONLY tables an approval-payload db_change may
+// touch. Anything else throws (payload table names arrive from AI output).
+const APP_TABLES = new Set([
+  'rooms', 'room_reservations', 'ski_equipment', 'ski_rentals', 'ski_rental_items',
+  'ski_lessons', 'tee_times', 'tee_time_carts', 'restaurant_reservations',
+  'store_products', 'store_transactions', 'guidelines', 'approval_queue', 'email_log',
+]);
 
 // ── APPROVALS LIST ──
 
@@ -1869,18 +2062,21 @@ export async function approvals_list(args: {
   const targetStatus = args.status || 'pending';
   const { type, limit } = args;
 
-  let sql = 'SELECT * FROM approval_queue WHERE user_id = ? AND status = ?';
-  const params: SqlValue[] = [uid(), targetStatus];
+  const where: Record<string, unknown> = { status: targetStatus };
+  if (type) where.type = type;
 
-  if (type) {
-    sql += ' AND type = ?';
-    params.push(type);
-  }
+  // ORDER BY CASE priority ... isn't expressible in the structured API:
+  // fetch ordered by created_at, rank priority in JS (stable sort), then slice.
+  const rows: ApprovalQueueRow[] = await galactic.db.select('approval_queue', {
+    where,
+    orderBy: { column: 'created_at', dir: 'asc' },
+  });
 
-  sql += ' ORDER BY CASE priority WHEN \'high\' THEN 1 WHEN \'normal\' THEN 2 WHEN \'low\' THEN 3 END, created_at ASC LIMIT ?';
-  params.push(limit || 20);
-
-  const approvals: ApprovalQueueRow[] = await ultralight.db.all(sql, params);
+  const priorityRank: Record<string, number> = { high: 1, normal: 2, low: 3 };
+  const approvals = rows
+    .slice()
+    .sort((a, b) => (priorityRank[a.priority] || 4) - (priorityRank[b.priority] || 4))
+    .slice(0, limit || 20);
 
   // Parse payloads
   const parsed: ParsedApprovalQueueRow[] = approvals.map((approval) => ({
@@ -1888,18 +2084,23 @@ export async function approvals_list(args: {
     payload: parseJsonObject(approval.payload),
   }));
 
-  // Counts
-  const pendingRow: CountRow | null = await ultralight.db.first('SELECT COUNT(*) as cnt FROM approval_queue WHERE user_id = ? AND status = ?', [uid(), 'pending']);
-  const todayApproved: CountRow | null = await ultralight.db.first('SELECT COUNT(*) as cnt FROM approval_queue WHERE user_id = ? AND status = ? AND DATE(resolved_at) = ?', [uid(), 'executed', todayISO()]);
-  const todayRejected: CountRow | null = await ultralight.db.first('SELECT COUNT(*) as cnt FROM approval_queue WHERE user_id = ? AND status = ? AND DATE(resolved_at) = ?', [uid(), 'rejected', todayISO()]);
+  // Counts (DATE(resolved_at) = today -> range in JS)
+  const today = todayISO();
+  const pendingCount: number = await galactic.db.count('approval_queue', { where: { status: 'pending' } });
+  const approvedToday: number = await galactic.db.count('approval_queue', {
+    where: { status: 'executed', resolved_at: dayRange(today) },
+  });
+  const rejectedToday: number = await galactic.db.count('approval_queue', {
+    where: { status: 'rejected', resolved_at: dayRange(today) },
+  });
 
   return {
     approvals: parsed,
     total: parsed.length,
     counts: {
-      pending: pendingRow ? pendingRow.cnt : 0,
-      approved_today: todayApproved ? todayApproved.cnt : 0,
-      rejected_today: todayRejected ? todayRejected.cnt : 0,
+      pending: pendingCount,
+      approved_today: approvedToday,
+      rejected_today: rejectedToday,
     },
   };
 }
@@ -1917,10 +2118,9 @@ export async function approvals_act(args: {
   if (!approval_id || !action) throw new Error('approval_id and action are required');
   if (!['approve', 'reject', 'revise'].includes(action)) throw new Error('action must be "approve", "reject", or "revise"');
 
-  const approval: ApprovalQueueRow | null = await ultralight.db.first(
-    'SELECT * FROM approval_queue WHERE id = ? AND user_id = ?',
-    [approval_id, uid()]
-  );
+  const approval: ApprovalQueueRow | null = await galactic.db.first('approval_queue', {
+    where: { id: approval_id },
+  });
   if (!approval) throw new Error('Approval not found: ' + approval_id);
   if (approval.status !== 'pending') throw new Error('Approval already resolved: ' + approval.status);
 
@@ -1929,10 +2129,10 @@ export async function approvals_act(args: {
   let result: unknown = null;
 
   if (action === 'reject') {
-    await ultralight.db.run(
-      'UPDATE approval_queue SET status = ?, admin_notes = ?, resolved_at = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      ['rejected', admin_notes || null, now, now, approval_id, uid()]
-    );
+    await galactic.db.update('approval_queue', {
+      set: { status: 'rejected', admin_notes: admin_notes || null, resolved_at: now, updated_at: now },
+      where: { id: approval_id },
+    });
     return { success: true, approval_id: approval_id, action: 'rejected' };
   }
 
@@ -1957,40 +2157,51 @@ export async function approvals_act(args: {
   if (approval.type === 'email_skip' && action === 'revise' && revision) {
     // Admin overrides skip — create a new reply approval with the revision as draft
     const newApprovalId = crypto.randomUUID();
-    await ultralight.db.run(
-      'INSERT INTO approval_queue (id, user_id, type, status, priority, title, summary, payload, original_email_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [newApprovalId, uid(), 'email_reply', 'pending', 'normal',
-        'Override reply: ' + payload.subject,
-        'Admin requested reply to previously skipped email',
-        JSON.stringify({ to: payload.from, subject: 'Re: ' + payload.subject, draft_body: revision, original_body: payload.original_body }),
-        approval.original_email_id, now, now]
-    );
+    await galactic.db.insert('approval_queue', {
+      id: newApprovalId,
+      type: 'email_reply',
+      status: 'pending',
+      priority: 'normal',
+      title: 'Override reply: ' + payload.subject,
+      summary: 'Admin requested reply to previously skipped email',
+      payload: JSON.stringify({ to: payload.from, subject: 'Re: ' + payload.subject, draft_body: revision, original_body: payload.original_body }),
+      original_email_id: approval.original_email_id,
+      created_at: now,
+      updated_at: now,
+    });
     result = { new_approval_id: newApprovalId, message: 'Reply draft created for approval' };
   }
 
   if (approval.type === 'db_change') {
-    // Execute the proposed DB change
-    // Note: We reconstruct the SQL from the structured payload for safety
+    // Execute the proposed DB change via the structured API. The table name
+    // arrives from the approval payload, so it is checked against an explicit
+    // allowlist of this app's own tables — anything else throws.
     try {
       const data = asRecord(payload.data);
-      if (payload.action === 'insert' && payload.table && data) {
-        const keys = Object.keys(data);
-        const vals = Object.values(data);
-        const placeholders = keys.map(() => '?').join(', ');
-        await ultralight.db.run(
-          'INSERT INTO ' + payload.table + ' (id, user_id, ' + keys.join(', ') + ', created_at, updated_at) VALUES (?, ?, ' + placeholders + ', ?, ?)',
-          [crypto.randomUUID(), uid(), ...vals, now, now]
-        );
+      const table = typeof payload.table === 'string' ? payload.table : '';
+      if (payload.action === 'insert' && table && data) {
+        if (!APP_TABLES.has(table)) {
+          throw new Error('Table not allowed for approval-driven changes: ' + table);
+        }
+        const values: Record<string, unknown> = { id: crypto.randomUUID() };
+        for (const [k, v] of Object.entries(data)) {
+          if (k !== 'id' && k !== 'user_id') values[k] = v;
+        }
+        values.created_at = now;
+        values.updated_at = now;
+        await galactic.db.insert(table, values);
         result = { table: payload.table, action: 'inserted', data };
-      } else if (payload.action === 'update' && payload.table && data && data.id) {
+      } else if (payload.action === 'update' && table && data && data.id) {
+        if (!APP_TABLES.has(table)) {
+          throw new Error('Table not allowed for approval-driven changes: ' + table);
+        }
         const id = data.id;
-        const updates = Object.entries(data).filter(([key]) => key !== 'id');
-        const setClauses = updates.map(([k]) => k + ' = ?').join(', ');
-        const vals = updates.map(([_, v]) => v);
-        await ultralight.db.run(
-          'UPDATE ' + payload.table + ' SET ' + setClauses + ', updated_at = ? WHERE id = ? AND user_id = ?',
-          [...vals, now, id, uid()]
-        );
+        const set: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(data)) {
+          if (k !== 'id' && k !== 'user_id') set[k] = v;
+        }
+        set.updated_at = now;
+        await galactic.db.update(table, { set, where: { id: id } });
         result = { table: payload.table, action: 'updated', id: id };
       } else {
         result = { message: 'DB change not auto-executable. Please apply manually.', payload: payload };
@@ -2001,10 +2212,10 @@ export async function approvals_act(args: {
   }
 
   const finalStatus = action === 'revise' ? 'revised' : 'executed';
-  await ultralight.db.run(
-    'UPDATE approval_queue SET status = ?, admin_notes = ?, resolved_at = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-    [finalStatus, admin_notes || null, now, now, approval_id, uid()]
-  );
+  await galactic.db.update('approval_queue', {
+    set: { status: finalStatus, admin_notes: admin_notes || null, resolved_at: now, updated_at: now },
+    where: { id: approval_id },
+  });
 
   return { success: true, approval_id: approval_id, action: finalStatus, result: result };
 }
@@ -2012,78 +2223,6 @@ export async function approvals_act(args: {
 // ============================================
 // 10. ADMIN & DB ACCESS
 // ============================================
-
-// ── DB BROWSE ──
-
-export async function db_browse(args: {
-  sql: string;
-  params?: unknown[];
-  mode?: string;
-}): Promise<unknown> {
-  const { sql, params, mode } = args;
-
-  if (!sql) throw new Error('sql is required');
-
-  const queryMode = mode || 'read';
-  const trimmed = sql.trim().toUpperCase();
-
-  if (queryMode === 'read') {
-    if (!trimmed.startsWith('SELECT') && !trimmed.startsWith('WITH')) {
-      throw new Error('Read mode only allows SELECT/WITH queries. Set mode: "write" for mutations.');
-    }
-  }
-
-  // Auto-inject user_id filtering — the SDK requires it
-  let finalSql = sql;
-  const queryParams: unknown[] = params ? [...params] : [];
-
-  // If query doesn't already reference user_id, inject it
-  if (!sql.toLowerCase().includes('user_id')) {
-    // For SELECT queries, inject WHERE user_id = ? (or AND user_id = ?)
-    if (trimmed.startsWith('SELECT') || trimmed.startsWith('WITH')) {
-      if (sql.toLowerCase().includes('where')) {
-        finalSql = sql.replace(/where/i, 'WHERE user_id = ? AND');
-      } else {
-        // Insert before ORDER BY, LIMIT, GROUP BY, or at end
-        const insertPoint = sql.search(/\b(order\s+by|limit|group\s+by)\b/i);
-        if (insertPoint > 0) {
-          finalSql = sql.slice(0, insertPoint) + ' WHERE user_id = ? ' + sql.slice(insertPoint);
-        } else {
-          finalSql = sql + ' WHERE user_id = ?';
-        }
-      }
-      queryParams.unshift(uid());
-    } else {
-      // For write queries, add user_id constraint
-      if (sql.toLowerCase().includes('where')) {
-        finalSql = sql.replace(/where/i, 'WHERE user_id = ? AND');
-      } else {
-        finalSql = sql + ' WHERE user_id = ?';
-      }
-      queryParams.unshift(uid());
-    }
-  }
-
-  // Enforce LIMIT on read queries to prevent unbounded result sets
-  if (queryMode === 'read') {
-    if (!/\bLIMIT\b/i.test(finalSql)) {
-      finalSql += ' LIMIT 100';
-    }
-
-    const rows: Array<Record<string, unknown>> = await ultralight.db.all(finalSql, queryParams);
-    return {
-      rows: rows,
-      meta: {
-        columns: rows.length > 0 ? Object.keys(rows[0]) : [],
-        row_count: rows.length,
-        limit_applied: !/\bLIMIT\b/i.test(sql), // true if we auto-injected LIMIT
-      },
-    };
-  } else {
-    const result = await ultralight.db.run(finalSql, queryParams);
-    return { success: true, result: result };
-  }
-}
 
 // ── DB TABLES ──
 
@@ -2099,13 +2238,10 @@ export async function db_tables(args: {}): Promise<unknown> {
 
   for (const table of tables) {
     try {
-      const countRow: CountRow | null = await ultralight.db.first(
-        'SELECT COUNT(*) as cnt FROM ' + table + ' WHERE user_id = ?',
-        [uid()]
-      );
+      const rowCount: number = await galactic.db.count(table);
       result.push({
         name: table,
-        row_count: countRow ? countRow.cnt : 0,
+        row_count: rowCount,
       });
     } catch (e) {
       result.push({ name: table, row_count: 0, error: 'table may not exist yet' });
