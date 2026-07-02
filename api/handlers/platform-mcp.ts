@@ -193,6 +193,7 @@ import { createServerLogger } from "../services/logging.ts";
 import { logLegacyPermissionNameCompatibility } from "../services/permission-name-telemetry.ts";
 import {
   appendVersionTrustMetadata,
+  buildAppNetworkDisclosure,
   buildAppTrustCard,
   buildVersionMetadataEntry,
   buildVersionTrustMetadata,
@@ -13220,6 +13221,10 @@ async function executeDiscoverInspect(
     },
     recent_calls: recentCalls,
     permissions: permissions,
+    // Outbound destinations + the per-user secrets bound to each (and the
+    // unbound "general" settings). connected reflects THIS caller's own secrets.
+    // Never includes a secret value.
+    network: buildAppNetworkDisclosure(app.manifest, new Set(connectedKeys)),
     diagnostics: {
       sharing: sharingDiagnostics,
       secrets: settingsDiagnostics,

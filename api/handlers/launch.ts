@@ -15,8 +15,15 @@ import {
   isGpuSupportEnabled,
   sanitizeGpuTrustCard,
 } from "../services/gpu/feature-flag.ts";
-import { buildAppTrustCard } from "../services/trust.ts";
+import { buildAppNetworkDisclosure, buildAppTrustCard } from "../services/trust.ts";
 import { resolveExecutedIntegrity } from "../services/executed-bundle.ts";
+import { encryptEnvVar } from "../services/envvars.ts";
+import { getScopedEnvSchemaEntries, resolveAppEnvSchema } from "../services/app-settings.ts";
+import {
+  buildPerUserSettingsStatus,
+  type UserAppSecretStatusRow,
+  validatePerUserSettingsValues,
+} from "../services/user-app-settings.ts";
 import { emptyHealth, getAppHealth } from "../services/app-health.ts";
 import { RequestValidationError } from "../services/request-validation.ts";
 import { createEmbeddingService } from "../services/embedding.ts";
@@ -656,6 +663,17 @@ export async function handleLaunch(request: Request): Promise<Response> {
       return await handleLaunchFunctionInferenceOverride(
         request,
         inferenceOverrideMatch[1],
+        method,
+      );
+    }
+
+    const agentSettingsMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/settings$/,
+    );
+    if (agentSettingsMatch) {
+      return await handleLaunchAgentSettings(
+        request,
+        agentSettingsMatch[1],
         method,
       );
     }
@@ -4373,6 +4391,118 @@ async function handleLaunchToolAgentPermissionsUpdate(
 // Per-(installer, app, function) galactic.ai() provider+model override.
 // GET lists overrides; PUT sets one (provider 'galactic'/'light' => credits, else
 // a configured BYOK provider); DELETE clears one (?functionName=).
+// GET/PUT /api/launch/agents/:id/settings — the viewing user's own per-user
+// secrets/config for this Agent. Mirrors /api/apps/:appId/settings but on the
+// launch auth surface. READ returns key names + connected status ONLY (never a
+// value); WRITE encrypts straight into the vault (user_app_secrets).
+async function handleLaunchAgentSettings(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  const resolved = await resolveAgentPermissionTool(user, encodedLocator);
+  if (!resolved) return error("Agent not found", 404);
+  const row = resolved.row;
+  const appId = row.id;
+
+  const isOwner = row.owner_id === user.id;
+  if (!isOwner && !resolved.installedIds.has(appId)) {
+    return error("Install this agent to configure your settings", 403);
+  }
+
+  const schema = resolveAppEnvSchema(row as never);
+  if (getScopedEnvSchemaEntries(schema, "per_user").length === 0) {
+    return error("This agent has no per-user settings", 400);
+  }
+
+  const supabaseUrl = getEnv("SUPABASE_URL");
+  const supabaseKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const headers = {
+    "apikey": supabaseKey,
+    "Authorization": `Bearer ${supabaseKey}`,
+    "Content-Type": "application/json",
+  };
+  const secretsUrl =
+    `${supabaseUrl}/rest/v1/user_app_secrets?user_id=eq.${user.id}&app_id=eq.${appId}&select=key,updated_at`;
+
+  const loadStatus = async () => {
+    const res = await fetch(secretsUrl, { headers });
+    const rows = res.ok ? await res.json() as UserAppSecretStatusRow[] : [];
+    return buildPerUserSettingsStatus(schema, rows);
+  };
+
+  if (method === "GET") {
+    const status = await loadStatus();
+    return json({
+      app_id: appId,
+      settings: status.settings,
+      connected_keys: status.connectedKeys,
+      missing_required: status.missingRequired,
+      fully_connected: status.fullyConnected,
+    });
+  }
+
+  if (method === "PUT" || method === "POST") {
+    const body = asRecord(await readJsonBody<unknown>(request)) || {};
+    const values = body.values;
+    if (!values || typeof values !== "object" || Array.isArray(values)) {
+      return error("values object is required", 400);
+    }
+    const validation = validatePerUserSettingsValues(
+      schema,
+      values as Record<string, unknown>,
+    );
+    if (validation.errors.length > 0) {
+      return json({ success: false, errors: validation.errors }, 400);
+    }
+    if (validation.entries.length === 0) {
+      return error("Provide at least one setting to update", 400);
+    }
+
+    const updatedAt = new Date().toISOString();
+    const keysSaved: string[] = [];
+    const keysRemoved: string[] = [];
+    for (const [key, value] of validation.entries) {
+      if (value === null) {
+        const del = await fetch(
+          `${supabaseUrl}/rest/v1/user_app_secrets?user_id=eq.${user.id}&app_id=eq.${appId}&key=eq.${encodeURIComponent(key)}`,
+          { method: "DELETE", headers },
+        );
+        if (!del.ok) return error(`Failed to clear setting "${key}"`, 500);
+        keysRemoved.push(key);
+        continue;
+      }
+      const encrypted = await encryptEnvVar(value);
+      const up = await fetch(`${supabaseUrl}/rest/v1/user_app_secrets`, {
+        method: "POST",
+        headers: { ...headers, "Prefer": "resolution=merge-duplicates" },
+        body: JSON.stringify({
+          user_id: user.id,
+          app_id: appId,
+          key,
+          value_encrypted: encrypted,
+          updated_at: updatedAt,
+        }),
+      });
+      if (!up.ok) return error(`Failed to save setting "${key}"`, 500);
+      keysSaved.push(key);
+    }
+
+    const status = await loadStatus();
+    return json({
+      success: true,
+      keys_saved: keysSaved,
+      keys_removed: keysRemoved,
+      connected_keys: status.connectedKeys,
+      missing_required: status.missingRequired,
+      fully_connected: status.fullyConnected,
+    });
+  }
+
+  return error("Method not allowed", 405);
+}
+
 async function handleLaunchFunctionInferenceOverride(
   request: Request,
   encodedLocator: string,
@@ -6379,7 +6509,7 @@ async function buildLaunchTrustCard(row: LaunchAppRow): Promise<LaunchTrustCard>
     // bundle vs signature), not just publish-time source signing.
     resolveExecutedIntegrity(row.id),
   ]);
-  return sanitizeGpuTrustCard(buildAppTrustCard(
+  const card = sanitizeGpuTrustCard(buildAppTrustCard(
     {
       current_version: row.current_version || "",
       runtime: row.runtime === "gpu" && !isGpuSupportEnabled()
@@ -6403,6 +6533,16 @@ async function buildLaunchTrustCard(row: LaunchAppRow): Promise<LaunchTrustCard>
       executed_integrity: executedIntegrity,
     },
   ) as LaunchTrustCard);
+
+  // Declared-only disclosure (no per-user connected state) — the trust card is a
+  // public, cacheable artifact; the viewer's connection status comes from the
+  // per-user settings endpoint instead.
+  return {
+    ...card,
+    network_disclosure: buildAppNetworkDisclosure(
+      (row.manifest ?? null) as Parameters<typeof buildAppNetworkDisclosure>[0],
+    ),
+  };
 }
 
 // A verified snapshot older than this is treated as unverified (fail closed).

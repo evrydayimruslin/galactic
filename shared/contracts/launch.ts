@@ -713,6 +713,49 @@ export interface LaunchAgentAdminSummary {
   } | null;
 }
 
+// A per-user secret that is a vaulted CREDENTIAL bound to one destination. The
+// platform injects it host-side into requests to that destination ONLY (never
+// into sandbox code, never to any other host). `connected` reflects the viewing
+// user's own configured state — a value is never included.
+export interface LaunchDestinationCredential {
+  key: string;
+  label: string;
+  required: boolean;
+  connected?: boolean;
+}
+
+// One outbound destination the Agent is allowed to reach, with the credentials
+// (if any) bound to it. A destination with an empty `credentials` list is
+// transparency-only: the Agent connects there but sends no user credential.
+export interface LaunchNetworkDestination {
+  host: string;
+  label: string | null;
+  description: string | null;
+  credentials: LaunchDestinationCredential[];
+}
+
+// A per-user setting NOT bound to a specific destination: readable config
+// (host/port/email/name) or a secret used generically. `secret` drives a masked
+// input; `group` is a display-only cluster label. Never carries a value.
+export interface LaunchGeneralSetting {
+  key: string;
+  label: string;
+  description: string | null;
+  input: string;
+  required: boolean;
+  secret: boolean;
+  group: string | null;
+  connected?: boolean;
+}
+
+// What the Agent connects to and the secrets it uses at each place. Powers the
+// "Capabilities & connections" UI and gx.discover(inspect). Values are never
+// included — only key names, requiredness, and the viewer's connected status.
+export interface LaunchNetworkDisclosure {
+  destinations: LaunchNetworkDestination[];
+  general_settings: LaunchGeneralSetting[];
+}
+
 export interface LaunchTrustCard {
   schema_version: 1;
   // Attests the published SOURCE manifest only — label "source signed", never
@@ -742,6 +785,9 @@ export interface LaunchTrustCard {
   };
   required_secrets: string[];
   per_user_secrets: string[];
+  // Grouped view of outbound destinations + the secrets bound to each, plus the
+  // unbound per-user settings. Optional so lite/batch trust surfaces can omit it.
+  network_disclosure?: LaunchNetworkDisclosure;
   access: {
     visibility: LaunchAgentVisibility;
     download_access: string | null;

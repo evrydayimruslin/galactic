@@ -199,6 +199,7 @@ export interface ManifestEnvVar {
     input?: EnvSchemaEntry['input'];
     placeholder?: string;
     help?: string;
+    group?: string;
     credential?: EnvCredential;
 }
 export interface ManifestValidationResult {

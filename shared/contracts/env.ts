@@ -13,6 +13,10 @@ export interface EnvSchemaEntry {
   input?: 'text' | 'password' | 'email' | 'number' | 'url' | 'textarea';
   placeholder?: string;
   help?: string;
+  // Optional display-only grouping label for the settings UI (e.g. "Email
+  // server" to cluster IMAP_HOST/IMAP_USER/IMAP_PASS). Has no security meaning —
+  // it never binds the value to a destination; it only groups inputs visually.
+  group?: string;
   // When set, this secret is a CREDENTIAL the platform uses on the Agent's
   // behalf against a declared destination — the plaintext is never injected
   // into the sandbox (the Phase 3 vault). See EnvCredential.

@@ -74,6 +74,8 @@ export const launchRoutes: LaunchRouteDefinition[] = [
       "GET /api/launch/agents/:id/function-inference",
       "PUT /api/launch/agents/:id/function-inference",
       "DELETE /api/launch/agents/:id/function-inference",
+      "GET /api/launch/agents/:id/settings",
+      "PUT /api/launch/agents/:id/settings",
       "GET /api/launch/agents/:id/wiring",
       "GET /api/launch/agents/:id/caller-trust",
       "GET /api/launch/grants",

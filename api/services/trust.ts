@@ -5,7 +5,12 @@ import type { AppManifest } from "../../shared/contracts/manifest.ts";
 // module) so executed-bundle.ts — which already imports signing helpers from
 // this file — can import it in that same direction, avoiding an import cycle.
 export type ExecutedIntegrity = "verified" | "unverified" | "unknown";
-import { getManifestEnvVars } from "../../shared/contracts/manifest.ts";
+import { getManifestEnvVars, humanizeEnvVarKey } from "../../shared/contracts/manifest.ts";
+import type {
+  LaunchGeneralSetting,
+  LaunchNetworkDestination,
+  LaunchNetworkDisclosure,
+} from "../../shared/contracts/launch.ts";
 import { getEnv } from "../lib/env.ts";
 import { parseAppManifest, resolveAppEnvSchema } from "./app-settings.ts";
 import { emptyHealth } from "./app-health.ts";
@@ -223,6 +228,94 @@ export function getManifestAllowedDestinations(
     }
   }
   return [...new Set(hosts)];
+}
+
+// Build the user-facing network disclosure: outbound destinations joined with
+// the per-user credentials bound to each (via credential.destination), plus the
+// unbound per-user settings ("general"). This is what the "Capabilities &
+// connections" UI and gx.discover(inspect) render.
+//
+// SAFETY: the value of a secret is NEVER included — only key names, requiredness,
+// and (when connectedKeys is supplied for the viewing user) a connected flag. A
+// credential appears under a destination ONLY when it is host-bound
+// (credential.destination), so the "only sent to X" assurance is never overclaimed;
+// every other per-user var lands in general_settings.
+export function buildAppNetworkDisclosure(
+  manifest: AppManifest | string | null | undefined,
+  connectedKeys?: Set<string>,
+): LaunchNetworkDisclosure {
+  const parsed = parseAppManifest(manifest);
+  const envVars = parsed ? getManifestEnvVars(parsed) : undefined;
+
+  // Ordered by declaration so transparency-only destinations (no bound
+  // credential) still appear and label/description are preserved.
+  const destinations = new Map<string, LaunchNetworkDestination>();
+  const rawDests = parsed?.network?.allowed_destinations;
+  if (Array.isArray(rawDests)) {
+    for (const dest of rawDests) {
+      const host = typeof dest === "string"
+        ? dest
+        : (dest && typeof dest === "object"
+          ? (dest as { host?: unknown }).host
+          : undefined);
+      if (typeof host !== "string" || !host.trim()) continue;
+      const hostKey = host.trim().toLowerCase();
+      if (destinations.has(hostKey)) continue;
+      const meta = (dest && typeof dest === "object")
+        ? dest as { label?: unknown; description?: unknown }
+        : {};
+      destinations.set(hostKey, {
+        host: hostKey,
+        label: typeof meta.label === "string" ? meta.label : null,
+        description: typeof meta.description === "string" ? meta.description : null,
+        credentials: [],
+      });
+    }
+  }
+
+  const generalSettings: LaunchGeneralSetting[] = [];
+
+  if (envVars) {
+    for (const [key, entry] of Object.entries(envVars)) {
+      // Only per-user vars are user-configurable; universal vars are developer-set.
+      if ((entry.scope ?? entry.type) !== "per_user") continue;
+
+      const label = entry.label && entry.label.trim()
+        ? entry.label.trim()
+        : humanizeEnvVarKey(key);
+      const required = entry.required ?? false;
+      const connected = connectedKeys ? connectedKeys.has(key) : undefined;
+      const destHost = entry.credential?.destination?.trim().toLowerCase();
+
+      if (destHost) {
+        let dest = destinations.get(destHost);
+        if (!dest) {
+          // Tolerate a credential whose destination isn't in the allowlist
+          // (validateManifest normally prevents this) — still surface it.
+          dest = { host: destHost, label: null, description: null, credentials: [] };
+          destinations.set(destHost, dest);
+        }
+        dest.credentials.push({ key, label, required, connected });
+        continue;
+      }
+
+      generalSettings.push({
+        key,
+        label,
+        description: entry.description ?? null,
+        input: entry.input ?? "text",
+        required,
+        secret: (entry.input ?? "text") === "password",
+        group: entry.group ?? null,
+        connected,
+      });
+    }
+  }
+
+  return {
+    destinations: [...destinations.values()],
+    general_settings: generalSettings,
+  };
 }
 
 export function getManifestEntrypoints(manifest: AppManifest | string | null | undefined): string[] {

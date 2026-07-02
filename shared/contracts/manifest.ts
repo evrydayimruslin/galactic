@@ -295,6 +295,8 @@ export interface ManifestEnvVar {
   input?: EnvSchemaEntry['input'];
   placeholder?: string;
   help?: string;
+  // Display-only grouping label for the settings UI (no security meaning).
+  group?: string;
   // Marks this secret as a CREDENTIAL: the platform attaches it to outbound
   // requests to `credential.destination` in the parent isolate and never
   // injects the plaintext into the sandbox (Phase 3 vault). destination must be
@@ -470,6 +472,9 @@ function normalizeManifestEnvVarEntry(
     input: normalizeEnvInput(raw.input, key, description),
     placeholder: typeof raw.placeholder === 'string' ? raw.placeholder : undefined,
     help: typeof raw.help === 'string' ? raw.help : undefined,
+    group: typeof raw.group === 'string' && raw.group.trim()
+      ? raw.group.trim()
+      : undefined,
     credential: normalizeEnvCredential(raw.credential),
   };
 }
@@ -519,6 +524,7 @@ export function manifestEnvVarsToEnvSchema(
       input: normalizeEnvInput(value.input, key, value.description),
       placeholder: value.placeholder,
       help: value.help,
+      group: value.group,
       credential: value.credential,
     };
   }

@@ -12,6 +12,7 @@ export interface EnvSchemaEntry {
     input?: 'text' | 'password' | 'email' | 'number' | 'url' | 'textarea';
     placeholder?: string;
     help?: string;
+    group?: string;
     credential?: EnvCredential;
 }
 export type EnvCredentialInjection = {
