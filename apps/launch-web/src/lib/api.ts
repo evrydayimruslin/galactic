@@ -835,7 +835,21 @@ export class LaunchApiClient {
           error?: unknown;
           message?: unknown;
         };
-        message = String(parsed.error || parsed.message || text);
+        // The API returns errors either as a string or a structured object
+        // ({ type, message, details }). Pull the human-readable message out —
+        // never String() the object (that yields the useless "[object Object]").
+        const errField = parsed.error;
+        if (typeof errField === "string") {
+          message = errField;
+        } else if (
+          errField && typeof errField === "object" &&
+          typeof (errField as { message?: unknown }).message === "string"
+        ) {
+          message = (errField as { message: string }).message;
+        } else if (typeof parsed.message === "string") {
+          message = parsed.message;
+        }
+        // else: fall through to the raw `text` (already assigned above).
       } catch {
         // Non-JSON error body (e.g. an upstream HTML error page): never
         // surface raw markup or page-sized bodies in UI error states.
