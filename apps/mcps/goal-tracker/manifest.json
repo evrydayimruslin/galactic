@@ -12,51 +12,154 @@
     "add_goal": {
       "description": "Create a new goal with optional milestones. Each milestone is a step toward completing the goal.",
       "parameters": {
-        "name": { "type": "string", "description": "Goal name", "required": true },
-        "description": { "type": "string", "description": "What this goal is about" },
-        "target_date": { "type": "string", "description": "Target completion date (YYYY-MM-DD)" },
-        "milestones": { "type": "array", "description": "Initial milestones to create", "items": { "type": "object", "properties": { "name": { "type": "string" }, "target_date": { "type": "string" } } } }
+        "name": {
+          "type": "string",
+          "description": "Goal name",
+          "required": true
+        },
+        "description": {
+          "type": "string",
+          "description": "What this goal is about"
+        },
+        "target_date": {
+          "type": "string",
+          "description": "Target completion date (YYYY-MM-DD)"
+        },
+        "milestones": {
+          "type": "array",
+          "description": "Initial milestones to create",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "target_date": {
+                "type": "string"
+              }
+            }
+          }
+        }
       },
-      "returns": { "type": "object", "description": "Goal ID and creation confirmation" }
+      "returns": {
+        "type": "object",
+        "description": "Goal ID and creation confirmation"
+      }
     },
     "add_milestone": {
       "description": "Add a milestone to an existing goal.",
       "parameters": {
-        "goal_id": { "type": "string", "description": "ID of the goal", "required": true },
-        "name": { "type": "string", "description": "Milestone name", "required": true },
-        "target_date": { "type": "string", "description": "Target date (YYYY-MM-DD)" }
+        "goal_id": {
+          "type": "string",
+          "description": "ID of the goal",
+          "required": true
+        },
+        "name": {
+          "type": "string",
+          "description": "Milestone name",
+          "required": true
+        },
+        "target_date": {
+          "type": "string",
+          "description": "Target date (YYYY-MM-DD)"
+        }
       },
-      "returns": { "type": "object", "description": "Milestone ID and confirmation" }
+      "returns": {
+        "type": "object",
+        "description": "Milestone ID and confirmation"
+      }
     },
     "update": {
       "description": "Update progress on a goal or mark a milestone complete. Provide goal_id to update the goal, or both goal_id and milestone_id to update a specific milestone.",
       "parameters": {
-        "goal_id": { "type": "string", "description": "ID of the goal to update" },
-        "milestone_id": { "type": "string", "description": "ID of a specific milestone to update" },
-        "completed": { "type": "boolean", "description": "Mark as completed" },
-        "notes": { "type": "string", "description": "Progress notes" },
-        "percent_complete": { "type": "number", "description": "Overall progress percentage (0-100)" },
-        "status": { "type": "string", "description": "Goal status", "enum": ["active", "completed", "paused", "abandoned"] }
+        "goal_id": {
+          "type": "string",
+          "description": "ID of the goal to update"
+        },
+        "milestone_id": {
+          "type": "string",
+          "description": "ID of a specific milestone to update"
+        },
+        "completed": {
+          "type": "boolean",
+          "description": "Mark as completed"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Progress notes"
+        },
+        "percent_complete": {
+          "type": "number",
+          "description": "Overall progress percentage (0-100)"
+        },
+        "status": {
+          "type": "string",
+          "description": "Goal status",
+          "enum": [
+            "active",
+            "completed",
+            "paused",
+            "abandoned"
+          ]
+        }
       },
-      "returns": { "type": "object", "description": "Updated goal or milestone" }
+      "returns": {
+        "type": "object",
+        "description": "Updated goal or milestone"
+      }
+    },
+    "remove_goal": {
+      "description": "Remove a goal (and its milestones and progress logs) by id or exact name.",
+      "parameters": {
+        "goal_id": {
+          "type": "string",
+          "description": "Goal id to remove"
+        },
+        "name": {
+          "type": "string",
+          "description": "Exact goal name (used when goal_id is not given)"
+        }
+      }
     },
     "list": {
       "description": "List goals with their milestones and progress.",
       "parameters": {
-        "status": { "type": "string", "description": "Filter by status: active, completed, paused, or all (default: all)", "enum": ["active", "completed", "paused", "abandoned", "all"] },
-        "limit": { "type": "number", "description": "Max goals to return (default 20)" }
+        "status": {
+          "type": "string",
+          "description": "Filter by status: active, completed, paused, or all (default: all)",
+          "enum": [
+            "active",
+            "completed",
+            "paused",
+            "abandoned",
+            "all"
+          ]
+        },
+        "limit": {
+          "type": "number",
+          "description": "Max goals to return (default 20)"
+        }
       },
-      "returns": { "type": "object", "description": "List of goals with milestones and progress" }
+      "returns": {
+        "type": "object",
+        "description": "List of goals with milestones and progress"
+      }
     },
     "review": {
       "description": "Get a summary of all active goals: progress, overdue items, and upcoming milestones.",
       "parameters": {},
-      "returns": { "type": "object", "description": "Review with summaries, overdue items, and upcoming milestones" }
+      "returns": {
+        "type": "object",
+        "description": "Review with summaries, overdue items, and upcoming milestones"
+      }
     },
     "status": {
       "description": "Quick count of total, active, and completed goals.",
       "parameters": {},
-      "returns": { "type": "object", "description": "Goal counts by status" }
+      "returns": {
+        "type": "object",
+        "description": "Goal counts by status"
+      }
     }
   }
 }

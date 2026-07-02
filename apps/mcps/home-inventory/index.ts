@@ -188,6 +188,33 @@ export async function export_summary(args: {
   };
 }
 
+// ── REMOVE ITEM ──
+
+export async function remove(args: {
+  item_id?: string;
+  name?: string;
+}): Promise<unknown> {
+  const { item_id, name } = args;
+  if (!item_id && !name) {
+    return { success: false, error: 'Provide item_id or name.' };
+  }
+
+  const item = item_id
+    ? await galactic.db.first('items', { where: { id: item_id } })
+    : await galactic.db.first('items', { where: { name: name } });
+
+  if (!item) {
+    return { success: false, error: 'Item not found.' };
+  }
+
+  await galactic.db.delete('items', { where: { id: item.id } });
+
+  return {
+    success: true,
+    removed: { id: item.id, name: item.name, location: item.location },
+  };
+}
+
 // ── STATUS ──
 
 export async function status(args?: {}): Promise<unknown> {

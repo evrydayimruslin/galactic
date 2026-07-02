@@ -167,6 +167,36 @@ export async function update(args: {
   return { success: false, error: 'Provide goal_id (and optionally milestone_id) to update' };
 }
 
+// ── REMOVE GOAL ──
+
+export async function remove_goal(args: {
+  goal_id?: string;
+  name?: string;
+}): Promise<unknown> {
+  const { goal_id, name } = args;
+  if (!goal_id && !name) {
+    return { success: false, error: 'Provide goal_id or name.' };
+  }
+
+  const goal = goal_id
+    ? await galactic.db.first('goals', { where: { id: goal_id } })
+    : await galactic.db.first('goals', { where: { name: name } });
+
+  if (!goal) {
+    return { success: false, error: 'Goal not found.' };
+  }
+
+  // Cascade: milestones and progress logs go with the goal.
+  await galactic.db.delete('milestones', { where: { goal_id: goal.id } });
+  await galactic.db.delete('progress_logs', { where: { goal_id: goal.id } });
+  await galactic.db.delete('goals', { where: { id: goal.id } });
+
+  return {
+    success: true,
+    removed: { id: goal.id, name: goal.name },
+  };
+}
+
 // ── LIST GOALS ──
 
 export async function list(args: {

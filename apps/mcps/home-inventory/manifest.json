@@ -12,51 +12,127 @@
     "add": {
       "description": "Add an item to your inventory. Specify where it is, what it's worth, and any notes.",
       "parameters": {
-        "name": { "type": "string", "description": "Item name", "required": true },
-        "location": { "type": "string", "description": "Where the item is (e.g. living room, garage, kitchen)", "required": true },
-        "value": { "type": "number", "description": "Estimated value in dollars" },
-        "category": { "type": "string", "description": "Item category (e.g. electronics, furniture, appliance)" },
-        "notes": { "type": "string", "description": "Additional notes (serial number, condition, etc.)" },
-        "purchase_date": { "type": "string", "description": "When purchased (YYYY-MM-DD)" },
-        "warranty_expires": { "type": "string", "description": "Warranty expiration (YYYY-MM-DD)" }
+        "name": {
+          "type": "string",
+          "description": "Item name",
+          "required": true
+        },
+        "location": {
+          "type": "string",
+          "description": "Where the item is (e.g. living room, garage, kitchen)",
+          "required": true
+        },
+        "value": {
+          "type": "number",
+          "description": "Estimated value in dollars"
+        },
+        "category": {
+          "type": "string",
+          "description": "Item category (e.g. electronics, furniture, appliance)"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Additional notes (serial number, condition, etc.)"
+        },
+        "purchase_date": {
+          "type": "string",
+          "description": "When purchased (YYYY-MM-DD)"
+        },
+        "warranty_expires": {
+          "type": "string",
+          "description": "Warranty expiration (YYYY-MM-DD)"
+        }
       },
-      "returns": { "type": "object", "description": "Item ID and confirmation" }
+      "returns": {
+        "type": "object",
+        "description": "Item ID and confirmation"
+      }
     },
     "list": {
       "description": "List inventory items, optionally filtered by location or category.",
       "parameters": {
-        "location": { "type": "string", "description": "Filter by location" },
-        "category": { "type": "string", "description": "Filter by category" },
-        "limit": { "type": "number", "description": "Max items to return (default 100)" }
+        "location": {
+          "type": "string",
+          "description": "Filter by location"
+        },
+        "category": {
+          "type": "string",
+          "description": "Filter by category"
+        },
+        "limit": {
+          "type": "number",
+          "description": "Max items to return (default 100)"
+        }
       },
-      "returns": { "type": "object", "description": "Items with total value" }
+      "returns": {
+        "type": "object",
+        "description": "Items with total value"
+      }
     },
     "search": {
       "description": "Search items by name, notes, location, or category.",
       "parameters": {
-        "query": { "type": "string", "description": "Search text", "required": true }
+        "query": {
+          "type": "string",
+          "description": "Search text",
+          "required": true
+        }
       },
-      "returns": { "type": "object", "description": "Matching items" }
+      "returns": {
+        "type": "object",
+        "description": "Matching items"
+      }
+    },
+    "remove": {
+      "description": "Remove an item from your inventory by id or exact name.",
+      "parameters": {
+        "item_id": {
+          "type": "string",
+          "description": "Item id to remove"
+        },
+        "name": {
+          "type": "string",
+          "description": "Exact item name (used when item_id is not given)"
+        }
+      }
     },
     "value": {
       "description": "Calculate total inventory value, optionally grouped by location or category.",
       "parameters": {
-        "location": { "type": "string", "description": "Calculate value for a specific location" },
-        "category": { "type": "string", "description": "Calculate value for a specific category" }
+        "location": {
+          "type": "string",
+          "description": "Calculate value for a specific location"
+        },
+        "category": {
+          "type": "string",
+          "description": "Calculate value for a specific category"
+        }
       },
-      "returns": { "type": "object", "description": "Total value with breakdown" }
+      "returns": {
+        "type": "object",
+        "description": "Total value with breakdown"
+      }
     },
     "export_summary": {
       "description": "Generate a full inventory summary organized by location, suitable for insurance documentation.",
       "parameters": {
-        "format": { "type": "string", "description": "Output format (default: structured JSON)" }
+        "format": {
+          "type": "string",
+          "description": "Output format (default: structured JSON)"
+        }
       },
-      "returns": { "type": "object", "description": "Complete inventory organized by location" }
+      "returns": {
+        "type": "object",
+        "description": "Complete inventory organized by location"
+      }
     },
     "status": {
       "description": "Quick overview: total items, locations, categories, and value.",
       "parameters": {},
-      "returns": { "type": "object", "description": "Inventory overview" }
+      "returns": {
+        "type": "object",
+        "description": "Inventory overview"
+      }
     }
   }
 }

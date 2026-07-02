@@ -41,6 +41,39 @@ export async function add(args: {
   };
 }
 
+// ── REMOVE TRANSACTION ──
+
+export async function remove(args: {
+  transaction_id?: string;
+  description?: string;
+}): Promise<unknown> {
+  const { transaction_id, description } = args;
+  if (!transaction_id && !description) {
+    return { success: false, error: 'Provide transaction_id or description.' };
+  }
+
+  const tx = transaction_id
+    ? await galactic.db.first('transactions', { where: { id: transaction_id } })
+    : await galactic.db.first('transactions', { where: { description: description } });
+
+  if (!tx) {
+    return { success: false, error: 'Transaction not found.' };
+  }
+
+  await galactic.db.delete('transactions', { where: { id: tx.id } });
+
+  return {
+    success: true,
+    removed: {
+      id: tx.id,
+      amount: tx.amount,
+      category: tx.category,
+      description: tx.description,
+      date: tx.date,
+    },
+  };
+}
+
 // ── LIST TRANSACTIONS ──
 
 export async function list(args: {
