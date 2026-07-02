@@ -242,6 +242,39 @@ Deno.test("agent function permissions: update upserts default and function overr
   );
 });
 
+Deno.test("agent function permissions: update writes health_gate when provided", async () => {
+  const writes: Array<{ url: string; body: unknown }> = [];
+  await withEnv(
+    async () => {
+      await updateCallerFunctionPermissions({
+        userId: "user-1",
+        appId: "app-1",
+        permissions: [{
+          functionName: "deploy",
+          policy: "always",
+          healthGate: false,
+        }],
+      });
+
+      assertEquals(writes.length, 1);
+      assertEquals(writes[0].body, [{
+        user_id: "user-1",
+        app_id: "app-1",
+        function_name: "deploy",
+        policy: "always",
+        health_gate: false,
+      }]);
+    },
+    async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (init?.method === "POST") {
+        writes.push({ url, body: JSON.parse(String(init.body)) });
+      }
+      return new Response(null, { status: 204 });
+    },
+  );
+});
+
 Deno.test("agent function permissions: confirm satisfies ask (allow once)", async () => {
   await withEnv(
     async () => {
@@ -270,7 +303,12 @@ Deno.test("agent function permissions: confirm does NOT override never", async (
         confirmed: true,
       });
       assertEquals(result.allowed, false);
-      if (!result.allowed) assertEquals(result.details.policy, "never");
+      if (!result.allowed) {
+        assertEquals(result.details.policy, "never");
+        // The bounce is a diagnostic: it names the policy and the way out.
+        assertEquals(result.message.includes('"never"'), true);
+        assertEquals(result.message.includes("gx.permit"), true);
+      }
     },
     (async (input: Request | URL | string) => {
       const url = input instanceof Request ? input.url : String(input);

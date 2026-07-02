@@ -2701,7 +2701,11 @@ const PLATFORM_TOOLS: MCPTool[] = [
       "Record YOUR decision about whether your connected agents may call a " +
       'specific app function on your behalf — the persistent side of the "ask" ' +
       'prompt. decision:"always" allows it from now on; "never" blocks it; ' +
-      '"ask" resets to per-call confirmation. This is about your OWN ' +
+      '"ask" resets to per-call confirmation. health_gate (default true) is ' +
+      'the same toggle as the website: "always" auto-allows only while the ' +
+      "function is recently healthy; pass health_gate:false for an " +
+      "unconditional always (private/owner-only agents never accrue public " +
+      "health, so gated-always keeps asking for them). This is about your OWN " +
       "connected-agent access — NOT gx.grants (which wires one app to call " +
       'another). After decision:"always", just retry gx.call.',
     annotations: {
@@ -2723,6 +2727,12 @@ const PLATFORM_TOOLS: MCPTool[] = [
           enum: ["always", "ask", "never"],
           description:
             "always = allow from now on; ask = confirm each call; never = block.",
+        },
+        health_gate: {
+          type: "boolean",
+          description:
+            'For decision:"always": true (default) = auto-allow only while ' +
+            "recently healthy, false = always allow unconditionally.",
         },
       },
       required: ["app_id", "function_name", "decision"],
@@ -10486,19 +10496,30 @@ async function executePermit(
       'decision must be "always", "ask", or "never".',
     );
   }
+  if (args.health_gate !== undefined && typeof args.health_gate !== "boolean") {
+    throw new ToolError(INVALID_PARAMS, "health_gate must be a boolean.");
+  }
+  const healthGate = args.health_gate as boolean | undefined;
   const appId = await resolveAppIdForMarketplace(appRef);
   await updateCallerFunctionPermissions({
     userId,
     appId,
-    permissions: [{ functionName, policy: decision }],
+    permissions: [{
+      functionName,
+      policy: decision,
+      ...(healthGate !== undefined ? { healthGate } : {}),
+    }],
   });
   return {
     ok: true,
     app_id: appId,
     function_name: functionName,
     decision,
+    ...(healthGate !== undefined ? { health_gate: healthGate } : {}),
     note: decision === "always"
-      ? "Your connected agents can now call this function — retry gx.call."
+      ? (healthGate === false
+        ? "Your connected agents can now call this function unconditionally — retry gx.call."
+        : "Your connected agents can now call this function while it is recently healthy — retry gx.call (unhealthy or unproven functions still ask; pass health_gate:false for unconditional).")
       : decision === "never"
       ? "Your connected agents are now blocked from this function."
       : "Reset to per-call confirmation (ask).",
