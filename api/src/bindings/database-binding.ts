@@ -1,9 +1,15 @@
 // RPC Database Binding for Dynamic Workers
 // Wraps D1 HTTP API calls behind a WorkerEntrypoint.
-// The Dynamic Worker sees env.DB.query() but never sees CF credentials.
+// The Dynamic Worker sees env.DB.select()/insert()/... but never sees CF
+// credentials AND never runs raw SQL.
 //
-// This is the security boundary: credentials stay in the parent Worker,
-// the Dynamic Worker only has access to the methods exposed here.
+// Two security boundaries live here:
+//  1. Credentials (CF_ACCOUNT_ID, CF_API_TOKEN) stay in the parent Worker; the
+//     Dynamic Worker only reaches the structured methods exposed below.
+//  2. Per-user isolation: the app passes a STRUCTURED op (table/columns/where);
+//     the SQL is built HOST-SIDE by scoped-query.ts with `user_id = ?` injected
+//     from ctx.props.userId on every table. App code cannot supply raw SQL or
+//     user_id, so it can never read or write another user's rows. (Phase 5.)
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { getEnv } from "../../lib/env.ts";
@@ -12,6 +18,27 @@ import {
   type CloudOperationMeteringContext,
   debitD1Usage,
 } from "../../services/cloud-usage.ts";
+import {
+  type BuiltQuery,
+  buildCount,
+  buildDelete,
+  buildInsert,
+  buildSelect,
+  buildUpdate,
+  buildUpsert,
+  type CountOp,
+  type DeleteOp,
+  type InsertOp,
+  type SelectOp,
+  type UpdateOp,
+  type UpsertOp,
+} from "./scoped-query.ts";
+
+export type ScopedBatchOp =
+  | ({ op: "insert" } & InsertOp)
+  | ({ op: "update" } & UpdateOp)
+  | ({ op: "delete" } & DeleteOp)
+  | ({ op: "upsert" } & UpsertOp);
 
 // ============================================
 // TYPES
@@ -137,49 +164,98 @@ export class DatabaseBinding
     return result;
   }
 
-  // ── D1DataService interface (matches ultralight.db.*) ──
+  // ── Scoped structured API (galactic.db.*) ──
+  // Every method builds SQL host-side via scoped-query.ts, injecting the caller's
+  // user_id from ctx.props. Raw SQL never crosses this boundary.
 
-  async run(sql: string, params?: unknown[]) {
-    const r = await this.queryD1(sql, params || []);
+  private get scopeUserId(): string {
+    return this.ctx.props.userId;
+  }
+
+  private shapeMeta(meta: D1QueryResult["meta"] | undefined) {
     return {
-      success: r.success,
-      meta: {
-        changes: r.meta?.changes ?? 0,
-        last_row_id: r.meta?.last_row_id ?? 0,
-        duration: r.meta?.duration ?? 0,
-        rows_read: r.meta?.rows_read ?? 0,
-        rows_written: r.meta?.rows_written ?? 0,
-      },
+      changes: meta?.changes ?? 0,
+      last_row_id: meta?.last_row_id ?? 0,
+      duration: meta?.duration ?? 0,
+      rows_read: meta?.rows_read ?? 0,
+      rows_written: meta?.rows_written ?? 0,
     };
   }
 
-  async all(sql: string, params?: unknown[]) {
-    const r = await this.queryD1(sql, params || []);
+  private async runBuilt(built: BuiltQuery): Promise<D1QueryResult> {
+    return await this.queryD1(built.sql, built.params);
+  }
+
+  async select(op: SelectOp): Promise<Record<string, unknown>[]> {
+    const r = await this.runBuilt(buildSelect(op, this.scopeUserId));
     return r.results ?? [];
   }
 
-  async first(sql: string, params?: unknown[]) {
-    const r = await this.queryD1(sql, params || []);
+  async first(op: SelectOp): Promise<Record<string, unknown> | null> {
+    const r = await this.runBuilt(
+      buildSelect({ ...op, limit: 1 }, this.scopeUserId),
+    );
     return r.results?.[0] ?? null;
   }
 
-  async batch(statements: Array<{ sql: string; params?: unknown[] }>) {
-    // Execute sequentially (D1 REST API doesn't support batch transactions)
+  async count(op: CountOp): Promise<number> {
+    const r = await this.runBuilt(buildCount(op, this.scopeUserId));
+    const row = r.results?.[0] as { count?: number } | undefined;
+    return Number(row?.count ?? 0);
+  }
+
+  async insert(op: InsertOp) {
+    const r = await this.runBuilt(buildInsert(op, this.scopeUserId));
+    return {
+      success: r.success,
+      id: r.meta?.last_row_id ?? 0,
+      meta: this.shapeMeta(r.meta),
+    };
+  }
+
+  async update(op: UpdateOp) {
+    const r = await this.runBuilt(buildUpdate(op, this.scopeUserId));
+    return { success: r.success, meta: this.shapeMeta(r.meta) };
+  }
+
+  async delete(op: DeleteOp) {
+    const r = await this.runBuilt(buildDelete(op, this.scopeUserId));
+    return { success: r.success, meta: this.shapeMeta(r.meta) };
+  }
+
+  async upsert(op: UpsertOp) {
+    const r = await this.runBuilt(buildUpsert(op, this.scopeUserId));
+    return { success: r.success, meta: this.shapeMeta(r.meta) };
+  }
+
+  async batch(ops: ScopedBatchOp[]) {
+    if (!Array.isArray(ops)) {
+      throw new Error("galactic.db.batch expects an array of write operations.");
+    }
+    // Sequential, non-transactional — the D1 REST API has no batch transaction.
     const results = [];
-    for (const stmt of statements) {
-      const r = await this.queryD1(stmt.sql, stmt.params || []);
-      results.push({
-        success: r.success,
-        meta: {
-          changes: r.meta?.changes ?? 0,
-          last_row_id: r.meta?.last_row_id ?? 0,
-          duration: r.meta?.duration ?? 0,
-          rows_read: r.meta?.rows_read ?? 0,
-          rows_written: r.meta?.rows_written ?? 0,
-        },
-      });
+    for (const op of ops) {
+      results.push(await this.dispatchWrite(op));
     }
     return results;
+  }
+
+  private async dispatchWrite(op: ScopedBatchOp) {
+    switch (op?.op) {
+      case "insert":
+        return await this.insert(op);
+      case "update":
+        return await this.update(op);
+      case "delete":
+        return await this.delete(op);
+      case "upsert":
+        return await this.upsert(op);
+      default:
+        throw new Error(
+          `galactic.db.batch: each operation needs op: "insert" | "update" | ` +
+            `"delete" | "upsert" (got ${JSON.stringify((op as { op?: unknown })?.op)}).`,
+        );
+    }
   }
 }
 

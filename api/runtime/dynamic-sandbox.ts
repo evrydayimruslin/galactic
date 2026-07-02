@@ -252,19 +252,33 @@ function __ulAllowsAppCall(targetAppId, functionName) {
 globalThis.ultralight = {
   get db() {
     const e = globalThis.__rpcEnv;
-    if (!e.DB) return {
-      run() { throw new Error('D1 database not available. Ensure your app has a migrations/ folder.'); },
-      all() { throw new Error('D1 database not available.'); },
-      first() { throw new Error('D1 database not available.'); },
-      batch() { throw new Error('D1 database not available.'); },
-      exec() { throw new Error('ultralight.db.exec() is not available at runtime.'); },
+    // Raw-SQL methods were removed in favour of the scoped structured API. Fail
+    // loud with an actionable message if an old bundle still calls them.
+    const __removed = function (name) {
+      return function () {
+        throw new Error('galactic.db.' + name + '() was removed. galactic.db is now a scoped, structured API — use galactic.db.select/first/insert/update/delete/upsert/count/batch. Raw SQL is no longer supported.');
+      };
     };
+    if (!e.DB) {
+      const na = function () { throw new Error('D1 database not available. Add a migrations/ folder to your app.'); };
+      return {
+        select: na, first: na, count: na, insert: na, update: na, delete: na, upsert: na, batch: na,
+        run: __removed('run'), all: __removed('all'), exec: __removed('exec'),
+      };
+    }
     return {
-      run: (s, p) => e.DB.run(s, p),
-      all: (s, p) => e.DB.all(s, p),
-      first: (s, p) => e.DB.first(s, p),
-      batch: (st) => e.DB.batch(st),
-      exec() { throw new Error('ultralight.db.exec() is not available at runtime.'); },
+      // Reads
+      select: (table, query) => e.DB.select(Object.assign({ table: table }, query || {})),
+      first: (table, query) => e.DB.first(Object.assign({ table: table }, query || {})),
+      count: (table, query) => e.DB.count(Object.assign({ table: table }, query || {})),
+      // Writes (user_id is injected host-side; app code never supplies it)
+      insert: (table, values) => e.DB.insert({ table: table, values: values }),
+      update: (table, spec) => e.DB.update(Object.assign({ table: table }, spec || {})),
+      delete: (table, spec) => e.DB.delete(Object.assign({ table: table }, spec || {})),
+      upsert: (table, spec) => e.DB.upsert(Object.assign({ table: table }, spec || {})),
+      batch: (ops) => e.DB.batch(ops || []),
+      // Removed raw-SQL surface
+      run: __removed('run'), all: __removed('all'), exec: __removed('exec'),
     };
   },
   user: ${userJson},
@@ -328,11 +342,11 @@ globalThis.ultralight = {
     });
     if (!response.ok) {
       var errorText = await response.text().catch(function() { return response.statusText; });
-      throw new Error('ultralight.call failed (' + response.status + '): ' + errorText);
+      throw new Error('galactic.call failed (' + response.status + '): ' + errorText);
     }
     var rpcResponse = await response.json();
     if (rpcResponse.error) {
-      throw new Error('ultralight.call RPC error: ' + (rpcResponse.error.message || JSON.stringify(rpcResponse.error)));
+      throw new Error('galactic.call RPC error: ' + (rpcResponse.error.message || JSON.stringify(rpcResponse.error)));
     }
     var result = rpcResponse.result;
     if (result && Array.isArray(result.content)) {
@@ -370,7 +384,7 @@ globalThis.ultralight = {
     }
     var api = {};
     (binding.functions || []).forEach(function(fn) {
-      api[fn] = function(args) { return globalThis.ultralight.call(binding.targetAppId, fn, args); };
+      api[fn] = function(args) { return globalThis.galactic.call(binding.targetAppId, fn, args); };
     });
     return api;
   },
@@ -400,7 +414,7 @@ globalThis.ultralight = {
       if (!e || !e.NET) throw new Error('net:connect not available');
       return await e.NET.smtpSend(hostKey, port, userKey, passKey, from, fromName || '', to, subject, body, inReplyTo || '');
     },
-    connectTls() { throw new Error('Low-level sockets not available. Use ultralight.net.imapFetchUnseen() or .smtpSend().'); },
+    connectTls() { throw new Error('Low-level sockets not available. Use galactic.net.imapFetchUnseen() or .smtpSend().'); },
   }`
         : `{
     imapFetchUnseen() { throw new Error('net:connect permission required.'); },
@@ -409,6 +423,9 @@ globalThis.ultralight = {
   }`
     },
 };
+// galactic.* is the canonical namespace; ultralight.* is a permanent alias so
+// every already-deployed bundle keeps working. Same object, two names.
+globalThis.galactic = globalThis.ultralight;
 `;
 
     // 3. Build wrapper module — entry point, sets RPC env, calls function

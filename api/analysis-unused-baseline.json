@@ -514,13 +514,6 @@
       "file": "services/d1-provisioning.ts"
     },
     {
-      "file": "services/d1-test-fixtures.ts",
-      "types": [
-        "D1FixtureMethod",
-        "D1FixtureRequest"
-      ]
-    },
-    {
       "file": "services/data-quota.ts",
       "types": [
         "DataQuotaResult",

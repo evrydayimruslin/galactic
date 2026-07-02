@@ -73,9 +73,8 @@ Deno.test("ul test inputs: supports extended fixture envelopes with env vars and
           d1_fixtures: {
             responses: [
               {
-                method: "all",
-                sql: "SELECT * FROM items WHERE user_id = ?",
-                params: ["user-test"],
+                method: "select",
+                table: "items",
                 result: [{ id: "item-1" }],
               },
             ],
@@ -90,9 +89,9 @@ Deno.test("ul test inputs: supports extended fixture envelopes with env vars and
   assertEquals(resolution.d1Fixtures, {
     responses: [
       {
-        method: "all",
-        sql: "SELECT * FROM items WHERE user_id = ?",
-        params: ["user-test"],
+        method: "select",
+        table: "items",
+        when: undefined,
         result: [{ id: "item-1" }],
       },
     ],
@@ -112,9 +111,8 @@ Deno.test("ul test inputs: validates explicit D1 fixture config", () => {
     resolveUlTestD1Fixtures({
       responses: [
         {
-          method: "run",
-          sql: "INSERT INTO items (id) VALUES (?)",
-          params: ["item-1"],
+          method: "insert",
+          table: "items",
           result: { meta: { changes: 1 } },
         },
       ],
@@ -122,9 +120,9 @@ Deno.test("ul test inputs: validates explicit D1 fixture config", () => {
     {
       responses: [
         {
-          method: "run",
-          sql: "INSERT INTO items (id) VALUES (?)",
-          params: ["item-1"],
+          method: "insert",
+          table: "items",
+          when: undefined,
           result: { meta: { changes: 1 } },
         },
       ],
