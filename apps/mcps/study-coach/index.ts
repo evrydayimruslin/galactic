@@ -2,10 +2,9 @@
 // Your personal AI tutor with quizzes, custom lessons, and progress tracking.
 // Storage: Galactic D1 | Permissions: ai:call
 
-const ultralight = (globalThis as typeof globalThis & { ultralight: any }).ultralight;
+const galactic = (globalThis as any).galactic;
 const AI_MODEL = 'meta-llama/llama-4-scout';
 
-type SqlValue = string | number | null;
 type JsonObject = Record<string, unknown>;
 type QuizQuestionType = 'mc' | 'open';
 
@@ -106,14 +105,6 @@ interface LessonRow {
   status: string | null;
   created_at: string;
   subject_name?: string | null;
-}
-
-interface CountRow {
-  count: number;
-}
-
-interface CntRow {
-  cnt: number;
 }
 
 interface ConceptStudyItem {
@@ -232,7 +223,6 @@ function parseJsonObject(value: string | null | undefined): JsonObject | null {
   }
 }
 
-function uid(): string { return ultralight.user.id; }
 function now(): string { return new Date().toISOString(); }
 function today(): string { return new Date().toISOString().split('T')[0]; }
 
@@ -249,25 +239,19 @@ export async function add_concept(args: {
 
   let subjectId = null;
   if (subject) {
-    const existing: Pick<SubjectRow, 'id'> | null = await ultralight.db.first(
-      'SELECT id FROM subjects WHERE user_id = ? AND LOWER(name) = ?',
-      [uid(), subject.toLowerCase()]
-    );
+    const subjectRows: Array<Pick<SubjectRow, 'id' | 'name'>> = await galactic.db.select('subjects', { columns: ['id', 'name'] });
+    const existing = subjectRows.find((row) => row.name.toLowerCase() === subject.toLowerCase()) || null;
     if (existing) {
       subjectId = existing.id;
     } else {
       subjectId = crypto.randomUUID();
-      await ultralight.db.run(
-        'INSERT INTO subjects (id, user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [subjectId, uid(), subject, '', ts, ts]
-      );
+      await galactic.db.insert('subjects', { id: subjectId, name: subject, description: '', created_at: ts, updated_at: ts });
     }
   }
 
-  await ultralight.db.run(
-    'INSERT INTO concepts (id, user_id, name, parent_id, description, subject_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, uid(), name, parent_id || null, description || '', subjectId, ts, ts]
-  );
+  await galactic.db.insert('concepts', {
+    id, name, parent_id: parent_id || null, description: description || '', subject_id: subjectId, created_at: ts, updated_at: ts,
+  });
 
   return { success: true, concept_id: id, name, subject_id: subjectId, parent_id: parent_id || null };
 }
@@ -276,17 +260,14 @@ export async function rate(args: {
   concept_id: string; understanding: number; notes?: string;
 }): Promise<unknown> {
   const { concept_id, understanding, notes } = args;
-  const concept: ConceptRow | null = await ultralight.db.first(
-    'SELECT * FROM concepts WHERE id = ? AND user_id = ?', [concept_id, uid()]
-  );
+  const concept: ConceptRow | null = await galactic.db.first('concepts', { where: { id: concept_id } });
   if (!concept) return { success: false, error: 'Concept not found: ' + concept_id };
 
   const rating = Math.min(5, Math.max(1, Math.round(understanding)));
   const ts = now();
-  await ultralight.db.run(
-    'INSERT INTO ratings (id, user_id, concept_id, understanding, date, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [crypto.randomUUID(), uid(), concept_id, rating, today(), notes || '', ts, ts]
-  );
+  await galactic.db.insert('ratings', {
+    id: crypto.randomUUID(), concept_id, understanding: rating, date: today(), notes: notes || '', created_at: ts, updated_at: ts,
+  });
 
   return { success: true, concept: concept.name, understanding: rating, date: today() };
 }
@@ -295,17 +276,15 @@ export async function study(args: { subject_id?: string; limit?: number }): Prom
   const { subject_id, limit } = args;
   const todayDate = new Date();
 
-  let sql = 'SELECT * FROM concepts WHERE user_id = ?';
-  const params: SqlValue[] = [uid()];
-  if (subject_id) { sql += ' AND subject_id = ?'; params.push(subject_id); }
-  const concepts: ConceptRow[] = await ultralight.db.all(sql, params);
+  const concepts: ConceptRow[] = await galactic.db.select('concepts', subject_id ? { where: { subject_id } } : {});
 
   const items: ConceptStudyItem[] = [];
   for (const concept of concepts) {
-    const last: RatingRow | null = await ultralight.db.first(
-      'SELECT understanding, date FROM ratings WHERE user_id = ? AND concept_id = ? ORDER BY date DESC LIMIT 1',
-      [uid(), concept.id]
-    );
+    const last: RatingRow | null = await galactic.db.first('ratings', {
+      columns: ['understanding', 'date'],
+      where: { concept_id: concept.id },
+      orderBy: { column: 'date', dir: 'desc' },
+    });
     let priority = 100;
     let lastRating: number | null = null;
     let daysSince: number | null = null;
@@ -323,10 +302,7 @@ export async function study(args: { subject_id?: string; limit?: number }): Prom
 }
 
 export async function tree(args: { subject_id?: string }): Promise<unknown> {
-  let sql = 'SELECT * FROM concepts WHERE user_id = ?';
-  const params: SqlValue[] = [uid()];
-  if (args.subject_id) { sql += ' AND subject_id = ?'; params.push(args.subject_id); }
-  const concepts: ConceptRow[] = await ultralight.db.all(sql, params);
+  const concepts: ConceptRow[] = await galactic.db.select('concepts', args.subject_id ? { where: { subject_id: args.subject_id } } : {});
 
   const byId: Record<string, ConceptTreeNode> = {};
   for (const concept of concepts) byId[concept.id] = { ...concept, children: [] };
@@ -377,7 +353,7 @@ export async function quick_start(args: {
 
   let extracted: QuickStartExtraction;
   try {
-    const response = await ultralight.ai({
+    const response = await galactic.ai({
       model: AI_MODEL,
       temperature: 0.7,
       messages: [
@@ -397,28 +373,24 @@ export async function quick_start(args: {
   const ts = now();
 
   // Create or find subject
-  const existingSubject: Pick<SubjectRow, 'id'> | null = await ultralight.db.first(
-    'SELECT id FROM subjects WHERE user_id = ? AND LOWER(name) = ?',
-    [uid(), extracted.subject.toLowerCase()]
-  );
+  const subjectRows: Array<Pick<SubjectRow, 'id' | 'name'>> = await galactic.db.select('subjects', { columns: ['id', 'name'] });
+  const existingSubject = subjectRows.find((row) => row.name.toLowerCase() === extracted.subject.toLowerCase()) || null;
   const subjectId = existingSubject?.id || crypto.randomUUID();
   if (!existingSubject) {
-    await ultralight.db.run(
-      'INSERT INTO subjects (id, user_id, name, description, source_material, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [subjectId, uid(), extracted.subject, '', extracted.summary || null, ts, ts]
-    );
+    await galactic.db.insert('subjects', {
+      id: subjectId, name: extracted.subject, description: '', source_material: extracted.summary || null, created_at: ts, updated_at: ts,
+    });
   } else if (extracted.summary) {
-    await ultralight.db.run('UPDATE subjects SET source_material = ?, updated_at = ? WHERE id = ?', [extracted.summary, ts, subjectId]);
+    await galactic.db.update('subjects', { set: { source_material: extracted.summary, updated_at: ts }, where: { id: subjectId } });
   }
 
   // Create concepts
   const conceptList: Array<{ id: string; name: string; description?: string }> = [];
   for (const concept of extracted.concepts) {
     const cId = crypto.randomUUID();
-    await ultralight.db.run(
-      'INSERT INTO concepts (id, user_id, name, parent_id, description, subject_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [cId, uid(), concept.name, null, concept.description || '', subjectId, ts, ts]
-    );
+    await galactic.db.insert('concepts', {
+      id: cId, name: concept.name, parent_id: null, description: concept.description || '', subject_id: subjectId, created_at: ts, updated_at: ts,
+    });
     conceptList.push({ id: cId, name: concept.name, description: concept.description });
   }
 
@@ -452,23 +424,28 @@ function decodeFileContent(content: string, filename: string): string | null {
 }
 
 export async function status(args: { subject_id?: string }): Promise<unknown> {
-  const subjects: SubjectRow[] = await ultralight.db.all('SELECT * FROM subjects WHERE user_id = ?', [uid()]);
-  const conceptCount: CountRow | null = await ultralight.db.first('SELECT COUNT(*) as count FROM concepts WHERE user_id = ?', [uid()]);
+  const subjects: SubjectRow[] = await galactic.db.select('subjects');
+  const conceptCount: number = await galactic.db.count('concepts');
 
   // Per-subject mastery from student_profiles
-  const profiles: StudentProfileRow[] = await ultralight.db.all('SELECT * FROM student_profiles WHERE user_id = ? ORDER BY updated_at DESC', [uid()]);
+  const profiles: StudentProfileRow[] = await galactic.db.select('student_profiles', { orderBy: { column: 'updated_at', dir: 'desc' } });
 
   // Recent quizzes
-  const recentQuizzes: QuizSessionWithSubjectRow[] = await ultralight.db.all(
-    'SELECT qs.*, s.name as subject_name FROM quiz_sessions qs LEFT JOIN subjects s ON qs.subject_id = s.id WHERE qs.user_id = ? AND qs.status = ? ORDER BY qs.started_at DESC LIMIT 5',
-    [uid(), 'completed']
-  );
+  const recentQuizzes: QuizSessionWithSubjectRow[] = await galactic.db.select('quiz_sessions', {
+    columns: ['*', { table: 's', column: 'name', as: 'subject_name' }],
+    joins: [{ table: 'subjects', as: 's', type: 'left', on: { fromColumn: 'subject_id', foreignColumn: 'id' } }],
+    where: { status: 'completed' },
+    orderBy: { column: 'started_at', dir: 'desc' },
+    limit: 5,
+  });
 
-  // Overall average — most recent rating per concept
-  const lastRatings: Array<Pick<RatingRow, 'concept_id' | 'understanding'>> = await ultralight.db.all(
-    'SELECT concept_id, understanding FROM ratings WHERE user_id = ? GROUP BY concept_id ORDER BY MAX(date) DESC',
-    [uid()]
-  );
+  // Overall average — most recent rating per concept (bare column resolves to
+  // the MAX(date) row per SQLite's min/max group semantics)
+  const lastRatings: Array<Pick<RatingRow, 'concept_id' | 'understanding'>> = await galactic.db.select('ratings', {
+    columns: ['concept_id', 'understanding', { fn: 'max', column: 'date', as: 'latest' }],
+    groupBy: ['concept_id'],
+    orderBy: { as: 'latest', dir: 'desc' },
+  });
   const ratedCount = lastRatings.length;
   const avgUnderstanding = ratedCount > 0 ? Math.round((lastRatings.reduce((sum, rating) => sum + rating.understanding, 0) / ratedCount) * 10) / 10 : null;
 
@@ -478,7 +455,7 @@ export async function status(args: { subject_id?: string }): Promise<unknown> {
       const profile = profiles.find((item) => item.subject_id === subject.id);
       return { id: subject.id, name: subject.name, mastery: profile?.avg_score || null, quiz_count: profile?.quiz_count || 0, strengths: profile ? parseStringArray(profile.strengths) : [], weaknesses: profile ? parseStringArray(profile.weaknesses) : [] };
     }),
-    total_concepts: conceptCount?.count || 0,
+    total_concepts: conceptCount || 0,
     concepts_rated: ratedCount,
     average_understanding: avgUnderstanding,
     recent_quizzes: recentQuizzes.map((quiz) => ({ id: quiz.id, subject: quiz.subject_name, score: quiz.score_pct, questions: quiz.total_questions, correct: quiz.correct_count, date: quiz.started_at })),
@@ -494,13 +471,9 @@ export async function quiz(args: {
   const { subject_id, concept_ids, count } = args;
   let concepts: ConceptRow[] = [];
   if (concept_ids?.length) {
-    const ph = concept_ids.map(() => '?').join(',');
-    concepts = await ultralight.db.all(`SELECT * FROM concepts WHERE user_id = ? AND id IN (${ph})`, [uid(), ...concept_ids]);
+    concepts = await galactic.db.select('concepts', { where: { id: { in: concept_ids } } });
   } else {
-    let sql = 'SELECT * FROM concepts WHERE user_id = ?';
-    const params: SqlValue[] = [uid()];
-    if (subject_id) { sql += ' AND subject_id = ?'; params.push(subject_id); }
-    concepts = await ultralight.db.all(sql, params);
+    concepts = await galactic.db.select('concepts', subject_id ? { where: { subject_id } } : {});
   }
   if (concepts.length === 0) return { success: false, error: 'No concepts found to quiz on.' };
 
@@ -509,7 +482,7 @@ export async function quiz(args: {
     '\n\nFor each question provide: the question, 4 multiple-choice options, the correct answer, and a brief explanation. Respond with ONLY valid JSON, no markdown. Format: [{"question": "...", "options": ["A", "B", "C", "D"], "correct": "A", "explanation": "..."}]';
 
   try {
-    const response = await ultralight.ai({
+    const response = await galactic.ai({
       model: AI_MODEL,
       messages: [
         { role: 'system', content: 'You are an educational quiz generator. Create clear, accurate quiz questions. Respond with valid JSON only.' },
@@ -530,8 +503,8 @@ export async function quiz(args: {
 
 async function getStudentContext(subjectId?: string): Promise<string> {
   const profile: StudentProfileRow | null = subjectId
-    ? await ultralight.db.first('SELECT * FROM student_profiles WHERE user_id = ? AND subject_id = ?', [uid(), subjectId])
-    : await ultralight.db.first('SELECT * FROM student_profiles WHERE user_id = ? AND subject_id IS NULL', [uid()]);
+    ? await galactic.db.first('student_profiles', { where: { subject_id: subjectId } })
+    : await galactic.db.first('student_profiles', { where: { subject_id: null } });
 
   if (!profile) return '';
   const strengths = parseStringArray(profile.strengths);
@@ -558,43 +531,62 @@ interface CourseContext {
 
 async function buildCourseContext(subjectId: string): Promise<CourseContext> {
   // Subject info
-  const subject: Pick<SubjectRow, 'id' | 'name' | 'description'> | null = await ultralight.db.first('SELECT id, name, description FROM subjects WHERE id = ? AND user_id = ?', [subjectId, uid()]);
-  const concepts: Array<Pick<ConceptRow, 'id' | 'name' | 'description'>> = await ultralight.db.all('SELECT id, name, description FROM concepts WHERE user_id = ? AND subject_id = ?', [uid(), subjectId]);
+  const subject: Pick<SubjectRow, 'id' | 'name' | 'description'> | null = await galactic.db.first('subjects', {
+    columns: ['id', 'name', 'description'], where: { id: subjectId },
+  });
+  const concepts: Array<Pick<ConceptRow, 'id' | 'name' | 'description'>> = await galactic.db.select('concepts', {
+    columns: ['id', 'name', 'description'], where: { subject_id: subjectId },
+  });
 
   // All completed quizzes chronologically
-  const quizzes: QuizSessionRow[] = await ultralight.db.all(
-    'SELECT id, score_pct, correct_count, total_questions, started_at, completed_at, assessment_json FROM quiz_sessions WHERE user_id = ? AND subject_id = ? AND status = ? ORDER BY completed_at ASC',
-    [uid(), subjectId, 'completed']
-  );
+  const quizzes: QuizSessionRow[] = await galactic.db.select('quiz_sessions', {
+    columns: ['id', 'score_pct', 'correct_count', 'total_questions', 'started_at', 'completed_at', 'assessment_json'],
+    where: { subject_id: subjectId, status: 'completed' },
+    orderBy: { column: 'completed_at', dir: 'asc' },
+  });
 
   // All lessons for subject
-  const lessons: Array<Pick<LessonRow, 'id' | 'title' | 'weak_concepts' | 'created_at' | 'status'>> = await ultralight.db.all(
-    'SELECT id, title, weak_concepts, created_at, status FROM lessons WHERE user_id = ? AND subject_id = ? ORDER BY created_at ASC',
-    [uid(), subjectId]
-  );
+  const lessons: Array<Pick<LessonRow, 'id' | 'title' | 'weak_concepts' | 'created_at' | 'status'>> = await galactic.db.select('lessons', {
+    columns: ['id', 'title', 'weak_concepts', 'created_at', 'status'],
+    where: { subject_id: subjectId },
+    orderBy: { column: 'created_at', dir: 'asc' },
+  });
 
   // Student profile
-  const profile: StudentProfileRow | null = await ultralight.db.first('SELECT * FROM student_profiles WHERE user_id = ? AND subject_id = ?', [uid(), subjectId]);
+  const profile: StudentProfileRow | null = await galactic.db.first('student_profiles', { where: { subject_id: subjectId } });
   const strengths = profile ? parseStringArray(profile.strengths) : [];
   const weaknesses = profile ? parseStringArray(profile.weaknesses) : [];
 
   // Per-concept data: mastery, test frequency, misconceptions, timing
   const conceptMastery: CourseContext['concept_mastery'] = {};
   for (const c of concepts) {
-    const rating: Pick<RatingRow, 'understanding'> | null = await ultralight.db.first('SELECT understanding FROM ratings WHERE user_id = ? AND concept_id = ? ORDER BY date DESC LIMIT 1', [uid(), c.id]);
-    const answerStats: { total: number; correct: number; avg_time: number | null } | null = await ultralight.db.first(
-      'SELECT COUNT(*) as total, SUM(CASE WHEN qa.is_correct = 1 THEN 1 ELSE 0 END) as correct, AVG(qa.time_seconds) as avg_time FROM quiz_answers qa JOIN quiz_sessions qs ON qa.session_id = qs.id WHERE qa.user_id = ? AND qa.concept_id = ? AND qs.subject_id = ?',
-      [uid(), c.id, subjectId]
-    );
+    const rating: Pick<RatingRow, 'understanding'> | null = await galactic.db.first('ratings', {
+      columns: ['understanding'], where: { concept_id: c.id }, orderBy: { column: 'date', dir: 'desc' },
+    });
+    // COUNT(*) + AVG in one query; the SUM(CASE WHEN is_correct...) becomes a
+    // separate filtered count (not expressible in the structured API).
+    const sessionJoin = [{ table: 'quiz_sessions', as: 'qs', type: 'inner' as const, on: { fromColumn: 'session_id', foreignColumn: 'id' } }];
+    const answerStats: { total: number; avg_time: number | null } | null = await galactic.db.first('quiz_answers', {
+      columns: [{ fn: 'count', as: 'total' }, { fn: 'avg', column: 'time_seconds', as: 'avg_time' }],
+      joins: sessionJoin,
+      where: { concept_id: c.id, 'qs.subject_id': subjectId },
+    });
+    const correctCount: number = await galactic.db.count('quiz_answers', {
+      joins: sessionJoin,
+      where: { concept_id: c.id, 'qs.subject_id': subjectId, is_correct: 1 },
+    });
     // Collect misconceptions for this concept
-    const misconceptionRows: Array<Pick<QuizAnswerRow, 'misconceptions'>> = await ultralight.db.all(
-      'SELECT qa.misconceptions FROM quiz_answers qa JOIN quiz_sessions qs ON qa.session_id = qs.id WHERE qa.user_id = ? AND qa.concept_id = ? AND qa.misconceptions IS NOT NULL AND qs.subject_id = ? ORDER BY qa.answered_at DESC LIMIT 5',
-      [uid(), c.id, subjectId]
-    );
+    const misconceptionRows: Array<Pick<QuizAnswerRow, 'misconceptions'>> = await galactic.db.select('quiz_answers', {
+      columns: ['misconceptions'],
+      joins: sessionJoin,
+      where: { concept_id: c.id, misconceptions: { isNull: false }, 'qs.subject_id': subjectId },
+      orderBy: { column: 'answered_at', dir: 'desc' },
+      limit: 5,
+    });
     const conceptMisconceptions: string[] = [];
     for (const row of misconceptionRows) conceptMisconceptions.push(...parseStringArray(row.misconceptions));
     const answerTotal = answerStats?.total || 0;
-    const answerCorrect = answerStats?.correct || 0;
+    const answerCorrect = correctCount || 0;
 
     conceptMastery[c.name] = {
       current_rating: rating?.understanding || 0,
@@ -683,14 +675,12 @@ export async function start_quiz(args: {
   // Gather concepts (prefer weak ones via spaced repetition priority)
   let concepts: ConceptRow[] = [];
   if (concept_ids?.length) {
-    const ph = concept_ids.map(() => '?').join(',');
-    concepts = await ultralight.db.all(`SELECT * FROM concepts WHERE user_id = ? AND id IN (${ph})`, [uid(), ...concept_ids]);
+    concepts = await galactic.db.select('concepts', { where: { id: { in: concept_ids } } });
   } else {
     const studyResult = await study({ subject_id, limit: qCount * 2 }) as { to_study?: ConceptStudyItem[] };
     const ids = (studyResult.to_study || []).map((item) => item.concept_id);
     if (ids.length > 0) {
-      const ph = ids.map(() => '?').join(',');
-      concepts = await ultralight.db.all(`SELECT * FROM concepts WHERE user_id = ? AND id IN (${ph})`, [uid(), ...ids]);
+      concepts = await galactic.db.select('concepts', { where: { id: { in: ids } } });
     }
   }
 
@@ -700,7 +690,9 @@ export async function start_quiz(args: {
   let courseCtx = '';
   if (subject_id) {
     try {
-      const cached: Pick<ConventionRow, 'value'> | null = await ultralight.db.first('SELECT value FROM conventions WHERE user_id = ? AND key = ?', [uid(), `course_context:${subject_id}`]);
+      const cached: Pick<ConventionRow, 'value'> | null = await galactic.db.first('conventions', {
+        columns: ['value'], where: { key: `course_context:${subject_id}` },
+      });
       if (cached?.value) {
         const ctx = parseJsonObject(cached.value);
         courseCtx = typeof ctx?.prompt_text === 'string' ? ctx.prompt_text : '';
@@ -714,14 +706,20 @@ export async function start_quiz(args: {
   let parsedCtx: JsonObject | null = null;
   if (subject_id) {
     try {
-      const cached: Pick<ConventionRow, 'value'> | null = await ultralight.db.first('SELECT value FROM conventions WHERE user_id = ? AND key = ?', [uid(), `course_context:${subject_id}`]);
+      const cached: Pick<ConventionRow, 'value'> | null = await galactic.db.first('conventions', {
+        columns: ['value'], where: { key: `course_context:${subject_id}` },
+      });
       if (cached?.value) parsedCtx = parseJsonObject(cached.value);
     } catch {}
   }
   const parsedStudent = parsedCtx?.student as { avg_score?: number } | undefined;
   if (parsedStudent?.avg_score) mastery = parsedStudent.avg_score;
   else {
-    const profile: Pick<StudentProfileRow, 'avg_score'> | null = await ultralight.db.first('SELECT avg_score FROM student_profiles WHERE user_id = ? AND subject_id = ?', [uid(), subject_id]);
+    // Original bound an undefined subject_id (matching nothing); querying only
+    // when present preserves that behavior.
+    const profile: Pick<StudentProfileRow, 'avg_score'> | null = subject_id
+      ? await galactic.db.first('student_profiles', { columns: ['avg_score'], where: { subject_id } })
+      : null;
     if (profile?.avg_score) mastery = profile.avg_score;
   }
 
@@ -749,7 +747,7 @@ export async function start_quiz(args: {
 
   let questions: GeneratedQuizQuestion[];
   try {
-    const response = await ultralight.ai({
+    const response = await galactic.ai({
       model: AI_MODEL,
       messages: [
         { role: 'system', content: 'You are an expert adaptive quiz generator. Create questions calibrated to the individual student\'s demonstrated fluency level — study their previous answers to gauge vocabulary, reasoning depth, and conceptual sophistication. A low score from a graduate student requires harder questions than a high score from a beginner. Test understanding, not memorization. For open-ended questions, write rubrics matching the student\'s level. Respond with valid JSON only.' },
@@ -769,10 +767,9 @@ export async function start_quiz(args: {
   // Create session
   const sessionId = crypto.randomUUID();
   const ts = now();
-  await ultralight.db.run(
-    'INSERT INTO quiz_sessions (id, user_id, subject_id, status, total_questions, started_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [sessionId, uid(), subject_id || null, 'in_progress', questions.length, ts]
-  );
+  await galactic.db.insert('quiz_sessions', {
+    id: sessionId, subject_id: subject_id || null, status: 'in_progress', total_questions: questions.length, started_at: ts,
+  });
 
   // Insert all questions
   const conceptMap: Record<string, string> = {};
@@ -782,17 +779,17 @@ export async function start_quiz(args: {
     const q = questions[i];
     const qType = q.type === 'open' ? 'open' : 'mc';
     const conceptId = q.concept ? conceptMap[q.concept.toLowerCase()] || null : null;
-    await ultralight.db.run(
-      'INSERT INTO quiz_answers (id, session_id, user_id, concept_id, question, options, correct_answer, explanation, question_type, rubric, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), sessionId, uid(), conceptId, q.question, JSON.stringify(q.options || []), q.correct || '', q.explanation || '', qType, q.rubric || null, i]
-    );
+    await galactic.db.insert('quiz_answers', {
+      id: crypto.randomUUID(), session_id: sessionId, concept_id: conceptId, question: q.question,
+      options: JSON.stringify(q.options || []), correct_answer: q.correct || '', explanation: q.explanation || '',
+      question_type: qType, rubric: q.rubric || null, sort_order: i,
+    });
   }
 
   // Return first question
-  const first: QuizAnswerRow | null = await ultralight.db.first(
-    'SELECT * FROM quiz_answers WHERE session_id = ? AND user_id = ? ORDER BY sort_order ASC LIMIT 1',
-    [sessionId, uid()]
-  );
+  const first: QuizAnswerRow | null = await galactic.db.first('quiz_answers', {
+    where: { session_id: sessionId }, orderBy: { column: 'sort_order', dir: 'asc' },
+  });
   if (!first) return { success: false, error: 'Quiz generated without questions.' };
 
   return {
@@ -812,7 +809,7 @@ export async function start_quiz(args: {
 // Pre-generate a quiz and save for later (no LLM call needed on start)
 async function pre_generate_quiz(subjectId: string, courseContext?: CourseContext): Promise<{ session_id: string; total_questions: number }> {
   const ctx = courseContext || await buildCourseContext(subjectId);
-  const concepts: ConceptRow[] = await ultralight.db.all('SELECT * FROM concepts WHERE user_id = ? AND subject_id = ?', [uid(), subjectId]);
+  const concepts: ConceptRow[] = await galactic.db.select('concepts', { where: { subject_id: subjectId } });
   if (concepts.length === 0) throw new Error('No concepts to quiz on');
 
   const qCount = Math.min(5, concepts.length);
@@ -822,7 +819,7 @@ async function pre_generate_quiz(subjectId: string, courseContext?: CourseContex
 
   const prompt = `${ctx.prompt_text}\n\nGenerate exactly ${qCount} quiz questions about these concepts:\n${conceptList}\n\nGenerate ${mcCount} multiple-choice and ${openCount} open-ended questions. Mix them together.\nAvoid repeating questions from previous quizzes.\nIncrease difficulty for concepts with mastery >= 4/5.\nFocus on misconceptions that keep recurring.\n\nMultiple-choice format: {"type":"mc","question":"...","options":["A)...","B)...","C)...","D)..."],"correct":"A","explanation":"...","concept":"concept name"}\nOpen-ended format: {"type":"open","question":"...","rubric":"what a good answer includes","concept":"concept name"}\n\nRespond with ONLY valid JSON array.`;
 
-  const response = await ultralight.ai({
+  const response = await galactic.ai({
     model: AI_MODEL,
     temperature: 0.7,
     messages: [
@@ -837,10 +834,9 @@ async function pre_generate_quiz(subjectId: string, courseContext?: CourseContex
 
   const sessionId = crypto.randomUUID();
   const ts = now();
-  await ultralight.db.run(
-    'INSERT INTO quiz_sessions (id, user_id, subject_id, status, total_questions, started_at, generated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [sessionId, uid(), subjectId, 'pending', questions.length, ts, ts]
-  );
+  await galactic.db.insert('quiz_sessions', {
+    id: sessionId, subject_id: subjectId, status: 'pending', total_questions: questions.length, started_at: ts, generated_at: ts,
+  });
 
   const conceptMap: Record<string, string> = {};
   for (const concept of concepts) conceptMap[concept.name.toLowerCase()] = concept.id;
@@ -849,10 +845,11 @@ async function pre_generate_quiz(subjectId: string, courseContext?: CourseContex
     const q = questions[i];
     const qType = q.type === 'open' ? 'open' : 'mc';
     const conceptId = q.concept ? conceptMap[q.concept.toLowerCase()] || null : null;
-    await ultralight.db.run(
-      'INSERT INTO quiz_answers (id, session_id, user_id, concept_id, question, options, correct_answer, explanation, question_type, rubric, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), sessionId, uid(), conceptId, q.question, JSON.stringify(q.options || []), q.correct || '', q.explanation || '', qType, q.rubric || null, i]
-    );
+    await galactic.db.insert('quiz_answers', {
+      id: crypto.randomUUID(), session_id: sessionId, concept_id: conceptId, question: q.question,
+      options: JSON.stringify(q.options || []), correct_answer: q.correct || '', explanation: q.explanation || '',
+      question_type: qType, rubric: q.rubric || null, sort_order: i,
+    });
   }
 
   return { session_id: sessionId, total_questions: questions.length };
@@ -860,21 +857,18 @@ async function pre_generate_quiz(subjectId: string, courseContext?: CourseContex
 
 // Start a pre-generated pending quiz (instant, no LLM call)
 async function start_pending_quiz(sessionId: string): Promise<unknown> {
-  const session: QuizSessionRow | null = await ultralight.db.first(
-    'SELECT * FROM quiz_sessions WHERE id = ? AND user_id = ? AND status = ?',
-    [sessionId, uid(), 'pending']
-  );
+  const session: QuizSessionRow | null = await galactic.db.first('quiz_sessions', {
+    where: { id: sessionId, status: 'pending' },
+  });
   if (!session) return { success: false, error: 'Pending quiz not found' };
 
-  await ultralight.db.run(
-    'UPDATE quiz_sessions SET status = ?, started_at = ? WHERE id = ?',
-    ['in_progress', now(), sessionId]
-  );
+  await galactic.db.update('quiz_sessions', {
+    set: { status: 'in_progress', started_at: now() }, where: { id: sessionId },
+  });
 
-  const first: QuizAnswerRow | null = await ultralight.db.first(
-    'SELECT * FROM quiz_answers WHERE session_id = ? AND user_id = ? ORDER BY sort_order ASC LIMIT 1',
-    [sessionId, uid()]
-  );
+  const first: QuizAnswerRow | null = await galactic.db.first('quiz_answers', {
+    where: { session_id: sessionId }, orderBy: { column: 'sort_order', dir: 'asc' },
+  });
   if (!first) return { success: false, error: 'No questions found' };
 
   return {
@@ -896,10 +890,9 @@ export async function submit_answer(args: {
 }): Promise<unknown> {
   const { session_id, answer_id, user_answer, time_seconds } = args;
 
-  const answer: QuizAnswerRow | null = await ultralight.db.first(
-    'SELECT * FROM quiz_answers WHERE id = ? AND session_id = ? AND user_id = ?',
-    [answer_id, session_id, uid()]
-  );
+  const answer: QuizAnswerRow | null = await galactic.db.first('quiz_answers', {
+    where: { id: answer_id, session_id },
+  });
   if (!answer) return { success: false, error: 'Answer not found' };
 
   // Idempotency: prevent double-answering
@@ -926,37 +919,38 @@ export async function submit_answer(args: {
     scoreVal = isCorrect ? 5 : 1;
   }
 
-  await ultralight.db.run(
-    'UPDATE quiz_answers SET user_answer = ?, is_correct = ?, score = ?, feedback = ?, misconceptions = ?, answered_at = ?, time_seconds = ? WHERE id = ?',
-    [user_answer, isCorrect, scoreVal, feedbackText, misconceptionsJson, now(), time_seconds || null, answer_id]
-  );
+  await galactic.db.update('quiz_answers', {
+    set: {
+      user_answer, is_correct: isCorrect, score: scoreVal, feedback: feedbackText,
+      misconceptions: misconceptionsJson, answered_at: now(), time_seconds: time_seconds || null,
+    },
+    where: { id: answer_id },
+  });
 
   // Auto-update concept rating if linked
   if (answer.concept_id) {
-    const lastRating: Pick<RatingRow, 'understanding'> | null = await ultralight.db.first(
-      'SELECT understanding FROM ratings WHERE user_id = ? AND concept_id = ? ORDER BY date DESC LIMIT 1',
-      [uid(), answer.concept_id]
-    );
+    const lastRating: Pick<RatingRow, 'understanding'> | null = await galactic.db.first('ratings', {
+      columns: ['understanding'], where: { concept_id: answer.concept_id }, orderBy: { column: 'date', dir: 'desc' },
+    });
     const current = lastRating?.understanding || 3;
     const newRating = isCorrect ? Math.min(5, current + 1) : Math.max(1, current - 1);
-    await ultralight.db.run(
-      'INSERT INTO ratings (id, user_id, concept_id, understanding, date, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), uid(), answer.concept_id, newRating, today(), isCorrect ? 'Correct on quiz' : 'Incorrect on quiz', now(), now()]
-    );
+    await galactic.db.insert('ratings', {
+      id: crypto.randomUUID(), concept_id: answer.concept_id, understanding: newRating, date: today(),
+      notes: isCorrect ? 'Correct on quiz' : 'Incorrect on quiz', created_at: now(), updated_at: now(),
+    });
   }
 
   // Get next unanswered question
-  const next: QuizAnswerRow | null = await ultralight.db.first(
-    'SELECT * FROM quiz_answers WHERE session_id = ? AND user_id = ? AND user_answer IS NULL ORDER BY sort_order ASC LIMIT 1',
-    [session_id, uid()]
-  );
+  const next: QuizAnswerRow | null = await galactic.db.first('quiz_answers', {
+    where: { session_id, user_answer: null }, orderBy: { column: 'sort_order', dir: 'asc' },
+  });
 
-  const answered: { cnt: number } | null = await ultralight.db.first(
-    'SELECT COUNT(*) as cnt FROM quiz_answers WHERE session_id = ? AND user_id = ? AND user_answer IS NOT NULL', [session_id, uid()]
-  );
-  const total: Pick<QuizSessionRow, 'total_questions'> | null = await ultralight.db.first(
-    'SELECT total_questions FROM quiz_sessions WHERE id = ? AND user_id = ?', [session_id, uid()]
-  );
+  const answered: number = await galactic.db.count('quiz_answers', {
+    where: { session_id, user_answer: { isNull: false } },
+  });
+  const total: Pick<QuizSessionRow, 'total_questions'> | null = await galactic.db.first('quiz_sessions', {
+    columns: ['total_questions'], where: { id: session_id },
+  });
 
   return {
     is_correct: !!isCorrect,
@@ -966,7 +960,7 @@ export async function submit_answer(args: {
     score: scoreVal,
     feedback: feedbackText,
     misconceptions: misconceptionsJson ? JSON.parse(misconceptionsJson) : null,
-    answered: answered?.cnt || 0,
+    answered: answered || 0,
     total: total?.total_questions || 0,
     next_question: next ? { id: next.id, text: next.question, type: next.question_type || 'mc', options: JSON.parse(next.options || '[]'), rubric: next.rubric || null, target_words: next.target_words || null } : null,
     quiz_complete: !next,
@@ -977,23 +971,27 @@ export async function complete_quiz(args: { session_id: string }): Promise<unkno
   const { session_id } = args;
 
   // Idempotency: prevent double-completion
-  const session: Pick<QuizSessionRow, 'status'> | null = await ultralight.db.first(
-    'SELECT status FROM quiz_sessions WHERE id = ? AND user_id = ?', [session_id, uid()]
-  );
+  const session: Pick<QuizSessionRow, 'status'> | null = await galactic.db.first('quiz_sessions', {
+    columns: ['status'], where: { id: session_id },
+  });
   if (!session) return { success: false, error: 'Session not found' };
   if (session.status === 'completed') return { success: false, error: 'Quiz already completed' };
 
-  const answers: QuizAnswerWithConceptRow[] & { _fluency?: FluencyAssessment | null } = await ultralight.db.all(
-    'SELECT qa.*, c.name as concept_name, c.subject_id FROM quiz_answers qa LEFT JOIN concepts c ON qa.concept_id = c.id WHERE qa.session_id = ? AND qa.user_id = ? ORDER BY qa.sort_order',
-    [session_id, uid()]
-  );
+  const answers: QuizAnswerWithConceptRow[] & { _fluency?: FluencyAssessment | null } = await galactic.db.select('quiz_answers', {
+    columns: ['*', { table: 'c', column: 'name', as: 'concept_name' }, { table: 'c', column: 'subject_id', as: 'subject_id' }],
+    joins: [{ table: 'concepts', as: 'c', type: 'left', on: { fromColumn: 'concept_id', foreignColumn: 'id' } }],
+    where: { session_id },
+    orderBy: 'sort_order',
+  });
 
   // ── Batch grade all open-ended answers + fluency assessment in ONE LLM call ──
   const openAnswers = answers.filter((answer) => answer.question_type === 'open' && answer.user_answer && answer.is_correct === null);
 
   // Gather context for fluency assessment
   const quizSubjectId = answers.find((answer) => answer.subject_id)?.subject_id;
-  const quizSubject: Pick<SubjectRow, 'name'> | null = quizSubjectId ? await ultralight.db.first('SELECT name FROM subjects WHERE id = ?', [quizSubjectId]) : null;
+  const quizSubject: Pick<SubjectRow, 'name'> | null = quizSubjectId
+    ? await galactic.db.first('subjects', { columns: ['name'], where: { id: quizSubjectId } })
+    : null;
   const mcAnswered = answers.filter((answer) => answer.question_type !== 'open');
   const mcCorrect = mcAnswered.filter((answer) => answer.is_correct === 1).length;
   const mcTotal = mcAnswered.length;
@@ -1003,10 +1001,11 @@ export async function complete_quiz(args: { session_id: string }): Promise<unkno
   let prevFluency = '';
   if (quizSubjectId) {
     try {
-      const prevQuiz = await ultralight.db.first(
-        'SELECT assessment_json FROM quiz_sessions WHERE user_id = ? AND subject_id = ? AND status = ? AND id != ? ORDER BY completed_at DESC LIMIT 1',
-        [uid(), quizSubjectId, 'completed', session_id]
-      ) as Pick<QuizSessionRow, 'assessment_json'> | null;
+      const prevQuiz = await galactic.db.first('quiz_sessions', {
+        columns: ['assessment_json'],
+        where: { subject_id: quizSubjectId, status: 'completed', id: { ne: session_id } },
+        orderBy: { column: 'completed_at', dir: 'desc' },
+      }) as Pick<QuizSessionRow, 'assessment_json'> | null;
       const previousAssessment = parseJsonObject(prevQuiz?.assessment_json);
       const previousFluency = previousAssessment?.fluency as FluencyAssessment | undefined;
       if (previousFluency) {
@@ -1040,7 +1039,7 @@ Assess the student's education/fluency level by analyzing:
 6. If they scored very low (≤30%), the questions may have been too advanced — assess their actual level, not just "bad"
 ${prevFluency ? '\n' + prevFluency + '\nCompare their current performance to the previous assessment — have they improved, regressed, or been consistent?' : ''}`;
 
-      const gradeResponse = await ultralight.ai({
+      const gradeResponse = await galactic.ai({
         model: AI_MODEL,
         messages: [
           { role: 'system', content: 'You are a tutor grading answers and assessing student fluency. Grade open-ended answers 1-5. Assess demonstrated education level from ALL evidence — topic choice, answer sophistication, MC patterns, timing. A perfect score means the student is ABOVE the quiz level. Respond with valid JSON only.' },
@@ -1063,10 +1062,10 @@ ${prevFluency ? '\n' + prevFluency + '\nCompare their current performance to the
           const score = Math.min(5, Math.max(1, Math.round(g.score || 3)));
           const ic = score >= 3 ? 1 : 0;
           const mc = g.misconceptions?.length ? JSON.stringify(g.misconceptions) : null;
-          await ultralight.db.run(
-            'UPDATE quiz_answers SET is_correct = ?, score = ?, feedback = ?, misconceptions = ? WHERE id = ?',
-            [ic, score, g.feedback || null, mc, a.id]
-          );
+          await galactic.db.update('quiz_answers', {
+            set: { is_correct: ic, score, feedback: g.feedback || null, misconceptions: mc },
+            where: { id: a.id },
+          });
           // Update in-memory answer for scoring below
           a.is_correct = ic; a.score = score; a.feedback = g.feedback; a.misconceptions = mc;
         }
@@ -1075,7 +1074,10 @@ ${prevFluency ? '\n' + prevFluency + '\nCompare their current performance to the
       console.error('[complete_quiz] Batch grading failed:', e instanceof Error ? e.message : e);
       // Fallback: mark ungraded open answers as partial credit
       for (const a of openAnswers) {
-        await ultralight.db.run('UPDATE quiz_answers SET is_correct = 0, score = 3, feedback = ? WHERE id = ?', ['Answer recorded — could not auto-grade.', a.id]);
+        await galactic.db.update('quiz_answers', {
+          set: { is_correct: 0, score: 3, feedback: 'Answer recorded — could not auto-grade.' },
+          where: { id: a.id },
+        });
         a.is_correct = 0; a.score = 3;
       }
     }
@@ -1086,10 +1088,10 @@ ${prevFluency ? '\n' + prevFluency + '\nCompare their current performance to the
   const scorePct = total > 0 ? Math.round((correct / total) * 100) : 0;
 
   // Update session
-  await ultralight.db.run(
-    'UPDATE quiz_sessions SET status = ?, score_pct = ?, correct_count = ?, completed_at = ? WHERE id = ? AND user_id = ?',
-    ['completed', scorePct, correct, now(), session_id, uid()]
-  );
+  await galactic.db.update('quiz_sessions', {
+    set: { status: 'completed', score_pct: scorePct, correct_count: correct, completed_at: now() },
+    where: { id: session_id },
+  });
 
   // Identify weak/strong concepts and collect misconceptions
   const conceptResults: Record<string, { correct: number; total: number; name: string; avg_score: number; scores: number[] }> = {};
@@ -1123,7 +1125,7 @@ ${prevFluency ? '\n' + prevFluency + '\nCompare their current performance to the
 
   // Update conventions for Flash context injection
   const subjectName = subjectId
-    ? (await ultralight.db.first('SELECT name FROM subjects WHERE id = ?', [subjectId]) as Pick<SubjectRow, 'name'> | null)?.name || 'General'
+    ? (await galactic.db.first('subjects', { columns: ['name'], where: { id: subjectId } }) as Pick<SubjectRow, 'name'> | null)?.name || 'General'
     : 'General';
 
   const convValue = `Score: ${scorePct}%.${weakConcepts.length ? ' Weak: ' + weakConcepts.join(', ') + '.' : ''}${strongConcepts.length ? ' Strong: ' + strongConcepts.join(', ') + '.' : ''}`;
@@ -1153,10 +1155,11 @@ ${prevFluency ? '\n' + prevFluency + '\nCompare their current performance to the
   // Compare with previous quiz on same subject
   let improvement: QuizAssessment['improvement'] = null;
   if (subjectId) {
-    const prevQuiz: Pick<QuizSessionRow, 'assessment_json' | 'score_pct'> | null = await ultralight.db.first(
-      'SELECT assessment_json, score_pct FROM quiz_sessions WHERE user_id = ? AND subject_id = ? AND status = ? AND id != ? ORDER BY completed_at DESC LIMIT 1',
-      [uid(), subjectId, 'completed', session_id]
-    );
+    const prevQuiz: Pick<QuizSessionRow, 'assessment_json' | 'score_pct'> | null = await galactic.db.first('quiz_sessions', {
+      columns: ['assessment_json', 'score_pct'],
+      where: { subject_id: subjectId, status: 'completed', id: { ne: session_id } },
+      orderBy: { column: 'completed_at', dir: 'desc' },
+    });
     if (prevQuiz?.assessment_json) {
       try {
         const prev = parseJsonObject(prevQuiz.assessment_json);
@@ -1191,10 +1194,10 @@ ${prevFluency ? '\n' + prevFluency + '\nCompare their current performance to the
   };
 
   // Store assessment in session
-  await ultralight.db.run(
-    'UPDATE quiz_sessions SET assessment_json = ? WHERE id = ? AND user_id = ?',
-    [JSON.stringify(assessment), session_id, uid()]
-  );
+  await galactic.db.update('quiz_sessions', {
+    set: { assessment_json: JSON.stringify(assessment) },
+    where: { id: session_id },
+  });
 
   // ── Build fresh course context (stores to convention for next calls) ──
   let courseContext: CourseContext | null = null;
@@ -1244,8 +1247,8 @@ ${prevFluency ? '\n' + prevFluency + '\nCompare their current performance to the
 
 async function updateStudentProfile(subjectId: string | null, score: number, strengths: string[], weaknesses: string[]) {
   const existing: StudentProfileRow | null = subjectId
-    ? await ultralight.db.first('SELECT * FROM student_profiles WHERE user_id = ? AND subject_id = ?', [uid(), subjectId])
-    : await ultralight.db.first('SELECT * FROM student_profiles WHERE user_id = ? AND subject_id IS NULL', [uid()]);
+    ? await galactic.db.first('student_profiles', { where: { subject_id: subjectId } })
+    : await galactic.db.first('student_profiles', { where: { subject_id: null } });
 
   if (existing) {
     const oldStrengths = parseStringArray(existing.strengths);
@@ -1257,15 +1260,18 @@ async function updateStudentProfile(subjectId: string | null, score: number, str
       ? (existing.avg_score * existing.quiz_count + score) / (existing.quiz_count + 1)
       : score;
 
-    await ultralight.db.run(
-      'UPDATE student_profiles SET strengths = ?, weaknesses = ?, avg_score = ?, quiz_count = ?, updated_at = ? WHERE id = ?',
-      [JSON.stringify(mergedStrengths), JSON.stringify(mergedWeaknesses), Math.round(newAvg * 10) / 10, existing.quiz_count + 1, now(), existing.id]
-    );
+    await galactic.db.update('student_profiles', {
+      set: {
+        strengths: JSON.stringify(mergedStrengths), weaknesses: JSON.stringify(mergedWeaknesses),
+        avg_score: Math.round(newAvg * 10) / 10, quiz_count: existing.quiz_count + 1, updated_at: now(),
+      },
+      where: { id: existing.id },
+    });
   } else {
-    await ultralight.db.run(
-      'INSERT INTO student_profiles (id, user_id, subject_id, strengths, weaknesses, avg_score, quiz_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), uid(), subjectId, JSON.stringify(strengths), JSON.stringify(weaknesses), score, 1, now()]
-    );
+    await galactic.db.insert('student_profiles', {
+      id: crypto.randomUUID(), subject_id: subjectId, strengths: JSON.stringify(strengths),
+      weaknesses: JSON.stringify(weaknesses), avg_score: score, quiz_count: 1, updated_at: now(),
+    });
   }
 }
 
@@ -1285,31 +1291,41 @@ export async function generate_lesson(args: {
 
   // If from a quiz, fetch ALL answers (not just wrong ones) for rich context
   if (quiz_session_id) {
-    const allAnswers: Array<Pick<QuizAnswerWithConceptRow, 'question' | 'correct_answer' | 'user_answer' | 'explanation' | 'is_correct' | 'score' | 'feedback' | 'time_seconds' | 'question_type' | 'concept_name'>> = await ultralight.db.all(
-      'SELECT qa.question, qa.correct_answer, qa.user_answer, qa.explanation, qa.is_correct, qa.score, qa.feedback, qa.time_seconds, qa.question_type, c.name as concept_name FROM quiz_answers qa LEFT JOIN concepts c ON qa.concept_id = c.id WHERE qa.session_id = ? AND qa.user_id = ? ORDER BY qa.sort_order',
-      [quiz_session_id, uid()]
-    );
+    const allAnswers: Array<Pick<QuizAnswerWithConceptRow, 'question' | 'correct_answer' | 'user_answer' | 'explanation' | 'is_correct' | 'score' | 'feedback' | 'time_seconds' | 'question_type' | 'concept_name'>> = await galactic.db.select('quiz_answers', {
+      columns: [
+        'question', 'correct_answer', 'user_answer', 'explanation', 'is_correct', 'score', 'feedback',
+        'time_seconds', 'question_type', { table: 'c', column: 'name', as: 'concept_name' },
+      ],
+      joins: [{ table: 'concepts', as: 'c', type: 'left', on: { fromColumn: 'concept_id', foreignColumn: 'id' } }],
+      where: { session_id: quiz_session_id },
+      orderBy: 'sort_order',
+    });
     for (const answer of allAnswers) {
       if (answer.concept_name) targetConcepts.push(answer.concept_name);
       const status = answer.is_correct ? '✓ CORRECT' : '✗ WRONG';
       const timing = answer.time_seconds ? ` [${answer.time_seconds}s]` : '';
       answerContext += `${status}${timing} — Q: ${answer.question}\n  Student: ${answer.user_answer}${answer.is_correct ? '' : ' | Correct: ' + answer.correct_answer}\n${answer.feedback ? '  Feedback: ' + answer.feedback + '\n' : ''}`;
     }
-    const session: Pick<QuizSessionRow, 'subject_id' | 'score_pct'> | null = await ultralight.db.first('SELECT subject_id, score_pct FROM quiz_sessions WHERE id = ?', [quiz_session_id]);
+    const session: Pick<QuizSessionRow, 'subject_id' | 'score_pct'> | null = await galactic.db.first('quiz_sessions', {
+      columns: ['subject_id', 'score_pct'], where: { id: quiz_session_id },
+    });
     if (session?.subject_id) resolvedSubjectId = session.subject_id;
     scorePct = session?.score_pct ?? null;
   }
 
   // Or from explicit concept list
   if (concept_ids?.length) {
-    const ph = concept_ids.map(() => '?').join(',');
-    const concepts: Array<Pick<ConceptRow, 'name' | 'description'>> = await ultralight.db.all(`SELECT name, description FROM concepts WHERE user_id = ? AND id IN (${ph})`, [uid(), ...concept_ids]);
+    const concepts: Array<Pick<ConceptRow, 'name' | 'description'>> = await galactic.db.select('concepts', {
+      columns: ['name', 'description'], where: { id: { in: concept_ids } },
+    });
     targetConcepts = concepts.map((concept) => concept.name);
   }
 
   // Fallback: get subject name as target if no concepts
   if (targetConcepts.length === 0 && resolvedSubjectId) {
-    const subj: Pick<SubjectRow, 'name'> | null = await ultralight.db.first('SELECT name FROM subjects WHERE id = ?', [resolvedSubjectId]);
+    const subj: Pick<SubjectRow, 'name'> | null = await galactic.db.first('subjects', {
+      columns: ['name'], where: { id: resolvedSubjectId },
+    });
     if (subj?.name) targetConcepts.push(subj.name);
   }
   if (targetConcepts.length === 0) return { success: false, error: 'No concepts to generate a lesson for.' };
@@ -1318,7 +1334,9 @@ export async function generate_lesson(args: {
   let courseCtx = '';
   if (resolvedSubjectId) {
     try {
-      const cached: Pick<ConventionRow, 'value'> | null = await ultralight.db.first('SELECT value FROM conventions WHERE user_id = ? AND key = ?', [uid(), `course_context:${resolvedSubjectId}`]);
+      const cached: Pick<ConventionRow, 'value'> | null = await galactic.db.first('conventions', {
+        columns: ['value'], where: { key: `course_context:${resolvedSubjectId}` },
+      });
       if (cached?.value) {
         const ctx = parseJsonObject(cached.value);
         courseCtx = typeof ctx?.prompt_text === 'string' ? ctx.prompt_text : '';
@@ -1352,7 +1370,7 @@ export async function generate_lesson(args: {
   const prompt = `${strategy}\n\n${courseCtx ? '## Full Course History\n' + courseCtx + '\n' : ''}Concepts covered in this lesson: ${uniqueConcepts.join(', ')}\n\n${answerContext ? '## Latest Quiz Performance\n' + answerContext + '\n' : ''}${improvementCtx ? '## Progress Tracking\n' + improvementCtx + '\n' : ''}Write a clear, engaging lesson in markdown format that:\n1. Builds on all previous lessons — don't repeat material already covered\n2. Addresses specific misconceptions from the quiz answers\n3. Uses concrete examples and analogies\n4. Includes 2-3 "check your understanding" reflection prompts\n5. Ends with key takeaways and suggested next steps\n\n500-800 words. Clear headers and formatting.`;
 
   try {
-    const response = await ultralight.ai({
+    const response = await galactic.ai({
       model: AI_MODEL,
       messages: [
         { role: 'system', content: 'You are an expert tutor creating personalized lessons based on quiz performance. Tailor your teaching to the student\'s demonstrated level. Reference their specific answers when addressing misconceptions.' },
@@ -1362,10 +1380,10 @@ export async function generate_lesson(args: {
 
     const title = `Lesson: ${uniqueConcepts.slice(0, 3).join(', ')}`;
     const lessonId = crypto.randomUUID();
-    await ultralight.db.run(
-      'INSERT INTO lessons (id, user_id, subject_id, quiz_session_id, title, content, weak_concepts, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [lessonId, uid(), resolvedSubjectId, quiz_session_id || null, title, response.content, JSON.stringify(uniqueConcepts), 'unread', now()]
-    );
+    await galactic.db.insert('lessons', {
+      id: lessonId, subject_id: resolvedSubjectId, quiz_session_id: quiz_session_id || null, title,
+      content: response.content, weak_concepts: JSON.stringify(uniqueConcepts), status: 'unread', created_at: now(),
+    });
 
     return { success: true, lesson_id: lessonId, title, content: response.content, concepts_covered: uniqueConcepts };
   } catch (e) {
@@ -1380,26 +1398,28 @@ export async function generate_lesson(args: {
 
 async function setConvention(key: string, value: string, category: string) {
   const ts = now();
-  const existing: Pick<ConventionRow, 'id'> | null = await ultralight.db.first('SELECT id FROM conventions WHERE user_id = ? AND key = ?', [uid(), key]);
+  const existing: Pick<ConventionRow, 'id'> | null = await galactic.db.first('conventions', {
+    columns: ['id'], where: { key },
+  });
   if (existing) {
-    await ultralight.db.run('UPDATE conventions SET value = ?, category = ?, updated_at = ? WHERE id = ?', [value, category, ts, existing.id]);
+    await galactic.db.update('conventions', {
+      set: { value, category, updated_at: ts }, where: { id: existing.id },
+    });
   } else {
-    await ultralight.db.run(
-      'INSERT INTO conventions (id, user_id, key, value, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), uid(), key, value, category, ts, ts]
-    );
+    await galactic.db.insert('conventions', {
+      id: crypto.randomUUID(), key, value, category, created_at: ts, updated_at: ts,
+    });
   }
 }
 
 export async function conventions_get(args: { key?: string; category?: string }): Promise<unknown> {
   if (args.key) {
-    const row: ConventionRow | null = await ultralight.db.first('SELECT * FROM conventions WHERE user_id = ? AND key = ?', [uid(), args.key]);
+    const row: ConventionRow | null = await galactic.db.first('conventions', { where: { key: args.key } });
     return row || { message: 'Convention not found' };
   }
-  let sql = 'SELECT * FROM conventions WHERE user_id = ?';
-  const params: SqlValue[] = [uid()];
-  if (args.category) { sql += ' AND category = ?'; params.push(args.category); }
-  return { conventions: await ultralight.db.all(sql + ' ORDER BY category, key', params) as ConventionRow[] };
+  const query: Record<string, unknown> = { orderBy: ['category', 'key'] };
+  if (args.category) query.where = { category: args.category };
+  return { conventions: await galactic.db.select('conventions', query) as ConventionRow[] };
 }
 
 export async function conventions_set(args: { key: string; value: string; category?: string }): Promise<unknown> {
@@ -1414,10 +1434,8 @@ export async function conventions_set(args: { key: string; value: string; catego
 export async function widget_quiz_ui(args: {}): Promise<unknown> {
   let badge = 0;
   try {
-    const needsReview: CntRow | null = await ultralight.db.first(
-      'SELECT COUNT(*) as cnt FROM concepts WHERE user_id = ?', [uid()]
-    );
-    badge = needsReview?.cnt || 0;
+    const needsReview: number = await galactic.db.count('concepts');
+    badge = needsReview || 0;
   } catch { /* tables may not exist yet */ }
   return { meta: { title: 'Quiz', icon: '🎯', badge_count: badge }, app_html: QUIZ_WIDGET_HTML, version: '4.0' };
 }
@@ -1426,10 +1444,8 @@ export async function widget_quiz_data(args: { action?: string; session_id?: str
   const { action } = args;
   let badge = 0;
   try {
-    const needsReview: CntRow | null = await ultralight.db.first(
-      'SELECT COUNT(*) as cnt FROM concepts WHERE user_id = ?', [uid()]
-    );
-    badge = needsReview?.cnt || 0;
+    const needsReview: number = await galactic.db.count('concepts');
+    badge = needsReview || 0;
   } catch { /* tables may not exist yet */ }
   const meta = { title: 'Quiz', icon: '🎯', badge_count: badge };
 
@@ -1438,17 +1454,34 @@ export async function widget_quiz_data(args: { action?: string; session_id?: str
   }
 
   if (action === 'subjects') {
-    const subjects: Array<SubjectRow & { concept_count: number }> = await ultralight.db.all('SELECT sub.*, (SELECT COUNT(*) FROM concepts WHERE subject_id = sub.id AND user_id = ?) as concept_count FROM subjects sub WHERE user_id = ?', [uid(), uid()]);
+    // Correlated subquery isn't expressible — fetch subjects, then one grouped
+    // concept count per subject_id and attach in JS.
+    const subjectRows: SubjectRow[] = await galactic.db.select('subjects');
+    const conceptCounts: Array<{ subject_id: string | null; n: number }> = await galactic.db.select('concepts', {
+      columns: ['subject_id', { fn: 'count', as: 'n' }],
+      groupBy: ['subject_id'],
+    });
+    const countBySubject = new Map(conceptCounts.map((row) => [row.subject_id, row.n]));
+    const subjects: Array<SubjectRow & { concept_count: number }> = subjectRows.map((subjectRow) => ({
+      ...subjectRow, concept_count: countBySubject.get(subjectRow.id) || 0,
+    }));
     // Pending quizzes and unread lessons for "continue where you left off"
-    const pendingQuizzes: QuizSessionWithSubjectRow[] = await ultralight.db.all(
-      'SELECT qs.id, qs.subject_id, qs.total_questions, qs.generated_at, s.name as subject_name FROM quiz_sessions qs LEFT JOIN subjects s ON qs.subject_id = s.id WHERE qs.user_id = ? AND qs.status = ? ORDER BY qs.generated_at DESC',
-      [uid(), 'pending']
-    );
-    const unreadLessons: LessonRow[] = await ultralight.db.all(
-      'SELECT l.id, l.subject_id, l.title, l.created_at, s.name as subject_name FROM lessons l LEFT JOIN subjects s ON l.subject_id = s.id WHERE l.user_id = ? AND (l.status = ? OR l.status IS NULL) ORDER BY l.created_at DESC LIMIT 5',
-      [uid(), 'unread']
-    );
-    const lastSubject: Pick<ConventionRow, 'value'> | null = await ultralight.db.first('SELECT value FROM conventions WHERE user_id = ? AND key = ?', [uid(), 'last_quiz_subject']);
+    const pendingQuizzes: QuizSessionWithSubjectRow[] = await galactic.db.select('quiz_sessions', {
+      columns: ['id', 'subject_id', 'total_questions', 'generated_at', { table: 's', column: 'name', as: 'subject_name' }],
+      joins: [{ table: 'subjects', as: 's', type: 'left', on: { fromColumn: 'subject_id', foreignColumn: 'id' } }],
+      where: { status: 'pending' },
+      orderBy: { column: 'generated_at', dir: 'desc' },
+    });
+    const unreadLessons: LessonRow[] = await galactic.db.select('lessons', {
+      columns: ['id', 'subject_id', 'title', 'created_at', { table: 's', column: 'name', as: 'subject_name' }],
+      joins: [{ table: 'subjects', as: 's', type: 'left', on: { fromColumn: 'subject_id', foreignColumn: 'id' } }],
+      where: { _or: [{ status: 'unread' }, { status: { isNull: true } }] },
+      orderBy: { column: 'created_at', dir: 'desc' },
+      limit: 5,
+    });
+    const lastSubject: Pick<ConventionRow, 'value'> | null = await galactic.db.first('conventions', {
+      columns: ['value'], where: { key: 'last_quiz_subject' },
+    });
     return { meta, subjects, pending_quizzes: pendingQuizzes, unread_lessons: unreadLessons, last_subject_id: lastSubject?.value || null, _code_version: '7.0.0', _model: AI_MODEL };
   }
 
@@ -1473,10 +1506,12 @@ export async function widget_quiz_data(args: { action?: string; session_id?: str
   }
 
   if (action === 'pending') {
-    const pending = await ultralight.db.all(
-      'SELECT qs.*, s.name as subject_name FROM quiz_sessions qs LEFT JOIN subjects s ON qs.subject_id = s.id WHERE qs.user_id = ? AND qs.status = ? ORDER BY qs.generated_at DESC',
-      [uid(), 'pending']
-    );
+    const pending = await galactic.db.select('quiz_sessions', {
+      columns: ['*', { table: 's', column: 'name', as: 'subject_name' }],
+      joins: [{ table: 'subjects', as: 's', type: 'left', on: { fromColumn: 'subject_id', foreignColumn: 'id' } }],
+      where: { status: 'pending' },
+      orderBy: { column: 'generated_at', dir: 'desc' },
+    });
     return { meta, pending };
   }
 
@@ -2050,10 +2085,8 @@ if (window.ulWidgetContext && window.ulWidgetContext.pending_session_id) {
 export async function widget_progress_ui(args: {}): Promise<unknown> {
   let badge = 0;
   try {
-    const quizCount: CntRow | null = await ultralight.db.first(
-      'SELECT COUNT(*) as cnt FROM quiz_sessions WHERE user_id = ? AND status = ?', [uid(), 'completed']
-    );
-    badge = quizCount?.cnt || 0;
+    const quizCount: number = await galactic.db.count('quiz_sessions', { where: { status: 'completed' } });
+    badge = quizCount || 0;
   } catch { /* tables may not exist yet */ }
   return { meta: { title: 'Study Progress', icon: '📊', badge_count: badge }, app_html: PROGRESS_WIDGET_HTML, version: '4.0' };
 }
@@ -2065,20 +2098,23 @@ export async function widget_progress_data(args: { action?: string; topic?: stri
   const statusData = await status({});
 
   // Add course dashboard data
-  const pendingQuizzes: QuizSessionWithSubjectRow[] = await ultralight.db.all(
-    'SELECT qs.id, qs.subject_id, qs.total_questions, qs.generated_at, s.name as subject_name FROM quiz_sessions qs LEFT JOIN subjects s ON qs.subject_id = s.id WHERE qs.user_id = ? AND qs.status = ? ORDER BY qs.generated_at DESC',
-    [uid(), 'pending']
-  );
-  const unreadLessons: LessonRow[] = await ultralight.db.all(
-    'SELECT l.id, l.subject_id, l.title, l.created_at, s.name as subject_name FROM lessons l LEFT JOIN subjects s ON l.subject_id = s.id WHERE l.user_id = ? AND (l.status = ? OR l.status IS NULL) ORDER BY l.created_at DESC LIMIT 5',
-    [uid(), 'unread']
-  );
+  const pendingQuizzes: QuizSessionWithSubjectRow[] = await galactic.db.select('quiz_sessions', {
+    columns: ['id', 'subject_id', 'total_questions', 'generated_at', { table: 's', column: 'name', as: 'subject_name' }],
+    joins: [{ table: 'subjects', as: 's', type: 'left', on: { fromColumn: 'subject_id', foreignColumn: 'id' } }],
+    where: { status: 'pending' },
+    orderBy: { column: 'generated_at', dir: 'desc' },
+  });
+  const unreadLessons: LessonRow[] = await galactic.db.select('lessons', {
+    columns: ['id', 'subject_id', 'title', 'created_at', { table: 's', column: 'name', as: 'subject_name' }],
+    joins: [{ table: 'subjects', as: 's', type: 'left', on: { fromColumn: 'subject_id', foreignColumn: 'id' } }],
+    where: { _or: [{ status: 'unread' }, { status: { isNull: true } }] },
+    orderBy: { column: 'created_at', dir: 'desc' },
+    limit: 5,
+  });
   let badge = 0;
   try {
-    const quizCount: CntRow | null = await ultralight.db.first(
-      'SELECT COUNT(*) as cnt FROM quiz_sessions WHERE user_id = ? AND status = ?', [uid(), 'completed']
-    );
-    badge = quizCount?.cnt || 0;
+    const quizCount: number = await galactic.db.count('quiz_sessions', { where: { status: 'completed' } });
+    badge = quizCount || 0;
   } catch { /* tables may not exist yet */ }
 
   return {
@@ -2395,10 +2431,8 @@ load();
 export async function widget_lessons_ui(args: {}): Promise<unknown> {
   let badge = 0;
   try {
-    const lessonCount: CntRow | null = await ultralight.db.first(
-      'SELECT COUNT(*) as cnt FROM lessons WHERE user_id = ?', [uid()]
-    );
-    badge = lessonCount?.cnt || 0;
+    const lessonCount: number = await galactic.db.count('lessons');
+    badge = lessonCount || 0;
   } catch { /* tables may not exist yet */ }
   return { meta: { title: 'Lessons', icon: '📖', badge_count: badge }, app_html: LESSONS_WIDGET_HTML, version: '4.0' };
 }
@@ -2413,29 +2447,29 @@ export async function widget_lessons_data(args: { action?: string; lesson_id?: s
 
   if (args.action === 'mark_read') {
     if (!args.lesson_id) return { error: 'lesson_id required' };
-    await ultralight.db.run(
-      'UPDATE lessons SET status = ?, read_at = ? WHERE id = ? AND user_id = ?',
-      ['reading', now(), args.lesson_id, uid()]
-    );
+    await galactic.db.update('lessons', {
+      set: { status: 'reading', read_at: now() }, where: { id: args.lesson_id },
+    });
     return { success: true };
   }
   if (args.lesson_id) {
-    const lesson = await ultralight.db.first(
-      'SELECT l.*, s.name as subject_name FROM lessons l LEFT JOIN subjects s ON l.subject_id = s.id WHERE l.id = ? AND l.user_id = ?',
-      [args.lesson_id, uid()]
-    );
+    const lesson = await galactic.db.first('lessons', {
+      columns: ['*', { table: 's', column: 'name', as: 'subject_name' }],
+      joins: [{ table: 'subjects', as: 's', type: 'left', on: { fromColumn: 'subject_id', foreignColumn: 'id' } }],
+      where: { id: args.lesson_id },
+    });
     return lesson || { error: 'Lesson not found' };
   }
-  const lessons = await ultralight.db.all(
-    'SELECT l.id, l.title, l.subject_id, l.quiz_session_id, l.weak_concepts, l.created_at, s.name as subject_name FROM lessons l LEFT JOIN subjects s ON l.subject_id = s.id WHERE l.user_id = ? ORDER BY l.created_at DESC LIMIT ?',
-    [uid(), args.limit || 10]
-  );
+  const lessons = await galactic.db.select('lessons', {
+    columns: ['id', 'title', 'subject_id', 'quiz_session_id', 'weak_concepts', 'created_at', { table: 's', column: 'name', as: 'subject_name' }],
+    joins: [{ table: 'subjects', as: 's', type: 'left', on: { fromColumn: 'subject_id', foreignColumn: 'id' } }],
+    orderBy: { column: 'created_at', dir: 'desc' },
+    limit: args.limit || 10,
+  });
   let badge = 0;
   try {
-    const lessonCount: CntRow | null = await ultralight.db.first(
-      'SELECT COUNT(*) as cnt FROM lessons WHERE user_id = ?', [uid()]
-    );
-    badge = lessonCount?.cnt || 0;
+    const lessonCount: number = await galactic.db.count('lessons');
+    badge = lessonCount || 0;
   } catch { /* tables may not exist yet */ }
   return { meta: { title: 'Lessons', icon: '📖', badge_count: badge }, lessons };
 }

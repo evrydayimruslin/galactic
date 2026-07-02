@@ -1,9 +1,9 @@
 // Story Builder v3 — Galactic MCP App
 // 7 tools: create_world, add, read, update, delete, get_context, generate
 // All lookups by name (unique per world). No UUIDs needed by the caller.
-// Storage: Galactic D1 | Permissions: ai:call
+// Storage: Galactic D1 (scoped structured API) | Permissions: ai:call
 
-const ultralight = globalThis.ultralight;
+const galactic = (globalThis as any).galactic;
 
 type EntityTable = 'characters' | 'locations' | 'themes' | 'arcs' | 'factions' | 'lore' | 'rules' | 'scenes';
 type SqlValue = string | number | null;
@@ -14,10 +14,6 @@ interface MutationResultEntry {
 }
 
 type MutationBuckets = Record<string, MutationResultEntry[]>;
-
-interface CountRow {
-  cnt: number;
-}
 
 interface WorldRow {
   id: string;
@@ -226,63 +222,82 @@ function parseStringArray(value: string | null | undefined): string[] {
 
 function uuid() { return crypto.randomUUID(); }
 function now() { return new Date().toISOString(); }
-function uid() { return ultralight.user.id; }
+
+// Explicit allowlist: entity kind → fixed table name. Exactly the entity tables
+// this app's own migrations create (worlds/relationships are handled by their
+// own dedicated code paths, never through the generic lookup).
+const ENTITY_TABLES: Record<EntityTable, EntityTable> = {
+  characters: 'characters',
+  locations: 'locations',
+  themes: 'themes',
+  arcs: 'arcs',
+  factions: 'factions',
+  lore: 'lore',
+  rules: 'rules',
+  scenes: 'scenes',
+};
+
+function entityTable(kind: string): EntityTable {
+  const table = (ENTITY_TABLES as Record<string, EntityTable | undefined>)[kind];
+  if (!table) {
+    throw new Error(
+      'Unknown entity kind: ' + kind + '. Expected one of: ' + Object.keys(ENTITY_TABLES).join(', ')
+    );
+  }
+  return table;
+}
 
 async function getWorld(world_id_or_name: string): Promise<WorldRow | null> {
   // Try by ID first, then by name
   return (
-    await ultralight.db.first(
-      'SELECT id, name, genre, description FROM worlds WHERE id = ? AND user_id = ?',
-      [world_id_or_name, uid()]
-    )
+    await galactic.db.first('worlds', {
+      columns: ['id', 'name', 'genre', 'description'],
+      where: { id: world_id_or_name },
+    })
   ) || (
-    await ultralight.db.first(
-      'SELECT id, name, genre, description FROM worlds WHERE name = ? AND user_id = ?',
-      [world_id_or_name, uid()]
-    )
+    await galactic.db.first('worlds', {
+      columns: ['id', 'name', 'genre', 'description'],
+      where: { name: world_id_or_name },
+    })
   );
 }
 
 // Resolve a character by name or ID within a world
 async function resolveChar(world_id: string, name_or_id: string): Promise<CharacterRow | null> {
-  return (
-    await ultralight.db.first(
-      'SELECT * FROM characters WHERE world_id = ? AND user_id = ? AND (id = ? OR name = ?)',
-      [world_id, uid(), name_or_id, name_or_id]
-    )
-  );
+  return galactic.db.first('characters', {
+    where: { world_id, _or: [{ id: name_or_id }, { name: name_or_id }] },
+  });
 }
 
-// Resolve any entity by name or ID in a table
+// Resolve any entity by name or ID (allowlisted table dispatch)
 async function resolveEntity(table: EntityTable, world_id: string, name_or_id: string): Promise<ResolvedEntityRow | null> {
-  return ultralight.db.first(
-    `SELECT * FROM ${table} WHERE world_id = ? AND user_id = ? AND (id = ? OR name = ?)`,
-    [world_id, uid(), name_or_id, name_or_id]
-  );
+  return galactic.db.first(entityTable(table), {
+    where: { world_id, _or: [{ id: name_or_id }, { name: name_or_id }] },
+  });
 }
 
 // Build a name→id map for characters in a world
 async function charNameMap(world_id: string): Promise<Map<string, string>> {
-  const chars: CharacterNameRow[] = await ultralight.db.all(
-    'SELECT id, name FROM characters WHERE world_id = ? AND user_id = ?',
-    [world_id, uid()]
-  );
+  const chars: CharacterNameRow[] = await galactic.db.select('characters', {
+    columns: ['id', 'name'],
+    where: { world_id },
+  });
   return new Map(chars.map((char) => [char.name, char.id]));
 }
 
 async function fetchCharacterIdToName(world_id: string): Promise<Map<string, string>> {
-  const chars: CharacterNameRow[] = await ultralight.db.all(
-    'SELECT id, name FROM characters WHERE world_id = ? AND user_id = ?',
-    [world_id, uid()]
-  );
+  const chars: CharacterNameRow[] = await galactic.db.select('characters', {
+    columns: ['id', 'name'],
+    where: { world_id },
+  });
   return new Map(chars.map((char) => [char.id, char.name]));
 }
 
 async function fetchLocationIdToName(world_id: string): Promise<Map<string, string>> {
-  const locations: Pick<LocationRow, 'id' | 'name'>[] = await ultralight.db.all(
-    'SELECT id, name FROM locations WHERE world_id = ? AND user_id = ?',
-    [world_id, uid()]
-  );
+  const locations: Pick<LocationRow, 'id' | 'name'>[] = await galactic.db.select('locations', {
+    columns: ['id', 'name'],
+    where: { world_id },
+  });
   return new Map(locations.map((location) => [location.id, location.name]));
 }
 
@@ -297,10 +312,14 @@ export async function create_world(args: {
   const id = uuid();
   const ts = now();
 
-  await ultralight.db.run(
-    'INSERT INTO worlds (id, user_id, name, genre, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [id, uid(), name, genre, description || '', ts, ts]
-  );
+  await galactic.db.insert('worlds', {
+    id,
+    name,
+    genre,
+    description: description || '',
+    created_at: ts,
+    updated_at: ts,
+  });
 
   return { success: true, world_id: id, name, genre };
 }
@@ -331,10 +350,17 @@ export async function add(args: {
     created.characters = [];
     for (const c of args.characters) {
       const id = uuid();
-      await ultralight.db.run(
-        'INSERT INTO characters (id, user_id, world_id, name, traits, backstory, role, relationships, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [id, uid(), world_id, c.name, JSON.stringify(c.traits || []), c.backstory || '', c.role || '', '[]', ts, ts]
-      );
+      await galactic.db.insert('characters', {
+        id,
+        world_id,
+        name: c.name,
+        traits: JSON.stringify(c.traits || []),
+        backstory: c.backstory || '',
+        role: c.role || '',
+        relationships: '[]',
+        created_at: ts,
+        updated_at: ts,
+      });
       created.characters.push({ id, name: c.name });
     }
   }
@@ -347,10 +373,14 @@ export async function add(args: {
     created.settings = [];
     for (const s of args.settings) {
       const id = uuid();
-      await ultralight.db.run(
-        'INSERT INTO locations (id, user_id, world_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [id, uid(), world_id, s.name, s.description, ts, ts]
-      );
+      await galactic.db.insert('locations', {
+        id,
+        world_id,
+        name: s.name,
+        description: s.description,
+        created_at: ts,
+        updated_at: ts,
+      });
       created.settings.push({ id, name: s.name });
     }
   }
@@ -360,10 +390,14 @@ export async function add(args: {
     created.themes = [];
     for (const t of args.themes) {
       const id = uuid();
-      await ultralight.db.run(
-        'INSERT INTO themes (id, user_id, world_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [id, uid(), world_id, t.name, t.description, ts, ts]
-      );
+      await galactic.db.insert('themes', {
+        id,
+        world_id,
+        name: t.name,
+        description: t.description,
+        created_at: ts,
+        updated_at: ts,
+      });
       created.themes.push({ id, name: t.name });
     }
   }
@@ -377,10 +411,16 @@ export async function add(args: {
       if (!aId) { created.relationships.push({ error: 'Character not found: ' + r.character_a }); continue; }
       if (!bId) { created.relationships.push({ error: 'Character not found: ' + r.character_b }); continue; }
       const id = uuid();
-      await ultralight.db.run(
-        'INSERT INTO relationships (id, user_id, world_id, character_a_id, character_b_id, type, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [id, uid(), world_id, aId, bId, r.type, r.description || '', ts, ts]
-      );
+      await galactic.db.insert('relationships', {
+        id,
+        world_id,
+        character_a_id: aId,
+        character_b_id: bId,
+        type: r.type,
+        description: r.description || '',
+        created_at: ts,
+        updated_at: ts,
+      });
       created.relationships.push({ id, between: [r.character_a, r.character_b], type: r.type });
     }
   }
@@ -388,15 +428,24 @@ export async function add(args: {
   // Arcs (character names resolved to IDs)
   if (args.arcs && args.arcs.length > 0) {
     created.arcs = [];
-    const arcCount = (await ultralight.db.first('SELECT COUNT(*) as cnt FROM arcs WHERE world_id = ? AND user_id = ?', [world_id, uid()]))?.cnt || 0;
+    const arcCount = (await galactic.db.count('arcs', { where: { world_id } })) || 0;
     let order = arcCount;
     for (const a of args.arcs) {
       const id = uuid();
       const charIds = (a.characters || []).map(n => nameMap.get(n)).filter(Boolean);
-      await ultralight.db.run(
-        'INSERT INTO arcs (id, user_id, world_id, name, type, description, season, episode_range, character_ids, arc_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [id, uid(), world_id, a.name, a.type || 'narrative', a.description, a.season || '', a.episode_range || '', JSON.stringify(charIds), order++, ts, ts]
-      );
+      await galactic.db.insert('arcs', {
+        id,
+        world_id,
+        name: a.name,
+        type: a.type || 'narrative',
+        description: a.description,
+        season: a.season || '',
+        episode_range: a.episode_range || '',
+        character_ids: JSON.stringify(charIds),
+        arc_order: order++,
+        created_at: ts,
+        updated_at: ts,
+      });
       created.arcs.push({ id, name: a.name });
     }
   }
@@ -407,10 +456,15 @@ export async function add(args: {
     for (const f of args.factions) {
       const id = uuid();
       const memberIds = (f.members || []).map(n => nameMap.get(n)).filter(Boolean);
-      await ultralight.db.run(
-        'INSERT INTO factions (id, user_id, world_id, name, description, member_ids, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [id, uid(), world_id, f.name, f.description, JSON.stringify(memberIds), ts, ts]
-      );
+      await galactic.db.insert('factions', {
+        id,
+        world_id,
+        name: f.name,
+        description: f.description,
+        member_ids: JSON.stringify(memberIds),
+        created_at: ts,
+        updated_at: ts,
+      });
       created.factions.push({ id, name: f.name });
     }
   }
@@ -420,10 +474,15 @@ export async function add(args: {
     created.lore = [];
     for (const l of args.lore) {
       const id = uuid();
-      await ultralight.db.run(
-        'INSERT INTO lore (id, user_id, world_id, name, type, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [id, uid(), world_id, l.name, l.type || 'institution', l.description, ts, ts]
-      );
+      await galactic.db.insert('lore', {
+        id,
+        world_id,
+        name: l.name,
+        type: l.type || 'institution',
+        description: l.description,
+        created_at: ts,
+        updated_at: ts,
+      });
       created.lore.push({ id, name: l.name });
     }
   }
@@ -433,10 +492,15 @@ export async function add(args: {
     created.rules = [];
     for (const r of args.rules) {
       const id = uuid();
-      await ultralight.db.run(
-        'INSERT INTO rules (id, user_id, world_id, name, type, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [id, uid(), world_id, r.name, r.type || 'constraint', r.description, ts, ts]
-      );
+      await galactic.db.insert('rules', {
+        id,
+        world_id,
+        name: r.name,
+        type: r.type || 'constraint',
+        description: r.description,
+        created_at: ts,
+        updated_at: ts,
+      });
       created.rules.push({ id, name: r.name });
     }
   }
@@ -444,16 +508,24 @@ export async function add(args: {
   // Scenes
   if (args.scenes && args.scenes.length > 0) {
     created.scenes = [];
-    const sceneCount = (await ultralight.db.first('SELECT COUNT(*) as cnt FROM scenes WHERE world_id = ? AND user_id = ?', [world_id, uid()]))?.cnt || 0;
+    const sceneCount = (await galactic.db.count('scenes', { where: { world_id } })) || 0;
     let order = sceneCount;
     for (const s of args.scenes) {
       const id = uuid();
       const charIds = (s.character_names || []).map(n => nameMap.get(n)).filter(Boolean);
       const settingRow = s.setting_name ? await resolveEntity('locations', world_id, s.setting_name) : null;
-      await ultralight.db.run(
-        'INSERT INTO scenes (id, user_id, world_id, title, content, type, character_ids, setting_id, scene_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [id, uid(), world_id, s.title, s.content, s.type || 'scene', JSON.stringify(charIds), settingRow?.id || null, order++, ts, ts]
-      );
+      await galactic.db.insert('scenes', {
+        id,
+        world_id,
+        title: s.title,
+        content: s.content,
+        type: s.type || 'scene',
+        character_ids: JSON.stringify(charIds),
+        setting_id: settingRow?.id || null,
+        scene_order: order++,
+        created_at: ts,
+        updated_at: ts,
+      });
       created.scenes.push({ id, title: s.title });
     }
   }
@@ -496,10 +568,18 @@ export async function read(args: {
     };
 
     // Their relationships
-    const rels: RelationshipLookupRow[] = await ultralight.db.all(
-      'SELECT r.*, a.name as a_name, b.name as b_name FROM relationships r JOIN characters a ON r.character_a_id = a.id JOIN characters b ON r.character_b_id = b.id WHERE r.world_id = ? AND r.user_id = ? AND (r.character_a_id = ? OR r.character_b_id = ?)',
-      [world_id, uid(), char.id, char.id]
-    );
+    const rels: RelationshipLookupRow[] = await galactic.db.select('relationships', {
+      columns: [
+        'id', 'type', 'description',
+        { table: 'a', column: 'name', as: 'a_name' },
+        { table: 'b', column: 'name', as: 'b_name' },
+      ],
+      joins: [
+        { table: 'characters', as: 'a', type: 'inner', on: { fromColumn: 'character_a_id', foreignColumn: 'id' } },
+        { table: 'characters', as: 'b', type: 'inner', on: { fromColumn: 'character_b_id', foreignColumn: 'id' } },
+      ],
+      where: { world_id, _or: [{ character_a_id: char.id }, { character_b_id: char.id }] },
+    });
     result.character.relationships = rels.map((relationship) => ({
       with: relationship.a_name === char.name ? relationship.b_name : relationship.a_name,
       type: relationship.type,
@@ -507,20 +587,21 @@ export async function read(args: {
     }));
 
     // Scenes they appear in
-    const scenes: Pick<SceneRow, 'id' | 'title' | 'type' | 'content' | 'scene_order'>[] = await ultralight.db.all(
-      'SELECT id, title, type, content, scene_order, created_at FROM scenes WHERE world_id = ? AND user_id = ? AND character_ids LIKE ? ORDER BY scene_order ASC',
-      [world_id, uid(), '%' + char.id + '%']
-    );
+    const scenes: Pick<SceneRow, 'id' | 'title' | 'type' | 'content' | 'scene_order'>[] = await galactic.db.select('scenes', {
+      columns: ['id', 'title', 'type', 'content', 'scene_order', 'created_at'],
+      where: { world_id, character_ids: { like: '%' + char.id + '%' } },
+      orderBy: { column: 'scene_order', dir: 'asc' },
+    });
     result.character.scenes = scenes.map((scene) => ({
       id: scene.id, title: scene.title, type: scene.type, scene_order: scene.scene_order,
       content_preview: scene.content.slice(0, 300),
     }));
 
     // Factions they belong to
-    const factions: Pick<FactionRow, 'id' | 'name' | 'description'>[] = await ultralight.db.all(
-      'SELECT id, name, description, member_ids FROM factions WHERE world_id = ? AND user_id = ? AND member_ids LIKE ?',
-      [world_id, uid(), '%' + char.id + '%']
-    );
+    const factions: Pick<FactionRow, 'id' | 'name' | 'description'>[] = await galactic.db.select('factions', {
+      columns: ['id', 'name', 'description', 'member_ids'],
+      where: { world_id, member_ids: { like: '%' + char.id + '%' } },
+    });
     result.character.factions = factions.map((faction) => ({ name: faction.name, description: faction.description }));
 
     return result;
@@ -528,10 +609,10 @@ export async function read(args: {
 
   // Full world read with include filter
   if (includeSet.has('characters')) {
-    const chars: CharacterRow[] = await ultralight.db.all(
-      'SELECT id, name, role, traits, backstory FROM characters WHERE world_id = ? AND user_id = ?',
-      [world_id, uid()]
-    );
+    const chars: CharacterRow[] = await galactic.db.select('characters', {
+      columns: ['id', 'name', 'role', 'traits', 'backstory'],
+      where: { world_id },
+    });
     result.characters = chars.map((character) => ({
       id: character.id, name: character.name, role: character.role,
       traits: parseStringArray(character.traits),
@@ -540,32 +621,41 @@ export async function read(args: {
   }
 
   if (includeSet.has('settings')) {
-    result.settings = await ultralight.db.all(
-      'SELECT id, name, description FROM locations WHERE world_id = ? AND user_id = ?',
-      [world_id, uid()]
-    );
+    result.settings = await galactic.db.select('locations', {
+      columns: ['id', 'name', 'description'],
+      where: { world_id },
+    });
   }
 
   if (includeSet.has('themes')) {
-    result.themes = await ultralight.db.all(
-      'SELECT id, name, description FROM themes WHERE world_id = ? AND user_id = ?',
-      [world_id, uid()]
-    );
+    result.themes = await galactic.db.select('themes', {
+      columns: ['id', 'name', 'description'],
+      where: { world_id },
+    });
   }
 
   if (includeSet.has('relationships')) {
-    const rels: RelationshipRow[] = await ultralight.db.all(
-      'SELECT r.id, r.type, r.description, a.name as character_a, b.name as character_b FROM relationships r JOIN characters a ON r.character_a_id = a.id JOIN characters b ON r.character_b_id = b.id WHERE r.world_id = ? AND r.user_id = ?',
-      [world_id, uid()]
-    );
+    const rels: RelationshipRow[] = await galactic.db.select('relationships', {
+      columns: [
+        'id', 'type', 'description',
+        { table: 'a', column: 'name', as: 'character_a' },
+        { table: 'b', column: 'name', as: 'character_b' },
+      ],
+      joins: [
+        { table: 'characters', as: 'a', type: 'inner', on: { fromColumn: 'character_a_id', foreignColumn: 'id' } },
+        { table: 'characters', as: 'b', type: 'inner', on: { fromColumn: 'character_b_id', foreignColumn: 'id' } },
+      ],
+      where: { world_id },
+    });
     result.relationships = rels;
   }
 
   if (includeSet.has('arcs')) {
-    const arcs: ArcRow[] = await ultralight.db.all(
-      'SELECT id, name, type, description, season, episode_range, character_ids, arc_order FROM arcs WHERE world_id = ? AND user_id = ? ORDER BY arc_order ASC',
-      [world_id, uid()]
-    );
+    const arcs: ArcRow[] = await galactic.db.select('arcs', {
+      columns: ['id', 'name', 'type', 'description', 'season', 'episode_range', 'character_ids', 'arc_order'],
+      where: { world_id },
+      orderBy: { column: 'arc_order', dir: 'asc' },
+    });
     const idToName = result.characters
       ? new Map(result.characters.map((character) => [character.id, character.name]))
       : await fetchCharacterIdToName(world_id);
@@ -577,10 +667,10 @@ export async function read(args: {
   }
 
   if (includeSet.has('factions')) {
-    const factions: FactionRow[] = await ultralight.db.all(
-      'SELECT id, name, description, member_ids FROM factions WHERE world_id = ? AND user_id = ?',
-      [world_id, uid()]
-    );
+    const factions: FactionRow[] = await galactic.db.select('factions', {
+      columns: ['id', 'name', 'description', 'member_ids'],
+      where: { world_id },
+    });
     const idToName = result.characters
       ? new Map(result.characters.map((character) => [character.id, character.name]))
       : await fetchCharacterIdToName(world_id);
@@ -591,33 +681,36 @@ export async function read(args: {
   }
 
   if (includeSet.has('lore')) {
-    result.lore = await ultralight.db.all(
-      'SELECT id, name, type, description FROM lore WHERE world_id = ? AND user_id = ?',
-      [world_id, uid()]
-    );
+    result.lore = await galactic.db.select('lore', {
+      columns: ['id', 'name', 'type', 'description'],
+      where: { world_id },
+    });
   }
 
   if (includeSet.has('rules')) {
-    result.rules = await ultralight.db.all(
-      'SELECT id, name, type, description FROM rules WHERE world_id = ? AND user_id = ?',
-      [world_id, uid()]
-    );
+    result.rules = await galactic.db.select('rules', {
+      columns: ['id', 'name', 'type', 'description'],
+      where: { world_id },
+    });
   }
 
   if (includeSet.has('scenes')) {
     const limit = args.scene_limit || 10;
     const offset = args.scene_offset || 0;
-    const scenes: SceneRow[] = await ultralight.db.all(
-      'SELECT id, title, type, content, character_ids, setting_id, scene_order, created_at FROM scenes WHERE world_id = ? AND user_id = ? ORDER BY scene_order ASC LIMIT ? OFFSET ?',
-      [world_id, uid(), limit, offset]
-    );
+    const scenes: SceneRow[] = await galactic.db.select('scenes', {
+      columns: ['id', 'title', 'type', 'content', 'character_ids', 'setting_id', 'scene_order', 'created_at'],
+      where: { world_id },
+      orderBy: { column: 'scene_order', dir: 'asc' },
+      limit,
+      offset,
+    });
     const idToName = result.characters
       ? new Map(result.characters.map((character) => [character.id, character.name]))
       : await fetchCharacterIdToName(world_id);
     const settingsMap = result.settings
       ? new Map(result.settings.map((setting) => [setting.id, setting.name]))
       : await fetchLocationIdToName(world_id);
-    const totalScenes = (await ultralight.db.first('SELECT COUNT(*) as cnt FROM scenes WHERE world_id = ? AND user_id = ?', [world_id, uid()]) as CountRow | null)?.cnt || 0;
+    const totalScenes = (await galactic.db.count('scenes', { where: { world_id } })) || 0;
     result.scenes = {
       total: totalScenes,
       offset,
@@ -658,15 +751,13 @@ export async function update(args: {
 
   // World metadata
   if (args.world) {
-    const fields: string[] = [];
-    const values: SqlValue[] = [];
-    if (args.world.name !== undefined) { fields.push('name = ?'); values.push(args.world.name); }
-    if (args.world.genre !== undefined) { fields.push('genre = ?'); values.push(args.world.genre); }
-    if (args.world.description !== undefined) { fields.push('description = ?'); values.push(args.world.description); }
-    if (fields.length > 0) {
-      fields.push('updated_at = ?'); values.push(ts);
-      values.push(world_id, uid());
-      await ultralight.db.run(`UPDATE worlds SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+    const set: Record<string, SqlValue> = {};
+    if (args.world.name !== undefined) set.name = args.world.name;
+    if (args.world.genre !== undefined) set.genre = args.world.genre;
+    if (args.world.description !== undefined) set.description = args.world.description;
+    if (Object.keys(set).length > 0) {
+      set.updated_at = ts;
+      await galactic.db.update('worlds', { set, where: { id: world_id } });
       updated.world = [{ success: true }];
     }
   }
@@ -678,24 +769,22 @@ export async function update(args: {
       const existing = await resolveChar(world_id, c.name_or_id);
       if (!existing) { updated.characters.push({ error: 'Not found: ' + c.name_or_id }); continue; }
 
-      const fields: string[] = [];
-      const values: SqlValue[] = [];
-      if (c.name !== undefined) { fields.push('name = ?'); values.push(c.name); }
-      if (c.role !== undefined) { fields.push('role = ?'); values.push(c.role); }
-      if (c.backstory !== undefined) { fields.push('backstory = ?'); values.push(c.backstory); }
+      const set: Record<string, SqlValue> = {};
+      if (c.name !== undefined) set.name = c.name;
+      if (c.role !== undefined) set.role = c.role;
+      if (c.backstory !== undefined) set.backstory = c.backstory;
       if (c.traits !== undefined) {
         if (c.merge_traits) {
           const existingTraits = parseStringArray(existing.traits);
           const merged = [...new Set([...existingTraits, ...c.traits])];
-          fields.push('traits = ?'); values.push(JSON.stringify(merged));
+          set.traits = JSON.stringify(merged);
         } else {
-          fields.push('traits = ?'); values.push(JSON.stringify(c.traits));
+          set.traits = JSON.stringify(c.traits);
         }
       }
-      if (fields.length > 0) {
-        fields.push('updated_at = ?'); values.push(ts);
-        values.push(existing.id, uid());
-        await ultralight.db.run(`UPDATE characters SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+      if (Object.keys(set).length > 0) {
+        set.updated_at = ts;
+        await galactic.db.update('characters', { set, where: { id: existing.id } });
         updated.characters.push({ name: c.name || existing.name, success: true });
       }
     }
@@ -707,14 +796,12 @@ export async function update(args: {
     for (const s of args.settings) {
       const existing = await resolveEntity('locations', world_id, s.name_or_id);
       if (!existing) { updated.settings.push({ error: 'Not found: ' + s.name_or_id }); continue; }
-      const fields: string[] = [];
-      const values: SqlValue[] = [];
-      if (s.name !== undefined) { fields.push('name = ?'); values.push(s.name); }
-      if (s.description !== undefined) { fields.push('description = ?'); values.push(s.description); }
-      if (fields.length > 0) {
-        fields.push('updated_at = ?'); values.push(ts);
-        values.push(existing.id, uid());
-        await ultralight.db.run(`UPDATE locations SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+      const set: Record<string, SqlValue> = {};
+      if (s.name !== undefined) set.name = s.name;
+      if (s.description !== undefined) set.description = s.description;
+      if (Object.keys(set).length > 0) {
+        set.updated_at = ts;
+        await galactic.db.update('locations', { set, where: { id: existing.id } });
         updated.settings.push({ name: s.name || existing.name, success: true });
       }
     }
@@ -726,14 +813,12 @@ export async function update(args: {
     for (const t of args.themes) {
       const existing = await resolveEntity('themes', world_id, t.name_or_id);
       if (!existing) { updated.themes.push({ error: 'Not found: ' + t.name_or_id }); continue; }
-      const fields: string[] = [];
-      const values: SqlValue[] = [];
-      if (t.name !== undefined) { fields.push('name = ?'); values.push(t.name); }
-      if (t.description !== undefined) { fields.push('description = ?'); values.push(t.description); }
-      if (fields.length > 0) {
-        fields.push('updated_at = ?'); values.push(ts);
-        values.push(existing.id, uid());
-        await ultralight.db.run(`UPDATE themes SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+      const set: Record<string, SqlValue> = {};
+      if (t.name !== undefined) set.name = t.name;
+      if (t.description !== undefined) set.description = t.description;
+      if (Object.keys(set).length > 0) {
+        set.updated_at = ts;
+        await galactic.db.update('themes', { set, where: { id: existing.id } });
         updated.themes.push({ name: t.name || existing.name, success: true });
       }
     }
@@ -750,20 +835,24 @@ export async function update(args: {
       if (!aId || !bId) { updated.relationships.push({ error: 'Character not found in pair: ' + r.between.join(', ') }); continue; }
 
       // Find relationship in either direction
-      const existing = await ultralight.db.first(
-        'SELECT id FROM relationships WHERE world_id = ? AND user_id = ? AND ((character_a_id = ? AND character_b_id = ?) OR (character_a_id = ? AND character_b_id = ?))',
-        [world_id, uid(), aId, bId, bId, aId]
-      ) as Pick<RelationshipRow, 'id'> | null;
+      const existing = await galactic.db.first('relationships', {
+        columns: ['id'],
+        where: {
+          world_id,
+          _or: [
+            { character_a_id: aId, character_b_id: bId },
+            { character_a_id: bId, character_b_id: aId },
+          ],
+        },
+      }) as Pick<RelationshipRow, 'id'> | null;
       if (!existing) { updated.relationships.push({ error: 'No relationship between: ' + r.between.join(', ') }); continue; }
 
-      const fields: string[] = [];
-      const values: SqlValue[] = [];
-      if (r.type !== undefined) { fields.push('type = ?'); values.push(r.type); }
-      if (r.description !== undefined) { fields.push('description = ?'); values.push(r.description); }
-      if (fields.length > 0) {
-        fields.push('updated_at = ?'); values.push(ts);
-        values.push(existing.id, uid());
-        await ultralight.db.run(`UPDATE relationships SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+      const set: Record<string, SqlValue> = {};
+      if (r.type !== undefined) set.type = r.type;
+      if (r.description !== undefined) set.description = r.description;
+      if (Object.keys(set).length > 0) {
+        set.updated_at = ts;
+        await galactic.db.update('relationships', { set, where: { id: existing.id } });
         updated.relationships.push({ between: r.between, success: true });
       }
     }
@@ -776,21 +865,19 @@ export async function update(args: {
     for (const a of args.arcs) {
       const existing = await resolveEntity('arcs', world_id, a.name_or_id);
       if (!existing) { updated.arcs.push({ error: 'Not found: ' + a.name_or_id }); continue; }
-      const fields: string[] = [];
-      const values: SqlValue[] = [];
-      if (a.name !== undefined) { fields.push('name = ?'); values.push(a.name); }
-      if (a.type !== undefined) { fields.push('type = ?'); values.push(a.type); }
-      if (a.description !== undefined) { fields.push('description = ?'); values.push(a.description); }
-      if (a.season !== undefined) { fields.push('season = ?'); values.push(a.season); }
-      if (a.episode_range !== undefined) { fields.push('episode_range = ?'); values.push(a.episode_range); }
+      const set: Record<string, SqlValue> = {};
+      if (a.name !== undefined) set.name = a.name;
+      if (a.type !== undefined) set.type = a.type;
+      if (a.description !== undefined) set.description = a.description;
+      if (a.season !== undefined) set.season = a.season;
+      if (a.episode_range !== undefined) set.episode_range = a.episode_range;
       if (a.characters !== undefined) {
         const charIds = a.characters.map(n => nameMapData.get(n)).filter(Boolean);
-        fields.push('character_ids = ?'); values.push(JSON.stringify(charIds));
+        set.character_ids = JSON.stringify(charIds);
       }
-      if (fields.length > 0) {
-        fields.push('updated_at = ?'); values.push(ts);
-        values.push(existing.id, uid());
-        await ultralight.db.run(`UPDATE arcs SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+      if (Object.keys(set).length > 0) {
+        set.updated_at = ts;
+        await galactic.db.update('arcs', { set, where: { id: existing.id } });
         updated.arcs.push({ name: a.name || existing.name, success: true });
       }
     }
@@ -803,10 +890,9 @@ export async function update(args: {
     for (const f of args.factions) {
       const existing = await resolveEntity('factions', world_id, f.name_or_id);
       if (!existing) { updated.factions.push({ error: 'Not found: ' + f.name_or_id }); continue; }
-      const fields: string[] = [];
-      const values: SqlValue[] = [];
-      if (f.name !== undefined) { fields.push('name = ?'); values.push(f.name); }
-      if (f.description !== undefined) { fields.push('description = ?'); values.push(f.description); }
+      const set: Record<string, SqlValue> = {};
+      if (f.name !== undefined) set.name = f.name;
+      if (f.description !== undefined) set.description = f.description;
 
       // Member management
       if (f.add_members || f.remove_members) {
@@ -819,13 +905,12 @@ export async function update(args: {
           const removeIds = new Set(f.remove_members.map(n => nameMapData.get(n)).filter(Boolean));
           currentMembers = currentMembers.filter(id => !removeIds.has(id));
         }
-        fields.push('member_ids = ?'); values.push(JSON.stringify(currentMembers));
+        set.member_ids = JSON.stringify(currentMembers);
       }
 
-      if (fields.length > 0) {
-        fields.push('updated_at = ?'); values.push(ts);
-        values.push(existing.id, uid());
-        await ultralight.db.run(`UPDATE factions SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+      if (Object.keys(set).length > 0) {
+        set.updated_at = ts;
+        await galactic.db.update('factions', { set, where: { id: existing.id } });
         updated.factions.push({ name: f.name || existing.name, success: true });
       }
     }
@@ -837,15 +922,13 @@ export async function update(args: {
     for (const l of args.lore) {
       const existing = await resolveEntity('lore', world_id, l.name_or_id);
       if (!existing) { updated.lore.push({ error: 'Not found: ' + l.name_or_id }); continue; }
-      const fields: string[] = [];
-      const values: SqlValue[] = [];
-      if (l.name !== undefined) { fields.push('name = ?'); values.push(l.name); }
-      if (l.type !== undefined) { fields.push('type = ?'); values.push(l.type); }
-      if (l.description !== undefined) { fields.push('description = ?'); values.push(l.description); }
-      if (fields.length > 0) {
-        fields.push('updated_at = ?'); values.push(ts);
-        values.push(existing.id, uid());
-        await ultralight.db.run(`UPDATE lore SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+      const set: Record<string, SqlValue> = {};
+      if (l.name !== undefined) set.name = l.name;
+      if (l.type !== undefined) set.type = l.type;
+      if (l.description !== undefined) set.description = l.description;
+      if (Object.keys(set).length > 0) {
+        set.updated_at = ts;
+        await galactic.db.update('lore', { set, where: { id: existing.id } });
         updated.lore.push({ name: l.name || existing.name, success: true });
       }
     }
@@ -857,15 +940,13 @@ export async function update(args: {
     for (const r of args.rules) {
       const existing = await resolveEntity('rules', world_id, r.name_or_id);
       if (!existing) { updated.rules.push({ error: 'Not found: ' + r.name_or_id }); continue; }
-      const fields: string[] = [];
-      const values: SqlValue[] = [];
-      if (r.name !== undefined) { fields.push('name = ?'); values.push(r.name); }
-      if (r.type !== undefined) { fields.push('type = ?'); values.push(r.type); }
-      if (r.description !== undefined) { fields.push('description = ?'); values.push(r.description); }
-      if (fields.length > 0) {
-        fields.push('updated_at = ?'); values.push(ts);
-        values.push(existing.id, uid());
-        await ultralight.db.run(`UPDATE rules SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+      const set: Record<string, SqlValue> = {};
+      if (r.name !== undefined) set.name = r.name;
+      if (r.type !== undefined) set.type = r.type;
+      if (r.description !== undefined) set.description = r.description;
+      if (Object.keys(set).length > 0) {
+        set.updated_at = ts;
+        await galactic.db.update('rules', { set, where: { id: existing.id } });
         updated.rules.push({ name: r.name || existing.name, success: true });
       }
     }
@@ -894,13 +975,13 @@ export async function remove(args: {
 
   const deleted: MutationBuckets = {};
 
-  // Helper: delete from table by name or ID
+  // Helper: delete from an allowlisted entity table by name or ID
   async function deleteEntities(table: EntityTable, items: string[], label: string) {
     const results: MutationResultEntry[] = [];
     for (const nameOrId of items) {
       const entity = await resolveEntity(table, world_id, nameOrId);
       if (!entity) { results.push({ error: 'Not found: ' + nameOrId }); continue; }
-      await ultralight.db.run(`DELETE FROM ${table} WHERE id = ? AND user_id = ?`, [entity.id, uid()]);
+      await galactic.db.delete(entityTable(table), { where: { id: entity.id } });
       results.push({ name: entity.name || nameOrId, success: true });
     }
     deleted[label] = results;
@@ -911,10 +992,9 @@ export async function remove(args: {
     for (const nameOrId of args.characters) {
       const char = await resolveChar(world_id, nameOrId);
       if (char) {
-        await ultralight.db.run(
-          'DELETE FROM relationships WHERE user_id = ? AND (character_a_id = ? OR character_b_id = ?)',
-          [uid(), char.id, char.id]
-        );
+        await galactic.db.delete('relationships', {
+          where: { _or: [{ character_a_id: char.id }, { character_b_id: char.id }] },
+        });
       }
     }
     await deleteEntities('characters', args.characters, 'characters');
@@ -937,18 +1017,27 @@ export async function remove(args: {
         const aId = nameMapData.get(nameA);
         const bId = nameMapData.get(nameB);
         if (!aId || !bId) { deleted.relationships.push({ error: 'Characters not found: ' + item }); continue; }
-        const rel = await ultralight.db.first(
-          'SELECT id FROM relationships WHERE world_id = ? AND user_id = ? AND ((character_a_id = ? AND character_b_id = ?) OR (character_a_id = ? AND character_b_id = ?))',
-          [world_id, uid(), aId, bId, bId, aId]
-        ) as Pick<RelationshipRow, 'id'> | null;
+        const rel = await galactic.db.first('relationships', {
+          columns: ['id'],
+          where: {
+            world_id,
+            _or: [
+              { character_a_id: aId, character_b_id: bId },
+              { character_a_id: bId, character_b_id: aId },
+            ],
+          },
+        }) as Pick<RelationshipRow, 'id'> | null;
         if (!rel) { deleted.relationships.push({ error: 'No relationship: ' + item }); continue; }
-        await ultralight.db.run('DELETE FROM relationships WHERE id = ? AND user_id = ?', [rel.id, uid()]);
+        await galactic.db.delete('relationships', { where: { id: rel.id } });
         deleted.relationships.push({ between: item, success: true });
       } else {
         // By ID
-        const rel = await ultralight.db.first('SELECT id FROM relationships WHERE id = ? AND user_id = ?', [item, uid()]) as Pick<RelationshipRow, 'id'> | null;
+        const rel = await galactic.db.first('relationships', {
+          columns: ['id'],
+          where: { id: item },
+        }) as Pick<RelationshipRow, 'id'> | null;
         if (!rel) { deleted.relationships.push({ error: 'Not found: ' + item }); continue; }
-        await ultralight.db.run('DELETE FROM relationships WHERE id = ? AND user_id = ?', [item, uid()]);
+        await galactic.db.delete('relationships', { where: { id: item } });
         deleted.relationships.push({ id: item, success: true });
       }
     }
@@ -1050,7 +1139,7 @@ export async function get_context(args: {
     }
 
     try {
-      const response = await ultralight.ai({
+      const response = await galactic.ai({
         model: 'openai/gpt-4o-mini',
         messages: [
           { role: 'system', content: 'You are a story bible summarizer. Given the full structured data of a fictional world, produce a concise but comprehensive handoff brief. Cover: premise, key characters and their dynamics, political landscape, active narrative arcs and where they stand, world rules, and what has happened so far in generated scenes. Be specific — use character names, relationship types, faction allegiances. The brief should let a new writer pick up exactly where the last one left off.' },
@@ -1167,10 +1256,10 @@ export async function generate(args: {
   const genType = type || 'scene';
   const userPrompt = prompt || 'Write the next ' + genType + ' in this story.';
 
-  const sceneCount = (await ultralight.db.first('SELECT COUNT(*) as cnt FROM scenes WHERE world_id = ? AND user_id = ?', [world_id, uid()]))?.cnt || 0;
+  const sceneCount = (await galactic.db.count('scenes', { where: { world_id } })) || 0;
 
   try {
-    const response = await ultralight.ai({
+    const response = await galactic.ai({
       model: 'openai/gpt-4o-mini',
       messages: [
         {
@@ -1193,10 +1282,18 @@ export async function generate(args: {
       const charIds = (character_names || []).map(n => nameMapData.get(n)).filter(Boolean);
       const settingRow = setting_name ? await resolveEntity('locations', world_id, setting_name) : null;
 
-      await ultralight.db.run(
-        'INSERT INTO scenes (id, user_id, world_id, title, content, type, character_ids, setting_id, scene_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [sceneId, uid(), world_id, genType + ' — ' + ts.split('T')[0], content, genType, JSON.stringify(charIds), settingRow?.id || null, sceneCount, ts, ts]
-      );
+      await galactic.db.insert('scenes', {
+        id: sceneId,
+        world_id,
+        title: genType + ' — ' + ts.split('T')[0],
+        content,
+        type: genType,
+        character_ids: JSON.stringify(charIds),
+        setting_id: settingRow?.id || null,
+        scene_order: sceneCount,
+        created_at: ts,
+        updated_at: ts,
+      });
     }
 
     return {

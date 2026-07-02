@@ -2,7 +2,7 @@
 // Track books, articles, tweets, and papers. Save highlights, notes, and search semantically.
 // Storage: Galactic D1 | Permissions: ai:call, net:fetch
 
-const ultralight = (globalThis as any).ultralight;
+const galactic = (globalThis as any).galactic;
 
 // ── SAVE URL / ITEM ──
 
@@ -80,7 +80,7 @@ export async function save(args: {
   const embeddingText = (itemTitle + ' ' + contentSnippet + ' ' + (tags || []).join(' ')).trim();
   if (embeddingText) {
     try {
-      const response = await ultralight.ai({
+      const response = await galactic.ai({
         model: 'openai/text-embedding-3-small',
         input: embeddingText,
       });
@@ -95,10 +95,20 @@ export async function save(args: {
   const now = new Date().toISOString();
   const finalTitle = itemTitle || url || 'Untitled';
 
-  await ultralight.db.run(
-    'INSERT INTO books (id, user_id, url, title, type, content_snippet, tags, notes, embedding, read_status, saved_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, ultralight.user.id, url || null, finalTitle, itemType, contentSnippet, JSON.stringify(tags || []), notes || '', embedding, 'unread', now, now, now]
-  );
+  await galactic.db.insert('books', {
+    id: id,
+    url: url || null,
+    title: finalTitle,
+    type: itemType,
+    content_snippet: contentSnippet,
+    tags: JSON.stringify(tags || []),
+    notes: notes || '',
+    embedding: embedding,
+    read_status: 'unread',
+    saved_at: now,
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -120,22 +130,20 @@ export async function list(args: {
 }): Promise<unknown> {
   const { tags, type, status, limit } = args;
 
-  let query = 'SELECT id, title, url, type, tags, read_status, saved_at FROM books WHERE user_id = ?';
-  const params: any[] = [ultralight.user.id];
-
+  const where: Record<string, any> = {};
   if (type) {
-    query += ' AND type = ?';
-    params.push(type);
+    where.type = type;
   }
   if (status) {
-    query += ' AND read_status = ?';
-    params.push(status);
+    where.read_status = status;
   }
 
-  query += ' ORDER BY saved_at DESC LIMIT ?';
-  params.push(limit || 20);
-
-  let items = await ultralight.db.all(query, params);
+  let items = await galactic.db.select('books', {
+    columns: ['id', 'title', 'url', 'type', 'tags', 'read_status', 'saved_at'],
+    where: Object.keys(where).length > 0 ? where : undefined,
+    orderBy: { column: 'saved_at', dir: 'desc' },
+    limit: limit || 20,
+  });
 
   // Parse tags JSON and filter by tags in app layer if needed
   items = items.map((item: any) => ({
@@ -153,10 +161,9 @@ export async function list(args: {
   // Count highlights per item
   const result = [];
   for (const item of items) {
-    const hCount = await ultralight.db.first(
-      'SELECT COUNT(*) as cnt FROM highlights WHERE book_id = ? AND user_id = ?',
-      [item.id, ultralight.user.id]
-    );
+    const hCount = await galactic.db.count('highlights', {
+      where: { book_id: item.id },
+    });
     result.push({
       id: item.id,
       title: item.title,
@@ -165,7 +172,7 @@ export async function list(args: {
       tags: item.tags,
       read_status: item.read_status,
       saved_at: item.saved_at,
-      highlights_count: hCount ? hCount.cnt : 0,
+      highlights_count: hCount,
     });
   }
 
@@ -186,7 +193,7 @@ export async function search(args: {
   // Generate query embedding
   let queryEmbedding: number[] | null = null;
   try {
-    const response = await ultralight.ai({
+    const response = await galactic.ai({
       model: 'openai/text-embedding-3-small',
       input: query,
     });
@@ -197,10 +204,9 @@ export async function search(args: {
     // Fall back to text search
   }
 
-  const items = await ultralight.db.all(
-    'SELECT id, title, url, type, tags, content_snippet, notes, embedding, read_status FROM books WHERE user_id = ?',
-    [ultralight.user.id]
-  );
+  const items = await galactic.db.select('books', {
+    columns: ['id', 'title', 'url', 'type', 'tags', 'content_snippet', 'notes', 'embedding', 'read_status'],
+  });
 
   let scored: Array<{ item: any; score: number }> = [];
 
@@ -282,10 +288,10 @@ export async function highlight(args: {
 }): Promise<unknown> {
   const { item_id, text, note } = args;
 
-  const item = await ultralight.db.first(
-    'SELECT id, title, read_status FROM books WHERE id = ? AND user_id = ?',
-    [item_id, ultralight.user.id]
-  );
+  const item = await galactic.db.first('books', {
+    columns: ['id', 'title', 'read_status'],
+    where: { id: item_id },
+  });
   if (!item) {
     return { success: false, error: 'Item not found: ' + item_id };
   }
@@ -293,38 +299,40 @@ export async function highlight(args: {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  await ultralight.db.run(
-    'INSERT INTO highlights (id, user_id, book_id, text, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [id, ultralight.user.id, item_id, text, note || '', now, now]
-  );
+  await galactic.db.insert('highlights', {
+    id: id,
+    book_id: item_id,
+    text: text,
+    note: note || '',
+    created_at: now,
+    updated_at: now,
+  });
 
   // Mark as reading if unread
   if (item.read_status === 'unread') {
-    await ultralight.db.run(
-      'UPDATE books SET read_status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      ['reading', now, item_id, ultralight.user.id]
-    );
+    await galactic.db.update('books', {
+      set: { read_status: 'reading', updated_at: now },
+      where: { id: item_id },
+    });
   }
 
-  const hCount = await ultralight.db.first(
-    'SELECT COUNT(*) as cnt FROM highlights WHERE book_id = ? AND user_id = ?',
-    [item_id, ultralight.user.id]
-  );
+  const hCount = await galactic.db.count('highlights', {
+    where: { book_id: item_id },
+  });
 
   return {
     success: true,
     item_title: item.title,
-    highlights_count: hCount ? hCount.cnt : 0,
+    highlights_count: hCount,
   };
 }
 
 // ── STATUS ──
 
 export async function status(args?: {}): Promise<unknown> {
-  const items = await ultralight.db.all(
-    'SELECT id, type, read_status FROM books WHERE user_id = ?',
-    [ultralight.user.id]
-  );
+  const items = await galactic.db.select('books', {
+    columns: ['id', 'type', 'read_status'],
+  });
 
   const byType: Record<string, number> = {};
   const byStatus: Record<string, number> = {};
@@ -334,15 +342,12 @@ export async function status(args?: {}): Promise<unknown> {
     byStatus[item.read_status] = (byStatus[item.read_status] || 0) + 1;
   }
 
-  const totalHighlightsRow = await ultralight.db.first(
-    'SELECT COUNT(*) as cnt FROM highlights WHERE user_id = ?',
-    [ultralight.user.id]
-  );
+  const totalHighlights = await galactic.db.count('highlights');
 
   return {
     total_items: items.length,
     by_type: byType,
     by_status: byStatus,
-    total_highlights: totalHighlightsRow ? totalHighlightsRow.cnt : 0,
+    total_highlights: totalHighlights,
   };
 }

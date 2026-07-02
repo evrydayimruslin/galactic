@@ -2,7 +2,7 @@
 // Save recipes, plan meals, generate grocery lists, and get AI recipe suggestions.
 // Storage: Galactic D1 | Permissions: ai:call
 
-const ultralight = (globalThis as any).ultralight;
+const galactic = (globalThis as any).galactic;
 
 // ── ADD RECIPE ──
 
@@ -20,10 +20,19 @@ export async function add_recipe(args: {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  await ultralight.db.run(
-    'INSERT INTO recipes (id, user_id, name, ingredients, steps, prep_time, cook_time, servings, tags, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, ultralight.user.id, name, JSON.stringify(ingredients), JSON.stringify(steps), prep_time || null, cook_time || null, servings || null, JSON.stringify(tags || []), source || null, now, now]
-  );
+  await galactic.db.insert('recipes', {
+    id,
+    name,
+    ingredients: JSON.stringify(ingredients),
+    steps: JSON.stringify(steps),
+    prep_time: prep_time || null,
+    cook_time: cook_time || null,
+    servings: servings || null,
+    tags: JSON.stringify(tags || []),
+    source: source || null,
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -49,10 +58,7 @@ export async function grocery_list(args: {
   // Aggregate ingredients from recipes
   if (recipe_ids && recipe_ids.length > 0) {
     for (const recipeId of recipe_ids) {
-      const recipe = await ultralight.db.first(
-        'SELECT * FROM recipes WHERE id = ? AND user_id = ?',
-        [recipeId, ultralight.user.id]
-      );
+      const recipe = await galactic.db.first('recipes', { where: { id: recipeId } });
       if (recipe) {
         const recipeIngredients = JSON.parse(recipe.ingredients);
         for (const ing of recipeIngredients) {
@@ -66,10 +72,15 @@ export async function grocery_list(args: {
 
   const listName = name || 'Grocery List ' + new Date().toISOString().split('T')[0];
 
-  await ultralight.db.run(
-    'INSERT INTO grocery_lists (id, user_id, name, items, checked_items, recipe_ids, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, ultralight.user.id, listName, JSON.stringify(allItems), JSON.stringify([]), JSON.stringify(recipe_ids || []), now, now]
-  );
+  await galactic.db.insert('grocery_lists', {
+    id,
+    name: listName,
+    items: JSON.stringify(allItems),
+    checked_items: JSON.stringify([]),
+    recipe_ids: JSON.stringify(recipe_ids || []),
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -97,20 +108,26 @@ export async function meal_plan(args: {
   // Get recipe name if recipe_id provided
   let recipeName = description || '';
   if (recipe_id) {
-    const recipe = await ultralight.db.first(
-      'SELECT name FROM recipes WHERE id = ? AND user_id = ?',
-      [recipe_id, ultralight.user.id]
-    );
+    const recipe = await galactic.db.first('recipes', {
+      columns: ['name'],
+      where: { id: recipe_id },
+    });
     if (recipe) {
       recipeName = recipe.name;
     }
   }
 
   const id = crypto.randomUUID();
-  await ultralight.db.run(
-    'INSERT INTO meal_plans (id, user_id, week_start, day, meal_type, recipe_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, ultralight.user.id, weekKey, dayLower, meal_type, recipe_id || null, recipeName || description || '', now, now]
-  );
+  await galactic.db.insert('meal_plans', {
+    id,
+    week_start: weekKey,
+    day: dayLower,
+    meal_type,
+    recipe_id: recipe_id || null,
+    description: recipeName || description || '',
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -145,7 +162,7 @@ export async function suggest(args: {
   prompt += ' For each recipe, provide: name, full ingredients list (including ones not in my list), and step-by-step instructions. Respond with ONLY valid JSON array, no markdown. Format: [{"name": "...", "ingredients": ["..."], "steps": ["..."]}]';
 
   try {
-    const response = await ultralight.ai({
+    const response = await galactic.ai({
       model: 'openai/gpt-4o-mini',
       messages: [
         { role: 'system', content: 'You are a creative chef. Suggest recipes based on available ingredients. Respond with valid JSON only.' },
@@ -174,10 +191,7 @@ export async function walkthrough(args: {
 }): Promise<unknown> {
   const { recipe_id, step_number } = args;
 
-  const recipe = await ultralight.db.first(
-    'SELECT * FROM recipes WHERE id = ? AND user_id = ?',
-    [recipe_id, ultralight.user.id]
-  );
+  const recipe = await galactic.db.first('recipes', { where: { id: recipe_id } });
   if (!recipe) {
     return { success: false, error: 'Recipe not found: ' + recipe_id };
   }
@@ -193,7 +207,7 @@ export async function walkthrough(args: {
   }
 
   try {
-    const response = await ultralight.ai({
+    const response = await galactic.ai({
       model: 'openai/gpt-4o-mini',
       messages: [
         { role: 'system', content: 'You are a friendly cooking instructor. Guide the user through the recipe with clear, helpful instructions.' },
@@ -215,32 +229,25 @@ export async function walkthrough(args: {
 // ── STATUS ──
 
 export async function status(args?: {}): Promise<unknown> {
-  const recipeCount = await ultralight.db.first(
-    'SELECT COUNT(*) as count FROM recipes WHERE user_id = ?',
-    [ultralight.user.id]
-  );
+  const recipeCount = await galactic.db.count('recipes');
 
-  const groceryCount = await ultralight.db.first(
-    'SELECT COUNT(*) as count FROM grocery_lists WHERE user_id = ?',
-    [ultralight.user.id]
-  );
+  const groceryCount = await galactic.db.count('grocery_lists');
 
-  const planCount = await ultralight.db.first(
-    'SELECT COUNT(DISTINCT week_start) as count FROM meal_plans WHERE user_id = ?',
-    [ultralight.user.id]
-  );
+  const planCount = await galactic.db.count('meal_plans', {
+    column: 'week_start',
+    distinct: true,
+  });
 
   // Check this week's meal plan
   const weekKey = getWeekStart();
-  const mealsThisWeek = await ultralight.db.first(
-    'SELECT COUNT(*) as count FROM meal_plans WHERE user_id = ? AND week_start = ?',
-    [ultralight.user.id, weekKey]
-  );
+  const mealsThisWeek = await galactic.db.count('meal_plans', {
+    where: { week_start: weekKey },
+  });
 
   return {
-    total_recipes: recipeCount?.count || 0,
-    grocery_lists: groceryCount?.count || 0,
-    meal_plans: planCount?.count || 0,
-    meals_planned_this_week: mealsThisWeek?.count || 0,
+    total_recipes: recipeCount || 0,
+    grocery_lists: groceryCount || 0,
+    meal_plans: planCount || 0,
+    meals_planned_this_week: mealsThisWeek || 0,
   };
 }

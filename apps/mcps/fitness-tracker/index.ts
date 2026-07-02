@@ -2,7 +2,7 @@
 // Log meals, workouts, sleep, and body metrics. AI-powered calorie estimation.
 // Storage: Galactic D1 | Permissions: ai:call
 
-const ultralight = (globalThis as any).ultralight;
+const galactic = (globalThis as any).galactic;
 
 function today(): string {
   return new Date().toISOString().split('T')[0];
@@ -23,7 +23,7 @@ export async function log_meal(args: {
   // AI calorie estimation
   let nutrition = { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 };
   try {
-    const response = await ultralight.ai({
+    const response = await galactic.ai({
       model: 'openai/gpt-4o-mini',
       messages: [
         {
@@ -42,10 +42,18 @@ export async function log_meal(args: {
     // If AI fails, store with zero values — user can update later
   }
 
-  await ultralight.db.run(
-    'INSERT INTO meals (id, user_id, description, meal_type, date, calories, protein_g, carbs_g, fat_g, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, ultralight.user.id, description, meal_type || 'meal', mealDate, nutrition.calories, nutrition.protein_g, nutrition.carbs_g, nutrition.fat_g, now, now]
-  );
+  await galactic.db.insert('meals', {
+    id: id,
+    description: description,
+    meal_type: meal_type || 'meal',
+    date: mealDate,
+    calories: nutrition.calories,
+    protein_g: nutrition.protein_g,
+    carbs_g: nutrition.carbs_g,
+    fat_g: nutrition.fat_g,
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -72,10 +80,16 @@ export async function log_workout(args: {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  await ultralight.db.run(
-    'INSERT INTO workouts (id, user_id, type, duration_min, calories_burned, notes, date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, ultralight.user.id, type, duration_min, calories_burned || 0, notes || '', workoutDate, now, now]
-  );
+  await galactic.db.insert('workouts', {
+    id: id,
+    type: type,
+    duration_min: duration_min,
+    calories_burned: calories_burned || 0,
+    notes: notes || '',
+    date: workoutDate,
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -100,22 +114,27 @@ export async function log_sleep(args: {
   const qualityVal = quality !== undefined ? Math.min(5, Math.max(1, quality)) : null;
 
   // Upsert: replace if already logged for this date
-  const existing = await ultralight.db.first(
-    'SELECT id FROM sleep_logs WHERE user_id = ? AND date = ?',
-    [ultralight.user.id, sleepDate]
-  );
+  const existing = await galactic.db.first('sleep_logs', {
+    columns: ['id'],
+    where: { date: sleepDate },
+  });
 
   if (existing) {
-    await ultralight.db.run(
-      'UPDATE sleep_logs SET hours = ?, quality = ?, notes = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      [hours, qualityVal, notes || '', now, existing.id, ultralight.user.id]
-    );
+    await galactic.db.update('sleep_logs', {
+      set: { hours: hours, quality: qualityVal, notes: notes || '', updated_at: now },
+      where: { id: existing.id },
+    });
   } else {
     const id = crypto.randomUUID();
-    await ultralight.db.run(
-      'INSERT INTO sleep_logs (id, user_id, hours, quality, notes, date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, ultralight.user.id, hours, qualityVal, notes || '', sleepDate, now, now]
-    );
+    await galactic.db.insert('sleep_logs', {
+      id: id,
+      hours: hours,
+      quality: qualityVal,
+      notes: notes || '',
+      date: sleepDate,
+      created_at: now,
+      updated_at: now,
+    });
   }
 
   return {
@@ -138,10 +157,14 @@ export async function log_weight(args: {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
 
-  await ultralight.db.run(
-    'INSERT INTO weight_logs (id, user_id, value, unit, date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [id, ultralight.user.id, value, unit || 'lbs', weightDate, now, now]
-  );
+  await galactic.db.insert('weight_logs', {
+    id: id,
+    value: value,
+    unit: unit || 'lbs',
+    date: weightDate,
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -171,20 +194,33 @@ export async function summary(args: {
     const startDate = days[days.length - 1];
     const endDate = days[0];
 
-    const mealStats = await ultralight.db.first(
-      'SELECT COUNT(*) as count, COALESCE(SUM(calories), 0) as total_calories, COALESCE(SUM(protein_g), 0) as protein_g, COALESCE(SUM(carbs_g), 0) as carbs_g, COALESCE(SUM(fat_g), 0) as fat_g FROM meals WHERE user_id = ? AND date >= ? AND date <= ?',
-      [ultralight.user.id, startDate, endDate]
-    );
+    const mealStats = await galactic.db.first('meals', {
+      columns: [
+        { fn: 'count', as: 'count' },
+        { fn: 'sum', column: 'calories', as: 'total_calories' },
+        { fn: 'sum', column: 'protein_g', as: 'protein_g' },
+        { fn: 'sum', column: 'carbs_g', as: 'carbs_g' },
+        { fn: 'sum', column: 'fat_g', as: 'fat_g' },
+      ],
+      where: { date: { gte: startDate, lte: endDate } },
+    });
 
-    const workoutStats = await ultralight.db.first(
-      'SELECT COUNT(*) as count, COALESCE(SUM(duration_min), 0) as total_minutes, COALESCE(SUM(calories_burned), 0) as total_calories_burned FROM workouts WHERE user_id = ? AND date >= ? AND date <= ?',
-      [ultralight.user.id, startDate, endDate]
-    );
+    const workoutStats = await galactic.db.first('workouts', {
+      columns: [
+        { fn: 'count', as: 'count' },
+        { fn: 'sum', column: 'duration_min', as: 'total_minutes' },
+        { fn: 'sum', column: 'calories_burned', as: 'total_calories_burned' },
+      ],
+      where: { date: { gte: startDate, lte: endDate } },
+    });
 
-    const sleepStats = await ultralight.db.first(
-      'SELECT COUNT(*) as days_logged, COALESCE(AVG(hours), 0) as avg_hours FROM sleep_logs WHERE user_id = ? AND date >= ? AND date <= ?',
-      [ultralight.user.id, startDate, endDate]
-    );
+    const sleepStats = await galactic.db.first('sleep_logs', {
+      columns: [
+        { fn: 'count', as: 'days_logged' },
+        { fn: 'avg', column: 'hours', as: 'avg_hours' },
+      ],
+      where: { date: { gte: startDate, lte: endDate } },
+    });
 
     return {
       period: 'weekly',
@@ -210,25 +246,22 @@ export async function summary(args: {
   }
 
   // Default: daily summary
-  const meals = await ultralight.db.all(
-    'SELECT * FROM meals WHERE user_id = ? AND date = ?',
-    [ultralight.user.id, targetDate]
-  );
+  const meals = await galactic.db.select('meals', {
+    where: { date: targetDate },
+  });
 
-  const workouts = await ultralight.db.all(
-    'SELECT * FROM workouts WHERE user_id = ? AND date = ?',
-    [ultralight.user.id, targetDate]
-  );
+  const workouts = await galactic.db.select('workouts', {
+    where: { date: targetDate },
+  });
 
-  const daySleep = await ultralight.db.first(
-    'SELECT * FROM sleep_logs WHERE user_id = ? AND date = ?',
-    [ultralight.user.id, targetDate]
-  );
+  const daySleep = await galactic.db.first('sleep_logs', {
+    where: { date: targetDate },
+  });
 
-  const dayWeight = await ultralight.db.first(
-    'SELECT * FROM weight_logs WHERE user_id = ? AND date = ? ORDER BY created_at DESC',
-    [ultralight.user.id, targetDate]
-  );
+  const dayWeight = await galactic.db.first('weight_logs', {
+    where: { date: targetDate },
+    orderBy: { column: 'created_at', dir: 'desc' },
+  });
 
   let totalCal = 0;
   let totalProt = 0;
@@ -264,30 +297,28 @@ export async function summary(args: {
 export async function status(args?: {}): Promise<unknown> {
   const todayStr = today();
 
-  const mealCount = await ultralight.db.first(
-    'SELECT COUNT(*) as count FROM meals WHERE user_id = ? AND date = ?',
-    [ultralight.user.id, todayStr]
-  );
+  const mealCount = await galactic.db.count('meals', {
+    where: { date: todayStr },
+  });
 
-  const workoutCount = await ultralight.db.first(
-    'SELECT COUNT(*) as count FROM workouts WHERE user_id = ? AND date = ?',
-    [ultralight.user.id, todayStr]
-  );
+  const workoutCount = await galactic.db.count('workouts', {
+    where: { date: todayStr },
+  });
 
-  const todaySleep = await ultralight.db.first(
-    'SELECT id FROM sleep_logs WHERE user_id = ? AND date = ?',
-    [ultralight.user.id, todayStr]
-  );
+  const todaySleep = await galactic.db.first('sleep_logs', {
+    columns: ['id'],
+    where: { date: todayStr },
+  });
 
-  const todayWeight = await ultralight.db.first(
-    'SELECT id FROM weight_logs WHERE user_id = ? AND date = ?',
-    [ultralight.user.id, todayStr]
-  );
+  const todayWeight = await galactic.db.first('weight_logs', {
+    columns: ['id'],
+    where: { date: todayStr },
+  });
 
   return {
     date: todayStr,
-    meals_logged_today: mealCount?.count || 0,
-    workouts_logged_today: workoutCount?.count || 0,
+    meals_logged_today: mealCount || 0,
+    workouts_logged_today: workoutCount || 0,
     sleep_logged_today: todaySleep ? true : false,
     weight_logged_today: todayWeight ? true : false,
   };

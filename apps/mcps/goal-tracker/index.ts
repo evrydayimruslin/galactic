@@ -1,8 +1,9 @@
 // Goal Tracker — Galactic MCP App
 // Set goals, break them into milestones, and track progress over time.
-// Storage: Galactic D1 (goals, milestones, progress_logs)
+// Storage: Galactic D1 (goals, milestones, progress_logs) via the structured
+// galactic.db API — the platform scopes every query to the calling user.
 
-const ultralight = (globalThis as any).ultralight;
+const galactic = (globalThis as any).galactic;
 
 // ── ADD GOAL ──
 
@@ -16,10 +17,15 @@ export async function add_goal(args: {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  await ultralight.db.run(
-    'INSERT INTO goals (id, user_id, name, description, target_date, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, ultralight.user.id, name, description || '', target_date || null, 'active', now, now]
-  );
+  await galactic.db.insert('goals', {
+    id,
+    name,
+    description: description || '',
+    target_date: target_date || null,
+    status: 'active',
+    created_at: now,
+    updated_at: now,
+  });
 
   // Create milestones if provided
   let milestonesCreated = 0;
@@ -27,10 +33,16 @@ export async function add_goal(args: {
     for (let idx = 0; idx < milestones.length; idx++) {
       const m = milestones[idx];
       const mId = crypto.randomUUID();
-      await ultralight.db.run(
-        'INSERT INTO milestones (id, user_id, goal_id, name, target_date, completed, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [mId, ultralight.user.id, id, m.name, m.target_date || null, 0, idx, now, now]
-      );
+      await galactic.db.insert('milestones', {
+        id: mId,
+        goal_id: id,
+        name: m.name,
+        target_date: m.target_date || null,
+        completed: 0,
+        sort_order: idx,
+        created_at: now,
+        updated_at: now,
+      });
       milestonesCreated++;
     }
   }
@@ -52,27 +64,29 @@ export async function add_milestone(args: {
 }): Promise<unknown> {
   const { goal_id, name, target_date } = args;
 
-  const goal = await ultralight.db.first(
-    'SELECT * FROM goals WHERE id = ? AND user_id = ?',
-    [goal_id, ultralight.user.id]
-  );
+  const goal = await galactic.db.first('goals', { where: { id: goal_id } });
   if (!goal) {
     return { success: false, error: 'Goal not found: ' + goal_id };
   }
 
   // Get existing milestones count for ordering
-  const countRow = await ultralight.db.first(
-    'SELECT COUNT(*) as count FROM milestones WHERE user_id = ? AND goal_id = ?',
-    [ultralight.user.id, goal_id]
-  );
+  const existingCount = await galactic.db.count('milestones', {
+    where: { goal_id: goal_id },
+  });
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  await ultralight.db.run(
-    'INSERT INTO milestones (id, user_id, goal_id, name, target_date, completed, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, ultralight.user.id, goal_id, name, target_date || null, 0, countRow?.count || 0, now, now]
-  );
+  await galactic.db.insert('milestones', {
+    id,
+    goal_id,
+    name,
+    target_date: target_date || null,
+    completed: 0,
+    sort_order: existingCount || 0,
+    created_at: now,
+    updated_at: now,
+  });
 
   return {
     success: true,
@@ -96,10 +110,9 @@ export async function update(args: {
 
   // Update a milestone
   if (milestone_id && goal_id) {
-    const milestone = await ultralight.db.first(
-      'SELECT * FROM milestones WHERE id = ? AND user_id = ? AND goal_id = ?',
-      [milestone_id, ultralight.user.id, goal_id]
-    );
+    const milestone = await galactic.db.first('milestones', {
+      where: { id: milestone_id, goal_id: goal_id },
+    });
     if (!milestone) {
       return { success: false, error: 'Milestone not found' };
     }
@@ -108,20 +121,17 @@ export async function update(args: {
     const newCompleted = completed !== undefined ? (completed ? 1 : 0) : milestone.completed;
     const newCompletedAt = completed ? now : (completed === false ? null : milestone.completed_at);
 
-    await ultralight.db.run(
-      'UPDATE milestones SET completed = ?, completed_at = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      [newCompleted, newCompletedAt, now, milestone_id, ultralight.user.id]
-    );
+    await galactic.db.update('milestones', {
+      set: { completed: newCompleted, completed_at: newCompletedAt, updated_at: now },
+      where: { id: milestone_id },
+    });
 
     return { success: true, milestone: { ...milestone, completed: newCompleted, completed_at: newCompletedAt } };
   }
 
   // Update a goal
   if (goal_id) {
-    const goal = await ultralight.db.first(
-      'SELECT * FROM goals WHERE id = ? AND user_id = ?',
-      [goal_id, ultralight.user.id]
-    );
+    const goal = await galactic.db.first('goals', { where: { id: goal_id } });
     if (!goal) {
       return { success: false, error: 'Goal not found' };
     }
@@ -131,19 +141,24 @@ export async function update(args: {
     if (status) newStatus = status;
     if (completed) newStatus = 'completed';
 
-    await ultralight.db.run(
-      'UPDATE goals SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',
-      [newStatus, now, goal_id, ultralight.user.id]
-    );
+    await galactic.db.update('goals', {
+      set: { status: newStatus, updated_at: now },
+      where: { id: goal_id },
+    });
 
     // Log progress entry
     if (notes || percent_complete !== undefined) {
       const today = new Date().toISOString().split('T')[0];
       const progressId = crypto.randomUUID();
-      await ultralight.db.run(
-        'INSERT INTO progress_logs (id, user_id, goal_id, date, notes, percent_complete, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [progressId, ultralight.user.id, goal_id, today, notes || '', percent_complete !== undefined ? percent_complete : null, now, now]
-      );
+      await galactic.db.insert('progress_logs', {
+        id: progressId,
+        goal_id,
+        date: today,
+        notes: notes || '',
+        percent_complete: percent_complete !== undefined ? percent_complete : null,
+        created_at: now,
+        updated_at: now,
+      });
     }
 
     return { success: true, goal: { ...goal, status: newStatus } };
@@ -160,25 +175,23 @@ export async function list(args: {
 }): Promise<unknown> {
   const { status: filterStatus, limit } = args;
 
-  let sql = 'SELECT * FROM goals WHERE user_id = ?';
-  const params: any[] = [ultralight.user.id];
-
+  const where: Record<string, unknown> = {};
   if (filterStatus && filterStatus !== 'all') {
-    sql += ' AND status = ?';
-    params.push(filterStatus);
+    where.status = filterStatus;
   }
 
-  sql += ' ORDER BY created_at DESC LIMIT ?';
-  params.push(limit || 20);
-
-  const goalRows = await ultralight.db.all(sql, params);
+  const goalRows = await galactic.db.select('goals', {
+    where,
+    orderBy: { column: 'created_at', dir: 'desc' },
+    limit: limit || 20,
+  });
 
   const goals = [];
   for (const goal of goalRows) {
-    const milestones = await ultralight.db.all(
-      'SELECT * FROM milestones WHERE user_id = ? AND goal_id = ? ORDER BY sort_order ASC',
-      [ultralight.user.id, goal.id]
-    );
+    const milestones = await galactic.db.select('milestones', {
+      where: { goal_id: goal.id },
+      orderBy: { column: 'sort_order', dir: 'asc' },
+    });
 
     const completedCount = milestones.filter((m: any) => m.completed).length;
     const progress = milestones.length > 0
@@ -204,10 +217,9 @@ export async function list(args: {
 // ── REVIEW ──
 
 export async function review(args?: {}): Promise<unknown> {
-  const goalRows = await ultralight.db.all(
-    'SELECT * FROM goals WHERE user_id = ? AND status = ?',
-    [ultralight.user.id, 'active']
-  );
+  const goalRows = await galactic.db.select('goals', {
+    where: { status: 'active' },
+  });
 
   const today = new Date().toISOString().split('T')[0];
   const overdue: any[] = [];
@@ -215,10 +227,9 @@ export async function review(args?: {}): Promise<unknown> {
   const summaries: any[] = [];
 
   for (const goal of goalRows) {
-    const milestones = await ultralight.db.all(
-      'SELECT * FROM milestones WHERE user_id = ? AND goal_id = ?',
-      [ultralight.user.id, goal.id]
-    );
+    const milestones = await galactic.db.select('milestones', {
+      where: { goal_id: goal.id },
+    });
 
     const completedCount = milestones.filter((m: any) => m.completed).length;
     const progress = milestones.length > 0
@@ -255,14 +266,26 @@ export async function review(args?: {}): Promise<unknown> {
 // ── STATUS ──
 
 export async function status(args?: {}): Promise<unknown> {
-  const stats = await ultralight.db.first(
-    'SELECT COUNT(*) as total, SUM(CASE WHEN status = \'active\' THEN 1 ELSE 0 END) as active, SUM(CASE WHEN status = \'completed\' THEN 1 ELSE 0 END) as completed FROM goals WHERE user_id = ?',
-    [ultralight.user.id]
-  );
+  // SUM(CASE WHEN status = ...) isn't expressible in the structured API:
+  // one grouped count per status, folded in JS.
+  const rows = await galactic.db.select('goals', {
+    columns: ['status', { fn: 'count', as: 'n' }],
+    groupBy: ['status'],
+  });
+
+  let total = 0;
+  let active = 0;
+  let completed = 0;
+  for (const row of rows) {
+    const n = Number(row.n) || 0;
+    total += n;
+    if (row.status === 'active') active += n;
+    if (row.status === 'completed') completed += n;
+  }
 
   return {
-    total_goals: stats?.total || 0,
-    active: stats?.active || 0,
-    completed: stats?.completed || 0,
+    total_goals: total || 0,
+    active: active || 0,
+    completed: completed || 0,
   };
 }
