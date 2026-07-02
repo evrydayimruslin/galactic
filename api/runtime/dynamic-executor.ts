@@ -123,19 +123,28 @@ globalThis.__rpcEnv = {};
 globalThis.ultralight = {
   get db() {
     const e = globalThis.__rpcEnv;
-    if (!e.DB) return {
-      run() { throw new Error('D1 not available'); },
-      all() { throw new Error('D1 not available'); },
-      first() { throw new Error('D1 not available'); },
-      batch() { throw new Error('D1 not available'); },
-      exec() { throw new Error('exec not available at runtime'); },
+    const __removed = function (name) {
+      return function () {
+        throw new Error('galactic.db.' + name + '() was removed. Use the scoped structured API: galactic.db.select/first/insert/update/delete/upsert/count/batch.');
+      };
     };
+    if (!e.DB) {
+      const na = function () { throw new Error('D1 not available'); };
+      return {
+        select: na, first: na, count: na, insert: na, update: na, delete: na, upsert: na, batch: na,
+        run: __removed('run'), all: __removed('all'), exec: __removed('exec'),
+      };
+    }
     return {
-      run: (s, p) => e.DB.run(s, p),
-      all: (s, p) => e.DB.all(s, p),
-      first: (s, p) => e.DB.first(s, p),
-      batch: (st) => e.DB.batch(st),
-      exec() { throw new Error('exec not available at runtime'); },
+      select: (table, query) => e.DB.select(Object.assign({ table: table }, query || {})),
+      first: (table, query) => e.DB.first(Object.assign({ table: table }, query || {})),
+      count: (table, query) => e.DB.count(Object.assign({ table: table }, query || {})),
+      insert: (table, values) => e.DB.insert({ table: table, values: values }),
+      update: (table, spec) => e.DB.update(Object.assign({ table: table }, spec || {})),
+      delete: (table, spec) => e.DB.delete(Object.assign({ table: table }, spec || {})),
+      upsert: (table, spec) => e.DB.upsert(Object.assign({ table: table }, spec || {})),
+      batch: (ops) => e.DB.batch(ops || []),
+      run: __removed('run'), all: __removed('all'), exec: __removed('exec'),
     };
   },
   user: ${userJson},

@@ -3516,7 +3516,7 @@ Test code in sandbox without deploying.
 - If \`test_fixture.json\` has a single function entry, \`function_name\` can be omitted and fixture args become the default test_args.
 - \`test_fixture.json\` entries can be direct args or an envelope like \`{ args, env_vars, d1_fixtures }\`.
 - Use \`env_vars\` to inject secrets or base URLs into \`galactic.env\` during the test run.
-- Use \`d1_fixtures\` to provide fixture-backed \`galactic.db.run/all/first/batch\` responses when you need D1 behavior before deploy.
+- Use \`d1_fixtures\` to stub D1 before deploy: each response pins \`{ method: "select"|"first"|"count"|"insert"|"update"|"delete"|"upsert"|"batch", table, when?, result }\` (structured ops — not raw SQL). \`when\` is an optional subset match on the op; first match wins.
 - \`lint_only: true\`: validate code conventions without executing (single-args check, no-shorthand-return, manifest sync, permission detection).
 - \`strict: true\`: lint warnings become errors.
 - Returns: \`{ success, result?, error?, duration_ms, exports, logs?, lint? }\`.
@@ -3619,7 +3619,8 @@ The policy function is the custom code path for functions. It receives \`{ app, 
 1. **FUNCTION SIGNATURE:** Single args object. \`function search(args: { query: string })\` NOT \`function search(query: string)\`. The sandbox passes args as a single object.
 2. **RETURN VALUES:** Explicit \`key: value\`. \`return { query: query, count: count }\` NOT \`return { query, count }\`. Shorthand causes "X is not defined" in IIFE bundling.
 3. **EXECUTION LIMIT:** 30s per call, 15s fetch timeout, 10MB fetch limit, max 20 concurrent fetches.
-4. **STORAGE KEYS:** \`ultralight.list()\` returns full keys (e.g., \`draft_abc123\`), not prefixed.
+4. **STORAGE KEYS:** \`galactic.list()\` returns full keys (e.g., \`draft_abc123\`), not prefixed.
+5. **D1 IS STRUCTURED + SCOPED:** \`galactic.db\` takes structured ops (\`select\`/\`insert\`/\`update\`/\`delete\`/\`upsert\`/\`count\`/\`batch\`), NOT raw SQL. Every query is automatically limited to the current user's rows — never add \`user_id\` yourself; the platform injects it. Raw SQL (\`db.run\`/\`db.all\`) is not available.
 
 ### The SDK — what your Agent inherits
 
@@ -3631,7 +3632,7 @@ Agent code runs in a sandbox with the \`galactic.*\` SDK (alias: \`ultralight.*\
 | **Call another Agent** | \`galactic.call(appId, fn, args)\` | \`app:call\` or a declared dependency |
 | **Charge the user** (in-app purchase) | \`galactic.charge(credits, reason?)\` | caller must be signed in |
 | KV storage (per-user, app-scoped) | \`galactic.store / load / list / remove / query\` | — |
-| SQL (D1, per-user isolation enforced) | \`galactic.db.run / all / first / batch\` | — |
+| SQL (D1, structured + auto per-user scoped) | \`galactic.db.select / first / insert / update / delete / upsert / count / batch\` | — |
 | Cross-app user memory | \`galactic.remember / recall\` | — |
 | Identity | \`galactic.user\` · \`isAuthenticated()\` · \`requireAuth()\` | — |
 | Secrets (decrypted) | \`galactic.env.MY_KEY\` | declare in manifest \`env_vars\` |
@@ -3648,6 +3649,16 @@ Request: \`{ messages: [{ role, content }], model?, max_tokens?, temperature? }\
 
 #### \`galactic.call(appId, fn, args)\` — orchestrate other Agents
 Calls another Agent's function over MCP and returns its parsed result. This is how Agents compose into graphs. Requires \`app:call\` or a declared manifest dependency on that app/function. Example: \`const r = await galactic.call("app-abc", "translate", { text, to: "fr" });\`
+
+#### \`galactic.db\` — structured, per-user SQL (D1)
+One database per Agent, shared by all its users, but **every call is automatically scoped to the current user** — the platform adds \`user_id\` to every write and every filter, so you never write it yourself and one user can never see or touch another's rows. Declare tables in \`migrations/NNN_*.sql\` (each non-system table needs a \`user_id TEXT NOT NULL\` column). There is no raw SQL — use these structured ops:
+- \`galactic.db.insert(table, values | values[])\` → \`{ success, id, meta }\`. Ex: \`await galactic.db.insert("items", { id, name, qty: 3 });\`
+- \`galactic.db.select(table, { columns?, where?, joins?, groupBy?, having?, orderBy?, limit?, offset? })\` → rows[]. \`where\` supports \`{ col: value }\` (equality), \`{ col: { gt/gte/lt/lte/ne/like/in/notIn/isNull } }\`, and \`{ _or: [...] }\`. Aggregates: \`columns: [{ fn: "sum", column: "amount", as: "total" }]\` + \`groupBy\`.
+- \`galactic.db.first(table, query?)\` → one row or null. \`galactic.db.count(table, query?)\` → number.
+- \`galactic.db.update(table, { set, where })\` and \`galactic.db.delete(table, { where })\` → \`{ success, meta }\`. \`set\` values may be a literal or \`{ op: "increment" | "max" | "min", value }\`.
+- \`galactic.db.upsert(table, { values, onConflict: ["key"], set? })\` — insert-or-update, conflict target always includes \`user_id\`.
+- \`galactic.db.batch(ops[])\` — array of \`{ op: "insert"|"update"|"delete"|"upsert", table, ... }\`, run sequentially.
+- Joins are scoped on every table: \`joins: [{ table: "versions", on: { column: "id", foreignColumn: "conversation_id" } }]\` and reference columns as \`{ table: "versions", column: "body" }\` or \`"versions.body"\` in \`where\`.
 
 #### \`galactic.charge(credits, reason?)\` — get paid mid-execution
 Charges the signed-in caller and credits you, net of the 15% platform fee — waived to 0% for customers you brought yourself (the same fee + referral system as per-call pricing). Returns \`{ success, to_balance, platform_fee, fee_waived }\`. Use it for in-app purchases, metered features, or tips. For simple "price per call" instead, set a price in the manifest or via \`gx.set\` — identical economics.
@@ -3678,6 +3689,7 @@ const ctx = galactic.context;                             // { user, ... } — n
 - **Paywalled feature:** \`galactic.requireAuth(); await galactic.charge(50, "premium_export"); return { url: url };\`
 - **Compose Agents:** \`const out = await galactic.call("translator-app", "translate", { text: t, to: "fr" });\`
 - **Persistent counter:** \`const n = (await galactic.load("count")) || 0; await galactic.store("count", n + 1); return { count: n + 1 };\`
+- **D1 CRUD (auto per-user):** \`await galactic.db.insert("notes", { id: crypto.randomUUID(), body: args.body }); const notes = await galactic.db.select("notes", { orderBy: { column: "created_at", dir: "desc" }, limit: 20 });\`
 
 ## Building GPU Functions
 
@@ -9430,7 +9442,7 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
   }
 
   const globalsLines: string[] = [];
-  globalsLines.push("const ultralight = globalThis.ultralight;");
+  globalsLines.push("const galactic = globalThis.galactic;");
 
   const indexLines: string[] = [];
   indexLines.push(`// ${name} — Galactic MCP Server`);
@@ -9438,14 +9450,16 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
   indexLines.push(`// ${description}`);
   indexLines.push("//");
   if (storage === "d1") {
-    indexLines.push("// Storage: Cloudflare D1 (ultralight.db.run/all/first)");
+    indexLines.push(
+      "// Storage: Cloudflare D1 — scoped, per-user (galactic.db.select/insert/update/delete)",
+    );
   }
   if (storage === "kv") {
-    indexLines.push("// Storage: key-value helpers via ultralight.store/load");
+    indexLines.push("// Storage: key-value helpers via galactic.store/load");
   }
   if (storage === "supabase") indexLines.push("// Storage: BYOS Supabase");
   if (detectedPerms.includes("ai:call")) {
-    indexLines.push("// AI: ultralight.ai() via configured inference route");
+    indexLines.push("// AI: galactic.ai() via configured inference route");
   }
   if (detectedPerms.includes("net:fetch")) {
     indexLines.push("// Network: fetch() for external API calls");
@@ -9516,20 +9530,20 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
     );
     indexLines.push("");
     if (storage === "d1") {
-      indexLines.push("  // Example D1 queries:");
+      indexLines.push("  // Example D1 queries (scoped: user_id is added for you):");
       indexLines.push(
-        '  // await ultralight.db.run("INSERT INTO items (id, user_id, name) VALUES (?, ?, ?)", [crypto.randomUUID(), ultralight.user.id, name]);',
+        '  // await galactic.db.insert("items", { id: crypto.randomUUID(), name });',
       );
       indexLines.push(
-        '  // const items = await ultralight.db.all("SELECT * FROM items WHERE user_id = ?", [ultralight.user.id]);',
+        '  // const items = await galactic.db.select("items", { orderBy: { column: "created_at", dir: "desc" }, limit: 50 });',
       );
       indexLines.push(
-        '  // const item = await ultralight.db.first("SELECT * FROM items WHERE user_id = ? AND id = ?", [ultralight.user.id, id]);',
+        '  // const item = await galactic.db.first("items", { where: { id } });',
       );
     } else if (storage === "kv") {
       indexLines.push("  // Example key-value usage:");
-      indexLines.push('  // await ultralight.store("key", value);');
-      indexLines.push('  // const data = await ultralight.load("key");');
+      indexLines.push('  // await galactic.store("key", value);');
+      indexLines.push('  // const data = await galactic.load("key");');
     } else if (storage === "supabase") {
       indexLines.push("  // Example Supabase query:");
       indexLines.push(

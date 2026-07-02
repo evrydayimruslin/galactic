@@ -1,81 +1,57 @@
-import type { D1RunResult } from "./d1-data.ts";
+// gx.test D1 fixtures — Phase 5 (structured, scoped data API).
+//
+// The runtime db surface is now structured (galactic.db.select/insert/update/...
+// — no raw SQL), so fixtures match on the STRUCTURED OP, not on SQL text.
+//
+// A fixture pins a method (+ optional table + optional `when` subset of the op)
+// to a canned `result`. First matching fixture wins, so put specific fixtures
+// (with `when`) before catch-alls.
 
-export type D1FixtureMethod = "run" | "all" | "first" | "batch";
+export type D1FixtureMethod =
+  | "select"
+  | "first"
+  | "count"
+  | "insert"
+  | "update"
+  | "delete"
+  | "upsert"
+  | "batch";
 
-export interface D1FixtureStatement {
-  sql: string;
-  params?: unknown[];
-}
+const FIXTURE_METHODS: ReadonlySet<string> = new Set([
+  "select",
+  "first",
+  "count",
+  "insert",
+  "update",
+  "delete",
+  "upsert",
+  "batch",
+]);
 
-export interface D1FixtureRunResult {
-  success?: boolean;
-  meta?: Partial<D1RunResult["meta"]>;
-}
-
-export interface D1FixtureRunResponse {
-  method: "run";
-  sql: string;
-  params?: unknown[];
-  result?: D1FixtureRunResult;
-}
-
-export interface D1FixtureBatchResponse {
-  method: "batch";
-  statements: D1FixtureStatement[];
-  result?: D1FixtureRunResult[];
-}
-
-export interface D1FixtureAllResponse {
-  method: "all";
-  sql: string;
-  params?: unknown[];
+export interface D1FixtureResponse {
+  method: D1FixtureMethod;
+  // Table the op targets. Omit to match any table for that method (e.g. batch).
+  table?: string;
+  // Optional deep-subset match against the op: every key here must deep-equal
+  // the same key in the actual op.
+  when?: Record<string, unknown>;
+  // Canned result: rows[] for select, a row|null for first, a number for count,
+  // { meta?, id? } for writes, or an array of those for batch.
   result?: unknown;
 }
-
-export interface D1FixtureFirstResponse {
-  method: "first";
-  sql: string;
-  params?: unknown[];
-  result?: unknown;
-}
-
-export type D1FixtureResponse =
-  | D1FixtureRunResponse
-  | D1FixtureAllResponse
-  | D1FixtureFirstResponse
-  | D1FixtureBatchResponse;
 
 export interface D1TestFixtureConfig {
   responses: D1FixtureResponse[];
 }
 
-interface D1FixtureRequestQuery {
-  method: "run" | "all" | "first";
-  sql: string;
-  params?: unknown[];
+interface D1FixtureRequest {
+  method: D1FixtureMethod;
+  table?: string;
+  op: Record<string, unknown>;
 }
-
-interface D1FixtureRequestBatch {
-  method: "batch";
-  statements: D1FixtureStatement[];
-}
-
-export type D1FixtureRequest = D1FixtureRequestQuery | D1FixtureRequestBatch;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function toParams(value: unknown, label: string): unknown[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) {
-    throw new Error(`${label} must be an array`);
-  }
-  return value;
-}
-
-export function normalizeD1FixtureSql(sql: string): string {
-  return sql.replace(/\s+/g, " ").trim();
 }
 
 export function resolveD1TestFixtureConfig(
@@ -106,127 +82,54 @@ function normalizeD1FixtureResponse(
   }
 
   const method = input.method;
-  if (
-    method !== "run" && method !== "all" && method !== "first" &&
-    method !== "batch"
-  ) {
+  if (typeof method !== "string" || !FIXTURE_METHODS.has(method)) {
     throw new Error(
-      `d1_fixtures.responses[${index}].method must be one of run, all, first, batch`,
+      `d1_fixtures.responses[${index}].method must be one of ${
+        [...FIXTURE_METHODS].join(", ")
+      }`,
     );
   }
 
-  if (method === "batch") {
-    if (!Array.isArray(input.statements) || input.statements.length === 0) {
-      throw new Error(
-        `d1_fixtures.responses[${index}].statements must be a non-empty array`,
-      );
-    }
-
-    return {
-      method,
-      statements: input.statements.map((statement, statementIndex) => {
-        if (!isRecord(statement) || typeof statement.sql !== "string") {
-          throw new Error(
-            `d1_fixtures.responses[${index}].statements[${statementIndex}].sql must be a string`,
-          );
-        }
-        return {
-          sql: normalizeD1FixtureSql(statement.sql),
-          params: toParams(
-            statement.params,
-            `d1_fixtures.responses[${index}].statements[${statementIndex}].params`,
-          ),
-        };
-      }),
-      result: Array.isArray(input.result)
-        ? input.result.map((entry, resultIndex) =>
-          normalizeD1FixtureRunResult(
-            entry,
-            `d1_fixtures.responses[${index}].result[${resultIndex}]`,
-          )
-        )
-        : undefined,
-    };
+  if (input.table !== undefined && typeof input.table !== "string") {
+    throw new Error(`d1_fixtures.responses[${index}].table must be a string`);
   }
-
-  if (typeof input.sql !== "string") {
-    throw new Error(`d1_fixtures.responses[${index}].sql must be a string`);
-  }
-
-  const sql = normalizeD1FixtureSql(input.sql);
-  const params = toParams(
-    input.params,
-    `d1_fixtures.responses[${index}].params`,
-  );
-
-  if (method === "run") {
-    return {
-      method,
-      sql,
-      params,
-      result: input.result === undefined
-        ? undefined
-        : normalizeD1FixtureRunResult(
-          input.result,
-          `d1_fixtures.responses[${index}].result`,
-        ),
-    };
-  }
-
-  if (method === "all") {
-    return {
-      method,
-      sql,
-      params,
-      result: input.result,
-    };
+  if (input.when !== undefined && !isRecord(input.when)) {
+    throw new Error(`d1_fixtures.responses[${index}].when must be an object`);
   }
 
   return {
-    method,
-    sql,
-    params,
+    method: method as D1FixtureMethod,
+    table: input.table as string | undefined,
+    when: input.when as Record<string, unknown> | undefined,
     result: input.result,
   };
 }
 
-function normalizeD1FixtureRunResult(
-  input: unknown,
-  label: string,
-): D1FixtureRunResult {
-  if (input === undefined) return {};
-  if (!isRecord(input)) {
-    throw new Error(`${label} must be an object`);
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    return a.every((item, i) => deepEqual(item, b[i]));
   }
-
-  const meta = input.meta;
-  if (meta !== undefined && !isRecord(meta)) {
-    throw new Error(`${label}.meta must be an object`);
+  if (isRecord(a) && isRecord(b)) {
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every((k) => deepEqual(a[k], b[k]));
   }
-
-  const normalized: D1FixtureRunResult = {};
-  if (typeof input.success === "boolean") {
-    normalized.success = input.success;
-  }
-  if (meta !== undefined) {
-    normalized.meta = meta as Partial<D1RunResult["meta"]>;
-  }
-  return normalized;
+  return false;
 }
 
-function paramsMatch(left: unknown[] | undefined, right: unknown[] | undefined): boolean {
-  return JSON.stringify(left || []) === JSON.stringify(right || []);
-}
-
-function statementsMatch(
-  left: D1FixtureStatement[],
-  right: D1FixtureStatement[],
+// Every key in `when` must deep-equal the same key in `op`. `op` may carry extra
+// keys (e.g. platform-added fields) — those are ignored.
+function matchesWhen(
+  when: Record<string, unknown> | undefined,
+  op: Record<string, unknown>,
 ): boolean {
-  if (left.length !== right.length) return false;
-  return left.every((statement, index) =>
-    normalizeD1FixtureSql(statement.sql) === normalizeD1FixtureSql(right[index].sql) &&
-    paramsMatch(statement.params, right[index].params)
-  );
+  if (!when) return true;
+  return Object.keys(when).every((k) => deepEqual(when[k], op[k]));
 }
 
 export function findD1TestFixtureResponse(
@@ -234,50 +137,55 @@ export function findD1TestFixtureResponse(
   request: D1FixtureRequest,
 ): D1FixtureResponse | null {
   if (!fixtures) return null;
-
-  return fixtures.responses.find((response) => {
-    if (response.method !== request.method) return false;
-
-    if (request.method === "batch" && response.method === "batch") {
-      return statementsMatch(response.statements, request.statements);
-    }
-
-    if (response.method === "batch" || request.method === "batch") {
-      return false;
-    }
-
-    return response.sql === normalizeD1FixtureSql(request.sql) &&
-      paramsMatch(response.params, request.params);
-  }) || null;
+  return (
+    fixtures.responses.find((response) => {
+      if (response.method !== request.method) return false;
+      if (response.table !== undefined && response.table !== request.table) {
+        return false;
+      }
+      return matchesWhen(response.when, request.op);
+    }) ?? null
+  );
 }
 
-export function buildD1FixtureRunResult(
-  result?: D1FixtureRunResult,
-): D1RunResult {
-  return {
-    success: result?.success ?? true,
-    meta: {
-      changes: result?.meta?.changes ?? 0,
-      last_row_id: result?.meta?.last_row_id ?? 0,
-      duration: result?.meta?.duration ?? 0,
-      rows_read: result?.meta?.rows_read ?? 0,
-      rows_written: result?.meta?.rows_written ?? 0,
-    },
+export function buildD1FixtureMissMessage(request: D1FixtureRequest): string {
+  const target = request.table ? ` on "${request.table}"` : "";
+  return `No D1 fixture matched galactic.db.${request.method}()${target}. Add a ` +
+    `d1_fixtures.responses entry with method:"${request.method}"${
+      request.table ? `, table:"${request.table}"` : ""
+    }.`;
+}
+
+// ── Result shaping (parity with DatabaseBinding return shapes) ──
+
+interface D1FixtureWriteResult {
+  success: boolean;
+  id?: number;
+  meta: {
+    changes: number;
+    last_row_id: number;
+    duration: number;
+    rows_read: number;
+    rows_written: number;
   };
 }
 
-export function buildD1FixtureBatchResult(
-  statements: D1FixtureStatement[],
-  result?: D1FixtureRunResult[],
-): D1RunResult[] {
-  return statements.map((_, index) => buildD1FixtureRunResult(result?.[index]));
-}
-
-export function buildD1FixtureMissMessage(
-  request: D1FixtureRequest,
-): string {
-  if (request.method === "batch") {
-    return `No D1 fixture matched batch(${request.statements.length} statements)`;
-  }
-  return `No D1 fixture matched ${request.method}(${normalizeD1FixtureSql(request.sql)})`;
+export function buildD1FixtureWriteResult(
+  result: unknown,
+  withId = false,
+): D1FixtureWriteResult {
+  const record = isRecord(result) ? result : {};
+  const meta = isRecord(record.meta) ? record.meta : {};
+  const shaped: D1FixtureWriteResult = {
+    success: typeof record.success === "boolean" ? record.success : true,
+    meta: {
+      changes: Number(meta.changes ?? 0),
+      last_row_id: Number(meta.last_row_id ?? record.id ?? 0),
+      duration: Number(meta.duration ?? 0),
+      rows_read: Number(meta.rows_read ?? 0),
+      rows_written: Number(meta.rows_written ?? 0),
+    },
+  };
+  if (withId) shaped.id = shaped.meta.last_row_id;
+  return shaped;
 }
