@@ -12,45 +12,129 @@
     "add": {
       "description": "Add a transaction (expense or income). Specify amount, category, and optionally a description and date.",
       "parameters": {
-        "amount": { "type": "number", "description": "Transaction amount", "required": true },
-        "category": { "type": "string", "description": "Category (e.g. food, rent, transport, salary)", "required": true },
-        "description": { "type": "string", "description": "What this transaction was for" },
-        "date": { "type": "string", "description": "Date in YYYY-MM-DD format (defaults to today)" },
-        "type": { "type": "string", "description": "Transaction type: 'expense' or 'income' (defaults to expense)", "enum": ["expense", "income"] }
+        "amount": {
+          "type": "number",
+          "description": "Transaction amount",
+          "required": true
+        },
+        "category": {
+          "type": "string",
+          "description": "Category (e.g. food, rent, transport, salary)",
+          "required": true
+        },
+        "description": {
+          "type": "string",
+          "description": "What this transaction was for"
+        },
+        "date": {
+          "type": "string",
+          "description": "Date in YYYY-MM-DD format (defaults to today)"
+        },
+        "type": {
+          "type": "string",
+          "description": "Transaction type: 'expense' or 'income' (defaults to expense)",
+          "enum": [
+            "expense",
+            "income"
+          ]
+        }
       },
-      "returns": { "type": "object", "description": "Confirmation with transaction ID" }
+      "returns": {
+        "type": "object",
+        "description": "Confirmation with transaction ID"
+      }
+    },
+    "remove": {
+      "description": "Remove a transaction by id or exact description.",
+      "parameters": {
+        "transaction_id": {
+          "type": "string",
+          "description": "Transaction id to remove"
+        },
+        "description": {
+          "type": "string",
+          "description": "Exact description (used when transaction_id is not given)"
+        }
+      }
     },
     "list": {
       "description": "List transactions, optionally filtered by category, month, or type.",
       "parameters": {
-        "category": { "type": "string", "description": "Filter by category" },
-        "month": { "type": "string", "description": "Month in YYYY-MM format (defaults to current month)" },
-        "type": { "type": "string", "description": "Filter by type: 'expense' or 'income'" },
-        "limit": { "type": "number", "description": "Max results to return (default 50)" }
+        "category": {
+          "type": "string",
+          "description": "Filter by category"
+        },
+        "month": {
+          "type": "string",
+          "description": "Month in YYYY-MM format (defaults to current month)"
+        },
+        "type": {
+          "type": "string",
+          "description": "Filter by type: 'expense' or 'income'"
+        },
+        "limit": {
+          "type": "number",
+          "description": "Max results to return (default 50)"
+        }
       },
-      "returns": { "type": "object", "description": "List of transactions with net total" }
+      "returns": {
+        "type": "object",
+        "description": "List of transactions with net total"
+      }
     },
     "summary": {
       "description": "Get a monthly spending summary broken down by category, with budget warnings.",
       "parameters": {
-        "month": { "type": "string", "description": "Month in YYYY-MM format (defaults to current month)" }
+        "month": {
+          "type": "string",
+          "description": "Month in YYYY-MM format (defaults to current month)"
+        }
       },
-      "returns": { "type": "object", "description": "Monthly breakdown by category with totals and budget warnings" }
+      "returns": {
+        "type": "object",
+        "description": "Monthly breakdown by category with totals and budget warnings"
+      }
     },
     "budget": {
       "description": "Set or view budget limits per category. Provide category + limit_amount to set, or call with no args to view all budgets.",
       "parameters": {
-        "action": { "type": "string", "description": "'set' or 'view' (auto-detected based on args)", "enum": ["set", "view"] },
-        "category": { "type": "string", "description": "Category to set budget for" },
-        "limit_amount": { "type": "number", "description": "Monthly spending limit for this category" },
-        "period": { "type": "string", "description": "Budget period (default: monthly)", "enum": ["monthly", "weekly"] }
+        "action": {
+          "type": "string",
+          "description": "'set' or 'view' (auto-detected based on args)",
+          "enum": [
+            "set",
+            "view"
+          ]
+        },
+        "category": {
+          "type": "string",
+          "description": "Category to set budget for"
+        },
+        "limit_amount": {
+          "type": "number",
+          "description": "Monthly spending limit for this category"
+        },
+        "period": {
+          "type": "string",
+          "description": "Budget period (default: monthly)",
+          "enum": [
+            "monthly",
+            "weekly"
+          ]
+        }
       },
-      "returns": { "type": "object", "description": "Budget confirmation or list of all budgets" }
+      "returns": {
+        "type": "object",
+        "description": "Budget confirmation or list of all budgets"
+      }
     },
     "status": {
       "description": "Quick overview of current month: total spent, income, net, and category count.",
       "parameters": {},
-      "returns": { "type": "object", "description": "Current month financial overview" }
+      "returns": {
+        "type": "object",
+        "description": "Current month financial overview"
+      }
     }
   }
 }
