@@ -74,6 +74,11 @@ export interface CallerFunctionPermissionEnforcementInput {
   // when the resolved policy is "always" AND its health gate is on, so health is
   // never fetched for "ask"/"never" or ungated "always".
   resolveTargetHealthGreen?: () => Promise<boolean>;
+  // In-band, one-shot user consent (the Claude-Code "allow once" model): the
+  // connected agent asserts its end user approved THIS call. Satisfies an "ask"
+  // (including an "always" degraded to ask by the health gate) for this single
+  // call WITHOUT persisting. Never overrides an owner-set "never".
+  confirmed?: boolean;
 }
 
 export type CallerFunctionPermissionEnforcement =
@@ -275,6 +280,8 @@ export async function enforceCallerFunctionPermission(
         ? await input.resolveTargetHealthGreen()
         : false;
       if (!green) {
+        // One-shot user consent still lets it through for this call.
+        if (input.confirmed) return { allowed: true, resolution };
         return buildAskBlock(input, resolution, true);
       }
     }
@@ -282,10 +289,13 @@ export async function enforceCallerFunctionPermission(
   }
 
   if (resolution.policy === "ask") {
+    // In-band consent (the agent asserts its user approved this call) satisfies
+    // "ask" for this one call without persisting anything.
+    if (input.confirmed) return { allowed: true, resolution };
     return buildAskBlock(input, resolution, false);
   }
 
-  // never
+  // never — an owner-set hard block; user-agent consent can NEVER override it.
   const message =
     `Connected agents are not allowed to call ${input.functionName}.`;
   const details: CallerPermissionBlock = {
@@ -314,9 +324,15 @@ function buildAskBlock(
   resolution: CallerFunctionPermissionResolution,
   fromHealthGate: boolean,
 ): Extract<CallerFunctionPermissionEnforcement, { allowed: false }> {
-  const message = fromHealthGate
+  const base = fromHealthGate
     ? `${input.functionName} has not been recently healthy, so your approval is required before calling it.`
-    : `Your connected agent needs permission to call ${input.functionName}.`;
+    : `Calling ${input.functionName} needs your user's confirmation.`;
+  // Actionable in-band resolution (no website round-trip): ask the end user,
+  // then either retry this call with confirm:true (allow once) or call gx.permit
+  // to allow it from now on. Not gx.grants — that is app-to-app wiring.
+  const message = `${base} Ask your user, then retry with confirm:true to allow ` +
+    `once, or call gx.permit({ app_id, function_name, decision:"always" }) to ` +
+    `allow it from now on.`;
   const details: CallerPermissionBlock = {
     type: "permission_required",
     policy: "ask",
