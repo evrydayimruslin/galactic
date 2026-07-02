@@ -1710,6 +1710,9 @@ async function handleToolsCall(
         const map = await getAppHealth([app.id]);
         return isRecentlyHealthy(map.get(app.id) ?? emptyHealth());
       },
+      // One-shot user consent, forwarded by the gx.call gateway. Satisfies "ask"
+      // for this single call only (never overrides "never").
+      confirmed: request.headers.get("X-Galactic-Confirm") === "1",
     });
     if (!permission.allowed) {
       return jsonRpcErrorResponse(

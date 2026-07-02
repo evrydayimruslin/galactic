@@ -241,3 +241,63 @@ Deno.test("agent function permissions: update upserts default and function overr
     },
   );
 });
+
+Deno.test("agent function permissions: confirm satisfies ask (allow once)", async () => {
+  await withEnv(
+    async () => {
+      const result = await enforceCallerFunctionPermission({
+        userId: "user-1",
+        appId: "app-1",
+        functionName: "deploy",
+        configureUrl: "https://ultralight.test/settings",
+        confirmed: true,
+      });
+      assertEquals(result.allowed, true);
+      if (result.allowed) assertEquals(result.resolution.policy, "ask");
+    },
+    async () => jsonResponse([]), // no explicit rows -> default "ask"
+  );
+});
+
+Deno.test("agent function permissions: confirm does NOT override never", async () => {
+  await withEnv(
+    async () => {
+      const result = await enforceCallerFunctionPermission({
+        userId: "user-1",
+        appId: "app-1",
+        functionName: "deploy",
+        configureUrl: "https://ultralight.test/settings",
+        confirmed: true,
+      });
+      assertEquals(result.allowed, false);
+      if (!result.allowed) assertEquals(result.details.policy, "never");
+    },
+    (async (input: Request | URL | string) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes("/rest/v1/user_agent_permission_defaults?")) {
+        return jsonResponse([{ user_id: "user-1", default_policy: "never" }]);
+      }
+      return jsonResponse([]);
+    }) as typeof fetch,
+  );
+});
+
+Deno.test("agent function permissions: confirm satisfies a health-gated ask", async () => {
+  await withEnv(
+    async () => {
+      const result = await enforceCallerFunctionPermission({
+        userId: "user-1",
+        appId: "app-1",
+        functionName: "deploy",
+        configureUrl: "https://ultralight.test/settings",
+        confirmed: true,
+        // Target is NOT healthy, so an "always" policy degrades to ask — which
+        // the one-shot consent then satisfies.
+        resolveTargetHealthGreen: async () => false,
+      });
+      assertEquals(result.allowed, true);
+      if (result.allowed) assertEquals(result.resolution.policy, "always");
+    },
+    alwaysPolicy(true),
+  );
+});

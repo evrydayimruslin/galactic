@@ -12,6 +12,7 @@ const CORE = [
   'gx.grants',
   'gx.job',
   'gx.memory',
+  'gx.permit',
   'gx.secrets',
   'gx.set',
   'gx.test',

@@ -217,6 +217,7 @@ import { emptyHealth, getAppHealth, isRecentlyHealthy } from "../services/app-he
 import {
   buildCallerPermissionConfigureUrl,
   enforceCallerFunctionPermission,
+  updateCallerFunctionPermissions,
 } from "../services/caller-function-permissions.ts";
 import {
   buildMarketplaceListingSummary,
@@ -2654,7 +2655,10 @@ const PLATFORM_TOOLS: MCPTool[] = [
     name: "ul.call",
     description:
       "Call any app's function through this single platform connection. " +
-      "No separate per-app MCP connection needed. Uses your auth context.",
+      "No separate per-app MCP connection needed. Uses your auth context. " +
+      "If it returns permission_required (policy \"ask\"), confirm with your " +
+      "user, then retry with confirm:true (allow once) or call gx.permit to " +
+      "allow it from now on.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -2678,8 +2682,50 @@ const PLATFORM_TOOLS: MCPTool[] = [
           description: "Arguments to pass to the function.",
           additionalProperties: true,
         },
+        confirm: {
+          type: "boolean",
+          description:
+            "Set true ONLY after your end user approves this call, to satisfy " +
+            'an "ask" policy for this one call (allow once). Never override a ' +
+            '"never" policy. To allow from now on, use gx.permit instead.',
+        },
       },
       required: ["app_id", "function_name"],
+    },
+  },
+
+  // ── ul.permit (your connected-agent access to an app's function) ────────
+  {
+    name: "ul.permit",
+    description:
+      "Record YOUR decision about whether your connected agents may call a " +
+      'specific app function on your behalf — the persistent side of the "ask" ' +
+      'prompt. decision:"always" allows it from now on; "never" blocks it; ' +
+      '"ask" resets to per-call confirmation. This is about your OWN ' +
+      "connected-agent access — NOT gx.grants (which wires one app to call " +
+      'another). After decision:"always", just retry gx.call.',
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        app_id: { type: "string", description: "App ID or slug." },
+        function_name: {
+          type: "string",
+          description: "Function to set the policy for.",
+        },
+        decision: {
+          type: "string",
+          enum: ["always", "ask", "never"],
+          description:
+            "always = allow from now on; ask = confirm each call; never = block.",
+        },
+      },
+      required: ["app_id", "function_name", "decision"],
     },
   },
 
@@ -2981,6 +3027,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
 const LAUNCH_CORE_TOOLS = new Set<string>([
   "ul.discover",
   "ul.call",
+  "ul.permit",
   "ul.verify",
   "ul.job",
   "ul.upload",
@@ -4840,6 +4887,12 @@ async function handleToolsCall(
         break;
       }
 
+      // ── ul.permit (connected-agent caller policy) ──────────────
+      case "ul.permit": {
+        result = await executePermit(userId, toolArgs);
+        break;
+      }
+
       // ── ul.emit (publish a cross-Agent event) ──────────────
       case "ul.emit": {
         result = await executeEmit(userId, toolArgs);
@@ -4894,6 +4947,8 @@ async function handleToolsCall(
           ...asToolArguments(toolArgs.args),
           ...widgetForwardArgs,
         };
+        // In-band "allow once": the agent asserts its user approved this call.
+        const callConfirmed = toolArgs.confirm === true;
 
         if (!targetAppId || !targetFn) {
           throw new ToolError(
@@ -4966,6 +5021,7 @@ async function handleToolsCall(
               const map = await getAppHealth([targetUuid]);
               return isRecentlyHealthy(map.get(targetUuid) ?? emptyHealth());
             },
+            confirmed: callConfirmed,
           });
           if (!callPermission.allowed) {
             throw new ToolError(
@@ -4982,6 +5038,10 @@ async function handleToolsCall(
           headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${authToken}`,
+            // Forward one-shot consent to the per-agent handler, which runs the
+            // caller-permission gate for api-token callers (we skip it above for
+            // those to avoid double-enforcing).
+            ...(callConfirmed ? { "X-Galactic-Confirm": "1" } : {}),
           },
           body: JSON.stringify(rpcPayload),
         });
@@ -10398,6 +10458,51 @@ async function executeSetSupabase(
   }
 
   return { app_id: app.id, supabase: serverName, config_id: config.id };
+}
+
+// ── ul.permit (connected-agent caller policy) ─────────────────────────
+// Records the CALLER'S OWN decision (this user's token) about whether their
+// connected agents may call a given app function: always | ask | never. The
+// persistent side of the in-band "ask" consent flow — distinct from gx.grants
+// (app-to-app wiring). User-scoped: only ever writes this user's own policy.
+async function executePermit(
+  userId: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const appRef = typeof args.app_id === "string" ? args.app_id.trim() : "";
+  const functionName = typeof args.function_name === "string"
+    ? args.function_name.trim()
+    : "";
+  const decision = typeof args.decision === "string" ? args.decision.trim() : "";
+  if (!appRef || !functionName) {
+    throw new ToolError(
+      INVALID_PARAMS,
+      "Missing required: app_id and function_name",
+    );
+  }
+  if (decision !== "always" && decision !== "ask" && decision !== "never") {
+    throw new ToolError(
+      INVALID_PARAMS,
+      'decision must be "always", "ask", or "never".',
+    );
+  }
+  const appId = await resolveAppIdForMarketplace(appRef);
+  await updateCallerFunctionPermissions({
+    userId,
+    appId,
+    permissions: [{ functionName, policy: decision }],
+  });
+  return {
+    ok: true,
+    app_id: appId,
+    function_name: functionName,
+    decision,
+    note: decision === "always"
+      ? "Your connected agents can now call this function — retry gx.call."
+      : decision === "never"
+      ? "Your connected agents are now blocked from this function."
+      : "Reset to per-call confirmation (ask).",
+  };
 }
 
 // ── ul.grants (cross-Agent wiring) ─────────────────────────
