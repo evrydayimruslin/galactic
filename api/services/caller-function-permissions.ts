@@ -297,7 +297,11 @@ export async function enforceCallerFunctionPermission(
 
   // never — an owner-set hard block; user-agent consent can NEVER override it.
   const message =
-    `Connected agents are not allowed to call ${input.functionName}.`;
+    `Connected agents are not allowed to call ${input.functionName}: your ` +
+    'user set its policy to "never". confirm:true cannot override this. If ' +
+    "your user wants to re-enable it, call gx.permit({ app_id, " +
+    'function_name, decision: "ask" | "always" }) or change it on the ' +
+    "website, then retry.";
   const details: CallerPermissionBlock = {
     type: "permission_denied",
     policy: "never",
