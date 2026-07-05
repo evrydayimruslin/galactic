@@ -17,6 +17,7 @@ import type { MCPTool } from "../../../shared/contracts/mcp.ts";
 import { verifyAppIntegrity } from "./verify.ts";
 import { pollJob } from "./job.ts";
 import { recordFlag } from "./flag.ts";
+import { inspectAppDatabase } from "./db-inspect.ts";
 
 const CAPABILITIES: Capability[] = [
   {
@@ -618,6 +619,50 @@ const CAPABILITIES: Capability[] = [
     surfaces: ["mcp"],
     coreTool: true,
     // Handler bound at load from platform-mcp (executeCodemode stays there).
+  },
+  {
+    id: "db_inspect",
+    branch: "ownership",
+    tier: 1,
+    advertisedName: "gx.db",
+    aliases: [],
+    title: "Inspect your app's database",
+    description:
+      "Read-only window into YOUR app's galactic.db (D1). action: \"schema\" " +
+      "(tables + columns), \"counts\" (row count per table), or \"rows\" (your " +
+      "OWN rows for one table, user_id-scoped). Owner-only. Reading other users' " +
+      "rows for support is a separate, disclosed opt-in.",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        app_id: { type: "string", description: "App ID or slug you own." },
+        action: {
+          type: "string",
+          enum: ["schema", "counts", "rows"],
+          description: "What to read. Default: schema.",
+        },
+        table: {
+          type: "string",
+          description: 'Table name (required for action "rows").',
+        },
+        limit: {
+          type: "number",
+          description: 'Max rows for action "rows" (1-200, default 50).',
+        },
+      },
+      required: ["app_id"],
+    },
+    auth: { ownerOnly: true },
+    surfaces: ["mcp", "cli"],
+    coreTool: false,
+    cli: { command: "db" },
+    handler: (args, ctx) => inspectAppDatabase(ctx.userId, args),
   },
   {
     id: "verify",
