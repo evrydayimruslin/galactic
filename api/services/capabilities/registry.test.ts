@@ -74,8 +74,10 @@ Deno.test("registry: tool-name resolution covers gx.*, ul.*, and aliases", () =>
   assertEquals(getCapabilityByToolName("ul.flag")?.id, "flag");
   assertEquals(getCapabilityByToolName("gx.download")?.id, "download");
   assertEquals(getCapabilityByToolName("ul.download")?.id, "download");
+  assertEquals(getCapabilityByToolName("gx.upload")?.id, "upload");
+  assertEquals(getCapabilityByToolName("ul.upload")?.id, "upload");
   // An unmigrated / unknown name does not resolve (falls to the legacy switch).
-  assertEquals(getCapabilityByToolName("gx.upload"), undefined);
+  assertEquals(getCapabilityByToolName("gx.set"), undefined);
   assertEquals(getCapabilityByToolName("nope"), undefined);
 });
 
@@ -83,7 +85,7 @@ Deno.test("registry: MCP projection honors LITE (core-only) and Free Mode", () =
   const lite = registryMcpTools({ lite: true }).map((t) => t.name);
   const full = registryMcpTools({ lite: false }).map((t) => t.name);
   // Core tools appear in both the lean and full manifests.
-  for (const name of ["gx.verify", "gx.job", "gx.discover"]) {
+  for (const name of ["gx.verify", "gx.job", "gx.discover", "gx.upload"]) {
     assert(lite.includes(name), `${name} should be in the LITE manifest`);
     assert(full.includes(name), `${name} should be in the full manifest`);
   }

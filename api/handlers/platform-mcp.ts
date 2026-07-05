@@ -1965,92 +1965,8 @@ const PLATFORM_TOOLS: MCPTool[] = [
     },
   },
 
-  // ── 4. ul.upload ──────────────────────────
-  {
-    name: "ul.upload",
-    description: "Deploy code or publish a markdown page. " +
-      'type="app" (default): deploy source code. No app_id = new app, with app_id = new version. ' +
-      'type="page": publish markdown as a live web page.',
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        type: {
-          type: "string",
-          enum: ["app", "page"],
-          description: "Deploy type. Default: app.",
-        },
-        // app fields
-        files: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              path: {
-                type: "string",
-                description: 'Relative file path (e.g. "index.ts")',
-              },
-              content: {
-                type: "string",
-                description: "File content (text or base64)",
-              },
-              encoding: {
-                type: "string",
-                enum: ["text", "base64"],
-                description: "Default: text",
-              },
-            },
-            required: ["path", "content"],
-          },
-          description: "Source files for app deploy.",
-        },
-        app_id: {
-          type: "string",
-          description: "Existing app ID or slug. Omit for new app.",
-        },
-        name: { type: "string", description: "App name (new apps only)." },
-        description: { type: "string", description: "App description." },
-        visibility: {
-          type: "string",
-          enum: ["private", "unlisted", "published"],
-          description: "Default: private.",
-        },
-        version: {
-          type: "string",
-          description: "Explicit version. Default: patch bump.",
-        },
-        // page fields
-        content: {
-          type: "string",
-          description: 'Markdown content. For type="page".',
-        },
-        slug: {
-          type: "string",
-          description: 'URL slug for page. For type="page".',
-        },
-        title: { type: "string", description: 'Page title. For type="page".' },
-        shared_with: {
-          type: "array",
-          items: { type: "string" },
-          description: "Emails for shared pages.",
-        },
-        tags: {
-          type: "array",
-          items: { type: "string" },
-          description: "Tags for page.",
-        },
-        published: {
-          type: "boolean",
-          description: "Discoverable in appstore. For pages.",
-        },
-      },
-    },
-  },
+  // ul.upload migrated to the capability registry
+  // (api/services/capabilities/registry.ts, handler bound from this module).
 
   // ── 5. ul.set ──────────────────────────
   {
@@ -2828,8 +2744,7 @@ const LAUNCH_CORE_TOOLS = new Set<string>([
   // ul.discover is a registry capability (coreTool) — advertised via registryMcpTools
   "ul.call",
   "ul.permit",
-  // ul.verify + ul.job are registry capabilities (coreTool) — advertised via registryMcpTools
-  "ul.upload",
+  // ul.verify + ul.job + ul.upload are registry capabilities (coreTool) — via registryMcpTools
   "ul.test",
   "ul.set",
   "ul.memory",
@@ -2904,6 +2819,20 @@ bindCapabilityHandler("download", async (args, ctx) => {
     );
   }
   return executeScaffold(args);
+});
+
+bindCapabilityHandler("upload", async (args, ctx) => {
+  const uploadType = args.type || "app";
+  if (uploadType === "page") {
+    if (!args.content || !args.slug) {
+      throw new CapabilityError(
+        "invalid_input",
+        'type="page" requires content and slug.',
+      );
+    }
+    return await executeMarkdown(ctx.userId, args);
+  }
+  return await executeUpload(ctx.userId, args);
 });
 
 function stripGpuFromTool(tool: MCPTool): MCPTool {
@@ -4523,24 +4452,7 @@ async function handleToolsCall(
         break;
       }
 
-      // ── 4. ul.upload (+ markdown pages) ──────────────
-      case "ul.upload": {
-        const uploadType = toolArgs.type || "app";
-        if (uploadType === "page") {
-          // Publish markdown page
-          if (!toolArgs.content || !toolArgs.slug) {
-            throw new ToolError(
-              INVALID_PARAMS,
-              'type="page" requires content and slug.',
-            );
-          }
-          result = await executeMarkdown(userId, toolArgs);
-        } else {
-          // Deploy app code
-          result = await executeUpload(userId, toolArgs);
-        }
-        break;
-      }
+      // ul.upload dispatched via the capability registry pre-check above.
 
       // ── 5. ul.set ──────────────
       case "ul.set": {

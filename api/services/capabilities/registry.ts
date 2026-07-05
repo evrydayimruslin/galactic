@@ -176,6 +176,103 @@ const CAPABILITIES: Capability[] = [
     // Handler bound at load from platform-mcp (executeDownload/executeScaffold stay there).
   },
   {
+    id: "upload",
+    branch: "ownership",
+    tier: 1,
+    advertisedName: "gx.upload",
+    aliases: ["ul.upload"],
+    title: "Deploy code or publish a page",
+    description: "Deploy code or publish a markdown page. " +
+      'type="app" (default): deploy source code. No app_id = new app, with app_id = new version. ' +
+      'type="page": publish markdown as a live web page.',
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        type: {
+          type: "string",
+          enum: ["app", "page"],
+          description: "Deploy type. Default: app.",
+        },
+        // app fields
+        files: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              path: {
+                type: "string",
+                description: 'Relative file path (e.g. "index.ts")',
+              },
+              content: {
+                type: "string",
+                description: "File content (text or base64)",
+              },
+              encoding: {
+                type: "string",
+                enum: ["text", "base64"],
+                description: "Default: text",
+              },
+            },
+            required: ["path", "content"],
+          },
+          description: "Source files for app deploy.",
+        },
+        app_id: {
+          type: "string",
+          description: "Existing app ID or slug. Omit for new app.",
+        },
+        name: { type: "string", description: "App name (new apps only)." },
+        description: { type: "string", description: "App description." },
+        visibility: {
+          type: "string",
+          enum: ["private", "unlisted", "published"],
+          description: "Default: private.",
+        },
+        version: {
+          type: "string",
+          description: "Explicit version. Default: patch bump.",
+        },
+        // page fields
+        content: {
+          type: "string",
+          description: 'Markdown content. For type="page".',
+        },
+        slug: {
+          type: "string",
+          description: 'URL slug for page. For type="page".',
+        },
+        title: { type: "string", description: 'Page title. For type="page".' },
+        shared_with: {
+          type: "array",
+          items: { type: "string" },
+          description: "Emails for shared pages.",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tags for page.",
+        },
+        published: {
+          type: "boolean",
+          description: "Discoverable in appstore. For pages.",
+        },
+      },
+    },
+    auth: {},
+    // Owner deploy (new app / new version) or page publish. Core tool. Website
+    // deploy is served by the /api/apps surface; formal web parity declared later.
+    surfaces: ["mcp", "cli"],
+    coreTool: true,
+    cli: { command: "upload" },
+    // Handler bound at load from platform-mcp (executeUpload/executeMarkdown stay there).
+  },
+  {
     id: "verify",
     branch: "agent_user",
     tier: 1,
