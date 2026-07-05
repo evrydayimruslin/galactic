@@ -524,6 +524,62 @@ const CAPABILITIES: Capability[] = [
     // NOTE: list-only restriction (writes → website-only) deferred to consolidation.
   },
   {
+    id: "call",
+    branch: "agent_user",
+    tier: 1,
+    advertisedName: "gx.call",
+    aliases: ["ul.call"],
+    title: "Call an agent's function",
+    description:
+      "Call any app's function through this single platform connection. " +
+      "No separate per-app MCP connection needed. Uses your auth context. " +
+      'If it returns permission_required (policy "ask"), confirm with your ' +
+      "user, then retry with confirm:true (allow once) or call gx.permit to " +
+      "allow it from now on.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        app_id: {
+          type: "string",
+          description: "App ID or slug of the target app.",
+        },
+        function_name: {
+          type: "string",
+          description:
+            'Function to call (e.g. "search", not "app-slug_search").',
+        },
+        args: {
+          type: "object",
+          description: "Arguments to pass to the function.",
+          additionalProperties: true,
+        },
+        confirm: {
+          type: "boolean",
+          description:
+            "Set true ONLY after your end user approves this call, to satisfy " +
+            'an "ask" policy for this one call (allow once). Never override a ' +
+            '"never" policy. To allow from now on, use gx.permit instead.',
+        },
+      },
+      required: ["app_id", "function_name"],
+    },
+    auth: {},
+    surfaces: ["mcp", "cli", "web"],
+    coreTool: true,
+    cli: { command: "call" },
+    web: {
+      method: "POST",
+      path: "/api/launch/agents/:id/functions/:fn/run",
+    },
+    // Handler bound at load from platform-mcp (executeCall stays there).
+  },
+  {
     id: "verify",
     branch: "agent_user",
     tier: 1,

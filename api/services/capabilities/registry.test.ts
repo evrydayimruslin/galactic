@@ -21,7 +21,7 @@ const ALL_SURFACES: CapabilitySurface[] = ["mcp", "cli", "web"];
 // Capabilities we intend to reach full MCP + CLI + website parity. Agent-native
 // signals (flag, codemode) are intentionally MCP-only and excluded. As each read
 // migrates it is added here so the parity invariant grows with the registry.
-const PARITY_TARGETS = ["verify", "job", "discover"];
+const PARITY_TARGETS = ["verify", "job", "discover", "call"];
 
 Deno.test("registry: full-parity capabilities declare all three surfaces", () => {
   for (const id of PARITY_TARGETS) {
@@ -87,6 +87,8 @@ Deno.test("registry: tool-name resolution covers gx.*, ul.*, and aliases", () =>
   // ul.connect + ul.connections folded into the secrets capability.
   assertEquals(getCapabilityByToolName("ul.connect")?.id, "secrets");
   assertEquals(getCapabilityByToolName("ul.connections")?.id, "secrets");
+  assertEquals(getCapabilityByToolName("gx.call")?.id, "call");
+  assertEquals(getCapabilityByToolName("ul.call")?.id, "call");
   // An unmigrated / unknown name does not resolve (falls to the legacy switch).
   assertEquals(getCapabilityByToolName("gx.wallet"), undefined);
   assertEquals(getCapabilityByToolName("nope"), undefined);

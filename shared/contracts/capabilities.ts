@@ -65,6 +65,19 @@ export interface CapabilityContext {
    * casts. Populated only on surfaces that have it (MCP dispatch).
    */
   user?: unknown;
+  /**
+   * The raw inbound request, when the surface has one (MCP dispatch). The gx.call
+   * gateway needs it to derive the base URL, bearer token, and session id for the
+   * inter-app hop. Surfaces without a request (e.g. a future direct invocation)
+   * leave it undefined.
+   */
+  request?: Request;
+  /**
+   * Widget/agentic-surface passthrough args (`_widget_*` / `_agentic_surface_*`)
+   * extracted from the call envelope, merged into the target function's args by
+   * gx.call. Populated only on the MCP surface.
+   */
+  widgetForwardArgs?: Record<string, unknown>;
 }
 
 export interface CapabilityAuth {
