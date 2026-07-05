@@ -103,6 +103,16 @@ export interface Capability<
   coreTool?: boolean;
   cli?: CapabilityCliCommand;
   web?: CapabilityWebRoute;
-  /** The single implementation every surface resolves to. */
-  handler: (args: Args, ctx: CapabilityContext) => Promise<Result>;
+  /**
+   * The single implementation every surface resolves to. Cleanly-extracted
+   * capabilities set it inline; capabilities whose logic is still embedded in a
+   * handler module bind it at load via bindCapabilityHandler (so the registry
+   * stays dependency-free of the handlers). Resolve with getCapabilityHandler.
+   */
+  handler?: CapabilityHandler<Args, Result>;
 }
+
+export type CapabilityHandler<
+  Args extends Record<string, unknown> = Record<string, unknown>,
+  Result = unknown,
+> = (args: Args, ctx: CapabilityContext) => Promise<Result>;

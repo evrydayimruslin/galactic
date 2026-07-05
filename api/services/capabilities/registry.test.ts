@@ -21,7 +21,7 @@ const ALL_SURFACES: CapabilitySurface[] = ["mcp", "cli", "web"];
 // Capabilities we intend to reach full MCP + CLI + website parity. Agent-native
 // signals (flag, codemode) are intentionally MCP-only and excluded. As each read
 // migrates it is added here so the parity invariant grows with the registry.
-const PARITY_TARGETS = ["verify", "job"];
+const PARITY_TARGETS = ["verify", "job", "discover"];
 
 Deno.test("registry: full-parity capabilities declare all three surfaces", () => {
   for (const id of PARITY_TARGETS) {
@@ -65,6 +65,8 @@ Deno.test("registry: tool-name resolution covers gx.*, ul.*, and aliases", () =>
   // gx.* advertised name, its ul.* twin, and explicit legacy aliases all resolve.
   assertEquals(getCapabilityByToolName("gx.verify")?.id, "verify");
   assertEquals(getCapabilityByToolName("ul.verify")?.id, "verify");
+  assertEquals(getCapabilityByToolName("gx.discover")?.id, "discover");
+  assertEquals(getCapabilityByToolName("ul.discover")?.id, "discover");
   assertEquals(getCapabilityByToolName("gx.job")?.id, "job");
   assertEquals(getCapabilityByToolName("ul.job")?.id, "job");
   assertEquals(getCapabilityByToolName("ultralight.job")?.id, "job");
@@ -78,8 +80,8 @@ Deno.test("registry: tool-name resolution covers gx.*, ul.*, and aliases", () =>
 Deno.test("registry: MCP projection honors LITE (core-only) and Free Mode", () => {
   const lite = registryMcpTools({ lite: true }).map((t) => t.name);
   const full = registryMcpTools({ lite: false }).map((t) => t.name);
-  // Core tools (verify, job) appear in both the lean and full manifests.
-  for (const name of ["gx.verify", "gx.job"]) {
+  // Core tools appear in both the lean and full manifests.
+  for (const name of ["gx.verify", "gx.job", "gx.discover"]) {
     assert(lite.includes(name), `${name} should be in the LITE manifest`);
     assert(full.includes(name), `${name} should be in the full manifest`);
   }

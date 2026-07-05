@@ -21,11 +21,17 @@ import { peekCallerUsage } from "../services/cloud-usage.ts";
 import { walletUrl } from "../lib/urls.ts";
 import { createAppsService } from "../services/apps.ts";
 import {
+  bindCapabilityHandler,
   getCapabilityByToolName,
+  getCapabilityHandler,
   registryDemotedMcpTools,
   registryMcpTools,
 } from "../services/capabilities/registry.ts";
-import { type Capability, CapabilityError } from "../../shared/contracts/capabilities.ts";
+import {
+  type CapabilityContext,
+  CapabilityError,
+  type CapabilityHandler,
+} from "../../shared/contracts/capabilities.ts";
 import { createR2Service, type R2Service } from "../services/storage.ts";
 import { checkInMemoryLimit, checkRateLimit } from "../services/ratelimit.ts";
 import { checkAndIncrementWeeklyCalls } from "../services/weekly-calls.ts";
@@ -1574,64 +1580,10 @@ function markAppContextSent(sessionId: string, appId: string): void {
 // ============================================
 
 const PLATFORM_TOOLS: MCPTool[] = [
-  // ── 1. ul.discover ──────────────────────────
-  {
-    name: "ul.discover",
-    description: "Find and explore apps. " +
-      'scope="desk": last 5 used apps (check first). ' +
-      'scope="inspect": deep introspection of one app. ' +
-      'scope="library": your owned+saved apps. ' +
-      'scope="appstore": all published apps. Add surfaces=["command_card"] to reveal dashboard-ready surfaces. ' +
-      'scope="tools": list additional platform tools not shown in tools/list (still callable by name).',
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        scope: {
-          type: "string",
-          enum: ["desk", "inspect", "library", "appstore", "tools"],
-          description: "Discovery scope.",
-        },
-        app_id: {
-          type: "string",
-          description: 'Required for scope="inspect".',
-        },
-        query: {
-          type: "string",
-          description: "Semantic search. For library + appstore.",
-        },
-        task: {
-          type: "string",
-          description:
-            "Task description for context-aware search. Auto-includes pages and returns inline markdown content (first 2KB) for top matches. For appstore.",
-        },
-        types: {
-          type: "array",
-          items: {
-            type: "string",
-            enum: ["app", "page", "memory_md", "library_md"],
-          },
-          description: "Content type filter.",
-        },
-        surfaces: {
-          type: "array",
-          items: {
-            type: "string",
-            enum: ["function", "command_card"],
-          },
-          description:
-            'Optional dashboard surface filter. Include "command_card" to return Command-ready surfaces alongside app results.',
-        },
-        limit: { type: "number", description: "Max results. For appstore." },
-      },
-      required: ["scope"],
-    },
-  },
+  // ul.discover migrated to the capability registry
+  // (api/services/capabilities/registry.ts, handler bound from this module) —
+  // projected into tools/list + dispatch from there. The 4 legacy scope aliases
+  // (ul.discover.desk/.inspect/.library/.appstore) still route via the switch.
 
   // ── 2. ul.command ──────────────────────────
   {
@@ -2959,7 +2911,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
 // surfaced separately (provisional sessions only). Disable lite with
 // PLATFORM_MCP_LITE=0 to restore the full manifest.
 const LAUNCH_CORE_TOOLS = new Set<string>([
-  "ul.discover",
+  // ul.discover is a registry capability (coreTool) — advertised via registryMcpTools
   "ul.call",
   "ul.permit",
   // ul.verify + ul.job are registry capabilities (coreTool) — advertised via registryMcpTools
@@ -2989,6 +2941,44 @@ function getDemotedPlatformTools(): MCPTool[] {
   // tools/list too — include them so scope="tools" still surfaces them.
   return [...legacy, ...registryDemotedMcpTools()];
 }
+
+// Bind capabilities whose executors remain in this module (strangler-fig): the
+// registry owns the tool definition, tools/list projection, and dispatch routing;
+// the scope executors stay here until it's worth extracting them. Runs once at
+// module load — the executeDiscover* declarations below are hoisted.
+bindCapabilityHandler("discover", async (args, ctx) => {
+  const scope = args.scope;
+  if (!scope) {
+    throw new CapabilityError(
+      "invalid_input",
+      "Missing required parameter: scope",
+    );
+  }
+  const econ = ctx.econ ?? { freeMode: false, byokPresent: false };
+  switch (scope) {
+    case "desk":
+      return await executeDiscoverDesk(ctx.userId);
+    case "inspect":
+      if (!args.app_id) {
+        throw new CapabilityError(
+          "invalid_input",
+          'scope="inspect" requires app_id',
+        );
+      }
+      return await executeDiscoverInspect(ctx.userId, args, econ);
+    case "library":
+      return await executeDiscoverLibrary(ctx.userId, args);
+    case "appstore":
+      return await executeDiscoverAppstore(ctx.userId, args);
+    case "tools":
+      return executeDiscoverTools();
+    default:
+      throw new CapabilityError(
+        "invalid_input",
+        `Invalid scope: ${scope}. Use desk|inspect|library|appstore|tools`,
+      );
+  }
+});
 
 function stripGpuFromTool(tool: MCPTool): MCPTool {
   const cloned = JSON.parse(JSON.stringify(tool)) as MCPTool;
@@ -4353,53 +4343,22 @@ async function handleToolsCall(
     // Capability registry (strangler-fig): names migrated off the legacy switch
     // are dispatched here first; everything else falls through to the switch.
     const capability = getCapabilityByToolName(name);
-    if (capability) {
-      result = await runCapabilityForMcp(capability, toolArgs, {
+    const capabilityHandler = capability
+      ? getCapabilityHandler(capability)
+      : undefined;
+    if (capabilityHandler) {
+      result = await runCapabilityForMcp(capabilityHandler, toolArgs, {
         userId,
         provisional: user.provisional ?? false,
         surface: "mcp",
+        econ,
       });
     } else
     switch (name) {
       // ── 1. ul.discover ──────────────
-      case "ul.discover": {
-        const scope = toolArgs.scope;
-        if (!scope) {
-          throw new ToolError(
-            INVALID_PARAMS,
-            "Missing required parameter: scope",
-          );
-        }
-        switch (scope) {
-          case "desk":
-            result = await executeDiscoverDesk(userId);
-            break;
-          case "inspect":
-            if (!toolArgs.app_id) {
-              throw new ToolError(
-                INVALID_PARAMS,
-                'scope="inspect" requires app_id',
-              );
-            }
-            result = await executeDiscoverInspect(userId, toolArgs, econ);
-            break;
-          case "library":
-            result = await executeDiscoverLibrary(userId, toolArgs);
-            break;
-          case "appstore":
-            result = await executeDiscoverAppstore(userId, toolArgs);
-            break;
-          case "tools":
-            result = executeDiscoverTools();
-            break;
-          default:
-            throw new ToolError(
-              INVALID_PARAMS,
-              `Invalid scope: ${scope}. Use desk|inspect|library|appstore|tools`,
-            );
-        }
-        break;
-      }
+      // ul.discover dispatched via the capability registry pre-check above
+      // (handler bound from this module). The 4 scope aliases below still route
+      // here.
 
       // ── 2. ul.command ──────────────
       case "ul.command": {
@@ -7971,14 +7930,13 @@ export async function executeDownload(
 // or secrets, so it is NOT gated by download_access (unlike gx.download).
 // Run a capability-registry handler on the MCP surface, mapping its
 // surface-neutral CapabilityError onto this surface's ToolError / JSON-RPC codes.
-// (verify migrated here — see api/services/capabilities/registry.ts.)
 async function runCapabilityForMcp(
-  capability: Capability,
+  handler: CapabilityHandler,
   args: Record<string, unknown>,
-  ctx: { userId: string; provisional: boolean; surface: "mcp" },
+  ctx: CapabilityContext,
 ): Promise<unknown> {
   try {
-    return await capability.handler(args, ctx);
+    return await handler(args, ctx);
   } catch (err) {
     if (err instanceof CapabilityError) {
       const code = err.code === "invalid_input"

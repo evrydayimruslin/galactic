@@ -10,6 +10,7 @@
 
 import type {
   Capability,
+  CapabilityHandler,
   CapabilitySurface,
 } from "../../../shared/contracts/capabilities.ts";
 import type { MCPTool } from "../../../shared/contracts/mcp.ts";
@@ -18,6 +19,63 @@ import { pollJob } from "./job.ts";
 import { recordFlag } from "./flag.ts";
 
 const CAPABILITIES: Capability[] = [
+  {
+    id: "discover",
+    branch: "agent_user",
+    tier: 1,
+    advertisedName: "gx.discover",
+    aliases: ["ul.discover"],
+    title: "Discover agents & context",
+    description:
+      "Find and inspect Agents. `scope` selects what: \"desk\" (your recently-used " +
+      "Agents), \"inspect\" (deep detail on one Agent — functions, pricing, trust, " +
+      "network) with app_id, \"library\" (your owned + saved Agents), \"appstore\" " +
+      "(search all published Agents by query or task), \"tools\" (platform tools not " +
+      "shown in tools/list).",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: {
+          type: "string",
+          enum: ["desk", "inspect", "library", "appstore", "tools"],
+          description: "What to discover. Required.",
+        },
+        app_id: {
+          type: "string",
+          description: 'Agent to inspect (required for scope="inspect").',
+        },
+        query: {
+          type: "string",
+          description: "Semantic search query (library/appstore).",
+        },
+        task: {
+          type: "string",
+          description: "Context-aware task description (appstore).",
+        },
+        types: {
+          type: "array",
+          items: { type: "string" },
+          description: "Filter by result type (app|page|memory_md|library_md).",
+        },
+        limit: { type: "number", description: "Max results (library/appstore)." },
+      },
+      required: ["scope"],
+    },
+    auth: {},
+    surfaces: ["mcp", "cli", "web"],
+    coreTool: true,
+    cli: { command: "discover" },
+    // Website discovery is served by GET /api/launch/discover (its own detail
+    // payloads); the honest trust card there + on inspect now share resolveTrustSignals.
+    web: { method: "GET", path: "/api/launch/discover" },
+    // Handler bound at load from platform-mcp (executeDiscover* stay there).
+  },
   {
     id: "verify",
     branch: "agent_user",
@@ -168,6 +226,24 @@ export function getCapabilityByToolName(name: string): Capability | undefined {
 /** Resolve a capability by its canonical id (used by the CLI/REST projections). */
 export function getCapabilityById(id: string): Capability | undefined {
   return CAPABILITIES.find((c) => c.id === id);
+}
+
+// Late-bound handlers for capabilities whose logic is still embedded in a handler
+// module (e.g. discover's executors live in platform-mcp). The handler module
+// binds them at load; the registry never imports the handlers, so there is no
+// cycle. Cleanly-extracted capabilities set `handler` inline and skip this.
+const boundHandlers = new Map<string, CapabilityHandler>();
+
+/** Bind a capability's implementation at startup (called by the handler module). */
+export function bindCapabilityHandler(id: string, handler: CapabilityHandler) {
+  boundHandlers.set(id, handler);
+}
+
+/** The effective handler for a capability — inline if present, else the bound one. */
+export function getCapabilityHandler(
+  cap: Capability,
+): CapabilityHandler | undefined {
+  return cap.handler ?? boundHandlers.get(cap.id);
 }
 
 /** Project a capability into an MCP tools/list entry. */
