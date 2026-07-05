@@ -273,6 +273,79 @@ const CAPABILITIES: Capability[] = [
     // Handler bound at load from platform-mcp (executeUpload/executeMarkdown stay there).
   },
   {
+    id: "test",
+    branch: "ownership",
+    tier: 1,
+    advertisedName: "gx.test",
+    aliases: ["ul.test"],
+    title: "Test code in a sandbox",
+    description:
+      "Test and validate code in a real sandbox without deploying. " +
+      "Runs lint automatically before executing. Use lint_only=true to validate without running.",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        files: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              path: {
+                type: "string",
+                description: 'Relative file path (e.g. "index.ts")',
+              },
+              content: { type: "string", description: "File content" },
+            },
+            required: ["path", "content"],
+          },
+          description: "Source files. Must include entry file.",
+        },
+        function_name: {
+          type: "string",
+          description:
+            "Function to execute. Optional when only one export exists or test_fixture.json has a single function entry.",
+        },
+        test_args: {
+          type: "object",
+          description: "Args to pass to the function.",
+          additionalProperties: true,
+        },
+        env_vars: {
+          type: "object",
+          description:
+            "Environment variables to inject into gx.test runtime (for example API keys or base URLs).",
+          additionalProperties: { type: "string" },
+        },
+        d1_fixtures: {
+          type: "object",
+          description:
+            "Fixture-backed D1 responses for gx.test. Use when code calls galactic.db.* without a deployed database.",
+          additionalProperties: true,
+        },
+        lint_only: {
+          type: "boolean",
+          description: "Only validate conventions, skip execution.",
+        },
+        strict: {
+          type: "boolean",
+          description: "Lint strict mode — warnings become errors.",
+        },
+      },
+      required: ["files"],
+    },
+    auth: {},
+    surfaces: ["mcp", "cli"],
+    coreTool: true,
+    cli: { command: "test" },
+    // Handler bound at load from platform-mcp (executeTest/executeLint stay there).
+  },
+  {
     id: "verify",
     branch: "agent_user",
     tier: 1,

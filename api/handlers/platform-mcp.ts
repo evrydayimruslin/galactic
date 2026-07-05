@@ -1900,70 +1900,8 @@ const PLATFORM_TOOLS: MCPTool[] = [
   // ul.download migrated to the capability registry
   // (api/services/capabilities/registry.ts, handler bound from this module).
 
-  // ── 3. ul.test ──────────────────────────
-  {
-    name: "ul.test",
-    description:
-      "Test and validate code in a real sandbox without deploying. " +
-      "Runs lint automatically before executing. Use lint_only=true to validate without running.",
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        files: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              path: {
-                type: "string",
-                description: 'Relative file path (e.g. "index.ts")',
-              },
-              content: { type: "string", description: "File content" },
-            },
-            required: ["path", "content"],
-          },
-          description: "Source files. Must include entry file.",
-        },
-        function_name: {
-          type: "string",
-          description:
-            "Function to execute. Optional when only one export exists or test_fixture.json has a single function entry.",
-        },
-        test_args: {
-          type: "object",
-          description: "Args to pass to the function.",
-          additionalProperties: true,
-        },
-        env_vars: {
-          type: "object",
-          description:
-            "Environment variables to inject into gx.test runtime (for example API keys or base URLs).",
-          additionalProperties: { type: "string" },
-        },
-        d1_fixtures: {
-          type: "object",
-          description:
-            "Fixture-backed D1 responses for gx.test. Use when code calls galactic.db.* without a deployed database.",
-          additionalProperties: true,
-        },
-        lint_only: {
-          type: "boolean",
-          description: "Only validate conventions, skip execution.",
-        },
-        strict: {
-          type: "boolean",
-          description: "Lint strict mode — warnings become errors.",
-        },
-      },
-      required: ["files"],
-    },
-  },
+  // ul.test migrated to the capability registry
+  // (api/services/capabilities/registry.ts, handler bound from this module).
 
   // ul.upload migrated to the capability registry
   // (api/services/capabilities/registry.ts, handler bound from this module).
@@ -2744,8 +2682,7 @@ const LAUNCH_CORE_TOOLS = new Set<string>([
   // ul.discover is a registry capability (coreTool) — advertised via registryMcpTools
   "ul.call",
   "ul.permit",
-  // ul.verify + ul.job + ul.upload are registry capabilities (coreTool) — via registryMcpTools
-  "ul.test",
+  // ul.verify + ul.job + ul.upload + ul.test are registry capabilities (coreTool) — via registryMcpTools
   "ul.set",
   "ul.memory",
   "ul.secrets",
@@ -2833,6 +2770,39 @@ bindCapabilityHandler("upload", async (args, ctx) => {
     return await executeMarkdown(ctx.userId, args);
   }
   return await executeUpload(ctx.userId, args);
+});
+
+bindCapabilityHandler("test", async (args, ctx) => {
+  const testFiles = args.files as
+    | Array<{ path: string; content: string }>
+    | undefined;
+  if (testFiles && hasGpuRuntimeFiles(testFiles) && !isGpuSupportEnabled()) {
+    throw new CapabilityError(
+      "invalid_input",
+      getGpuSupportDisabledMessage("GPU test validation"),
+    );
+  }
+  if (args.lint_only) {
+    return executeLint(args); // lint-only: validate without running
+  }
+  // Run lint first, then execute (strict mode blocks on lint errors).
+  const lintResult = asLintExecutionResult(executeLint(args));
+  const lintErrors = (lintResult.issues || []).filter((issue) =>
+    issue.severity === "error"
+  );
+  if (lintErrors.length > 0 && args.strict) {
+    return {
+      lint_passed: false,
+      lint: lintResult,
+      tip: "Fix lint errors before testing. Or set strict=false to test anyway.",
+    };
+  }
+  const testResult = await executeTest(
+    ctx.userId,
+    args,
+    ctx.user as UserContext,
+  );
+  return { ...asToolArguments(testResult), lint: lintResult };
 });
 
 function stripGpuFromTool(tool: MCPTool): MCPTool {
@@ -4214,6 +4184,7 @@ async function handleToolsCall(
         provisional: user.provisional ?? false,
         surface: "mcp",
         econ,
+        user,
       });
     } else
     switch (name) {
@@ -4415,42 +4386,7 @@ async function handleToolsCall(
       // ── 4. ul.download (+ scaffold when no app_id) ──────────────
       // ul.download dispatched via the capability registry pre-check above.
 
-      // ── 3. ul.test (+ lint) ──────────────
-      case "ul.test": {
-        const testFiles = toolArgs.files as
-          | Array<{ path: string; content: string }>
-          | undefined;
-        if (
-          testFiles && hasGpuRuntimeFiles(testFiles) && !isGpuSupportEnabled()
-        ) {
-          throw new ToolError(
-            INVALID_PARAMS,
-            getGpuSupportDisabledMessage("GPU test validation"),
-          );
-        }
-        if (toolArgs.lint_only) {
-          // Lint-only mode
-          result = executeLint(toolArgs);
-        } else {
-          // Run lint first, then execute
-          const lintResult = asLintExecutionResult(executeLint(toolArgs));
-          const lintErrors = (lintResult.issues || []).filter((issue) =>
-            issue.severity === "error"
-          );
-          if (lintErrors.length > 0 && toolArgs.strict) {
-            result = {
-              lint_passed: false,
-              lint: lintResult,
-              tip:
-                "Fix lint errors before testing. Or set strict=false to test anyway.",
-            };
-          } else {
-            const testResult = await executeTest(userId, toolArgs, user);
-            result = { ...asToolArguments(testResult), lint: lintResult };
-          }
-        }
-        break;
-      }
+      // ul.test dispatched via the capability registry pre-check above.
 
       // ul.upload dispatched via the capability registry pre-check above.
 

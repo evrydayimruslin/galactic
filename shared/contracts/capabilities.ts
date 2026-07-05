@@ -58,6 +58,13 @@ export interface CapabilityContext {
    * (CLI/REST reads) leave it undefined and the handler falls back to defaults.
    */
   econ?: { freeMode: boolean; byokPresent: boolean };
+  /**
+   * The full authenticated principal, when a handler needs more than userId (e.g.
+   * gx.test forwards it into the sandbox). Typed `unknown` so the shared contract
+   * stays decoupled from the runtime UserContext; the one handler that needs it
+   * casts. Populated only on surfaces that have it (MCP dispatch).
+   */
+  user?: unknown;
 }
 
 export interface CapabilityAuth {
