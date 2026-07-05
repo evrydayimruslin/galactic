@@ -2278,7 +2278,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
   // handler bound from this module — see executeCall).
 
   // ul.permit migrated to the capability registry (id "consent", advertised
-  // gx.permit; handler bound from this module).
+  // gx.consent; gx.permit/ul.permit kept as aliases; handler bound from this module).
 
   // ul.verify migrated to the capability registry
   // (api/services/capabilities/registry.ts) — projected into tools/list and
