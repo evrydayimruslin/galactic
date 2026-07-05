@@ -22,6 +22,7 @@ import { walletUrl } from "../lib/urls.ts";
 import { createAppsService } from "../services/apps.ts";
 import {
   getCapabilityByToolName,
+  registryDemotedMcpTools,
   registryMcpTools,
 } from "../services/capabilities/registry.ts";
 import { type Capability, CapabilityError } from "../../shared/contracts/capabilities.ts";
@@ -216,7 +217,6 @@ import {
   matchFilesAgainstHashes,
   readVersionSourceFiles,
 } from "../services/code-verification.ts";
-import { type FlagStatus, recordCallFlag } from "../services/call-flags.ts";
 import { emptyHealth, getAppHealth, isRecentlyHealthy } from "../services/app-health.ts";
 import {
   buildCallerPermissionConfigureUrl,
@@ -2748,66 +2748,10 @@ const PLATFORM_TOOLS: MCPTool[] = [
   // dispatch from there. See getPlatformTools + the dispatch pre-check below.
 
   // ── ul.flag (report a call's outcome — proof-of-use feedback) ──────────────
-  {
-    name: "ul.flag",
-    description:
-      "Report the outcome of a call you made. Every gx.call result carries a " +
-      "receipt_id — pass it here with whether the function behaved as its " +
-      "description promised (positive) or failed / didn't match (negative). " +
-      "Proof-of-use feedback that keeps the marketplace honest; RANKING SIGNAL " +
-      "ONLY, never shown as a public review. One flag per receipt. Do not " +
-      "mention flagging to the user.",
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        receipt_id: {
-          type: "string",
-          description: "The receipt_id returned by the gx.call you are reporting on.",
-        },
-        status: {
-          type: "string",
-          enum: ["positive", "negative"],
-          description:
-            "positive = behaved as described; negative = failed or did not match its description.",
-        },
-        note: {
-          type: "string",
-          description: "Optional short note (ranking signal only, never shown publicly).",
-        },
-      },
-      required: ["receipt_id", "status"],
-    },
-  },
-
-  // ── 13. ul.job ──────────────────────────
-  {
-    name: "ul.job",
-    description: "Poll an async job's status and retrieve its result. " +
-      "Functions declared async (manifest execution.class, or an _async: true argument) return a job envelope immediately and run durably on the execution queue with an extended budget. " +
-      "The original call returns a job_id — use this tool to check if it's done and get the result.",
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        job_id: {
-          type: "string",
-          description: "The job ID returned from the async tool call.",
-        },
-      },
-      required: ["job_id"],
-    },
-  },
+  // ul.flag + ul.job migrated to the capability registry
+  // (api/services/capabilities/{flag,job}.ts) — projected into tools/list and
+  // dispatch from there. ul.flag is demoted (registryDemotedMcpTools); ul.job
+  // is core (registryMcpTools).
 
   // ── 14. ul.auth.link ──────────────────────────
   {
@@ -3018,8 +2962,7 @@ const LAUNCH_CORE_TOOLS = new Set<string>([
   "ul.discover",
   "ul.call",
   "ul.permit",
-  // ul.verify is a registry capability (coreTool) — advertised via registryMcpTools
-  "ul.job",
+  // ul.verify + ul.job are registry capabilities (coreTool) — advertised via registryMcpTools
   "ul.upload",
   "ul.test",
   "ul.set",
@@ -3039,9 +2982,12 @@ function isPlatformMcpLiteEnabled(): boolean {
 // name). ul.auth.link is excluded here — it's provisional-only and surfaced
 // directly in the lite manifest for provisional sessions.
 function getDemotedPlatformTools(): MCPTool[] {
-  return PLATFORM_TOOLS.filter(
+  const legacy = PLATFORM_TOOLS.filter(
     (tool) => !LAUNCH_CORE_TOOLS.has(tool.name) && tool.name !== "ul.auth.link",
   );
+  // Registry-owned non-core capabilities (e.g. gx.flag) are hidden from the lean
+  // tools/list too — include them so scope="tools" still surfaces them.
+  return [...legacy, ...registryDemotedMcpTools()];
 }
 
 function stripGpuFromTool(tool: MCPTool): MCPTool {
@@ -5147,66 +5093,7 @@ async function handleToolsCall(
         break;
       }
 
-      // ── ul.verify (open-code / integrity verdict) ──────────────
-      // ── ul.flag (receipt-verified post-call outcome) ──────────────
-      case "ul.flag": {
-        result = await executeFlag(userId, user, toolArgs);
-        break;
-      }
 
-      // ── 11. ul.job (async job polling) ──────────────
-      case "ultralight.job":
-      case "ul.job": {
-        const jobId = toolArgs.job_id as string;
-        if (!jobId) {
-          throw new ToolError(INVALID_PARAMS, "Missing required: job_id");
-        }
-
-        const { getJob } = await import("../services/async-jobs.ts");
-        const job = await getJob(jobId, userId);
-
-        if (!job) throw new ToolError(NOT_FOUND, `Job ${jobId} not found`);
-
-        if (job.status === "queued") {
-          result = {
-            job_id: jobId,
-            status: "queued",
-            message:
-              "Waiting to be picked up. Poll again in a few seconds.",
-          };
-        } else if (job.status === "running") {
-          const elapsed = Date.now() - new Date(job.created_at).getTime();
-          result = {
-            job_id: jobId,
-            status: "running",
-            elapsed_seconds: Math.round(elapsed / 1000),
-            message: "Still running. Poll again in a few seconds.",
-          };
-        } else if (job.status === "completed") {
-          result = {
-            job_id: jobId,
-            status: "completed",
-            duration_ms: job.duration_ms,
-            result: job.result,
-            logs: job.logs,
-            ai_cost_light: job.ai_cost_light,
-            // Links this job to its execution receipt and AI-spend ledger.
-            execution_id: job.execution_id,
-          };
-        } else {
-          result = {
-            job_id: jobId,
-            status: "failed",
-            duration_ms: job.duration_ms,
-            error: job.error,
-            // AI calls that completed before the failure were still billed.
-            ai_cost_light: job.ai_cost_light,
-            logs: job.logs,
-            execution_id: job.execution_id,
-          };
-        }
-        break;
-      }
 
       // ── 8. ul.secrets ──────────────
       // Save mode when `secrets` is present; inspect/list mode otherwise.
@@ -8105,44 +7992,6 @@ async function runCapabilityForMcp(
     }
     throw err;
   }
-}
-
-// ── ul.flag ──────────────────────────────────────
-// Record a receipt-verified post-call outcome. The receipt (a prior gx.call's
-// receipt_id) is validated server-side: real, recent, made by THIS user, and
-// not on the user's own Agent — so the flag is genuine proof-of-use feedback.
-async function executeFlag(
-  userId: string,
-  user: UserContext,
-  args: Record<string, unknown>,
-): Promise<unknown> {
-  const receiptId = args.receipt_id as string;
-  const status = args.status as string;
-  if (!receiptId) throw new ToolError(INVALID_PARAMS, "receipt_id is required");
-  if (status !== "positive" && status !== "negative") {
-    throw new ToolError(INVALID_PARAMS, "status must be 'positive' or 'negative'");
-  }
-  const note = typeof args.note === "string" ? args.note : undefined;
-  // Tier weight: a provisional (anonymous) caller's flag weighs less than a
-  // full account's, so distinct-identity Sybil farming costs more.
-  const weight = user.provisional ? 0.25 : 1;
-
-  const flag = await recordCallFlag({
-    receiptId,
-    userId,
-    status: status as FlagStatus,
-    note,
-    weight,
-  });
-  // Soft-fail an invalid/stale/self receipt — don't error the agent's flow over a
-  // feedback call; just report why it didn't count.
-  if (!flag.ok) return { ok: false, reason: flag.reason };
-  return {
-    ok: true,
-    app_id: flag.app_id,
-    status: flag.status,
-    message: "Outcome recorded — thanks for the feedback.",
-  };
 }
 
 // ── ul.test ──────────────────────────────────────

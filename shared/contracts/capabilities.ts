@@ -52,6 +52,12 @@ export interface CapabilityContext {
   provisional: boolean;
   /** The surface the call arrived on — for telemetry, never for authorization. */
   surface: CapabilitySurface;
+  /**
+   * Economic context (Free Mode + BYOK presence) that some read handlers use to
+   * decide which functions to surface. Optional: surfaces that don't compute it
+   * (CLI/REST reads) leave it undefined and the handler falls back to defaults.
+   */
+  econ?: { freeMode: boolean; byokPresent: boolean };
 }
 
 export interface CapabilityAuth {

@@ -10,6 +10,7 @@ import {
   getCapabilityById,
   getCapabilityByToolName,
   listCapabilities,
+  registryDemotedMcpTools,
   registryMcpTools,
   toMcpTool,
 } from "./registry.ts";
@@ -17,13 +18,19 @@ import type { CapabilitySurface } from "../../../shared/contracts/capabilities.t
 
 const ALL_SURFACES: CapabilitySurface[] = ["mcp", "cli", "web"];
 
-Deno.test("registry: every Tier-1 capability declares all three surfaces", () => {
-  for (const cap of listCapabilities()) {
-    if (cap.tier !== 1) continue;
+// Capabilities we intend to reach full MCP + CLI + website parity. Agent-native
+// signals (flag, codemode) are intentionally MCP-only and excluded. As each read
+// migrates it is added here so the parity invariant grows with the registry.
+const PARITY_TARGETS = ["verify", "job"];
+
+Deno.test("registry: full-parity capabilities declare all three surfaces", () => {
+  for (const id of PARITY_TARGETS) {
+    const cap = getCapabilityById(id);
+    assert(cap, `${id} should be registered`);
     for (const surface of ALL_SURFACES) {
       assert(
-        cap.surfaces.includes(surface),
-        `Tier-1 capability "${cap.id}" is missing the "${surface}" surface`,
+        cap!.surfaces.includes(surface),
+        `full-parity capability "${id}" is missing the "${surface}" surface`,
       );
     }
   }
@@ -55,22 +62,35 @@ Deno.test("registry: each declared surface has a projection descriptor", () => {
 });
 
 Deno.test("registry: tool-name resolution covers gx.*, ul.*, and aliases", () => {
-  const verify = getCapabilityById("verify");
-  assert(verify, "verify capability should be registered");
-  // gx.* advertised name, its ul.* twin, and the explicit legacy alias all resolve.
+  // gx.* advertised name, its ul.* twin, and explicit legacy aliases all resolve.
   assertEquals(getCapabilityByToolName("gx.verify")?.id, "verify");
   assertEquals(getCapabilityByToolName("ul.verify")?.id, "verify");
+  assertEquals(getCapabilityByToolName("gx.job")?.id, "job");
+  assertEquals(getCapabilityByToolName("ul.job")?.id, "job");
+  assertEquals(getCapabilityByToolName("ultralight.job")?.id, "job");
+  assertEquals(getCapabilityByToolName("gx.flag")?.id, "flag");
+  assertEquals(getCapabilityByToolName("ul.flag")?.id, "flag");
   // An unmigrated / unknown name does not resolve (falls to the legacy switch).
   assertEquals(getCapabilityByToolName("gx.upload"), undefined);
   assertEquals(getCapabilityByToolName("nope"), undefined);
 });
 
 Deno.test("registry: MCP projection honors LITE (core-only) and Free Mode", () => {
-  // verify is a coreTool, so it appears in both the lean and full manifests.
   const lite = registryMcpTools({ lite: true }).map((t) => t.name);
   const full = registryMcpTools({ lite: false }).map((t) => t.name);
-  assert(lite.includes("gx.verify"), "gx.verify should be in the LITE manifest");
-  assert(full.includes("gx.verify"), "gx.verify should be in the full manifest");
+  // Core tools (verify, job) appear in both the lean and full manifests.
+  for (const name of ["gx.verify", "gx.job"]) {
+    assert(lite.includes(name), `${name} should be in the LITE manifest`);
+    assert(full.includes(name), `${name} should be in the full manifest`);
+  }
+  // Demoted tools (flag) are hidden from LITE but callable + in the full manifest
+  // and the progressive-disclosure list.
+  assert(!lite.includes("gx.flag"), "gx.flag is demoted — not in LITE");
+  assert(full.includes("gx.flag"), "gx.flag should be in the full manifest");
+  assertEquals(
+    registryDemotedMcpTools().map((t) => t.name),
+    ["gx.flag"],
+  );
 });
 
 Deno.test("registry: toMcpTool produces a well-formed tools/list entry", () => {
