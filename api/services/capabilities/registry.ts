@@ -580,6 +580,46 @@ const CAPABILITIES: Capability[] = [
     // Handler bound at load from platform-mcp (executeCall stays there).
   },
   {
+    id: "codemode",
+    branch: "agent_user",
+    tier: 1,
+    advertisedName: "gx.codemode",
+    aliases: ["ul.codemode", "ul.execute"],
+    title: "Run a typed multi-call recipe",
+    description:
+      "Write ONE JavaScript recipe that chains ALL needed operations. Functions are typed on the `codemode` object. " +
+      "Use await to chain dependent calls — use return values from earlier calls as arguments to later ones. " +
+      "IMPORTANT: Write a SINGLE comprehensive recipe per task. Never split across multiple calls.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        code: {
+          type: "string",
+          description:
+            "JavaScript async function body. Chain ALL operations in one recipe using await. " +
+            'Example: const list = await codemode.app_list({ status: "pending" }); ' +
+            "const detail = await codemode.app_get({ id: list[0].id }); " +
+            "await codemode.app_update({ id: detail.id, done: true }); " +
+            "return { updated: detail.id, total: list.length };",
+        },
+      },
+      required: ["code"],
+    },
+    auth: {},
+    // Agent-native in-process orchestration: MCP-only (like flag). The
+    // registryMcpTools freeMode filter drops it in Free Mode (billing bypass),
+    // and executeCodemode also refuses it there.
+    surfaces: ["mcp"],
+    coreTool: true,
+    // Handler bound at load from platform-mcp (executeCodemode stays there).
+  },
+  {
     id: "verify",
     branch: "agent_user",
     tier: 1,

@@ -2392,35 +2392,9 @@ const PLATFORM_TOOLS: MCPTool[] = [
       required: ["action"],
     },
   },
-  // ── 16. ul.codemode ──────────────────────────
-  {
-    name: "ul.codemode",
-    description:
-      "Write ONE JavaScript recipe that chains ALL needed operations. Functions are typed on the `codemode` object. " +
-      "Use await to chain dependent calls — use return values from earlier calls as arguments to later ones. " +
-      "IMPORTANT: Write a SINGLE comprehensive recipe per task. Never split across multiple calls.",
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        code: {
-          type: "string",
-          description:
-            "JavaScript async function body. Chain ALL operations in one recipe using await. " +
-            'Example: const list = await codemode.app_list({ status: "pending" }); ' +
-            "const detail = await codemode.app_get({ id: list[0].id }); " +
-            "await codemode.app_update({ id: detail.id, done: true }); " +
-            "return { updated: detail.id, total: list.length };",
-        },
-      },
-      required: ["code"],
-    },
-  },
+  // ul.codemode (+ ul.execute alias) migrated to the capability registry
+  // (id "codemode", advertised gx.codemode; handler bound from this module —
+  // see executeCodemode).
 
   // ── 17. ul.wallet ──────────────────────────
   {
@@ -2500,7 +2474,7 @@ const LAUNCH_CORE_TOOLS = new Set<string>([
   // ul.permit + ul.secrets are registry capabilities (coreTool) — via registryMcpTools
   "ul.memory",
   "ul.grants",
-  "ul.codemode",
+  // ul.codemode is a registry capability (coreTool) — advertised via registryMcpTools
 ]);
 
 function isPlatformMcpLiteEnabled(): boolean {
@@ -2960,6 +2934,320 @@ bindCapabilityHandler("call", (args, ctx) =>
     ctx.request!,
     ctx.widgetForwardArgs ?? {},
     ctx.econ ?? { freeMode: false, byokPresent: false },
+  ));
+
+// gx.codemode (migrated to the capability registry, handler bound below). Kept
+// in this module so it throws ToolError natively. Refused in Free Mode.
+async function executeCodemode(
+  userId: string,
+  args: Record<string, unknown>,
+  request: Request,
+  econ: { freeMode: boolean; byokPresent: boolean },
+  user: UserContext,
+): Promise<unknown> {
+  let result: unknown;
+  // codemode-local tool map for call-logging annotation. (Previously a
+  // dispatch-level var; the post-switch logging keys it on the platform tool
+  // name — never an app-function key — so it was always undefined for codemode,
+  // and localizing it preserves that behavior exactly.)
+  let toolMapForLogging: Record<string, ToolMapping> | undefined;
+  // Free Mode: codemode runs app functions in-process, bypassing the
+  // per-call billing gate, so it's refused (and dropped from tools/list).
+  if (isFreeModeEnabled() && econ.freeMode) {
+    throw new ToolError(
+      INVALID_PARAMS,
+      `codemode is unavailable in free mode. Add credits at ${
+        walletUrl()
+      } to use it.`,
+    );
+  }
+  const recipeCode = args.code as string;
+  if (!recipeCode) {
+    throw new ToolError(
+      INVALID_PARAMS,
+      "Missing required parameter: code",
+    );
+  }
+
+  const reqUrl = new URL(request.url);
+  const host = request.headers.get("host") || reqUrl.host;
+  const proto = request.headers.get("x-forwarded-proto") ||
+    (host.includes("localhost") ? "http" : "https");
+  const baseUrl = `${proto}://${host}`;
+  const authToken = request.headers.get("Authorization")?.slice(7);
+
+  if (!authToken) {
+    throw new ToolError(
+      INTERNAL_ERROR,
+      "Missing auth token for codemode execution",
+    );
+  }
+
+  // 1. Get user's function index (fast — reads from R2 cache)
+  const {
+    buildToolFunctions,
+    generateTypes,
+    buildJsonSchemaDescriptors,
+  } = await import("../services/codemode-tools.ts");
+  const { executeCodeMode } = await import(
+    "../runtime/codemode-executor.ts"
+  );
+  const { executeDynamicCodeMode } = await import(
+    "../runtime/dynamic-executor.ts"
+  );
+  const { getFunctionIndex, rebuildFunctionIndex } = await import(
+    "../services/function-index.ts"
+  );
+  const { getD1DatabaseId } = await import(
+    "../services/d1-provisioning.ts"
+  );
+
+  // Try cached index first, rebuild if missing
+  let fnIndex = await getFunctionIndex(userId);
+  let toolMap: Record<string, ToolMapping>;
+  let availableTypes: string;
+  let widgets: WidgetIndexEntry[];
+
+  if (fnIndex) {
+    // Fast path — use cached index
+    toolMap = {};
+    for (const [name, fn] of Object.entries(fnIndex.functions)) {
+      toolMap[name] = {
+        appId: fn.appId,
+        appSlug: fn.appSlug,
+        appName: "",
+        fnName: fn.fnName,
+      };
+    }
+    toolMapForLogging = toolMap;
+    availableTypes = fnIndex.types;
+    widgets = fnIndex.widgets;
+  } else {
+    // Slow path — build on demand (first time only)
+    const { SUPABASE_URL: cmSbUrl, SUPABASE_SERVICE_ROLE_KEY: cmSbKey } =
+      getSupabaseEnv();
+    const ownedRes = await fetch(
+      `${cmSbUrl}/rest/v1/apps?owner_id=eq.${userId}&deleted_at=is.null&select=id,name,slug,manifest`,
+      {
+        headers: {
+          "apikey": cmSbKey,
+          "Authorization": `Bearer ${cmSbKey}`,
+        },
+      },
+    );
+    const ownedApps = ownedRes.ok
+      ? await readJsonArray<
+        {
+          id: string;
+          name: string;
+          slug: string;
+          manifest: string | null;
+        }
+      >(ownedRes)
+      : [];
+
+    const likedRes = await fetch(
+      `${cmSbUrl}/rest/v1/user_app_library?user_id=eq.${userId}&select=app_id`,
+      {
+        headers: {
+          "apikey": cmSbKey,
+          "Authorization": `Bearer ${cmSbKey}`,
+        },
+      },
+    );
+    const likedIds = likedRes.ok
+      ? (await readJsonArray<{ app_id: string }>(likedRes)).map((l) =>
+        l.app_id
+      )
+      : [];
+
+    let likedApps: typeof ownedApps = [];
+    if (likedIds.length > 0) {
+      const likedAppsRes = await fetch(
+        `${cmSbUrl}/rest/v1/apps?id=in.(${
+          likedIds.join(",")
+        })&deleted_at=is.null&select=id,name,slug,manifest`,
+        {
+          headers: {
+            "apikey": cmSbKey,
+            "Authorization": `Bearer ${cmSbKey}`,
+          },
+        },
+      );
+      likedApps = likedAppsRes.ok
+        ? await readJsonArray<typeof ownedApps[number]>(likedAppsRes)
+        : [];
+    }
+
+    const allAppsMap = new Map<string, AppForCodemode>();
+    for (const app of [...ownedApps, ...likedApps]) {
+      if (!allAppsMap.has(app.id) && app.manifest) {
+        const manifest = typeof app.manifest === "string"
+          ? JSON.parse(app.manifest)
+          : app.manifest;
+        allAppsMap.set(app.id, {
+          id: app.id,
+          name: app.name,
+          slug: app.slug,
+          manifest: isRecord(manifest)
+            ? manifest as AppForCodemode["manifest"]
+            : {},
+        });
+      }
+    }
+
+    const descriptorsResult = buildJsonSchemaDescriptors(
+      Array.from(allAppsMap.values()),
+    );
+    toolMap = descriptorsResult.toolMap;
+    toolMapForLogging = toolMap;
+    widgets = descriptorsResult.widgets;
+    availableTypes = generateTypes(descriptorsResult.descriptors);
+
+    // Rebuild index in background for next time
+    rebuildFunctionIndex(userId).catch((err) =>
+      console.error("Index rebuild failed:", err)
+    );
+  }
+
+  // P5: codemode invokes these functions in-process, bypassing the
+  // normal /mcp/:appId authorization. Drop entries the user is no longer
+  // allowed to call (a revoked non-owned-private grant, or an explicit
+  // "never" connected-agent policy) before building the recipe. Owned and
+  // accessible-public apps stay callable (codemode orchestrates the
+  // user's own library). Fails open on a DB outage.
+  {
+    const { filterCodemodeToolMapByAccess } = await import(
+      "../services/codemode-access.ts"
+    );
+    toolMap = await filterCodemodeToolMapByAccess(userId, toolMap);
+    toolMapForLogging = toolMap;
+  }
+
+  // 2. Try Dynamic Worker path (in-process MCP calls)
+  const hasLoader = !!globalThis.__env?.LOADER;
+  let execResult: { result: unknown; error?: string; logs: string[] };
+
+  if (hasLoader) {
+    // Dynamic Worker path — load ESM bundles, create RPC bindings
+    const appIds = [
+      ...new Set(Object.values(toolMap).map((t) => t.appId)),
+    ];
+    const workerExports = getPlatformWorkerExports();
+    if (!workerExports) {
+      throw new ToolError(
+        INTERNAL_ERROR,
+        "Dynamic codemode bindings are unavailable in this runtime",
+      );
+    }
+
+    // Load pre-compiled ESM bundles + their signed attestations from KV
+    // (atomically, in parallel) so codemode runs the same integrity check
+    // as the direct gx.call path.
+    const bundlePromises = appIds.map(async (appId) => {
+      const loaded = await loadLiveExecutedBundle(appId);
+      return [appId, loaded] as const;
+    });
+    const bundleEntries = await Promise.all(bundlePromises);
+    const appBundles: Record<string, string> = {};
+    const appAttestations: Record<string, BundleAttestation | null> = {};
+    for (const [appId, loaded] of bundleEntries) {
+      if (loaded.code) {
+        appBundles[appId] = loaded.code;
+        appAttestations[appId] = loaded.attestation;
+      }
+    }
+
+    // Create RPC bindings for each app's DB and data (parallel)
+    const bindings: Record<string, unknown> = {};
+    const dbIdPromises = appIds.map(async (appId) => {
+      const dbId = await getD1DatabaseId(appId);
+      return [appId, dbId] as const;
+    });
+    const dbIdEntries = await Promise.all(dbIdPromises);
+
+    for (const [appId, dbId] of dbIdEntries) {
+      const safeId = appId.replace(/-/g, "_");
+      if (dbId) {
+        bindings[`DB_${safeId}`] = workerExports.DatabaseBinding({
+          props: { databaseId: dbId, appId, userId },
+        });
+      }
+      bindings[`DATA_${safeId}`] = workerExports.AppDataBinding({
+        props: { appId, userId },
+      });
+    }
+
+    codemodeLogger.info("Using dynamic worker execution path", {
+      app_count: appIds.length,
+      bundle_count: Object.keys(appBundles).length,
+    });
+
+    execResult = await executeDynamicCodeMode({
+      code: recipeCode,
+      toolMap,
+      appBundles,
+      appAttestations,
+      bindings,
+      userContext: user,
+      timeoutMs: 60_000,
+    });
+  } else {
+    // Fallback: HTTP-based tool functions (original path)
+    codemodeLogger.info("Falling back to HTTP executor", {
+      reason: "missing_loader_binding",
+    });
+    const discoverLib = async (args: Record<string, unknown>) =>
+      await executeDiscoverLibrary(userId, args);
+    const discoverStore = async (args: Record<string, unknown>) =>
+      await executeDiscoverAppstore(userId, args);
+
+    const toolFunctions = buildToolFunctions(
+      toolMap,
+      baseUrl,
+      authToken,
+      discoverLib,
+      discoverStore,
+    );
+
+    execResult = await executeCodeMode(recipeCode, toolFunctions, 60_000);
+  }
+
+  // Always include available functions so agent knows what to call next
+  result = {
+    result: execResult.result,
+    ...(execResult.error ? { error: execResult.error } : {}),
+    ...(execResult.logs.length > 0 ? { logs: execResult.logs } : {}),
+    _available_functions: Object.keys(toolMap),
+    _types: availableTypes,
+    ...(widgets.length > 0
+      ? {
+        _widgets: widgets.map((w) => `{{widget:${w.name}:${w.appId}}}`),
+        _command_cards: widgets.flatMap((w) =>
+          (w.cards || []).map((card) => ({
+            app_id: w.appId,
+            app_slug: w.appSlug,
+            widget_id: w.name,
+            card_id: card.id,
+            label: card.label,
+            size: card.size,
+            render: card.render,
+            kind: card.kind,
+          }))
+        ),
+      }
+      : {}),
+  };
+  return result;
+}
+
+bindCapabilityHandler("codemode", (args, ctx) =>
+  executeCodemode(
+    ctx.userId,
+    args,
+    ctx.request!,
+    ctx.econ ?? { freeMode: false, byokPresent: false },
+    ctx.user as UserContext,
   ));
 
 function stripGpuFromTool(tool: MCPTool): MCPTool {
@@ -5683,301 +5971,7 @@ async function handleToolsCall(
         break;
       }
 
-      // ── 13. ul.codemode (typed code mode) ──────────────
-      case "ul.codemode":
-      case "ul.execute": { // backward compat alias
-        if (name === "ul.execute") {
-          logAliasUsage(name);
-        }
-        // Free Mode: codemode runs app functions in-process, bypassing the
-        // per-call billing gate, so it's refused (and dropped from tools/list).
-        if (isFreeModeEnabled() && econ.freeMode) {
-          throw new ToolError(
-            INVALID_PARAMS,
-            `codemode is unavailable in free mode. Add credits at ${
-              walletUrl()
-            } to use it.`,
-          );
-        }
-        const recipeCode = toolArgs.code as string;
-        if (!recipeCode) {
-          throw new ToolError(
-            INVALID_PARAMS,
-            "Missing required parameter: code",
-          );
-        }
-
-        const reqUrl = new URL(request.url);
-        const host = request.headers.get("host") || reqUrl.host;
-        const proto = request.headers.get("x-forwarded-proto") ||
-          (host.includes("localhost") ? "http" : "https");
-        const baseUrl = `${proto}://${host}`;
-        const authToken = request.headers.get("Authorization")?.slice(7);
-
-        if (!authToken) {
-          throw new ToolError(
-            INTERNAL_ERROR,
-            "Missing auth token for codemode execution",
-          );
-        }
-
-        // 1. Get user's function index (fast — reads from R2 cache)
-        const {
-          buildToolFunctions,
-          generateTypes,
-          buildJsonSchemaDescriptors,
-        } = await import("../services/codemode-tools.ts");
-        const { executeCodeMode } = await import(
-          "../runtime/codemode-executor.ts"
-        );
-        const { executeDynamicCodeMode } = await import(
-          "../runtime/dynamic-executor.ts"
-        );
-        const { getFunctionIndex, rebuildFunctionIndex } = await import(
-          "../services/function-index.ts"
-        );
-        const { getD1DatabaseId } = await import(
-          "../services/d1-provisioning.ts"
-        );
-
-        // Try cached index first, rebuild if missing
-        let fnIndex = await getFunctionIndex(userId);
-        let toolMap: Record<string, ToolMapping>;
-        let availableTypes: string;
-        let widgets: WidgetIndexEntry[];
-
-        if (fnIndex) {
-          // Fast path — use cached index
-          toolMap = {};
-          for (const [name, fn] of Object.entries(fnIndex.functions)) {
-            toolMap[name] = {
-              appId: fn.appId,
-              appSlug: fn.appSlug,
-              appName: "",
-              fnName: fn.fnName,
-            };
-          }
-          toolMapForLogging = toolMap;
-          availableTypes = fnIndex.types;
-          widgets = fnIndex.widgets;
-        } else {
-          // Slow path — build on demand (first time only)
-          const { SUPABASE_URL: cmSbUrl, SUPABASE_SERVICE_ROLE_KEY: cmSbKey } =
-            getSupabaseEnv();
-          const ownedRes = await fetch(
-            `${cmSbUrl}/rest/v1/apps?owner_id=eq.${userId}&deleted_at=is.null&select=id,name,slug,manifest`,
-            {
-              headers: {
-                "apikey": cmSbKey,
-                "Authorization": `Bearer ${cmSbKey}`,
-              },
-            },
-          );
-          const ownedApps = ownedRes.ok
-            ? await readJsonArray<
-              {
-                id: string;
-                name: string;
-                slug: string;
-                manifest: string | null;
-              }
-            >(ownedRes)
-            : [];
-
-          const likedRes = await fetch(
-            `${cmSbUrl}/rest/v1/user_app_library?user_id=eq.${userId}&select=app_id`,
-            {
-              headers: {
-                "apikey": cmSbKey,
-                "Authorization": `Bearer ${cmSbKey}`,
-              },
-            },
-          );
-          const likedIds = likedRes.ok
-            ? (await readJsonArray<{ app_id: string }>(likedRes)).map((l) =>
-              l.app_id
-            )
-            : [];
-
-          let likedApps: typeof ownedApps = [];
-          if (likedIds.length > 0) {
-            const likedAppsRes = await fetch(
-              `${cmSbUrl}/rest/v1/apps?id=in.(${
-                likedIds.join(",")
-              })&deleted_at=is.null&select=id,name,slug,manifest`,
-              {
-                headers: {
-                  "apikey": cmSbKey,
-                  "Authorization": `Bearer ${cmSbKey}`,
-                },
-              },
-            );
-            likedApps = likedAppsRes.ok
-              ? await readJsonArray<typeof ownedApps[number]>(likedAppsRes)
-              : [];
-          }
-
-          const allAppsMap = new Map<string, AppForCodemode>();
-          for (const app of [...ownedApps, ...likedApps]) {
-            if (!allAppsMap.has(app.id) && app.manifest) {
-              const manifest = typeof app.manifest === "string"
-                ? JSON.parse(app.manifest)
-                : app.manifest;
-              allAppsMap.set(app.id, {
-                id: app.id,
-                name: app.name,
-                slug: app.slug,
-                manifest: isRecord(manifest)
-                  ? manifest as AppForCodemode["manifest"]
-                  : {},
-              });
-            }
-          }
-
-          const descriptorsResult = buildJsonSchemaDescriptors(
-            Array.from(allAppsMap.values()),
-          );
-          toolMap = descriptorsResult.toolMap;
-          toolMapForLogging = toolMap;
-          widgets = descriptorsResult.widgets;
-          availableTypes = generateTypes(descriptorsResult.descriptors);
-
-          // Rebuild index in background for next time
-          rebuildFunctionIndex(userId).catch((err) =>
-            console.error("Index rebuild failed:", err)
-          );
-        }
-
-        // P5: codemode invokes these functions in-process, bypassing the
-        // normal /mcp/:appId authorization. Drop entries the user is no longer
-        // allowed to call (a revoked non-owned-private grant, or an explicit
-        // "never" connected-agent policy) before building the recipe. Owned and
-        // accessible-public apps stay callable (codemode orchestrates the
-        // user's own library). Fails open on a DB outage.
-        {
-          const { filterCodemodeToolMapByAccess } = await import(
-            "../services/codemode-access.ts"
-          );
-          toolMap = await filterCodemodeToolMapByAccess(userId, toolMap);
-          toolMapForLogging = toolMap;
-        }
-
-        // 2. Try Dynamic Worker path (in-process MCP calls)
-        const hasLoader = !!globalThis.__env?.LOADER;
-        let execResult: { result: unknown; error?: string; logs: string[] };
-
-        if (hasLoader) {
-          // Dynamic Worker path — load ESM bundles, create RPC bindings
-          const appIds = [
-            ...new Set(Object.values(toolMap).map((t) => t.appId)),
-          ];
-          const workerExports = getPlatformWorkerExports();
-          if (!workerExports) {
-            throw new ToolError(
-              INTERNAL_ERROR,
-              "Dynamic codemode bindings are unavailable in this runtime",
-            );
-          }
-
-          // Load pre-compiled ESM bundles + their signed attestations from KV
-          // (atomically, in parallel) so codemode runs the same integrity check
-          // as the direct gx.call path.
-          const bundlePromises = appIds.map(async (appId) => {
-            const loaded = await loadLiveExecutedBundle(appId);
-            return [appId, loaded] as const;
-          });
-          const bundleEntries = await Promise.all(bundlePromises);
-          const appBundles: Record<string, string> = {};
-          const appAttestations: Record<string, BundleAttestation | null> = {};
-          for (const [appId, loaded] of bundleEntries) {
-            if (loaded.code) {
-              appBundles[appId] = loaded.code;
-              appAttestations[appId] = loaded.attestation;
-            }
-          }
-
-          // Create RPC bindings for each app's DB and data (parallel)
-          const bindings: Record<string, unknown> = {};
-          const dbIdPromises = appIds.map(async (appId) => {
-            const dbId = await getD1DatabaseId(appId);
-            return [appId, dbId] as const;
-          });
-          const dbIdEntries = await Promise.all(dbIdPromises);
-
-          for (const [appId, dbId] of dbIdEntries) {
-            const safeId = appId.replace(/-/g, "_");
-            if (dbId) {
-              bindings[`DB_${safeId}`] = workerExports.DatabaseBinding({
-                props: { databaseId: dbId, appId, userId },
-              });
-            }
-            bindings[`DATA_${safeId}`] = workerExports.AppDataBinding({
-              props: { appId, userId },
-            });
-          }
-
-          codemodeLogger.info("Using dynamic worker execution path", {
-            app_count: appIds.length,
-            bundle_count: Object.keys(appBundles).length,
-          });
-
-          execResult = await executeDynamicCodeMode({
-            code: recipeCode,
-            toolMap,
-            appBundles,
-            appAttestations,
-            bindings,
-            userContext: user,
-            timeoutMs: 60_000,
-          });
-        } else {
-          // Fallback: HTTP-based tool functions (original path)
-          codemodeLogger.info("Falling back to HTTP executor", {
-            reason: "missing_loader_binding",
-          });
-          const discoverLib = async (args: Record<string, unknown>) =>
-            await executeDiscoverLibrary(userId, args);
-          const discoverStore = async (args: Record<string, unknown>) =>
-            await executeDiscoverAppstore(userId, args);
-
-          const toolFunctions = buildToolFunctions(
-            toolMap,
-            baseUrl,
-            authToken,
-            discoverLib,
-            discoverStore,
-          );
-
-          execResult = await executeCodeMode(recipeCode, toolFunctions, 60_000);
-        }
-
-        // Always include available functions so agent knows what to call next
-        result = {
-          result: execResult.result,
-          ...(execResult.error ? { error: execResult.error } : {}),
-          ...(execResult.logs.length > 0 ? { logs: execResult.logs } : {}),
-          _available_functions: Object.keys(toolMap),
-          _types: availableTypes,
-          ...(widgets.length > 0
-            ? {
-              _widgets: widgets.map((w) => `{{widget:${w.name}:${w.appId}}}`),
-              _command_cards: widgets.flatMap((w) =>
-                (w.cards || []).map((card) => ({
-                  app_id: w.appId,
-                  app_slug: w.appSlug,
-                  widget_id: w.name,
-                  card_id: card.id,
-                  label: card.label,
-                  size: card.size,
-                  render: card.render,
-                  kind: card.kind,
-                }))
-              ),
-            }
-            : {}),
-        };
-        break;
-      }
+      // ul.codemode + ul.execute dispatched via the capability registry pre-check above.
 
       default:
         return jsonRpcErrorResponse(

@@ -89,6 +89,9 @@ Deno.test("registry: tool-name resolution covers gx.*, ul.*, and aliases", () =>
   assertEquals(getCapabilityByToolName("ul.connections")?.id, "secrets");
   assertEquals(getCapabilityByToolName("gx.call")?.id, "call");
   assertEquals(getCapabilityByToolName("ul.call")?.id, "call");
+  assertEquals(getCapabilityByToolName("gx.codemode")?.id, "codemode");
+  assertEquals(getCapabilityByToolName("ul.codemode")?.id, "codemode");
+  assertEquals(getCapabilityByToolName("ul.execute")?.id, "codemode");
   // An unmigrated / unknown name does not resolve (falls to the legacy switch).
   assertEquals(getCapabilityByToolName("gx.wallet"), undefined);
   assertEquals(getCapabilityByToolName("nope"), undefined);
@@ -97,6 +100,13 @@ Deno.test("registry: tool-name resolution covers gx.*, ul.*, and aliases", () =>
 Deno.test("registry: MCP projection honors LITE (core-only) and Free Mode", () => {
   const lite = registryMcpTools({ lite: true }).map((t) => t.name);
   const full = registryMcpTools({ lite: false }).map((t) => t.name);
+  // codemode is core (in LITE) but dropped in Free Mode (billing bypass).
+  assert(lite.includes("gx.codemode"), "gx.codemode should be in LITE");
+  assert(
+    !registryMcpTools({ lite: false, freeMode: true }).map((t) => t.name)
+      .includes("gx.codemode"),
+    "gx.codemode must be dropped in Free Mode",
+  );
   // Core tools appear in both the lean and full manifests.
   for (
     const name of [
