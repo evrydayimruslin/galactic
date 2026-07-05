@@ -20,6 +20,11 @@ import {
 import { peekCallerUsage } from "../services/cloud-usage.ts";
 import { walletUrl } from "../lib/urls.ts";
 import { createAppsService } from "../services/apps.ts";
+import {
+  getCapabilityByToolName,
+  registryMcpTools,
+} from "../services/capabilities/registry.ts";
+import { type Capability, CapabilityError } from "../../shared/contracts/capabilities.ts";
 import { createR2Service, type R2Service } from "../services/storage.ts";
 import { checkInMemoryLimit, checkRateLimit } from "../services/ratelimit.ts";
 import { checkAndIncrementWeeklyCalls } from "../services/weekly-calls.ts";
@@ -206,11 +211,9 @@ import {
   putLiveExecutedBundle,
 } from "../services/executed-bundle.ts";
 import {
-  buildVerificationVerdict,
   getVersionTrust,
   matchFilesAgainstHashes,
   readVersionSourceFiles,
-  recordVerification,
 } from "../services/code-verification.ts";
 import { type FlagStatus, recordCallFlag } from "../services/call-flags.ts";
 import { emptyHealth, getAppHealth, isRecentlyHealthy } from "../services/app-health.ts";
@@ -2739,33 +2742,9 @@ const PLATFORM_TOOLS: MCPTool[] = [
     },
   },
 
-  // ── ul.verify (open-code / integrity check before calling) ──────────────
-  {
-    name: "ul.verify",
-    description:
-      "Verify an Agent's integrity BEFORE you call it. Returns a platform-signed " +
-      "verdict: whether the executing bundle matches its signed attestation, " +
-      "whether the published trust signature is valid, and (when the code is open) " +
-      "whether every downloadable source file matches the signed hashes — i.e. " +
-      "'the code you can read is the code that runs'. Pair with gx.download to read " +
-      "the source yourself.",
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        app_id: {
-          type: "string",
-          description: "App ID or slug of the Agent to verify.",
-        },
-      },
-      required: ["app_id"],
-    },
-  },
+  // ul.verify migrated to the capability registry
+  // (api/services/capabilities/registry.ts) — projected into tools/list and
+  // dispatch from there. See getPlatformTools + the dispatch pre-check below.
 
   // ── ul.flag (report a call's outcome — proof-of-use feedback) ──────────────
   {
@@ -3038,7 +3017,7 @@ const LAUNCH_CORE_TOOLS = new Set<string>([
   "ul.discover",
   "ul.call",
   "ul.permit",
-  "ul.verify",
+  // ul.verify is a registry capability (coreTool) — advertised via registryMcpTools
   "ul.job",
   "ul.upload",
   "ul.test",
@@ -3131,7 +3110,14 @@ export function getPlatformTools(
   // Advertise the canonical gx.* prefix outward. ul.* stays the internal
   // registration name + a permanent input alias (dispatch normalizes gx.→ul.),
   // so this only changes the names agents SEE in tools/list, never breaks callers.
-  return tools.map(advertiseGxName);
+  const legacy = tools.map(advertiseGxName);
+  // Capabilities migrated to the registry have left PLATFORM_TOOLS; project them
+  // in here (already gx.*-named). Same LITE (core-only) + Free Mode rules apply.
+  const registry = registryMcpTools({
+    lite: isPlatformMcpLiteEnabled(),
+    freeMode: options?.freeMode,
+  });
+  return [...legacy, ...registry];
 }
 
 // Progressive disclosure for the lite manifest: list the platform tools that
@@ -4417,6 +4403,16 @@ async function handleToolsCall(
       );
     }
 
+    // Capability registry (strangler-fig): names migrated off the legacy switch
+    // are dispatched here first; everything else falls through to the switch.
+    const capability = getCapabilityByToolName(name);
+    if (capability) {
+      result = await runCapabilityForMcp(capability, toolArgs, {
+        userId,
+        provisional: user.provisional ?? false,
+        surface: "mcp",
+      });
+    } else
     switch (name) {
       // ── 1. ul.discover ──────────────
       case "ul.discover": {
@@ -5151,11 +5147,6 @@ async function handleToolsCall(
       }
 
       // ── ul.verify (open-code / integrity verdict) ──────────────
-      case "ul.verify": {
-        result = await executeVerify(userId, toolArgs);
-        break;
-      }
-
       // ── ul.flag (receipt-verified post-call outcome) ──────────────
       case "ul.flag": {
         result = await executeFlag(userId, user, toolArgs);
@@ -8090,37 +8081,29 @@ export async function executeDownload(
 // and records the verified-read (Phase 4 ranking signal). Available for any
 // discoverable Agent — verify reveals only hashes + a verdict, never the source
 // or secrets, so it is NOT gated by download_access (unlike gx.download).
-async function executeVerify(
-  userId: string,
+// Run a capability-registry handler on the MCP surface, mapping its
+// surface-neutral CapabilityError onto this surface's ToolError / JSON-RPC codes.
+// (verify migrated here — see api/services/capabilities/registry.ts.)
+async function runCapabilityForMcp(
+  capability: Capability,
   args: Record<string, unknown>,
+  ctx: { userId: string; provisional: boolean; surface: "mcp" },
 ): Promise<unknown> {
-  const appIdOrSlug = args.app_id as string;
-  if (!appIdOrSlug) throw new ToolError(INVALID_PARAMS, "app_id is required");
-
-  const appsService = createAppsService();
-  let app: App | null = await appsService.findById(appIdOrSlug);
-  if (!app) app = await appsService.findBySlug(userId, appIdOrSlug);
-  if (!app) throw new ToolError(NOT_FOUND, `App not found: ${appIdOrSlug}`);
-  // Don't leak the existence/integrity of a private Agent to a non-owner.
-  if (app.owner_id !== userId && app.visibility === "private") {
-    throw new ToolError(NOT_FOUND, `App not found: ${appIdOrSlug}`);
+  try {
+    return await capability.handler(args, ctx);
+  } catch (err) {
+    if (err instanceof CapabilityError) {
+      const code = err.code === "invalid_input"
+        ? INVALID_PARAMS
+        : err.code === "not_found"
+        ? NOT_FOUND
+        : err.code === "forbidden"
+        ? FORBIDDEN
+        : INTERNAL_ERROR;
+      throw new ToolError(code, err.message);
+    }
+    throw err;
   }
-
-  // Verify always reflects the LIVE running version (the only one with an
-  // executed-bundle attestation); a per-version executed verdict isn't producible.
-  const verdict = await buildVerificationVerdict(app);
-  // Best-effort telemetry — never blocks the verdict. Skip suspended Agents:
-  // they can't actually be called, so they should not earn the verified-read
-  // ranking signal.
-  if (!app.hosting_suspended) {
-    await recordVerification({
-      appId: app.id,
-      userId,
-      version: verdict.version,
-      verdict,
-    });
-  }
-  return verdict;
 }
 
 // ── ul.flag ──────────────────────────────────────
