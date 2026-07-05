@@ -307,7 +307,7 @@ Deno.test("agent function permissions: confirm does NOT override never", async (
         assertEquals(result.details.policy, "never");
         // The bounce is a diagnostic: it names the policy and the way out.
         assertEquals(result.message.includes('"never"'), true);
-        assertEquals(result.message.includes("gx.permit"), true);
+        assertEquals(result.message.includes("gx.consent"), true);
       }
     },
     (async (input: Request | URL | string) => {

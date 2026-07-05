@@ -80,7 +80,8 @@ Deno.test("registry: tool-name resolution covers gx.*, ul.*, and aliases", () =>
   assertEquals(getCapabilityByToolName("ul.test")?.id, "test");
   assertEquals(getCapabilityByToolName("gx.set")?.id, "set");
   assertEquals(getCapabilityByToolName("ul.set")?.id, "set");
-  assertEquals(getCapabilityByToolName("gx.permit")?.id, "consent");
+  assertEquals(getCapabilityByToolName("gx.consent")?.id, "consent");
+  assertEquals(getCapabilityByToolName("gx.permit")?.id, "consent"); // legacy alias
   assertEquals(getCapabilityByToolName("ul.permit")?.id, "consent");
   assertEquals(getCapabilityByToolName("gx.secrets")?.id, "secrets");
   assertEquals(getCapabilityByToolName("ul.secrets")?.id, "secrets");
@@ -117,7 +118,7 @@ Deno.test("registry: MCP projection honors LITE (core-only) and Free Mode", () =
       "gx.upload",
       "gx.test",
       "gx.set",
-      "gx.permit",
+      "gx.consent",
       "gx.secrets",
     ]
   ) {

@@ -436,10 +436,9 @@ const CAPABILITIES: Capability[] = [
     id: "consent",
     branch: "agent_user",
     tier: 1,
-    // NOTE: advertised name stays gx.permit for now; rename to gx.consent in the
-    // retire/rename pass (names are late-bound).
-    advertisedName: "gx.permit",
-    aliases: ["ul.permit"],
+    advertisedName: "gx.consent",
+    // gx.permit / ul.permit kept as permanent aliases for one deprecation window.
+    aliases: ["ul.permit", "gx.permit"],
     title: "Set or read your connected-agent call policy",
     description:
       "Record or read YOUR decision about whether your connected agents may call a " +
@@ -535,7 +534,7 @@ const CAPABILITIES: Capability[] = [
       "Call any app's function through this single platform connection. " +
       "No separate per-app MCP connection needed. Uses your auth context. " +
       'If it returns permission_required (policy "ask"), confirm with your ' +
-      "user, then retry with confirm:true (allow once) or call gx.permit to " +
+      "user, then retry with confirm:true (allow once) or call gx.consent to " +
       "allow it from now on.",
     annotations: {
       readOnlyHint: false,
@@ -565,7 +564,7 @@ const CAPABILITIES: Capability[] = [
           description:
             "Set true ONLY after your end user approves this call, to satisfy " +
             'an "ask" policy for this one call (allow once). Never override a ' +
-            '"never" policy. To allow from now on, use gx.permit instead.',
+            '"never" policy. To allow from now on, use gx.consent instead.',
         },
       },
       required: ["app_id", "function_name"],
