@@ -205,6 +205,7 @@ import {
   generateGpuManifest,
   getManifestAllowedDestinations,
 } from "../services/trust.ts";
+import { resolveTrustSignals } from "../services/trust-signals.ts";
 import {
   type BundleAttestation,
   loadLiveExecutedBundle,
@@ -13298,10 +13299,17 @@ async function executeDiscoverInspect(
       gpuReliability = await getGpuReliability(app.id);
     } catch { /* GPU module not available */ }
   }
+  // Single-agent detail surface — report the REAL trust signals (executing-bundle
+  // integrity, call health, publisher verification) via the shared gatherer, the
+  // same ones the website agent page uses. Previously this passed only
+  // `reliability`, so integrity/health/publisher silently defaulted to an
+  // optimistic-but-unchecked card.
+  const trustSignals = await resolveTrustSignals(app);
   const trustCard = sanitizeGpuTrustCard(buildAppTrustCard({
     ...app,
     runtime: appRuntime || "deno",
   } as App, {
+    ...trustSignals,
     reliability: gpuReliability,
   }));
 

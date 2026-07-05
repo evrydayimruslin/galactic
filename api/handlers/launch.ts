@@ -11,12 +11,14 @@ import {
   parseFeeWaiverLeaderboardQuery,
 } from "../services/fee-waivers.ts";
 import { getOrCreatePublisherReferralLink } from "../services/referrals.ts";
+import { verifyAppIntegrity } from "../services/capabilities/verify.ts";
+import { CapabilityError } from "../../shared/contracts/capabilities.ts";
 import {
   isGpuSupportEnabled,
   sanitizeGpuTrustCard,
 } from "../services/gpu/feature-flag.ts";
 import { buildAppNetworkDisclosure, buildAppTrustCard } from "../services/trust.ts";
-import { resolveExecutedIntegrity } from "../services/executed-bundle.ts";
+import { resolveTrustSignals } from "../services/trust-signals.ts";
 import { encryptEnvVar } from "../services/envvars.ts";
 import { getScopedEnvSchemaEntries, resolveAppEnvSchema } from "../services/app-settings.ts";
 import {
@@ -24,7 +26,6 @@ import {
   type UserAppSecretStatusRow,
   validatePerUserSettingsValues,
 } from "../services/user-app-settings.ts";
-import { emptyHealth, getAppHealth } from "../services/app-health.ts";
 import { RequestValidationError } from "../services/request-validation.ts";
 import { createEmbeddingService } from "../services/embedding.ts";
 import { getRecentCalls } from "../services/call-logger.ts";
@@ -759,6 +760,16 @@ export async function handleLaunch(request: Request): Promise<Response> {
       return await handleLaunchToolFunctions(request, functionsMatch[1]);
     }
 
+    // Web projection of the `verify` capability (registry) — the signed
+    // integrity verdict gx.verify returns, mounted here so the website has
+    // parity with MCP/CLI. Authenticated read (matches gx.verify).
+    const verifyMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/verify$/,
+    );
+    if (verifyMatch) {
+      return await handleLaunchAgentVerify(request, verifyMatch[1]);
+    }
+
     const toolMatch = path.match(/^\/api\/launch\/agents\/([^/]+)$/);
     if (toolMatch) {
       return await handleLaunchTool(request, toolMatch[1]);
@@ -774,6 +785,34 @@ export async function handleLaunch(request: Request): Promise<Response> {
     }
     console.error("[LAUNCH] API facade failed:", err);
     return error("Launch API request failed", 500);
+  }
+}
+
+// GET /api/launch/agents/:id/verify — website projection of the `verify`
+// capability. Runs the identical surface-neutral handler gx.verify uses, so the
+// verdict is byte-for-byte the same across MCP, CLI, and website. Authenticated
+// read (any identity authenticate() accepts, matching gx.verify's Tier-1 reach).
+async function handleLaunchAgentVerify(
+  request: Request,
+  encodedLocator: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  const locator = parseLocator(encodedLocator);
+  try {
+    const verdict = await verifyAppIntegrity(user.id, locator);
+    return json({ verdict });
+  } catch (err) {
+    if (err instanceof CapabilityError) {
+      const status = err.code === "not_found"
+        ? 404
+        : err.code === "invalid_input"
+        ? 400
+        : err.code === "forbidden"
+        ? 403
+        : 500;
+      return error(err.message, status);
+    }
+    throw err;
   }
 }
 
@@ -6499,16 +6538,11 @@ function normalizeVisibility(
 }
 
 async function buildLaunchTrustCard(row: LaunchAppRow): Promise<LaunchTrustCard> {
-  // Two external trust signals fetched in parallel: the publisher's Connect
-  // verification (persisted boolean, kept fresh by the account.updated webhook —
-  // no live Stripe call per page load) and the Agent's binary call health.
-  const [publisherVerified, healthMap, executedIntegrity] = await Promise.all([
-    isPublisherVerified(row.owner_id),
-    getAppHealth([row.id]),
-    // Single-agent detail surface: report REAL runtime integrity (executing
-    // bundle vs signature), not just publish-time source signing.
-    resolveExecutedIntegrity(row.id),
-  ]);
+  // Real runtime integrity + binary call health + publisher Connect verification,
+  // gathered in parallel by the shared resolveTrustSignals (same signals the MCP
+  // gx.discover inspect path now uses) — never the base builder's optimistic
+  // defaults. Persisted signals, no live Stripe call per page load.
+  const signals = await resolveTrustSignals(row);
   const card = sanitizeGpuTrustCard(buildAppTrustCard(
     {
       current_version: row.current_version || "",
@@ -6527,11 +6561,7 @@ async function buildLaunchTrustCard(row: LaunchAppRow): Promise<LaunchTrustCard>
       download_access: row.download_access || "owner",
       env_schema: row.env_schema || {},
     } as never,
-    {
-      publisher_verified: publisherVerified,
-      health: healthMap.get(row.id) ?? emptyHealth(),
-      executed_integrity: executedIntegrity,
-    },
+    signals,
   ) as LaunchTrustCard);
 
   // Declared-only disclosure (no per-user connected state) — the trust card is a
@@ -6543,48 +6573,6 @@ async function buildLaunchTrustCard(row: LaunchAppRow): Promise<LaunchTrustCard>
       (row.manifest ?? null) as Parameters<typeof buildAppNetworkDisclosure>[0],
     ),
   };
-}
-
-// A verified snapshot older than this is treated as unverified (fail closed).
-// The hourly reconcile cron refreshes any seller whose snapshot has crossed a
-// 12h staleness threshold (effective per-seller refresh ~12-13h), so a
-// legitimately verified seller stays well inside this 48h window; if reconcile
-// stalls, badges degrade to unverified rather than stranding a stale "verified".
-const PUBLISHER_VERIFIED_MAX_AGE_MS = 48 * 60 * 60 * 1000;
-
-// publisher_verified := the owner's Stripe Connect account is payable AND in
-// good standing (strict stripe_connect_verified, distilled by the webhook +
-// reconcile cron) AND that signal is fresh. Reads persisted columns, never the
-// live Stripe API. Every failure direction resolves to false (unverified).
-async function isPublisherVerified(
-  ownerId: string | null | undefined,
-): Promise<boolean> {
-  if (!ownerId) return false;
-  try {
-    const db = getDbConfig();
-    const rows = await dbGet<{
-      stripe_connect_verified: boolean | null;
-      stripe_connect_synced_at: string | null;
-    }>(
-      db,
-      "users",
-      {
-        id: `eq.${ownerId}`,
-        select: "stripe_connect_verified,stripe_connect_synced_at",
-        limit: "1",
-      },
-    );
-    const row = rows[0];
-    if (row?.stripe_connect_verified !== true) return false;
-    const syncedAt = row.stripe_connect_synced_at
-      ? Date.parse(row.stripe_connect_synced_at)
-      : NaN;
-    if (!Number.isFinite(syncedAt)) return false;
-    return Date.now() - syncedAt <= PUBLISHER_VERIFIED_MAX_AGE_MS;
-  } catch (err) {
-    console.warn("[LAUNCH] publisher_verified lookup failed:", err);
-    return false;
-  }
 }
 
 function shouldHideGpu(row: LaunchAppRow): boolean {
