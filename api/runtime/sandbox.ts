@@ -122,6 +122,10 @@ export interface RuntimeAIRoute {
   billingSource?: string;
   requestDefaults?: Record<string, unknown>;
   shouldDebitLight: boolean;
+  // Metered (credits) route: re-check the wallet before EVERY ai() call so a
+  // buyer cannot fan out many galactic.ai() calls in one execution and outspend
+  // their balance. BYOK routes set this false. Mirrors ResolvedInferenceRoute.
+  shouldRequireBalance: boolean;
 }
 
 interface RpcToolCallEnvelope {

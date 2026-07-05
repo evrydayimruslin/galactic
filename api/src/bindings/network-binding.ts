@@ -6,6 +6,13 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { connect } from 'cloudflare:sockets';
 import { isBlockedHost } from './outbound-policy.ts';
+import {
+  assertNoHeaderInjection,
+  assertSingleAddress,
+  dotStuffBody,
+  assertImapAtom,
+  assertImapQuotable,
+} from '../../services/mail-sanitize.ts';
 import type { ResolvedCredential } from '../../../shared/contracts/env.ts';
 
 interface NetworkBindingProps {
@@ -189,6 +196,10 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
     const host = this.resolveCredential(hostKey);
     const user = this.resolveCredential(userKey);
     const pass = this.resolveCredential(passKey);
+    // Fail closed on injection before opening the socket.
+    assertImapQuotable('user', user);
+    assertImapQuotable('pass', pass);
+    assertImapAtom('processedFlag', processedFlag);
     validateTarget(host, port);
     const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
     const lr = new LineReader(socket.readable);
@@ -308,6 +319,12 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
     const host = this.resolveCredential(hostKey);
     const user = this.resolveCredential(userKey);
     const pass = this.resolveCredential(passKey);
+    // Fail closed on header/command injection before opening the socket.
+    assertSingleAddress('from', from);
+    assertSingleAddress('to', to);
+    assertNoHeaderInjection('fromName', fromName);
+    assertNoHeaderInjection('subject', subject);
+    if (inReplyTo) assertNoHeaderInjection('inReplyTo', inReplyTo);
     validateTarget(host, port);
     const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
     const lr = new LineReader(socket.readable);
@@ -352,7 +369,7 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
       headers += 'Content-Type: text/plain; charset=UTF-8\r\n';
       headers += 'Date: ' + new Date().toUTCString() + '\r\n';
 
-      await writer.write(enc.encode(headers + '\r\n' + body + '\r\n.\r\n'));
+      await writer.write(enc.encode(headers + '\r\n' + dotStuffBody(body) + '\r\n.\r\n'));
       const sendResp = await lr.readLine();
       if (!sendResp.startsWith('250')) throw new Error('SMTP send failed: ' + sendResp);
 

@@ -11,7 +11,6 @@ const REQUIRED_RUNS = [
   { name: "Supabase Production DB", category: "production" },
   { name: "API Deploy", category: "production" },
   { name: "Launch Web Deploy", category: "production" },
-  { name: "Desktop Release", category: "production" },
 ];
 
 function printHelp() {

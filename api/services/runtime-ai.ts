@@ -63,6 +63,7 @@ function toRuntimeAIRoute(route: ResolvedInferenceRoute): RuntimeAIRoute {
     billingSource: route.billingSource,
     requestDefaults: route.requestDefaults,
     shouldDebitLight: route.shouldDebitLight,
+    shouldRequireBalance: route.shouldRequireBalance,
   };
 }
 
@@ -81,6 +82,7 @@ function toChatUsage(response: AIResponse): ChatUsage {
 export function createRoutedRuntimeAIService(
   route: ResolvedInferenceRoute,
   userId: string,
+  checkBalance: typeof checkChatBalance = checkChatBalance,
 ): RuntimeAIService {
   const service = createAIService(
     route.upstreamProvider,
@@ -88,10 +90,41 @@ export function createRoutedRuntimeAIService(
     route.model,
     route.requestDefaults,
   );
+  // A metered route re-checks the wallet on EVERY ai() call. The context-build
+  // gate (createRuntimeAIContext) only fires once; without this a buyer could
+  // fan out many galactic.ai() calls in one execution and outspend their
+  // balance, since the post-hoc debit allows partial debiting. BYOK routes are
+  // not metered and skip this entirely.
+  const metered = route.shouldRequireBalance && route.shouldDebitLight;
 
   return {
     call: async (request: AIRequest): Promise<AIResponse> => {
       const model = selectInferenceModel(route, request.model);
+
+      if (metered) {
+        // Fail OPEN on a balance-read error (match the context-build gate's
+        // normal branch): availability wins on infra blips, and the post-hoc
+        // debit still applies. Free-Mode users are already denied at context
+        // build, so a call only reaches here for a funded, non-Free user.
+        let balance: number | null = null;
+        try {
+          balance = await checkBalance(userId);
+        } catch (balanceError) {
+          console.warn(
+            "[RUNTIME-AI] Per-call balance re-check unavailable; proceeding un-gated:",
+            balanceError,
+          );
+        }
+        if (balance !== null && balance < CHAT_MIN_BALANCE_LIGHT) {
+          return emptyAIResponse(
+            model,
+            `Platform inference requires at least ${CHAT_MIN_BALANCE_LIGHT} credits ` +
+              `(current balance: ${balance}). Add credits in the wallet or configure ` +
+              `a BYOK provider key in Settings.`,
+          );
+        }
+      }
+
       const response = await service.call({ ...request, model });
       const usage = toChatUsage(response);
 
@@ -114,6 +147,17 @@ export function createRoutedRuntimeAIService(
             },
             { billingSource: route.billingSource },
           );
+          // A depleting (partial) debit means the buyer could not fully cover
+          // this call: withhold the content so they cannot consume inference
+          // they did not pay for. Only on metered routes (a BYOK route never
+          // depletes a platform wallet, so was_depleted there is irrelevant).
+          if (metered && billing.was_depleted) {
+            return emptyAIResponse(
+              response.model || model,
+              `Insufficient credits to complete this AI call. Add credits in the ` +
+                `wallet or configure a BYOK provider key in Settings.`,
+            );
+          }
           response.usage.cost_light = billing.cost_light;
         } catch (err) {
           console.error("[RUNTIME-AI] Failed to debit Light for AI call:", err);
@@ -223,7 +267,7 @@ export async function createRuntimeAIContext(
     return {
       route: toRuntimeAIRoute(route),
       resolvedRoute: route,
-      aiService: createRoutedRuntimeAIService(route, user.id),
+      aiService: createRoutedRuntimeAIService(route, user.id, checkBalance),
       userApiKey: route.apiKey,
       unavailableReason: null,
     };

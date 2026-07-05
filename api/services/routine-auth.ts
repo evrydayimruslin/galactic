@@ -139,7 +139,10 @@ function getSigningSecret(explicitSecret?: string): string {
   for (
     const key of [
       "ROUTINE_ACTOR_TOKEN_SECRET",
-      "WORKER_SECRET",
+      // Server-only fallback. Deliberately NOT WORKER_SECRET (sandbox-exposed):
+      // WORKER_SECRET is injected into the dynamic-worker sandbox, so including
+      // it here would let app code forge routine-actor (gxr_v1_) tokens and
+      // impersonate any user. Matches sandbox-actor.ts / agent-caller-context.ts.
       "SUPABASE_SERVICE_ROLE_KEY",
     ]
   ) {

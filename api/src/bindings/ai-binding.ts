@@ -3,7 +3,7 @@
 // The Dynamic Worker sees env.AI.call() but never has the API key.
 
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { deductChatCost } from '../../services/chat-billing.ts';
+import { CHAT_MIN_BALANCE_LIGHT, checkChatBalance, deductChatCost } from '../../services/chat-billing.ts';
 import { recordAiSpend } from '../../services/ai-spend-tracker.ts';
 import { resolvePlatformInferenceModel } from '../../services/platform-inference-models.ts';
 
@@ -37,6 +37,10 @@ interface AIBindingProps {
   billingSource: string | null;
   requestDefaults: Record<string, unknown> | null;
   shouldDebitLight: boolean;
+  // Metered (credits) route: re-check the wallet before EVERY call so a buyer
+  // cannot fan out many galactic.ai() calls in one execution and outspend their
+  // balance. BYOK routes set this false.
+  shouldRequireBalance: boolean;
   unavailableReason?: string | null;
 }
 
@@ -107,6 +111,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       billingSource,
       requestDefaults,
       shouldDebitLight,
+      shouldRequireBalance,
       userId,
       executionId,
       unavailableReason,
@@ -119,6 +124,35 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
         usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
         error: unavailableReason || 'AI is not configured for this request.',
       };
+    }
+
+    // Metered (credits) route: re-check the wallet before EVERY call. The
+    // context-build gate only fires once, so without this a sandboxed app could
+    // fan out many galactic.ai() calls in one execution and outspend its
+    // balance (the post-hoc debit below allows partial debiting). BYOK routes
+    // are not metered and skip this. Fail OPEN on a balance-read error (a
+    // Free-Mode / already-insufficient user is denied at context build, so a
+    // call only reaches here for a funded route) — the post-hoc debit is the
+    // backstop and availability wins on transient blips.
+    const metered = shouldRequireBalance && shouldDebitLight;
+    if (metered) {
+      let balance: number | null = null;
+      try {
+        balance = await checkChatBalance(userId);
+      } catch (balanceError) {
+        console.warn('[AI-BINDING] Per-call balance re-check unavailable; proceeding un-gated:', balanceError);
+      }
+      if (balance !== null && balance < CHAT_MIN_BALANCE_LIGHT) {
+        return {
+          content: '',
+          model: request.model || defaultModel || 'none',
+          usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
+          error:
+            `Platform inference requires at least ${CHAT_MIN_BALANCE_LIGHT} credits ` +
+            `(current balance: ${balance}). Add credits in the wallet or configure ` +
+            `a BYOK provider key in Settings.`,
+        };
+      }
     }
 
     // Format messages — handle multimodal content arrays
@@ -273,6 +307,20 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
         // Authoritative spend ledger: survives a sandbox abort (where the
         // sandbox-side accumulator is lost) and is out of tenant reach.
         recordAiSpend(executionId, costLight);
+        // A depleting (partial) debit means the buyer could not fully cover this
+        // call: withhold the content so they cannot consume metered inference
+        // they did not pay for. Only on metered routes (a BYOK route never
+        // depletes a platform wallet).
+        if (metered && billing.was_depleted) {
+          return {
+            content: '',
+            model: responseModel,
+            usage: { input_tokens: promptTokens, output_tokens: completionTokens, cost_light: costLight },
+            error:
+              'Insufficient credits to complete this AI call. Add credits in the ' +
+              'wallet or configure a BYOK provider key in Settings.',
+          };
+        }
       } catch (err) {
         console.error('[AI-BINDING] Failed to debit Light for AI call:', err);
       }

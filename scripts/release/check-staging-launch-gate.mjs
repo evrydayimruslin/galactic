@@ -59,13 +59,6 @@ const WORKFLOW_SPECS = [
       ".github/workflows/launch-web-deploy.yml",
     ],
   },
-  {
-    name: "Desktop Build",
-    patterns: [
-      "desktop/**",
-      ".github/workflows/desktop-build.yml",
-    ],
-  },
 ];
 
 function printHelp() {
