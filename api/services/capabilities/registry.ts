@@ -432,6 +432,98 @@ const CAPABILITIES: Capability[] = [
     // legacy ul.set.* single-setting aliases still route via the switch.
   },
   {
+    id: "consent",
+    branch: "agent_user",
+    tier: 1,
+    // NOTE: advertised name stays gx.permit for now; rename to gx.consent in the
+    // retire/rename pass (names are late-bound).
+    advertisedName: "gx.permit",
+    aliases: ["ul.permit"],
+    title: "Set or read your connected-agent call policy",
+    description:
+      "Record or read YOUR decision about whether your connected agents may call a " +
+      'specific app function on your behalf — the persistent side of the "ask" ' +
+      'prompt. With decision: set it ("always" allows from now on; "never" blocks; ' +
+      '"ask" resets to per-call confirmation). Without decision: read the current ' +
+      "policy for that function. health_gate (default true): \"always\" auto-allows " +
+      "only while recently healthy; pass health_gate:false for an unconditional " +
+      "always. This is about your OWN connected-agent access — NOT gx.grants.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        app_id: { type: "string", description: "App ID or slug." },
+        function_name: {
+          type: "string",
+          description: "Function to set or read the policy for.",
+        },
+        decision: {
+          type: "string",
+          enum: ["always", "ask", "never"],
+          description:
+            "always = allow from now on; ask = confirm each call; never = block. Omit to READ the current policy.",
+        },
+        health_gate: {
+          type: "boolean",
+          description:
+            'For decision:"always": true (default) = auto-allow only while ' +
+            "recently healthy, false = always allow unconditionally.",
+        },
+      },
+      required: ["app_id", "function_name"],
+    },
+    auth: {},
+    // Website twin: GET/PATCH /api/launch/agents/:id/caller-permissions.
+    surfaces: ["mcp", "web"],
+    coreTool: true,
+    web: { method: "PATCH", path: "/api/launch/agents/:id/caller-permissions" },
+    // Handler bound at load from platform-mcp (executePermit stays there).
+  },
+  {
+    id: "secrets",
+    branch: "agent_user",
+    tier: 1,
+    advertisedName: "gx.secrets",
+    // ul.connect (save) + ul.connections (list) folded in as aliases.
+    aliases: ["ul.secrets", "ul.connect", "ul.connections"],
+    title: "Save or inspect your secrets for an app",
+    description:
+      "Save or inspect your per-user credentials/secrets for an installed app. " +
+      "With `secrets`: save values (use null to remove one) — requires app_id. " +
+      "With only `app_id`: show that app's required settings and which are configured. " +
+      "With no args: list the apps you have connected.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        app_id: { type: "string", description: "App ID or slug." },
+        secrets: {
+          type: "object",
+          description:
+            "Map of setting keys to values to save. Use null to remove a saved value. Omit to inspect instead of save.",
+          additionalProperties: true,
+        },
+      },
+    },
+    auth: {},
+    // Website twin: GET/PUT /api/launch/agents/:id/settings.
+    surfaces: ["mcp", "web"],
+    coreTool: true,
+    web: { method: "GET", path: "/api/launch/agents/:id/settings" },
+    // Handler bound at load from platform-mcp (executeConnect/executeConnections stay there).
+    // NOTE: list-only restriction (writes → website-only) deferred to consolidation.
+  },
+  {
     id: "verify",
     branch: "agent_user",
     tier: 1,

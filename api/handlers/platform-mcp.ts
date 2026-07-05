@@ -227,6 +227,7 @@ import { emptyHealth, getAppHealth, isRecentlyHealthy } from "../services/app-he
 import {
   buildCallerPermissionConfigureUrl,
   enforceCallerFunctionPermission,
+  listCallerFunctionPermissions,
   updateCallerFunctionPermissions,
 } from "../services/caller-function-permissions.ts";
 import {
@@ -2165,36 +2166,9 @@ const PLATFORM_TOOLS: MCPTool[] = [
     },
   },
 
-  // ── 8. ul.secrets ──────────────────────────
-  // Per-user credentials/secrets for an installed app. Replaces ul.connect +
-  // ul.connections (both kept as backward-compat aliases). Save mode when
-  // `secrets` is present; inspect/list mode otherwise.
-  {
-    name: "ul.secrets",
-    description:
-      "Save or inspect your per-user credentials/secrets for an installed app. " +
-      "With `secrets`: save values (use null to remove one) — requires app_id. " +
-      "With only `app_id`: show that app's required settings and which are configured. " +
-      "With no args: list the apps you have connected.",
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        app_id: { type: "string", description: "App ID or slug." },
-        secrets: {
-          type: "object",
-          description:
-            "Map of setting keys to values to save. Use null to remove a saved value. Omit to inspect instead of save.",
-          additionalProperties: true,
-        },
-      },
-    },
-  },
+  // ul.secrets (+ ul.connect/ul.connections aliases) migrated to the capability
+  // registry (id "secrets", advertised gx.secrets; handler bound from this
+  // module). List-only now — entering secret values is website-only.
 
   // ── 10. ul.logs ──────────────────────────
   {
@@ -2344,50 +2318,8 @@ const PLATFORM_TOOLS: MCPTool[] = [
     },
   },
 
-  // ── ul.permit (your connected-agent access to an app's function) ────────
-  {
-    name: "ul.permit",
-    description:
-      "Record YOUR decision about whether your connected agents may call a " +
-      'specific app function on your behalf — the persistent side of the "ask" ' +
-      'prompt. decision:"always" allows it from now on; "never" blocks it; ' +
-      '"ask" resets to per-call confirmation. health_gate (default true) is ' +
-      'the same toggle as the website: "always" auto-allows only while the ' +
-      "function is recently healthy; pass health_gate:false for an " +
-      "unconditional always (private/owner-only agents never accrue public " +
-      "health, so gated-always keeps asking for them). This is about your OWN " +
-      "connected-agent access — NOT gx.grants (which wires one app to call " +
-      'another). After decision:"always", just retry gx.call.',
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        app_id: { type: "string", description: "App ID or slug." },
-        function_name: {
-          type: "string",
-          description: "Function to set the policy for.",
-        },
-        decision: {
-          type: "string",
-          enum: ["always", "ask", "never"],
-          description:
-            "always = allow from now on; ask = confirm each call; never = block.",
-        },
-        health_gate: {
-          type: "boolean",
-          description:
-            'For decision:"always": true (default) = auto-allow only while ' +
-            "recently healthy, false = always allow unconditionally.",
-        },
-      },
-      required: ["app_id", "function_name", "decision"],
-    },
-  },
+  // ul.permit migrated to the capability registry (id "consent", advertised
+  // gx.permit; handler bound from this module).
 
   // ul.verify migrated to the capability registry
   // (api/services/capabilities/registry.ts) — projected into tools/list and
@@ -2607,10 +2539,9 @@ const PLATFORM_TOOLS: MCPTool[] = [
 const LAUNCH_CORE_TOOLS = new Set<string>([
   // ul.discover is a registry capability (coreTool) — advertised via registryMcpTools
   "ul.call",
-  "ul.permit",
-  // ul.verify + ul.job + ul.upload + ul.test + ul.set are registry capabilities (coreTool) — via registryMcpTools
+  // ul.verify + ul.job + ul.upload + ul.test + ul.set + ul.permit + ul.secrets
+  // are registry capabilities (coreTool) — advertised via registryMcpTools
   "ul.memory",
-  "ul.secrets",
   "ul.grants",
   "ul.codemode",
 ]);
@@ -2820,6 +2751,39 @@ bindCapabilityHandler("set", async (args, ctx) => {
     throw new CapabilityError("invalid_input", "No settings provided.");
   }
   return setCount === 1 ? Object.values(setResults)[0] : setResults;
+});
+
+bindCapabilityHandler("consent", async (args, ctx) => {
+  // Read side (no decision): report the current policy for the given function.
+  if (args.decision === undefined) {
+    const appRef = typeof args.app_id === "string" ? args.app_id.trim() : "";
+    const fn = typeof args.function_name === "string"
+      ? args.function_name.trim()
+      : "";
+    if (!appRef || !fn) {
+      throw new CapabilityError(
+        "invalid_input",
+        "Missing required: app_id and function_name",
+      );
+    }
+    const appId = await resolveAppIdForMarketplace(appRef);
+    return await listCallerFunctionPermissions({
+      userId: ctx.userId,
+      appId,
+      functionNames: [fn],
+    });
+  }
+  return await executePermit(ctx.userId, args);
+});
+
+bindCapabilityHandler("secrets", async (args, ctx) => {
+  // Save when `secrets` is present; inspect/list otherwise. (The list-only
+  // restriction — entering values website-only — is a DECIDED change deferred to
+  // the consolidation pass; migrating here is behavior-preserving.)
+  if (args.secrets !== undefined) {
+    return await executeConnect(ctx.userId, args);
+  }
+  return await executeConnections(ctx.userId, args);
 });
 
 function stripGpuFromTool(tool: MCPTool): MCPTool {
@@ -4491,10 +4455,7 @@ async function handleToolsCall(
       }
 
       // ── ul.permit (connected-agent caller policy) ──────────────
-      case "ul.permit": {
-        result = await executePermit(userId, toolArgs);
-        break;
-      }
+      // ul.permit dispatched via the capability registry pre-check above.
 
       // ── ul.emit (publish a cross-Agent event) ──────────────
       case "ul.emit": {
@@ -4745,15 +4706,7 @@ async function handleToolsCall(
 
 
 
-      // ── 8. ul.secrets ──────────────
-      // Save mode when `secrets` is present; inspect/list mode otherwise.
-      case "ul.secrets":
-        if (toolArgs.secrets !== undefined) {
-          result = await executeConnect(userId, toolArgs);
-        } else {
-          result = await executeConnections(userId, toolArgs);
-        }
-        break;
+      // ul.secrets dispatched via the capability registry pre-check above.
 
       // ── Backward-compat aliases ──────────────
       case "ul.discover.desk":
@@ -4812,14 +4765,8 @@ async function handleToolsCall(
         logAliasUsage(name);
         result = await executePermissionsExport(userId, toolArgs);
         break;
-      case "ul.connect":
-        logAliasUsage(name);
-        result = await executeConnect(userId, toolArgs);
-        break;
-      case "ul.connections":
-        logAliasUsage(name);
-        result = await executeConnections(userId, toolArgs);
-        break;
+      // ul.connect + ul.connections folded into the "secrets" registry
+      // capability (list-only) — dispatched via the pre-check above.
       case "ul.memory.read":
       case "ul.memory.write":
       case "ul.memory.append":
@@ -11921,6 +11868,7 @@ async function executeLogs(
     scope: "granted_users",
   };
 }
+
 
 // ── ul.connect ───────────────────────────────────
 
