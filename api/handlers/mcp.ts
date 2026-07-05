@@ -124,7 +124,10 @@ import type {
   MCPToolsListResponse,
 } from "../../shared/contracts/mcp.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
-import { manifestToMCPTools } from "../../shared/contracts/manifest.ts";
+import {
+  manifestToMCPTools,
+  parseManifestCallRateLimit,
+} from "../../shared/contracts/manifest.ts";
 import type {
   AIContentPart,
   AIRequest,
@@ -971,6 +974,16 @@ export async function handleMcp(
       calls_per_minute?: number;
       calls_per_day?: number;
     } | null;
+    // Dual-path (mirrors pricing): the gx.set config wins per field; where a
+    // field is unset, fall through to the deployed manifest's app-level
+    // rate_limit. Only parse the manifest when gx.set doesn't cover both fields.
+    const manifestRl =
+      (rlConfig?.calls_per_minute != null && rlConfig?.calls_per_day != null)
+        ? null
+        : parseManifestCallRateLimit(app.manifest);
+    const effCallsPerMinute = rlConfig?.calls_per_minute ??
+      manifestRl?.calls_per_minute;
+    const effCallsPerDay = rlConfig?.calls_per_day ?? manifestRl?.calls_per_day;
     const endpointRateLimitOptions = isToolsCall
       ? { mode: "fail_closed" as const, resource: "MCP tools/call rate limit" }
       : undefined;
@@ -996,12 +1009,12 @@ export async function handleMcp(
           },
         )
         : null,
-      // [2] Per-app minute rate limit (tools/call, non-owner, if configured)
-      isToolsCall && isNonOwner && rlConfig?.calls_per_minute
+      // [2] Per-app minute rate limit (tools/call, non-owner, gx.set or manifest)
+      isToolsCall && isNonOwner && effCallsPerMinute
         ? checkRateLimit(
           userId,
           `app:${appId}:minute`,
-          rlConfig.calls_per_minute,
+          effCallsPerMinute,
           1,
           {
             mode: "fail_closed",
@@ -1009,12 +1022,12 @@ export async function handleMcp(
           },
         )
         : null,
-      // [3] Per-app daily rate limit (tools/call, non-owner, if configured)
-      isToolsCall && isNonOwner && rlConfig?.calls_per_day
+      // [3] Per-app daily rate limit (tools/call, non-owner, gx.set or manifest)
+      isToolsCall && isNonOwner && effCallsPerDay
         ? checkRateLimit(
           userId,
           `app:${appId}:day`,
-          rlConfig.calls_per_day,
+          effCallsPerDay,
           1440,
           {
             mode: "fail_closed",

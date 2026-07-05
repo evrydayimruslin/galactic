@@ -51,11 +51,52 @@ export interface AppManifest {
   env?: Record<string, ManifestEnvVar>;
   env_vars?: Record<string, ManifestEnvVar>;
   http?: ManifestHttpConfig;
+  // App-level call rate limits for MCP tools/call, keyed by the CALLER's user id.
+  // Distinct from http.*.rate_limit (which is IP-scoped, per HTTP route). Mirrors
+  // the gx.set `rate_limit_config` shape so the two compose: gx.set overrides this
+  // per field; where gx.set is unset the deployed manifest value applies. Only
+  // ever restricts below the platform ceiling — never widens it.
+  rate_limit?: ManifestCallRateLimit;
   // Outbound network allowlist. In Phase 2 this becomes default-deny: with
   // net:fetch granted, the Agent's code may reach ONLY these hosts. Surfaced to
   // the user before install, and the only destinations a vaulted per-user
   // credential may be sent to.
   network?: ManifestNetworkConfig;
+}
+
+export interface ManifestCallRateLimit {
+  calls_per_minute?: number;
+  calls_per_day?: number;
+}
+
+/**
+ * Read the app-level call rate limit from a manifest (string or parsed), defensively.
+ * Ignores non-positive / non-finite values; returns null when nothing valid is set.
+ */
+export function parseManifestCallRateLimit(
+  manifest: string | AppManifest | null | undefined,
+): ManifestCallRateLimit | null {
+  if (!manifest) return null;
+  let parsed: unknown;
+  try {
+    parsed = typeof manifest === "string" ? JSON.parse(manifest) : manifest;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const rl = (parsed as { rate_limit?: unknown }).rate_limit;
+  if (!rl || typeof rl !== "object") return null;
+  const rec = rl as Record<string, unknown>;
+  const out: ManifestCallRateLimit = {};
+  const rpm = rec.calls_per_minute;
+  const day = rec.calls_per_day;
+  if (typeof rpm === "number" && Number.isFinite(rpm) && rpm > 0) {
+    out.calls_per_minute = Math.floor(rpm);
+  }
+  if (typeof day === "number" && Number.isFinite(day) && day > 0) {
+    out.calls_per_day = Math.floor(day);
+  }
+  return out.calls_per_minute || out.calls_per_day ? out : null;
 }
 
 export interface ManifestNetworkConfig {
