@@ -72,6 +72,8 @@ Deno.test("registry: tool-name resolution covers gx.*, ul.*, and aliases", () =>
   assertEquals(getCapabilityByToolName("ultralight.job")?.id, "job");
   assertEquals(getCapabilityByToolName("gx.flag")?.id, "flag");
   assertEquals(getCapabilityByToolName("ul.flag")?.id, "flag");
+  assertEquals(getCapabilityByToolName("gx.download")?.id, "download");
+  assertEquals(getCapabilityByToolName("ul.download")?.id, "download");
   // An unmigrated / unknown name does not resolve (falls to the legacy switch).
   assertEquals(getCapabilityByToolName("gx.upload"), undefined);
   assertEquals(getCapabilityByToolName("nope"), undefined);
@@ -89,9 +91,10 @@ Deno.test("registry: MCP projection honors LITE (core-only) and Free Mode", () =
   // and the progressive-disclosure list.
   assert(!lite.includes("gx.flag"), "gx.flag is demoted — not in LITE");
   assert(full.includes("gx.flag"), "gx.flag should be in the full manifest");
+  // Demoted registry tools, in registration order (for the scope="tools" list).
   assertEquals(
     registryDemotedMcpTools().map((t) => t.name),
-    ["gx.flag"],
+    ["gx.download", "gx.flag"],
   );
 });
 

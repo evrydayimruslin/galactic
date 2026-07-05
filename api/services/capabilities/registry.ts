@@ -77,6 +77,105 @@ const CAPABILITIES: Capability[] = [
     // Handler bound at load from platform-mcp (executeDiscover* stay there).
   },
   {
+    id: "download",
+    branch: "ownership",
+    tier: 1,
+    advertisedName: "gx.download",
+    aliases: ["ul.download"],
+    title: "Download source or scaffold a new app",
+    description: "With app_id: download app source code. " +
+      "Without app_id: scaffold a new app template from name + description.",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        app_id: {
+          type: "string",
+          description: "App ID or slug to download. Omit to scaffold a new app.",
+        },
+        version: {
+          type: "string",
+          description: "Version to download. Default: live version.",
+        },
+        // scaffold fields (when no app_id)
+        name: { type: "string", description: "App name for scaffolding." },
+        description: {
+          type: "string",
+          description: "App description — generates function stubs.",
+        },
+        runtime: {
+          type: "string",
+          enum: ["deno", "gpu"],
+          description: "Scaffold runtime. Use gpu for Python GPU functions.",
+        },
+        gpu_type: {
+          type: "string",
+          description:
+            'GPU type for runtime="gpu" scaffolds, e.g. A40, L40S, A100-80GB-SXM, H100-SXM.',
+        },
+        base: {
+          type: "string",
+          enum: ["python-cuda", "torch-cuda"],
+          description:
+            'GPU base profile for runtime="gpu". Use torch-cuda for PyTorch/model workloads.',
+        },
+        functions: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              description: { type: "string" },
+              parameters: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                    type: { type: "string" },
+                    required: { type: "boolean" },
+                    description: { type: "string" },
+                  },
+                  required: ["name", "type"],
+                },
+              },
+            },
+            required: ["name"],
+          },
+          description: "Functions to scaffold. Omit to auto-generate.",
+        },
+        storage: {
+          type: "string",
+          enum: ["none", "kv", "supabase"],
+          description: "Storage strategy for scaffolding.",
+        },
+        permissions: {
+          type: "array",
+          items: { type: "string" },
+          description: "Permissions for scaffolding.",
+        },
+        policy: {
+          type: "boolean",
+          description:
+            "When true, scaffold policy.ts plus manifest access_policy for programmable function pricing and denial logic.",
+        },
+      },
+    },
+    auth: {},
+    // Owner action: download own source (or public source), or scaffold a new
+    // app. Demoted (not in the lean tools/list). Website source-download is
+    // served by the /api/apps surface; formal web parity declared later.
+    surfaces: ["mcp", "cli"],
+    coreTool: false,
+    cli: { command: "download" },
+    // Handler bound at load from platform-mcp (executeDownload/executeScaffold stay there).
+  },
+  {
     id: "verify",
     branch: "agent_user",
     tier: 1,

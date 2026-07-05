@@ -1897,94 +1897,8 @@ const PLATFORM_TOOLS: MCPTool[] = [
     },
   },
 
-  // ── 4. ul.download ──────────────────────────
-  {
-    name: "ul.download",
-    description: "With app_id: download app source code. " +
-      "Without app_id: scaffold a new app template from name + description.",
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        app_id: {
-          type: "string",
-          description:
-            "App ID or slug to download. Omit to scaffold a new app.",
-        },
-        version: {
-          type: "string",
-          description: "Version to download. Default: live version.",
-        },
-        // scaffold fields (when no app_id)
-        name: { type: "string", description: "App name for scaffolding." },
-        description: {
-          type: "string",
-          description: "App description — generates function stubs.",
-        },
-        runtime: {
-          type: "string",
-          enum: ["deno", "gpu"],
-          description: "Scaffold runtime. Use gpu for Python GPU functions.",
-        },
-        gpu_type: {
-          type: "string",
-          description:
-            'GPU type for runtime="gpu" scaffolds, e.g. A40, L40S, A100-80GB-SXM, H100-SXM.',
-        },
-        base: {
-          type: "string",
-          enum: ["python-cuda", "torch-cuda"],
-          description:
-            'GPU base profile for runtime="gpu". Use torch-cuda for PyTorch/model workloads.',
-        },
-        functions: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              name: { type: "string" },
-              description: { type: "string" },
-              parameters: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: {
-                    name: { type: "string" },
-                    type: { type: "string" },
-                    required: { type: "boolean" },
-                    description: { type: "string" },
-                  },
-                  required: ["name", "type"],
-                },
-              },
-            },
-            required: ["name"],
-          },
-          description: "Functions to scaffold. Omit to auto-generate.",
-        },
-        storage: {
-          type: "string",
-          enum: ["none", "kv", "supabase"],
-          description: "Storage strategy for scaffolding.",
-        },
-        permissions: {
-          type: "array",
-          items: { type: "string" },
-          description: "Permissions for scaffolding.",
-        },
-        policy: {
-          type: "boolean",
-          description:
-            "When true, scaffold policy.ts plus manifest access_policy for programmable function pricing and denial logic.",
-        },
-      },
-    },
-  },
+  // ul.download migrated to the capability registry
+  // (api/services/capabilities/registry.ts, handler bound from this module).
 
   // ── 3. ul.test ──────────────────────────
   {
@@ -2980,13 +2894,30 @@ bindCapabilityHandler("discover", async (args, ctx) => {
   }
 });
 
+bindCapabilityHandler("download", async (args, ctx) => {
+  if (args.app_id) return await executeDownload(ctx.userId, args);
+  // Scaffold mode — generate app template from name + description.
+  if (!args.name || !args.description) {
+    throw new CapabilityError(
+      "invalid_input",
+      "Without app_id, provide name + description to scaffold a new app.",
+    );
+  }
+  return executeScaffold(args);
+});
+
 function stripGpuFromTool(tool: MCPTool): MCPTool {
   const cloned = JSON.parse(JSON.stringify(tool)) as MCPTool;
   const properties = cloned.inputSchema?.properties as
     | Record<string, unknown>
     | undefined;
+  // Match on the canonical ul.* name so this works whether the tool is a legacy
+  // (ul.*) entry or a registry-projected (gx.*) one.
+  const canonical = cloned.name.startsWith("gx.")
+    ? "ul." + cloned.name.slice(3)
+    : cloned.name;
 
-  if (cloned.name === "ul.download" && properties) {
+  if (canonical === "ul.download" && properties) {
     const runtime = properties.runtime as {
       enum?: string[];
       description?: string;
@@ -3001,7 +2932,7 @@ function stripGpuFromTool(tool: MCPTool): MCPTool {
     delete properties.base;
   }
 
-  if (cloned.name === "ul.set" && properties) {
+  if (canonical === "ul.set" && properties) {
     delete properties.gpu_pricing_config;
   }
 
@@ -3049,11 +2980,13 @@ export function getPlatformTools(
   // so this only changes the names agents SEE in tools/list, never breaks callers.
   const legacy = tools.map(advertiseGxName);
   // Capabilities migrated to the registry have left PLATFORM_TOOLS; project them
-  // in here (already gx.*-named). Same LITE (core-only) + Free Mode rules apply.
-  const registry = registryMcpTools({
+  // in here (already gx.*-named). Same LITE (core-only) + Free Mode + GPU-strip
+  // rules apply.
+  let registry = registryMcpTools({
     lite: isPlatformMcpLiteEnabled(),
     freeMode: options?.freeMode,
   });
+  if (!isGpuSupportEnabled()) registry = registry.map(stripGpuFromTool);
   return [...legacy, ...registry];
 }
 
@@ -4551,21 +4484,7 @@ async function handleToolsCall(
         break;
 
       // ── 4. ul.download (+ scaffold when no app_id) ──────────────
-      case "ul.download": {
-        if (toolArgs.app_id) {
-          result = await executeDownload(userId, toolArgs);
-        } else {
-          // Scaffold mode — generate app template
-          if (!toolArgs.name || !toolArgs.description) {
-            throw new ToolError(
-              INVALID_PARAMS,
-              "Without app_id, provide name + description to scaffold a new app.",
-            );
-          }
-          result = executeScaffold(toolArgs);
-        }
-        break;
-      }
+      // ul.download dispatched via the capability registry pre-check above.
 
       // ── 3. ul.test (+ lint) ──────────────
       case "ul.test": {
