@@ -629,9 +629,10 @@ const CAPABILITIES: Capability[] = [
     title: "Inspect your app's database",
     description:
       "Read-only window into YOUR app's galactic.db (D1). action: \"schema\" " +
-      "(tables + columns), \"counts\" (row count per table), or \"rows\" (your " +
-      "OWN rows for one table, user_id-scoped). Owner-only. Reading other users' " +
-      "rows for support is a separate, disclosed opt-in.",
+      "(tables + columns), \"counts\" (row count per table), \"rows\" (your OWN " +
+      "rows for one table, user_id-scoped), or \"support_read\" (OTHER users' rows " +
+      "for support — requires declaring the data:support_read permission; disclosed " +
+      "on your trust card and audit-logged). Owner-only.",
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -644,16 +645,21 @@ const CAPABILITIES: Capability[] = [
         app_id: { type: "string", description: "App ID or slug you own." },
         action: {
           type: "string",
-          enum: ["schema", "counts", "rows"],
+          enum: ["schema", "counts", "rows", "support_read"],
           description: "What to read. Default: schema.",
         },
         table: {
           type: "string",
-          description: 'Table name (required for action "rows").',
+          description: 'Table name (required for action "rows" / "support_read").',
         },
         limit: {
           type: "number",
-          description: 'Max rows for action "rows" (1-200, default 50).',
+          description: 'Max rows for "rows"/"support_read" (1-200, default 50).',
+        },
+        reason: {
+          type: "string",
+          description:
+            'Optional reason recorded in the audit log for action "support_read".',
         },
       },
       required: ["app_id"],

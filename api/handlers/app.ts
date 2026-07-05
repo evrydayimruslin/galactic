@@ -4351,6 +4351,21 @@ async function renderTermsHTML(): Promise<string> {
         copy.freeCallSponsorship,
       ],
     },
+    {
+      title: "Developer Access To Your Data",
+      body: [
+        "By default, an agent's developer cannot read the data you store in that " +
+        "agent — they see only aggregate row counts and their own rows, never your " +
+        "individual data. Some agents enable their developer to read your data for " +
+        "support. Whether an agent's developer can do this is disclosed on the " +
+        "agent's trust card before you use it (look for \"the developer can read " +
+        "your data\").",
+        "Where enabled, such access is read-only and every access is recorded in an " +
+        "append-only audit log, so it can be reviewed. Do not store data in an " +
+        "agent that you are unwilling to have its developer see when this " +
+        "disclosure is present.",
+      ],
+    },
   ];
 
   return `<!DOCTYPE html>
@@ -4388,7 +4403,7 @@ async function renderTermsHTML(): Promise<string> {
 <main>
   <div class="eyebrow">Galactic Terms</div>
   <h1>Credits Economy Terms</h1>
-  <p class="updated">Last updated May 18, 2026</p>
+  <p class="updated">Last updated July 5, 2026</p>
   <p>These terms summarize the payment, creator earnings, payout, and platform fee rules used by Galactic. Additional product or marketplace terms may apply to specific workflows.</p>
   ${
     sections.map((section) => `

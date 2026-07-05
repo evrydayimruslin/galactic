@@ -20,6 +20,8 @@ import { createAppsService } from "../apps.ts";
 import { getD1DatabaseId } from "../d1-provisioning.ts";
 import { createD1DataService } from "../d1-data.ts";
 import { buildSelect } from "../../src/bindings/scoped-query.ts";
+import { resolveAppPermissions, SUPPORT_DATA_READ_PERMISSION } from "../trust.ts";
+import { recordSupportDataAccess } from "../support-access-log.ts";
 
 // SQLite identifier guard for table names we interpolate into fixed templates.
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -140,13 +142,60 @@ export async function inspectAppDatabase(
       scope: "own_rows",
       note:
         "Shows only YOUR rows (user_id = you). Reading other users' rows for " +
-        "support is a separate, disclosed opt-in.",
+        "support is a separate, disclosed opt-in (action \"support_read\").",
+      rows,
+    };
+  }
+
+  if (action === "support_read") {
+    const table = typeof args.table === "string" ? args.table.trim() : "";
+    if (!table) {
+      throw new CapabilityError("invalid_input", 'action "support_read" requires a table');
+    }
+    if (!tables.includes(table)) {
+      throw new CapabilityError("not_found", `Table not found: ${table}`);
+    }
+    // GATE: the app must have DECLARED the disclosed permission — the SAME
+    // permission the trust card surfaces (resolveAppPermissions). Off by default.
+    const permissions = resolveAppPermissions(app);
+    if (!permissions.includes(SUPPORT_DATA_READ_PERMISSION)) {
+      throw new CapabilityError(
+        "forbidden",
+        `This app has not enabled support data access. Declare the ` +
+          `"${SUPPORT_DATA_READ_PERMISSION}" permission in your manifest and ` +
+          `re-publish — it is then disclosed on your agent's trust card. Until ` +
+          `then only your own rows (action "rows") are available.`,
+      );
+    }
+    const limit = Math.min(Math.max(Number(args.limit ?? 50) || 50, 1), 200);
+    // Cross-user read: unscoped SELECT over the IDENT-guarded table, limit bound
+    // as a param. This is the disclosed hole — every guard below keeps it honest.
+    const rows = await d1.all(`SELECT * FROM "${table}" LIMIT ?`, [limit]);
+    // FAIL CLOSED: record the access durably BEFORE returning any data. If the
+    // append-only audit write fails, the rows are never disclosed.
+    await recordSupportDataAccess({
+      accessorUserId: userId,
+      appId: app.id,
+      action: "support_read",
+      tableName: table,
+      rowCount: rows.length,
+      reason: typeof args.reason === "string" ? args.reason : undefined,
+    });
+    return {
+      provisioned: true,
+      table,
+      scope: "all_users",
+      disclosed: true,
+      audited: true,
+      note:
+        "Cross-user rows (ALL users of this app). This access is disclosed on " +
+        "your agent's trust card and recorded in an append-only audit log.",
       rows,
     };
   }
 
   throw new CapabilityError(
     "invalid_input",
-    `Invalid action: ${action}. Use schema | counts | rows.`,
+    `Invalid action: ${action}. Use schema | counts | rows | support_read.`,
   );
 }

@@ -33,9 +33,22 @@ function d1(results: unknown[]) {
 // Build a fetch stub. `app` is the row findById returns (null → not found);
 // `dbId` is what getD1DatabaseId resolves. D1 queries are routed by SQL; every
 // D1 SQL string is captured into `sql`.
-function makeStub(opts: { app: Record<string, unknown> | null; dbId: string | null; sql: string[] }): typeof fetch {
+interface StubOpts {
+  app: Record<string, unknown> | null;
+  dbId: string | null;
+  sql: string[];
+  audit?: unknown[]; // captured audit-log bodies
+  auditFail?: boolean; // simulate an audit write failure (fail-closed test)
+  lastParams?: unknown[];
+}
+
+function makeStub(opts: StubOpts): typeof fetch {
   return (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/rest/v1/support_data_access_log")) {
+      (opts.audit ??= []).push(JSON.parse(String(init?.body ?? "{}")));
+      return Promise.resolve(new Response("", { status: opts.auditFail ? 500 : 201 }));
+    }
     if (url.includes("/rest/v1/apps")) {
       if (url.includes("select=d1_database_id")) {
         return Promise.resolve(
@@ -68,7 +81,7 @@ function makeStub(opts: { app: Record<string, unknown> | null; dbId: string | nu
 }
 
 async function withStub(
-  opts: { app: Record<string, unknown> | null; dbId: string | null; sql: string[] },
+  opts: StubOpts,
   run: () => Promise<void>,
 ) {
   const oe = g.__env, of = g.fetch;
@@ -156,5 +169,54 @@ Deno.test("db-inspect: invalid action is rejected", async () => {
       CapabilityError,
       "Invalid action",
     );
+  });
+});
+
+// An app that has DECLARED the disclosed permission (data:support_read).
+const supportApp = { ...ownedApp, manifest: JSON.stringify({ permissions: ["data:support_read"] }) };
+
+Deno.test("db-inspect: support_read is DENIED unless the app declared the permission", async () => {
+  // ownedApp has no manifest → no data:support_read → forbidden.
+  await withStub({ app: ownedApp, dbId: DBID, sql: [] }, async () => {
+    await assertRejects(
+      () => inspectAppDatabase(OWNER, { app_id: "app-1", action: "support_read", table: "notes" }) as Promise<unknown>,
+      CapabilityError,
+      "has not enabled support data access",
+    );
+  });
+});
+
+Deno.test("db-inspect: support_read is UNSCOPED (cross-user) and audit-logged", async () => {
+  const opts: StubOpts = { app: supportApp, dbId: DBID, sql: [], audit: [] };
+  await withStub(opts, async () => {
+    const r = await inspectAppDatabase(OWNER, { app_id: "app-1", action: "support_read", table: "notes", reason: "ticket #7" }) as {
+      scope: string;
+      disclosed: boolean;
+      audited: boolean;
+    };
+    assertEquals(r.scope, "all_users");
+    assertEquals([r.disclosed, r.audited], [true, true]);
+    // The cross-user read must NOT be user_id-scoped (that's the whole point).
+    const selectSql = opts.sql.find((s) => s.includes("FROM \"notes\"") && !s.includes("sqlite_master"))!;
+    assert(!selectSql.includes("user_id"), "support_read must be unscoped (cross-user)");
+    // Exactly one audit row, with accessor + app + table + reason.
+    assertEquals(opts.audit!.length, 1);
+    const a = opts.audit![0] as Record<string, unknown>;
+    assertEquals(a.accessor_user_id, OWNER);
+    assertEquals(a.action, "support_read");
+    assertEquals(a.table_name, "notes");
+    assertEquals(a.reason, "ticket #7");
+  });
+});
+
+Deno.test("db-inspect: support_read FAILS CLOSED when the audit write fails", async () => {
+  const opts: StubOpts = { app: supportApp, dbId: DBID, sql: [], audit: [], auditFail: true };
+  await withStub(opts, async () => {
+    await assertRejects(
+      () => inspectAppDatabase(OWNER, { app_id: "app-1", action: "support_read", table: "notes" }) as Promise<unknown>,
+      Error,
+      "audit write failed",
+    );
+    assertEquals(opts.audit!.length, 1); // attempted
   });
 });

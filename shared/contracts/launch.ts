@@ -801,6 +801,9 @@ export interface LaunchTrustCard {
   // Binary call-success health over rolling windows (self + free calls excluded).
   health: HealthWindows;
   reliability?: unknown;
+  // DISCLOSURE: the app's owner can read other users' data stored in this app
+  // (declared `data:support_read`, read-only + audit-logged). Show it prominently.
+  developer_can_read_user_data: boolean;
   execution_receipts: {
     enabled: true;
     field: "receipt_id";
