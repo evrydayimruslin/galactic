@@ -1906,82 +1906,8 @@ const PLATFORM_TOOLS: MCPTool[] = [
   // ul.upload migrated to the capability registry
   // (api/services/capabilities/registry.ts, handler bound from this module).
 
-  // ── 5. ul.set ──────────────────────────
-  {
-    name: "ul.set",
-    description:
-      "Configure app settings. Multiple settings in one call: version, visibility, " +
-      "download access, supabase, rate limits, pricing.",
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        app_id: { type: "string", description: "App ID or slug." },
-        version: { type: "string", description: "Set live version." },
-        visibility: {
-          type: "string",
-          enum: ["private", "unlisted", "published"],
-          description: "Set visibility.",
-        },
-        download_access: {
-          type: "string",
-          enum: ["owner", "public"],
-          description: "Who can download source.",
-        },
-        supabase_server: {
-          description: "Supabase config name. null to unassign.",
-        },
-        calls_per_minute: {
-          description: "Rate limit per minute. null = default.",
-        },
-        calls_per_day: { description: "Rate limit per day. null = unlimited." },
-        default_price_credits: {
-          description:
-            "Price in credits per call. Supports fractions. null = free. Replaces default_price_light.",
-        },
-        default_price_light: {
-          description:
-            "Deprecated alias of default_price_credits. Price in credits per call. Supports fractions. null = free.",
-        },
-        default_free_calls: {
-          type: "integer",
-          description:
-            "Default free calls per user before charging begins. 0 = charge from first call.",
-        },
-        free_calls_scope: {
-          type: "string",
-          enum: ["app", "function"],
-          description:
-            "Whether free calls are counted per-app (shared) or per-function (separate). Default: function.",
-        },
-        function_prices: {
-          description:
-            'Per-function prices: { "fn": credits } or { "fn": { price_light: credits, free_calls?: N } }. null = remove.',
-        },
-        gpu_pricing_config: {
-          description:
-            'GPU developer fee config for GPU apps. null = no developer fee. Examples: { mode: "per_call", flat_fee_light: 10 }, { mode: "per_duration", duration_rate_light_per_second: 1, duration_markup_light: 5 }. GPU compute is always charged separately.',
-        },
-        search_hints: {
-          type: "array",
-          items: { type: "string" },
-          description:
-            "Search keywords for app discovery. Improves semantic search accuracy. Include data domain terms, entity names, use cases.",
-        },
-        show_metrics: {
-          type: "boolean",
-          description:
-            "Show usage metrics (calls, revenue, unique callers) on marketplace listing to potential bidders.",
-        },
-      },
-      required: ["app_id"],
-    },
-  },
+  // ul.set migrated to the capability registry
+  // (api/services/capabilities/registry.ts, handler bound from this module).
 
   // ── 6. ul.memory ──────────────────────────
   {
@@ -2682,8 +2608,7 @@ const LAUNCH_CORE_TOOLS = new Set<string>([
   // ul.discover is a registry capability (coreTool) — advertised via registryMcpTools
   "ul.call",
   "ul.permit",
-  // ul.verify + ul.job + ul.upload + ul.test are registry capabilities (coreTool) — via registryMcpTools
-  "ul.set",
+  // ul.verify + ul.job + ul.upload + ul.test + ul.set are registry capabilities (coreTool) — via registryMcpTools
   "ul.memory",
   "ul.secrets",
   "ul.grants",
@@ -2803,6 +2728,98 @@ bindCapabilityHandler("test", async (args, ctx) => {
     ctx.user as UserContext,
   );
   return { ...asToolArguments(testResult), lint: lintResult };
+});
+
+bindCapabilityHandler("set", async (args, ctx) => {
+  const userId = ctx.userId;
+  if (!args.app_id) {
+    throw new CapabilityError("invalid_input", "Missing required parameter: app_id");
+  }
+  const setResults: Record<string, unknown> = {};
+  let setCount = 0;
+  if (args.version !== undefined) {
+    setResults.version = await executeSetVersion(userId, {
+      app_id: args.app_id,
+      version: args.version,
+    });
+    setCount++;
+  }
+  if (args.visibility !== undefined) {
+    setResults.visibility = await executeSetVisibility(userId, {
+      app_id: args.app_id,
+      visibility: args.visibility,
+    });
+    setCount++;
+  }
+  if (args.download_access !== undefined) {
+    setResults.download_access = await executeSetDownload(userId, {
+      app_id: args.app_id,
+      access: args.download_access,
+    });
+    setCount++;
+  }
+  if (args.supabase_server !== undefined) {
+    setResults.supabase_server = await executeSetSupabase(userId, {
+      app_id: args.app_id,
+      server_name: args.supabase_server,
+    });
+    setCount++;
+  }
+  if (
+    args.calls_per_minute !== undefined || args.calls_per_day !== undefined
+  ) {
+    setResults.ratelimit = await executeSetRateLimit(userId, {
+      app_id: args.app_id,
+      calls_per_minute: args.calls_per_minute,
+      calls_per_day: args.calls_per_day,
+    });
+    setCount++;
+  }
+  if (
+    args.default_price_credits !== undefined ||
+    args.default_price_light !== undefined ||
+    args.function_prices !== undefined ||
+    args.default_free_calls !== undefined ||
+    args.free_calls_scope !== undefined
+  ) {
+    setResults.pricing = await executeSetPricing(userId, {
+      app_id: args.app_id,
+      // default_price_credits is the preferred param; default_price_light
+      // remains a deprecated alias.
+      default_price_light: args.default_price_credits !== undefined
+        ? args.default_price_credits
+        : args.default_price_light,
+      functions: args.function_prices,
+      default_free_calls: args.default_free_calls,
+      free_calls_scope: args.free_calls_scope,
+    });
+    setCount++;
+  }
+  if (args.gpu_pricing_config !== undefined) {
+    setResults.gpu_pricing = await executeSetGpuPricing(userId, {
+      app_id: args.app_id,
+      gpu_pricing_config: args.gpu_pricing_config,
+    });
+    setCount++;
+  }
+  if (args.search_hints !== undefined) {
+    setResults.search_hints = await executeSetSearchHints(userId, {
+      app_id: args.app_id,
+      search_hints: args.search_hints,
+    });
+    setCount++;
+  }
+  if (args.show_metrics !== undefined) {
+    setResults.show_metrics = await executeSetShowMetrics(userId, {
+      app_id: args.app_id,
+      show_metrics: args.show_metrics,
+    });
+    setCount++;
+  }
+  if (setCount === 0) {
+    throw new CapabilityError("invalid_input", "No settings provided.");
+  }
+  return setCount === 1 ? Object.values(setResults)[0] : setResults;
 });
 
 function stripGpuFromTool(tool: MCPTool): MCPTool {
@@ -4391,101 +4408,8 @@ async function handleToolsCall(
       // ul.upload dispatched via the capability registry pre-check above.
 
       // ── 5. ul.set ──────────────
-      case "ul.set": {
-        if (!toolArgs.app_id) {
-          throw new ToolError(
-            INVALID_PARAMS,
-            "Missing required parameter: app_id",
-          );
-        }
-        const setResults: Record<string, unknown> = {};
-        let setCount = 0;
-        if (toolArgs.version !== undefined) {
-          setResults.version = await executeSetVersion(userId, {
-            app_id: toolArgs.app_id,
-            version: toolArgs.version,
-          });
-          setCount++;
-        }
-        if (toolArgs.visibility !== undefined) {
-          setResults.visibility = await executeSetVisibility(userId, {
-            app_id: toolArgs.app_id,
-            visibility: toolArgs.visibility,
-          });
-          setCount++;
-        }
-        if (toolArgs.download_access !== undefined) {
-          setResults.download_access = await executeSetDownload(userId, {
-            app_id: toolArgs.app_id,
-            access: toolArgs.download_access,
-          });
-          setCount++;
-        }
-        if (toolArgs.supabase_server !== undefined) {
-          setResults.supabase_server = await executeSetSupabase(userId, {
-            app_id: toolArgs.app_id,
-            server_name: toolArgs.supabase_server,
-          });
-          setCount++;
-        }
-        if (
-          toolArgs.calls_per_minute !== undefined ||
-          toolArgs.calls_per_day !== undefined
-        ) {
-          setResults.ratelimit = await executeSetRateLimit(userId, {
-            app_id: toolArgs.app_id,
-            calls_per_minute: toolArgs.calls_per_minute,
-            calls_per_day: toolArgs.calls_per_day,
-          });
-          setCount++;
-        }
-        if (
-          toolArgs.default_price_credits !== undefined ||
-          toolArgs.default_price_light !== undefined ||
-          toolArgs.function_prices !== undefined ||
-          toolArgs.default_free_calls !== undefined ||
-          toolArgs.free_calls_scope !== undefined
-        ) {
-          setResults.pricing = await executeSetPricing(userId, {
-            app_id: toolArgs.app_id,
-            // default_price_credits is the preferred param; default_price_light
-            // remains a deprecated alias.
-            default_price_light: toolArgs.default_price_credits !== undefined
-              ? toolArgs.default_price_credits
-              : toolArgs.default_price_light,
-            functions: toolArgs.function_prices,
-            default_free_calls: toolArgs.default_free_calls,
-            free_calls_scope: toolArgs.free_calls_scope,
-          });
-          setCount++;
-        }
-        if (toolArgs.gpu_pricing_config !== undefined) {
-          setResults.gpu_pricing = await executeSetGpuPricing(userId, {
-            app_id: toolArgs.app_id,
-            gpu_pricing_config: toolArgs.gpu_pricing_config,
-          });
-          setCount++;
-        }
-        if (toolArgs.search_hints !== undefined) {
-          setResults.search_hints = await executeSetSearchHints(userId, {
-            app_id: toolArgs.app_id,
-            search_hints: toolArgs.search_hints,
-          });
-          setCount++;
-        }
-        if (toolArgs.show_metrics !== undefined) {
-          setResults.show_metrics = await executeSetShowMetrics(userId, {
-            app_id: toolArgs.app_id,
-            show_metrics: toolArgs.show_metrics,
-          });
-          setCount++;
-        }
-        if (setCount === 0) {
-          throw new ToolError(INVALID_PARAMS, "No settings provided.");
-        }
-        result = setCount === 1 ? Object.values(setResults)[0] : setResults;
-        break;
-      }
+      // ul.set dispatched via the capability registry pre-check above; the 6
+      // ul.set.* single-setting aliases below still route here.
 
       // ── 6. ul.memory ──────────────
       case "ul.memory": {

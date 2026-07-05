@@ -346,6 +346,92 @@ const CAPABILITIES: Capability[] = [
     // Handler bound at load from platform-mcp (executeTest/executeLint stay there).
   },
   {
+    id: "set",
+    branch: "ownership",
+    tier: 1,
+    advertisedName: "gx.set",
+    aliases: ["ul.set"],
+    title: "Configure app settings",
+    description:
+      "Configure app settings. Multiple settings in one call: version, visibility, " +
+      "download access, supabase, rate limits, pricing.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        app_id: { type: "string", description: "App ID or slug." },
+        version: { type: "string", description: "Set live version." },
+        visibility: {
+          type: "string",
+          enum: ["private", "unlisted", "published"],
+          description: "Set visibility.",
+        },
+        download_access: {
+          type: "string",
+          enum: ["owner", "public"],
+          description: "Who can download source.",
+        },
+        supabase_server: {
+          description: "Supabase config name. null to unassign.",
+        },
+        calls_per_minute: {
+          description: "Rate limit per minute. null = default.",
+        },
+        calls_per_day: { description: "Rate limit per day. null = unlimited." },
+        default_price_credits: {
+          description:
+            "Price in credits per call. Supports fractions. null = free. Replaces default_price_light.",
+        },
+        default_price_light: {
+          description:
+            "Deprecated alias of default_price_credits. Price in credits per call. Supports fractions. null = free.",
+        },
+        default_free_calls: {
+          type: "integer",
+          description:
+            "Default free calls per user before charging begins. 0 = charge from first call.",
+        },
+        free_calls_scope: {
+          type: "string",
+          enum: ["app", "function"],
+          description:
+            "Whether free calls are counted per-app (shared) or per-function (separate). Default: function.",
+        },
+        function_prices: {
+          description:
+            'Per-function prices: { "fn": credits } or { "fn": { price_light: credits, free_calls?: N } }. null = remove.',
+        },
+        gpu_pricing_config: {
+          description:
+            'GPU developer fee config for GPU apps. null = no developer fee. Examples: { mode: "per_call", flat_fee_light: 10 }, { mode: "per_duration", duration_rate_light_per_second: 1, duration_markup_light: 5 }. GPU compute is always charged separately.',
+        },
+        search_hints: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Search keywords for app discovery. Improves semantic search accuracy. Include data domain terms, entity names, use cases.",
+        },
+        show_metrics: {
+          type: "boolean",
+          description:
+            "Show usage metrics (calls, revenue, unique callers) on marketplace listing to potential bidders.",
+        },
+      },
+      required: ["app_id"],
+    },
+    auth: { ownerOnly: true },
+    surfaces: ["mcp", "cli"],
+    coreTool: true,
+    cli: { command: "set" },
+    // Handler bound at load from platform-mcp (executeSet* stay there); the 6
+    // legacy ul.set.* single-setting aliases still route via the switch.
+  },
+  {
     id: "verify",
     branch: "agent_user",
     tier: 1,
