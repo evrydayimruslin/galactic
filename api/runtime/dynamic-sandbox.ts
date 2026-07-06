@@ -278,15 +278,15 @@ globalThis.ultralight = {
     }
     return {
       // Reads
-      select: (table, query) => e.DB.select(Object.assign({ table: table }, query || {})),
-      first: (table, query) => e.DB.first(Object.assign({ table: table }, query || {})),
-      count: (table, query) => e.DB.count(Object.assign({ table: table }, query || {})),
+      select: (table, query) => e.DB.select(Object.assign({ table: table }, query || {}), globalThis.__execHandle),
+      first: (table, query) => e.DB.first(Object.assign({ table: table }, query || {}), globalThis.__execHandle),
+      count: (table, query) => e.DB.count(Object.assign({ table: table }, query || {}), globalThis.__execHandle),
       // Writes (user_id is injected host-side; app code never supplies it)
-      insert: (table, values) => e.DB.insert({ table: table, values: values }),
-      update: (table, spec) => e.DB.update(Object.assign({ table: table }, spec || {})),
-      delete: (table, spec) => e.DB.delete(Object.assign({ table: table }, spec || {})),
-      upsert: (table, spec) => e.DB.upsert(Object.assign({ table: table }, spec || {})),
-      batch: (ops) => e.DB.batch(ops || []),
+      insert: (table, values) => e.DB.insert({ table: table, values: values }, globalThis.__execHandle),
+      update: (table, spec) => e.DB.update(Object.assign({ table: table }, spec || {}), globalThis.__execHandle),
+      delete: (table, spec) => e.DB.delete(Object.assign({ table: table }, spec || {}), globalThis.__execHandle),
+      upsert: (table, spec) => e.DB.upsert(Object.assign({ table: table }, spec || {}), globalThis.__execHandle),
+      batch: (ops) => e.DB.batch(ops || [], globalThis.__execHandle),
       // Removed raw-SQL surface
       run: __removed('run'), all: __removed('all'), exec: __removed('exec'),
     };
@@ -301,25 +301,25 @@ globalThis.ultralight = {
     } },
   store(k, v) { if (!${
       config.permissions.includes("storage:write")
-    }) return Promise.reject(new Error('storage:write permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.store(k, v) : Promise.reject(new Error('Data not available')); },
+    }) return Promise.reject(new Error('storage:write permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.store(k, v, globalThis.__execHandle) : Promise.reject(new Error('Data not available')); },
   load(k) { if (!${
       config.permissions.includes("storage:read")
-    }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.load(k) : Promise.resolve(null); },
+    }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.load(k, globalThis.__execHandle) : Promise.resolve(null); },
   remove(k) { if (!${
       config.permissions.includes("storage:delete")
-    }) return Promise.reject(new Error('storage:delete permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.remove(k) : Promise.reject(new Error('Data not available')); },
+    }) return Promise.reject(new Error('storage:delete permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.remove(k, globalThis.__execHandle) : Promise.reject(new Error('Data not available')); },
   list(p) { if (!${
       config.permissions.includes("storage:read")
-    }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.list(p) : Promise.resolve([]); },
+    }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.list(p, globalThis.__execHandle) : Promise.resolve([]); },
   query(p, o) { if (!${
       config.permissions.includes("storage:read")
-    }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA?.query?.(p, o) || Promise.resolve([]); },
+    }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA?.query?.(p, o, globalThis.__execHandle) || Promise.resolve([]); },
   remember(k, v, o) { if (!${
       config.permissions.includes("memory:write")
-    }) return Promise.reject(new Error('memory:write permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.remember(k, v, s) : Promise.resolve(); },
+    }) return Promise.reject(new Error('memory:write permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.remember(k, v, s, globalThis.__execHandle) : Promise.resolve(); },
   recall(k, o) { if (!${
       config.permissions.includes("memory:read")
-    }) return Promise.reject(new Error('memory:read permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.recall(k, s) : Promise.resolve(null); },
+    }) return Promise.reject(new Error('memory:read permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.recall(k, s, globalThis.__execHandle) : Promise.resolve(null); },
   ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { throw new Error('galactic.ai failed: ' + resp.error); } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
   async call(targetAppId, functionName, callArgs) {
     if (!targetAppId || !functionName) throw new Error('target app id and function name are required');
@@ -381,7 +381,7 @@ globalThis.ultralight = {
     // Fail fast on an oversized payload (the server enforces a 32KB payload cap
     // authoritatively; this just avoids a wasted RPC with a clearer error).
     if (JSON.stringify(payload || {}).length > 64 * 1024) throw new Error('emit payload too large (max 32KB)');
-    return await e.EVENTS.emit(topic, payload || {});
+    return await e.EVENTS.emit(topic, payload || {}, globalThis.__execHandle);
   },
   // Resolve a logical slot (declared in this Agent's manifest imports) to the
   // concrete target the user wired it to. Only the granted functions are
@@ -697,6 +697,7 @@ export default {
       aiExecutionId: config.executionId,
       cloudOperationMetering: config.cloudOperationMetering,
       cloudOperationBillingConfig: config.cloudOperationBillingConfig,
+      callerContextToken: config.callerContextToken ?? null,
     });
 
     const worker = loader.load(loadConfig);

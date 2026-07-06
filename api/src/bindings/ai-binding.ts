@@ -121,12 +121,29 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     // The execution id the spend ledger is keyed by. Under warm-isolate reuse
     // (loader.get) the isolate's env bindings are FROZEN at first load, so
     // props.executionId would be STALE (call 1's id) on every later call —
-    // recording spend under an already-consumed id = free inference. So resolve
-    // the CURRENT execution's id from the parent-side registry via the per-call
-    // handle. props.executionId is the fallback for the fresh-load path (where
-    // they agree) and if the handle is somehow unresolved (never free inference).
-    const resolvedCtx = resolveExecutionContext(execCtxHandle);
-    const executionId = resolvedCtx?.aiExecutionId ?? propExecutionId;
+    // recording spend under an already-settled id = FREE INFERENCE. So when a
+    // per-call handle is threaded, trust ONLY the parent-side registry: an
+    // unresolvable handle (execution already deregistered, or a forgery)
+    // REFUSES the call rather than charging a stale hold. props.executionId is
+    // used only on the legacy no-handle path (fresh load, where they agree).
+    // A resolved context whose aiExecutionId is null is legitimate (a run with
+    // no spend id) — only an unresolvable HANDLE fails closed.
+    let executionId: string | null;
+    if (execCtxHandle !== undefined) {
+      const resolvedCtx = resolveExecutionContext(execCtxHandle);
+      if (!resolvedCtx) {
+        return {
+          content: '',
+          model: request.model || defaultModel || 'none',
+          usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
+          error:
+            'AI execution context could not be resolved; inference refused.',
+        };
+      }
+      executionId = resolvedCtx.aiExecutionId;
+    } else {
+      executionId = propExecutionId;
+    }
 
     if (!apiKey || !provider || !baseUrl) {
       return {

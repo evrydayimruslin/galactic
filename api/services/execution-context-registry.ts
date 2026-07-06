@@ -28,6 +28,13 @@ export interface ExecutionContextEntry {
   /** Per-call cloud-operation metering (receiptId/holdId/payerUserId/...). */
   cloudOperationMetering: RuntimeConfig["cloudOperationMetering"];
   cloudOperationBillingConfig: RuntimeConfig["cloudOperationBillingConfig"];
+  /**
+   * The signed caller-context token this execution emits pub/sub events under.
+   * It bakes in the per-call entry function + incoming hop, so — like the
+   * metering context — it MUST be resolved per-RPC, never read from a warm
+   * isolate's frozen props (a stale hop would defeat the hop ceiling).
+   */
+  callerContextToken: string | null;
 }
 
 const registry = new Map<string, ExecutionContextEntry & { at: number }>();
@@ -68,6 +75,7 @@ export function resolveExecutionContext(
     aiExecutionId: entry.aiExecutionId,
     cloudOperationMetering: entry.cloudOperationMetering,
     cloudOperationBillingConfig: entry.cloudOperationBillingConfig,
+    callerContextToken: entry.callerContextToken,
   };
 }
 

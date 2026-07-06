@@ -3,6 +3,7 @@
 // The Dynamic Worker sees env.DATA.store() etc. but never has direct R2 access.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { resolveExecutionContext } from "../../services/execution-context-registry.ts";
 import type { BillingConfig } from "../../services/billing-config.ts";
 import {
   type CloudOperationMeteringContext,
@@ -34,12 +35,37 @@ interface AppDataBindingProps {
 
 export class AppDataBinding
   extends WorkerEntrypoint<unknown, AppDataBindingProps> {
+  // Per-RPC-call context handle. A fresh binding instance is created per RPC
+  // (Cloudflare WorkerEntrypoint contract), so this is call-scoped. Set at each
+  // public method entry; meter() resolves the CURRENT metering context from it,
+  // so a warm-reused isolate never meters against a stale baked hold.
+  private execCtxHandle?: string;
+
   private getR2Bucket(): R2Bucket {
     return globalThis.__env.R2_BUCKET;
   }
 
+  private meteringContext() {
+    // Handle threaded (even if it resolves to null) → resolve-or-FAIL-CLOSED:
+    // never fall back to props, which are frozen at load and go STALE under a
+    // warm get() reuse. Handle NOT threaded (undefined: legacy/direct-call
+    // path) → props fallback preserves pre-registry behavior. No-op under
+    // load(); safety linchpin under get() reuse. See database-binding.ts.
+    if (this.execCtxHandle !== undefined) {
+      const resolved = resolveExecutionContext(this.execCtxHandle);
+      return {
+        metering: resolved?.cloudOperationMetering ?? null,
+        billingConfig: resolved?.cloudOperationBillingConfig ?? null,
+      };
+    }
+    return {
+      metering: this.ctx.props.operationMetering,
+      billingConfig: this.ctx.props.operationBillingConfig,
+    };
+  }
+
   private async meter(operation: string, key?: string): Promise<void> {
-    const metering = this.ctx.props.operationMetering;
+    const { metering, billingConfig } = this.meteringContext();
     if (!metering) {
       return;
     }
@@ -49,7 +75,7 @@ export class AppDataBinding
       resource: "r2_operation",
       operation,
       units: 1,
-      billingConfig: this.ctx.props.operationBillingConfig ?? undefined,
+      billingConfig: billingConfig ?? undefined,
       metadata: {
         ...(metering.metadata ?? {}),
         key,
@@ -66,7 +92,12 @@ export class AppDataBinding
       : `apps/${appId}/data/${sanitized}.json`;
   }
 
-  async store(key: string, value: unknown): Promise<void> {
+  async store(
+    key: string,
+    value: unknown,
+    execCtxHandle?: string,
+  ): Promise<void> {
+    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
     await this.meter("appdata.store", key);
     const bucket = this.getR2Bucket();
     const data = JSON.stringify({
@@ -79,7 +110,8 @@ export class AppDataBinding
     });
   }
 
-  async load(key: string): Promise<unknown> {
+  async load(key: string, execCtxHandle?: string): Promise<unknown> {
+    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
     await this.meter("appdata.load", key);
     const bucket = this.getR2Bucket();
     const obj = await bucket.get(this.dataKey(key));
@@ -93,13 +125,15 @@ export class AppDataBinding
     }
   }
 
-  async remove(key: string): Promise<void> {
+  async remove(key: string, execCtxHandle?: string): Promise<void> {
+    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
     await this.meter("appdata.remove", key);
     const bucket = this.getR2Bucket();
     await bucket.delete(this.dataKey(key));
   }
 
-  async list(prefix?: string): Promise<string[]> {
+  async list(prefix?: string, execCtxHandle?: string): Promise<string[]> {
+    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
     await this.meter("appdata.list", prefix);
     const bucket = this.getR2Bucket();
     const { appId, userId } = this.ctx.props;
