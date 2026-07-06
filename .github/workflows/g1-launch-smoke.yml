@@ -1,0 +1,116 @@
+# G1 launch-verification smoke — runs docs/G1_LAUNCH_VERIFICATION_RUNBOOK.md
+# steps 1-3 (secrets preflight → release-packet scaffold → full smoke suite)
+# against staging or production, entirely in CI where the smoke credentials
+# live, and uploads the evidence dir as an artifact for the release packet.
+#
+# Credentials (repo secrets):
+#   ULTRALIGHT_TOKEN            — smoke-account API token (required)
+#   ULTRALIGHT_SMOKE_USER_ID    — smoke account user UUID   (optional: enables free-mode-e2e)
+#   SUPABASE_SERVICE_ROLE_KEY   — target Supabase SRK        (optional: enables free-mode-e2e)
+# A smoke whose inputs are missing is SKIPPED with the reason recorded — the
+# summary makes the gap explicit instead of silently passing.
+
+name: G1 Launch Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Environment to verify'
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      durable_app:
+        description: 'Optional async-capable agent id (enables durable-exec smoke)'
+        required: false
+        default: ''
+      durable_function:
+        description: 'Optional async function name on that agent'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: g1-launch-smoke-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: G1 smoke (${{ inputs.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN }}
+      ULTRALIGHT_SMOKE_USER_ID: ${{ secrets.ULTRALIGHT_SMOKE_USER_ID }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Resolve candidate id + evidence dir
+        id: cid
+        shell: bash
+        run: |
+          set -euo pipefail
+          CID="$(date -u +%F)-${GITHUB_REF_NAME}-$(git rev-parse --short=7 HEAD)"
+          DIR="docs/_generated/launch/${{ inputs.target }}/$CID"
+          mkdir -p "$DIR"
+          echo "cid=$CID" >> "$GITHUB_OUTPUT"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "candidate: $CID → $DIR"
+
+      - name: Secrets preflight (verify-secrets)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ops/verify-secrets.mjs \
+            --target "${{ inputs.target }}" \
+            --token "$ULTRALIGHT_TOKEN" \
+            | tee "${{ steps.cid.outputs.dir }}/verify-secrets.txt"
+
+      - name: Scaffold release packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ops/init-release-packet.mjs \
+            --target "${{ inputs.target }}" \
+            --commit-sha "$(git rev-parse HEAD)" \
+            --git-ref "$GITHUB_REF_NAME" \
+            --operator "github-actions/g1-launch-smoke" \
+            --output-dir "${{ steps.cid.outputs.dir }}"
+
+      - name: Run smoke suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/smoke/run-staging-smoke-suite.mjs \
+            --target "${{ inputs.target }}" \
+            ${{ inputs.durable_app && format('--durable-app {0}', inputs.durable_app) || '' }} \
+            ${{ inputs.durable_function && format('--durable-function {0}', inputs.durable_function) || '' }} \
+            --output-dir "${{ steps.cid.outputs.dir }}"
+
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          SUMMARY="${{ steps.cid.outputs.dir }}/g1-smoke-suite-summary.md"
+          if [[ -f "$SUMMARY" ]]; then
+            cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: g1-evidence-${{ inputs.target }}-${{ steps.cid.outputs.cid }}
+          path: ${{ steps.cid.outputs.dir }}
+          if-no-files-found: error
