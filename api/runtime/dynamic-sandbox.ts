@@ -14,6 +14,10 @@
 import type { ExecutionResult, RuntimeConfig } from "./sandbox.ts";
 import type { ResolvedCredential } from "../../shared/contracts/env.ts";
 import { consumeAiSpend } from "../services/ai-spend-tracker.ts";
+import {
+  deregisterExecutionContext,
+  registerExecutionContext,
+} from "../services/execution-context-registry.ts";
 import { debitCloudOperation } from "../services/cloud-usage.ts";
 import { mintSandboxAuthToken } from "../services/sandbox-actor.ts";
 import {
@@ -122,6 +126,10 @@ export async function executeInDynamicSandbox(
 ): Promise<ExecutionResult> {
   const startTime = Date.now();
   const loader = globalThis.__env?.LOADER;
+  // Per-execution context handle (registered before the loader fetch, resolved
+  // by the bindings, deregistered in finally). Declared here so finally can
+  // clean it up on every exit path.
+  let execCtxHandle: string | null = null;
 
   if (!loader) {
     return {
@@ -312,7 +320,7 @@ globalThis.ultralight = {
   recall(k, o) { if (!${
       config.permissions.includes("memory:read")
     }) return Promise.reject(new Error('memory:read permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.recall(k, s) : Promise.resolve(null); },
-  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); return e.AI.call(r).then(function(resp){ if (resp && resp.error) { throw new Error('galactic.ai failed: ' + resp.error); } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
+  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { throw new Error('galactic.ai failed: ' + resp.error); } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
   async call(targetAppId, functionName, callArgs) {
     if (!targetAppId || !functionName) throw new Error('target app id and function name are required');
     if (!__ulAllowsAppCall(targetAppId, functionName)) {
@@ -442,6 +450,12 @@ export default {
   async fetch(request, env) {
     // Set RPC bindings for lazy getters in ultralight SDK
     globalThis.__rpcEnv = env;
+    // Per-request context handle (opaque; the parent registered the real billing
+    // context under it). The SDK echoes it on binding RPCs so the parent resolves
+    // the CURRENT execution's context — never a stale baked one under reuse.
+    let __req = {};
+    try { __req = await request.json(); } catch (_e) { __req = {}; }
+    globalThis.__execHandle = (__req && __req.execCtxHandle) || null;
     // Reset the per-execution AI-cost accumulator. Each execution runs in a
     // fresh isolate today, but resetting here keeps the per-grant cap
     // accounting correct independent of any future CF isolate reuse.
@@ -675,6 +689,16 @@ export default {
         },
       });
     }
+    // Register this execution's per-call billing context and hand the sandbox
+    // only an opaque handle (never the payer/receipt identity). The bindings
+    // resolve it per-RPC — so under future warm-isolate reuse the context is
+    // the CURRENT call's, not a stale baked one. (See execution-context-registry.)
+    execCtxHandle = registerExecutionContext({
+      aiExecutionId: config.executionId,
+      cloudOperationMetering: config.cloudOperationMetering,
+      cloudOperationBillingConfig: config.cloudOperationBillingConfig,
+    });
+
     const worker = loader.load(loadConfig);
 
     // 6. Execute with timeout
@@ -684,7 +708,14 @@ export default {
 
     const entrypoint = worker.getEntrypoint();
     const response = await entrypoint.fetch(
-      new Request("http://internal/execute"),
+      new Request("http://internal/execute", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // Per-request payload: only the opaque context handle (the sandbox never
+        // receives payer/receipt identity). functionName/args stay baked for now
+        // (safe under load()); they move here when get() reuse is enabled.
+        body: JSON.stringify({ execCtxHandle }),
+      }),
       { signal: controller.signal },
     );
     clearTimeout(timeoutId);
@@ -748,5 +779,9 @@ export default {
         message: err instanceof Error ? err.message : String(err),
       },
     };
+  } finally {
+    // Always release the handle (success, error, abort) so a later resolve
+    // fails closed and the registry never leaks entries.
+    deregisterExecutionContext(execCtxHandle);
   }
 }

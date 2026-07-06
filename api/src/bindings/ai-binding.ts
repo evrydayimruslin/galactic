@@ -5,6 +5,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { CHAT_MIN_BALANCE_LIGHT, checkChatBalance, deductChatCost } from '../../services/chat-billing.ts';
 import { recordAiSpend } from '../../services/ai-spend-tracker.ts';
+import { resolveExecutionContext } from '../../services/execution-context-registry.ts';
 import { resolvePlatformInferenceModel } from '../../services/platform-inference-models.ts';
 
 // ============================================
@@ -99,7 +100,7 @@ function translateParts(parts: ContentPart[]): unknown[] {
 
 export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
 
-  async call(request: AIRequest) {
+  async call(request: AIRequest, execCtxHandle?: string) {
     const {
       apiKey,
       provider,
@@ -113,9 +114,19 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       shouldDebitLight,
       shouldRequireBalance,
       userId,
-      executionId,
+      executionId: propExecutionId,
       unavailableReason,
     } = this.ctx.props;
+
+    // The execution id the spend ledger is keyed by. Under warm-isolate reuse
+    // (loader.get) the isolate's env bindings are FROZEN at first load, so
+    // props.executionId would be STALE (call 1's id) on every later call —
+    // recording spend under an already-consumed id = free inference. So resolve
+    // the CURRENT execution's id from the parent-side registry via the per-call
+    // handle. props.executionId is the fallback for the fresh-load path (where
+    // they agree) and if the handle is somehow unresolved (never free inference).
+    const resolvedCtx = resolveExecutionContext(execCtxHandle);
+    const executionId = resolvedCtx?.aiExecutionId ?? propExecutionId;
 
     if (!apiKey || !provider || !baseUrl) {
       return {
