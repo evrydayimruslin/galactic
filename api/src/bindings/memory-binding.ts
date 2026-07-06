@@ -7,6 +7,14 @@ import {
   type CloudOperationMeteringContext,
   debitCloudOperation,
 } from "../../services/cloud-usage.ts";
+import {
+  type MemoryScope,
+  normalizeMemoryScope,
+  resolveMemoryKey,
+} from "./memory-scope.ts";
+
+export type { MemoryScope };
+export { normalizeMemoryScope, resolveMemoryKey };
 
 // ============================================
 // TYPES
@@ -14,6 +22,10 @@ import {
 
 interface MemoryBindingProps {
   userId: string;
+  // When present, remember/recall default to AGENT scope — a per-(app,user)
+  // notebook isolated from every other agent. Absent (or scope:"user") falls
+  // back to the shared per-user notebook the person carries between agents.
+  appId?: string | null;
   operationMetering?: CloudOperationMeteringContext | null;
   operationBillingConfig?:
     | Pick<
@@ -26,6 +38,7 @@ interface MemoryBindingProps {
     | null;
 }
 
+
 // ============================================
 // RPC BINDING
 // ============================================
@@ -36,7 +49,11 @@ export class MemoryBinding
     return globalThis.__env.R2_BUCKET;
   }
 
-  private async meter(operation: string, units = 1): Promise<void> {
+  private async meter(
+    operation: string,
+    memKey: string,
+    units = 1,
+  ): Promise<void> {
     const metering = this.ctx.props.operationMetering;
     if (!metering) {
       return;
@@ -50,20 +67,24 @@ export class MemoryBinding
       billingConfig: this.ctx.props.operationBillingConfig ?? undefined,
       metadata: {
         ...(metering.metadata ?? {}),
-        key: this.memoryKey(),
+        key: memKey,
         binding: "MemoryBinding",
       },
     });
   }
 
-  private memoryKey(): string {
-    return `users/${this.ctx.props.userId}/memory.md`;
+  private memoryKey(scope: MemoryScope): string {
+    return resolveMemoryKey(scope, this.ctx.props.userId, this.ctx.props.appId);
   }
 
-  async remember(key: string, value: unknown): Promise<void> {
-    await this.meter("memory.remember", 2);
+  async remember(
+    key: string,
+    value: unknown,
+    scope?: MemoryScope,
+  ): Promise<void> {
+    const memKey = this.memoryKey(normalizeMemoryScope(scope));
+    await this.meter("memory.remember", memKey, 2);
     const bucket = this.getR2Bucket();
-    const memKey = this.memoryKey();
 
     // Load existing memory
     let memory = "";
@@ -89,10 +110,10 @@ export class MemoryBinding
     });
   }
 
-  async recall(key: string): Promise<unknown> {
-    await this.meter("memory.recall");
+  async recall(key: string, scope?: MemoryScope): Promise<unknown> {
+    const memKey = this.memoryKey(normalizeMemoryScope(scope));
+    await this.meter("memory.recall", memKey);
     const bucket = this.getR2Bucket();
-    const memKey = this.memoryKey();
 
     try {
       const obj = await bucket.get(memKey);

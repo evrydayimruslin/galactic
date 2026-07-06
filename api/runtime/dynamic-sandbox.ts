@@ -58,6 +58,7 @@ interface DynamicWorkerEntrypointExports {
     input: {
       props: {
         userId: string;
+        appId?: string | null;
         operationMetering?: RuntimeConfig["cloudOperationMetering"];
         operationBillingConfig?: RuntimeConfig["cloudOperationBillingConfig"];
       };
@@ -305,13 +306,13 @@ globalThis.ultralight = {
   query(p, o) { if (!${
       config.permissions.includes("storage:read")
     }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA?.query?.(p, o) || Promise.resolve([]); },
-  remember(k, v) { if (!${
+  remember(k, v, o) { if (!${
       config.permissions.includes("memory:write")
-    }) return Promise.reject(new Error('memory:write permission not granted.')); const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.remember(k, v) : Promise.resolve(); },
-  recall(k) { if (!${
+    }) return Promise.reject(new Error('memory:write permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.remember(k, v, s) : Promise.resolve(); },
+  recall(k, o) { if (!${
       config.permissions.includes("memory:read")
-    }) return Promise.reject(new Error('memory:read permission not granted.')); const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.recall(k) : Promise.resolve(null); },
-  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.resolve({ content: '', error: 'AI not available' }); return e.AI.call(r).then(function(resp){ try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
+    }) return Promise.reject(new Error('memory:read permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.recall(k, s) : Promise.resolve(null); },
+  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); return e.AI.call(r).then(function(resp){ if (resp && resp.error) { throw new Error('galactic.ai failed: ' + resp.error); } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
   async call(targetAppId, functionName, callArgs) {
     if (!targetAppId || !functionName) throw new Error('target app id and function name are required');
     if (!__ulAllowsAppCall(targetAppId, functionName)) {
@@ -541,6 +542,10 @@ export default {
       bindings.MEMORY = ctx.exports.MemoryBinding({
         props: {
           userId: config.userId,
+          // Agent-scoped memory by default: each agent gets its own notebook
+          // keyed by appId so remember/recall can't collide across the agents a
+          // user runs. scope:"user" still reaches the shared per-user notebook.
+          appId: config.appId,
           operationMetering: config.cloudOperationMetering,
           operationBillingConfig: config.cloudOperationBillingConfig,
         },

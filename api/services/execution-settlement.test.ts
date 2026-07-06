@@ -151,6 +151,39 @@ Deno.test("settleCallerAppCharge reports insufficient balance when transfer RPC 
   });
 });
 
+Deno.test("settleAppCall fails CLOSED when the settlement backend is unavailable (no free giveaway)", async () => {
+  // Force the !supabase branch by running with SUPABASE_* unset. A paid call
+  // must be BLOCKED with a distinct, retryable code — not silently run free,
+  // which would give the developer's paid work away as a "successful" call.
+  const globalWithEnv = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
+  const previousEnv = globalWithEnv.__env;
+  globalWithEnv.__env = { ...(previousEnv || {}), SUPABASE_URL: "", SUPABASE_SERVICE_ROLE_KEY: "" };
+  try {
+    const result = await settleAppCall({
+      app: createTestApp({ default_price_light: 10 }),
+      userId: "user_settlement_down",
+      functionName: "search",
+      inputArgs: { query: "x" },
+      successful: true,
+      callerAuthState: "authenticated",
+    }, {
+      fetchFn: async (input) => {
+        throw new Error(`No settlement fetch should occur: ${String(input)}`);
+      },
+    });
+
+    assertEquals(result.insufficientBalance, true);
+    assertEquals(result.insufficientBalanceCode, "settlement_unavailable");
+    assertEquals(result.chargedLight, 0);
+    assertEquals(result.developerRevenueLight, 0);
+    assertMatch(result.insufficientBalanceMessage ?? "", /temporarily unavailable/i);
+  } finally {
+    globalWithEnv.__env = previousEnv;
+  }
+});
+
 Deno.test("settleAppCall preserves waived fee fields from transfer RPC", async () => {
   await withMockedEnv(async () => {
     const result = await settleAppCall({
