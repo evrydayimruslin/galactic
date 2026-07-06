@@ -223,10 +223,15 @@ else
   PREFLIGHT_STATUS=$(fetch_json "chat preflight" "$API_URL/debug/chat-preflight?model=$ENCODED_CHAT_MODEL" "$PREFLIGHT_JSON" "${AUTH_HEADER[@]}")
   if [[ "$PREFLIGHT_STATUS" == "200" ]] && [[ "$(json_get "$PREFLIGHT_JSON" "ok")" == "true" ]]; then
     ROUTE_UPSTREAM="$(json_get "$PREFLIGHT_JSON" "route.upstream_provider")"
-    if [[ "$CHAT_MODEL" == ultralight/deepseek-v4-* ]] && [[ "$ROUTE_UPSTREAM" != "deepseek" ]]; then
+    ROUTE_MODEL="$(json_get "$PREFLIGHT_JSON" "route.model")"
+    # All platform (Light) models route via OpenRouter — DeepSeek-direct was
+    # retired 2026-06-25 (buildLightRoute maps legacy ids to OpenRouter slugs).
+    if [[ "$CHAT_MODEL" == ultralight/deepseek-v4-* ]] && [[ "$ROUTE_UPSTREAM" != "openrouter" ]]; then
       fail "chat preflight resolved $CHAT_MODEL to unexpected upstream: ${ROUTE_UPSTREAM:-unknown}"
+    elif [[ "$CHAT_MODEL" == "ultralight/deepseek-v4-flash" ]] && [[ "$ROUTE_MODEL" != "deepseek/deepseek-v4-flash" ]]; then
+      fail "chat preflight mapped $CHAT_MODEL to unexpected slug: ${ROUTE_MODEL:-unknown}"
     else
-      pass "chat preflight checks all passed (upstream: ${ROUTE_UPSTREAM:-unknown})"
+      pass "chat preflight checks all passed (upstream: ${ROUTE_UPSTREAM:-unknown}, model: ${ROUTE_MODEL:-unknown})"
     fi
   else
     fail "/debug/chat-preflight failed (status $PREFLIGHT_STATUS)"

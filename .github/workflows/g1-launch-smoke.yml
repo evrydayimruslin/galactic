@@ -48,6 +48,10 @@ jobs:
       ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN }}
       ULTRALIGHT_SMOKE_USER_ID: ${{ secrets.ULTRALIGHT_SMOKE_USER_ID }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Fixed smoke fixture app — interface-deploy-smoke refuses to run without
+      # it (creating apps ad hoc was the duplicate-Interface-Demo bug).
+      GALACTIC_SMOKE_APP_ID: ${{ secrets.GALACTIC_SMOKE_APP_ID }}
+      ULTRALIGHT_SMOKE_APP_ID: ${{ secrets.ULTRALIGHT_SMOKE_APP_ID }}
 
     steps:
       - uses: actions/checkout@v4

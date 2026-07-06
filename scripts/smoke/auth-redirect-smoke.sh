@@ -113,11 +113,10 @@ if (callback.scheme, callback.netloc, callback.path) != (base.scheme, base.netlo
         f"Expected redirect_to {base.scheme}://{base.netloc}/auth/callback, got {callback.scheme}://{callback.netloc}{callback.path}"
     )
 
-callback_params = urllib.parse.parse_qs(callback.query)
-if not callback_params.get('desktop_session', [''])[0]:
-    raise SystemExit('Missing desktop_session in redirect_to callback')
-if not callback_params.get('v', [''])[0]:
-    raise SystemExit('Missing PKCE verifier in redirect_to callback')
+# The PKCE verifier + desktop session are NO LONGER carried in the redirect_to
+# query — auth.ts moved them into HttpOnly __Host- cookies so the verifier can't
+# leak via Supabase/Google logs, referrers, or history. The Set-Cookie checks
+# live in the shell callers (they have the response headers).
 
 prompt = params.get('prompt', [''])[0]
 if expect_prompt == 'select_account':
@@ -155,8 +154,10 @@ LOGIN_HEADERS="$TMP_DIR/login.headers"
 LOGIN_STATUS=$(curl -sS -D "$LOGIN_HEADERS" -o /dev/null -w '%{http_code}' \
   "$BASE_URL/auth/login?desktop_session=$SESSION_ID&desktop_poll_secret_hash=$SESSION_SECRET_HASH")
 LOGIN_LOCATION="$(grep -i '^location:' "$LOGIN_HEADERS" | tail -n 1 | cut -d' ' -f2- | tr -d '\r')"
-if [[ "$LOGIN_STATUS" == "302" ]] && [[ -n "$LOGIN_LOCATION" ]] && validate_login_redirect "$LOGIN_LOCATION" ""; then
-  pass "desktop login redirects to Google via Supabase"
+if [[ "$LOGIN_STATUS" == "302" ]] && [[ -n "$LOGIN_LOCATION" ]] && validate_login_redirect "$LOGIN_LOCATION" "" \
+  && grep -qi 'set-cookie: __Host-ul_oauth_verifier=[^;]' "$LOGIN_HEADERS" \
+  && grep -qi "set-cookie: __Host-ul_oauth_desktop_session=$SESSION_ID;" "$LOGIN_HEADERS"; then
+  pass "desktop login redirects to Google via Supabase (state in __Host- cookies)"
 else
   fail "/auth/login redirect failed (status $LOGIN_STATUS)"
 fi
@@ -166,8 +167,10 @@ SELECT_HEADERS="$TMP_DIR/select.headers"
 SELECT_STATUS=$(curl -sS -D "$SELECT_HEADERS" -o /dev/null -w '%{http_code}' \
   "$BASE_URL/auth/login?desktop_session=${SESSION_ID}-select&desktop_poll_secret_hash=$SESSION_SECRET_HASH&prompt=select_account")
 SELECT_LOCATION="$(grep -i '^location:' "$SELECT_HEADERS" | tail -n 1 | cut -d' ' -f2- | tr -d '\r')"
-if [[ "$SELECT_STATUS" == "302" ]] && [[ -n "$SELECT_LOCATION" ]] && validate_login_redirect "$SELECT_LOCATION" "select_account"; then
-  pass "account-switch redirect preserves prompt=select_account"
+if [[ "$SELECT_STATUS" == "302" ]] && [[ -n "$SELECT_LOCATION" ]] && validate_login_redirect "$SELECT_LOCATION" "select_account" \
+  && grep -qi 'set-cookie: __Host-ul_oauth_verifier=[^;]' "$SELECT_HEADERS" \
+  && grep -qi "set-cookie: __Host-ul_oauth_desktop_session=${SESSION_ID}-select;" "$SELECT_HEADERS"; then
+  pass "account-switch redirect preserves prompt=select_account (state in __Host- cookies)"
 else
   fail "/auth/login select_account redirect failed (status $SELECT_STATUS)"
 fi

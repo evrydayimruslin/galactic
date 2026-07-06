@@ -129,9 +129,16 @@ const authenticatedApiProbes = [
     failureClass: "auth-api",
   },
   {
+    // API-key management is browser-account-session ONLY (Tier-2 lockdown):
+    // requireAccountSessionForApiKeys rejects bearer api tokens with 403. This
+    // probe asserts the gate is working — a 200 here would be the regression.
     name: "api-launch-settings-keys",
     path: "/api/launch/api-keys",
     failureClass: "auth-api",
+    expectStatus: 403,
+    expectBodyPattern: /account session/i,
+    expected:
+      "Bearer API token is rejected with 403 JSON (API key management is browser-session only)",
   },
 ];
 
@@ -342,8 +349,13 @@ async function runAuthenticatedApiProbe(probe) {
       "User-Agent": "ultralight-launch-web-pages-smoke",
     },
   });
+  const expectStatus = probe.expectStatus ?? 200;
   const corsOk = acao(raw.headers) === pagesBase;
-  const passed = raw.ok && raw.status_code === 200 && corsOk &&
+  // For non-200 expectations, also require the gate's own message so a generic
+  // 403 (e.g. a WAF) can't fake a pass.
+  const bodyOk = !probe.expectBodyPattern ||
+    probe.expectBodyPattern.test(parseJson(raw.body_text)?.error || "");
+  const passed = raw.status_code === expectStatus && corsOk && bodyOk &&
     /application\/json/i.test(contentType(raw.headers));
   return {
     name: probe.name,
@@ -352,10 +364,11 @@ async function runAuthenticatedApiProbe(probe) {
     status: passed ? "passed" : "failed",
     failure_class: passed
       ? null
-      : !corsOk && raw.status_code === 200
+      : !corsOk && raw.status_code === expectStatus
       ? "api-cors"
       : probe.failureClass,
-    expected: "Authenticated launch API route returns JSON for the Pages origin",
+    expected: probe.expected ??
+      "Authenticated launch API route returns JSON for the Pages origin",
     observed: {
       status_code: raw.status_code,
       content_type: contentType(raw.headers) || null,
