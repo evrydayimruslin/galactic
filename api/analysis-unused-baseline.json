@@ -1562,6 +1562,12 @@
       ]
     },
     {
+      "file": "src/bindings/memory-binding-scope.test.ts",
+      "files": [
+        "src/bindings/memory-binding-scope.test.ts"
+      ]
+    },
+    {
       "file": "src/bindings/outbound-policy.ts",
       "types": [
         "GuardedFetchOptions",

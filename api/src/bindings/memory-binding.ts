@@ -13,9 +13,6 @@ import {
   resolveMemoryKey,
 } from "./memory-scope.ts";
 
-export type { MemoryScope };
-export { normalizeMemoryScope, resolveMemoryKey };
-
 // ============================================
 // TYPES
 // ============================================
