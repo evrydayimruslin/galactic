@@ -125,7 +125,8 @@ export interface AppCallSettlementResult {
     | "access_policy_denied"
     | "access_policy_error"
     | "free_mode_paid_blocked"
-    | "free_mode_ai_requires_byok";
+    | "free_mode_ai_requires_byok"
+    | "settlement_unavailable";
   insufficientBalanceMessage?: string;
   receiptId?: string;
   metadata: Record<string, unknown>;
@@ -921,23 +922,23 @@ export async function settleAppCall(
 
   if (appChargeLight > 0) {
     if (!supabase) {
+      // Fail CLOSED: the settlement backend is unavailable, so we cannot move
+      // Light. Charging $0 here would silently give the developer's paid work
+      // away and misreport it as a successful free call. Block the call with a
+      // distinct, retryable code instead of running it free.
       console.error(
-        "[PRICING] Supabase not configured for caller charge settlement",
+        "[PRICING] Supabase not configured for caller charge settlement — blocking paid call (fail-closed)",
       );
-      return buildBaseSettlement(params, {
+      return buildInsufficientSettlement(params, {
         appPriceLight,
-        appChargeLight: 0,
-        developerRevenueLight: 0,
-        platformFeeLight: 0,
         freeCall,
         freeCallCount,
         freeCallLimit,
-        infraChargeLight: 0,
-        infraPayerUserId: null,
-        ownerSponsoredInfra: false,
-        callerInfraFallback: false,
         transferId,
         cloudUsageEventId,
+        code: "settlement_unavailable",
+        message:
+          "Payment settlement is temporarily unavailable, so this paid call was not completed. No Light was charged. Please retry shortly.",
       });
     }
 

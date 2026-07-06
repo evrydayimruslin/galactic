@@ -3903,7 +3903,7 @@ Agent code runs in a sandbox with the \`galactic.*\` SDK (alias: \`ultralight.*\
 | **Charge the user** (in-app purchase) | \`galactic.charge(credits, reason?)\` | caller must be signed in |
 | KV storage (per-user, app-scoped) | \`galactic.store / load / list / remove / query\` | — |
 | SQL (D1, structured + auto per-user scoped) | \`galactic.db.select / first / insert / update / delete / upsert / count / batch\` | — |
-| Cross-app user memory | \`galactic.remember / recall\` | — |
+| Per-agent memory (markdown) | \`galactic.remember(k,v) / recall(k)\` — this agent's private notebook; add \`{ scope: "user" }\` for the shared cross-agent notebook | \`memory:read\` / \`memory:write\` |
 | Identity | \`galactic.user\` · \`isAuthenticated()\` · \`requireAuth()\` | — |
 | Secrets (decrypted) | \`galactic.env.MY_KEY\` | declare in manifest \`env_vars\` |
 | HTTPS fetch | \`fetch(url)\` (15s · 10MB · 20 concurrent) | — |
@@ -3912,10 +3912,16 @@ Agent code runs in a sandbox with the \`galactic.*\` SDK (alias: \`ultralight.*\
 | Stdlib (global) | \`_\` (lodash) · \`uuid\` · \`base64\` · \`hash\` · \`dateFns\` · \`schema\` (Zod-like) · \`markdown\` · \`str\` · \`jwt\` · \`http\` · \`crypto\` | — |
 
 #### \`galactic.ai(request)\` — multimodal chat completion
-Request: \`{ messages: [{ role, content }], model?, max_tokens?, temperature? }\`. \`content\` is a string OR an array of parts — \`{ type: "text", text }\` and \`{ type: "file", data, filename? }\` where an image file enables **vision**. Returns \`{ content, model, usage }\`. Billed in credits (or the user's BYOK key). Requires \`ai:call\` in manifest permissions. There is no streaming / JSON-mode / image-generation — ask for JSON in the prompt and \`JSON.parse\` the result.
+Request: \`{ messages: [{ role, content }], model?, max_tokens?, temperature? }\`. \`content\` is a string OR an array of parts — \`{ type: "text", text }\` and \`{ type: "file", data, filename? }\` where an image file enables **vision**. Returns \`{ content, model, usage }\`. Billed in credits (or the user's BYOK key). Requires \`ai:call\` in manifest permissions. There is no streaming / JSON-mode / image-generation — ask for JSON in the prompt and \`JSON.parse\` the result. **On failure \`galactic.ai\` throws** (out of credits, rate limit, upstream error) — it never returns an empty \`content\`, so a plain \`await\` either yields a real completion or surfaces the error in your function's error envelope. It auto-retries once against the platform fallback model before throwing.
 - Generate: \`const { content } = await galactic.ai({ messages: [{ role: "user", content: prompt }] });\`
 - Extract to JSON: prompt \`"Return ONLY JSON {title, tags[]} for: " + text\`, then \`JSON.parse(content)\`.
 - Vision: \`content: [{ type: "text", text: "What is this?" }, { type: "file", data: dataUri, filename: "p.png" }]\`.
+
+#### Errors & retries — what to expect
+- **Your thrown errors are safe.** When your function throws, the caller receives a structured \`{ error: { type, message } }\` — never a raw stack. \`type\` is your error's class name; write \`throw new Error("clear message")\` (or a custom Error subclass) and it reaches the caller intact.
+- **What the platform retries for you:** \`galactic.ai()\` retries once (fallback model) before throwing. Queued/async jobs are retried only up to the point they start running.
+- **What is single-shot (no auto-retry):** \`galactic.call()\` to another Agent, \`galactic.db\` / \`galactic.store\` operations, and a job once it has begun executing. Wrap these in your own retry/backoff if the operation is safe to repeat, and make repeatable writes idempotent (e.g. key on a request id) — there is no platform idempotency key.
+- **Memory scope:** \`recall\`/\`remember\` default to this agent's private notebook; only pass \`{ scope: "user" }\` when you intend to share state with the user's other agents.
 
 #### \`galactic.call(appId, fn, args)\` — orchestrate other Agents
 Calls another Agent's function over MCP and returns its parsed result. This is how Agents compose into graphs. Requires \`app:call\` or a declared manifest dependency on that app/function. Example: \`const r = await galactic.call("app-abc", "translate", { text, to: "fr" });\`

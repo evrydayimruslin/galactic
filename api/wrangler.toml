@@ -120,6 +120,12 @@ GPU_SUPPORT_ENABLED = "false"
 # Requires migration 20260625000000_free_mode_hold_gate (the p_free_mode hold
 # arg) to be applied first — it ships ahead of the API via the supabase-db CI.
 FREE_MODE = "1"
+# Autonomous routines (docs/CAPABILITY_REGISTRY_MIGRATION.md, routines-feature-flag.ts):
+# the minute-cron routine executor dispatches due scheduled/interval routines.
+# Enabled for prod now that the routines schema (20260517120000/130000/140000) is
+# confirmed applied on the production Supabase project — the executor queries
+# user_routines/routine_runs via the service-role key (RLS-independent).
+ROUTINES_ENABLED = "1"
 SUPABASE_URL = "https://uavjzycsltdnwblwutmb.supabase.co"
 CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 # Optional rollout knob for Wave 4 alias retirement:
