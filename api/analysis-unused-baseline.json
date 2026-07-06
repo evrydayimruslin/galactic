@@ -637,6 +637,12 @@
       ]
     },
     {
+      "file": "services/execution-context-registry.ts",
+      "types": [
+        "ExecutionContextEntry"
+      ]
+    },
+    {
       "file": "services/execution-settlement.ts",
       "types": [
         "AppCallSettlementResult",
