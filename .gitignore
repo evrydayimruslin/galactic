@@ -61,3 +61,9 @@ desktop/src-tauri/tauri.windows.release.conf.json
 # UI handoff package (Claude Design reference; not committed)
 /handoff
 /handoff/
+
+# Local CLI app-binding files (created by running the CLI in an example dir)
+.ultralightrc.json
+
+# api runs Deno with --no-lock; its lockfile is a local side effect
+api/deno.lock
