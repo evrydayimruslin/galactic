@@ -2173,8 +2173,10 @@ const PLATFORM_TOOLS: MCPTool[] = [
   // ── 10. ul.logs ──────────────────────────
   {
     name: "ul.logs",
-    description: "View call logs and health events. " +
+    description: "View call logs, runtime logs, and health events. " +
       "Default: call logs for an app. " +
+      "receipt_id: fetch the persisted console output of ONE call (owner-only, " +
+      "kept 7 days) — the go-to for debugging a live incident. " +
       "health=true: view error events instead. " +
       "resolve_event_id: mark health event as resolved.",
     annotations: {
@@ -2189,6 +2191,11 @@ const PLATFORM_TOOLS: MCPTool[] = [
         app_id: {
           type: "string",
           description: "App ID or slug. Omit with health=true for all apps.",
+        },
+        receipt_id: {
+          type: "string",
+          description:
+            "Fetch the stored runtime console logs for one call by its receipt. Owner-only; retained 7 days.",
         },
         // call log filters
         emails: {
@@ -3922,6 +3929,7 @@ Request: \`{ messages: [{ role, content }], model?, max_tokens?, temperature? }\
 - **What the platform retries for you:** \`galactic.ai()\` retries once (fallback model) before throwing. Queued/async jobs are retried only up to the point they start running.
 - **What is single-shot (no auto-retry):** \`galactic.call()\` to another Agent, \`galactic.db\` / \`galactic.store\` operations, and a job once it has begun executing. Wrap these in your own retry/backoff if the operation is safe to repeat, and make repeatable writes idempotent (e.g. key on a request id) — there is no platform idempotency key.
 - **Memory scope:** \`recall\`/\`remember\` default to this agent's private notebook; only pass \`{ scope: "user" }\` when you intend to share state with the user's other agents.
+- **Debugging a live call:** every call returns a \`receipt_id\`, and each run's \`console.log/warn/error\` output is stored for 7 days. As the app owner, fetch it with \`gx.logs({ receipt_id })\` — logs + the structured error for that exact run. Log storage counts toward your data-storage allowance while retained; reads are audit-logged since runtime logs can contain user data.
 
 #### \`galactic.call(appId, fn, args)\` — orchestrate other Agents
 Calls another Agent's function over MCP and returns its parsed result. This is how Agents compose into graphs. Requires \`app:call\` or a declared manifest dependency on that app/function. Example: \`const r = await galactic.call("app-abc", "translate", { text, to: "fr" });\`
@@ -11722,6 +11730,26 @@ async function executeLogs(
   userId: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  // Per-call runtime logs by receipt (owner-only, audited, 7-day retention).
+  if (typeof args.receipt_id === "string" && args.receipt_id.trim()) {
+    const { readCallLogsByReceipt, CallLogForbidden, CallLogNotFound } =
+      await import("../services/call-log-store.ts");
+    try {
+      return await readCallLogsByReceipt({
+        callerUserId: userId,
+        receiptId: args.receipt_id.trim(),
+      });
+    } catch (err) {
+      if (err instanceof CallLogForbidden) {
+        throw new ToolError(FORBIDDEN, err.message);
+      }
+      if (err instanceof CallLogNotFound) {
+        throw new ToolError(NOT_FOUND, err.message);
+      }
+      throw err;
+    }
+  }
+
   const appIdOrSlug = args.app_id as string;
   const emails = args.emails as string[] | undefined;
   const functions = args.functions as string[] | undefined;
