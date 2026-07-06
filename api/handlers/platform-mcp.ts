@@ -1752,152 +1752,6 @@ const PLATFORM_TOOLS: MCPTool[] = [
   },
 
   // ── 3. ul.routine ──────────────────────────
-  {
-    name: "ul.routine",
-    description:
-      "Create and manage persistent cloud routines from MCP-published templates. " +
-      'Use action="templates" to discover routine templates, "plan" to preview schedule/config/capabilities, ' +
-      '"create" to save a user-owned routine, "list"/"get"/"update"/"pause"/"resume"/"delete" to manage it, and "run_now" to queue a manual run.',
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: [
-            "templates",
-            "plan",
-            "create",
-            "list",
-            "get",
-            "update",
-            "pause",
-            "resume",
-            "delete",
-            "run_now",
-          ],
-          description: "Routine operation.",
-        },
-        app_id: {
-          type: "string",
-          description:
-            "Composer app ID or slug. Required when template_id is ambiguous; optional for templates search.",
-        },
-        template_id: {
-          type: "string",
-          description:
-            "Routine template ID, appSlug/templateId, or appId/templateId. Required for plan/create.",
-        },
-        routine_id: {
-          type: "string",
-          description:
-            "Routine instance ID. Required for get/update/pause/resume/delete/run_now.",
-        },
-        query: {
-          type: "string",
-          description:
-            "Search routine templates by app, label, description, or capability.",
-        },
-        name: { type: "string", description: "Routine instance name." },
-        description: {
-          type: "string",
-          description: "Routine instance description.",
-        },
-        intent: {
-          type: "string",
-          description: "Natural-language business outcome this routine owns.",
-        },
-        schedule: {
-          description:
-            "Cron string or interval object, e.g. { every_minutes: 5 }. For plan/create/update.",
-        },
-        config: {
-          type: "object",
-          description:
-            "Routine configuration arguments merged over template defaults.",
-          additionalProperties: true,
-        },
-        budget_policy: {
-          type: "object",
-          description:
-            "Credits budget policy, e.g. { max_light_per_run, max_light_per_day, max_calls_per_run }.",
-          additionalProperties: true,
-        },
-        approval_policy: {
-          type: "object",
-          description:
-            "Approval guardrails for side effects and paid capabilities.",
-          additionalProperties: true,
-        },
-        capabilities: {
-          type: "array",
-          description:
-            "Optional full capability override. Each item supports app_ref/app, function_name/functions, access, required, purpose.",
-          items: { type: "object", additionalProperties: true },
-        },
-        extra_capabilities: {
-          type: "array",
-          description:
-            "Additional approved/downstream capabilities beyond the template default.",
-          items: { type: "object", additionalProperties: true },
-        },
-        approve_capabilities: {
-          type: "boolean",
-          description:
-            "Set true after user approval to mark requested routine capabilities approved for durable execution.",
-        },
-        dashboard_bindings: {
-          type: "array",
-          description:
-            "Optional Command dashboard widget/card bindings for this routine.",
-          items: { type: "object", additionalProperties: true },
-        },
-        activate: {
-          type: "boolean",
-          description:
-            "For create: resume immediately after creation. Requires approve_capabilities=true when capabilities exist.",
-        },
-        status: {
-          type: "string",
-          enum: ["active", "paused", "disabled", "deleted", "error"],
-          description: "Filter list or set status during update.",
-        },
-        next_run_at: {
-          type: "string",
-          description: "ISO timestamp for the next scheduled run.",
-        },
-        max_concurrency: {
-          type: "number",
-          description: "Maximum concurrent runs for this routine.",
-        },
-        run_config: {
-          type: "object",
-          description: "Manual run override config for run_now.",
-          additionalProperties: true,
-        },
-        metadata: {
-          type: "object",
-          description: "Routine or run metadata.",
-          additionalProperties: true,
-        },
-        trace_id: {
-          type: "string",
-          description: "Trace ID to attach to created routine or queued run.",
-        },
-        limit: {
-          type: "number",
-          description: "Max templates/routines to return.",
-        },
-      },
-      required: ["action"],
-    },
-  },
-
   // ul.download migrated to the capability registry
   // (api/services/capabilities/registry.ts, handler bound from this module).
 
@@ -2131,41 +1985,6 @@ const PLATFORM_TOOLS: MCPTool[] = [
   },
 
   // ── ul.emit (publish a cross-Agent event) ──────────────────────────
-  {
-    name: "ul.emit",
-    description: "Publish an event as one of your own Agents. " +
-      "Every Agent the user wired a matching subscribe grant for (caller=this Agent, topic) " +
-      "has its handler invoked, async, billed to the user and capped by each subscribe grant. " +
-      "Emitting is unprivileged; only wired subscribers receive it. " +
-      "Useful for manually triggering a reactive workflow or testing a subscription. " +
-      "You may only emit as an Agent you OWN.",
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        app_id: {
-          type: "string",
-          description: "The emitting Agent (ID or slug). Must be one you own.",
-        },
-        topic: {
-          type: "string",
-          description: "Event topic (for example \"sale.created\").",
-        },
-        payload: {
-          type: "object",
-          description: "Event payload delivered to each subscriber's handler.",
-          additionalProperties: true,
-        },
-      },
-      required: ["app_id", "topic"],
-    },
-  },
-
   // ul.secrets (+ ul.connect/ul.connections aliases) migrated to the capability
   // registry (id "secrets", advertised gx.secrets; handler bound from this
   // module). List-only now — entering secret values is website-only.
@@ -3256,6 +3075,14 @@ bindCapabilityHandler("codemode", (args, ctx) =>
     ctx.econ ?? { freeMode: false, byokPresent: false },
     ctx.user as UserContext,
   ));
+
+// Autonomous execution: routines (scheduled) + emit (pub/sub). Both keep their
+// executors in this module and throw ToolError natively, so runCapabilityForMcp
+// passes their errors through unchanged.
+bindCapabilityHandler("routine", (args, ctx) =>
+  executeRoutinePlatformAction(ctx.userId, args));
+
+bindCapabilityHandler("emit", (args, ctx) => executeEmit(ctx.userId, args));
 
 function stripGpuFromTool(tool: MCPTool): MCPTool {
   const cloned = JSON.parse(JSON.stringify(tool)) as MCPTool;
@@ -4852,9 +4679,8 @@ async function handleToolsCall(
       }
 
       // ── 3. ul.routine ──────────────
-      case "ul.routine":
-        result = await executeRoutinePlatformAction(userId, toolArgs);
-        break;
+      // ul.routine migrated to the capability registry (id "routine",
+      // advertised gx.routine; handler bound from this module).
 
       // ── 4. ul.download (+ scaffold when no app_id) ──────────────
       // ul.download dispatched via the capability registry pre-check above.
@@ -4950,10 +4776,8 @@ async function handleToolsCall(
       // ul.permit dispatched via the capability registry pre-check above.
 
       // ── ul.emit (publish a cross-Agent event) ──────────────
-      case "ul.emit": {
-        result = await executeEmit(userId, toolArgs);
-        break;
-      }
+      // ul.emit migrated to the capability registry (id "emit", advertised
+      // gx.emit; handler bound from this module).
 
       // ── 8. ul.logs (+ health) ──────────────
       case "ul.logs": {
