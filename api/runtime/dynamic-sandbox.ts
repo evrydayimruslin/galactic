@@ -756,8 +756,15 @@ export default {
     // Emit-path calls (callerContextToken present) MUST keep load(): they carry
     // an EventsBinding whose parent-side caller token is per-execution and must
     // not be reused, and it must not become a sandbox-forgeable per-request value.
+    // Anonymous callers ALSO keep load(): the anon sentinel is a SHARED user id,
+    // so a warm isolate would persist app module-level state across DIFFERENT
+    // anonymous end-users. Reuse only for a real, distinct user.
+    // ANONYMOUS_USER_ID (request-caller-context.ts) inlined to avoid an import cycle.
+    const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
+    const canReuseIsolate = !config.callerContextToken &&
+      !!config.userId && config.userId !== ANON_USER_ID;
     let worker: ReturnType<typeof loader.load>;
-    if (config.callerContextToken) {
+    if (!canReuseIsolate) {
       worker = loader.load(loadConfig);
     } else {
       const reuseKey = await deriveIsolateReuseKey(
