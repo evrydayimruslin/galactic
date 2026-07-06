@@ -42,7 +42,7 @@ jobs:
         with:
           node-version-file: api/.nvmrc
       - name: Wrangler dry run
-        run: npx wrangler@4.67.0 deploy --dry-run
+        run: npx wrangler@4.67.0 deploy --dry-run --config wrangler.toml
 
   deploy:
     name: Deploy data worker (manual)
@@ -68,4 +68,4 @@ jobs:
         with:
           node-version-file: api/.nvmrc
       - name: Deploy
-        run: npx wrangler@4.67.0 deploy
+        run: npx wrangler@4.67.0 deploy --config wrangler.toml
