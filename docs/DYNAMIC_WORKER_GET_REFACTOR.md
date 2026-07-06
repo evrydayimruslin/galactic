@@ -60,16 +60,25 @@ call-frame arguments.
   `globalThis.__rpcEnv` to a per-fetch-bound facade threading `{env,
   execCtxToken}` explicitly. Backward-compatible (load() still per-call). Isolates
   the highest-risk change from billing. Gate: wave3-e2e + unit green.
-- **Stage 1 — registry + AI spend off props.** Add `execution-context-registry.ts`
-  + mint/verify `execCtxToken`. Thread to `AIBinding.call`; resolve `aiExecutionId`
-  from the registry; drop `executionId` from AIBinding props. register/deregister
-  around the fetch. Still `load()` → props and registry agree → zero-behavior-change
-  diff. Test: recordAiSpend keyed correctly; replayed/absent handle → 0 debit.
-- **Stage 2 — cloud metering off props.** Thread `execCtxToken` through
-  DB/DATA/MEMORY methods; resolve `operationMetering` from the registry; drop it
-  from all three props. Convert EventsBinding `callerContextToken` from prop to
-  per-RPC token. Still `load()`. Test: debits land on the correct receiptId/hold;
-  forged handle → no debit.
+- **Stage 1 — registry + AI spend off props. ✅ DONE (ba6431b).** Added
+  `execution-context-registry.ts`. Design deviation from the sketch: the sandbox
+  gets an OPAQUE RANDOM HANDLE (128-bit) resolved against the parent-side
+  registry, NOT a signed/verified token — strictly safer (the sandbox holds
+  nothing forgeable; an unknown handle → null → fail closed) and needs no signing
+  secret. Threaded to `AIBinding.call`; `aiExecutionId` resolves from the registry.
+  register/deregister around the fetch. Still `load()` → props and registry agree.
+- **Stage 2 — cloud metering off props + events per-RPC. ✅ DONE (1254ca1).**
+  Threaded `execCtxHandle` through every DB/DATA/MEMORY public method; a
+  `meteringContext()` helper resolves `operationMetering`/`billingConfig` from the
+  registry. EventsBinding `callerContextToken` now resolved per-RPC (it bakes in
+  the per-call entry function + hop; a frozen prop would report a stale hop and
+  defeat the hop ceiling). **Deviation — props KEPT, not dropped:** the resolution
+  rule is *handle threaded → resolve-or-FAIL-CLOSED (never read props); handle
+  absent (legacy/direct-call) → props fallback*. This is a genuine no-op under
+  `load()` (handle always resolves to the same value props hold) AND already
+  reuse-safe (under `get()`, stale props are never consulted). Net effect: Stage 3
+  becomes a pure loader flag flip with ZERO further billing-logic edits. Still
+  `load()`. Curated suite 1314 passed / 0 failed.
 - **Stage 3 — enable `get()` behind `EXECUTED_LOADER_GET_REUSE` (default OFF).**
   `loader.load()` → `loader.get(key, cb)`. Stages 1-2 already made props
   reuse-safe. Flag OFF in prod, ON in staging. Test: reuse an isolate across two
@@ -81,17 +90,23 @@ call-frame arguments.
   regression (userId-in-key still scopes D1/DATA/MEMORY). Adversarial review. Only
   then flip the prod flag (mirroring DATA_TENANT_ENFORCE / free-mode discipline).
 
-## Per-binding change list
-- **AIBinding** (ai-binding.ts:100/116/309): +execCtxToken param; resolve
-  aiExecutionId from registry; drop `executionId` from props. apiKey/provider/
-  model/shouldDebitLight/shouldRequireBalance STAY in props (per-(user,route),
-  valid — key retains userId).
-- **DatabaseBinding** (database-binding.ts:85 + each select/first/count/insert/
-  update/delete/upsert/batch): +execCtxToken; resolve metering; drop
-  operationMetering/operationBillingConfig from props; KEEP databaseId/appId/userId.
-- **AppDataBinding** (appdata-binding.ts:42): same; KEEP appId/userId.
-- **MemoryBinding** (memory-binding.ts:54): same; KEEP userId/appId.
-- **EventsBinding** (events-binding.ts:32): callerContextToken prop → per-RPC token.
+## Per-binding change list (as SHIPPED)
+Props are KEPT on every binding as the legacy no-handle fallback (see Stage 2
+deviation); the per-call values are resolved from the registry whenever a handle
+is threaded. Nothing was dropped from props.
+- **AIBinding** (ai-binding.ts): +execCtxHandle param; resolve aiExecutionId from
+  registry; refuse the call if a threaded handle is unresolvable. `executionId`
+  KEPT in props as the no-handle fallback. apiKey/provider/model/
+  shouldDebitLight/shouldRequireBalance stay in props (per-(user,route), valid —
+  the reuse key retains userId).
+- **DatabaseBinding** (each select/first/count/insert/update/delete/upsert/batch):
+  +execCtxHandle; `meteringContext()` resolves metering; props kept; the guard
+  `if (h !== undefined) this.execCtxHandle = h` preserves the handle when `batch`
+  fans out to insert/update/delete via `dispatchWrite` (no handle re-passed).
+- **AppDataBinding** (store/load/remove/list): +execCtxHandle; same helper.
+- **MemoryBinding** (remember/recall): +execCtxHandle; same helper.
+- **EventsBinding** (emit): +execCtxHandle; callerContextToken resolved per-RPC
+  from the registry (prop kept as no-handle fallback).
 - **ai-spend-tracker.ts:** unchanged (parent-side, keyed by config.executionId).
 - **NEW execution-context-registry.ts:** register/resolve/deregister + bounded TTL
   sweep (mirror ai-spend-tracker.ts).
