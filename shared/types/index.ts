@@ -1297,6 +1297,18 @@ export const CLOUD_UNIT_LIGHT_PER_1K = 1;
 /** Worker execution granularity: one cloud unit per started interval. */
 export const WORKER_MS_PER_CLOUD_UNIT = 250;
 
+/**
+ * Fixed Light charged per sandbox execution to recover Cloudflare's Dynamic
+ * Worker (Worker Loader) per-load fee (~$0.002 = ~0.2 Light after the 1,000
+ * free loads/month). The duration meter above is CPU-ms-shaped and cannot
+ * recover a fixed per-invocation cost. Default 0 = OFF (behavior-preserving)
+ * until the Cloudflare Worker Loader charge is confirmed real (a dispute is
+ * open) and the load()→get() reuse work lands. Set ~0.25 (=$0.0025) live to
+ * cover the load with margin; it rides the existing infra hold cascade
+ * (owner-sponsor → caller → block), so free-call sponsorship applies unchanged.
+ */
+export const WORKER_LOAD_LIGHT_PER_INVOCATION = 0;
+
 /** D1 read granularity: one cloud unit per started row group. */
 export const D1_READ_ROWS_PER_CLOUD_UNIT = 100;
 

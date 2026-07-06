@@ -18,6 +18,7 @@ import {
   WIDGET_PULLS_PER_CLOUD_UNIT,
   WIRE_MINIMUM_CENTS,
   WORKER_MS_PER_CLOUD_UNIT,
+  WORKER_LOAD_LIGHT_PER_INVOCATION,
 } from "../../shared/types/index.ts";
 import { getEnv } from "../lib/env.ts";
 
@@ -34,6 +35,7 @@ export interface BillingConfig {
   wireMinimumCents: number;
   cloudUnitLightPer1k: number;
   workerMsPerCloudUnit: number;
+  workerLoadLightPerInvocation: number;
   d1ReadRowsPerCloudUnit: number;
   d1WriteRowsPerCloudUnit: number;
   r2OpsPerCloudUnit: number;
@@ -61,6 +63,7 @@ interface BillingConfigRow {
   wire_minimum_cents?: number | null;
   cloud_unit_light_per_1k?: number | null;
   worker_ms_per_cloud_unit?: number | null;
+  worker_load_light_per_invocation?: number | null;
   d1_read_rows_per_cloud_unit?: number | null;
   d1_write_rows_per_cloud_unit?: number | null;
   r2_ops_per_cloud_unit?: number | null;
@@ -115,6 +118,7 @@ export const DEFAULT_BILLING_CONFIG: BillingConfig = {
   wireMinimumCents: WIRE_MINIMUM_CENTS,
   cloudUnitLightPer1k: CLOUD_UNIT_LIGHT_PER_1K,
   workerMsPerCloudUnit: WORKER_MS_PER_CLOUD_UNIT,
+  workerLoadLightPerInvocation: WORKER_LOAD_LIGHT_PER_INVOCATION,
   d1ReadRowsPerCloudUnit: D1_READ_ROWS_PER_CLOUD_UNIT,
   d1WriteRowsPerCloudUnit: D1_WRITE_ROWS_PER_CLOUD_UNIT,
   r2OpsPerCloudUnit: R2_OPS_PER_CLOUD_UNIT,
@@ -199,6 +203,11 @@ export function normalizeBillingConfigRow(
     workerMsPerCloudUnit: positiveInteger(
       row.worker_ms_per_cloud_unit,
       DEFAULT_BILLING_CONFIG.workerMsPerCloudUnit,
+    ),
+    // finiteNonNegative: the load floor legitimately defaults to 0 (OFF).
+    workerLoadLightPerInvocation: finiteNonNegative(
+      row.worker_load_light_per_invocation,
+      DEFAULT_BILLING_CONFIG.workerLoadLightPerInvocation,
     ),
     d1ReadRowsPerCloudUnit: positiveInteger(
       row.d1_read_rows_per_cloud_unit,
@@ -302,6 +311,7 @@ export function toPublicBillingConfig(config: BillingConfig) {
     ach_minimum_cents: config.wireMinimumCents,
     cloud_unit_light_per_1k: config.cloudUnitLightPer1k,
     worker_ms_per_cloud_unit: config.workerMsPerCloudUnit,
+    worker_load_light_per_invocation: config.workerLoadLightPerInvocation,
     d1_read_rows_per_cloud_unit: config.d1ReadRowsPerCloudUnit,
     d1_write_rows_per_cloud_unit: config.d1WriteRowsPerCloudUnit,
     r2_ops_per_cloud_unit: config.r2OpsPerCloudUnit,

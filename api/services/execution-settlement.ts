@@ -1792,13 +1792,15 @@ function calculateExpectedRuntimeHoldAmount(
   timeoutMs: number,
   billingConfig: Pick<
     BillingConfig,
-    "workerMsPerCloudUnit" | "cloudUnitLightPer1k"
+    "workerMsPerCloudUnit" | "cloudUnitLightPer1k" | "workerLoadLightPerInvocation"
   >,
 ): number {
+  // Mirror createRuntimeCloudHold exactly (duration cost + fixed per-load floor)
+  // so the "you need X Light" message states the true required amount.
   return calcCloudUsageLight(
     calcWorkerCloudUnits(timeoutMs, billingConfig.workerMsPerCloudUnit),
     billingConfig.cloudUnitLightPer1k,
-  );
+  ) + (billingConfig.workerLoadLightPerInvocation ?? 0);
 }
 
 function parseIncrementCallerUsageCount(payload: unknown): number | null {
