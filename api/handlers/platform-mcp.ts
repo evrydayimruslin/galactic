@@ -3220,7 +3220,7 @@ function stripGpuPlatformDocs(docs: string): string {
     )
     .replace(
       '- Without `app_id`: scaffold a new app. Default runtime generates index.ts + manifest.json + .ultralightrc.json. With `runtime: "gpu"`, generates `ultralight.gpu.yaml`, `main.py`, `requirements.txt`, and `test_fixture.json`. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts, `gpu_type`, `base: "python-cuda" | "torch-cuda"`.\n',
-      "- Without `app_id`: scaffold a new app. The enabled runtime generates index.ts + manifest.json + .ultralightrc.json. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts.\n",
+      "- Without `app_id`: scaffold a new app. The enabled runtime generates index.ts + manifest.json + .ultralightrc.json. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts, `interface: true` for a working interfaces/main.html (agent UI) with the call bridge pre-wired.\n",
     )
     .replace(
       "- GPU apps are validation-only in `gx.test`: it checks `ultralight.gpu.yaml`, `main.py`, `test_fixture.json`, pinned requirements, and rejects Dockerfiles. Actual Python/GPU execution happens after upload/build/benchmark.\n",
@@ -8716,6 +8716,104 @@ function executeLint(args: Record<string, unknown>): unknown {
 
 // ── ul.scaffold ──────────────────────────────────────
 
+// A working agent-UI starter: the Galactic call bridge (verbatim from
+// ultralight-spec/conventions/interfaces.md) plus a minimal page that calls the
+// agent's first function and renders the result. The point is a page that RUNS
+// on first load, which the developer then edits — not boilerplate to transcribe.
+function buildScaffoldInterfaceHtml(
+  name: string,
+  description: string,
+  firstFn: string,
+): string {
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(name)}</title>
+<!-- Galactic interface bridge — do not edit. Exposes window.ul.call(fn, args)
+     (a Promise) and window.ul.resize(px). Verbatim from the interfaces spec. -->
+<script>
+(function () {
+  var port = null, queue = [], pending = {}, nextId = 1;
+  function flush() {
+    if (!port) return;
+    while (queue.length) {
+      var item = queue.shift(), id = nextId++;
+      pending[id] = item;
+      port.postMessage({ type: "call", id: id, functionName: item.fn, args: item.args || {} });
+    }
+  }
+  window.ul = {
+    context: null,
+    call: function (fn, args) {
+      return new Promise(function (resolve, reject) {
+        queue.push({ fn: fn, args: args, resolve: resolve, reject: reject });
+        flush();
+      });
+    },
+    resize: function (height) { if (port) port.postMessage({ type: "resize", height: height }); },
+  };
+  window.addEventListener("message", function (event) {
+    var d = event.data;
+    if (!d || d.type !== "ul-interface-connect" || !event.ports || !event.ports[0]) return;
+    port = event.ports[0];
+    window.ul.context = d.context;
+    port.onmessage = function (e) {
+      var m = e.data;
+      if (!m || m.type !== "result" || !(m.id in pending)) return;
+      var item = pending[m.id];
+      delete pending[m.id];
+      if (m.success) item.resolve(m.result);
+      else { var err = new Error((m.error && m.error.message) || "Call failed"); err.code = m.error && m.error.type; item.reject(err); }
+    };
+    flush();
+    document.dispatchEvent(new CustomEvent("ul-ready"));
+  });
+  parent.postMessage({ type: "ul-interface-hello" }, "*");
+})();
+</script>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 20px; color: #1c1c1c; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.sub { color: #777; font-size: 13px; margin: 0 0 16px; }
+  button { padding: 8px 14px; border: 1px solid #1c1c1c; border-radius: 8px; background: #1c1c1c; color: #fff; font-size: 13px; cursor: pointer; }
+  pre { background: #f5f5f5; border: 1px solid #e5e5e5; border-radius: 8px; padding: 12px; font-size: 12px; overflow: auto; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+  <h1>${esc(name)}</h1>
+  <p class="sub">${esc(description)}</p>
+  <button id="go">Call ${esc(firstFn)}()</button>
+  <pre id="out">Click the button to call your agent's <code>${esc(firstFn)}</code> function.</pre>
+<script>
+  // Your UI code. window.ul.call(functionName, args) returns a Promise with the
+  // function's result — call any function your agent exports.
+  function init() {
+    var out = document.getElementById("out");
+    document.getElementById("go").addEventListener("click", async function () {
+      out.textContent = "Calling…";
+      try {
+        var result = await window.ul.call("${firstFn}", {});
+        out.textContent = JSON.stringify(result, null, 2);
+      } catch (err) {
+        out.textContent = "Error: " + err.message;
+      }
+      window.ul.resize(document.body.scrollHeight);
+    });
+    window.ul.resize(document.body.scrollHeight);
+  }
+  // ul-ready fires once the bridge is connected; if it already fired, run now.
+  if (window.ul && window.ul.context) init();
+  else document.addEventListener("ul-ready", init);
+</script>
+</body>
+</html>
+`;
+}
+
 export function executeScaffold(args: Record<string, unknown>): unknown {
   const name = args.name as string;
   const description = args.description as string;
@@ -8732,6 +8830,7 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
   const permissions = args.permissions as string[] | undefined;
   const runtime = (args.runtime as string) || "deno";
   const includePolicy = args.policy === true || args.access_policy === true;
+  const includeInterface = args.interface === true;
   const gpuType = (args.gpu_type as string) || "A40";
   const baseProfile = (args.base as string) ||
     (description.toLowerCase().includes("torch") ||
@@ -8974,6 +9073,17 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
     access_policy: includePolicy
       ? { mode: "module", module: "policy.ts", export: "planAccess" }
       : undefined,
+    interfaces: includeInterface
+      ? [{
+        id: "main",
+        label: name,
+        entry: "interfaces/main.html",
+        // Bridge allowlist — the only functions the UI page may call. Seeded
+        // with every scaffolded function so new buttons work without editing
+        // the manifest.
+        functions: funcs.map((f) => f.name),
+      }]
+      : undefined,
     permissions: detectedPerms.length > 0 ? detectedPerms : undefined,
     env_vars: storage === "supabase"
       ? {
@@ -9040,6 +9150,12 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
       : []),
     { path: "manifest.json", content: JSON.stringify(manifestObj, null, 2) },
     { path: ".ultralightrc.json", content: JSON.stringify(rcObj, null, 2) },
+    ...(includeInterface
+      ? [{
+        path: "interfaces/main.html",
+        content: buildScaffoldInterfaceHtml(name, description, funcs[0].name),
+      }]
+      : []),
   ];
 
   if (storage === "d1") {
@@ -9077,6 +9193,9 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
       "Replace the placeholder scaffoldResponse() logic in index.ts with real application behavior.",
       includePolicy
         ? "Edit policy.ts to customize function pricing, free quotas, denials, and policy metadata."
+        : null,
+      includeInterface
+        ? "Edit interfaces/main.html — it already runs and calls your first function via window.ul.call(fn, args). Reachable at /agents/<slug> after deploy."
         : null,
       'Run each function with gx.test({ files: [...], function_name: "...", test_args: {...} }).',
       "Run gx.test({ files: [...], lint_only: true }) before you upload.",

@@ -165,6 +165,11 @@ const CAPABILITIES: Capability[] = [
           description:
             "When true, scaffold policy.ts plus manifest access_policy for programmable function pricing and denial logic.",
         },
+        interface: {
+          type: "boolean",
+          description:
+            "When true, scaffold a working interfaces/main.html (agent UI) with the call bridge pre-wired plus the manifest interfaces[] entry — a running page you then edit.",
+        },
       },
     },
     auth: {},
