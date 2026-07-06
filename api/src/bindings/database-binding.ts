@@ -13,7 +13,10 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { getEnv } from "../../lib/env.ts";
-import { resolveExecutionContext } from "../../services/execution-context-registry.ts";
+import {
+  assertExecutionContext,
+  resolveExecutionContext,
+} from "../../services/execution-context-registry.ts";
 import type { BillingConfig } from "../../services/billing-config.ts";
 import {
   type CloudOperationMeteringContext,
@@ -59,6 +62,10 @@ interface DatabaseBindingProps {
       | "d1WriteRowsPerCloudUnit"
     >
     | null;
+  // Set for bindings loaded into a REUSABLE isolate (loader.get): every public
+  // method then refuses to run without a resolvable per-call context handle,
+  // so a direct-binding bypass can never ride the stale frozen props.
+  requireExecCtx?: boolean;
 }
 
 interface D1QueryResult {
@@ -215,12 +222,14 @@ export class DatabaseBinding
 
   async select(op: SelectOp, execCtxHandle?: string): Promise<Record<string, unknown>[]> {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const r = await this.runBuilt(buildSelect(op, this.scopeUserId));
     return r.results ?? [];
   }
 
   async first(op: SelectOp, execCtxHandle?: string): Promise<Record<string, unknown> | null> {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const r = await this.runBuilt(
       buildSelect({ ...op, limit: 1 }, this.scopeUserId),
     );
@@ -229,6 +238,7 @@ export class DatabaseBinding
 
   async count(op: CountOp, execCtxHandle?: string): Promise<number> {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const r = await this.runBuilt(buildCount(op, this.scopeUserId));
     const row = r.results?.[0] as { count?: number } | undefined;
     return Number(row?.count ?? 0);
@@ -236,6 +246,7 @@ export class DatabaseBinding
 
   async insert(op: InsertOp, execCtxHandle?: string) {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const r = await this.runBuilt(buildInsert(op, this.scopeUserId));
     return {
       success: r.success,
@@ -246,24 +257,28 @@ export class DatabaseBinding
 
   async update(op: UpdateOp, execCtxHandle?: string) {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const r = await this.runBuilt(buildUpdate(op, this.scopeUserId));
     return { success: r.success, meta: this.shapeMeta(r.meta) };
   }
 
   async delete(op: DeleteOp, execCtxHandle?: string) {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const r = await this.runBuilt(buildDelete(op, this.scopeUserId));
     return { success: r.success, meta: this.shapeMeta(r.meta) };
   }
 
   async upsert(op: UpsertOp, execCtxHandle?: string) {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const r = await this.runBuilt(buildUpsert(op, this.scopeUserId));
     return { success: r.success, meta: this.shapeMeta(r.meta) };
   }
 
   async batch(ops: ScopedBatchOp[], execCtxHandle?: string) {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     if (!Array.isArray(ops)) {
       throw new Error("galactic.db.batch expects an array of write operations.");
     }

@@ -2,7 +2,10 @@
 // Wraps user memory (Memory.md) read/write behind a WorkerEntrypoint.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { resolveExecutionContext } from "../../services/execution-context-registry.ts";
+import {
+  assertExecutionContext,
+  resolveExecutionContext,
+} from "../../services/execution-context-registry.ts";
 import type { BillingConfig } from "../../services/billing-config.ts";
 import {
   type CloudOperationMeteringContext,
@@ -34,6 +37,10 @@ interface MemoryBindingProps {
       | "kvOpsPerCloudUnit"
     >
     | null;
+  // Set for bindings loaded into a REUSABLE isolate (loader.get): every public
+  // method then refuses to run without a resolvable per-call context handle,
+  // so a direct-binding bypass can never ride the stale frozen props.
+  requireExecCtx?: boolean;
 }
 
 
@@ -107,6 +114,7 @@ export class MemoryBinding
     execCtxHandle?: string,
   ): Promise<void> {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const memKey = this.memoryKey(normalizeMemoryScope(scope));
     await this.meter("memory.remember", memKey, 2);
     const bucket = this.getR2Bucket();
@@ -141,6 +149,7 @@ export class MemoryBinding
     execCtxHandle?: string,
   ): Promise<unknown> {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const memKey = this.memoryKey(normalizeMemoryScope(scope));
     await this.meter("memory.recall", memKey);
     const bucket = this.getR2Bucket();

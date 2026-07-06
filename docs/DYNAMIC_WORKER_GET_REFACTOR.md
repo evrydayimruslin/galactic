@@ -79,11 +79,48 @@ call-frame arguments.
   reuse-safe (under `get()`, stale props are never consulted). Net effect: Stage 3
   becomes a pure loader flag flip with ZERO further billing-logic edits. Still
   `load()`. Curated suite 1314 passed / 0 failed.
-- **Stage 3 — enable `get()` behind `EXECUTED_LOADER_GET_REUSE` (default OFF).**
-  `loader.load()` → `loader.get(key, cb)`. Stages 1-2 already made props
-  reuse-safe. Flag OFF in prod, ON in staging. Test: reuse an isolate across two
-  executions with DIFFERENT executionId/receiptId → each debit lands on its OWN
-  context (no free inference, no cross-hold debit).
+- **Stage 3 — enable `get()` behind `EXECUTED_LOADER_GET_REUSE` (default OFF). ✅ DONE.**
+  `loader.load()` → `loader.get(reuseKey, cb)` when the flag is `1` AND the
+  execution is reuse-eligible. Per-call data moved off baked literals onto the
+  fetch body (functionName/args/authToken/callerCtx/execCtxHandle); wrapper reads
+  them per fetch and resets `__aiCostLight` + `__emitCount`. Reusable-isolate
+  bindings carry `requireExecCtx=true` → a handle-less direct-binding RPC fails
+  closed (`assertExecutionContext`). Flag OFF in prod (`[vars]` comment), ON in
+  `[env.staging.vars]`. Tests: `dynamic-sandbox-reuse-key.test.ts` (isolation
+  invariants), `dynamic-sandbox-get-reuse.test.ts` (load-vs-get dispatch, body
+  plumbing, warm-hit frozen-env, eligibility gates).
+
+  **Stage-3 adversarial review (~57 agents, 6 dimensions, 3-lens verify) found 8
+  confirmed findings; all fixed before commit:**
+  - *reuse-key completeness (medium×2/low):* the key now folds in a
+    `SANDBOX_TEMPLATE_VERSION` constant, the resolved D1 `dbId`, and `hasDb`/
+    `hasMemory` binding-set presence (`bindingState` param) — previously a lazily
+    (re)provisioned DB or a toggled binding set could collide on one warm isolate
+    (sticky "D1 not available" / split-database writes). `SANDBOX_TEMPLATE_VERSION`
+    is a manual constant, so `dynamic-sandbox-template-version.test.ts` snapshots
+    the generated setup/wrapper for a fixed config and fails loudly on any
+    template drift — converting "forgot to bump the version" into a CI failure.
+  - *hop-ceiling + function-grant defeat (HIGH + medium):* `ultralight.call`
+    reads its caller-context token from the app-mutable, sibling-shared
+    `globalThis.__ulReq.callerCtx`; a warm isolate serving concurrent same-(app,
+    user) executions could let a deep-chain call present a shallow-hop token
+    (defeating `MAX_AGENT_CALL_HOP_DEPTH`) or replay a captured token to bypass a
+    function-scoped grant. A host-side move alone does NOT fix this (the RPC still
+    reads the shared `__execHandle`), and there is no AsyncLocalStorage in the
+    sandbox. **Fix: cross-Agent-call-capable executions are ineligible for reuse**
+    (`isolateReuseEligibility` → `cross_agent_call_capable` when app:call /
+    appCallDependencies / slotBindings present) → they stay on `load()`, one
+    isolate per call, no shared-globalThis race and no cross-execution module
+    state. The token is minted for every non-anon user but only *usable* by
+    `ultralight.call`, so gating on call-capability is the precise cut. (Future:
+    a host-side call binding + async-context handle store could reclaim reuse for
+    these apps.)
+  - *test fidelity (medium/low):* both `loader.get` mocks now cache-by-id (build
+    callback fires once per id; warm hits replay frozen env/modules), so the
+    frozen-props / body-wins / fail-closed contract is actually exercised; the
+    wave3 mock also gained `aiCostLight` + the `Available:` fn list.
+  - *`__proto__`-in-args (low):* NOT a regression — the new body-`JSON.parse`
+    path prevents the prototype-pollution the old baked-object-literal allowed.
 - **Stage 4 — staging isolation smoke + adversarial review = PROD GATE.** Extend
   `scripts/smoke/sandbox-isolation-smoke.ts` (flag ON): (i) concurrent two-user
   cross-billing probe, (ii) stale/replayed-handle probe, (iii) tenant-isolation

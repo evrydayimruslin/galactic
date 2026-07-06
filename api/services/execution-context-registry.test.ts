@@ -1,7 +1,9 @@
 import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
+import { assertThrows } from "https://deno.land/std@0.210.0/assert/assert_throws.ts";
 import {
   _executionContextRegistrySize,
+  assertExecutionContext,
   deregisterExecutionContext,
   registerExecutionContext,
   resolveExecutionContext,
@@ -18,6 +20,7 @@ function entry(receiptId: string, execId: string) {
       // deno-lint-ignore no-explicit-any
     } as any,
     cloudOperationBillingConfig: null,
+    callerContextToken: null,
   };
 }
 
@@ -86,4 +89,28 @@ Deno.test("registry: deregister is idempotent + no leak after paired register/de
   deregisterExecutionContext(h);
   deregisterExecutionContext(h); // idempotent
   assertEquals(_executionContextRegistrySize(), before);
+});
+
+Deno.test("assertExecutionContext: not required → no-op regardless of handle", () => {
+  assertExecutionContext(undefined, false);
+  assertExecutionContext(undefined, undefined);
+  assertExecutionContext("garbage", false);
+});
+
+Deno.test("assertExecutionContext: required + live handle → passes", () => {
+  const h = registerExecutionContext(entry("r1", "exec-1"));
+  assertExecutionContext(h, true);
+  deregisterExecutionContext(h);
+});
+
+Deno.test("assertExecutionContext: required + missing/forged/expired handle → throws (operation refused)", () => {
+  // Missing entirely (direct-binding bypass that omits the handle).
+  assertThrows(() => assertExecutionContext(undefined, true));
+  assertThrows(() => assertExecutionContext(null, true));
+  // Forged (never registered).
+  assertThrows(() => assertExecutionContext("forged-handle", true));
+  // Expired / replayed after the execution deregistered.
+  const h = registerExecutionContext(entry("r1", "exec-1"));
+  deregisterExecutionContext(h);
+  assertThrows(() => assertExecutionContext(h, true));
 });

@@ -15,6 +15,7 @@ const SECRET = "SUPER_SECRET_WORKER_VALUE_DO_NOT_LEAK_7f3a9c";
 
 interface CapturedLoad {
   setup: string;
+  wrapper: string;
   envKeys: string[];
 }
 
@@ -23,7 +24,7 @@ function installSandboxHarness(): {
   constructed: { events: boolean; net: boolean };
   restore: () => void;
 } {
-  const captured: CapturedLoad = { setup: "", envKeys: [] };
+  const captured: CapturedLoad = { setup: "", wrapper: "", envKeys: [] };
   const constructed = { events: false, net: false, cred: false };
 
   const prevEnv = globalThis.__env;
@@ -35,6 +36,7 @@ function installSandboxHarness(): {
     // deno-lint-ignore no-explicit-any
     load(cfg: any) {
       captured.setup = cfg?.modules?.["setup.js"] ?? "";
+      captured.wrapper = cfg?.modules?.["wrapper.js"] ?? "";
       captured.envKeys = Object.keys(cfg?.env ?? {});
       return {
         getEntrypoint() {
@@ -147,6 +149,26 @@ Deno.test("dynamic sandbox: WORKER_SECRET never enters the injected sandbox sour
     assert(
       !harness.captured.setup.includes("X-Worker-Secret"),
       "X-Worker-Secret header still embedded in sandbox source",
+    );
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("dynamic sandbox: per-call tokens ride the fetch body, never the baked module source", async () => {
+  const harness = installSandboxHarness();
+  try {
+    const result = await executeInDynamicSandbox(baseConfig(), "noop", []);
+    assertEquals(result.success, true);
+
+    // The signed caller-context token is per-call (it bakes in hop + entry
+    // function). Baked into module content, a warm-reused isolate would send a
+    // STALE hop on outbound cross-Agent calls — so it must not appear in any
+    // injected source (Stage 3 of the get() rearchitecture).
+    const modules = harness.captured.setup + "\n" + harness.captured.wrapper;
+    assert(
+      !modules.includes("gxc1.dummy-host-set-token.sig"),
+      "caller-context token is baked into sandbox module source",
     );
   } finally {
     harness.restore();

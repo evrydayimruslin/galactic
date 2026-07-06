@@ -87,6 +87,29 @@ export function deregisterExecutionContext(
   registry.delete(handle);
 }
 
+/**
+ * Fail-closed guard for bindings loaded into a REUSABLE isolate
+ * (props.requireExecCtx). Sandbox code can bypass the SDK and call a binding
+ * on globalThis.__rpcEnv directly, omitting the handle — under warm reuse that
+ * must refuse the OPERATION (not silently fall back to the props frozen at
+ * first load, which would meter against a stale, possibly settled hold).
+ * No-op when `required` is falsy (fresh-load / legacy paths keep today's
+ * behavior). Throws unless the handle resolves to a live execution context.
+ */
+export function assertExecutionContext(
+  handle: string | null | undefined,
+  required: boolean | undefined,
+): void {
+  if (!required) return;
+  if (typeof handle !== "string" || !resolveExecutionContext(handle)) {
+    throw new Error(
+      "Execution context required: this operation must carry the current " +
+        "execution's context handle (missing, expired, or unknown). " +
+        "Use the galactic.* SDK methods rather than calling bindings directly.",
+    );
+  }
+}
+
 /** Test-only: current entry count. */
 export function _executionContextRegistrySize(): number {
   return registry.size;

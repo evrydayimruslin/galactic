@@ -43,6 +43,11 @@ interface AIBindingProps {
   // balance. BYOK routes set this false.
   shouldRequireBalance: boolean;
   unavailableReason?: string | null;
+  // Set for bindings loaded into a REUSABLE isolate (loader.get): call() then
+  // refuses inference without a resolvable per-call context handle, so a
+  // direct-binding bypass can never record spend against the stale frozen
+  // props.executionId.
+  requireExecCtx?: boolean;
 }
 
 type ContentPart = { type: 'text'; text: string }
@@ -122,14 +127,17 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     // (loader.get) the isolate's env bindings are FROZEN at first load, so
     // props.executionId would be STALE (call 1's id) on every later call —
     // recording spend under an already-settled id = FREE INFERENCE. So when a
-    // per-call handle is threaded, trust ONLY the parent-side registry: an
-    // unresolvable handle (execution already deregistered, or a forgery)
-    // REFUSES the call rather than charging a stale hold. props.executionId is
-    // used only on the legacy no-handle path (fresh load, where they agree).
-    // A resolved context whose aiExecutionId is null is legitimate (a run with
-    // no spend id) — only an unresolvable HANDLE fails closed.
+    // per-call handle is threaded — or the binding was loaded into a reusable
+    // isolate (props.requireExecCtx, which also catches a direct-binding
+    // bypass that omits the handle entirely) — trust ONLY the parent-side
+    // registry: an unresolvable handle (execution already deregistered, or a
+    // forgery) REFUSES the call rather than charging a stale hold.
+    // props.executionId is used only on the legacy no-handle fresh-load path
+    // (where they agree). A resolved context whose aiExecutionId is null is
+    // legitimate (a run with no spend id) — only an unresolvable HANDLE fails
+    // closed.
     let executionId: string | null;
-    if (execCtxHandle !== undefined) {
+    if (execCtxHandle !== undefined || this.ctx.props.requireExecCtx) {
       const resolvedCtx = resolveExecutionContext(execCtxHandle);
       if (!resolvedCtx) {
         return {

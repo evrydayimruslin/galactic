@@ -13,6 +13,7 @@
 
 import type { ExecutionResult, RuntimeConfig } from "./sandbox.ts";
 import type { ResolvedCredential } from "../../shared/contracts/env.ts";
+import { getEnv } from "../lib/env.ts";
 import { consumeAiSpend } from "../services/ai-spend-tracker.ts";
 import {
   deregisterExecutionContext,
@@ -27,6 +28,156 @@ import {
   verifyExecutedBundle,
 } from "../services/executed-bundle.ts";
 
+// ============================================
+// WARM-ISOLATE REUSE (Worker Loader get())
+// ============================================
+
+// Local SHA-256 hex — no import to keep the hot runtime path free of a cycle
+// into the trust/service graph. Used only to derive the get() reuse key.
+async function sha256HexLocal(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(input),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// ANONYMOUS_USER_ID (request-caller-context.ts) inlined to avoid an import cycle.
+const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
+
+// Bump whenever the generated setup.js / wrapper.js TEMPLATE, the loadConfig
+// shape (compatibilityDate, limits, binding wiring), or the fetch-body contract
+// changes. Folded into the reuse key so a parent-worker deploy that changes the
+// isolate's generated content can never collide with a still-cached old isolate
+// under the same key. (bundleHash covers app.js; this covers everything the
+// runtime generates around it.)
+const SANDBOX_TEMPLATE_VERSION = "2026-07-06.get-reuse.v1";
+
+/**
+ * Whether this execution may run in a warm-reused isolate at all (independent
+ * of the rollout flag). Exported for unit-testing the gates.
+ *  - Anonymous callers NEVER reuse: the anon sentinel is a SHARED user id, so a
+ *    warm isolate would persist app module-level state across DIFFERENT
+ *    anonymous end-users — a cross-tenant leak.
+ *  - Fixture-backed executions (gx.test) NEVER reuse: d1Fixtures are per-call
+ *    data baked into FixtureDatabaseBinding props, so a warm isolate would
+ *    serve one test's fixtures to the next.
+ *  - Cross-Agent-CALL-capable executions NEVER reuse: ultralight.call sets the
+ *    X-Galactic-Caller header from a per-call token read at call time from the
+ *    shared-globalThis request payload. A warm isolate serves CONCURRENT
+ *    executions of the same (app,user) through that shared globalThis, so a
+ *    sibling could overwrite the token and let a deep-chain call present a
+ *    shallow-hop identity — defeating MAX_AGENT_CALL_HOP_DEPTH (runaway
+ *    recursion) and function-scoped grants. There is no per-async-context store
+ *    in the sandbox (no AsyncLocalStorage), so the only sound fix today is to
+ *    keep these on load() (one isolate per call → no shared-globalThis race).
+ *    Gated on the same capability ultralight.call itself requires: app:call
+ *    permission, a declared call dependency, or a wired slot. (A future
+ *    host-side call binding + async-context handle store could reclaim reuse
+ *    here; tracked in docs/DYNAMIC_WORKER_GET_REFACTOR.md.)
+ */
+export function isolateReuseEligibility(
+  config: Pick<
+    RuntimeConfig,
+    "userId" | "d1Fixtures" | "permissions" | "appCallDependencies" | "slotBindings"
+  >,
+): { eligible: boolean; reason: string } {
+  if (!config.userId || config.userId === ANON_USER_ID) {
+    return { eligible: false, reason: "anonymous_user" };
+  }
+  if (config.d1Fixtures) {
+    return { eligible: false, reason: "fixture_execution" };
+  }
+  if (
+    config.permissions?.includes("app:call") ||
+    (config.appCallDependencies?.length ?? 0) > 0 ||
+    (config.slotBindings?.length ?? 0) > 0
+  ) {
+    return { eligible: false, reason: "cross_agent_call_capable" };
+  }
+  return { eligible: true, reason: "ok" };
+}
+
+/**
+ * Derive the Worker Loader `get()` reuse key for an execution.
+ *
+ * The key uniquely determines every BAKED input to the isolate, so Cloudflare's
+ * rule ("same id ⟺ same content") holds and warm reuse is safe:
+ *   - `appId` + `bundleHash`  ⇒ a different app or code version ⇒ different key.
+ *   - `userId`                ⇒ an isolate is NEVER shared across users. This is
+ *     the isolation linchpin: any residual shared-globalThis race is intra-user
+ *     misattribution at worst, never cross-tenant.
+ *   - `stateFingerprint`      ⇒ any per-user baked input change (secret rotation,
+ *     grant/dependency change, BYOK key, envVars, user, egress allowlist, AI
+ *     route) ⇒ a fresh isolate, so a warm one never serves stale secrets/grants.
+ *
+ * The caller-context token's PRESENCE is fingerprinted (it decides whether the
+ * EVENTS binding exists in the baked env) but its VALUE is not — the value is
+ * per-call (hop/function/expiry) and is resolved per-RPC from the execution-
+ * context registry, never from baked content. Only functionName/args/authToken/
+ * callerCtx/execCtxHandle vary within a key; those ride the fetch body.
+ * Exported for unit-testing the isolation invariants.
+ */
+export async function deriveIsolateReuseKey(
+  config: Pick<
+    RuntimeConfig,
+    | "appId"
+    | "userId"
+    | "user"
+    | "envVars"
+    | "permissions"
+    | "credentials"
+    | "appCallDependencies"
+    | "slotBindings"
+    | "userApiKey"
+    | "aiRoute"
+    | "aiUnavailableReason"
+    | "callerContextToken"
+    | "supabase"
+    | "baseUrl"
+    | "workerBaseUrl"
+  >,
+  esmCode: string,
+  allowedDestinations: unknown,
+  // Resolved binding-set state that is BAKED into loadConfig.env but not derived
+  // from any other fingerprinted field: the D1 database id (lazily provisioned;
+  // can transition null→id, or be re-provisioned to a new id, with no bundle
+  // change) and whether the DB / MEMORY bindings were wired at all (depends on
+  // getD1DatabaseId + memoryService, not just permissions). Without these, two
+  // executions that differ only in binding presence/target would collide on one
+  // warm isolate — a sticky "D1 not available" outage or a split-database write.
+  bindingState: { dbId: string | null; hasDb: boolean; hasMemory: boolean },
+): Promise<string> {
+  const bundleHash = await sha256HexLocal(esmCode);
+  const stateFingerprint = await sha256HexLocal(JSON.stringify({
+    // Version of the runtime-generated setup/wrapper template + loadConfig shape.
+    tpl: SANDBOX_TEMPLATE_VERSION,
+    user: config.user ?? null,
+    env: config.envVars ?? {},
+    perms: [...(config.permissions ?? [])].sort(),
+    // Credential VALUES are included: a rotation changes the fingerprint and
+    // mints a fresh isolate, so a warm one never serves a stale secret.
+    creds: config.credentials ?? {},
+    deps: config.appCallDependencies ?? [],
+    slots: config.slotBindings ?? [],
+    byok: config.userApiKey ?? null,
+    aiRoute: config.aiRoute ?? null,
+    aiUnavailable: config.aiUnavailableReason ?? null,
+    // Presence only — the token value is per-call and rides the fetch body.
+    hasCallerCtx: !!config.callerContextToken,
+    supabase: config.supabase ?? null,
+    callBase: config.baseUrl || config.workerBaseUrl || "",
+    dests: allowedDestinations ?? [],
+    // Baked binding-set state (see param doc).
+    dbId: bindingState.dbId,
+    hasDb: bindingState.hasDb,
+    hasMemory: bindingState.hasMemory,
+  }));
+  return `${config.appId}:${bundleHash}:${config.userId}:${stateFingerprint}`;
+}
+
 interface DynamicWorkerEntrypointExports {
   DatabaseBinding(
     input: {
@@ -36,6 +187,7 @@ interface DynamicWorkerEntrypointExports {
         userId: string;
         operationMetering?: RuntimeConfig["cloudOperationMetering"];
         operationBillingConfig?: RuntimeConfig["cloudOperationBillingConfig"];
+        requireExecCtx?: boolean;
       };
     },
   ): unknown;
@@ -55,6 +207,7 @@ interface DynamicWorkerEntrypointExports {
         userId: string;
         operationMetering?: RuntimeConfig["cloudOperationMetering"];
         operationBillingConfig?: RuntimeConfig["cloudOperationBillingConfig"];
+        requireExecCtx?: boolean;
       };
     },
   ): unknown;
@@ -65,6 +218,7 @@ interface DynamicWorkerEntrypointExports {
         appId?: string | null;
         operationMetering?: RuntimeConfig["cloudOperationMetering"];
         operationBillingConfig?: RuntimeConfig["cloudOperationBillingConfig"];
+        requireExecCtx?: boolean;
       };
     },
   ): unknown;
@@ -84,6 +238,7 @@ interface DynamicWorkerEntrypointExports {
       shouldDebitLight: boolean;
       shouldRequireBalance: boolean;
       unavailableReason?: string | null;
+      requireExecCtx?: boolean;
     };
   }): unknown;
   NetworkBinding(input: {
@@ -96,6 +251,7 @@ interface DynamicWorkerEntrypointExports {
   EventsBinding(input: {
     props: {
       callerContextToken: string;
+      requireExecCtx?: boolean;
     };
   }): unknown;
   OutboundBinding(input: {
@@ -231,8 +387,6 @@ export async function executeInDynamicSandbox(
         .map((dependency) => dependency.app)
         .filter(Boolean),
     });
-    const callAuthToken = JSON.stringify(sandboxAuthToken || "");
-    const callerContextToken = JSON.stringify(config.callerContextToken || "");
     const slotBindingsJson = JSON.stringify(config.slotBindings || []);
     const callDependenciesJson = JSON.stringify(
       config.appCallDependencies || [],
@@ -326,7 +480,11 @@ globalThis.ultralight = {
     if (!__ulAllowsAppCall(targetAppId, functionName)) {
       throw new Error('app:call permission or a matching dependency is required');
     }
-    var authToken = ${callAuthToken};
+    // Per-request (set by wrapper.fetch from the request body) so a warm isolate
+    // can be reused across this user's calls without baking a per-execution token
+    // into module content. The token is a scoped, HMAC-signed server mint — a
+    // sandbox cannot forge a valid one, and it only asserts THIS app's targets.
+    var authToken = (globalThis.__ulReq && globalThis.__ulReq.authToken) || '';
     var baseUrl = ${callBaseUrl};
     if (!authToken || !baseUrl) throw new Error('Inter-app calls not available (missing baseUrl or authToken)');
     var e = globalThis.__rpcEnv;
@@ -337,8 +495,11 @@ globalThis.ultralight = {
       : baseUrl.replace(/\\/$/, '') + '/mcp/' + encodeURIComponent(targetAppId);
     var __headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken };
     // Unforgeable caller identity (minted server-side, asserts only this app).
-    // The target uses it to run the cross-Agent grant check.
-    var __callerCtx = ${callerContextToken};
+    // The target uses it to run the cross-Agent grant check. Per-request (from
+    // the fetch body, like authToken): the token bakes in the per-call entry
+    // function + incoming hop, so a value frozen into warm-reused module content
+    // would report a stale hop and defeat the hop ceiling.
+    var __callerCtx = (globalThis.__ulReq && globalThis.__ulReq.callerCtx) || '';
     if (__callerCtx) __headers['X-Galactic-Caller'] = __callerCtx;
     var response = await fetchFn(endpoint, {
       method: 'POST',
@@ -438,10 +599,10 @@ globalThis.ultralight = {
 globalThis.galactic = globalThis.ultralight;
 `;
 
-    // 3. Build wrapper module — entry point, sets RPC env, calls function
-    const escapedFnName = JSON.stringify(functionName);
-    const escapedArgs = JSON.stringify(args);
-
+    // 3. Build wrapper module — entry point, sets RPC env, calls function.
+    // functionName + args are NOT baked here — they arrive per-request in the
+    // fetch body so the isolate content is identical across this user's calls
+    // (the precondition for warm reuse via loader.get()).
     const wrapperModule = `
 import './setup.js';
 import * as appModule from './app.js';
@@ -450,16 +611,27 @@ export default {
   async fetch(request, env) {
     // Set RPC bindings for lazy getters in ultralight SDK
     globalThis.__rpcEnv = env;
-    // Per-request context handle (opaque; the parent registered the real billing
-    // context under it). The SDK echoes it on binding RPCs so the parent resolves
-    // the CURRENT execution's context — never a stale baked one under reuse.
+    // Per-request payload — the ONLY per-execution data, read fresh each fetch so
+    // a warm isolate can be reused across this user's calls. functionName + args
+    // select what runs; authToken is the scoped inter-app call token; callerCtx
+    // is the signed caller-context header value; execCtxHandle is the opaque
+    // billing-context handle (the parent registered the real context under it —
+    // payer/receipt identity never enters the sandbox). NOTE: concurrent
+    // requests in one isolate share globalThis, so these can interleave — the
+    // reuse key pins (appId, userId), so any race is intra-user misattribution
+    // at worst, never cross-tenant.
     let __req = {};
     try { __req = await request.json(); } catch (_e) { __req = {}; }
     globalThis.__execHandle = (__req && __req.execCtxHandle) || null;
-    // Reset the per-execution AI-cost accumulator. Each execution runs in a
-    // fresh isolate today, but resetting here keeps the per-grant cap
-    // accounting correct independent of any future CF isolate reuse.
+    globalThis.__ulReq = {
+      authToken: (__req && __req.authToken) || '',
+      callerCtx: (__req && __req.callerCtx) || '',
+    };
+    // Reset the per-execution accumulators. Isolates may be warm-reused
+    // (loader.get), so resetting per fetch keeps per-grant AI-cap accounting
+    // and the per-execution emit cap correct.
     globalThis.__aiCostLight = 0;
+    globalThis.__emitCount = 0;
 
     const logs = [];
     const con = {
@@ -471,8 +643,8 @@ export default {
     globalThis.console = con;
 
     try {
-      const fnName = ${escapedFnName};
-      const fnArgs = ${escapedArgs};
+      const fnName = (__req && typeof __req.functionName === 'string') ? __req.functionName : '';
+      const fnArgs = (__req && Array.isArray(__req.args)) ? __req.args : [];
 
       let targetFn = appModule[fnName];
       if (!targetFn && appModule.default && typeof appModule.default === 'object') {
@@ -503,9 +675,22 @@ export default {
 };
 `;
 
+    // Warm-isolate reuse decision (needed before binding construction: reused
+    // isolates get requireExecCtx bindings that refuse any RPC arriving without
+    // a resolvable per-call context handle — closing the direct-binding bypass
+    // where app code calls globalThis.__rpcEnv.DB.* itself, skipping the SDK's
+    // handle threading, to get operations metered against a stale baked hold).
+    const useGetReuse = getEnv("EXECUTED_LOADER_GET_REUSE") === "1" &&
+      typeof loader.get === "function" &&
+      isolateReuseEligibility(config).eligible;
+
     // 4. Create RPC bindings
     const ctx = globalThis.__ctx as DynamicWorkerExecutionContext;
     const bindings: Record<string, unknown> = {};
+    // Resolved D1 database id baked into the DB binding props — captured here so
+    // the reuse key can fingerprint it (it is lazily provisioned / re-provisioned
+    // independently of the bundle). null when no live DB binding is wired.
+    let resolvedDbId: string | null = null;
 
     if (config.d1Fixtures && ctx?.exports?.FixtureDatabaseBinding) {
       bindings.DB = ctx.exports.FixtureDatabaseBinding({
@@ -520,6 +705,7 @@ export default {
         "../services/d1-provisioning.ts"
       );
       const dbId = await getD1DatabaseId(config.appId);
+      resolvedDbId = dbId ?? null;
       if (dbId && ctx?.exports?.DatabaseBinding) {
         bindings.DB = ctx.exports.DatabaseBinding({
           props: {
@@ -528,6 +714,7 @@ export default {
             userId: config.userId,
             operationMetering: config.cloudOperationMetering,
             operationBillingConfig: config.cloudOperationBillingConfig,
+            requireExecCtx: useGetReuse,
           },
         });
       }
@@ -546,6 +733,7 @@ export default {
           userId: config.userId,
           operationMetering: config.cloudOperationMetering,
           operationBillingConfig: config.cloudOperationBillingConfig,
+          requireExecCtx: useGetReuse,
         },
       });
     }
@@ -562,6 +750,7 @@ export default {
           appId: config.appId,
           operationMetering: config.cloudOperationMetering,
           operationBillingConfig: config.cloudOperationBillingConfig,
+          requireExecCtx: useGetReuse,
         },
       });
     }
@@ -584,6 +773,7 @@ export default {
           shouldDebitLight: !!config.aiRoute?.shouldDebitLight,
           shouldRequireBalance: !!config.aiRoute?.shouldRequireBalance,
           unavailableReason: config.aiUnavailableReason || null,
+          requireExecCtx: useGetReuse,
         },
       });
     }
@@ -595,7 +785,10 @@ export default {
     // minted only for a real user), matching the prior emit auth requirement.
     if (config.callerContextToken && ctx?.exports?.EventsBinding) {
       bindings.EVENTS = ctx.exports.EventsBinding({
-        props: { callerContextToken: config.callerContextToken },
+        props: {
+          callerContextToken: config.callerContextToken,
+          requireExecCtx: useGetReuse,
+        },
       });
     }
 
@@ -700,7 +893,35 @@ export default {
       callerContextToken: config.callerContextToken ?? null,
     });
 
-    const worker = loader.load(loadConfig);
+    // 5b. Warm-isolate reuse (Cloudflare Worker Loader get()). Reusing a warm
+    // isolate across this user's repeated calls cuts billable Dynamic Worker
+    // loads from ~1/call to ~1/(app-version, user)/day, with NO change to the
+    // isolation model:
+    //   - userId in the key   => an isolate is NEVER shared across users.
+    //   - stateFingerprint    => any change to a baked per-user input (secrets,
+    //     grants/dependencies, BYOK key, envVars, user, egress allowlist, AI
+    //     route) mints a fresh isolate — a rotated secret is never served stale.
+    //   - bundleHash          => a code change mints a fresh isolate.
+    // Per-call values (functionName/args/authToken/callerCtx/execCtxHandle) ride
+    // the fetch body below, never the cached content; per-call billing context
+    // resolves via the execution-context registry (requireExecCtx bindings).
+    // Flag-gated: EXECUTED_LOADER_GET_REUSE=1 (default OFF; staging first).
+    let worker: ReturnType<typeof loader.load>;
+    if (useGetReuse) {
+      const reuseKey = await deriveIsolateReuseKey(
+        config,
+        esmCode,
+        allowedDestinations,
+        {
+          dbId: resolvedDbId,
+          hasDb: "DB" in bindings,
+          hasMemory: "MEMORY" in bindings,
+        },
+      );
+      worker = loader.get(reuseKey, () => Promise.resolve(loadConfig));
+    } else {
+      worker = loader.load(loadConfig);
+    }
 
     // 6. Execute with timeout
     const timeoutMs = config.timeoutMs || 30_000;
@@ -712,10 +933,17 @@ export default {
       new Request("http://internal/execute", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        // Per-request payload: only the opaque context handle (the sandbox never
-        // receives payer/receipt identity). functionName/args stay baked for now
-        // (safe under load()); they move here when get() reuse is enabled.
-        body: JSON.stringify({ execCtxHandle }),
+        // Per-request payload — the only per-execution data, kept OUT of the
+        // (potentially cached) isolate content so a warm isolate is reusable
+        // across this user's calls. The sandbox never receives payer/receipt
+        // identity — only the opaque handle.
+        body: JSON.stringify({
+          execCtxHandle,
+          functionName,
+          args,
+          authToken: sandboxAuthToken || "",
+          callerCtx: config.callerContextToken || "",
+        }),
       }),
       { signal: controller.signal },
     );

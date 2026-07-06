@@ -3,7 +3,10 @@
 // The Dynamic Worker sees env.DATA.store() etc. but never has direct R2 access.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { resolveExecutionContext } from "../../services/execution-context-registry.ts";
+import {
+  assertExecutionContext,
+  resolveExecutionContext,
+} from "../../services/execution-context-registry.ts";
 import type { BillingConfig } from "../../services/billing-config.ts";
 import {
   type CloudOperationMeteringContext,
@@ -27,6 +30,10 @@ interface AppDataBindingProps {
       | "kvOpsPerCloudUnit"
     >
     | null;
+  // Set for bindings loaded into a REUSABLE isolate (loader.get): every public
+  // method then refuses to run without a resolvable per-call context handle,
+  // so a direct-binding bypass can never ride the stale frozen props.
+  requireExecCtx?: boolean;
 }
 
 // ============================================
@@ -98,6 +105,7 @@ export class AppDataBinding
     execCtxHandle?: string,
   ): Promise<void> {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     await this.meter("appdata.store", key);
     const bucket = this.getR2Bucket();
     const data = JSON.stringify({
@@ -112,6 +120,7 @@ export class AppDataBinding
 
   async load(key: string, execCtxHandle?: string): Promise<unknown> {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     await this.meter("appdata.load", key);
     const bucket = this.getR2Bucket();
     const obj = await bucket.get(this.dataKey(key));
@@ -127,6 +136,7 @@ export class AppDataBinding
 
   async remove(key: string, execCtxHandle?: string): Promise<void> {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     await this.meter("appdata.remove", key);
     const bucket = this.getR2Bucket();
     await bucket.delete(this.dataKey(key));
@@ -134,6 +144,7 @@ export class AppDataBinding
 
   async list(prefix?: string, execCtxHandle?: string): Promise<string[]> {
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     await this.meter("appdata.list", prefix);
     const bucket = this.getR2Bucket();
     const { appId, userId } = this.ctx.props;
