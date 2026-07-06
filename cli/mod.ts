@@ -955,7 +955,11 @@ ${colors.dim('EXAMPLES')}
   }
 
   console.log();
-  console.log(colors.green(appId ? '✓ New version uploaded' : '✓ App created'));
+  if (result.deduplicated) {
+    console.log(colors.yellow('· No changes — identical to the live version (no new version created)'));
+  } else {
+    console.log(colors.green(appId ? '✓ New version uploaded' : '✓ App created'));
+  }
   if (result.app_id) console.log(`  ID:       ${result.app_id}`);
   if (result.slug) console.log(`  Slug:     ${result.slug}`);
   if (result.version) console.log(`  Version:  ${result.version}`);

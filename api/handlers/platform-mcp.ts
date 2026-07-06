@@ -6322,15 +6322,25 @@ async function executeUpload(
       liveSourceHash && liveSourceHash === uploadSourceHash &&
       !args.version && visibilityUnchanged
     ) {
-      return {
-        deduplicated: true,
-        app_id: app.id,
-        slug: app.slug,
-        version: app.current_version,
-        live: true,
-        message:
-          "No changes — the uploaded files are byte-identical to the live version, so no new version was created.",
-      };
+      // Matching hashes are NOT enough: the deploy writes the DB row (which
+      // carries source_hash + current_version) BEFORE the live KV bundle. If
+      // that KV write failed, the natural repair is re-uploading the identical
+      // files — deduping here would no-op the repair and strand the app on a
+      // stale bundle forever. So only dedup when the LIVE bundle's attestation
+      // proves it actually serves current_version; anything else (missing
+      // bundle, legacy no-attestation, version skew) falls through and deploys.
+      const { attestation } = await loadLiveExecutedBundle(app.id);
+      if (attestation?.version === app.current_version) {
+        return {
+          deduplicated: true,
+          app_id: app.id,
+          slug: app.slug,
+          version: app.current_version,
+          is_live: true,
+          message:
+            "No changes — the uploaded files are byte-identical to the live version, so no new version was created.",
+        };
+      }
     }
 
     const { processUploadPipeline, provisionAndMigrate } = await import(
@@ -8796,7 +8806,7 @@ function buildScaffoldInterfaceHtml(
     document.getElementById("go").addEventListener("click", async function () {
       out.textContent = "Calling…";
       try {
-        var result = await window.ul.call("${firstFn}", {});
+        var result = await window.ul.call(${JSON.stringify(firstFn)}, {});
         out.textContent = JSON.stringify(result, null, 2);
       } catch (err) {
         out.textContent = "Error: " + err.message;
