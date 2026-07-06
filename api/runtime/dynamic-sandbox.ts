@@ -23,6 +23,65 @@ import {
   verifyExecutedBundle,
 } from "../services/executed-bundle.ts";
 
+// Local SHA-256 hex — no import to keep the hot runtime path free of a cycle
+// into the trust/service graph. Used only to derive the get() reuse key.
+async function sha256HexLocal(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(input),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Derive the Worker Loader `get()` reuse key for an execution.
+ *
+ * The key uniquely determines every BAKED input to the isolate, so Cloudflare's
+ * rule ("same id ⟺ same content") holds and warm reuse is safe:
+ *   - `appId` + `bundleHash`  ⇒ a different app or code version ⇒ different key.
+ *   - `userId`                ⇒ an isolate is NEVER shared across users.
+ *   - `stateFingerprint`      ⇒ any per-user baked input change (secret rotation,
+ *     grant/dependency change, BYOK key, envVars, user, egress allowlist) ⇒ a
+ *     fresh isolate, so a warm one never serves stale secrets/grants.
+ * Only functionName/args/authToken vary within a key; those ride the fetch body,
+ * not the cached content. Exported for unit-testing the isolation invariants.
+ */
+export async function deriveIsolateReuseKey(
+  config: Pick<
+    RuntimeConfig,
+    | "appId"
+    | "userId"
+    | "user"
+    | "envVars"
+    | "permissions"
+    | "credentials"
+    | "appCallDependencies"
+    | "slotBindings"
+    | "userApiKey"
+    | "aiRoute"
+  >,
+  esmCode: string,
+  allowedDestinations: unknown,
+): Promise<string> {
+  const bundleHash = await sha256HexLocal(esmCode);
+  const stateFingerprint = await sha256HexLocal(JSON.stringify({
+    user: config.user ?? null,
+    env: config.envVars ?? {},
+    perms: [...(config.permissions ?? [])].sort(),
+    // Credential VALUES are included: a rotation changes the fingerprint and
+    // mints a fresh isolate, so a warm one never serves a stale secret.
+    creds: config.credentials ?? {},
+    deps: config.appCallDependencies ?? [],
+    slots: config.slotBindings ?? [],
+    byok: config.userApiKey ?? null,
+    aiRoute: config.aiRoute ?? null,
+    dests: allowedDestinations,
+  }));
+  return `${config.appId}:${bundleHash}:${config.userId}:${stateFingerprint}`;
+}
+
 interface DynamicWorkerEntrypointExports {
   DatabaseBinding(
     input: {
@@ -223,7 +282,6 @@ export async function executeInDynamicSandbox(
         .map((dependency) => dependency.app)
         .filter(Boolean),
     });
-    const callAuthToken = JSON.stringify(sandboxAuthToken || "");
     const callerContextToken = JSON.stringify(config.callerContextToken || "");
     const slotBindingsJson = JSON.stringify(config.slotBindings || []);
     const callDependenciesJson = JSON.stringify(
@@ -318,7 +376,11 @@ globalThis.ultralight = {
     if (!__ulAllowsAppCall(targetAppId, functionName)) {
       throw new Error('app:call permission or a matching dependency is required');
     }
-    var authToken = ${callAuthToken};
+    // Per-request (set by wrapper.fetch from the request body) so a warm isolate
+    // can be reused across this user's calls without baking a per-execution token
+    // into module content. The token is a scoped, HMAC-signed server mint — a
+    // sandbox cannot forge a valid one, and it only asserts THIS app's targets.
+    var authToken = (globalThis.__ulReq && globalThis.__ulReq.authToken) || '';
     var baseUrl = ${callBaseUrl};
     if (!authToken || !baseUrl) throw new Error('Inter-app calls not available (missing baseUrl or authToken)');
     var e = globalThis.__rpcEnv;
@@ -430,10 +492,9 @@ globalThis.ultralight = {
 globalThis.galactic = globalThis.ultralight;
 `;
 
-    // 3. Build wrapper module — entry point, sets RPC env, calls function
-    const escapedFnName = JSON.stringify(functionName);
-    const escapedArgs = JSON.stringify(args);
-
+    // 3. Build wrapper module — entry point, sets RPC env, calls function.
+    // functionName + args are NOT baked here anymore — they arrive per-request in
+    // the fetch body so the isolate content is identical across this user's calls.
     const wrapperModule = `
 import './setup.js';
 import * as appModule from './app.js';
@@ -442,9 +503,15 @@ export default {
   async fetch(request, env) {
     // Set RPC bindings for lazy getters in ultralight SDK
     globalThis.__rpcEnv = env;
-    // Reset the per-execution AI-cost accumulator. Each execution runs in a
-    // fresh isolate today, but resetting here keeps the per-grant cap
-    // accounting correct independent of any future CF isolate reuse.
+    // Per-request payload — the ONLY per-execution data, read fresh each fetch so
+    // a warm isolate can be reused across this user's calls (get()). functionName
+    // + args select what runs; authToken is the scoped inter-app call token. The
+    // app:call allowlist and caller-context stay baked (parent-side), never here.
+    let __req = {};
+    try { __req = await request.json(); } catch (_e) { __req = {}; }
+    globalThis.__ulReq = { authToken: (__req && __req.authToken) || '' };
+    // Reset the per-execution AI-cost accumulator. Isolates may be warm-reused
+    // (get()), so resetting here per fetch keeps per-grant cap accounting correct.
     globalThis.__aiCostLight = 0;
 
     const logs = [];
@@ -457,8 +524,8 @@ export default {
     globalThis.console = con;
 
     try {
-      const fnName = ${escapedFnName};
-      const fnArgs = ${escapedArgs};
+      const fnName = (__req && typeof __req.functionName === 'string') ? __req.functionName : '';
+      const fnArgs = (__req && Array.isArray(__req.args)) ? __req.args : [];
 
       let targetFn = appModule[fnName];
       if (!targetFn && appModule.default && typeof appModule.default === 'object') {
@@ -675,7 +742,31 @@ export default {
         },
       });
     }
-    const worker = loader.load(loadConfig);
+    // 5b. Warm-isolate reuse (Cloudflare Worker Loader get()). Reusing a warm
+    // isolate across this user's repeated calls cuts billable Dynamic Worker
+    // loads from ~1/call to ~1/(app-version, user)/day, with NO change to
+    // isolation:
+    //   - userId in the key  ⇒ an isolate is NEVER shared across users.
+    //   - stateFingerprint    ⇒ any change to a baked per-user input (secrets,
+    //     grants/dependencies, BYOK key, envVars, user, egress allowlist) mints a
+    //     fresh isolate — a rotated secret is never served stale.
+    //   - bundleHash          ⇒ a code change mints a fresh isolate.
+    // Only functionName/args/authToken vary per call, and those now ride the
+    // fetch body (below), not the cached content.
+    // Emit-path calls (callerContextToken present) MUST keep load(): they carry
+    // an EventsBinding whose parent-side caller token is per-execution and must
+    // not be reused, and it must not become a sandbox-forgeable per-request value.
+    let worker: ReturnType<typeof loader.load>;
+    if (config.callerContextToken) {
+      worker = loader.load(loadConfig);
+    } else {
+      const reuseKey = await deriveIsolateReuseKey(
+        config,
+        esmCode,
+        allowedDestinations,
+      );
+      worker = loader.get(reuseKey, () => Promise.resolve(loadConfig));
+    }
 
     // 6. Execute with timeout
     const timeoutMs = config.timeoutMs || 30_000;
@@ -684,7 +775,17 @@ export default {
 
     const entrypoint = worker.getEntrypoint();
     const response = await entrypoint.fetch(
-      new Request("http://internal/execute"),
+      new Request("http://internal/execute", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // Per-request payload — the only per-execution data, kept OUT of the
+        // cached isolate content so a warm isolate is reusable across calls.
+        body: JSON.stringify({
+          functionName,
+          args,
+          authToken: sandboxAuthToken || "",
+        }),
+      }),
       { signal: controller.signal },
     );
     clearTimeout(timeoutId);
