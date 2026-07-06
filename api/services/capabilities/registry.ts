@@ -185,6 +185,8 @@ const CAPABILITIES: Capability[] = [
     title: "Deploy code or publish a page",
     description: "Deploy code or publish a markdown page. " +
       'type="app" (default): deploy source code. No app_id = new app, with app_id = new version. ' +
+      "Re-uploading files byte-identical to the live version is a no-op (returns " +
+      "deduplicated:true, no new version) unless you pass an explicit version. " +
       'type="page": publish markdown as a live web page.',
     annotations: {
       readOnlyHint: false,

@@ -209,7 +209,9 @@ import {
   buildAppTrustCard,
   buildVersionMetadataEntry,
   buildVersionTrustMetadata,
+  computeUploadSourceHash,
   generateGpuManifest,
+  getLatestVersionSourceHash,
   getManifestAllowedDestinations,
 } from "../services/trust.ts";
 import { resolveTrustSignals } from "../services/trust-signals.ts";
@@ -6307,6 +6309,30 @@ async function executeUpload(
     }
 
     // ── Deno existing app version — uses shared pipeline ──
+    // Dedup: if the raw uploaded file-set is byte-identical to the live version
+    // — and the caller isn't forcing a version or changing visibility — skip the
+    // version bump + rebundle entirely, so a redeploy loop can't spam versions.
+    const uploadSourceHash = await computeUploadSourceHash(
+      uploadFiles.map((f) => ({ path: f.name, content: f.content })),
+    );
+    const liveSourceHash = getLatestVersionSourceHash(app);
+    const visibilityUnchanged = !args.visibility ||
+      args.visibility === app.visibility;
+    if (
+      liveSourceHash && liveSourceHash === uploadSourceHash &&
+      !args.version && visibilityUnchanged
+    ) {
+      return {
+        deduplicated: true,
+        app_id: app.id,
+        slug: app.slug,
+        version: app.current_version,
+        live: true,
+        message:
+          "No changes — the uploaded files are byte-identical to the live version, so no new version was created.",
+      };
+    }
+
     const { processUploadPipeline, provisionAndMigrate } = await import(
       "../services/upload-pipeline.ts"
     );
@@ -6434,7 +6460,12 @@ async function executeUpload(
       versions,
       version_metadata: appendVersionTrustMetadata(
         app.version_metadata,
-        buildVersionMetadataEntry(newVersion, uploadedSizeBytes, versionTrust),
+        buildVersionMetadataEntry(
+          newVersion,
+          uploadedSizeBytes,
+          versionTrust,
+          uploadSourceHash,
+        ),
       ),
     };
     if (autoLive) {

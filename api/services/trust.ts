@@ -459,13 +459,48 @@ export function buildVersionMetadataEntry(
   version: string,
   sizeBytes: number,
   trust: VersionTrustMetadata,
+  sourceHash?: string,
 ): VersionMetadata {
   return {
     version,
     size_bytes: sizeBytes,
     created_at: new Date().toISOString(),
     trust,
+    ...(sourceHash ? { source_hash: sourceHash } : {}),
   };
+}
+
+/**
+ * Deterministic hash of a RAW uploaded file-set — developer intent, before any
+ * deploy-pipeline transform. Sort by path, hash each file's content, then hash
+ * the canonical {path: contentHash} map. Two identical uploads produce the same
+ * hash; any change to a file's path or content (including manifest.json) changes
+ * it. Used to dedup a re-upload of byte-identical files.
+ */
+export async function computeUploadSourceHash(
+  files: Array<{ path: string; content: string }>,
+): Promise<string> {
+  const perFile: Record<string, string> = {};
+  for (const f of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
+    perFile[f.path] = await sha256Hex(f.content);
+  }
+  return await sha256Hex(canonicalJson(perFile));
+}
+
+/** The live version's stored raw-source hash, if any. */
+export function getLatestVersionSourceHash(
+  app: Pick<App, "current_version" | "version_metadata">,
+): string | null {
+  const metadata = Array.isArray(app.version_metadata)
+    ? app.version_metadata
+    : [];
+  for (let i = metadata.length - 1; i >= 0; i--) {
+    const entry = metadata[i];
+    if (entry?.version === app.current_version && entry.source_hash) {
+      return entry.source_hash;
+    }
+  }
+  return null;
 }
 
 export function appendVersionTrustMetadata(

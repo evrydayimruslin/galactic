@@ -102,6 +102,10 @@ export interface VersionMetadata {
   size_bytes: number;
   created_at: string;
   trust?: VersionTrustMetadata;
+  // Deterministic hash of the RAW uploaded file-set (developer intent, pre-
+  // pipeline). Used to dedup a re-upload of byte-identical files so a redeploy
+  // loop can't spam versions. Absent on versions deployed before this shipped.
+  source_hash?: string;
 }
 
 export interface VersionTrustSignature {
