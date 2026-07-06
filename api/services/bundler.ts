@@ -167,9 +167,27 @@ function createVirtualFsPlugin(files: FileInput[]): esbuild.Plugin {
           return { path: resolved, namespace: 'virtual' };
         }
 
-        // Unknown external import — transform to CDN URL
+        // Unknown external import — transform to CDN URL.
+        // SECURITY (#25): the resulting `import ... from "https://esm.sh/<pkg>"`
+        // stays as an EXTERNAL specifier in the emitted bundle, so the executed-
+        // bundle attestation hashes the import STATEMENT, not the third-party
+        // bytes esm.sh serves (unpinned: no exact version, no SRI), and those
+        // bytes are never safety-scanned. At runtime workerd resolves this
+        // specifier through the sandbox globalOutbound: non-network apps
+        // (globalOutbound=null) fail to load; network apps load it ONLY if they
+        // allowlisted esm.sh (default-deny egress). Flag it so callers can
+        // surface "imports remote code" on the disclosure/trust surface.
         if (!args.path.startsWith('./') && !args.path.startsWith('../')) {
-          return { path: `https://esm.sh/${args.path}`, external: true };
+          return {
+            path: `https://esm.sh/${args.path}`,
+            external: true,
+            warnings: [{
+              text: `Imports remote npm package "${args.path}" from esm.sh at ` +
+                `runtime; those bytes are not scanned and not covered by the ` +
+                `executed-bundle attestation. Vendor it into your source to ` +
+                `keep the app fully self-contained.`,
+            }],
+          };
         }
 
         return { path: resolved, namespace: 'virtual' };
@@ -281,13 +299,24 @@ export async function bundleCode(
       // ESM bundling is non-fatal here — upload handler has a transform fallback
     }
 
+    // A React/JSX app is bundled with jsxImportSource=esm.sh/react, which
+    // injects a remote `import ... from "https://esm.sh/react/jsx-runtime"`
+    // into the output even when the source has no explicit import — so it emits
+    // remote code just like a bare-npm import (#25). detectExternalImports scans
+    // SOURCE and misses this, so flag it here and warn the developer.
+    const jsxRemoteWarning = isReactProject
+      ? ['This app renders JSX/React, which is bundled with a remote import from ' +
+         'esm.sh/react at runtime; those bytes are not scanned and not covered by ' +
+         'the executed-bundle attestation. Vendor React into your source to keep ' +
+         'the app fully self-contained.']
+      : [];
     return {
       success: result.errors.length === 0,
       code: processedCode,
       esmCode,
       errors: result.errors.map(e => e.text),
-      warnings: result.warnings.map(e => e.text),
-      hasExternalImports,
+      warnings: [...result.warnings.map(e => e.text), ...jsxRemoteWarning],
+      hasExternalImports: hasExternalImports || isReactProject,
     };
   } catch (err) {
     return {
@@ -366,12 +395,20 @@ export async function bundleCodeESM(
     const result = await esbuild.build(buildOptions);
     const outputCode = result.outputFiles?.[0]?.text || '';
 
+    // See bundleCode: a React/JSX app emits a remote esm.sh/react import that
+    // detectExternalImports (source-only) misses. Flag it + warn (#25).
+    const jsxRemoteWarning = isReactProject
+      ? ['This app renders JSX/React, which is bundled with a remote import from ' +
+         'esm.sh/react at runtime; those bytes are not scanned and not covered by ' +
+         'the executed-bundle attestation. Vendor React into your source to keep ' +
+         'the app fully self-contained.']
+      : [];
     return {
       success: result.errors.length === 0,
       code: postProcessBundle(outputCode),
       errors: result.errors.map(e => e.text),
-      warnings: result.warnings.map(e => e.text),
-      hasExternalImports,
+      warnings: [...result.warnings.map(e => e.text), ...jsxRemoteWarning],
+      hasExternalImports: hasExternalImports || isReactProject,
     };
   } catch (err) {
     return {

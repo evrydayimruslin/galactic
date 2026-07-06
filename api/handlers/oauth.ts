@@ -432,8 +432,15 @@ async function verifySignedState(signedState: string): Promise<string | null> {
 // ============================================
 
 function getBaseUrl(request: Request): string {
+  // Prefer a fixed, operator-configured BASE_URL so OAuth callback URLs and
+  // well-known issuer/endpoint metadata cannot be pointed at an
+  // attacker-controlled host via a spoofed X-Forwarded-Host header.
+  const configured = getEnv('BASE_URL');
+  if (configured) return configured.replace(/\/+$/, '');
   const url = new URL(request.url);
-  const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || url.host;
+  // Fall back to the Host header only (never the client-spoofable
+  // X-Forwarded-Host).
+  const host = request.headers.get('host') || url.host;
   // Behind DigitalOcean + Cloudflare, internal requests arrive as http://
   // but the service is always accessed via https:// externally.
   // Use x-forwarded-proto if available, otherwise default to https for non-localhost.
@@ -1033,9 +1040,15 @@ async function handleAuthorize(request: Request): Promise<Response> {
     throw err;
   }
 
-  // Validate client exists and redirect_uri is registered
+  // Validate client exists and redirect_uri is registered. An unknown
+  // client_id yields null here; we MUST reject it (never fall through with
+  // an unvalidated, attacker-chosen redirect_uri), and we require the
+  // redirect_uri to be one of the client's registered URIs in ALL cases.
   const client = await getOAuthClient(query.clientId);
-  if (client && !client.redirect_uris.includes(query.redirectUri)) {
+  if (!client) {
+    return error('Unknown client_id', 400);
+  }
+  if (!client.redirect_uris.includes(query.redirectUri)) {
     return error('redirect_uri not registered for this client', 400);
   }
 

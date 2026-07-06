@@ -124,7 +124,10 @@ import type {
   MCPToolsListResponse,
 } from "../../shared/contracts/mcp.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
-import { manifestToMCPTools } from "../../shared/contracts/manifest.ts";
+import {
+  manifestToMCPTools,
+  parseManifestCallRateLimit,
+} from "../../shared/contracts/manifest.ts";
 import type {
   AIContentPart,
   AIRequest,
@@ -900,6 +903,29 @@ export async function handleMcp(
     };
   }
 
+  // Confused-deputy guard (fail closed): a sandbox_actor token is minted ONLY
+  // for the sandbox's outbound galactic.call(), which ALWAYS attaches a signed
+  // X-Galactic-Caller context. A sandbox_actor token that reaches this per-app
+  // chokepoint WITHOUT one means app code hand-rolled the request (e.g. via the
+  // raw SELF binding + baked bearer), deliberately omitting the header to skip
+  // the authoritative cross-Agent grant check. Reject it here rather than let it
+  // fall through to the per-function ask/never policy (which an attacker could
+  // otherwise satisfy with a forged X-Galactic-Confirm header). Scoped to
+  // sandbox_actor ONLY: routine_actor legitimately posts headerless to its own
+  // composer app (routine-executor), and user gateway API tokens make direct
+  // headerless calls — neither can hand-roll a sandbox bearer.
+  if (
+    !callerContext.callerApp &&
+    callerUsesSandboxActorToken(callerContext)
+  ) {
+    return jsonRpcErrorResponse(
+      rpcRequest.id,
+      -32004,
+      "Cross-Agent caller context is required for this call. Use galactic.call() so the request carries a signed caller identity.",
+      { type: "AGENT_CALLER_CONTEXT_REQUIRED" },
+    );
+  }
+
   // Update last_active_at for provisional users (fire-and-forget)
   if (callerContext.authUser?.provisional) {
     updateLastActive(userId);
@@ -948,6 +974,16 @@ export async function handleMcp(
       calls_per_minute?: number;
       calls_per_day?: number;
     } | null;
+    // Dual-path (mirrors pricing): the gx.set config wins per field; where a
+    // field is unset, fall through to the deployed manifest's app-level
+    // rate_limit. Only parse the manifest when gx.set doesn't cover both fields.
+    const manifestRl =
+      (rlConfig?.calls_per_minute != null && rlConfig?.calls_per_day != null)
+        ? null
+        : parseManifestCallRateLimit(app.manifest);
+    const effCallsPerMinute = rlConfig?.calls_per_minute ??
+      manifestRl?.calls_per_minute;
+    const effCallsPerDay = rlConfig?.calls_per_day ?? manifestRl?.calls_per_day;
     const endpointRateLimitOptions = isToolsCall
       ? { mode: "fail_closed" as const, resource: "MCP tools/call rate limit" }
       : undefined;
@@ -973,12 +1009,12 @@ export async function handleMcp(
           },
         )
         : null,
-      // [2] Per-app minute rate limit (tools/call, non-owner, if configured)
-      isToolsCall && isNonOwner && rlConfig?.calls_per_minute
+      // [2] Per-app minute rate limit (tools/call, non-owner, gx.set or manifest)
+      isToolsCall && isNonOwner && effCallsPerMinute
         ? checkRateLimit(
           userId,
           `app:${appId}:minute`,
-          rlConfig.calls_per_minute,
+          effCallsPerMinute,
           1,
           {
             mode: "fail_closed",
@@ -986,12 +1022,12 @@ export async function handleMcp(
           },
         )
         : null,
-      // [3] Per-app daily rate limit (tools/call, non-owner, if configured)
-      isToolsCall && isNonOwner && rlConfig?.calls_per_day
+      // [3] Per-app daily rate limit (tools/call, non-owner, gx.set or manifest)
+      isToolsCall && isNonOwner && effCallsPerDay
         ? checkRateLimit(
           userId,
           `app:${appId}:day`,
-          rlConfig.calls_per_day,
+          effCallsPerDay,
           1440,
           {
             mode: "fail_closed",
@@ -1711,8 +1747,14 @@ async function handleToolsCall(
         return isRecentlyHealthy(map.get(app.id) ?? emptyHealth());
       },
       // One-shot user consent, forwarded by the gx.call gateway. Satisfies "ask"
-      // for this single call only (never overrides "never").
-      confirmed: request.headers.get("X-Galactic-Confirm") === "1",
+      // for this single call only (never overrides "never"). Honored ONLY for a
+      // user-originated gateway API token: an actor token (sandbox/routine) can
+      // read request headers and its own baked bearer, so trusting its
+      // X-Galactic-Confirm would let app code self-approve. Headerless
+      // sandbox_actor calls are already rejected above; this is defense in depth
+      // and also blocks a routine_actor from self-approving an "ask" function.
+      confirmed: callerUsesApiToken(callerContext) &&
+        request.headers.get("X-Galactic-Confirm") === "1",
     });
     if (!permission.allowed) {
       return jsonRpcErrorResponse(

@@ -371,7 +371,11 @@ export async function handleAuth(request: Request): Promise<Response> {
     if (errorDesc) {
       return withClearedOAuthCallbackStateCookies(
         new Response(getCallbackErrorHTML(errorDesc), {
-          headers: { "Content-Type": "text/html" },
+          headers: {
+            "Content-Type": "text/html",
+            "Content-Security-Policy":
+              "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+          },
         }),
       );
     }
@@ -513,7 +517,11 @@ export async function handleAuth(request: Request): Promise<Response> {
               supabaseError,
           ),
           {
-            headers: { "Content-Type": "text/html" },
+            headers: {
+              "Content-Type": "text/html",
+              "Content-Security-Policy":
+                "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+            },
           },
         ),
       );
@@ -1338,6 +1346,18 @@ function getDesktopCallbackHTML(): string {
 </html>`;
 }
 
+// Local HTML escaper. Defined here (rather than importing escapeHtml from the
+// large app.ts handler) to avoid an import cycle. Neutralizes the reflected
+// XSS where error_description / supabaseError are interpolated below.
+function escapeCallbackHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function getCallbackErrorHTML(message: string): string {
   return `<!DOCTYPE html>
 <html>
@@ -1351,7 +1371,7 @@ function getCallbackErrorHTML(message: string): string {
 </head>
 <body>
   <div class="container">
-    <p style="color: #ef4444;">Error: ${message}</p>
+    <p style="color: #ef4444;">Error: ${escapeCallbackHtml(message)}</p>
     <a href="/">Go back</a>
   </div>
 </body>

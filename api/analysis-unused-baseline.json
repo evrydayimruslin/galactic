@@ -315,6 +315,26 @@
       ]
     },
     {
+      "file": "services/capabilities/db-inspect.test.ts",
+      "files": [
+        "services/capabilities/db-inspect.test.ts"
+      ]
+    },
+    {
+      "file": "services/capabilities/registry.test.ts",
+      "files": [
+        "services/capabilities/registry.test.ts"
+      ]
+    },
+    {
+      "exports": [
+        "getCapabilityById",
+        "listCapabilities",
+        "toMcpTool"
+      ],
+      "file": "services/capabilities/registry.ts"
+    },
+    {
       "file": "services/capability-suggestion-telemetry.ts",
       "types": [
         "CapabilityGapShortcomingInput",
@@ -328,9 +348,6 @@
       ]
     },
     {
-      "exports": [
-        "CHAT_MIN_BALANCE_LIGHT"
-      ],
       "file": "services/chat-billing.ts",
       "types": [
         "ChatBillingCostOptions",
@@ -1422,6 +1439,12 @@
         "BuildSuggestionPreviewBatchInput",
         "BuildSuggestionPreviewInput",
         "SuggestionPreviewDependencies"
+      ]
+    },
+    {
+      "file": "services/support-access-log.ts",
+      "types": [
+        "SupportDataAccessEntry"
       ]
     },
     {

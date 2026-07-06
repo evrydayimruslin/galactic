@@ -182,6 +182,96 @@ export async function runMigrations(
 // ============================================
 
 /**
+ * Maximum size of a single migration .sql file accepted by the validator.
+ * The validator runs several regexes synchronously over attacker-supplied SQL
+ * at upload time (a mandatory gate). The only upstream cap is the 50MB TOTAL
+ * upload budget, which is far too large for a single file to scan safely — a
+ * multi-megabyte file can burn seconds of CPU. Cap per file well below that.
+ */
+export const MAX_MIGRATION_FILE_BYTES = 256 * 1024; // 256KB per .sql file
+
+/**
+ * Reserved (system) tables are prefixed with `_`. App migrations may never
+ * write to them: forging rows in e.g. `_usage` / `_migrations` would corrupt
+ * cross-user usage/quota attribution and migration bookkeeping.
+ */
+function isReservedTable(name: string): boolean {
+  return name.startsWith('_');
+}
+
+/**
+ * Split SQL into individual statements on `;`, ignoring semicolons that appear
+ * inside string literals. Comments are assumed already stripped by the caller.
+ * This is a pragmatic tokenizer (no full SQL grammar) sufficient to bound each
+ * validation regex to a single statement — which both defuses the O(N^2) ReDoS
+ * of cross-statement `[\s\S]*?` scanning and lets us inspect DML per-target.
+ */
+function splitSqlStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let current = '';
+  let quote: string | null = null; // active string delimiter: ' " or `
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    if (quote) {
+      current += ch;
+      if (ch === quote) {
+        // Handle SQL-style doubled-quote escape ('' inside a '...' literal)
+        if (sql[i + 1] === quote) {
+          current += sql[i + 1];
+          i++;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === ';') {
+      if (current.trim()) statements.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) statements.push(current);
+  return statements;
+}
+
+/**
+ * Split a CREATE TABLE column block on top-level commas, ignoring commas nested
+ * inside parentheses (e.g. `DECIMAL(10, 2)`, `CHECK (x IN (1, 2))`) or string
+ * literals. Used to isolate individual column definitions for validation.
+ */
+function splitTopLevel(columns: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < columns.length; i++) {
+    const ch = columns[i];
+    if (quote) {
+      current += ch;
+      if (ch === quote) {
+        if (columns[i + 1] === quote) { current += columns[i + 1]; i++; }
+        else quote = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') { quote = ch; current += ch; continue; }
+    if (ch === '(') { depth++; current += ch; continue; }
+    if (ch === ')') { if (depth > 0) depth--; current += ch; continue; }
+    if (ch === ',' && depth === 0) { parts.push(current); current = ''; continue; }
+    current += ch;
+  }
+  if (current.trim()) parts.push(current);
+  return parts;
+}
+
+/**
  * Validate migration SQL for Galactic conventions.
  * Called at deploy time (upload handler) before storing migrations.
  *
@@ -189,13 +279,34 @@ export async function runMigrations(
  * - Every CREATE TABLE (except system tables starting with _) must have user_id TEXT NOT NULL
  * - No DROP TABLE; no ALTER TABLE ... DROP COLUMN (destructive, breaks rollback compatibility)
  * - No PRAGMA / ATTACH DATABASE (security risk)
+ * - No INSERT/UPDATE/DELETE targeting a reserved `_`-prefixed system table
  * - DROP INDEX, RENAME, and DELETE FROM are warned (non-additive / mutate data at deploy)
  */
 export function validateMigrationSchema(sql: string): SchemaValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
+  // Size guard FIRST — before any regex runs — so an oversized file cannot be
+  // used as a ReDoS / CPU-exhaustion vector against the upload gate.
+  const byteLength = new TextEncoder().encode(sql).length;
+  if (byteLength > MAX_MIGRATION_FILE_BYTES) {
+    return {
+      valid: false,
+      errors: [
+        `Migration file is too large (${byteLength} bytes). ` +
+        `Each .sql file must be at most ${MAX_MIGRATION_FILE_BYTES} bytes ` +
+        `(${MAX_MIGRATION_FILE_BYTES / 1024}KB). Split large migrations into ` +
+        `separate numbered files.`,
+      ],
+      warnings: [],
+    };
+  }
+
   const normalized = sql.replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, ''); // Strip comments
+
+  // Tokenize into statements once, up front. Every subsequent statement-level
+  // check runs per-statement so no regex can scan across statement boundaries.
+  const statements = splitSqlStatements(normalized);
 
   // Check every CREATE TABLE for user_id
   const createTableRegex = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?\s*\(([\s\S]*?)\)/gi;
@@ -205,9 +316,16 @@ export function validateMigrationSchema(sql: string): SchemaValidationResult {
     const columns = match[2];
 
     // Skip system tables
-    if (tableName.startsWith('_')) continue;
+    if (isReservedTable(tableName)) continue;
 
-    if (!/user_id/i.test(columns)) {
+    // Require a real column literally named user_id — not a substring match
+    // (which `not_user_id`, a DEFAULT value, or a CHECK expression could
+    // satisfy). Split the column block on top-level commas and look for a
+    // definition whose first identifier token is exactly `user_id`.
+    const hasUserIdColumn = splitTopLevel(columns).some((def) =>
+      /^\s*["`]?user_id["`]?\s/i.test(def)
+    );
+    if (!hasUserIdColumn) {
       errors.push(
         `Table "${tableName}" must include a "user_id TEXT NOT NULL" column. ` +
         `All tables must support per-user data isolation.`
@@ -234,9 +352,30 @@ export function validateMigrationSchema(sql: string): SchemaValidationResult {
 
   // Non-additive schema changes break rollback compatibility: an older code
   // version promoted via gx.set may still reference a column a later migration
-  // removed or renamed. Keep migrations additive.
-  if (/ALTER\s+TABLE[\s\S]*?DROP\s+COLUMN/i.test(normalized)) {
-    errors.push('ALTER TABLE ... DROP COLUMN is not allowed in migrations. Dropping a column breaks older code versions if they are rolled back to. Keep migrations additive.');
+  // removed or renamed. Keep migrations additive. Check per-statement so the
+  // regex is bounded to a single ALTER TABLE (no cross-statement backtracking).
+  for (const stmt of statements) {
+    if (/\bALTER\s+TABLE\b[^;]*?\bDROP\s+COLUMN\b/i.test(stmt)) {
+      errors.push('ALTER TABLE ... DROP COLUMN is not allowed in migrations. Dropping a column breaks older code versions if they are rolled back to. Keep migrations additive.');
+      break;
+    }
+  }
+
+  // Reject any DML (INSERT/UPDATE/DELETE) that targets a reserved `_`-prefixed
+  // system table (e.g. _usage, _migrations). A migration writing to _usage can
+  // forge cross-user usage/quota attribution; writing to _migrations corrupts
+  // bookkeeping. These statements are never legitimate in an app migration.
+  for (const stmt of statements) {
+    const target =
+      stmt.match(/\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+["`]?(\w+)["`]?/i) ??
+      stmt.match(/\bUPDATE\s+["`]?(\w+)["`]?/i) ??
+      stmt.match(/\bDELETE\s+FROM\s+["`]?(\w+)["`]?/i);
+    if (target && isReservedTable(target[1])) {
+      errors.push(
+        `Writing to reserved system table "${target[1]}" is not allowed in migrations. ` +
+        `Tables prefixed with "_" are managed by the platform.`
+      );
+    }
   }
   if (/DROP\s+INDEX/i.test(normalized)) {
     warnings.push('DROP INDEX in a migration is irreversible at the schema level — prefer leaving indexes in place or replacing them within the same migration.');

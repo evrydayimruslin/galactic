@@ -473,112 +473,9 @@ export function createApp() {
         return handleUpload(request);
       }
 
-      // Temporary IMAP test endpoint
-      if (path === "/api/imap-test" && method === "POST") {
-        try {
-          const { authenticate } = await import("./auth.ts");
-          await authenticate(request);
-          const body = await request.json() as Record<string, unknown>;
-          const { connect } = await import("cloudflare:sockets");
-          const socket = connect(
-            { hostname: body.host as string, port: body.port as number },
-            { secureTransport: "on", allowHalfOpen: false },
-          );
-          const reader = socket.readable.getReader();
-          const writer = socket.writable.getWriter();
-          const d = new TextDecoder();
-          const e = new TextEncoder();
-          let buf = "";
-          async function rl(): Promise<string> {
-            while (true) {
-              const idx = buf.indexOf("\r\n");
-              if (idx >= 0) {
-                const l = buf.substring(0, idx);
-                buf = buf.substring(idx + 2);
-                return l;
-              }
-              const { value, done } = await reader.read();
-              if (done) return buf;
-              buf += d.decode(value, { stream: true });
-            }
-          }
-          async function rb(n: number): Promise<string> {
-            while (buf.length < n) {
-              const { value, done } = await reader.read();
-              if (done) break;
-              buf += d.decode(value, { stream: true });
-            }
-            const data = buf.substring(0, n);
-            buf = buf.substring(n);
-            return data;
-          }
-          let tagN = 0;
-          async function cmd(
-            c: string,
-          ): Promise<{ lines: string[]; ok: boolean }> {
-            tagN++;
-            const tag = "A" + String(tagN).padStart(4, "0");
-            await writer.write(e.encode(tag + " " + c + "\r\n"));
-            const lines: string[] = [];
-            while (true) {
-              const line = await rl();
-              if (line.startsWith(tag + " ")) {
-                return { lines, ok: line.includes(tag + " OK") };
-              }
-              lines.push(line);
-            }
-          }
-          const greeting = await rl();
-          const login = await cmd(
-            'LOGIN "' + (body.user as string) + '" "' + (body.pass as string) +
-              '"',
-          );
-          const sel = await cmd("SELECT INBOX");
-          const search = await cmd("UID SEARCH UNSEEN");
-          const uidLine = search.lines.find((l) => l.startsWith("* SEARCH"));
-          const uids = uidLine
-            ? uidLine.replace("* SEARCH", "").trim().split(/\s+/).map(Number)
-              .filter((n) => n > 0)
-            : [];
-          let fetchResult: any = null;
-          if (uids.length > 0) {
-            fetchResult = await cmd(
-              "UID FETCH " + uids[0] + " (BODY.PEEK[] FLAGS)",
-            );
-          }
-          await cmd("LOGOUT");
-          reader.releaseLock();
-          try {
-            writer.releaseLock();
-          } catch {}
-          try {
-            socket.close();
-          } catch {}
-          return new Response(
-            JSON.stringify(
-              {
-                greeting: greeting.substring(0, 80),
-                login: login.ok,
-                unseen: uids.length,
-                firstUid: uids[0],
-                fetchLines: fetchResult ? fetchResult.lines.length : 0,
-                fetchOk: fetchResult?.ok,
-                fetchFirstLine: fetchResult?.lines?.[0]?.substring(0, 100),
-              },
-              null,
-              2,
-            ),
-            { headers: { "Content-Type": "application/json" } },
-          );
-        } catch (e2: unknown) {
-          return new Response(
-            JSON.stringify({
-              error: e2 instanceof Error ? e2.message : String(e2),
-            }),
-            { status: 500, headers: { "Content-Type": "application/json" } },
-          );
-        }
-      }
+      // (Removed) The temporary /api/imap-test debug endpoint took a raw
+      // host/port with no SSRF guard and interpolated user/pass into an IMAP
+      // LOGIN with no CRLF sanitization. It had no callers; deleted outright.
 
       // Internal TCP protocol endpoints — called by Dynamic Worker sandbox via fetch()
       // Internal event emit (Phase 4.5 pub/sub). Auth is DOUBLE-gated:
@@ -4454,6 +4351,21 @@ async function renderTermsHTML(): Promise<string> {
         copy.freeCallSponsorship,
       ],
     },
+    {
+      title: "Developer Access To Your Data",
+      body: [
+        "By default, an agent's developer cannot read the data you store in that " +
+        "agent — they see only aggregate row counts and their own rows, never your " +
+        "individual data. Some agents enable their developer to read your data for " +
+        "support. Whether an agent's developer can do this is disclosed on the " +
+        "agent's trust card before you use it (look for \"the developer can read " +
+        "your data\").",
+        "Where enabled, such access is read-only and every access is recorded in an " +
+        "append-only audit log, so it can be reviewed. Do not store data in an " +
+        "agent that you are unwilling to have its developer see when this " +
+        "disclosure is present.",
+      ],
+    },
   ];
 
   return `<!DOCTYPE html>
@@ -4491,7 +4403,7 @@ async function renderTermsHTML(): Promise<string> {
 <main>
   <div class="eyebrow">Galactic Terms</div>
   <h1>Credits Economy Terms</h1>
-  <p class="updated">Last updated May 18, 2026</p>
+  <p class="updated">Last updated July 5, 2026</p>
   <p>These terms summarize the payment, creator earnings, payout, and platform fee rules used by Galactic. Additional product or marketplace terms may apply to specific workflows.</p>
   ${
     sections.map((section) => `
@@ -5430,6 +5342,9 @@ async function handlePublishedPage(
   return new Response(html, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
+      // Defense-in-depth for user/developer-authored markdown rendered here.
+      // This page ships no inline scripts, so a strict CSP does not break it.
+      "Content-Security-Policy": PUBLIC_MARKDOWN_CSP,
       "Cache-Control": cacheControl,
     },
   });
@@ -5439,9 +5354,15 @@ async function handlePublishedPage(
  * Get the public base URL of the server, respecting reverse proxy headers.
  */
 function getBaseUrl(request: Request): string {
+  // Prefer a fixed, operator-configured BASE_URL so generated absolute URLs
+  // cannot be pointed at an attacker-controlled host via a spoofed
+  // X-Forwarded-Host header.
+  const configured = getEnv("BASE_URL");
+  if (configured) return configured.replace(/\/+$/, "");
   const url = new URL(request.url);
-  const host = request.headers.get("x-forwarded-host") ||
-    request.headers.get("host") || url.host;
+  // Fall back to the Host header only (never the client-spoofable
+  // X-Forwarded-Host).
+  const host = request.headers.get("host") || url.host;
   const proto = request.headers.get("x-forwarded-proto") ||
     (host.includes("localhost") ? "http" : "https");
   return `${proto}://${host}`;
@@ -5608,6 +5529,48 @@ async function handleReferralBotPreview(
   });
 }
 
+// CSP for public pages that render developer/user-controlled markdown
+// (the published markdown page). No inline scripts run on that page, so this
+// strict policy is safe. Applied per-response rather than globally because
+// other endpoints (the app-store app page, launch-web, sandbox, interface,
+// contract dashboard) legitimately serve inline scripts and external fonts.
+const PUBLIC_MARKDOWN_CSP =
+  "default-src 'none'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; font-src 'self' https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/**
+ * Allowlist the scheme of a markdown link target. Permits http(s), mailto,
+ * root-relative and relative paths, and same-page anchors. Rejects
+ * javascript:/data:/vbscript: and any other scheme so developer-controlled
+ * markdown cannot inject active-content URIs into public HTML.
+ *
+ * NOTE: the caller has already run the full markdown body through escapeHtml,
+ * so `&` appears as `&amp;`, `<`/`>` are gone, and quotes are entity-encoded.
+ * A raw leading-scheme match on the escaped string is therefore sufficient and
+ * cannot be defeated by quote/angle-bracket breakout.
+ */
+export function isSafeMarkdownLinkUrl(rawUrl: string): boolean {
+  const url = rawUrl.trim();
+  if (!url) return false;
+  // Same-page anchors and relative/root-relative paths (no scheme).
+  if (url.startsWith("#") || url.startsWith("/") || url.startsWith("./") || url.startsWith("../")) {
+    return true;
+  }
+  // Reject control chars (incl. tab/newline that browsers strip from schemes,
+  // e.g. "java\tscript:") which could be used to smuggle a blocked scheme.
+  // deno-lint-ignore no-control-regex
+  if (/[\x00-\x1f]/.test(url)) return false;
+  // If there is a scheme, it must be in the allowlist. A leading token of
+  // scheme chars followed by ':' denotes an absolute URL scheme.
+  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(url);
+  if (schemeMatch) {
+    const scheme = schemeMatch[1].toLowerCase();
+    return scheme === "http" || scheme === "https" || scheme === "mailto";
+  }
+  // No scheme and not an anchor/relative prefix: treat as a relative reference
+  // (e.g. "foo/bar"). Safe — cannot introduce an active-content scheme.
+  return true;
+}
+
 /**
  * Convert markdown text to HTML using simple regex-based conversion (no external deps).
  * Extracted for reuse across published pages, app pages, etc.
@@ -5634,10 +5597,17 @@ function markdownToHtml(markdown: string): string {
   html = html.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-  // Links
+  // Links — allowlist the scheme so a developer-controlled markdown link
+  // cannot smuggle javascript:/data:/vbscript: into an href. Only http(s),
+  // mailto, relative paths, and same-page anchors are permitted; anything
+  // else is rendered as inert text. (The whole input was already run through
+  // escapeHtml above, so $2 cannot contain raw quotes/angle brackets.)
   html = html.replace(
     /\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener">$1</a>',
+    (_m, text, rawUrl) =>
+      isSafeMarkdownLinkUrl(rawUrl)
+        ? `<a href="${rawUrl}" target="_blank" rel="noopener noreferrer">${text}</a>`
+        : text,
   );
   // Horizontal rules
   html = html.replace(/^---+$/gm, "<hr>");

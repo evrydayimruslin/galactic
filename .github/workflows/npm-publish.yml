@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   publish:
-    name: Verify and publish ultralightagent
+    name: Verify and publish galacticconnection
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -54,8 +54,8 @@ jobs:
 
       - name: Fail if version already on npm
         run: |
-          if npm view "ultralightagent@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
-            echo "ultralightagent@${{ steps.version.outputs.version }} is already published — bump the version first." >&2
+          if npm view "galacticconnection@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
+            echo "galacticconnection@${{ steps.version.outputs.version }} is already published — bump the version first." >&2
             exit 1
           fi
 

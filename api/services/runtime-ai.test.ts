@@ -323,3 +323,133 @@ Deno.test("runtime AI context: balance check failure fails open and proceeds un-
     console.warn = previousWarn;
   }
 });
+
+Deno.test("runtime AI: metered call is refused per-call when balance is below the floor", async () => {
+  const previousFetch = globalThis.fetch;
+  let providerCalled = false;
+  let debitCalled = false;
+  try {
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.includes("/chat/completions")) providerCalled = true;
+      if (url.includes("/rpc/debit_light")) debitCalled = true;
+      return new Response("unexpected fetch", { status: 500 });
+    }) as typeof fetch;
+
+    // Injected balance below CHAT_MIN_BALANCE_LIGHT (25) — the per-call gate must
+    // refuse BEFORE any billable upstream inference is generated.
+    const service = createRoutedRuntimeAIService(
+      makeCreditsRoute(),
+      "user-1",
+      async () => 10,
+    );
+    const response = await service.call({
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    assertEquals(response.content, "");
+    assertStringIncludes(response.error ?? "", "requires at least");
+    assertEquals(providerCalled, false);
+    assertEquals(debitCalled, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+Deno.test("runtime AI: metered call withholds content when the debit depletes the wallet", async () => {
+  const previousFetch = globalThis.fetch;
+  const globalWithEnv = globalThis as typeof globalThis & { __env?: Record<string, unknown> };
+  const previousEnv = globalWithEnv.__env;
+  try {
+    globalWithEnv.__env = {
+      ...(previousEnv || {}),
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    };
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.includes("/chat/completions")) {
+        return new Response(JSON.stringify({
+          model: "deepseek/deepseek-v4-flash",
+          choices: [{ message: { content: "should-be-withheld" } }],
+          usage: { prompt_tokens: 100, completion_tokens: 200 },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.includes("/rpc/debit_light")) {
+        // Partial/depleting debit: the buyer could not fully cover the call.
+        return new Response(JSON.stringify([{
+          old_balance: 0.01,
+          new_balance: 0,
+          was_depleted: true,
+          amount_debited: 0.01,
+        }]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.includes("/billing_transactions")) return new Response(null, { status: 204 });
+      return new Response("unexpected fetch", { status: 500 });
+    }) as typeof fetch;
+
+    // Balance is above the floor at call time, but the debit depletes it — the
+    // content of THIS call must be withheld.
+    const service = createRoutedRuntimeAIService(
+      makeCreditsRoute(),
+      "user-1",
+      async () => 1000,
+    );
+    const response = await service.call({
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    assertEquals(response.content, "");
+    assertStringIncludes(response.error ?? "", "Insufficient credits");
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalWithEnv.__env = previousEnv;
+  }
+});
+
+Deno.test("runtime AI: metered call with ample balance passes the gate and returns content", async () => {
+  const previousFetch = globalThis.fetch;
+  const globalWithEnv = globalThis as typeof globalThis & { __env?: Record<string, unknown> };
+  const previousEnv = globalWithEnv.__env;
+  try {
+    globalWithEnv.__env = {
+      ...(previousEnv || {}),
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    };
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.includes("/chat/completions")) {
+        return new Response(JSON.stringify({
+          model: "deepseek/deepseek-v4-flash",
+          choices: [{ message: { content: "ok" } }],
+          usage: { prompt_tokens: 100, completion_tokens: 200 },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.includes("/rpc/debit_light")) {
+        return new Response(JSON.stringify([{
+          old_balance: 1000,
+          new_balance: 999.98,
+          was_depleted: false,
+          amount_debited: 0.02,
+        }]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.includes("/billing_transactions")) return new Response(null, { status: 204 });
+      return new Response("unexpected fetch", { status: 500 });
+    }) as typeof fetch;
+
+    const service = createRoutedRuntimeAIService(
+      makeCreditsRoute(),
+      "user-1",
+      async () => 1000,
+    );
+    const response = await service.call({
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    assertEquals(response.content, "ok");
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalWithEnv.__env = previousEnv;
+  }
+});

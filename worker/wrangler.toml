@@ -14,8 +14,8 @@ id = "d348ee797036460faf4b3e014921f0b0"
 
 # Secrets (set via: wrangler secret put <NAME>):
 #   WORKER_SECRET       — shared secret for DO API → Worker auth
-#   CF_ACCOUNT_ID       — Cloudflare account ID for D1 API access
-#   CF_API_TOKEN        — Cloudflare API token with D1 read/write permissions
+#   (CF_ACCOUNT_ID / CF_API_TOKEN are no longer used — the /d1 SQL proxy that
+#    required them was removed; app D1 access is scoped by the API worker.)
 #   DATA_TENANT_SECRET  — per-tenant proof signing secret. MUST be identical to
 #                         the API worker's DATA_TENANT_SECRET. Deliberately
 #                         distinct from WORKER_SECRET (which is sandbox-exposed),

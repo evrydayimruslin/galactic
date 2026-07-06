@@ -84,13 +84,27 @@ LAUNCH_WEB_BASE_URL = "https://connectgalactic.com"
 INTERFACE_SANDBOX_BASE_URL = "https://interfaces.connectgalactic.com"
 ENVIRONMENT = "production"
 # Executed-bundle integrity: enforce blocks a call when the running ESM bundle
-# does not match its signed attestation (bad_signature / hash_mismatch only;
-# legacy unsigned + deploy-skew never block). observe = log only; off = skip.
+# does not match its signed attestation (bad_signature / hash_mismatch), AND
+# hard-blocks (fail-closed) when the trust secret is unresolvable so enforce can
+# never silently degrade to off. legacy unsigned + deploy-skew still never block
+# (until require-attestation below). observe = log only; off = skip.
+# PRE-REQ for enforce to actually enforce: TRUST_SIGNING_SECRET (or
+# LIGHT_TRUST_SIGNING_SECRET) MUST be set, else every call fails closed. The
+# hourly cron self-check (assertTrustSecretResolvable) alarms until it resolves.
 EXECUTED_BUNDLE_VERIFY = "enforce"
 # Strip-the-sidecar defense — second-stage rollout (default OFF). When "1",
-# no_attestation also blocks under enforce, closing the "write the live bundle
-# WITHOUT a sidecar to dodge verification" path. Flip ON only AFTER the backfill
-# below reports zero legitimately-unattested bundles, else legacy apps break.
+# no_attestation also blocks under enforce, closing the "raw KV put of app.js
+# WITHOUT a metadata sidecar to dodge verification" path. NEW publishes always
+# attest (putLiveExecutedBundle is the sole live-key writer), so once the
+# backfill re-attests the pre-Phase-0 legacy cohort, any remaining no_attestation
+# can ONLY be a stripped sidecar. DO NOT flip this to "1" until the backfill
+# below has run and reported attested=0 on a subsequent pass — flipping first
+# hard-blocks every un-backfilled legacy app. Ordered rollout:
+#   1. set EXECUTED_BUNDLE_BACKFILL="1", deploy, wait for the hourly cron
+#   2. confirm [BUNDLE-BACKFILL] log shows a run whose attested count reaches 0
+#   3. unset EXECUTED_BUNDLE_BACKFILL, then set REQUIRE_ATTESTATION="1", deploy
+#      (in BOTH this [vars] block and [env.staging.vars] below, and run the
+#      backfill in staging too, so staging enforce matches prod)
 # EXECUTED_BUNDLE_REQUIRE_ATTESTATION = "1"
 # One-shot backfill (default OFF). When "1", the hourly cron re-attests any
 # still-unattested live bundle (idempotent). Set "1", deploy, watch the
@@ -177,7 +191,11 @@ BASE_URL = "https://ultralight-api-staging.rgn4jz429m.workers.dev"
 LAUNCH_WEB_BASE_URL = "https://staging.ultralight-launch-web.pages.dev"
 INTERFACE_SANDBOX_BASE_URL = "https://ultralight-interfaces-staging.rgn4jz429m.workers.dev"
 ENVIRONMENT = "staging"
-# Executed-bundle integrity enforcement (see [vars] above).
+# Executed-bundle integrity enforcement (see [vars] above). enforce now also
+# fail-closes when the trust secret is unresolvable, so staging MUST have
+# TRUST_SIGNING_SECRET set or every sandboxed call is refused. When the prod
+# REQUIRE_ATTESTATION flip happens, mirror it here (and backfill staging) so
+# staging enforce matches prod and catches a stripped-sidecar regression.
 EXECUTED_BUNDLE_VERIFY = "enforce"
 CORS_ALLOWED_ORIGINS = "https://ultralight-api-staging.rgn4jz429m.workers.dev,https://staging.ultralight-launch-web.pages.dev,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5178,http://127.0.0.1:5178"
 GPU_SUPPORT_ENABLED = "false"

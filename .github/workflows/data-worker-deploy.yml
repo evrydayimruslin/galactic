@@ -31,9 +31,11 @@ jobs:
     defaults:
       run:
         working-directory: worker
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    # No Cloudflare credentials here: `wrangler deploy --dry-run` needs none, and
+    # wrangler runs wrangler.toml's [build] command during dry-run — exposing the
+    # deploy token to a pull_request-triggered job lets a malicious PR exfiltrate
+    # it. Mirrors the sibling api/interfaces verify jobs, which run the same
+    # dry-run without any token. Credentials live only in the gated deploy job.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

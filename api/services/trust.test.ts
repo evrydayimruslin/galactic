@@ -95,6 +95,24 @@ Deno.test("trust: builds a public trust card from current version metadata", asy
     assertEquals(card.capability_summary.gpu, true);
     assertEquals(card.execution_receipts.field, "receipt_id");
   });
+
+});
+
+Deno.test("trust: developer_can_read_user_data reflects data:support_read", () => {
+  // deno-lint-ignore no-explicit-any
+  const build = (perms: string[]) =>
+    buildAppTrustCard({
+      current_version: "1.0.0",
+      runtime: "deno",
+      manifest: JSON.stringify({ permissions: perms }),
+      version_metadata: [],
+      visibility: "public",
+      download_access: "owner",
+      env_schema: {},
+      // deno-lint-ignore no-explicit-any
+    } as any);
+  assertEquals(build(["data:support_read", "storage:read"]).developer_can_read_user_data, true);
+  assertEquals(build(["storage:read"]).developer_can_read_user_data, false);
 });
 
 Deno.test("trust: verifyVersionTrustSignature accepts a valid sig, rejects tampering", async () => {

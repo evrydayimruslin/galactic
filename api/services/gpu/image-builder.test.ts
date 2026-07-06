@@ -37,7 +37,7 @@ Deno.test("gpu image builder: target image refs are normalized", () => {
       "Version 1.0",
       "ghcr.io/Galactic/GPU-Apps/",
     ),
-    "ghcr.io/ultralight/gpu-apps/app_123:version-1.0",
+    "ghcr.io/galactic/gpu-apps/app_123:version-1.0",
   );
 });
 

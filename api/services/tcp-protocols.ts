@@ -3,6 +3,13 @@
 // Called by /api/net/ HTTP endpoints, NOT by Dynamic Workers directly.
 
 import { connect } from 'cloudflare:sockets';
+import {
+  assertNoHeaderInjection,
+  assertSingleAddress,
+  dotStuffBody,
+  assertImapAtom,
+  assertImapQuotable,
+} from './mail-sanitize.ts';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -236,6 +243,10 @@ export async function imapFetchUnseen(
   host: string, port: number, user: string, pass: string,
   lastUid: number, businessEmail: string, processedFlag: string, limit: number,
 ): Promise<{ emails: ParsedEmail[]; maxUid: number; hasMore: boolean }> {
+  // Fail closed on IMAP command injection before opening the socket.
+  assertImapQuotable('user', user);
+  assertImapQuotable('pass', pass);
+  assertImapAtom('processedFlag', processedFlag);
   validateTarget(host, port);
 
   const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
@@ -329,6 +340,12 @@ export async function smtpSend(
   host: string, port: number, user: string, pass: string,
   from: string, fromName: string, to: string, subject: string, body: string, inReplyTo?: string,
 ): Promise<{ success: boolean; error?: string }> {
+  // Fail closed on header/command injection before opening the socket.
+  assertSingleAddress('from', from);
+  assertSingleAddress('to', to);
+  assertNoHeaderInjection('fromName', fromName);
+  assertNoHeaderInjection('subject', subject);
+  if (inReplyTo) assertNoHeaderInjection('inReplyTo', inReplyTo);
   validateTarget(host, port);
 
   const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
@@ -368,7 +385,7 @@ export async function smtpSend(
     headers += 'Content-Type: text/plain; charset=UTF-8\r\n';
     headers += 'Date: ' + new Date().toUTCString() + '\r\n';
 
-    await writer.write(enc.encode(headers + '\r\n' + body + '\r\n.\r\n'));
+    await writer.write(enc.encode(headers + '\r\n' + dotStuffBody(body) + '\r\n.\r\n'));
     const sendResp = await lr.readLine();
     if (!sendResp.startsWith('250')) throw new Error('SMTP send failed: ' + sendResp);
 

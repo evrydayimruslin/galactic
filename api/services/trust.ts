@@ -87,6 +87,11 @@ export interface TrustCard {
   // excluded. "no_data" when a window has too few paid calls to judge.
   health: HealthWindows;
   reliability?: unknown;
+  // DISCLOSURE: the app declares the `data:support_read` permission, which lets
+  // the app OWNER (developer) read OTHER users' rows stored in this app — for
+  // support. Read-only and audit-logged, but it materially changes trust, so
+  // every surface MUST show it. Off by default (permission not declared).
+  developer_can_read_user_data: boolean;
   execution_receipts: {
     enabled: true;
     field: "receipt_id";
@@ -481,6 +486,24 @@ export function getLatestVersionTrust(app: Pick<App, "current_version" | "versio
   return null;
 }
 
+/**
+ * The app's effective declared permissions (signed version metadata preferred,
+ * else the live manifest). SINGLE SOURCE used by BOTH the trust-card disclosure
+ * and the runtime data-access gate (db-inspect support_read) so what is disclosed
+ * and what is enforced can never drift.
+ */
+export function resolveAppPermissions(
+  app: Pick<App, "current_version" | "version_metadata" | "manifest">,
+): string[] {
+  const trust = getLatestVersionTrust(app);
+  return trust?.permissions.length
+    ? trust.permissions
+    : getManifestPermissions(app.manifest).sort();
+}
+
+/** The permission a developer declares to unlock the disclosed support data-read. */
+export const SUPPORT_DATA_READ_PERMISSION = "data:support_read";
+
 export function buildAppTrustCard(
   app: Pick<App, "current_version" | "runtime" | "manifest" | "version_metadata" | "visibility" | "download_access" | "env_schema">,
   options: {
@@ -493,8 +516,7 @@ export function buildAppTrustCard(
   } = {},
 ): TrustCard {
   const trust = getLatestVersionTrust(app as Pick<App, "current_version" | "version_metadata">);
-  const manifest = parseAppManifest(app.manifest);
-  const permissions = trust?.permissions.length ? trust.permissions : getManifestPermissions(manifest).sort();
+  const permissions = resolveAppPermissions(app);
   const envSchema = resolveAppEnvSchema(app);
   const requiredSecrets = Object.entries(envSchema)
     .filter(([, entry]) => entry.required)
@@ -535,6 +557,9 @@ export function buildAppTrustCard(
     open_code: app.download_access === "public",
     publisher_verified: options.publisher_verified ?? false,
     health: options.health ?? emptyHealth(),
+    // Derived from the SAME permission set the runtime gate enforces (see
+    // resolveAppPermissions), so what's disclosed here == what's actually allowed.
+    developer_can_read_user_data: permissions.includes(SUPPORT_DATA_READ_PERMISSION),
     ...(options.reliability !== undefined ? { reliability: options.reliability } : {}),
     execution_receipts: {
       enabled: true,

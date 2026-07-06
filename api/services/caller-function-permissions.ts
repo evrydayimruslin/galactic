@@ -299,7 +299,7 @@ export async function enforceCallerFunctionPermission(
   const message =
     `Connected agents are not allowed to call ${input.functionName}: your ` +
     'user set its policy to "never". confirm:true cannot override this. If ' +
-    "your user wants to re-enable it, call gx.permit({ app_id, " +
+    "your user wants to re-enable it, call gx.consent({ app_id, " +
     'function_name, decision: "ask" | "always" }) or change it on the ' +
     "website, then retry.";
   const details: CallerPermissionBlock = {
@@ -332,10 +332,10 @@ function buildAskBlock(
     ? `${input.functionName} has not been recently healthy, so your approval is required before calling it.`
     : `Calling ${input.functionName} needs your user's confirmation.`;
   // Actionable in-band resolution (no website round-trip): ask the end user,
-  // then either retry this call with confirm:true (allow once) or call gx.permit
+  // then either retry this call with confirm:true (allow once) or call gx.consent
   // to allow it from now on. Not gx.grants — that is app-to-app wiring.
   const message = `${base} Ask your user, then retry with confirm:true to allow ` +
-    `once, or call gx.permit({ app_id, function_name, decision:"always" }) to ` +
+    `once, or call gx.consent({ app_id, function_name, decision:"always" }) to ` +
     `allow it from now on.`;
   const details: CallerPermissionBlock = {
     type: "permission_required",

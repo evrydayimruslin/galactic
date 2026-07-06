@@ -26,8 +26,18 @@ export interface AppManifest {
     env?: Record<string, ManifestEnvVar>;
     env_vars?: Record<string, ManifestEnvVar>;
     http?: ManifestHttpConfig;
+    rate_limit?: ManifestCallRateLimit;
     network?: ManifestNetworkConfig;
 }
+export interface ManifestCallRateLimit {
+    calls_per_minute?: number;
+    calls_per_day?: number;
+}
+/**
+ * Read the app-level call rate limit from a manifest (string or parsed), defensively.
+ * Ignores non-positive / non-finite values; returns null when nothing valid is set.
+ */
+export declare function parseManifestCallRateLimit(manifest: string | AppManifest | null | undefined): ManifestCallRateLimit | null;
 export interface ManifestNetworkConfig {
     allowed_destinations?: ManifestNetworkDestination[];
 }

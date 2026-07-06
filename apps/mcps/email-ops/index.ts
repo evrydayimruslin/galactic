@@ -13,6 +13,23 @@
 const galactic = (globalThis as any).galactic;
 const AI_MODEL = 'google/gemini-3-flash-preview';
 
+// IMAP quoted-string guard. This app rolls its own IMAP session (the `cmd`
+// helper writes `<tag> <command>\r\n` straight to the socket), so any value
+// interpolated into a quoted-string argument must have CR/LF/NUL rejected and
+// backslash/double-quote escaped — otherwise a value carrying a line break
+// (e.g. an attacker-influenced guest email address, or a server-supplied
+// mailbox name) could inject an extra IMAP command. Fails closed on a control
+// char. (SMTP send goes through the platform net.smtpSend binding, which is
+// sanitized host-side, so only IMAP needs a local guard here.)
+function imapQuoted(field: string, value: string): string {
+  const s = String(value ?? '');
+  // deno-lint-ignore no-control-regex
+  if (/[\r\n\x00]/.test(s)) {
+    throw new Error(`Invalid ${field}: line breaks are not allowed`);
+  }
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 type ConversationClassification =
   | 'inquiry'
   | 'booking_request'
@@ -582,7 +599,7 @@ async function createImapConnection(): Promise<ImapConnection> {
 
   // Login
   const loginResult = await cmd(
-    'LOGIN "' + user.replace(/"/g, '\\"') + '" "' + pass.replace(/"/g, '\\"') + '"',
+    'LOGIN "' + imapQuoted('user', user) + '" "' + imapQuoted('pass', pass) + '"',
   );
   if (!loginResult.ok) {
     lr.releaseLock();
@@ -820,10 +837,10 @@ async function checkSentFolder(guestEmail: string): Promise<boolean> {
       }
     }
 
-    const selResult = await conn.cmd('SELECT "' + sentFolder + '"');
+    const selResult = await conn.cmd('SELECT "' + imapQuoted('folder', sentFolder) + '"');
     if (!selResult.ok) return false; // Sent folder not found — assume no reply
 
-    const searchResult = await conn.cmd('UID SEARCH TO "' + guestEmail + '"');
+    const searchResult = await conn.cmd('UID SEARCH TO "' + imapQuoted('guestEmail', guestEmail) + '"');
     const uidLine = searchResult.lines.find((l: string) => l.startsWith('* SEARCH'));
     if (uidLine) {
       const uids = uidLine.replace('* SEARCH', '').trim();

@@ -308,6 +308,13 @@ async function computeVerdict(
 // (enforce + a real violation). Logging: violations/errors warn in any mode;
 // benign legacy no_attestation is silent in observe but warned under enforce so
 // un-attested live bundles are visible before/after the flip.
+//
+// FAIL CLOSED on "error": status "error" means the trust secret could not be
+// resolved, so verification could not even be ATTEMPTED. Treating that as
+// non-blocking silently degrades enforce to off (a KV-tampered bundle would run
+// unverified). Under enforce we therefore REFUSE execution on "error" — the
+// per-instance alarm already fired in computeVerdict, and the hourly self-check
+// (assertTrustSecretResolvable) re-surfaces the misconfig until it is fixed.
 export function handleExecutedBundleVerdict(
   appId: string,
   verdict: BundleVerifyResult,
@@ -316,7 +323,8 @@ export function handleExecutedBundleVerdict(
   if (verdict.status === "ok") return false;
   const requireAttestation = executedBundleRequireAttestation();
   const block = mode === "enforce" &&
-    isExecutedBundleViolation(verdict.status, requireAttestation);
+    (verdict.status === "error" ||
+      isExecutedBundleViolation(verdict.status, requireAttestation));
   if (verdict.status !== "no_attestation" || mode === "enforce") {
     console.warn("[BUNDLE-VERIFY] executed bundle not verified-ok", {
       appId,

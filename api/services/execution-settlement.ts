@@ -505,32 +505,36 @@ export async function preflightRuntimeCloudHold(
       },
     }, deps);
 
-    // Fold per-transaction sales tax into the upfront reservation. The infra
-    // hold reserves only infra; the app charge + tax are paid at settlement.
-    // Without this check a buyer who can afford the app charge but not the tax
-    // would complete the sale and then under-collect tax (the settlement debit
-    // is best-effort). Here we require — before the call runs — that the balance
-    // remaining after the infra hold covers appCharge + tax; if not, we release
-    // the hold and reject. Gated on a configured rate (zero hot-path cost when
-    // tax is off) and on an authoritative paid charge (hold.appChargeLight is
-    // post-free-quota, so free/self/sponsored calls are naturally exempt).
-    if (isSalesTaxConfigured() && hold.appChargeLight > 0) {
-      const resolveTaxLocation = deps?.resolveBuyerTaxLocationFn ??
-        resolveBuyerTaxLocation;
-      const buyer = await resolveTaxLocation(params.userId);
-      const taxLight = computeSalesTaxLight(
-        hold.appChargeLight,
-        resolveSalesTaxRateBps(buyer?.location ?? null),
-      );
-      if (taxLight > 0 && hold.newBalance < hold.appChargeLight + taxLight) {
+    // Reserve the app charge (plus any per-transaction sales tax) at preflight.
+    // The infra hold reserves ONLY infra; without this check an under-funded
+    // buyer would force the seller function to fully execute before the
+    // settle-time transfer_light fails. Here we require — before the call runs —
+    // that the balance remaining after the infra hold covers appCharge (+ tax if
+    // a jurisdiction is configured); if not, we release the hold and reject.
+    // Gated on an authoritative paid charge (hold.appChargeLight is
+    // post-free-quota, so free/self/sponsored calls are naturally exempt); the
+    // tax read only runs when a rate is configured, so an empty rate table adds
+    // zero hot-path cost.
+    if (hold.appChargeLight > 0) {
+      let taxLight = 0;
+      if (isSalesTaxConfigured()) {
+        const resolveTaxLocation = deps?.resolveBuyerTaxLocationFn ??
+          resolveBuyerTaxLocation;
+        const buyer = await resolveTaxLocation(params.userId);
+        taxLight = computeSalesTaxLight(
+          hold.appChargeLight,
+          resolveSalesTaxRateBps(buyer?.location ?? null),
+        );
+      }
+      const requiredLight = hold.appChargeLight + taxLight;
+      if (hold.newBalance < requiredLight) {
         await releaseCloudUsageHold({ holdId: hold.holdId }, deps).catch(
           (releaseErr) =>
             console.error(
-              "[SALES-TAX] Failed to release hold after tax shortfall:",
+              "[PRICING] Failed to release hold after app-charge shortfall:",
               releaseErr,
             ),
         );
-        const requiredLight = hold.appChargeLight + taxLight;
         return {
           hold: null,
           pricing: basePricing,

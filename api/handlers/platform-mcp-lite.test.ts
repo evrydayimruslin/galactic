@@ -8,11 +8,11 @@ import { getPlatformTools } from './platform-mcp.ts';
 const CORE = [
   'gx.call',
   'gx.codemode',
+  'gx.consent',
   'gx.discover',
   'gx.grants',
   'gx.job',
   'gx.memory',
-  'gx.permit',
   'gx.secrets',
   'gx.set',
   'gx.test',
