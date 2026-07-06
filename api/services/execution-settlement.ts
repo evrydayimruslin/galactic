@@ -12,6 +12,10 @@ import type {
   WidgetActionCallMetadata,
 } from "./call-logger.ts";
 import { logMcpCall } from "./call-logger.ts";
+import {
+  prepareCallLogCapture,
+  persistPreparedCallLogs,
+} from "./call-log-store.ts";
 import type { GpuExecuteResult } from "./gpu/executor.ts";
 import { settleGpuExecution } from "./gpu/billing.ts";
 import { createSupabaseRestClient } from "./platform-clients/supabase-rest.ts";
@@ -239,6 +243,11 @@ export interface LogExecutionResultParams {
   sessionId?: string;
   sequenceNumber?: number;
   userQuery?: string;
+  // Captured runtime console output (LogEntry[]) — persisted to the call-log
+  // store keyed by receiptId so the app owner can debug via gx.logs.
+  runtimeLogs?: unknown[];
+  // The app owner; log-blob bytes debit their data-storage allowance.
+  appOwnerId?: string;
   callChargeLight?: number;
   appPriceLight?: number;
   appChargeLight?: number;
@@ -319,6 +328,7 @@ export interface SettleAndLogAppExecutionParams {
   runtimePricingPreflight?: RuntimeAppCallPricingPreflight | null;
   runtimeCloudSettlement?: RuntimeCloudSettlementForAppCall | null;
   routineContext?: RoutineTraceContext | null;
+  runtimeLogs?: unknown[];
   widgetAction?: WidgetActionCallMetadata;
   agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
 }
@@ -1237,6 +1247,21 @@ export function logExecutionResult(
   );
   const logMcpCallFn = deps?.logMcpCallFn ?? logMcpCall;
 
+  // Persist the captured console output keyed by receipt (always-on, 7-day
+  // retention). The pointer is computed synchronously so it rides this insert;
+  // the blob write is scheduled best-effort — it must never fail or slow the
+  // call. (A dangling pointer reads back as "logs unavailable".)
+  const preparedLogs = prepareCallLogCapture({
+    appId: params.appId,
+    receiptId: params.receiptId,
+    logs: params.runtimeLogs,
+  });
+  if (preparedLogs) {
+    const persist = persistPreparedCallLogs(preparedLogs, params.appOwnerId);
+    const ctx = (globalThis as { __ctx?: { waitUntil?: (p: Promise<unknown>) => void } }).__ctx;
+    if (ctx?.waitUntil) ctx.waitUntil(persist);
+  }
+
   logMcpCallFn({
     receiptId: params.receiptId,
     userId: params.userId,
@@ -1374,6 +1399,8 @@ export async function settleAndLogAppExecution(
     userId: params.userId,
     receiptId: params.receiptId,
     appId: params.app.id,
+    appOwnerId: params.app.owner_id,
+    runtimeLogs: params.runtimeLogs,
     appName: params.app.name || params.app.slug,
     callerAppId: params.callerAppId ?? null,
     callChainDepth: params.callChainDepth ?? null,

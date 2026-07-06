@@ -4364,6 +4364,12 @@ async function renderTermsHTML(): Promise<string> {
         "append-only audit log, so it can be reviewed. Do not store data in an " +
         "agent that you are unwilling to have its developer see when this " +
         "disclosure is present.",
+        "Separately, each run of an agent records its technical console output " +
+        "(runtime logs) for 7 days so the agent's developer can diagnose failures. " +
+        "These logs can include the inputs you provided to that run. They are " +
+        "readable only by the agent's developer, every read is recorded in the " +
+        "same append-only audit log, and they are deleted automatically after 7 " +
+        "days.",
       ],
     },
   ];

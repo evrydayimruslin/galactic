@@ -2917,6 +2917,7 @@ async function executeAppFunction(
         source: callSource,
         inputArgs: args,
         outputResult: result.success ? result.result : result.error,
+      runtimeLogs: result.logs,
         aiCostLight: result.aiCostLight || 0,
         sessionId: meta?.sessionId,
         sequenceNumber: nextSequenceNumber(meta?.sessionId),

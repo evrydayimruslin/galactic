@@ -289,6 +289,19 @@
     },
     {
       "exports": [
+        "CALL_LOG_MAX_LINE_BYTES",
+        "CALL_LOG_RETENTION_DAYS"
+      ],
+      "file": "services/call-log-store.ts",
+      "types": [
+        "CallLogReadResult",
+        "CallLogSweepResult",
+        "PreparedCallLogCapture",
+        "TruncatedLogs"
+      ]
+    },
+    {
+      "exports": [
         "summarizeReceiptCloudEvents"
       ],
       "file": "services/call-receipts.ts",

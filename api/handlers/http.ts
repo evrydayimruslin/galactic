@@ -758,6 +758,7 @@ export async function handleHttpEndpoint(
         ? undefined
         : (result.error?.message || "Execution failed"),
       outputResult: result.success ? result.result : result.error,
+      runtimeLogs: result.logs,
       aiCostLight: result.aiCostLight || 0,
       inputArgs,
       callerAuthState: caller.authState,

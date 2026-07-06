@@ -7,6 +7,7 @@ import { processHostingBilling } from '../services/hosting-billing.ts';
 import { runAutoHealing } from '../services/auto-healing.ts';
 import { processHeldPayouts } from '../services/payout-processor.ts';
 import { expireMarketplaceBids } from '../services/marketplace-maintenance.ts';
+import { sweepExpiredCallLogs } from '../services/call-log-store.ts';
 import { processNullEmbeddings } from '../services/embedding-processor.ts';
 import { processGpuBuilds } from '../services/gpu/benchmark.ts';
 import { runD1BillingCycle } from '../services/d1-billing.ts';
@@ -336,6 +337,9 @@ async function runHourlyJobs(): Promise<void> {
     processHostingBilling(),
     processHeldPayouts(),
     expireMarketplaceBids(),
+    // Call-log retention: delete run-log blobs older than 7 days and credit the
+    // bytes back to each owner's data-storage allowance.
+    sweepExpiredCallLogs(),
     // Backstop the account.updated webhook: re-pull live Connect status for
     // connected sellers whose snapshot has gone stale, so a "verified" badge
     // can't strand true after Stripe disables payouts with no fresh webhook.
@@ -356,7 +360,7 @@ async function runHourlyJobs(): Promise<void> {
 
   for (const [i, result] of results.entries()) {
     if (result.status === 'rejected') {
-      const names = ['hostingBilling', 'payoutProcessor', 'marketplaceBidExpiry', 'connectVerificationReconcile', 'executedBundleIntegrity'];
+      const names = ['hostingBilling', 'payoutProcessor', 'marketplaceBidExpiry', 'callLogRetentionSweep', 'connectVerificationReconcile', 'executedBundleIntegrity'];
       cronLogger.error('Hourly cron job failed', {
         job: names[i],
         error: result.reason,
