@@ -92,20 +92,15 @@ ENVIRONMENT = "production"
 # LIGHT_TRUST_SIGNING_SECRET) MUST be set, else every call fails closed. The
 # hourly cron self-check (assertTrustSecretResolvable) alarms until it resolves.
 EXECUTED_BUNDLE_VERIFY = "enforce"
-# Strip-the-sidecar defense — second-stage rollout (default OFF). When "1",
-# no_attestation also blocks under enforce, closing the "raw KV put of app.js
-# WITHOUT a metadata sidecar to dodge verification" path. NEW publishes always
-# attest (putLiveExecutedBundle is the sole live-key writer), so once the
-# backfill re-attests the pre-Phase-0 legacy cohort, any remaining no_attestation
-# can ONLY be a stripped sidecar. DO NOT flip this to "1" until the backfill
-# below has run and reported attested=0 on a subsequent pass — flipping first
-# hard-blocks every un-backfilled legacy app. Ordered rollout:
-#   1. set EXECUTED_BUNDLE_BACKFILL="1", deploy, wait for the hourly cron
-#   2. confirm [BUNDLE-BACKFILL] log shows a run whose attested count reaches 0
-#   3. unset EXECUTED_BUNDLE_BACKFILL, then set REQUIRE_ATTESTATION="1", deploy
-#      (in BOTH this [vars] block and [env.staging.vars] below, and run the
-#      backfill in staging too, so staging enforce matches prod)
-# EXECUTED_BUNDLE_REQUIRE_ATTESTATION = "1"
+# Strip-the-sidecar defense: no_attestation also blocks under enforce, closing
+# the "raw KV put of app.js WITHOUT a metadata sidecar to dodge verification"
+# path. NEW publishes always attest (putLiveExecutedBundle is the sole live-key
+# writer), so any no_attestation now can ONLY be a stripped sidecar or a bundle
+# written outside the publish path. ENABLED 2026-07-06: instead of the backfill
+# route, the pre-Phase-0 legacy cohort was deleted outright (pre-launch test
+# agents) and the two remaining fixture apps were verified attested via
+# gx.verify (executed_bundle_status=ok) before this flip.
+EXECUTED_BUNDLE_REQUIRE_ATTESTATION = "1"
 # One-shot backfill (default OFF). When "1", the hourly cron re-attests any
 # still-unattested live bundle (idempotent). Set "1", deploy, watch the
 # [BUNDLE-BACKFILL] log report attested=0, then unset and flip require-attestation.
@@ -203,6 +198,7 @@ ENVIRONMENT = "staging"
 # REQUIRE_ATTESTATION flip happens, mirror it here (and backfill staging) so
 # staging enforce matches prod and catches a stripped-sidecar regression.
 EXECUTED_BUNDLE_VERIFY = "enforce"
+EXECUTED_BUNDLE_REQUIRE_ATTESTATION = "1"
 CORS_ALLOWED_ORIGINS = "https://ultralight-api-staging.rgn4jz429m.workers.dev,https://staging.ultralight-launch-web.pages.dev,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5178,http://127.0.0.1:5178"
 GPU_SUPPORT_ENABLED = "false"
 # Routines are a deferred capability with no prod schema; staging has the full
