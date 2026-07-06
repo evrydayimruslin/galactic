@@ -209,7 +209,9 @@ import {
   buildAppTrustCard,
   buildVersionMetadataEntry,
   buildVersionTrustMetadata,
+  computeUploadSourceHash,
   generateGpuManifest,
+  getLatestVersionSourceHash,
   getManifestAllowedDestinations,
 } from "../services/trust.ts";
 import { resolveTrustSignals } from "../services/trust-signals.ts";
@@ -1752,152 +1754,6 @@ const PLATFORM_TOOLS: MCPTool[] = [
   },
 
   // ── 3. ul.routine ──────────────────────────
-  {
-    name: "ul.routine",
-    description:
-      "Create and manage persistent cloud routines from MCP-published templates. " +
-      'Use action="templates" to discover routine templates, "plan" to preview schedule/config/capabilities, ' +
-      '"create" to save a user-owned routine, "list"/"get"/"update"/"pause"/"resume"/"delete" to manage it, and "run_now" to queue a manual run.',
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: [
-            "templates",
-            "plan",
-            "create",
-            "list",
-            "get",
-            "update",
-            "pause",
-            "resume",
-            "delete",
-            "run_now",
-          ],
-          description: "Routine operation.",
-        },
-        app_id: {
-          type: "string",
-          description:
-            "Composer app ID or slug. Required when template_id is ambiguous; optional for templates search.",
-        },
-        template_id: {
-          type: "string",
-          description:
-            "Routine template ID, appSlug/templateId, or appId/templateId. Required for plan/create.",
-        },
-        routine_id: {
-          type: "string",
-          description:
-            "Routine instance ID. Required for get/update/pause/resume/delete/run_now.",
-        },
-        query: {
-          type: "string",
-          description:
-            "Search routine templates by app, label, description, or capability.",
-        },
-        name: { type: "string", description: "Routine instance name." },
-        description: {
-          type: "string",
-          description: "Routine instance description.",
-        },
-        intent: {
-          type: "string",
-          description: "Natural-language business outcome this routine owns.",
-        },
-        schedule: {
-          description:
-            "Cron string or interval object, e.g. { every_minutes: 5 }. For plan/create/update.",
-        },
-        config: {
-          type: "object",
-          description:
-            "Routine configuration arguments merged over template defaults.",
-          additionalProperties: true,
-        },
-        budget_policy: {
-          type: "object",
-          description:
-            "Credits budget policy, e.g. { max_light_per_run, max_light_per_day, max_calls_per_run }.",
-          additionalProperties: true,
-        },
-        approval_policy: {
-          type: "object",
-          description:
-            "Approval guardrails for side effects and paid capabilities.",
-          additionalProperties: true,
-        },
-        capabilities: {
-          type: "array",
-          description:
-            "Optional full capability override. Each item supports app_ref/app, function_name/functions, access, required, purpose.",
-          items: { type: "object", additionalProperties: true },
-        },
-        extra_capabilities: {
-          type: "array",
-          description:
-            "Additional approved/downstream capabilities beyond the template default.",
-          items: { type: "object", additionalProperties: true },
-        },
-        approve_capabilities: {
-          type: "boolean",
-          description:
-            "Set true after user approval to mark requested routine capabilities approved for durable execution.",
-        },
-        dashboard_bindings: {
-          type: "array",
-          description:
-            "Optional Command dashboard widget/card bindings for this routine.",
-          items: { type: "object", additionalProperties: true },
-        },
-        activate: {
-          type: "boolean",
-          description:
-            "For create: resume immediately after creation. Requires approve_capabilities=true when capabilities exist.",
-        },
-        status: {
-          type: "string",
-          enum: ["active", "paused", "disabled", "deleted", "error"],
-          description: "Filter list or set status during update.",
-        },
-        next_run_at: {
-          type: "string",
-          description: "ISO timestamp for the next scheduled run.",
-        },
-        max_concurrency: {
-          type: "number",
-          description: "Maximum concurrent runs for this routine.",
-        },
-        run_config: {
-          type: "object",
-          description: "Manual run override config for run_now.",
-          additionalProperties: true,
-        },
-        metadata: {
-          type: "object",
-          description: "Routine or run metadata.",
-          additionalProperties: true,
-        },
-        trace_id: {
-          type: "string",
-          description: "Trace ID to attach to created routine or queued run.",
-        },
-        limit: {
-          type: "number",
-          description: "Max templates/routines to return.",
-        },
-      },
-      required: ["action"],
-    },
-  },
-
   // ul.download migrated to the capability registry
   // (api/services/capabilities/registry.ts, handler bound from this module).
 
@@ -2131,41 +1987,6 @@ const PLATFORM_TOOLS: MCPTool[] = [
   },
 
   // ── ul.emit (publish a cross-Agent event) ──────────────────────────
-  {
-    name: "ul.emit",
-    description: "Publish an event as one of your own Agents. " +
-      "Every Agent the user wired a matching subscribe grant for (caller=this Agent, topic) " +
-      "has its handler invoked, async, billed to the user and capped by each subscribe grant. " +
-      "Emitting is unprivileged; only wired subscribers receive it. " +
-      "Useful for manually triggering a reactive workflow or testing a subscription. " +
-      "You may only emit as an Agent you OWN.",
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        app_id: {
-          type: "string",
-          description: "The emitting Agent (ID or slug). Must be one you own.",
-        },
-        topic: {
-          type: "string",
-          description: "Event topic (for example \"sale.created\").",
-        },
-        payload: {
-          type: "object",
-          description: "Event payload delivered to each subscriber's handler.",
-          additionalProperties: true,
-        },
-      },
-      required: ["app_id", "topic"],
-    },
-  },
-
   // ul.secrets (+ ul.connect/ul.connections aliases) migrated to the capability
   // registry (id "secrets", advertised gx.secrets; handler bound from this
   // module). List-only now — entering secret values is website-only.
@@ -3257,6 +3078,14 @@ bindCapabilityHandler("codemode", (args, ctx) =>
     ctx.user as UserContext,
   ));
 
+// Autonomous execution: routines (scheduled) + emit (pub/sub). Both keep their
+// executors in this module and throw ToolError natively, so runCapabilityForMcp
+// passes their errors through unchanged.
+bindCapabilityHandler("routine", (args, ctx) =>
+  executeRoutinePlatformAction(ctx.userId, args));
+
+bindCapabilityHandler("emit", (args, ctx) => executeEmit(ctx.userId, args));
+
 function stripGpuFromTool(tool: MCPTool): MCPTool {
   const cloned = JSON.parse(JSON.stringify(tool)) as MCPTool;
   const properties = cloned.inputSchema?.properties as
@@ -3391,7 +3220,7 @@ function stripGpuPlatformDocs(docs: string): string {
     )
     .replace(
       '- Without `app_id`: scaffold a new app. Default runtime generates index.ts + manifest.json + .ultralightrc.json. With `runtime: "gpu"`, generates `ultralight.gpu.yaml`, `main.py`, `requirements.txt`, and `test_fixture.json`. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts, `gpu_type`, `base: "python-cuda" | "torch-cuda"`.\n',
-      "- Without `app_id`: scaffold a new app. The enabled runtime generates index.ts + manifest.json + .ultralightrc.json. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts.\n",
+      "- Without `app_id`: scaffold a new app. The enabled runtime generates index.ts + manifest.json + .ultralightrc.json. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts, `interface: true` for a working interfaces/main.html (agent UI) with the call bridge pre-wired.\n",
     )
     .replace(
       "- GPU apps are validation-only in `gx.test`: it checks `ultralight.gpu.yaml`, `main.py`, `test_fixture.json`, pinned requirements, and rejects Dockerfiles. Actual Python/GPU execution happens after upload/build/benchmark.\n",
@@ -4852,9 +4681,8 @@ async function handleToolsCall(
       }
 
       // ── 3. ul.routine ──────────────
-      case "ul.routine":
-        result = await executeRoutinePlatformAction(userId, toolArgs);
-        break;
+      // ul.routine migrated to the capability registry (id "routine",
+      // advertised gx.routine; handler bound from this module).
 
       // ── 4. ul.download (+ scaffold when no app_id) ──────────────
       // ul.download dispatched via the capability registry pre-check above.
@@ -4950,10 +4778,8 @@ async function handleToolsCall(
       // ul.permit dispatched via the capability registry pre-check above.
 
       // ── ul.emit (publish a cross-Agent event) ──────────────
-      case "ul.emit": {
-        result = await executeEmit(userId, toolArgs);
-        break;
-      }
+      // ul.emit migrated to the capability registry (id "emit", advertised
+      // gx.emit; handler bound from this module).
 
       // ── 8. ul.logs (+ health) ──────────────
       case "ul.logs": {
@@ -6483,6 +6309,40 @@ async function executeUpload(
     }
 
     // ── Deno existing app version — uses shared pipeline ──
+    // Dedup: if the raw uploaded file-set is byte-identical to the live version
+    // — and the caller isn't forcing a version or changing visibility — skip the
+    // version bump + rebundle entirely, so a redeploy loop can't spam versions.
+    const uploadSourceHash = await computeUploadSourceHash(
+      uploadFiles.map((f) => ({ path: f.name, content: f.content })),
+    );
+    const liveSourceHash = getLatestVersionSourceHash(app);
+    const visibilityUnchanged = !args.visibility ||
+      args.visibility === app.visibility;
+    if (
+      liveSourceHash && liveSourceHash === uploadSourceHash &&
+      !args.version && visibilityUnchanged
+    ) {
+      // Matching hashes are NOT enough: the deploy writes the DB row (which
+      // carries source_hash + current_version) BEFORE the live KV bundle. If
+      // that KV write failed, the natural repair is re-uploading the identical
+      // files — deduping here would no-op the repair and strand the app on a
+      // stale bundle forever. So only dedup when the LIVE bundle's attestation
+      // proves it actually serves current_version; anything else (missing
+      // bundle, legacy no-attestation, version skew) falls through and deploys.
+      const { attestation } = await loadLiveExecutedBundle(app.id);
+      if (attestation?.version === app.current_version) {
+        return {
+          deduplicated: true,
+          app_id: app.id,
+          slug: app.slug,
+          version: app.current_version,
+          is_live: true,
+          message:
+            "No changes — the uploaded files are byte-identical to the live version, so no new version was created.",
+        };
+      }
+    }
+
     const { processUploadPipeline, provisionAndMigrate } = await import(
       "../services/upload-pipeline.ts"
     );
@@ -6610,7 +6470,12 @@ async function executeUpload(
       versions,
       version_metadata: appendVersionTrustMetadata(
         app.version_metadata,
-        buildVersionMetadataEntry(newVersion, uploadedSizeBytes, versionTrust),
+        buildVersionMetadataEntry(
+          newVersion,
+          uploadedSizeBytes,
+          versionTrust,
+          uploadSourceHash,
+        ),
       ),
     };
     if (autoLive) {
@@ -8861,6 +8726,104 @@ function executeLint(args: Record<string, unknown>): unknown {
 
 // ── ul.scaffold ──────────────────────────────────────
 
+// A working agent-UI starter: the Galactic call bridge (verbatim from
+// ultralight-spec/conventions/interfaces.md) plus a minimal page that calls the
+// agent's first function and renders the result. The point is a page that RUNS
+// on first load, which the developer then edits — not boilerplate to transcribe.
+function buildScaffoldInterfaceHtml(
+  name: string,
+  description: string,
+  firstFn: string,
+): string {
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(name)}</title>
+<!-- Galactic interface bridge — do not edit. Exposes window.ul.call(fn, args)
+     (a Promise) and window.ul.resize(px). Verbatim from the interfaces spec. -->
+<script>
+(function () {
+  var port = null, queue = [], pending = {}, nextId = 1;
+  function flush() {
+    if (!port) return;
+    while (queue.length) {
+      var item = queue.shift(), id = nextId++;
+      pending[id] = item;
+      port.postMessage({ type: "call", id: id, functionName: item.fn, args: item.args || {} });
+    }
+  }
+  window.ul = {
+    context: null,
+    call: function (fn, args) {
+      return new Promise(function (resolve, reject) {
+        queue.push({ fn: fn, args: args, resolve: resolve, reject: reject });
+        flush();
+      });
+    },
+    resize: function (height) { if (port) port.postMessage({ type: "resize", height: height }); },
+  };
+  window.addEventListener("message", function (event) {
+    var d = event.data;
+    if (!d || d.type !== "ul-interface-connect" || !event.ports || !event.ports[0]) return;
+    port = event.ports[0];
+    window.ul.context = d.context;
+    port.onmessage = function (e) {
+      var m = e.data;
+      if (!m || m.type !== "result" || !(m.id in pending)) return;
+      var item = pending[m.id];
+      delete pending[m.id];
+      if (m.success) item.resolve(m.result);
+      else { var err = new Error((m.error && m.error.message) || "Call failed"); err.code = m.error && m.error.type; item.reject(err); }
+    };
+    flush();
+    document.dispatchEvent(new CustomEvent("ul-ready"));
+  });
+  parent.postMessage({ type: "ul-interface-hello" }, "*");
+})();
+</script>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 20px; color: #1c1c1c; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.sub { color: #777; font-size: 13px; margin: 0 0 16px; }
+  button { padding: 8px 14px; border: 1px solid #1c1c1c; border-radius: 8px; background: #1c1c1c; color: #fff; font-size: 13px; cursor: pointer; }
+  pre { background: #f5f5f5; border: 1px solid #e5e5e5; border-radius: 8px; padding: 12px; font-size: 12px; overflow: auto; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+  <h1>${esc(name)}</h1>
+  <p class="sub">${esc(description)}</p>
+  <button id="go">Call ${esc(firstFn)}()</button>
+  <pre id="out">Click the button to call your agent's <code>${esc(firstFn)}</code> function.</pre>
+<script>
+  // Your UI code. window.ul.call(functionName, args) returns a Promise with the
+  // function's result — call any function your agent exports.
+  function init() {
+    var out = document.getElementById("out");
+    document.getElementById("go").addEventListener("click", async function () {
+      out.textContent = "Calling…";
+      try {
+        var result = await window.ul.call(${JSON.stringify(firstFn)}, {});
+        out.textContent = JSON.stringify(result, null, 2);
+      } catch (err) {
+        out.textContent = "Error: " + err.message;
+      }
+      window.ul.resize(document.body.scrollHeight);
+    });
+    window.ul.resize(document.body.scrollHeight);
+  }
+  // ul-ready fires once the bridge is connected; if it already fired, run now.
+  if (window.ul && window.ul.context) init();
+  else document.addEventListener("ul-ready", init);
+</script>
+</body>
+</html>
+`;
+}
+
 export function executeScaffold(args: Record<string, unknown>): unknown {
   const name = args.name as string;
   const description = args.description as string;
@@ -8877,6 +8840,7 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
   const permissions = args.permissions as string[] | undefined;
   const runtime = (args.runtime as string) || "deno";
   const includePolicy = args.policy === true || args.access_policy === true;
+  const includeInterface = args.interface === true;
   const gpuType = (args.gpu_type as string) || "A40";
   const baseProfile = (args.base as string) ||
     (description.toLowerCase().includes("torch") ||
@@ -9119,6 +9083,17 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
     access_policy: includePolicy
       ? { mode: "module", module: "policy.ts", export: "planAccess" }
       : undefined,
+    interfaces: includeInterface
+      ? [{
+        id: "main",
+        label: name,
+        entry: "interfaces/main.html",
+        // Bridge allowlist — the only functions the UI page may call. Seeded
+        // with every scaffolded function so new buttons work without editing
+        // the manifest.
+        functions: funcs.map((f) => f.name),
+      }]
+      : undefined,
     permissions: detectedPerms.length > 0 ? detectedPerms : undefined,
     env_vars: storage === "supabase"
       ? {
@@ -9185,6 +9160,12 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
       : []),
     { path: "manifest.json", content: JSON.stringify(manifestObj, null, 2) },
     { path: ".ultralightrc.json", content: JSON.stringify(rcObj, null, 2) },
+    ...(includeInterface
+      ? [{
+        path: "interfaces/main.html",
+        content: buildScaffoldInterfaceHtml(name, description, funcs[0].name),
+      }]
+      : []),
   ];
 
   if (storage === "d1") {
@@ -9222,6 +9203,9 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
       "Replace the placeholder scaffoldResponse() logic in index.ts with real application behavior.",
       includePolicy
         ? "Edit policy.ts to customize function pricing, free quotas, denials, and policy metadata."
+        : null,
+      includeInterface
+        ? "Edit interfaces/main.html — it already runs and calls your first function via window.ul.call(fn, args). Reachable at /agents/<slug> after deploy."
         : null,
       'Run each function with gx.test({ files: [...], function_name: "...", test_args: {...} }).',
       "Run gx.test({ files: [...], lint_only: true }) before you upload.",

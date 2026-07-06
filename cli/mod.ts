@@ -64,6 +64,7 @@ const commands: Record<string, (args: string[], client: ApiClient, config: Confi
   verify: verifyCmd,
   discover,
   logs: logsCmd,
+  routine: routineCmd,
   health,
   config: configCmd,
   help,
@@ -182,6 +183,7 @@ ${colors.dim('USE')}
   ${colors.cyan('verify')} <app>       Verify integrity + open code before calling (gx.verify)
   ${colors.cyan('discover')} <query>   Search the App Store for MCP tools
   ${colors.cyan('logs')} <app>         View MCP call logs (gx.logs)
+  ${colors.cyan('routine')} <action>   Manage scheduled autonomous routines (gx.routine)
   ${colors.cyan('health')} [app]       View app health events (gx.health)
 
 ${colors.dim('OTHER')}
@@ -953,7 +955,11 @@ ${colors.dim('EXAMPLES')}
   }
 
   console.log();
-  console.log(colors.green(appId ? '✓ New version uploaded' : '✓ App created'));
+  if (result.deduplicated) {
+    console.log(colors.yellow('· No changes — identical to the live version (no new version created)'));
+  } else {
+    console.log(colors.green(appId ? '✓ New version uploaded' : '✓ App created'));
+  }
   if (result.app_id) console.log(`  ID:       ${result.app_id}`);
   if (result.slug) console.log(`  Slug:     ${result.slug}`);
   if (result.version) console.log(`  Version:  ${result.version}`);
@@ -2209,6 +2215,92 @@ ${colors.dim('EXAMPLES')}
 // ============================================
 // LOGS COMMAND — uses gx.logs
 // ============================================
+
+// ROUTINE COMMAND — scheduled autonomous runs (gx.routine)
+async function routineCmd(args: string[], client: ApiClient, _config: Config) {
+  const parsed = parseArgs(args, {
+    string: [
+      'app', 'routine', 'template', 'query', 'name', 'description',
+      'schedule', 'status', 'config', 'json',
+    ],
+    boolean: ['help', 'activate'],
+    alias: { h: 'help' },
+  });
+
+  const action = parsed._[0] as string | undefined;
+  if (parsed.help || !action) {
+    console.log(`
+${colors.bold('galactic routine')} <action> [options]
+
+Create and manage scheduled autonomous routines (gx.routine). A routine runs a
+published template on a cron/interval, sequencing galactic.ai() and app calls.
+
+${colors.dim('ACTIONS')}
+  templates                 Discover routine templates (use --query to search)
+  plan                      Preview a routine's schedule/config/capabilities
+  create                    Save a user-owned routine from a template
+  list                      List your routines (filter with --status)
+  get | pause | resume      Manage one routine (needs --routine <id>)
+  delete | run_now          Delete, or queue a manual run (needs --routine <id>)
+
+${colors.dim('OPTIONS')}
+  --template <id>           Routine template (plan/create)
+  --routine <id>            Routine instance id (get/update/pause/resume/delete/run_now)
+  --app <id>                Composer app id or slug
+  --query <text>            Search templates
+  --name <text>             Routine instance name (create/update)
+  --schedule <cron|json>    Cron string ("*/5 * * * *") or interval JSON ({"every_minutes":5})
+  --status <state>          Filter list, or set on update
+  --config <json>           Routine config args (JSON object)
+  --activate                On create: resume immediately after creating
+  --json <json>             Escape hatch: merge raw JSON args (for complex create/update)
+
+${colors.dim('EXAMPLES')}
+  galactic routine templates --query summarize
+  galactic routine list --status active
+  galactic routine create --template acme/daily-digest --schedule "0 9 * * *" --activate
+  galactic routine run_now --routine rt_abc123
+  galactic routine pause --routine rt_abc123
+`);
+    return;
+  }
+
+  const toolArgs: Record<string, unknown> = { action };
+  if (parsed.app) toolArgs.app_id = parsed.app;
+  if (parsed.routine) toolArgs.routine_id = parsed.routine;
+  if (parsed.template) toolArgs.template_id = parsed.template;
+  if (parsed.query) toolArgs.query = parsed.query;
+  if (parsed.name) toolArgs.name = parsed.name;
+  if (parsed.description) toolArgs.description = parsed.description;
+  if (parsed.status) toolArgs.status = parsed.status;
+  if (parsed.activate) toolArgs.activate = true;
+  if (parsed.schedule) {
+    // Cron string or interval object — accept either form.
+    const raw = String(parsed.schedule).trim();
+    try {
+      toolArgs.schedule = raw.startsWith('{') ? JSON.parse(raw) : raw;
+    } catch {
+      throw new Error('Invalid --schedule: pass a cron string or interval JSON like {"every_minutes":5}');
+    }
+  }
+  if (parsed.config) {
+    try {
+      toolArgs.config = JSON.parse(String(parsed.config));
+    } catch {
+      throw new Error('Invalid --config: must be a JSON object');
+    }
+  }
+  if (parsed.json) {
+    try {
+      Object.assign(toolArgs, JSON.parse(String(parsed.json)));
+    } catch {
+      throw new Error('Invalid --json: must be a JSON object');
+    }
+  }
+
+  const result = await client.callTool('gx.routine', toolArgs);
+  console.log(JSON.stringify(result, null, 2));
+}
 
 async function logsCmd(args: string[], client: ApiClient, _config: Config) {
   const parsed = parseArgs(args, {

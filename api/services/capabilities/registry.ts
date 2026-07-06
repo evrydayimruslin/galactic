@@ -165,6 +165,11 @@ const CAPABILITIES: Capability[] = [
           description:
             "When true, scaffold policy.ts plus manifest access_policy for programmable function pricing and denial logic.",
         },
+        interface: {
+          type: "boolean",
+          description:
+            "When true, scaffold a working interfaces/main.html (agent UI) with the call bridge pre-wired plus the manifest interfaces[] entry — a running page you then edit.",
+        },
       },
     },
     auth: {},
@@ -185,6 +190,8 @@ const CAPABILITIES: Capability[] = [
     title: "Deploy code or publish a page",
     description: "Deploy code or publish a markdown page. " +
       'type="app" (default): deploy source code. No app_id = new app, with app_id = new version. ' +
+      "Re-uploading files byte-identical to the live version is a no-op (returns " +
+      "deduplicated:true, no new version) unless you pass an explicit version. " +
       'type="page": publish markdown as a live web page.',
     annotations: {
       readOnlyHint: false,
@@ -788,6 +795,209 @@ const CAPABILITIES: Capability[] = [
     surfaces: ["mcp"],
     coreTool: false,
     handler: (args, ctx) => recordFlag(ctx.userId, ctx.provisional, args),
+  },
+  {
+    id: "routine",
+    branch: "agent_user",
+    tier: 1,
+    advertisedName: "gx.routine",
+    aliases: ["ul.routine"],
+    title: "Scheduled autonomous routines",
+    description:
+      "Create and manage persistent cloud routines from MCP-published templates. " +
+      'Use action="templates" to discover routine templates, "plan" to preview schedule/config/capabilities, ' +
+      '"create" to save a user-owned routine, "list"/"get"/"update"/"pause"/"resume"/"delete" to manage it, and "run_now" to queue a manual run.',
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: [
+            "templates",
+            "plan",
+            "create",
+            "list",
+            "get",
+            "update",
+            "pause",
+            "resume",
+            "delete",
+            "run_now",
+          ],
+          description: "Routine operation.",
+        },
+        app_id: {
+          type: "string",
+          description:
+            "Composer app ID or slug. Required when template_id is ambiguous; optional for templates search.",
+        },
+        template_id: {
+          type: "string",
+          description:
+            "Routine template ID, appSlug/templateId, or appId/templateId. Required for plan/create.",
+        },
+        routine_id: {
+          type: "string",
+          description:
+            "Routine instance ID. Required for get/update/pause/resume/delete/run_now.",
+        },
+        query: {
+          type: "string",
+          description:
+            "Search routine templates by app, label, description, or capability.",
+        },
+        name: { type: "string", description: "Routine instance name." },
+        description: {
+          type: "string",
+          description: "Routine instance description.",
+        },
+        intent: {
+          type: "string",
+          description: "Natural-language business outcome this routine owns.",
+        },
+        schedule: {
+          description:
+            "Cron string or interval object, e.g. { every_minutes: 5 }. For plan/create/update.",
+        },
+        config: {
+          type: "object",
+          description:
+            "Routine configuration arguments merged over template defaults.",
+          additionalProperties: true,
+        },
+        budget_policy: {
+          type: "object",
+          description:
+            "Credits budget policy, e.g. { max_light_per_run, max_light_per_day, max_calls_per_run }.",
+          additionalProperties: true,
+        },
+        approval_policy: {
+          type: "object",
+          description:
+            "Approval guardrails for side effects and paid capabilities.",
+          additionalProperties: true,
+        },
+        capabilities: {
+          type: "array",
+          description:
+            "Optional full capability override. Each item supports app_ref/app, function_name/functions, access, required, purpose.",
+          items: { type: "object", additionalProperties: true },
+        },
+        extra_capabilities: {
+          type: "array",
+          description:
+            "Additional approved/downstream capabilities beyond the template default.",
+          items: { type: "object", additionalProperties: true },
+        },
+        approve_capabilities: {
+          type: "boolean",
+          description:
+            "Set true after user approval to mark requested routine capabilities approved for durable execution.",
+        },
+        dashboard_bindings: {
+          type: "array",
+          description:
+            "Optional Command dashboard widget/card bindings for this routine.",
+          items: { type: "object", additionalProperties: true },
+        },
+        activate: {
+          type: "boolean",
+          description:
+            "For create: resume immediately after creation. Requires approve_capabilities=true when capabilities exist.",
+        },
+        status: {
+          type: "string",
+          enum: ["active", "paused", "disabled", "deleted", "error"],
+          description: "Filter list or set status during update.",
+        },
+        next_run_at: {
+          type: "string",
+          description: "ISO timestamp for the next scheduled run.",
+        },
+        max_concurrency: {
+          type: "number",
+          description: "Maximum concurrent runs for this routine.",
+        },
+        run_config: {
+          type: "object",
+          description: "Manual run override config for run_now.",
+          additionalProperties: true,
+        },
+        metadata: {
+          type: "object",
+          description: "Routine or run metadata.",
+          additionalProperties: true,
+        },
+        trace_id: {
+          type: "string",
+          description: "Trace ID to attach to created routine or queued run.",
+        },
+        limit: {
+          type: "number",
+          description: "Max templates/routines to return.",
+        },
+      },
+      required: ["action"],
+    },
+    auth: {},
+    // Autonomous scheduled/interval agent runs (the routine executor dispatches
+    // due ones every minute). Demoted — money/side-effecting, not in the lean
+    // tools/list. MCP + CLI: `galactic routine <action>` proxies this.
+    surfaces: ["mcp", "cli"],
+    coreTool: false,
+    cli: { command: "routine" },
+    // Handler bound at load from platform-mcp (executeRoutinePlatformAction).
+  },
+  {
+    id: "emit",
+    branch: "agent_user",
+    tier: 1,
+    advertisedName: "gx.emit",
+    aliases: ["ul.emit"],
+    title: "Publish a pub/sub event",
+    description: "Publish an event as one of your own Agents. " +
+      "Every Agent the user wired a matching subscribe grant for (caller=this Agent, topic) " +
+      "has its handler invoked, async, billed to the user and capped by each subscribe grant. " +
+      "Emitting is unprivileged; only wired subscribers receive it. " +
+      "Useful for manually triggering a reactive workflow or testing a subscription. " +
+      "You may only emit as an Agent you OWN.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        app_id: {
+          type: "string",
+          description: "The emitting Agent (ID or slug). Must be one you own.",
+        },
+        topic: {
+          type: "string",
+          description: "Event topic (for example \"sale.created\").",
+        },
+        payload: {
+          type: "object",
+          description: "Event payload delivered to each subscriber's handler.",
+          additionalProperties: true,
+        },
+      },
+      required: ["app_id", "topic"],
+    },
+    auth: {},
+    // Agent-native pub/sub trigger: emit as an owned agent; only wired
+    // subscribers receive it. MCP-only (not a human CLI/web action).
+    surfaces: ["mcp"],
+    coreTool: false,
+    // Handler bound at load from platform-mcp (executeEmit).
   },
 ];
 

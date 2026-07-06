@@ -56,6 +56,7 @@ export interface VersionMetadata {
     size_bytes: number;
     created_at: string;
     trust?: VersionTrustMetadata;
+    source_hash?: string;
 }
 export interface VersionTrustSignature {
     algorithm: "HMAC-SHA256";
