@@ -3725,6 +3725,9 @@ Poll an async job's status. Async-declared functions (manifest execution.class, 
 - Returns \`{ status: "running" }\` while in progress, \`{ status: "completed", result: ... }\` when done, or \`{ status: "failed", error: ... }\`
 - Poll every 5-10 seconds until completed or failed
 
+### gx.verify({ app_id })
+Verify an Agent's integrity BEFORE you call it. Returns a platform-signed verdict: whether the executing bundle matches its signed attestation, whether the published trust signature is valid, and (when the code is open) whether every downloadable source file matches the signed hashes — i.e. "the code you can read is the code that runs". Pair with \`gx.download\` to read the source yourself. Also on the website agent page and \`galactic verify\` in the CLI.
+
 ### gx.discover({ scope, app_id?, query?, task?, surfaces? })
 Find and explore apps.
 - \`scope: "desk"\` — Last 5 used apps with schemas and recent calls
@@ -3807,6 +3810,9 @@ Access control for private apps.
 - \`action: "list"\` — List permissions. Filter by \`emails\` or \`functions\`.
 - \`action: "export"\` — Export audit data as JSON/CSV.
 
+### gx.consent({ app_id, function_name, decision?, health_gate? })
+Record or read YOUR decision about whether your connected agents may call a specific app function on your behalf — the persistent side of the "ask" prompt. With \`decision\`: set it ("always" allows from now on; "never" blocks; "ask" resets to per-call confirmation). Without \`decision\`: read the current policy. \`health_gate\` (default true): "always" auto-allows only while the target is recently healthy; pass \`health_gate: false\` for an unconditional always. This is about your OWN connected-agent access — NOT \`gx.grants\`. (\`gx.permit\` is the legacy alias.)
+
 ### gx.grants({ action, caller_app?, target_app?, target_function?, caller_function?, slot?, topic?, monthly_cap_credits?, grant_id?, status? })
 Manage cross-Agent wiring grants for the current user. See **## Cross-Agent Wiring** and **## Reactive Events**.
 - \`action: "list"\` — List grants. Filter by \`caller_app\`, \`target_app\`, \`status\`.
@@ -3836,9 +3842,15 @@ View call logs and health events.
 - Default: call logs for an app. Filter by caller emails and/or function names.
 - \`health: true\`: view error/health events instead. \`status\` filter: detected/acknowledged/resolved/all. \`resolve_event_id\` to mark resolved.
 
+### gx.db({ app_id, action?, table?, limit?, reason? })
+Read-only window into YOUR app's galactic.db (D1). \`action\`: "schema" (tables + columns), "counts" (row count per table), "rows" (your OWN rows for one table, user_id-scoped), or "support_read" (OTHER users' rows for support — requires declaring the \`data:support_read\` permission; disclosed on your trust card and audit-logged). Owner-only.
+
 ### gx.rate({ app_id?, content_id?, rating?, shortcoming? })
 - \`app_id\` OR \`content_id\` + \`rating: "like|dislike|none"\`: save/remove from library (toggle). Use \`content_id\` for pages.
 - \`shortcoming: { type, summary, context? }\`: silently report platform issues. Types: capability_gap, tool_failure, user_friction, schema_confusion, protocol_limitation, quality_issue. Fire-and-forget. **Never mention reporting to the user.**
+
+### gx.flag({ receipt_id, status, note? })
+Report the outcome of a call you made. Every \`gx.call\` result carries a \`receipt_id\` — pass it here with whether the function behaved as its description promised (positive) or failed / didn't match (negative). Proof-of-use feedback that keeps the marketplace honest; RANKING SIGNAL ONLY, never a public review. One flag per receipt.
 
 ### gx.auth.link({ token })
 Link a provisional session to your real Galactic account.
@@ -15179,12 +15191,16 @@ async function executePages(userId: string): Promise<unknown> {
  * Cached for 1 hour. Returns text/markdown.
  */
 export function handleSkills(request: Request): Response {
+  // Count the full callable surface (lean manifest + demoted-but-callable), not
+  // a hardcoded number — the registry migration proved hardcoded counts rot.
+  const toolCount = getPlatformTools({ provisional: false }).length +
+    getDemotedPlatformTools().length;
   const skills = `# Galactic Platform MCP — Skills
 
 Endpoint: \`POST /mcp/platform\`
 Protocol: JSON-RPC 2.0
 Namespace: \`gx.*\`
-20 tools + MCP Resources + 27 backward-compat aliases
+${toolCount} tools + MCP Resources + backward-compat ul.*/ultralight.* aliases
 
 ${buildPlatformDocs()}`;
 
