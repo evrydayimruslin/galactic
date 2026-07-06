@@ -156,7 +156,8 @@ export interface RuntimeCloudHoldParams {
   idempotencyKey?: string | null;
   billingConfig?: Pick<
     BillingConfig,
-    "version" | "workerMsPerCloudUnit" | "cloudUnitLightPer1k"
+    | "version" | "workerMsPerCloudUnit" | "cloudUnitLightPer1k"
+    | "workerLoadLightPerInvocation"
   >;
   metadata?: Record<string, unknown>;
   // Free Mode: when true the hold refuses (raises free_mode_blocked) before any
@@ -185,7 +186,7 @@ export interface RuntimeCloudHoldSettlementParams {
   idempotencyKey?: string | null;
   billingConfig?: Pick<
     BillingConfig,
-    "workerMsPerCloudUnit" | "cloudUnitLightPer1k"
+    "workerMsPerCloudUnit" | "cloudUnitLightPer1k" | "workerLoadLightPerInvocation"
   >;
   metadata?: Record<string, unknown>;
 }
@@ -503,10 +504,14 @@ export async function createRuntimeCloudHold(
     params.timeoutMs,
     config.workerMsPerCloudUnit,
   );
+  // Fixed per-load floor (recovers Cloudflare's Dynamic Worker per-load fee, which
+  // the duration meter structurally cannot). Added to the RESERVED amount so the
+  // existing infra cascade (owner-sponsor → caller → block) routes it exactly like
+  // the duration cost — no new branching. Default 0 = behavior-preserving.
   const expectedAmountLight = calculateCloudUsageLight(
     expectedCloudUnits,
     config.cloudUnitLightPer1k,
-  );
+  ) + (config.workerLoadLightPerInvocation ?? 0);
 
   const row = await callCloudUsageRpcRow("create_app_call_runtime_cloud_hold", {
     p_caller_user_id: params.callerUserId,
@@ -613,10 +618,13 @@ export async function settleRuntimeCloudHold(
     params.durationMs,
     config.workerMsPerCloudUnit,
   );
+  // The per-load floor is a FIXED cost — it must survive the duration true-down,
+  // so add it to the settled amount too (matching the hold). Uses the same pinned
+  // billing-config version as the hold, so the floor is identical on both sides.
   const amountLight = calculateCloudUsageLight(
     cloudUnits,
     config.cloudUnitLightPer1k,
-  );
+  ) + (config.workerLoadLightPerInvocation ?? 0);
   const settlement = await settleCloudUsageHold({
     holdId: params.holdId,
     units,

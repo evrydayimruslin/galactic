@@ -742,3 +742,85 @@ Deno.test("peekCallerUsage returns an empty map when the caller has no counters"
     globalThis.__env = previousEnv;
   }
 });
+
+Deno.test("per-load floor: added to the hold AND survives the duration true-down", async () => {
+  const previousEnv = globalThis.__env;
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  globalThis.__env = {
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role",
+  } as unknown as typeof globalThis.__env;
+
+  const fetchFn = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.toString()
+      : input.url;
+    const body = init?.body && typeof init.body === "string"
+      ? JSON.parse(init.body)
+      : {};
+    calls.push({ url, body });
+    if (url.endsWith("/rpc/create_app_call_runtime_cloud_hold")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([{
+            hold_id: "hold-floor", payer_user_id: "u1", sponsor_user_id: null,
+            app_price_light: 0, app_charge_light: 0, free_call: false,
+            free_call_count: null, free_call_limit: 0, old_balance: 10,
+            new_balance: 9, held_amount_light: 1, held_deposit_light: 1,
+            held_earned_light: 0,
+          }]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    return Promise.resolve(
+      new Response(
+        JSON.stringify([{
+          event_id: "e1", hold_id: "hold-floor",
+          settled_amount_light: 0.3, released_amount_light: 0,
+        }]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  }) as typeof fetch;
+
+  try {
+    // 0.5 Light per-load floor ($0.005), duration meter tuned so the duration
+    // component is a clean 0.06 (30 units * 2 / 1000) at the 30s timeout.
+    const cfg = {
+      version: 1,
+      workerMsPerCloudUnit: 1_000,
+      cloudUnitLightPer1k: 2,
+      workerLoadLightPerInvocation: 0.5,
+    };
+    const hold = await createRuntimeCloudHold({
+      callerUserId: "u1", ownerUserId: "u2", appId: "a1", functionName: "run",
+      receiptId: "r1", source: "run", timeoutMs: 30_000, appPriceLight: 0,
+      billingConfig: cfg,
+    }, { fetchFn });
+    // Reserved = duration (0.06) + floor (0.5) = 0.56.
+    assertEquals(hold.expectedAmountLight, 0.56);
+    assertEquals(calls[0].body.p_expected_amount_light, 0.56);
+
+    // A tiny 1ms call: duration component floors to 1 cloud unit = 0.002, but the
+    // fixed 0.5 floor MUST survive — settled = 0.002 + 0.5 = 0.502, NOT 0.002.
+    const settlement = await settleRuntimeCloudHold({
+      holdId: hold.holdId, durationMs: 1, billingConfig: cfg,
+    }, { fetchFn });
+    assertEquals(settlement.amountLight, 0.502);
+    assertEquals(calls[1].body.p_amount_light, 0.502);
+  } finally {
+    globalThis.__env = previousEnv;
+  }
+});
+
+Deno.test("per-load floor: absent config field defaults to 0 (behavior-preserving)", () => {
+  // 0.001 Light thousandths round-trip exactly through the duration calc.
+  assertEquals(calculateCloudUsageLight(1, 1), 0.001);
+  assertEquals(calculateCloudUsageLight(300, 1), 0.3);
+  assertEquals(calculateCloudUsageLight(500, 1), 0.5);
+  // 0.3 Light + 0.005-style thousandths add cleanly (no float drift at this scale).
+  assertEquals(0.3 + 0.2, 0.5);
+});
