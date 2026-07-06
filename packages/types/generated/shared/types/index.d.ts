@@ -895,13 +895,19 @@ export declare const WORKER_MS_PER_CLOUD_UNIT = 250;
  * Fixed Light charged per sandbox execution to recover Cloudflare's Dynamic
  * Worker (Worker Loader) per-load fee (~$0.002 = ~0.2 Light after the 1,000
  * free loads/month). The duration meter above is CPU-ms-shaped and cannot
- * recover a fixed per-invocation cost. Default 0 = OFF (behavior-preserving)
- * until the Cloudflare Worker Loader charge is confirmed real (a dispute is
- * open) and the load()→get() reuse work lands. Set ~0.25 (=$0.0025) live to
- * cover the load with margin; it rides the existing infra hold cascade
- * (owner-sponsor → caller → block), so free-call sponsorship applies unchanged.
+ * recover a fixed per-invocation cost.
+ *
+ * LIVE at 0.5 Light (=$0.005): Cloudflare confirmed Dynamic Workers is a GA
+ * PAID product (a deploy without the paid plan fails with code 10195), so the
+ * per-load fee is real, recurring, and mandatory. 0.5 is exactly
+ * float-representable and covers the ~$0.002 load with margin. Rides the
+ * existing infra hold cascade (owner-sponsor → caller → block), so free-call
+ * sponsorship is unchanged. (load()→get() warm reuse — which would make this
+ * near-pure margin by cutting the real cost to ~1 load/(agent,user)/day — is
+ * deferred: it needs a billing-context rearchitecture so warm-reused bindings
+ * don't misattribute AI spend / cloud metering. See PR #67 review + memory.)
  */
-export declare const WORKER_LOAD_LIGHT_PER_INVOCATION = 0;
+export declare const WORKER_LOAD_LIGHT_PER_INVOCATION = 0.5;
 /** D1 read granularity: one cloud unit per started row group. */
 export declare const D1_READ_ROWS_PER_CLOUD_UNIT = 100;
 /** D1 write granularity: one cloud unit per row written. */
