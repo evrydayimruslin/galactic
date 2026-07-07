@@ -1,0 +1,36 @@
+{
+  "name": "Get Reuse Isolation Probe",
+  "version": "1.0.0",
+  "type": "mcp",
+  "description": "Test fixture for scripts/smoke/get-reuse-isolation-smoke.mjs: probes the Worker Loader get() warm-isolate reuse invariants (warm-reuse detection, per-call body correctness, cross-user data isolation, direct-binding fail-closed) against a live staging deployment with EXECUTED_LOADER_GET_REUSE=1. Reuse-eligible (storage only, no cross-Agent calls). Stays private; never goes live.",
+  "entry": { "functions": "index.ts" },
+  "permissions": ["storage:read", "storage:write"],
+  "functions": {
+    "reuseProbe": {
+      "description": "Returns { callCount, warm } from a module-level counter. warm=true on a warm-reused isolate (loader.get); always callCount=1 under loader.load.",
+      "returns": { "type": "object", "description": "{ callCount, warm }" }
+    },
+    "echo": {
+      "description": "Returns { value } echoing the per-call arg — proves body-borne args are correct even on a warm isolate.",
+      "parameters": {
+        "value": { "type": "string", "description": "Arbitrary value to echo back.", "required": false }
+      },
+      "returns": { "type": "object", "description": "{ value }" }
+    },
+    "storeMine": {
+      "description": "Stores a per-user value under a fixed key via galactic.store (userId-scoped host-side).",
+      "parameters": {
+        "value": { "type": "string", "description": "Value to store for the calling user.", "required": false }
+      },
+      "returns": { "type": "object", "description": "{ ok }" }
+    },
+    "readMine": {
+      "description": "Reads back the calling user's stored value. Must return null for a user who never stored (cross-user isolation).",
+      "returns": { "type": "object", "description": "{ value }" }
+    },
+    "directBypass": {
+      "description": "Attempts a raw RPC binding call WITHOUT the per-call context handle. Must be refused (fail closed) on a reusable isolate.",
+      "returns": { "type": "object", "description": "{ refused, error? }" }
+    }
+  }
+}

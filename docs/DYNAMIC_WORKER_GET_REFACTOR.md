@@ -121,11 +121,37 @@ call-frame arguments.
     wave3 mock also gained `aiCostLight` + the `Available:` fn list.
   - *`__proto__`-in-args (low):* NOT a regression — the new body-`JSON.parse`
     path prevents the prototype-pollution the old baked-object-literal allowed.
-- **Stage 4 — staging isolation smoke + adversarial review = PROD GATE.** Extend
-  `scripts/smoke/sandbox-isolation-smoke.ts` (flag ON): (i) concurrent two-user
-  cross-billing probe, (ii) stale/replayed-handle probe, (iii) tenant-isolation
-  regression (userId-in-key still scopes D1/DATA/MEMORY). Adversarial review. Only
-  then flip the prod flag (mirroring DATA_TENANT_ENFORCE / free-mode discipline).
+- **Stage 4 — staging isolation smoke + adversarial review = PROD GATE. ⏳ ARTIFACTS READY; live run + flip are owner steps.**
+  Two layers:
+  - *Deterministic (runs in CI now):* `dynamic-sandbox-get-reuse.test.ts` gained a
+    CONCURRENT two-user test — 12×2 interleaved executions across two users with a
+    cache-by-id loader, asserting exactly TWO cached isolates (never one shared
+    across users) and that the execution-context registry returns to baseline (no
+    stranded handle). Together with the reuse-key isolation invariants and the
+    `assertExecutionContext` fail-closed unit tests, the isolation LOGIC is
+    covered without a live deploy.
+  - *Live staging (owner-run):* `scripts/smoke/get-reuse-isolation-smoke.mjs` +
+    the private probe fixture `scripts/smoke/fixtures/get-reuse-probe`. Four gates
+    against staging (flag ON): (economic) warm reuse is actually observed
+    (`reuseProbe` module counter persists); (security) per-call body args are
+    correct on a warm isolate (`echo`), user B cannot read user A's data
+    (`storeMine`/`readMine`), and a handle-less direct-binding call is refused
+    (`directBypass`). A security-gate failure BLOCKS the prod flip; an economic
+    failure means the flip is safe but yields no savings (investigate).
+
+  **RUNBOOK (owner):**
+  1. Merge this branch to `main` → staging auto-deploys with the flag ON
+     (`[env.staging.vars]`), prod stays OFF (`[vars]` comment).
+  2. Deploy the probe fixture PRIVATE to staging (two staging users A & B); note
+     its app id.
+  3. `ULTRALIGHT_API_URL=… PROBE_APP_ID=… USER_A_TOKEN=… USER_B_TOKEN=… node
+     scripts/smoke/get-reuse-isolation-smoke.mjs` → all gates green.
+  4. Soak staging (watch for isolation/billing anomalies; confirm reuse rate in
+     the economic gate).
+  5. Final adversarial review, then uncomment `EXECUTED_LOADER_GET_REUSE = "1"`
+     in `[vars]` and cut a `v*` tag (same discipline as `DATA_TENANT_ENFORCE` /
+     Free Mode). Then flip the per-load floor `0 → 0.5` Light + per-(agent,user,
+     day) gate.
 
 ## Per-binding change list (as SHIPPED)
 Props are KEPT on every binding as the legacy no-handle fallback (see Stage 2

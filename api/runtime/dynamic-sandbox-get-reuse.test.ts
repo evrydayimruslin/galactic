@@ -13,6 +13,10 @@ import {
   deriveIsolateReuseKey,
   executeInDynamicSandbox,
 } from "./dynamic-sandbox.ts";
+import {
+  _executionContextRegistrySize,
+  resolveExecutionContext,
+} from "../services/execution-context-registry.ts";
 import type { RuntimeConfig } from "./sandbox.ts";
 
 const BUNDLE_CODE = "export const noop = 1;";
@@ -26,6 +30,12 @@ interface Captured {
   modules: Record<string, string>;
   requestBodies: unknown[];
   bindingProps: Record<string, unknown>;
+  // Per-fetch: the function requested + the aiExecutionId that the body's
+  // execCtxHandle RESOLVES to in the real parent-side registry. This is the
+  // actual cross-execution isolation signal — a handle must resolve to its OWN
+  // execution's context, never a concurrent sibling's (we encode the user in
+  // the executionId so a cross-USER bleed is directly detectable).
+  contexts: Array<{ fn: unknown; execId: string | null }>;
 }
 
 function installHarness(): { captured: Captured; restore: () => void } {
@@ -37,6 +47,7 @@ function installHarness(): { captured: Captured; restore: () => void } {
     modules: {},
     requestBodies: [],
     bindingProps: {},
+    contexts: [],
   };
 
   const prevEnv = globalThis.__env;
@@ -44,11 +55,25 @@ function installHarness(): { captured: Captured; restore: () => void } {
   const prevAgentSecret = Deno.env.get("AGENT_CALLER_SECRET");
   Deno.env.set("AGENT_CALLER_SECRET", "test-agent-caller-secret");
 
+  // Resolve the body's handle against the REAL registry (as a binding would) and
+  // record which user's context it points at. Called inside each fetch, while
+  // the execution is still live (before its finally deregisters the handle).
+  // deno-lint-ignore no-explicit-any
+  const recordContext = (body: any) => {
+    const rc = resolveExecutionContext(body?.execCtxHandle);
+    captured.contexts.push({
+      fn: body?.functionName,
+      execId: rc?.aiExecutionId ?? null,
+    });
+  };
+
   const entrypointFor = () => ({
     getEntrypoint() {
       return {
         fetch: async (request: Request) => {
-          captured.requestBodies.push(await request.json().catch(() => null));
+          const body = await request.json().catch(() => null);
+          captured.requestBodies.push(body);
+          recordContext(body);
           return new Response(
             JSON.stringify({
               success: true,
@@ -93,9 +118,9 @@ function installHarness(): { captured: Captured; restore: () => void } {
               const cfg = self.cache.get(id);
               // Frozen content from the FIRST load for this id.
               captured.modules = cfg?.modules ?? {};
-              captured.requestBodies.push(
-                await request.json().catch(() => null),
-              );
+              const body = await request.json().catch(() => null);
+              captured.requestBodies.push(body);
+              recordContext(body);
               return new Response(
                 JSON.stringify({
                   success: true,
@@ -390,6 +415,80 @@ Deno.test("get reuse: WARM HIT — callback runs once (frozen isolate); per-call
     };
     assertEquals(secondBody.functionName, "warmFn");
     assertEquals(secondBody.args, [{ n: 2 }]);
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("get reuse: CONCURRENT two-user load — no execution resolves another user's context + no isolate sharing + no handle leak", async () => {
+  const harness = installHarness();
+  try {
+    const before = _executionContextRegistrySize();
+
+    // Per-user configs whose executionId ENCODES the user, so a cross-user
+    // context bleed is directly observable when the body's handle is resolved.
+    const cfgA = () => {
+      const c = baseConfig();
+      c.executionId = "exec_user_a";
+      return c;
+    };
+    const cfgB = () => {
+      const c = baseConfig();
+      c.userId = "user_b";
+      c.executionId = "exec_user_b";
+      // deno-lint-ignore no-explicit-any
+      (c as any).user = {
+        id: "user_b",
+        email: "b@test.dev",
+        displayName: null,
+        tier: "free",
+      };
+      return c;
+    };
+
+    // Interleave many concurrent executions of the SAME app across TWO users.
+    // A warm isolate serving concurrent requests shares globalThis, so this is
+    // the shape that would expose a cross-user leak or a stranded handle.
+    const runs: Promise<{ success: boolean }>[] = [];
+    for (let i = 0; i < 12; i++) {
+      runs.push(executeInDynamicSandbox(cfgA(), `a${i}`, [i]));
+      runs.push(executeInDynamicSandbox(cfgB(), `b${i}`, [i]));
+    }
+    const results = await Promise.all(runs);
+    assert(results.every((r) => r.success), "all concurrent executions succeed");
+
+    // THE ISOLATION GUARANTEE: every execution's body handle resolved to ITS
+    // OWN user's context — an 'a*' function NEVER saw exec_user_b and vice
+    // versa. This asserts the resolved billing/identity context, not just the
+    // loader id, so it would catch a cross-user handle bleed even if the ids
+    // happened to collide.
+    assertEquals(harness.captured.contexts.length, 24);
+    for (const { fn, execId } of harness.captured.contexts) {
+      const expected = String(fn).startsWith("a")
+        ? "exec_user_a"
+        : "exec_user_b";
+      assertEquals(
+        execId,
+        expected,
+        `execution ${fn} resolved context ${execId}, expected ${expected} ` +
+          `(cross-user context bleed)`,
+      );
+    }
+
+    // The reuse id pins userId, so exactly TWO distinct isolates are ever
+    // requested (one per user) — never a cross-user shared one.
+    const uniqueIds = new Set(harness.captured.getIds);
+    assertEquals(uniqueIds.size, 2, "exactly two cached isolates (one per user)");
+    assertEquals(harness.captured.getCalls, 24);
+
+    // Every registered per-call context deregistered in its finally — no handle
+    // stranded under concurrency (a leak would grow the parent-side registry
+    // unboundedly and, worse, keep a settled context resolvable).
+    assertEquals(
+      _executionContextRegistrySize(),
+      before,
+      "execution-context registry leaked a handle under concurrency",
+    );
   } finally {
     harness.restore();
   }
