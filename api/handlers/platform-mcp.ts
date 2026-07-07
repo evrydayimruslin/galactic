@@ -3631,6 +3631,7 @@ Persistent cloud routines for ongoing delegated work.
 - \`action: "list"\` / \`"get"\` / \`"update"\` — Inspect and edit routine instances.
 - \`action: "pause"\` / \`"resume"\` / \`"delete"\` — Control ongoing work.
 - \`action: "run_now"\` — Queue a manual run. Durable execution is claimed by the backend routine executor.
+- **Handler contract:** each run invokes the routine's \`handler_function\` with the routine's \`config\` (merged with the run's \`run_config\`) plus a reserved \`_routine\` object: \`{ routine_id, routine_run_id, trace_id, trigger: "scheduled" | "manual", attempt, scheduled_at, intent }\`. \`intent\` is the routine's natural-language goal — write the standing directive there and have the handler read \`args._routine.intent\` on every wake. \`args._routine\` being present is how code knows it was woken by a routine rather than called by a user. Handlers must complete synchronously.
 
 ### gx.upload({ files, name?, description?, visibility?, app_id?, type? })
 Deploy TypeScript/Python app or publish markdown page.

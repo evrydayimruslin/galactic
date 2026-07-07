@@ -636,6 +636,9 @@ function buildRoutineArgs(
       trigger: run.trigger,
       attempt: run.attempt_count,
       scheduled_at: run.created_at,
+      // The routine's natural-language goal. Lives inside the reserved
+      // _routine namespace so it can never collide with a config key.
+      intent: routine.intent ?? null,
     },
   };
 }
