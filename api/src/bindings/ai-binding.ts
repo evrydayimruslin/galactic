@@ -5,6 +5,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { CHAT_MIN_BALANCE_LIGHT, checkChatBalance, deductChatCost } from '../../services/chat-billing.ts';
 import { recordAiSpend } from '../../services/ai-spend-tracker.ts';
+import { resolveExecutionContext } from '../../services/execution-context-registry.ts';
 import { resolvePlatformInferenceModel } from '../../services/platform-inference-models.ts';
 
 // ============================================
@@ -42,6 +43,11 @@ interface AIBindingProps {
   // balance. BYOK routes set this false.
   shouldRequireBalance: boolean;
   unavailableReason?: string | null;
+  // Set for bindings loaded into a REUSABLE isolate (loader.get): call() then
+  // refuses inference without a resolvable per-call context handle, so a
+  // direct-binding bypass can never record spend against the stale frozen
+  // props.executionId.
+  requireExecCtx?: boolean;
 }
 
 type ContentPart = { type: 'text'; text: string }
@@ -99,7 +105,7 @@ function translateParts(parts: ContentPart[]): unknown[] {
 
 export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
 
-  async call(request: AIRequest) {
+  async call(request: AIRequest, execCtxHandle?: string) {
     const {
       apiKey,
       provider,
@@ -113,9 +119,39 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       shouldDebitLight,
       shouldRequireBalance,
       userId,
-      executionId,
+      executionId: propExecutionId,
       unavailableReason,
     } = this.ctx.props;
+
+    // The execution id the spend ledger is keyed by. Under warm-isolate reuse
+    // (loader.get) the isolate's env bindings are FROZEN at first load, so
+    // props.executionId would be STALE (call 1's id) on every later call —
+    // recording spend under an already-settled id = FREE INFERENCE. So when a
+    // per-call handle is threaded — or the binding was loaded into a reusable
+    // isolate (props.requireExecCtx, which also catches a direct-binding
+    // bypass that omits the handle entirely) — trust ONLY the parent-side
+    // registry: an unresolvable handle (execution already deregistered, or a
+    // forgery) REFUSES the call rather than charging a stale hold.
+    // props.executionId is used only on the legacy no-handle fresh-load path
+    // (where they agree). A resolved context whose aiExecutionId is null is
+    // legitimate (a run with no spend id) — only an unresolvable HANDLE fails
+    // closed.
+    let executionId: string | null;
+    if (execCtxHandle !== undefined || this.ctx.props.requireExecCtx) {
+      const resolvedCtx = resolveExecutionContext(execCtxHandle);
+      if (!resolvedCtx) {
+        return {
+          content: '',
+          model: request.model || defaultModel || 'none',
+          usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
+          error:
+            'AI execution context could not be resolved; inference refused.',
+        };
+      }
+      executionId = resolvedCtx.aiExecutionId;
+    } else {
+      executionId = propExecutionId;
+    }
 
     if (!apiKey || !provider || !baseUrl) {
       return {

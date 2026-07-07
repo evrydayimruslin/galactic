@@ -2,6 +2,10 @@
 // Wraps user memory (Memory.md) read/write behind a WorkerEntrypoint.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import {
+  assertExecutionContext,
+  resolveExecutionContext,
+} from "../../services/execution-context-registry.ts";
 import type { BillingConfig } from "../../services/billing-config.ts";
 import {
   type CloudOperationMeteringContext,
@@ -33,6 +37,10 @@ interface MemoryBindingProps {
       | "kvOpsPerCloudUnit"
     >
     | null;
+  // Set for bindings loaded into a REUSABLE isolate (loader.get): every public
+  // method then refuses to run without a resolvable per-call context handle,
+  // so a direct-binding bypass can never ride the stale frozen props.
+  requireExecCtx?: boolean;
 }
 
 
@@ -42,8 +50,33 @@ interface MemoryBindingProps {
 
 export class MemoryBinding
   extends WorkerEntrypoint<unknown, MemoryBindingProps> {
+  // Per-RPC-call context handle. A fresh binding instance is created per RPC
+  // (Cloudflare WorkerEntrypoint contract), so this is call-scoped. Set at each
+  // public method entry; meter() resolves the CURRENT metering context from it,
+  // so a warm-reused isolate never meters against a stale baked hold.
+  private execCtxHandle?: string;
+
   private getR2Bucket(): R2Bucket {
     return globalThis.__env.R2_BUCKET;
+  }
+
+  private meteringContext() {
+    // Handle threaded (even if it resolves to null) → resolve-or-FAIL-CLOSED:
+    // never fall back to props, which are frozen at load and go STALE under a
+    // warm get() reuse. Handle NOT threaded (undefined: legacy/direct-call
+    // path) → props fallback preserves pre-registry behavior. No-op under
+    // load(); safety linchpin under get() reuse. See database-binding.ts.
+    if (this.execCtxHandle !== undefined) {
+      const resolved = resolveExecutionContext(this.execCtxHandle);
+      return {
+        metering: resolved?.cloudOperationMetering ?? null,
+        billingConfig: resolved?.cloudOperationBillingConfig ?? null,
+      };
+    }
+    return {
+      metering: this.ctx.props.operationMetering,
+      billingConfig: this.ctx.props.operationBillingConfig,
+    };
   }
 
   private async meter(
@@ -51,7 +84,7 @@ export class MemoryBinding
     memKey: string,
     units = 1,
   ): Promise<void> {
-    const metering = this.ctx.props.operationMetering;
+    const { metering, billingConfig } = this.meteringContext();
     if (!metering) {
       return;
     }
@@ -61,7 +94,7 @@ export class MemoryBinding
       resource: "r2_operation",
       operation,
       units,
-      billingConfig: this.ctx.props.operationBillingConfig ?? undefined,
+      billingConfig: billingConfig ?? undefined,
       metadata: {
         ...(metering.metadata ?? {}),
         key: memKey,
@@ -78,7 +111,10 @@ export class MemoryBinding
     key: string,
     value: unknown,
     scope?: MemoryScope,
+    execCtxHandle?: string,
   ): Promise<void> {
+    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const memKey = this.memoryKey(normalizeMemoryScope(scope));
     await this.meter("memory.remember", memKey, 2);
     const bucket = this.getR2Bucket();
@@ -107,7 +143,13 @@ export class MemoryBinding
     });
   }
 
-  async recall(key: string, scope?: MemoryScope): Promise<unknown> {
+  async recall(
+    key: string,
+    scope?: MemoryScope,
+    execCtxHandle?: string,
+  ): Promise<unknown> {
+    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const memKey = this.memoryKey(normalizeMemoryScope(scope));
     await this.meter("memory.recall", memKey);
     const bucket = this.getR2Bucket();

@@ -459,131 +459,196 @@ class Wave3Harness {
   }
 
   private createLoader() {
+    type WorkerCode = {
+      modules: Record<string, string>;
+      env: Record<string, unknown>;
+    };
+    // Real behavior: per-execution data (functionName/args/authToken/callerCtx/
+    // execCtxHandle) arrives in the fetch REQUEST BODY (not baked into the
+    // wrapper), and get(id, cb) builds the worker from cb() then runs
+    // identically to load(). Both paths share this runner.
+    const runWorker = async (
+      workerCode: WorkerCode,
+      request: Request,
+    ): Promise<Response> => {
+      const runFetch = this.buildWorkerFetch(workerCode);
+      return await runFetch(request);
+    };
+    // Cache-by-id so get() mirrors the real Worker Loader: the build callback
+    // fires ONCE per id (cold start); a warm hit REPLAYS the frozen env/modules
+    // and ignores the callback. Per-call data reaches the frozen isolate only
+    // through the fetch body.
+    const getCache = new Map<string, WorkerCode>();
     return {
-      load: (workerCode: {
-        modules: Record<string, string>;
-        env: Record<string, unknown>;
-      }) => ({
+      load: (workerCode: WorkerCode) => ({
         getEntrypoint: () => ({
-          fetch: async () => {
-            const previousConsole = globalThis.console;
-            const previousGalactic = (globalThis as Record<string, unknown>)
-              .ultralight;
-            const previousRpcEnv = (globalThis as Record<string, unknown>)
-              .__rpcEnv;
-
-            const logs: Array<{
-              time: string;
-              level: "log" | "error" | "warn" | "info";
-              message: string;
-            }> = [];
-            const capture = (
-              level: "log" | "error" | "warn" | "info",
-              args: unknown[],
-            ) => {
-              logs.push({
-                time: new Date().toISOString(),
-                level,
-                message: args.map((value) =>
-                  typeof value === "string" ? value : JSON.stringify(value)
-                ).join(" "),
-              });
-            };
-
-            try {
-              new Function(workerCode.modules["setup.js"])();
-              (globalThis as Record<string, unknown>).__rpcEnv = workerCode.env;
-              globalThis.console = {
-                ...previousConsole,
-                log: (...args: unknown[]) => capture("log", args),
-                error: (...args: unknown[]) => capture("error", args),
-                warn: (...args: unknown[]) => capture("warn", args),
-                info: (...args: unknown[]) => capture("info", args),
-              };
-
-              const fnName = this.extractWrapperLiteral<string>(
-                workerCode.modules["wrapper.js"],
-                /const fnName = ([\s\S]*?);\n/,
-              );
-              const fnArgs = this.extractWrapperLiteral<unknown[]>(
-                workerCode.modules["wrapper.js"],
-                /const fnArgs = ([\s\S]*?);\n\n\s+let targetFn/,
-              );
-              const appModule = await import(
-                `data:text/javascript;charset=utf-8,${
-                  encodeURIComponent(
-                    `${
-                      workerCode.modules["app.js"]
-                    }\n// ${crypto.randomUUID()}`,
-                  )
-                }`
-              );
-
-              let targetFn = appModule[fnName];
-              if (
-                !targetFn && appModule.default &&
-                typeof appModule.default === "object"
-              ) {
-                targetFn =
-                  (appModule.default as Record<string, unknown>)[fnName];
-              }
-
-              if (typeof targetFn !== "function") {
-                return Response.json({
-                  success: false,
-                  result: null,
-                  logs,
-                  error: {
-                    type: "FunctionNotFound",
-                    message: `Function "${fnName}" not found`,
-                  },
-                });
-              }
-
-              const result = await targetFn(...fnArgs);
-              return Response.json({ success: true, result, logs });
-            } catch (err) {
-              return Response.json({
-                success: false,
-                result: null,
-                logs,
-                error: {
-                  type: err instanceof Error ? err.constructor.name : "Error",
-                  message: err instanceof Error ? err.message : String(err),
-                },
-              });
-            } finally {
-              globalThis.console = previousConsole;
-              if (previousGalactic === undefined) {
-                delete (globalThis as Record<string, unknown>).ultralight;
-              } else {
-                (globalThis as Record<string, unknown>).ultralight =
-                  previousGalactic;
-              }
-              if (previousRpcEnv === undefined) {
-                delete (globalThis as Record<string, unknown>).__rpcEnv;
-              } else {
-                (globalThis as Record<string, unknown>).__rpcEnv =
-                  previousRpcEnv;
-              }
-            }
-          },
+          fetch: (request: Request) => runWorker(workerCode, request),
         }),
       }),
-      get: () => ({
+      get: (id: string, cb: () => WorkerCode | Promise<WorkerCode>) => ({
         getEntrypoint: () => ({
-          fetch: async () => Response.json({ success: false }),
+          fetch: async (request: Request) => {
+            if (!getCache.has(id)) getCache.set(id, await cb());
+            return await runWorker(getCache.get(id)!, request);
+          },
         }),
       }),
     };
   }
 
-  private extractWrapperLiteral<T>(source: string, pattern: RegExp): T {
-    const match = source.match(pattern);
-    if (!match) {
-      throw new Error(`Could not parse wrapper module with pattern ${pattern}`);
-    }
-    return JSON.parse(match[1]) as T;
+  private buildWorkerFetch(workerCode: {
+    modules: Record<string, string>;
+    env: Record<string, unknown>;
+  }) {
+    return async (request: Request): Promise<Response> => {
+      const previousConsole = globalThis.console;
+      const previousGalactic = (globalThis as Record<string, unknown>)
+        .ultralight;
+      const previousRpcEnv = (globalThis as Record<string, unknown>).__rpcEnv;
+      const previousReq = (globalThis as Record<string, unknown>).__ulReq;
+      const previousHandle = (globalThis as Record<string, unknown>)
+        .__execHandle;
+
+      const logs: Array<{
+        time: string;
+        level: "log" | "error" | "warn" | "info";
+        message: string;
+      }> = [];
+      const capture = (
+        level: "log" | "error" | "warn" | "info",
+        args: unknown[],
+      ) => {
+        logs.push({
+          time: new Date().toISOString(),
+          level,
+          message: args.map((value) =>
+            typeof value === "string" ? value : JSON.stringify(value)
+          ).join(" "),
+        });
+      };
+
+      try {
+        // Per-request payload (functionName/args/authToken/callerCtx/
+        // execCtxHandle) arrives in the fetch body, exactly like the real
+        // wrapper.
+        const req = await request.json().catch(() => ({})) as {
+          functionName?: string;
+          args?: unknown[];
+          authToken?: string;
+          callerCtx?: string;
+          execCtxHandle?: string;
+        };
+        new Function(workerCode.modules["setup.js"])();
+        (globalThis as Record<string, unknown>).__rpcEnv = workerCode.env;
+        (globalThis as Record<string, unknown>).__execHandle =
+          req.execCtxHandle ?? null;
+        (globalThis as Record<string, unknown>).__ulReq = {
+          authToken: req.authToken ?? "",
+          callerCtx: req.callerCtx ?? "",
+        };
+        globalThis.console = {
+          ...previousConsole,
+          log: (...args: unknown[]) => capture("log", args),
+          error: (...args: unknown[]) => capture("error", args),
+          warn: (...args: unknown[]) => capture("warn", args),
+          info: (...args: unknown[]) => capture("info", args),
+        };
+
+        const fnName = typeof req.functionName === "string"
+          ? req.functionName
+          : "";
+        const fnArgs = Array.isArray(req.args) ? req.args : [];
+        const appModule = await import(
+          `data:text/javascript;charset=utf-8,${
+            encodeURIComponent(
+              `${workerCode.modules["app.js"]}\n// ${crypto.randomUUID()}`,
+            )
+          }`
+        );
+
+        let targetFn = appModule[fnName];
+        if (
+          !targetFn && appModule.default &&
+          typeof appModule.default === "object"
+        ) {
+          targetFn = (appModule.default as Record<string, unknown>)[fnName];
+        }
+
+        if (typeof targetFn !== "function") {
+          // Mirror the real wrapper: enumerate the app's callable exports.
+          const available: string[] = [];
+          for (const k of Object.keys(appModule)) {
+            if (typeof appModule[k] === "function") available.push(k);
+          }
+          if (
+            appModule.default && typeof appModule.default === "object"
+          ) {
+            for (const k of Object.keys(appModule.default)) {
+              if (
+                typeof (appModule.default as Record<string, unknown>)[k] ===
+                  "function"
+              ) available.push(k);
+            }
+          }
+          return Response.json({
+            success: false,
+            result: null,
+            logs,
+            aiCostLight: (globalThis as Record<string, unknown>)
+              .__aiCostLight as number || 0,
+            error: {
+              type: "FunctionNotFound",
+              message: `Function "${fnName}" not found. Available: ${
+                [...new Set(available)].join(", ")
+              }`,
+            },
+          });
+        }
+
+        const result = await targetFn(...fnArgs);
+        return Response.json({
+          success: true,
+          result,
+          logs,
+          aiCostLight: (globalThis as Record<string, unknown>)
+            .__aiCostLight as number || 0,
+        });
+      } catch (err) {
+        return Response.json({
+          success: false,
+          result: null,
+          logs,
+          aiCostLight: (globalThis as Record<string, unknown>)
+            .__aiCostLight as number || 0,
+          error: {
+            type: err instanceof Error ? err.constructor.name : "Error",
+            message: err instanceof Error ? err.message : String(err),
+          },
+        });
+      } finally {
+        globalThis.console = previousConsole;
+        if (previousGalactic === undefined) {
+          delete (globalThis as Record<string, unknown>).ultralight;
+        } else {
+          (globalThis as Record<string, unknown>).ultralight = previousGalactic;
+        }
+        if (previousRpcEnv === undefined) {
+          delete (globalThis as Record<string, unknown>).__rpcEnv;
+        } else {
+          (globalThis as Record<string, unknown>).__rpcEnv = previousRpcEnv;
+        }
+        if (previousReq === undefined) {
+          delete (globalThis as Record<string, unknown>).__ulReq;
+        } else {
+          (globalThis as Record<string, unknown>).__ulReq = previousReq;
+        }
+        if (previousHandle === undefined) {
+          delete (globalThis as Record<string, unknown>).__execHandle;
+        } else {
+          (globalThis as Record<string, unknown>).__execHandle = previousHandle;
+        }
+      }
+    };
   }
 
   private async fetch(
