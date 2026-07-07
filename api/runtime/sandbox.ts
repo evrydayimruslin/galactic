@@ -30,6 +30,11 @@ export interface RuntimeConfig {
   appId: string;
   userId: string;
   ownerId: string;
+  // Manifest flight_recorder flag: wires the RUNS read binding
+  // (galactic.runs.recent) so the agent can review its own recent routine
+  // runs. The capture side (persisting ai() exchanges as run steps) is decided
+  // host-side at settlement from the same manifest flag.
+  flightRecorder?: boolean;
   // The app's DB current_version. When set, the executed-bundle verify rejects a
   // live bundle whose signed attestation is for a different (e.g. downgraded)
   // version. Optional: paths that don't supply it skip the version check.
@@ -212,6 +217,18 @@ export interface ExecutionResult {
   // churns creds/BYOK/model/env and mints several isolates in one day. Absent
   // on the load() path (each call is its own CF unit → per-call floor).
   reuseKeyHash?: string;
+  // Flight capture: this execution's galactic.ai() exchanges (clipped
+  // in-sandbox, ≤20). Present only when at least one exchange was captured;
+  // persisted at settlement when manifest flight_recorder is on and the run
+  // has a routine context.
+  flightAi?: Array<{
+    at?: string;
+    ms?: number;
+    model?: string | null;
+    cost_light?: number;
+    prompt?: string;
+    response?: string;
+  }>;
 }
 
 // ============================================

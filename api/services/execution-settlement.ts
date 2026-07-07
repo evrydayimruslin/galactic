@@ -358,6 +358,18 @@ export interface SettleAndLogAppExecutionParams {
   runtimeCloudSettlement?: RuntimeCloudSettlementForAppCall | null;
   routineContext?: RoutineTraceContext | null;
   runtimeLogs?: unknown[];
+  // Flight recorder: this execution's captured galactic.ai() exchanges
+  // (already clipped + capped in-sandbox). Set ONLY when the app's manifest
+  // opted in via flight_recorder; persisted as routine_run_steps when a
+  // routine context is present.
+  flightAiExchanges?: Array<{
+    at?: string;
+    ms?: number;
+    model?: string | null;
+    cost_light?: number;
+    prompt?: string;
+    response?: string;
+  }> | null;
   widgetAction?: WidgetActionCallMetadata;
   agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
 }
@@ -1509,6 +1521,51 @@ export async function settleAndLogAppExecution(
     widgetAction: params.widgetAction,
     agenticSurfaceAction: params.agenticSurfaceAction,
   }, deps);
+
+  // Flight recorder: persist the run's captured ai() exchanges as
+  // routine_run_steps (function_name "galactic.ai", cost 0 — the spend is
+  // already on the handler's contribution). Sequential through the same RPC
+  // as call contributions so step indexes never collide. Best-effort and
+  // off the response path; recorded for failed handlers too — that is when
+  // the recorded reasoning matters most.
+  const flightExchanges = (params.flightAiExchanges ?? []).slice(0, 20);
+  if (flightExchanges.length > 0 && params.routineContext) {
+    const routine = params.routineContext;
+    const persistFlight = (async () => {
+      for (const exchange of flightExchanges) {
+        await recordRoutineCallContribution({
+          userId: params.userId,
+          routine,
+          appId: params.app.id,
+          appRef: params.app.slug,
+          functionName: "galactic.ai",
+          receiptId: params.receiptId,
+          status: "succeeded",
+          durationMs: typeof exchange.ms === "number" ? exchange.ms : null,
+          costLight: 0,
+          argsPreview: { prompt: String(exchange.prompt ?? "") },
+          resultPreview: { response: String(exchange.response ?? "") },
+          metadata: {
+            kind: "ai_exchange",
+            model: exchange.model ?? null,
+            at: exchange.at ?? null,
+            cost_light: typeof exchange.cost_light === "number"
+              ? exchange.cost_light
+              : 0,
+          },
+        }, deps);
+      }
+    })().catch((err) => {
+      console.error("[FLIGHT] Failed to record ai exchanges:", err);
+    });
+    const ctx = (globalThis as {
+      __ctx?: { waitUntil?: (p: Promise<unknown>) => void };
+    }).__ctx;
+    // waitUntil when available (production: off the response path); otherwise
+    // await so the write is ordered and deterministic (tests, direct callers).
+    if (ctx?.waitUntil) ctx.waitUntil(persistFlight);
+    else await persistFlight;
+  }
 
   const routineStep = routineContribution ? await routineContribution : null;
 

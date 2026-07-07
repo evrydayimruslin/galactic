@@ -34,8 +34,8 @@ function base(): any {
   };
 }
 const CODE = "export function run(){return 1}";
-// Default baked binding-set state (no DB/MEMORY wired).
-const BS = { dbId: null, hasDb: false, hasMemory: false };
+// Default baked binding-set state (no DB/MEMORY/RUNS wired).
+const BS = { dbId: null, hasDb: false, hasMemory: false, hasRuns: false };
 // deno-lint-ignore no-explicit-any
 const derive = (cfg: any, code = CODE, dests: unknown = [], bs = BS) =>
   deriveIsolateReuseKey(cfg, code, dests, bs);
@@ -149,34 +149,48 @@ Deno.test("reuse key: D1 databaseId change → different key (no split-database 
     dbId: "db-old",
     hasDb: true,
     hasMemory: false,
+    hasRuns: false,
   });
   const b = await derive(base(), CODE, [], {
     dbId: "db-new",
     hasDb: true,
     hasMemory: false,
+    hasRuns: false,
   });
   assertNotEquals(a, b);
 });
 
-Deno.test("reuse key: DB / MEMORY binding-set presence changes the key (no sticky 'not available')", async () => {
+Deno.test("reuse key: DB / MEMORY / RUNS binding-set presence changes the key (no sticky 'not available')", async () => {
   const none = await derive(base(), CODE, [], {
     dbId: null,
     hasDb: false,
     hasMemory: false,
+    hasRuns: false,
   });
   const withDb = await derive(base(), CODE, [], {
     dbId: "db-1",
     hasDb: true,
     hasMemory: false,
+    hasRuns: false,
   });
   const withMem = await derive(base(), CODE, [], {
     dbId: null,
     hasDb: false,
     hasMemory: true,
+    hasRuns: false,
+  });
+  const withRuns = await derive(base(), CODE, [], {
+    dbId: null,
+    hasDb: false,
+    hasMemory: false,
+    hasRuns: true,
   });
   assertNotEquals(none, withDb);
   assertNotEquals(none, withMem);
   assertNotEquals(withDb, withMem);
+  // Flipping manifest flight_recorder re-wires the RUNS binding — a warm
+  // isolate from before the flip must not be reused without it.
+  assertNotEquals(none, withRuns);
 });
 
 // ── Eligibility gates (independent of the rollout flag) ──
