@@ -14,6 +14,7 @@
 import type { ExecutionResult, RuntimeConfig } from "./sandbox.ts";
 import type { ResolvedCredential } from "../../shared/contracts/env.ts";
 import { getEnv } from "../lib/env.ts";
+import { isolateReuseEligibility } from "./isolate-reuse-eligibility.ts";
 import { consumeAiSpend } from "../services/ai-spend-tracker.ts";
 import {
   deregisterExecutionContext,
@@ -44,9 +45,6 @@ async function sha256HexLocal(input: string): Promise<string> {
     .join("");
 }
 
-// ANONYMOUS_USER_ID (request-caller-context.ts) inlined to avoid an import cycle.
-const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
-
 // Bump whenever the generated setup.js / wrapper.js TEMPLATE, the loadConfig
 // shape (compatibilityDate, limits, binding wiring), or the fetch-body contract
 // changes. Folded into the reuse key so a parent-worker deploy that changes the
@@ -55,50 +53,10 @@ const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
 // runtime generates around it.)
 const SANDBOX_TEMPLATE_VERSION = "2026-07-06.get-reuse.v1";
 
-/**
- * Whether this execution may run in a warm-reused isolate at all (independent
- * of the rollout flag). Exported for unit-testing the gates.
- *  - Anonymous callers NEVER reuse: the anon sentinel is a SHARED user id, so a
- *    warm isolate would persist app module-level state across DIFFERENT
- *    anonymous end-users — a cross-tenant leak.
- *  - Fixture-backed executions (gx.test) NEVER reuse: d1Fixtures are per-call
- *    data baked into FixtureDatabaseBinding props, so a warm isolate would
- *    serve one test's fixtures to the next.
- *  - Cross-Agent-CALL-capable executions NEVER reuse: ultralight.call sets the
- *    X-Galactic-Caller header from a per-call token read at call time from the
- *    shared-globalThis request payload. A warm isolate serves CONCURRENT
- *    executions of the same (app,user) through that shared globalThis, so a
- *    sibling could overwrite the token and let a deep-chain call present a
- *    shallow-hop identity — defeating MAX_AGENT_CALL_HOP_DEPTH (runaway
- *    recursion) and function-scoped grants. There is no per-async-context store
- *    in the sandbox (no AsyncLocalStorage), so the only sound fix today is to
- *    keep these on load() (one isolate per call → no shared-globalThis race).
- *    Gated on the same capability ultralight.call itself requires: app:call
- *    permission, a declared call dependency, or a wired slot. (A future
- *    host-side call binding + async-context handle store could reclaim reuse
- *    here; tracked in docs/DYNAMIC_WORKER_GET_REFACTOR.md.)
- */
-export function isolateReuseEligibility(
-  config: Pick<
-    RuntimeConfig,
-    "userId" | "d1Fixtures" | "permissions" | "appCallDependencies" | "slotBindings"
-  >,
-): { eligible: boolean; reason: string } {
-  if (!config.userId || config.userId === ANON_USER_ID) {
-    return { eligible: false, reason: "anonymous_user" };
-  }
-  if (config.d1Fixtures) {
-    return { eligible: false, reason: "fixture_execution" };
-  }
-  if (
-    config.permissions?.includes("app:call") ||
-    (config.appCallDependencies?.length ?? 0) > 0 ||
-    (config.slotBindings?.length ?? 0) > 0
-  ) {
-    return { eligible: false, reason: "cross_agent_call_capable" };
-  }
-  return { eligible: true, reason: "ok" };
-}
+// Reuse eligibility lives in its own dependency-light module (imported above) so
+// billing imports the SAME predicate — a divergent copy is a money bug (see the
+// module doc). Re-exported for the existing runtime tests + call sites.
+export { isolateReuseEligibility };
 
 /**
  * Derive the Worker Loader `get()` reuse key for an execution.

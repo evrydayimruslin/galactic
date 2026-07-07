@@ -188,6 +188,14 @@ export interface RuntimeCloudHoldSettlementParams {
     BillingConfig,
     "workerMsPerCloudUnit" | "cloudUnitLightPer1k" | "workerLoadLightPerInvocation"
   >;
+  // Effective per-load floor for THIS settlement, overriding the config default.
+  // Set by the per-(app,user,UTC-day) load-floor dedup (execution-settlement.ts):
+  // the first execution that loads the worker each day pays the full floor;
+  // later same-day calls pass 0 so the hold's reserved floor is released. Absent
+  // → the config floor applies (per-call, unchanged). A negative/NaN value is
+  // ignored (falls back to the config floor) so it can never zero out the floor
+  // by accident.
+  loadFloorLightOverride?: number;
   metadata?: Record<string, unknown>;
 }
 
@@ -621,10 +629,17 @@ export async function settleRuntimeCloudHold(
   // The per-load floor is a FIXED cost — it must survive the duration true-down,
   // so add it to the settled amount too (matching the hold). Uses the same pinned
   // billing-config version as the hold, so the floor is identical on both sides.
+  // An explicit per-day override (>= 0 and finite) wins; anything else falls back
+  // to the config floor (never leaks it to 0 on a bad value).
+  const override = params.loadFloorLightOverride;
+  const loadFloorLight =
+    typeof override === "number" && Number.isFinite(override) && override >= 0
+      ? override
+      : (config.workerLoadLightPerInvocation ?? 0);
   const amountLight = calculateCloudUsageLight(
     cloudUnits,
     config.cloudUnitLightPer1k,
-  ) + (config.workerLoadLightPerInvocation ?? 0);
+  ) + loadFloorLight;
   const settlement = await settleCloudUsageHold({
     holdId: params.holdId,
     units,
