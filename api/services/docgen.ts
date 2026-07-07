@@ -160,7 +160,9 @@ export function generateSkillsMd(
       lines.push("");
       lines.push("### Products (In-App Purchases)");
       lines.push("");
-      lines.push("Available via `ultralight.charge(price_light, product_id)`:");
+      lines.push(
+        "Declared in-app products (legacy — there is no in-code charge API; purchases flow through platform per-call pricing):",
+      );
       lines.push("");
       lines.push("| Product | Price | Description |");
       lines.push("|---------|-------|-------------|");
