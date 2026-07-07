@@ -177,6 +177,15 @@ export interface PreflightRuntimeCloudHoldParams {
   // applied here so callers just pass the state through.
   freeMode?: boolean;
   byokPresent?: boolean;
+  // Whether THIS execution will run in a warm-reused isolate (loader.get) — the
+  // ONLY condition under which Cloudflare bills the Dynamic Worker load fee
+  // ~once/(app,user)/day instead of per call, and thus the only condition under
+  // which the per-day load-floor dedup is safe. The CALLER must compute this
+  // with the SAME signals as isolateReuseEligibility (dynamic-sandbox.ts) —
+  // flag + real user + NOT cross-Agent-call-capable, where call-capability
+  // includes grant-resolved dependencies/slots that are INVISIBLE to the
+  // manifest. Absent/false → the per-call floor applies (never under-charges).
+  reuseEligibleForBilling?: boolean;
 }
 
 export interface RuntimeCloudPreflightResult {
@@ -187,6 +196,26 @@ export interface RuntimeCloudPreflightResult {
   insufficientBalanceCode?: AppCallSettlementResult["insufficientBalanceCode"];
   insufficientBalanceMessage?: string;
   metadata: Record<string, unknown>;
+  // Inputs for the per-(app,user,UTC-day) load-floor dedup, resolved at settle
+  // time (settleRuntimeCloudPreflight) so only executions that actually loaded a
+  // worker consume the day's slot. Present only on the success path.
+  loadFloorContext?: LoadFloorContext;
+}
+
+interface LoadFloorContext {
+  appId: string;
+  callerUserId: string;
+  /** The full config floor (Light) — charged only to the day's first loader. */
+  baseFloorLight: number;
+  /**
+   * Whether the per-day dedup applies at all. TRUE only when warm-isolate reuse
+   * is active (EXECUTED_LOADER_GET_REUSE — so CF bills ~once/(app,user)/day) AND
+   * the execution is reuse-ELIGIBLE (a real user, not a cross-Agent-call-capable
+   * app, which stays on load() and is billed per call). FALSE → per-call floor,
+   * unchanged. Over-approximates ineligibility (any doubt → per-call) so the
+   * dedup can never under-charge.
+   */
+  perDayEligible: boolean;
 }
 
 export interface RuntimeOperationMeteringContextParams {
@@ -581,6 +610,15 @@ export async function preflightRuntimeCloudHold(
       },
       billingConfig,
       insufficientBalance: false,
+      loadFloorContext: {
+        appId: params.app.id,
+        callerUserId: params.userId,
+        baseFloorLight: billingConfig.workerLoadLightPerInvocation ?? 0,
+        // The caller is authoritative: it alone knows whether this execution
+        // will actually run in a warm-reused isolate (incl. grant-resolved
+        // call-capability invisible to the manifest). Absent → per-call floor.
+        perDayEligible: params.reuseEligibleForBilling === true,
+      },
       metadata: {
         ...accessDecision.metadata,
         billing_config_version: billingConfig.version,
@@ -701,14 +739,32 @@ export async function settleRuntimeCloudPreflight(
     return null;
   }
 
+  // Per-(app,user,UTC-day) load-floor dedup. Runs HERE — at settle, i.e. only
+  // for an execution that actually loaded a worker — so a rejected/never-run
+  // call never consumes the day's slot. When reuse is active the Dynamic Worker
+  // load fee is incurred ~once per (app,user,day), so only the day's FIRST loader
+  // pays the full floor; later same-day calls settle with floor 0 (the hold's
+  // reserved floor is released by the true-down). The counter increment is a
+  // single atomic INSERT…ON CONFLICT…RETURNING, so concurrent first-calls resolve
+  // to distinct counts and exactly one pays. Any RPC failure leaves the override
+  // undefined → the full config floor applies (fail toward charging = no leak).
+  const loadFloorOverride = await resolveDailyLoadFloor(
+    preflight.loadFloorContext,
+    deps,
+  );
+
   const settlement = await settleRuntimeCloudHold({
     holdId: preflight.hold.holdId,
     durationMs,
     billingConfig: preflight.billingConfig,
+    loadFloorLightOverride: loadFloorOverride,
     metadata: {
       ...metadata,
       expected_cloud_units: preflight.hold.expectedCloudUnits,
       expected_amount_light: preflight.hold.expectedAmountLight,
+      ...(loadFloorOverride !== undefined
+        ? { load_floor_light: loadFloorOverride }
+        : {}),
     },
   }, deps);
 
@@ -1786,6 +1842,52 @@ function isFreeModeBlocked(err: unknown): boolean {
 function isCallerInfraFallbackLightRequired(err: unknown): boolean {
   return err instanceof CloudUsageRpcError &&
     /caller_infra_fallback_light_required/i.test(err.message);
+}
+
+/** UTC calendar day (YYYY-MM-DD) — the per-day load-floor counter bucket. */
+function utcDayKey(nowMs: number): string {
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
+/**
+ * Resolve the effective per-load floor for a settlement under the
+ * per-(app,user,UTC-day) dedup. Returns the override (Light) or `undefined` to
+ * mean "use the config floor" (the per-call default).
+ *  - Not eligible / floor is 0 → undefined (per-call floor, unchanged).
+ *  - Eligible → atomically bump the (app,user,`load_floor:<utc-day>`) counter;
+ *    the day's FIRST loader (count 1) pays the full floor, every later same-day
+ *    call returns 0 (its reserved floor is released by the settle true-down).
+ *  - Supabase unavailable / RPC error / unparseable → undefined (full floor).
+ * FAIL TOWARD CHARGING everywhere: the dedup can only ever REDUCE a charge for a
+ * confirmed non-first call, never zero out a floor on uncertainty.
+ */
+async function resolveDailyLoadFloor(
+  context: LoadFloorContext | undefined,
+  deps?: ExecutionSettlementDeps,
+): Promise<number | undefined> {
+  if (!context || !context.perDayEligible || context.baseFloorLight <= 0) {
+    return undefined;
+  }
+  const supabaseConfigured = Boolean(
+    getEnv("SUPABASE_URL") && getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  );
+  if (!supabaseConfigured) return undefined;
+  const supabase = createSupabaseRestClient({ fetchFn: deps?.fetchFn ?? fetch });
+  try {
+    const res = await supabase.rpc("increment_caller_usage", {
+      p_app_id: context.appId,
+      p_user_id: context.callerUserId,
+      p_counter_key: `load_floor:${utcDayKey(Date.now())}`,
+    });
+    if (!res.ok) return undefined;
+    const count = parseIncrementCallerUsageCount(await res.json());
+    if (count === null) return undefined;
+    // First loader of the day pays the full floor; every later same-day call is 0.
+    return count <= 1 ? context.baseFloorLight : 0;
+  } catch (err) {
+    console.error("[LOAD-FLOOR] per-day dedup RPC error:", err);
+    return undefined;
+  }
 }
 
 function calculateExpectedRuntimeHoldAmount(

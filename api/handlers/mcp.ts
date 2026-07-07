@@ -18,6 +18,7 @@ import {
 import { getPermissionsForUser } from "./user.ts";
 import type { Tier } from "../../shared/contracts/runtime.ts";
 import { type UserContext } from "../runtime/sandbox.ts";
+import { isolateReuseEligibility } from "../runtime/isolate-reuse-eligibility.ts";
 import {
   createRuntimeAIContext,
   createUnavailableAIService,
@@ -2721,6 +2722,18 @@ async function executeAppFunction(
       routineContext: meta?.routineContext,
       freeMode: callerContext.freeMode,
       byokPresent: callerContext.byokPresent,
+      // Per-day load-floor dedup eligibility — uses the SAME predicate the
+      // runtime uses to choose loader.get() vs load() (incl. GRANT-resolved
+      // deps/slots, invisible to the manifest), so billing can never deem an app
+      // per-day-eligible that the runtime keeps on load() (where CF bills the
+      // load fee per call). Flag-gated to match the runtime's useGetReuse.
+      reuseEligibleForBilling: getEnv("EXECUTED_LOADER_GET_REUSE") === "1" &&
+        isolateReuseEligibility({
+          userId,
+          permissions,
+          appCallDependencies,
+          slotBindings,
+        }).eligible,
     });
     if (cloudPreflight.insufficientBalance) {
       const widgetBalanceMessage = widgetPull
