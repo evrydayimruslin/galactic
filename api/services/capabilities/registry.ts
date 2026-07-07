@@ -170,6 +170,11 @@ const CAPABILITIES: Capability[] = [
           description:
             "When true, scaffold a working interfaces/main.html (agent UI) with the call bridge pre-wired plus the manifest interfaces[] entry — a running page you then edit.",
         },
+        full_time: {
+          type: "boolean",
+          description:
+            "When true, scaffold a full-time agent: a running goal → journal → observe → reason → act → record loop (tick handler), a journal migration, and a manifest routine template with budget defaults and flight_recorder on. Activate after deploy with gx.routine create (mission in `intent`) + resume.",
+        },
       },
     },
     auth: {},
