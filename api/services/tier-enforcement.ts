@@ -49,6 +49,30 @@ export interface PublishReadinessErrorPayload {
   required_light: number;
   current_balance_light: number;
   next_action: string;
+  /** Deep link to the website page that clears this block, when one applies.
+   *  Lets a connected agent hand the user the exact URL at the moment they're
+   *  blocked, instead of describing where to go. */
+  configure_url?: string;
+}
+
+/**
+ * The website page that clears a given publish block. Both money steps live on
+ * the website (Stripe-hosted), so there's no MCP action — surfacing the link is
+ * the useful thing. `billing_check_unavailable` is transient, so no link.
+ */
+function configureUrlForReason(
+  reason: PublishReadinessBlockReason,
+): string | undefined {
+  const base = getEnv("LAUNCH_WEB_BASE_URL");
+  if (!base) return undefined;
+  switch (reason) {
+    case "insufficient_publish_balance":
+      return `${base}/account?tab=balance`;
+    case "connect_payouts_required":
+      return `${base}/account?tab=earnings`;
+    default:
+      return undefined;
+  }
 }
 
 export class PublishReadinessError extends Error {
@@ -74,12 +98,14 @@ export class PublishReadinessError extends Error {
 export function publishReadinessErrorPayload(
   block: PublishReadinessBlock,
 ): PublishReadinessErrorPayload {
+  const configureUrl = configureUrlForReason(block.reason);
   return {
     error: block.message,
     reason: block.reason,
     required_light: block.requiredLight,
     current_balance_light: block.currentBalanceLight,
     next_action: block.nextAction,
+    ...(configureUrl ? { configure_url: configureUrl } : {}),
   };
 }
 
