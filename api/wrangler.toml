@@ -106,12 +106,14 @@ EXECUTED_BUNDLE_REQUIRE_ATTESTATION = "1"
 # [BUNDLE-BACKFILL] log report attested=0, then unset and flip require-attestation.
 # EXECUTED_BUNDLE_BACKFILL = "1"
 # Warm-isolate reuse (Worker Loader get()): cuts billable Dynamic Worker loads
-# from ~1/call to ~1/(app-version, user)/day. Reuse key pins
+# from ~1/call to ~1/(app-version, user)/day, and gates the per-(app,user,day)
+# load-floor dedup (charge the load fee once/day). Reuse key pins
 # appId:bundleHash:userId:stateFingerprint (never shared across users; any
-# baked-input change mints a fresh isolate). OFF in prod until the Stage-4
-# staging isolation smoke (cross-user + concurrent-billing + replayed-handle
-# probes) passes — mirror the staging flip here then.
-# EXECUTED_LOADER_GET_REUSE = "1"
+# baked-input change mints a fresh isolate). Enabled here so the NEXT prod tag
+# (which is the first to ship the get() code) deploys with reuse + per-day
+# billing ON — and so a wrangler deploy does NOT wipe the dashboard var and
+# silently keep it OFF. Run the staging isolation smoke before cutting that tag.
+EXECUTED_LOADER_GET_REUSE = "1"
 # New primary domain is connectgalactic.com; the old ultralightagent.com origins
 # stay listed so they keep working during the cutover (remove later).
 CORS_ALLOWED_ORIGINS = "https://api.connectgalactic.com,https://connectgalactic.com,https://api.ultralightagent.com,https://ultralightagent.com"
