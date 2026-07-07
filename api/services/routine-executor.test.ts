@@ -370,3 +370,265 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
     restoreEnv();
   }
 });
+
+Deno.test("routine executor: skips scheduled run and defers to budget reset when the daily budget is exhausted", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  const routinePatches: Array<{ body: Record<string, unknown>; url: string }> =
+    [];
+  const runPatches: Array<Record<string, unknown>> = [];
+  let handlerInvocations = 0;
+
+  const budgeted = () =>
+    routineRow({
+      budget_policy: { max_light_per_day: 250 },
+      metadata: {
+        budget_spend: {
+          day: "2026-05-17",
+          day_light: 250,
+          month: "2026-05",
+          month_light: 250,
+          updated_at: "2026-05-17T11:55:00.000Z",
+        },
+      },
+    });
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+
+    if (table === "user_routines" && method === "GET") {
+      return jsonResponse([budgeted()]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      routinePatches.push({
+        body: body as Record<string, unknown>,
+        url: url.toString(),
+      });
+      return jsonResponse([{
+        ...budgeted(),
+        ...(body as Record<string, unknown>),
+      }]);
+    }
+    if (table === "routine_runs" && method === "GET") return jsonResponse([]);
+    if (table === "routine_runs" && method === "POST") {
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      runPatches.push(body as Record<string, unknown>);
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
+    if (table === "routine_capabilities") return jsonResponse(capabilityRows());
+    if (table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "users") return jsonResponse([userRow()]);
+    if (table === "routine_run_steps" && method === "POST") {
+      return jsonResponse([{ id: "step-1" }]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    const summary = await runRoutineExecutorCycle({
+      now: NOW,
+      clock: () => NOW,
+      limit: 5,
+      baseUrl: "https://api.example.test",
+      fetchFn: (async () => {
+        handlerInvocations += 1;
+        return jsonResponse({
+          result: { content: [{ type: "text", text: "{}" }] },
+        });
+      }) as typeof fetch,
+    });
+
+    assertEquals(summary.skipped, 1);
+    assertEquals(summary.budget_skipped, 1);
+    assertEquals(summary.succeeded, 0);
+    // The handler must never run on an exhausted budget.
+    assertEquals(handlerInvocations, 0);
+
+    const skipPatch = runPatches.find((body) => body.status === "skipped");
+    assert(String(skipPatch?.summary).includes("budget exhausted"));
+    assertEquals(
+      (skipPatch?.error as Record<string, unknown>)?.code,
+      "budget_day_exhausted",
+    );
+
+    // next_run_at is deferred to the UTC-midnight budget reset instead of the
+    // routine's own cadence, so an exhausted budget records ONE skipped run.
+    const deferPatch = routinePatches.find((patch) =>
+      patch.body.next_run_at === "2026-05-18T00:00:00.000Z"
+    );
+    assert(deferPatch, "expected next_run_at deferred to next UTC midnight");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("routine executor: auto-pauses the routine after consecutive failed attempts", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  const routinePatches: Array<Record<string, unknown>> = [];
+
+  // failure_count 9 + this terminal failed attempt = 10 = default threshold.
+  const failing = () => routineRow({ failure_count: 9, budget_policy: {} });
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+
+    if (table === "user_routines" && method === "GET") {
+      if (url.searchParams.get("status") === "eq.active") {
+        return jsonResponse([]);
+      }
+      return jsonResponse([failing()]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      routinePatches.push(body as Record<string, unknown>);
+      return jsonResponse([{
+        ...failing(),
+        ...(body as Record<string, unknown>),
+      }]);
+    }
+    if (table === "routine_runs" && method === "GET") {
+      if (url.searchParams.get("status") === "in.(queued,running)") {
+        return jsonResponse([]);
+      }
+      if (url.searchParams.get("id")) return jsonResponse([runRow()]);
+      return jsonResponse([runRow({
+        status: "queued",
+        trigger: "manual",
+        started_at: null,
+        attempt_count: 2,
+        max_attempts: 3,
+        lease_id: null,
+        lease_expires_at: null,
+      })]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
+    if (table === "routine_capabilities") return jsonResponse(capabilityRows());
+    if (table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "users") return jsonResponse([userRow()]);
+    if (table === "routine_run_steps" && method === "POST") {
+      return jsonResponse([{ id: "step-1" }]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    const summary = await runRoutineExecutorCycle({
+      now: NOW,
+      clock: () => NOW,
+      limit: 5,
+      baseUrl: "https://api.example.test",
+      fetchFn: (async () =>
+        jsonResponse({
+          error: { code: -32000, message: "Inbox unavailable" },
+        })) as typeof fetch,
+    });
+
+    assertEquals(summary.failed, 1);
+    assertEquals(summary.auto_paused, 1);
+
+    const pausePatch = routinePatches.find((body) => body.status === "paused");
+    assert(pausePatch, "expected the routine to be auto-paused");
+    assertEquals(pausePatch?.failure_count, 10);
+    const autoPause = (pausePatch?.metadata as Record<string, unknown>)
+      ?.auto_pause as Record<string, unknown>;
+    assertEquals(autoPause?.reason, "consecutive_failures");
+    assertEquals(autoPause?.threshold, 10);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("routine executor: auto-pauses when a run exceeds max_light_per_run and rolls up spend", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  const routinePatches: Array<Record<string, unknown>> = [];
+
+  const capped = () =>
+    routineRow({
+      budget_policy: { max_light_per_run: 10, max_light_per_day: 250 },
+    });
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+
+    if (table === "user_routines" && method === "GET") {
+      return jsonResponse([capped()]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      routinePatches.push(body as Record<string, unknown>);
+      return jsonResponse([{
+        ...capped(),
+        ...(body as Record<string, unknown>),
+      }]);
+    }
+    if (table === "routine_runs" && method === "GET") {
+      // The post-run spend read: the run accrued 25 Light via contributions.
+      if (url.searchParams.get("id")) {
+        return jsonResponse([{ id: "run-1", total_light: 25 }]);
+      }
+      return jsonResponse([]);
+    }
+    if (table === "routine_runs" && method === "POST") {
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
+    if (table === "routine_capabilities") return jsonResponse(capabilityRows());
+    if (table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "users") return jsonResponse([userRow()]);
+    if (table === "routine_run_steps" && method === "POST") {
+      return jsonResponse([{ id: "step-1" }]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    const summary = await runRoutineExecutorCycle({
+      now: NOW,
+      clock: () => NOW,
+      limit: 5,
+      baseUrl: "https://api.example.test",
+      fetchFn: (async () =>
+        jsonResponse({
+          result: {
+            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          },
+        })) as typeof fetch,
+    });
+
+    assertEquals(summary.succeeded, 1);
+    assertEquals(summary.auto_paused, 1);
+
+    const pausePatch = routinePatches.find((body) => body.status === "paused");
+    assert(pausePatch, "expected the routine to be auto-paused");
+    const metadata = pausePatch?.metadata as Record<string, unknown>;
+    const autoPause = metadata?.auto_pause as Record<string, unknown>;
+    assertEquals(autoPause?.reason, "budget_run_exceeded");
+    assertEquals(autoPause?.light, 25);
+    assertEquals(autoPause?.cap, 10);
+    // Terminal spend folds into the day/month rollup for the pre-run gates.
+    const rollup = metadata?.budget_spend as Record<string, unknown>;
+    assertEquals(rollup?.day, "2026-05-17");
+    assertEquals(rollup?.day_light, 25);
+    assertEquals(rollup?.month_light, 25);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});

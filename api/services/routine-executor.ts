@@ -27,6 +27,14 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_SECONDS = 60;
 const MAX_RETRY_DELAY_SECONDS = 15 * 60;
 const MIN_INTERVAL_SECONDS = 60;
+// Circuit breaker: consecutive failed ATTEMPTS (failure_count resets to 0 on
+// any success) before the routine is auto-paused. At the default retry policy
+// (3 attempts/run) the default trips after ~3-4 fully failed runs. Overridable
+// per routine via metadata.circuit_breaker.max_consecutive_failures (1-100).
+const DEFAULT_BREAKER_FAILURES = 10;
+// max_calls_per_run is verified by counting the run's recorded contribution
+// steps; caps at or above this bound cannot be verified cheaply and are inert.
+const MAX_VERIFIABLE_CALLS_CAP = 500;
 
 export interface RoutineExecutorOptions {
   now?: Date;
@@ -46,6 +54,8 @@ export interface RoutineExecutorSummary {
   failed: number;
   retried: number;
   skipped: number;
+  budget_skipped: number;
+  auto_paused: number;
   errors: Array<{ run_id?: string; routine_id?: string; error: string }>;
 }
 
@@ -359,6 +369,252 @@ function nextRetryAt(
     policy.baseDelaySeconds * 2 ** exponent,
   );
   return addMs(now, delaySeconds * 1000);
+}
+
+// ---------------------------------------------------------------------------
+// Budget enforcement + circuit breaker.
+//
+// budget_policy caps (shared/contracts/routine.ts) are enforced here with no
+// schema changes:
+// - Day/month caps gate SCHEDULED wakes before the handler runs. Spend is
+//   rolled up on the routine row (metadata.budget_spend) from each terminal
+//   run's total_light, so the gate costs zero extra queries. An exhausted
+//   budget records ONE skipped run and defers next_run_at to the budget reset
+//   boundary (next UTC midnight / first of next UTC month) instead of
+//   re-skipping every cadence tick. Manual run_now bypasses these gates — it
+//   is an explicit user action.
+// - Per-run caps (max_light_per_run, max_calls_per_run) cannot stop a
+//   synchronous handler mid-flight; a violation auto-pauses the routine after
+//   the run, limiting a runaway loop to a single wake.
+// - The circuit breaker auto-pauses after consecutive failed attempts
+//   (failure_count already resets on success), so a routine that can never
+//   succeed — e.g. wallet below the inference floor — stops rescheduling
+//   forever. Resume via gx.routine resume; the pause reason is recorded on
+//   metadata.auto_pause and surfaces in the routine monitor and gx.routine.
+
+interface BudgetSpendRollup {
+  day: string;
+  day_light: number;
+  month: string;
+  month_light: number;
+  updated_at: string;
+}
+
+interface AutoPauseInfo {
+  reason:
+    | "consecutive_failures"
+    | "budget_run_exceeded"
+    | "budget_calls_exceeded";
+  at: string;
+  run_id?: string;
+  light?: number;
+  calls?: number;
+  cap?: number;
+  failure_count?: number;
+  threshold?: number;
+}
+
+interface RunBudgetAccounting {
+  spendRollup?: BudgetSpendRollup;
+  autoPause?: AutoPauseInfo;
+}
+
+interface RunOutcome {
+  status: "succeeded" | "failed" | "retried" | "skipped";
+  budgetSkipped?: boolean;
+  autoPaused?: boolean;
+}
+
+function budgetCap(value: number | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function utcDayKey(date: Date): string {
+  return iso(date).slice(0, 10);
+}
+
+function utcMonthKey(date: Date): string {
+  return iso(date).slice(0, 7);
+}
+
+function nextUtcMidnight(date: Date): Date {
+  const next = new Date(date.getTime());
+  next.setUTCHours(0, 0, 0, 0);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next;
+}
+
+function nextUtcMonthStart(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
+}
+
+// Reads the routine's spend rollup, resetting whichever window (UTC day /
+// month) has rolled over since it was last written.
+function currentSpendRollup(
+  routine: StoredRoutine,
+  now: Date,
+): BudgetSpendRollup {
+  const raw =
+    isRecord(routine.metadata) && isRecord(routine.metadata.budget_spend)
+      ? routine.metadata.budget_spend
+      : {};
+  const day = utcDayKey(now);
+  const month = utcMonthKey(now);
+  return {
+    day,
+    day_light: raw.day === day && typeof raw.day_light === "number" &&
+        Number.isFinite(raw.day_light)
+      ? raw.day_light
+      : 0,
+    month,
+    month_light: raw.month === month && typeof raw.month_light === "number" &&
+        Number.isFinite(raw.month_light)
+      ? raw.month_light
+      : 0,
+    updated_at: iso(now),
+  };
+}
+
+interface BudgetGateResult {
+  period: "daily" | "monthly";
+  code: "budget_day_exhausted" | "budget_month_exhausted";
+  cap: number;
+  spent: number;
+  resumeAt: Date;
+}
+
+function budgetGate(routine: StoredRoutine, now: Date): BudgetGateResult | null {
+  const budget = routine.budget_policy || {};
+  const dayCap = budgetCap(budget.max_light_per_day);
+  const monthCap = budgetCap(budget.max_light_per_month);
+  if (dayCap === null && monthCap === null) return null;
+  const rollup = currentSpendRollup(routine, now);
+  if (dayCap !== null && rollup.day_light >= dayCap) {
+    return {
+      period: "daily",
+      code: "budget_day_exhausted",
+      cap: dayCap,
+      spent: rollup.day_light,
+      resumeAt: nextUtcMidnight(now),
+    };
+  }
+  if (monthCap !== null && rollup.month_light >= monthCap) {
+    return {
+      period: "monthly",
+      code: "budget_month_exhausted",
+      cap: monthCap,
+      spent: rollup.month_light,
+      resumeAt: nextUtcMonthStart(now),
+    };
+  }
+  return null;
+}
+
+function circuitBreakerThreshold(routine: StoredRoutine): number {
+  const raw = isRecord(routine.metadata) &&
+      isRecord(routine.metadata.circuit_breaker)
+    ? routine.metadata.circuit_breaker.max_consecutive_failures
+    : undefined;
+  return positiveInteger(raw, DEFAULT_BREAKER_FAILURES, 100);
+}
+
+// The run row's total_light is accumulated by record_routine_call_contribution
+// during the run; the executor's in-memory copy is stale by completion time.
+async function readRunTotalLight(runId: string): Promise<number> {
+  try {
+    const [row] = await fetchRows<{ id: string; total_light: number | null }>(
+      "routine_runs",
+      { id: `eq.${runId}`, select: "id,total_light", limit: "1" },
+      "Failed to read routine run spend",
+    );
+    return typeof row?.total_light === "number" &&
+        Number.isFinite(row.total_light)
+      ? Math.max(0, row.total_light)
+      : 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Counts the run's recorded contribution steps. Called BEFORE the executor
+// records its own root step, so the count contains exactly the calls the run
+// made. Fetches at most cap+1 rows — enough to detect a violation.
+async function countRunContributionSteps(
+  runId: string,
+  cap: number,
+): Promise<number> {
+  try {
+    const rows = await fetchRows<{ id: string }>(
+      "routine_run_steps",
+      {
+        run_id: `eq.${runId}`,
+        select: "id",
+        limit: String(Math.min(cap + 1, MAX_VERIFIABLE_CALLS_CAP)),
+      },
+      "Failed to count routine run steps",
+    );
+    return rows.length;
+  } catch {
+    return 0;
+  }
+}
+
+// Post-run budget accounting: fold the run's spend into the rollup and detect
+// per-run cap violations. Only queries when a relevant cap is set, so routines
+// without a budget_policy keep the exact pre-existing hot path.
+async function settleRunBudget(
+  routine: StoredRoutine,
+  run: ExecutorRunRow,
+  completedAt: Date,
+): Promise<RunBudgetAccounting> {
+  const budget = routine.budget_policy || {};
+  const runCap = budgetCap(budget.max_light_per_run);
+  const dayCap = budgetCap(budget.max_light_per_day);
+  const monthCap = budgetCap(budget.max_light_per_month);
+  const callsCap = budgetCap(budget.max_calls_per_run);
+
+  const accounting: RunBudgetAccounting = {};
+  if (
+    runCap === null && dayCap === null && monthCap === null && callsCap === null
+  ) {
+    return accounting;
+  }
+
+  let runLight = 0;
+  if (runCap !== null || dayCap !== null || monthCap !== null) {
+    runLight = await readRunTotalLight(run.id);
+  }
+  if (dayCap !== null || monthCap !== null) {
+    const rollup = currentSpendRollup(routine, completedAt);
+    rollup.day_light += runLight;
+    rollup.month_light += runLight;
+    accounting.spendRollup = rollup;
+  }
+  if (runCap !== null && runLight > runCap) {
+    accounting.autoPause = {
+      reason: "budget_run_exceeded",
+      at: iso(completedAt),
+      run_id: run.id,
+      light: runLight,
+      cap: runCap,
+    };
+    return accounting;
+  }
+  if (callsCap !== null) {
+    const calls = await countRunContributionSteps(run.id, callsCap);
+    if (calls > callsCap) {
+      accounting.autoPause = {
+        reason: "budget_calls_exceeded",
+        at: iso(completedAt),
+        run_id: run.id,
+        calls,
+        cap: callsCap,
+      };
+    }
+  }
+  return accounting;
 }
 
 async function activeRunCount(routineId: string): Promise<number> {
@@ -799,29 +1055,60 @@ async function markRunForRetry(
   });
 }
 
+// Updates the routine's bookkeeping after a run attempt and applies the
+// circuit breaker + budget auto-pause. Returns true when the routine was
+// auto-paused by this update.
 async function updateRoutineAfterRun(
   routine: StoredRoutine,
   now: Date,
   success: boolean,
-): Promise<void> {
+  accounting: RunBudgetAccounting = {},
+): Promise<boolean> {
+  let autoPause = accounting.autoPause ?? null;
+  const nextFailureCount = success ? 0 : (routine.failure_count || 0) + 1;
+  if (!success && !autoPause) {
+    const threshold = circuitBreakerThreshold(routine);
+    if (nextFailureCount >= threshold) {
+      autoPause = {
+        reason: "consecutive_failures",
+        at: iso(now),
+        failure_count: nextFailureCount,
+        threshold,
+      };
+    }
+  }
+
+  const metadataUpdates: Record<string, unknown> = {};
+  if (accounting.spendRollup) {
+    metadataUpdates.budget_spend = accounting.spendRollup;
+  }
+  if (autoPause) metadataUpdates.auto_pause = autoPause;
+
+  const payload: Record<string, unknown> = success
+    ? {
+      last_run_at: iso(now),
+      last_success_at: iso(now),
+      failure_count: 0,
+      updated_at: iso(now),
+    }
+    : {
+      last_run_at: iso(now),
+      last_error_at: iso(now),
+      failure_count: nextFailureCount,
+      updated_at: iso(now),
+    };
+  if (Object.keys(metadataUpdates).length > 0) {
+    payload.metadata = { ...(routine.metadata || {}), ...metadataUpdates };
+  }
+  if (autoPause) payload.status = "paused";
+
   await patchRows<ExecutorRoutineRow>(
     "user_routines",
     { id: `eq.${routine.id}`, select: ROUTINE_SELECT },
-    success
-      ? {
-        last_run_at: iso(now),
-        last_success_at: iso(now),
-        failure_count: 0,
-        updated_at: iso(now),
-      }
-      : {
-        last_run_at: iso(now),
-        last_error_at: iso(now),
-        failure_count: (routine.failure_count || 0) + 1,
-        updated_at: iso(now),
-      },
+    payload,
     "Failed to update routine after run",
   );
+  return autoPause !== null;
 }
 
 async function recordRootStep(
@@ -856,7 +1143,7 @@ async function executeClaimedRun(
   options: Required<Pick<RoutineExecutorOptions, "baseUrl" | "fetchFn">>,
   now: Date,
   clock: () => Date,
-): Promise<"succeeded" | "failed" | "retried" | "skipped"> {
+): Promise<RunOutcome> {
   const run = claimed.run;
   const routine = claimed.routine ??
     await getRoutine(run.user_id, run.routine_id);
@@ -864,14 +1151,46 @@ async function executeClaimedRun(
     await finishRun(run, "failed", now, {
       error: { message: `Routine ${run.routine_id} not found` },
     });
-    return "failed";
+    return { status: "failed" };
   }
 
-  if (routine.status === "deleted" || routine.status === "disabled") {
+  // "paused" is included so an auto-pause (circuit breaker / budget) also
+  // stops queued retries that were claimed before the pause landed.
+  if (
+    routine.status === "deleted" || routine.status === "disabled" ||
+    routine.status === "paused"
+  ) {
     await finishRun(run, "skipped", now, {
       summary: `Routine is ${routine.status}`,
     });
-    return "skipped";
+    return { status: "skipped" };
+  }
+
+  // Day/month budget gate for scheduled wakes. Manual run_now bypasses it —
+  // an explicit user action, and a debugging path while a budget is spent.
+  if (run.trigger === "scheduled") {
+    const gate = budgetGate(routine, now);
+    if (gate) {
+      const label = gate.period === "daily" ? "Daily" : "Monthly";
+      await finishRun(run, "skipped", now, {
+        summary:
+          `${label} credits budget exhausted (${gate.spent}/${gate.cap} Light); ` +
+          `next run deferred to ${iso(gate.resumeAt)}.`,
+        error: {
+          code: gate.code,
+          spent: gate.spent,
+          cap: gate.cap,
+          resume_at: iso(gate.resumeAt),
+        },
+      });
+      await patchRows<ExecutorRoutineRow>(
+        "user_routines",
+        { id: `eq.${routine.id}`, select: ROUTINE_SELECT },
+        { next_run_at: iso(gate.resumeAt), updated_at: iso(now) },
+        "Failed to defer routine to budget reset",
+      ).catch(() => {});
+      return { status: "skipped", budgetSkipped: true };
+    }
   }
 
   const startedAt = now;
@@ -879,6 +1198,9 @@ async function executeClaimedRun(
   try {
     const result = await invokeRoutineHandler(routine, run, options);
     const completedAt = clock();
+    // Budget accounting runs before the root step is recorded so the
+    // contribution count contains exactly the calls the run made.
+    const accounting = await settleRunBudget(routine, run, completedAt);
     await recordRootStep(
       routine,
       run,
@@ -891,10 +1213,22 @@ async function executeClaimedRun(
     await finishRun(run, "succeeded", completedAt, {
       summary: "Routine handler completed successfully.",
     });
-    await updateRoutineAfterRun(routine, completedAt, true);
-    return "succeeded";
+    const autoPaused = await updateRoutineAfterRun(
+      routine,
+      completedAt,
+      true,
+      accounting,
+    );
+    return { status: "succeeded", autoPaused };
   } catch (err) {
     const completedAt = clock();
+    const policy = retryPolicyFrom(routine, run);
+    const willRetry = run.attempt_count < policy.maxAttempts;
+    // Failed runs spend too — fold terminal attempts into the rollup. Retried
+    // runs settle when they terminally complete (total_light spans attempts).
+    const accounting = willRetry
+      ? {}
+      : await settleRunBudget(routine, run, completedAt);
     await recordRootStep(
       routine,
       run,
@@ -905,19 +1239,27 @@ async function executeClaimedRun(
       null,
       err,
     );
-    const policy = retryPolicyFrom(routine, run);
-    if (run.attempt_count < policy.maxAttempts) {
+    if (willRetry) {
       await markRunForRetry(run, routine, completedAt, err);
-      await updateRoutineAfterRun(routine, completedAt, false).catch(() => {});
-      return "retried";
+      const autoPaused = await updateRoutineAfterRun(
+        routine,
+        completedAt,
+        false,
+      ).catch(() => false);
+      return { status: "retried", autoPaused };
     }
 
     await finishRun(run, "failed", completedAt, {
       error: errorPayload(err),
       summary: "Routine handler failed.",
     });
-    await updateRoutineAfterRun(routine, completedAt, false).catch(() => {});
-    return "failed";
+    const autoPaused = await updateRoutineAfterRun(
+      routine,
+      completedAt,
+      false,
+      accounting,
+    ).catch(() => false);
+    return { status: "failed", autoPaused };
   }
 }
 
@@ -945,6 +1287,8 @@ export async function runRoutineExecutorCycle(
     failed: 0,
     retried: 0,
     skipped: 0,
+    budget_skipped: 0,
+    auto_paused: 0,
     errors: [],
   };
 
@@ -971,17 +1315,19 @@ export async function runRoutineExecutorCycle(
 
   for (const claimed of [...scheduled, ...queued]) {
     try {
-      const result = await executeClaimedRun(
+      const outcome = await executeClaimedRun(
         claimed,
         { baseUrl, fetchFn },
         now,
         clock,
       );
       summary.executed += 1;
-      if (result === "succeeded") summary.succeeded += 1;
-      if (result === "failed") summary.failed += 1;
-      if (result === "retried") summary.retried += 1;
-      if (result === "skipped") summary.skipped += 1;
+      if (outcome.status === "succeeded") summary.succeeded += 1;
+      if (outcome.status === "failed") summary.failed += 1;
+      if (outcome.status === "retried") summary.retried += 1;
+      if (outcome.status === "skipped") summary.skipped += 1;
+      if (outcome.budgetSkipped) summary.budget_skipped += 1;
+      if (outcome.autoPaused) summary.auto_paused += 1;
     } catch (err) {
       summary.failed += 1;
       summary.errors.push({
