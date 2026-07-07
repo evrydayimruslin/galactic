@@ -3627,6 +3627,7 @@ Natural-language Command dashboard primitive.
 Persistent cloud routines for ongoing delegated work.
 - \`action: "templates"\` — Discover MCP-published routine templates. Optional \`query\`, \`app_id\`, \`limit\`.
 - \`action: "plan"\` — Preview schedule, config, capability approvals, credits budgets, and Command surfaces before saving.
+- **Budgets & circuit breaker (enforced):** \`budget_policy.max_light_per_day\` / \`max_light_per_month\` gate scheduled runs — an exhausted budget records one skipped run and defers the next run to the budget reset (UTC midnight / month start). \`max_light_per_run\` / \`max_calls_per_run\` violations auto-pause the routine after the offending run. Routines also auto-pause after 10 consecutive failed attempts (override via routine \`metadata.circuit_breaker.max_consecutive_failures\`). The pause reason is recorded on the routine's \`metadata.auto_pause\`; resume with \`action: "resume"\` after fixing the cause. Manual \`run_now\` bypasses day/month gates but is skipped while paused.
 - \`action: "create"\` — Save a user-owned routine from a template. Pass \`approve_capabilities: true\` after user approval to approve durable downstream MCP calls.
 - \`action: "list"\` / \`"get"\` / \`"update"\` — Inspect and edit routine instances.
 - \`action: "pause"\` / \`"resume"\` / \`"delete"\` — Control ongoing work.
