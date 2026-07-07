@@ -23,6 +23,7 @@ export interface AppManifest {
     widgets?: WidgetDeclaration[];
     context_sources?: WidgetContextSourceDeclaration[];
     routines?: RoutineDeclaration[];
+    flight_recorder?: boolean;
     env?: Record<string, ManifestEnvVar>;
     env_vars?: Record<string, ManifestEnvVar>;
     http?: ManifestHttpConfig;
