@@ -743,6 +743,8 @@ export async function handleHttpEndpoint(
           }
           : {}),
       },
+      undefined,
+      result.reuseKeyHash,
     );
 
     const { settlement } = await settleAndLogAppExecution({

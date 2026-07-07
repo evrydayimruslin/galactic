@@ -1,9 +1,13 @@
-// Per-(app,user,UTC-day) load-floor dedup (the "only the first call each day per
-// user per agent pays the Dynamic Worker load fee" billing model). Gated by the
-// same EXECUTED_LOADER_GET_REUSE flag as warm-isolate reuse, via
-// loadFloorContext.perDayEligible. These tests pin the money-critical behavior:
-// the day's FIRST loader pays the full floor, later same-day calls pay 0, and
-// every uncertainty path FAILS TOWARD CHARGING (no leak).
+// Per-DISTINCT-isolate-per-UTC-day load-floor dedup. Cloudflare bills ~one
+// Dynamic Worker load per unique worker (= reuse key + code) per day, so the
+// floor is charged once per distinct reuse-key HASH per day — NOT once per
+// (app,user)/day, which would under-charge when a user mints several isolates in
+// a day by rotating creds/BYOK/model/env. Gated by the same
+// EXECUTED_LOADER_GET_REUSE flag (via loadFloorContext.perDayEligible) and by the
+// LOAD_FLOOR_PER_DAY kill switch. These tests pin the money-critical behavior:
+// the day's FIRST loader of an isolate pays the full floor, later same-day calls
+// to the SAME isolate pay 0, a DIFFERENT isolate is charged again, and every
+// uncertainty path FAILS TOWARD CHARGING (no leak).
 
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import { assertAlmostEquals } from "https://deno.land/std@0.210.0/assert/assert_almost_equals.ts";
@@ -65,6 +69,7 @@ function makeFetch(opts: {
   incrementStatus?: number;
   settleBodies: Array<Record<string, unknown>>;
   counterHit: { value: boolean };
+  counterKeys?: string[];
 }): typeof fetch {
   return ((input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -73,6 +78,7 @@ function makeFetch(opts: {
       : {};
     if (url.includes("/rpc/increment_caller_usage")) {
       opts.counterHit.value = true;
+      opts.counterKeys?.push(String(body.p_counter_key ?? ""));
       if ((opts.incrementStatus ?? 200) !== 200) {
         return Promise.resolve(jsonResp({ error: "boom" }, opts.incrementStatus));
       }
@@ -105,20 +111,32 @@ function withEnv<T>(fn: () => Promise<T>): Promise<T> {
 async function settleWith(
   loadFloorContext: unknown,
   fetchOpts: { incrementCount?: number; incrementStatus?: number },
-): Promise<{ amount: number; counterHit: boolean }> {
+  // The reuse-key hash the warm-reuse run would surface. The per-day dedup keys
+  // on it; pass null to model a load() run (no reuse) → per-call floor. (null,
+  // not undefined — an explicit undefined would just re-trigger this default.)
+  reuseKeyHash: string | null = "isolate-hash-A",
+): Promise<{ amount: number; counterHit: boolean; counterKey: string | null }> {
   const settleBodies: Array<Record<string, unknown>> = [];
   const counterHit = { value: false };
-  const fetchFn = makeFetch({ ...fetchOpts, settleBodies, counterHit });
+  const counterKeys: string[] = [];
+  const fetchFn = makeFetch({
+    ...fetchOpts,
+    settleBodies,
+    counterHit,
+    counterKeys,
+  });
   await settleRuntimeCloudPreflight(
     makePreflight(loadFloorContext),
     0, // durationMs 0 → duration-cost 0 → p_amount_light == effective floor
     {},
     { fetchFn },
+    reuseKeyHash ?? undefined,
   );
   assertEquals(settleBodies.length, 1, "settle_cloud_usage_hold called once");
   return {
     amount: Number(settleBodies[0].p_amount_light),
     counterHit: counterHit.value,
+    counterKey: counterKeys[0] ?? null,
   };
 }
 
@@ -142,6 +160,60 @@ Deno.test("load-floor: per-day eligible, LATER same-day call (count 2) pays 0 (f
     const r = await settleWith(ELIGIBLE, { incrementCount: 2 });
     assertFloor(r.amount, 0);
   });
+});
+
+Deno.test("load-floor: dedup counter keys on the reuse-key HASH (once per distinct isolate/day, not per (app,user)/day)", async () => {
+  await withEnv(async () => {
+    const r = await settleWith(ELIGIBLE, { incrementCount: 1 }, "isolate-hash-A");
+    assert(
+      r.counterKey?.includes("isolate-hash-A"),
+      `counter key must include the reuse-key hash, got ${r.counterKey}`,
+    );
+    assert(
+      r.counterKey?.startsWith("load_floor:"),
+      "counter key must stay in the load_floor namespace",
+    );
+  });
+});
+
+Deno.test("load-floor: a DIFFERENT reuse key (cred/BYOK/model rotation) hits a FRESH counter → charged again (no under-charge)", async () => {
+  await withEnv(async () => {
+    // Both are 'first call' for their OWN isolate (count 1) → each pays the full
+    // floor. Distinct hashes ⟹ distinct counter keys ⟹ CF billed two loads, we
+    // charge two floors. Keying on (app,user)/day alone would charge only once.
+    const a = await settleWith(ELIGIBLE, { incrementCount: 1 }, "isolate-hash-A");
+    const b = await settleWith(ELIGIBLE, { incrementCount: 1 }, "isolate-hash-B");
+    assertFloor(a.amount, FLOOR);
+    assertFloor(b.amount, FLOOR);
+    assert(
+      a.counterKey !== b.counterKey && !!a.counterKey && !!b.counterKey,
+      `distinct reuse keys must map to distinct counters, got ${a.counterKey} vs ${b.counterKey}`,
+    );
+  });
+});
+
+Deno.test("load-floor: per-day eligible but NO reuse-key hash (load() path) → per-call floor, counter NOT consulted", async () => {
+  await withEnv(async () => {
+    const r = await settleWith(ELIGIBLE, { incrementCount: 2 }, null);
+    assertFloor(r.amount, FLOOR, "no isolate identity → charge the full floor");
+    assertEquals(r.counterHit, false, "no per-day counter without a reuse key");
+  });
+});
+
+Deno.test("load-floor: LOAD_FLOOR_PER_DAY=0 kill switch → per-call floor, counter NOT consulted (revert to per-invocation)", async () => {
+  const prev = globalThis.__env;
+  globalThis.__env = {
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role",
+    LOAD_FLOOR_PER_DAY: "0",
+  } as unknown as typeof globalThis.__env;
+  try {
+    const r = await settleWith(ELIGIBLE, { incrementCount: 2 }, "isolate-hash-A");
+    assertFloor(r.amount, FLOOR, "kill switch reverts to the per-call floor");
+    assertEquals(r.counterHit, false, "no per-day counter when disabled");
+  } finally {
+    globalThis.__env = prev;
+  }
 });
 
 Deno.test("load-floor: NOT per-day eligible → per-call floor, counter NOT consulted", async () => {

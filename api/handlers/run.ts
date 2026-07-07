@@ -588,6 +588,8 @@ export async function handleRun(
           }
           : {}),
       },
+      undefined,
+      result.reuseKeyHash,
     );
     const { settlement } = await settleAndLogAppExecution({
       receiptId,

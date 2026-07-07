@@ -204,6 +204,14 @@ export interface ExecutionResult {
     message: string;
     stack?: string;
   };
+  // sha256 of the Worker Loader reuse key — set ONLY when the execution ran on
+  // the warm-reuse (loader.get) path. Cloudflare bills ~one Dynamic Worker load
+  // per unique worker (= reuse key + code) per UTC day, resetting daily, so the
+  // per-day load-floor dedup keys on THIS hash: the floor is charged once per
+  // DISTINCT isolate-identity per day, tracking CF's meter even when a user
+  // churns creds/BYOK/model/env and mints several isolates in one day. Absent
+  // on the load() path (each call is its own CF unit → per-call floor).
+  reuseKeyHash?: string;
 }
 
 // ============================================
