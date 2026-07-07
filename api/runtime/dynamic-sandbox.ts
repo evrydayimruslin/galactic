@@ -145,7 +145,7 @@ export async function deriveIsolateReuseKey(
 // One captured galactic.ai() exchange, clipped in-sandbox (prompt/response
 // ≤2000 chars each, ≤20 exchanges/execution). Persisted as routine_run_steps
 // at settlement when the app opted into the flight recorder.
-export interface FlightAiExchange {
+interface FlightAiExchange {
   at?: string;
   ms?: number;
   model?: string | null;

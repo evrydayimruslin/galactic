@@ -40,7 +40,7 @@ interface RoutineIdRow {
   name: string | null;
 }
 
-export const RECENT_RUNS_MAX = 20;
+const RECENT_RUNS_MAX = 20;
 const MAX_ROUTINES = 25;
 const MAX_STEPS = 200;
 
