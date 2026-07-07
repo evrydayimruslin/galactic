@@ -246,6 +246,12 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
         .routine_run_id,
       "run-1",
     );
+    // The routine's goal is delivered to the handler on every run so agent
+    // code can steer autonomous work against it (the /goal contract).
+    assertEquals(
+      (rpcBody.params.arguments._routine as Record<string, unknown>).intent,
+      "Handle sales follow-up.",
+    );
 
     const nextRunPatch = dbCalls.find((call) =>
       call.table === "user_routines" &&
