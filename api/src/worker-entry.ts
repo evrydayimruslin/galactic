@@ -277,9 +277,10 @@ async function runMinuteJobs(): Promise<void> {
     releaseExpiredCloudUsageHolds(),
     processNullEmbeddings(),
     processGpuBuilds(),
-    // Platform-owned durable routines: deferred post-launch capability. Skip when
-    // disabled (e.g. production, which does not ship the routines schema) so the
-    // executor does not query absent tables and error every minute.
+    // Platform-owned durable routines: LIVE in prod and staging (both declare
+    // ROUTINES_ENABLED="1" and ship the routines schema). The flag is the
+    // operational kill switch — when off, the executor skips instead of
+    // querying absent tables every minute.
     isRoutinesEnabled() ? runRoutineExecutorCycle({ baseUrl }) : Promise.resolve(null),
     dispatchPendingEvents(), // cross-Agent pub/sub event fan-out
   ]);

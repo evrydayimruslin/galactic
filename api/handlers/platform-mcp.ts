@@ -3772,22 +3772,25 @@ The policy function is the custom code path for functions. It receives \`{ app, 
 
 ### The SDK — what your Agent inherits
 
-Agent code runs in a sandbox with the \`galactic.*\` SDK (alias: \`ultralight.*\` — both work; prefer \`galactic.*\` in new code). An Agent is not just a function — it inherits a whole backend: storage, a SQL database, AI, cross-Agent calls, payments, raw sockets, and secrets. Each capability and the permission it needs:
+Agent code runs in a sandbox with the \`galactic.*\` SDK (alias: \`ultralight.*\` — both work; prefer \`galactic.*\` in new code). An Agent is not just a function — it inherits a whole backend: storage, a SQL database, AI, cross-Agent calls, events, managed email, vaulted-credential fetch, and secrets. Each capability and the permission it needs:
 
 | Capability | Call | Permission |
 |---|---|---|
 | **AI** — multimodal chat (incl. vision) | \`galactic.ai({ messages })\` | \`ai:call\` |
 | **Call another Agent** | \`galactic.call(appId, fn, args)\` | \`app:call\` or a declared dependency |
-| **Charge the user** (in-app purchase) | \`galactic.charge(credits, reason?)\` | caller must be signed in |
-| KV storage (per-user, app-scoped) | \`galactic.store / load / list / remove / query\` | — |
-| SQL (D1, structured + auto per-user scoped) | \`galactic.db.select / first / insert / update / delete / upsert / count / batch\` | — |
+| **Wired imports** — call whatever the user connected to a slot | \`galactic.use(slotName)\` | slot declared in manifest \`imports\`, wired by the user |
+| **Emit an event** (pub/sub) | \`galactic.emit(topic, payload)\` — ≤50/execution, 32KB payload; delivery is grant-gated at subscribers | — |
+| KV storage (per-user, app-scoped) | \`galactic.store / load / list / remove / query\` | \`storage:write\` / \`storage:read\` / \`storage:delete\` |
+| SQL (D1, structured + auto per-user scoped) | \`galactic.db.select / first / insert / update / delete / upsert / count / batch\` | provision via \`migrations/\` |
 | Per-agent memory (markdown) | \`galactic.remember(k,v) / recall(k)\` — this agent's private notebook; add \`{ scope: "user" }\` for the shared cross-agent notebook | \`memory:read\` / \`memory:write\` |
 | Identity | \`galactic.user\` · \`isAuthenticated()\` · \`requireAuth()\` | — |
 | Secrets (decrypted) | \`galactic.env.MY_KEY\` | declare in manifest \`env_vars\` |
-| HTTPS fetch | \`fetch(url)\` (15s · 10MB · 20 concurrent) | — |
-| **Raw TCP/TLS sockets** | \`galactic.net.connectTls(host, port)\` · \`connectPlain\` | \`net:connect\` |
-| Supabase (bring-your-own) | \`supabase\` client (when configured) | — |
+| HTTPS fetch | \`fetch(url)\` (15s · 10MB · 20 concurrent) | \`net:fetch\` or the host in manifest \`network.allowed_destinations\` (default-deny) |
+| **Credentialed fetch** — vaulted secret attached host-side | \`galactic.fetch(credentialKey, url, init?)\` | vaulted credential configured by the user |
+| **Managed email** (IMAP poll / SMTP send) | \`galactic.net.imapFetchUnseen(...)\` · \`galactic.net.smtpSend(...)\` | \`net:connect\` |
 | Stdlib (global) | \`_\` (lodash) · \`uuid\` · \`base64\` · \`hash\` · \`dateFns\` · \`schema\` (Zod-like) · \`markdown\` · \`str\` · \`jwt\` · \`http\` · \`crypto\` | — |
+
+Not in the SDK: there is no in-code charging API (monetize via per-call pricing / \`planAccess\`), no raw TCP/TLS sockets (\`galactic.net.connectTls\` throws — use the managed email methods), and no bring-your-own Supabase client in the runtime (reach external databases through \`fetch\`/\`galactic.fetch\` to allowlisted hosts).
 
 #### \`galactic.ai(request)\` — multimodal chat completion
 Request: \`{ messages: [{ role, content }], model?, max_tokens?, temperature? }\`. \`content\` is a string OR an array of parts — \`{ type: "text", text }\` and \`{ type: "file", data, filename? }\` where an image file enables **vision**. Returns \`{ content, model, usage }\`. Billed in credits (or the user's BYOK key). Requires \`ai:call\` in manifest permissions. There is no streaming / JSON-mode / image-generation — ask for JSON in the prompt and \`JSON.parse\` the result. **On failure \`galactic.ai\` throws** (out of credits, rate limit, upstream error) — it never returns an empty \`content\`, so a plain \`await\` either yields a real completion or surfaces the error in your function's error envelope. It auto-retries once against the platform fallback model before throwing.
@@ -3815,8 +3818,19 @@ One database per Agent, shared by all its users, but **every call is automatical
 - \`galactic.db.batch(ops[])\` — array of \`{ op: "insert"|"update"|"delete"|"upsert", table, ... }\`, run sequentially.
 - Joins are scoped on every table: \`joins: [{ table: "versions", on: { column: "id", foreignColumn: "conversation_id" } }]\` and reference columns as \`{ table: "versions", column: "body" }\` or \`"versions.body"\` in \`where\`.
 
-#### \`galactic.charge(credits, reason?)\` — get paid mid-execution
-Charges the signed-in caller and credits you, net of the 15% platform fee — waived to 0% for customers you brought yourself (the same fee + referral system as per-call pricing). Returns \`{ success, to_balance, platform_fee, fee_waived }\`. Use it for in-app purchases, metered features, or tips. For simple "price per call" instead, set a price in the manifest or via \`gx.set\` — identical economics.
+#### \`galactic.use(slotName)\` — call the Agents your user wired in
+Resolves a manifest import slot to whatever Agent the user connected, exposing only the granted functions — each keyed by name and routed through \`galactic.call\` (grant-gated at the target): \`const summarizer = await galactic.use("summarizer"); const out = await summarizer.summarize({ text });\`. An unwired slot throws with a pointer to the Agent page. Use \`galactic.call(appId, fn, args)\` when you know the concrete app id instead.
+
+#### \`galactic.fetch(credentialKey, url, init?)\` — authenticated fetch with a vaulted secret
+Like \`fetch\`, but the platform attaches the user's vaulted credential named \`credentialKey\` host-side — the secret value never enters your code, and it is only applied toward the credential's declared destination. Returns the \`Response\`. Users add credentials on the Agent's settings page.
+
+#### \`galactic.net\` — managed email (requires \`net:connect\`)
+High-level protocol methods run host-side; raw sockets are not exposed (\`connectTls\` throws).
+- \`galactic.net.imapFetchUnseen(hostKey, port, userKey, passKey, lastUid?, businessEmail?, processedFlag?, limit?)\` — poll unseen mail. The \`*Key\` arguments name env vars / vaulted credentials, never raw values.
+- \`galactic.net.smtpSend(hostKey, port, userKey, passKey, from, fromName, to, subject, body, inReplyTo?)\` — send mail.
+
+#### Getting paid
+There is no in-code charging API. Monetize with per-call pricing (manifest \`price_light\` or \`gx.set\`) or the \`planAccess\` policy hook for dynamic pricing/quotas — both flow through the same 15% platform fee with referral waivers.
 
 ### Interfaces — give your Agent a real UI
 
@@ -3833,7 +3847,7 @@ const result = await galactic.call("get_data", { id });  // runs YOUR Agent's fu
 galactic.resize(600);                                     // set the iframe height
 const ctx = galactic.context;                             // { user, ... } — null if signed out
 \`\`\`
-**The Agent IS the interface's backend.** The interface renders; \`galactic.call\` runs functions that can \`galactic.ai()\`, read \`galactic.db\`, charge, or call other Agents. So any pixel can be backed by generation and persistent memory.
+**The Agent IS the interface's backend.** The interface renders; \`galactic.call\` runs functions that can \`galactic.ai()\`, read \`galactic.db\`, or call other Agents. So any pixel can be backed by generation and persistent memory.
 
 **Sandbox rules — read them as a superpower, not just limits:** inline JS + WebGL/WebGPU run (three.js, shaders, procedural 3D, audio synthesis — demoscene-style visuals with no assets); external **https images** load (textures); BUT there is **no fetch/network inside the interface** — every piece of dynamic data comes through \`galactic.call\` to your Agent (or is inlined). No localStorage either — persist through your Agent. One file, ≤ 1 MiB. So: build procedural, AI-backed experiences, not asset-streamed ones.
 
@@ -3841,7 +3855,7 @@ const ctx = galactic.context;                             // { user, ... } — n
 
 ### Recipes (copy-paste)
 - **AI-backed function** (manifest \`permissions: ["ai:call"]\`): \`export async function summarize(args) { const { content } = await galactic.ai({ messages: [{ role: "user", content: "Summarize: " + args.text }] }); return { summary: content }; }\`
-- **Paywalled feature:** \`galactic.requireAuth(); await galactic.charge(50, "premium_export"); return { url: url };\`
+- **Paid function:** set \`price_light\` on the function in the manifest (or return a price from \`planAccess\`) — the platform meters and charges per call; no in-code charging is needed.
 - **Compose Agents:** \`const out = await galactic.call("translator-app", "translate", { text: t, to: "fr" });\`
 - **Persistent counter:** \`const n = (await galactic.load("count")) || 0; await galactic.store("count", n + 1); return { count: n + 1 };\`
 - **D1 CRUD (auto per-user):** \`await galactic.db.insert("notes", { id: crypto.randomUUID(), body: args.body }); const notes = await galactic.db.select("notes", { orderBy: { column: "created_at", dir: "desc" }, limit: 20 });\`
