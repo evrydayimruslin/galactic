@@ -114,6 +114,13 @@ EXECUTED_BUNDLE_REQUIRE_ATTESTATION = "1"
 # billing ON — and so a wrangler deploy does NOT wipe the dashboard var and
 # silently keep it OFF. Run the staging isolation smoke before cutting that tag.
 EXECUTED_LOADER_GET_REUSE = "1"
+# Load-floor billing granularity. Unset/"1" (default) = charge the load floor
+# once per DISTINCT isolate (reuse key) per UTC day — tracks Cloudflare's
+# per-unique-worker-per-day meter (a user who rotates creds/BYOK/model mints new
+# isolates and is charged per one, no under-charge). Set "0" as a KILL SWITCH to
+# revert to a per-invocation floor (charge every call) if CF's meter ever changes
+# to per-load — one dashboard/config flip, no code change.
+# LOAD_FLOOR_PER_DAY = "0"
 # New primary domain is connectgalactic.com; the old ultralightagent.com origins
 # stay listed so they keep working during the cutover (remove later).
 CORS_ALLOWED_ORIGINS = "https://api.connectgalactic.com,https://connectgalactic.com,https://api.ultralightagent.com,https://ultralightagent.com"

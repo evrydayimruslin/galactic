@@ -2889,6 +2889,7 @@ async function executeAppFunction(
         logs: Array<{ time: string; level: string; message: string }>;
         durationMs: number;
         aiCostLight: number;
+        reuseKeyHash?: string;
       },
     ) => {
       const callSource = widgetPull
@@ -2916,6 +2917,8 @@ async function executeAppFunction(
             }
             : {}),
         },
+        undefined,
+        result.reuseKeyHash,
       );
       const { settlement } = await settleAndLogAppExecution({
         receiptId,

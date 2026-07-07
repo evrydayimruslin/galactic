@@ -244,6 +244,11 @@ export async function executeInDynamicSandbox(
   // by the bindings, deregistered in finally). Declared here so finally can
   // clean it up on every exit path.
   let execCtxHandle: string | null = null;
+  // sha256 of the reuse key — set only on the warm-reuse (get) path; surfaced on
+  // the ExecutionResult so settle keys the per-day load-floor dedup on the
+  // DISTINCT isolate identity (once per CF-billable worker/day). Declared here so
+  // both the success and error returns can carry it.
+  let reuseKeyHash: string | null = null;
 
   if (!loader) {
     return {
@@ -876,6 +881,11 @@ export default {
           hasMemory: "MEMORY" in bindings,
         },
       );
+      // Hash the reuse key for the per-day load-floor dedup counter. The reuse
+      // key already contains NO raw secrets (creds/BYOK are folded into the
+      // sha256 stateFingerprint), but hash again for a fixed-length, opaque
+      // counter component that never lands raw in the usage table.
+      reuseKeyHash = await sha256HexLocal(reuseKey);
       worker = loader.get(reuseKey, () => Promise.resolve(loadConfig));
     } else {
       worker = loader.load(loadConfig);
@@ -949,6 +959,7 @@ export default {
       logs: data.logs || [],
       durationMs: Date.now() - startTime,
       aiCostLight,
+      ...(reuseKeyHash ? { reuseKeyHash } : {}),
       ...(data.error ? { error: data.error } : {}),
     };
   } catch (err) {
@@ -961,6 +972,9 @@ export default {
       // completed before the failure — report the real debited spend so the
       // receipt and grant-cap accounting stay truthful.
       aiCostLight: consumeAiSpend(config.executionId),
+      // If the loader.get() ran before the failure, CF still billed the load —
+      // carry the hash so the floor still dedups on the correct isolate identity.
+      ...(reuseKeyHash ? { reuseKeyHash } : {}),
       error: {
         type: err instanceof Error ? err.constructor.name : "UnknownError",
         message: err instanceof Error ? err.message : String(err),

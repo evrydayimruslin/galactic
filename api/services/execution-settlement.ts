@@ -734,6 +734,11 @@ export async function settleRuntimeCloudPreflight(
   durationMs: number,
   metadata?: Record<string, unknown>,
   deps?: ExecutionSettlementDeps,
+  // sha256 of the reuse key from the ExecutionResult — known only AFTER
+  // execution (the reuse key needs runtime-resolved inputs), so it is passed
+  // here rather than baked into the preflight-built loadFloorContext. Present
+  // only for warm-reuse (loader.get) runs; absent → per-call floor.
+  reuseKeyHash?: string,
 ): Promise<RuntimeCloudSettlementForAppCall | null> {
   if (!preflight.hold) {
     return null;
@@ -750,6 +755,7 @@ export async function settleRuntimeCloudPreflight(
   // undefined → the full config floor applies (fail toward charging = no leak).
   const loadFloorOverride = await resolveDailyLoadFloor(
     preflight.loadFloorContext,
+    reuseKeyHash,
     deps,
   );
 
@@ -1850,24 +1856,46 @@ function utcDayKey(nowMs: number): string {
 }
 
 /**
- * Resolve the effective per-load floor for a settlement under the
- * per-(app,user,UTC-day) dedup. Returns the override (Light) or `undefined` to
- * mean "use the config floor" (the per-call default).
+ * Resolve the effective per-load floor for a settlement under the per-DISTINCT-
+ * ISOLATE-per-UTC-day dedup. Returns the override (Light) or `undefined` to mean
+ * "use the config floor" (the per-call default).
+ *
+ * Cloudflare bills ~one Dynamic Worker load per UNIQUE worker (Worker ID + code)
+ * per UTC day, resetting daily (developers.cloudflare.com/dynamic-workers/
+ * pricing). Our Worker ID IS the reuse key, so the floor must be charged once
+ * per distinct reuse key per day — NOT once per (app,user,day). Keying only on
+ * (app,user,day) under-charges when a user mints several isolates in a day by
+ * churning a reuse-key input (credential rotation, BYOK swap, model/aiRoute
+ * change, envVars) — each mints a new CF-billable worker while the day-only
+ * counter charges once. Keying on `reuseKeyHash` tracks CF's meter exactly and
+ * is bit-identical for the normal stable-config case (one reuse key/day).
+ *
  *  - Not eligible / floor is 0 → undefined (per-call floor, unchanged).
- *  - Eligible → atomically bump the (app,user,`load_floor:<utc-day>`) counter;
- *    the day's FIRST loader (count 1) pays the full floor, every later same-day
- *    call returns 0 (its reserved floor is released by the settle true-down).
+ *  - LOAD_FLOOR_PER_DAY="0" (kill switch) → undefined (per-call floor). Flip this
+ *    to revert to per-invocation billing if CF's meter ever changes to per-load.
+ *  - No reuseKeyHash (load() path, or a caller that didn't thread it) → undefined
+ *    (per-call floor). The dedup applies ONLY to warm-reuse runs, whose CF cost
+ *    is per-key/day.
+ *  - Eligible + hash → atomically bump the (app,user,`load_floor:<day>:<hash>`)
+ *    counter; the day's FIRST loader of THAT isolate (count 1) pays the full
+ *    floor, every later same-day call to the SAME isolate returns 0.
  *  - Supabase unavailable / RPC error / unparseable → undefined (full floor).
  * FAIL TOWARD CHARGING everywhere: the dedup can only ever REDUCE a charge for a
- * confirmed non-first call, never zero out a floor on uncertainty.
+ * confirmed non-first call of the same isolate, never zero out on uncertainty.
  */
 async function resolveDailyLoadFloor(
   context: LoadFloorContext | undefined,
+  reuseKeyHash: string | undefined,
   deps?: ExecutionSettlementDeps,
 ): Promise<number | undefined> {
   if (!context || !context.perDayEligible || context.baseFloorLight <= 0) {
     return undefined;
   }
+  // Kill switch: revert to per-invocation floor billing without a code change.
+  if (getEnv("LOAD_FLOOR_PER_DAY") === "0") return undefined;
+  // The dedup is meaningful only per distinct CF-billable worker (= reuse key).
+  // Without the hash we cannot attribute the day's load → charge the full floor.
+  if (!reuseKeyHash) return undefined;
   const supabaseConfigured = Boolean(
     getEnv("SUPABASE_URL") && getEnv("SUPABASE_SERVICE_ROLE_KEY"),
   );
@@ -1877,12 +1905,15 @@ async function resolveDailyLoadFloor(
     const res = await supabase.rpc("increment_caller_usage", {
       p_app_id: context.appId,
       p_user_id: context.callerUserId,
-      p_counter_key: `load_floor:${utcDayKey(Date.now())}`,
+      p_counter_key: `load_floor:${utcDayKey(Date.now())}:${reuseKeyHash}`,
     });
     if (!res.ok) return undefined;
     const count = parseIncrementCallerUsageCount(await res.json());
     if (count === null) return undefined;
-    // First loader of the day pays the full floor; every later same-day call is 0.
+    // First loader of this isolate today pays the full floor; later same-day
+    // calls to the SAME reuse key are 0 (their reserved floor is released by the
+    // settle true-down). A DIFFERENT reuse key that day → a fresh counter → the
+    // full floor again, matching the extra CF load it caused.
     return count <= 1 ? context.baseFloorLight : 0;
   } catch (err) {
     console.error("[LOAD-FLOOR] per-day dedup RPC error:", err);
