@@ -145,6 +145,7 @@ import {
   getManifestEnvVars,
   type ManifestFunction,
   resolveManifestEnvSchema,
+  validateManifest,
 } from "../../shared/contracts/manifest.ts";
 import { getEnv } from "../lib/env.ts";
 import { resolveInternalMcpCall } from "../services/internal-mcp.ts";
@@ -1548,10 +1549,14 @@ const VALIDATION_ERROR = -32006;
 // ============================================
 // SESSION CONTEXT TRACKING — for auto-inspect on first ul.call
 // ============================================
-// Tracks which apps have received full inspect context per session.
+// Tracks which apps have received first-call context per session.
 // Key: `${sessionId}:${appId}`, Value: timestamp.
-// In-memory — acceptable for per-session state. With 2 instances,
-// worst case is inspect data sent twice (harmless extra context).
+// In-memory and therefore best-effort: Cloudflare runs many short-lived
+// isolates, each with its own empty map, so "first call" re-fires whenever a
+// call lands on a cold isolate. That's fine because the attached context is
+// deliberately compact (see compactFirstCallContext) — a repeat costs a few
+// hundred bytes, not the multi-KB inspect blob — so we don't pay for a shared
+// store to enforce exactly-once on a pure convenience.
 
 const sessionAppContext = new Map<string, number>();
 const SESSION_CONTEXT_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -1576,6 +1581,39 @@ function markAppContextSent(sessionId: string, appId: string): void {
       if (now - v > SESSION_CONTEXT_TTL_MS) sessionAppContext.delete(k);
     }
   }
+}
+
+/**
+ * Project the full inspect payload down to just what an agent needs to make
+ * its NEXT call correctly: the function signatures, the storage backend, and
+ * any per-user secrets still missing. Everything else on the inspect card
+ * (trust card, metrics, recent calls, network disclosure, skills doc) is a
+ * gx.discover({ scope: "inspect" }) away and doesn't belong on every call.
+ * Keeping this small is what makes the best-effort dedup above acceptable.
+ */
+function compactFirstCallContext(inspect: unknown): unknown {
+  if (!inspect || typeof inspect !== "object") return inspect;
+  const d = inspect as Record<string, unknown>;
+  const meta = (d.metadata ?? {}) as Record<string, unknown>;
+  const storage = d.storage as { backend?: unknown } | undefined;
+  const settings = d.settings as
+    | { missing_required?: unknown[] }
+    | undefined;
+  const appId = meta.app_id;
+  const missingRequired = settings?.missing_required;
+  const compact: Record<string, unknown> = {
+    app_id: appId,
+    name: meta.name,
+    functions: d.functions,
+    _full:
+      `Full details (trust card, storage schema, metrics, recent calls) via ` +
+      `gx.discover({ scope: "inspect", app_id: "${appId}" }).`,
+  };
+  if (storage?.backend) compact.storage = { backend: storage.backend };
+  if (Array.isArray(missingRequired) && missingRequired.length > 0) {
+    compact.missing_required = missingRequired;
+  }
+  return compact;
 }
 
 // ============================================
@@ -2732,7 +2770,7 @@ async function executeCall(
       }, econ);
       markAppContextSent(mcpSessionId, targetAppId);
       result = {
-        _first_call_context: inspectData,
+        _first_call_context: compactFirstCallContext(inspectData),
         result: unwrappedResult,
         ...flagNudge,
       };
@@ -3713,7 +3751,9 @@ Manage your wallet: balance, earnings, conversions, withdrawals, payouts.
 
 **Workflow:** \`gx.download\` (scaffold) → implement functions (reach for \`galactic.ai()\`, \`galactic.call()\`, \`galactic.db\`) → add an Interface (\`interfaces[]\`) for a human-facing UI → \`gx.test\` → \`gx.upload\` → \`gx.set\`. The richest Agents combine functions + AI + an Interface — see "The SDK" and "Interfaces" below.
 
-**Always include a manifest.json** alongside index.ts. The manifest enables per-function pricing in the dashboard, typed parameter schemas for better agent tool use, permission grants, Settings surfaces on public app pages, and a declared \`access_policy\` hook for custom-coded permission/monetization logic. Without it, functions are auto-detected from exports but lack parameter/return metadata. Structure: \`{ "functions": { "fnName": { "description": "...", "parameters": { "paramName": { "type": "string", "required": true, "description": "What this param does" } } } }, "access_policy": { "mode": "module", "module": "policy.ts", "export": "planAccess" }, "env_vars": { "MY_KEY": { "scope": "per_user", "input": "password", "description": "..." } } }\`. Parameters must be an object keyed by parameter name (NOT an array). \`access_policy.module\` records the source file, and \`access_policy.export\` must be exported from the bundled app entry surface, e.g. \`export { planAccess } from "./policy.ts";\`. Policy functions receive \`{ app, caller, subject, input, metadata, static }\` and return \`{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }\` or \`{ effect: "deny", reason }\`. \`gx.download\` scaffolds the base manifest automatically.
+**Always include a manifest.json** alongside index.ts. The manifest enables per-function pricing in the dashboard, typed parameter schemas for better agent tool use, permission grants, Settings surfaces on public app pages, and a declared \`access_policy\` hook for custom-coded permission/monetization logic. Without it, functions are auto-detected from exports but lack parameter/return metadata. Structure: \`{ "functions": { "fnName": { "description": "...", "parameters": { "paramName": { "type": "string", "required": true, "description": "What this param does" } } } }, "access_policy": { "mode": "module", "module": "policy.ts", "export": "planAccess" }, "env_vars": { "MY_KEY": { "scope": "per_user", "input": "password", "description": "..." } } }\`. Parameters must be an object keyed by parameter name (NOT an array). \`access_policy.module\` records the source file, and \`access_policy.export\` must be exported from the bundled app entry surface, e.g. \`export { planAccess } from "./policy.ts";\`. Policy functions receive \`{ app, caller, subject, input, metadata, static }\` and return \`{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }\` or \`{ effect: "deny", reason }\`. \`gx.download\` scaffolds the base manifest automatically. The \`type\` and \`entry\` fields are optional in a hand-written manifest — they default to \`"mcp"\` and \`{ "functions": "index.ts" }\`, so the structure above deploys as-is.
+
+**Two steps live on the website, not MCP.** Adding credits (a non-private Agent needs a minimum balance to go live) and Stripe Connect payout setup (required to publish publicly) are Stripe-hosted and browser-only — there is no MCP action for either. When a publish call is blocked, the error carries a \`configure_url\`; hand the user that exact link. The pages: add credits at \`https://connectgalactic.com/account?tab=balance\`, set up payouts at \`https://connectgalactic.com/account?tab=earnings\`.
 
 ### Programmable Permissions and Monetization
 
@@ -8585,21 +8625,21 @@ function executeLint(args: Record<string, unknown>): unknown {
   }
 
   if (manifest) {
-    // Check required manifest fields
-    if (!manifest.name) {
+    // Predict gx.upload's strict validator so gx.test is a faithful preflight
+    // instead of green-lighting manifests that upload then rejects. Runs the
+    // exact same validateManifest (which auto-defaults type/entry), so the
+    // documented shape passes here AND on upload. Surfaced as errors because
+    // any one of these blocks the deploy.
+    const schema = validateManifest(manifest);
+    for (const e of schema.errors) {
       issues.push({
         severity: "error",
-        rule: "manifest-name",
-        message: 'manifest.json missing "name" field.',
+        rule: "manifest-schema",
+        message: `${e.path}: ${e.message}`,
       });
     }
-    if (!manifest.version) {
-      issues.push({
-        severity: "warning",
-        rule: "manifest-version",
-        message: 'manifest.json missing "version" field.',
-      });
-    }
+    // description isn't required by the deploy validator, but a missing one
+    // hurts discovery — keep nudging for it as a warning.
     if (!manifest.description) {
       issues.push({
         severity: "warning",

@@ -2811,6 +2811,14 @@ export function validateManifest(input: unknown): ManifestValidationResult {
 
   const manifest = input as Record<string, unknown>;
 
+  // Default the two fields that have exactly one conventional value, so a
+  // hand-authored manifest that follows the docs (functions + access_policy,
+  // no explicit type/entry) deploys instead of 400-ing. `type` has a single
+  // legal value; `entry.functions` defaults to the scaffold's convention.
+  // Only fill when absent — an explicit wrong value still errors below.
+  if (manifest.type === undefined) manifest.type = 'mcp';
+  if (manifest.entry === undefined) manifest.entry = { functions: 'index.ts' };
+
   if (!manifest.name || typeof manifest.name !== 'string') {
     errors.push({
       path: 'name',

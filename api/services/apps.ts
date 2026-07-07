@@ -24,6 +24,11 @@ function toPgVector(embedding: number[]): string {
   return `[${embedding.filter(Number.isFinite).join(",")}]`;
 }
 
+// Postgres rejects a non-uuid value in a `uuid = eq.` filter with SQLSTATE
+// 22P02 ("invalid input syntax for type uuid"). We treat that as "not found"
+// on id lookups so id-or-slug resolvers fall through to a slug lookup.
+const UUID_SYNTAX_ERROR_RE = /22P02|invalid input syntax for type uuid/i;
+
 export interface SupabaseConfig {
   url: string;
   serviceKey: string;
@@ -91,7 +96,18 @@ export class AppsService {
     url.searchParams.set("deleted_at", "is.null");
     url.searchParams.set("select", "*");
     url.searchParams.set("limit", "1");
-    return this.fetchSingle<AppWithDraft>(url);
+    try {
+      return await this.fetchSingle<AppWithDraft>(url);
+    } catch (err) {
+      // A non-uuid ref (e.g. a slug handed to an id-or-slug resolver) makes
+      // Postgres reject the id filter with 22P02. Treat as "not found" so the
+      // resolver falls through to its slug lookup rather than leaking the raw
+      // Postgres error to the caller.
+      if (err instanceof Error && UUID_SYNTAX_ERROR_RE.test(err.message)) {
+        return null;
+      }
+      throw err;
+    }
   }
 
   /**
