@@ -269,11 +269,6 @@ function addMs(date: Date, ms: number): Date {
   return new Date(date.getTime() + ms);
 }
 
-function leaseAndDueFilter(dueColumn: string, now: Date): string {
-  const stamp = iso(now);
-  return `(or(lease_expires_at.is.null,lease_expires_at.lt.${stamp}),or(${dueColumn}.is.null,${dueColumn}.lte.${stamp}))`;
-}
-
 function nextMinuteAfter(date: Date): Date {
   const next = new Date(date.getTime());
   next.setUTCSeconds(0, 0);
@@ -688,18 +683,44 @@ async function activeRunCount(routineId: string): Promise<number> {
   return rows.length;
 }
 
+// Clear leases stuck on active routines past their expiry (a cron/consumer that
+// died between claim and release). A flat filter so it's cheap and the reset
+// makes the routine claimable again via lease_id=is.null. Returns rows touched.
+async function clearExpiredRoutineLeases(now: Date): Promise<number> {
+  const cleared = await patchRows<{ id: string }>(
+    "user_routines",
+    {
+      status: "eq.active",
+      lease_expires_at: `lt.${iso(now)}`,
+      select: "id",
+    },
+    { lease_id: null, lease_expires_at: null, updated_at: iso(now) },
+    "Failed to clear expired routine leases",
+  ).catch(() => [] as Array<{ id: string }>);
+  return cleared.length;
+}
+
 async function claimRoutine(
   routine: ExecutorRoutineRow,
   now: Date,
   leaseMs: number,
 ): Promise<ExecutorRoutineRow | null> {
   const leaseId = crypto.randomUUID();
+  // FLAT filter only (id + status + lease_id.is.null) — the CAS guard against
+  // concurrent claimers, resolved by PostgreSQL row-locking so exactly one wins.
+  // A nested `and=(or,or)` filter here returns an EMPTY representation on a
+  // successful PATCH (PostgREST only echoes rows still matching the filter after
+  // the update, and setting lease_expires_at pushes the row out of the lease-free
+  // clause), so the claim looked like it failed and the lease was orphaned. Flat
+  // params echo the updated row correctly (same shape claimQueuedRunForExecution
+  // relies on). Expired leases are reset to null by clearExpiredRoutineLeases
+  // before this runs; the due-check already happened in dueRoutineCandidates.
   const [claimed] = await patchRows<ExecutorRoutineRow>(
     "user_routines",
     {
       id: `eq.${routine.id}`,
       status: "eq.active",
-      and: leaseAndDueFilter("next_run_at", now),
+      lease_id: "is.null",
       select: ROUTINE_SELECT,
     },
     {
@@ -796,6 +817,8 @@ async function prepareDueScheduledRuns(
   leaseMs: number,
 ): Promise<string[]> {
   const runIds: string[] = [];
+  // Free leases orphaned by a prior crash so their routines are claimable again.
+  await clearExpiredRoutineLeases(now);
   const candidates = await dueRoutineCandidates(now, limit);
 
   for (const candidate of candidates) {
@@ -1600,3 +1623,4 @@ export async function runRoutineExecutorCycle(
 
   return summary;
 }
+
