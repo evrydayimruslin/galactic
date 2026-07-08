@@ -10,10 +10,10 @@ import {
   assertNoHeaderInjection,
   assertSingleAddress,
   dotStuffBody,
-  assertImapAtom,
   assertImapQuotable,
 } from '../../services/mail-sanitize.ts';
 import type { ResolvedCredential } from '../../../shared/contracts/env.ts';
+import { parseMessage } from './mime-parse.ts';
 
 interface NetworkBindingProps {
   userId: string;
@@ -25,18 +25,42 @@ interface NetworkBindingProps {
   credentials: Record<string, ResolvedCredential>;
 }
 
+// A fully-parsed inbound message. All header fields are RFC 2047-decoded and the
+// body is charset-decoded (UTF-8, ISO-2022-JP, Shift_JIS, windows-1252, …).
 interface FetchedEmail {
   uid: number;
   from: string;
   to: string;
+  cc: string;
+  replyTo: string;
   subject: string;
   body: string;
   messageId: string;
   inReplyTo: string;
+  references: string;
+  date: string;
+}
+
+interface ImapFetchResult {
+  emails: FetchedEmail[];
+  // Every UID this call attempted to fetch, ascending. The app advances its
+  // watermark only over a contiguous prefix of these that processed cleanly, so
+  // a UID whose fetch/parse failed (present here but absent from `emails`) holds
+  // the watermark and is retried next poll — at-least-once, never skipped.
+  attemptedUids: number[];
+  // Mailbox identity + cursor from SELECT. uidValidity change ⇒ the app must
+  // reset its watermark; uidNext lets a first-time connect baseline to "now"
+  // instead of ingesting the entire archive.
+  uidValidity: number;
+  uidNext: number;
+  hasMore: boolean;
+  // Highest existing UID in the mailbox (for logging + first-connect baseline).
+  // The app's watermark is derived from the contiguous-success prefix, not this.
+  maxUid: number;
 }
 
 const enc = new TextEncoder();
-const dec = new TextDecoder();
+const latin1 = new TextDecoder('latin1');
 
 // ── Security ──
 // host/port are sandbox-supplied, so block connections to internal/private
@@ -55,117 +79,70 @@ function validateTarget(hostname: string, port: number): void {
   // the user's arbitrary mail host. SSRF (internal/private) is still enforced.
 }
 
-// ── IMAP Protocol Helpers ──
-
-class LineReader {
+// ── Byte-accurate line/literal reader ──
+// IMAP literals declare a length in OCTETS ({N}), not characters. The previous
+// reader accumulated a *decoded* string and sliced N characters, so any 8-bit
+// (UTF-8/8BITMIME) message over-consumed past the literal and spliced protocol
+// text into the body. This reader buffers raw bytes: readLine decodes a single
+// ASCII/latin1 protocol line, readBytes returns EXACTLY N octets untouched, so
+// the raw MIME handed to the parser is byte-for-byte correct.
+class ByteReader {
   private reader: ReadableStreamDefaultReader<Uint8Array>;
-  private buf = '';
+  private buf = new Uint8Array(0);
 
   constructor(readable: ReadableStream<Uint8Array>) {
     this.reader = readable.getReader();
   }
 
+  private append(chunk: Uint8Array): void {
+    const next = new Uint8Array(this.buf.length + chunk.length);
+    next.set(this.buf);
+    next.set(chunk, this.buf.length);
+    this.buf = next;
+  }
+
+  private indexOfCRLF(): number {
+    for (let i = 0; i + 1 < this.buf.length; i++) {
+      if (this.buf[i] === 13 && this.buf[i + 1] === 10) return i;
+    }
+    return -1;
+  }
+
   async readLine(): Promise<string> {
     while (true) {
-      const idx = this.buf.indexOf('\r\n');
+      const idx = this.indexOfCRLF();
       if (idx >= 0) {
-        const line = this.buf.substring(0, idx);
-        this.buf = this.buf.substring(idx + 2);
-        return line;
+        const line = this.buf.subarray(0, idx);
+        this.buf = this.buf.subarray(idx + 2);
+        return latin1.decode(line);
       }
       const { value, done } = await this.reader.read();
-      if (done) return this.buf;
-      this.buf += dec.decode(value, { stream: true });
+      if (done) {
+        const rest = latin1.decode(this.buf);
+        this.buf = new Uint8Array(0);
+        return rest;
+      }
+      this.append(value);
     }
   }
 
-  async readBytes(n: number): Promise<string> {
+  async readBytes(n: number): Promise<Uint8Array> {
     while (this.buf.length < n) {
       const { value, done } = await this.reader.read();
       if (done) break;
-      this.buf += dec.decode(value, { stream: true });
+      this.append(value);
     }
-    const data = this.buf.substring(0, n);
-    this.buf = this.buf.substring(n);
-    return data;
+    const take = Math.min(n, this.buf.length);
+    const out = this.buf.slice(0, take); // copy — caller retains it across reads
+    this.buf = this.buf.subarray(take);
+    return out;
   }
 
-  releaseLock() { try { this.reader.releaseLock(); } catch {} }
-}
-
-function parseEmail(raw: string): Omit<FetchedEmail, 'uid'> {
-  const headerEnd = raw.indexOf('\r\n\r\n');
-  const headerBlock = headerEnd > 0 ? raw.substring(0, headerEnd) : raw;
-  const bodyBlock = headerEnd > 0 ? raw.substring(headerEnd + 4) : '';
-  const unfolded = headerBlock.replace(/\r\n([ \t])/g, ' ');
-
-  function getHeader(name: string): string {
-    const re = new RegExp('^' + name + ':\\s*(.+)$', 'im');
-    const m = unfolded.match(re);
-    return m ? m[1].trim() : '';
+  releaseLock(): void {
+    try {
+      this.reader.releaseLock();
+    } catch { /* already released */ }
   }
-
-  function decodeWord(s: string): string {
-    return s.replace(/=\?([^?]+)\?([BQ])\?([^?]+)\?=/gi, (_: string, _charset: string, encoding: string, text: string) => {
-      if (encoding.toUpperCase() === 'B') {
-        return dec.decode(Uint8Array.from(atob(text), c => c.charCodeAt(0)));
-      }
-      return text.replace(/_/g, ' ').replace(/=([0-9A-F]{2})/gi, (__: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
-    });
-  }
-
-  function extractAddr(s: string): string {
-    const m = s.match(/<([^>]+)>/);
-    return m ? m[1] : s.trim();
-  }
-
-  const from = extractAddr(getHeader('From'));
-  const to = extractAddr(getHeader('To'));
-  const subject = decodeWord(getHeader('Subject'));
-  const messageId = getHeader('Message-ID').replace(/[<>]/g, '');
-  const inReplyTo = getHeader('In-Reply-To').replace(/[<>]/g, '');
-
-  // Extract body — handle multipart
-  let textBody = '';
-  const contentType = getHeader('Content-Type');
-
-  if (contentType.includes('multipart/')) {
-    const bMatch = contentType.match(/boundary="?([^";\s]+)"?/);
-    if (bMatch) {
-      const boundary = bMatch[1];
-      const parts = bodyBlock.split('--' + boundary);
-      for (const part of parts) {
-        if (part.trim() === '--' || part.trim() === '') continue;
-        const phe = part.indexOf('\r\n\r\n');
-        if (phe < 0) continue;
-        const ph = part.substring(0, phe).toLowerCase();
-        const pb = part.substring(phe + 4).trim();
-        if (ph.includes('text/plain')) {
-          textBody = pb;
-          if (ph.includes('quoted-printable')) {
-            textBody = textBody.replace(/=\r?\n/g, '').replace(/=([0-9A-F]{2})/gi, (_: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
-          } else if (ph.includes('base64')) {
-            textBody = dec.decode(Uint8Array.from(atob(pb.replace(/\s/g, '')), c => c.charCodeAt(0)));
-          }
-          break;
-        }
-      }
-    }
-  }
-
-  if (!textBody) {
-    textBody = bodyBlock;
-    if (contentType.includes('quoted-printable') || getHeader('Content-Transfer-Encoding').includes('quoted-printable')) {
-      textBody = textBody.replace(/=\r?\n/g, '').replace(/=([0-9A-F]{2})/gi, (_: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
-    } else if (getHeader('Content-Transfer-Encoding').includes('base64')) {
-      textBody = dec.decode(Uint8Array.from(atob(textBody.replace(/\s/g, '')), c => c.charCodeAt(0)));
-    }
-    if (contentType.includes('text/html')) {
-      textBody = textBody.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").trim();
-    }
-  }
-
-  return { from, to, subject: subject || '(no subject)', body: textBody.trim(), messageId, inReplyTo };
 }
 
 // ── Network Binding ──
@@ -185,43 +162,60 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
   }
 
   /**
-   * Fetch unseen emails from an IMAP server in a single TCP session.
-   * host/user/pass are per-user credential KEYS, resolved host-side.
-   * Returns parsed emails and marks them with a custom flag.
+   * Fetch inbound mail above a UID watermark in a single TCP session.
+   *
+   * host/user/pass are per-user credential KEYS, resolved host-side. Delivery is
+   * at-least-once: this call does NOT mark messages seen/processed and does NOT
+   * filter on \Seen, so mail already read in another client is still ingested and
+   * a failed downstream step re-delivers on the next poll. The app owns the
+   * cursor (advancing only over a contiguous prefix of `attemptedUids`) and
+   * de-duplicates by Message-ID.
+   *
+   * `processedFlag` is accepted for wire-compat with the sandbox shim but is no
+   * longer used — the UID watermark + Message-ID ledger replace the server-side
+   * keyword, which silently no-ops on servers without custom-keyword support.
    */
   async imapFetchUnseen(
-    hostKey: string, port: number, userKey: string, passKey: string,
-    lastUid: number, businessEmail: string, processedFlag: string, limit: number,
-  ): Promise<{ emails: FetchedEmail[]; maxUid: number; hasMore: boolean }> {
+    hostKey: string,
+    port: number,
+    userKey: string,
+    passKey: string,
+    lastUid: number,
+    businessEmail: string,
+    _processedFlag: string,
+    limit: number,
+  ): Promise<ImapFetchResult> {
     const host = this.resolveCredential(hostKey);
     const user = this.resolveCredential(userKey);
     const pass = this.resolveCredential(passKey);
     // Fail closed on injection before opening the socket.
     assertImapQuotable('user', user);
     assertImapQuotable('pass', pass);
-    assertImapAtom('processedFlag', processedFlag);
     validateTarget(host, port);
     const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
-    const lr = new LineReader(socket.readable);
+    const lr = new ByteReader(socket.readable);
     const writer = socket.writable.getWriter();
     let tagNum = 0;
 
-    async function cmd(command: string): Promise<{ lines: string[]; ok: boolean }> {
+    // Send a command and read its tagged response. Any literals ({N}) are
+    // captured as raw bytes (not decoded), so a FETCH body comes back intact.
+    async function cmd(command: string): Promise<{ lines: string[]; literals: Uint8Array[]; ok: boolean }> {
       tagNum++;
       const tag = 'A' + String(tagNum).padStart(4, '0');
       await writer.write(enc.encode(tag + ' ' + command + '\r\n'));
       const lines: string[] = [];
+      const literals: Uint8Array[] = [];
       while (true) {
         let line = await lr.readLine();
-        const litMatch = line.match(/\{(\d+)\}$/);
-        if (litMatch) {
-          const litData = await lr.readBytes(parseInt(litMatch[1]));
-          line += '\r\n' + litData;
-          const closing = await lr.readLine();
-          line += closing;
+        let lit = line.match(/\{(\d+)\}$/);
+        while (lit) {
+          literals.push(await lr.readBytes(parseInt(lit[1], 10)));
+          const cont = await lr.readLine();
+          line = cont;
+          lit = cont.match(/\{(\d+)\}$/);
         }
         if (line.startsWith(tag + ' ')) {
-          return { lines, ok: line.includes(tag + ' OK') };
+          return { lines, literals, ok: line.includes(tag + ' OK') };
         }
         lines.push(line);
       }
@@ -229,93 +223,113 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
 
     try {
       console.log('[NET:IMAP] Connecting to', host, port);
-      // Greeting
       const greeting = await lr.readLine();
-      console.log('[NET:IMAP] Greeting:', greeting.substring(0, 80));
       if (!greeting.startsWith('* OK')) throw new Error('IMAP greeting failed: ' + greeting);
 
-      // Login
-      console.log('[NET:IMAP] Logging in as', user);
-      const loginResult = await cmd('LOGIN "' + user.replace(/"/g, '\\"') + '" "' + pass.replace(/"/g, '\\"') + '"');
-      console.log('[NET:IMAP] Login:', loginResult.ok ? 'OK' : 'FAILED');
+      const loginResult = await cmd(
+        'LOGIN "' + user.replace(/["\\]/g, '\\$&') + '" "' + pass.replace(/["\\]/g, '\\$&') + '"',
+      );
       if (!loginResult.ok) throw new Error('IMAP login failed');
 
-      // Select INBOX
       const selResult = await cmd('SELECT INBOX');
-      console.log('[NET:IMAP] SELECT INBOX:', selResult.ok ? 'OK' : 'FAILED', selResult.lines.length, 'response lines');
       if (!selResult.ok) throw new Error('SELECT INBOX failed');
 
-      // Search for unseen, unprocessed emails
-      let searchCmd = 'UID SEARCH';
-      if (lastUid > 0) searchCmd += ' UID ' + (lastUid + 1) + ':*';
-      searchCmd += ' UNKEYWORD ' + processedFlag + ' UNSEEN';
-      console.log('[NET:IMAP] Search:', searchCmd);
+      // Mailbox identity + cursor come back as untagged "* OK [UIDVALIDITY n]" /
+      // "* OK [UIDNEXT n]" responses.
+      let uidValidity = 0;
+      let uidNext = 0;
+      for (const l of selResult.lines) {
+        const v = l.match(/\[UIDVALIDITY (\d+)\]/i);
+        if (v) uidValidity = parseInt(v[1], 10);
+        const n = l.match(/\[UIDNEXT (\d+)\]/i);
+        if (n) uidNext = parseInt(n[1], 10);
+      }
 
+      // No UNSEEN / UNKEYWORD filter: fetch everything above the watermark so
+      // mail already read elsewhere is still ingested. `<lastUid+1>:*` always
+      // echoes the highest UID even when nothing is new, so filter client-side.
+      const searchCmd = lastUid > 0
+        ? 'UID SEARCH UID ' + (lastUid + 1) + ':*'
+        : 'UID SEARCH ALL';
       const searchResult = await cmd(searchCmd);
-      const uidLine = searchResult.lines.find((l: string) => l.startsWith('* SEARCH'));
+      const uidLine = searchResult.lines.find((l) => /^\* SEARCH/i.test(l));
       const uids: number[] = [];
       if (uidLine) {
-        for (const p of uidLine.replace('* SEARCH', '').trim().split(/\s+/)) {
-          const n = parseInt(p);
-          if (n > 0) uids.push(n);
+        for (const p of uidLine.replace(/^\* SEARCH/i, '').trim().split(/\s+/)) {
+          const n = parseInt(p, 10);
+          if (n > lastUid) uids.push(n);
         }
       }
-
-      console.log('[NET:IMAP] Search found', uids.length, 'UIDs:', uids.slice(0, 5).join(','));
+      uids.sort((a, b) => a - b);
 
       if (uids.length === 0) {
-        console.log('[NET:IMAP] No unseen emails, logging out');
         await cmd('LOGOUT');
-        return { emails: [], maxUid: lastUid, hasMore: false };
+        return { emails: [], attemptedUids: [], uidValidity, uidNext, hasMore: false, maxUid: lastUid };
       }
 
-      const toProcess = uids.slice(0, limit);
+      const attemptedUids = uids.slice(0, Math.max(1, limit));
       const emails: FetchedEmail[] = [];
 
-      for (const emailUid of toProcess) {
+      for (const uid of attemptedUids) {
         try {
-          const fetchResult = await cmd('UID FETCH ' + emailUid + ' (BODY.PEEK[] FLAGS)');
-          const rawEmail = fetchResult.lines.join('\r\n');
-          const bodyMatch = rawEmail.match(/BODY\[\]\s*\{(\d+)\}\r\n([\s\S]*)/);
-          if (!bodyMatch) continue;
-
-          const emailContent = bodyMatch[2].substring(0, parseInt(bodyMatch[1]));
-          const parsed = parseEmail(emailContent);
-
-          // Skip own outbound emails
-          if (parsed.from.toLowerCase() === businessEmail.toLowerCase()) continue;
-
-          emails.push({ uid: emailUid, ...parsed });
-
-          // Mark as processed
-          await cmd('UID STORE ' + emailUid + ' +FLAGS (' + processedFlag + ')');
-        } catch (e: unknown) {
-          // Skip individual email errors, continue with rest
+          // BODY.PEEK[] leaves \Seen untouched; the literal carries the raw
+          // message which readBytes returns as exact octets.
+          const fetchResult = await cmd('UID FETCH ' + uid + ' (BODY.PEEK[])');
+          const rawMessage = fetchResult.literals[0];
+          if (!rawMessage || rawMessage.length === 0) continue;
+          const parsed = parseMessage(rawMessage);
+          // Skip our own outbound (bounced back into the inbox, or a Sent copy).
+          if (businessEmail && parsed.from.toLowerCase() === businessEmail.toLowerCase()) {
+            continue;
+          }
+          emails.push({ uid, ...parsed });
+        } catch {
+          // Leave this UID out of `emails`; it stays in attemptedUids so the app
+          // holds the watermark and retries it next poll.
         }
       }
 
-      const maxUid = toProcess.length > 0 ? Math.max(...toProcess) : lastUid;
       await cmd('LOGOUT');
-
-      console.log('[NET:IMAP] Done. Fetched', emails.length, 'emails, maxUid=', maxUid);
-      return { emails, maxUid, hasMore: uids.length > limit };
+      // True mailbox tip (highest existing UID), not just the batch max — lets a
+      // first-connect baseline be correct even if the server omitted UIDNEXT.
+      // reduce (not Math.max spread) to stay safe on very large mailboxes.
+      const maxUid = uids.reduce((m, u) => (u > m ? u : m), lastUid);
+      console.log('[NET:IMAP] Fetched', emails.length, 'of', attemptedUids.length, 'attempted; hasMore=', uids.length > attemptedUids.length);
+      return {
+        emails,
+        attemptedUids,
+        uidValidity,
+        uidNext,
+        hasMore: uids.length > attemptedUids.length,
+        maxUid,
+      };
     } catch (e: unknown) {
       console.error('[NET:IMAP] ERROR:', e instanceof Error ? e.message : String(e));
       throw e;
     } finally {
       lr.releaseLock();
-      try { writer.releaseLock(); } catch {}
-      try { socket.close(); } catch {}
+      try { writer.releaseLock(); } catch { /* noop */ }
+      try { socket.close(); } catch { /* noop */ }
     }
   }
 
   /**
-   * Send an email via SMTP in a single TCP session.
+   * Send an email via SMTP in a single TCP session. Returns the generated
+   * Message-ID (without angle brackets) so the caller can persist it and thread
+   * the guest's eventual reply back to this conversation.
    */
   async smtpSend(
-    hostKey: string, port: number, userKey: string, passKey: string,
-    from: string, fromName: string, to: string, subject: string, body: string, inReplyTo?: string,
-  ): Promise<{ success: boolean; error?: string }> {
+    hostKey: string,
+    port: number,
+    userKey: string,
+    passKey: string,
+    from: string,
+    fromName: string,
+    to: string,
+    subject: string,
+    body: string,
+    inReplyTo?: string,
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const host = this.resolveCredential(hostKey);
     const user = this.resolveCredential(userKey);
     const pass = this.resolveCredential(passKey);
@@ -327,46 +341,63 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
     if (inReplyTo) assertNoHeaderInjection('inReplyTo', inReplyTo);
     validateTarget(host, port);
     const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
-    const lr = new LineReader(socket.readable);
+    const lr = new ByteReader(socket.readable);
     const writer = socket.writable.getWriter();
 
-    async function send(cmd: string): Promise<string> {
-      await writer.write(enc.encode(cmd + '\r\n'));
+    async function send(command: string): Promise<string> {
+      await writer.write(enc.encode(command + '\r\n'));
       return await lr.readLine();
     }
 
+    // AUTH LOGIN wants base64 of the UTF-8 bytes; btoa() alone throws on any
+    // non-Latin1 character in the credential.
+    const b64 = (s: string): string => {
+      let bin = '';
+      for (const byte of enc.encode(s)) bin += String.fromCharCode(byte);
+      return btoa(bin);
+    };
+    // EHLO/Message-ID identify as the sender's own domain (deliverability signal)
+    // rather than a fixed platform hostname.
+    const senderDomain = (from.split('@')[1] || 'localhost').trim();
+
     try {
-      // Greeting
       const greeting = await lr.readLine();
       if (!greeting.startsWith('220')) throw new Error('SMTP greeting failed: ' + greeting);
 
-      // EHLO
-      let ehloResp = await send('EHLO api.ultralightagent.com');
-      while (!ehloResp.startsWith('250 ')) { ehloResp = await lr.readLine(); }
+      let ehloResp = await send('EHLO ' + senderDomain);
+      while (!/^250 /.test(ehloResp)) {
+        if (/^[45]/.test(ehloResp)) throw new Error('EHLO rejected: ' + ehloResp);
+        ehloResp = await lr.readLine();
+      }
 
-      // AUTH LOGIN
       const authResp = await send('AUTH LOGIN');
-      if (!authResp.startsWith('334')) throw new Error('AUTH LOGIN failed');
-      await send(btoa(user));
-      const passResp = await send(btoa(pass));
-      if (!passResp.startsWith('235')) throw new Error('SMTP auth failed');
+      if (!authResp.startsWith('334')) throw new Error('AUTH LOGIN not offered: ' + authResp);
+      await send(b64(user));
+      const passResp = await send(b64(pass));
+      if (!passResp.startsWith('235')) throw new Error('SMTP auth failed: ' + passResp);
 
-      // MAIL FROM / RCPT TO
-      await send('MAIL FROM:<' + from + '>');
-      await send('RCPT TO:<' + to + '>');
+      const mailResp = await send('MAIL FROM:<' + from + '>');
+      if (!mailResp.startsWith('250')) throw new Error('MAIL FROM rejected: ' + mailResp);
+      const rcptResp = await send('RCPT TO:<' + to + '>');
+      if (!/^25[01]/.test(rcptResp)) throw new Error('RCPT TO rejected: ' + rcptResp);
 
-      // DATA
       const dataResp = await send('DATA');
-      if (!dataResp.startsWith('354')) throw new Error('SMTP DATA rejected');
+      if (!dataResp.startsWith('354')) throw new Error('SMTP DATA rejected: ' + dataResp);
 
-      // Compose message
-      const msgId = '<' + crypto.randomUUID() + '@api.ultralightagent.com>';
+      const messageId = crypto.randomUUID() + '@' + senderDomain;
       let headers = 'From: ' + fromName + ' <' + from + '>\r\n';
       headers += 'To: ' + to + '\r\n';
       headers += 'Subject: ' + subject + '\r\n';
-      headers += 'Message-ID: ' + msgId + '\r\n';
-      if (inReplyTo) headers += 'In-Reply-To: <' + inReplyTo + '>\r\n';
+      headers += 'Message-ID: <' + messageId + '>\r\n';
+      if (inReplyTo) {
+        // Thread the guest's reply back to us: In-Reply-To + References carry the
+        // parent id so Gmail/Outlook group the reply into the same conversation.
+        headers += 'In-Reply-To: <' + inReplyTo + '>\r\n';
+        headers += 'References: <' + inReplyTo + '>\r\n';
+      }
+      headers += 'MIME-Version: 1.0\r\n';
       headers += 'Content-Type: text/plain; charset=UTF-8\r\n';
+      headers += 'Content-Transfer-Encoding: 8bit\r\n';
       headers += 'Date: ' + new Date().toUTCString() + '\r\n';
 
       await writer.write(enc.encode(headers + '\r\n' + dotStuffBody(body) + '\r\n.\r\n'));
@@ -374,13 +405,13 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
       if (!sendResp.startsWith('250')) throw new Error('SMTP send failed: ' + sendResp);
 
       await send('QUIT');
-      return { success: true };
+      return { success: true, messageId };
     } catch (e: unknown) {
       return { success: false, error: e instanceof Error ? e.message : String(e) };
     } finally {
       lr.releaseLock();
-      try { writer.releaseLock(); } catch {}
-      try { socket.close(); } catch {}
+      try { writer.releaseLock(); } catch { /* noop */ }
+      try { socket.close(); } catch { /* noop */ }
     }
   }
 }

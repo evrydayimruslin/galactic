@@ -11,7 +11,9 @@
 // Permissions: ai:call, net:fetch, net:connect
 
 const galactic = (globalThis as any).galactic;
-const AI_MODEL = 'google/gemini-3-flash-preview';
+// Model is overridable per-deployment via env so a preview-model deprecation
+// doesn't silently break the showcase agent's classification + drafting.
+const AI_MODEL = (galactic?.env?.EMAIL_AI_MODEL as string) || 'google/gemini-3-flash-preview';
 
 // IMAP quoted-string guard. This app rolls its own IMAP session (the `cmd`
 // helper writes `<tag> <command>\r\n` straight to the socket), so any value
@@ -71,6 +73,7 @@ interface MaxVersionRow {
 
 interface SyncStateRow {
   last_uid: number | null;
+  uid_validity?: number | null;
 }
 
 interface ConversationRow {
@@ -118,6 +121,9 @@ interface LatestDraftMetadata extends JsonObject {
   priority?: EmailPriority;
   manual_trigger?: boolean;
   sent_to?: string;
+  subject?: string;
+  message_id?: string;
+  references?: string;
   extracted_emails?: string[];
   primary_name?: string | null;
 }
@@ -130,14 +136,24 @@ interface ImapFetchedEmail {
   uid: number;
   from: string;
   to: string;
+  cc?: string;
+  replyTo?: string;
   subject: string;
   body: string;
   messageId?: string;
   inReplyTo?: string;
+  references?: string;
+  date?: string;
 }
 
 interface ImapFetchResult {
   emails?: ImapFetchedEmail[];
+  // UIDs this poll attempted (ascending). The watermark advances only over a
+  // contiguous prefix that processed cleanly, so a fetch/parse failure holds the
+  // cursor and is retried next poll — at-least-once, never skipped.
+  attemptedUids?: number[];
+  uidValidity?: number;
+  uidNext?: number;
   maxUid: number;
   hasMore: boolean;
 }
@@ -145,11 +161,15 @@ interface ImapFetchResult {
 interface ReceiveEmailPayload {
   from?: string;
   to?: string;
+  cc?: string;
+  reply_to?: string;
   subject?: string;
   text?: string;
   html?: string;
   message_id?: string;
   in_reply_to?: string;
+  references?: string;
+  date?: string;
 }
 
 interface ReceiveEmailArgs extends ReceiveEmailPayload {
@@ -237,6 +257,18 @@ interface UltralightNetApi {
     processedFlag: string,
     batchSize: number,
   ) => Promise<ImapFetchResult>;
+  smtpSend?: (
+    host: string,
+    port: number,
+    user: string,
+    password: string,
+    from: string,
+    fromName: string,
+    to: string,
+    subject: string,
+    body: string,
+    inReplyTo?: string,
+  ) => Promise<{ success: boolean; messageId?: string; error?: string }>;
 }
 
 interface GlobalConnectApi {
@@ -370,16 +402,24 @@ function getHeaderValue(headers: ReceiveEmailArgs['headers'], name: string): str
   return map[name] || map[name.toLowerCase()];
 }
 
+// Build the thread transcript for the model. Only real turns count: inbound
+// guest messages and replies we actually SENT. Unsent draft iterations
+// (auto_draft/regeneration/manual_edit/followup_draft) and discarded versions
+// are excluded — otherwise a conversation with three regenerations looks like we
+// promised the guest three things we never sent.
+const SENT_VERSION_TYPES = new Set<VersionType>(['sent', 'followup_sent']);
 function formatThreadContext(
   versions: Array<Pick<VersionRow, 'type' | 'body'>>,
   cleanInbound: boolean,
 ): string {
-  return versions.map((version) => {
-    const body = cleanInbound && version.type === 'inbound'
-      ? cleanEmailBody(version.body || '').cleaned
-      : (version.body || '');
-    return (version.type === 'inbound' ? 'Guest: ' : 'You: ') + body;
-  }).join('\n---\n');
+  return versions
+    .filter((v) => v.type === 'inbound' || SENT_VERSION_TYPES.has(v.type))
+    .map((version) => {
+      const body = cleanInbound && version.type === 'inbound'
+        ? cleanEmailBody(version.body || '').cleaned
+        : (version.body || '');
+      return (version.type === 'inbound' ? 'Guest: ' : 'You: ') + body;
+    }).join('\n---\n');
 }
 
 function parseConversationVersions(versions: VersionRow[]): ParsedVersionRow[] {
@@ -396,6 +436,19 @@ function now(): string {
 }
 function uname(): string {
   return galactic.user.name || galactic.user.email || 'admin';
+}
+// Identity block prepended to every drafting/classification prompt so the model
+// signs and speaks as the actual business. Without this the agent only knew it
+// was "an email response agent for a business" — it could not name itself.
+function businessPersona(): string {
+  const name = (galactic.env.BUSINESS_NAME as string) || 'the business';
+  const email = (galactic.env.BUSINESS_EMAIL as string) || '';
+  return 'You are the email assistant for ' + name +
+    (email ? ' (' + email + ')' : '') +
+    '. Reply as a member of their team — warm, professional, and accurate. ' +
+    'Sign as ' + name + '. Never invent policies, prices, or availability that ' +
+    "aren't in the business conventions below; if something isn't covered, keep " +
+    'the reply general and flag it as a knowledge gap.';
 }
 function esc(s: string): string {
   if (!s) return '';
@@ -414,9 +467,14 @@ function stripHtml(html: string): string {
 async function getConventionsText(): Promise<string> {
   const rows = await galactic.db.select('conventions', {
     columns: ['key', 'value', 'category'],
+    where: { category: { ne: '_deleted' } },
   }) as ConventionRow[];
-  return rows.length > 0
-    ? rows.map((convention) =>
+  // Soft-deleted FAQs (category '_deleted', value '[DELETED]') must never reach
+  // the model — otherwise every prompt carries a growing block of "[DELETED]"
+  // noise that can steer drafts to claim a topic is unavailable.
+  const live = rows.filter((c) => c.category !== '_deleted' && c.value !== '[DELETED]');
+  return live.length > 0
+    ? live.map((convention) =>
       (convention.category ? '[' + convention.category + '] ' : '') + convention.key + ': ' +
       convention.value
     ).join('\n')
@@ -436,6 +494,16 @@ async function nextVersionNum(conversationId: string): Promise<number> {
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
+// ⚠️ DEAD CODE (scheduled for removal in a dedicated cleanup PR).
+// The functions from here down to checkSentFolder — openTlsSocket, the in-app
+// LineReader, createImapConnection/closeImap, the in-app MIME parser
+// (parseEmail/extractTextFromMime/decodeBytes/decodeBody/getCharset/…), and
+// checkSentFolder — are the legacy raw-socket path. They are INERT in the
+// production Dynamic Worker sandbox: galactic.net.connectTls throws
+// ('Low-level sockets not available'), so none of this executes. All live
+// IMAP/SMTP now runs host-side via the NET binding (net.imapFetchUnseen /
+// net.smtpSend). Left in place only to keep this correctness PR focused;
+// deleting the interleaved block is a separate, purely-subtractive change.
 // Socket connector — tries galactic.net first, falls back to Deno/CF Workers globals
 async function openTlsSocket(hostname: string, port: number): Promise<TlsSocket> {
   const net = getNetApi();
@@ -516,9 +584,18 @@ async function sendViaSMTP(
     };
   }
 
-  // Phase 3b: host/user/pass are passed as per-user credential KEYS. The NET
-  // binding runs the entire SMTP session host-side; the password never enters
-  // app code and can only reach the user's own configured SMTP host.
+  // The NET binding is exposed on the injected `galactic` object as
+  // `galactic.net` — there is no bare `net` global. (The Phase-3b refactor
+  // dropped this accessor, which made every send throw ReferenceError.)
+  const net = getNetApi();
+  if (!net?.smtpSend) {
+    return { success: false, error: 'SMTP send is not available in this runtime' };
+  }
+
+  // host/user/pass are passed as per-user credential KEYS. The NET binding runs
+  // the entire SMTP session host-side; the password never enters app code and
+  // can only reach the user's own configured SMTP host. It returns the generated
+  // Message-ID so we can persist it and thread the guest's reply back to us.
   const result = await net.smtpSend(
     'SMTP_HOST',
     port,
@@ -532,7 +609,7 @@ async function sendViaSMTP(
     inReplyTo || '',
   );
   return result.success
-    ? { success: true }
+    ? { success: true, messageId: result.messageId }
     : { success: false, error: result.error };
 }
 
@@ -875,13 +952,13 @@ export async function check_inbox(
       throw new Error('IMAP fetch helper is not available in this runtime');
     }
 
-    // Get last processed UID from DB
     const syncRow = await galactic.db.first('imap_sync_state', {
-      columns: ['last_uid'],
+      columns: ['last_uid', 'uid_validity'],
     }) as SyncStateRow | null;
+    const hadSync = !!syncRow;
     const lastUid = syncRow?.last_uid || 0;
+    const storedValidity = syncRow?.uid_validity || 0;
 
-    // Config-only mode: return immediately without IMAP call
     if (args.config_only) {
       return {
         config: {
@@ -896,13 +973,13 @@ export async function check_inbox(
       };
     }
 
-    // Fetch unseen emails via high-level IMAP RPC (entire TCP session in one
-    // call). Phase 3b: host/user/pass are passed as per-user credential KEYS —
-    // the NET binding resolves them host-side; the password never enters app code.
+    // host/user/pass are passed as per-user credential KEYS — the NET binding
+    // resolves them host-side; the password never enters app code.
     if (!galactic.env.IMAP_HOST || !galactic.env.IMAP_USER) {
       throw new Error('IMAP not configured — connect IMAP_HOST / IMAP_USER / IMAP_PASS');
     }
 
+    const batchSize = Math.max(1, Math.min(50, parseInt(galactic.env.EMAIL_BATCH_SIZE || '10') || 10));
     const result = await net.imapFetchUnseen(
       'IMAP_HOST',
       parseInt(galactic.env.IMAP_PORT || '993'),
@@ -910,76 +987,148 @@ export async function check_inbox(
       'IMAP_PASS',
       lastUid,
       businessEmail,
-      '$ULProcessed',
-      3,
+      '$ULProcessed', // ignored host-side; kept for wire-compat
+      batchSize,
     );
 
-    // Debug mode: return raw IMAP result without AI processing
+    const emails = result.emails || [];
+    const attemptedUids = result.attemptedUids ||
+      emails.map((e) => e.uid).sort((a, b) => a - b);
+    const uidValidity = result.uidValidity || 0;
+    const uidNext = result.uidNext || 0;
+    // Current mailbox tip: UIDNEXT-1 when the server reports it, else the highest
+    // existing UID the fetch saw. Used to baseline the watermark to "now".
+    const mailboxTip = uidNext > 0 ? uidNext - 1 : (result.maxUid || 0);
+    const checkTs = now();
+
     if (args.debug) {
       return {
         success: true,
         debug: true,
         lastUid,
-        config: {
-          host: galactic.env.IMAP_HOST,
-          port: galactic.env.IMAP_PORT,
-          user: galactic.env.IMAP_USER,
-          businessEmail,
-        },
+        uidValidity,
+        uidNext,
         imapResult: {
-          emailCount: result.emails?.length,
-          maxUid: result.maxUid,
+          emailCount: emails.length,
+          attempted: attemptedUids.length,
           hasMore: result.hasMore,
-          emails: (result.emails || []).map((email) => ({
-            uid: email.uid,
-            from: email.from,
-            subject: email.subject,
-          })),
+          emails: emails.map((e) => ({ uid: e.uid, from: e.from, subject: e.subject })),
         },
       };
     }
 
-    if (!result.emails || result.emails.length === 0) {
-      const checkTs = now();
+    // Mailbox rebuilt (UIDVALIDITY changed): the old watermark is meaningless.
+    // Re-baseline to "now" rather than reprocessing the whole archive.
+    if (hadSync && storedValidity && uidValidity && uidValidity !== storedValidity) {
+      const baseline = Math.max(0, mailboxTip);
       await galactic.db.upsert('imap_sync_state', {
-        values: { last_uid: lastUid, last_check: checkTs },
+        values: { last_uid: baseline, uid_validity: uidValidity, last_check: checkTs },
         onConflict: ['user_id'],
-        set: { last_check: checkTs },
+        set: { last_uid: baseline, uid_validity: uidValidity, last_check: checkTs },
+      });
+      return { success: true, processed: 0, resynced: true, message: 'UIDVALIDITY changed — re-baselined' };
+    }
+
+    // First-ever connect: start watching from now. Don't draft replies to the
+    // entire existing inbox — baseline the watermark to the current tip and pick
+    // up only mail that arrives from here on. (Existing installs already have a
+    // sync row, so they continue from their watermark and this path is skipped.)
+    if (!hadSync) {
+      const baseline = Math.max(0, mailboxTip);
+      await galactic.db.upsert('imap_sync_state', {
+        values: { last_uid: baseline, uid_validity: uidValidity, last_check: checkTs },
+        onConflict: ['user_id'],
+        set: { last_uid: baseline, uid_validity: uidValidity, last_check: checkTs },
+      });
+      return { success: true, processed: 0, baselined: true, message: 'Now watching for new mail' };
+    }
+
+    if (attemptedUids.length === 0) {
+      await galactic.db.upsert('imap_sync_state', {
+        values: { last_uid: lastUid, uid_validity: uidValidity, last_check: checkTs },
+        onConflict: ['user_id'],
+        set: { uid_validity: uidValidity, last_check: checkTs },
       });
       return { success: true, processed: 0, message: 'No new emails' };
     }
 
+    // At-least-once ingestion. Walk the attempted UIDs in ascending order and
+    // advance the watermark only across a contiguous prefix that processed
+    // cleanly. A UID whose host-side fetch/parse failed (present in
+    // attemptedUids but absent from `emails`) or whose processing throws HOLDS
+    // the watermark, so it is retried on the next poll and never skipped.
+    // Message-ID de-duplication makes a retry (or a crash-replay from an older
+    // watermark) idempotent — an already-processed message is advanced over, not
+    // re-drafted.
+    const byUid = new Map<number, ImapFetchedEmail>();
+    for (const e of emails) byUid.set(e.uid, e);
+
+    let cursor = lastUid;
     let processed = 0;
     let newConversations = 0;
     let followups = 0;
+    let held = false;
 
-    for (const email of result.emails) {
+    for (const uid of attemptedUids) {
+      const email = byUid.get(uid);
+      if (!email) {
+        // Host couldn't fetch/parse this UID — hold the watermark here.
+        held = true;
+        break;
+      }
+      const mid = (email.messageId || '').trim();
+      if (mid) {
+        const seen = await galactic.db.first('processed_messages', {
+          columns: ['message_id'],
+          where: { message_id: mid },
+        }) as { message_id?: string } | null;
+        if (seen) {
+          cursor = uid; // already handled (crash-replay) — advance past it
+          continue;
+        }
+      }
       try {
         const processResult = await receive_email({
           from: email.from,
           to: email.to,
+          cc: email.cc,
+          reply_to: email.replyTo,
           subject: email.subject,
           text: email.body,
           message_id: email.messageId,
           in_reply_to: email.inReplyTo,
+          references: email.references,
+          date: email.date,
         }) as { success?: boolean; thread?: boolean };
 
-        if (processResult?.success) {
-          processed++;
-          if (processResult.thread) followups++;
-          else newConversations++;
+        if (!processResult?.success) {
+          held = true;
+          break;
         }
+        processed++;
+        if (processResult.thread) followups++;
+        else newConversations++;
+        // Best-effort: the message is already committed, so a ledger write
+        // failure must not hold the watermark (that would reprocess it). The
+        // ledger only guards crash-replay; the contiguous cursor is the primary
+        // no-reprocess guarantee.
+        if (mid) {
+          try {
+            await galactic.db.insert('processed_messages', { message_id: mid, uid, created_at: checkTs });
+          } catch { /* already recorded / unique race — safe to ignore */ }
+        }
+        cursor = uid;
       } catch (error: unknown) {
-        console.error('Failed to process email from ' + email.from + ': ' + getErrorMessage(error));
+        console.error('[check_inbox] failed on uid ' + uid + ': ' + getErrorMessage(error));
+        held = true;
+        break;
       }
     }
 
-    // Update sync state
-    const syncTs = now();
     await galactic.db.upsert('imap_sync_state', {
-      values: { last_uid: result.maxUid, last_check: syncTs },
+      values: { last_uid: cursor, uid_validity: uidValidity, last_check: checkTs },
       onConflict: ['user_id'],
-      set: { last_uid: { op: 'max', value: result.maxUid }, last_check: syncTs },
+      set: { last_uid: cursor, uid_validity: uidValidity, last_check: checkTs },
     });
 
     return {
@@ -987,7 +1136,9 @@ export async function check_inbox(
       processed,
       new_conversations: newConversations,
       followups,
-      has_more: result.hasMore,
+      // More waiting either because this batch was capped, or because a failure
+      // held the watermark mid-batch (retried next poll).
+      has_more: result.hasMore || held,
     };
   } catch (error: unknown) {
     return { success: false, error: getErrorMessage(error) };
@@ -1145,6 +1296,7 @@ const BOOKING_CONFIRMATION_KEYWORDS =
 
 export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   let from: string, to: string, subject: string, body: string, messageId: string | undefined;
+  let replyToHeader = '', references = '';
 
   if (args.method && args.json) {
     const p = await args.json();
@@ -1154,12 +1306,16 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
     subject = p.subject || '';
     body = p.text || stripHtml(p.html || '');
     messageId = p.message_id;
+    replyToHeader = p.reply_to || '';
+    references = p.references || '';
   } else {
     from = args.from || '';
     to = args.to || '';
     subject = args.subject || '';
     body = args.text || stripHtml(args.html || '');
     messageId = args.message_id;
+    replyToHeader = args.reply_to || getHeaderValue(args.headers, 'reply-to') || '';
+    references = args.references || '';
   }
 
   if (!from || !subject) return { error: 'from and subject are required' };
@@ -1168,21 +1324,37 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   const { cleaned: cleanBody, original: originalBody } = cleanEmailBody(body);
   const { emails: bodyEmails, primaryName } = extractEmailsFromBody(originalBody);
 
-  // Resolve guest identity: if the From is a form/noreply/OTA sender AND the
-  // body yielded at least one real email, use that as the guest contact.
-  // Otherwise fall back to the envelope From.
+  // Resolve guest identity. When the envelope From is a form/noreply/OTA sender,
+  // the real requester is elsewhere. Order of preference: the Reply-To header
+  // (the DMARC-era standard for contact forms) → a labeled email extracted from
+  // the body → the envelope From.
   const fromLower = from.toLowerCase();
   const fromIsSystem = NOREPLY_PATTERN.test(from) || OTA_DOMAINS.some((d) => fromLower.includes(d));
-  const guestEmail = (fromIsSystem && bodyEmails.length > 0) ? bodyEmails[0] : from;
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const replyToAddr = replyToHeader.trim().toLowerCase();
+  const replyToUsable = !!replyToAddr && emailRe.test(replyToAddr) &&
+    !NOREPLY_PATTERN.test(replyToAddr) && replyToAddr !== fromLower;
+  let guestEmail = from;
+  if (replyToUsable) {
+    guestEmail = replyToAddr;
+  } else if (fromIsSystem && bodyEmails.length > 0) {
+    guestEmail = bodyEmails[0];
+  }
   const guestName = primaryName ||
-    ((fromIsSystem && bodyEmails.length > 0) ? bodyEmails[0].split('@')[0] : from.split('@')[0]);
+    (guestEmail !== from ? guestEmail.split('@')[0] : from.split('@')[0]);
+  // A form-like sender that resolved to a different guest must NOT be treated as
+  // an internal staff email even when it shares the business domain (e.g.
+  // forms@ourhotel.com) — otherwise the enquiry is silently filed as "internal".
+  const isFormLike = (fromIsSystem || replyToUsable) && guestEmail !== from;
 
-  // Metadata to attach to the inbound version so the widget recipient dropdown
-  // can populate from extracted emails (Phase D). Piggybacks on the existing
-  // metadata TEXT column — no migration needed.
-  const inboundMeta = bodyEmails.length > 0 || primaryName
-    ? JSON.stringify({ extracted_emails: bodyEmails, primary_name: primaryName })
-    : null;
+  // Metadata on the inbound version: extracted recipient candidates (Phase D
+  // widget dropdown) + threading ids. Piggybacks the existing metadata column.
+  const inboundMeta = JSON.stringify({
+    ...(bodyEmails.length > 0 ? { extracted_emails: bodyEmails } : {}),
+    ...(primaryName ? { primary_name: primaryName } : {}),
+    ...(messageId ? { message_id: messageId } : {}),
+    ...(references ? { references } : {}),
+  });
 
   // Check for reply threading — match by In-Reply-To or same guest+subject
   const inReplyTo = args.in_reply_to || getHeaderValue(args.headers, 'in-reply-to');
@@ -1264,7 +1436,8 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
           {
             role: 'system',
             content:
-              'You are an email response agent. Draft a followup reply to an ongoing conversation.\n\nBusiness conventions:\n' +
+              businessPersona() +
+              '\n\nDraft a followup reply to an ongoing conversation. Reply in the same language as the guest.\n\nBusiness conventions:\n' +
               conventionsText + '\n\nFull thread so far:\n' + threadContext +
               '\n\nRespond with JSON:\n{"draft_body": "your reply", "knowledge_gaps": ["topics not in conventions"]}',
             cache_control: { type: 'ephemeral' },
@@ -1320,8 +1493,10 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   const businessEmail = ((galactic.env.BUSINESS_EMAIL as string) || '').toLowerCase();
   const businessDomain = businessEmail.split('@')[1] || '';
 
-  // Internal staff emails from the same domain
-  const isInternal = businessDomain && fromLower.endsWith('@' + businessDomain);
+  // Internal staff emails from the same domain — but a same-domain contact-form
+  // sender (forms@ourhotel.com) that resolved to a real guest is a genuine
+  // enquiry, not internal, so it must go to AI classification.
+  const isInternal = !!businessDomain && fromLower.endsWith('@' + businessDomain) && !isFormLike;
 
   // Booking confirmation: known OTA domain OR noreply-pattern sender with
   // booking-related subject keywords
@@ -1381,7 +1556,8 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       {
         role: 'system',
         content:
-          'You are an email response agent for a business. Classify inbound emails and draft professional replies.\n\n' +
+          businessPersona() + '\n\n' +
+          'Classify inbound emails and draft professional replies.\n\n' +
           'Business conventions:\n' + conventionsText + '\n\n' +
           'Classifications: inquiry | booking_request | booking_confirmation | cancellation | complaint | feedback | internal | spam | other\n\n' +
           'Hints:\n' +
@@ -1537,27 +1713,6 @@ export async function conversation_act(args: {
       ? toOverride
       : convo.guest_email;
 
-    // Check if staff already replied manually via their inbox
-    const staffReplied = await checkSentFolder(recipient);
-    if (staffReplied) {
-      const vNum = await nextVersionNum(conversation_id);
-      await galactic.db.insert('versions', {
-        id: crypto.randomUUID(),
-        conversation_id,
-        version_num: vNum,
-        type: 'discarded',
-        body: bodyToSend,
-        actor: 'system',
-        metadata: JSON.stringify({ reason: 'staff_already_replied' }),
-        created_at: ts,
-      });
-      await galactic.db.update('conversations', {
-        set: { status: 'resolved', updated_at: ts },
-        where: { id: conversation_id },
-      });
-      return { success: true, action: 'skipped', reason: 'staff_already_replied', conversation_id };
-    }
-
     const vNum = await nextVersionNum(conversation_id);
     const isSentBefore = !!(await galactic.db.first('versions', {
       columns: ['id'],
@@ -1565,20 +1720,24 @@ export async function conversation_act(args: {
     }));
     const vType = isSentBefore ? 'followup_sent' : 'sent';
 
-    // Send via SMTP through hotel's mail server
+    // Don't double-prefix an already-"Re:" subject.
+    const replySubject = /^\s*re:/i.test(convo.subject)
+      ? convo.subject
+      : 'Re: ' + convo.subject;
+
+    // Send via SMTP through the business's own mail server. Thread the reply to
+    // the conversation's root message so the guest's client groups it correctly.
     const result = await sendViaSMTP(
       recipient,
-      'Re: ' + convo.subject,
+      replySubject,
       bodyToSend,
       convo.message_id || undefined,
     );
     if (!result.success) throw new Error('Send failed: ' + result.error);
 
-    // Track recipient on the sent version's metadata so the widget can show
-    // which address was actually used (useful when admin picks from the dropdown).
-    const sendMeta = recipient !== convo.guest_email
-      ? JSON.stringify({ sent_to: recipient })
-      : null;
+    // Snapshot the actual recipient + subject on the sent version so the audit
+    // trail is complete without joining back to the (mutable) conversation row.
+    const sendMeta = JSON.stringify({ sent_to: recipient, subject: replySubject });
     await galactic.db.insert('versions', {
       id: crypto.randomUUID(),
       conversation_id,

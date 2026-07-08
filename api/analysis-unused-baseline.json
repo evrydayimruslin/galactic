@@ -1587,6 +1587,12 @@
       ]
     },
     {
+      "file": "src/bindings/mime-parse.test.ts",
+      "files": [
+        "src/bindings/mime-parse.test.ts"
+      ]
+    },
+    {
       "file": "src/bindings/outbound-policy.ts",
       "types": [
         "GuardedFetchOptions",
