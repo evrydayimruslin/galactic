@@ -5,6 +5,19 @@
   "entry": { "functions": "index.ts" },
   "description": "Autonomous email agent: connects to hotel mailbox via IMAP, AI classifies and drafts responses in sender's language, queues for admin approval, sends via SMTP. Widget-enabled for desktop Activity tab.",
   "permissions": ["ai:call", "net:fetch", "net:connect"],
+  "flight_recorder": true,
+  "routines": [
+    {
+      "id": "inbox_watch",
+      "label": "Inbox watch",
+      "description": "Scheduled inbox check: fetch new mail, classify, and queue drafts for approval. Set the standing triage directive in the routine's `intent` (delivered as args._routine.intent each wake).",
+      "handler": "check_inbox",
+      "default_schedule": { "every_minutes": 5 },
+      "config_schema": {},
+      "default_config": {},
+      "budget_defaults": { "max_light_per_run": 15, "max_light_per_day": 200 }
+    }
+  ],
   "storage": "d1",
   "env_vars": {
     "IMAP_HOST": {

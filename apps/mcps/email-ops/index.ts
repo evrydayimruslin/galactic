@@ -176,6 +176,10 @@ interface ReceiveEmailArgs extends ReceiveEmailPayload {
   method?: string;
   json?: () => Promise<ReceiveEmailPayload | null>;
   headers?: Headers | Record<string, string | undefined>;
+  // The operator's standing triage directive (a routine's `intent`), threaded
+  // into the classification/draft prompts so tone/priorities can be steered
+  // without a code change.
+  operator_directive?: string;
 }
 
 interface EmailDraftResponse {
@@ -440,15 +444,20 @@ function uname(): string {
 // Identity block prepended to every drafting/classification prompt so the model
 // signs and speaks as the actual business. Without this the agent only knew it
 // was "an email response agent for a business" — it could not name itself.
-function businessPersona(): string {
+function businessPersona(directive?: string): string {
   const name = (galactic.env.BUSINESS_NAME as string) || 'the business';
   const email = (galactic.env.BUSINESS_EMAIL as string) || '';
-  return 'You are the email assistant for ' + name +
+  const base = 'You are the email assistant for ' + name +
     (email ? ' (' + email + ')' : '') +
     '. Reply as a member of their team — warm, professional, and accurate. ' +
     'Sign as ' + name + '. Never invent policies, prices, or availability that ' +
     "aren't in the business conventions below; if something isn't covered, keep " +
     'the reply general and flag it as a knowledge gap.';
+  const d = (directive || '').trim();
+  return d
+    ? base + '\n\nStanding operator instructions (honor unless they conflict ' +
+      'with the conventions below): ' + d
+    : base;
 }
 function esc(s: string): string {
   if (!s) return '';
@@ -942,8 +951,26 @@ async function checkSentFolder(guestEmail: string): Promise<boolean> {
 // ============================================
 
 export async function check_inbox(
-  args: { debug?: boolean; config_only?: boolean },
+  args: {
+    debug?: boolean;
+    config_only?: boolean;
+    // Present when the platform routine wakes this handler on a schedule.
+    _routine?: {
+      routine_id: string;
+      routine_run_id: string;
+      trigger: 'scheduled' | 'manual';
+      attempt: number;
+      scheduled_at: string;
+      intent?: string | null;
+    };
+  },
 ): Promise<unknown> {
+  // A routine wake carries the operator's standing triage directive in
+  // `_routine.intent` (editable any time via gx.routine); it's threaded into the
+  // draft prompts so operators can steer tone/priorities without a code change.
+  const wake = args._routine ?? null;
+  const operatorDirective = (wake && wake.intent) ||
+    (galactic.env.EMAIL_TRIAGE_INTENT as string) || '';
   try {
     const businessEmail = (galactic.env.BUSINESS_EMAIL || galactic.env.IMAP_USER || '')
       .toLowerCase();
@@ -1068,6 +1095,7 @@ export async function check_inbox(
     let newConversations = 0;
     let followups = 0;
     let held = false;
+    let lastError = '';
 
     for (const uid of attemptedUids) {
       const email = byUid.get(uid);
@@ -1099,9 +1127,11 @@ export async function check_inbox(
           in_reply_to: email.inReplyTo,
           references: email.references,
           date: email.date,
+          operator_directive: operatorDirective,
         }) as { success?: boolean; thread?: boolean };
 
         if (!processResult?.success) {
+          lastError = 'receive_email returned no success for uid ' + uid;
           held = true;
           break;
         }
@@ -1119,7 +1149,8 @@ export async function check_inbox(
         }
         cursor = uid;
       } catch (error: unknown) {
-        console.error('[check_inbox] failed on uid ' + uid + ': ' + getErrorMessage(error));
+        lastError = getErrorMessage(error);
+        console.error('[check_inbox] failed on uid ' + uid + ': ' + lastError);
         held = true;
         break;
       }
@@ -1131,6 +1162,17 @@ export async function check_inbox(
       set: { last_uid: cursor, uid_validity: uidValidity, last_check: checkTs },
     });
 
+    // Zero progress despite mail waiting = a stuck wake. Surface it as a failure
+    // so a routine run is retried and the platform circuit breaker can trip
+    // (10 consecutive failures → auto-pause) instead of recording silent
+    // "success" forever. Partial progress (processed > 0) is a success — the
+    // remainder is retried next wake.
+    if (processed === 0 && held) {
+      const msg = lastError || 'inbox check fetched mail but processed none';
+      if (wake) throw new Error(msg);
+      return { success: false, error: msg, processed: 0, has_more: true };
+    }
+
     return {
       success: true,
       processed,
@@ -1141,6 +1183,12 @@ export async function check_inbox(
       has_more: result.hasMore || held,
     };
   } catch (error: unknown) {
+    // On a routine wake, a hard failure (bad creds, connection, DB) must THROW:
+    // the executor counts only a THROWN error as a failed run, so returning
+    // { success: false } would be recorded as a successful wake and defeat
+    // retries, the circuit breaker, and the flight-recorder failure status.
+    // Manual/widget callers keep the graceful envelope.
+    if (wake) throw error instanceof Error ? error : new Error(getErrorMessage(error));
     return { success: false, error: getErrorMessage(error) };
   }
 }
@@ -1320,6 +1368,8 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
 
   if (!from || !subject) return { error: 'from and subject are required' };
 
+  const operatorDirective = (args.operator_directive || '').trim();
+
   // ── Phase B: pre-process body, extract emails, resolve guest identity ──
   const { cleaned: cleanBody, original: originalBody } = cleanEmailBody(body);
   const { emails: bodyEmails, primaryName } = extractEmailsFromBody(originalBody);
@@ -1436,7 +1486,7 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
           {
             role: 'system',
             content:
-              businessPersona() +
+              businessPersona(operatorDirective) +
               '\n\nDraft a followup reply to an ongoing conversation. Reply in the same language as the guest.\n\nBusiness conventions:\n' +
               conventionsText + '\n\nFull thread so far:\n' + threadContext +
               '\n\nRespond with JSON:\n{"draft_body": "your reply", "knowledge_gaps": ["topics not in conventions"]}',
@@ -1556,7 +1606,7 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       {
         role: 'system',
         content:
-          businessPersona() + '\n\n' +
+          businessPersona(operatorDirective) + '\n\n' +
           'Classify inbound emails and draft professional replies.\n\n' +
           'Business conventions:\n' + conventionsText + '\n\n' +
           'Classifications: inquiry | booking_request | booking_confirmation | cancellation | complaint | feedback | internal | spam | other\n\n' +
