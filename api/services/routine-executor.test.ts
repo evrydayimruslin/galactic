@@ -92,11 +92,11 @@ function queuedRunRow(overrides: Record<string, unknown> = {}) {
   });
 }
 
-// True for the reaper's stale-run probe/write: an `or` boolean filter with no
-// top-level `status` param (status lives inside the `or`). queuedRunCandidates
-// also carries `or`, but pairs it with status=eq.queued, so this excludes it.
+// True for the reaper's stale-run probe/write: it is the only routine_runs query
+// that filters on lease_expires_at (activeRunCount / queuedRunCandidates /
+// getRunById never do).
 function isReaperQuery(url: URL): boolean {
-  return url.searchParams.has("or") && !url.searchParams.has("status");
+  return url.searchParams.has("lease_expires_at");
 }
 
 function userRow() {
@@ -871,7 +871,6 @@ Deno.test("processQueuedRoutineRun: duplicate delivery (claim matches nothing) i
 Deno.test("routine executor: reaps a run orphaned in 'running' past its lease", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;
-  let reapFilter: string | null = null;
   const runPatches: Array<{ body: Record<string, unknown>; url: string }> = [];
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -882,12 +881,18 @@ Deno.test("routine executor: reaps a run orphaned in 'running' past its lease", 
     // No due routines and no queued candidates: isolate the reap path.
     if (table === "user_routines" && method === "GET") return jsonResponse([]);
     if (table === "routine_runs" && method === "GET") {
-      // The reaper probe finds one run wedged in 'running' past its lease.
-      if (isReaperQuery(url)) return jsonResponse([{ id: "orphan-1" }]);
+      // The reaper runs two disjoint probes; the orphan is a lease-less run
+      // stuck past the staleness window (the second probe). The lease-expired
+      // probe finds nothing here.
+      if (
+        isReaperQuery(url) &&
+        url.searchParams.get("lease_expires_at") === "is.null"
+      ) {
+        return jsonResponse([{ id: "orphan-1" }]);
+      }
       return jsonResponse([]);
     }
     if (table === "routine_runs" && method === "PATCH") {
-      reapFilter = url.searchParams.get("or");
       runPatches.push({ body: body as Record<string, unknown>, url: url.toString() });
       return jsonResponse([{ id: "orphan-1" }]);
     }
@@ -912,13 +917,13 @@ Deno.test("routine executor: reaps a run orphaned in 'running' past its lease", 
       "ServerTimeout",
     );
     assertEquals(failPatch?.body.lease_id, null);
-    // The write re-applies the full staleness filter so a run legitimately
-    // reclaimed between probe and PATCH is not clobbered.
-    assert(reapFilter?.includes("status.eq.running"));
-    assert(
-      new URL(failPatch?.url || "https://supabase.example").searchParams
-        .get("id")?.includes("orphan-1"),
-    );
+    // The write re-applies the same staleness filter (status + lease) plus the
+    // probed ids, so a run legitimately reclaimed between probe and PATCH is
+    // not clobbered.
+    const failUrl = new URL(failPatch?.url || "https://supabase.example");
+    assertEquals(failUrl.searchParams.get("status"), "eq.running");
+    assertEquals(failUrl.searchParams.get("lease_expires_at"), "is.null");
+    assert(failUrl.searchParams.get("id")?.includes("orphan-1"));
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv();

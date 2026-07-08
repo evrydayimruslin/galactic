@@ -22,12 +22,6 @@ const USER_SELECT = "id,email,tier,provisional";
 
 const DEFAULT_LIMIT = 10;
 const DEFAULT_LEASE_MS = 10 * 60 * 1000;
-// A "running" run whose lease has expired means the consumer died after the
-// queued->running claim but before finishRun; a "queued" run older than this
-// never got dispatched (lost message). Both are reaped. The queued cutoff sits
-// well above the max retry backoff (MAX_RETRY_DELAY_SECONDS) so a run merely
-// waiting on its next_attempt_at is never mistaken for lost.
-const STALE_QUEUED_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_SECONDS = 60;
 const MAX_RETRY_DELAY_SECONDS = 15 * 60;
@@ -1411,41 +1405,31 @@ export async function processQueuedRoutineRun(
   return "ack";
 }
 
-// Recover runs abandoned mid-flight and fail them terminally. A run claimed to
-// "running" whose lease has expired means the consumer crashed after the claim
-// but before finishRun — at-least-once redelivery can't recover it (the claim
-// guard finds it no longer "queued"), and left alone it counts against
-// max_concurrency forever, permanently wedging a max_concurrency=1 routine. A
-// "queued" backstop catches runs whose EXEC_QUEUE message was lost. Terminal
-// fail (not retry) matches async jobs' at-most-once contract: a periodic
-// routine simply recovers on its next scheduled tick, and re-running a run that
-// may have partially executed would risk duplicate side effects. Probe-first
-// (the minute cron must not blind-write every tick) and the PATCH re-applies the
-// full staleness filter so a run legitimately claimed between probe and write is
-// not clobbered. Mirrors cleanupStaleJobs.
-async function reapStaleRoutineRuns(now: Date): Promise<number> {
-  const leaseCutoff = iso(now);
-  const startedCutoff = iso(addMs(now, -DEFAULT_LEASE_MS));
-  const queuedCutoff = iso(addMs(now, -STALE_QUEUED_MS));
-  const staleFilter =
-    `(` +
-    `and(status.eq.running,lease_expires_at.lt.${leaseCutoff}),` +
-    `and(status.eq.running,lease_expires_at.is.null,started_at.lt.${startedCutoff}),` +
-    `and(status.eq.running,lease_expires_at.is.null,started_at.is.null,created_at.lt.${startedCutoff}),` +
-    `and(status.eq.queued,created_at.lt.${queuedCutoff},or(next_attempt_at.is.null,next_attempt_at.lt.${leaseCutoff}))` +
-    `)`;
-
+// Fail a batch of runs matched by a flat staleness filter and return how many
+// were written. Probe-first (the minute cron must not blind-write every tick),
+// and the PATCH re-applies the SAME filter so a run legitimately re-leased or
+// settled between probe and write is not clobbered.
+async function failStaleRuns(
+  filter: Record<string, string>,
+  now: Date,
+): Promise<number> {
   const stale = await fetchRows<{ id: string }>(
     "routine_runs",
-    { or: staleFilter, select: "id", limit: "200" },
+    { ...filter, select: "id", limit: "200" },
     "Failed to probe stale routine runs",
-  ).catch(() => [] as Array<{ id: string }>);
+  ).catch((err) => {
+    console.error(
+      "[ROUTINE-REAP] probe failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return [] as Array<{ id: string }>;
+  });
   if (stale.length === 0) return 0;
 
   const ids = stale.map((row) => row.id).join(",");
   const reaped = await patchRows<{ id: string }>(
     "routine_runs",
-    { id: `in.(${ids})`, or: staleFilter, select: "id" },
+    { ...filter, id: `in.(${ids})`, select: "id" },
     {
       status: "failed",
       completed_at: iso(now),
@@ -1454,12 +1438,52 @@ async function reapStaleRoutineRuns(now: Date): Promise<number> {
       error: {
         type: "ServerTimeout",
         message:
-          "Routine run exceeded its lease or was never dispatched (worker restart or lost queue message).",
+          "Routine run exceeded its lease (worker restart or lost invocation).",
       },
     },
     "Failed to reap stale routine runs",
-  ).catch(() => [] as Array<{ id: string }>);
+  ).catch((err) => {
+    console.error(
+      "[ROUTINE-REAP] patch failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return [] as Array<{ id: string }>;
+  });
   return reaped.length;
+}
+
+// Recover runs abandoned mid-flight and fail them terminally. A run claimed to
+// "running" whose lease has expired means the consumer crashed after the claim
+// but before finishRun — at-least-once redelivery can't recover it (the claim
+// guard finds it no longer "queued"), and left alone it counts against
+// max_concurrency forever, permanently wedging a max_concurrency=1 routine.
+// Terminal fail (not retry) matches async jobs' at-most-once contract: a
+// periodic routine simply recovers on its next scheduled tick, and re-running a
+// run that may have partially executed would risk duplicate side effects.
+//
+// Only "running" is reaped: a "queued" run is never orphaned — queuedRunCandidates
+// re-dispatches it every cron, and a lost EXEC_QUEUE message is near-impossible
+// (at-least-once delivery + DLQ). Two FLAT filters (the proven PostgREST shape,
+// no nested and/or grouping): a live lease that has expired, and a legacy /
+// never-leased run stuck past the staleness window. They are disjoint (lease
+// non-null-and-past vs lease null), so nothing is counted twice.
+async function reapStaleRoutineRuns(now: Date): Promise<number> {
+  const leaseCutoff = iso(now);
+  const startedCutoff = iso(addMs(now, -DEFAULT_LEASE_MS));
+  let reaped = 0;
+  reaped += await failStaleRuns(
+    { status: "eq.running", lease_expires_at: `lt.${leaseCutoff}` },
+    now,
+  );
+  reaped += await failStaleRuns(
+    {
+      status: "eq.running",
+      lease_expires_at: "is.null",
+      started_at: `lt.${startedCutoff}`,
+    },
+    now,
+  );
+  return reaped;
 }
 
 export async function runRoutineExecutorCycle(
