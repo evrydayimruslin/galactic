@@ -83,6 +83,7 @@ import {
   SupabaseConfigMigrationRequiredError,
 } from "../services/app-runtime-resources.ts";
 import { getManifestAllowedDestinations } from "../services/trust.ts";
+import { parseAppManifest } from "../services/app-settings.ts";
 import {
   ANONYMOUS_USER_ID,
   callerHasAppAccess,
@@ -1726,6 +1727,20 @@ async function handleToolsCall(
       callerGrantId = resolution.grant?.id ?? null;
     }
   } else if (
+    // A routine invoking ITS OWN declared handler on ITS OWN composer app is
+    // not a connected-agent call — the user authorized the routine (and its
+    // capabilities) when they created it. Subjecting it to the always/ask/never
+    // gate is wrong: the routine_actor can't self-confirm (by design), and a
+    // fresh private agent is never health-green, so the FIRST wake would be
+    // blocked forever. The token's composerAppId/handlerFunction are minted
+    // server-side from the routine row, so this can't be forged by app code.
+    callerUsesRoutineActorToken(callerContext) &&
+    callerContext.routineActor?.composerAppId === app.id &&
+    (!callerContext.routineActor?.handlerFunction ||
+      callerContext.routineActor.handlerFunction === rawName)
+  ) {
+    // Routine self-invocation: allowed without a connected-agent grant.
+  } else if (
     callerUsesApiToken(callerContext) ||
     callerUsesRoutineActorToken(callerContext) ||
     callerUsesSandboxActorToken(callerContext)
@@ -2848,9 +2863,10 @@ async function executeAppFunction(
     // Flight recorder opt-in (manifest flight_recorder): wires the RUNS
     // read-back binding and persists this execution's captured ai() exchanges
     // as routine_run_steps when a routine context is present.
+    // app.manifest is stored as a JSON string — parse before reading the flag
+    // (reading .flight_recorder off the raw string is always undefined).
     const flightRecorderEnabled =
-      (app.manifest as { flight_recorder?: unknown } | null | undefined)
-        ?.flight_recorder === true;
+      parseAppManifest(app.manifest)?.flight_recorder === true;
 
     const sandboxConfig = {
       appId: app.id,
