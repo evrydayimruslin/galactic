@@ -3257,8 +3257,8 @@ function stripGpuPlatformDocs(docs: string): string {
       "### gx.download({ app_id?, name?, description?, version? })",
     )
     .replace(
-      '- Without `app_id`: scaffold a new app. Default runtime generates index.ts + manifest.json + .ultralightrc.json. With `runtime: "gpu"`, generates `ultralight.gpu.yaml`, `main.py`, `requirements.txt`, and `test_fixture.json`. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts, `gpu_type`, `base: "python-cuda" | "torch-cuda"`.\n',
-      "- Without `app_id`: scaffold a new app. The enabled runtime generates index.ts + manifest.json + .ultralightrc.json. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts, `interface: true` for a working interfaces/main.html (agent UI) with the call bridge pre-wired.\n",
+      '- Without `app_id`: scaffold a new app. Default runtime generates index.ts + manifest.json + .ultralightrc.json. With `runtime: "gpu"`, generates `ultralight.gpu.yaml`, `main.py`, `requirements.txt`, and `test_fixture.json`. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts, `full_time: true` for a running full-time-agent loop (see "Full-time Agents" below), `gpu_type`, `base: "python-cuda" | "torch-cuda"`.\n',
+      "- Without `app_id`: scaffold a new app. The enabled runtime generates index.ts + manifest.json + .ultralightrc.json. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts, `interface: true` for a working interfaces/main.html (agent UI) with the call bridge pre-wired, `full_time: true` for a running full-time-agent loop (see \"Full-time Agents\" below).\n",
     )
     .replace(
       "- GPU apps are validation-only in `gx.test`: it checks `ultralight.gpu.yaml`, `main.py`, `test_fixture.json`, pinned requirements, and rejects Dockerfiles. Actual Python/GPU execution happens after upload/build/benchmark.\n",
@@ -3644,7 +3644,7 @@ Deploy TypeScript/Python app or publish markdown page.
 
 ### gx.download({ app_id?, name?, description?, version?, runtime?, gpu_type?, base? })
 - With \`app_id\`: download app source code (respects download_access setting).
-- Without \`app_id\`: scaffold a new app. Default runtime generates index.ts + manifest.json + .ultralightrc.json. With \`runtime: "gpu"\`, generates \`ultralight.gpu.yaml\`, \`main.py\`, \`requirements.txt\`, and \`test_fixture.json\`. Optional: \`functions\` array, \`storage\` type, \`permissions\` list, \`policy: true\` for policy.ts, \`gpu_type\`, \`base: "python-cuda" | "torch-cuda"\`.
+- Without \`app_id\`: scaffold a new app. Default runtime generates index.ts + manifest.json + .ultralightrc.json. With \`runtime: "gpu"\`, generates \`ultralight.gpu.yaml\`, \`main.py\`, \`requirements.txt\`, and \`test_fixture.json\`. Optional: \`functions\` array, \`storage\` type, \`permissions\` list, \`policy: true\` for policy.ts, \`full_time: true\` for a running full-time-agent loop (see "Full-time Agents" below), \`gpu_type\`, \`base: "python-cuda" | "torch-cuda"\`.
 
 ### gx.test({ files, function_name?, test_args?, env_vars?, d1_fixtures?, lint_only?, strict? })
 Test code in sandbox without deploying.
@@ -3868,6 +3868,29 @@ const ctx = galactic.context;                             // { user, ... } — n
 - **Compose Agents:** \`const out = await galactic.call("translator-app", "translate", { text: t, to: "fr" });\`
 - **Persistent counter:** \`const n = (await galactic.load("count")) || 0; await galactic.store("count", n + 1); return { count: n + 1 };\`
 - **D1 CRUD (auto per-user):** \`await galactic.db.insert("notes", { id: crypto.randomUUID(), body: args.body }); const notes = await galactic.db.select("notes", { orderBy: { column: "created_at", dir: "desc" }, limit: 20 });\`
+
+## Full-time Agents (loop engineering)
+
+Galactic Agents can work here full-time: a **routine** wakes your handler on a schedule, forever, and each wake runs a loop — **read the goal → review your own past → take in new information → reason → act → record**. Everything below is live platform capability; start from the scaffold:
+
+\`\`\`
+gx.download({ name: "Inbox Keeper", description: "Keeps my inbox triaged.", full_time: true })
+\`\`\`
+
+That emits a RUNNING loop, not boilerplate: a \`tick(args)\` handler wired end-to-end, a \`journal\` D1 migration (the agent's working memory across wakes), and a manifest with a routine template (schedule + budget defaults) and \`flight_recorder: true\`. Two marked EXTENSION POINTs are yours: the observation source and the actions.
+
+**How each loop stage maps to the platform:**
+- **Wake** — the routine invokes \`handler_function\` with the routine's config plus \`_routine\` metadata (see the gx.routine handler contract). Cadence floor 60s; handlers are synchronous, 30s default / 120s max wall; \`args._routine\` present ⇒ routine wake.
+- **Goal** — write the standing mission in the routine's \`intent\` (delivered as \`args._routine.intent\` every wake, editable any time with \`gx.routine update\`); fall back to \`config.goal\` or a \`universal\` env var. The agent cannot rewrite its own directive — the loop is autonomous, the mission is not.
+- **Review its own past** — two complementary memories: the agent's own \`galactic.db\` journal (curated working memory it writes each wake) and the platform flight recorder, \`galactic.runs.recent({ limit })\` (recorded truth: per-wake status/cost/steps including its past \`ai()\` exchanges — survives the agent's own bugs).
+- **Take in new information** — allowlisted \`fetch()\` (manifest \`network.allowed_destinations\`), \`galactic.net.imapFetchUnseen\`, event subscriptions, or \`galactic.call\` to other Agents.
+- **Reason** — \`galactic.ai()\`; sequential calls are fine within the wall clock. For thinking that outgrows a wake, use **submit/collect**: wake N submits a batch job to an external provider via vaulted \`galactic.fetch\` and journals the job id; wake N+1 polls and collects. No single invocation waits, and duration billing (wall-clock) drops too.
+- **Act** — \`galactic.call\`, \`smtpSend\`, \`galactic.emit\`. Growing the repertoire is user-approved by design: the first call to a new Agent is denied with \`AGENT_GRANT_REQUIRED\` and **auto-files an approval request in the user's inbox** — journal the denial and retry next wake once approved. No self-wiring.
+- **Record** — append to the journal (what happened + why + what to do next); with \`flight_recorder\` on, the platform independently records the wake's \`ai()\` exchanges as run steps the owner can audit.
+
+**Safety + economics:** \`budget_policy\` is enforced — day/month caps defer wakes to the budget reset, per-run caps and 10 consecutive failures auto-pause with the reason on the routine (see gx.routine). The routine's owner pays; fixed overhead is roughly a cent a day — the bill is how hard the agent thinks.
+
+**Activation checklist:** \`gx.test\` a wake (\`test_args: { _routine: { trigger: "manual", attempt: 1, intent: "…" } }\`) → \`gx.upload\` → \`gx.routine create\` (mission in \`intent\`, budgets prefilled) → approve capabilities → \`gx.routine resume\` (routines are created paused) → watch via the routine monitor / \`gx.routine get\`.
 
 ## Building GPU Functions
 
@@ -8889,6 +8912,261 @@ function buildScaffoldInterfaceHtml(
 `;
 }
 
+// Full-time agent scaffold: a deployable LOOP, not placeholder functions. One
+// wake = goal → journal → observe → reason → act → record. Ships with a
+// routine template (schedule + budget defaults), a journal migration, and
+// flight_recorder on — so activation is upload → gx.routine create (mission in
+// `intent`) → resume. The generated code is meant to RUN on first deploy and
+// then be edited at the two marked extension points (observe + act).
+function executeFullTimeScaffold(name: string, description: string): unknown {
+  const indexLines = [
+    `// ${name} — a full-time Galactic agent`,
+    "//",
+    `// ${description}`,
+    "//",
+    "// The loop (one wake): goal → journal → observe → reason → act → record.",
+    "// A routine (manifest.json \"routines\") wakes tick() on a schedule. After",
+    "// deploy: gx.routine create (write the mission in `intent` — it arrives as",
+    "// args._routine.intent every wake), then gx.routine resume (routines are",
+    "// created paused). Budgets + the failure circuit breaker are enforced by",
+    "// the platform from the routine's budget_policy.",
+    "",
+    "const galactic = globalThis.galactic;",
+    "",
+    "// How many past journal entries the agent re-reads each wake.",
+    "const JOURNAL_CONTEXT = 10;",
+    "",
+    "// ============================================",
+    "// TICK — one wake of the loop",
+    "// ============================================",
+    "",
+    "export async function tick(args: {",
+    "  goal?: string;",
+    "  _routine?: {",
+    "    routine_id: string;",
+    "    routine_run_id: string;",
+    '    trigger: "scheduled" | "manual";',
+    "    attempt: number;",
+    "    scheduled_at: string;",
+    "    intent?: string | null;",
+    "  };",
+    "}): Promise<unknown> {",
+    "  const wake = args?._routine ?? null;",
+    "  // The standing directive: routine intent (set via gx.routine) wins, then",
+    "  // routine config.goal, then a universal env var.",
+    "  const goal = (wake && wake.intent) || (args && args.goal) ||",
+    "    galactic.env.GOAL ||",
+    '    "No goal configured yet. Observe, then summarize what this agent should do.";',
+    "",
+    "  // 1. Review the past: the self-authored journal (curated working memory)…",
+    '  const journal = await galactic.db.select("journal", {',
+    '    orderBy: { column: "created_at", dir: "desc" },',
+    "    limit: JOURNAL_CONTEXT,",
+    "  });",
+    "  // …and the platform's recorded truth (per-wake status/cost/steps, incl.",
+    "  // this code's past ai() exchanges — manifest flight_recorder).",
+    "  let recentRuns: unknown = null;",
+    "  try {",
+    "    const readback = await galactic.runs.recent({ limit: 5 });",
+    "    recentRuns = readback.runs.map((r: Record<string, unknown>) => ({",
+    "      status: r.status,",
+    "      summary: r.summary,",
+    "      total_light: r.total_light,",
+    "    }));",
+    "  } catch (_err) {",
+    "    // Read-back is unavailable until the app runs with flight_recorder on.",
+    "  }",
+    "",
+    "  // 2. Take in new information. ── EXTENSION POINT ──",
+    "  // Replace with your real observation source: an allowlisted fetch()",
+    "  // (declare the host in manifest network.allowed_destinations),",
+    "  // galactic.net.imapFetchUnseen(...), or galactic.call to another agent.",
+    '  // const res = await fetch("https://example.com/feed.json");',
+    '  const observations = "No observation source wired yet.";',
+    "",
+    "  // 3. Reason: assess progress against the goal, choose the next actions.",
+    '  let outcome = "ok";',
+    '  let assessment = "";',
+    "  let actionsTaken: string[] = [];",
+    "  try {",
+    "    const completion = await galactic.ai({",
+    "      messages: [{",
+    '        role: "user",',
+    "        content:",
+    '          "You are the reasoning core of a scheduled autonomous agent.\\n" +',
+    '          "Goal: " + goal + "\\n" +',
+    '          "Wake: " + (wake ? wake.trigger : "direct call") +',
+    '          " (attempt " + String((wake && wake.attempt) || 1) + ")\\n" +',
+    '          "Recent journal (newest first): " + JSON.stringify(journal) + "\\n" +',
+    '          (recentRuns ? "Recent run outcomes: " + JSON.stringify(recentRuns) + "\\n" : "") +',
+    '          "New observations: " + observations + "\\n" +',
+    '          "Assess progress toward the goal, then return ONLY JSON: " +',
+    "          '{ \"assessment\": \"...\", \"actions\": [\"...\"] }',",
+    "      }],",
+    "    });",
+    "    const plan = JSON.parse(completion.content);",
+    '    assessment = String(plan.assessment ?? "");',
+    "    actionsTaken = Array.isArray(plan.actions)",
+    "      ? plan.actions.map((a: unknown) => String(a))",
+    "      : [];",
+    "",
+    "    // 4. Act. ── EXTENSION POINT ──",
+    "    // Execute the plan with real side effects: galactic.call to other",
+    "    // agents, smtpSend, an authenticated galactic.fetch, galactic.emit.",
+    "    // First call to a NEW agent is denied with AGENT_GRANT_REQUIRED and",
+    "    // auto-files an approval request in your user's inbox — journal it and",
+    "    // retry next wake once approved:",
+    "    // try {",
+    '    //   await galactic.call("target-app-id", "some_function", { input: x });',
+    '    //   actionsTaken.push("called target-app-id.some_function");',
+    "    // } catch (err) {",
+    '    //   actionsTaken.push("requested access: " + String(err));',
+    "    // }",
+    "  } catch (err) {",
+    '    outcome = "error";',
+    '    assessment = "Reasoning failed: " +',
+    "      (err instanceof Error ? err.message : String(err));",
+    "  }",
+    "",
+    "  // 5. Record what happened and why — re-read at the top of the next wake.",
+    '  await galactic.db.insert("journal", {',
+    "    id: crypto.randomUUID(),",
+    "    run_id: (wake && wake.routine_run_id) || null,",
+    '    wake_trigger: (wake && wake.trigger) || "direct",',
+    "    goal: goal,",
+    "    observations: observations,",
+    "    assessment: assessment,",
+    "    actions: JSON.stringify(actionsTaken),",
+    "    outcome: outcome,",
+    "  });",
+    "",
+    "  return {",
+    '    ok: outcome === "ok",',
+    "    goal: goal,",
+    "    assessment: assessment,",
+    "    actions: actionsTaken,",
+    "  };",
+    "}",
+    "",
+    "// ============================================",
+    "// STATUS — inspect the journal",
+    "// ============================================",
+    "",
+    "export async function status(args?: { limit?: number }): Promise<unknown> {",
+    "  const limit = Math.min(50, Math.max(1, Number(args?.limit) || 10));",
+    '  const entries = await galactic.db.select("journal", {',
+    '    orderBy: { column: "created_at", dir: "desc" },',
+    "    limit: limit,",
+    "  });",
+    '  const total = await galactic.db.count("journal");',
+    "  return { total_entries: total, recent: entries };",
+    "}",
+    "",
+  ];
+
+  const migrationLines = [
+    "-- migrations/001_journal.sql",
+    `-- ${name} — the agent's run journal (its working memory across wakes).`,
+    "-- Every table must have: id, user_id, created_at, updated_at",
+    "",
+    "CREATE TABLE journal (",
+    "  id TEXT PRIMARY KEY,",
+    "  user_id TEXT NOT NULL,",
+    "  run_id TEXT,",
+    "  wake_trigger TEXT NOT NULL DEFAULT 'direct',",
+    "  goal TEXT NOT NULL DEFAULT '',",
+    "  observations TEXT NOT NULL DEFAULT '',",
+    "  assessment TEXT NOT NULL DEFAULT '',",
+    "  actions TEXT NOT NULL DEFAULT '[]',",
+    "  outcome TEXT NOT NULL DEFAULT 'ok',",
+    "  created_at TEXT NOT NULL DEFAULT (datetime('now')),",
+    "  updated_at TEXT NOT NULL DEFAULT (datetime('now'))",
+    ");",
+    "",
+    "CREATE INDEX idx_journal_user ON journal(user_id);",
+    "CREATE INDEX idx_journal_user_created ON journal(user_id, created_at);",
+  ];
+
+  const manifestObj = {
+    name: name,
+    version: "1.0.0",
+    type: "mcp",
+    description: description,
+    author: "",
+    entry: { functions: "index.ts" },
+    permissions: ["ai:call"],
+    // Flight recorder: persist each routine run's ai() exchanges as run steps
+    // so tick() can review its own reasoning via galactic.runs.recent().
+    flight_recorder: true,
+    functions: {
+      tick: {
+        description:
+          "One wake of the loop: read goal → review journal → observe → reason → act → record. Normally invoked by the routine; callable directly for testing.",
+        parameters: {
+          goal: {
+            type: "string",
+            description:
+              "Overrides the standing goal for this run (normally the routine's intent).",
+          },
+        },
+        returns: { type: "object" },
+      },
+      status: {
+        description: "Recent journal entries and totals.",
+        parameters: {
+          limit: {
+            type: "number",
+            description: "How many entries to return (1-50, default 10).",
+          },
+        },
+        returns: { type: "object" },
+      },
+    },
+    routines: [{
+      id: "main_loop",
+      label: `${name} loop`,
+      description:
+        "The standing loop. Write the mission in the routine's `intent` when creating it — tick() reads args._routine.intent every wake.",
+      handler: "tick",
+      default_schedule: { every_minutes: 30 },
+      config_schema: {
+        goal: {
+          type: "string",
+          description: "Fallback goal used when the routine's intent is empty.",
+        },
+      },
+      default_config: {},
+      // Enforced by the platform: day cap defers wakes to the budget reset;
+      // per-run violations auto-pause; 10 consecutive failures auto-pause.
+      budget_defaults: {
+        max_light_per_run: 10,
+        max_light_per_day: 100,
+      },
+    }],
+  };
+
+  return {
+    files: [
+      { path: "index.ts", content: indexLines.join("\n") },
+      { path: "manifest.json", content: JSON.stringify(manifestObj, null, 2) },
+      {
+        path: ".ultralightrc.json",
+        content: JSON.stringify({ app_id: "", slug: "", name: name }, null, 2),
+      },
+      { path: "migrations/001_journal.sql", content: migrationLines.join("\n") },
+    ],
+    next_steps: [
+      "Wire the two EXTENSION POINTs in index.ts tick(): a real observation source (allowlisted fetch / IMAP / galactic.call) and real actions.",
+      'Test one wake without deploying: gx.test({ files: [...], function_name: "tick", test_args: { _routine: { trigger: "manual", attempt: 1, intent: "your mission here" } } }).',
+      'Deploy with gx.upload({ files: [...], name: "' + name + '" }).',
+      'Activate the loop: gx.routine({ action: "create", ... }) from the main_loop template — write the standing mission in `intent`, keep or tighten the prefilled budgets, approve capabilities — then gx.routine({ action: "resume" }) (routines are created paused).',
+      "Watch it work: gx.routine({ action: \"get\" }) / the routine monitor for runs + auto-pause reasons; the agent itself reads galactic.runs.recent() each wake.",
+    ],
+    tip:
+      "This scaffold RUNS as-is: each wake reasons about its goal and journals the outcome even before you wire observations/actions. Budgets and the failure circuit breaker are enforced platform-side from the routine's budget_policy — see the gx.routine section of this doc.",
+  };
+}
+
 export function executeScaffold(args: Record<string, unknown>): unknown {
   const name = args.name as string;
   const description = args.description as string;
@@ -8950,6 +9228,13 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
       gpuType,
       baseProfile,
     });
+  }
+
+  // Full-time agent: a specialized, RUNNING loop scaffold (goal → journal →
+  // observe → reason → act → record) wired for routines, budgets, and the
+  // flight recorder — not the generic placeholder functions.
+  if (args.full_time === true) {
+    return executeFullTimeScaffold(name, description);
   }
 
   const detectedPerms: string[] = permissions || [];
