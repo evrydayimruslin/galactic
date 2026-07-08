@@ -204,11 +204,11 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
       clock: () => NOW,
       limit: 5,
       baseUrl: "https://api.example.test",
-      fetchFn: (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      invokeMcp: async (request: Request, appId: string) => {
+        const body = await request.json().catch(() => undefined);
         mcpCalls.push({
-          url: input.toString(),
-          auth: new Headers(init?.headers).get("Authorization"),
+          url: `${request.url}#${appId}`,
+          auth: request.headers.get("Authorization"),
           body,
         });
         return jsonResponse({
@@ -216,7 +216,7 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
             content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
           },
         });
-      }) as typeof fetch,
+      },
     });
 
     assertEquals(summary.claimed_scheduled, 1);
@@ -224,7 +224,7 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
     assertEquals(summary.succeeded, 1);
     assertEquals(
       mcpCalls[0].url,
-      "https://api.example.test/mcp/composer-app-1",
+      "https://api.example.test/mcp/composer-app-1#composer-app-1",
     );
     assert(mcpCalls[0].auth?.startsWith("Bearer gxr_v1_"));
     const claimPatch = dbCalls.find((call) =>
@@ -335,10 +335,10 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
       clock: () => NOW,
       limit: 5,
       baseUrl: "https://api.example.test",
-      fetchFn: (async () =>
+      invokeMcp: async () =>
         jsonResponse({
           error: { code: -32000, message: "Inbox unavailable" },
-        })) as typeof fetch,
+        }),
     });
 
     assertEquals(summary.claimed_queued, 1);
@@ -435,12 +435,12 @@ Deno.test("routine executor: skips scheduled run and defers to budget reset when
       clock: () => NOW,
       limit: 5,
       baseUrl: "https://api.example.test",
-      fetchFn: (async () => {
+      invokeMcp: async () => {
         handlerInvocations += 1;
         return jsonResponse({
           result: { content: [{ type: "text", text: "{}" }] },
         });
-      }) as typeof fetch,
+      },
     });
 
     assertEquals(summary.skipped, 1);
@@ -528,10 +528,10 @@ Deno.test("routine executor: auto-pauses the routine after consecutive failed at
       clock: () => NOW,
       limit: 5,
       baseUrl: "https://api.example.test",
-      fetchFn: (async () =>
+      invokeMcp: async () =>
         jsonResponse({
           error: { code: -32000, message: "Inbox unavailable" },
-        })) as typeof fetch,
+        }),
     });
 
     assertEquals(summary.failed, 1);
@@ -604,12 +604,12 @@ Deno.test("routine executor: auto-pauses when a run exceeds max_light_per_run an
       clock: () => NOW,
       limit: 5,
       baseUrl: "https://api.example.test",
-      fetchFn: (async () =>
+      invokeMcp: async () =>
         jsonResponse({
           result: {
             content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
           },
-        })) as typeof fetch,
+        }),
     });
 
     assertEquals(summary.succeeded, 1);
@@ -627,6 +627,65 @@ Deno.test("routine executor: auto-pauses when a run exceeds max_light_per_run an
     assertEquals(rollup?.day, "2026-05-17");
     assertEquals(rollup?.day_light, 25);
     assertEquals(rollup?.month_light, 25);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("routine executor: a hung handler invocation times out into a retry (never stuck 'running')", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  const runPatches: Array<Record<string, unknown>> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (table === "user_routines" && method === "GET") {
+      return jsonResponse([routineRow({ budget_policy: {} })]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      return jsonResponse([{ ...routineRow(), ...(body as Record<string, unknown>) }]);
+    }
+    if (table === "routine_runs" && method === "GET") return jsonResponse([]);
+    if (table === "routine_runs" && method === "POST") {
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      runPatches.push(body as Record<string, unknown>);
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
+    if (table === "routine_capabilities") return jsonResponse(capabilityRows());
+    if (table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "users") return jsonResponse([userRow()]);
+    if (table === "routine_run_steps" && method === "POST") {
+      return jsonResponse([{ id: "step-1" }]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    const summary = await runRoutineExecutorCycle({
+      now: NOW,
+      clock: () => NOW,
+      limit: 5,
+      baseUrl: "https://api.example.test",
+      handlerTimeoutMs: 40,
+      // A wedged handler: never resolves. The backstop must abort it so the run
+      // is retried/failed rather than left "running" forever (the prod bug).
+      invokeMcp: () => new Promise<Response>(() => {}),
+    });
+
+    assertEquals(summary.executed, 1);
+    assertEquals(summary.retried, 1);
+    const retryPatch = runPatches.find((b) => b.status === "queued");
+    assert(retryPatch, "hung run must be re-queued for retry, not left running");
+    assertEquals(
+      (retryPatch?.error as Record<string, unknown>).message,
+      "Routine handler invocation timed out",
+    );
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv();

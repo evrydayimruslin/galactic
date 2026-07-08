@@ -1,5 +1,4 @@
 import { getEnv } from "../lib/env.ts";
-import { resolveInternalMcpCall } from "./internal-mcp.ts";
 import type { RoutineBudgetDefaults } from "../../shared/contracts/routine.ts";
 import {
   createRoutineActorTokenForRun,
@@ -35,6 +34,17 @@ const DEFAULT_BREAKER_FAILURES = 10;
 // max_calls_per_run is verified by counting the run's recorded contribution
 // steps; caps at or above this bound cannot be verified cheaply and are inert.
 const MAX_VERIFIABLE_CALLS_CAP = 500;
+// Backstop timeout on a single handler invocation. The in-process handler runs
+// the dynamic sandbox, which self-limits to 30s (default) / 120s (max) — this
+// only fires if an invocation wedges beyond that, so a single stuck routine can
+// never stall the shared minute-cron (runRoutineExecutorCycle runs inside the
+// worker's Promise.allSettled cron cycle alongside billing, events, etc.).
+const HANDLER_INVOKE_TIMEOUT_MS = 130_000;
+
+// Invokes the /mcp/{appId} pipeline for the composer app. Defaults to an
+// IN-PROCESS handleMcp call (see invokeRoutineHandler for why); overridable in
+// tests to intercept the request without a real handler.
+type InvokeMcp = (request: Request, appId: string) => Promise<Response>;
 
 export interface RoutineExecutorOptions {
   now?: Date;
@@ -43,6 +53,28 @@ export interface RoutineExecutorOptions {
   leaseMs?: number;
   baseUrl?: string;
   fetchFn?: typeof fetch;
+  invokeMcp?: InvokeMcp;
+  handlerTimeoutMs?: number;
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 export interface RoutineExecutorSummary {
@@ -902,7 +934,7 @@ function buildRoutineArgs(
 async function invokeRoutineHandler(
   routine: StoredRoutine,
   run: ExecutorRunRow,
-  options: Required<Pick<RoutineExecutorOptions, "baseUrl" | "fetchFn">>,
+  options: Required<Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">>,
 ): Promise<unknown> {
   const composerAppId = routine.composer_app_id || routine.composer_app_slug;
   if (!composerAppId) {
@@ -924,15 +956,20 @@ async function invokeRoutineHandler(
     tokenId: `routine-run-${run.id}-attempt-${run.attempt_count}`,
   });
 
-  // SELF service binding when available: same-worker fetch() over the public
-  // hostname is blocked by the CDN (error 1042). options.fetchFn remains the
-  // test seam / fallback. The helper validates + encodes the composer id.
-  const internalCall = resolveInternalMcpCall(composerAppId, {
-    baseUrl: options.baseUrl,
-    fetchFn: options.fetchFn,
-  });
-  const response = await internalCall.fetchFn(
-    internalCall.url,
+  // Invoke the handler IN-PROCESS via handleMcp, NOT through a SELF
+  // service-binding HTTP round-trip. The executor's only home is the worker's
+  // scheduled() cron cycle, and a SELF round-trip made from there HANGS (it
+  // works fine from a normal fetch() request context, which is why gx.call and
+  // the interface bridge are unaffected). The event-bus dispatcher — also
+  // cron-triggered — already invokes handlers in-process (executeEventDelivery),
+  // which is why events work while routines did not. An in-process handleMcp
+  // call runs the identical /mcp pipeline (auth from the routine-actor bearer,
+  // caller-permission, dynamic sandbox, settlement, flight recorder) with no
+  // network hop. A backstop timeout guards the shared cron against a wedge.
+  const mcpRequest = new Request(
+    `${
+      options.baseUrl.replace(/\/+$/, "")
+    }/mcp/${encodeURIComponent(composerAppId)}`,
     {
       method: "POST",
       headers: {
@@ -951,6 +988,11 @@ async function invokeRoutineHandler(
         },
       }),
     },
+  );
+  const response = await withTimeout(
+    options.invokeMcp(mcpRequest, composerAppId),
+    options.handlerTimeoutMs,
+    "Routine handler invocation timed out",
   );
 
   if (!response.ok) {
@@ -1140,7 +1182,7 @@ async function recordRootStep(
 
 async function executeClaimedRun(
   claimed: ClaimedRun,
-  options: Required<Pick<RoutineExecutorOptions, "baseUrl" | "fetchFn">>,
+  options: Required<Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">>,
   now: Date,
   clock: () => Date,
 ): Promise<RunOutcome> {
@@ -1275,7 +1317,19 @@ export async function runRoutineExecutorCycle(
   );
   const baseUrl = options.baseUrl || getEnv("BASE_URL") ||
     "https://api.connectgalactic.com";
-  const fetchFn = options.fetchFn || fetch;
+  // Default handler invocation: call handleMcp IN-PROCESS (no SELF round-trip —
+  // see invokeRoutineHandler). Lazy import keeps the handler graph off this
+  // module's load path. Overridable in tests.
+  const invokeMcp: InvokeMcp = options.invokeMcp ||
+    (async (request, appId) => {
+      const { handleMcp } = await import("../handlers/mcp.ts");
+      return handleMcp(request, appId);
+    });
+  const handlerTimeoutMs = positiveInteger(
+    options.handlerTimeoutMs,
+    HANDLER_INVOKE_TIMEOUT_MS,
+    15 * 60 * 1000,
+  );
   const clock = options.clock || (() => new Date());
 
   const summary: RoutineExecutorSummary = {
@@ -1317,7 +1371,7 @@ export async function runRoutineExecutorCycle(
     try {
       const outcome = await executeClaimedRun(
         claimed,
-        { baseUrl, fetchFn },
+        { baseUrl, invokeMcp, handlerTimeoutMs },
         now,
         clock,
       );

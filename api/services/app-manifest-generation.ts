@@ -161,10 +161,21 @@ export function generateManifestFromParseResult(
 }
 
 // Regenerated manifests must not silently drop publisher declarations that
-// are not derivable from source parsing: external_functions is an
-// authorization-bearing declaration, and interfaces point at uploaded
-// artifacts the parser never sees.
-const CARRIED_MANIFEST_FIELDS = ['external_functions', 'interfaces'] as const;
+// describe RUNTIME BEHAVIOR the source parser cannot derive. external_functions
+// is authorization-bearing; interfaces point at uploaded artifacts; routines /
+// emits / imports / network / flight_recorder each drive runtime wiring, so a
+// terse manifest (one without rich descriptions, which takes the carry-forward
+// path) must keep them — otherwise a full-time agent silently loses its routine
+// template and flight recorder on the next regenerate.
+const CARRIED_MANIFEST_FIELDS = [
+  'external_functions',
+  'interfaces',
+  'routines',
+  'emits',
+  'imports',
+  'network',
+  'flight_recorder',
+] as const;
 
 function carryForwardDeclaredFields(
   existing: AppManifest | null,

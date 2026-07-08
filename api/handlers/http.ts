@@ -16,6 +16,7 @@ import {
 import { resolveFunctionInferenceOverride } from "../services/function-inference-overrides.ts";
 import { checkAndIncrementWeeklyCalls } from "../services/weekly-calls.ts";
 import { getManifestAllowedDestinations } from "../services/trust.ts";
+import { parseAppManifest } from "../services/app-settings.ts";
 import { executeGpuFunction } from "../services/gpu/executor.ts";
 import { acquireGpuSlot } from "../services/gpu/concurrency.ts";
 import { buildGpuNotReadyMessage } from "../services/gpu/status.ts";
@@ -701,9 +702,7 @@ export async function handleHttpEndpoint(
         permissions: httpPermissions,
         // Read-back only on the HTTP surface: runs.recent works for the
         // authenticated caller; nothing is recorded here (no routine context).
-        flightRecorder:
-          (app.manifest as { flight_recorder?: unknown } | null | undefined)
-            ?.flight_recorder === true,
+        flightRecorder: parseAppManifest(app.manifest)?.flight_recorder === true,
         allowedDestinations: getManifestAllowedDestinations(app.manifest),
         userApiKey: runtimeAI.userApiKey,
         aiUnavailableReason: runtimeAI.unavailableReason,
