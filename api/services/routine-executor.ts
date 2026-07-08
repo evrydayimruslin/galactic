@@ -22,6 +22,12 @@ const USER_SELECT = "id,email,tier,provisional";
 
 const DEFAULT_LIMIT = 10;
 const DEFAULT_LEASE_MS = 10 * 60 * 1000;
+// A "running" run whose lease has expired means the consumer died after the
+// queued->running claim but before finishRun; a "queued" run older than this
+// never got dispatched (lost message). Both are reaped. The queued cutoff sits
+// well above the max retry backoff (MAX_RETRY_DELAY_SECONDS) so a run merely
+// waiting on its next_attempt_at is never mistaken for lost.
+const STALE_QUEUED_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_SECONDS = 60;
 const MAX_RETRY_DELAY_SECONDS = 15 * 60;
@@ -87,6 +93,9 @@ function withTimeout<T>(
 
 export interface RoutineExecutorSummary {
   checked_at: string;
+  // Runs abandoned mid-flight ("running" past lease, or a lost queued message)
+  // that this cycle failed terminally to unwedge max_concurrency.
+  reaped: number;
   claimed_scheduled: number;
   claimed_queued: number;
   // Runs handed to the EXEC_QUEUE consumer for handler execution (prod path).
@@ -102,12 +111,11 @@ export interface RoutineExecutorSummary {
 }
 
 // EXEC_QUEUE message shape for a routine run. Discriminated from async-job
-// messages ({ jobId }) by the routineRunId key. leaseId pins the exact claim
-// the scheduled() cycle made, so the consumer's optimistic re-claim rejects a
-// duplicate (Queues at-least-once) delivery.
+// messages ({ jobId }) by the routineRunId key. The run is left "queued" on
+// enqueue; the consumer claims queued->running, which is the at-most-once guard
+// against Queues' at-least-once delivery.
 interface RoutineRunQueueMessage {
   routineRunId: string;
-  leaseId: string | null;
 }
 
 interface QueueLike {
@@ -734,7 +742,6 @@ async function releaseRoutineLease(
 async function insertScheduledRun(
   routine: ExecutorRoutineRow,
   now: Date,
-  leaseMs: number,
 ): Promise<ExecutorRunRow> {
   const policy = retryPolicyFrom(routine);
   const [run] = await insertRows<ExecutorRunRow>(
@@ -743,18 +750,23 @@ async function insertScheduledRun(
     {
       routine_id: routine.id,
       user_id: routine.user_id,
-      status: "running",
+      // Created "queued", NOT "running": the cron only enqueues; the queue
+      // consumer claims queued->running and executes. A cron that dies before
+      // enqueueing leaves the run "queued", so the next cron re-enqueues it —
+      // nothing is ever orphaned in "running".
+      status: "queued",
       trigger: "scheduled",
       trace_id: crypto.randomUUID(),
-      started_at: iso(now),
+      started_at: null,
       run_config: {},
       metadata: {
         source: "routine_executor",
         routine_lease_id: routine.lease_id,
       },
-      lease_id: crypto.randomUUID(),
-      lease_expires_at: iso(addMs(now, leaseMs)),
-      attempt_count: 1,
+      lease_id: null,
+      lease_expires_at: null,
+      // attempt_count 0 → the consumer's claim increments it to 1 (first try).
+      attempt_count: 0,
       max_attempts: policy.maxAttempts,
     },
     "Failed to create scheduled routine run",
@@ -781,16 +793,19 @@ async function dueRoutineCandidates(
   );
 }
 
-async function claimScheduledRuns(
+// Creates a "queued" run for each due routine (leasing the routine + advancing
+// next_run_at to prevent a double-fire) and returns the new run ids to enqueue.
+// It does NOT claim runs to "running" — that happens in the consumer.
+async function prepareDueScheduledRuns(
   now: Date,
   limit: number,
   leaseMs: number,
-): Promise<ClaimedRun[]> {
-  const claimedRuns: ClaimedRun[] = [];
+): Promise<string[]> {
+  const runIds: string[] = [];
   const candidates = await dueRoutineCandidates(now, limit);
 
   for (const candidate of candidates) {
-    if (claimedRuns.length >= limit) break;
+    if (runIds.length >= limit) break;
     const activeCount = await activeRunCount(candidate.id);
     if (activeCount >= candidate.max_concurrency) continue;
 
@@ -798,13 +813,13 @@ async function claimScheduledRuns(
     if (!claimedRoutine) continue;
 
     try {
-      const run = await insertScheduledRun(claimedRoutine, now, leaseMs);
+      const run = await insertScheduledRun(claimedRoutine, now);
       const nextRunAt = computeNextRoutineRunAt(claimedRoutine.schedule, now);
       await releaseRoutineLease(claimedRoutine.id, now, {
         next_run_at: nextRunAt ? iso(nextRunAt) : null,
         last_run_at: iso(now),
       });
-      claimedRuns.push({ run, source: "scheduled" });
+      runIds.push(run.id);
     } catch (err) {
       await releaseRoutineLease(claimedRoutine.id, now, {
         last_error_at: iso(now),
@@ -814,7 +829,7 @@ async function claimScheduledRuns(
     }
   }
 
-  return claimedRuns;
+  return runIds;
 }
 
 async function queuedRunCandidates(
@@ -834,11 +849,19 @@ async function queuedRunCandidates(
   );
 }
 
-async function claimQueuedRun(
-  run: ExecutorRunRow,
+// Consumer/inline claim: load the run by id and optimistically move it
+// queued->running (attempt++). Returns the claimed run, or null when it is not
+// claimable — already claimed/terminal (a duplicate Queues delivery, or a
+// concurrent claim won the race), or attempts exhausted. The atomic PATCH
+// (status=queued AND attempt_count=N) is the at-most-once guard.
+async function claimQueuedRunForExecution(
+  runId: string,
   now: Date,
   leaseMs: number,
 ): Promise<ExecutorRunRow | null> {
+  const run = await getRunById(runId);
+  if (!run) return null;
+  if (run.status !== "queued") return null;
   if (run.attempt_count >= run.max_attempts) {
     await finishRun(run, "failed", now, {
       summary: "Routine run exhausted retry attempts before claim.",
@@ -850,10 +873,9 @@ async function claimQueuedRun(
   const [claimed] = await patchRows<ExecutorRunRow>(
     "routine_runs",
     {
-      id: `eq.${run.id}`,
+      id: `eq.${runId}`,
       status: "eq.queued",
       attempt_count: `eq.${run.attempt_count}`,
-      and: leaseAndDueFilter("next_attempt_at", now),
       select: RUN_SELECT,
     },
     {
@@ -867,23 +889,6 @@ async function claimQueuedRun(
     "Failed to claim queued routine run",
   );
   return claimed ?? null;
-}
-
-async function claimQueuedRuns(
-  now: Date,
-  limit: number,
-  leaseMs: number,
-): Promise<ClaimedRun[]> {
-  const claimedRuns: ClaimedRun[] = [];
-  const candidates = await queuedRunCandidates(now, limit);
-
-  for (const candidate of candidates) {
-    if (claimedRuns.length >= limit) break;
-    const claimed = await claimQueuedRun(candidate, now, leaseMs);
-    if (claimed) claimedRuns.push({ run: claimed, source: "queued" });
-  }
-
-  return claimedRuns;
 }
 
 async function loadUser(userId: string): Promise<RoutineActorUserInput> {
@@ -1366,29 +1371,29 @@ async function getRunById(runId: string): Promise<ExecutorRunRow | null> {
 // still being "running". This is the at-most-once guard against Queues'
 // at-least-once delivery — a duplicate message finds the lease already rotated
 // (or the run terminal) and matches zero rows.
-async function claimRunForConsumer(
+// Claim a queued run (queued->running) and execute it. Shared by the queue
+// consumer and the inline (no-queue) cron path. Returns the run outcome, or
+// null when the run was not claimable (duplicate / already terminal).
+async function claimAndExecuteRun(
   runId: string,
-  leaseId: string | null,
-  now: Date,
-  leaseMs: number,
-): Promise<ExecutorRunRow | null> {
-  const filters: Record<string, string> = {
-    id: `eq.${runId}`,
-    status: "eq.running",
-    select: RUN_SELECT,
-  };
-  // lease_id may legitimately be null (older rows); match it exactly either way.
-  filters.lease_id = leaseId === null ? "is.null" : `eq.${leaseId}`;
-  const [claimed] = await patchRows<ExecutorRunRow>(
-    "routine_runs",
-    filters,
+  options: RoutineExecutorOptions,
+): Promise<RunOutcome | null> {
+  const now = options.now ?? new Date();
+  const clock = options.clock || (() => new Date());
+  const leaseMs = positiveInteger(options.leaseMs, DEFAULT_LEASE_MS, 60 * 60 * 1000);
+  const invocation = resolveInvocationOptions(options);
+
+  const claimed = await claimQueuedRunForExecution(runId, now, leaseMs);
+  if (!claimed) return null;
+  return await executeClaimedRun(
     {
-      lease_id: crypto.randomUUID(),
-      lease_expires_at: iso(addMs(now, leaseMs)),
+      run: claimed,
+      source: claimed.trigger === "scheduled" ? "scheduled" : "queued",
     },
-    "Failed to claim routine run for execution",
+    invocation,
+    now,
+    clock,
   );
-  return claimed ?? null;
 }
 
 // EXEC_QUEUE consumer entry for a routine run (routed from processExecMessage
@@ -1400,30 +1405,61 @@ export async function processQueuedRoutineRun(
   body: RoutineRunQueueMessage,
   options: RoutineExecutorOptions = {},
 ): Promise<"ack"> {
-  const now = options.now ?? new Date();
-  const clock = options.clock || (() => new Date());
-  const leaseMs = positiveInteger(options.leaseMs, DEFAULT_LEASE_MS, 60 * 60 * 1000);
-  const invocation = resolveInvocationOptions(options);
-
-  const claimed = await claimRunForConsumer(
-    body.routineRunId,
-    body.leaseId ?? null,
-    now,
-    leaseMs,
-  );
-  if (!claimed) {
-    // Duplicate delivery or the run is no longer running — nothing to do.
-    return "ack";
-  }
-  await executeClaimedRun(
-    { run: claimed, source: claimed.trigger === "scheduled" ? "scheduled" : "queued" },
-    invocation,
-    now,
-    clock,
-  ).catch((err) => {
+  await claimAndExecuteRun(body.routineRunId, options).catch((err) => {
     console.error("[ROUTINE-QUEUE] Run execution failed:", err);
   });
   return "ack";
+}
+
+// Recover runs abandoned mid-flight and fail them terminally. A run claimed to
+// "running" whose lease has expired means the consumer crashed after the claim
+// but before finishRun — at-least-once redelivery can't recover it (the claim
+// guard finds it no longer "queued"), and left alone it counts against
+// max_concurrency forever, permanently wedging a max_concurrency=1 routine. A
+// "queued" backstop catches runs whose EXEC_QUEUE message was lost. Terminal
+// fail (not retry) matches async jobs' at-most-once contract: a periodic
+// routine simply recovers on its next scheduled tick, and re-running a run that
+// may have partially executed would risk duplicate side effects. Probe-first
+// (the minute cron must not blind-write every tick) and the PATCH re-applies the
+// full staleness filter so a run legitimately claimed between probe and write is
+// not clobbered. Mirrors cleanupStaleJobs.
+async function reapStaleRoutineRuns(now: Date): Promise<number> {
+  const leaseCutoff = iso(now);
+  const startedCutoff = iso(addMs(now, -DEFAULT_LEASE_MS));
+  const queuedCutoff = iso(addMs(now, -STALE_QUEUED_MS));
+  const staleFilter =
+    `(` +
+    `and(status.eq.running,lease_expires_at.lt.${leaseCutoff}),` +
+    `and(status.eq.running,lease_expires_at.is.null,started_at.lt.${startedCutoff}),` +
+    `and(status.eq.running,lease_expires_at.is.null,started_at.is.null,created_at.lt.${startedCutoff}),` +
+    `and(status.eq.queued,created_at.lt.${queuedCutoff},or(next_attempt_at.is.null,next_attempt_at.lt.${leaseCutoff}))` +
+    `)`;
+
+  const stale = await fetchRows<{ id: string }>(
+    "routine_runs",
+    { or: staleFilter, select: "id", limit: "200" },
+    "Failed to probe stale routine runs",
+  ).catch(() => [] as Array<{ id: string }>);
+  if (stale.length === 0) return 0;
+
+  const ids = stale.map((row) => row.id).join(",");
+  const reaped = await patchRows<{ id: string }>(
+    "routine_runs",
+    { id: `in.(${ids})`, or: staleFilter, select: "id" },
+    {
+      status: "failed",
+      completed_at: iso(now),
+      lease_id: null,
+      lease_expires_at: null,
+      error: {
+        type: "ServerTimeout",
+        message:
+          "Routine run exceeded its lease or was never dispatched (worker restart or lost queue message).",
+      },
+    },
+    "Failed to reap stale routine runs",
+  ).catch(() => [] as Array<{ id: string }>);
+  return reaped.length;
 }
 
 export async function runRoutineExecutorCycle(
@@ -1446,6 +1482,7 @@ export async function runRoutineExecutorCycle(
 
   const summary: RoutineExecutorSummary = {
     checked_at: iso(now),
+    reaped: 0,
     claimed_scheduled: 0,
     claimed_queued: 0,
     dispatched: 0,
@@ -1459,63 +1496,68 @@ export async function runRoutineExecutorCycle(
     errors: [],
   };
 
-  const scheduled = await claimScheduledRuns(now, limit, leaseMs).catch(
-    (err) => {
-      summary.errors.push({
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return [] as ClaimedRun[];
-    },
-  );
-  summary.claimed_scheduled = scheduled.length;
+  // Reap abandoned runs FIRST: a run orphaned in "running" counts against
+  // max_concurrency, so clearing it here lets a wedged routine schedule again
+  // this same cycle.
+  summary.reaped = await reapStaleRoutineRuns(now).catch((err) => {
+    summary.errors.push({
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  });
 
-  const remaining = Math.max(0, limit - scheduled.length);
-  const queued = remaining > 0
-    ? await claimQueuedRuns(now, remaining, leaseMs).catch((err) => {
+  // Create a "queued" run per due scheduled routine (does NOT claim to
+  // running); the ids are enqueued below alongside due queued runs. This is the
+  // minimal, cut-off-safe work the cron does — the claim + execute happen in the
+  // consumer (or inline when no queue is bound).
+  const scheduledRunIds = await prepareDueScheduledRuns(now, limit, leaseMs)
+    .catch((err) => {
       summary.errors.push({
         error: err instanceof Error ? err.message : String(err),
       });
-      return [] as ClaimedRun[];
+      return [] as string[];
+    });
+  summary.claimed_scheduled = scheduledRunIds.length;
+
+  const remaining = Math.max(0, limit - scheduledRunIds.length);
+  const queuedRuns = remaining > 0
+    ? await queuedRunCandidates(now, remaining).catch((err) => {
+      summary.errors.push({
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [] as ExecutorRunRow[];
     })
     : [];
-  summary.claimed_queued = queued.length;
+  summary.claimed_queued = queuedRuns.length;
 
-  for (const claimed of [...scheduled, ...queued]) {
+  const runIds = [
+    ...new Set([...scheduledRunIds, ...queuedRuns.map((r) => r.id)]),
+  ];
+
+  for (const runId of runIds) {
     try {
       if (execQueue) {
-        // PROD path: hand the run to the EXEC_QUEUE consumer, which runs the
-        // dynamic sandbox in a normal request context. Running it here (in
-        // scheduled()) hangs — see the execQueue option doc.
-        try {
-          await execQueue.send(
-            {
-              routineRunId: claimed.run.id,
-              leaseId: claimed.run.lease_id,
-            } satisfies RoutineRunQueueMessage,
-          );
-          summary.dispatched += 1;
-        } catch (sendErr) {
-          // The run is "running" with a lease; a failed dispatch would strand
-          // it. Revert to "queued" so the next cron cycle re-dispatches it.
-          await patchRun(claimed.run.id, {
-            status: "queued",
-            lease_id: null,
-            lease_expires_at: null,
-            next_attempt_at: iso(now),
-          }).catch(() => {});
-          throw sendErr;
-        }
+        // PROD path: enqueue only. The run stays "queued"; the EXEC_QUEUE
+        // consumer claims queued->running and runs the dynamic sandbox in a
+        // normal request context (the sandbox hangs in scheduled()). A cron
+        // that dies before/while enqueueing leaves the run "queued" for the
+        // next cron — nothing is orphaned in "running".
+        await execQueue.send(
+          { routineRunId: runId } satisfies RoutineRunQueueMessage,
+        );
+        summary.dispatched += 1;
         continue;
       }
 
-      // INLINE path (tests / no queue bound): run in-process, same as the
-      // consumer does.
-      const outcome = await executeClaimedRun(
-        claimed,
-        invocation,
+      // INLINE path (tests / no queue bound): claim + run in-process, exactly
+      // what the consumer does.
+      const outcome = await claimAndExecuteRun(runId, {
+        ...options,
         now,
         clock,
-      );
+        execQueue: null,
+      });
+      if (!outcome) continue; // already claimed / terminal (duplicate)
       summary.executed += 1;
       if (outcome.status === "succeeded") summary.succeeded += 1;
       if (outcome.status === "failed") summary.failed += 1;
@@ -1526,8 +1568,7 @@ export async function runRoutineExecutorCycle(
     } catch (err) {
       summary.failed += 1;
       summary.errors.push({
-        run_id: claimed.run.id,
-        routine_id: claimed.run.routine_id,
+        run_id: runId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
