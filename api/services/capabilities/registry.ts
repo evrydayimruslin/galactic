@@ -18,6 +18,7 @@ import { verifyAppIntegrity } from "./verify.ts";
 import { pollJob } from "./job.ts";
 import { recordFlag } from "./flag.ts";
 import { inspectAppDatabase } from "./db-inspect.ts";
+import { notificationsCapability } from "./notifications.ts";
 
 const CAPABILITIES: Capability[] = [
   {
@@ -751,6 +752,62 @@ const CAPABILITIES: Capability[] = [
     cli: { command: "job" },
     web: { method: "GET", path: "/api/launch/jobs/:id" },
     handler: (args, ctx) => pollJob(ctx.userId, String(args.job_id ?? "")),
+  },
+  {
+    id: "notifications",
+    branch: "agent_user",
+    tier: 1,
+    advertisedName: "gx.notifications",
+    aliases: ["ul.notifications"],
+    title: "Read the owner's notification inbox",
+    description:
+      "Read your owner's notification inbox and mark items read. The platform " +
+      "writes here when a routine auto-pauses or hits a budget wall, so you can " +
+      'surface "your agent was paused" to the owner in chat instead of them ' +
+      'finding out by accident. action="list" (optional unread_only, limit) ' +
+      'returns { notifications, unread_count }; action="mark_read" with ids[] ' +
+      "or all:true marks them read. Scoped to the current user.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "mark_read"],
+          description: 'Default "list".',
+        },
+        unread_only: {
+          type: "boolean",
+          description: "list: only unread notifications.",
+        },
+        limit: {
+          type: "number",
+          description: "list: max notifications to return (default 20).",
+        },
+        ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "mark_read: notification ids to mark read.",
+        },
+        all: {
+          type: "boolean",
+          description: "mark_read: mark ALL unread read instead of specific ids.",
+        },
+      },
+    },
+    auth: {},
+    surfaces: ["mcp", "cli", "web"],
+    // Non-core: discoverable via gx.discover + callable by name, but not in the
+    // lean default tools/list (matches gx.flag).
+    coreTool: false,
+    cli: { command: "notifications" },
+    web: { method: "GET", path: "/api/launch/notifications" },
+    handler: (args, ctx) => notificationsCapability(ctx.userId, args),
   },
   {
     id: "flag",

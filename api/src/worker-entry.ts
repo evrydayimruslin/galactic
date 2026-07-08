@@ -8,6 +8,7 @@ import { runAutoHealing } from '../services/auto-healing.ts';
 import { processHeldPayouts } from '../services/payout-processor.ts';
 import { expireMarketplaceBids } from '../services/marketplace-maintenance.ts';
 import { sweepExpiredCallLogs } from '../services/call-log-store.ts';
+import { sweepExpiredNotifications } from '../services/notifications.ts';
 import { processNullEmbeddings } from '../services/embedding-processor.ts';
 import { processGpuBuilds } from '../services/gpu/benchmark.ts';
 import { runD1BillingCycle } from '../services/d1-billing.ts';
@@ -342,6 +343,8 @@ async function runHourlyJobs(): Promise<void> {
     // Call-log retention: delete run-log blobs older than 7 days and credit the
     // bytes back to each owner's data-storage allowance.
     sweepExpiredCallLogs(),
+    // Notification inbox retention: delete owner notifications older than 90 days.
+    sweepExpiredNotifications(),
     // Backstop the account.updated webhook: re-pull live Connect status for
     // connected sellers whose snapshot has gone stale, so a "verified" badge
     // can't strand true after Stripe disables payouts with no fresh webhook.

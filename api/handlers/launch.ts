@@ -536,6 +536,10 @@ export async function handleLaunch(request: Request): Promise<Response> {
       return await handleLaunchPlatformModel(request, method);
     }
 
+    if (path === "/api/launch/notifications") {
+      return await handleLaunchNotifications(request, method);
+    }
+
     if (
       path === "/api/launch/grants" ||
       path.startsWith("/api/launch/grants/")
@@ -3297,6 +3301,46 @@ async function handleLaunchByokPrimary(
 // Set (or clear) the user's platform (credits) OpenRouter model. Unlike BYOK,
 // this requires NO key — it's the slug the credit-billed Light path routes for
 // the user, honored by both interactive chat and autonomous/agent runs.
+// Owner notification inbox (launch-web bell). GET lists (newest-first, optional
+// ?unread=1) with an unread count; PATCH marks read ({ ids } or { all: true }).
+async function handleLaunchNotifications(
+  request: Request,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  const {
+    listNotifications,
+    countUnread,
+    markNotificationsRead,
+    markAllNotificationsRead,
+  } = await import("../services/notifications.ts");
+
+  if (method === "GET") {
+    const url = new URL(request.url);
+    const unreadOnly = url.searchParams.get("unread") === "1";
+    const rawLimit = Number(url.searchParams.get("limit"));
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
+    const [notifications, unreadCount] = await Promise.all([
+      listNotifications(user.id, { unreadOnly, limit }),
+      countUnread(user.id),
+    ]);
+    return json({ notifications, unread_count: unreadCount });
+  }
+
+  if (method === "PATCH") {
+    const body = asRecord(await readJsonBody<unknown>(request)) || {};
+    const marked = body.all === true
+      ? await markAllNotificationsRead(user.id)
+      : await markNotificationsRead(
+        user.id,
+        Array.isArray(body.ids) ? body.ids.map(String) : [],
+      );
+    return json({ ok: true, marked });
+  }
+
+  return error("Method not allowed for launch notifications", 405);
+}
+
 async function handleLaunchPlatformModel(
   request: Request,
   method: string,
