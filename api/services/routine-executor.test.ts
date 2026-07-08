@@ -255,15 +255,26 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
       "https://api.example.test/mcp/composer-app-1#composer-app-1",
     );
     assert(mcpCalls[0].auth?.startsWith("Bearer gxr_v1_"));
+    // The claim is a FLAT-filter CAS: status=active AND lease_id IS NULL. A
+    // nested and=(or,or) filter returns an empty PATCH representation (the update
+    // pushes the row out of the filter), which silently orphaned the lease.
     const claimPatch = dbCalls.find((call) =>
       call.table === "user_routines" &&
       call.method === "PATCH" &&
       (call.body as Record<string, unknown>).lease_id
     );
-    assert(
-      new URL(claimPatch?.url || "https://supabase.example").searchParams
-        .get("and")?.includes("next_run_at.lte.2026-05-17T12:00:00.000Z"),
+    const claimParams = new URL(claimPatch?.url || "https://supabase.example")
+      .searchParams;
+    assertEquals(claimParams.get("lease_id"), "is.null");
+    assertEquals(claimParams.get("status"), "eq.active");
+    assertEquals(claimParams.get("and"), null); // no nested filter
+    // Expired leases are cleared before claiming so a crashed routine unwedges.
+    const clearExpiredPatch = dbCalls.find((call) =>
+      call.table === "user_routines" &&
+      call.method === "PATCH" &&
+      new URL(call.url).searchParams.get("lease_expires_at")?.startsWith("lt.")
     );
+    assert(clearExpiredPatch, "expected an expired-lease clear before claiming");
     const rpcBody = mcpCalls[0].body as {
       params: { name: string; arguments: Record<string, unknown> };
     };
