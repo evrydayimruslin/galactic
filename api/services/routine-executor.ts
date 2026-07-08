@@ -1480,6 +1480,20 @@ export async function runRoutineExecutorCycle(
     : [];
   summary.claimed_queued = queued.length;
 
+  // Diagnostic: surfaces the dispatch decision in the worker tail. Logged
+  // BEFORE the loop so it appears even if a claimed run wedges the cycle.
+  if (scheduled.length + queued.length > 0) {
+    console.log(
+      "[ROUTINE-EXEC] cycle",
+      JSON.stringify({
+        execQueue: !!execQueue,
+        claimed_scheduled: scheduled.length,
+        claimed_queued: queued.length,
+        run_ids: [...scheduled, ...queued].map((c) => c.run.id),
+      }),
+    );
+  }
+
   for (const claimed of [...scheduled, ...queued]) {
     try {
       if (execQueue) {
@@ -1494,7 +1508,9 @@ export async function runRoutineExecutorCycle(
             } satisfies RoutineRunQueueMessage,
           );
           summary.dispatched += 1;
+          console.log("[ROUTINE-EXEC] dispatched", claimed.run.id);
         } catch (sendErr) {
+          console.error("[ROUTINE-EXEC] dispatch send failed", claimed.run.id, String(sendErr));
           // The run is "running" with a lease; a failed dispatch would strand
           // it. Revert to "queued" so the next cron cycle re-dispatches it.
           await patchRun(claimed.run.id, {
@@ -1510,6 +1526,7 @@ export async function runRoutineExecutorCycle(
 
       // INLINE path (tests / no queue bound): run in-process, same as the
       // consumer does.
+      console.log("[ROUTINE-EXEC] inline (no execQueue)", claimed.run.id);
       const outcome = await executeClaimedRun(
         claimed,
         invocation,
