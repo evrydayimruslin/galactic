@@ -17,6 +17,8 @@ import {
   assertExecutionContext,
   resolveExecutionContext,
 } from "../../services/execution-context-registry.ts";
+import { recordDbMutation } from "../../services/db-diff-tracker.ts";
+import type { DbMutationOp } from "../../services/db-diff-tracker.ts";
 import type { BillingConfig } from "../../services/billing-config.ts";
 import {
   type CloudOperationMeteringContext,
@@ -112,6 +114,21 @@ export class DatabaseBinding
       billingConfig: this.ctx.props.operationBillingConfig,
     };
   }
+  // Flight recorder: record a mutation's row count against the current
+  // execution (resolved from the same handle metering uses). Host-authoritative
+  // — the count is not app-reportable. A no-op on the legacy no-handle path
+  // (props carries no executionId) and when nothing resolves.
+  private recordDiff(
+    op: DbMutationOp,
+    table: string,
+    meta: D1QueryResult["meta"] | undefined,
+  ): void {
+    if (this.execCtxHandle === undefined) return;
+    const executionId =
+      resolveExecutionContext(this.execCtxHandle)?.aiExecutionId ?? null;
+    recordDbMutation(executionId, op, table, meta?.changes);
+  }
+
   private async meterD1Result(
     sql: string,
     meta: D1QueryResult["meta"] | undefined,
@@ -248,6 +265,7 @@ export class DatabaseBinding
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
     assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const r = await this.runBuilt(buildInsert(op, this.scopeUserId));
+    this.recordDiff("insert", op.table, r.meta);
     return {
       success: r.success,
       id: r.meta?.last_row_id ?? 0,
@@ -259,6 +277,7 @@ export class DatabaseBinding
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
     assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const r = await this.runBuilt(buildUpdate(op, this.scopeUserId));
+    this.recordDiff("update", op.table, r.meta);
     return { success: r.success, meta: this.shapeMeta(r.meta) };
   }
 
@@ -266,6 +285,7 @@ export class DatabaseBinding
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
     assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const r = await this.runBuilt(buildDelete(op, this.scopeUserId));
+    this.recordDiff("delete", op.table, r.meta);
     return { success: r.success, meta: this.shapeMeta(r.meta) };
   }
 
@@ -273,6 +293,7 @@ export class DatabaseBinding
     if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
     assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
     const r = await this.runBuilt(buildUpsert(op, this.scopeUserId));
+    this.recordDiff("upsert", op.table, r.meta);
     return { success: r.success, meta: this.shapeMeta(r.meta) };
   }
 

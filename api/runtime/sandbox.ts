@@ -10,6 +10,7 @@ import { formatLight } from "../../shared/types/index.ts";
 import type { AIRequest, AIResponse } from "../../shared/contracts/ai.ts";
 import type { ResolvedCredential } from "../../shared/contracts/env.ts";
 import type { BillingConfig } from "../services/billing-config.ts";
+import type { DbDiffTally } from "../services/db-diff-tracker.ts";
 import type { D1DataService } from "../services/d1-data.ts";
 import type { D1TestFixtureConfig } from "../services/d1-test-fixtures.ts";
 import type { CloudOperationMeteringContext } from "../services/cloud-usage.ts";
@@ -229,6 +230,11 @@ export interface ExecutionResult {
     prompt?: string;
     response?: string;
   }>;
+  // Flight capture: host-authoritative tally of galactic.db mutations this
+  // execution (counts + rows, by table). Present only when at least one write
+  // ran; persisted at settlement when manifest flight_recorder is on and the
+  // run has a routine context.
+  flightDb?: DbDiffTally;
 }
 
 // ============================================

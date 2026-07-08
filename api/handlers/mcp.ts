@@ -18,6 +18,7 @@ import {
 import { getPermissionsForUser } from "./user.ts";
 import type { Tier } from "../../shared/contracts/runtime.ts";
 import { type UserContext } from "../runtime/sandbox.ts";
+import type { DbDiffTally } from "../services/db-diff-tracker.ts";
 import { isolateReuseEligibility } from "../runtime/isolate-reuse-eligibility.ts";
 import {
   createRuntimeAIContext,
@@ -2915,6 +2916,7 @@ async function executeAppFunction(
         aiCostLight: number;
         reuseKeyHash?: string;
         flightAi?: Array<Record<string, unknown>>;
+        flightDb?: DbDiffTally;
       },
     ) => {
       const callSource = widgetPull
@@ -2970,6 +2972,7 @@ async function executeAppFunction(
         runtimeCloudSettlement: cloudSettlement,
         routineContext: meta?.routineContext,
         flightAiExchanges: flightRecorderEnabled ? result.flightAi : undefined,
+        flightDbTally: flightRecorderEnabled ? result.flightDb : undefined,
         widgetAction: meta?.widgetAction,
         agenticSurfaceAction: meta?.agenticSurfaceAction,
       });

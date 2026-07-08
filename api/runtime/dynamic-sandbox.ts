@@ -16,6 +16,7 @@ import type { ResolvedCredential } from "../../shared/contracts/env.ts";
 import { getEnv } from "../lib/env.ts";
 import { isolateReuseEligibility } from "./isolate-reuse-eligibility.ts";
 import { consumeAiSpend } from "../services/ai-spend-tracker.ts";
+import { consumeDbDiff } from "../services/db-diff-tracker.ts";
 import {
   deregisterExecutionContext,
   registerExecutionContext,
@@ -1009,6 +1010,10 @@ export default {
       );
     }
 
+    // Host-authoritative tally of galactic.db mutations this execution (null =
+    // read-only wake). Consumed here the same way as the AI spend ledger.
+    const flightDb = consumeDbDiff(config.executionId);
+
     return {
       success: data.success,
       result: data.result,
@@ -1018,6 +1023,7 @@ export default {
       ...(Array.isArray(data.flight?.ai) && data.flight.ai.length > 0
         ? { flightAi: data.flight.ai }
         : {}),
+      ...(flightDb ? { flightDb } : {}),
       ...(reuseKeyHash ? { reuseKeyHash } : {}),
       ...(data.error ? { error: data.error } : {}),
     };
@@ -1031,6 +1037,12 @@ export default {
       // completed before the failure — report the real debited spend so the
       // receipt and grant-cap accounting stay truthful.
       aiCostLight: consumeAiSpend(config.executionId),
+      // Likewise capture any galactic.db mutations that landed before the
+      // failure (also frees the tracker entry so it can't leak).
+      ...(() => {
+        const flightDb = consumeDbDiff(config.executionId);
+        return flightDb ? { flightDb } : {};
+      })(),
       // If the loader.get() ran before the failure, CF still billed the load —
       // carry the hash so the floor still dedups on the correct isolate identity.
       ...(reuseKeyHash ? { reuseKeyHash } : {}),
