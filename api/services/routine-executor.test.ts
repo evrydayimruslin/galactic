@@ -527,6 +527,7 @@ Deno.test("routine executor: auto-pauses the routine after consecutive failed at
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;
   const routinePatches: Array<Record<string, unknown>> = [];
+  const notifications: Array<Record<string, unknown>> = [];
 
   // failure_count 9 + this terminal failed attempt = 10 = default threshold.
   const failing = () => routineRow({ failure_count: 9, budget_policy: {} });
@@ -537,6 +538,10 @@ Deno.test("routine executor: auto-pauses the routine after consecutive failed at
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
 
+    if (table === "user_notifications" && method === "POST") {
+      notifications.push(body as Record<string, unknown>);
+      return jsonResponse([{ id: "notif-1", ...(body as Record<string, unknown>) }]);
+    }
     if (table === "user_routines" && method === "GET") {
       if (url.searchParams.get("status") === "eq.active") {
         return jsonResponse([]);
@@ -594,6 +599,15 @@ Deno.test("routine executor: auto-pauses the routine after consecutive failed at
       ?.auto_pause as Record<string, unknown>;
     assertEquals(autoPause?.reason, "consecutive_failures");
     assertEquals(autoPause?.threshold, 10);
+
+    // The owner is notified their agent stopped (idempotent per pause event).
+    const pauseNotif = notifications.find((n) => n.kind === "routine_paused");
+    assert(pauseNotif, "expected an owner notification on auto-pause");
+    assertEquals(pauseNotif?.severity, "critical");
+    assertEquals(pauseNotif?.entity_type, "routine");
+    assert(
+      String(pauseNotif?.dedupe_key).startsWith("routine_paused:routine-1:"),
+    );
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv();

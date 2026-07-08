@@ -3599,6 +3599,12 @@ Poll an async job's status. Async-declared functions (manifest execution.class, 
 - Returns \`{ status: "running" }\` while in progress, \`{ status: "completed", result: ... }\` when done, or \`{ status: "failed", error: ... }\`
 - Poll every 5-10 seconds until completed or failed
 
+### gx.notifications({ action, unread_only?, limit?, ids?, all? })
+Read your owner's notification inbox and mark items read. The platform writes here when one of the owner's routines auto-pauses (circuit breaker / per-run budget or call cap) or hits a daily/monthly budget wall — so a full-time agent can tell its owner "I was paused, here's why" in chat instead of the owner discovering it by accident.
+- \`action: "list"\` (default) — returns \`{ notifications: [{ id, kind, severity, title, body, entity_type, entity_id, created_at, read_at }], unread_count }\`. Pass \`unread_only: true\` and/or \`limit\` (default 20).
+- \`action: "mark_read"\` — pass \`ids: string[]\` (or \`all: true\`) to mark read; returns \`{ ok, marked }\`.
+- Scoped to the current user; \`kind\` is \`routine_paused\` | \`routine_budget_exhausted\` today. A good thing to check at the start of a wake or when the owner asks "how are my agents doing?".
+
 ### gx.verify({ app_id })
 Verify an Agent's integrity BEFORE you call it. Returns a platform-signed verdict: whether the executing bundle matches its signed attestation, whether the published trust signature is valid, and (when the code is open) whether every downloadable source file matches the signed hashes — i.e. "the code you can read is the code that runs". Pair with \`gx.download\` to read the source yourself. Also on the website agent page and \`galactic verify\` in the CLI.
 

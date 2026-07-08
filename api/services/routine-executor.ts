@@ -13,6 +13,7 @@ import {
   type RoutineRunStatus,
   type StoredRoutine,
 } from "./routines.ts";
+import { createNotification } from "./notifications.ts";
 
 const ROUTINE_SELECT =
   "id,user_id,composer_app_id,composer_app_slug,template_id,template_version,name,description,intent,handler_function,status,schedule,config,budget_policy,approval_policy,max_concurrency,next_run_at,last_run_at,last_success_at,last_error_at,failure_count,created_by_trace_id,metadata,created_at,updated_at,deleted_at,lease_id,lease_expires_at";
@@ -1195,6 +1196,28 @@ async function updateRoutineAfterRun(
     payload,
     "Failed to update routine after run",
   );
+  // Tell the owner their agent stopped — the point of an always-on agent is
+  // that you don't have to watch it. Best-effort + idempotent (one row per pause
+  // event via the `at` timestamp in the dedupe key), never blocks the executor.
+  if (autoPause) {
+    const reason = autoPause.reason === "consecutive_failures"
+      ? `Paused after ${autoPause.failure_count} consecutive failed attempts.`
+      : autoPause.reason === "budget_run_exceeded"
+      ? `Paused: a run exceeded its per-run budget (${autoPause.light}/${autoPause.cap} Light).`
+      : autoPause.reason === "budget_calls_exceeded"
+      ? `Paused: a run exceeded its per-run call cap (${autoPause.calls}/${autoPause.cap} calls).`
+      : "Paused by the circuit breaker.";
+    await createNotification({
+      userId: routine.user_id,
+      kind: "routine_paused",
+      severity: "critical",
+      title: `${routine.name} was paused`,
+      body: `${reason} Resume it once you've addressed the cause.`,
+      entityType: "routine",
+      entityId: routine.id,
+      dedupeKey: `routine_paused:${routine.id}:${autoPause.at}`,
+    });
+  }
   return autoPause !== null;
 }
 
@@ -1276,6 +1299,22 @@ async function executeClaimedRun(
         { next_run_at: iso(gate.resumeAt), updated_at: iso(now) },
         "Failed to defer routine to budget reset",
       ).catch(() => {});
+      // Notify the owner ONCE per reset window (the resumeAt in the dedupe key),
+      // not on every skipped tick until the budget resets.
+      const periodLabel = gate.period === "daily" ? "daily" : "monthly";
+      await createNotification({
+        userId: routine.user_id,
+        kind: "routine_budget_exhausted",
+        severity: "info",
+        title: `${routine.name} hit its ${periodLabel} budget`,
+        body:
+          `Spent ${gate.spent}/${gate.cap} Light this ${periodLabel} window. ` +
+          `Runs resume automatically at ${iso(gate.resumeAt)}.`,
+        entityType: "routine",
+        entityId: routine.id,
+        dedupeKey:
+          `routine_budget:${routine.id}:${gate.period}:${iso(gate.resumeAt)}`,
+      });
       return { status: "skipped", budgetSkipped: true };
     }
   }
