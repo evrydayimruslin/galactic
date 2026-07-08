@@ -1149,6 +1149,89 @@ Deno.test("settleAndLogAppExecution persists flight-recorded ai exchanges as rou
   });
 });
 
+Deno.test("settleAndLogAppExecution persists the db-diff tally as a galactic.db step", async () => {
+  await withMockedEnv(async () => {
+    const contributions: Array<Record<string, unknown>> = [];
+    const routineContext = {
+      routineId: "00000000-0000-4000-8000-000000000301",
+      routineRunId: "00000000-0000-4000-8000-000000000302",
+      traceId: "00000000-0000-4000-8000-000000000303",
+    };
+    await settleAndLogAppExecution({
+      receiptId: "receipt-dbdiff-1",
+      app: createTestApp(),
+      userId: "user_dbdiff",
+      user: {
+        id: "user_dbdiff",
+        email: "dbdiff@example.test",
+        displayName: "DbDiff",
+        avatarUrl: null,
+        tier: "pro",
+      },
+      functionName: "tick",
+      inputArgs: {},
+      method: "run",
+      success: true,
+      durationMs: 900,
+      outputResult: { ok: true },
+      callerAuthState: "authenticated",
+      routineContext,
+      flightDbTally: {
+        inserts: 3,
+        updates: 1,
+        deletes: 0,
+        upserts: 0,
+        rows_written: 4,
+        by_table: { emails: { inserts: 3, updates: 1, deletes: 0, upserts: 0, rows: 4 } },
+      },
+    }, {
+      fetchFn: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body
+          ? JSON.parse(String(init.body)) as Record<string, unknown>
+          : {};
+        if (url.includes("/rpc/record_routine_call_contribution")) {
+          contributions.push(body);
+          return new Response(
+            JSON.stringify([{
+              step_id: crypto.randomUUID(),
+              step_index: contributions.length,
+              total_light: 0,
+            }]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url.includes("/platform_billing_config")) {
+          return new Response(
+            JSON.stringify([{ id: "singleton", version: 1 }]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    const dbSteps = contributions.filter((body) =>
+      body.p_function_name === "galactic.db"
+    );
+    assertEquals(dbSteps.length, 1);
+    assertEquals(dbSteps[0].p_routine_run_id, routineContext.routineRunId);
+    // Zero cost — the diff step is evidence, not a charge.
+    assertEquals(dbSteps[0].p_cost_light, 0);
+    const meta = dbSteps[0].p_metadata as Record<string, unknown>;
+    assertEquals(meta.kind, "db_diff");
+    assertEquals(meta.inserts, 3);
+    assertEquals(meta.rows_written, 4);
+    assertEquals(
+      (meta.by_table as Record<string, unknown>).emails,
+      { inserts: 3, updates: 1, deletes: 0, upserts: 0, rows: 4 },
+    );
+  });
+});
+
 Deno.test("settleAndLogAppExecution ignores flight exchanges without a routine context", async () => {
   await withMockedEnv(async () => {
     const contributionUrls: string[] = [];

@@ -1,4 +1,5 @@
 import type { UserContext } from "../runtime/sandbox.ts";
+import type { DbDiffTally } from "./db-diff-tracker.ts";
 import { getEnv } from "../lib/env.ts";
 import { type BillingConfig, getBillingConfig } from "./billing-config.ts";
 import type { App } from "../../shared/types/index.ts";
@@ -370,6 +371,11 @@ export interface SettleAndLogAppExecutionParams {
     prompt?: string;
     response?: string;
   }> | null;
+  // Flight recorder: host-authoritative tally of galactic.db mutations this
+  // execution changed (counts + rows, by table). Set ONLY when flight_recorder
+  // is on; persisted as a single "galactic.db" routine_run_step when a routine
+  // context is present.
+  flightDbTally?: DbDiffTally | null;
   widgetAction?: WidgetActionCallMetadata;
   agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
 }
@@ -1529,7 +1535,8 @@ export async function settleAndLogAppExecution(
   // off the response path; recorded for failed handlers too — that is when
   // the recorded reasoning matters most.
   const flightExchanges = (params.flightAiExchanges ?? []).slice(0, 20);
-  if (flightExchanges.length > 0 && params.routineContext) {
+  const dbTally = params.flightDbTally ?? null;
+  if ((flightExchanges.length > 0 || dbTally) && params.routineContext) {
     const routine = params.routineContext;
     const persistFlight = (async () => {
       for (const exchange of flightExchanges) {
@@ -1555,8 +1562,33 @@ export async function settleAndLogAppExecution(
           },
         }, deps);
       }
+      // One "galactic.db" step recording what the wake actually CHANGED in the
+      // data (not just what it reasoned/did) — the diff-recording surface. Same
+      // RPC + sequential ordering as the ai exchanges above.
+      if (dbTally) {
+        await recordRoutineCallContribution({
+          userId: params.userId,
+          routine,
+          appId: params.app.id,
+          appRef: params.app.slug,
+          functionName: "galactic.db",
+          receiptId: params.receiptId,
+          status: "succeeded",
+          durationMs: null,
+          costLight: 0,
+          argsPreview: {},
+          resultPreview: {
+            inserts: dbTally.inserts,
+            updates: dbTally.updates,
+            deletes: dbTally.deletes,
+            upserts: dbTally.upserts,
+            rows_written: dbTally.rows_written,
+          },
+          metadata: { kind: "db_diff", ...dbTally },
+        }, deps);
+      }
     })().catch((err) => {
-      console.error("[FLIGHT] Failed to record ai exchanges:", err);
+      console.error("[FLIGHT] Failed to record run steps:", err);
     });
     const ctx = (globalThis as {
       __ctx?: { waitUntil?: (p: Promise<unknown>) => void };
