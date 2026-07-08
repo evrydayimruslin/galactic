@@ -51,7 +51,7 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-06.get-reuse.v1";
+const SANDBOX_TEMPLATE_VERSION = "2026-07-07.flight-recorder.v1";
 
 // Reuse eligibility lives in its own dependency-light module (imported above) so
 // billing imports the SAME predicate — a divergent copy is a money bug (see the
@@ -106,7 +106,12 @@ export async function deriveIsolateReuseKey(
   // getD1DatabaseId + memoryService, not just permissions). Without these, two
   // executions that differ only in binding presence/target would collide on one
   // warm isolate — a sticky "D1 not available" outage or a split-database write.
-  bindingState: { dbId: string | null; hasDb: boolean; hasMemory: boolean },
+  bindingState: {
+    dbId: string | null;
+    hasDb: boolean;
+    hasMemory: boolean;
+    hasRuns: boolean;
+  },
 ): Promise<string> {
   const bundleHash = await sha256HexLocal(esmCode);
   const stateFingerprint = await sha256HexLocal(JSON.stringify({
@@ -132,8 +137,21 @@ export async function deriveIsolateReuseKey(
     dbId: bindingState.dbId,
     hasDb: bindingState.hasDb,
     hasMemory: bindingState.hasMemory,
+    hasRuns: bindingState.hasRuns,
   }));
   return `${config.appId}:${bundleHash}:${config.userId}:${stateFingerprint}`;
+}
+
+// One captured galactic.ai() exchange, clipped in-sandbox (prompt/response
+// ≤2000 chars each, ≤20 exchanges/execution). Persisted as routine_run_steps
+// at settlement when the app opted into the flight recorder.
+interface FlightAiExchange {
+  at?: string;
+  ms?: number;
+  model?: string | null;
+  cost_light?: number;
+  prompt?: string;
+  response?: string;
 }
 
 interface DynamicWorkerEntrypointExports {
@@ -176,6 +194,15 @@ interface DynamicWorkerEntrypointExports {
         appId?: string | null;
         operationMetering?: RuntimeConfig["cloudOperationMetering"];
         operationBillingConfig?: RuntimeConfig["cloudOperationBillingConfig"];
+        requireExecCtx?: boolean;
+      };
+    },
+  ): unknown;
+  RunsBinding(
+    input: {
+      props: {
+        appId: string;
+        userId: string;
         requireExecCtx?: boolean;
       };
     },
@@ -437,7 +464,13 @@ globalThis.ultralight = {
   recall(k, o) { if (!${
       config.permissions.includes("memory:read")
     }) return Promise.reject(new Error('memory:read permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.recall(k, s, globalThis.__execHandle) : Promise.resolve(null); },
-  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { throw new Error('galactic.ai failed: ' + resp.error); } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
+  // Flight recorder read-back: this agent's recent routine runs (+ recorded
+  // steps, incl. captured ai() exchanges) for the CURRENT user. Wired only
+  // when the manifest sets "flight_recorder": true.
+  runs: {
+    recent(o) { const e = globalThis.__rpcEnv; if (!e.RUNS) return Promise.reject(new Error('galactic.runs unavailable: set "flight_recorder": true in the manifest.')); return e.RUNS.recent((o && o.limit) || 10, globalThis.__execHandle); },
+  },
+  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); var __t0 = Date.now(); var __clip = function(v){ try { var s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > 2000 ? s.slice(0, 2000) + '…[truncated]' : (s || ''); } catch (_e) { return ''; } }; var __rec = function(resp, errMsg){ try { var f = globalThis.__flight; if (f && f.ai && f.ai.length < 20) f.ai.push({ at: new Date().toISOString(), ms: Date.now() - __t0, model: (resp && resp.model) || (r && r.model) || null, cost_light: (resp && resp.usage && resp.usage.cost_light) || 0, prompt: __clip(r && r.messages), response: errMsg ? ('[error] ' + __clip(errMsg)) : __clip(resp && resp.content) }); } catch (_e) {} }; return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { __rec(null, resp.error); throw new Error('galactic.ai failed: ' + resp.error); } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} __rec(resp); return resp; }); },
   async call(targetAppId, functionName, callArgs) {
     if (!targetAppId || !functionName) throw new Error('target app id and function name are required');
     if (!__ulAllowsAppCall(targetAppId, functionName)) {
@@ -595,6 +628,11 @@ export default {
     // and the per-execution emit cap correct.
     globalThis.__aiCostLight = 0;
     globalThis.__emitCount = 0;
+    // Flight capture: bounded per-execution record of ai() exchanges (clipped
+    // prompt/response), returned in the result envelope. Persistence is the
+    // HOST's decision (manifest flight_recorder + routine context) — capture
+    // itself is unconditional so the baked module text never varies.
+    globalThis.__flight = { ai: [] };
 
     const logs = [];
     const con = {
@@ -621,16 +659,16 @@ export default {
           for (const k of Object.keys(appModule.default)) { if (typeof appModule.default[k] === 'function') available.push(k); }
         }
         return Response.json({
-          success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0,
+          success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
           error: { type: 'FunctionNotFound', message: 'Function "' + fnName + '" not found. Available: ' + [...new Set(available)].join(', ') },
         });
       }
 
       const result = await targetFn(...fnArgs);
-      return Response.json({ success: true, result, logs, aiCostLight: globalThis.__aiCostLight || 0 });
+      return Response.json({ success: true, result, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight });
     } catch (err) {
       return Response.json({
-        success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0,
+        success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
         error: { type: err.constructor?.name || 'Error', message: err.message || String(err) },
       });
     }
@@ -713,6 +751,19 @@ export default {
           appId: config.appId,
           operationMetering: config.cloudOperationMetering,
           operationBillingConfig: config.cloudOperationBillingConfig,
+          requireExecCtx: useGetReuse,
+        },
+      });
+    }
+
+    // Flight recorder read-back (manifest flight_recorder): the agent can list
+    // its own recent routine runs + recorded steps for the CURRENT user. The
+    // (appId, userId) scope is baked host-side — sandbox code cannot widen it.
+    if (config.flightRecorder === true && ctx?.exports?.RunsBinding) {
+      bindings.RUNS = ctx.exports.RunsBinding({
+        props: {
+          appId: config.appId,
+          userId: config.userId,
           requireExecCtx: useGetReuse,
         },
       });
@@ -879,6 +930,7 @@ export default {
           dbId: resolvedDbId,
           hasDb: "DB" in bindings,
           hasMemory: "MEMORY" in bindings,
+          hasRuns: "RUNS" in bindings,
         },
       );
       // Hash the reuse key for the per-day load-floor dedup counter. The reuse
@@ -931,6 +983,10 @@ export default {
       // only — the authoritative value is the main-isolate spend ledger below,
       // which tenant code cannot touch.
       aiCostLight?: number;
+      // Flight capture (bounded, clipped in-sandbox): ai() exchanges for this
+      // execution. Persisted host-side only when the app opted in via the
+      // manifest flight_recorder flag and a routine context is present.
+      flight?: { ai?: FlightAiExchange[] };
       error?: { type: string; message: string };
     };
 
@@ -959,6 +1015,9 @@ export default {
       logs: data.logs || [],
       durationMs: Date.now() - startTime,
       aiCostLight,
+      ...(Array.isArray(data.flight?.ai) && data.flight.ai.length > 0
+        ? { flightAi: data.flight.ai }
+        : {}),
       ...(reuseKeyHash ? { reuseKeyHash } : {}),
       ...(data.error ? { error: data.error } : {}),
     };

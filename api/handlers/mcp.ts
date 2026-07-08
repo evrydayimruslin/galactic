@@ -2845,6 +2845,13 @@ async function executeAppFunction(
       ? createMeteredAppDataService(_rawAppDataService2, userId)
       : _rawAppDataService2;
 
+    // Flight recorder opt-in (manifest flight_recorder): wires the RUNS
+    // read-back binding and persists this execution's captured ai() exchanges
+    // as routine_run_steps when a routine context is present.
+    const flightRecorderEnabled =
+      (app.manifest as { flight_recorder?: unknown } | null | undefined)
+        ?.flight_recorder === true;
+
     const sandboxConfig = {
       appId: app.id,
       userId,
@@ -2855,6 +2862,7 @@ async function executeAppFunction(
       // only to satisfy RuntimeConfig until the legacy Deno path is removed.
       code: "",
       permissions,
+      flightRecorder: flightRecorderEnabled,
       allowedDestinations: getManifestAllowedDestinations(app.manifest),
       userApiKey: runtimeAI.userApiKey,
       aiUnavailableReason: runtimeAI.unavailableReason,
@@ -2890,6 +2898,7 @@ async function executeAppFunction(
         durationMs: number;
         aiCostLight: number;
         reuseKeyHash?: string;
+        flightAi?: Array<Record<string, unknown>>;
       },
     ) => {
       const callSource = widgetPull
@@ -2944,6 +2953,7 @@ async function executeAppFunction(
         runtimePricingPreflight: cloudPreflight.pricing,
         runtimeCloudSettlement: cloudSettlement,
         routineContext: meta?.routineContext,
+        flightAiExchanges: flightRecorderEnabled ? result.flightAi : undefined,
         widgetAction: meta?.widgetAction,
         agenticSurfaceAction: meta?.agenticSurfaceAction,
       });

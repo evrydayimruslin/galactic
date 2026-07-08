@@ -3818,6 +3818,15 @@ One database per Agent, shared by all its users, but **every call is automatical
 - \`galactic.db.batch(ops[])\` — array of \`{ op: "insert"|"update"|"delete"|"upsert", table, ... }\`, run sequentially.
 - Joins are scoped on every table: \`joins: [{ table: "versions", on: { column: "id", foreignColumn: "conversation_id" } }]\` and reference columns as \`{ table: "versions", column: "body" }\` or \`"versions.body"\` in \`where\`.
 
+#### \`galactic.runs.recent({ limit? })\` — the flight recorder (manifest \`"flight_recorder": true\`)
+Built for full-time agents on routines: opt in with \`"flight_recorder": true\` at the top level of your manifest and the platform records each routine run's \`galactic.ai()\` exchanges (prompt + response, clipped to 2KB each, ≤20 per run) as run steps — alongside the cross-Agent calls it already records. Your code can then review its own recent work each wake:
+\`\`\`js
+const { runs } = await galactic.runs.recent({ limit: 10 });
+// each run: { status, trigger, started_at, duration_ms, total_light, summary, error,
+//             routine_name, steps: [{ function_name, status, args_preview, result_preview, ... }] }
+\`\`\`
+Steps with \`function_name: "galactic.ai"\` carry the recorded reasoning (\`args_preview.prompt\`, \`result_preview.response\`, \`metadata.model\`). Scope is always THIS agent + the CURRENT user — recording only happens on runs with a routine context (scheduled/manual routine runs), failed runs included, and the owner sees the same steps in the routine monitor. Use it to answer "what did I do on recent wakes and did it work" from platform-recorded truth; keep your own \`galactic.db\` journal for curated long-term memory.
+
 #### \`galactic.use(slotName)\` — call the Agents your user wired in
 Resolves a manifest import slot to whatever Agent the user connected, exposing only the granted functions — each keyed by name and routed through \`galactic.call\` (grant-gated at the target): \`const summarizer = await galactic.use("summarizer"); const out = await summarizer.summarize({ text });\`. An unwired slot throws with a pointer to the Agent page. Use \`galactic.call(appId, fn, args)\` when you know the concrete app id instead.
 

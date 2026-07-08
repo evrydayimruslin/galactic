@@ -48,6 +48,12 @@ export interface AppManifest {
   widgets?: WidgetDeclaration[];
   context_sources?: WidgetContextSourceDeclaration[];
   routines?: RoutineDeclaration[];
+  // Flight recorder (opt-in): persist each routine run's galactic.ai()
+  // exchanges (clipped) as routine_run_steps so the agent can review its own
+  // reasoning next wake via galactic.runs.recent(), and the owner can audit
+  // them in the routine monitor. Only runs with a routine context are
+  // recorded; the galactic.runs read API is wired only when this is true.
+  flight_recorder?: boolean;
   env?: Record<string, ManifestEnvVar>;
   env_vars?: Record<string, ManifestEnvVar>;
   http?: ManifestHttpConfig;
@@ -3010,6 +3016,16 @@ export function validateManifest(input: unknown): ManifestValidationResult {
         message: 'emits must be an array of non-empty topic strings',
       });
     }
+  }
+
+  if (
+    manifest.flight_recorder !== undefined &&
+    typeof manifest.flight_recorder !== 'boolean'
+  ) {
+    errors.push({
+      path: 'flight_recorder',
+      message: 'flight_recorder must be a boolean',
+    });
   }
 
   if (

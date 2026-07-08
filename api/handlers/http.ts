@@ -699,6 +699,11 @@ export async function handleHttpEndpoint(
         executionId: crypto.randomUUID(),
         code,
         permissions: httpPermissions,
+        // Read-back only on the HTTP surface: runs.recent works for the
+        // authenticated caller; nothing is recorded here (no routine context).
+        flightRecorder:
+          (app.manifest as { flight_recorder?: unknown } | null | undefined)
+            ?.flight_recorder === true,
         allowedDestinations: getManifestAllowedDestinations(app.manifest),
         userApiKey: runtimeAI.userApiKey,
         aiUnavailableReason: runtimeAI.unavailableReason,

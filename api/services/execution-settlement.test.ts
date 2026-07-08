@@ -1039,3 +1039,145 @@ Deno.test("free mode: a hold free_mode_blocked maps to free_mode_paid_blocked", 
     assertEquals(result.insufficientBalanceCode, "free_mode_paid_blocked");
   });
 });
+
+Deno.test("settleAndLogAppExecution persists flight-recorded ai exchanges as routine run steps", async () => {
+  await withMockedEnv(async () => {
+    const contributions: Array<Record<string, unknown>> = [];
+    const routineContext = {
+      routineId: "00000000-0000-4000-8000-000000000201",
+      routineRunId: "00000000-0000-4000-8000-000000000202",
+      traceId: "00000000-0000-4000-8000-000000000203",
+    };
+    await settleAndLogAppExecution({
+      receiptId: "receipt-flight-1",
+      app: createTestApp(),
+      userId: "user_flight",
+      user: {
+        id: "user_flight",
+        email: "flight@example.test",
+        displayName: "Flight",
+        avatarUrl: null,
+        tier: "pro",
+      },
+      functionName: "tick",
+      inputArgs: {},
+      method: "run",
+      success: true,
+      durationMs: 1500,
+      outputResult: { ok: true },
+      callerAuthState: "authenticated",
+      routineContext,
+      flightAiExchanges: [
+        {
+          at: "2026-07-07T12:00:01.000Z",
+          ms: 800,
+          model: "deepseek-v4-flash",
+          cost_light: 0.12,
+          prompt: '[{"role":"user","content":"Goal: triage inbox"}]',
+          response: "Plan: archive 3, reply 1",
+        },
+        {
+          ms: 300,
+          model: null,
+          prompt: '[{"role":"user","content":"Draft the reply"}]',
+          response: "[error] rate limited",
+        },
+      ],
+    }, {
+      fetchFn: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const body = init?.body
+          ? JSON.parse(String(init.body)) as Record<string, unknown>
+          : {};
+        if (url.includes("/rpc/record_routine_call_contribution")) {
+          contributions.push(body);
+          return new Response(
+            JSON.stringify([{
+              step_id: crypto.randomUUID(),
+              step_index: contributions.length,
+              total_light: 0,
+            }]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url.includes("/platform_billing_config")) {
+          return new Response(
+            JSON.stringify([{ id: "singleton", version: 1 }]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        // Free app: no transfer RPC expected; tolerate incidental reads.
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    // 1 handler contribution + 2 ai exchanges, all through the same RPC so
+    // step indexes can never collide.
+    const aiSteps = contributions.filter((body) =>
+      body.p_function_name === "galactic.ai"
+    );
+    assertEquals(contributions.length, 3);
+    assertEquals(aiSteps.length, 2);
+    assertEquals(aiSteps[0].p_routine_run_id, routineContext.routineRunId);
+    // ai exchanges are recorded at zero cost — spend already rides the
+    // handler's contribution.
+    assertEquals(aiSteps[0].p_cost_light, 0);
+    assertEquals(
+      (aiSteps[0].p_args_preview as Record<string, unknown>).prompt,
+      '[{"role":"user","content":"Goal: triage inbox"}]',
+    );
+    assertEquals(
+      (aiSteps[0].p_result_preview as Record<string, unknown>).response,
+      "Plan: archive 3, reply 1",
+    );
+    assertEquals(
+      (aiSteps[0].p_metadata as Record<string, unknown>).kind,
+      "ai_exchange",
+    );
+    assertEquals(
+      (aiSteps[0].p_metadata as Record<string, unknown>).cost_light,
+      0.12,
+    );
+    // Failed exchanges are recorded too — that is when the reasoning matters.
+    assertEquals(
+      (aiSteps[1].p_result_preview as Record<string, unknown>).response,
+      "[error] rate limited",
+    );
+  });
+});
+
+Deno.test("settleAndLogAppExecution ignores flight exchanges without a routine context", async () => {
+  await withMockedEnv(async () => {
+    const contributionUrls: string[] = [];
+    await settleAndLogAppExecution({
+      receiptId: "receipt-flight-2",
+      app: createTestApp(),
+      userId: "user_flight",
+      user: null,
+      functionName: "tick",
+      inputArgs: {},
+      method: "run",
+      success: true,
+      durationMs: 100,
+      outputResult: { ok: true },
+      callerAuthState: "authenticated",
+      flightAiExchanges: [{ prompt: "p", response: "r" }],
+    }, {
+      fetchFn: (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/rpc/record_routine_call_contribution")) {
+          contributionUrls.push(url);
+        }
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+    // No routine context → nothing to attach the steps to → no RPC.
+    assertEquals(contributionUrls, []);
+  });
+});

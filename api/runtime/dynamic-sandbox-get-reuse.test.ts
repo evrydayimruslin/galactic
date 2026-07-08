@@ -224,6 +224,7 @@ Deno.test("get reuse: flag ON + eligible → loader.get with the derived reuse k
       dbId: null,
       hasDb: false,
       hasMemory: false,
+      hasRuns: false,
     });
     assertEquals(harness.captured.getIds[0], expected);
   } finally {
