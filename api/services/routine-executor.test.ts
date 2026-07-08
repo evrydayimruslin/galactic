@@ -78,6 +78,27 @@ function runRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// A freshly-queued run as getRunById / queuedRunCandidates return it, ready for
+// the consumer (or inline) path to claim queued->running. The cron only
+// enqueues; claiming + executing happens against a "queued" row.
+function queuedRunRow(overrides: Record<string, unknown> = {}) {
+  return runRow({
+    status: "queued",
+    started_at: null,
+    attempt_count: 0,
+    lease_id: null,
+    lease_expires_at: null,
+    ...overrides,
+  });
+}
+
+// True for the reaper's stale-run probe/write: an `or` boolean filter with no
+// top-level `status` param (status lives inside the `or`). queuedRunCandidates
+// also carries `or`, but pairs it with status=eq.queued, so this excludes it.
+function isReaperQuery(url: URL): boolean {
+  return url.searchParams.has("or") && !url.searchParams.has("status");
+}
+
 function userRow() {
   return {
     id: "user-1",
@@ -180,7 +201,13 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
         ...(body as Record<string, unknown>),
       }]);
     }
-    if (table === "routine_runs" && method === "GET") return jsonResponse([]);
+    if (table === "routine_runs" && method === "GET") {
+      if (isReaperQuery(url)) return jsonResponse([]); // nothing stale to reap
+      if (url.searchParams.get("id")?.startsWith("eq.")) {
+        return jsonResponse([queuedRunRow()]); // getRunById -> claimable
+      }
+      return jsonResponse([]);
+    }
     if (table === "routine_runs" && method === "POST") {
       return jsonResponse([runRow(body as Record<string, unknown>)]);
     }
@@ -273,6 +300,7 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;
   const runPatches: Array<{ body: Record<string, unknown>; url: string }> = [];
+  let queuedCandidatesFilter: string | null = null;
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input.toString());
@@ -299,17 +327,16 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
       }]);
     }
     if (table === "routine_runs" && method === "GET") {
+      if (isReaperQuery(url)) return jsonResponse([]); // nothing stale to reap
       if (url.searchParams.get("status") === "in.(queued,running)") {
         return jsonResponse([]);
       }
-      return jsonResponse([runRow({
-        status: "queued",
-        trigger: "manual",
-        started_at: null,
-        attempt_count: 1,
-        lease_id: null,
-        lease_expires_at: null,
-      })]);
+      // queuedRunCandidates carries the due filter (status=eq.queued + or on
+      // next_attempt_at); getRunById loads the same run by id to claim it.
+      if (url.searchParams.get("status") === "eq.queued") {
+        queuedCandidatesFilter = url.searchParams.get("or");
+      }
+      return jsonResponse([queuedRunRow({ trigger: "manual", attempt_count: 1 })]);
     }
     if (table === "routine_runs" && method === "PATCH") {
       runPatches.push({
@@ -346,12 +373,22 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
     assertEquals(summary.executed, 1);
     assertEquals(summary.retried, 1);
 
+    // Only DUE queued runs are picked up: the candidate query filters on
+    // next_attempt_at (backoff not yet elapsed => not re-dispatched).
+    assert(
+      queuedCandidatesFilter?.includes(
+        "next_attempt_at.lte.2026-05-17T12:00:00.000Z",
+      ),
+      "queued candidates must be filtered by next_attempt_at",
+    );
+    // The claim is the at-most-once guard: CAS gated on the row still queued.
     const claimPatch = runPatches.find((patch) =>
       patch.body.status === "running"
     );
-    assert(
+    assertEquals(
       new URL(claimPatch?.url || "https://supabase.example").searchParams
-        .get("and")?.includes("next_attempt_at.lte.2026-05-17T12:00:00.000Z"),
+        .get("status"),
+      "eq.queued",
     );
 
     const retryPatch = runPatches.find((patch) =>
@@ -413,7 +450,13 @@ Deno.test("routine executor: skips scheduled run and defers to budget reset when
         ...(body as Record<string, unknown>),
       }]);
     }
-    if (table === "routine_runs" && method === "GET") return jsonResponse([]);
+    if (table === "routine_runs" && method === "GET") {
+      if (isReaperQuery(url)) return jsonResponse([]); // nothing stale to reap
+      if (url.searchParams.get("id")?.startsWith("eq.")) {
+        return jsonResponse([queuedRunRow()]); // getRunById -> claimable
+      }
+      return jsonResponse([]);
+    }
     if (table === "routine_runs" && method === "POST") {
       return jsonResponse([runRow(body as Record<string, unknown>)]);
     }
@@ -497,19 +540,14 @@ Deno.test("routine executor: auto-pauses the routine after consecutive failed at
       }]);
     }
     if (table === "routine_runs" && method === "GET") {
+      if (isReaperQuery(url)) return jsonResponse([]); // nothing stale to reap
       if (url.searchParams.get("status") === "in.(queued,running)") {
         return jsonResponse([]);
       }
-      if (url.searchParams.get("id")) return jsonResponse([runRow()]);
-      return jsonResponse([runRow({
-        status: "queued",
-        trigger: "manual",
-        started_at: null,
-        attempt_count: 2,
-        max_attempts: 3,
-        lease_id: null,
-        lease_expires_at: null,
-      })]);
+      // Final attempt (2) already spent: the claim increments to 3 = max, so the
+      // failing handler terminates the run and trips the breaker. getRunById and
+      // queuedRunCandidates return the same pending run.
+      return jsonResponse([queuedRunRow({ trigger: "manual", attempt_count: 2 })]);
     }
     if (table === "routine_runs" && method === "PATCH") {
       return jsonResponse([runRow(body as Record<string, unknown>)]);
@@ -578,9 +616,10 @@ Deno.test("routine executor: auto-pauses when a run exceeds max_light_per_run an
       }]);
     }
     if (table === "routine_runs" && method === "GET") {
-      // The post-run spend read: the run accrued 25 Light via contributions.
+      // id-GET serves both the claim (getRunById -> a claimable queued run) and
+      // the post-run spend read (the run accrued 25 Light via contributions).
       if (url.searchParams.get("id")) {
-        return jsonResponse([{ id: "run-1", total_light: 25 }]);
+        return jsonResponse([queuedRunRow({ total_light: 25 })]);
       }
       return jsonResponse([]);
     }
@@ -650,7 +689,13 @@ Deno.test("routine executor: a hung handler invocation times out into a retry (n
     if (table === "user_routines" && method === "PATCH") {
       return jsonResponse([{ ...routineRow(), ...(body as Record<string, unknown>) }]);
     }
-    if (table === "routine_runs" && method === "GET") return jsonResponse([]);
+    if (table === "routine_runs" && method === "GET") {
+      if (isReaperQuery(url)) return jsonResponse([]); // nothing stale to reap
+      if (url.searchParams.get("id")?.startsWith("eq.")) {
+        return jsonResponse([queuedRunRow()]); // getRunById -> claimable
+      }
+      return jsonResponse([]);
+    }
     if (table === "routine_runs" && method === "POST") {
       return jsonResponse([runRow(body as Record<string, unknown>)]);
     }
@@ -696,7 +741,7 @@ Deno.test("routine executor: a hung handler invocation times out into a retry (n
 Deno.test("routine executor: dispatches claimed runs to the queue instead of running inline", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;
-  const sent: Array<{ routineRunId: string; leaseId: string | null }> = [];
+  const sent: Array<{ routineRunId: string }> = [];
   let handlerInvoked = false;
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -706,7 +751,13 @@ Deno.test("routine executor: dispatches claimed runs to the queue instead of run
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     if (table === "user_routines" && method === "GET") return jsonResponse([routineRow()]);
     if (table === "user_routines" && method === "PATCH") return jsonResponse([{ ...routineRow(), ...(body as Record<string, unknown>) }]);
-    if (table === "routine_runs" && method === "GET") return jsonResponse([]);
+    if (table === "routine_runs" && method === "GET") {
+      if (isReaperQuery(url)) return jsonResponse([]); // nothing stale to reap
+      if (url.searchParams.get("id")?.startsWith("eq.")) {
+        return jsonResponse([queuedRunRow()]); // getRunById -> claimable
+      }
+      return jsonResponse([]);
+    }
     if (table === "routine_runs" && method === "POST") return jsonResponse([runRow(body as Record<string, unknown>)]);
     if (table === "routine_runs" && method === "PATCH") return jsonResponse([runRow(body as Record<string, unknown>)]);
     if (table === "routine_capabilities") return jsonResponse(capabilityRows());
@@ -721,7 +772,7 @@ Deno.test("routine executor: dispatches claimed runs to the queue instead of run
       clock: () => NOW,
       limit: 5,
       baseUrl: "https://api.example.test",
-      execQueue: { send: async (b) => { sent.push(b as { routineRunId: string; leaseId: string | null }); } },
+      execQueue: { send: async (b) => { sent.push(b as { routineRunId: string }); } },
       // If this ever runs inline, the flag flips — it must NOT in the cron cycle.
       invokeMcp: async () => { handlerInvoked = true; return jsonResponse({ result: { content: [{ type: "text", text: "{}" }] } }); },
     });
@@ -738,11 +789,11 @@ Deno.test("routine executor: dispatches claimed runs to the queue instead of run
   }
 });
 
-Deno.test("processQueuedRoutineRun: claims the running run and executes the handler in the consumer", async () => {
+Deno.test("processQueuedRoutineRun: claims the queued run and executes the handler in the consumer", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;
   let handlerInvoked = false;
-  let casLeaseFilter: string | null = null;
+  let claimStatusFilter: string | null = null;
   const runPatches: Array<Record<string, unknown>> = [];
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -750,9 +801,14 @@ Deno.test("processQueuedRoutineRun: claims the running run and executes the hand
     const table = url.pathname.split("/").pop() || "";
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    // getRunById loads the enqueued run; it is still "queued" until claimed here.
+    if (table === "routine_runs" && method === "GET") {
+      return jsonResponse([queuedRunRow()]);
+    }
     if (table === "routine_runs" && method === "PATCH") {
-      if (url.searchParams.get("status") === "eq.running") {
-        casLeaseFilter = url.searchParams.get("lease_id");
+      if ((body as Record<string, unknown>)?.status === "running") {
+        // The claim's at-most-once guard: CAS gated on the row still being queued.
+        claimStatusFilter = url.searchParams.get("status");
       }
       runPatches.push(body as Record<string, unknown>);
       return jsonResponse([runRow(body as Record<string, unknown>)]);
@@ -767,7 +823,7 @@ Deno.test("processQueuedRoutineRun: claims the running run and executes the hand
 
   try {
     await processQueuedRoutineRun(
-      { routineRunId: "run-1", leaseId: "run-lease-1" },
+      { routineRunId: "run-1" },
       {
         now: NOW,
         clock: () => NOW,
@@ -777,7 +833,7 @@ Deno.test("processQueuedRoutineRun: claims the running run and executes the hand
     );
 
     assertEquals(handlerInvoked, true);
-    assertEquals(casLeaseFilter, "eq.run-lease-1"); // CAS gated on the dispatched lease
+    assertEquals(claimStatusFilter, "eq.queued"); // at-most-once: claim only a queued row
     assert(runPatches.some((p) => p.status === "succeeded"));
   } finally {
     globalThis.fetch = originalFetch;
@@ -801,11 +857,68 @@ Deno.test("processQueuedRoutineRun: duplicate delivery (claim matches nothing) i
 
   try {
     const outcome = await processQueuedRoutineRun(
-      { routineRunId: "run-1", leaseId: "stale-lease" },
+      { routineRunId: "run-1" },
       { now: NOW, invokeMcp: async () => { handlerInvoked = true; return jsonResponse({ result: { content: [] } }); } },
     );
     assertEquals(outcome, "ack");
     assertEquals(handlerInvoked, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("routine executor: reaps a run orphaned in 'running' past its lease", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  let reapFilter: string | null = null;
+  const runPatches: Array<{ body: Record<string, unknown>; url: string }> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    // No due routines and no queued candidates: isolate the reap path.
+    if (table === "user_routines" && method === "GET") return jsonResponse([]);
+    if (table === "routine_runs" && method === "GET") {
+      // The reaper probe finds one run wedged in 'running' past its lease.
+      if (isReaperQuery(url)) return jsonResponse([{ id: "orphan-1" }]);
+      return jsonResponse([]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      reapFilter = url.searchParams.get("or");
+      runPatches.push({ body: body as Record<string, unknown>, url: url.toString() });
+      return jsonResponse([{ id: "orphan-1" }]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    const summary = await runRoutineExecutorCycle({
+      now: NOW,
+      clock: () => NOW,
+      limit: 5,
+      baseUrl: "https://api.example.test",
+      invokeMcp: async () =>
+        jsonResponse({ result: { content: [{ type: "text", text: "{}" }] } }),
+    });
+
+    assertEquals(summary.reaped, 1);
+    const failPatch = runPatches.find((p) => p.body.status === "failed");
+    assert(failPatch, "orphaned run must be failed terminally");
+    assertEquals(
+      (failPatch?.body.error as Record<string, unknown>).type,
+      "ServerTimeout",
+    );
+    assertEquals(failPatch?.body.lease_id, null);
+    // The write re-applies the full staleness filter so a run legitimately
+    // reclaimed between probe and PATCH is not clobbered.
+    assert(reapFilter?.includes("status.eq.running"));
+    assert(
+      new URL(failPatch?.url || "https://supabase.example").searchParams
+        .get("id")?.includes("orphan-1"),
+    );
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv();

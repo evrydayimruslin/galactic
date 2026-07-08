@@ -24,11 +24,7 @@ export async function processExecMessage(
     : null;
   if (routineRunId) {
     const { processQueuedRoutineRun } = await import("./routine-executor.ts");
-    const msg = body as { routineRunId: string; leaseId?: string | null };
-    return await processQueuedRoutineRun({
-      routineRunId: msg.routineRunId,
-      leaseId: msg.leaseId ?? null,
-    });
+    return await processQueuedRoutineRun({ routineRunId });
   }
 
   const jobId = body && typeof body === "object" &&
