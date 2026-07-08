@@ -1,4 +1,4 @@
-import { getEnv } from "../lib/env.ts";
+import { getEnv, getExecQueue } from "../lib/env.ts";
 import type { RoutineBudgetDefaults } from "../../shared/contracts/routine.ts";
 import {
   createRoutineActorTokenForRun,
@@ -55,6 +55,14 @@ export interface RoutineExecutorOptions {
   fetchFn?: typeof fetch;
   invokeMcp?: InvokeMcp;
   handlerTimeoutMs?: number;
+  // Where claimed runs are dispatched for handler execution. Defaults to the
+  // bound EXEC_QUEUE. Explicit `null` forces INLINE execution (tests + any env
+  // without queues) — the same in-process path the consumer uses. In prod the
+  // queue is always bound, so runs execute in the queue consumer, NOT in the
+  // scheduled() cron: the dynamic sandbox (env.LOADER) cannot run from the cron
+  // context and hangs there, whereas the queue consumer runs in a normal
+  // request context (exactly how events + async jobs already work).
+  execQueue?: QueueLike | null;
 }
 
 function withTimeout<T>(
@@ -81,6 +89,8 @@ export interface RoutineExecutorSummary {
   checked_at: string;
   claimed_scheduled: number;
   claimed_queued: number;
+  // Runs handed to the EXEC_QUEUE consumer for handler execution (prod path).
+  dispatched: number;
   executed: number;
   succeeded: number;
   failed: number;
@@ -89,6 +99,19 @@ export interface RoutineExecutorSummary {
   budget_skipped: number;
   auto_paused: number;
   errors: Array<{ run_id?: string; routine_id?: string; error: string }>;
+}
+
+// EXEC_QUEUE message shape for a routine run. Discriminated from async-job
+// messages ({ jobId }) by the routineRunId key. leaseId pins the exact claim
+// the scheduled() cycle made, so the consumer's optimistic re-claim rejects a
+// duplicate (Queues at-least-once) delivery.
+interface RoutineRunQueueMessage {
+  routineRunId: string;
+  leaseId: string | null;
+}
+
+interface QueueLike {
+  send(body: unknown): Promise<void>;
 }
 
 interface ExecutorRoutineRow {
@@ -1305,6 +1328,104 @@ async function executeClaimedRun(
   }
 }
 
+// Resolves the shared handler-invocation options (baseUrl + in-process
+// invokeMcp + timeout), used by both the scheduled cycle's inline fallback and
+// the queue consumer.
+function resolveInvocationOptions(
+  options: RoutineExecutorOptions,
+): Required<Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">> {
+  return {
+    baseUrl: options.baseUrl || getEnv("BASE_URL") ||
+      "https://api.connectgalactic.com",
+    // Call handleMcp IN-PROCESS (lazy import keeps the handler graph off this
+    // module's load path). Overridable in tests.
+    invokeMcp: options.invokeMcp ||
+      (async (request, appId) => {
+        const { handleMcp } = await import("../handlers/mcp.ts");
+        return handleMcp(request, appId);
+      }),
+    handlerTimeoutMs: positiveInteger(
+      options.handlerTimeoutMs,
+      HANDLER_INVOKE_TIMEOUT_MS,
+      15 * 60 * 1000,
+    ),
+  };
+}
+
+async function getRunById(runId: string): Promise<ExecutorRunRow | null> {
+  const [run] = await fetchRows<ExecutorRunRow>(
+    "routine_runs",
+    { id: `eq.${runId}`, select: RUN_SELECT, limit: "1" },
+    "Failed to load routine run",
+  );
+  return run ?? null;
+}
+
+// Optimistic re-claim in the CONSUMER: transition the run's lease from the one
+// the scheduled() cycle stamped to a fresh consumer lease, gated on the run
+// still being "running". This is the at-most-once guard against Queues'
+// at-least-once delivery — a duplicate message finds the lease already rotated
+// (or the run terminal) and matches zero rows.
+async function claimRunForConsumer(
+  runId: string,
+  leaseId: string | null,
+  now: Date,
+  leaseMs: number,
+): Promise<ExecutorRunRow | null> {
+  const filters: Record<string, string> = {
+    id: `eq.${runId}`,
+    status: "eq.running",
+    select: RUN_SELECT,
+  };
+  // lease_id may legitimately be null (older rows); match it exactly either way.
+  filters.lease_id = leaseId === null ? "is.null" : `eq.${leaseId}`;
+  const [claimed] = await patchRows<ExecutorRunRow>(
+    "routine_runs",
+    filters,
+    {
+      lease_id: crypto.randomUUID(),
+      lease_expires_at: iso(addMs(now, leaseMs)),
+    },
+    "Failed to claim routine run for execution",
+  );
+  return claimed ?? null;
+}
+
+// EXEC_QUEUE consumer entry for a routine run (routed from processExecMessage
+// by the routineRunId key). Runs in the queue-consumer context, where the
+// dynamic sandbox works — unlike scheduled(). Always acks: the run's own
+// lifecycle (retry/fail via executeClaimedRun) is the durability mechanism, not
+// message redelivery, which could double-execute a settled run.
+export async function processQueuedRoutineRun(
+  body: RoutineRunQueueMessage,
+  options: RoutineExecutorOptions = {},
+): Promise<"ack"> {
+  const now = options.now ?? new Date();
+  const clock = options.clock || (() => new Date());
+  const leaseMs = positiveInteger(options.leaseMs, DEFAULT_LEASE_MS, 60 * 60 * 1000);
+  const invocation = resolveInvocationOptions(options);
+
+  const claimed = await claimRunForConsumer(
+    body.routineRunId,
+    body.leaseId ?? null,
+    now,
+    leaseMs,
+  );
+  if (!claimed) {
+    // Duplicate delivery or the run is no longer running — nothing to do.
+    return "ack";
+  }
+  await executeClaimedRun(
+    { run: claimed, source: claimed.trigger === "scheduled" ? "scheduled" : "queued" },
+    invocation,
+    now,
+    clock,
+  ).catch((err) => {
+    console.error("[ROUTINE-QUEUE] Run execution failed:", err);
+  });
+  return "ack";
+}
+
 export async function runRoutineExecutorCycle(
   options: RoutineExecutorOptions = {},
 ): Promise<RoutineExecutorSummary> {
@@ -1315,27 +1436,19 @@ export async function runRoutineExecutorCycle(
     DEFAULT_LEASE_MS,
     60 * 60 * 1000,
   );
-  const baseUrl = options.baseUrl || getEnv("BASE_URL") ||
-    "https://api.connectgalactic.com";
-  // Default handler invocation: call handleMcp IN-PROCESS (no SELF round-trip —
-  // see invokeRoutineHandler). Lazy import keeps the handler graph off this
-  // module's load path. Overridable in tests.
-  const invokeMcp: InvokeMcp = options.invokeMcp ||
-    (async (request, appId) => {
-      const { handleMcp } = await import("../handlers/mcp.ts");
-      return handleMcp(request, appId);
-    });
-  const handlerTimeoutMs = positiveInteger(
-    options.handlerTimeoutMs,
-    HANDLER_INVOKE_TIMEOUT_MS,
-    15 * 60 * 1000,
-  );
+  const invocation = resolveInvocationOptions(options);
   const clock = options.clock || (() => new Date());
+  // Dispatch target for handler execution. Explicit null => inline (tests / no
+  // queue). In prod EXEC_QUEUE is always bound, so runs execute in the consumer.
+  const execQueue = options.execQueue !== undefined
+    ? options.execQueue
+    : getExecQueue();
 
   const summary: RoutineExecutorSummary = {
     checked_at: iso(now),
     claimed_scheduled: 0,
     claimed_queued: 0,
+    dispatched: 0,
     executed: 0,
     succeeded: 0,
     failed: 0,
@@ -1369,9 +1482,37 @@ export async function runRoutineExecutorCycle(
 
   for (const claimed of [...scheduled, ...queued]) {
     try {
+      if (execQueue) {
+        // PROD path: hand the run to the EXEC_QUEUE consumer, which runs the
+        // dynamic sandbox in a normal request context. Running it here (in
+        // scheduled()) hangs — see the execQueue option doc.
+        try {
+          await execQueue.send(
+            {
+              routineRunId: claimed.run.id,
+              leaseId: claimed.run.lease_id,
+            } satisfies RoutineRunQueueMessage,
+          );
+          summary.dispatched += 1;
+        } catch (sendErr) {
+          // The run is "running" with a lease; a failed dispatch would strand
+          // it. Revert to "queued" so the next cron cycle re-dispatches it.
+          await patchRun(claimed.run.id, {
+            status: "queued",
+            lease_id: null,
+            lease_expires_at: null,
+            next_attempt_at: iso(now),
+          }).catch(() => {});
+          throw sendErr;
+        }
+        continue;
+      }
+
+      // INLINE path (tests / no queue bound): run in-process, same as the
+      // consumer does.
       const outcome = await executeClaimedRun(
         claimed,
-        { baseUrl, invokeMcp, handlerTimeoutMs },
+        invocation,
         now,
         clock,
       );

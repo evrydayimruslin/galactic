@@ -5,6 +5,7 @@ import {
 
 import {
   computeNextRoutineRunAt,
+  processQueuedRoutineRun,
   runRoutineExecutorCycle,
 } from "./routine-executor.ts";
 
@@ -686,6 +687,125 @@ Deno.test("routine executor: a hung handler invocation times out into a retry (n
       (retryPatch?.error as Record<string, unknown>).message,
       "Routine handler invocation timed out",
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("routine executor: dispatches claimed runs to the queue instead of running inline", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  const sent: Array<{ routineRunId: string; leaseId: string | null }> = [];
+  let handlerInvoked = false;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (table === "user_routines" && method === "GET") return jsonResponse([routineRow()]);
+    if (table === "user_routines" && method === "PATCH") return jsonResponse([{ ...routineRow(), ...(body as Record<string, unknown>) }]);
+    if (table === "routine_runs" && method === "GET") return jsonResponse([]);
+    if (table === "routine_runs" && method === "POST") return jsonResponse([runRow(body as Record<string, unknown>)]);
+    if (table === "routine_runs" && method === "PATCH") return jsonResponse([runRow(body as Record<string, unknown>)]);
+    if (table === "routine_capabilities") return jsonResponse(capabilityRows());
+    if (table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "users") return jsonResponse([userRow()]);
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    const summary = await runRoutineExecutorCycle({
+      now: NOW,
+      clock: () => NOW,
+      limit: 5,
+      baseUrl: "https://api.example.test",
+      execQueue: { send: async (b) => { sent.push(b as { routineRunId: string; leaseId: string | null }); } },
+      // If this ever runs inline, the flag flips — it must NOT in the cron cycle.
+      invokeMcp: async () => { handlerInvoked = true; return jsonResponse({ result: { content: [{ type: "text", text: "{}" }] } }); },
+    });
+
+    assertEquals(summary.claimed_scheduled, 1);
+    assertEquals(summary.dispatched, 1);
+    assertEquals(summary.executed, 0);
+    assertEquals(handlerInvoked, false);
+    assertEquals(sent.length, 1);
+    assertEquals(sent[0].routineRunId, "run-1");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("processQueuedRoutineRun: claims the running run and executes the handler in the consumer", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  let handlerInvoked = false;
+  let casLeaseFilter: string | null = null;
+  const runPatches: Array<Record<string, unknown>> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (table === "routine_runs" && method === "PATCH") {
+      if (url.searchParams.get("status") === "eq.running") {
+        casLeaseFilter = url.searchParams.get("lease_id");
+      }
+      runPatches.push(body as Record<string, unknown>);
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
+    if (table === "user_routines") return jsonResponse([routineRow()]);
+    if (table === "routine_capabilities") return jsonResponse(capabilityRows());
+    if (table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "users") return jsonResponse([userRow()]);
+    if (table === "routine_run_steps" && method === "POST") return jsonResponse([{ id: "step-1" }]);
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    await processQueuedRoutineRun(
+      { routineRunId: "run-1", leaseId: "run-lease-1" },
+      {
+        now: NOW,
+        clock: () => NOW,
+        baseUrl: "https://api.example.test",
+        invokeMcp: async () => { handlerInvoked = true; return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ ok: true }) }] } }); },
+      },
+    );
+
+    assertEquals(handlerInvoked, true);
+    assertEquals(casLeaseFilter, "eq.run-lease-1"); // CAS gated on the dispatched lease
+    assert(runPatches.some((p) => p.status === "succeeded"));
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("processQueuedRoutineRun: duplicate delivery (claim matches nothing) is a no-op", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  let handlerInvoked = false;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    // CAS claim returns no rows -> already claimed / terminal.
+    if (table === "routine_runs" && method === "PATCH") return jsonResponse([]);
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    const outcome = await processQueuedRoutineRun(
+      { routineRunId: "run-1", leaseId: "stale-lease" },
+      { now: NOW, invokeMcp: async () => { handlerInvoked = true; return jsonResponse({ result: { content: [] } }); } },
+    );
+    assertEquals(outcome, "ack");
+    assertEquals(handlerInvoked, false);
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv();

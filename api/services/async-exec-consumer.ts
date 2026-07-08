@@ -15,6 +15,22 @@ type ExecMessageOutcome = "ack" | "retry";
 export async function processExecMessage(
   body: unknown,
 ): Promise<ExecMessageOutcome> {
+  // Routine runs share EXEC_QUEUE (already provisioned) and are discriminated
+  // by the routineRunId key. They must execute here in the consumer context —
+  // the dynamic sandbox (env.LOADER) cannot run from the scheduled() cron.
+  const routineRunId = body && typeof body === "object" &&
+      typeof (body as { routineRunId?: unknown }).routineRunId === "string"
+    ? (body as { routineRunId: string }).routineRunId
+    : null;
+  if (routineRunId) {
+    const { processQueuedRoutineRun } = await import("./routine-executor.ts");
+    const msg = body as { routineRunId: string; leaseId?: string | null };
+    return await processQueuedRoutineRun({
+      routineRunId: msg.routineRunId,
+      leaseId: msg.leaseId ?? null,
+    });
+  }
+
   const jobId = body && typeof body === "object" &&
       typeof (body as { jobId?: unknown }).jobId === "string"
     ? (body as { jobId: string }).jobId
