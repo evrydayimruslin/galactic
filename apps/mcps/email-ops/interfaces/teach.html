@@ -1,0 +1,843 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teach — Email Admin</title>
+<!-- The Galactic bridge snippet, verbatim from
+     ultralight-spec/conventions/interfaces.md -->
+<script>
+(function () {
+  var port = null, queue = [], pending = {}, nextId = 1;
+  function flush() {
+    if (!port) return;
+    while (queue.length) {
+      var item = queue.shift(), id = nextId++;
+      pending[id] = item;
+      port.postMessage({ type: "call", id: id, functionName: item.fn, args: item.args || {} });
+    }
+  }
+  window.ul = {
+    context: null,
+    call: function (fn, args) {
+      return new Promise(function (resolve, reject) {
+        queue.push({ fn: fn, args: args, resolve: resolve, reject: reject });
+        flush();
+      });
+    },
+    resize: function (height) {
+      if (port) port.postMessage({ type: "resize", height: height });
+    },
+  };
+  window.addEventListener("message", function (event) {
+    var d = event.data;
+    if (!d || d.type !== "ul-interface-connect" || !event.ports || !event.ports[0]) return;
+    port = event.ports[0];
+    window.ul.context = d.context;
+    port.onmessage = function (e) {
+      var m = e.data;
+      if (!m || m.type !== "result" || !(m.id in pending)) return;
+      var item = pending[m.id];
+      delete pending[m.id];
+      if (m.success) item.resolve(m.result);
+      else {
+        var err = new Error((m.error && m.error.message) || "Call failed");
+        err.code = m.error && m.error.type;
+        item.reject(err);
+      }
+    };
+    flush();
+    document.dispatchEvent(new CustomEvent("ul-ready"));
+  });
+  parent.postMessage({ type: "ul-interface-hello" }, "*");
+})();
+</script>
+<style>
+:root{
+  --bg:#ffffff; --surface:#f7f7f5; --line:#e3e1dc;
+  --ink:#23272e; --ink-2:#5c6470; --ink-3:#8b93a0;
+  --accent:#2f6d62; --accent-soft:#e7f1ee; --accent-ink:#ffffff;
+  --red:#b23a3a; --red-soft:#f9ecec;
+  --amber:#a06b1f; --amber-soft:#f7efdd;
+  --green:#3a7a4e; --green-soft:#e9f2ec;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Hiragino Sans","Yu Gothic",sans-serif;color:var(--ink);background:var(--bg);margin:0;font-size:14px;line-height:1.5;padding:16px 18px 6px;}
+h1{font-size:16px;font-weight:700;margin:0 0 10px;}
+h2{font-size:15px;font-weight:700;margin:0;}
+.muted{color:var(--ink-3);font-size:12.5px;}
+.ok{color:var(--green);font-size:13px;}
+.err{color:var(--red);font-size:12.5px;margin-top:6px;}
+.card{border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);padding:12px 14px;margin-bottom:10px;}
+.card.done{background:var(--surface);}
+.gap-q{font-weight:600;font-size:14.5px;}
+.gap-meta{color:var(--ink-3);font-size:12.5px;margin:1px 0 8px;}
+.linkbtn{background:none;border:none;color:var(--accent);padding:0;font:inherit;font-size:13px;cursor:pointer;}
+.linkbtn:hover{text-decoration:underline;}
+.linkbtn.quiet{color:var(--ink-3);font-size:12.5px;}
+.linkbtn:disabled{opacity:.5;cursor:default;text-decoration:none;}
+.evidence{border-left:3px solid var(--line);margin:10px 0 4px;padding:8px 12px;background:var(--surface);border-radius:0 8px 8px 0;font-size:13px;}
+.ev-label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);margin:6px 0 1px;}
+.ev-label:first-child{margin-top:0;}
+.evidence blockquote{margin:2px 0 4px;padding:0 0 0 2px;color:var(--ink-2);white-space:pre-wrap;word-break:break-word;max-height:150px;overflow:auto;}
+.ansrow{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center;}
+.ansrow input{flex:1;min-width:180px;}
+input[type=text]{padding:7px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:13.5px;background:var(--bg);color:var(--ink);}
+input[type=text]:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+button.btn{background:var(--accent);color:var(--accent-ink);border:1px solid var(--accent);border-radius:8px;padding:6px 14px;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit;}
+button.btn2{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 14px;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit;}
+button.btn:disabled,button.btn2:disabled{opacity:.55;cursor:default;}
+.chip{display:inline-block;border-radius:999px;padding:1px 9px;font-size:11.5px;font-weight:600;vertical-align:1px;}
+.chip-green{background:var(--green-soft);color:var(--green);}
+.chip-amber{background:var(--amber-soft);color:var(--amber);}
+.rw{margin-top:8px;font-size:13px;}
+.sect{margin-top:22px;border-top:1px solid var(--line);padding-top:14px;}
+.k-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between;margin-bottom:2px;}
+#kb-search{width:230px;max-width:100%;}
+.k-scroll{max-height:430px;overflow:auto;margin-top:6px;}
+.k-cat{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin:12px 0 2px;}
+.k-cat:first-child{margin-top:2px;}
+.k-row{display:flex;gap:10px;padding:7px 4px;border-bottom:1px solid var(--surface);align-items:flex-start;}
+.k-name{flex:0 0 150px;font-weight:600;font-size:13px;word-break:break-word;}
+.k-val{flex:1;color:var(--ink-2);font-size:13px;white-space:pre-wrap;word-break:break-word;min-width:120px;}
+.k-acts{flex:0 0 auto;display:flex;gap:12px;padding-top:1px;}
+.k-editrow{flex:1;display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.k-editrow input{flex:1;min-width:160px;}
+.addform{background:var(--surface);border:1px dashed var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;}
+.addform label{display:block;font-size:12px;color:var(--ink-2);margin:6px 0 2px;font-weight:600;}
+.addform label:first-child{margin-top:0;}
+.addform input{width:100%;}
+.addform .frow{display:flex;gap:8px;margin-top:10px;}
+.starter{margin-bottom:10px;}
+.starter .s-label{font-weight:700;font-size:13.5px;margin-bottom:2px;}
+footer{margin-top:24px;border-top:1px solid var(--line);padding:10px 0 4px;color:var(--ink-3);font-size:12.5px;text-align:center;}
+details{margin-top:4px;}
+summary{cursor:pointer;font-size:12px;color:var(--ink-3);}
+pre.raw{font-size:11.5px;white-space:pre-wrap;word-break:break-word;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px;margin:4px 0 0;}
+.sample{opacity:.9;}
+.loadbox{padding:24px 0;color:var(--ink-3);}
+@media (max-width:640px){
+  .k-row{flex-wrap:wrap;}
+  .k-name{flex-basis:100%;}
+  .k-acts{margin-left:auto;}
+  #kb-search{width:100%;}
+}
+@media (prefers-reduced-motion: no-preference){
+  .card,.addform{transition:opacity .15s ease;}
+}
+</style>
+</head>
+<body>
+<main id="app"><div class="loadbox">Connecting…</div></main>
+
+<script>
+"use strict";
+/* ---------- utilities ---------- */
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+function trunc(s, n) {
+  s = String(s == null ? "" : s);
+  n = n || 300;
+  return s.length > n ? s.slice(0, n).replace(/\s+\S*$/, "") + " …" : s;
+}
+function slugify(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40).replace(/_+$/, "");
+}
+function idc(s) {
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, function (ch) { return "x" + ch.charCodeAt(0); });
+}
+function titleCase(s) {
+  return String(s || "").replace(/[_-]+/g, " ").trim().replace(/\S+/g, function (w) {
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  }) || "Other";
+}
+
+/* ---------- call queue: max 4 in flight ---------- */
+var CQ = [], inflight = 0;
+function call(fn, args) {
+  return new Promise(function (resolve, reject) {
+    CQ.push({ fn: fn, args: args || {}, resolve: resolve, reject: reject });
+    pump();
+  });
+}
+function pump() {
+  while (inflight < 4 && CQ.length) {
+    var it = CQ.shift();
+    inflight++;
+    (function (it) {
+      ul.call(it.fn, it.args).then(function (r) {
+        inflight--; pump(); it.resolve(r);
+      }, function (e) {
+        inflight--; pump(); it.reject(e);
+      });
+    })(it);
+  }
+}
+/* read-only calls: retry once after 5s on rate-limit/busy */
+function callRetry(fn, args) {
+  return call(fn, args).catch(function (e) {
+    var c = e && (e.code || e.type);
+    if (c === "RATE_LIMITED" || c === "BUSY") {
+      return new Promise(function (resolve, reject) {
+        setTimeout(function () { call(fn, args).then(resolve, reject); }, 5000);
+      });
+    }
+    throw e;
+  });
+}
+
+/* ---------- error humanization ---------- */
+function human(err) {
+  var t = (err && (err.code || err.type)) || "";
+  var m = (err && err.message) || "";
+  if (t === "SIGN_IN_REQUIRED") return "Sign in to use this.";
+  if (t === "RATE_LIMITED" || t === "BUSY") return "Give it a few seconds — too many requests at once.";
+  if (t === "RUN_FAILED") {
+    if (/SMTP auth/i.test(m)) return "Couldn't sign in to your mailbox to send — check the email password in Settings.";
+    if (/MISSING_SECRETS|IMAP|SMTP/i.test(m)) return "Your mailbox isn't connected yet. Add your email settings in the agent's Settings, then try again.";
+    if (m && /\s/.test(m) && !/[A-Z_]{6,}|ECONN|ETIMEDOUT|EAI_|ENOTFOUND/.test(m)) return m;
+  }
+  return null;
+}
+function errHtml(err, lead) {
+  var h = human(err);
+  if (h) return '<div class="err">' + esc(lead ? lead + " " : "") + esc(h) + "</div>";
+  return '<div class="err">' + esc(lead ? lead + " " : "") + "Something went wrong — try again." +
+    '<details><summary>Technical details</summary><pre class="raw">' + esc((err && err.message) || String(err)) + "</pre></details></div>";
+}
+
+/* ---------- state ---------- */
+var S = {
+  load: "loading", loadErr: null,
+  gaps: [], totalOpen: 0,
+  conv: [],
+  search: ""
+};
+var GU = {};  // per gap key
+var CU = {};  // per convention key
+var AU = {};  // per category
+var ST = {};  // starter forms
+var HIST = {}; // conversation_history cache
+var STARTERS = [
+  { label: "Rates", key: "rates", cat: "rates", ph: "e.g. Doubles are 120/night, breakfast included" },
+  { label: "Check-in time", key: "check_in_time", cat: "policies", ph: "e.g. Check-in from 3pm, checkout by 11am" },
+  { label: "Directions", key: "directions", cat: "getting here", ph: "e.g. 10 minutes' walk from the station, north exit" }
+];
+function gu(k) { if (!GU[k]) GU[k] = { ev: "closed", answer: "" }; return GU[k]; }
+function cu(k) { if (!CU[k]) CU[k] = {}; return CU[k]; }
+function au(c) { if (!AU[c]) AU[c] = { open: false, about: "", say: "" }; return AU[c]; }
+function st(i) { if (!ST[i]) ST[i] = { say: "" }; return ST[i]; }
+
+/* ---------- rendering ---------- */
+var app = document.getElementById("app");
+function fit() {
+  requestAnimationFrame(function () {
+    ul.resize(document.documentElement.scrollHeight);
+  });
+}
+function render() {
+  var act = document.activeElement;
+  var focusId = act && act.id;
+  var selS = null, selE = null;
+  if (focusId && act.setSelectionRange && /^(text|search)$/.test(act.type || "")) {
+    try { selS = act.selectionStart; selE = act.selectionEnd; } catch (e) {}
+  }
+  var scr = document.getElementById("k-scroll");
+  var scrTop = scr ? scr.scrollTop : 0;
+
+  var html;
+  if (!ul.context || !ul.context.signedIn) html = signedOutHtml();
+  else if (S.load === "loading") html = '<div class="loadbox">Loading what it wants to learn…</div>';
+  else if (S.load === "error") html = loadErrHtml();
+  else html = gapsHtml() + knowledgeHtml() + footerHtml();
+
+  app.innerHTML = html;
+
+  var scr2 = document.getElementById("k-scroll");
+  if (scr2) scr2.scrollTop = scrTop;
+  if (focusId) {
+    var el = document.getElementById(focusId);
+    if (el) {
+      el.focus();
+      if (selS != null && el.setSelectionRange) { try { el.setSelectionRange(selS, selE); } catch (e) {} }
+    }
+  }
+  fit();
+}
+
+function footerHtml() {
+  return "<footer>Everything here is used to write drafts. Nothing is ever sent without you.</footer>";
+}
+
+function signedOutHtml() {
+  return '<h1>The agent couldn’t answer these</h1>' +
+    '<div class="card sample">' +
+      '<div class="gap-q">When does the spa reopen?</div>' +
+      '<div class="gap-meta">came up 3 times this week</div>' +
+      '<div class="ansrow"><input type="text" disabled placeholder="Type the answer — one line is enough">' +
+      '<button class="btn" disabled>Teach it</button></div>' +
+      '<div class="muted" style="margin-top:8px">Teach it once, it answers forever.</div>' +
+    "</div>" +
+    '<p class="muted">Sign in to see what your agent wants to learn — and to teach it.</p>' +
+    footerHtml();
+}
+
+function loadErrHtml() {
+  return "<h1>Teach</h1>" + errHtml(S.loadErr, "Couldn’t load this page.") +
+    '<p><button class="btn2" data-act="retry-load">Try again</button></p>' + footerHtml();
+}
+
+function gapsHtml() {
+  var visible = S.gaps.filter(function (g) { return !gu(g.key).gone; });
+  var out = "<h1>The agent couldn’t answer these (" + S.totalOpen + ")</h1>";
+  if (!visible.length) {
+    if (!S.conv.length) {
+      out += '<p class="muted">No open questions yet — once it starts drafting replies, anything it couldn’t answer shows up here.</p>';
+    } else {
+      out += '<p class="ok">It had answers for everything recently.</p>';
+    }
+    return out;
+  }
+  out += visible.map(gapCardHtml).join("");
+  if (S.totalOpen > visible.length) {
+    out += '<div class="muted">Showing the ' + visible.length + " most frequent.</div>";
+  }
+  return out;
+}
+
+function gapCardHtml(g) {
+  var u = gu(g.key);
+  var K = esc(g.key);
+  var kid = idc(g.key);
+
+  if (u.dismissed) {
+    return '<div class="card done">' +
+      '<span class="muted">Won’t ask about “' + esc(g.question) + '” again.</span> ' +
+      (u.undoing
+        ? '<span class="muted">Restoring…</span>'
+        : '<button class="linkbtn" data-act="undo-dismiss" data-gap="' + K + '">Undo</button> <span class="muted">(10s)</span>') +
+      (u.dismissErr ? errHtml(u.dismissErr) : "") +
+      "</div>";
+  }
+
+  if (u.learned) {
+    var rw = "";
+    if (u.rw) {
+      if (u.rw.state === "checking") rw = '<div class="rw muted">Checking for waiting replies…</div>';
+      else if (u.rw.state === "offer") {
+        var n = u.rw.targets.length;
+        rw = '<div class="rw"><button class="btn2" data-act="rewrite" data-gap="' + K + '">Rewrite ' + n +
+          " waiting " + (n === 1 ? "reply" : "replies") + " with this</button></div>";
+      } else if (u.rw.state === "running") {
+        rw = '<div class="rw muted">Rewriting reply ' + Math.min(u.rw.done + 1, u.rw.total) + " of " + u.rw.total + "…</div>";
+      } else if (u.rw.state === "done") {
+        rw = '<div class="rw ok">' + u.rw.done + " of " + u.rw.total + " rewritten ✓ — review them in the Inbox tab</div>";
+      } else if (u.rw.state === "error") {
+        rw = '<div class="rw">' + u.rw.done + " of " + u.rw.total + " rewritten — couldn’t finish the rest. " +
+          '<button class="linkbtn" data-act="rewrite-retry" data-gap="' + K + '">Try the rest again</button>' +
+          errHtml(u.rw.err) + "</div>";
+      }
+    }
+    return '<div class="card done">' +
+      '<div><span class="chip chip-green">Learned ✓</span> <span style="font-size:13px">— future replies will use this</span></div>' +
+      '<div class="muted" style="margin-top:2px">' + esc(g.question) + "</div>" + rw + "</div>";
+  }
+
+  var evBtn = '<button class="linkbtn" data-act="toggle-ev" data-gap="' + K + '" aria-expanded="' +
+    (u.ev === "open" ? "true" : "false") + '">See an email that asked ' + (u.ev === "open" ? "▴" : "▾") + "</button>";
+  var hasEv = (g.conversation_ids || []).length > 0;
+
+  var evPanel = "";
+  if (u.ev === "loading") evPanel = '<div class="evidence muted">Fetching the email…</div>';
+  else if (u.ev === "error") evPanel = '<div class="evidence">' + errHtml(u.evErr, "Couldn’t fetch the email.") +
+    '<button class="linkbtn" data-act="toggle-ev" data-gap="' + K + '">Try again</button></div>';
+  else if (u.ev === "open") evPanel = evidenceHtml(g);
+
+  return '<div class="card">' +
+    '<div class="gap-q">' + esc(g.question) + "</div>" +
+    '<div class="gap-meta">came up ' + (g.count === 1 ? "once" : esc(g.count) + " times") + " this week</div>" +
+    (hasEv ? evBtn : "") + evPanel +
+    '<div class="ansrow">' +
+      '<input type="text" id="ans-' + kid + '" data-model="answer" data-gap="' + K + '" data-enter="teach"' +
+      ' placeholder="Type the answer — one line is enough" value="' + esc(u.answer) + '"' + (u.saving ? " disabled" : "") + ">" +
+      '<button class="btn" data-act="teach" data-gap="' + K + '"' + (u.saving ? " disabled" : "") + ">" +
+      (u.saving ? "Saving…" : "Teach it") + "</button>" +
+    "</div>" +
+    (u.err ? '<div class="err">Couldn’t save — try again.' +
+      (human(u.err) && human(u.err) !== "Something went wrong — try again." ? " " + esc(human(u.err)) : "") + "</div>" : "") +
+    '<div style="margin-top:8px"><button class="linkbtn quiet" data-act="dismiss" data-gap="' + K + '"' +
+    (u.dismissing ? " disabled" : "") + ">" + (u.dismissing ? "Saving…" : "Don’t ask about this") + "</button></div>" +
+    "</div>";
+}
+
+function evidenceHtml(g) {
+  var h = HIST[(g.conversation_ids || [])[0]];
+  if (!h) return "";
+  var conv = h.conversation || {};
+  var versions = h.versions || [];
+  var inbound = null, draft = null;
+  versions.forEach(function (v) {
+    if (v.type === "inbound" && !inbound) inbound = v;
+    if (["auto_draft", "regeneration", "manual_edit", "followup_draft"].indexOf(v.type) >= 0) {
+      if (!draft || (v.version_num || 0) > (draft.version_num || 0)) draft = v;
+    }
+  });
+  var md = (inbound && inbound.metadata) || {};
+  var summary = md.summary || conv.summary || "";
+  var excerpt = md.translated_message || (inbound && inbound.body) || "";
+  var who = [conv.guest_name, conv.subject].filter(Boolean).join(" · ");
+  var out = '<div class="evidence">';
+  if (who) out += '<div class="muted">' + esc(who) + "</div>";
+  out += '<div class="ev-label">The guest asked</div>';
+  if (summary) out += "<div>" + esc(summary) + "</div>";
+  if (excerpt) out += "<blockquote>" + esc(trunc(excerpt)) + "</blockquote>";
+  if (draft && draft.body) {
+    out += '<div class="ev-label">What it drafted without knowing</div>' +
+      "<blockquote>" + esc(trunc(draft.body)) + "</blockquote>";
+  }
+  if (!summary && !excerpt && !(draft && draft.body)) out += '<div class="muted">Couldn’t find the email.</div>';
+  return out + "</div>";
+}
+
+/* ---------- knowledge section ---------- */
+function groupConv() {
+  var groups = {}, order = [];
+  S.conv.forEach(function (c) {
+    if (!c || c.category === "_deleted") return;
+    var cat = c.category || "other";
+    if (!groups[cat]) { groups[cat] = []; order.push(cat); }
+    groups[cat].push(c);
+  });
+  var pref = ["rates", "getting here", "policies", "house info", "taught"];
+  order.sort(function (a, b) {
+    var ia = pref.indexOf(a.toLowerCase()), ib = pref.indexOf(b.toLowerCase());
+    if (ia < 0) ia = 99; if (ib < 0) ib = 99;
+    return ia - ib || a.localeCompare(b);
+  });
+  return { groups: groups, order: order };
+}
+
+function knowledgeHtml() {
+  if (!S.conv.length) return firstRunHtml();
+  var q = S.search.trim().toLowerCase();
+  var gd = groupConv();
+  var liveCount = S.conv.filter(function (c) { return !cu(c.key).removed; }).length;
+  var out = '<div class="sect"><div class="k-head"><h2>What it knows (' + liveCount + ")</h2>" +
+    '<input type="text" id="kb-search" data-model="search" placeholder="Search what it knows" value="' + esc(S.search) + '"></div>';
+  var any = false;
+  out += '<div class="k-scroll" id="k-scroll">';
+  gd.order.forEach(function (cat) {
+    var rows = gd.groups[cat].filter(function (c) {
+      if (!q) return true;
+      return (c.key + " " + c.value).toLowerCase().indexOf(q) >= 0;
+    });
+    var a = au(cat);
+    if (!rows.length && !(a.open && !q)) return;
+    any = true;
+    out += '<div class="k-cat">' + esc(titleCase(cat)) + "</div>";
+    rows.forEach(function (c) { out += knowRowHtml(c); });
+    if (!q) {
+      if (a.open) out += addFormHtml(cat, a);
+      else out += '<div><button class="linkbtn" data-act="add-open" data-cat="' + esc(cat) + '">+ Add a fact</button></div>';
+    }
+  });
+  if (!any) out += '<div class="muted" style="padding:10px 2px">Nothing matches “' + esc(S.search.trim()) + "”.</div>";
+  out += "</div></div>";
+  return out;
+}
+
+function knowRowHtml(c) {
+  var u = cu(c.key);
+  var K = esc(c.key);
+  var kid = idc(c.key);
+  var name = titleCase(c.key);
+  if (u.removed) {
+    return '<div class="k-row"><div class="k-val muted">Removed “' + esc(name) + "” — " +
+      (u.undoing ? "restoring…"
+        : '<button class="linkbtn" data-act="undo-remove" data-key="' + K + '">Undo</button> <span class="muted">(10s)</span>') +
+      (u.err ? errHtml(u.err) : "") + "</div></div>";
+  }
+  if (u.editing) {
+    return '<div class="k-row"><div class="k-name">' + esc(name) + '</div><div class="k-editrow">' +
+      '<input type="text" id="edit-' + kid + '" data-model="edit-val" data-key="' + K + '" data-enter="edit-save" value="' + esc(u.val) + '"' + (u.saving ? " disabled" : "") + ">" +
+      '<button class="btn" data-act="edit-save" data-key="' + K + '"' + (u.saving ? " disabled" : "") + ">" + (u.saving ? "Saving…" : "Save") + "</button>" +
+      '<button class="btn2" data-act="edit-cancel" data-key="' + K + '"' + (u.saving ? " disabled" : "") + ">Cancel</button>" +
+      (u.err ? '<div class="err" style="flex-basis:100%">Couldn’t save — try again.</div>' : "") +
+      "</div></div>";
+  }
+  return '<div class="k-row"><div class="k-name">' + esc(name) + '</div><div class="k-val">' + esc(c.value) + "</div>" +
+    '<div class="k-acts">' +
+      '<button class="linkbtn" data-act="edit" data-key="' + K + '">Edit</button>' +
+      '<button class="linkbtn quiet" data-act="remove" data-key="' + K + '"' + (u.removing ? " disabled" : "") + ">" + (u.removing ? "Removing…" : "Remove") + "</button>" +
+    "</div>" +
+    (u.err && !u.editing ? '<div class="err" style="flex-basis:100%">' + esc(human(u.err) || "Something went wrong — try again.") + "</div>" : "") +
+    "</div>";
+}
+
+function addFormHtml(cat, a) {
+  var C = esc(cat), cid = idc(cat);
+  return '<div class="addform">' +
+    '<label for="add-about-' + cid + '">What’s it about?</label>' +
+    '<input type="text" id="add-about-' + cid + '" data-model="add-about" data-cat="' + C + '" placeholder="e.g. Parking" value="' + esc(a.about) + '"' + (a.saving ? " disabled" : "") + ">" +
+    '<label for="add-say-' + cid + '">What should the agent say?</label>' +
+    '<input type="text" id="add-say-' + cid + '" data-model="add-say" data-cat="' + C + '" data-enter="add-save" placeholder="e.g. Free parking behind the building, gate code 4412" value="' + esc(a.say) + '"' + (a.saving ? " disabled" : "") + ">" +
+    '<div class="frow">' +
+      '<button class="btn" data-act="add-save" data-cat="' + C + '"' + (a.saving ? " disabled" : "") + ">" + (a.saving ? "Saving…" : "Teach it") + "</button>" +
+      '<button class="btn2" data-act="add-cancel" data-cat="' + C + '"' + (a.saving ? " disabled" : "") + ">Cancel</button>" +
+    "</div>" +
+    (a.err ? '<div class="err">Couldn’t save — try again.</div>' : "") +
+    "</div>";
+}
+
+function firstRunHtml() {
+  var out = '<div class="sect"><h2>What it knows (0)</h2>' +
+    '<p class="muted">It doesn’t know anything yet. Give it its first facts — one line each is enough.</p>';
+  STARTERS.forEach(function (p, i) {
+    var u = st(i);
+    if (u.done) {
+      out += '<div class="starter"><span class="chip chip-green">Learned ✓</span> <span style="font-size:13px">' + esc(p.label) + "</span></div>";
+      return;
+    }
+    out += '<div class="starter"><div class="s-label">' + esc(p.label) + "</div>" +
+      '<div class="ansrow">' +
+        '<input type="text" id="starter-' + i + '" data-model="starter" data-si="' + i + '" data-enter="starter-save" placeholder="' + esc(p.ph) + '" value="' + esc(u.say) + '"' + (u.saving ? " disabled" : "") + ">" +
+        '<button class="btn" data-act="starter-save" data-si="' + i + '"' + (u.saving ? " disabled" : "") + ">" + (u.saving ? "Saving…" : "Teach it") + "</button>" +
+      "</div>" +
+      (u.err ? '<div class="err">Couldn’t save — try again.</div>' : "") +
+      "</div>";
+  });
+  return out + "</div>";
+}
+
+/* ---------- data loading ---------- */
+function coldLoad() {
+  S.load = "loading";
+  render();
+  Promise.all([
+    callRetry("knowledge_gaps", { limit: 10 }),
+    callRetry("conventions_get", {})
+  ]).then(function (res) {
+    S.gaps = (res[0] && res[0].gaps) || [];
+    S.totalOpen = (res[0] && res[0].total_open) || S.gaps.length;
+    S.conv = ((res[1] && res[1].conventions) || []).filter(function (c) { return c && c.category !== "_deleted"; });
+    S.load = "ready";
+    render();
+  }).catch(function (e) {
+    S.load = "error";
+    S.loadErr = e;
+    render();
+  });
+}
+function refetchConventions() {
+  callRetry("conventions_get", {}).then(function (r) {
+    S.conv = ((r && r.conventions) || []).filter(function (c) { return c && c.category !== "_deleted"; });
+    render();
+  }).catch(function () { /* keep optimistic local state */ });
+}
+function findGap(key) {
+  for (var i = 0; i < S.gaps.length; i++) if (S.gaps[i].key === key) return S.gaps[i];
+  return null;
+}
+function findConv(key) {
+  for (var i = 0; i < S.conv.length; i++) if (S.conv[i].key === key) return S.conv[i];
+  return null;
+}
+
+/* ---------- actions ---------- */
+function doAction(act, el) {
+  var gk = el.getAttribute("data-gap");
+  var ck = el.getAttribute("data-key");
+  var cat = el.getAttribute("data-cat");
+  var si = el.getAttribute("data-si");
+
+  if (act === "retry-load") { coldLoad(); return; }
+
+  if (act === "toggle-ev") {
+    var g = findGap(gk); if (!g) return;
+    var u = gu(gk);
+    if (u.ev === "open") { u.ev = "closed"; render(); return; }
+    var cid = (g.conversation_ids || [])[0];
+    if (!cid) return;
+    if (HIST[cid]) { u.ev = "open"; render(); return; }
+    u.ev = "loading"; render();
+    callRetry("conversation_history", { conversation_id: cid }).then(function (h) {
+      HIST[cid] = h; u.ev = "open"; render();
+    }).catch(function (e) {
+      u.ev = "error"; u.evErr = e; render();
+    });
+    return;
+  }
+
+  if (act === "teach") {
+    var g2 = findGap(gk); if (!g2) return;
+    var u2 = gu(gk);
+    var ans = (u2.answer || "").trim();
+    if (!ans) {
+      u2.err = null; render();
+      var inp = document.getElementById("ans-" + idc(gk));
+      if (inp) inp.focus();
+      return;
+    }
+    var key = slugify(g2.question) || slugify(g2.key) || "fact";
+    u2.saving = true; u2.err = null; render();
+    call("conventions_set", { key: key, value: ans, category: "taught", answers_gap: g2.key }).then(function () {
+      u2.saving = false; u2.learned = true;
+      S.totalOpen = Math.max(0, S.totalOpen - 1);
+      render();
+      refetchConventions();
+      offerRewrites(g2, key, ans);
+    }, function (e) {
+      u2.saving = false; u2.err = e; render();
+    });
+    return;
+  }
+
+  if (act === "dismiss") {
+    var g3 = findGap(gk); if (!g3) return;
+    var u3 = gu(gk);
+    u3.dismissing = true; u3.err = null; render();
+    call("gap_dismiss", { gap_key: g3.key }).then(function () {
+      u3.dismissing = false; u3.dismissed = true;
+      S.totalOpen = Math.max(0, S.totalOpen - 1);
+      u3.undoT = setTimeout(function () { u3.gone = true; render(); }, 10000);
+      render();
+    }, function (e) {
+      u3.dismissing = false; u3.err = e; render();
+    });
+    return;
+  }
+
+  if (act === "undo-dismiss") {
+    var u4 = gu(gk);
+    if (u4.undoT) { clearTimeout(u4.undoT); u4.undoT = null; }
+    u4.undoing = true; u4.dismissErr = null; render();
+    call("gap_dismiss", { gap_key: gk, undo: true }).then(function () {
+      u4.undoing = false; u4.dismissed = false;
+      S.totalOpen = S.totalOpen + 1;
+      render();
+    }, function (e) {
+      u4.undoing = false; u4.dismissErr = e; render();
+    });
+    return;
+  }
+
+  if (act === "rewrite" || act === "rewrite-retry") {
+    var u5 = gu(gk);
+    if (!u5.rw) return;
+    if (act === "rewrite") { u5.rw.pending = u5.rw.targets.slice(); u5.rw.done = 0; u5.rw.total = u5.rw.targets.length; }
+    u5.rw.state = "running"; u5.rw.err = null;
+    render();
+    runRewrites(u5.rw);
+    return;
+  }
+
+  if (act === "edit") {
+    var c = findConv(ck); if (!c) return;
+    var e1 = cu(ck);
+    e1.editing = true; e1.val = c.value; e1.err = null;
+    render();
+    var ei = document.getElementById("edit-" + idc(ck));
+    if (ei) ei.focus();
+    return;
+  }
+  if (act === "edit-cancel") {
+    var e2 = cu(ck); e2.editing = false; e2.err = null; render(); return;
+  }
+  if (act === "edit-save") {
+    var c2 = findConv(ck); if (!c2) return;
+    var e3 = cu(ck);
+    var val = (e3.val || "").trim();
+    if (!val) { render(); return; }
+    e3.saving = true; e3.err = null; render();
+    call("conventions_set", { key: c2.key, value: val, category: c2.category }).then(function () {
+      e3.saving = false; e3.editing = false;
+      c2.value = val;
+      render();
+      refetchConventions();
+    }, function (e) {
+      e3.saving = false; e3.err = e; render();
+    });
+    return;
+  }
+
+  if (act === "remove") {
+    var c3 = findConv(ck); if (!c3) return;
+    var r1 = cu(ck);
+    r1.removing = true; r1.err = null; render();
+    call("conventions_set", { key: c3.key, value: "[DELETED]", category: "_deleted" }).then(function () {
+      r1.removing = false; r1.removed = true;
+      r1.oldValue = c3.value; r1.oldCategory = c3.category;
+      r1.undoT = setTimeout(function () {
+        S.conv = S.conv.filter(function (x) { return x.key !== ck; });
+        delete CU[ck];
+        render();
+      }, 10000);
+      render();
+    }, function (e) {
+      r1.removing = false; r1.err = e; render();
+    });
+    return;
+  }
+  if (act === "undo-remove") {
+    var r2 = cu(ck);
+    if (r2.undoT) { clearTimeout(r2.undoT); r2.undoT = null; }
+    r2.undoing = true; r2.err = null; render();
+    call("conventions_set", { key: ck, value: r2.oldValue, category: r2.oldCategory }).then(function () {
+      r2.undoing = false; r2.removed = false;
+      render();
+      refetchConventions();
+    }, function (e) {
+      r2.undoing = false; r2.err = e; render();
+    });
+    return;
+  }
+
+  if (act === "add-open") {
+    var a1 = au(cat); a1.open = true; a1.err = null;
+    render();
+    var ai = document.getElementById("add-about-" + idc(cat));
+    if (ai) ai.focus();
+    return;
+  }
+  if (act === "add-cancel") {
+    var a2 = au(cat); a2.open = false; a2.err = null; render(); return;
+  }
+  if (act === "add-save") {
+    var a3 = au(cat);
+    var about = (a3.about || "").trim(), say = (a3.say || "").trim();
+    if (!about || !say) {
+      var missing = document.getElementById((!about ? "add-about-" : "add-say-") + idc(cat));
+      if (missing) missing.focus();
+      return;
+    }
+    var nk = slugify(about) || "fact";
+    a3.saving = true; a3.err = null; render();
+    call("conventions_set", { key: nk, value: say, category: cat }).then(function () {
+      a3.saving = false; a3.open = false; a3.about = ""; a3.say = "";
+      if (!findConv(nk)) S.conv.push({ key: nk, value: say, category: cat });
+      else findConv(nk).value = say;
+      render();
+      refetchConventions();
+    }, function (e) {
+      a3.saving = false; a3.err = e; render();
+    });
+    return;
+  }
+
+  if (act === "starter-save") {
+    var idx = Number(si);
+    var p = STARTERS[idx]; if (!p) return;
+    var s1 = st(idx);
+    var say2 = (s1.say || "").trim();
+    if (!say2) {
+      var sinp = document.getElementById("starter-" + idx);
+      if (sinp) sinp.focus();
+      return;
+    }
+    s1.saving = true; s1.err = null; render();
+    call("conventions_set", { key: p.key, value: say2, category: p.cat }).then(function () {
+      s1.saving = false; s1.done = true;
+      render();
+      refetchConventions();
+    }, function (e) {
+      s1.saving = false; s1.err = e; render();
+    });
+    return;
+  }
+}
+
+/* ---------- rewrite batch ---------- */
+function offerRewrites(gap, key, value) {
+  var ids = gap.conversation_ids || [];
+  var u = gu(gap.key);
+  if (!ids.length) return;
+  u.rw = { state: "checking" };
+  render();
+  call("conversations_list", { status: "active" }).then(function (r) {
+    var activeIds = {};
+    ((r && r.conversations) || []).forEach(function (c) { activeIds[c.id] = 1; });
+    var targets = ids.filter(function (id) { return activeIds[id]; }).slice(0, 3);
+    if (!targets.length) { u.rw = null; render(); return; }
+    u.rw = { state: "offer", targets: targets, key: key, value: value };
+    render();
+  }).catch(function () {
+    u.rw = null; render();
+  });
+}
+function runRewrites(rw) {
+  function next() {
+    if (!rw.pending.length) { rw.state = "done"; render(); return; }
+    var id = rw.pending[0];
+    call("conversation_act", {
+      conversation_id: id,
+      action: "regenerate",
+      prompt: "Use the newly added knowledge: " + rw.key + ": " + rw.value + ". Keep everything else."
+    }).then(function () {
+      rw.pending.shift();
+      rw.done++;
+      render();
+      next();
+    }, function (e) {
+      rw.state = "error"; rw.err = e; render();
+    });
+  }
+  next();
+}
+
+/* ---------- events (delegated) ---------- */
+app.addEventListener("click", function (e) {
+  var el = e.target.closest ? e.target.closest("[data-act]") : null;
+  if (!el || el.disabled) return;
+  doAction(el.getAttribute("data-act"), el);
+});
+app.addEventListener("input", function (e) {
+  var el = e.target;
+  var m = el.getAttribute && el.getAttribute("data-model");
+  if (!m) return;
+  if (m === "answer") gu(el.getAttribute("data-gap")).answer = el.value;
+  else if (m === "edit-val") cu(el.getAttribute("data-key")).val = el.value;
+  else if (m === "add-about") au(el.getAttribute("data-cat")).about = el.value;
+  else if (m === "add-say") au(el.getAttribute("data-cat")).say = el.value;
+  else if (m === "starter") st(Number(el.getAttribute("data-si"))).say = el.value;
+  else if (m === "search") { S.search = el.value; render(); }
+});
+app.addEventListener("keydown", function (e) {
+  if (e.key === "Enter") {
+    var act = e.target.getAttribute && e.target.getAttribute("data-enter");
+    if (act) { e.preventDefault(); doAction(act, e.target); }
+    return;
+  }
+  if (e.key === "Escape") {
+    var t = e.target;
+    var closed = false;
+    // cancel the form the focus is inside first
+    if (t && t.getAttribute) {
+      var m = t.getAttribute("data-model");
+      if (m === "edit-val") { cu(t.getAttribute("data-key")).editing = false; closed = true; }
+      else if (m === "add-about" || m === "add-say") { au(t.getAttribute("data-cat")).open = false; closed = true; }
+    }
+    if (!closed) {
+      // otherwise collapse any open evidence panels
+      Object.keys(GU).forEach(function (k) {
+        if (GU[k].ev === "open" || GU[k].ev === "error") { GU[k].ev = "closed"; closed = true; }
+      });
+    }
+    if (closed) render();
+  }
+});
+
+/* ---------- boot ---------- */
+function init() {
+  if (ul.context && ul.context.signedIn) coldLoad();
+  else render();
+}
+if (window.ul && ul.context) init();
+else document.addEventListener("ul-ready", init);
+window.addEventListener("load", fit);
+</script>
+</body>
+</html>
