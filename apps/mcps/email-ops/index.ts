@@ -410,7 +410,18 @@ const CONFIDENCES = new Set<EnvelopeConfidence>(['high', 'medium', 'low']);
 const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function coerceNullableText(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
+  if (typeof value !== 'string') return null;
+  const t = value.trim();
+  if (!t || ['null', 'none', 'n/a', 'undefined'].includes(t.toLowerCase())) return null;
+  return t;
+}
+
+// Models sometimes stringify booleans ("false"); Boolean("false") is true, which
+// would silently invert the reply decision.
+function coerceBool(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return value.trim().toLowerCase() === 'true';
+  return Boolean(value);
 }
 
 function coerceEmailList(value: unknown): string[] {
@@ -463,7 +474,7 @@ function parseEnvelopeResponse(
     translated_message: coerceNullableText(parsed?.translated_message),
     classification,
     labels,
-    should_reply: Boolean(parsed?.should_reply),
+    should_reply: coerceBool(parsed?.should_reply),
     no_reply_reason: coerceNullableText(parsed?.no_reply_reason)?.toLowerCase() ?? null,
     priority,
     recipients: {
@@ -497,7 +508,7 @@ function parseFollowupEnvelope(rawContent: string | undefined): FollowupEnvelope
   return {
     summary: coerceNullableText(parsed.summary) || '',
     translated_message: coerceNullableText(parsed.translated_message),
-    should_reply: Boolean(parsed.should_reply),
+    should_reply: coerceBool(parsed.should_reply),
     no_reply_reason: coerceNullableText(parsed.no_reply_reason)?.toLowerCase() ?? null,
     draft_body: coerceNullableText(parsed.draft_body),
     confidence: coerceConfidence(parsed.confidence, gaps),
@@ -1740,6 +1751,14 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       });
 
       followup = parseFollowupEnvelope(aiResp.content);
+      // Clamp the no-reply reason to a real taxonomy key (same invariant as the
+      // new-conversation path).
+      const followupNoReplyKeys = new Set(
+        labelRows.filter((label) => label.category === 'no_reply').map((label) => label.key),
+      );
+      if (followup.no_reply_reason && !followupNoReplyKeys.has(followup.no_reply_reason)) {
+        followup.no_reply_reason = 'no_action_needed';
+      }
 
       // Enrich the just-inserted inbound version with the envelope's
       // message-level details (summary + stored translation).
@@ -1759,22 +1778,25 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
 
       if (followup.should_reply) {
         followupStatus = 'active';
-        const draftVId = crypto.randomUUID();
-        await galactic.db.insert('versions', {
-          id: draftVId,
-          conversation_id: existingConvo.id,
-          version_num: vNum + 1,
-          type: 'auto_draft',
-          body: followup.draft_body ||
-            'Thank you for your message. I will get back to you shortly.',
-          actor: 'ai',
-          model: AI_MODEL,
-          metadata: JSON.stringify({
-            knowledge_gaps: followup.knowledge_gaps || [],
-            confidence: followup.draft_body ? followup.confidence : 'low',
-          }),
-          created_at: ts,
-        });
+        // Only queue a draft when the model actually produced one — never a
+        // canned English reply into a non-English thread. A reply-wanted wake
+        // with no draft stays needs-attention for the operator to write.
+        if (followup.draft_body) {
+          await galactic.db.insert('versions', {
+            id: crypto.randomUUID(),
+            conversation_id: existingConvo.id,
+            version_num: vNum + 1,
+            type: 'auto_draft',
+            body: followup.draft_body,
+            actor: 'ai',
+            model: AI_MODEL,
+            metadata: JSON.stringify({
+              knowledge_gaps: followup.knowledge_gaps || [],
+              confidence: followup.confidence,
+            }),
+            created_at: ts,
+          });
+        }
       } else if (followup.no_reply_reason) {
         await assignConversationLabels(existingConvo.id, [followup.no_reply_reason]);
       }
@@ -1786,7 +1808,9 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
         updated_at: ts,
         ...(followup
           ? {
-            summary: followup.summary,
+            // Don't erase a good earlier summary with an empty one from a bad
+            // parse — only overwrite when the new summary has content.
+            ...(followup.summary ? { summary: followup.summary } : {}),
             confidence: followup.should_reply && !followup.draft_body ? 'low' : followup.confidence,
             no_reply_reason: followup.no_reply_reason || '',
           }
@@ -1925,7 +1949,8 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
           '5. recipients — who a reply should go to. Consider From, Reply-To, and addresses in the email body (contact forms and OTA relays carry the real guest there). Set default to the single best address, candidates to all plausible ones, reason to one short sentence.\n' +
           '6. draft_body — when should_reply is true, the full reply IN THE GUEST\'S LANGUAGE (never ' +
           operatorLanguage + ' unless the guest wrote in it). Warm, professional, accurate, grounded ONLY in the conventions.\n' +
-          '7. confidence — high only when the conventions fully cover the answer and the intent is unambiguous; medium when mostly covered; low when guessing or information is missing. If knowledge_gaps is non-empty, confidence must not be high.\n\n' +
+          '7. confidence — high only when the conventions fully cover the answer and the intent is unambiguous; medium when mostly covered; low when guessing or information is missing. If knowledge_gaps is non-empty, confidence must not be high.\n' +
+          '8. priority — high for time-sensitive or sensitive mail (arriving today/tomorrow, a complaint, a cancellation, anything urgent), otherwise normal; low for pure FYI.\n\n' +
           'Respond with JSON only:\n' +
           '{"summary":"...","language":"en|ja|etc","translated_message":"...or null","classification":"...","labels":["..."],"should_reply":true/false,"no_reply_reason":"...or null","priority":"high|normal|low","recipients":{"default":"a@b.c","candidates":["..."],"reason":"..."},"draft_body":"...or null","confidence":"high|medium|low","knowledge_gaps":["topics not covered in conventions"]}',
         cache_control: { type: 'ephemeral' },
@@ -1964,6 +1989,18 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
     if (!parsed.no_reply_reason) parsed.no_reply_reason = 'auto_generated';
   }
   if (parsed.should_reply) parsed.no_reply_reason = null;
+  // Contract-breach guard: a reply is wanted but the model produced no usable
+  // draft. Don't fabricate a canned reply — leave it for the operator at low
+  // confidence (so it reads as needs-attention, per the not-high rule).
+  if (parsed.should_reply && !parsed.draft_body) parsed.confidence = 'low';
+  // Clamp the no-reply reason to a real no_reply taxonomy key so label filters
+  // never miss a conversation (the model can invent free text otherwise).
+  const noReplyKeySet = new Set(
+    labelRows.filter((label) => label.category === 'no_reply').map((label) => label.key),
+  );
+  if (parsed.no_reply_reason && !noReplyKeySet.has(parsed.no_reply_reason)) {
+    parsed.no_reply_reason = 'no_action_needed';
+  }
 
   // Recipient proposal: the AI's pick leads, regex-extracted addresses backstop.
   const recipientCandidates = [...new Set([...parsed.recipients.candidates, ...bodyEmails])];
@@ -2226,7 +2263,9 @@ export async function conversation_act(args: {
       ],
     });
 
-    const parsed = parseDraftResponse(aiResp.content, aiResp.content || currentDraft);
+    // On a malformed response, keep the existing draft rather than dumping the
+    // raw JSON wrapper into the editor.
+    const parsed = parseDraftResponse(aiResp.content, currentDraft);
 
     const vNum = await nextVersionNum(conversation_id);
     await galactic.db.insert('versions', {
@@ -2334,13 +2373,13 @@ export async function conversation_act(args: {
       ],
     });
 
-    const parsed = parseDraftResponse(
-      aiResp.content,
-      (aiResp.content || '').trim() ||
-        'Thank you for your message. I will get back to you shortly.',
-    );
+    // Empty fallback so a malformed response fails loudly (retryable) instead of
+    // storing the raw JSON wrapper — or an English canned reply — as the draft.
+    const parsed = parseDraftResponse(aiResp.content, '');
 
-    if (!parsed.draft_body) throw new Error('Draft generation failed: no draft_body in response');
+    if (!parsed.draft_body) {
+      throw new Error('Draft generation failed — the response was not usable. Try again.');
+    }
 
     const vNum = await nextVersionNum(conversation_id);
     await galactic.db.insert('versions', {
