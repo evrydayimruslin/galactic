@@ -14,6 +14,12 @@ const galactic = (globalThis as any).galactic;
 // Model is overridable per-deployment via env so a preview-model deprecation
 // doesn't silently break the showcase agent's classification + drafting.
 const AI_MODEL = (galactic?.env?.EMAIL_AI_MODEL as string) || 'google/gemini-3-flash-preview';
+// Low temperature: the envelope is mostly structured extraction plus a draft
+// grounded in the conventions — consistency beats creativity. Owner-tunable.
+const AI_TEMPERATURE = (() => {
+  const t = parseFloat((galactic?.env?.EMAIL_AI_TEMPERATURE as string) || '0.3');
+  return Number.isFinite(t) && t >= 0 && t <= 2 ? t : 0.3;
+})();
 
 // IMAP quoted-string guard. This app rolls its own IMAP session (the `cmd`
 // helper writes `<tag> <command>\r\n` straight to the socket), so any value
@@ -42,7 +48,12 @@ type ConversationClassification =
   | 'internal'
   | 'spam'
   | 'other';
-type ConversationStatus = 'active' | 'resolved' | 'discarded';
+// 'active' = needs operator attention (a draft is queued or wanted);
+// 'no_action' = recorded + summarized, but the agent decided no reply is
+// warranted (CC'd, automated, staff already answered, closing thanks) — keeps
+// every email accountable without parking it in the attention queue forever;
+// 'resolved' = replied; 'discarded' = operator dismissed it.
+type ConversationStatus = 'active' | 'resolved' | 'discarded' | 'no_action';
 type VersionType =
   | 'inbound'
   | 'auto_draft'
@@ -86,6 +97,9 @@ interface ConversationRow {
   classification: ConversationClassification;
   status: ConversationStatus;
   message_id: string | null;
+  summary?: string | null;
+  confidence?: string | null;
+  no_reply_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -187,13 +201,53 @@ interface EmailDraftResponse {
   knowledge_gaps: string[];
 }
 
-interface EmailClassificationResponse {
-  classification: ConversationClassification;
+type EnvelopeConfidence = 'high' | 'medium' | 'low';
+
+interface RecipientProposal {
+  default: string | null;
+  candidates: string[];
+  reason: string;
+}
+
+// The full per-message inference envelope: everything an operator needs to act
+// without reading the raw email — a thorough summary, a translation into the
+// operator's language, classification + labels, the reply decision (with a
+// reasoned "no reply needed" as a first-class outcome), proposed recipients,
+// the draft, and a confidence grade.
+interface EmailEnvelope {
+  summary: string;
   language: string;
+  translated_message: string | null;
+  classification: ConversationClassification;
+  labels: string[];
   should_reply: boolean;
+  no_reply_reason: string | null;
   priority: EmailPriority;
+  recipients: RecipientProposal;
   draft_body: string | null;
+  confidence: EnvelopeConfidence;
   knowledge_gaps: string[];
+}
+
+// Lighter envelope for followups in an existing thread (classification and
+// recipients are already settled; the reply decision is reassessed fresh).
+interface FollowupEnvelope {
+  summary: string;
+  translated_message: string | null;
+  should_reply: boolean;
+  no_reply_reason: string | null;
+  draft_body: string | null;
+  confidence: EnvelopeConfidence;
+  knowledge_gaps: string[];
+}
+
+interface LabelRow {
+  id?: string;
+  key: string;
+  name: string;
+  description: string;
+  category: string;
+  built_in?: number;
 }
 
 interface ApprovalBridgeRow {
@@ -352,10 +406,36 @@ function parseDraftResponse(
   };
 }
 
-function parseClassificationResponse(
+const CONFIDENCES = new Set<EnvelopeConfidence>(['high', 'medium', 'low']);
+const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function coerceNullableText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function coerceEmailList(value: unknown): string[] {
+  return parseStringArray(value)
+    .map((e) => e.toLowerCase())
+    .filter((e) => EMAIL_FORMAT_RE.test(e));
+}
+
+// Confidence with the gap rule enforced in CODE, not trust: models self-grade
+// generously, so any knowledge gap caps confidence at medium, and an
+// unparseable response is low. "Needs attention" downstream = anything not high.
+function coerceConfidence(value: unknown, gaps: string[]): EnvelopeConfidence {
+  let confidence: EnvelopeConfidence =
+    typeof value === 'string' && CONFIDENCES.has(value as EnvelopeConfidence)
+      ? value as EnvelopeConfidence
+      : 'low';
+  if (gaps.length > 0 && confidence === 'high') confidence = 'medium';
+  return confidence;
+}
+
+function parseEnvelopeResponse(
   rawContent: string | undefined,
   fallbackLanguage: string,
-): EmailClassificationResponse {
+  allowedLabels: Set<string>,
+): EmailEnvelope {
   const parsed = parseJsonObject(extractJsonPayload(rawContent || ''));
   const classification = typeof parsed?.classification === 'string' &&
       CLASSIFICATIONS.has(parsed.classification as ConversationClassification)
@@ -365,18 +445,63 @@ function parseClassificationResponse(
     typeof parsed?.priority === 'string' && PRIORITIES.has(parsed.priority as EmailPriority)
       ? parsed.priority as EmailPriority
       : 'normal';
-  const draftBody = typeof parsed?.draft_body === 'string' && parsed.draft_body.trim()
-    ? parsed.draft_body.trim()
-    : null;
+  const gaps = parseStringArray(parsed?.knowledge_gaps);
+  const labels = parseStringArray(parsed?.labels)
+    .map((label) => label.toLowerCase().trim())
+    .filter((label) => allowedLabels.has(label))
+    .slice(0, 6);
+  const recipientsRaw = asRecord(parsed?.recipients);
+  const candidates = coerceEmailList(recipientsRaw?.candidates);
+  const defaultRaw = coerceNullableText(recipientsRaw?.default)?.toLowerCase() ?? null;
+  const defaultRecipient = defaultRaw && EMAIL_FORMAT_RE.test(defaultRaw) ? defaultRaw : null;
+  if (defaultRecipient && !candidates.includes(defaultRecipient)) {
+    candidates.unshift(defaultRecipient);
+  }
   return {
+    summary: coerceNullableText(parsed?.summary) || '',
+    language: coerceNullableText(parsed?.language) || fallbackLanguage,
+    translated_message: coerceNullableText(parsed?.translated_message),
     classification,
-    language: typeof parsed?.language === 'string' && parsed.language.trim()
-      ? parsed.language.trim()
-      : fallbackLanguage,
+    labels,
     should_reply: Boolean(parsed?.should_reply),
+    no_reply_reason: coerceNullableText(parsed?.no_reply_reason)?.toLowerCase() ?? null,
     priority,
-    draft_body: draftBody,
-    knowledge_gaps: parseStringArray(parsed?.knowledge_gaps),
+    recipients: {
+      default: defaultRecipient,
+      candidates,
+      reason: coerceNullableText(recipientsRaw?.reason) || '',
+    },
+    draft_body: coerceNullableText(parsed?.draft_body),
+    confidence: parsed ? coerceConfidence(parsed.confidence, gaps) : 'low',
+    knowledge_gaps: gaps,
+  };
+}
+
+function parseFollowupEnvelope(rawContent: string | undefined): FollowupEnvelope {
+  const parsed = parseJsonObject(extractJsonPayload(rawContent || ''));
+  const gaps = parseStringArray(parsed?.knowledge_gaps);
+  if (!parsed) {
+    // Unparseable model output: keep the operator in the loop — treat as
+    // reply-worthy at LOW confidence (caller supplies a canned draft) rather
+    // than silently dropping the followup.
+    return {
+      summary: '',
+      translated_message: null,
+      should_reply: true,
+      no_reply_reason: null,
+      draft_body: null,
+      confidence: 'low',
+      knowledge_gaps: gaps,
+    };
+  }
+  return {
+    summary: coerceNullableText(parsed.summary) || '',
+    translated_message: coerceNullableText(parsed.translated_message),
+    should_reply: Boolean(parsed.should_reply),
+    no_reply_reason: coerceNullableText(parsed.no_reply_reason)?.toLowerCase() ?? null,
+    draft_body: coerceNullableText(parsed.draft_body),
+    confidence: coerceConfidence(parsed.confidence, gaps),
+    knowledge_gaps: gaps,
   };
 }
 
@@ -488,6 +613,99 @@ async function getConventionsText(): Promise<string> {
       convention.value
     ).join('\n')
     : 'No business conventions configured yet.';
+}
+
+// ── Operator settings + label taxonomy ──
+
+async function getSetting(key: string): Promise<string | null> {
+  const row = await galactic.db.first('settings', {
+    columns: ['value'],
+    where: { key },
+  }) as { value?: string } | null;
+  return row?.value || null;
+}
+
+async function setSetting(key: string, value: string): Promise<void> {
+  const ts = now();
+  await galactic.db.upsert('settings', {
+    values: { key, value, created_at: ts, updated_at: ts },
+    onConflict: ['key'],
+    set: { value, updated_at: ts },
+  });
+}
+
+// The language the OPERATOR reads summaries and translations in. Reply drafts
+// always stay in the GUEST's language — this setting never changes outbound mail.
+async function getOperatorLanguage(): Promise<string> {
+  return (await getSetting('language')) || 'English';
+}
+
+// Default taxonomy: classification mirrors (so classification filters on the
+// same axis as everything else) + the no-reply reasons the envelope assigns
+// when it decides a reply would be wrong or redundant. Users edit freely via
+// label_set/label_delete; seeding runs only when the user has NO labels at all,
+// so deleted defaults are never re-imposed.
+const DEFAULT_LABELS: Array<{ key: string; name: string; description: string; category: string }> = [
+  { key: 'inquiry', name: 'Inquiry', description: 'General question from a guest', category: 'type' },
+  { key: 'booking_request', name: 'Booking request', description: 'Guest asking to make a new reservation', category: 'type' },
+  { key: 'booking_confirmation', name: 'Booking confirmation', description: 'Automated OTA/agency confirmation for an existing booking', category: 'type' },
+  { key: 'cancellation', name: 'Cancellation', description: 'Guest cancelling or changing a booking', category: 'type' },
+  { key: 'complaint', name: 'Complaint', description: 'Guest reporting a problem', category: 'type' },
+  { key: 'feedback', name: 'Feedback', description: 'Guest sharing feedback or thanks', category: 'type' },
+  { key: 'internal', name: 'Internal', description: 'Staff email from within the business', category: 'type' },
+  { key: 'spam', name: 'Spam', description: 'Unsolicited or irrelevant mail', category: 'type' },
+  { key: 'other', name: 'Other', description: 'Anything that fits no other type', category: 'type' },
+  { key: 'cc_only', name: 'CC only', description: 'We were only copied; someone else is the intended responder', category: 'no_reply' },
+  { key: 'staff_already_replied', name: 'Staff already replied', description: 'A team member already answered in the thread', category: 'no_reply' },
+  { key: 'redundant', name: 'Redundant', description: 'A reply would only repeat what was already said', category: 'no_reply' },
+  { key: 'auto_generated', name: 'Auto-generated', description: 'Automated notification, receipt, or system mail', category: 'no_reply' },
+  { key: 'bounce', name: 'Bounce', description: 'Delivery failure / mailer-daemon report', category: 'no_reply' },
+  { key: 'no_action_needed', name: 'No action needed', description: 'Closing message that needs no answer', category: 'no_reply' },
+];
+
+async function ensureDefaultLabels(): Promise<void> {
+  const count = await galactic.db.count('labels') as number;
+  if (count > 0) return;
+  const ts = now();
+  for (const label of DEFAULT_LABELS) {
+    try {
+      await galactic.db.insert('labels', {
+        id: crypto.randomUUID(),
+        key: label.key,
+        name: label.name,
+        description: label.description,
+        category: label.category,
+        built_in: 1,
+        created_at: ts,
+        updated_at: ts,
+      });
+    } catch {
+      // Concurrent seed — the unique (user_id, key) index makes this safe.
+    }
+  }
+}
+
+async function listLabelRows(): Promise<LabelRow[]> {
+  await ensureDefaultLabels();
+  return await galactic.db.select('labels', { orderBy: 'key' }) as LabelRow[];
+}
+
+// Attach labels to a conversation; duplicates are absorbed by the unique index.
+async function assignConversationLabels(conversationId: string, keys: string[]): Promise<void> {
+  const ts = now();
+  const unique = [...new Set(keys.map((k) => k.toLowerCase().trim()).filter(Boolean))];
+  for (const key of unique) {
+    try {
+      await galactic.db.insert('conversation_labels', {
+        id: crypto.randomUUID(),
+        conversation_id: conversationId,
+        label_key: key,
+        created_at: ts,
+      });
+    } catch {
+      // Already assigned — fine.
+    }
+  }
 }
 
 async function nextVersionNum(conversationId: string): Promise<number> {
@@ -1397,14 +1615,16 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   // forms@ourhotel.com) — otherwise the enquiry is silently filed as "internal".
   const isFormLike = (fromIsSystem || replyToUsable) && guestEmail !== from;
 
-  // Metadata on the inbound version: extracted recipient candidates (Phase D
-  // widget dropdown) + threading ids. Piggybacks the existing metadata column.
-  const inboundMeta = JSON.stringify({
+  // Metadata on the inbound version: extracted recipient candidates + threading
+  // ids. Kept as an object so the envelope paths can extend it with the
+  // summary/translation before stringifying.
+  const inboundMetaObj: JsonObject = {
     ...(bodyEmails.length > 0 ? { extracted_emails: bodyEmails } : {}),
     ...(primaryName ? { primary_name: primaryName } : {}),
     ...(messageId ? { message_id: messageId } : {}),
     ...(references ? { references } : {}),
-  });
+  };
+  const inboundMeta = JSON.stringify(inboundMetaObj);
 
   // Check for reply threading — match by In-Reply-To or same guest+subject
   const inReplyTo = args.in_reply_to || getHeaderValue(args.headers, 'in-reply-to');
@@ -1465,13 +1685,22 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       created_at: ts,
     });
 
-    // Skip AI draft for internal / booking_confirmation / spam followups —
-    // admin can trigger a manual draft via conversation_act('generate_draft').
+    // Followups to no-draft classes skip AI entirely — the admin can still
+    // trigger a manual draft via conversation_act('generate_draft').
     const skipAutoDraft = ['internal', 'booking_confirmation', 'spam'].includes(
       existingConvo.classification,
     );
+    let followupStatus: ConversationStatus = 'no_action';
+    let followup: FollowupEnvelope | null = null;
     if (!skipAutoDraft) {
-      // Get full thread for context (cleaned bodies for AI input quality)
+      const operatorLanguage = await getOperatorLanguage();
+      const labelRows = await listLabelRows();
+      const noReplyKeys = labelRows
+        .filter((label) => label.category === 'no_reply')
+        .map((label) => label.key)
+        .join(' | ') || 'no_action_needed';
+
+      // Full thread for context (cleaned bodies for AI input quality)
       const allVersions = await galactic.db.select('versions', {
         columns: ['type', 'body', 'actor'],
         where: { conversation_id: existingConvo.id },
@@ -1479,44 +1708,90 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       }) as Array<Pick<VersionRow, 'type' | 'body' | 'actor'>>;
       const threadContext = formatThreadContext(allVersions, true);
 
-      // AI draft followup
+      // Followup envelope: summary + translation + a FRESH reply decision (a
+      // closing "thanks" or an already-answered thread must not burn a draft).
       const aiResp = await galactic.ai({
         model: AI_MODEL,
+        temperature: AI_TEMPERATURE,
         messages: [
           {
             role: 'system',
             content:
               businessPersona(operatorDirective) +
-              '\n\nDraft a followup reply to an ongoing conversation. Reply in the same language as the guest.\n\nBusiness conventions:\n' +
-              conventionsText + '\n\nFull thread so far:\n' + threadContext +
-              '\n\nRespond with JSON:\n{"draft_body": "your reply", "knowledge_gaps": ["topics not in conventions"]}',
+              '\n\nA guest sent a new message in an ongoing conversation. Produce a JSON envelope.\n\n' +
+              'Business conventions (the ONLY ground truth for facts, prices, policies):\n' +
+              conventionsText +
+              '\n\nFull thread so far:\n' + threadContext +
+              '\n\nInstructions:\n' +
+              '1. summary — thorough, in ' + operatorLanguage +
+              ': every actionable detail of the NEW message (dates, names, amounts, requests, questions). As long as necessary.\n' +
+              '2. translated_message — the new message translated into ' + operatorLanguage +
+              ' (null if it is already in ' + operatorLanguage + ').\n' +
+              '3. should_reply — false when a reply would be wrong or redundant: a closing thank-you, we were only CC\'d, or the thread shows it was already answered. Then set no_reply_reason to one of: ' +
+              noReplyKeys + ' and draft_body to null.\n' +
+              '4. draft_body — when should_reply is true, the full followup reply IN THE GUEST\'S LANGUAGE, grounded only in the conventions.\n' +
+              '5. confidence — high | medium | low; must not be high if knowledge_gaps is non-empty.\n\n' +
+              'Respond with JSON only:\n' +
+              '{"summary":"...","translated_message":"...or null","should_reply":true/false,"no_reply_reason":"...or null","draft_body":"...or null","confidence":"high|medium|low","knowledge_gaps":["topics not in conventions"]}',
             cache_control: { type: 'ephemeral' },
           },
-          { role: 'user', content: 'Latest message from guest:\n' + cleanBody.substring(0, 2000) },
+          { role: 'user', content: 'Latest message from guest:\n' + cleanBody.substring(0, 6000) },
         ],
       });
 
-      const parsed = parseDraftResponse(
-        aiResp.content,
-        'Thank you for your message. I will get back to you shortly.',
-      );
+      followup = parseFollowupEnvelope(aiResp.content);
 
-      const draftVId = crypto.randomUUID();
-      await galactic.db.insert('versions', {
-        id: draftVId,
-        conversation_id: existingConvo.id,
-        version_num: vNum + 1,
-        type: 'auto_draft',
-        body: parsed.draft_body,
-        actor: 'ai',
-        model: AI_MODEL,
-        metadata: JSON.stringify({ knowledge_gaps: parsed.knowledge_gaps || [] }),
-        created_at: ts,
-      });
+      // Enrich the just-inserted inbound version with the envelope's
+      // message-level details (summary + stored translation).
+      if (followup.summary || followup.translated_message) {
+        await galactic.db.update('versions', {
+          set: {
+            metadata: JSON.stringify({
+              ...inboundMetaObj,
+              summary: followup.summary,
+              translated_message: followup.translated_message,
+              translated_lang: followup.translated_message ? operatorLanguage : null,
+            }),
+          },
+          where: { id: vId },
+        });
+      }
+
+      if (followup.should_reply) {
+        followupStatus = 'active';
+        const draftVId = crypto.randomUUID();
+        await galactic.db.insert('versions', {
+          id: draftVId,
+          conversation_id: existingConvo.id,
+          version_num: vNum + 1,
+          type: 'auto_draft',
+          body: followup.draft_body ||
+            'Thank you for your message. I will get back to you shortly.',
+          actor: 'ai',
+          model: AI_MODEL,
+          metadata: JSON.stringify({
+            knowledge_gaps: followup.knowledge_gaps || [],
+            confidence: followup.draft_body ? followup.confidence : 'low',
+          }),
+          created_at: ts,
+        });
+      } else if (followup.no_reply_reason) {
+        await assignConversationLabels(existingConvo.id, [followup.no_reply_reason]);
+      }
     }
 
     await galactic.db.update('conversations', {
-      set: { status: 'active', updated_at: ts },
+      set: {
+        status: followupStatus,
+        updated_at: ts,
+        ...(followup
+          ? {
+            summary: followup.summary,
+            confidence: followup.should_reply && !followup.draft_body ? 'low' : followup.confidence,
+            no_reply_reason: followup.no_reply_reason || '',
+          }
+          : {}),
+      },
       where: { id: existingConvo.id },
     });
 
@@ -1532,6 +1807,10 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       thread: true,
       classification: existingConvo.classification,
       language: existingConvo.language,
+      status: followupStatus,
+      summary: followup?.summary || '',
+      confidence: followup?.confidence || null,
+      action: followupStatus === 'active' ? 'draft_queued' : 'no_reply',
     };
   }
 
@@ -1567,6 +1846,8 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       from,
     );
 
+    // Deterministic no-AI path: recorded + viewable as no_action (never a
+    // draft), labeled by its classification so it filters like everything else.
     await galactic.db.insert('conversations', {
       id: convoId,
       guest_email: guestEmail,
@@ -1574,7 +1855,8 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       subject,
       language: lang,
       classification,
-      status: 'active',
+      status: 'no_action',
+      no_reply_reason: 'auto_generated',
       message_id: messageId || null,
       created_at: ts,
       updated_at: ts,
@@ -1589,61 +1871,88 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       metadata: inboundMeta,
       created_at: ts,
     });
+    await assignConversationLabels(convoId, [classification, 'auto_generated']);
     if (args.method) return { statusCode: 200, body: { received: true, conversation_id: convoId } };
     return {
       success: true,
       conversation_id: convoId,
       classification,
       language: lang,
+      status: 'no_action',
       action: 'no_reply',
     };
   }
 
-  // ── AI classify + draft ──
+  // ── The inference envelope: summary + translation + classification + labels
+  // + reply decision + recipients + draft + confidence, in ONE call ──
+  const operatorLanguage = await getOperatorLanguage();
+  const labelRows = await listLabelRows();
+  const labelTaxonomy = labelRows
+    .map((label) =>
+      '- ' + label.key + (label.category === 'no_reply' ? ' (no-reply reason)' : '') + ': ' +
+      (label.description || label.name)
+    )
+    .join('\n');
+  const allowedLabelKeys = new Set(labelRows.map((label) => label.key));
+  const noReplyKeys = labelRows
+    .filter((label) => label.category === 'no_reply')
+    .map((label) => label.key)
+    .join(' | ') || 'no_action_needed';
+  const envelopeBizName = (galactic.env.BUSINESS_NAME as string) || 'the business';
+
   const aiResp = await galactic.ai({
     model: AI_MODEL,
+    temperature: AI_TEMPERATURE,
     messages: [
       {
         role: 'system',
         content:
           businessPersona(operatorDirective) + '\n\n' +
-          'Classify inbound emails and draft professional replies.\n\n' +
-          'Business conventions:\n' + conventionsText + '\n\n' +
-          'Classifications: inquiry | booking_request | booking_confirmation | cancellation | complaint | feedback | internal | spam | other\n\n' +
-          'Hints:\n' +
-          '- "booking_request" = guest asking to make a NEW reservation (should_reply=true, draft the response)\n' +
-          '- "booking_confirmation" = automated confirmation from an OTA/travel agency for an existing booking (should_reply=false)\n' +
-          '- "internal" = staff email from within the business (should_reply=false)\n' +
-          '- "spam" / "other" that does not need a response → should_reply=false\n' +
-          '- Contact-form submissions: classify by content, not by the form sender address\n\n' +
+          'You process one inbound email into a JSON envelope containing everything an operator needs to act without reading the raw email.\n\n' +
+          'Business conventions (the ONLY ground truth for facts, prices, policies):\n' +
+          conventionsText + '\n\n' +
+          'Available labels (assign 1-4 that apply, by key):\n' + labelTaxonomy + '\n\n' +
+          'Operator language: ' + operatorLanguage + '\n\n' +
           'Instructions:\n' +
-          '1. Classify intent using the enum above\n' +
-          '2. Detect language (en, ja, etc.)\n' +
-          '3. Draft reply IN THE SAME LANGUAGE as sender (only when should_reply=true)\n' +
-          '4. Be warm, professional, accurate\n\n' +
+          '1. summary — thorough, in ' + operatorLanguage +
+          '. Capture EVERY actionable detail: who is writing, what they want, dates, party size, names, amounts, deadlines, special requests, and every question asked. As long as necessary — never omit a detail an operator would need. Short only when the email truly says little.\n' +
+          '2. translated_message — if the email is not in ' + operatorLanguage +
+          ', translate the full message into ' + operatorLanguage + '. If it already is, use null.\n' +
+          '3. classification — one of: inquiry | booking_request | booking_confirmation | cancellation | complaint | feedback | internal | spam | other. labels — from the available list above. Contact-form submissions: classify by content, not by the form sender address.\n' +
+          '4. should_reply — false when a reply from ' + envelopeBizName +
+          ' would be wrong or redundant: we are only CC\'d/FYI, a staff member already answered, it is an automated notification/receipt/bounce, or a closing thank-you that needs no answer. When false: set no_reply_reason to the best-matching key (' +
+          noReplyKeys + ') and draft_body to null. The email is still summarized either way.\n' +
+          '5. recipients — who a reply should go to. Consider From, Reply-To, and addresses in the email body (contact forms and OTA relays carry the real guest there). Set default to the single best address, candidates to all plausible ones, reason to one short sentence.\n' +
+          '6. draft_body — when should_reply is true, the full reply IN THE GUEST\'S LANGUAGE (never ' +
+          operatorLanguage + ' unless the guest wrote in it). Warm, professional, accurate, grounded ONLY in the conventions.\n' +
+          '7. confidence — high only when the conventions fully cover the answer and the intent is unambiguous; medium when mostly covered; low when guessing or information is missing. If knowledge_gaps is non-empty, confidence must not be high.\n\n' +
           'Respond with JSON only:\n' +
-          '{"classification":"inquiry|booking_request|booking_confirmation|cancellation|complaint|feedback|internal|spam|other","language":"en|ja|etc","should_reply":true/false,"priority":"high|normal|low","draft_body":"full reply text or null","knowledge_gaps":["topics not covered in conventions"]}',
+          '{"summary":"...","language":"en|ja|etc","translated_message":"...or null","classification":"...","labels":["..."],"should_reply":true/false,"no_reply_reason":"...or null","priority":"high|normal|low","recipients":{"default":"a@b.c","candidates":["..."],"reason":"..."},"draft_body":"...or null","confidence":"high|medium|low","knowledge_gaps":["topics not covered in conventions"]}',
         cache_control: { type: 'ephemeral' },
       },
       {
         role: 'user',
-        content: 'From: ' + from + (guestEmail !== from ? '\nGuest: ' + guestEmail : '') +
-          '\nSubject: ' + subject + '\n\n' + cleanBody.substring(0, 2000),
+        content: 'From: ' + from +
+          (guestEmail !== from ? '\nResolved guest: ' + guestEmail : '') +
+          (replyToHeader ? '\nReply-To: ' + replyToHeader : '') +
+          (args.cc ? '\nCc: ' + args.cc : '') +
+          '\nSubject: ' + subject +
+          (bodyEmails.length > 0 ? '\nAddresses found in body: ' + bodyEmails.join(', ') : '') +
+          '\n\n' + cleanBody.substring(0, 6000),
       },
     ],
   });
 
+  const parsed = parseEnvelopeResponse(aiResp.content, detectLanguage(cleanBody), allowedLabelKeys);
   console.log(
-    '[receive_email] AI raw response:',
-    JSON.stringify({ content: aiResp.content?.substring(0, 500), error: aiResp.error }),
-  );
-  const parsed = parseClassificationResponse(aiResp.content, detectLanguage(cleanBody));
-  console.log(
-    '[receive_email] Parsed:',
+    '[receive_email] envelope:',
     JSON.stringify({
       classification: parsed.classification,
       should_reply: parsed.should_reply,
+      confidence: parsed.confidence,
+      labels: parsed.labels,
       has_draft: !!parsed.draft_body,
+      ai_error: aiResp.error || null,
     }),
   );
 
@@ -1652,9 +1961,16 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   if (noDraftClasses.includes(parsed.classification)) {
     parsed.should_reply = false;
     parsed.draft_body = null;
+    if (!parsed.no_reply_reason) parsed.no_reply_reason = 'auto_generated';
   }
+  if (parsed.should_reply) parsed.no_reply_reason = null;
 
-  // Create conversation
+  // Recipient proposal: the AI's pick leads, regex-extracted addresses backstop.
+  const recipientCandidates = [...new Set([...parsed.recipients.candidates, ...bodyEmails])];
+  const defaultRecipient = parsed.recipients.default || guestEmail;
+  const convoStatus: ConversationStatus = parsed.should_reply ? 'active' : 'no_action';
+
+  // Create conversation (envelope fields denormalized for list-level filtering)
   await galactic.db.insert('conversations', {
     id: convoId,
     guest_email: guestEmail,
@@ -1662,13 +1978,17 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
     subject,
     language: parsed.language,
     classification: parsed.classification,
-    status: 'active',
+    status: convoStatus,
+    summary: parsed.summary,
+    confidence: parsed.confidence,
+    no_reply_reason: parsed.no_reply_reason || '',
     message_id: messageId || null,
     created_at: ts,
     updated_at: ts,
   });
 
-  // Version 1: inbound (original body for admin reference, extracted emails in metadata)
+  // Version 1: inbound — original body ("view raw") + the envelope's
+  // message-level details (summary, stored translation, recipient proposal).
   await galactic.db.insert('versions', {
     id: crypto.randomUUID(),
     conversation_id: convoId,
@@ -1676,11 +1996,19 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
     type: 'inbound',
     body: originalBody,
     actor: guestEmail,
-    metadata: inboundMeta,
+    metadata: JSON.stringify({
+      ...inboundMetaObj,
+      summary: parsed.summary,
+      translated_message: parsed.translated_message,
+      translated_lang: parsed.translated_message ? operatorLanguage : null,
+      proposed_recipients: recipientCandidates,
+      default_recipient: defaultRecipient,
+      recipient_reason: parsed.recipients.reason,
+    }),
     created_at: ts,
   });
 
-  // Version 2: auto_draft (if should_reply)
+  // Version 2: auto_draft (when a reply is warranted)
   if (parsed.should_reply && parsed.draft_body) {
     await galactic.db.insert('versions', {
       id: crypto.randomUUID(),
@@ -1693,10 +2021,20 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       metadata: JSON.stringify({
         knowledge_gaps: parsed.knowledge_gaps || [],
         priority: parsed.priority,
+        confidence: parsed.confidence,
+        labels: parsed.labels,
       }),
       created_at: ts,
     });
   }
+
+  // Labels: classification mirror + AI-assigned + the no-reply reason — one
+  // filterable axis for everything.
+  await assignConversationLabels(convoId, [
+    parsed.classification,
+    ...parsed.labels,
+    ...(parsed.no_reply_reason ? [parsed.no_reply_reason] : []),
+  ]);
 
   if (args.method) return { statusCode: 200, body: { received: true, conversation_id: convoId } };
   return {
@@ -1704,6 +2042,10 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
     conversation_id: convoId,
     classification: parsed.classification,
     language: parsed.language,
+    status: convoStatus,
+    summary: parsed.summary,
+    confidence: parsed.confidence,
+    labels: parsed.labels,
     action: parsed.should_reply ? 'draft_queued' : 'no_reply',
   };
 }
@@ -1868,11 +2210,13 @@ export async function conversation_act(args: {
 
     const aiResp = await galactic.ai({
       model: AI_MODEL,
+      temperature: AI_TEMPERATURE,
       messages: [
         {
           role: 'system',
           content:
-            "You are rewriting a draft email response. Follow the admin's instructions.\n\nBusiness conventions:\n" +
+            businessPersona() +
+            "\n\nYou are rewriting a draft email response. Follow the admin's instructions. Unless the admin explicitly asks for a different language, keep the draft in the guest's language.\n\nBusiness conventions:\n" +
             conventionsText + '\n\nInbound email(s):\n' + inboundBodies + '\n\nCurrent draft:\n' +
             currentDraft +
             '\n\nRespond with JSON:\n{"draft_body": "rewritten email", "knowledge_gaps": ["topics not covered"]}',
@@ -1915,11 +2259,16 @@ export async function conversation_act(args: {
     // Japanese (the hotel's staff language). Admin can override via `prompt`
     // (e.g. "translate to Korean").
     if (!inputBody) throw new Error('body is required for translate');
+    const operatorLanguage = await getOperatorLanguage();
     const instruction = prompt
       ? prompt
-      : 'Translate the following text to English. If the text is already in English, translate it to Japanese instead. Output ONLY the translation — no commentary, no quoting, no language label.';
+      : 'Translate the following text to ' + operatorLanguage +
+        '. If the text is already in ' + operatorLanguage +
+        ", translate it to the guest's language (" + (convo.language || 'ja') +
+        ') instead. Output ONLY the translation — no commentary, no quoting, no language label.';
     const aiResp = await galactic.ai({
       model: AI_MODEL,
+      temperature: AI_TEMPERATURE,
       messages: [
         { role: 'system', content: instruction },
         { role: 'user', content: inputBody },
@@ -1953,13 +2302,13 @@ export async function conversation_act(args: {
     const adminInstruction = prompt ? '\n\nAdmin instruction for this draft: ' + prompt : '';
 
     const systemPrompt = isFollowup
-      ? 'You are an email response agent. Draft a followup reply to an ongoing conversation.\n\n' +
+      ? businessPersona() + '\n\nDraft a followup reply to an ongoing conversation.\n\n' +
         'Business conventions:\n' + conventionsText + '\n\n' +
         'Full thread so far:\n' + threadContext + '\n\n' +
         'Reply in the same language as the guest. Be warm, professional, accurate.' +
         adminInstruction + '\n\n' +
         'Respond with JSON:\n{"draft_body": "your reply", "knowledge_gaps": ["topics not in conventions"]}'
-      : 'You are an email response agent for a business. Draft a professional reply to the guest.\n\n' +
+      : businessPersona() + '\n\nDraft a professional reply to the guest.\n\n' +
         'Business conventions:\n' + conventionsText + '\n\n' +
         'Classification: ' + (convo.classification || 'other') +
         ' (admin manually requested a draft)\n\n' +
@@ -1978,6 +2327,7 @@ export async function conversation_act(args: {
 
     const aiResp = await galactic.ai({
       model: AI_MODEL,
+      temperature: AI_TEMPERATURE,
       messages: [
         { role: 'system', content: systemPrompt, cache_control: { type: 'ephemeral' } },
         { role: 'user', content: userContent },
@@ -2041,11 +2391,13 @@ export async function conversation_act(args: {
 
       const aiResp = await galactic.ai({
         model: AI_MODEL,
+        temperature: AI_TEMPERATURE,
         messages: [
           {
             role: 'system',
             content:
-              'Draft a followup email in an ongoing conversation.\n\nBusiness conventions:\n' +
+              businessPersona() +
+              '\n\nDraft a followup email in an ongoing conversation. Keep it in the guest\'s language.\n\nBusiness conventions:\n' +
               conventionsText + '\n\nThread:\n' + threadContext +
               '\n\nRespond with ONLY the email body text.',
             cache_control: { type: 'ephemeral' },
@@ -2129,11 +2481,14 @@ export async function conversation_history(args: { conversation_id: string }): P
 // ============================================
 
 export async function conversations_list(args: {
+  // active | no_action | resolved | discarded
   status?: string;
   limit?: number;
   search?: string;
+  // Filter by a label key from the taxonomy (labels_list).
+  label?: string;
 }): Promise<unknown> {
-  const { status, limit, search } = args;
+  const { status, limit, search, label } = args;
 
   const where: Record<string, unknown> = {};
   if (status) where.status = status;
@@ -2143,12 +2498,34 @@ export async function conversations_list(args: {
       { subject: { like: '%' + search + '%' } },
     ];
   }
+  if (label) {
+    const tagged = await galactic.db.select('conversation_labels', {
+      columns: ['conversation_id'],
+      where: { label_key: label.toLowerCase().trim() },
+      limit: 500,
+    }) as Array<{ conversation_id: string }>;
+    const ids = [...new Set(tagged.map((row) => row.conversation_id))];
+    if (ids.length === 0) return { conversations: [], total: 0 };
+    where.id = { in: ids };
+  }
 
   const convos = await galactic.db.select('conversations', {
     where,
     orderBy: { column: 'updated_at', dir: 'desc' },
     limit: limit || 50,
   }) as ConversationRow[];
+
+  // Labels per conversation, one grouped query.
+  const labelsByConvo: Record<string, string[]> = {};
+  if (convos.length > 0) {
+    const labelRows = await galactic.db.select('conversation_labels', {
+      columns: ['conversation_id', 'label_key'],
+      where: { conversation_id: { in: convos.map((c) => c.id) } },
+    }) as Array<{ conversation_id: string; label_key: string }>;
+    for (const row of labelRows) {
+      (labelsByConvo[row.conversation_id] ||= []).push(row.label_key);
+    }
+  }
 
   // Version counts per conversation (was a correlated subquery — now one
   // grouped query merged in JS).
@@ -2166,7 +2543,10 @@ export async function conversations_list(args: {
 
   // Get latest version for each conversation
   const result: Array<
-    ConversationWithVersionCountRow & { latest_version: LatestVersionPreviewRow | null }
+    ConversationWithVersionCountRow & {
+      latest_version: LatestVersionPreviewRow | null;
+      labels: string[];
+    }
   > = [];
   for (const c of convos) {
     const latest = await galactic.db.first('versions', {
@@ -2174,10 +2554,130 @@ export async function conversations_list(args: {
       where: { conversation_id: c.id },
       orderBy: { column: 'version_num', dir: 'desc' },
     }) as LatestVersionPreviewRow | null;
-    result.push({ ...c, version_count: versionCounts[c.id] || 0, latest_version: latest });
+    result.push({
+      ...c,
+      version_count: versionCounts[c.id] || 0,
+      latest_version: latest,
+      labels: labelsByConvo[c.id] || [],
+    });
   }
 
   return { conversations: result, total: result.length };
+}
+
+// ============================================
+// 5b. OPERATOR SETTINGS + LABELS
+// ============================================
+
+export async function set_language(args: { language: string }): Promise<unknown> {
+  const language = (args.language || '').trim();
+  if (!language) throw new Error('language is required (e.g. "English", "Japanese", "fr")');
+  if (language.length > 40) throw new Error('language must be 40 characters or fewer');
+  await setSetting('language', language);
+  return {
+    success: true,
+    language,
+    note: 'Summaries and translations will be written in this language from the next email on. ' +
+      'Reply drafts always stay in the guest\'s own language.',
+  };
+}
+
+export async function get_language(): Promise<unknown> {
+  return { language: await getOperatorLanguage() };
+}
+
+export async function labels_list(): Promise<unknown> {
+  const rows = await listLabelRows();
+  return {
+    labels: rows.map((row) => ({
+      key: row.key,
+      name: row.name,
+      description: row.description,
+      category: row.category,
+      built_in: !!row.built_in,
+    })),
+  };
+}
+
+const LABEL_KEY_RE = /^[a-z0-9][a-z0-9_:-]{0,47}$/;
+
+export async function label_set(
+  args: { key: string; name?: string; description?: string; category?: string },
+): Promise<unknown> {
+  const key = (args.key || '').trim().toLowerCase();
+  if (!LABEL_KEY_RE.test(key)) {
+    throw new Error('key must be 1-48 chars of lowercase letters, digits, "_", ":", or "-"');
+  }
+  await ensureDefaultLabels();
+  const ts = now();
+  const existing = await galactic.db.first('labels', { where: { key } }) as LabelRow | null;
+  if (existing) {
+    await galactic.db.update('labels', {
+      set: {
+        name: args.name?.trim() || existing.name,
+        description: args.description?.trim() ?? existing.description,
+        category: args.category?.trim() || existing.category,
+        updated_at: ts,
+      },
+      where: { key },
+    });
+    return { success: true, action: 'updated', key };
+  }
+  await galactic.db.insert('labels', {
+    id: crypto.randomUUID(),
+    key,
+    name: args.name?.trim() || key,
+    description: args.description?.trim() || '',
+    category: args.category?.trim() || 'general',
+    built_in: 0,
+    created_at: ts,
+    updated_at: ts,
+  });
+  return { success: true, action: 'created', key };
+}
+
+export async function label_delete(args: { key: string }): Promise<unknown> {
+  const key = (args.key || '').trim().toLowerCase();
+  if (!key) throw new Error('key is required');
+  await galactic.db.delete('labels', { where: { key } });
+  await galactic.db.delete('conversation_labels', { where: { label_key: key } });
+  return { success: true, deleted: key };
+}
+
+export async function conversation_label(
+  args: { conversation_id: string; add?: string[]; remove?: string[] },
+): Promise<unknown> {
+  const { conversation_id } = args;
+  if (!conversation_id) throw new Error('conversation_id is required');
+  const convo = await galactic.db.first('conversations', {
+    columns: ['id'],
+    where: { id: conversation_id },
+  });
+  if (!convo) throw new Error('Conversation not found');
+
+  const add = parseStringArray(args.add).map((k) => k.toLowerCase().trim()).filter(Boolean);
+  const remove = parseStringArray(args.remove).map((k) => k.toLowerCase().trim()).filter(Boolean);
+  if (add.length > 0) {
+    const rows = await listLabelRows();
+    const allowed = new Set(rows.map((row) => row.key));
+    const unknown = add.filter((k) => !allowed.has(k));
+    if (unknown.length > 0) {
+      throw new Error(
+        'Unknown label key(s): ' + unknown.join(', ') + ' — create them first with label_set',
+      );
+    }
+    await assignConversationLabels(conversation_id, add);
+  }
+  for (const key of remove) {
+    await galactic.db.delete('conversation_labels', {
+      where: { conversation_id, label_key: key },
+    });
+  }
+  const current = await galactic.db.select('conversation_labels', {
+    columns: ['label_key'],
+    where: { conversation_id },
+  }) as Array<{ label_key: string }>;
+  return { success: true, conversation_id, labels: current.map((row) => row.label_key) };
 }
 
 // ============================================

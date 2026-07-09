@@ -2,9 +2,15 @@
   "name": "email-ops",
   "version": "2.0.0",
   "type": "mcp",
-  "entry": { "functions": "index.ts" },
+  "entry": {
+    "functions": "index.ts"
+  },
   "description": "Autonomous email agent: connects to hotel mailbox via IMAP, AI classifies and drafts responses in sender's language, queues for admin approval, sends via SMTP. Widget-enabled for desktop Activity tab.",
-  "permissions": ["ai:call", "net:fetch", "net:connect"],
+  "permissions": [
+    "ai:call",
+    "net:fetch",
+    "net:connect"
+  ],
   "flight_recorder": true,
   "routines": [
     {
@@ -12,10 +18,15 @@
       "label": "Inbox watch",
       "description": "Scheduled inbox check: fetch new mail, classify, and queue drafts for approval. Set the standing triage directive in the routine's `intent` (delivered as args._routine.intent each wake).",
       "handler": "check_inbox",
-      "default_schedule": { "every_minutes": 5 },
+      "default_schedule": {
+        "every_minutes": 5
+      },
       "config_schema": {},
       "default_config": {},
-      "budget_defaults": { "max_light_per_run": 15, "max_light_per_day": 200 }
+      "budget_defaults": {
+        "max_light_per_run": 15,
+        "max_light_per_day": 200
+      }
     }
   ],
   "storage": "d1",
@@ -100,12 +111,24 @@
       "access": "read",
       "searchable": true,
       "query": "SELECT c.id, c.guest_email, c.subject, c.language, c.classification, c.status, c.updated_at, (SELECT v.body FROM versions v WHERE v.conversation_id = c.id AND v.user_id = :user_id ORDER BY v.version_num DESC LIMIT 1) AS latest_context FROM conversations c WHERE c.user_id = :user_id AND (c.subject LIKE :query OR c.guest_email LIKE :query OR c.classification LIKE :query OR c.language LIKE :query) ORDER BY c.updated_at DESC LIMIT :limit",
-      "default_for_widgets": ["email_inbox"],
+      "default_for_widgets": [
+        "email_inbox"
+      ],
       "generation_hints": {
-        "tags": ["email", "guest", "drafts", "approvals"],
+        "tags": [
+          "email",
+          "guest",
+          "drafts",
+          "approvals"
+        ],
         "preferred_component": "table",
-        "entity_types": ["conversation", "draft"],
-        "safe_default_filters": { "limit": 10 },
+        "entity_types": [
+          "conversation",
+          "draft"
+        ],
+        "safe_default_filters": {
+          "limit": 10
+        },
         "prompt_examples": [
           "review recent guest email approvals",
           "show active guest conversations"
@@ -119,13 +142,27 @@
       "type": "d1_table",
       "access": "read",
       "searchable": true,
-      "tables": ["conventions"],
-      "default_for_widgets": ["email_inbox"],
+      "tables": [
+        "conventions"
+      ],
+      "default_for_widgets": [
+        "email_inbox"
+      ],
       "generation_hints": {
-        "tags": ["email", "faq", "tone", "business rules"],
+        "tags": [
+          "email",
+          "faq",
+          "tone",
+          "business rules"
+        ],
         "preferred_component": "detail",
-        "entity_types": ["convention", "faq"],
-        "prompt_examples": ["show the hotel tone rules for drafting replies"]
+        "entity_types": [
+          "convention",
+          "faq"
+        ],
+        "prompt_examples": [
+          "show the hotel tone rules for drafting replies"
+        ]
       }
     }
   ],
@@ -139,11 +176,22 @@
       "agentic": true,
       "context_function": "widget_email_inbox_data",
       "actions_function": "widget_email_inbox_data",
-      "context_sources": ["email_recent_threads", "email_business_conventions"],
+      "context_sources": [
+        "email_recent_threads",
+        "email_business_conventions"
+      ],
       "generation_hints": {
-        "tags": ["email approvals", "guest replies", "draft review"],
+        "tags": [
+          "email approvals",
+          "guest replies",
+          "draft review"
+        ],
         "preferred_component": "widget_embed",
-        "entity_types": ["conversation", "draft", "guest"],
+        "entity_types": [
+          "conversation",
+          "draft",
+          "guest"
+        ],
         "action_group": "draft_review",
         "suggested_components": [
           {
@@ -178,9 +226,16 @@
           "data_view": "drafts_queue",
           "refresh_interval_s": 300,
           "generation_hints": {
-            "tags": ["approval queue", "drafts", "guest emails"],
+            "tags": [
+              "approval queue",
+              "drafts",
+              "guest emails"
+            ],
             "preferred_component": "table",
-            "entity_types": ["conversation", "draft"],
+            "entity_types": [
+              "conversation",
+              "draft"
+            ],
             "suggested_components": [
               {
                 "kind": "detail",
@@ -188,7 +243,9 @@
                 "description": "Show the selected conversation, current draft body, and history cues."
               }
             ],
-            "prompt_examples": ["review pending email drafts"]
+            "prompt_examples": [
+              "review pending email drafts"
+            ]
           }
         },
         {
@@ -200,9 +257,14 @@
           "data_view": "inbox_volume",
           "refresh_interval_s": 300,
           "generation_hints": {
-            "tags": ["email volume", "inbox status"],
+            "tags": [
+              "email volume",
+              "inbox status"
+            ],
             "preferred_component": "metric",
-            "entity_types": ["conversation"]
+            "entity_types": [
+              "conversation"
+            ]
           }
         }
       ],
@@ -213,11 +275,18 @@
           "description": "Load the full version history for the currently selected conversation.",
           "mode": "read",
           "confirmation": "none",
-          "mcp": { "function": "conversation_history" },
+          "mcp": {
+            "function": "conversation_history"
+          },
           "generation_hints": {
-            "tags": ["history", "draft review"],
+            "tags": [
+              "history",
+              "draft review"
+            ],
             "preferred_component": "timeline",
-            "entity_types": ["conversation_version"],
+            "entity_types": [
+              "conversation_version"
+            ],
             "action_group": "draft_review"
           },
           "expected_result": "Conversation and version history for the selected email thread."
@@ -231,7 +300,9 @@
           "ui": {
             "command": "navigate",
             "component_id": "tabs",
-            "args_template": { "view": "active" }
+            "args_template": {
+              "view": "active"
+            }
           },
           "expected_result": "The active queue tab is selected."
         },
@@ -244,7 +315,9 @@
           "ui": {
             "command": "navigate",
             "component_id": "tabs",
-            "args_template": { "view": "archive" }
+            "args_template": {
+              "view": "archive"
+            }
           },
           "expected_result": "The sent conversation tab is selected."
         },
@@ -254,7 +327,10 @@
           "description": "Expand the version history section for the selected conversation.",
           "mode": "ui",
           "confirmation": "none",
-          "ui": { "command": "open", "component_id": "version_history" },
+          "ui": {
+            "command": "open",
+            "component_id": "version_history"
+          },
           "expected_result": "The version history section is visible when the selected conversation has history."
         },
         {
@@ -263,7 +339,10 @@
           "description": "Open and focus the editable draft reply field for the selected conversation.",
           "mode": "ui",
           "confirmation": "none",
-          "ui": { "command": "focus", "component_id": "draft_response" },
+          "ui": {
+            "command": "focus",
+            "component_id": "draft_response"
+          },
           "expected_result": "The draft editor is open and focused."
         },
         {
@@ -275,10 +354,15 @@
           "args_schema": {
             "type": "object",
             "properties": {
-              "text": { "type": "string" }
+              "text": {
+                "type": "string"
+              }
             }
           },
-          "ui": { "command": "prefill", "component_id": "regenerate_prompt" },
+          "ui": {
+            "command": "prefill",
+            "component_id": "regenerate_prompt"
+          },
           "expected_result": "The regeneration prompt is open and focused."
         },
         {
@@ -290,10 +374,15 @@
           "args_schema": {
             "type": "object",
             "properties": {
-              "text": { "type": "string" }
+              "text": {
+                "type": "string"
+              }
             }
           },
-          "ui": { "command": "prefill", "component_id": "followup_prompt" },
+          "ui": {
+            "command": "prefill",
+            "component_id": "followup_prompt"
+          },
           "expected_result": "The follow-up prompt is open and focused."
         },
         {
@@ -304,12 +393,19 @@
           "confirmation": "user",
           "mcp": {
             "function": "conversation_act",
-            "args_template": { "action": "send" }
+            "args_template": {
+              "action": "send"
+            }
           },
           "generation_hints": {
-            "tags": ["send", "approve draft"],
+            "tags": [
+              "send",
+              "approve draft"
+            ],
             "action_group": "draft_review",
-            "entity_types": ["draft"]
+            "entity_types": [
+              "draft"
+            ]
           },
           "expected_result": "The draft is sent and the widget refreshes into the latest queue state."
         },
@@ -321,12 +417,19 @@
           "confirmation": "user",
           "mcp": {
             "function": "conversation_act",
-            "args_template": { "action": "discard" }
+            "args_template": {
+              "action": "discard"
+            }
           },
           "generation_hints": {
-            "tags": ["discard", "reject draft"],
+            "tags": [
+              "discard",
+              "reject draft"
+            ],
             "action_group": "draft_review",
-            "entity_types": ["conversation"]
+            "entity_types": [
+              "conversation"
+            ]
           },
           "expected_result": "The conversation is discarded and the widget refreshes."
         }
@@ -341,101 +444,374 @@
     "receive_email": {
       "description": "Process an inbound email (called by check_inbox or directly). Classifies intent, drafts response in sender's language, queues for admin approval.",
       "parameters": [
-        { "name": "from", "type": "string", "required": false },
-        { "name": "to", "type": "string", "required": false },
-        { "name": "subject", "type": "string", "required": false },
-        { "name": "text", "type": "string", "required": false },
-        { "name": "html", "type": "string", "required": false },
-        { "name": "message_id", "type": "string", "required": false },
-        { "name": "in_reply_to", "type": "string", "required": false }
+        {
+          "name": "from",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "to",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "subject",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "html",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "message_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "in_reply_to",
+          "type": "string",
+          "required": false
+        }
       ]
     },
     "email_send": {
       "description": "Send an email via SMTP through the hotel's mail server.",
       "parameters": [
-        { "name": "to", "type": "string", "required": true },
-        { "name": "subject", "type": "string", "required": true },
-        { "name": "body", "type": "string", "required": true },
-        { "name": "in_reply_to", "type": "string", "required": false }
+        {
+          "name": "to",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "subject",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "in_reply_to",
+          "type": "string",
+          "required": false
+        }
       ]
     },
     "conversation_act": {
       "description": "Take action on a conversation: send, discard, restore, save_edit, regenerate, followup_draft.",
       "generation_hints": {
-        "tags": ["email", "draft action", "send", "discard", "regenerate"],
+        "tags": [
+          "email",
+          "draft action",
+          "send",
+          "discard",
+          "regenerate"
+        ],
         "action_group": "draft_review",
-        "entity_types": ["conversation", "draft"],
-        "prompt_examples": ["send the selected guest draft after confirmation"]
+        "entity_types": [
+          "conversation",
+          "draft"
+        ],
+        "prompt_examples": [
+          "send the selected guest draft after confirmation"
+        ]
       },
       "parameters": [
-        { "name": "conversation_id", "type": "string", "required": true },
-        { "name": "action", "type": "string", "required": true },
-        { "name": "body", "type": "string", "required": false },
-        { "name": "prompt", "type": "string", "required": false },
-        { "name": "to", "type": "string", "required": false }
+        {
+          "name": "conversation_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "action",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "to",
+          "type": "string",
+          "required": false
+        }
       ]
     },
     "conversation_history": {
       "description": "Get full version history for a conversation.",
       "generation_hints": {
-        "tags": ["email history", "versions", "draft review"],
+        "tags": [
+          "email history",
+          "versions",
+          "draft review"
+        ],
         "preferred_component": "timeline",
-        "entity_types": ["conversation_version"],
-        "prompt_examples": ["show the history for this guest conversation"]
+        "entity_types": [
+          "conversation_version"
+        ],
+        "prompt_examples": [
+          "show the history for this guest conversation"
+        ]
       },
       "parameters": [
-        { "name": "conversation_id", "type": "string", "required": true }
+        {
+          "name": "conversation_id",
+          "type": "string",
+          "required": true
+        }
       ]
     },
     "conversations_list": {
-      "description": "List conversations by status.",
+      "description": "List conversations filtered by status (active | no_action | resolved | discarded), label key, and/or a guest-email/subject search. Every inbound email is accounted for: no_action holds mail the agent decided needs no reply (still summarized and labeled).",
       "generation_hints": {
-        "tags": ["email", "guest conversations", "approval queue"],
+        "tags": [
+          "email",
+          "guest conversations",
+          "approval queue"
+        ],
         "preferred_component": "table",
-        "entity_types": ["conversation", "draft"],
-        "safe_default_filters": { "status": "active", "limit": 10 },
-        "prompt_examples": ["list active guest conversations waiting on review"]
+        "entity_types": [
+          "conversation",
+          "draft"
+        ],
+        "safe_default_filters": {
+          "status": "active",
+          "limit": 10
+        },
+        "prompt_examples": [
+          "list active guest conversations waiting on review"
+        ]
       },
       "parameters": [
-        { "name": "status", "type": "string", "required": false },
-        { "name": "limit", "type": "number", "required": false }
+        {
+          "name": "status",
+          "type": "string",
+          "required": false,
+          "description": "active | no_action | resolved | discarded"
+        },
+        {
+          "name": "label",
+          "type": "string",
+          "required": false,
+          "description": "Filter by a label key from labels_list (e.g. booking_request, cc_only)"
+        },
+        {
+          "name": "search",
+          "type": "string",
+          "required": false,
+          "description": "Substring match on guest email or subject"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "Max rows (default 50)"
+        }
       ]
     },
     "conventions_get": {
       "description": "Get business conventions/guidelines by key or category",
       "generation_hints": {
-        "tags": ["faq", "tone", "business rules"],
+        "tags": [
+          "faq",
+          "tone",
+          "business rules"
+        ],
         "preferred_component": "detail",
-        "entity_types": ["convention"],
-        "prompt_examples": ["show hotel email tone and FAQ rules"]
+        "entity_types": [
+          "convention"
+        ],
+        "prompt_examples": [
+          "show hotel email tone and FAQ rules"
+        ]
       },
       "parameters": [
-        { "name": "key", "type": "string", "required": false },
-        { "name": "category", "type": "string", "required": false }
+        {
+          "name": "key",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": false
+        }
       ]
     },
     "conventions_set": {
       "description": "Create or update a business convention.",
       "parameters": [
-        { "name": "key", "type": "string", "required": true },
-        { "name": "value", "type": "string", "required": true },
-        { "name": "category", "type": "string", "required": false }
+        {
+          "name": "key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "value",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": false
+        }
       ]
+    },
+    "set_language": {
+      "description": "Set the operator language for summaries and stored translations (e.g. \"English\", \"Japanese\"). Reply drafts always stay in the guest's own language.",
+      "parameters": [
+        {
+          "name": "language",
+          "type": "string",
+          "required": true,
+          "description": "Language name or code the operator reads in"
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    "get_language": {
+      "description": "Get the configured operator language (default English).",
+      "parameters": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    "labels_list": {
+      "description": "List the label taxonomy the AI assigns from (classification types + no-reply reasons + custom labels). Seeded with defaults on first use; fully user-editable.",
+      "parameters": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    "label_set": {
+      "description": "Create or update a label in the taxonomy. The AI assigns labels from this set when it processes each email; conversations are filterable by label.",
+      "parameters": [
+        {
+          "name": "key",
+          "type": "string",
+          "required": true,
+          "description": "Machine key: lowercase letters, digits, \"_\", \":\", \"-\" (max 48 chars)"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": false,
+          "description": "Display name"
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "required": false,
+          "description": "What the label means — shown to the AI when it assigns labels"
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": false,
+          "description": "Grouping, e.g. \"type\", \"no_reply\", \"general\" (default)"
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    "label_delete": {
+      "description": "Delete a label from the taxonomy and remove it from all conversations.",
+      "parameters": [
+        {
+          "name": "key",
+          "type": "string",
+          "required": true,
+          "description": "Label key to delete"
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    "conversation_label": {
+      "description": "Add or remove labels on a conversation (labels must exist in the taxonomy).",
+      "parameters": [
+        {
+          "name": "conversation_id",
+          "type": "string",
+          "required": true,
+          "description": "Conversation id"
+        },
+        {
+          "name": "add",
+          "type": "array",
+          "required": false,
+          "description": "Label keys to add"
+        },
+        {
+          "name": "remove",
+          "type": "array",
+          "required": false,
+          "description": "Label keys to remove"
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
     },
     "approvals_list": {
       "description": "Legacy approval bridge: list active conversations with draft replies for older approval UIs.",
       "parameters": [
-        { "name": "status", "type": "string", "required": false },
-        { "name": "limit", "type": "number", "required": false }
+        {
+          "name": "status",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false
+        }
       ]
     },
     "approvals_act": {
       "description": "Legacy approval bridge: approve, reject, or revise a pending conversation draft.",
       "parameters": [
-        { "name": "approval_id", "type": "string", "required": true },
-        { "name": "action", "type": "string", "required": true },
-        { "name": "revision", "type": "string", "required": false },
-        { "name": "admin_notes", "type": "string", "required": false }
+        {
+          "name": "approval_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "action",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "revision",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "admin_notes",
+          "type": "string",
+          "required": false
+        }
       ]
     },
     "widget_approval_queue": {
