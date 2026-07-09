@@ -223,6 +223,7 @@ interface DynamicWorkerEntrypointExports {
       requestDefaults: Record<string, unknown> | null;
       shouldDebitLight: boolean;
       shouldRequireBalance: boolean;
+      modelPinned?: boolean;
       unavailableReason?: string | null;
       requireExecCtx?: boolean;
     };
@@ -787,6 +788,7 @@ export default {
           requestDefaults: config.aiRoute?.requestDefaults || null,
           shouldDebitLight: !!config.aiRoute?.shouldDebitLight,
           shouldRequireBalance: !!config.aiRoute?.shouldRequireBalance,
+          modelPinned: !!config.aiRoute?.modelPinned,
           unavailableReason: config.aiUnavailableReason || null,
           requireExecCtx: useGetReuse,
         },

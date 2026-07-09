@@ -64,6 +64,7 @@ function toRuntimeAIRoute(route: ResolvedInferenceRoute): RuntimeAIRoute {
     requestDefaults: route.requestDefaults,
     shouldDebitLight: route.shouldDebitLight,
     shouldRequireBalance: route.shouldRequireBalance,
+    modelPinned: route.modelPinned,
   };
 }
 
@@ -215,6 +216,10 @@ export async function createRuntimeAIContext(
       userId: user.id,
       userEmail: user.email,
       selection: options.inferenceSelection ?? null,
+      // inferenceSelection is the installer's explicit per-function override:
+      // when it names a model, pin it so the dev's per-call ai({model})
+      // argument cannot outrank the user's choice.
+      pinSelectedModel: Boolean(options.inferenceSelection?.model?.trim()),
     });
 
     // Pre-call balance gate for credits-billed routes (BYOK routes set

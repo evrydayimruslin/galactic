@@ -442,3 +442,82 @@ Deno.test("inference route: missing user returns typed route error", async () =>
   assertEquals(error.code, "user_not_found");
   assertEquals(error.status, 404);
 });
+
+Deno.test("inference route: pinSelectedModel marks the Light route model as pinned", async () => {
+  const route = await resolveInferenceRoute({
+    userId: "user-1",
+    userEmail: "auth@example.com",
+    selection: { billingMode: "light", model: "openai/gpt-4o-mini" },
+    pinSelectedModel: true,
+    userService: {
+      getUser: async () => makeUser({ platform_inference_model: "anthropic/claude-x" }),
+      getDecryptedApiKey: async () => null,
+    },
+    getOrCreateOpenRouterKey: async () => "or-platform-key",
+  });
+
+  assertEquals(route.model, "openai/gpt-4o-mini");
+  assertEquals(route.modelPinned, true);
+});
+
+Deno.test("inference route: pinSelectedModel marks the BYOK route model as pinned", async () => {
+  const route = await resolveInferenceRoute({
+    userId: "user-1",
+    userEmail: "auth@example.com",
+    selection: { billingMode: "byok", provider: "deepseek", model: "deepseek-v4-pro" },
+    pinSelectedModel: true,
+    userService: {
+      getUser: async () =>
+        makeUser({
+          byok_enabled: true,
+          byok_provider: "deepseek",
+          byok_configs: [{
+            provider: "deepseek",
+            has_key: true,
+            model: "deepseek-chat",
+            added_at: "2026-04-24T00:00:00Z",
+          }],
+        }),
+      getDecryptedApiKey: async () => "ds-user-key",
+    },
+    getOrCreateOpenRouterKey: async () => {
+      throw new Error("platform key should not be provisioned");
+    },
+  });
+
+  assertEquals(route.model, "deepseek-v4-pro");
+  assertEquals(route.modelPinned, true);
+});
+
+Deno.test("inference route: a selection without pinSelectedModel is not pinned", async () => {
+  const route = await resolveInferenceRoute({
+    userId: "user-1",
+    userEmail: "auth@example.com",
+    selection: { billingMode: "light", model: "openai/gpt-4o-mini" },
+    userService: {
+      getUser: async () => makeUser(),
+      getDecryptedApiKey: async () => null,
+    },
+    getOrCreateOpenRouterKey: async () => "or-platform-key",
+  });
+
+  assertEquals(route.model, "openai/gpt-4o-mini");
+  assertEquals(route.modelPinned, false);
+});
+
+Deno.test("inference route: pinSelectedModel without a selection model does not pin", async () => {
+  const route = await resolveInferenceRoute({
+    userId: "user-1",
+    userEmail: "auth@example.com",
+    requestedModel: "openai/gpt-4o-mini",
+    pinSelectedModel: true,
+    userService: {
+      getUser: async () => makeUser(),
+      getDecryptedApiKey: async () => null,
+    },
+    getOrCreateOpenRouterKey: async () => "or-platform-key",
+  });
+
+  assertEquals(route.model, "openai/gpt-4o-mini");
+  assertEquals(route.modelPinned, false);
+});

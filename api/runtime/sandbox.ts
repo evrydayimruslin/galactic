@@ -132,6 +132,9 @@ export interface RuntimeAIRoute {
   // buyer cannot fan out many galactic.ai() calls in one execution and outspend
   // their balance. BYOK routes set this false. Mirrors ResolvedInferenceRoute.
   shouldRequireBalance: boolean;
+  // The route model is the installer's explicit per-function override — it
+  // beats the dev's per-call ai({model}) argument. Mirrors ResolvedInferenceRoute.
+  modelPinned?: boolean;
 }
 
 interface RpcToolCallEnvelope {

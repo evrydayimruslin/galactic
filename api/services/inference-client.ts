@@ -16,6 +16,12 @@ export function selectInferenceModel(
   route: ResolvedInferenceRoute,
   requestedModel?: string | null,
 ): string {
+  // A pinned route model is the user's explicit choice (per-function override)
+  // and beats the caller's requested model on every billing mode.
+  if (route.modelPinned) {
+    return route.model;
+  }
+
   if (route.billingMode === "byok") {
     return route.model;
   }
