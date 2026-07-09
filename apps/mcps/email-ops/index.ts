@@ -166,6 +166,10 @@ interface ImapFetchResult {
   // contiguous prefix that processed cleanly, so a fetch/parse failure holds the
   // cursor and is retried next poll — at-least-once, never skipped.
   attemptedUids?: number[];
+  // UIDs the host DELIBERATELY dropped (our own outbound, empty body). The app
+  // advances its watermark over these — retrying them forever would wedge the
+  // whole inbox behind one message.
+  skippedUids?: number[];
   uidValidity?: number;
   uidNext?: number;
   maxUid: number;
@@ -1250,6 +1254,7 @@ export async function check_inbox(
     const emails = result.emails || [];
     const attemptedUids = result.attemptedUids ||
       emails.map((e) => e.uid).sort((a, b) => a - b);
+    const skippedSet = new Set(result.skippedUids || []);
     const uidValidity = result.uidValidity || 0;
     const uidNext = result.uidNext || 0;
     // Current mailbox tip: UIDNEXT-1 when the server reports it, else the highest
@@ -1327,9 +1332,16 @@ export async function check_inbox(
     let lastError = '';
 
     for (const uid of attemptedUids) {
+      if (skippedSet.has(uid)) {
+        // Host deliberately dropped it (our own outbound / empty body) — done,
+        // advance past it. Retrying forever would wedge the whole inbox.
+        cursor = uid;
+        continue;
+      }
       const email = byUid.get(uid);
       if (!email) {
         // Host couldn't fetch/parse this UID — hold the watermark here.
+        lastError = 'host could not fetch uid ' + uid;
         held = true;
         break;
       }
@@ -1357,8 +1369,19 @@ export async function check_inbox(
           references: email.references,
           date: email.date,
           operator_directive: operatorDirective,
-        }) as { success?: boolean; thread?: boolean };
+        }) as { success?: boolean; thread?: boolean; error?: string; duplicate?: boolean };
 
+        if (processResult?.error) {
+          // Malformed / unprocessable message (e.g. missing From/Subject). It can
+          // never succeed, so advance past it rather than wedging the inbox.
+          console.error('[check_inbox] skipping unprocessable uid ' + uid + ': ' + processResult.error);
+          cursor = uid;
+          continue;
+        }
+        if (processResult?.duplicate) {
+          cursor = uid; // already processed in a prior wake — advance
+          continue;
+        }
         if (!processResult?.success) {
           lastError = 'receive_email returned no success for uid ' + uid;
           held = true;
@@ -1571,6 +1594,20 @@ const BOOKING_CONFIRMATION_KEYWORDS =
 // 1. RECEIVE EMAIL — Webhook + Direct
 // ============================================
 
+// Parse a From header ("Display Name <addr@host>" or a bare address) into a
+// bare, lowercased email + a display name. The IMAP host parser already returns
+// a bare address, but a webhook/direct caller may pass the raw header — an
+// unparsed "Name <addr>" would become the guest_email and then fail SMTP send.
+function parseFromHeader(rawFrom: string): { email: string; name: string } {
+  const raw = (rawFrom || '').trim();
+  const angle = raw.match(/<([^>]+)>/);
+  const bare = raw.match(/[^\s<>",;]+@[^\s<>",;]+/);
+  const email = (angle ? angle[1] : (bare ? bare[0] : raw)).trim().toLowerCase();
+  let name = angle ? raw.slice(0, raw.indexOf('<')).trim() : '';
+  name = name.replace(/^["']+|["']+$/g, '').trim();
+  return { email, name };
+}
+
 export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   let from: string, to: string, subject: string, body: string, messageId: string | undefined;
   let replyToHeader = '', references = '';
@@ -1607,24 +1644,25 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   // the real requester is elsewhere. Order of preference: the Reply-To header
   // (the DMARC-era standard for contact forms) → a labeled email extracted from
   // the body → the envelope From.
-  const fromLower = from.toLowerCase();
-  const fromIsSystem = NOREPLY_PATTERN.test(from) || OTA_DOMAINS.some((d) => fromLower.includes(d));
+  const { email: fromEmail, name: fromName } = parseFromHeader(from);
+  const fromLower = fromEmail;
+  const fromIsSystem = NOREPLY_PATTERN.test(fromEmail) || OTA_DOMAINS.some((d) => fromEmail.includes(d));
   const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const replyToAddr = replyToHeader.trim().toLowerCase();
   const replyToUsable = !!replyToAddr && emailRe.test(replyToAddr) &&
     !NOREPLY_PATTERN.test(replyToAddr) && replyToAddr !== fromLower;
-  let guestEmail = from;
+  let guestEmail = fromEmail;
   if (replyToUsable) {
     guestEmail = replyToAddr;
   } else if (fromIsSystem && bodyEmails.length > 0) {
     guestEmail = bodyEmails[0];
   }
-  const guestName = primaryName ||
-    (guestEmail !== from ? guestEmail.split('@')[0] : from.split('@')[0]);
+  const guestName = primaryName || fromName ||
+    (guestEmail.split('@')[0] || guestEmail);
   // A form-like sender that resolved to a different guest must NOT be treated as
   // an internal staff email even when it shares the business domain (e.g.
   // forms@ourhotel.com) — otherwise the enquiry is silently filed as "internal".
-  const isFormLike = (fromIsSystem || replyToUsable) && guestEmail !== from;
+  const isFormLike = (fromIsSystem || replyToUsable) && guestEmail !== fromEmail;
 
   // Metadata on the inbound version: extracted recipient candidates + threading
   // ids. Kept as an object so the envelope paths can extend it with the
@@ -1683,26 +1721,23 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
 
   if (existingConvo) {
     // ── Followup in existing thread ──
+    // Preserve a resolved thread's status on a no-reply followup (a closing
+    // "thanks" must not un-resolve it, and must not demote it to no_action —
+    // that would make it vanish from the Sent view).
+    const priorStatus = existingConvo.status;
     const vNum = await nextVersionNum(existingConvo.id);
     const vId = crypto.randomUUID();
-    await galactic.db.insert('versions', {
-      id: vId,
-      conversation_id: existingConvo.id,
-      version_num: vNum,
-      type: 'inbound',
-      body: originalBody,
-      actor: guestEmail,
-      metadata: inboundMeta,
-      created_at: ts,
-    });
 
     // Followups to no-draft classes skip AI entirely — the admin can still
     // trigger a manual draft via conversation_act('generate_draft').
     const skipAutoDraft = ['internal', 'booking_confirmation', 'spam'].includes(
       existingConvo.classification,
     );
-    let followupStatus: ConversationStatus = 'no_action';
+    let followupStatus: ConversationStatus = priorStatus === 'resolved' ? 'resolved' : 'no_action';
     let followup: FollowupEnvelope | null = null;
+    // The inbound version's metadata — enriched with the envelope's summary /
+    // translation once the (fallible) AI call has succeeded.
+    let inboundMetaFinal = inboundMeta;
     if (!skipAutoDraft) {
       const operatorLanguage = await getOperatorLanguage();
       const labelRows = await listLabelRows();
@@ -1711,7 +1746,9 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
         .map((label) => label.key)
         .join(' | ') || 'no_action_needed';
 
-      // Full thread for context (cleaned bodies for AI input quality)
+      // Full thread for context (existing versions; the new message is passed
+      // separately below). Built BEFORE inserting the new inbound so a failed
+      // AI call leaves nothing persisted to duplicate on retry.
       const allVersions = await galactic.db.select('versions', {
         columns: ['type', 'body', 'actor'],
         where: { conversation_id: existingConvo.id },
@@ -1761,47 +1798,53 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       if (followup.no_reply_reason && !followupNoReplyKeys.has(followup.no_reply_reason)) {
         followup.no_reply_reason = 'no_action_needed';
       }
-
-      // Enrich the just-inserted inbound version with the envelope's
-      // message-level details (summary + stored translation).
       if (followup.summary || followup.translated_message) {
-        await galactic.db.update('versions', {
-          set: {
-            metadata: JSON.stringify({
-              ...inboundMetaObj,
-              summary: followup.summary,
-              translated_message: followup.translated_message,
-              translated_lang: followup.translated_message ? operatorLanguage : null,
-            }),
-          },
-          where: { id: vId },
+        inboundMetaFinal = JSON.stringify({
+          ...inboundMetaObj,
+          summary: followup.summary,
+          translated_message: followup.translated_message,
+          translated_lang: followup.translated_message ? operatorLanguage : null,
         });
       }
+    }
 
-      if (followup.should_reply) {
-        followupStatus = 'active';
-        // Only queue a draft when the model actually produced one — never a
-        // canned English reply into a non-English thread. A reply-wanted wake
-        // with no draft stays needs-attention for the operator to write.
-        if (followup.draft_body) {
-          await galactic.db.insert('versions', {
-            id: crypto.randomUUID(),
-            conversation_id: existingConvo.id,
-            version_num: vNum + 1,
-            type: 'auto_draft',
-            body: followup.draft_body,
-            actor: 'ai',
-            model: AI_MODEL,
-            metadata: JSON.stringify({
-              knowledge_gaps: followup.knowledge_gaps || [],
-              confidence: followup.confidence,
-            }),
-            created_at: ts,
-          });
-        }
-      } else if (followup.no_reply_reason) {
-        await assignConversationLabels(existingConvo.id, [followup.no_reply_reason]);
+    // Persist the inbound version now (after the AI call): a throw above leaves
+    // nothing behind, so a routine retry re-runs cleanly instead of appending a
+    // duplicate inbound turn every wake.
+    await galactic.db.insert('versions', {
+      id: vId,
+      conversation_id: existingConvo.id,
+      version_num: vNum,
+      type: 'inbound',
+      body: originalBody,
+      actor: guestEmail,
+      metadata: inboundMetaFinal,
+      created_at: ts,
+    });
+
+    if (followup && followup.should_reply) {
+      followupStatus = 'active';
+      // Only queue a draft when the model actually produced one — never a canned
+      // English reply into a non-English thread. A reply-wanted wake with no
+      // draft stays needs-attention for the operator to write.
+      if (followup.draft_body) {
+        await galactic.db.insert('versions', {
+          id: crypto.randomUUID(),
+          conversation_id: existingConvo.id,
+          version_num: vNum + 1,
+          type: 'auto_draft',
+          body: followup.draft_body,
+          actor: 'ai',
+          model: AI_MODEL,
+          metadata: JSON.stringify({
+            knowledge_gaps: followup.knowledge_gaps || [],
+            confidence: followup.confidence,
+          }),
+          created_at: ts,
+        });
       }
+    } else if (followup && followup.no_reply_reason) {
+      await assignConversationLabels(existingConvo.id, [followup.no_reply_reason]);
     }
 
     await galactic.db.update('conversations', {
@@ -1960,7 +2003,7 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
       {
         role: 'user',
         content: 'From: ' + from +
-          (guestEmail !== from ? '\nResolved guest: ' + guestEmail : '') +
+          (guestEmail !== fromEmail ? '\nResolved guest: ' + guestEmail : '') +
           (replyToHeader ? '\nReply-To: ' + replyToHeader : '') +
           (args.cc ? '\nCc: ' + args.cc : '') +
           '\nSubject: ' + subject +
@@ -2138,11 +2181,23 @@ export async function conversation_act(args: {
     const bodyToSend = inputBody || latestDraft?.body;
     if (!bodyToSend) throw new Error('No draft to send');
 
-    // Recipient: explicit override (from widget recipient dropdown) > convo guest_email.
-    // Validate format so we don't attempt SMTP with garbage.
-    const recipient = (toOverride && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toOverride))
-      ? toOverride
-      : convo.guest_email;
+    // Recipient: an explicit override must be a valid address — never silently
+    // fall back to the guest (that would send a colleague-bound forward to the
+    // guest instead). Absent an override, reply to the guest.
+    if (toOverride && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toOverride)) {
+      throw new Error("That recipient address doesn't look valid: " + toOverride);
+    }
+    const recipient = toOverride || convo.guest_email;
+
+    // Idempotency: refuse to re-send the exact same reply body (a double-click or
+    // a retried call must not email the guest twice).
+    const dupSent = await galactic.db.first('versions', {
+      columns: ['id'],
+      where: { conversation_id, type: { in: ['sent', 'followup_sent'] }, body: bodyToSend },
+    });
+    if (dupSent) {
+      return { success: true, action: 'already_sent', conversation_id, to: recipient };
+    }
 
     const vNum = await nextVersionNum(conversation_id);
     const isSentBefore = !!(await galactic.db.first('versions', {
@@ -2535,18 +2590,30 @@ export async function conversations_list(args: {
 }): Promise<unknown> {
   const { status, limit, search, label } = args;
 
+  // Validate the filters so a typo returns an ERROR, never a falsely-empty inbox
+  // (the most trust-destroying failure a triage view can have).
+  const VALID_STATUSES = ['active', 'no_action', 'resolved', 'discarded'];
+  if (status && !VALID_STATUSES.includes(status)) {
+    throw new Error('Unknown status "' + status + '". Use one of: ' + VALID_STATUSES.join(', '));
+  }
   const where: Record<string, unknown> = {};
   if (status) where.status = status;
   if (search) {
     where._or = [
       { guest_email: { like: '%' + search + '%' } },
+      { guest_name: { like: '%' + search + '%' } },
       { subject: { like: '%' + search + '%' } },
     ];
   }
   if (label) {
+    const key = label.toLowerCase().trim();
+    const known = (await listLabelRows()).some((row) => row.key === key);
+    if (!known) {
+      throw new Error('Unknown label "' + label + '". See labels_list for valid keys.');
+    }
     const tagged = await galactic.db.select('conversation_labels', {
       columns: ['conversation_id'],
-      where: { label_key: label.toLowerCase().trim() },
+      where: { label_key: key },
       limit: 500,
     }) as Array<{ conversation_id: string }>;
     const ids = [...new Set(tagged.map((row) => row.conversation_id))];

@@ -57,6 +57,10 @@ interface ImapFetchResult {
   // Highest existing UID in the mailbox (for logging + first-connect baseline).
   // The app's watermark is derived from the contiguous-success prefix, not this.
   maxUid: number;
+  // UIDs this call DELIBERATELY dropped (our own outbound copy, or an empty
+  // body). They are done — the app must advance its watermark over them rather
+  // than retry forever (which would wedge the whole inbox behind one message).
+  skippedUids: number[];
 }
 
 const enc = new TextEncoder();
@@ -264,11 +268,12 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
 
       if (uids.length === 0) {
         await cmd('LOGOUT');
-        return { emails: [], attemptedUids: [], uidValidity, uidNext, hasMore: false, maxUid: lastUid };
+        return { emails: [], attemptedUids: [], uidValidity, uidNext, hasMore: false, maxUid: lastUid, skippedUids: [] };
       }
 
       const attemptedUids = uids.slice(0, Math.max(1, limit));
       const emails: FetchedEmail[] = [];
+      const skippedUids: number[] = [];
 
       for (const uid of attemptedUids) {
         try {
@@ -276,10 +281,11 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
           // message which readBytes returns as exact octets.
           const fetchResult = await cmd('UID FETCH ' + uid + ' (BODY.PEEK[])');
           const rawMessage = fetchResult.literals[0];
-          if (!rawMessage || rawMessage.length === 0) continue;
+          if (!rawMessage || rawMessage.length === 0) { skippedUids.push(uid); continue; }
           const parsed = parseMessage(rawMessage);
           // Skip our own outbound (bounced back into the inbox, or a Sent copy).
           if (businessEmail && parsed.from.toLowerCase() === businessEmail.toLowerCase()) {
+            skippedUids.push(uid);
             continue;
           }
           emails.push({ uid, ...parsed });
@@ -302,6 +308,7 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
         uidNext,
         hasMore: uids.length > attemptedUids.length,
         maxUid,
+        skippedUids,
       };
     } catch (e: unknown) {
       console.error('[NET:IMAP] ERROR:', e instanceof Error ? e.message : String(e));
