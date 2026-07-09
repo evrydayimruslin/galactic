@@ -1581,6 +1581,12 @@
       ]
     },
     {
+      "file": "src/bindings/ai-model-precedence.test.ts",
+      "files": [
+        "src/bindings/ai-model-precedence.test.ts"
+      ]
+    },
+    {
       "file": "src/bindings/memory-binding-scope.test.ts",
       "files": [
         "src/bindings/memory-binding-scope.test.ts"
