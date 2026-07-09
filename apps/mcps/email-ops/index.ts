@@ -1740,7 +1740,9 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
               ' (null if it is already in ' + operatorLanguage + ').\n' +
               '3. should_reply — false when a reply would be wrong or redundant: a closing thank-you, we were only CC\'d, or the thread shows it was already answered. Then set no_reply_reason to one of: ' +
               noReplyKeys + ' and draft_body to null.\n' +
-              '4. draft_body — when should_reply is true, the full followup reply IN THE GUEST\'S LANGUAGE, grounded only in the conventions.\n' +
+              '4. draft_body — when should_reply is true, the full followup reply. CRITICAL: write it in the guest\'s language (' +
+              (existingConvo.language || 'the language of their latest message') +
+              ') — always match the language the guest is writing in, never switch. Grounded only in the conventions.\n' +
               '5. confidence — high | medium | low; must not be high if knowledge_gaps is non-empty.\n\n' +
               'Respond with JSON only:\n' +
               '{"summary":"...","translated_message":"...or null","should_reply":true/false,"no_reply_reason":"...or null","draft_body":"...or null","confidence":"high|medium|low","knowledge_gaps":["topics not in conventions"]}',
@@ -1947,8 +1949,8 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
           ' would be wrong or redundant: we are only CC\'d/FYI, a staff member already answered, it is an automated notification/receipt/bounce, or a closing thank-you that needs no answer. When false: set no_reply_reason to the best-matching key (' +
           noReplyKeys + ') and draft_body to null. The email is still summarized either way.\n' +
           '5. recipients — who a reply should go to. Consider From, Reply-To, and addresses in the email body (contact forms and OTA relays carry the real guest there). Set default to the single best address, candidates to all plausible ones, reason to one short sentence.\n' +
-          '6. draft_body — when should_reply is true, the full reply IN THE GUEST\'S LANGUAGE (never ' +
-          operatorLanguage + ' unless the guest wrote in it). Warm, professional, accurate, grounded ONLY in the conventions.\n' +
+          '6. draft_body — when should_reply is true, the full reply. CRITICAL: write the reply in the SAME LANGUAGE the guest wrote their email in — detect it and match it exactly, and NEVER reply in a different language. (The operator language ' +
+          operatorLanguage + ' is only for the summary and translation, never the reply.) Warm, professional, accurate, grounded ONLY in the conventions.\n' +
           '7. confidence — high only when the conventions fully cover the answer and the intent is unambiguous; medium when mostly covered; low when guessing or information is missing. If knowledge_gaps is non-empty, confidence must not be high.\n' +
           '8. priority — high for time-sensitive or sensitive mail (arriving today/tomorrow, a complaint, a cancellation, anything urgent), otherwise normal; low for pure FYI.\n\n' +
           'Respond with JSON only:\n' +
@@ -2344,14 +2346,16 @@ export async function conversation_act(args: {
       ? businessPersona() + '\n\nDraft a followup reply to an ongoing conversation.\n\n' +
         'Business conventions:\n' + conventionsText + '\n\n' +
         'Full thread so far:\n' + threadContext + '\n\n' +
-        'Reply in the same language as the guest. Be warm, professional, accurate.' +
+        'ALWAYS reply in the guest\'s language (' + (convo.language || 'match the guest\'s message') +
+        ') — never reply in a different language than the guest used. Be warm, professional, accurate.' +
         adminInstruction + '\n\n' +
         'Respond with JSON:\n{"draft_body": "your reply", "knowledge_gaps": ["topics not in conventions"]}'
       : businessPersona() + '\n\nDraft a professional reply to the guest.\n\n' +
         'Business conventions:\n' + conventionsText + '\n\n' +
         'Classification: ' + (convo.classification || 'other') +
         ' (admin manually requested a draft)\n\n' +
-        'Reply in the same language as the guest. Be warm, professional, accurate.' +
+        'ALWAYS reply in the guest\'s language (' + (convo.language || 'match the guest\'s message') +
+        ') — never reply in a different language than the guest used. Be warm, professional, accurate.' +
         adminInstruction + '\n\n' +
         'Respond with JSON:\n{"draft_body": "full reply text", "knowledge_gaps": ["topics not covered in conventions"]}';
 
@@ -2436,7 +2440,9 @@ export async function conversation_act(args: {
             role: 'system',
             content:
               businessPersona() +
-              '\n\nDraft a followup email in an ongoing conversation. Keep it in the guest\'s language.\n\nBusiness conventions:\n' +
+              '\n\nDraft a followup email in an ongoing conversation. ALWAYS write it in the guest\'s language (' +
+              (convo.language || 'match the guest\'s messages') +
+              ') — never switch languages. \n\nBusiness conventions:\n' +
               conventionsText + '\n\nThread:\n' + threadContext +
               '\n\nRespond with ONLY the email body text.',
             cache_control: { type: 'ephemeral' },
