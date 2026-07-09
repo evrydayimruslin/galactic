@@ -453,3 +453,85 @@ Deno.test("runtime AI: metered call with ample balance passes the gate and retur
     globalWithEnv.__env = previousEnv;
   }
 });
+
+Deno.test("runtime AI: a pinned route model beats the dev's per-call model", async () => {
+  const previousFetch = globalThis.fetch;
+  let capturedBody: Record<string, unknown> = {};
+
+  try {
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (!url.includes("/chat/completions")) {
+        return new Response("unexpected fetch", { status: 500 });
+      }
+      capturedBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        model: capturedBody.model,
+        choices: [{ message: { content: "pinned" } }],
+        usage: { prompt_tokens: 3, completion_tokens: 4 },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    // Light route with a pinned per-function override model; billing flags off
+    // to isolate model selection from the debit path.
+    const service = createRoutedRuntimeAIService(
+      makeRoute({
+        billingMode: "light",
+        provider: "ultralight",
+        upstreamProvider: "openrouter",
+        baseUrl: "https://openrouter.test/api/v1",
+        model: "anthropic/claude-x",
+        keySource: "platform_openrouter",
+        billingSource: "openrouter",
+        shouldRequireBalance: false,
+        shouldDebitLight: false,
+        modelPinned: true,
+      }),
+      "user-1",
+    );
+    const response = await service.call({
+      model: "openai/gpt-4o-mini",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    assertEquals(capturedBody.model, "anthropic/claude-x");
+    assertEquals(response.content, "pinned");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+Deno.test("runtime AI context: a per-function override selection pins the route model", async () => {
+  let capturedParams: Record<string, unknown> | null = null;
+
+  const context = await createRuntimeAIContext(testUser, {
+    inferenceSelection: { billingMode: "light", model: "openai/gpt-4o-mini" },
+    resolveRoute: async (params) => {
+      capturedParams = params as unknown as Record<string, unknown>;
+      return makeRoute({ modelPinned: true });
+    },
+    checkBalance: async () => 1000,
+  });
+
+  assertEquals(capturedParams?.pinSelectedModel, true);
+  assertEquals(
+    (capturedParams?.selection as Record<string, unknown>)?.model,
+    "openai/gpt-4o-mini",
+  );
+  // toRuntimeAIRoute must carry the pin through to the sandbox route props.
+  assertEquals(context.route?.modelPinned, true);
+});
+
+Deno.test("runtime AI context: no override selection does not pin the route model", async () => {
+  let capturedParams: Record<string, unknown> | null = null;
+
+  await createRuntimeAIContext(testUser, {
+    resolveRoute: async (params) => {
+      capturedParams = params as unknown as Record<string, unknown>;
+      return makeRoute();
+    },
+    checkBalance: async () => 1000,
+  });
+
+  assertEquals(capturedParams?.pinSelectedModel, false);
+});

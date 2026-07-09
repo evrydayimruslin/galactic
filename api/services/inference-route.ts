@@ -39,6 +39,11 @@ export interface ResolvedInferenceRoute {
   requestDefaults?: PlatformInferenceRequestDefaults;
   shouldRequireBalance: boolean;
   shouldDebitLight: boolean;
+  // The route model is the caller's EXPLICIT choice (e.g. the installer's
+  // per-function override) and must win over any per-call ai({model}) argument
+  // from app code. Executors (selectInferenceModel, the sandbox AI binding)
+  // pin route.model when this is set.
+  modelPinned?: boolean;
 }
 
 export function getInferenceRouteCapabilities(
@@ -64,6 +69,10 @@ export interface ResolveInferenceRouteParams {
   userEmail: string;
   requestedModel?: string | null;
   selection?: InferenceRoutePreference | null;
+  // The selection is a user's EXPLICIT override (per-function model picker):
+  // when it carries a model, the resolved route is marked modelPinned so the
+  // dev's per-call ai({model}) argument cannot outrank it.
+  pinSelectedModel?: boolean;
   userService?: Pick<UserService, "getUser" | "getDecryptedApiKey">;
   getOrCreateOpenRouterKey?: typeof getOrCreateOpenRouterKey;
 }
@@ -128,6 +137,10 @@ function getRequestedLightModel(params: ResolveInferenceRouteParams): string | n
     null;
 }
 
+function shouldPinSelectedModel(params: ResolveInferenceRouteParams): boolean {
+  return (params.pinSelectedModel ?? false) && !!params.selection?.model?.trim();
+}
+
 function isConfiguredByokProvider(
   user: UserProfile,
   provider: ActiveBYOKProvider,
@@ -175,6 +188,7 @@ async function buildByokRoute(
     billingSource: "none",
     shouldRequireBalance: false,
     shouldDebitLight: false,
+    modelPinned: shouldPinSelectedModel(params),
   };
 }
 
@@ -226,6 +240,7 @@ async function buildLightRoute(
       billingSource: "openrouter",
       shouldRequireBalance: true,
       shouldDebitLight: true,
+      modelPinned: shouldPinSelectedModel(params),
     };
   } catch (error) {
     if (error instanceof InferenceRouteError) throw error;

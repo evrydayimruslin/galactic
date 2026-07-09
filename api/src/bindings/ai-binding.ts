@@ -7,6 +7,7 @@ import { CHAT_MIN_BALANCE_LIGHT, checkChatBalance, deductChatCost } from '../../
 import { recordAiSpend } from '../../services/ai-spend-tracker.ts';
 import { resolveExecutionContext } from '../../services/execution-context-registry.ts';
 import { resolvePlatformInferenceModel } from '../../services/platform-inference-models.ts';
+import { resolveRequestedModel, shouldRetryWithFallbackModel } from './ai-model-precedence.ts';
 
 // ============================================
 // TYPES
@@ -42,6 +43,11 @@ interface AIBindingProps {
   // cannot fan out many galactic.ai() calls in one execution and outspend their
   // balance. BYOK routes set this false.
   shouldRequireBalance: boolean;
+  // defaultModel is the installer's EXPLICIT per-function override: it beats
+  // the dev's per-call request.model, and the OpenRouter fallback retry is
+  // skipped rather than silently substituting another model for the user's
+  // choice.
+  modelPinned?: boolean;
   unavailableReason?: string | null;
   // Set for bindings loaded into a REUSABLE isolate (loader.get): call() then
   // refuses inference without a resolvable per-call context handle, so a
@@ -118,6 +124,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       requestDefaults,
       shouldDebitLight,
       shouldRequireBalance,
+      modelPinned,
       userId,
       executionId: propExecutionId,
       unavailableReason,
@@ -198,9 +205,15 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       return { role: msg.role, content: msg.content };
     });
 
-    // Model precedence: dev's per-call model > user's selected model
-    // (defaultModel) > platform fallback (deepseek-v4).
-    const requestedModel = request.model || defaultModel || PLATFORM_FALLBACK_MODEL;
+    // Model precedence: see resolveRequestedModel — a pinned per-function
+    // override beats the dev's per-call model; otherwise per-call model >
+    // user's selected model (defaultModel) > platform fallback (deepseek-v4).
+    const requestedModel = resolveRequestedModel({
+      requestModel: request.model,
+      defaultModel,
+      modelPinned,
+      fallbackModel: PLATFORM_FALLBACK_MODEL,
+    });
     const platformModel = provider === 'ultralight'
       ? resolvePlatformInferenceModel(requestedModel)
       : null;
@@ -276,14 +289,18 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       }
     };
 
-    // Attempt the resolved model; if it fails, retry once with the platform
-    // fallback model — but only on the OpenRouter path, where that slug is
-    // valid. A non-OpenRouter BYOK provider can't serve it, so surface the error.
+    // Attempt the resolved model; on failure retry once with the platform
+    // fallback model when eligible (OpenRouter path only, and never for a
+    // pinned model — see shouldRetryWithFallbackModel).
     let result = await attempt(model);
     if (
       'error' in result &&
-      upstreamProvider === 'openrouter' &&
-      model !== PLATFORM_FALLBACK_MODEL
+      shouldRetryWithFallbackModel({
+        upstreamProvider,
+        attemptedModel: model,
+        fallbackModel: PLATFORM_FALLBACK_MODEL,
+        modelPinned,
+      })
     ) {
       const fallback = await attempt(PLATFORM_FALLBACK_MODEL);
       if ('data' in fallback) {

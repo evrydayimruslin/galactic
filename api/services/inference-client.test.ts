@@ -208,3 +208,23 @@ Deno.test("inference client: strips trailing base URL slash", () => {
     "https://api.x.ai/v1/chat/completions",
   );
 });
+
+Deno.test("inference client: a pinned route model beats the requested model", () => {
+  // The pinned model is the user's explicit per-function override — the dev's
+  // per-call model argument must not outrank it on either billing mode.
+  const light = makeRoute({ modelPinned: true, model: "anthropic/claude-x" });
+  assertEquals(selectInferenceModel(light, "openai/gpt-4o-mini"), "anthropic/claude-x");
+
+  const byok = makeRoute({
+    billingMode: "byok",
+    provider: "deepseek",
+    upstreamProvider: "deepseek",
+    model: "deepseek-v4-pro",
+    keySource: "user_byok",
+    billingSource: "none",
+    shouldRequireBalance: false,
+    shouldDebitLight: false,
+    modelPinned: true,
+  });
+  assertEquals(selectInferenceModel(byok, "openai/gpt-4o-mini"), "deepseek-v4-pro");
+});
