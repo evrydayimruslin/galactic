@@ -284,6 +284,34 @@ Deno.test('launch facade: install instructions expose MCP and CLI targets', asyn
   });
 });
 
+Deno.test({
+  name:
+    'launch facade: notifications route rejects api_token/actor callers (account session only)',
+  // The api_token auth path lazily creates a module-cached supabase-js client
+  // whose timer outlives the test (same pattern as the BYOK/wallet launch tests).
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    await withLaunchEnv(async () => {
+      for (const method of ['GET', 'PATCH'] as const) {
+        const response = await handleLaunch(
+          new Request('https://ultralight.test/api/launch/notifications', {
+            method,
+            headers: { Authorization: `Bearer ${TEST_API_TOKEN}` },
+            ...(method === 'PATCH'
+              ? { body: JSON.stringify({ all: true }) }
+              : {}),
+          }),
+        );
+        // An api_token (and by the same guard, routine_actor/sandbox_actor) must
+        // NOT read the owner's inbox or mark alerts read — that path is
+        // gx.notifications, not the website route.
+        assertEquals(response.status, 403);
+      }
+    }, apiTokenAuthMock());
+  },
+});
+
 Deno.test('launch facade: install can include tool-specific handoff', async () => {
   await withLaunchEnv(
     async () => {

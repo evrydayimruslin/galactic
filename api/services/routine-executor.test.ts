@@ -307,6 +307,91 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
   }
 });
 
+Deno.test("routine executor: a post-success bookkeeping failure does NOT re-run the handler", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  let handlerInvocations = 0;
+  const runPatches: Array<Record<string, unknown>> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+
+    if (table === "user_routines" && method === "GET") {
+      if (url.searchParams.get("status") === "eq.active") {
+        return jsonResponse([routineRow()]);
+      }
+      return jsonResponse([routineRow()]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      // The updateRoutineAfterRun success write (carries last_success_at) fails
+      // transiently AFTER the handler already succeeded — the exact window that
+      // used to route into the retry/re-queue path.
+      if ((body as Record<string, unknown>)?.last_success_at) {
+        return new Response("boom", { status: 500 });
+      }
+      return jsonResponse([{ ...routineRow(), ...(body as Record<string, unknown>) }]);
+    }
+    if (table === "routine_runs" && method === "GET") {
+      if (isReaperQuery(url)) return jsonResponse([]);
+      if (url.searchParams.get("id")?.startsWith("eq.")) {
+        return jsonResponse([queuedRunRow()]);
+      }
+      return jsonResponse([]);
+    }
+    if (table === "routine_runs" && method === "POST") {
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      runPatches.push(body as Record<string, unknown>);
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
+    if (table === "routine_capabilities") return jsonResponse(capabilityRows());
+    if (table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "users") return jsonResponse([userRow()]);
+    if (table === "routine_run_steps" && method === "POST") {
+      return jsonResponse([{ id: "step-1" }]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    const summary = await runRoutineExecutorCycle({
+      now: NOW,
+      clock: () => NOW,
+      limit: 5,
+      baseUrl: "https://api.example.test",
+      invokeMcp: async () => {
+        handlerInvocations += 1;
+        return jsonResponse({
+          result: { content: [{ type: "text", text: JSON.stringify({ ok: true }) }] },
+        });
+      },
+    });
+
+    // The handler ran exactly once and the run is reported succeeded, NOT retried.
+    assertEquals(handlerInvocations, 1);
+    assertEquals(summary.succeeded, 1);
+    assertEquals(summary.retried, 0);
+    assertEquals(summary.failed, 0);
+    // Crucially: the run was NEVER re-queued (which would re-execute the handler).
+    assert(
+      !runPatches.some((p) => p.status === "queued"),
+      "post-success bookkeeping failure must not re-queue the run",
+    );
+    // The run is still marked terminal succeeded so the reaper won't retry it.
+    assert(
+      runPatches.some((p) => p.status === "succeeded"),
+      "run should be finished as succeeded",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
 Deno.test("routine executor: retries failed queued runs with backoff", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;
@@ -413,6 +498,14 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
     assertEquals(
       (retryPatch?.body.error as Record<string, unknown>).message,
       "Inbox unavailable",
+    );
+    // The re-queue is CAS-guarded on the run still being "running" so a run the
+    // reaper already failed (or one finishRun marked terminal) can never be
+    // resurrected to "queued" and re-executed.
+    assertEquals(
+      new URL(retryPatch?.url || "https://supabase.example").searchParams
+        .get("status"),
+      "eq.running",
     );
   } finally {
     globalThis.fetch = originalFetch;

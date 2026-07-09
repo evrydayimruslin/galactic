@@ -3309,6 +3309,17 @@ async function handleLaunchNotifications(
   method: string,
 ): Promise<Response> {
   const user = await requireLaunchUser(request);
+  // Account-session only, like every other launch settings/grants route: reject
+  // api_token / routine_actor / sandbox_actor so in-sandbox app code (or a
+  // routine handler) can't read the owner's inbox or silently mark their
+  // "agent paused" alerts read. Agents read notifications via gx.notifications.
+  if (
+    user.authSource === "api_token" ||
+    user.authSource === "routine_actor" ||
+    user.authSource === "sandbox_actor"
+  ) {
+    return error("Notifications require an account session", 403);
+  }
   const {
     listNotifications,
     countUnread,

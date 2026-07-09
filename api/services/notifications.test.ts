@@ -213,6 +213,14 @@ Deno.test("sweepExpiredNotifications deletes rows older than the 90-day cutoff",
     // cutoff = NOW - 90d = 2026-04-09T12:00:00.000Z
     assert(calls[0].url.includes("created_at=lt."));
     assert(calls[0].url.includes("2026-04-09T12%3A00%3A00.000Z"));
+    // Never delete a still-UNREAD critical alert: only rows that are read OR
+    // non-critical are swept.
+    assert(
+      decodeURIComponent(calls[0].url).includes(
+        "or=(read_at.not.is.null,severity.neq.critical)",
+      ),
+      "sweep must preserve unread criticals",
+    );
   } finally {
     restore();
   }

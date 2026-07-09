@@ -199,10 +199,14 @@ export async function sweepExpiredNotifications(
   try {
     const supabase = createSupabaseRestClient({ fetchFn: deps?.fetchFn });
     const cutoff = new Date(now.getTime() - RETENTION_MS).toISOString();
+    // Delete rows past the horizon that are EITHER read OR non-critical — i.e.
+    // never delete a still-UNREAD critical alert (an auto-pause the owner has
+    // not seen). A malformed filter would 400 -> !res.ok -> no-op, never a
+    // wrong delete.
     const res = await supabase.request(
       `/rest/v1/user_notifications?created_at=lt.${
         encodeURIComponent(cutoff)
-      }&select=id`,
+      }&or=(read_at.not.is.null,severity.neq.critical)&select=id`,
       { method: "DELETE", headers: { "Prefer": "return=representation" } },
     );
     if (!res.ok) return 0;
