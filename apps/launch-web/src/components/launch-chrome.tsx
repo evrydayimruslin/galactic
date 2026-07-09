@@ -2,9 +2,12 @@ import {
   type ReactElement,
   type ReactNode,
   useEffect,
+  useRef,
   useState,
 } from "react";
 
+import type { LaunchNotification } from "../../../../shared/contracts/launch.ts";
+import { launchApi } from "../lib/api";
 import { hasLaunchAuthToken } from "../lib/auth";
 import type { LaunchRouteDefinition, LaunchRouteKey } from "../lib/routes";
 import { AddToAgentButton } from "../pages/foundation-pages";
@@ -12,6 +15,7 @@ import { useSignInModal } from "./sign-in-modal";
 
 export type IconName =
   | "arrow"
+  | "bell"
   | "check"
   | "copy"
   | "edit"
@@ -132,7 +136,7 @@ export function LaunchShell({
         <div className="top-actions">
           <AddToAgentButton size="sm" variant="ghost" />
           {signedIn
-            ? null
+            ? <NotificationBell navigate={navigate} />
             : (
               <button
                 className="signin-link"
@@ -284,6 +288,178 @@ export function RouteLink({
   );
 }
 
+function notifRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
+// Owner notification bell (Tier 2A). Reads the same rows as gx.notifications;
+// surfaces auto-pause / budget events for signed-in owners without a reload.
+function NotificationBell(
+  { navigate }: { navigate: (to: string) => void },
+): ReactElement {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<LaunchNotification[]>([]);
+  const [unread, setUnread] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const refresh = async (): Promise<void> => {
+    try {
+      const res = await launchApi.listNotifications({ limit: 30 });
+      setItems(res.notifications);
+      setUnread(res.unread_count);
+    } catch {
+      // Best-effort: the bell just shows no badge if the fetch fails.
+    }
+  };
+
+  // Badge on mount + light 60s polling so an away agent's pause surfaces
+  // without a reload; the dropdown refetches on open.
+  useEffect(() => {
+    let alive = true;
+    const tick = () => {
+      if (alive) void refresh();
+    };
+    tick();
+    const id = window.setInterval(tick, 60000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  // Close on outside click / Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const toggle = async (): Promise<void> => {
+    const next = !open;
+    setOpen(next);
+    if (next) {
+      setLoading(true);
+      await refresh();
+      setLoading(false);
+    }
+  };
+
+  const markAll = async (): Promise<void> => {
+    try {
+      await launchApi.markNotificationsRead({ all: true });
+      const now = new Date().toISOString();
+      setItems((prev) => prev.map((n) => ({ ...n, read_at: n.read_at ?? now })));
+      setUnread(0);
+    } catch {
+      // Best-effort.
+    }
+  };
+
+  const onItemClick = async (n: LaunchNotification): Promise<void> => {
+    if (!n.read_at) {
+      try {
+        await launchApi.markNotificationsRead({ ids: [n.id] });
+        const now = new Date().toISOString();
+        setItems((prev) =>
+          prev.map((x) => (x.id === n.id ? { ...x, read_at: now } : x))
+        );
+        setUnread((u) => Math.max(0, u - 1));
+      } catch {
+        // Best-effort.
+      }
+    }
+    if (n.action_url) {
+      navigate(n.action_url);
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div className="notif-bell" ref={ref}>
+      <button
+        className="icon-button notif-bell-button"
+        aria-label={unread > 0
+          ? `Notifications, ${unread} unread`
+          : "Notifications"}
+        aria-expanded={open}
+        onClick={() => void toggle()}
+        type="button"
+      >
+        <Icon name="bell" />
+        {unread > 0
+          ? <span className="notif-badge">{unread > 9 ? "9+" : unread}</span>
+          : null}
+      </button>
+      {open
+        ? (
+          <div className="notif-panel" role="dialog" aria-label="Notifications">
+            <div className="notif-panel-head">
+              <strong>Notifications</strong>
+              {unread > 0
+                ? (
+                  <button
+                    className="notif-markall"
+                    onClick={() => void markAll()}
+                    type="button"
+                  >
+                    Mark all read
+                  </button>
+                )
+                : null}
+            </div>
+            <div className="notif-list">
+              {loading && items.length === 0
+                ? <p className="notif-empty">Loading…</p>
+                : items.length === 0
+                ? <p className="notif-empty">You're all caught up.</p>
+                : items.map((n) => (
+                  <button
+                    key={n.id}
+                    className={`notif-item${
+                      n.read_at ? "" : " notif-item-unread"
+                    } notif-sev-${n.severity}`}
+                    onClick={() => void onItemClick(n)}
+                    type="button"
+                  >
+                    <span className="notif-item-dot" aria-hidden="true" />
+                    <span className="notif-item-body">
+                      <span className="notif-item-title">{n.title}</span>
+                      {n.body
+                        ? <span className="notif-item-sub">{n.body}</span>
+                        : null}
+                      <span className="notif-item-time">
+                        {notifRelativeTime(n.created_at)}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+            </div>
+          </div>
+        )
+        : null}
+    </div>
+  );
+}
+
 export function Icon({ name, size = 16 }: { name: IconName; size?: number }): ReactElement {
   const common = {
     fill: "none",
@@ -298,6 +474,8 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }): Re
   switch (name) {
     case "arrow":
       return <svg {...common}><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></svg>;
+    case "bell":
+      return <svg {...common}><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6" /><path d="M10.5 20a1.8 1.8 0 0 0 3 0" /></svg>;
     case "check":
       return <svg {...common}><path d="m5 12 5 5L20 7" /></svg>;
     case "copy":

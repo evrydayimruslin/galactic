@@ -17,6 +17,8 @@ import type {
   LaunchApiKeyListResponse,
   LaunchByokMutationResponse,
   LaunchCallerFunctionPermissionsResponse,
+  LaunchNotificationsMarkReadResponse,
+  LaunchNotificationsResponse,
   LaunchCallerFunctionPermissionsUpdateRequest,
   LaunchFunctionInferenceOverrideRequest,
   LaunchFunctionInferenceResponse,
@@ -781,6 +783,27 @@ export class LaunchApiClient {
   revokeApiKey(id: string): Promise<LaunchApiKeyDeleteResponse> {
     return this.fetchJson(`/api/launch/api-keys/${encodeURIComponent(id)}`, {
       method: "DELETE",
+    });
+  }
+
+  listNotifications(
+    options: { unreadOnly?: boolean; limit?: number } = {},
+  ): Promise<LaunchNotificationsResponse> {
+    const params = new URLSearchParams();
+    if (options.unreadOnly) params.set("unread", "1");
+    if (options.limit) params.set("limit", String(options.limit));
+    const qs = params.toString();
+    return this.fetchJson(
+      `/api/launch/notifications${qs ? `?${qs}` : ""}`,
+    );
+  }
+
+  markNotificationsRead(
+    body: { ids?: string[]; all?: boolean },
+  ): Promise<LaunchNotificationsMarkReadResponse> {
+    return this.fetchJson("/api/launch/notifications", {
+      method: "PATCH",
+      body: JSON.stringify(body),
     });
   }
 

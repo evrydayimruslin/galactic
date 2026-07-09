@@ -221,6 +221,140 @@ button {
   font-weight: 500;
 }
 
+/* Owner notification bell (Tier 2A) — header inbox. */
+.notif-bell {
+  position: relative;
+  display: inline-flex;
+}
+
+.notif-bell-button {
+  position: relative;
+}
+
+.notif-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--ul-red);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--ul-bg);
+}
+
+.notif-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  background: var(--ul-bg);
+  border: 1px solid var(--ul-border);
+  border-radius: 12px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.14);
+  z-index: 120;
+  overflow: hidden;
+}
+
+.notif-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--ul-border);
+}
+
+.notif-markall {
+  border: 0;
+  background: transparent;
+  color: var(--ul-green-deep);
+  cursor: pointer;
+  font-family: var(--ul-font);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.notif-list {
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.notif-empty {
+  margin: 0;
+  padding: 22px 14px;
+  color: var(--ul-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.notif-item {
+  display: flex;
+  gap: 9px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--ul-border);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--ul-font);
+}
+
+.notif-item:last-child {
+  border-bottom: 0;
+}
+
+.notif-item:hover {
+  background: var(--ul-active);
+}
+
+.notif-item-unread {
+  background: rgba(34, 197, 94, 0.05);
+}
+
+.notif-item-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--ul-muted);
+}
+
+.notif-item-unread.notif-sev-critical .notif-item-dot { background: var(--ul-red); }
+.notif-item-unread.notif-sev-warning .notif-item-dot { background: var(--ul-amber); }
+.notif-item-unread.notif-sev-info .notif-item-dot { background: var(--ul-green); }
+.notif-item:not(.notif-item-unread) .notif-item-dot { background: transparent; }
+
+.notif-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.notif-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ul-text);
+}
+
+.notif-item-sub {
+  font-size: 12px;
+  color: var(--ul-muted);
+}
+
+.notif-item-time {
+  font-size: 11px;
+  color: var(--ul-muted);
+}
+
 /* Sign-in modal (rendered by SignInModalProvider). Without these rules the
    modal renders as an unstyled in-flow block below the fold — i.e. clicking
    "Sign in" appears to do nothing. */

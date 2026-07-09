@@ -665,6 +665,31 @@ export interface LaunchInterfaceSummary {
   minHeight?: number | null;
 }
 
+// Owner notification (routine auto-pause / budget wall today; any subsystem
+// later). The website bell + gx.notifications read the same rows.
+export interface LaunchNotification {
+  id: string;
+  kind: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  body?: string | null;
+  entity_type?: string | null;
+  entity_id?: string | null;
+  action_url?: string | null;
+  created_at: string;
+  read_at?: string | null;
+}
+
+export interface LaunchNotificationsResponse {
+  notifications: LaunchNotification[];
+  unread_count: number;
+}
+
+export interface LaunchNotificationsMarkReadResponse {
+  ok: boolean;
+  marked: number;
+}
+
 // Viewer-facing disclosure of an Agent's autonomous (full-time) behavior,
 // derived from its manifest routine declaration. Present only when the Agent
 // ships a routine template — the "this runs on its own" transparency card.
