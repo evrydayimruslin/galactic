@@ -387,7 +387,15 @@ function NotificationBell(
         // Best-effort.
       }
     }
-    if (n.action_url) {
+    // Only follow an in-app relative path. A notification action_url is a
+    // server-stored string; restricting to a single leading "/" (not "//",
+    // which is protocol-relative) blocks javascript: URLs and off-origin
+    // redirects that navigate()/App.tsx would otherwise execute.
+    if (
+      typeof n.action_url === "string" &&
+      n.action_url.startsWith("/") &&
+      !n.action_url.startsWith("//")
+    ) {
       navigate(n.action_url);
       setOpen(false);
     }

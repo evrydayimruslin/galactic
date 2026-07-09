@@ -1081,10 +1081,19 @@ async function invokeRoutineHandler(
 async function patchRun(
   runId: string,
   payload: Record<string, unknown>,
+  // Optional CAS guard: only apply the update if the row is still in this
+  // status. Note callers must NOT rely on the returned row when the update
+  // moves the row OUT of expectStatus — PostgREST return=representation echoes
+  // only rows still matching the filter after the write (see claimRoutine).
+  expectStatus?: RoutineRunStatus,
 ): Promise<ExecutorRunRow | null> {
   const [run] = await patchRows<ExecutorRunRow>(
     "routine_runs",
-    { id: `eq.${runId}`, select: RUN_SELECT },
+    {
+      id: `eq.${runId}`,
+      ...(expectStatus ? { status: `eq.${expectStatus}` } : {}),
+      select: RUN_SELECT,
+    },
     payload,
     "Failed to update routine run",
   );
@@ -1140,7 +1149,10 @@ async function markRunForRetry(
         max_delay_seconds: policy.maxDelaySeconds,
       },
     },
-  });
+    // CAS: only re-queue a run that is still "running". A run the reaper already
+    // failed, or one finishRun already marked terminal, must never be resurrected
+    // to "queued" (which would re-execute the handler's side effects).
+  }, "running");
 }
 
 // Updates the routine's bookkeeping after a run attempt and applies the
@@ -1321,31 +1333,13 @@ async function executeClaimedRun(
 
   const startedAt = now;
   const args = buildRoutineArgs(routine, run);
+
+  // ONLY the handler invocation is in the retryable try. A failure here is the
+  // handler genuinely failing (its side effects did not complete) — the one
+  // case that may retry / terminally-fail the run.
+  let result: unknown;
   try {
-    const result = await invokeRoutineHandler(routine, run, options);
-    const completedAt = clock();
-    // Budget accounting runs before the root step is recorded so the
-    // contribution count contains exactly the calls the run made.
-    const accounting = await settleRunBudget(routine, run, completedAt);
-    await recordRootStep(
-      routine,
-      run,
-      "succeeded",
-      startedAt,
-      completedAt,
-      args,
-      result,
-    );
-    await finishRun(run, "succeeded", completedAt, {
-      summary: "Routine handler completed successfully.",
-    });
-    const autoPaused = await updateRoutineAfterRun(
-      routine,
-      completedAt,
-      true,
-      accounting,
-    );
-    return { status: "succeeded", autoPaused };
+    result = await invokeRoutineHandler(routine, run, options);
   } catch (err) {
     const completedAt = clock();
     const policy = retryPolicyFrom(routine, run);
@@ -1386,6 +1380,48 @@ async function executeClaimedRun(
       accounting,
     ).catch(() => false);
     return { status: "failed", autoPaused };
+  }
+
+  // The handler SUCCEEDED — its side effects are committed. From here, ANY
+  // bookkeeping failure is best-effort and MUST NOT re-run the handler (a retry
+  // would duplicate the side effects — emails re-sent, rows re-written). We
+  // swallow it and still report success; the run is a completed wake regardless
+  // of whether the flight/budget rollup finished writing.
+  const completedAt = clock();
+  try {
+    // Budget accounting runs before the root step is recorded so the
+    // contribution count contains exactly the calls the run made.
+    const accounting = await settleRunBudget(routine, run, completedAt);
+    await recordRootStep(
+      routine,
+      run,
+      "succeeded",
+      startedAt,
+      completedAt,
+      args,
+      result,
+    );
+    await finishRun(run, "succeeded", completedAt, {
+      summary: "Routine handler completed successfully.",
+    });
+    const autoPaused = await updateRoutineAfterRun(
+      routine,
+      completedAt,
+      true,
+      accounting,
+    );
+    return { status: "succeeded", autoPaused };
+  } catch (bookkeepingErr) {
+    console.error(
+      "[ROUTINE-EXEC] post-success bookkeeping failed (run not re-run):",
+      bookkeepingErr,
+    );
+    // Best-effort: get the run out of "running" so the reaper doesn't later
+    // fail it and drive a retry of an already-succeeded handler.
+    await finishRun(run, "succeeded", completedAt, {
+      summary: "Routine handler completed successfully (bookkeeping incomplete).",
+    }).catch(() => {});
+    return { status: "succeeded", autoPaused: false };
   }
 }
 
