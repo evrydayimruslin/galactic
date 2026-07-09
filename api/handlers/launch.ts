@@ -84,6 +84,7 @@ import {
   type LaunchAgentRelationship,
   type LaunchAgentSummary,
   type LaunchFolder,
+  type LaunchFullTimeDisclosure,
   type LaunchInterfaceSummary,
   type LaunchAgentVisibility,
   type LaunchTrustCard,
@@ -6454,6 +6455,11 @@ function toLaunchAgentSummary(
   const interfaces = options.includeInterfaces
     ? interfaceSummaries(row)
     : undefined;
+  // Full-time disclosure rides the same detail-context flag as interfaces — both
+  // are manifest-derived and only wanted on the agent detail response.
+  const fullTime = options.includeInterfaces
+    ? fullTimeDisclosure(row)
+    : undefined;
   return {
     id: row.id,
     slug,
@@ -6473,7 +6479,81 @@ function toLaunchAgentSummary(
     tags: row.tags || [],
     updatedAt: row.updated_at || row.created_at || null,
     ...(interfaces ? { interfaces } : {}),
+    ...(fullTime ? { fullTime } : {}),
   };
+}
+
+// Viewer-facing disclosure of an Agent's autonomous behavior, from its manifest
+// routine declaration. Present only when the Agent ships a routine template — a
+// full-time agent — so the detail page can show "this runs on its own".
+function fullTimeDisclosure(
+  row: LaunchAppRow,
+): LaunchFullTimeDisclosure | undefined {
+  const manifest = parseManifest(row.manifest);
+  const routine = manifest?.routines?.[0];
+  if (!routine) return undefined;
+
+  type CapEntry = LaunchFullTimeDisclosure["capabilities"][number];
+  const capabilities: CapEntry[] = (routine.capabilities || [])
+    .flatMap((cap): CapEntry[] => {
+      const access: "read" | "write" = cap.access === "write"
+        ? "write"
+        : "read";
+      const fns = Array.isArray(cap.functions) ? cap.functions : [];
+      if (fns.length === 0) {
+        return [{ appRef: cap.app ?? null, functionName: null, access }];
+      }
+      return fns.map((fn): CapEntry => ({
+        appRef: cap.app ?? null,
+        functionName: fn,
+        access,
+      }));
+    })
+    .slice(0, 24);
+
+  return {
+    label: routine.label || "Full-time agent",
+    description: routine.description ?? null,
+    scheduleSummary: summarizeRoutineSchedule(routine.default_schedule),
+    budget: {
+      perRunLight: positiveOrNull(routine.budget_defaults?.max_light_per_run),
+      perDayLight: positiveOrNull(routine.budget_defaults?.max_light_per_day),
+      perMonthLight: positiveOrNull(
+        routine.budget_defaults?.max_light_per_month,
+      ),
+    },
+    recordsReasoning: manifest?.flight_recorder === true,
+    capabilities,
+  };
+}
+
+function positiveOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+// Human-readable cadence from a manifest schedule declaration (string cron or
+// interval/cron object).
+function summarizeRoutineSchedule(schedule: unknown): string | null {
+  if (!schedule) return null;
+  if (typeof schedule === "string") {
+    return schedule.trim() ? `cron ${schedule.trim()}` : null;
+  }
+  if (typeof schedule !== "object") return null;
+  const s = schedule as Record<string, unknown>;
+  if (typeof s.cron === "string" && s.cron.trim()) {
+    return `cron ${s.cron.trim()}`;
+  }
+  const mins = s.every_minutes;
+  if (typeof mins === "number" && mins > 0) {
+    return mins === 1 ? "every minute" : `every ${mins} minutes`;
+  }
+  const secs = s.every_seconds;
+  if (typeof secs === "number" && secs > 0) {
+    return secs === 1 ? "every second" : `every ${secs} seconds`;
+  }
+  return null;
 }
 
 const INTERFACE_ARTIFACT_HASH_RE = /^[0-9a-f]{64}$/;

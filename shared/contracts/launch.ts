@@ -665,6 +665,30 @@ export interface LaunchInterfaceSummary {
   minHeight?: number | null;
 }
 
+// Viewer-facing disclosure of an Agent's autonomous (full-time) behavior,
+// derived from its manifest routine declaration. Present only when the Agent
+// ships a routine template — the "this runs on its own" transparency card.
+export interface LaunchFullTimeDisclosure {
+  label: string;
+  description?: string | null;
+  // Human-readable cadence, e.g. "every 5 minutes" / "daily at 09:00 UTC".
+  scheduleSummary: string | null;
+  budget: {
+    perRunLight: number | null;
+    perDayLight: number | null;
+    perMonthLight: number | null;
+  };
+  // Manifest flight_recorder flag — whether the platform records the agent's
+  // reasoning + data changes each wake (owner + agent can review them).
+  recordsReasoning: boolean;
+  // Downstream Agents/functions the routine is declared to use autonomously.
+  capabilities: Array<{
+    appRef: string | null;
+    functionName: string | null;
+    access: "read" | "write" | null;
+  }>;
+}
+
 export interface LaunchAgentSummary {
   id: string;
   slug: string;
@@ -689,6 +713,10 @@ export interface LaunchAgentSummary {
   // Present only on the agent detail response, and only for interfaces with
   // a server-stamped artifact hash (renderable by the sandbox worker).
   interfaces?: LaunchInterfaceSummary[];
+  // Present only on the agent detail response, and only when the Agent's
+  // manifest declares a routine (full-time agent) — the autonomous-behavior
+  // disclosure card.
+  fullTime?: LaunchFullTimeDisclosure | null;
 }
 
 export interface LaunchAgentAdminSummary {

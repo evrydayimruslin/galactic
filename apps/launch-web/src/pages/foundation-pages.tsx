@@ -32,6 +32,7 @@ import {
   type LaunchAgentRelationship,
   type LaunchAgentSummary,
   type LaunchFolder,
+  type LaunchFullTimeDisclosure,
   type LaunchInterfaceSummary,
   type LaunchNetworkDisclosure,
   type LaunchTrustCard,
@@ -158,6 +159,9 @@ interface AgentDetailFixture extends AgentFixture {
   functions: AgentFunctionFixture[];
   // Sandboxed HTML interfaces the agent ships; empty for agents without any.
   interfaces: LaunchInterfaceSummary[];
+  // Autonomous-behavior disclosure, present only for full-time agents (the
+  // manifest declares a routine). Null otherwise.
+  fullTime: LaunchFullTimeDisclosure | null;
   relationship: LaunchAgentRelationship;
   // Trust fields are null until the Agent publishes a signed trust card.
   runtime: string | null;
@@ -591,6 +595,7 @@ function liveAgentFixture(
     interfaces: tool.interfaces || [],
     kind: tool.kind,
     name: tool.name,
+    fullTime: tool.fullTime ?? null,
     relationship: tool.relationship,
     runtime: trust?.runtime || null,
     signer: trust?.signer || null,
@@ -3917,6 +3922,9 @@ function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement
           })()}
         </div>
       </Card>
+      {tool.fullTime
+        ? <FullTimeDisclosureCard fullTime={tool.fullTime} />
+        : null}
       <Card>
         <p className="section-label">Pricing</p>
         <div className="pricing-line">
@@ -3954,6 +3962,77 @@ function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement
         </div>
       </div>
     </div>
+  );
+}
+
+// Viewer-facing disclosure that an Agent runs autonomously (full-time). Purely
+// informational — what it does on its own, from its manifest routine
+// declaration. Owners activate/manage it in the routine monitor, not here.
+function FullTimeDisclosureCard(
+  { fullTime }: { fullTime: LaunchFullTimeDisclosure },
+): ReactElement {
+  const light = (n: number | null): string | null =>
+    n === null ? null : `${formatNumber(n)} Light`;
+  const budgetParts = [
+    light(fullTime.budget.perRunLight) &&
+    `${light(fullTime.budget.perRunLight)}/run`,
+    light(fullTime.budget.perDayLight) &&
+    `${light(fullTime.budget.perDayLight)}/day`,
+    light(fullTime.budget.perMonthLight) &&
+    `${light(fullTime.budget.perMonthLight)}/month`,
+  ].filter((part): part is string => Boolean(part));
+
+  return (
+    <Card className="fulltime-card">
+      <div className="fulltime-head">
+        <Icon name="spark" />
+        <div>
+          <h3>Full-time agent</h3>
+          <p>
+            {fullTime.description ||
+              "Runs on its own, on a schedule, without being prompted."}
+          </p>
+        </div>
+      </div>
+      <div className="trust-meta">
+        {fullTime.scheduleSummary
+          ? <MetaPair label="runs" value={fullTime.scheduleSummary} />
+          : null}
+        {budgetParts.length > 0
+          ? <MetaPair label="budget" value={budgetParts.join(" · ")} />
+          : null}
+        <MetaPair
+          label="reasoning"
+          value={fullTime.recordsReasoning ? "recorded" : "not recorded"}
+        />
+      </div>
+      {fullTime.capabilities.length > 0
+        ? (
+          <div className="fulltime-caps">
+            <p className="section-label">Uses on its own</p>
+            <div className="fulltime-cap-list">
+              {fullTime.capabilities.map((cap, i) => (
+                <span
+                  key={`${cap.appRef ?? "app"}-${cap.functionName ?? i}`}
+                  className="fulltime-cap"
+                >
+                  <Mono>
+                    {cap.appRef ?? "?"}
+                    {cap.functionName ? `.${cap.functionName}` : ""}
+                  </Mono>
+                  {cap.access === "write"
+                    ? <span className="fulltime-cap-write">write</span>
+                    : null}
+                </span>
+              ))}
+            </div>
+          </div>
+        )
+        : null}
+      <p className="fulltime-note">
+        The owner controls whether it's active, its goal, and its budget.
+      </p>
+    </Card>
   );
 }
 

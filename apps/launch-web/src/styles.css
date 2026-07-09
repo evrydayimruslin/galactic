@@ -2687,6 +2687,65 @@ button {
   margin: 0 0 4px;
 }
 
+/* Full-time agent disclosure card (autonomous-behavior transparency). */
+.fulltime-card {
+  border-color: var(--ul-green);
+}
+
+.fulltime-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin-bottom: 12px;
+}
+
+.fulltime-head svg {
+  flex: 0 0 auto;
+  color: var(--ul-green-deep);
+}
+
+.fulltime-head h3 {
+  margin: 0 0 4px;
+}
+
+.fulltime-head p {
+  margin: 0;
+  color: var(--ul-muted);
+}
+
+.fulltime-caps {
+  margin-top: 12px;
+}
+
+.fulltime-cap-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.fulltime-cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--ul-active);
+}
+
+.fulltime-cap-write {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ul-green-deep);
+}
+
+.fulltime-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--ul-muted);
+}
+
 .trust-card-title {
   display: flex;
   align-items: center;
