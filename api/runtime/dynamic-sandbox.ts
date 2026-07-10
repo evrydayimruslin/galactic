@@ -52,7 +52,7 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-07.flight-recorder.v1";
+const SANDBOX_TEMPLATE_VERSION = "2026-07-09.notify-owner.v1";
 
 // Reuse eligibility lives in its own dependency-light module (imported above) so
 // billing imports the SAME predicate — a divergent copy is a money bug (see the
@@ -208,9 +208,19 @@ interface DynamicWorkerEntrypointExports {
       };
     },
   ): unknown;
+  NotifyBinding(
+    input: {
+      props: {
+        appId: string;
+        userId: string;
+        requireExecCtx?: boolean;
+      };
+    },
+  ): unknown;
   AIBinding(input: {
     props: {
       userId: string;
+      appId: string | null;
       executionId: string | null;
       apiKey: string | null;
       provider: string | null;
@@ -220,6 +230,7 @@ interface DynamicWorkerEntrypointExports {
       canonicalModelId: string | null;
       billingModelId: string | null;
       billingSource: string | null;
+      keySource: string | null;
       requestDefaults: Record<string, unknown> | null;
       shouldDebitLight: boolean;
       shouldRequireBalance: boolean;
@@ -472,6 +483,11 @@ globalThis.ultralight = {
   runs: {
     recent(o) { const e = globalThis.__rpcEnv; if (!e.RUNS) return Promise.reject(new Error('galactic.runs unavailable: set "flight_recorder": true in the manifest.')); return e.RUNS.recent((o && o.limit) || 10, globalThis.__execHandle); },
   },
+  // Owner notifications: one report to the CURRENT user's inbox bell. Kind,
+  // identity, dedupe namespacing, and rate caps are enforced host-side.
+  notify(o) { if (!${
+      config.permissions.includes("notify:owner")
+    }) return Promise.reject(new Error('galactic.notify unavailable: add "notify:owner" to manifest permissions.')); const e = globalThis.__rpcEnv; return e.NOTIFY ? e.NOTIFY.notifyOwner(o || {}, globalThis.__execHandle) : Promise.reject(new Error('Notifications not available')); },
   ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); var __t0 = Date.now(); var __clip = function(v){ try { var s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > 2000 ? s.slice(0, 2000) + '…[truncated]' : (s || ''); } catch (_e) { return ''; } }; var __rec = function(resp, errMsg){ try { var f = globalThis.__flight; if (f && f.ai && f.ai.length < 20) f.ai.push({ at: new Date().toISOString(), ms: Date.now() - __t0, model: (resp && resp.model) || (r && r.model) || null, cost_light: (resp && resp.usage && resp.usage.cost_light) || 0, prompt: __clip(r && r.messages), response: errMsg ? ('[error] ' + __clip(errMsg)) : __clip(resp && resp.content) }); } catch (_e) {} }; return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { __rec(null, resp.error); throw new Error('galactic.ai failed: ' + resp.error); } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} __rec(resp); return resp; }); },
   async call(targetAppId, functionName, callArgs) {
     if (!targetAppId || !functionName) throw new Error('target app id and function name are required');
@@ -771,10 +787,30 @@ export default {
       });
     }
 
+    // Owner notifications (manifest notify:owner): self-notification only —
+    // the (appId, userId) identity is baked host-side, the kind is fixed to
+    // agent_report, dedupe keys are namespaced per app, and writes are
+    // rate-capped per (user, app, day). See services/agent-notify.ts.
+    if (
+      config.permissions.includes("notify:owner") && ctx?.exports?.NotifyBinding
+    ) {
+      bindings.NOTIFY = ctx.exports.NotifyBinding({
+        props: {
+          appId: config.appId,
+          userId: config.userId,
+          requireExecCtx: useGetReuse,
+        },
+      });
+    }
+
     if (config.permissions.includes("ai:call") && ctx?.exports?.AIBinding) {
       bindings.AI = ctx.exports.AIBinding({
         props: {
           userId: config.userId,
+          // appId is stable for the isolate's lifetime (reuse key includes the
+          // app), so props are a safe legacy fallback — unlike functionName,
+          // which is per-call and resolves via the execution context only.
+          appId: config.appId || null,
           executionId: config.executionId || null,
           apiKey: config.aiRoute?.apiKey || config.userApiKey,
           provider: config.aiRoute?.provider || null,
@@ -785,6 +821,7 @@ export default {
           canonicalModelId: config.aiRoute?.canonicalModelId || null,
           billingModelId: config.aiRoute?.billingModelId || null,
           billingSource: config.aiRoute?.billingSource || null,
+          keySource: config.aiRoute?.keySource || null,
           requestDefaults: config.aiRoute?.requestDefaults || null,
           shouldDebitLight: !!config.aiRoute?.shouldDebitLight,
           shouldRequireBalance: !!config.aiRoute?.shouldRequireBalance,
@@ -905,6 +942,8 @@ export default {
     // the CURRENT call's, not a stale baked one. (See execution-context-registry.)
     execCtxHandle = registerExecutionContext({
       aiExecutionId: config.executionId,
+      appId: config.appId ?? null,
+      functionName: functionName ?? null,
       cloudOperationMetering: config.cloudOperationMetering,
       cloudOperationBillingConfig: config.cloudOperationBillingConfig,
       callerContextToken: config.callerContextToken ?? null,

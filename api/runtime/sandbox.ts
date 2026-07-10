@@ -126,6 +126,9 @@ export interface RuntimeAIRoute {
   canonicalModelId?: string;
   billingModelId?: string;
   billingSource?: string;
+  // Which key served the route ('user_byok' | 'platform_openrouter' | ...);
+  // lets the unbilled-usage recorder tag BYOK vs other zero-debit routes.
+  keySource?: string;
   requestDefaults?: Record<string, unknown>;
   shouldDebitLight: boolean;
   // Metered (credits) route: re-check the wallet before EVERY ai() call so a

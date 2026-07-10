@@ -5,7 +5,10 @@ import type {
 import { getEnv } from "../lib/env.ts";
 import { getBillingConfig } from "./billing-config.ts";
 import { quoteLaunchWalletFunding } from "./stripe-processing-fees.ts";
-import { recordPendingLightDeposit } from "./stripe-deposits.ts";
+import {
+  recordFailedLightDepositAttempt,
+  recordPendingLightDeposit,
+} from "./stripe-deposits.ts";
 
 export const LAUNCH_CARD_FUNDING_METHOD = "launch_card_gross_up";
 export const LAUNCH_ACH_FUNDING_METHOD = "launch_ach_direct_debit";
@@ -145,6 +148,19 @@ export async function createLaunchWalletPaymentIntent(input: {
   const publishableKey = getEnv("STRIPE_PUBLISHABLE_KEY") as string | undefined;
 
   if (!stripeSecretKey || !publishableKey) {
+    // Persist the attempt: a config-down checkout previously left ZERO DB
+    // trace (thrown before any row), making the outage invisible to any
+    // monitor. Best-effort — never mask the 503.
+    await recordFailedLightDepositAttempt({
+      userId: input.userId,
+      fundingMethod: fundingMethod(input.method),
+      failureCode: "config_stripe_unconfigured",
+      failureMessage: "Stripe wallet funding is not configured yet.",
+      requestedLight: input.amountLight,
+      metadata: { source: "launch_web" },
+    }).catch((err) =>
+      console.error("[STRIPE] Failed to record config-down attempt:", err)
+    );
     throw new LaunchWalletFundingError(
       "Stripe wallet funding is not configured yet.",
       503,
@@ -183,6 +199,23 @@ export async function createLaunchWalletPaymentIntent(input: {
     } catch {
       // Non-JSON body (rare) — fall through to the generic message.
     }
+    // Persist the attempt (intent-create failures previously left no row).
+    // Best-effort — never mask the real error.
+    await recordFailedLightDepositAttempt({
+      userId: input.userId,
+      fundingMethod: fundingMethod(quote.method),
+      failureCode: stripeError.code || `stripe_create_failed_${intentRes.status}`,
+      failureMessage: stripeError.message || bodyText.slice(0, 300),
+      requestedLight: quote.amountLight,
+      requestedAmountCents: quote.totalAmountCents,
+      metadata: {
+        source: "launch_web",
+        stripe_error_type: stripeError.type || null,
+        stripe_http_status: intentRes.status,
+      },
+    }).catch((err) =>
+      console.error("[STRIPE] Failed to record intent-create failure:", err)
+    );
     // Account not yet activated for live charges: actionable for the operator,
     // not the buyer's fault — surface as a config (503) error, do not retry.
     if (stripeError.code === "testmode_charges_only") {

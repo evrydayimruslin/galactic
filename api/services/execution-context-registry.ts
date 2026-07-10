@@ -25,6 +25,14 @@ import type { RuntimeConfig } from "../runtime/sandbox.ts";
 export interface ExecutionContextEntry {
   /** The execution id the AI-spend ledger (ai-spend-tracker.ts) is keyed by. */
   aiExecutionId: string | null;
+  /**
+   * App + entry-function attribution for this execution's billing rows
+   * (debit_light p_app_id/p_function_name, ai_usage_events). functionName is
+   * per-CALL, so like the metering context it must resolve per-RPC — a warm
+   * isolate's frozen props would attribute call N's spend to call 1's function.
+   */
+  appId: string | null;
+  functionName: string | null;
   /** Per-call cloud-operation metering (receiptId/holdId/payerUserId/...). */
   cloudOperationMetering: RuntimeConfig["cloudOperationMetering"];
   cloudOperationBillingConfig: RuntimeConfig["cloudOperationBillingConfig"];
@@ -73,6 +81,8 @@ export function resolveExecutionContext(
   if (!entry) return null;
   return {
     aiExecutionId: entry.aiExecutionId,
+    appId: entry.appId,
+    functionName: entry.functionName,
     cloudOperationMetering: entry.cloudOperationMetering,
     cloudOperationBillingConfig: entry.cloudOperationBillingConfig,
     callerContextToken: entry.callerContextToken,

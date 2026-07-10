@@ -535,3 +535,141 @@ Deno.test("runtime AI context: no override selection does not pin the route mode
 
   assertEquals(capturedParams?.pinSelectedModel, false);
 });
+
+Deno.test("runtime AI: BYOK route records an unbilled usage event with attribution", async () => {
+  const previousFetch = globalThis.fetch;
+  const globalWithEnv = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
+  const previousEnv = globalWithEnv.__env;
+  let usageBody: Record<string, unknown> | null = null;
+  let debitCalled = false;
+
+  try {
+    globalWithEnv.__env = {
+      ...(previousEnv || {}),
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    };
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("/rpc/debit_light")) {
+        debitCalled = true;
+        return new Response("[]", { status: 200 });
+      }
+      if (url.includes("/rest/v1/ai_usage_events")) {
+        usageBody = JSON.parse(String(init?.body));
+        return new Response(null, { status: 201 });
+      }
+      return new Response(JSON.stringify({
+        model: "deepseek-v4-pro",
+        choices: [{ message: { content: "ok" } }],
+        usage: { prompt_tokens: 3, completion_tokens: 4 },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    const service = createRoutedRuntimeAIService(
+      makeRoute(),
+      "user-1",
+      undefined,
+      { appId: "app-9", functionName: "summarize" },
+    );
+    const response = await service.call({
+      messages: [{ role: "user", content: "hi" }],
+    });
+    // The usage write is fire-and-forget — let its microtask chain settle.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assertEquals(response.content, "ok");
+    assertEquals(debitCalled, false);
+    assertEquals(usageBody !== null, true);
+    assertEquals(usageBody!.billing_mode, "byok");
+    assertEquals(usageBody!.key_source, "user_byok");
+    assertEquals(usageBody!.app_id, "app-9");
+    assertEquals(usageBody!.function_name, "summarize");
+    assertEquals(usageBody!.model, "deepseek-v4-pro");
+    assertEquals(usageBody!.prompt_tokens, 3);
+    assertEquals(usageBody!.completion_tokens, 4);
+    assertEquals(usageBody!.total_tokens, 7);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalWithEnv.__env = previousEnv;
+  }
+});
+
+Deno.test("runtime AI: metered debit carries app + function attribution", async () => {
+  const previousFetch = globalThis.fetch;
+  const globalWithEnv = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
+  const previousEnv = globalWithEnv.__env;
+  let debitBody: Record<string, unknown> | null = null;
+  let usageEventFired = false;
+
+  try {
+    globalWithEnv.__env = {
+      ...(previousEnv || {}),
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    };
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("/chat/completions")) {
+        return new Response(JSON.stringify({
+          model: "openai/gpt-4o-mini",
+          choices: [{ message: { content: "metered" } }],
+          usage: { prompt_tokens: 100, completion_tokens: 200 },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.includes("/rpc/debit_light")) {
+        debitBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify([{
+          old_balance: 100,
+          new_balance: 99.9851,
+          was_depleted: false,
+          amount_debited: 0.0149,
+        }]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.includes("/rest/v1/ai_usage_events")) {
+        usageEventFired = true;
+        return new Response(null, { status: 201 });
+      }
+      if (url.includes("/billing_transactions")) {
+        return new Response(null, { status: 204 });
+      }
+      return new Response("unexpected fetch", { status: 500 });
+    }) as typeof fetch;
+
+    const service = createRoutedRuntimeAIService(
+      makeRoute({
+        billingMode: "light",
+        provider: "ultralight",
+        upstreamProvider: "openrouter",
+        baseUrl: "https://openrouter.test/api/v1",
+        model: "deepseek/deepseek-v4-flash",
+        keySource: "platform_openrouter",
+        billingSource: "openrouter",
+        shouldRequireBalance: true,
+        shouldDebitLight: true,
+      }),
+      "user-1",
+      undefined,
+      { appId: "app-9", functionName: "summarize" },
+    );
+    const response = await service.call({
+      model: "openai/gpt-4o-mini",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assertEquals(response.content, "metered");
+    assertEquals(debitBody?.p_app_id, "app-9");
+    assertEquals(debitBody?.p_function_name, "summarize");
+    // Billed calls are covered by billing_transactions — no duplicate row on
+    // the unbilled-events path.
+    assertEquals(usageEventFired, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalWithEnv.__env = previousEnv;
+  }
+});

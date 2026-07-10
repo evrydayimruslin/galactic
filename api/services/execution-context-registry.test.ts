@@ -12,6 +12,8 @@ import {
 function entry(receiptId: string, execId: string) {
   return {
     aiExecutionId: execId,
+    appId: "app-1",
+    functionName: "fn-1",
     cloudOperationMetering: {
       payerUserId: "payer-1",
       source: "run",
@@ -29,6 +31,9 @@ Deno.test("registry: register → resolve round-trips the context", () => {
   const ctx = resolveExecutionContext(h);
   assert(ctx);
   assertEquals(ctx!.aiExecutionId, "exec-1");
+  // Attribution fields resolve per-call (never via frozen isolate props).
+  assertEquals(ctx!.appId, "app-1");
+  assertEquals(ctx!.functionName, "fn-1");
   assertEquals(
     (ctx!.cloudOperationMetering as { receiptId: string }).receiptId,
     "r1",

@@ -447,6 +447,7 @@ export async function handleRun(
       ? await createRuntimeAIContext(user, {
         freeMode: caller.freeMode,
         inferenceSelection,
+        attribution: { appId: app.id, functionName },
       })
       : {
         route: null,

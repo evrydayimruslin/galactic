@@ -27,6 +27,11 @@ export interface ChatBillingMetadata {
   conversationId?: string;
   messageId?: string;
   source?: string;
+  // App + function attribution for galactic.ai() calls (debit_light persists
+  // them as first-class p_app_id/p_function_name). Absent on the chat surface,
+  // which has no app context.
+  appId?: string | null;
+  functionName?: string | null;
   [key: string]: unknown;
 }
 
@@ -205,6 +210,8 @@ export async function deductChatCost(
             model,
           ])
           : null,
+        p_app_id: metadata.appId ?? null,
+        p_function_name: metadata.functionName ?? null,
         p_metadata: {
           trace_id: metadata.traceId,
           conversation_id: metadata.conversationId,
@@ -282,6 +289,7 @@ async function logChatTransaction(
     headers: dbWriteHeaders(),
     body: JSON.stringify({
       user_id: userId,
+      app_id: metadata.appId ?? null,
       type: "charge",
       category: "chat_inference",
       description:
@@ -299,6 +307,7 @@ async function logChatTransaction(
         total_tokens: usage.total_tokens,
         cost_light: costLight,
         billing_source: options.billingSource ?? null,
+        function_name: metadata.functionName ?? null,
         markup: CHAT_PLATFORM_MARKUP,
         trace_id: metadata.traceId || null,
         conversation_id: metadata.conversationId || null,

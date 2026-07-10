@@ -3794,6 +3794,7 @@ Agent code runs in a sandbox with the \`galactic.*\` SDK (alias: \`ultralight.*\
 | HTTPS fetch | \`fetch(url)\` (15s · 10MB · 20 concurrent) | \`net:fetch\` or the host in manifest \`network.allowed_destinations\` (default-deny) |
 | **Credentialed fetch** — vaulted secret attached host-side | \`galactic.fetch(credentialKey, url, init?)\` | vaulted credential configured by the user |
 | **Managed email** (IMAP poll / SMTP send) | \`galactic.net.imapFetchUnseen(...)\` · \`galactic.net.smtpSend(...)\` | \`net:connect\` |
+| **Notify your user** — one report to their inbox bell | \`galactic.notify({ title, dedupe_key })\` | \`notify:owner\` |
 | Stdlib (global) | \`_\` (lodash) · \`uuid\` · \`base64\` · \`hash\` · \`dateFns\` · \`schema\` (Zod-like) · \`markdown\` · \`str\` · \`jwt\` · \`http\` · \`crypto\` | — |
 
 Not in the SDK: there is no in-code charging API (monetize via per-call pricing / \`planAccess\`), no raw TCP/TLS sockets (\`galactic.net.connectTls\` throws — use the managed email methods), and no bring-your-own Supabase client in the runtime (reach external databases through \`fetch\`/\`galactic.fetch\` to allowlisted hosts).
@@ -3832,6 +3833,9 @@ const { runs } = await galactic.runs.recent({ limit: 10 });
 //             routine_name, steps: [{ function_name, status, args_preview, result_preview, ... }] }
 \`\`\`
 Steps with \`function_name: "galactic.ai"\` carry the recorded reasoning (\`args_preview.prompt\`, \`result_preview.response\`, \`metadata.model\`). A run that changed data also gets ONE \`function_name: "galactic.db"\` step whose \`metadata\` (\`kind: "db_diff"\`) tallies what the wake actually CHANGED — \`{ inserts, updates, deletes, upserts, rows_written, by_table }\` — counted host-side, so it catches the silent no-op (the agent *thought* it acted; nothing moved). Scope is always THIS agent + the CURRENT user — recording only happens on runs with a routine context (scheduled/manual routine runs), failed runs included, and the owner sees the same steps in the routine monitor. Use it to answer "what did I do on recent wakes, did it work, and did anything actually change" from platform-recorded truth; keep your own \`galactic.db\` journal for curated long-term memory.
+
+#### \`galactic.notify({ title, body?, severity?, dedupe_key })\` — report to your user's inbox (requires \`notify:owner\`)
+Writes one notification to the CURRENT user's in-product inbox (the website bell) — built for full-time agents that need to surface a digest or an anomaly without being polled. Self-notification only: it always targets the user your code is running for; the kind is fixed host-side (\`agent_report\`), and delivery is rate-capped at 20/day per agent per user. \`dedupe_key\` is REQUIRED and identifies the EVENT (e.g. \`"digest:" + today\`) — a retried run with the same key never double-notifies. \`severity\`: \`info\` (default) | \`warning\` | \`critical\` — reserve \`critical\` for things the user must act on. Returns \`{ created, reason? }\`; \`created: false\` with \`reason: "rate_limited"\` or \`"duplicate"\` is a soft outcome, not an error. Title caps at 140 chars, body at 2000. Missing \`title\` or \`dedupe_key\` throws.
 
 #### \`galactic.use(slotName)\` — call the Agents your user wired in
 Resolves a manifest import slot to whatever Agent the user connected, exposing only the granted functions — each keyed by name and routed through \`galactic.call\` (grant-gated at the target): \`const summarizer = await galactic.use("summarizer"); const out = await summarizer.summarize({ text });\`. An unwired slot throws with a pointer to the Agent page. Use \`galactic.call(appId, fn, args)\` when you know the concrete app id instead.
@@ -4246,11 +4250,42 @@ ${platformDocs}`;
 /**
  * Handle initialize — async, fetches user context for rich instructions.
  */
+/**
+ * Set-once first-connect stamp: fills users.first_connected_at only where
+ * still NULL, making it the immutable "connect" milestone of the onboarding
+ * funnel (initialize previously recorded nothing). Best-effort.
+ */
+async function stampFirstConnected(userId: string): Promise<void> {
+  try {
+    const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = getSupabaseEnv();
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/users?id=eq.${userId}&first_connected_at=is.null`,
+      {
+        method: "PATCH",
+        headers: {
+          "apikey": SUPABASE_SERVICE_ROLE_KEY,
+          "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json",
+          "Prefer": "return=minimal",
+        },
+        body: JSON.stringify({ first_connected_at: new Date().toISOString() }),
+      },
+    );
+  } catch (err) {
+    console.warn("[MCP-PLATFORM] first-connect stamp failed:", err);
+  }
+}
+
 async function handleInitialize(
   id: JsonRpcRequestId,
   userId: string,
   freeMode = false,
 ): Promise<Response> {
+  // Funnel stamp runs CONCURRENTLY with the context fetch below (awaited
+  // before return so the write isn't cancelled with the request context) —
+  // zero added latency on the initialize path.
+  const stamp = stampFirstConnected(userId);
+
   // Fetch desk + library context (best-effort, graceful degradation)
   let instructions: string;
   try {
@@ -4263,6 +4298,7 @@ async function handleInitialize(
       "",
     );
   }
+  await stamp;
 
   // Free Mode (D-tell): prepend the notice so the agent knows on connect why
   // paid/AI tools are missing and what to tell the user.

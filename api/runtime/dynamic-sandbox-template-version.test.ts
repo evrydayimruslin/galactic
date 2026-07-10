@@ -16,7 +16,7 @@ import type { RuntimeConfig } from "./sandbox.ts";
 
 // Bump this in lockstep with SANDBOX_TEMPLATE_VERSION whenever the generated
 // setup.js / wrapper.js template changes.
-const PINNED_TEMPLATE_VERSION = "2026-07-07.flight-recorder.v1";
+const PINNED_TEMPLATE_VERSION = "2026-07-09.notify-owner.v1";
 
 // Stable separator between the two captured modules for the snapshot hash.
 const SEP = "\n----MODULE-BOUNDARY----\n";
@@ -161,10 +161,10 @@ Deno.test("sandbox template: snapshot pinned -- a template change must bump SAND
     // TEMPLATE_HASH below to the new value. This forces the reuse key to rotate
     // so a cached old isolate cannot serve new template content.
     const TEMPLATE_HASH =
-      "3524429983e65dc2a82eaefd62895902d368922042073ae11b713469c97971d0";
+      "afa687ba81d4d896f06ed4e0acdfbaec9e2337b9bc3bbdef534dbc63543fdfff";
     assertEquals(
       PINNED_TEMPLATE_VERSION,
-      "2026-07-07.flight-recorder.v1",
+      "2026-07-09.notify-owner.v1",
       "PINNED_TEMPLATE_VERSION drifted from the pinned literal",
     );
     assertEquals(
