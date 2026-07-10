@@ -2396,7 +2396,7 @@ button {
 
 .interface-focus-btn {
   position: absolute;
-  top: 10px;
+  bottom: 10px;
   right: 10px;
   display: grid;
   place-items: center;
@@ -6031,27 +6031,27 @@ button {
     gap: 8px;
   }
 }
-.connection-req {
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
+.connection-req-star {
   color: var(--ul-red);
-  background: color-mix(in srgb, var(--ul-red) 9%, transparent);
-  border-radius: 999px;
-  padding: 1px 8px;
+  font-weight: 700;
+  margin-right: 5px;
 }
-.connection-connected {
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
+.connection-setmark {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--ul-green-deep);
-  background: color-mix(in srgb, var(--ul-green-deep) 10%, transparent);
-  border-radius: 999px;
-  padding: 1px 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: help;
 }
-.connection-field input {
+.connection-input-wrap {
   grid-column: 2;
   grid-row: 1;
+  position: relative;
+}
+.connection-field input {
   width: 100%;
   padding: 9px 12px;
   border: 1px solid var(--ul-border-strong);
@@ -6068,12 +6068,15 @@ button {
   border-color: var(--ul-text);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ul-text) 8%, transparent);
 }
+.connection-field input {
+  padding-right: 34px;
+}
 .connection-field .connection-note {
   grid-column: 2;
   margin: 0;
 }
 @media (max-width: 640px) {
-  .connection-field input,
+  .connection-input-wrap,
   .connection-field .connection-note {
     grid-column: 1;
     grid-row: auto;
