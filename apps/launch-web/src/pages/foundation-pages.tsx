@@ -1740,7 +1740,7 @@ function AgentDetailSurface({
                   }}
                   type="button"
                 >
-                  <span>Interface</span>
+                  <span>Interfaces</span>
                   <span
                     aria-hidden="true"
                     className={effectiveTab === "interface" && intMenuOpen
@@ -2015,6 +2015,24 @@ function InterfaceSurfaceCard({
     clampInterfaceHeight(iface.minHeight ?? 320)
   );
   const [spend, setSpend] = useState({ calls: 0, credits: 0 });
+  // Focus mode dims the page behind and centers the interface. Implemented as
+  // a class toggle on the SAME tree position: reparenting an iframe reloads
+  // it, which would drop the bridge and the interface's in-memory state.
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFocused(false);
+    };
+    document.addEventListener("keydown", onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [focused]);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -2087,17 +2105,45 @@ function InterfaceSurfaceCard({
   }, [connected, reloadKey]);
 
   return (
-    <div className="interface-panel">
-      <iframe
-        className="interface-frame"
-        key={reloadKey}
-        ref={iframeRef}
-        referrerPolicy="no-referrer"
-        sandbox="allow-scripts allow-forms"
-        src={iface.url}
-        style={{ height: `${height}px` }}
-        title={`${tool.title} — ${iface.label}`}
-      />
+    <div
+      className={focused ? "interface-panel interface-focus" : "interface-panel"}
+      onClick={(event) => {
+        // Clicking the dimmed backdrop (the panel itself, not its children)
+        // exits focus.
+        if (focused && event.target === event.currentTarget) setFocused(false);
+      }}
+    >
+      <div className="interface-stage">
+        <iframe
+          className="interface-frame"
+          key={reloadKey}
+          ref={iframeRef}
+          referrerPolicy="no-referrer"
+          sandbox="allow-scripts allow-forms"
+          src={iface.url}
+          style={{ height: `${height}px` }}
+          title={`${tool.title} — ${iface.label}`}
+        />
+        <button
+          aria-label={focused ? "Exit focus" : "Focus this interface"}
+          className="interface-focus-btn"
+          onClick={() => setFocused((value) => !value)}
+          title={focused ? "Exit focus (Esc)" : "Focus"}
+          type="button"
+        >
+          {focused
+            ? (
+              <svg aria-hidden="true" fill="none" height="14" viewBox="0 0 14 14" width="14">
+                <path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeLinecap="round" strokeWidth="1.6" />
+              </svg>
+            )
+            : (
+              <svg aria-hidden="true" fill="none" height="14" viewBox="0 0 14 14" width="14">
+                <path d="M8.5 1H13v4.5M13 1L8 6M5.5 13H1V8.5M1 13l5-5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" />
+              </svg>
+            )}
+        </button>
+      </div>
       <div className="interface-status">
         {!connected && !stalled ? <span>Loading interface…</span> : null}
         {!connected && stalled
@@ -3854,7 +3900,7 @@ function AgentConnectionsCard(
               onClick={() => void onSave()}
               disabled={status === "locked" || status === "saving" || noPending}
             >
-              {status === "saving" ? "Saving…" : "Save connections"}
+              {status === "saving" ? "Saving…" : "Save"}
             </button>
             {message
               ? <span className="connection-message">{message}</span>
