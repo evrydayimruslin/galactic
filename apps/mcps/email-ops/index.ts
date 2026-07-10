@@ -1943,7 +1943,12 @@ export async function receive_email(args: ReceiveEmailArgs): Promise<unknown> {
   // Booking confirmation: known OTA domain OR noreply-pattern sender with
   // booking-related subject keywords
   const isOtaSender = OTA_DOMAINS.some((d) => fromLower.includes(d));
-  const isBookingConfirmation = !isInternal && (
+  // OTA domains relay REAL GUEST MESSAGES as well as receipts (a Booking.com
+  // guest question arrives from a booking.com relay with a Reply-To back to
+  // the guest). A form-like message — the resolved guest differs from the
+  // sender — must reach the full envelope, never this shortcut; only
+  // sender-is-guest OTA mail (receipts, confirmations) may fast-path.
+  const isBookingConfirmation = !isInternal && !isFormLike && (
     isOtaSender || (NOREPLY_PATTERN.test(from) && BOOKING_CONFIRMATION_KEYWORDS.test(subject))
   );
 
