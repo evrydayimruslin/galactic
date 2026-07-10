@@ -2833,8 +2833,11 @@ export async function activity_digest(args: { window?: string } = {}): Promise<u
     where: { ok: 1 },
     orderBy: { column: 'ts', dir: 'desc' },
   }) as { ts: string } | null;
-  const arrived = await galactic.db.count('processed_messages', {
-    where: { created_at: { gte: since } },
+  // Every inbound message counts as "arrived" regardless of ingestion path —
+  // processed_messages only ledgers IMAP fetches, which undercounts webhook
+  // and direct deliveries.
+  const arrived = await galactic.db.count('versions', {
+    where: { type: 'inbound', created_at: { gte: since } },
   }) as number;
   const drafted = await galactic.db.count('versions', {
     where: { type: { in: ['auto_draft', 'followup_draft'] }, created_at: { gte: since } },
