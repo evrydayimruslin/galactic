@@ -18,7 +18,7 @@
 import { createNotification } from "./notifications.ts";
 import { createSupabaseRestClient } from "./platform-clients/supabase-rest.ts";
 
-export const AGENT_NOTIFY_KIND = "agent_report";
+const AGENT_NOTIFY_KIND = "agent_report";
 // Generous for a daily digest + real anomalies; tight enough that the bell —
 // the owner's only alert channel — stays readable.
 export const AGENT_NOTIFY_DAILY_CAP = 20;

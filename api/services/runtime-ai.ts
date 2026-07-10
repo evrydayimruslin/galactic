@@ -82,7 +82,7 @@ function toChatUsage(response: AIResponse): ChatUsage {
   };
 }
 
-export interface RuntimeAIAttribution {
+interface RuntimeAIAttribution {
   appId?: string | null;
   functionName?: string | null;
 }

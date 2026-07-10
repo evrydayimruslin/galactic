@@ -530,7 +530,7 @@ export async function markLightDepositFailed(
   return rows[0] ? normalizeDepositResult(rows[0]) : null;
 }
 
-export interface FailedDepositAttemptInput {
+interface FailedDepositAttemptInput {
   userId: string;
   fundingMethod: string;
   failureCode: string;

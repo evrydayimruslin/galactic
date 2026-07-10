@@ -9,7 +9,7 @@
 
 import { getEnv } from "../lib/env.ts";
 
-export interface UnbilledAiUsageInput {
+interface UnbilledAiUsageInput {
   userId: string;
   appId?: string | null;
   functionName?: string | null;
