@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email Admin — Inbox</title>
+<!-- The Galactic bridge snippet, verbatim from
+     ultralight-spec/conventions/interfaces.md -->
+<script>
+(function () {
+  var port = null, queue = [], pending = {}, nextId = 1;
+  function flush() {
+    if (!port) return;
+    while (queue.length) {
+      var item = queue.shift(), id = nextId++;
+      pending[id] = item;
+      port.postMessage({ type: "call", id: id, functionName: item.fn, args: item.args || {} });
+    }
+  }
+  window.ul = {
+    context: null,
+    call: function (fn, args) {
+      return new Promise(function (resolve, reject) {
+        queue.push({ fn: fn, args: args, resolve: resolve, reject: reject });
+        flush();
+      });
+    },
+    resize: function (height) {
+      if (port) port.postMessage({ type: "resize", height: height });
+    },
+  };
+  window.addEventListener("message", function (event) {
+    var d = event.data;
+    if (!d || d.type !== "ul-interface-connect" || !event.ports || !event.ports[0]) return;
+    port = event.ports[0];
+    window.ul.context = d.context;
+    port.onmessage = function (e) {
+      var m = e.data;
+      if (!m || m.type !== "result" || !(m.id in pending)) return;
+      var item = pending[m.id];
+      delete pending[m.id];
+      if (m.success) item.resolve(m.result);
+      else {
+        var err = new Error((m.error && m.error.message) || "Call failed");
+        err.code = m.error && m.error.type;
+        item.reject(err);
+      }
+    };
+    flush();
+    document.dispatchEvent(new CustomEvent("ul-ready"));
+  });
+  parent.postMessage({ type: "ul-interface-hello" }, "*");
+})();
+</script>
+<style>
+:root{
+  --bg:#ffffff; --surface:#f7f7f5; --line:#e3e1dc;
+  --ink:#23272e; --ink-2:#5c6470; --ink-3:#8b93a0;
+  --accent:#2f6d62; --accent-soft:#e7f1ee; --accent-ink:#ffffff;
+  --red:#b23a3a; --red-soft:#f9ecec;
+  --amber:#a06b1f; --amber-soft:#f7efdd;
+  --green:#3a7a4e; --green-soft:#e9f2ec;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Hiragino Sans","Yu Gothic",sans-serif;color:var(--ink);background:var(--bg);margin:0;font-size:14px;line-height:1.5;}
+button{font:inherit;cursor:pointer;border-radius:8px;padding:6px 14px;font-weight:600;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+button:focus-visible,a:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button.ghost{border-style:dashed;color:var(--ink-2)}
+button.small{padding:3px 10px;font-size:12px}
+button:disabled{opacity:.5;cursor:default}
+input,textarea,select{font:inherit;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--ink);background:var(--bg)}
+textarea{width:100%;min-height:140px;resize:vertical;line-height:1.55}
+.wrap{padding:10px 12px 16px}
+.chip{display:inline-block;font-size:11px;font-weight:600;border-radius:5px;padding:1px 7px;border:1px solid var(--line);color:var(--ink-2);background:var(--bg);white-space:nowrap;vertical-align:1px}
+.chip.red{background:var(--red-soft);color:var(--red);border-color:transparent}
+.chip.amber{background:var(--amber-soft);color:var(--amber);border-color:transparent}
+.chip.green{background:var(--green-soft);color:var(--green);border-color:transparent}
+.chip.lang{background:var(--surface)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.dot.red{background:var(--red)}.dot.amber{background:var(--amber)}.dot.none{background:var(--line)}
+/* top strip */
+.strip{display:flex;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);flex-wrap:wrap;align-items:flex-start}
+.strip .big{font-size:17px;font-weight:700}
+.strip .big .alert{color:var(--red)}
+.strip .big .ok{color:var(--green)}
+.strip .sub{color:var(--ink-2);font-size:12px;margin-top:2px}
+.strip .right{text-align:right;font-size:12px;color:var(--ink-2)}
+.banner{margin-top:8px;background:var(--amber-soft);color:var(--amber);font-size:12.5px;font-weight:600;border-radius:8px;padding:7px 11px}
+.banner.err{background:var(--red-soft);color:var(--red)}
+/* pills */
+.pills{display:flex;gap:6px;margin:12px 0;flex-wrap:wrap;align-items:center}
+.spill{font-size:12.5px;padding:4px 12px;border-radius:999px;border:1px solid var(--line);color:var(--ink-3);background:var(--bg);font-weight:500}
+.spill[aria-pressed="true"]{font-weight:700;color:var(--ink);border-color:var(--ink-2)}
+.search{margin-left:auto;min-width:150px;font-size:12.5px;padding:4px 10px}
+/* split */
+.split{display:grid;grid-template-columns:2fr 3fr;gap:12px;align-items:start}
+.split>*{min-width:0}
+.backbar{display:none}
+@media (max-width:640px){
+  .split{grid-template-columns:1fr}
+  .split.detail-open .list-pane{display:none}
+  .split.detail-open .backbar{display:block;margin-bottom:8px}
+}
+.list{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;max-height:560px;overflow-y:auto}
+.lrow{display:flex;align-items:center;gap:7px;padding:9px 10px;border-bottom:1px solid var(--line);cursor:pointer;background:var(--bg);width:100%;text-align:left;border-left:none;border-right:none;border-top:none;border-radius:0;font-weight:400}
+.lrow:last-child{border-bottom:none}
+.lrow.sel{background:var(--accent-soft)}
+.lrow .who{font-weight:600;white-space:nowrap;max-width:32%;overflow:hidden;text-overflow:ellipsis}
+.lrow .sum{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:50px;font-size:12.5px}
+.lrow .age{color:var(--ink-3);font-size:11px;white-space:nowrap}
+.newchip{display:block;width:100%;text-align:center;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:12px;border:none;border-bottom:1px solid var(--line);padding:6px;border-radius:0}
+/* detail cards */
+.card{border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;background:var(--bg)}
+.card .cap{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-3);font-weight:700;margin-bottom:5px}
+.card.reading{border-color:var(--accent)}
+.card.draft{background:var(--surface)}
+.detail-head{margin-bottom:8px}
+.detail-head .name{font-weight:700;font-size:15px}
+.detail-head .meta{color:var(--ink-2);font-size:12.5px}
+.caution{background:var(--amber-soft);color:var(--amber);font-size:12.5px;font-weight:600;border-radius:8px;padding:6px 10px;margin-bottom:8px}
+.gapchip{display:flex;align-items:center;gap:8px;background:var(--amber-soft);color:var(--amber);font-size:12.5px;font-weight:600;border-radius:8px;padding:6px 10px;margin-top:8px;flex-wrap:wrap}
+.gapchip.done{background:var(--green-soft);color:var(--green)}
+.gapform{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;width:100%}
+.gapform input{flex:1;min-width:160px;font-size:12.5px}
+.actionbar{display:flex;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--line);position:sticky;bottom:0;background:var(--bg)}
+.linky{background:none;border:none;color:var(--accent);font-weight:600;font-size:12.5px;padding:2px 4px}
+.body-pre{white-space:pre-wrap;word-break:break-word;font-size:13px;max-height:260px;overflow-y:auto}
+.whisper{color:var(--ink-3);font-size:11.5px}
+.dd{position:relative;display:inline-block}
+.dd-menu{position:absolute;bottom:calc(100% + 6px);left:0;background:var(--bg);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 24px rgba(30,35,42,.14);padding:8px;min-width:270px;z-index:30;max-height:240px;overflow-y:auto}
+.dd-item{display:block;width:100%;text-align:left;border:none;background:none;padding:6px 8px;border-radius:7px;font-weight:500;font-size:12.5px}
+.dd-item:hover{background:var(--surface)}
+.dd-item .why{display:block;color:var(--ink-3);font-size:11px;font-weight:400}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;background:var(--ink);color:#fff;border-radius:10px;padding:9px 16px;font-size:13px;z-index:50;display:flex;gap:10px;align-items:center;max-width:92vw}
+.toast button{background:none;border:none;color:#9fd4c8;font-weight:700;padding:0}
+.skel{background:linear-gradient(90deg,var(--surface),#eceae6,var(--surface));border-radius:8px;height:16px;margin:8px 0}
+@media (prefers-reduced-motion: no-preference){
+  .skel{background-size:200% 100%;animation:sh 1.2s infinite}
+  @keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+  .toast{transition:opacity .2s}
+}
+details summary{cursor:pointer;color:var(--ink-2);font-size:12.5px;font-weight:600}
+.hist{font-size:12px;color:var(--ink-2);padding:4px 0;border-bottom:1px dashed var(--line)}
+.center{color:var(--ink-3);text-align:center;padding:28px 10px;font-size:13px}
+.allclear{color:var(--green);font-weight:700;text-align:center;padding:28px 10px}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="center">Loading your inbox…</div></div>
+<script>
+"use strict";
+/* ---------- utilities ---------- */
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+  });
+}
+var LANG_CODES = {english:"EN",japanese:"JA",german:"DE",french:"FR",spanish:"ES",italian:"IT",portuguese:"PT",chinese:"ZH",korean:"KO",dutch:"NL",russian:"RU"};
+function langCode(l){
+  if(!l) return "";
+  var k = String(l).toLowerCase().trim();
+  if (LANG_CODES[k]) return LANG_CODES[k];
+  if (k.length <= 3) return k.toUpperCase();
+  return k.slice(0,2).toUpperCase();
+}
+function langName(l){
+  if(!l) return "their language";
+  var k = String(l).toLowerCase().trim();
+  var m = {en:"English",ja:"Japanese",de:"German",fr:"French",es:"Spanish",it:"Italian",pt:"Portuguese",zh:"Chinese",ko:"Korean"};
+  if (m[k]) return m[k];
+  return l.charAt(0).toUpperCase()+l.slice(1);
+}
+function parseTs(ts){
+  if(!ts) return NaN;
+  var s = String(ts).replace(" ", "T");
+  if (!/[zZ]|[+-]\d\d:?\d\d$/.test(s)) s += "Z";
+  return Date.parse(s);
+}
+function num(x){ x = +x; return isFinite(x) ? x : 0; }
+function ago(ts, ref){
+  if(!ts) return "";
+  var t = parseTs(ts), r = ref ? parseTs(ref) : Date.now();
+  if (!isFinite(t)) return "";
+  var s = Math.max(0, (r - t)/1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s/60) + " min ago";
+  if (s < 86400) return Math.floor(s/3600) + "h ago";
+  return Math.floor(s/86400) + "d ago";
+}
+function firstName(c){
+  var n = (c.guest_name||"").trim();
+  if (n) return n.split(/\s+/)[0];
+  return (c.guest_email||"").split("@")[0] || "guest";
+}
+function displayName(c){
+  return (c.guest_name||"").trim() || (c.guest_email||"").split("@")[0] || c.guest_email || "Guest";
+}
+var REASONS = {
+  ignored_instructions: "This email tried to give the agent instructions — it ignored them and filed it",
+  auto_generated: "Automatic notification or receipt",
+  cc_only: "We were only copied — someone else is answering",
+  staff_already_replied: "A team member already answered",
+  redundant: "A reply would only repeat what was already said",
+  bounce: "Delivery failure report",
+  spam: "Spam",
+  no_action_needed: "No answer needed"
+};
+function reasonText(k){
+  if(!k) return REASONS.no_action_needed;
+  return REASONS[k] || String(k).replace(/_/g," ").replace(/^./,function(c){return c.toUpperCase();});
+}
+var CLASS_LABEL = {complaint:"Complaint",booking_request:"Booking request",booking_confirmation:"Booking confirmation",inquiry:"Question",cancellation:"Cancellation",feedback:"Feedback",internal:"Internal",spam:"Spam",other:"Message"};
+function humanErr(e){
+  var code = e && e.code, msg = (e && e.message) || "";
+  if (code === "SIGN_IN_REQUIRED") return "Sign in to use this.";
+  if (code === "RATE_LIMITED" || code === "BUSY") return "Give it a few seconds — too many requests at once.";
+  if (/MISSING_SECRETS|IMAP_HOST|SMTP_HOST|not configured|mailbox isn/i.test(msg)) return "Your mailbox isn't connected yet. Add your email settings in the agent's Settings, then try again.";
+  if (/SMTP auth/i.test(msg)) return "Couldn't sign in to your mailbox to send — check the email password in Settings.";
+  if (/recipient address|Already sent|Only discarded|required/i.test(msg)) return msg;
+  return "Something went wrong — try again.";
+}
+/* ---------- call queue: max 4 in flight ---------- */
+var inFlight = 0, waiters = [];
+function call(fn, args){
+  return new Promise(function(res, rej){
+    function run(){
+      inFlight++;
+      ul.call(fn, args || {}).then(function(r){ done(); res(r); }, function(e){ done(); rej(e); });
+    }
+    function done(){ inFlight--; if (waiters.length && inFlight < 4) waiters.shift()(); }
+    if (inFlight < 4) run(); else waiters.push(run);
+  });
+}
+/* ---------- resize discipline ---------- */
+var resizeQueued = false;
+function fit(){
+  if (resizeQueued) return;
+  resizeQueued = true;
+  requestAnimationFrame(function(){
+    resizeQueued = false;
+    ul.resize(Math.min(900, Math.max(320, document.documentElement.scrollHeight + 4)));
+  });
+}
+/* ---------- state ---------- */
+var S = {
+  overview: null, status: "active", rows: [], total: 0, selected: null,
+  history: {},           // conversation_id -> {conversation, versions}
+  translations: {},      // cache key -> text
+  editing: false, editDirty: false, editTimer: null,
+  searchTimer: null, searchMode: false,
+  opLang: "English", checkDisabledUntil: 0, pendingNew: 0,
+  toastTimer: null, undoDiscard: null, teachState: {}, // gap -> {saved, key, value, busy}
+  loadErr: null, loadErrRaw: null, recipientPick: null, lastRefresh: 0,
+  listEpoch: 0, listedActive: null
+};
+var PILLS = [
+  {k:"active", label:"Needs a reply"},
+  {k:"no_action", label:"No reply needed"},
+  {k:"resolved", label:"Replied"},
+  {k:"discarded", label:"Set aside"}
+];
+/* ---------- data ---------- */
+function loadOverview(){
+  return call("inbox_overview", {}).then(function(o){
+    S.overview = o;
+    if (o.operator_language) S.opLang = o.operator_language;
+  });
+}
+function loadList(status){
+  var my = ++S.listEpoch;
+  return call("conversations_list", {status: status, limit: 50}).then(function(r){
+    if (my !== S.listEpoch) return; // superseded by a newer list request
+    var rows = r.conversations || [];
+    if (status === "active"){
+      var rank = function(p){ return p==="high"?0 : p==="low"?2 : 1; };
+      rows.sort(function(a,b){ return rank(a.priority)-rank(b.priority) || String(a.created_at).localeCompare(String(b.created_at)); });
+      S.listedActive = S.overview ? num(S.overview.counts.active) : rows.length;
+      S.pendingNew = 0;
+    }
+    S.rows = rows; S.total = r.total || rows.length; S.searchMode = false;
+  });
+}
+function loadHistory(id, force){
+  if (!force && S.history[id]) return Promise.resolve(S.history[id]);
+  return call("conversation_history", {conversation_id:id}).then(function(h){ S.history[id]=h; return h; });
+}
+/* ---------- derivations ---------- */
+function parseMeta(v){
+  if (!v || v.metadata == null) return null;
+  if (typeof v.metadata === "object") return v.metadata;
+  try { return JSON.parse(v.metadata); } catch(e){ return null; }
+}
+function derive(h){
+  var vs = h.versions || [];
+  var lastSentNum = -1, latestInbound = null, drafts = [], sent = [];
+  vs.forEach(function(v){
+    if (v.type === "inbound") latestInbound = v;
+    if (v.type === "sent" || v.type === "followup_sent"){ sent.push(v); if (v.version_num > lastSentNum) lastSentNum = v.version_num; }
+  });
+  vs.forEach(function(v){
+    if (["auto_draft","regeneration","manual_edit","followup_draft"].indexOf(v.type) >= 0 && v.version_num > lastSentNum) drafts.push(v);
+  });
+  var current = drafts.length ? drafts[drafts.length-1] : null;
+  var im = latestInbound ? (parseMeta(latestInbound) || {}) : {};
+  var cands = [];
+  (im.proposed_recipients || []).forEach(function(a){ if (a && cands.indexOf(a)<0) cands.push(a); });
+  var def = im.default_recipient || h.conversation.recipient_default || h.conversation.guest_email;
+  if (def && cands.indexOf(def) < 0) cands.unshift(def);
+  return {
+    latestInbound: latestInbound, drafts: drafts, sent: sent, current: current,
+    draftNum: drafts.length,
+    recipDefault: def,
+    recipReason: im.recipient_reason || h.conversation.recipient_reason || "",
+    candidates: cands,
+    gaps: current ? ((parseMeta(current)||{}).knowledge_gaps || []) : [],
+    confidence: current ? ((parseMeta(current)||{}).confidence || h.conversation.confidence) : h.conversation.confidence,
+    translatedMsg: im.translated_message || null
+  };
+}
+/* ---------- rendering ---------- */
+var app = document.getElementById("app");
+function render(){
+  if (!ul.context) return;
+  if (!ul.context.signedIn){ renderSignedOut(); return; }
+  if (S.loadErr){
+    app.innerHTML = '<div class="banner err">'+esc(S.loadErr)+' <button class="small" id="retryBtn">Try again</button></div>'
+      + (S.loadErrRaw ? '<details style="margin-top:6px"><summary>Technical details</summary><div class="whisper">'+esc(S.loadErrRaw)+'</div></details>' : '');
+    document.getElementById("retryBtn").onclick = function(){ S.loadErr=null; S.loadErrRaw=null; boot(); };
+    fit(); return;
+  }
+  if (!S.overview){ app.innerHTML = '<div class="skel"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:85%"></div>'; fit(); return; }
+  var html = renderStrip() + renderPills() + renderBody();
+  app.innerHTML = html;
+  wire();
+  fit();
+}
+function renderStrip(){
+  var o = S.overview, h = "";
+  var big;
+  if (num(o.counts.active) > 0){
+    big = '<span>'+num(o.counts.active)+' need'+(num(o.counts.active)===1?"s":"")+' a reply</span>';
+    if (num(o.complaints_active) > 0) big += ' · <span class="alert">'+num(o.complaints_active)+' complaint'+(num(o.complaints_active)>1?"s":"")+'</span>';
+  } else {
+    big = '<span class="ok">All clear</span>';
+  }
+  var checked = o.last_checked_at ? ('Checked '+esc(ago(o.last_checked_at, o.now))) : 'Not checked yet';
+  var disabled = Date.now() < S.checkDisabledUntil ? " disabled" : "";
+  h += '<div class="strip"><div><div class="big">'+big+'</div>'
+    + '<div class="sub">Quietly handled '+num(o.handled_today)+' today</div></div>'
+    + '<div class="right"><div>'+checked+' · <button class="small" id="checkNow"'+disabled+'>Check now</button></div>'
+    + '<div style="margin-top:5px">Summaries in: <select id="langSel" style="font-size:11.5px;padding:2px 6px">'
+    + ["English","Japanese","German","French","Spanish","Italian","Portuguese","Chinese","Korean"].map(function(l){
+        return '<option'+(l===S.opLang?" selected":"")+'>'+l+'</option>';
+      }).join("") + '</select></div></div></div>';
+  var mins = o.last_checked_at ? (parseTs(o.now)-parseTs(o.last_checked_at))/60000 : null;
+  if (mins !== null && isFinite(mins) && mins > 20){
+    var dur = mins < 90 ? Math.round(mins) + ' minutes'
+      : mins < 2880 ? Math.round(mins/60) + ' hours'
+      : Math.round(mins/1440) + ' days';
+    h += '<div class="banner">Last successful mailbox check was '+dur+' ago — the agent may be having trouble reaching your mailbox.</div>';
+  }
+  return h;
+}
+function renderPills(){
+  var o = S.overview;
+  var counts = {active:num(o.counts.active), no_action:num(o.counts.no_action), resolved:num(o.counts.resolved), discarded:num(o.counts.discarded)};
+  return '<div class="pills">' + PILLS.map(function(p){
+    return '<button class="spill" data-status="'+p.k+'" aria-pressed="'+(S.status===p.k && !S.searchMode)+'">'+p.label+' ('+counts[p.k]+')</button>';
+  }).join("") + '<input class="search" id="searchBox" placeholder="Find a guest…" value="" aria-label="Find a guest"></div>';
+}
+function renderBody(){
+  var listHtml = renderList();
+  var detailHtml = S.selected ? renderDetail() : '<div class="center">Select a message to review it.</div>';
+  return '<div class="split'+(S.selected?' detail-open':'')+'">'
+    + '<div class="list-pane">'+listHtml+'</div>'
+    + '<div class="detail-pane"><div class="backbar"><button class="small" id="backBtn">← Back to the list</button></div>'+detailHtml+'</div></div>';
+}
+function renderList(){
+  var h = '<div class="list">';
+  if (S.pendingNew > 0) h += '<button class="newchip" id="newChip">'+S.pendingNew+' new — refresh</button>';
+  if (!S.rows.length){
+    if (S.searchMode) h += '<div class="center">No matches.</div>';
+    else if (S.status === "active") h += '<div class="allclear">All clear — nothing needs you.</div>';
+    else h += '<div class="center">Nothing here yet.</div>';
+    return h + '</div>';
+  }
+  S.rows.forEach(function(c){
+    var dot = (c.priority==="urgent"||c.priority==="high") ? "red" : (c.priority==="medium" ? "amber" : "none");
+    var sel = S.selected===c.id ? " sel" : "";
+    var mid;
+    if (S.status === "no_action" && !S.searchMode){
+      mid = '<span class="sum"><b>'+esc(reasonText(c.no_reply_reason))+'.</b> '+esc(c.summary||c.subject||"")+'</span>';
+    } else {
+      mid = '<span class="sum">'+esc(c.summary || c.subject || "")+'</span>';
+    }
+    h += '<button class="lrow'+sel+'" data-id="'+esc(c.id)+'">'
+      + '<span class="dot '+dot+'"></span>'
+      + (c.language ? '<span class="chip lang">'+esc(langCode(c.language))+'</span>' : '')
+      + (c.classification==="complaint" ? '<span class="chip red">Complaint</span>' : '')
+      + '<span class="who">'+esc(displayName(c))+'</span>'
+      + mid
+      + (c.confidence==="low" ? '<span class="chip amber">Double-check</span>' : '')
+      + (c.has_unsaved_edit ? '<span class="chip">✎ Editing</span>' : '')
+      + '<span class="age">'+esc(ago(c.created_at))+'</span>'
+      + '</button>';
+  });
+  return h + '</div>';
+}
+function renderDetail(){
+  var c = S.rows.filter(function(r){ return r.id===S.selected; })[0];
+  var h = S.history[S.selected];
+  if (!h){
+    return '<div class="skel"></div><div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div>';
+  }
+  var conv = h.conversation, d = derive(h);
+  var out = "";
+  var gl = langName(conv.language);
+  out += '<div class="detail-head"><div class="name">'+esc(displayName(conv))+'</div>'
+    + '<div class="meta">writes in '+esc(gl)+' — replies go out in '+esc(gl)+' · '+esc(statusWord(conv.status))+'</div></div>';
+  /* the agent's reading */
+  out += '<div class="card reading"><div class="cap">The agent’s reading</div><div style="margin-bottom:5px">'
+    + '<span class="chip'+(conv.classification==="complaint"?" red":"")+'">'+esc(CLASS_LABEL[conv.classification]||conv.classification||"Message")+'</span> '
+    + (conv.priority==="high"||conv.priority==="urgent" ? '<span class="chip amber">High priority</span> ' : '')
+    + (conv.language ? '<span class="chip lang">'+esc(gl)+'</span> ' : '')
+    + (d.confidence==="low" ? '<span class="chip amber">Double-check this one</span>' : '')
+    + '</div><div style="font-size:13px">Reply goes to <b>'+esc(d.recipDefault||conv.guest_email)+'</b>'
+    + (d.recipReason ? ' — '+esc(d.recipReason) : '')
+    + (d.candidates.length>1 ? ' <button class="linky" id="candToggle" aria-expanded="false">▾ other options</button>' : '')
+    + '</div><div id="candList" hidden></div></div>';
+  /* guest message */
+  out += '<div class="card"><div class="cap">The guest’s message</div>'
+    + '<div style="font-size:13px">'+esc(conv.summary || "(no summary)")+'</div>'
+    + (d.latestInbound ? '<details style="margin-top:6px"><summary>Read the original</summary>'
+        + '<div class="body-pre" style="margin-top:6px">'+esc(d.latestInbound.body||"")+'</div>'
+        + (d.translatedMsg ? '<button class="linky" id="msgTrans" data-shown="0">Show in '+esc(S.opLang)+'</button><div id="msgTransBox" hidden class="body-pre" style="margin-top:6px;color:var(--ink-2)"></div>' : '')
+        + '</details>' : '')
+    + '</div>';
+  /* draft card / status-specific panel */
+  if (conv.status === "no_action" && !d.current){
+    out += '<div class="card draft"><div class="cap">The agent’s decision</div>'
+      + '<div style="font-size:13px">'+esc(reasonText(conv.no_reply_reason))+'.</div></div>';
+  } else if (d.current){
+    var isEdited = d.current.type === "manual_edit";
+    var caution = (conv.classification==="complaint" || d.confidence==="low")
+      ? '<div class="caution">High-stakes — please read the whole reply.</div>' : "";
+    out += '<div class="card draft"><div class="cap">Draft '+d.draftNum+' · '+(isEdited?'edited by you':'written by the agent')+'</div>'
+      + caution;
+    if (S.editing){
+      out += '<textarea id="editBox">'+esc(d.current.body||"")+'</textarea>'
+        + '<div style="display:flex;gap:8px;align-items:center;margin-top:6px"><button class="small" id="doneEdit">Done editing</button><span class="whisper" id="saveWhisper"></span></div>';
+    } else {
+      out += '<div class="body-pre" id="draftBody">'+esc(d.current.body||"")+'</div>'
+        + '<button class="linky" id="draftTrans" data-shown="0">Read it in '+esc(S.opLang)+'</button>'
+        + '<div id="draftTransBox" hidden class="body-pre" style="margin-top:6px;color:var(--ink-2)"></div>';
+    }
+    /* knowledge gaps */
+    d.gaps.forEach(function(g, i){
+      var t = S.teachState[g] || {};
+      if (t.saved){
+        out += '<div class="gapchip done">Now covered ✓ — '+esc(g)
+          + (t.rewritten ? '' : ' <button class="small" data-rewrite="'+esc(g)+'">Rewrite this reply using it</button>')
+          + '</div>';
+      } else if (t.open){
+        out += '<div class="gapchip">Didn’t know: '+esc(g)
+          + '<span class="gapform"><input id="gapAns'+i+'" placeholder="Type the answer once — it remembers forever" value="'+esc(t.draft||"")+'">'
+          + '<button class="small primary" data-teach="'+esc(g)+'" data-i="'+i+'"'+(t.busy?" disabled":"")+'>'+(t.busy?"Saving…":"Teach it")+'</button></span>'
+          + (t.err ? '<span style="color:var(--red);font-weight:400;font-size:12px;width:100%">'+esc(t.err)+'</span>' : '')
+          + '</div>';
+      } else {
+        out += '<div class="gapchip">Didn’t know: '+esc(g)+' <button class="small" data-open-teach="'+esc(g)+'">Teach it</button></div>';
+      }
+    });
+    out += '</div>';
+  } else {
+    out += '<div class="card draft"><div class="cap">No draft yet</div><div style="font-size:13px;color:var(--ink-2)">The agent hasn’t written a reply for this one.</div></div>';
+  }
+  /* actions */
+  out += '<div class="actionbar">' + actionButtons(conv, d) + '</div>';
+  /* history */
+  out += '<details style="margin-top:10px"><summary>History</summary><div style="margin-top:6px">'
+    + (h.versions||[]).map(function(v){
+        return '<div class="hist">v'+v.version_num+' · '+esc(typeLabel(v.type))+' · '+esc(v.actor||"")+' · '+esc(ago(v.created_at))+'</div>';
+      }).join("")
+    + '</div></details>';
+  return out;
+}
+function statusWord(s){
+  return {active:"Needs a reply", no_action:"No reply needed", resolved:"Replied", discarded:"Set aside"}[s] || s;
+}
+function typeLabel(t){
+  return {inbound:"Guest message", auto_draft:"Draft — written by the agent", regeneration:"Draft — rewritten",
+    manual_edit:"Draft — edited by you", followup_draft:"Follow-up draft", sent:"Reply sent",
+    followup_sent:"Follow-up sent", discarded:"Set aside"}[t] || t;
+}
+function actionButtons(conv, d){
+  if (conv.status === "discarded"){
+    return '<button class="primary" id="reopenBtn">Reopen</button>';
+  }
+  if (conv.status === "resolved"){
+    return '<button class="primary" id="followupBtn">Write a follow-up</button>';
+  }
+  if (conv.status === "no_action" && !d.current){
+    return '<button class="primary" id="draftAnywayBtn">Write a reply anyway</button>';
+  }
+  var b = "";
+  if (d.current){
+    b += '<span class="dd"><button class="primary" id="sendBtn">Send to '+esc(firstName(conv))+' ▾</button><div class="dd-menu" id="sendMenu" hidden></div></span>'
+      + (S.editing ? '' : '<button id="editBtn">Edit</button>')
+      + '<button id="askNewBtn">Ask for a new draft…</button>';
+  } else {
+    b += '<button class="primary" id="draftAnywayBtn">Write a reply</button>';
+  }
+  b += '<button class="ghost" id="asideBtn">Set aside</button>';
+  return b;
+}
+function renderSignedOut(){
+  app.innerHTML = '<div class="strip"><div><div class="big muted">Sample preview</div>'
+    + '<div class="sub">Your own inbox appears here after you sign in.</div></div></div>'
+    + '<div class="center">The agent checks your mailbox every few minutes, drafts each reply in the guest\'s own language, and files the rest with a reason you can audit.<br><b>Nothing is ever sent without you.</b><br><br>Sign in to review your inbox.</div>';
+  fit();
+}
+/* ---------- toasts ---------- */
+function toast(msg, actionLabel, actionFn, ms){
+  var el = document.createElement("div");
+  el.className = "toast";
+  el.innerHTML = '<span>'+msg+'</span>' + (actionLabel ? '<button>'+esc(actionLabel)+'</button>' : '');
+  if (actionLabel) el.querySelector("button").onclick = function(){ document.body.removeChild(el); clearTimeout(t); actionFn(); };
+  document.body.appendChild(el);
+  var t = setTimeout(function(){ if (el.parentNode) document.body.removeChild(el); }, ms || 4500);
+}
+/* ---------- wiring ---------- */
+function wire(){
+  var q = function(id){ return document.getElementById(id); };
+  document.querySelectorAll("details").forEach(function(d){ d.addEventListener("toggle", fit); });
+  document.querySelectorAll(".spill").forEach(function(b){
+    b.onclick = function(){
+      clearTimeout(S.editTimer);
+      S.status = b.getAttribute("data-status"); S.selected = null; S.pendingNew = 0; S.rows = [];
+      render();
+      loadList(S.status).then(render, showErr);
+    };
+  });
+  document.querySelectorAll(".lrow").forEach(function(b){
+    b.onclick = function(){
+      clearTimeout(S.editTimer);
+      S.selected = b.getAttribute("data-id"); S.editing = false; S.teachState = {}; S.recipientPick = null;
+      render();
+      loadHistory(S.selected).then(render, function(e){ toast(esc(humanErr(e))); });
+    };
+  });
+  if (q("backBtn")) q("backBtn").onclick = function(){ clearTimeout(S.editTimer); S.selected = null; S.editing = false; render(); };
+  if (q("newChip")) q("newChip").onclick = function(){
+    S.pendingNew = 0;
+    Promise.all([loadOverview(), loadList(S.status)]).then(render, showErr);
+  };
+  if (q("checkNow")) q("checkNow").onclick = function(){
+    S.checkDisabledUntil = Date.now() + 30000; render();
+    call("check_inbox", {}).then(function(){
+      return Promise.all([loadOverview(), loadList(S.status)]);
+    }).then(render, function(e){ toast(esc(humanErr(e))); render(); });
+  };
+  if (q("langSel")) q("langSel").onchange = function(){
+    var v = q("langSel").value;
+    call("set_language", {language:v}).then(function(){ S.opLang = v; toast("Summaries will now be in "+esc(v)+" for new mail."); }, function(e){ toast(esc(humanErr(e))); });
+  };
+  if (q("searchBox")){
+    var sb = q("searchBox");
+    sb.oninput = function(){
+      clearTimeout(S.searchTimer);
+      var v = sb.value.trim();
+      S.searchTimer = setTimeout(function(){
+        if (!v){ S.searchMode=false; loadList(S.status).then(render, showErr); return; }
+        var my = ++S.listEpoch;
+        call("conversations_list", {search:v, limit:50}).then(function(r){
+          if (my !== S.listEpoch) return;
+          S.rows = r.conversations||[]; S.total = r.total||S.rows.length; S.searchMode = true; S.selected=null; render();
+          q("searchBox").value = v; q("searchBox").focus();
+        }, function(e){ toast(esc(humanErr(e))); });
+      }, 400);
+    };
+    sb.onkeydown = function(ev){ if (ev.key === "Escape"){ sb.value=""; S.searchMode=false; loadList(S.status).then(render, showErr); } };
+  }
+  wireDetail(q);
+}
+function wireDetail(q){
+  var h = S.history[S.selected];
+  if (!h) return;
+  var conv = h.conversation, d = derive(h);
+  if (q("candToggle")) q("candToggle").onclick = function(){
+    var box = q("candList");
+    if (box.hidden){
+      box.innerHTML = d.candidates.map(function(a){
+        return '<label style="display:block;font-size:12.5px;padding:2px 0"><input type="radio" name="cand" value="'+esc(a)+'"'+((S.recipientPick||d.recipDefault)===a?" checked":"")+'> '+esc(a)+(a===d.recipDefault?' <span class="whisper">(the agent’s pick)</span>':'')+'</label>';
+      }).join("");
+      box.hidden = false; q("candToggle").setAttribute("aria-expanded","true");
+      box.querySelectorAll("input[name=cand]").forEach(function(r){ r.onchange = function(){ S.recipientPick = r.value; }; });
+    } else { box.hidden = true; q("candToggle").setAttribute("aria-expanded","false"); }
+    fit();
+  };
+  if (q("msgTrans")) q("msgTrans").onclick = function(){
+    var box = q("msgTransBox");
+    if (q("msgTrans").getAttribute("data-shown")==="0"){
+      box.textContent = d.translatedMsg || ""; box.hidden = false;
+      q("msgTrans").setAttribute("data-shown","1"); q("msgTrans").textContent = "Show original only";
+    } else { box.hidden = true; q("msgTrans").setAttribute("data-shown","0"); q("msgTrans").textContent = "Show in "+S.opLang; }
+    fit();
+  };
+  if (q("draftTrans")) q("draftTrans").onclick = function(){
+    var box = q("draftTransBox"), key = "d:"+S.selected+":"+(d.current?d.current.version_num:0);
+    if (q("draftTrans").getAttribute("data-shown")==="1"){ box.hidden=true; q("draftTrans").setAttribute("data-shown","0"); fit(); return; }
+    if (S.translations[key]){ box.textContent = S.translations[key]; box.hidden=false; q("draftTrans").setAttribute("data-shown","1"); fit(); return; }
+    box.textContent = "Translating…"; box.hidden = false; fit();
+    call("conversation_act", {conversation_id:S.selected, action:"translate", body: d.current.body}).then(function(r){
+      S.translations[key] = r.translation || "";
+      box.textContent = S.translations[key]; q("draftTrans").setAttribute("data-shown","1"); fit();
+    }, function(e){ box.textContent = humanErr(e); fit(); });
+  };
+  /* teach chips */
+  document.querySelectorAll("[data-open-teach]").forEach(function(b){
+    b.onclick = function(){ S.teachState[b.getAttribute("data-open-teach")] = {open:true}; render(); };
+  });
+  document.querySelectorAll("[data-teach]").forEach(function(b){
+    b.onclick = function(){
+      var gap = b.getAttribute("data-teach"), i = b.getAttribute("data-i");
+      var ans = (document.getElementById("gapAns"+i)||{}).value || "";
+      if (!ans.trim()){ S.teachState[gap] = {open:true, err:"Type the answer first."}; render(); return; }
+      var key = gap.toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,40) || "note";
+      S.teachState[gap] = {open:true, busy:true, draft:ans}; render();
+      call("conventions_set", {key:key, value:ans.trim(), category:"taught", answers_gap:gap}).then(function(){
+        S.teachState[gap] = {saved:true, key:key, value:ans.trim()}; render();
+      }, function(e){ S.teachState[gap] = {open:true, draft:ans, err:humanErr(e)}; render(); });
+    };
+  });
+  document.querySelectorAll("[data-rewrite]").forEach(function(b){
+    b.onclick = function(){
+      var gap = b.getAttribute("data-rewrite"), t = S.teachState[gap] || {};
+      b.disabled = true; b.textContent = "Rewriting…";
+      call("conversation_act", {conversation_id:S.selected, action:"regenerate",
+        prompt:"Use the newly added knowledge — "+(t.key||gap)+": "+(t.value||"")+". Keep everything else about the reply the same."
+      }).then(function(){
+        S.teachState[gap] = {saved:true, rewritten:true, key:t.key, value:t.value};
+        return loadHistory(S.selected, true);
+      }).then(function(){ render(); toast("Rewritten — the reply now uses what you taught it."); },
+        function(e){ toast(esc(humanErr(e))); render(); });
+    };
+  });
+  /* actions */
+  if (q("sendBtn")) q("sendBtn").onclick = function(){
+    var menu = q("sendMenu");
+    if (!menu.hidden){ menu.hidden = true; return; }
+    var to = S.recipientPick || d.recipDefault || conv.guest_email;
+    menu.innerHTML = '<div style="font-size:11.5px;color:var(--ink-3);padding:2px 8px 6px">Send this reply to:</div>'
+      + d.candidates.map(function(a){
+          return '<button class="dd-item" data-send-to="'+esc(a)+'"><b>'+esc(a)+'</b>'+(a===d.recipDefault?'<span class="why">'+esc(d.recipReason||"the agent’s pick")+'</span>':'')+'</button>';
+        }).join("")
+      + '<div style="display:flex;gap:6px;padding:6px 8px 2px"><input id="customTo" placeholder="Another address…" style="flex:1;font-size:12px"><button class="small" id="customSend">Send</button></div>';
+    menu.hidden = false;
+    menu.querySelectorAll("[data-send-to]").forEach(function(x){ x.onclick = function(){ doSend(x.getAttribute("data-send-to")); }; });
+    q("customSend").onclick = function(){ var v = q("customTo").value.trim(); if (v) doSend(v); };
+    fit();
+  };
+  function doSend(to){
+    var args = {conversation_id:S.selected, action:"send"};
+    if (to && to !== conv.guest_email) args.to = to;
+    var editBox = document.getElementById("editBox");
+    if (S.editing && editBox) args.body = editBox.value;
+    clearTimeout(S.editTimer);
+    q("sendMenu").hidden = true;
+    q("sendBtn").disabled = true; q("sendBtn").textContent = "Sending…";
+    call("conversation_act", args).then(function(r){
+      S.editing = false;
+      if (r && r.action === "already_sent"){
+        toast("Already sent — nothing was sent twice. See History.");
+        return afterSend(false);
+      }
+      return afterSend(true, r && r.to);
+    }, function(e){ toast(esc(humanErr(e))); q("sendBtn").disabled=false; q("sendBtn").textContent="Send to "+firstName(conv)+" ▾"; });
+  }
+  function afterSend(sent, to){
+    var sentId = S.selected;
+    delete S.history[sentId];
+    return Promise.all([loadOverview(), loadList(S.status==="active"?"active":S.status)]).then(function(){
+      var next = S.rows.filter(function(r){ return r.status==="active" && r.id!==sentId; })[0];
+      if (sent){
+        var nextTxt = next ? " — next: "+esc(CLASS_LABEL[next.classification]||"message").toLowerCase()+" from "+esc(displayName(next)) : " — queue clear";
+        toast("Sent"+(to?" to "+esc(to):"")+" ✓"+nextTxt, null, null, 5500);
+      }
+      if (next){ S.selected = next.id; loadHistory(next.id).then(render, function(){ render(); }); }
+      else S.selected = null;
+      render();
+    });
+  }
+  if (q("editBtn")) q("editBtn").onclick = function(){ S.editing = true; S.editDirty = false; render(); };
+  if (q("doneEdit")) q("doneEdit").onclick = function(){
+    clearTimeout(S.editTimer);
+    var v = document.getElementById("editBox").value;
+    saveEdit(conv.id, v, true);
+  };
+  var eb = document.getElementById("editBox");
+  if (eb){
+    eb.oninput = function(){
+      S.editDirty = true;
+      clearTimeout(S.editTimer);
+      var w = document.getElementById("saveWhisper"); if (w) w.textContent = "";
+      // Pin the save to THIS conversation: if the operator navigates before the
+      // debounce fires, the save must not land on whatever is selected then.
+      var cid = conv.id;
+      S.editTimer = setTimeout(function(){ saveEdit(cid, eb.value, false); }, 2500);
+    };
+  }
+  function saveEdit(cid, v, close){
+    call("conversation_act", {conversation_id:cid, action:"save_edit", body:v}).then(function(){
+      if (cid !== S.selected && !close) return; // navigated away — saved quietly
+      S.editDirty = false;
+      if (close){ S.editing = false; return loadHistory(cid, true).then(render); }
+      var w = document.getElementById("saveWhisper"); if (w) w.textContent = "Saved";
+    }, function(e){
+      if (cid !== S.selected) return;
+      var w = document.getElementById("saveWhisper"); if (w) w.textContent = humanErr(e);
+    });
+  }
+  if (q("askNewBtn")) q("askNewBtn").onclick = function(){
+    var steer = window.prompt ? null : null; /* modals are blocked in the sandbox */
+    var bar = q("askNewBtn");
+    var inputWrap = document.createElement("span");
+    inputWrap.innerHTML = '<input id="steerBox" placeholder="Tell it what to change — e.g. shorter, offer late checkout" style="font-size:12px;min-width:220px"> <button class="small primary" id="steerGo">Go</button>';
+    bar.replaceWith(inputWrap);
+    var go = document.getElementById("steerGo"), box = document.getElementById("steerBox");
+    box.focus();
+    go.onclick = function(){
+      go.disabled = true; go.textContent = "Writing…";
+      call("conversation_act", {conversation_id:S.selected, action:"regenerate", prompt: box.value.trim() || undefined}).then(function(){
+        return loadHistory(S.selected, true);
+      }).then(function(){ render(); toast("New draft ready."); }, function(e){ toast(esc(humanErr(e))); render(); });
+    };
+    box.onkeydown = function(ev){ if (ev.key==="Enter") go.onclick(); if (ev.key==="Escape") render(); };
+    fit();
+  };
+  if (q("asideBtn")) q("asideBtn").onclick = function(){
+    var id = S.selected;
+    call("conversation_act", {conversation_id:id, action:"discard"}).then(function(){
+      delete S.history[id]; S.selected = null;
+      Promise.all([loadOverview(), loadList(S.status)]).then(render);
+      toast("Set aside.", "Undo", function(){
+        call("conversation_act", {conversation_id:id, action:"restore"}).then(function(){
+          Promise.all([loadOverview(), loadList(S.status)]).then(render);
+        }, function(e){ toast(esc(humanErr(e))); });
+      }, 10000);
+    }, function(e){ toast(esc(humanErr(e))); });
+  };
+  if (q("reopenBtn")) q("reopenBtn").onclick = function(){
+    call("conversation_act", {conversation_id:S.selected, action:"restore"}).then(function(){
+      delete S.history[S.selected];
+      Promise.all([loadOverview(), loadList(S.status)]).then(render);
+    }, function(e){ toast(esc(humanErr(e))); });
+  };
+  if (q("followupBtn")) q("followupBtn").onclick = function(){
+    q("followupBtn").disabled = true; q("followupBtn").textContent = "Writing…";
+    call("conversation_act", {conversation_id:S.selected, action:"followup_draft"}).then(function(){
+      return loadHistory(S.selected, true);
+    }).then(function(){ return Promise.all([loadOverview(), loadList(S.status)]); })
+      .then(function(){ render(); toast("Follow-up draft ready."); }, function(e){ toast(esc(humanErr(e))); render(); });
+  };
+  if (q("draftAnywayBtn")) q("draftAnywayBtn").onclick = function(){
+    q("draftAnywayBtn").disabled = true; q("draftAnywayBtn").textContent = "Writing…";
+    call("conversation_act", {conversation_id:S.selected, action:"generate_draft"}).then(function(){
+      return loadHistory(S.selected, true);
+    }).then(function(){ return Promise.all([loadOverview(), loadList(S.status)]); })
+      .then(function(){ render(); toast("Draft ready for your review."); }, function(e){ toast(esc(humanErr(e))); render(); });
+  };
+}
+function showErr(e){ S.loadErr = humanErr(e); S.loadErrRaw = (e && e.message) || String(e); render(); }
+/* ---------- background freshness (90s, visibility-gated, edit-paused) ---------- */
+function interactionActive(){
+  if (S.editing) return true;
+  var ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
+  var m = document.getElementById("sendMenu"); if (m && !m.hidden) return true;
+  var c = document.getElementById("candList"); if (c && !c.hidden) return true;
+  if (document.getElementById("steerBox")) return true;
+  return false;
+}
+setInterval(function(){
+  if (!ul.context || !ul.context.signedIn) return;
+  if (document.visibilityState !== "visible") return;
+  if (interactionActive()) return; // a re-render would wipe what they're doing
+  call("inbox_overview", {}).then(function(o){
+    S.overview = o;
+    if (o.operator_language) S.opLang = o.operator_language;
+    if (S.status === "active" && !S.searchMode && S.listedActive !== null){
+      var pn = num(o.counts.active) - S.listedActive;
+      if (pn > 0) S.pendingNew = pn;
+    }
+    /* refresh strip + pills without touching the list order */
+    render();
+  }, function(){ /* silent — next tick will retry */ });
+}, 90000);
+/* ---------- boot ---------- */
+function boot(){
+  if (!ul.context.signedIn){ renderSignedOut(); return; }
+  render(); /* skeleton */
+  Promise.all([loadOverview(), loadList("active")]).then(render, showErr);
+}
+document.addEventListener("keydown", function(ev){
+  if (ev.key !== "Escape") return;
+  var m = document.getElementById("sendMenu"); if (m && !m.hidden){ m.hidden = true; fit(); }
+  var c = document.getElementById("candList");
+  if (c && !c.hidden){
+    c.hidden = true;
+    var t = document.getElementById("candToggle");
+    if (t) t.setAttribute("aria-expanded", "false");
+    fit();
+  }
+});
+document.addEventListener("ul-ready", boot);
+if (window.ul && ul.context) boot();
+</script>
+</body>
+</html>

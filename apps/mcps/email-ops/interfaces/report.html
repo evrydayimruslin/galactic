@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email Admin — Report</title>
+<script>
+(function () {
+  var port = null, queue = [], pending = {}, nextId = 1;
+  function flush() {
+    if (!port) return;
+    while (queue.length) {
+      var item = queue.shift(), id = nextId++;
+      pending[id] = item;
+      port.postMessage({ type: "call", id: id, functionName: item.fn, args: item.args || {} });
+    }
+  }
+  window.ul = {
+    context: null,
+    call: function (fn, args) {
+      return new Promise(function (resolve, reject) {
+        queue.push({ fn: fn, args: args, resolve: resolve, reject: reject });
+        flush();
+      });
+    },
+    resize: function (height) {
+      if (port) port.postMessage({ type: "resize", height: height });
+    },
+  };
+  window.addEventListener("message", function (event) {
+    var d = event.data;
+    if (!d || d.type !== "ul-interface-connect" || !event.ports || !event.ports[0]) return;
+    port = event.ports[0];
+    window.ul.context = d.context;
+    port.onmessage = function (e) {
+      var m = e.data;
+      if (!m || m.type !== "result" || !(m.id in pending)) return;
+      var item = pending[m.id];
+      delete pending[m.id];
+      if (m.success) item.resolve(m.result);
+      else {
+        var err = new Error((m.error && m.error.message) || "Call failed");
+        err.code = m.error && m.error.type;
+        item.reject(err);
+      }
+    };
+    flush();
+    document.dispatchEvent(new CustomEvent("ul-ready"));
+  });
+  parent.postMessage({ type: "ul-interface-hello" }, "*");
+})();
+</script>
+<style>
+:root{
+  --bg:#ffffff; --surface:#f7f7f5; --line:#e3e1dc;
+  --ink:#23272e; --ink-2:#5c6470; --ink-3:#8b93a0;
+  --accent:#2f6d62; --accent-soft:#e7f1ee; --accent-ink:#ffffff;
+  --red:#b23a3a; --red-soft:#f9ecec;
+  --amber:#a06b1f; --amber-soft:#f7efdd;
+  --green:#3a7a4e; --green-soft:#e9f2ec;
+  --radius:10px;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Hiragino Sans","Yu Gothic",sans-serif;color:var(--ink);background:var(--bg);margin:0;font-size:14px;line-height:1.5;}
+*{box-sizing:border-box}
+#app{padding:14px 16px 10px;}
+button{font:inherit;cursor:pointer;border-radius:8px;padding:6px 14px;font-weight:600;}
+button:focus-visible,[role="button"]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+button:disabled{opacity:.55;cursor:default;}
+.btn-primary{background:var(--accent);color:var(--accent-ink);border:1px solid var(--accent);}
+.btn-secondary{background:var(--bg);color:var(--ink);border:1px solid var(--line);}
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;}
+.seg button{border:none;border-radius:0;background:var(--bg);color:var(--ink-2);font-weight:600;padding:6px 12px;}
+.seg button+button{border-left:1px solid var(--line);}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);}
+.spacer{flex:1;}
+.refresh-note{color:var(--ink-3);font-size:12px;}
+.hero{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-bottom:14px;font-size:15px;}
+.hero .lead{color:var(--ink-2);font-size:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em;font-weight:600;}
+.hero .ok{color:var(--green);font-weight:600;}
+.hero .warn{color:var(--red);font-weight:600;}
+.hero.degraded{cursor:pointer;}
+.hero.degraded .note{color:var(--amber);font-size:12.5px;margin-top:6px;font-weight:600;}
+.banner{border-radius:var(--radius);padding:8px 12px;margin-bottom:12px;font-size:13px;}
+.banner.amber{background:var(--amber-soft);color:var(--amber);border:1px solid #e8d9b8;}
+.banner.err{background:var(--red-soft);color:var(--red);border:1px solid #ecd2d2;display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.banner.err button{background:var(--bg);border:1px solid var(--line);color:var(--ink);padding:3px 10px;font-size:12.5px;}
+.banner.signin{background:var(--accent-soft);color:var(--accent);border:1px solid #cfe2dc;font-weight:600;}
+section{margin-bottom:16px;}
+section h2{font-size:13px;margin:0 0 2px;color:var(--ink);}
+.hint{color:var(--ink-3);font-size:12px;margin:0 0 6px;}
+.rows{border:1px solid var(--line);border-radius:var(--radius);overflow-y:auto;max-height:252px;background:var(--bg);}
+.rows:empty{display:none;}
+.row{padding:8px 12px;border-bottom:1px solid var(--line);}
+.row:last-child{border-bottom:none;}
+.row .top{display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+.row .who{font-weight:600;}
+.row .sum{color:var(--ink-2);font-size:13px;margin-top:1px;overflow-wrap:anywhere;}
+.row .time{color:var(--ink-3);font-size:12px;margin-left:auto;white-space:nowrap;}
+.empty{color:var(--ink-3);font-size:13px;border:1px dashed var(--line);border-radius:var(--radius);padding:10px 12px;}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block;}
+.dot.red{background:var(--red);} .dot.amber{background:var(--amber);}
+.chip{display:inline-block;border-radius:6px;padding:0 6px;font-size:11px;font-weight:600;line-height:18px;}
+.chip.lang{background:var(--surface);color:var(--ink-2);border:1px solid var(--line);}
+.chip.complaint{background:var(--red-soft);color:var(--red);}
+.chip.prov{background:var(--surface);color:var(--ink-2);border:1px solid var(--line);}
+.readbtn{background:none;border:none;color:var(--accent);font-weight:600;padding:2px 0;font-size:13px;margin-top:2px;}
+.fullreply{margin-top:8px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px;}
+.fullreply .body{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow-y:auto;font-size:13px;margin-top:6px;}
+.fullreply .mini{color:var(--ink-3);font-size:12px;}
+.reason{font-size:13px;color:var(--ink);}
+.reason.inject{color:var(--amber);font-weight:600;}
+footer{border-top:1px solid var(--line);padding-top:8px;color:var(--ink-3);font-size:12.5px;}
+details{margin-top:4px;} details summary{cursor:pointer;font-size:12px;color:var(--ink-3);}
+details pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;color:var(--ink-2);background:var(--surface);padding:6px 8px;border-radius:6px;}
+.skel{background:var(--surface);border-radius:6px;height:14px;margin:6px 0;}
+@media (prefers-reduced-motion: no-preference){
+  .skel{animation:pulse 1.2s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+}
+.sample-tag{color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;}
+@media (max-width:640px){ .row .time{margin-left:0;width:100%;} }
+</style>
+</head>
+<body>
+<div id="app"><div class="skel" style="width:60%"></div><div class="skel" style="width:90%"></div><div class="skel" style="width:75%"></div></div>
+<script>
+"use strict";
+var app = document.getElementById("app");
+
+/* ---------- tiny call queue: max 4 in flight ---------- */
+var inFlight = 0, waitQ = [];
+function pump(){
+  while (inFlight < 4 && waitQ.length){
+    (function(t){
+      inFlight++;
+      ul.call(t.fn, t.args).then(function(r){ inFlight--; pump(); t.res(r); },
+                                 function(e){ inFlight--; pump(); t.rej(e); });
+    })(waitQ.shift());
+  }
+}
+function call(fn, args){
+  return new Promise(function(res, rej){ waitQ.push({fn:fn, args:args, res:res, rej:rej}); pump(); });
+}
+
+/* ---------- helpers ---------- */
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+  });
+}
+var LANG = {German:"DE",Japanese:"JA",English:"EN",French:"FR",Spanish:"ES"};
+function langCode(l){ if(!l) return ""; return LANG[l] || String(l).slice(0,2).toUpperCase(); }
+function parseTs(ts){
+  if(!ts) return null;
+  var s = String(ts).replace(" ","T");
+  if (!/[zZ]|[+-]\d\d:?\d\d$/.test(s)) s += "Z";
+  var d = new Date(s); return isNaN(d) ? null : d;
+}
+function fmtTime(ts){ var d = parseTs(ts); return d ? d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : ""; }
+function fmtWhen(ts){
+  var d = parseTs(ts); if(!d) return "";
+  return d.toLocaleDateString([], {month:"short",day:"numeric"}) + " " + d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+}
+function minsBetween(a, b){
+  var da = parseTs(a), db = parseTs(b) || new Date();
+  if(!da) return null;
+  return Math.max(0, Math.round((db - da) / 60000));
+}
+function plural(n, one, many){ return n + " " + (n === 1 ? one : many); }
+function cap(s){ s = String(s); return s.charAt(0).toUpperCase() + s.slice(1); }
+function fit(){ requestAnimationFrame(function(){ ul.resize(document.documentElement.scrollHeight); }); }
+
+/* ---------- reason humanization ---------- */
+var REASON_TEXT = {
+  ignored_instructions: "This email tried to give the agent instructions — it ignored them and filed it",
+  auto_generated: "Automatic notification or receipt",
+  spam: "Looks like spam",
+  newsletter: "Newsletter or marketing mail",
+  out_of_office: "Automatic out-of-office reply",
+  no_action_needed: "Nothing needed — informational only",
+  duplicate: "Duplicate of an email already handled",
+  internal: "Internal mail — not a guest inquiry"
+};
+var REASON_SHORT = {
+  ignored_instructions: "ignored instructions",
+  auto_generated: "automatic",
+  spam: "spam",
+  newsletter: "newsletters",
+  out_of_office: "out-of-office",
+  no_action_needed: "nothing needed",
+  duplicate: "duplicates",
+  internal: "internal"
+};
+function reasonText(k){ return REASON_TEXT[k] || cap(String(k || "no_action_needed").replace(/_/g," ")); }
+function reasonShort(k){ return REASON_SHORT[k] || String(k || "").replace(/_/g," "); }
+
+/* ---------- error humanization ---------- */
+function humanErr(err){
+  var code = err && err.code, msg = (err && err.message) || "";
+  if (code === "SIGN_IN_REQUIRED") return {text:"Sign in to use this."};
+  if (code === "RATE_LIMITED" || code === "BUSY") return {text:"Give it a few seconds — too many requests at once.", retryable:true};
+  if (code === "RUN_FAILED"){
+    if (/SMTP auth/i.test(msg)) return {text:"Couldn't sign in to your mailbox to send — check the email password in Settings."};
+    if (/MISSING_SECRETS|IMAP|SMTP/i.test(msg)) return {text:"Your mailbox isn't connected yet. Add your email settings in the agent's Settings, then try again."};
+    if (/^E[A-Z]{3,}|ECONN|ETIMEDOUT|EHOSTUNREACH|errno/i.test(msg)) return {text:"Something went wrong — try again.", raw: msg};
+    if (msg && msg.length < 200 && /^[A-Z]/.test(msg) && !/[_{}\\]/.test(msg)) return {text: msg};
+  }
+  return {text:"Something went wrong — try again.", raw: msg};
+}
+
+/* ---------- state ---------- */
+var state = {
+  win: "today",                 // 'today' | 'shift' | '7d'  (Today = default, owner decision)
+  loading: true,
+  digest: null,                 // last successful activity_digest
+  degraded: null,               // inbox_overview payload when the digest failed
+  error: null,                  // humanized error for the failed refresh strip
+  expanded: {},                 // conversation_id -> {open, loading, body, provenance, error}
+  histCache: {}                 // conversation_id -> conversation_history result
+};
+var WIN_LABEL = {today:"Today", shift:"This shift (8h)", "7d":"Last 7 days"};
+var WIN_NOUN  = {today:"day", shift:"shift", "7d":"week"};
+
+/* ---------- data loading ---------- */
+var loadSeq = 0;
+function loadDigest(){
+  var seq = ++loadSeq;
+  state.loading = true; state.error = null;
+  render();
+  var retried = false;
+  function attempt(){
+    call("activity_digest", {window: state.win}).then(function(d){
+      if (seq !== loadSeq) return;
+      state.loading = false; state.digest = d; state.degraded = null; state.error = null;
+      render();
+    }, function(err){
+      if (seq !== loadSeq) return;
+      var h = humanErr(err);
+      if (h.retryable && !retried){
+        retried = true;
+        setTimeout(function(){ if (seq === loadSeq) attempt(); }, 5000);
+        return;
+      }
+      state.loading = false; state.error = h;
+      if (state.digest){ render(); return; }        // keep the previous report on screen
+      // degraded mode: fall back to inbox_overview counts
+      call("inbox_overview", {}).then(function(ov){
+        if (seq !== loadSeq) return;
+        state.degraded = ov; render();
+      }, function(){
+        if (seq !== loadSeq) return;
+        state.degraded = null; render();
+      });
+    });
+  }
+  attempt();
+}
+
+function toggleReply(convId, sentAt){
+  var ex = state.expanded[convId] || (state.expanded[convId] = {open:false});
+  ex.open = !ex.open;
+  if (ex.open && ex.body == null && !ex.loading){
+    ex.loading = true; ex.error = null;
+    var p = state.histCache[convId]
+      ? Promise.resolve(state.histCache[convId])
+      : call("conversation_history", {conversation_id: convId});
+    p.then(function(h){
+      state.histCache[convId] = h;
+      var sents = (h.versions || []).filter(function(v){ return v.type === "sent" || v.type === "followup_sent"; });
+      var pick = null;
+      for (var i = 0; i < sents.length; i++){
+        if (sentAt && sents[i].created_at === sentAt){ pick = sents[i]; break; }
+      }
+      if (!pick && sents.length){
+        pick = sents.reduce(function(a,b){ return (b.version_num||0) > (a.version_num||0) ? b : a; });
+      }
+      ex.loading = false;
+      if (pick){
+        ex.body = pick.body || "";
+        ex.provenance = (pick.metadata && pick.metadata.provenance) === "edited" ? "edited" : "agent";
+      } else {
+        ex.error = {text:"Couldn't find the sent reply in this conversation."};
+      }
+      render(convId);
+    }, function(err){
+      ex.loading = false; ex.error = humanErr(err);
+      render(convId);
+    });
+  }
+  render(convId);
+}
+
+/* ---------- rendering ---------- */
+function heroSentenceHTML(d){
+  var sinceLabel = d.win7 ? fmtWhen(d.since) : fmtTime(d.since);
+  var nr = d.no_reply || {total:0, reasons:[]};
+  var c = d.complaints || {arrived:0, open:0};
+  var quiet = d.arrived === 0 && d.drafted === 0 && d.sent === 0 && nr.total === 0;
+  if (quiet){
+    return "A quiet " + esc(WIN_NOUN[(d.window === "shift" || d.window === "7d") ? d.window : "today"]) + " — no new email since " + esc(sinceLabel) +
+      ". The agent checked the mailbox " + esc(plural(d.checks, "time", "times")) + ".";
+  }
+  var parts = [];
+  parts.push("the agent checked the mailbox " + esc(plural(d.checks, "time", "times")));
+  parts.push(esc(plural(d.arrived, "email arrived", "emails arrived")));
+  parts.push(esc(plural(d.drafted, "reply", "replies")) + " drafted for your review");
+  var reasons = (nr.reasons || []).filter(function(r){ return r.count > 0; });
+  var breakdown = reasons.map(function(r){ return esc(r.count + " " + reasonShort(r.reason)); }).join(", ");
+  parts.push(esc(String(nr.total)) + " needed no reply" + (breakdown ? " (" + breakdown + ")" : ""));
+  parts.push(esc(plural(d.sent, "reply sent", "replies sent")));
+  if (c.arrived > 0){
+    var cc = esc(plural(c.arrived, "complaint", "complaints"));
+    cc += c.open === 0
+      ? ' — <span class="ok">answered ✓</span>'
+      : ' — <span class="warn">' + esc(c.open === 1 ? "1 still open" : c.open + " still open") + "</span>";
+    parts.push(cc);
+  }
+  return "Since " + esc(sinceLabel) + ": " + parts.join(" · ") + ".";
+}
+
+function rowWaiting(w){
+  var dotCls = (w.priority === "urgent" || w.priority === "high") ? "red" : (w.priority === "medium" ? "amber" : "");
+  var name = w.guest_name || w.guest_email || "Unknown sender";
+  return '<div class="row"><div class="top">' +
+    (dotCls ? '<span class="dot ' + dotCls + '" aria-label="' + esc(w.priority) + ' priority"></span>' : "") +
+    '<span class="who">' + esc(name) + "</span>" +
+    (w.language ? '<span class="chip lang">' + esc(langCode(w.language)) + "</span>" : "") +
+    (w.classification === "complaint" ? '<span class="chip complaint">Complaint</span>' : "") +
+    '<span class="time">' + esc(fmtWhen(w.created_at)) + "</span></div>" +
+    (w.summary ? '<div class="sum">' + esc(w.summary) + "</div>" : "") +
+    "</div>";
+}
+
+function rowSent(s){
+  var id = s.conversation_id;
+  var ex = state.expanded[id];
+  var name = s.guest_name || "Unknown recipient";
+  var firstLine = String(s.preview || "").split(/\r?\n/).filter(function(l){ return l.trim(); })[0] || "";
+  if (firstLine.length > 140) firstLine = firstLine.slice(0, 140) + "…";
+  var html = '<div class="row" data-conv="' + esc(id) + '"><div class="top">' +
+    '<span class="who">' + esc(name) + "</span>" +
+    (s.language ? '<span class="chip lang">' + esc(langCode(s.language)) + "</span>" : "") +
+    '<span class="time">' + esc(fmtWhen(s.sent_at)) + "</span></div>" +
+    (firstLine ? '<div class="sum">' + esc(firstLine) + "</div>" : "") +
+    '<button type="button" class="readbtn" id="exp-' + esc(id) + '" data-exp="' + esc(id) +
+    '" data-sentat="' + esc(s.sent_at || "") + '" aria-expanded="' + (ex && ex.open ? "true" : "false") + '">' +
+    (ex && ex.open ? "Hide the full reply ▴" : "Read the full reply ▾") + "</button>";
+  if (ex && ex.open){
+    html += '<div class="fullreply">';
+    if (ex.loading){
+      html += '<div class="mini">Fetching the reply…</div>';
+    } else if (ex.error){
+      html += '<div class="mini">' + esc(ex.error.text) + "</div>";
+    } else {
+      html += '<span class="chip prov">' + (ex.provenance === "edited" ? "edited by you" : "written by the agent") + "</span>" +
+        '<div class="body">' + esc(ex.body) + "</div>";
+    }
+    html += "</div>";
+  }
+  return html + "</div>";
+}
+
+function rowNoReply(n){
+  var name = n.guest_name || n.guest_email || "Unknown sender";
+  var inject = n.reason === "ignored_instructions";
+  return '<div class="row"><div class="top">' +
+    '<span class="who">' + esc(name) + "</span>" +
+    '<span class="time">' + esc(fmtWhen(n.created_at)) + "</span></div>" +
+    '<div class="reason' + (inject ? " inject" : "") + '">' + esc(reasonText(n.reason)) + "</div>" +
+    (n.summary ? '<div class="sum">' + esc(n.summary) + "</div>" : "") +
+    "</div>";
+}
+
+function sectionHTML(title, hint, rowsHTML, emptyText){
+  return "<section><h2>" + title + "</h2>" +
+    (hint ? '<p class="hint">' + hint + "</p>" : "") +
+    (rowsHTML ? '<div class="rows">' + rowsHTML + "</div>" : '<div class="empty">' + esc(emptyText) + "</div>") +
+    "</section>";
+}
+
+function toolbarHTML(disabled){
+  var b = ["today","shift","7d"].map(function(w){
+    return '<button type="button" data-win="' + w + '" aria-pressed="' + (state.win === w) + '"' +
+      (disabled ? " disabled" : "") + ">" + esc(WIN_LABEL[w]) + "</button>";
+  }).join("");
+  return '<div class="toolbar"><div class="seg" role="group" aria-label="Report window">' + b + "</div>" +
+    '<span class="spacer"></span>' +
+    (state.loading && !disabled ? '<span class="refresh-note">Refreshing…</span>' : "") +
+    '<button type="button" class="btn-secondary" id="refresh-btn"' +
+    ((disabled || state.loading) ? " disabled" : "") + ">Refresh report</button></div>";
+}
+
+function footerHTML(lastCheckedAt, nowTs){
+  var html = "";
+  if (!lastCheckedAt){
+    html += '<div class="banner amber">The agent hasn’t checked the mailbox yet. It normally checks every 5 minutes.</div>';
+    html += "<footer>The agent checks the mailbox every 5 minutes · no checks recorded yet</footer>";
+    return html;
+  }
+  var mins = minsBetween(lastCheckedAt, nowTs);
+  if (mins != null && mins > 20){
+    html += '<div class="banner amber">The agent hasn’t checked the mailbox in ' + esc(String(mins)) +
+      " min — it may have stalled. It normally checks every 5 minutes.</div>";
+  }
+  var ago = mins == null ? "" : (mins < 1 ? "just now" : mins + " min ago");
+  html += "<footer>The agent checks the mailbox every 5 minutes · last check " + esc(ago) + "</footer>";
+  return html;
+}
+
+function skeletonHTML(){
+  return '<div class="hero" aria-hidden="true"><div class="skel" style="width:40%"></div>' +
+    '<div class="skel" style="width:95%"></div><div class="skel" style="width:70%"></div></div>' +
+    ["Waiting for you","Replies sent","No reply needed"].map(function(t){
+      return "<section><h2>" + t + '</h2><div class="rows"><div class="row"><div class="skel" style="width:55%"></div>' +
+        '<div class="skel" style="width:85%"></div></div></div></section>';
+    }).join("");
+}
+
+/* ---------- signed-out sample ---------- */
+function sampleHTML(){
+  return '<div class="banner signin">Sign in to see your report — below is a sample of what the agent writes here.</div>' +
+    toolbarHTML(true) +
+    '<div class="hero"><div class="lead"><span class="sample-tag">Sample</span> · Today</div>' +
+    "Since 07:00: the agent checked the mailbox 96 times · 14 emails arrived · 6 replies drafted for your review · " +
+    '5 needed no reply (3 automatic, 1 newsletter, 1 spam) · 2 replies sent · 1 complaint — <span class="ok">answered ✓</span>.</div>' +
+    sectionHTML("Waiting for you (2)", "Reply from the Inbox tab",
+      '<div class="row"><div class="top"><span class="dot red"></span><span class="who">Anna Weber</span>' +
+      '<span class="chip lang">DE</span><span class="chip complaint">Complaint</span><span class="time">09:41</span></div>' +
+      '<div class="sum">Guest upset — the room smelled of smoke on arrival; wants a partial refund.</div></div>' +
+      '<div class="row"><div class="top"><span class="who">K. Tanaka</span><span class="chip lang">JA</span>' +
+      '<span class="time">08:15</span></div><div class="sum">Asks whether a late checkout at 1pm is possible on Sunday.</div></div>') +
+    sectionHTML("Replies sent", "",
+      '<div class="row"><div class="top"><span class="who">Marie Dubois</span><span class="chip lang">FR</span>' +
+      '<span class="time">10:02</span></div><div class="sum">Thanks her for booking and confirms the airport shuttle for 06:30.</div>' +
+      '<button type="button" class="readbtn" disabled>Read the full reply ▾</button></div>' +
+      '<div class="row"><div class="top"><span class="who">Tom Riley</span><span class="chip lang">EN</span>' +
+      '<span class="time">07:48</span></div><div class="sum">Confirms the twin-bed setup and sends the parking directions.</div>' +
+      '<button type="button" class="readbtn" disabled>Read the full reply ▾</button></div>') +
+    sectionHTML("No reply needed", "",
+      '<div class="row"><div class="top"><span class="who">Booking.com</span><span class="time">09:12</span></div>' +
+      '<div class="reason">Automatic notification or receipt</div></div>' +
+      '<div class="row"><div class="top"><span class="who">newsletter@travel-deals.example</span><span class="time">06:30</span></div>' +
+      '<div class="reason">Newsletter or marketing mail</div></div>') +
+    "<footer>The agent checks the mailbox every 5 minutes · last check 4 min ago</footer>";
+}
+
+/* ---------- main render ---------- */
+function render(focusConvId){
+  var html = "";
+  if (!ul.context || ul.context.signedIn === false){
+    app.innerHTML = sampleHTML();
+    wire(); fit(); return;
+  }
+  html += toolbarHTML(false);
+
+  if (state.error){
+    html += '<div class="banner err"><span>Couldn’t refresh the report — ' + esc(state.error.text) +
+      '</span><button type="button" id="retry-btn">Try again</button>' +
+      (state.error.raw ? "<details><summary>Technical details</summary><pre>" + esc(state.error.raw) + "</pre></details>" : "") +
+      "</div>";
+  }
+
+  if (state.loading && !state.digest && !state.degraded){
+    html += skeletonHTML();
+    app.innerHTML = html; wire(); fit(); return;
+  }
+
+  if (state.digest){
+    var d = state.digest;
+    var dataWin = d.window === "shift" || d.window === "7d" ? d.window : "today";
+    d.win7 = dataWin === "7d";
+    html += '<div class="hero"><div class="lead">' + esc(WIN_LABEL[dataWin]) + "</div>" + heroSentenceHTML(d) + "</div>";
+
+    var waiting = d.waiting || [];
+    html += sectionHTML("Waiting for you (" + esc(String(waiting.length)) + ")",
+      waiting.length ? "Reply from the Inbox tab" : "",
+      waiting.map(rowWaiting).join(""),
+      "Nothing waiting — all caught up.");
+
+    var sents = d.sent_items || [];
+    html += sectionHTML("Replies sent", "", sents.map(rowSent).join(""),
+      "No replies sent in this window.");
+
+    var noReply = d.no_reply_items || [];
+    html += sectionHTML("No reply needed", "", noReply.map(rowNoReply).join(""),
+      "Nothing filed in this window.");
+
+    html += footerHTML(d.last_checked_at, d.now);
+  } else if (state.degraded){
+    var ov = state.degraded, c = ov.counts || {};
+    html += '<div class="hero degraded" id="degraded-hero" role="button" tabindex="0" aria-label="Try loading the full report again">' +
+      '<div class="lead">Right now</div>' +
+      esc(plural(c.active || 0, "email is waiting", "emails are waiting")) + " for a reply · " +
+      esc(plural(c.resolved || 0, "reply sent", "replies sent")) + " overall · " +
+      esc(String(c.no_action || 0)) + " needed no reply · the agent checked the mailbox " +
+      esc(plural(ov.checks_today || 0, "time", "times")) + " today." +
+      '<div class="note">Full activity report unavailable — tap to try again.</div></div>';
+    html += footerHTML(ov.last_checked_at, ov.now);
+  } else {
+    html += '<div class="empty">The report couldn’t load. Use “Try again” above.</div>';
+  }
+
+  app.innerHTML = html;
+  wire();
+  if (focusConvId){
+    var btn = document.getElementById("exp-" + focusConvId);
+    if (btn) btn.focus();
+  }
+  fit();
+}
+
+/* ---------- event wiring ---------- */
+function wire(){
+  var i;
+  var winBtns = app.querySelectorAll("[data-win]");
+  for (i = 0; i < winBtns.length; i++){
+    winBtns[i].addEventListener("click", function(){
+      var w = this.getAttribute("data-win");
+      if (w === state.win || state.loading) return;
+      state.win = w;
+      loadDigest();
+    });
+  }
+  var rf = document.getElementById("refresh-btn");
+  if (rf) rf.addEventListener("click", function(){ loadDigest(); });
+  var rt = document.getElementById("retry-btn");
+  if (rt) rt.addEventListener("click", function(){ loadDigest(); });
+  var dh = document.getElementById("degraded-hero");
+  if (dh){
+    dh.addEventListener("click", function(){ loadDigest(); });
+    dh.addEventListener("keydown", function(e){
+      if (e.key === "Enter" || e.key === " "){ e.preventDefault(); loadDigest(); }
+    });
+  }
+  var exps = app.querySelectorAll("[data-exp]");
+  for (i = 0; i < exps.length; i++){
+    exps[i].addEventListener("click", function(){
+      toggleReply(this.getAttribute("data-exp"), this.getAttribute("data-sentat") || null);
+    });
+  }
+}
+
+document.addEventListener("keydown", function(e){
+  if (e.key !== "Escape") return;
+  var any = false;
+  Object.keys(state.expanded).forEach(function(k){
+    if (state.expanded[k].open){ state.expanded[k].open = false; any = true; }
+  });
+  if (any) render();
+});
+
+/* ---------- boot ---------- */
+function init(){
+  if (!ul.context || ul.context.signedIn === false){ render(); return; }
+  loadDigest();   // cold load = exactly 1 call
+}
+if (window.ul && ul.context) init();
+else document.addEventListener("ul-ready", init);
+window.addEventListener("load", fit);
+</script>
+</body>
+</html>
