@@ -3809,33 +3809,45 @@ function AgentConnectionsCard(
     return (
       <div className="connection-field" key={key}>
         <label>
-          <span>{label}</span>
-          {required ? <span className="connection-req">required</span> : null}
+          <span>
+            {required
+              ? (
+                <span aria-label="required" className="connection-req-star">
+                  *
+                </span>
+              )
+              : null}
+            {label}
+          </span>
+        </label>
+        <div className="connection-input-wrap">
+          <input
+            type={opts.secret ? "password" : "text"}
+            autoComplete="off"
+            placeholder={opts.secret && isSet ? "••••••••" : opts.note ?? ""}
+            value={values[key] ?? ""}
+            disabled={disabled}
+            onChange={(event) =>
+              setValues((prev) => ({ ...prev, [key]: event.target.value }))}
+          />
           {isSet
             ? (
-              <span className="connection-connected">
-                {opts.secret ? "connected" : "set"}
+              <span
+                className="connection-setmark"
+                title={(opts.secret ? "Connected" : "Configured") +
+                  " — type to replace"}
+              >
+                ✓
               </span>
             )
             : null}
-        </label>
-        <input
-          type={opts.secret ? "password" : "text"}
-          autoComplete="off"
-          placeholder={isSet ? "•••••••• (enter a new value to replace)" : "Enter value"}
-          value={values[key] ?? ""}
-          disabled={disabled}
-          onChange={(event) =>
-            setValues((prev) => ({ ...prev, [key]: event.target.value }))}
-        />
+        </div>
         {opts.host
           ? (
             <p className="connection-note">
               Only ever sent to <Mono>{opts.host}</Mono>.
             </p>
           )
-          : opts.note
-          ? <p className="connection-note">{opts.note}</p>
           : null}
       </div>
     );
