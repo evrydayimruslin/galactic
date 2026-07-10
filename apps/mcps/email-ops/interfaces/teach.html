@@ -253,7 +253,7 @@ function render() {
   if (!ul.context || !ul.context.signedIn) html = signedOutHtml();
   else if (S.load === "loading") html = '<div class="loadbox">Loading what it wants to learn…</div>';
   else if (S.load === "error") html = loadErrHtml();
-  else html = gapsHtml() + knowledgeHtml() + footerHtml();
+  else html = gapsHtml() + knowledgeHtml() + pendingStartersHtml() + footerHtml();
 
   app.innerHTML = html;
 
@@ -502,15 +502,33 @@ function firstRunHtml() {
       out += '<div class="starter"><span class="chip chip-green">Learned ✓</span> <span style="font-size:13px">' + esc(p.label) + "</span></div>";
       return;
     }
-    out += '<div class="starter"><div class="s-label">' + esc(p.label) + "</div>" +
-      '<div class="ansrow">' +
-        '<input type="text" id="starter-' + i + '" data-model="starter" data-si="' + i + '" data-enter="starter-save" placeholder="' + esc(p.ph) + '" value="' + esc(u.say) + '"' + (u.saving ? " disabled" : "") + ">" +
-        '<button class="btn" data-act="starter-save" data-si="' + i + '"' + (u.saving ? " disabled" : "") + ">" + (u.saving ? "Saving…" : "Teach it") + "</button>" +
-      "</div>" +
-      (u.err ? '<div class="err">Couldn’t save — try again.</div>' : "") +
-      "</div>";
+    out += starterFormHtml(p, i, u);
   });
   return out + "</div>";
+}
+
+function starterFormHtml(p, i, u) {
+  return '<div class="starter"><div class="s-label">' + esc(p.label) + "</div>" +
+    '<div class="ansrow">' +
+      '<input type="text" id="starter-' + i + '" data-model="starter" data-si="' + i + '" data-enter="starter-save" placeholder="' + esc(p.ph) + '" value="' + esc(u.say) + '"' + (u.saving ? " disabled" : "") + ">" +
+      '<button class="btn" data-act="starter-save" data-si="' + i + '"' + (u.saving ? " disabled" : "") + ">" + (u.saving ? "Saving…" : "Teach it") + "</button>" +
+    "</div>" +
+    (u.err ? '<div class="err">Couldn’t save — try again.</div>' : "") +
+    "</div>";
+}
+
+// Starter answers the operator has typed (or is saving) but not yet saved —
+// rendered below the grouped list so the first save never eats the others.
+function pendingStartersHtml() {
+  if (!S.conv.length) return ""; // first-run view already shows every starter
+  var out = "";
+  STARTERS.forEach(function (p, i) {
+    var u = st(i);
+    if (u.done) return;
+    if (!((u.say || "").trim()) && !u.saving) return;
+    out += starterFormHtml(p, i, u);
+  });
+  return out ? '<div class="sect"><h2 style="font-size:15px">Finish teaching the basics</h2>' + out + "</div>" : "";
 }
 
 /* ---------- data loading ---------- */
@@ -534,7 +552,16 @@ function coldLoad() {
 }
 function refetchConventions() {
   callRetry("conventions_get", {}).then(function (r) {
-    S.conv = ((r && r.conventions) || []).filter(function (c) { return c && c.category !== "_deleted"; });
+    var rows = ((r && r.conventions) || []).filter(function (c) { return c && c.category !== "_deleted"; });
+    // A row soft-deleted moments ago (Undo still armed) is gone server-side;
+    // keep it visible from the captured old value so the Undo can land.
+    Object.keys(CU).forEach(function (k) {
+      var u = CU[k];
+      if (u && u.removed && u.undoT && !rows.some(function (x) { return x.key === k; })) {
+        rows.push({ key: k, value: u.oldValue, category: u.oldCategory });
+      }
+    });
+    S.conv = rows;
     render();
   }).catch(function () { /* keep optimistic local state */ });
 }
@@ -582,7 +609,8 @@ function doAction(act, el) {
       if (inp) inp.focus();
       return;
     }
-    var key = slugify(g2.question) || slugify(g2.key) || "fact";
+    var key = slugify(g2.question) || slugify(g2.key) ||
+      String(g2.key || g2.question || "").trim().slice(0, 60) || "fact";
     u2.saving = true; u2.err = null; render();
     call("conventions_set", { key: key, value: ans, category: "taught", answers_gap: g2.key }).then(function () {
       u2.saving = false; u2.learned = true;
@@ -757,7 +785,7 @@ function offerRewrites(gap, key, value) {
   if (!ids.length) return;
   u.rw = { state: "checking" };
   render();
-  call("conversations_list", { status: "active" }).then(function (r) {
+  call("conversations_list", { status: "active", limit: 200 }).then(function (r) {
     var activeIds = {};
     ((r && r.conversations) || []).forEach(function (c) { activeIds[c.id] = 1; });
     var targets = ids.filter(function (id) { return activeIds[id]; }).slice(0, 3);

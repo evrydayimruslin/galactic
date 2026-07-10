@@ -172,9 +172,16 @@ function langName(l){
   if (m[k]) return m[k];
   return l.charAt(0).toUpperCase()+l.slice(1);
 }
+function parseTs(ts){
+  if(!ts) return NaN;
+  var s = String(ts).replace(" ", "T");
+  if (!/[zZ]|[+-]\d\d:?\d\d$/.test(s)) s += "Z";
+  return Date.parse(s);
+}
+function num(x){ x = +x; return isFinite(x) ? x : 0; }
 function ago(ts, ref){
   if(!ts) return "";
-  var t = Date.parse(ts), r = ref ? Date.parse(ref) : Date.now();
+  var t = parseTs(ts), r = ref ? parseTs(ref) : Date.now();
   if (!isFinite(t)) return "";
   var s = Math.max(0, (r - t)/1000);
   if (s < 60) return "just now";
@@ -212,7 +219,7 @@ function humanErr(e){
   if (/MISSING_SECRETS|IMAP_HOST|SMTP_HOST|not configured|mailbox isn/i.test(msg)) return "Your mailbox isn't connected yet. Add your email settings in the agent's Settings, then try again.";
   if (/SMTP auth/i.test(msg)) return "Couldn't sign in to your mailbox to send — check the email password in Settings.";
   if (/recipient address|Already sent|Only discarded|required/i.test(msg)) return msg;
-  return "Something went wrong.";
+  return "Something went wrong — try again.";
 }
 /* ---------- call queue: max 4 in flight ---------- */
 var inFlight = 0, waiters = [];
@@ -245,7 +252,8 @@ var S = {
   searchTimer: null, searchMode: false,
   opLang: "English", checkDisabledUntil: 0, pendingNew: 0,
   toastTimer: null, undoDiscard: null, teachState: {}, // gap -> {saved, key, value, busy}
-  loadErr: null, recipientPick: null, lastRefresh: 0
+  loadErr: null, loadErrRaw: null, recipientPick: null, lastRefresh: 0,
+  listEpoch: 0, listedActive: null
 };
 var PILLS = [
   {k:"active", label:"Needs a reply"},
@@ -255,14 +263,21 @@ var PILLS = [
 ];
 /* ---------- data ---------- */
 function loadOverview(){
-  return call("inbox_overview", {}).then(function(o){ S.overview = o; });
+  return call("inbox_overview", {}).then(function(o){
+    S.overview = o;
+    if (o.operator_language) S.opLang = o.operator_language;
+  });
 }
 function loadList(status){
+  var my = ++S.listEpoch;
   return call("conversations_list", {status: status, limit: 50}).then(function(r){
+    if (my !== S.listEpoch) return; // superseded by a newer list request
     var rows = r.conversations || [];
     if (status === "active"){
-      var rank = function(p){ return p==="urgent"?0 : p==="high"?1 : p==="medium"?2 : 3; };
+      var rank = function(p){ return p==="high"?0 : p==="low"?2 : 1; };
       rows.sort(function(a,b){ return rank(a.priority)-rank(b.priority) || String(a.created_at).localeCompare(String(b.created_at)); });
+      S.listedActive = S.overview ? num(S.overview.counts.active) : rows.length;
+      S.pendingNew = 0;
     }
     S.rows = rows; S.total = r.total || rows.length; S.searchMode = false;
   });
@@ -310,8 +325,9 @@ function render(){
   if (!ul.context) return;
   if (!ul.context.signedIn){ renderSignedOut(); return; }
   if (S.loadErr){
-    app.innerHTML = '<div class="banner err">'+esc(S.loadErr)+' <button class="small" id="retryBtn">Try again</button></div>';
-    document.getElementById("retryBtn").onclick = function(){ S.loadErr=null; boot(); };
+    app.innerHTML = '<div class="banner err">'+esc(S.loadErr)+' <button class="small" id="retryBtn">Try again</button></div>'
+      + (S.loadErrRaw ? '<details style="margin-top:6px"><summary>Technical details</summary><div class="whisper">'+esc(S.loadErrRaw)+'</div></details>' : '');
+    document.getElementById("retryBtn").onclick = function(){ S.loadErr=null; S.loadErrRaw=null; boot(); };
     fit(); return;
   }
   if (!S.overview){ app.innerHTML = '<div class="skel"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:85%"></div>'; fit(); return; }
@@ -323,22 +339,22 @@ function render(){
 function renderStrip(){
   var o = S.overview, h = "";
   var big;
-  if (o.counts.active > 0){
-    big = '<span>'+o.counts.active+' need'+(o.counts.active===1?"s":"")+' a reply</span>';
-    if (o.complaints_active > 0) big += ' · <span class="alert">'+o.complaints_active+' complaint'+(o.complaints_active>1?"s":"")+'</span>';
+  if (num(o.counts.active) > 0){
+    big = '<span>'+num(o.counts.active)+' need'+(num(o.counts.active)===1?"s":"")+' a reply</span>';
+    if (num(o.complaints_active) > 0) big += ' · <span class="alert">'+num(o.complaints_active)+' complaint'+(num(o.complaints_active)>1?"s":"")+'</span>';
   } else {
     big = '<span class="ok">All clear</span>';
   }
   var checked = o.last_checked_at ? ('Checked '+esc(ago(o.last_checked_at, o.now))) : 'Not checked yet';
   var disabled = Date.now() < S.checkDisabledUntil ? " disabled" : "";
   h += '<div class="strip"><div><div class="big">'+big+'</div>'
-    + '<div class="sub">Quietly handled '+o.handled_today+' today</div></div>'
+    + '<div class="sub">Quietly handled '+num(o.handled_today)+' today</div></div>'
     + '<div class="right"><div>'+checked+' · <button class="small" id="checkNow"'+disabled+'>Check now</button></div>'
     + '<div style="margin-top:5px">Summaries in: <select id="langSel" style="font-size:11.5px;padding:2px 6px">'
     + ["English","Japanese","German","French","Spanish","Italian","Portuguese","Chinese","Korean"].map(function(l){
         return '<option'+(l===S.opLang?" selected":"")+'>'+l+'</option>';
       }).join("") + '</select></div></div></div>';
-  var mins = o.last_checked_at ? (Date.parse(o.now)-Date.parse(o.last_checked_at))/60000 : null;
+  var mins = o.last_checked_at ? (parseTs(o.now)-parseTs(o.last_checked_at))/60000 : null;
   if (mins !== null && isFinite(mins) && mins > 20){
     var dur = mins < 90 ? Math.round(mins) + ' minutes'
       : mins < 2880 ? Math.round(mins/60) + ' hours'
@@ -349,7 +365,7 @@ function renderStrip(){
 }
 function renderPills(){
   var o = S.overview;
-  var counts = {active:o.counts.active, no_action:o.counts.no_action, resolved:o.counts.resolved, discarded:o.counts.discarded};
+  var counts = {active:num(o.counts.active), no_action:num(o.counts.no_action), resolved:num(o.counts.resolved), discarded:num(o.counts.discarded)};
   return '<div class="pills">' + PILLS.map(function(p){
     return '<button class="spill" data-status="'+p.k+'" aria-pressed="'+(S.status===p.k && !S.searchMode)+'">'+p.label+' ('+counts[p.k]+')</button>';
   }).join("") + '<input class="search" id="searchBox" placeholder="Find a guest…" value="" aria-label="Find a guest"></div>';
@@ -402,7 +418,7 @@ function renderDetail(){
   var out = "";
   var gl = langName(conv.language);
   out += '<div class="detail-head"><div class="name">'+esc(displayName(conv))+'</div>'
-    + '<div class="meta">writes in '+esc(gl)+' — replies go out in '+esc(gl)+' · '+statusWord(conv.status)+'</div></div>';
+    + '<div class="meta">writes in '+esc(gl)+' — replies go out in '+esc(gl)+' · '+esc(statusWord(conv.status))+'</div></div>';
   /* the agent's reading */
   out += '<div class="card reading"><div class="cap">The agent’s reading</div><div style="margin-bottom:5px">'
     + '<span class="chip'+(conv.classification==="complaint"?" red":"")+'">'+esc(CLASS_LABEL[conv.classification]||conv.classification||"Message")+'</span> '
@@ -500,9 +516,9 @@ function actionButtons(conv, d){
   return b;
 }
 function renderSignedOut(){
-  app.innerHTML = '<div class="strip"><div><div class="big">3 need a reply · <span class="alert">1 complaint</span></div>'
-    + '<div class="sub">Quietly handled 5 today — sample data</div></div></div>'
-    + '<div class="center">Sign in to review your inbox. The agent keeps working either way — nothing is ever sent without you.</div>';
+  app.innerHTML = '<div class="strip"><div><div class="big muted">Sample preview</div>'
+    + '<div class="sub">Your own inbox appears here after you sign in.</div></div></div>'
+    + '<div class="center">The agent checks your mailbox every few minutes, drafts each reply in the guest\'s own language, and files the rest with a reason you can audit.<br><b>Nothing is ever sent without you.</b><br><br>Sign in to review your inbox.</div>';
   fit();
 }
 /* ---------- toasts ---------- */
@@ -517,8 +533,10 @@ function toast(msg, actionLabel, actionFn, ms){
 /* ---------- wiring ---------- */
 function wire(){
   var q = function(id){ return document.getElementById(id); };
+  document.querySelectorAll("details").forEach(function(d){ d.addEventListener("toggle", fit); });
   document.querySelectorAll(".spill").forEach(function(b){
     b.onclick = function(){
+      clearTimeout(S.editTimer);
       S.status = b.getAttribute("data-status"); S.selected = null; S.pendingNew = 0; S.rows = [];
       render();
       loadList(S.status).then(render, showErr);
@@ -526,12 +544,13 @@ function wire(){
   });
   document.querySelectorAll(".lrow").forEach(function(b){
     b.onclick = function(){
+      clearTimeout(S.editTimer);
       S.selected = b.getAttribute("data-id"); S.editing = false; S.teachState = {}; S.recipientPick = null;
       render();
       loadHistory(S.selected).then(render, function(e){ toast(esc(humanErr(e))); });
     };
   });
-  if (q("backBtn")) q("backBtn").onclick = function(){ S.selected = null; S.editing = false; render(); };
+  if (q("backBtn")) q("backBtn").onclick = function(){ clearTimeout(S.editTimer); S.selected = null; S.editing = false; render(); };
   if (q("newChip")) q("newChip").onclick = function(){
     S.pendingNew = 0;
     Promise.all([loadOverview(), loadList(S.status)]).then(render, showErr);
@@ -553,7 +572,9 @@ function wire(){
       var v = sb.value.trim();
       S.searchTimer = setTimeout(function(){
         if (!v){ S.searchMode=false; loadList(S.status).then(render, showErr); return; }
+        var my = ++S.listEpoch;
         call("conversations_list", {search:v, limit:50}).then(function(r){
+          if (my !== S.listEpoch) return;
           S.rows = r.conversations||[]; S.total = r.total||S.rows.length; S.searchMode = true; S.selected=null; render();
           q("searchBox").value = v; q("searchBox").focus();
         }, function(e){ toast(esc(humanErr(e))); });
@@ -638,7 +659,6 @@ function wireDetail(q){
     menu.hidden = false;
     menu.querySelectorAll("[data-send-to]").forEach(function(x){ x.onclick = function(){ doSend(x.getAttribute("data-send-to")); }; });
     q("customSend").onclick = function(){ var v = q("customTo").value.trim(); if (v) doSend(v); };
-    document.addEventListener("keydown", function esch(ev){ if (ev.key==="Escape"){ menu.hidden=true; document.removeEventListener("keydown", esch); } });
     fit();
   };
   function doSend(to){
@@ -646,6 +666,7 @@ function wireDetail(q){
     if (to && to !== conv.guest_email) args.to = to;
     var editBox = document.getElementById("editBox");
     if (S.editing && editBox) args.body = editBox.value;
+    clearTimeout(S.editTimer);
     q("sendMenu").hidden = true;
     q("sendBtn").disabled = true; q("sendBtn").textContent = "Sending…";
     call("conversation_act", args).then(function(r){
@@ -673,8 +694,9 @@ function wireDetail(q){
   }
   if (q("editBtn")) q("editBtn").onclick = function(){ S.editing = true; S.editDirty = false; render(); };
   if (q("doneEdit")) q("doneEdit").onclick = function(){
+    clearTimeout(S.editTimer);
     var v = document.getElementById("editBox").value;
-    saveEdit(v, true);
+    saveEdit(conv.id, v, true);
   };
   var eb = document.getElementById("editBox");
   if (eb){
@@ -682,15 +704,20 @@ function wireDetail(q){
       S.editDirty = true;
       clearTimeout(S.editTimer);
       var w = document.getElementById("saveWhisper"); if (w) w.textContent = "";
-      S.editTimer = setTimeout(function(){ saveEdit(eb.value, false); }, 2500);
+      // Pin the save to THIS conversation: if the operator navigates before the
+      // debounce fires, the save must not land on whatever is selected then.
+      var cid = conv.id;
+      S.editTimer = setTimeout(function(){ saveEdit(cid, eb.value, false); }, 2500);
     };
   }
-  function saveEdit(v, close){
-    call("conversation_act", {conversation_id:S.selected, action:"save_edit", body:v}).then(function(){
+  function saveEdit(cid, v, close){
+    call("conversation_act", {conversation_id:cid, action:"save_edit", body:v}).then(function(){
+      if (cid !== S.selected && !close) return; // navigated away — saved quietly
       S.editDirty = false;
-      if (close){ S.editing = false; return loadHistory(S.selected, true).then(render); }
+      if (close){ S.editing = false; return loadHistory(cid, true).then(render); }
       var w = document.getElementById("saveWhisper"); if (w) w.textContent = "Saved";
     }, function(e){
+      if (cid !== S.selected) return;
       var w = document.getElementById("saveWhisper"); if (w) w.textContent = humanErr(e);
     });
   }
@@ -744,17 +771,27 @@ function wireDetail(q){
       .then(function(){ render(); toast("Draft ready for your review."); }, function(e){ toast(esc(humanErr(e))); render(); });
   };
 }
-function showErr(e){ S.loadErr = humanErr(e); render(); }
+function showErr(e){ S.loadErr = humanErr(e); S.loadErrRaw = (e && e.message) || String(e); render(); }
 /* ---------- background freshness (90s, visibility-gated, edit-paused) ---------- */
+function interactionActive(){
+  if (S.editing) return true;
+  var ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
+  var m = document.getElementById("sendMenu"); if (m && !m.hidden) return true;
+  var c = document.getElementById("candList"); if (c && !c.hidden) return true;
+  if (document.getElementById("steerBox")) return true;
+  return false;
+}
 setInterval(function(){
   if (!ul.context || !ul.context.signedIn) return;
   if (document.visibilityState !== "visible") return;
-  if (S.editing) return;
+  if (interactionActive()) return; // a re-render would wipe what they're doing
   call("inbox_overview", {}).then(function(o){
-    var prevActive = S.overview ? S.overview.counts.active : 0;
     S.overview = o;
-    if (S.status === "active" && !S.searchMode && o.counts.active > S.rows.length){
-      S.pendingNew = o.counts.active - S.rows.length;
+    if (o.operator_language) S.opLang = o.operator_language;
+    if (S.status === "active" && !S.searchMode && S.listedActive !== null){
+      var pn = num(o.counts.active) - S.listedActive;
+      if (pn > 0) S.pendingNew = pn;
     }
     /* refresh strip + pills without touching the list order */
     render();
@@ -764,9 +801,19 @@ setInterval(function(){
 function boot(){
   if (!ul.context.signedIn){ renderSignedOut(); return; }
   render(); /* skeleton */
-  call("get_language", {}).then(function(r){ if (r && r.language) S.opLang = r.language; }, function(){});
   Promise.all([loadOverview(), loadList("active")]).then(render, showErr);
 }
+document.addEventListener("keydown", function(ev){
+  if (ev.key !== "Escape") return;
+  var m = document.getElementById("sendMenu"); if (m && !m.hidden){ m.hidden = true; fit(); }
+  var c = document.getElementById("candList");
+  if (c && !c.hidden){
+    c.hidden = true;
+    var t = document.getElementById("candToggle");
+    if (t) t.setAttribute("aria-expanded", "false");
+    fit();
+  }
+});
 document.addEventListener("ul-ready", boot);
 if (window.ul && ul.context) boot();
 </script>
