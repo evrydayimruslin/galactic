@@ -7,6 +7,7 @@ import type {
 import { CHAT_MIN_BALANCE_LIGHT } from "../../shared/contracts/ai.ts";
 import type { RuntimeAIRoute } from "../runtime/sandbox.ts";
 import { createAIService } from "./ai.ts";
+import { recordUnbilledAiUsage } from "./ai-usage-events.ts";
 import { checkChatBalance, deductChatCost } from "./chat-billing.ts";
 import { isFreeModeEnabled } from "./free-mode.ts";
 import { selectInferenceModel } from "./inference-client.ts";
@@ -61,6 +62,7 @@ function toRuntimeAIRoute(route: ResolvedInferenceRoute): RuntimeAIRoute {
     canonicalModelId: route.canonicalModelId,
     billingModelId: route.billingModelId,
     billingSource: route.billingSource,
+    keySource: route.keySource,
     requestDefaults: route.requestDefaults,
     shouldDebitLight: route.shouldDebitLight,
     shouldRequireBalance: route.shouldRequireBalance,
@@ -80,10 +82,16 @@ function toChatUsage(response: AIResponse): ChatUsage {
   };
 }
 
+export interface RuntimeAIAttribution {
+  appId?: string | null;
+  functionName?: string | null;
+}
+
 export function createRoutedRuntimeAIService(
   route: ResolvedInferenceRoute,
   userId: string,
   checkBalance: typeof checkChatBalance = checkChatBalance,
+  attribution: RuntimeAIAttribution = {},
 ): RuntimeAIService {
   const service = createAIService(
     route.upstreamProvider,
@@ -145,6 +153,8 @@ export function createRoutedRuntimeAIService(
               upstream_model: response.model || model,
               canonical_model_id: route.canonicalModelId ?? null,
               source: 'runtime_ai',
+              appId: attribution.appId ?? null,
+              functionName: attribution.functionName ?? null,
             },
             { billingSource: route.billingSource },
           );
@@ -163,6 +173,27 @@ export function createRoutedRuntimeAIService(
         } catch (err) {
           console.error("[RUNTIME-AI] Failed to debit Light for AI call:", err);
         }
+      } else if (
+        !route.shouldDebitLight && usage.total_tokens > 0 && !response.error
+      ) {
+        // Zero-debit route (BYOK or otherwise unbilled): record usage metadata
+        // on a NON-economic path so model/function analytics aren't blind to
+        // BYOK traffic. Fire-and-forget — never blocks or fails the call, and
+        // never touches debit_light.
+        recordUnbilledAiUsage({
+          userId,
+          appId: attribution.appId ?? null,
+          functionName: attribution.functionName ?? null,
+          billingMode: route.keySource === "user_byok" ? "byok" : "unbilled",
+          provider: route.provider,
+          upstreamProvider: route.upstreamProvider,
+          keySource: route.keySource,
+          model: response.model || model,
+          requestedModel: model,
+          promptTokens: usage.prompt_tokens,
+          completionTokens: usage.completion_tokens,
+          source: "runtime_ai",
+        });
       }
 
       return response;
@@ -191,6 +222,9 @@ export interface CreateRuntimeAIContextOptions {
   // Per-(installer, app, function) route override → a resolveInferenceRoute
   // selection. null/undefined = no override → the default fallback chain.
   inferenceSelection?: InferenceRoutePreference | null;
+  // App + entry-function attribution stamped onto this execution's billing
+  // and usage rows. Omitted on surfaces with no app context (e.g. chat).
+  attribution?: RuntimeAIAttribution;
 }
 
 export async function createRuntimeAIContext(
@@ -272,7 +306,12 @@ export async function createRuntimeAIContext(
     return {
       route: toRuntimeAIRoute(route),
       resolvedRoute: route,
-      aiService: createRoutedRuntimeAIService(route, user.id, checkBalance),
+      aiService: createRoutedRuntimeAIService(
+        route,
+        user.id,
+        checkBalance,
+        options.attribution ?? {},
+      ),
       userApiKey: route.apiKey,
       unavailableReason: null,
     };

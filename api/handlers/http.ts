@@ -598,6 +598,7 @@ export async function handleHttpEndpoint(
       ? await createRuntimeAIContext(billingRuntimeUser, {
         freeMode: caller.freeMode,
         inferenceSelection,
+        attribution: { appId: app.id, functionName },
       })
       : {
         route: null,

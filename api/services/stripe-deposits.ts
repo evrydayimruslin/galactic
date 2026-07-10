@@ -530,6 +530,52 @@ export async function markLightDepositFailed(
   return rows[0] ? normalizeDepositResult(rows[0]) : null;
 }
 
+export interface FailedDepositAttemptInput {
+  userId: string;
+  fundingMethod: string;
+  failureCode: string;
+  failureMessage?: string;
+  requestedLight?: number;
+  requestedAmountCents?: number;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Persist a top-up attempt that failed BEFORE a Stripe object existed
+ * (missing Stripe config, PaymentIntent create rejected). Without this row a
+ * hard-down checkout leaves zero DB trace — the exact 503 outage class that
+ * already happened once, silently. Direct insert (not the webhook RPCs, which
+ * key on a stripe_event id this failure never gets). Callers treat it as
+ * best-effort: a logging failure must never mask the original error.
+ */
+export async function recordFailedLightDepositAttempt(
+  input: FailedDepositAttemptInput,
+): Promise<void> {
+  const res = await fetch(`${getEnv("SUPABASE_URL")}/rest/v1/light_deposits`, {
+    method: "POST",
+    headers: { ...dbHeaders(), "Prefer": "return=minimal" },
+    body: JSON.stringify({
+      user_id: input.userId,
+      status: "failed",
+      funding_method: input.fundingMethod,
+      requested_amount_cents: input.requestedAmountCents ?? null,
+      requested_light: input.requestedLight ?? null,
+      failure_code: input.failureCode,
+      failure_message: (input.failureMessage || "").slice(0, 500) || null,
+      failed_at: new Date().toISOString(),
+      metadata: {
+        attempt_stage: "intent_create",
+        ...(input.metadata || {}),
+      },
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Failed to record deposit attempt failure: ${await res.text()}`,
+    );
+  }
+}
+
 export async function recordLightDepositReversal(
   input: DepositReversalInput,
 ): Promise<DepositRpcResult | null> {

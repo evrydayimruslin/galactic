@@ -2682,6 +2682,7 @@ async function executeAppFunction(
       ? await createRuntimeAIContext(user, {
         freeMode: callerContext.freeMode,
         inferenceSelection,
+        attribution: { appId: app.id, functionName },
       })
       : {
         route: null,

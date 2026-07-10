@@ -4246,11 +4246,42 @@ ${platformDocs}`;
 /**
  * Handle initialize — async, fetches user context for rich instructions.
  */
+/**
+ * Set-once first-connect stamp: fills users.first_connected_at only where
+ * still NULL, making it the immutable "connect" milestone of the onboarding
+ * funnel (initialize previously recorded nothing). Best-effort.
+ */
+async function stampFirstConnected(userId: string): Promise<void> {
+  try {
+    const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = getSupabaseEnv();
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/users?id=eq.${userId}&first_connected_at=is.null`,
+      {
+        method: "PATCH",
+        headers: {
+          "apikey": SUPABASE_SERVICE_ROLE_KEY,
+          "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json",
+          "Prefer": "return=minimal",
+        },
+        body: JSON.stringify({ first_connected_at: new Date().toISOString() }),
+      },
+    );
+  } catch (err) {
+    console.warn("[MCP-PLATFORM] first-connect stamp failed:", err);
+  }
+}
+
 async function handleInitialize(
   id: JsonRpcRequestId,
   userId: string,
   freeMode = false,
 ): Promise<Response> {
+  // Funnel stamp runs CONCURRENTLY with the context fetch below (awaited
+  // before return so the write isn't cancelled with the request context) —
+  // zero added latency on the initialize path.
+  const stamp = stampFirstConnected(userId);
+
   // Fetch desk + library context (best-effort, graceful degradation)
   let instructions: string;
   try {
@@ -4263,6 +4294,7 @@ async function handleInitialize(
       "",
     );
   }
+  await stamp;
 
   // Free Mode (D-tell): prepend the notice so the agent knows on connect why
   // paid/AI tools are missing and what to tell the user.

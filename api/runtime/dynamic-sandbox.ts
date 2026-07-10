@@ -211,6 +211,7 @@ interface DynamicWorkerEntrypointExports {
   AIBinding(input: {
     props: {
       userId: string;
+      appId: string | null;
       executionId: string | null;
       apiKey: string | null;
       provider: string | null;
@@ -220,6 +221,7 @@ interface DynamicWorkerEntrypointExports {
       canonicalModelId: string | null;
       billingModelId: string | null;
       billingSource: string | null;
+      keySource: string | null;
       requestDefaults: Record<string, unknown> | null;
       shouldDebitLight: boolean;
       shouldRequireBalance: boolean;
@@ -775,6 +777,10 @@ export default {
       bindings.AI = ctx.exports.AIBinding({
         props: {
           userId: config.userId,
+          // appId is stable for the isolate's lifetime (reuse key includes the
+          // app), so props are a safe legacy fallback — unlike functionName,
+          // which is per-call and resolves via the execution context only.
+          appId: config.appId || null,
           executionId: config.executionId || null,
           apiKey: config.aiRoute?.apiKey || config.userApiKey,
           provider: config.aiRoute?.provider || null,
@@ -785,6 +791,7 @@ export default {
           canonicalModelId: config.aiRoute?.canonicalModelId || null,
           billingModelId: config.aiRoute?.billingModelId || null,
           billingSource: config.aiRoute?.billingSource || null,
+          keySource: config.aiRoute?.keySource || null,
           requestDefaults: config.aiRoute?.requestDefaults || null,
           shouldDebitLight: !!config.aiRoute?.shouldDebitLight,
           shouldRequireBalance: !!config.aiRoute?.shouldRequireBalance,
@@ -905,6 +912,8 @@ export default {
     // the CURRENT call's, not a stale baked one. (See execution-context-registry.)
     execCtxHandle = registerExecutionContext({
       aiExecutionId: config.executionId,
+      appId: config.appId ?? null,
+      functionName: functionName ?? null,
       cloudOperationMetering: config.cloudOperationMetering,
       cloudOperationBillingConfig: config.cloudOperationBillingConfig,
       callerContextToken: config.callerContextToken ?? null,

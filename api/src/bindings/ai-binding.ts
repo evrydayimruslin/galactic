@@ -4,6 +4,7 @@
 
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { CHAT_MIN_BALANCE_LIGHT, checkChatBalance, deductChatCost } from '../../services/chat-billing.ts';
+import { recordUnbilledAiUsage } from '../../services/ai-usage-events.ts';
 import { recordAiSpend } from '../../services/ai-spend-tracker.ts';
 import { resolveExecutionContext } from '../../services/execution-context-registry.ts';
 import { resolvePlatformInferenceModel } from '../../services/platform-inference-models.ts';
@@ -26,6 +27,10 @@ const PLATFORM_FALLBACK_MODEL = 'deepseek/deepseek-v4-flash';
 
 interface AIBindingProps {
   userId: string;
+  // App attribution for billing/usage rows. Safe in props (unlike per-call
+  // functionName): the isolate reuse key includes the app, so appId is stable
+  // for the isolate's lifetime.
+  appId?: string | null;
   // Execution receipt key for the authoritative AI-spend ledger
   // (ai-spend-tracker.ts). Null only for legacy callers.
   executionId: string | null;
@@ -37,6 +42,8 @@ interface AIBindingProps {
   canonicalModelId: string | null;
   billingModelId: string | null;
   billingSource: string | null;
+  // Which key served the route ('user_byok' | 'platform_openrouter' | ...).
+  keySource: string | null;
   requestDefaults: Record<string, unknown> | null;
   shouldDebitLight: boolean;
   // Metered (credits) route: re-check the wallet before EVERY call so a buyer
@@ -121,6 +128,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       canonicalModelId,
       billingModelId,
       billingSource,
+      keySource,
       requestDefaults,
       shouldDebitLight,
       shouldRequireBalance,
@@ -144,6 +152,12 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     // legitimate (a run with no spend id) — only an unresolvable HANDLE fails
     // closed.
     let executionId: string | null;
+    // App/function attribution for billing rows. appId falls back to props
+    // (stable per isolate); functionName is per-CALL, so it comes ONLY from
+    // the resolved execution context — a warm isolate's frozen props would
+    // attribute call N's spend to call 1's function.
+    let attributedAppId: string | null = this.ctx.props.appId ?? null;
+    let attributedFunctionName: string | null = null;
     if (execCtxHandle !== undefined || this.ctx.props.requireExecCtx) {
       const resolvedCtx = resolveExecutionContext(execCtxHandle);
       if (!resolvedCtx) {
@@ -156,6 +170,8 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
         };
       }
       executionId = resolvedCtx.aiExecutionId;
+      attributedAppId = resolvedCtx.appId ?? attributedAppId;
+      attributedFunctionName = resolvedCtx.functionName;
     } else {
       executionId = propExecutionId;
     }
@@ -347,6 +363,8 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
             upstream_model: responseModel,
             canonical_model_id: canonicalModelId,
             source: 'runtime_ai_binding',
+            appId: attributedAppId,
+            functionName: attributedFunctionName,
           },
           {
             billingSource: billingSource === 'platform_deepseek_direct'
@@ -377,6 +395,26 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       } catch (err) {
         console.error('[AI-BINDING] Failed to debit Light for AI call:', err);
       }
+    } else if (!shouldDebitLight && promptTokens + completionTokens > 0) {
+      // Zero-debit route (BYOK or otherwise unbilled): record usage metadata
+      // on a NON-economic path so model/function analytics aren't blind to
+      // BYOK traffic. Fire-and-forget — never blocks or fails the call, and
+      // never touches debit_light.
+      recordUnbilledAiUsage({
+        userId,
+        appId: attributedAppId,
+        functionName: attributedFunctionName,
+        executionId,
+        billingMode: keySource === 'user_byok' ? 'byok' : 'unbilled',
+        provider,
+        upstreamProvider,
+        keySource,
+        model: responseModel,
+        requestedModel: model,
+        promptTokens,
+        completionTokens,
+        source: 'runtime_ai_binding',
+      });
     }
 
     return {
