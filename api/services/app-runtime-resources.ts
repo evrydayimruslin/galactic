@@ -584,6 +584,7 @@ const STRICT_RUNTIME_PERMISSIONS = new Set([
   "net:connect",
   "app:call",
   "gpu:execute",
+  "notify:owner",
 ]);
 
 export interface StrictRuntimePermissionResolution {
