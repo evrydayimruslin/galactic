@@ -434,7 +434,8 @@ export async function handleRun(
 
     // ── Deno Sandbox Path ──
     const permissions = resolveStrictManifestPermissions(app).permissions;
-    const usesAi = permissions.includes("ai:call");
+    const usesAi = permissions.includes("ai:call") ||
+      permissions.includes("ai:embed");
     // Per-function provider/model override for this installer's galactic.ai().
     const inferenceSelection = usesAi
       ? await resolveFunctionInferenceOverride({
@@ -466,7 +467,7 @@ export async function handleRun(
     );
     const argsArray = Array.isArray(args) ? args : [args];
     const receiptId = createExecutionReceiptId();
-    const timeoutMs = permissions.includes("ai:call") ? 120_000 : 30_000;
+    const timeoutMs = usesAi ? 120_000 : 30_000;
     const inputArgs =
       typeof args === "object" && args !== null && !Array.isArray(args)
         ? args as Record<string, unknown>

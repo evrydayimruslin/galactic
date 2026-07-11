@@ -35,6 +35,7 @@ export { DatabaseBinding } from './bindings/database-binding.ts';
 export { FixtureDatabaseBinding } from './bindings/fixture-database-binding.ts';
 export { AppDataBinding } from './bindings/appdata-binding.ts';
 export { AIBinding } from './bindings/ai-binding.ts';
+export { EmbedBinding } from './bindings/embed-binding.ts';
 export { MemoryBinding } from './bindings/memory-binding.ts';
 export { RunsBinding } from './bindings/runs-binding.ts';
 export { NotifyBinding } from './bindings/notify-binding.ts';

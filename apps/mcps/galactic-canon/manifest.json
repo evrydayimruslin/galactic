@@ -1,0 +1,404 @@
+{
+  "name": "Galactic Canon",
+  "version": "1.0.0",
+  "type": "mcp",
+  "description": "The authoritative decision bank for Galactic development. Connected agents should search Canon before consequential work, treat active decisions as constraints, explain conflicts, and record newly settled decisions with rationale and evidence.",
+  "entry": {
+    "functions": "index.ts"
+  },
+  "storage": "d1",
+  "permissions": [
+    "ai:embed"
+  ],
+  "context_sources": [
+    {
+      "id": "canon_active_decisions",
+      "label": "Active Canon decisions",
+      "description": "Current development constraints with rationale, consequences, provenance, and review dates.",
+      "type": "d1_query",
+      "access": "read",
+      "searchable": true,
+      "query": "SELECT id, title, statement, rationale, consequences, decided_at, effective_at, author_type, author_label, source_ref, review_due_at, updated_at FROM decisions WHERE user_id = :user_id AND status = 'active' AND (title LIKE :query OR statement LIKE :query OR rationale LIKE :query OR consequences LIKE :query) ORDER BY updated_at DESC LIMIT :limit",
+      "generation_hints": {
+        "tags": [
+          "decisions",
+          "architecture",
+          "constraints",
+          "institutional memory"
+        ],
+        "preferred_component": "table",
+        "entity_types": ["decision"],
+        "safe_default_filters": { "limit": 20 },
+        "prompt_examples": [
+          "show active decisions that constrain the admin agent spine",
+          "what has Canon decided about full-time agent context"
+        ]
+      }
+    },
+    {
+      "id": "canon_tags",
+      "label": "Canon tags",
+      "description": "The user-managed taxonomy applied to decisions.",
+      "type": "d1_table",
+      "access": "read",
+      "searchable": true,
+      "tables": ["tags"],
+      "generation_hints": {
+        "tags": ["taxonomy", "decision tags"],
+        "preferred_component": "list",
+        "entity_types": ["tag"]
+      }
+    }
+  ],
+  "functions": {
+    "canon_create": {
+      "description": "Record a newly settled canonical decision. Use this only after a choice is settled; include rationale, constraints, tags, provenance, and evidence. The decision is active immediately, revision 1 is preserved, and semantic embedding is best-effort.",
+      "parameters": {
+        "title": {
+          "type": "string",
+          "required": true,
+          "description": "Concise human-readable title."
+        },
+        "statement": {
+          "type": "string",
+          "required": true,
+          "description": "The canonical decision stated unambiguously."
+        },
+        "rationale": {
+          "type": "string",
+          "description": "Why this choice was made."
+        },
+        "alternatives": {
+          "type": "string",
+          "description": "Alternatives considered and why they were not chosen."
+        },
+        "consequences": {
+          "type": "string",
+          "description": "Constraints, follow-up work, risks, and expected consequences."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "User-managed scope and topic tags; missing tags are created automatically."
+        },
+        "decided_at": {
+          "type": "string",
+          "description": "When the decision was actually settled; ISO timestamp. Defaults to now."
+        },
+        "effective_at": {
+          "type": "string",
+          "description": "When this decision begins constraining work; ISO timestamp."
+        },
+        "review_due_at": {
+          "type": "string",
+          "description": "Optional date when the decision should be reconsidered."
+        },
+        "author_type": {
+          "type": "string",
+          "enum": ["human", "agent", "collaborative"],
+          "description": "Who made the decision."
+        },
+        "author_label": {
+          "type": "string",
+          "description": "Human or agent label, e.g. Russell + Codex or Codex."
+        },
+        "source_ref": {
+          "type": "string",
+          "description": "Originating task, session, PR, or other reference."
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Additional structured provenance."
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "object" },
+          "description": "References with ref plus optional type, label, and metadata."
+        }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_get": {
+      "description": "Read one decision with tags, comments, relationships, evidence, and immutable revision history.",
+      "parameters": {
+        "decision_id": { "type": "string", "required": true },
+        "include_revisions": {
+          "type": "boolean",
+          "description": "Default true."
+        }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_update": {
+      "description": "Edit the current view of a decision or replace its complete tag set. Every meaningful edit creates an immutable revision. Use canon_supersede instead of silently reversing a decision.",
+      "parameters": {
+        "decision_id": { "type": "string", "required": true },
+        "title": { "type": "string" },
+        "statement": { "type": "string" },
+        "rationale": { "type": "string" },
+        "alternatives": { "type": "string" },
+        "consequences": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Complete replacement tag set."
+        },
+        "decided_at": { "type": "string" },
+        "effective_at": { "type": "string" },
+        "last_reviewed_at": { "type": "string" },
+        "review_due_at": { "type": "string" },
+        "author_type": {
+          "type": "string",
+          "enum": ["human", "agent", "collaborative"]
+        },
+        "author_label": { "type": "string" },
+        "source_ref": { "type": "string" },
+        "metadata": { "type": "object" },
+        "change_comment": {
+          "type": "string",
+          "description": "Why this edit was made."
+        }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_list": {
+      "description": "List decisions by status, tags, and review date without semantic inference.",
+      "parameters": {
+        "status": {
+          "type": "string",
+          "enum": ["active", "superseded", "archived", "all"]
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "All supplied tags must match."
+        },
+        "review_due_before": { "type": "string" },
+        "limit": { "type": "number" },
+        "offset": { "type": "number" }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_search": {
+      "description": "Hybrid semantic, keyword, tag, and status search over Canon. Embedding failure falls back to deterministic lexical ranking.",
+      "parameters": {
+        "query": { "type": "string", "required": true },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "status": {
+          "type": "string",
+          "enum": ["active", "superseded", "archived", "all"],
+          "description": "Defaults to active."
+        },
+        "limit": { "type": "number" },
+        "threshold": { "type": "number" }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_context": {
+      "description": "Retrieve a bounded decision packet for a connected agent's current task. Active decisions are constraints; relationships and evidence are included, with optional canonical comments.",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "The development task or question needing Canon context."
+        },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "status": {
+          "type": "string",
+          "enum": ["active", "superseded", "archived", "all"]
+        },
+        "limit": { "type": "number" },
+        "max_chars": {
+          "type": "number",
+          "description": "Bounded context budget, 2,000-40,000; default 12,000."
+        },
+        "include_comments": {
+          "type": "boolean",
+          "description": "Include comments explicitly marked for context."
+        }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_supersede": {
+      "description": "Make an existing replacement decision supersede an older decision. Preserves both records, creates a typed relationship, and marks the older record historical.",
+      "parameters": {
+        "decision_id": {
+          "type": "string",
+          "required": true,
+          "description": "Older decision being superseded."
+        },
+        "replacement_id": {
+          "type": "string",
+          "required": true,
+          "description": "New active decision."
+        },
+        "note": { "type": "string" },
+        "author_type": {
+          "type": "string",
+          "enum": ["human", "agent", "collaborative"]
+        },
+        "author_label": { "type": "string" }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_archive": {
+      "description": "Soft-archive a decision without deleting its history.",
+      "parameters": {
+        "decision_id": { "type": "string", "required": true },
+        "reason": { "type": "string" },
+        "author_type": {
+          "type": "string",
+          "enum": ["human", "agent", "collaborative"]
+        },
+        "author_label": { "type": "string" }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_comment_add": {
+      "description": "Attach a timestamped note, question, implementation detail, outcome, or clarification to a decision. Comments remain distinct from canonical decision text.",
+      "parameters": {
+        "decision_id": { "type": "string", "required": true },
+        "body": { "type": "string", "required": true },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "note",
+            "question",
+            "implementation",
+            "outcome",
+            "clarification"
+          ]
+        },
+        "author_type": {
+          "type": "string",
+          "enum": ["human", "agent", "collaborative"]
+        },
+        "author_label": { "type": "string" },
+        "source_ref": { "type": "string" },
+        "include_in_context": {
+          "type": "boolean",
+          "description": "Allow this comment into canon_context packets."
+        }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_comment_update": {
+      "description": "Edit, resolve, context-promote, or soft-delete a decision comment.",
+      "parameters": {
+        "comment_id": { "type": "string", "required": true },
+        "body": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "note",
+            "question",
+            "implementation",
+            "outcome",
+            "clarification"
+          ]
+        },
+        "include_in_context": { "type": "boolean" },
+        "resolved": { "type": "boolean" },
+        "delete": { "type": "boolean" }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_relation_add": {
+      "description": "Add a typed decision relationship. Supersession must use canon_supersede.",
+      "parameters": {
+        "from_decision_id": { "type": "string", "required": true },
+        "to_decision_id": { "type": "string", "required": true },
+        "relation_type": {
+          "type": "string",
+          "required": true,
+          "enum": ["related_to", "depends_on", "implements", "conflicts_with"]
+        },
+        "note": { "type": "string" }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_relation_remove": {
+      "description": "Remove a non-supersession decision relationship by ID.",
+      "parameters": {
+        "relation_id": { "type": "string", "required": true }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_evidence_add": {
+      "description": "Attach a PR, commit, file, URL, task, run, or generic reference as evidence for a decision.",
+      "parameters": {
+        "decision_id": { "type": "string", "required": true },
+        "type": {
+          "type": "string",
+          "enum": ["pr", "commit", "file", "url", "task", "run", "reference"]
+        },
+        "label": { "type": "string" },
+        "ref": { "type": "string", "required": true },
+        "metadata": { "type": "object" }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_evidence_remove": {
+      "description": "Remove an evidence attachment without deleting the decision or its revisions.",
+      "parameters": {
+        "evidence_id": { "type": "string", "required": true }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_tags": {
+      "description": "List, create/update, or archive user-managed decision tags. action defaults to list.",
+      "parameters": {
+        "action": { "type": "string", "enum": ["list", "upsert", "archive"] },
+        "tag_id": {
+          "type": "string",
+          "description": "Required for update-by-id or archive."
+        },
+        "name": { "type": "string", "description": "Required for upsert." },
+        "description": { "type": "string" },
+        "color": { "type": "string" }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_reembed": {
+      "description": "Repair or migrate semantic embeddings for one decision or a bounded batch. Defaults to failed embeddings only.",
+      "parameters": {
+        "decision_id": { "type": "string" },
+        "failed_only": { "type": "boolean" },
+        "limit": { "type": "number" }
+      },
+      "returns": { "type": "object" }
+    },
+    "canon_status": {
+      "description": "Counts, embedding health, and decisions whose review date has arrived.",
+      "parameters": {},
+      "returns": { "type": "object" }
+    }
+  },
+  "interfaces": [
+    {
+      "id": "canon",
+      "label": "Canon",
+      "description": "Browse, search, create, edit, tag, discuss, relate, and supersede Galactic's canonical decisions.",
+      "entry": "interfaces/canon.html",
+      "functions": [
+        "canon_list",
+        "canon_search",
+        "canon_get",
+        "canon_create",
+        "canon_update",
+        "canon_supersede",
+        "canon_archive",
+        "canon_comment_add",
+        "canon_comment_update",
+        "canon_relation_add",
+        "canon_relation_remove",
+        "canon_evidence_add",
+        "canon_evidence_remove",
+        "canon_tags",
+        "canon_reembed",
+        "canon_status"
+      ],
+      "min_height": 620
+    }
+  ]
+}

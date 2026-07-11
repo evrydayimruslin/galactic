@@ -52,7 +52,7 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-09.notify-owner.v1";
+const SANDBOX_TEMPLATE_VERSION = "2026-07-10.embed.v1";
 
 // Reuse eligibility lives in its own dependency-light module (imported above) so
 // billing imports the SAME predicate — a divergent copy is a money bug (see the
@@ -236,6 +236,16 @@ interface DynamicWorkerEntrypointExports {
       shouldRequireBalance: boolean;
       modelPinned?: boolean;
       unavailableReason?: string | null;
+      requireExecCtx?: boolean;
+    };
+  }): unknown;
+  EmbedBinding(input: {
+    props: {
+      userId: string;
+      appId: string;
+      appVersion?: string | null;
+      executionId?: string | null;
+      userApiKey?: string | null;
       requireExecCtx?: boolean;
     };
   }): unknown;
@@ -489,6 +499,7 @@ globalThis.ultralight = {
       config.permissions.includes("notify:owner")
     }) return Promise.reject(new Error('galactic.notify unavailable: add "notify:owner" to manifest permissions.')); const e = globalThis.__rpcEnv; return e.NOTIFY ? e.NOTIFY.notifyOwner(o || {}, globalThis.__execHandle) : Promise.reject(new Error('Notifications not available')); },
   ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); var __t0 = Date.now(); var __clip = function(v){ try { var s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > 2000 ? s.slice(0, 2000) + '…[truncated]' : (s || ''); } catch (_e) { return ''; } }; var __rec = function(resp, errMsg){ try { var f = globalThis.__flight; if (f && f.ai && f.ai.length < 20) f.ai.push({ at: new Date().toISOString(), ms: Date.now() - __t0, model: (resp && resp.model) || (r && r.model) || null, cost_light: (resp && resp.usage && resp.usage.cost_light) || 0, prompt: __clip(r && r.messages), response: errMsg ? ('[error] ' + __clip(errMsg)) : __clip(resp && resp.content) }); } catch (_e) {} }; return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { __rec(null, resp.error); throw new Error('galactic.ai failed: ' + resp.error); } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} __rec(resp); return resp; }); },
+  embed(r) { const e = globalThis.__rpcEnv; if (!e.EMBED) return Promise.reject(new Error('galactic.embed unavailable: ai:embed permission not granted or no authenticated user context.')); return e.EMBED.embed(r || {}, globalThis.__execHandle).then(function(resp){ try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
   async call(targetAppId, functionName, callArgs) {
     if (!targetAppId || !functionName) throw new Error('target app id and function name are required');
     if (!__ulAllowsAppCall(targetAppId, functionName)) {
@@ -827,6 +838,29 @@ export default {
           shouldRequireBalance: !!config.aiRoute?.shouldRequireBalance,
           modelPinned: !!config.aiRoute?.modelPinned,
           unavailableReason: config.aiUnavailableReason || null,
+          requireExecCtx: useGetReuse,
+        },
+      });
+    }
+
+    if (
+      config.permissions.includes("ai:embed") && ctx?.exports?.EmbedBinding
+    ) {
+      bindings.EMBED = ctx.exports.EmbedBinding({
+        props: {
+          userId: config.userId,
+          appId: config.appId,
+          appVersion: config.expectedVersion ?? null,
+          executionId: config.executionId ?? null,
+          // EmbeddingService calls OpenRouter's /embeddings endpoint directly.
+          // Only pass a genuine user OpenRouter BYOK key; a platform route key
+          // or a direct-provider BYOK key belongs to a different endpoint and
+          // must never be misclassified as unbilled OpenRouter usage.
+          userApiKey:
+            config.aiRoute?.keySource === "user_byok" &&
+              config.aiRoute?.upstreamProvider === "openrouter"
+              ? config.aiRoute.apiKey
+              : null,
           requireExecCtx: useGetReuse,
         },
       });

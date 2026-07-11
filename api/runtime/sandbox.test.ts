@@ -980,6 +980,49 @@ Deno.test("sandbox: ai works when permission granted", async () => {
   assertEquals(result.result, "AI response");
 });
 
+Deno.test("sandbox: embed requires permission and returns vector metadata", async () => {
+  const denied = makeConfig({
+    permissions: [],
+    embeddingService: {
+      embed: async () => ({
+        embedding: [1, 0],
+        model: "embedding-test",
+        usage: { input_tokens: 1, total_tokens: 1 },
+      }),
+    },
+    code: iife(`
+      async function embedTest() { return await ultralight.embed({ input: 'canon' }); }
+      return { embedTest: embedTest };
+    `),
+  });
+  const deniedResult = await executeInSandbox(denied, "embedTest", [{}]);
+  assertEquals(deniedResult.success, false);
+  assert(deniedResult.error?.message.includes("ai:embed"));
+
+  const allowed = makeConfig({
+    permissions: ["ai:embed"],
+    embeddingService: {
+      embed: async () => ({
+        embedding: [1, 0, 0.5],
+        model: "embedding-test",
+        usage: { input_tokens: 2, total_tokens: 2 },
+      }),
+    },
+    code: iife(`
+      async function embedTest() { return await ultralight.embed({ input: 'canon' }); }
+      return { embedTest: embedTest };
+    `),
+  });
+  const allowedResult = await executeInSandbox(allowed, "embedTest", [{}]);
+  assertEquals(allowedResult.success, true);
+  assertEquals(allowedResult.result, {
+    embedding: [1, 0, 0.5],
+    model: "embedding-test",
+    dimensions: 3,
+    usage: { input_tokens: 2, total_tokens: 2, cost_light: 0 },
+  });
+});
+
 Deno.test("sandbox: app call can use a declared read dependency", async () => {
   const originalFetch = globalThis.fetch;
   let capturedUrl = "";

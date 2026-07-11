@@ -581,7 +581,9 @@ export async function handleHttpEndpoint(
 
     // Execute the function in sandbox — AI-capable apps get 120s timeout
     const httpPermissions = resolveStrictManifestPermissions(app).permissions;
-    const billingRuntimeUser = httpPermissions.includes("ai:call")
+    const usesModel = httpPermissions.includes("ai:call") ||
+      httpPermissions.includes("ai:embed");
+    const billingRuntimeUser = usesModel
       ? await resolveHttpBillingRuntimeUser(app.owner_id, caller, httpRuntime)
       : (httpRuntime.payerUserId === user?.id ? user : null);
     // Per-function override keyed on the INSTALLER/payer (not the billing user,
@@ -594,7 +596,7 @@ export async function handleHttpEndpoint(
         functionName,
       })
       : null;
-    const runtimeAI = httpPermissions.includes("ai:call")
+    const runtimeAI = usesModel
       ? await createRuntimeAIContext(billingRuntimeUser, {
         freeMode: caller.freeMode,
         inferenceSelection,
@@ -615,7 +617,7 @@ export async function handleHttpEndpoint(
     );
     const receiptId = createExecutionReceiptId();
     auditReceiptId = receiptId;
-    const timeoutMs = httpPermissions.includes("ai:call") ? 120_000 : 30_000;
+    const timeoutMs = usesModel ? 120_000 : 30_000;
     const inputArgs = loggedInputArgs;
     const cloudPreflight = await preflightRuntimeCloudHold({
       app,

@@ -396,6 +396,12 @@ Deno.test('parser: infers ai:call from ultralight.ai', async () => {
   assert(result.permissions.includes('ai:call'));
 });
 
+Deno.test('parser: infers ai:embed from galactic.embed', async () => {
+  const code = `export async function index(text: string) { return await galactic.embed({ input: text }); }`;
+  const result = await parseTypeScript(code);
+  assert(result.permissions.includes('ai:embed'));
+});
+
 Deno.test('parser: infers net:fetch from fetch()', async () => {
   const code = `export async function get() { return await fetch('https://api.example.com'); }`;
   const result = await parseTypeScript(code);

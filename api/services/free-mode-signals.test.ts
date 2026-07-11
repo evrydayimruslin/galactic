@@ -52,6 +52,18 @@ Deno.test("free mode: detects the ultralight.ai() alias", async () => {
   assertEquals(usesInference(result.functions, "ask"), true);
 });
 
+Deno.test("free mode: detects a direct galactic.embed() call per function", async () => {
+  const result = await parseTypeScript(`
+    export async function semanticIndex(text: string) {
+      return await galactic.embed({ input: text });
+    }
+    export async function echo(text: string) { return text; }
+  `);
+  assertEquals(usesInference(result.functions, "semanticIndex"), true);
+  assertEquals(usesInference(result.functions, "echo"), false);
+  assert(result.permissions.includes("ai:embed"));
+});
+
 Deno.test("free mode: detects inference reached transitively through a local helper", async () => {
   const result = await parseTypeScript(`
     async function callModel(q: string) {

@@ -2668,7 +2668,7 @@ async function executeAppFunction(
     // 120s (AI) / 30s windows. The same value sizes the cloud-usage hold.
     const timeoutMs = meta?.executionTimeoutMs
       ? Math.min(meta.executionTimeoutMs, MAX_ASYNC_EXECUTION_MS)
-      : permissions.includes("ai:call")
+      : permissions.includes("ai:call") || permissions.includes("ai:embed")
       ? 120_000
       : 30_000;
     const inferenceSelection = permissions.includes("ai:call")
@@ -2678,7 +2678,8 @@ async function executeAppFunction(
         functionName,
       })
       : null;
-    const runtimeAI = permissions.includes("ai:call")
+    const runtimeAI = permissions.includes("ai:call") ||
+        permissions.includes("ai:embed")
       ? await createRuntimeAIContext(user, {
         freeMode: callerContext.freeMode,
         inferenceSelection,
