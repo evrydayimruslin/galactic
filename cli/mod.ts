@@ -2547,7 +2547,8 @@ async function writeAppRc(dir: string, rc: Record<string, unknown>): Promise<voi
 
 async function collectFiles(dir: string): Promise<Array<{ name: string; content: string; size: number }>> {
   const files: Array<{ name: string; content: string; size: number }> = [];
-  const allowedExtensions = ['.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.css', '.html'];
+  // D1 apps depend on SQL migrations being uploaded alongside their source.
+  const allowedExtensions = ['.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.css', '.html', '.sql'];
   const ignoreDirs = ['node_modules', '.git', 'dist', 'build', '.galactic', '.ultralight'];
 
   async function walk(path: string, base: string) {

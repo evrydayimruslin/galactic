@@ -161,6 +161,16 @@ Deno.test('CLI: api.ts has restGet, callAppTool, listAppTools methods', async ()
   assertStringIncludes(apiSource, 'isAuthenticated()', 'Missing isAuthenticated method in api.ts');
 });
 
+Deno.test('CLI: upload includes SQL migrations for D1 apps', async () => {
+  const cliSource = await Deno.readTextFile('./cli/mod.ts');
+
+  assertStringIncludes(
+    cliSource,
+    "'.sql'",
+    'collectFiles must upload .sql migration files'
+  );
+});
+
 Deno.test('CLI: callAppTool calls per-app endpoint /mcp/{appId}', async () => {
   const apiSource = await Deno.readTextFile('./cli/api.ts');
 
