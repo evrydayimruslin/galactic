@@ -20,12 +20,12 @@ import {
 const MAX_EMBED_INPUT_CHARS = 32_000;
 const DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small";
 
-export interface EmbedRequest {
+interface EmbedRequest {
   input?: unknown;
   model?: unknown;
 }
 
-export interface EmbedResponse {
+interface EmbedResponse {
   embedding: number[];
   model: string;
   dimensions: number;
