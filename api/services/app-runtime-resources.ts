@@ -580,6 +580,7 @@ const STRICT_RUNTIME_PERMISSIONS = new Set([
   "memory:read",
   "memory:write",
   "ai:call",
+  "ai:embed",
   "net:fetch",
   "net:connect",
   "app:call",

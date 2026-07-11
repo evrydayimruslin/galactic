@@ -66,6 +66,10 @@ export interface RuntimeConfig {
   // User memory (for unified Memory.md - optional, can be null)
   memoryService: MemoryService | null;
   aiService: AIService;
+  // Optional in-process embedding adapter. Production Dynamic Workers use the
+  // host-side EmbedBinding; this keeps the legacy/local sandbox contract
+  // complete and testable without exposing provider credentials.
+  embeddingService?: RuntimeEmbeddingService | null;
   // Decrypted environment variables (injected as ultralight.env)
   envVars: Record<string, string>;
   // Supabase configuration (decrypted)
@@ -203,6 +207,19 @@ export interface MemoryService {
 
 export interface AIService {
   call(request: AIRequest, apiKey: string): Promise<AIResponse>;
+}
+
+export interface RuntimeEmbeddingService {
+  embed(input: string): Promise<{
+    embedding: number[];
+    model: string;
+    dimensions?: number;
+    usage: {
+      input_tokens: number;
+      total_tokens: number;
+      cost_light?: number;
+    };
+  }>;
 }
 
 export interface ExecutionResult {
@@ -2138,6 +2155,30 @@ export async function executeInSandbox(
           throw new Error(aiError);
         }
         return response;
+      },
+
+      embed: async (request: { input?: unknown; model?: unknown }) => {
+        if (!config.permissions.includes("ai:embed")) {
+          throw new Error("ai:embed permission required");
+        }
+        const input = typeof request?.input === "string"
+          ? request.input.trim()
+          : "";
+        if (!input) {
+          throw new Error("galactic.embed requires a non-empty string `input`.");
+        }
+        if (!config.embeddingService) {
+          throw new Error("Embedding service not available");
+        }
+        const response = await config.embeddingService.embed(input);
+        return {
+          ...response,
+          dimensions: response.dimensions ?? response.embedding.length,
+          usage: {
+            ...response.usage,
+            cost_light: response.usage.cost_light ?? 0,
+          },
+        };
       },
 
       // CALL - Inter-app function calls via MCP

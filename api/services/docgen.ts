@@ -737,6 +737,7 @@ function permissionToCapability(permission: string): string | null {
     "memory:read": "can access user memory",
     "memory:write": "can save to user memory",
     "ai:call": "can call AI models",
+    "ai:embed": "can generate semantic embeddings",
     "net:fetch": "can make HTTP requests",
   };
   return map[permission] || null;

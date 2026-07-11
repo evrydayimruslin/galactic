@@ -224,6 +224,7 @@ Agent code runs in a sandbox with the `galactic.*` SDK (alias: `ultralight.*` �
 | Capability | Call | Permission |
 |---|---|---|
 | **AI** — multimodal chat (incl. vision) | `galactic.ai({ messages })` | `ai:call` |
+| **Embeddings** — semantic vectors for retrieval | `galactic.embed({ input })` | `ai:embed` |
 | **Call another Agent** | `galactic.call(appId, fn, args)` | `app:call` or a declared dependency |
 | **Charge the user** (in-app purchase) | `galactic.charge(credits, reason?)` | caller must be signed in |
 | KV storage (per-user, app-scoped) | `galactic.store / load / list / remove / query` | — |
@@ -241,6 +242,9 @@ Request: `{ messages: [{ role, content }], model?, max_tokens?, temperature? }`.
 - Generate: `const { content } = await galactic.ai({ messages: [{ role: "user", content: prompt }] });`
 - Extract to JSON: prompt `"Return ONLY JSON {title, tags[]} for: " + text`, then `JSON.parse(content)`.
 - Vision: `content: [{ type: "text", text: "What is this?" }, { type: "file", data: dataUri, filename: "p.png" }]`.
+
+#### `galactic.embed({ input, model? })` — semantic embedding
+Returns `{ embedding, model, dimensions, usage }` from an embedding-capable model. Requires `ai:embed` in manifest permissions. Keep source writes durable when embedding fails, retain lexical search, and expose a repair/backfill function. The initial supported model is `openai/text-embedding-3-small`.
 
 #### `galactic.call(appId, fn, args)` — orchestrate other Agents
 Calls another Agent's function over MCP and returns its parsed result. This is how Agents compose into graphs. Requires `app:call` or a declared manifest dependency on that app/function. Example: `const r = await galactic.call("app-abc", "translate", { text, to: "fr" });`

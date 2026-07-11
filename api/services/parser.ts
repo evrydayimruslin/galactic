@@ -775,6 +775,9 @@ function inferPermissions(code: string): string[] {
   if (new RegExp(`${SDK}\\.ai`).test(code)) {
     permissions.push('ai:call');
   }
+  if (new RegExp(`${SDK}\\.embed`).test(code)) {
+    permissions.push('ai:embed');
+  }
 
   // Network operations
   if (/\bfetch\s*\(/.test(code)) {
@@ -788,7 +791,7 @@ function inferPermissions(code: string): string[] {
  * Per-function inference detection (Free Mode signal — docs/FREE_MODE_DESIGN.md).
  *
  * Builds a call graph over the entry file's AST and marks each function that
- * transitively reaches galactic.ai() / ultralight.ai(). Conservative by design:
+ * transitively reaches galactic.ai()/embed() or ultralight.ai()/embed(). Conservative by design:
  * when inference is present but can't be attributed precisely — multi-file
  * helpers (relative imports), a destructured `ai` binding, module-scope ai, or
  * an unresolved callee — every function is marked true (fail-safe toward
@@ -799,7 +802,7 @@ function analyzeInferenceUsage(
   sourceFile: tsTypes.SourceFile,
   code: string,
 ): { hasAi: boolean; allInference: boolean; byFunction: Map<string, boolean> } {
-  if (!new RegExp(`${SDK}\\.ai\\s*\\(`).test(code)) {
+  if (!new RegExp(`${SDK}\\.(?:ai|embed)\\s*\\(`).test(code)) {
     return { hasAi: false, allInference: false, byFunction: new Map() };
   }
 
@@ -828,7 +831,8 @@ function analyzeInferenceUsage(
   const isAiCall = (node: tsTypes.Node): boolean =>
     ts.isCallExpression(node) &&
     ts.isPropertyAccessExpression(node.expression) &&
-    node.expression.name.text === 'ai' &&
+    (node.expression.name.text === 'ai' ||
+      node.expression.name.text === 'embed') &&
     ts.isIdentifier(node.expression.expression) &&
     (node.expression.expression.text === 'ultralight' ||
       node.expression.expression.text === 'galactic');

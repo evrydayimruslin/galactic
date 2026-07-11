@@ -3783,6 +3783,7 @@ Agent code runs in a sandbox with the \`galactic.*\` SDK (alias: \`ultralight.*\
 | Capability | Call | Permission |
 |---|---|---|
 | **AI** — multimodal chat (incl. vision) | \`galactic.ai({ messages })\` | \`ai:call\` |
+| **Embeddings** — semantic vectors for retrieval | \`galactic.embed({ input })\` | \`ai:embed\` |
 | **Call another Agent** | \`galactic.call(appId, fn, args)\` | \`app:call\` or a declared dependency |
 | **Wired imports** — call whatever the user connected to a slot | \`galactic.use(slotName)\` | slot declared in manifest \`imports\`, wired by the user |
 | **Emit an event** (pub/sub) | \`galactic.emit(topic, payload)\` — ≤50/execution, 32KB payload; delivery is grant-gated at subscribers | — |
@@ -3804,6 +3805,9 @@ Request: \`{ messages: [{ role, content }], model?, max_tokens?, temperature? }\
 - Generate: \`const { content } = await galactic.ai({ messages: [{ role: "user", content: prompt }] });\`
 - Extract to JSON: prompt \`"Return ONLY JSON {title, tags[]} for: " + text\`, then \`JSON.parse(content)\`.
 - Vision: \`content: [{ type: "text", text: "What is this?" }, { type: "file", data: dataUri, filename: "p.png" }]\`.
+
+#### \`galactic.embed({ input, model? })\` — semantic embedding
+Returns \`{ embedding, model, dimensions, usage }\` using an embedding-capable model; it never asks a chat model to invent vectors. Provider credentials, billing attribution, and execution identity stay host-side. Requires \`ai:embed\` in manifest permissions. Writes should remain durable when embedding fails: store the source record, mark indexing failed, retain lexical search, and retry through an explicit repair function. The initial supported model is \`openai/text-embedding-3-small\`.
 
 #### Errors & retries — what to expect
 - **Your thrown errors are safe.** When your function throws, the caller receives a structured \`{ error: { type, message } }\` — never a raw stack. \`type\` is your error's class name; write \`throw new Error("clear message")\` (or a custom Error subclass) and it reaches the caller intact.
@@ -8753,6 +8757,15 @@ function executeLint(args: Record<string, unknown>): unknown {
           suggestion: 'Add "permissions": ["ai:call"] to manifest.json',
         });
       }
+      if (/(?:ultralight|galactic)\.embed\s*\(/.test(code)) {
+        issues.push({
+          severity: "error",
+          rule: "manifest-permissions",
+          message:
+            'Code calls galactic.embed() but manifest does not declare "ai:embed" permission.',
+          suggestion: 'Add "permissions": ["ai:embed"] to manifest.json',
+        });
+      }
       if (code.includes("fetch(") || code.includes("fetch (")) {
         issues.push({
           severity: strict ? "error" : "warning",
@@ -8774,6 +8787,17 @@ function executeLint(args: Record<string, unknown>): unknown {
           rule: "unused-permission",
           message:
             'manifest declares "ai:call" permission but code does not appear to use galactic.ai().',
+        });
+      }
+      if (
+        permissions.includes("ai:embed") &&
+        !/(?:ultralight|galactic)\.embed\s*\(/.test(code)
+      ) {
+        issues.push({
+          severity: "info",
+          rule: "unused-permission",
+          message:
+            'manifest declares "ai:embed" permission but code does not appear to use galactic.embed().',
         });
       }
     }
