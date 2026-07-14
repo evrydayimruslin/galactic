@@ -621,6 +621,166 @@ export async function createGrant(
   return mapRow(rows[0] as AgentGrantRow);
 }
 
+/**
+ * Record an Agent-authored wiring proposal without activating it.
+ *
+ * This performs the same delegation-not-expansion validation as createGrant,
+ * but the resulting row is pending until an authenticated account session
+ * calls approvePendingGrant. Re-proposing an active row never mutates its cap
+ * or constraints; this prevents an API key from laundering an authority
+ * expansion through the proposal path.
+ */
+export async function createPendingGrantProposal(
+  userId: string,
+  request: AgentGrantCreateRequest,
+  origin: AgentGrantOrigin = "agent",
+): Promise<AgentFunctionGrant> {
+  const db = getDbConfig();
+  if (!db) {
+    throw new RequestValidationError("Grant storage is not configured", 503);
+  }
+
+  const callerAppId = request.callerAppId?.trim();
+  const targetAppId = request.targetAppId?.trim();
+  const rawTargetFunction = request.targetFunction?.trim();
+  if (!callerAppId || !targetAppId || !rawTargetFunction) {
+    throw new RequestValidationError(
+      "callerAppId, targetAppId, and targetFunction are required",
+    );
+  }
+  if (callerAppId === targetAppId) {
+    throw new RequestValidationError(
+      "An Agent does not need a grant to call its own functions",
+    );
+  }
+
+  const [callerApp, targetApp] = await Promise.all([
+    loadApp(db, callerAppId),
+    loadApp(db, targetAppId),
+  ]);
+  if (!callerApp) {
+    throw new RequestValidationError("Caller Agent not found", 404);
+  }
+  if (!targetApp) {
+    throw new RequestValidationError("Target Agent not found", 404);
+  }
+
+  // Launch invariant for connected builders: proposals may only connect the
+  // owner's private Agents. The broader cross-user/public grant basin remains
+  // available to explicit account-session flows through createGrant().
+  if (
+    callerApp.owner_id !== userId || targetApp.owner_id !== userId ||
+    callerApp.visibility !== "private" || targetApp.visibility !== "private"
+  ) {
+    throw new RequestValidationError(
+      "Connected agents may only propose grants between private Agents owned by this account",
+      403,
+    );
+  }
+
+  const targetFunction = toRawFunctionName(rawTargetFunction, targetApp.slug);
+  const callerFunction = request.callerFunction
+    ? toRawFunctionName(request.callerFunction, callerApp.slug)
+    : "";
+  const mode = request.mode === "subscribe" ? "subscribe" : "call";
+  const topic = mode === "subscribe" ? (request.topic?.trim() || "") : "";
+  if (mode === "subscribe" && !topic) {
+    throw new RequestValidationError("A subscribe grant requires a topic");
+  }
+
+  if (!(await userControlsCaller(db, userId, callerApp))) {
+    throw new RequestValidationError(
+      "You can only wire Agents you own or have installed",
+      403,
+    );
+  }
+  if (!(await userCanCallTarget(db, userId, targetApp, targetFunction))) {
+    throw new RequestValidationError(
+      "You cannot grant access to a function you cannot call yourself",
+      403,
+    );
+  }
+
+  const cap = request.monthlyCapCredits === undefined
+    ? DEFAULT_GRANT_MONTHLY_CAP_CREDITS
+    : request.monthlyCapCredits;
+  const slot = request.slot?.trim() || "";
+  const selector = [
+    `user_id=eq.${userId}`,
+    `caller_app_id=eq.${callerAppId}`,
+    `caller_function=eq.${encodeURIComponent(callerFunction)}`,
+    `slot=eq.${encodeURIComponent(slot)}`,
+    `target_app_id=eq.${targetAppId}`,
+    `target_function=eq.${encodeURIComponent(targetFunction)}`,
+    `topic=eq.${encodeURIComponent(topic)}`,
+    `mode=eq.${mode}`,
+    `select=*`,
+    `limit=1`,
+  ].join("&");
+  const existing = await dbGet(db, selector);
+  if (existing[0]?.status === "active" || existing[0]?.status === "pending") {
+    return mapRow(existing[0] as AgentGrantRow);
+  }
+  if (existing[0]?.status === "revoked") {
+    const reproposed = await patchGrant(db, userId, existing[0].id, {
+      status: "pending",
+      monthly_cap_credits: cap,
+      constraints: request.constraints ?? {},
+      spent_credits_period: 0,
+      period_start: new Date().toISOString(),
+    });
+    if (reproposed) return reproposed;
+    throw new RequestValidationError("Failed to re-propose revoked grant", 500);
+  }
+
+  const payload = {
+    user_id: userId,
+    caller_app_id: callerAppId,
+    caller_function: callerFunction,
+    slot,
+    target_app_id: targetAppId,
+    target_function: targetFunction,
+    topic,
+    mode,
+    status: "pending",
+    monthly_cap_credits: cap,
+    spent_credits_period: 0,
+    period_start: new Date().toISOString(),
+    constraints: request.constraints ?? {},
+    created_by: origin,
+  };
+  const response = await fetch(
+    `${db.baseUrl}/rest/v1/agent_function_grants?on_conflict=user_id,caller_app_id,caller_function,slot,target_app_id,target_function,topic,mode`,
+    {
+      method: "POST",
+      headers: {
+        ...db.headers,
+        Prefer: "resolution=ignore-duplicates,return=representation",
+      },
+      body: JSON.stringify([payload]),
+    },
+  );
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new RequestValidationError(
+      detail
+        ? `Failed to propose grant: ${detail}`
+        : "Failed to propose grant",
+      500,
+    );
+  }
+  const rows = await response.json().catch(() => []);
+  if (Array.isArray(rows) && rows[0]) {
+    return mapRow(rows[0] as AgentGrantRow);
+  }
+
+  // A concurrent identical proposal may win the unique-key race. Return that
+  // row rather than reporting a false failure.
+  const raced = await dbGet(db, selector);
+  if (raced[0]) return mapRow(raced[0] as AgentGrantRow);
+  throw new RequestValidationError("Grant proposal returned no row", 500);
+}
+
 // Revoke only. Activation must go through approvePendingGrant, which re-runs
 // the delegation-not-expansion safety invariant — a bare status flip would
 // skip that re-check and could re-activate a wiring the user no longer has

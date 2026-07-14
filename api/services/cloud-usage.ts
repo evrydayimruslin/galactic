@@ -4,6 +4,7 @@ import {
 } from "./billing-config.ts";
 import { buildEconomicIdempotencyKey } from "./economic-idempotency.ts";
 import { createSupabaseRestClient } from "./platform-clients/supabase-rest.ts";
+import type { RoutineTraceContext } from "./routine-trace.ts";
 
 export type CloudUsageResource =
   | "worker_execution"
@@ -41,6 +42,14 @@ export interface CloudOperationMeteringContext {
   billingConfigVersion?: number | null;
   idempotencyKey?: string | null;
   metadata?: Record<string, unknown>;
+  /**
+   * Trusted server-minted attribution for a persistent routine run. Routine
+   * micro-operations are platform-sponsored in the launch MVP: runtime,
+   * function, and AI work remain hard-budgeted, while KV/R2/D1 debits are
+   * intentionally omitted so an unbounded D1 scan can never happen before its
+   * budget authorization decision.
+   */
+  routineContext?: RoutineTraceContext | null;
 }
 
 export interface DebitCloudOperationParams
@@ -156,7 +165,9 @@ export interface RuntimeCloudHoldParams {
   idempotencyKey?: string | null;
   billingConfig?: Pick<
     BillingConfig,
-    | "version" | "workerMsPerCloudUnit" | "cloudUnitLightPer1k"
+    | "version"
+    | "workerMsPerCloudUnit"
+    | "cloudUnitLightPer1k"
     | "workerLoadLightPerInvocation"
   >;
   metadata?: Record<string, unknown>;
@@ -186,7 +197,9 @@ export interface RuntimeCloudHoldSettlementParams {
   idempotencyKey?: string | null;
   billingConfig?: Pick<
     BillingConfig,
-    "workerMsPerCloudUnit" | "cloudUnitLightPer1k" | "workerLoadLightPerInvocation"
+    | "workerMsPerCloudUnit"
+    | "cloudUnitLightPer1k"
+    | "workerLoadLightPerInvocation"
   >;
   // Effective per-load floor for THIS settlement, overriding the config default.
   // Set by the per-(app,user,UTC-day) load-floor dedup (execution-settlement.ts):
@@ -347,6 +360,14 @@ export async function debitCloudOperation(
     config.cloudUnitLightPer1k,
   );
 
+  // Launch invariant: routine KV/R2 micro-operations are platform-sponsored.
+  // The binding calls this before touching storage, but D1 exposes row counts
+  // only after executing. Applying one consistent rule across all three keeps
+  // the hard routine ledger truthful without disabling persistent storage.
+  if (params.routineContext) {
+    return null;
+  }
+
   return await debitCloudUsage({
     payerUserId: params.payerUserId,
     sponsorUserId: params.sponsorUserId,
@@ -404,6 +425,14 @@ export async function debitD1Usage(
     rowsWritten,
     config.d1WriteRowsPerCloudUnit,
   );
+
+  // See debitCloudOperation: D1 row cost is unknowable until the query has
+  // executed, so routine D1 is deliberately non-billable for the launch MVP.
+  // Runtime/app/AI charges remain admitted against the hard ceiling.
+  if (params.routineContext) {
+    return null;
+  }
+
   const events: CloudUsageDebitResult[] = [];
   let readEventId: string | undefined;
   let writeEventId: string | undefined;

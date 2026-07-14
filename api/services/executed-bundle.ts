@@ -141,6 +141,13 @@ export async function putLiveExecutedBundle(input: {
   );
 }
 
+/** Remove an ephemeral executed-bundle pointer (used by gx.test cleanup). */
+export async function deleteLiveExecutedBundle(appId: string): Promise<void> {
+  const cache = codeCache();
+  if (!cache?.delete) return;
+  await cache.delete(liveKey(appId));
+}
+
 // Fetch the live bundle + its attestation atomically (one read). Used by every
 // execution path so the bytes that run are exactly the bytes that get verified.
 export async function loadLiveExecutedBundle(

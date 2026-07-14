@@ -10,6 +10,16 @@ import { handleRun } from "./run.ts";
 import { getCodeCache } from "../services/codecache.ts";
 import { encryptEnvVar } from "../services/envvars.ts";
 import { getPermissionCache } from "../services/permission-cache.ts";
+import {
+  buildD1FixtureWriteResult,
+  findD1TestFixtureResponse,
+  type D1TestFixtureConfig,
+} from "../services/d1-test-fixtures.ts";
+import {
+  createUlTestAiResponse,
+  createUlTestEmbedResponse,
+  createUlTestNotifyResponse,
+} from "../services/ul-test-runtime.ts";
 
 const OWNER_ID = "11111111-1111-4111-8111-111111111111";
 const COLLAB_ID = "22222222-2222-4222-8222-222222222222";
@@ -237,7 +247,27 @@ class Wave3Harness {
             usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
           }),
         }),
-        FixtureDatabaseBinding: () => ({
+        FixtureDatabaseBinding: (
+          { props }: { props: { fixtures: D1TestFixtureConfig } },
+        ) => ({
+          select: async (op: Record<string, unknown>) => {
+            const fixture = findD1TestFixtureResponse(props.fixtures, {
+              method: "select",
+              table: typeof op.table === "string" ? op.table : undefined,
+              op,
+            });
+            if (!fixture) throw new Error("missing select fixture");
+            return Array.isArray(fixture.result) ? fixture.result : [];
+          },
+          insert: async (op: Record<string, unknown>) => {
+            const fixture = findD1TestFixtureResponse(props.fixtures, {
+              method: "insert",
+              table: typeof op.table === "string" ? op.table : undefined,
+              op,
+            });
+            if (!fixture) throw new Error("missing insert fixture");
+            return buildD1FixtureWriteResult(fixture.result, true);
+          },
           run: async () => ({
             success: true,
             meta: {
@@ -252,6 +282,15 @@ class Wave3Harness {
           first: async () => null,
           batch: async () => [],
           exec: async () => ({ success: true, count: 0 }),
+        }),
+        TestAIBinding: () => ({
+          call: async () => createUlTestAiResponse(),
+        }),
+        TestEmbedBinding: () => ({
+          embed: async () => createUlTestEmbedResponse(),
+        }),
+        TestNotifyBinding: () => ({
+          notifyOwner: async () => createUlTestNotifyResponse(),
         }),
       },
       waitUntil: (promise: Promise<unknown>) => {
@@ -1700,6 +1739,80 @@ export async function echo(args = {}) {
           assertEquals(callResult.scaffold, true);
           assertEquals(callResult.function, "hello");
           assertEquals(callResult.received, { name: "Wave 3" });
+        },
+      );
+
+      await t.step(
+        "full-time scaffold executes a representative gx.test wake",
+        async () => {
+          const scaffoldResponse = await handlePlatformMcp(
+            new Request("https://wave3.ultralight.test/mcp/platform", {
+              method: "POST",
+              headers: authHeaders(OWNER_TOKEN),
+              body: JSON.stringify(
+                rpcRequest("tools/call", {
+                  name: "gx.download",
+                  arguments: {
+                    name: "Wave 3 Keeper",
+                    description: "Persistent-agent golden path",
+                    full_time: true,
+                  },
+                }),
+              ),
+            }),
+          );
+          const scaffold = expectToolSuccess(
+            await parseJson(scaffoldResponse),
+          );
+          const files = scaffold.files as Array<{
+            path: string;
+            content: string;
+          }>;
+
+          const testResponse = await handlePlatformMcp(
+            new Request("https://wave3.ultralight.test/mcp/platform", {
+              method: "POST",
+              headers: authHeaders(OWNER_TOKEN),
+              body: JSON.stringify(
+                rpcRequest("tools/call", {
+                  name: "gx.test",
+                  arguments: {
+                    files,
+                    function_name: "tick",
+                    test_args: {
+                      _routine: {
+                        routine_id: "routine-wave3",
+                        routine_run_id: "run-wave3",
+                        trigger: "manual",
+                        attempt: 1,
+                        scheduled_at: new Date(0).toISOString(),
+                        intent: "Keep the inbox triaged.",
+                      },
+                    },
+                    d1_fixtures: {
+                      responses: [
+                        { method: "select", table: "journal", result: [] },
+                        {
+                          method: "insert",
+                          table: "journal",
+                          result: { success: true, meta: { changes: 1 } },
+                        },
+                      ],
+                    },
+                  },
+                }),
+              ),
+            }),
+          );
+          const tested = expectToolSuccess(await parseJson(testResponse));
+          assertEquals(tested.success, true);
+          assertEquals((tested.result as JsonRecord).ok, true);
+          assertEquals(
+            (tested.result as JsonRecord).assessment,
+            "gx.test deterministic AI response",
+          );
+          assertEquals(tested.test_attestation_mode, "deno_execution");
+          assert(typeof tested.test_attestation === "string");
         },
       );
     } finally {

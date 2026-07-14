@@ -6,6 +6,7 @@ import type {
 } from "../../../../shared/contracts/agent-grants.ts";
 import type {
   LaunchAgentFunctionsResponse,
+  LaunchAgentRoutineResponse,
   LaunchApiKeyListResponse,
   LaunchByokSummaryResponse,
   LaunchCallerFunctionPermissionsResponse,
@@ -40,6 +41,7 @@ export interface LaunchRouteLiveData {
   library?: LaunchLibraryResponse;
   agent?: LaunchAgentResponse;
   agentFunctions?: LaunchAgentFunctionsResponse;
+  agentRoutine?: LaunchAgentRoutineResponse;
   agentCallerPermissions?: LaunchCallerFunctionPermissionsResponse;
   agentWiring?: AgentWiringView;
   agentCallerTrust?: AgentCallerTrustSummary;
@@ -186,6 +188,7 @@ async function loadRouteData(
       const [
         agent,
         agentFunctions,
+        agentRoutine,
         agentCallerPermissions,
         agentWiring,
         agentCallerTrust,
@@ -196,6 +199,8 @@ async function loadRouteData(
         .all([
           launchApi.agent(id),
           optional(() => launchApi.agentFunctions(id)),
+          // Owner-only. Public/installed compatibility pages simply omit it.
+          optional(() => launchApi.agentRoutine(id)),
           optional(() => launchApi.agentCallerPermissions(id)),
           optional(() => launchApi.agentWiring(id)),
           optional(() => launchApi.agentCallerTrust(id)),
@@ -211,6 +216,7 @@ async function loadRouteData(
         agentCallerPermissions,
         agentCallerTrust,
         agentFunctions,
+        agentRoutine,
         agentWiring,
         byok,
         inferenceOptions,

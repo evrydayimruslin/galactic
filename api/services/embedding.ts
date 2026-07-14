@@ -650,7 +650,10 @@ export class EmbeddingService {
   /**
    * Generate embedding for a single text input
    */
-  async embed(text: string): Promise<EmbeddingResult> {
+  async embed(
+    text: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<EmbeddingResult> {
     const response = await fetch(OPENROUTER_API_URL, {
       method: "POST",
       headers: {
@@ -663,6 +666,7 @@ export class EmbeddingService {
         model: this.model,
         input: text,
       }),
+      signal: options?.signal,
     });
 
     if (!response.ok) {

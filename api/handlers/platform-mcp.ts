@@ -13,6 +13,16 @@ import { scheduleCaptureTask } from "../services/chat-capture.ts";
 import { createUserService } from "../services/user.ts";
 import { deriveCallerEconomicState } from "../services/request-caller-context.ts";
 import {
+  authorizePlatformMcpTool,
+  canApiTokenManageAgentVisibility,
+  canApiTokenStageExistingRuntime,
+  filterPlatformMcpToolsForAuth,
+  isApiTokenPlatformAuth,
+  shouldAutoLiveExistingUpload,
+  type PlatformMcpAuthContext,
+  violatesPrivateAgentCreationPolicy,
+} from "../services/platform-mcp-authorization.ts";
+import {
   freeModeNotice,
   isFreeModeEnabled,
   isFunctionBlockedInFreeMode,
@@ -20,6 +30,21 @@ import {
 import { peekCallerUsage } from "../services/cloud-usage.ts";
 import { walletUrl } from "../lib/urls.ts";
 import { createAppsService } from "../services/apps.ts";
+import { findManifestAuthorityExpansions } from "../services/manifest-authority.ts";
+import { initialReleaseVersionState } from "../services/release-version.ts";
+import {
+  computeDecodedSourceHash,
+  decodeSourceFileSet,
+  findPersistedTestAttestation,
+  issueTestAttestation,
+  persistedTestAttestation,
+  type TestAttestationMode,
+  verifyTestAttestation,
+} from "../services/test-attestation.ts";
+import {
+  loadAndValidateStagedMigrations,
+  strictAdditiveMigrationErrors,
+} from "../services/staged-migrations.ts";
 import {
   bindCapabilityHandler,
   getCapabilityByToolName,
@@ -63,9 +88,16 @@ import {
   publishReadinessErrorPayload,
 } from "../services/tier-enforcement.ts";
 import {
+  checkStorageQuota,
   getVersionStorageBytes,
   recordUploadStorage as recordLiveAppStorage,
 } from "../services/storage-quota.ts";
+import {
+  countConnectedNonLiveVersions,
+  MAX_CONNECTED_NON_LIVE_VERSIONS,
+  retainedNonLiveVersionBytes,
+  validateConnectedUploadFileSet,
+} from "../services/connected-upload-admission.ts";
 import { handleUploadFiles, type UploadFile } from "./upload.ts";
 import { validateAndParseSkillsMd } from "../services/docgen.ts";
 import {
@@ -94,6 +126,11 @@ import {
   writeUserMemory,
 } from "../services/library.ts";
 import { createMemoryService } from "../services/memory.ts";
+import { resolveStrictManifestPermissions } from "../services/app-runtime-resources.ts";
+import {
+  createUlTestAiResponse,
+  createUlTestMemoryAdapter,
+} from "../services/ul-test-runtime.ts";
 import { decryptEnvVar, encryptEnvVar } from "../services/envvars.ts";
 import {
   getMcpFunctionNameQueryIdentifiers,
@@ -143,7 +180,9 @@ import type { App, AppWithDraft } from "../../shared/types/index.ts";
 import {
   type AppManifest,
   getManifestEnvVars,
+  isCanonicalAppVersion,
   type ManifestFunction,
+  nextCanonicalAppPatchVersion,
   resolveManifestEnvSchema,
   validateManifest,
 } from "../../shared/contracts/manifest.ts";
@@ -188,7 +227,7 @@ import {
 import {
   approvePendingGrant,
   createGrant,
-  getUserGrantAutoApprove,
+  createPendingGrantProposal,
   listGrantSummaries,
   setGrantCap,
   setGrantStatus,
@@ -210,7 +249,6 @@ import {
   buildAppTrustCard,
   buildVersionMetadataEntry,
   buildVersionTrustMetadata,
-  computeUploadSourceHash,
   generateGpuManifest,
   getLatestVersionSourceHash,
   getManifestAllowedDestinations,
@@ -218,6 +256,7 @@ import {
 import { resolveTrustSignals } from "../services/trust-signals.ts";
 import {
   type BundleAttestation,
+  deleteLiveExecutedBundle,
   loadLiveExecutedBundle,
   putLiveExecutedBundle,
 } from "../services/executed-bundle.ts";
@@ -1951,7 +1990,7 @@ const PLATFORM_TOOLS: MCPTool[] = [
       'action="propose": create a raw grant (slot=null). ' +
       'action="bind": create a slot-binding grant (requires slot). ' +
       'action="subscribe": wire an event subscription — when caller_app emits topic, call target_app.target_function (requires topic). ' +
-      'action="approve": approve a pending grant_id (website-only unless you enable agent approval in settings). ' +
+      'action="approve": approve a pending grant_id from an authenticated owner session. ' +
       'action="revoke": revoke a grant_id. ' +
       'action="set_cap": set a grant_id\'s monthly credit cap.',
     annotations: {
@@ -2390,7 +2429,7 @@ bindCapabilityHandler("discover", async (args, ctx) => {
     case "appstore":
       return await executeDiscoverAppstore(ctx.userId, args);
     case "tools":
-      return executeDiscoverTools();
+      return executeDiscoverTools(ctx.authSource === "api_token");
     default:
       throw new CapabilityError(
         "invalid_input",
@@ -2422,24 +2461,71 @@ bindCapabilityHandler("upload", async (args, ctx) => {
     }
     return await executeMarkdown(ctx.userId, args);
   }
-  return await executeUpload(ctx.userId, args);
+  return await executeUpload(ctx.userId, args, {
+    callerIsApiToken: ctx.authSource === "api_token",
+  });
 });
 
 bindCapabilityHandler("test", async (args, ctx) => {
-  const testFiles = args.files as
-    | Array<{ path: string; content: string }>
-    | undefined;
-  if (testFiles && hasGpuRuntimeFiles(testFiles) && !isGpuSupportEnabled()) {
+  let testFiles: Array<{ path: string; content: string }>;
+  try {
+    testFiles = decodeSourceFileSet(
+      args.files as Array<{
+        path: string;
+        content: string;
+        encoding?: string;
+      }>,
+    );
+  } catch (err) {
+    throw new CapabilityError(
+      "invalid_input",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  const decodedArgs = { ...args, files: testFiles };
+  const isGpu = hasGpuRuntimeFiles(testFiles);
+  if (isGpu && !isGpuSupportEnabled()) {
     throw new CapabilityError(
       "invalid_input",
       getGpuSupportDisabledMessage("GPU test validation"),
     );
   }
   if (args.lint_only) {
-    return executeLint(args); // lint-only: validate without running
+    // GPU gx.test is validation-only already. The generic lint path expects an
+    // index.ts and would incorrectly reject every valid GPU package.
+    return isGpu
+      ? await executeTest(ctx.userId, decodedArgs, ctx.user as UserContext)
+      : executeLint(decodedArgs); // lint-only never attests execution
   }
+
+  if (isGpu) {
+    const result = asToolArguments(
+      await executeTest(ctx.userId, decodedArgs, ctx.user as UserContext),
+    );
+    const gpuLint = asToolArguments(result.lint);
+    const gpuLintErrors = Array.isArray(gpuLint.errors)
+      ? gpuLint.errors
+      : [];
+    if (result.success === true && gpuLintErrors.length === 0) {
+      const sourceHash = await computeDecodedSourceHash(testFiles);
+      const issued = await issueTestAttestation({
+        userId: ctx.userId,
+        sourceHash,
+        mode: "gpu_validation",
+      });
+      return {
+        ...result,
+        source_hash: sourceHash,
+        test_attestation: issued.token,
+        test_attestation_mode: "gpu_validation",
+        test_attestation_expires_at: issued.claims.expires_at,
+      };
+    }
+    return result;
+  }
+
   // Run lint first, then execute (strict mode blocks on lint errors).
-  const lintResult = asLintExecutionResult(executeLint(args));
+  const lintResult = asLintExecutionResult(executeLint(decodedArgs));
   const lintErrors = (lintResult.issues || []).filter((issue) =>
     issue.severity === "error"
   );
@@ -2452,10 +2538,27 @@ bindCapabilityHandler("test", async (args, ctx) => {
   }
   const testResult = await executeTest(
     ctx.userId,
-    args,
+    decodedArgs,
     ctx.user as UserContext,
   );
-  return { ...asToolArguments(testResult), lint: lintResult };
+  const result = asToolArguments(testResult);
+  if (result.success === true && lintErrors.length === 0) {
+    const sourceHash = await computeDecodedSourceHash(testFiles);
+    const issued = await issueTestAttestation({
+      userId: ctx.userId,
+      sourceHash,
+      mode: "deno_execution",
+    });
+    return {
+      ...result,
+      lint: lintResult,
+      source_hash: sourceHash,
+      test_attestation: issued.token,
+      test_attestation_mode: "deno_execution",
+      test_attestation_expires_at: issued.claims.expires_at,
+    };
+  }
+  return { ...result, lint: lintResult };
 });
 
 bindCapabilityHandler("set", async (args, ctx) => {
@@ -2469,6 +2572,8 @@ bindCapabilityHandler("set", async (args, ctx) => {
     setResults.version = await executeSetVersion(userId, {
       app_id: args.app_id,
       version: args.version,
+    }, {
+      callerIsApiToken: ctx.authSource === "api_token",
     });
     setCount++;
   }
@@ -2574,9 +2679,8 @@ bindCapabilityHandler("consent", async (args, ctx) => {
 });
 
 bindCapabilityHandler("secrets", async (args, ctx) => {
-  // Save when `secrets` is present; inspect/list otherwise. (The list-only
-  // restriction — entering values website-only — is a DECIDED change deferred to
-  // the consolidation pass; migrating here is behavior-preserving.)
+  // Save when `secrets` is present; inspect/list otherwise. Platform MCP
+  // authorization reserves the write branch for an authenticated owner session.
   if (args.secrets !== undefined) {
     return await executeConnect(ctx.userId, args);
   }
@@ -2592,6 +2696,7 @@ async function executeCall(
   request: Request,
   widgetForwardArgs: Record<string, unknown>,
   econ: { freeMode: boolean; byokPresent: boolean },
+  callerIsApiToken: boolean,
 ): Promise<unknown> {
   let result: unknown;
   const targetAppId = args.app_id as string;
@@ -2660,7 +2765,7 @@ async function executeCall(
   // are already gated downstream (don't double-enforce). The "always"
   // policy is health-gated: it auto-allows ONLY when the target is
   // recently healthy, otherwise it degrades to "ask".
-  if (!isApiToken(authToken)) {
+  if (!callerIsApiToken) {
     const callPermission = await enforceCallerFunctionPermission({
       userId,
       appId: targetUuid,
@@ -2800,6 +2905,7 @@ bindCapabilityHandler("call", (args, ctx) =>
     ctx.request!,
     ctx.widgetForwardArgs ?? {},
     ctx.econ ?? { freeMode: false, byokPresent: false },
+    ctx.authSource === "api_token",
   ));
 
 // gx.codemode (migrated to the capability registry, handler bound below). Kept
@@ -3167,7 +3273,11 @@ function advertiseGxName(tool: MCPTool): MCPTool {
 }
 
 export function getPlatformTools(
-  options?: { provisional?: boolean; freeMode?: boolean },
+  options?: {
+    provisional?: boolean;
+    freeMode?: boolean;
+    auth?: PlatformMcpAuthContext;
+  },
 ): MCPTool[] {
   const provisional = options?.provisional ?? false;
 
@@ -3205,12 +3315,15 @@ export function getPlatformTools(
     freeMode: options?.freeMode,
   });
   if (!isGpuSupportEnabled()) registry = registry.map(stripGpuFromTool);
-  return [...legacy, ...registry];
+  const projected = [...legacy, ...registry];
+  return options?.auth
+    ? filterPlatformMcpToolsForAuth(projected, options.auth)
+    : projected;
 }
 
 // Progressive disclosure for the lite manifest: list the platform tools that
 // are not advertised in tools/list so an agent can still find + call them.
-function executeDiscoverTools(): {
+function executeDiscoverTools(callerIsApiToken = false): {
   tools: Array<{ name: string; description: string }>;
   note: string;
 } {
@@ -3221,7 +3334,16 @@ function executeDiscoverTools(): {
         "All platform tools are advertised in tools/list; none are hidden.",
     };
   }
-  const tools = getDemotedPlatformTools().map((tool) => ({
+  const demoted = callerIsApiToken
+    ? filterPlatformMcpToolsForAuth(getDemotedPlatformTools(), {
+      authSource: "api_token",
+      // This inventory describes which deferred tools can ever be granted to a
+      // Connect key. Per-request authorization still requires the key's actual
+      // explicit scope before dispatch.
+      scopes: ["apps:read", "apps:call", "agents:build", "agents:operate"],
+    })
+    : getDemotedPlatformTools();
+  const tools = demoted.map((tool) => ({
     name: gxToolName(tool.name),
     description: typeof tool.description === "string" ? tool.description : "",
   }));
@@ -3229,8 +3351,8 @@ function executeDiscoverTools(): {
     tools,
     note:
       "These platform tools are not listed in tools/list (to keep the default " +
-      "surface small) but are fully callable by name via tools/call — pass the " +
-      "tool name and its arguments exactly as documented.",
+      "surface small). They can be called by name only when this API key has " +
+      "the required explicit scope; owner-approval operations remain website-only.",
   };
 }
 
@@ -3337,10 +3459,15 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
   // Authenticate
   let userId: string;
   let user: UserContext;
+  let platformAuth: PlatformMcpAuthContext = {};
   let econ = deriveCallerEconomicState(null);
   try {
     const authUser = await authenticate(request);
     userId = authUser.id;
+    platformAuth = {
+      authSource: authUser.authSource,
+      scopes: authUser.scopes,
+    };
 
     // Hardening: actor tokens (sandbox_actor / routine_actor) are minted only
     // for the per-app execution path — galactic.call() POSTs them to
@@ -3368,7 +3495,7 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
     let displayName: string | null = authUser.email.split("@")[0];
     let avatarUrl: string | null = null;
     const token = request.headers.get("Authorization")?.slice(7) || "";
-    if (token && !isApiToken(token)) {
+    if (token && authUser.authSource === "supabase") {
       try {
         const parts = token.split(".");
         if (parts.length === 3) {
@@ -3434,6 +3561,36 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
     });
   }
 
+  // Authorize API keys before usage counters or dispatch. Dedicated apps:call
+  // keys may execute Agents but cannot silently become deployment, secrets,
+  // grant, or routine-management credentials. Account sessions retain the
+  // existing owner checks; API keys must carry the explicit control-plane
+  // scope and still cannot cross the human approval boundaries below.
+  if (rpcRequest.method === "tools/call") {
+    const call = rpcRequest.params as MCPToolCallRequest | undefined;
+    if (call?.name) {
+      const decision = authorizePlatformMcpTool({
+        requestedName: call.name,
+        args: call.arguments as Record<string, unknown> | undefined,
+        auth: platformAuth,
+      });
+      if (!decision.allowed) {
+        return jsonRpcErrorResponse(
+          rpcRequest.id,
+          FORBIDDEN,
+          decision.reason ||
+            "API key is not authorized for this platform tool.",
+          {
+            type: decision.accountSessionRequired
+              ? "ACCOUNT_SESSION_REQUIRED"
+              : "API_KEY_SCOPE_REQUIRED",
+            required_scopes: decision.requiredScopes || [],
+          },
+        );
+      }
+    }
+  }
+
   // Rate limit — use in-memory limiter for platform MCP to avoid
   // Supabase RPC counter issues. 200 calls/minute is generous for dev tools.
   const rateLimitEndpoint = `platform:${rpcRequest.method}`;
@@ -3489,9 +3646,22 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
       case "notifications/initialized":
         return new Response(null, { status: 202 });
       case "tools/list":
-        return handleToolsList(id, user.provisional, econ.freeMode);
+        return handleToolsList(
+          id,
+          user.provisional,
+          econ.freeMode,
+          platformAuth,
+        );
       case "tools/call":
-        return await handleToolsCall(id, params, userId, user, request, econ);
+        return await handleToolsCall(
+          id,
+          params,
+          userId,
+          user,
+          request,
+          econ,
+          platformAuth,
+        );
       case "resources/list":
         return handleResourcesList(id, userId);
       case "resources/read":
@@ -3572,12 +3742,14 @@ Agents can call one another on a user's behalf. A grant means: for this user, ca
 
 - Cross-Agent calls are **default-deny**: an ungranted call is blocked and a pending request lands in the user's wiring inbox. Inspect it with \`gx.grants({ action: "pending" })\`.
 - \`gx.grants\` can \`propose\` raw grants or \`bind\` a developer-declared import slot — both only for Agents the user already controls (owns or has installed) and functions the user can already call. The runtime enforces this safety invariant; you cannot widen a user's reach.
-- **Approval defaults to website-only.** A connected agent (api_token) cannot \`approve\` a pending request unless the user has enabled agent grant approval in \`/settings\`. Otherwise direct the user to approve once on \`/agents/:id\` wiring. Revoking and proposing always work.
+- **Approval is account-session-only.** A connected agent can propose wiring, but the proposal stays pending until the owner approves it on the Agent Overview. API keys cannot approve their own authority expansion. Revoking and proposing remain available to an operator-scoped key.
 - Spend is capped per grant via \`monthly_cap_credits\` (set at propose/approve or later with \`set_cap\`).
 
 ## Reactive Events (pub/sub)
 
 Agents can react to one another's events instead of being called directly. An Agent emits a topic (\`galactic.emit("sale.created", payload)\` from its code, or \`gx.emit\` manually); every Agent the user wired a **subscribe** grant for has its handler invoked in response.
+
+Routine executions cannot emit in the launch MVP: deferred fanout is rejected until every downstream delivery can be attributed to the originating routine's hard budget. Interactive executions and explicit \`gx.emit\` calls retain the existing event behavior.
 
 - A subscribe grant is \`gx.grants({ action: "subscribe", caller_app: <emitter>, target_app: <subscriber>, target_function: <handler>, topic })\`. Same delegation-not-expansion invariant: the user must control the emitter and be able to call the handler.
 - Emitting is **unprivileged** — anyone's Agent can emit — but **receiving is grant-gated**: only the subscribers the user explicitly wired are invoked. One emit fans out to all matching subscribers.
@@ -3585,7 +3757,7 @@ Agents can react to one another's events instead of being called directly. An Ag
 
 ## Platform Tools
 
-In the default launch configuration only the core set is advertised in \`tools/list\` — \`gx.discover\`, \`gx.call\`, \`gx.job\`, \`gx.upload\`, \`gx.test\`, \`gx.set\`, \`gx.memory\`, \`gx.secrets\`, \`gx.grants\`, \`gx.codemode\`. Every other tool below is **still fully callable by name** via \`tools/call\`; list them at runtime with \`gx.discover({ scope: "tools" })\`. So if a tool you need isn't in your tool list, call it anyway or discover it first — nothing here is disabled.
+The tools advertised in \`tools/list\` are filtered to the API key's explicit scopes. A standard builder/operator connection includes \`apps:read\`, \`apps:call\`, \`agents:build\`, and \`agents:operate\`. Dedicated \`apps:call\` keys only see and execute call-safe tools. Some advanced tools remain discoverable with \`gx.discover({ scope: "tools" })\`, but dispatch still fails closed unless the key carries the required scope; owner approvals always require an authenticated Galactic account session.
 
 ### gx.call({ app_id, function_name, args? })
 Execute any app's function through this single platform connection.
@@ -3633,19 +3805,21 @@ Natural-language Command dashboard primitive.
 Persistent cloud routines for ongoing delegated work.
 - \`action: "templates"\` — Discover MCP-published routine templates. Optional \`query\`, \`app_id\`, \`limit\`.
 - \`action: "plan"\` — Preview schedule, config, capability approvals, credits budgets, and Command surfaces before saving.
-- **Budgets & circuit breaker (enforced):** \`budget_policy.max_light_per_day\` / \`max_light_per_month\` gate scheduled runs — an exhausted budget records one skipped run and defers the next run to the budget reset (UTC midnight / month start). \`max_light_per_run\` / \`max_calls_per_run\` violations auto-pause the routine after the offending run. Routines also auto-pause after 10 consecutive failed attempts (override via routine \`metadata.circuit_breaker.max_consecutive_failures\`). The pause reason is recorded on the routine's \`metadata.auto_pause\`; resume with \`action: "resume"\` after fixing the cause. Manual \`run_now\` bypasses day/month gates but is skipped while paused.
-- \`action: "create"\` — Save a user-owned routine from a template. Pass \`approve_capabilities: true\` after user approval to approve durable downstream MCP calls.
+- **Budgets & circuit breaker (enforced):** day/month and per-run LIGHT/call ceilings are checked before billable work, so execution stops before crossing a hard ceiling. Exhausted day/month budgets defer scheduled work to the reset; a per-run ceiling or 10 consecutive failures auto-pauses the routine with the reason on \`metadata.auto_pause\`. Only the authenticated owner session may resume or manually run it after review.
+- \`action: "create"\` — Connected agents may save a paused proposal from a template. Capability approval and activation are authenticated-owner-session decisions.
 - \`action: "list"\` / \`"get"\` / \`"update"\` — Inspect and edit routine instances.
-- \`action: "pause"\` / \`"resume"\` / \`"delete"\` — Control ongoing work.
+- \`action: "pause"\` — A connected operator may stop ongoing work. \`"resume"\`, \`"run_now"\`, and \`"delete"\` require the authenticated owner session.
 - \`action: "run_now"\` — Queue a manual run. Durable execution is claimed by the backend routine executor.
 - **Handler contract:** each run invokes the routine's \`handler_function\` with the routine's \`config\` (merged with the run's \`run_config\`) plus a reserved \`_routine\` object: \`{ routine_id, routine_run_id, trace_id, trigger: "scheduled" | "manual", attempt, scheduled_at, intent }\`. \`intent\` is the routine's natural-language goal — write the standing directive there and have the handler read \`args._routine.intent\` on every wake. \`args._routine\` being present is how code knows it was woken by a routine rather than called by a user. Handlers must complete synchronously.
 
-### gx.upload({ files, name?, description?, visibility?, app_id?, type? })
+### gx.upload({ files, test_attestation?, name?, description?, visibility?, app_id?, type? })
 Deploy TypeScript/Python app or publish markdown page.
 - \`type: "page"\`: publish markdown at a URL. Requires \`content\` + \`slug\`.
 - No \`app_id\`: creates new app at v1.0.0 (auto-live for Deno; GPU apps start building).
 - With \`app_id\`: adds new version (NOT live — use \`gx.set\` to activate).
+- Connected-agent keys can create and update **private Agents only**. Existing versions stay staged even for name-based uploads or \`_auto_live\`; page publication and legacy public/unlisted Agents require the authenticated owner session.
 - \`files\`: array of \`{ path: string, content: string, encoding?: "text" | "base64" }\`.
+- Connected-agent uploads must pass \`test_attestation\` from a successful \`gx.test\` of the exact same decoded file set. The proof is short-lived and bound to the owner, source hash, and runtime mode; authenticated account-session uploads may omit it.
 - **GPU functions:** Include \`ultralight.gpu.yaml\` + \`main.py\` in files. Runtime is auto-detected on upload. For new scaffolds, pass \`runtime: "gpu"\`. Do not include a Dockerfile; Galactic generates it, installs \`requirements.txt\` at GHCR build time, then points RunPod at the baked image. Build is async; \`gpu_status\` starts at \`building\` and settles to \`live\`, \`build_failed\`, \`benchmark_failed\`, or \`build_config_invalid\`.
 
 ### gx.download({ app_id?, name?, description?, version?, runtime?, gpu_type?, base? })
@@ -3662,11 +3836,12 @@ Test code in sandbox without deploying.
 - Use \`d1_fixtures\` to stub D1 before deploy: each response pins \`{ method: "select"|"first"|"count"|"insert"|"update"|"delete"|"upsert"|"batch", table, when?, result }\` (structured ops — not raw SQL). \`when\` is an optional subset match on the op; first match wins.
 - \`lint_only: true\`: validate code conventions without executing (single-args check, no-shorthand-return, manifest sync, permission detection).
 - \`strict: true\`: lint warnings become errors.
-- Returns: \`{ success, result?, error?, duration_ms, exports, logs?, lint? }\`.
-- Always test before \`gx.upload\`.
+- A successful execution with zero lint errors returns \`source_hash\`, an opaque short-lived \`test_attestation\`, its mode, and expiry. GPU packages receive a validation-only attestation; \`lint_only\` never returns one.
+- Connected-agent flow: keep the successful response as \`tested\`, then upload the exact same files with \`gx.upload({ files, test_attestation: tested.test_attestation, ... })\`. Any file or path change requires another test.
 
 ### gx.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_credits?, default_free_calls?, free_calls_scope?, function_prices?, gpu_pricing_config?, search_hints?, show_metrics? })
 Batch configure app settings. Each field is optional — only provided fields are updated.
+- Connected builder keys may only promote an attested staged version of a private Agent, and promotion fails closed if its manifest expands permissions, destinations, credentials, cross-Agent calls, routines, or public exposure. Existing-Agent D1 migrations stay staged until promotion, are reloaded and revalidated then, and connected builders may apply only warning-free additive migrations. Owners may explicitly review warnings. D1 application is synchronous before the code-pointer swap, but D1, KV, and the app row are not one transaction; a migration failure keeps the previous code live.
 - \`version\`: set which version is live
 - \`visibility\`: "private" | "unlisted" | "published" (published = app store)
 - \`supabase_server\`: assign Bring Your Own Supabase server (or null to unassign)
@@ -3702,7 +3877,7 @@ Manage cross-Agent wiring grants for the current user. See **## Cross-Agent Wiri
 - \`action: "propose"\` — Create a raw grant (slot=null). Needs \`caller_app\`, \`target_app\`, \`target_function\`; optional \`caller_function\`, \`monthly_cap_credits\`.
 - \`action: "bind"\` — Bind an import \`slot\` (required) to a grant. Same fields as propose.
 - \`action: "subscribe"\` — Wire an event subscription: when \`caller_app\` emits \`topic\` (required), call \`target_app\`.\`target_function\`. Optional \`monthly_cap_credits\`.
-- \`action: "approve"\` — Approve a pending \`grant_id\`. Connected agents may approve only when you enable agent grant approval in \`/settings\`; otherwise approve on \`/agents/:id\` wiring.
+- \`action: "approve"\` — Approve a pending \`grant_id\` from the Agent Overview in an authenticated owner session. Connected-agent API keys can propose wiring but cannot approve their own authority expansion.
 - \`action: "revoke"\` — Revoke a \`grant_id\`.
 - \`action: "set_cap"\` — Set a \`grant_id\`'s \`monthly_cap_credits\` (omit/null clears the cap).
 
@@ -3757,7 +3932,7 @@ Manage your wallet: balance, earnings, conversions, withdrawals, payouts.
 
 ## Building Apps
 
-**Workflow:** \`gx.download\` (scaffold) → implement functions (reach for \`galactic.ai()\`, \`galactic.call()\`, \`galactic.db\`) → add an Interface (\`interfaces[]\`) for a human-facing UI → \`gx.test\` → \`gx.upload\` → \`gx.set\`. The richest Agents combine functions + AI + an Interface — see "The SDK" and "Interfaces" below.
+**Workflow:** \`gx.download\` (scaffold) → implement functions (reach for \`galactic.ai()\`, \`galactic.call()\`, \`galactic.db\`) → add an Interface (\`interfaces[]\`) for a human-facing UI → \`tested = gx.test(...)\` → \`gx.upload({ ..., test_attestation: tested.test_attestation })\` → \`gx.set\`. Upload the exact tested file set. The richest Agents combine functions + AI + an Interface — see "The SDK" and "Interfaces" below.
 
 **Always include a manifest.json** alongside index.ts. The manifest enables per-function pricing in the dashboard, typed parameter schemas for better agent tool use, permission grants, Settings surfaces on public app pages, and a declared \`access_policy\` hook for custom-coded permission/monetization logic. Without it, functions are auto-detected from exports but lack parameter/return metadata. Structure: \`{ "functions": { "fnName": { "description": "...", "parameters": { "paramName": { "type": "string", "required": true, "description": "What this param does" } } } }, "access_policy": { "mode": "module", "module": "policy.ts", "export": "planAccess" }, "env_vars": { "MY_KEY": { "scope": "per_user", "input": "password", "description": "..." } } }\`. Parameters must be an object keyed by parameter name (NOT an array). \`access_policy.module\` records the source file, and \`access_policy.export\` must be exported from the bundled app entry surface, e.g. \`export { planAccess } from "./policy.ts";\`. Policy functions receive \`{ app, caller, subject, input, metadata, static }\` and return \`{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }\` or \`{ effect: "deny", reason }\`. \`gx.download\` scaffolds the base manifest automatically. The \`type\` and \`entry\` fields are optional in a hand-written manifest — they default to \`"mcp"\` and \`{ "functions": "index.ts" }\`, so the structure above deploys as-is.
 
@@ -3786,7 +3961,7 @@ Agent code runs in a sandbox with the \`galactic.*\` SDK (alias: \`ultralight.*\
 | **Embeddings** — semantic vectors for retrieval | \`galactic.embed({ input })\` | \`ai:embed\` |
 | **Call another Agent** | \`galactic.call(appId, fn, args)\` | \`app:call\` or a declared dependency |
 | **Wired imports** — call whatever the user connected to a slot | \`galactic.use(slotName)\` | slot declared in manifest \`imports\`, wired by the user |
-| **Emit an event** (pub/sub) | \`galactic.emit(topic, payload)\` — ≤50/execution, 32KB payload; delivery is grant-gated at subscribers | — |
+| **Emit an event** (pub/sub) | \`galactic.emit(topic, payload)\` — ≤50/interactive execution, 32KB payload; delivery is grant-gated at subscribers; unavailable during routine execution in the launch MVP | — |
 | KV storage (per-user, app-scoped) | \`galactic.store / load / list / remove / query\` | \`storage:write\` / \`storage:read\` / \`storage:delete\` |
 | SQL (D1, structured + auto per-user scoped) | \`galactic.db.select / first / insert / update / delete / upsert / count / batch\` | provision via \`migrations/\` |
 | Per-agent memory (markdown) | \`galactic.remember(k,v) / recall(k)\` — this agent's private notebook; add \`{ scope: "user" }\` for the shared cross-agent notebook | \`memory:read\` / \`memory:write\` |
@@ -3895,16 +4070,16 @@ That emits a RUNNING loop, not boilerplate: a \`tick(args)\` handler wired end-t
 
 **How each loop stage maps to the platform:**
 - **Wake** — the routine invokes \`handler_function\` with the routine's config plus \`_routine\` metadata (see the gx.routine handler contract). Cadence floor 60s; handlers are synchronous, 30s default / 120s max wall; \`args._routine\` present ⇒ routine wake.
-- **Goal** — write the standing mission in the routine's \`intent\` (delivered as \`args._routine.intent\` every wake, editable any time with \`gx.routine update\`); fall back to \`config.goal\` or a \`universal\` env var. The agent cannot rewrite its own directive — the loop is autonomous, the mission is not.
+- **Goal** — write the standing mission in the routine's \`intent\` (delivered as \`args._routine.intent\` every wake); the owner reviews mission and cadence on the Agent Overview. A connected builder may rename or describe the paused proposal, but cannot rewrite intent, schedule, configuration, capabilities, budgets, or activation state. Fall back to \`config.goal\` or a \`universal\` env var.
 - **Review its own past** — two complementary memories: the agent's own \`galactic.db\` journal (curated working memory it writes each wake) and the platform flight recorder, \`galactic.runs.recent({ limit })\` (recorded truth: per-wake status/cost/steps including its past \`ai()\` exchanges — survives the agent's own bugs).
-- **Take in new information** — allowlisted \`fetch()\` (manifest \`network.allowed_destinations\`), \`galactic.net.imapFetchUnseen\`, event subscriptions, or \`galactic.call\` to other Agents.
-- **Reason** — \`galactic.ai()\`; sequential calls are fine within the wall clock. For thinking that outgrows a wake, use **submit/collect**: wake N submits a batch job to an external provider via vaulted \`galactic.fetch\` and journals the job id; wake N+1 polls and collects. No single invocation waits, and duration billing (wall-clock) drops too.
-- **Act** — \`galactic.call\`, \`smtpSend\`, \`galactic.emit\`. Growing the repertoire is user-approved by design: the first call to a new Agent is denied with \`AGENT_GRANT_REQUIRED\` and **auto-files an approval request in the user's inbox** — journal the denial and retry next wake once approved. No self-wiring.
+- **Take in new information** — allowlisted \`fetch()\` (manifest \`network.allowed_destinations\`), \`galactic.net.imapFetchUnseen\`, or \`galactic.call\` to other Agents.
+- **Reason** — \`galactic.ai()\`; keep each wake bounded by its wall-clock and hard budget ceilings. Do not launch deferred provider work that can continue spending after the wake ends; journal unfinished work and resume it in a later admitted wake instead.
+- **Act** — \`galactic.call\` or \`smtpSend\`. Growing the repertoire is user-approved by design: the first call to a new Agent is denied with \`AGENT_GRANT_REQUIRED\` and **auto-files an approval request in the user's inbox** — journal the denial and retry next wake once approved. \`galactic.emit\` is rejected during routine execution in the launch MVP because deferred fanout is not yet charged to the originating routine budget. No self-wiring.
 - **Record** — append to the journal (what happened + why + what to do next); with \`flight_recorder\` on, the platform independently records the wake's \`ai()\` exchanges as run steps the owner can audit.
 
-**Safety + economics:** \`budget_policy\` is enforced — day/month caps defer wakes to the budget reset, per-run caps and 10 consecutive failures auto-pause with the reason on the routine (see gx.routine). The routine's owner pays; fixed overhead is roughly a cent a day — the bill is how hard the agent thinks.
+**Safety + economics:** every day/month and per-run LIGHT/call ceiling is a pre-execution admission check: billable work stops before overspending. Exhausted day/month budgets defer wakes; a per-run ceiling or 10 consecutive failures auto-pauses with the reason on the routine (see gx.routine). The routine's owner pays; fixed overhead is roughly a cent a day — the bill is how hard the agent thinks.
 
-**Activation checklist:** \`gx.test\` a wake (\`test_args: { _routine: { trigger: "manual", attempt: 1, intent: "…" } }\`) → \`gx.upload\` → \`gx.routine create\` (mission in \`intent\`, budgets prefilled) → approve capabilities → \`gx.routine resume\` (routines are created paused) → watch via the routine monitor / \`gx.routine get\`.
+**Activation checklist:** the connected builder runs \`gx.test\`, passes its \`test_attestation\` into \`gx.upload\` with the exact same files, stages a private version, and creates a paused \`gx.routine\` proposal with hard ceilings. Then the owner reviews mission, cadence, data/secrets, allowed actions, reporting, grants, and budgets on the Agent Overview and explicitly approves + activates it. Watch via the routine monitor / \`gx.routine get\`.
 
 ## Building GPU Functions
 
@@ -4159,7 +4334,7 @@ async function getInitializeContext(
 
   // Build desk section
   const deskSection = deskResult ||
-    '## Your Apps\n\nNo recent apps. Use `gx.discover({ scope: "library" })` to browse your apps, or `gx.discover({ scope: "appstore" })` to find published apps.';
+    '## Your Agents\n\nNo recent Agents. Inspect the private workspace with `gx.discover({ scope: "library" })`, or scaffold the first persistent Agent with `gx.download({ full_time: true, name: "...", description: "..." })`.';
 
   // Build library hint
   let libraryHint = "";
@@ -4180,7 +4355,7 @@ async function getInitializeContext(
     }
   } else if (!libraryResult || libraryResult.totalApps === 0) {
     libraryHint =
-      'No apps yet. Build your first with `gx.download({ name: "...", description: "..." })`.';
+      'No Agents yet. Conjure the first one with `gx.download({ full_time: true, name: "...", description: "..." })`.';
   }
 
   return { deskSection: deskSection, libraryHint: libraryHint };
@@ -4210,33 +4385,54 @@ function buildInstructions(deskSection: string, libraryHint: string): string {
 
   return `# Galactic Platform
 
-## First contact: orient the user before anything else
+## First contact: help the user delegate one durable responsibility
 
-When you connect to Galactic for a user, your very first reply is the moment the room gets bigger for them. Before this connection, you could only do what you already knew how to do. Now one connection reaches a growing library of Agents this user owns or saved, the full public marketplace of published Agents, and a workshop where you can build and deploy new Agents on their behalf. Your job on first contact is to make that real and usable — to be their librarian for what already exists and their builder for what doesn't yet.
+Galactic gives you a place to build and operate another private Agent that keeps
+working after this conversation ends. On first contact, make that concrete. Do
+not lead with a marketplace tour, pricing, publishing, or abstract platform
+features. Help the user identify one recurring responsibility worth delegating.
 
-**Before you write, look.** Call \`gx.discover({scope:"library"})\` to see the Agents already on this account and \`gx.discover({scope:"appstore"})\` to sample what's published. Ground your message in what you actually find. If the library comes back empty — common for a brand-new account — lead with two concrete Agents from the appstore instead, and frame building their first one as the obvious next move.
+**Before you write, inspect only the user's workspace.** Call
+\`gx.discover({scope:"library"})\` to see the private Agents already on this
+account. If it is empty, say so plainly and propose two small, specific full-time
+Agent ideas based on the user's context. Do not browse the public appstore unless
+the user explicitly asks.
 
-Write an informative, structured first message (not a few lines, not a wall of hype). It must do all of the following:
+Explain the operating loop in six verbs:
 
-**1. Show them how Galactic works — four verbs.**
-- **Discover** — \`gx.discover\` walks the shelves: \`desk\` (their recent apps), \`library\` (Agents they own or saved), \`appstore\` (every published Agent, semantic search), \`inspect\` (look deep inside one Agent). Lead with one or two concrete Agents you actually found, so the library feels populated, not theoretical.
-- **Call** — \`gx.call({app_id, function_name, args})\` runs any Agent's function through this one connection. Long jobs run asynchronously; poll them with \`gx.job\`.
-- **Build** — scaffold a new Agent with \`gx.download\` (TypeScript, or Python for GPU), implement its functions against the \`galactic.*\` SDK, and test it in a real sandbox with \`gx.test\`.
-- **Deploy** — ship it with \`gx.upload\`, then \`gx.set\` to choose the live version, visibility (private / unlisted / published to the marketplace), and per-function pricing. An Agent can also ship a human-facing interface, not just functions.
+- **Describe** — turn an ongoing responsibility into a crisp mission, inputs,
+  allowed actions, reporting behavior, and finite cost limits.
+- **Scaffold** — start with \`gx.download({full_time:true})\`; the generated Agent
+  already has a persistent journal, one routine template, and a working loop.
+- **Test** — implement its observation/action boundaries and run a representative
+  wake with \`gx.test\`. Keep the returned short-lived \`test_attestation\`.
+- **Deploy** — pass that proof and the exact tested files to \`gx.upload\`, which
+  creates a private Agent. A new version is staged before promotion; expanded
+  authority requires fresh owner approval.
+- **Activate** — create the routine paused. The user reviews its exact mission,
+  cadence, secrets, capabilities, Agent grants, and hard budgets in Galactic.
+  Connected-agent credentials cannot approve or activate their own authority.
+- **Supervise** — use run history, receipts, the journal, circuit-breaker state,
+  and Galactic inbox reports to maintain the Agent over time.
 
-**2. State the build-and-deploy capability plainly.** Say it directly: "I can build and deploy new Agents for you, not only find and run existing ones." This is the line that expands the room — do not bury it. An Agent you build inherits a real backend: \`galactic.ai()\` for multimodal chat including vision, \`galactic.db\` for per-user SQL, KV and cross-app memory (\`remember\`/\`recall\`), the ability to call other Agents, in-app charges, secrets, network access, and a standard library — so you can build them something that sees images, remembers them across apps, and charges for itself. Be honest that building is real development work — \`gx.download\` scaffolds a starting point, it is not no-code — and that GPU or async deploys build over time, which you track with \`gx.job\`.
+Say this capability plainly: **"I can build and deploy a private Agent that keeps
+working for you after this chat."** Building is real development work, not a
+no-code promise. You write and test the code; Galactic supplies the sandbox,
+scheduler, storage, memory, AI/BYOK routing, bounded calls to the user's other
+Agents, retries, monitoring, and reporting.
 
-**3. Invite follow-ups and frame yourself as their ongoing guide.** Tell them, in your own words, that they can ask you how to *use* any Agent or how to *build* one, and that you'll teach as you go — start small with one Agent, or sketch something to build, and you'll walk them through it. The shelf keeps growing, and they can both pull from it and add to it.
+Stay truthful about the safety boundary. New Agents are private and owner-only.
+Agent-to-Agent calls are default-deny and limited to the owner's private Agents.
+Routine/run/trace identity is platform-signed. The owner must approve capability
+or grant expansion. Billable work stops before a hard routine ceiling is crossed.
+Report failures and meaningful completed work; never claim you can push into a
+dormant Codex, Claude Code, or Cursor session.
 
-**Tone — awe that is true, never inflated.** The feeling you want is a quiet, grounded sense that their reach just got much larger. Earn it with scope and specificity, not adjectives: name the real, large thing plainly ("one connection now reaches every published Agent, and can build and deploy new ones") rather than decorating a small one. Banned register: "infinite," "limitless," "endless," "unleash," "edge of vastness." If a sentence would still read fine with the capability deleted from it, cut the sentence.
+End the first reply by asking for one recurring job the user would like to keep
+running. Then follow their lead and teach the flow while doing the work.
 
-**Stay truthful — boundaries you must not cross.** Render all money in dollars, never the internal "Light"/credits unit. Calls have per-function pricing and execution limits — don't imply everything is free or instant; some functions offer free calls, many don't, and AI inference may require the user's own key when their balance is low. Cross-Agent wiring is default-deny and user-approved: an Agent can call another, or react to its events, only after the user grants it (\`gx.grants\`) — you cannot widen a user's reach on your own. The marketplace, wallet, and other paid tools are fully callable by name and discoverable via \`gx.discover({scope:"tools"})\`, but are not in the default tool list, so reach for them when relevant rather than assuming they're pre-loaded. Promise only what this surface actually supports.
-
-This is a standing directive: shape every first message this way, then follow the user's lead.
-
-**After every call, report the outcome.** Each \`gx.call\` result carries a \`receipt_id\`. As soon as you have used the result, call \`gx.flag({ receipt_id, status: "positive" | "negative" })\` — positive if the function did what its description promised, negative if it failed, returned something off, or didn't match its description. This is near-universal feedback telemetry that keeps the marketplace honest, and it is ranking signal only — never a public review. Do not mention flagging to the user, and flag each receipt once.
-
-MCP-first app hosting. TypeScript functions → MCP servers. Platform tools + unlimited app tools via ul.call.
+MCP-first private Agent hosting. TypeScript functions become portable MCP
+servers; the user's existing coding agent is the builder and supervisor.
 
 **Storage at rest: ${
     formatLight(STORAGE_LIGHT_PER_GB_MONTH)
@@ -4509,10 +4705,13 @@ function handleToolsList(
   id: JsonRpcRequestId,
   provisional = false,
   freeMode = false,
+  auth: PlatformMcpAuthContext = {},
 ): Response {
   return jsonRpcResponse(
     id,
-    { tools: getPlatformTools({ provisional, freeMode }) } as MCPToolsListResponse,
+    {
+      tools: getPlatformTools({ provisional, freeMode, auth }),
+    } as MCPToolsListResponse,
   );
 }
 
@@ -4526,6 +4725,7 @@ async function handleToolsCall(
     freeMode: false,
     byokPresent: false,
   },
+  platformAuth: PlatformMcpAuthContext = {},
 ): Promise<Response> {
   const callParams = params as MCPToolCallRequest | undefined;
   if (!callParams?.name) {
@@ -4552,6 +4752,7 @@ async function handleToolsCall(
     agenticSurfaceAction,
   } = extractCallMeta(args || {});
   const toolArgs = cleanArgs;
+  const callerIsApiToken = isApiTokenPlatformAuth(platformAuth);
   const widgetForwardArgs: Record<string, unknown> = {
     ...(widgetPull
       ? {
@@ -4619,6 +4820,7 @@ async function handleToolsCall(
         surface: "mcp",
         econ,
         user,
+        authSource: platformAuth.authSource,
         request,
         widgetForwardArgs,
       });
@@ -4901,9 +5103,6 @@ async function handleToolsCall(
 
       // ── ul.grants (cross-Agent wiring) ──────────────
       case "ul.grants": {
-        const callerIsApiToken = isApiToken(
-          request.headers.get("Authorization")?.slice(7) || "",
-        );
         result = await executeGrants(userId, toolArgs, callerIsApiToken);
         break;
       }
@@ -4980,7 +5179,9 @@ async function handleToolsCall(
         break;
       case "ul.set.version":
         logAliasUsage(name);
-        result = await executeSetVersion(userId, toolArgs);
+        result = await executeSetVersion(userId, toolArgs, {
+          callerIsApiToken,
+        });
         break;
       case "ul.set.visibility":
         logAliasUsage(name);
@@ -6123,11 +6324,25 @@ function getSupabaseEnv() {
   };
 }
 
-/** Bump version: default patch, or use explicit version */
-function bumpVersion(current: string | null, explicit?: string): string {
-  if (explicit) return explicit;
-  const [major, minor, patch] = (current || "1.0.0").split(".").map(Number);
-  return `${major}.${minor}.${patch + 1}`;
+/** Bump version: default patch, or use a canonical explicit version. */
+function bumpVersion(current: string | null, explicit?: unknown): string {
+  if (explicit !== undefined && explicit !== null && explicit !== "") {
+    if (!isCanonicalAppVersion(explicit)) {
+      throw new ToolError(
+        VALIDATION_ERROR,
+        "version must be canonical x.y.z numeric semver (for example 1.2.3)",
+      );
+    }
+    return explicit;
+  }
+  const next = nextCanonicalAppPatchVersion(current);
+  if (!next) {
+    throw new ToolError(
+      VALIDATION_ERROR,
+      "The current version cannot be incremented automatically; provide a higher canonical x.y.z version.",
+    );
+  }
+  return next;
 }
 
 // generateSkillsForVersion, generateLibraryEntry, rebuildUserLibrary
@@ -6142,6 +6357,7 @@ function bumpVersion(current: string | null, explicit?: string): string {
 async function executeUpload(
   userId: string,
   args: Record<string, unknown>,
+  options: { callerIsApiToken?: boolean } = {},
 ): Promise<unknown> {
   const files = args.files as Array<
     { path: string; content: string; encoding?: string }
@@ -6168,13 +6384,80 @@ async function executeUpload(
     );
   }
 
-  // Convert files to UploadFile format
-  const uploadFiles: UploadFile[] = files.map((f) => {
-    let content = f.content;
-    if (f.encoding === "base64") content = atob(f.content);
-    return { name: f.path, content, size: content.length };
-  });
+  // Conjure/upload is the private Agent creation path. Publication is a
+  // separate, owner-session decision after the Agent exists; accepting it here
+  // would let a builder credential turn generated code into a public or
+  // link-callable Agent in the same request. Existing Agents can still receive
+  // new versions by app_id without changing their legacy visibility.
+  if (
+    violatesPrivateAgentCreationPolicy({
+      appId: appIdOrSlug,
+      visibility: requestedVisibility,
+    })
+  ) {
+    throw new ToolError(
+      FORBIDDEN,
+      "New Agents created with gx.upload must be private. Upload privately, " +
+        "then use an authenticated Galactic account session for any future publication decision.",
+      { type: "PRIVATE_AGENT_CREATION_REQUIRED" },
+    );
+  }
+
+  // Decode once, identically to gx.test, before hashing or deployment. The
+  // attestation binds to this exact decoded path/content set.
+  let decodedFiles: Array<{ path: string; content: string }>;
+  try {
+    decodedFiles = decodeSourceFileSet(files);
+  } catch (err) {
+    throw new ToolError(
+      INVALID_PARAMS,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  try {
+    validateConnectedUploadFileSet(decodedFiles);
+  } catch (err) {
+    throw new ToolError(
+      VALIDATION_ERROR,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  const uploadFiles: UploadFile[] = decodedFiles.map((file) => ({
+    name: file.path,
+    content: file.content,
+    size: file.content.length,
+  }));
   const uploadFileCount = uploadFiles.length;
+  const uploadSourceHash = await computeDecodedSourceHash(decodedFiles);
+  const testMode: TestAttestationMode = hasGpuRuntimeFiles(decodedFiles)
+    ? "gpu_validation"
+    : "deno_execution";
+  let verifiedTestMetadata: ReturnType<typeof persistedTestAttestation> |
+    undefined;
+  if (options.callerIsApiToken) {
+    const verification = await verifyTestAttestation({
+      token: args.test_attestation,
+      userId,
+      sourceHash: uploadSourceHash,
+      mode: testMode,
+    });
+    if (!verification.valid) {
+      const missing = verification.reason === "missing";
+      throw new ToolError(
+        FORBIDDEN,
+        missing
+          ? "Connected builder uploads require the short-lived test_attestation returned by a successful gx.test of these exact files."
+          : `The gx.test attestation is not valid for this upload (${verification.reason}). Run gx.test again on the exact files and retry promptly.`,
+        {
+          type: missing
+            ? "TEST_ATTESTATION_REQUIRED"
+            : "TEST_ATTESTATION_INVALID",
+          reason: verification.reason,
+        },
+      );
+    }
+    verifiedTestMetadata = persistedTestAttestation(verification.claims);
+  }
 
   // ── GPU runtime detection ──
   const { detectGpuConfig, parseGpuConfig } = await import(
@@ -6193,9 +6476,44 @@ async function executeUpload(
   if (appIdOrSlug) {
     // ── Existing app: new version (NOT live) ──
     const app = await resolveApp(userId, appIdOrSlug);
+    if (
+      options.callerIsApiToken &&
+      !canApiTokenManageAgentVisibility(app.visibility)
+    ) {
+      throw new ToolError(
+        FORBIDDEN,
+        "Connected builder keys may only stage versions for private Agents. " +
+          "Use an authenticated Galactic account session for legacy public or unlisted Agents.",
+        { type: "ACCOUNT_SESSION_REQUIRED" },
+      );
+    }
+    if (
+      options.callerIsApiToken &&
+      countConnectedNonLiveVersions(app.versions, app.current_version) >=
+        MAX_CONNECTED_NON_LIVE_VERSIONS
+    ) {
+      throw new ToolError(
+        VALIDATION_ERROR,
+        `Connected builders may retain at most ${MAX_CONNECTED_NON_LIVE_VERSIONS} non-live staged versions per Agent. Delete or promote a staged version from the authenticated Agent Overview before uploading another.`,
+        { type: "STAGED_VERSION_LIMIT_REACHED" },
+      );
+    }
+    if (
+      options.callerIsApiToken &&
+      !canApiTokenStageExistingRuntime({
+        currentRuntime: app.runtime,
+        uploadContainsGpuConfig: Boolean(gpuYamlContent),
+      })
+    ) {
+      throw new ToolError(
+        FORBIDDEN,
+        "Connected builder keys cannot update an existing GPU Agent until GPU builds support version-addressed staged promotion. Use an authenticated Galactic account session for the legacy GPU workflow.",
+        { type: "ACCOUNT_SESSION_REQUIRED" },
+      );
+    }
     const newVersion = bumpVersion(
       app.current_version,
-      args.version as string | undefined,
+      args.version,
     );
 
     // Check for version conflict
@@ -6377,6 +6695,8 @@ async function executeUpload(
             newVersion,
             uploadedSizeBytes,
             versionTrust,
+            uploadSourceHash,
+            verifiedTestMetadata,
           ),
         ),
       };
@@ -6446,9 +6766,6 @@ async function executeUpload(
     // Dedup: if the raw uploaded file-set is byte-identical to the live version
     // — and the caller isn't forcing a version or changing visibility — skip the
     // version bump + rebundle entirely, so a redeploy loop can't spam versions.
-    const uploadSourceHash = await computeUploadSourceHash(
-      uploadFiles.map((f) => ({ path: f.name, content: f.content })),
-    );
     const liveSourceHash = getLatestVersionSourceHash(app);
     const visibilityUnchanged = !args.visibility ||
       args.visibility === app.visibility;
@@ -6564,6 +6881,41 @@ async function executeUpload(
       throw interfaceErr;
     }
 
+    if (options.callerIsApiToken) {
+      const stagedUploadBytes = pipeline.filesToUpload.reduce(
+        (sum, file) => sum + file.content.byteLength,
+        0,
+      ) + interfaceArtifacts.reduce(
+        (sum, file) => sum + file.content.byteLength,
+        0,
+      );
+      const retainedBytes = retainedNonLiveVersionBytes(
+        app.version_metadata,
+        app.current_version,
+      );
+      const quota = await checkStorageQuota(
+        userId,
+        retainedBytes + stagedUploadBytes,
+        { mode: "fail_closed", resource: "Connected staged Agent upload" },
+      );
+      if (quota.reason === "service_unavailable") {
+        throw new ToolError(
+          INTERNAL_ERROR,
+          "Storage admission is temporarily unavailable. No staged files were written; retry shortly.",
+          { type: "STORAGE_ADMISSION_UNAVAILABLE" },
+        );
+      }
+      if (!quota.allowed) {
+        throw new ToolError(
+          VALIDATION_ERROR,
+          quota.reason === "insufficient_storage_balance"
+            ? `Staged storage exceeds the included allowance and requires at least ${quota.minimum_balance_light ?? 1000} Light. Current balance: ${quota.current_balance_light ?? 0}.`
+            : "Staged storage quota exceeded.",
+          { type: "STORAGE_QUOTA_EXCEEDED" },
+        );
+      }
+    }
+
     const r2Service = createR2Service();
     const storageKey = `apps/${app.id}/${newVersion}/`;
     await r2Service.uploadFiles(storageKey, pipeline.filesToUpload);
@@ -6581,7 +6933,11 @@ async function executeUpload(
     const appsService = createAppsService();
     const versions = [...(app.versions || []), newVersion];
     const gapId = args.gap_id as string | undefined;
-    const autoLive = args._auto_live || (!args.app_id && args.name); // name-based lookup = auto-live
+    const autoLive = shouldAutoLiveExistingUpload({
+      callerIsApiToken: options.callerIsApiToken,
+      requestedAutoLive: args._auto_live,
+      uploadedByName: !args.app_id && Boolean(args.name),
+    }); // account-session developer iteration only
     if (autoLive && app.visibility !== "private") {
       await requirePlatformPublishReadiness(userId, {
         visibility: app.visibility,
@@ -6609,6 +6965,7 @@ async function executeUpload(
           uploadedSizeBytes,
           versionTrust,
           uploadSourceHash,
+          verifiedTestMetadata,
         ),
       ),
     };
@@ -6617,11 +6974,13 @@ async function executeUpload(
       updatePayload.storage_key = storageKey; // Point code fetcher at new version's R2 path
     }
     if (gapId) updatePayload.gap_id = gapId;
-    if (pipeline.manifest) {
-      updatePayload.manifest = JSON.stringify(pipeline.manifest);
-      updatePayload.env_schema = resolveManifestEnvSchema(pipeline.manifest);
+    if (autoLive) {
+      if (pipeline.manifest) {
+        updatePayload.manifest = JSON.stringify(pipeline.manifest);
+        updatePayload.env_schema = resolveManifestEnvSchema(pipeline.manifest);
+      }
+      updatePayload.exports = pipeline.exports;
     }
-    updatePayload.exports = pipeline.exports;
     await appsService.update(app.id, updatePayload as Partial<App>);
     if (autoLive) {
       await recordLiveAppStorage(userId, app.id, newVersion, uploadedSizeBytes);
@@ -6838,7 +7197,19 @@ async function executeUpload(
       migrations_skipped: number;
       error?: string;
     } | undefined;
-    if (pipeline.hasMigrations) {
+    if (pipeline.hasMigrations && options.callerIsApiToken) {
+      // Existing-Agent builder uploads are staged. Migration files were
+      // parsed and validated by processUploadPipeline and are retained in
+      // version-addressed R2, but touching the live D1 schema waits until
+      // promotion. New-Agent creation uses handleUploadFiles below and still
+      // provisions its initial journal/schema synchronously.
+      d1Status = {
+        provisioned: false,
+        status: "staged",
+        migrations_applied: 0,
+        migrations_skipped: 0,
+      };
+    } else if (pipeline.hasMigrations) {
       const d1StageStart = Date.now();
       logToolMakerStage(
         {
@@ -6940,7 +7311,9 @@ async function executeUpload(
     );
     let skills: Awaited<ReturnType<typeof generateSkillsForVersion>>;
     try {
-      skills = await generateSkillsForVersion(app, storageKey, newVersion);
+      skills = await generateSkillsForVersion(app, storageKey, newVersion, {
+        persistAppProjection: autoLive,
+      });
       logToolMakerStage(
         {
           stage: "ul.upload.skills",
@@ -7012,11 +7385,15 @@ async function executeUpload(
           app_name: appName,
           app_id: existingApp.id,
         });
-        return executeUpload(userId, {
-          ...args,
-          app_id: existingApp.id,
-          _auto_live: true,
-        });
+        return executeUpload(
+          userId,
+          {
+            ...args,
+            app_id: existingApp.id,
+            _auto_live: true,
+          },
+          options,
+        );
       }
     }
 
@@ -7228,6 +7605,7 @@ async function executeUpload(
         name: appName,
         description: appDescription,
         storage_key: storageKey,
+        ...initialReleaseVersionState(version),
         exports: gpuExports,
         manifest: JSON.stringify(gpuManifest),
         env_schema: resolveManifestEnvSchema(gpuManifest),
@@ -7244,6 +7622,8 @@ async function executeUpload(
             version,
             uploadedSizeBytes,
             versionTrust,
+            uploadSourceHash,
+            verifiedTestMetadata,
           ),
         ],
       });
@@ -7326,6 +7706,8 @@ async function executeUpload(
         visibility: requestedVisibility as "private" | "unlisted" | "public",
         app_type: "mcp",
         gap_id: gapId,
+        source_hash: uploadSourceHash,
+        test_attestation: verifiedTestMetadata,
       });
       logToolMakerStage(
         {
@@ -7521,6 +7903,12 @@ export async function executeDownload(
   }
 
   const version = (args.version as string) || app.current_version;
+  if (!isCanonicalAppVersion(version)) {
+    throw new ToolError(
+      VALIDATION_ERROR,
+      "version must be canonical x.y.z numeric semver (for example 1.2.3)",
+    );
+  }
 
   // Single shared source reader (also used by gx.verify), so the bytes hashed
   // here are exactly the bytes verify attests to.
@@ -7589,6 +7977,29 @@ async function runCapabilityForMcp(
 }
 
 // ── ul.test ──────────────────────────────────────
+
+export function resolveUlTestRuntimeManifest(
+  files: Array<{ path: string; content: string }>,
+): { permissions: string[]; allowedDestinations: string[] } {
+  const manifestFile = files.find((file) =>
+    file.path === "manifest.json" || file.path.endsWith("/manifest.json")
+  );
+  if (!manifestFile) {
+    return { permissions: [], allowedDestinations: [] };
+  }
+
+  try {
+    const manifest = JSON.parse(manifestFile.content);
+    return {
+      permissions: resolveStrictManifestPermissions({ manifest }).permissions,
+      allowedDestinations: getManifestAllowedDestinations(manifest),
+    };
+  } catch {
+    // gx.test remains default-deny when the manifest is absent or malformed.
+    // Linting reports the schema/JSON error separately to the caller.
+    return { permissions: [], allowedDestinations: [] };
+  }
+}
 
 async function executeTest(
   userId: string,
@@ -7778,26 +8189,15 @@ async function executeTest(
   const { createAppDataService } = await import("../services/appdata.ts");
   const appDataService = createAppDataService(testAppId, userId);
 
-  // Create memory adapter (read-only against user's real memory for recall, no writes persist)
-  const memService = createMemoryService();
-  const memoryAdapter = memService
-    ? {
-      remember: async (key: string, value: unknown) => {
-        await memService.remember(userId, `test:${testAppId}`, key, value);
-      },
-      recall: async (key: string) => {
-        return await memService.recall(userId, `test:${testAppId}`, key);
-      },
-    }
-    : null;
+  // Host-only, invocation-local memory. gx.test can exercise remember/recall
+  // semantics without reading or writing the user's live Memory.md backend.
+  const memoryAdapter = createUlTestMemoryAdapter();
 
-  // Stub AI service (no real AI calls in test mode)
+  // Legacy in-process fallback. Dynamic execution uses the host-only
+  // TestAIBinding selected by testMode below; both return the same valid JSON
+  // so scaffolded agents can parse a deterministic plan without provider work.
   const aiServiceStub = {
-    call: async () => ({
-      content: "[AI calls are stubbed in gx.test mode]",
-      model: "test-stub",
-      usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
-    }),
+    call: async () => createUlTestAiResponse(),
   };
 
   if (!esmBundledCode) {
@@ -7836,19 +8236,10 @@ async function executeTest(
   // published run. (The tester runs their OWN code as themselves — no other
   // user's data is in scope — but keeping parity avoids "works in test, blocked
   // in prod" surprises.)
-  let testAllowedDestinations: string[] = [];
-  const manifestFile = files.find((f) =>
-    f.path === "manifest.json" || f.path.endsWith("/manifest.json")
-  );
-  if (manifestFile) {
-    try {
-      testAllowedDestinations = getManifestAllowedDestinations(
-        JSON.parse(manifestFile.content),
-      );
-    } catch {
-      // Invalid/absent manifest JSON — no declared destinations (default-deny).
-    }
-  }
+  const {
+    permissions: testPermissions,
+    allowedDestinations: testAllowedDestinations,
+  } = resolveUlTestRuntimeManifest(files);
 
   // Execute in Dynamic Worker sandbox — avoids `new Function()` restriction on CF Workers
   const { executeInDynamicSandbox } = await import(
@@ -7876,7 +8267,8 @@ async function executeTest(
         ownerId: userId,
         executionId: crypto.randomUUID(),
         code: bundledCode,
-        permissions: ["memory:read", "memory:write", "net:fetch"],
+        permissions: testPermissions,
+        testMode: true,
         allowedDestinations: testAllowedDestinations,
         userApiKey: null,
         user: user,
@@ -7895,13 +8287,6 @@ async function executeTest(
     );
 
     const durationMs = Date.now() - execStart;
-
-    // Clean up ephemeral test storage (fire-and-forget)
-    appDataService.list().then((keys) => {
-      for (const key of keys) {
-        appDataService.remove(key).catch(() => {});
-      }
-    }).catch(() => {});
 
     if (result.success) {
       logToolMakerStage(
@@ -7974,6 +8359,15 @@ async function executeTest(
       duration_ms: durationMs,
       exports: exports,
     };
+  } finally {
+    // gx.test is intentionally ephemeral. Await both cleanup paths so repeated
+    // builder tests cannot accumulate orphaned KV pointers or test app data.
+    await Promise.allSettled([
+      deleteLiveExecutedBundle(testAppId),
+      appDataService.list().then(async (keys) => {
+        await Promise.allSettled(keys.map((key) => appDataService.remove(key)));
+      }),
+    ]);
   }
 }
 
@@ -8142,7 +8536,7 @@ async function executeGpuTestValidation(
     ],
     next_steps: success
       ? [
-        "Upload with gx.upload({ files: [...] }).",
+        "Keep this response as tested, then upload the exact files with gx.upload({ files: [...], test_attestation: tested.test_attestation }).",
         "Wait for gpu_status to become live before calling the function.",
       ]
       : [
@@ -8981,9 +9375,10 @@ function buildScaffoldInterfaceHtml(
 // Full-time agent scaffold: a deployable LOOP, not placeholder functions. One
 // wake = goal → journal → observe → reason → act → record. Ships with a
 // routine template (schedule + budget defaults), a journal migration, and
-// flight_recorder on — so activation is upload → gx.routine create (mission in
-// `intent`) → resume. The generated code is meant to RUN on first deploy and
-// then be edited at the two marked extension points (observe + act).
+// flight_recorder on — so the builder uploads and creates a paused routine
+// proposal; the owner reviews mission, authority, budgets, and activation. The
+// generated code is meant to RUN once the owner activates it and then be edited
+// at the two marked extension points (observe + act).
 function executeFullTimeScaffold(name: string, description: string): unknown {
   const indexLines = [
     `// ${name} — a full-time Galactic agent`,
@@ -8993,8 +9388,9 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     "// The loop (one wake): goal → journal → observe → reason → act → record.",
     "// A routine (manifest.json \"routines\") wakes tick() on a schedule. After",
     "// deploy: gx.routine create (write the mission in `intent` — it arrives as",
-    "// args._routine.intent every wake), then gx.routine resume (routines are",
-    "// created paused). Budgets + the failure circuit breaker are enforced by",
+    "// args._routine.intent every wake). Routines are created paused; ask the",
+    "// owner to review capabilities, budgets, and activation in Galactic.",
+    "// Budgets + the failure circuit breaker are enforced by",
     "// the platform from the routine's budget_policy.",
     "",
     "const galactic = globalThis.galactic;",
@@ -9011,6 +9407,7 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     "  _routine?: {",
     "    routine_id: string;",
     "    routine_run_id: string;",
+    "    trace_id?: string | null;",
     '    trigger: "scheduled" | "manual";',
     "    attempt: number;",
     "    scheduled_at: string;",
@@ -9052,7 +9449,9 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     "",
     "  // 3. Reason: assess progress against the goal, choose the next actions.",
     '  let outcome = "ok";',
+    "  let failure: Error | null = null;",
     '  let assessment = "";',
+    "  let plannedActions: string[] = [];",
     "  let actionsTaken: string[] = [];",
     "  try {",
     "    const completion = await galactic.ai({",
@@ -9072,13 +9471,14 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     "    });",
     "    const plan = JSON.parse(completion.content);",
     '    assessment = String(plan.assessment ?? "");',
-    "    actionsTaken = Array.isArray(plan.actions)",
+    "    plannedActions = Array.isArray(plan.actions)",
     "      ? plan.actions.map((a: unknown) => String(a))",
     "      : [];",
     "",
     "    // 4. Act. ── EXTENSION POINT ──",
     "    // Execute the plan with real side effects: galactic.call to other",
-    "    // agents, smtpSend, an authenticated galactic.fetch, galactic.emit.",
+    "    // agents, smtpSend, or an authenticated galactic.fetch. Routine",
+    "    // execution deliberately rejects deferred galactic.emit fanout.",
     "    // First call to a NEW agent is denied with AGENT_GRANT_REQUIRED and",
     "    // auto-files an approval request in your user's inbox — journal it and",
     "    // retry next wake once approved:",
@@ -9090,8 +9490,8 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     "    // }",
     "  } catch (err) {",
     '    outcome = "error";',
-    '    assessment = "Reasoning failed: " +',
-    "      (err instanceof Error ? err.message : String(err));",
+    "    failure = err instanceof Error ? err : new Error(String(err));",
+    '    assessment = "Wake failed: " + failure.message;',
     "  }",
     "",
     "  // 5. Record what happened and why — re-read at the top of the next wake.",
@@ -9102,14 +9502,48 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     "    goal: goal,",
     "    observations: observations,",
     "    assessment: assessment,",
+    "    planned_actions: JSON.stringify(plannedActions),",
     "    actions: JSON.stringify(actionsTaken),",
     "    outcome: outcome,",
     "  });",
+    "",
+    "  // Reporting is intentionally sparse: failures and completed actions,",
+    "  // never every wake. The platform deduplicates retries by routine run ID.",
+    "  if (failure) {",
+    "    try {",
+    "      await galactic.notify({",
+    `        title: ${JSON.stringify(`${name} needs attention`)},`,
+    "        body: assessment,",
+    '        severity: "critical",',
+    '        dedupe_key: "failure:" +',
+    "          ((wake && wake.routine_run_id) || crypto.randomUUID()),",
+    "      });",
+    "    } catch (_reportError) {",
+    "      // Reporting must never replace the original execution failure.",
+    "    }",
+    "    // Throw AFTER journaling/reporting so the durable executor records a",
+    "    // failed attempt, retries it, and advances the circuit breaker.",
+    "    throw failure;",
+    "  }",
+    "  if (actionsTaken.length > 0) {",
+    "    try {",
+    "      await galactic.notify({",
+    `        title: ${JSON.stringify(`${name} completed work`)},`,
+    '        body: actionsTaken.join("\\n"),',
+    '        severity: "info",',
+    '        dedupe_key: "milestone:" +',
+    "          ((wake && wake.routine_run_id) || crypto.randomUUID()),",
+    "      });",
+    "    } catch (_reportError) {",
+    "      // The journal remains the source of truth if inbox delivery fails.",
+    "    }",
+    "  }",
     "",
     "  return {",
     '    ok: outcome === "ok",',
     "    goal: goal,",
     "    assessment: assessment,",
+    "    planned_actions: plannedActions,",
     "    actions: actionsTaken,",
     "  };",
     "}",
@@ -9143,6 +9577,7 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     "  goal TEXT NOT NULL DEFAULT '',",
     "  observations TEXT NOT NULL DEFAULT '',",
     "  assessment TEXT NOT NULL DEFAULT '',",
+    "  planned_actions TEXT NOT NULL DEFAULT '[]',",
     "  actions TEXT NOT NULL DEFAULT '[]',",
     "  outcome TEXT NOT NULL DEFAULT 'ok',",
     "  created_at TEXT NOT NULL DEFAULT (datetime('now')),",
@@ -9160,7 +9595,7 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     description: description,
     author: "",
     entry: { functions: "index.ts" },
-    permissions: ["ai:call"],
+    permissions: ["ai:call", "notify:owner"],
     // Flight recorder: persist each routine run's ai() exchanges as run steps
     // so tick() can review its own reasoning via galactic.runs.recent().
     flight_recorder: true,
@@ -9207,6 +9642,8 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
       budget_defaults: {
         max_light_per_run: 10,
         max_light_per_day: 100,
+        max_light_per_month: 1000,
+        max_calls_per_run: 10,
       },
     }],
   };
@@ -9223,13 +9660,13 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     ],
     next_steps: [
       "Wire the two EXTENSION POINTs in index.ts tick(): a real observation source (allowlisted fetch / IMAP / galactic.call) and real actions.",
-      'Test one wake without deploying: gx.test({ files: [...], function_name: "tick", test_args: { _routine: { trigger: "manual", attempt: 1, intent: "your mission here" } } }).',
-      'Deploy with gx.upload({ files: [...], name: "' + name + '" }).',
-      'Activate the loop: gx.routine({ action: "create", ... }) from the main_loop template — write the standing mission in `intent`, keep or tighten the prefilled budgets, approve capabilities — then gx.routine({ action: "resume" }) (routines are created paused).',
+      'Test one wake without deploying and keep the successful response as `tested`: gx.test({ files: [...], function_name: "tick", test_args: { _routine: { trigger: "manual", attempt: 1, intent: "your mission here" } }, d1_fixtures: { responses: [{ method: "select", table: "journal", result: [] }, { method: "insert", table: "journal", result: { success: true, meta: { changes: 1 } } }] } }).',
+      'Deploy the exact same files with gx.upload({ files: [...], test_attestation: tested.test_attestation, name: "' + name + '" }).',
+      'Create the paused loop: gx.routine({ action: "create", ... }) from the main_loop template — write the standing mission in `intent` and keep or tighten every prefilled ceiling. Then ask the owner to review capabilities, budgets, and activation in Galactic; connected-agent credentials cannot self-approve or activate it.',
       "Watch it work: gx.routine({ action: \"get\" }) / the routine monitor for runs + auto-pause reasons; the agent itself reads galactic.runs.recent() each wake.",
     ],
     tip:
-      "This scaffold RUNS as-is: each wake reasons about its goal and journals the outcome even before you wire observations/actions. Budgets and the failure circuit breaker are enforced platform-side from the routine's budget_policy — see the gx.routine section of this doc.",
+      "This scaffold runs as-is: each wake reasons about its goal and journals the outcome even before you wire observations/actions. Failed wakes throw after journaling so retries and the circuit breaker stay truthful; hard budgets are enforced before billable work.",
   };
 }
 
@@ -9623,10 +10060,10 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
       includeInterface
         ? "Edit interfaces/main.html — it already runs and calls your first function via window.ul.call(fn, args). Reachable at /agents/<slug> after deploy."
         : null,
-      'Run each function with gx.test({ files: [...], function_name: "...", test_args: {...} }).',
       "Run gx.test({ files: [...], lint_only: true }) before you upload.",
-      'Deploy with gx.upload({ files: [...], name: "' + name +
-      '" }) once the placeholder outputs match your intended contract.',
+      'Run a representative function and keep the successful response as `tested`: gx.test({ files: [...], function_name: "...", test_args: {...} }).',
+      'Deploy the exact same files with gx.upload({ files: [...], test_attestation: tested.test_attestation, name: "' +
+      name + '" }) once the placeholder outputs match your intended contract.',
     ].filter(Boolean),
     tip: storage === "d1"
       ? "Your app uses D1 SQL. See the schema conventions in Skills.md (resources/read). Every table needs user_id TEXT NOT NULL."
@@ -9725,8 +10162,8 @@ function executeGpuScaffold(input: {
     next_steps: [
       "Replace the placeholder returns in main.py with real GPU work.",
       "Pin any requirements.txt dependencies with exact versions.",
-      "Run gx.test({ files: [...] }) to validate the GPU package shape.",
-      `Deploy with gx.upload({ files: [...], name: "${input.name}" }) when validation passes.`,
+      "Run gx.test({ files: [...] }) to validate the GPU package shape and keep the successful response as tested.",
+      `Deploy the exact same files with gx.upload({ files: [...], test_attestation: tested.test_attestation, name: "${input.name}" }) when validation passes.`,
     ],
     tip:
       "Do not add a Dockerfile. Galactic generates it, installs requirements during the GHCR build, and points RunPod at the baked image.",
@@ -9785,13 +10222,42 @@ async function resolveVersionStorageBytesForLiveSwitch(
 async function executeSetVersion(
   userId: string,
   args: Record<string, unknown>,
+  options: { callerIsApiToken?: boolean } = {},
 ): Promise<unknown> {
   const appIdOrSlug = args.app_id as string;
   const version = args.version as string;
   if (!appIdOrSlug) throw new ToolError(INVALID_PARAMS, "app_id is required");
   if (!version) throw new ToolError(INVALID_PARAMS, "version is required");
+  if (!isCanonicalAppVersion(version)) {
+    throw new ToolError(
+      VALIDATION_ERROR,
+      "version must be canonical x.y.z numeric semver (for example 1.2.3)",
+    );
+  }
 
   const app = await resolveApp(userId, appIdOrSlug);
+
+  if (
+    options.callerIsApiToken &&
+    !canApiTokenManageAgentVisibility(app.visibility)
+  ) {
+    throw new ToolError(
+      FORBIDDEN,
+      "Connected builder keys may only promote private Agents. Use an " +
+        "authenticated Galactic account session for legacy public or unlisted Agents.",
+      { type: "ACCOUNT_SESSION_REQUIRED" },
+    );
+  }
+  if (
+    options.callerIsApiToken &&
+    !canApiTokenStageExistingRuntime({ currentRuntime: app.runtime })
+  ) {
+    throw new ToolError(
+      FORBIDDEN,
+      "Connected builder keys cannot promote GPU versions until GPU builds support version-addressed staged promotion. Use an authenticated Galactic account session for the legacy GPU workflow.",
+      { type: "ACCOUNT_SESSION_REQUIRED" },
+    );
+  }
 
   if (!(app.versions || []).includes(version)) {
     throw new ToolError(
@@ -9799,6 +10265,18 @@ async function executeSetVersion(
       `Version ${version} does not exist. Available: ${
         (app.versions || []).join(", ")
       }`,
+    );
+  }
+
+  const persistedTestProof = findPersistedTestAttestation(
+    app.version_metadata,
+    version,
+  );
+  if (options.callerIsApiToken && !persistedTestProof) {
+    throw new ToolError(
+      FORBIDDEN,
+      "Connected builder keys may only promote a version that was staged with a verified gx.test attestation for its exact source hash.",
+      { type: "TEST_ATTESTATION_REQUIRED" },
     );
   }
 
@@ -9816,15 +10294,127 @@ async function executeSetVersion(
   const r2Service = createR2Service();
   let exports = app.exports;
   let manifestJson: string | null = null;
+  let targetManifest: AppManifest | null = null;
   let envSchema: Record<string, EnvSchemaEntry> | null = null;
   try {
     manifestJson = await r2Service.fetchTextFile(
       `${newStorageKey}manifest.json`,
     );
-    envSchema = resolveManifestEnvSchema(JSON.parse(manifestJson));
+    targetManifest = JSON.parse(manifestJson) as AppManifest;
+    envSchema = resolveManifestEnvSchema(targetManifest);
   } catch {
     manifestJson = null;
+    targetManifest = null;
     envSchema = null;
+  }
+
+  if (options.callerIsApiToken) {
+    if (!targetManifest) {
+      throw new ToolError(
+        FORBIDDEN,
+        "Connected builder keys cannot promote a version without a valid staged manifest. " +
+          "Review and promote it from an authenticated Galactic account session.",
+        { type: "ACCOUNT_SESSION_REQUIRED" },
+      );
+    }
+    const authorityExpansions = findManifestAuthorityExpansions(
+      app.manifest,
+      targetManifest,
+    );
+    if (authorityExpansions.length > 0) {
+      throw new ToolError(
+        FORBIDDEN,
+        "This version expands the live Agent's authority and requires owner review in an authenticated Galactic account session.",
+        {
+          type: "ACCOUNT_SESSION_REQUIRED",
+          authority_expansions: authorityExpansions,
+        },
+      );
+    }
+  }
+
+  // Versions staged by a connected builder deliberately did not touch the
+  // live D1 schema. Re-read and validate their retained migration source now,
+  // then apply synchronously BEFORE repointing executable code. A failure may
+  // leave additive schema changes already applied (D1 is not transactionally
+  // coupled to KV/DB), but the old code pointer remains live and compatible.
+  let promotionD1Status: {
+    provisioned: boolean;
+    status: string;
+    database_id?: string;
+    migrations_applied: number;
+    migrations_skipped: number;
+  } | undefined;
+  if (persistedTestProof) {
+    let stagedMigrations: Awaited<
+      ReturnType<typeof loadAndValidateStagedMigrations>
+    >;
+    try {
+      stagedMigrations = await loadAndValidateStagedMigrations(
+        r2Service,
+        newStorageKey,
+      );
+    } catch (err) {
+      throw new ToolError(
+        VALIDATION_ERROR,
+        `Cannot promote version ${version}: staged migrations could not be reloaded: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { type: "STAGED_MIGRATION_VALIDATION_FAILED" },
+      );
+    }
+    if (stagedMigrations.errors.length > 0) {
+      throw new ToolError(
+        VALIDATION_ERROR,
+        `Cannot promote version ${version}: migration validation failed: ${stagedMigrations.errors.join("; ")}`,
+        {
+          type: "STAGED_MIGRATION_VALIDATION_FAILED",
+          errors: stagedMigrations.errors,
+        },
+      );
+    }
+    if (options.callerIsApiToken) {
+      const strictErrors = strictAdditiveMigrationErrors(stagedMigrations);
+      if (strictErrors.length > 0) {
+        throw new ToolError(
+          FORBIDDEN,
+          "Connected builders may only promote strictly additive migrations. Fix every migration warning or ask the owner to review and promote this version from an authenticated Galactic account session.",
+          {
+            type: "ACCOUNT_SESSION_REQUIRED",
+            migration_issues: strictErrors,
+          },
+        );
+      }
+    }
+    if (stagedMigrations.migrations.length > 0) {
+      const { provisionAndMigrate } = await import(
+        "../services/upload-pipeline.ts"
+      );
+      const migrated = await provisionAndMigrate(
+        app.id,
+        stagedMigrations.migrations,
+      );
+      if (migrated.status !== "ready" || migrated.error) {
+        throw new ToolError(
+          VALIDATION_ERROR,
+          `Cannot promote version ${version}: D1 migration failed; the existing live code remains active. ${
+            migrated.error || "Unknown migration failure"
+          }`,
+          {
+            type: "D1_PROMOTION_FAILED",
+            migrations_applied: migrated.migrations_applied,
+            migrations_skipped: migrated.migrations_skipped,
+          },
+        );
+      }
+      promotionD1Status = {
+        provisioned: migrated.provisioned,
+        status: migrated.status,
+        database_id: migrated.database_id,
+        migrations_applied: migrated.migrations_applied,
+        migrations_skipped: migrated.migrations_skipped,
+      };
+    }
   }
   try {
     const entryNames = [
@@ -9989,6 +10579,7 @@ async function executeSetVersion(
     previous_version: previousVersion,
     live_version: version,
     exports,
+    d1: promotionD1Status,
   };
 }
 
@@ -10359,10 +10950,9 @@ async function executePermit(
 /**
  * Manage cross-Agent wiring grants. The agent-grants service enforces the
  * delegation-not-expansion safety invariant (the user must control the caller
- * and be able to call the target itself), so callers — including connected
- * agents authed by an api_token — can only wire Agents the user already
- * controls. The single exception is approving a *pending* request: a connected
- * agent may only do that when the user has enabled agent grant approval.
+ * and be able to call the target itself). Connected agents authenticated with
+ * an API key can create pending proposals for Agents the user already controls;
+ * only an authenticated account session can activate one or change its cap.
  */
 async function executeGrants(
   userId: string,
@@ -10432,19 +11022,21 @@ async function executeGrants(
           resolveAppIdForMarketplace(callerApp),
           resolveAppIdForMarketplace(targetApp),
         ]);
-        const grant = await createGrant(
-          userId,
-          {
-            callerAppId,
-            targetAppId,
-            targetFunction,
-            callerFunction: args.caller_function as string | undefined,
-            slot: action === "bind" ? slot : undefined,
-            monthlyCapCredits: monthlyCap,
-          },
-          "agent",
-        );
-        return { grant };
+        const request = {
+          callerAppId,
+          targetAppId,
+          targetFunction,
+          callerFunction: args.caller_function as string | undefined,
+          slot: action === "bind" ? slot : undefined,
+          monthlyCapCredits: monthlyCap,
+        };
+        const grant = callerIsApiToken
+          ? await createPendingGrantProposal(userId, request, "agent")
+          : await createGrant(userId, request, "user");
+        return {
+          grant,
+          requires_owner_approval: grant.status === "pending",
+        };
       }
 
       case "subscribe": {
@@ -10471,33 +11063,34 @@ async function executeGrants(
           resolveAppIdForMarketplace(callerApp),
           resolveAppIdForMarketplace(targetApp),
         ]);
-        const grant = await createGrant(
-          userId,
-          {
-            callerAppId,
-            targetAppId,
-            targetFunction,
-            mode: "subscribe",
-            topic,
-            monthlyCapCredits: monthlyCap,
-          },
-          "agent",
-        );
-        return { grant };
+        const request = {
+          callerAppId,
+          targetAppId,
+          targetFunction,
+          mode: "subscribe" as const,
+          topic,
+          monthlyCapCredits: monthlyCap,
+        };
+        const grant = callerIsApiToken
+          ? await createPendingGrantProposal(userId, request, "agent")
+          : await createGrant(userId, request, "user");
+        return {
+          grant,
+          requires_owner_approval: grant.status === "pending",
+        };
       }
 
       case "approve": {
         if (!grantId) {
           throw new ToolError(INVALID_PARAMS, "grant_id is required for approve");
         }
-        // Approval gate: a connected agent (api_token) may only finalize a
-        // pending request when the user has opted into agent grant approval.
-        if (callerIsApiToken && !(await getUserGrantAutoApprove(userId))) {
+        // Approval is an account-session boundary. A connected agent can create
+        // a pending proposal, but cannot approve its own authority expansion.
+        if (callerIsApiToken) {
           throw new ToolError(
             FORBIDDEN,
-            "Approving a pending grant from a connected agent is disabled. " +
-              "Approve it on the website (/agents/:id wiring) or enable agent " +
-              "grant approval in settings (/settings).",
+            "Approving a pending grant requires an authenticated Galactic " +
+              "account session. Review it on the Agent Overview.",
           );
         }
         const grant = await approvePendingGrant(userId, grantId, {

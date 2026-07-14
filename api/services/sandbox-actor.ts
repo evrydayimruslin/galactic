@@ -25,6 +25,8 @@
 // primitive can be audited on its own).
 
 import { getEnv } from "../lib/env.ts";
+import type { RoutineActorCapabilityScope } from "./routine-auth.ts";
+import type { RoutineTraceContext } from "./routine-trace.ts";
 
 export const SANDBOX_ACTOR_TOKEN_PREFIX = "gxe_v1_";
 const CLAIM_TYPE = "ultralight.sandbox_actor";
@@ -126,6 +128,17 @@ export interface SandboxActorTokenClaims {
   /** Function scope; ['*'] — functions are gated by deps + cross-Agent grants. */
   function_names: string[];
   scopes: string[];
+  /**
+   * Server-minted routine attribution. These claims are deliberately carried
+   * by the signed bearer rather than the tenant-controlled JSON-RPC body, so a
+   * galactic.call() hop cannot drop, replace, or invent routine ownership.
+   * Legacy/non-routine sandbox tokens omit the entire group.
+   */
+  routine_id?: string;
+  routine_run_id?: string;
+  trace_id?: string;
+  /** Exact approved target/function pairs inherited from the routine actor. */
+  routine_capabilities?: RoutineActorCapabilityScope[];
   iat: number;
   exp: number;
 }
@@ -142,6 +155,10 @@ export interface CreateSandboxActorTokenInput {
   allowedAppIds?: string[] | null;
   scopes?: string[];
   executionId?: string;
+  /** Trusted host context only; never sourced from app arguments. */
+  routineContext?: RoutineTraceContext | null;
+  /** Trusted, signed routine authority ceiling; preserved across every hop. */
+  routineCapabilities?: RoutineActorCapabilityScope[] | null;
   expiresInSeconds?: number;
   nowMs?: number;
 }
@@ -153,6 +170,67 @@ export interface CreatedSandboxActorToken {
 
 export function isSandboxActorToken(token: string): boolean {
   return token.startsWith(SANDBOX_ACTOR_TOKEN_PREFIX);
+}
+
+function normalizeRoutineContext(
+  value: RoutineTraceContext | null | undefined,
+): RoutineTraceContext | null {
+  if (value == null) return null;
+  const routineId = typeof value.routineId === "string"
+    ? value.routineId.trim()
+    : "";
+  const routineRunId = typeof value.routineRunId === "string"
+    ? value.routineRunId.trim()
+    : "";
+  const traceId = typeof value.traceId === "string" ? value.traceId.trim() : "";
+  if (!routineId || !routineRunId) {
+    throw new SandboxActorTokenError(
+      "routineContext requires routineId and routineRunId",
+    );
+  }
+  return {
+    routineId,
+    routineRunId,
+    ...(traceId ? { traceId } : {}),
+  };
+}
+
+function normalizeRoutineCapabilities(
+  value: RoutineActorCapabilityScope[] | null | undefined,
+): RoutineActorCapabilityScope[] {
+  if (!Array.isArray(value)) return [];
+  const byPair = new Map<string, RoutineActorCapabilityScope>();
+  for (const capability of value) {
+    const appId = typeof capability?.app_id === "string"
+      ? capability.app_id.trim()
+      : "";
+    const appRef = typeof capability?.app_ref === "string"
+      ? capability.app_ref.trim()
+      : "";
+    const functionName = typeof capability?.function_name === "string"
+      ? capability.function_name.trim()
+      : "";
+    if ((!appId && !appRef) || !functionName) continue;
+    const normalized: RoutineActorCapabilityScope = {
+      app_id: appId || null,
+      app_ref: appRef || null,
+      function_name: functionName,
+      access: capability.access === "write" ? "write" : "read",
+      required: capability.required !== false,
+      ...(capability.constraints && typeof capability.constraints === "object"
+        ? { constraints: capability.constraints }
+        : {}),
+      ...(capability.pricing_snapshot &&
+          typeof capability.pricing_snapshot === "object"
+        ? { pricing_snapshot: capability.pricing_snapshot }
+        : {}),
+      ...(capability.metadata && typeof capability.metadata === "object"
+        ? { metadata: capability.metadata }
+        : {}),
+    };
+    byPair.set(`${appId}\u0000${appRef}\u0000${functionName}`, normalized);
+  }
+  return Array.from(byPair.values());
 }
 
 export async function createSandboxActorToken(
@@ -172,11 +250,33 @@ export async function createSandboxActorToken(
     );
   }
 
+  const routineContext = normalizeRoutineContext(input.routineContext);
+  const routineCapabilities = normalizeRoutineCapabilities(
+    input.routineCapabilities,
+  );
+  if (!routineContext && routineCapabilities.length > 0) {
+    throw new SandboxActorTokenError(
+      "routineCapabilities require a routineContext",
+    );
+  }
   const allowedAppIds = input.allowedAppIds;
-  const unrestricted = allowedAppIds == null || allowedAppIds.includes("*");
-  const appIds = unrestricted
+  const unrestricted = !routineContext &&
+    (allowedAppIds == null || allowedAppIds.includes("*"));
+  const appIds = routineContext
+    ? dedupe([
+      appId,
+      ...routineCapabilities.flatMap((capability) =>
+        [capability.app_id, capability.app_ref].filter(
+          (value): value is string => !!value,
+        )
+      ),
+    ])
+    : unrestricted
     ? ["*"]
-    : dedupe([appId, ...allowedAppIds]);
+    : dedupe([appId, ...(allowedAppIds ?? [])]);
+  const functionNames = routineContext
+    ? dedupe(routineCapabilities.map((capability) => capability.function_name))
+    : ["*"];
 
   const scopes = dedupe(
     input.scopes && input.scopes.length > 0 ? input.scopes : DEFAULT_SCOPES,
@@ -203,8 +303,20 @@ export async function createSandboxActorToken(
     provisional: input.user.provisional === true,
     app_id: appId,
     app_ids: appIds,
-    function_names: ["*"],
+    // Routine tokens carry a separate exact-pair ceiling. This flattened list
+    // remains diagnostic only and deliberately never widens to '*'.
+    function_names: functionNames.length > 0 ? functionNames : ["__none__"],
     scopes,
+    ...(routineContext
+      ? {
+        routine_id: routineContext.routineId,
+        routine_run_id: routineContext.routineRunId,
+        ...(routineContext.traceId
+          ? { trace_id: routineContext.traceId }
+          : {}),
+        routine_capabilities: routineCapabilities,
+      }
+      : {}),
     iat: nowSec,
     exp: nowSec + ttl,
   };
@@ -224,6 +336,24 @@ function isStringArray(value: unknown): value is string[] {
     value.every((item) => typeof item === "string" && !!item.trim());
 }
 
+function isRoutineCapabilityArray(
+  value: unknown,
+): value is RoutineActorCapabilityScope[] {
+  return Array.isArray(value) && value.every((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const capability = item as Record<string, unknown>;
+    const hasAppId = typeof capability.app_id === "string" &&
+      !!capability.app_id.trim();
+    const hasAppRef = typeof capability.app_ref === "string" &&
+      !!capability.app_ref.trim();
+    return (hasAppId || hasAppRef) &&
+      typeof capability.function_name === "string" &&
+      !!capability.function_name.trim() &&
+      (capability.access === "read" || capability.access === "write") &&
+      typeof capability.required === "boolean";
+  });
+}
+
 function parseClaims(value: unknown): SandboxActorTokenClaims | null {
   if (!value || typeof value !== "object") return null;
   const c = value as Record<string, unknown>;
@@ -240,6 +370,30 @@ function parseClaims(value: unknown): SandboxActorTokenClaims | null {
     return null;
   }
   if (!isStringArray(c.scopes) || c.scopes.length === 0) return null;
+  const hasRoutineId = Object.hasOwn(c, "routine_id");
+  const hasRoutineRunId = Object.hasOwn(c, "routine_run_id");
+  const hasTraceId = Object.hasOwn(c, "trace_id");
+  const hasRoutineCapabilities = Object.hasOwn(c, "routine_capabilities");
+  // Routine attribution is one signed unit. Reject partial claims instead of
+  // silently downgrading them to a non-routine call (which would lose spend and
+  // receipt attribution downstream).
+  if (hasRoutineId !== hasRoutineRunId) return null;
+  if (hasTraceId && !hasRoutineId) return null;
+  if (hasRoutineCapabilities && !hasRoutineId) return null;
+  if (
+    hasRoutineId &&
+    (typeof c.routine_id !== "string" || !c.routine_id.trim() ||
+      typeof c.routine_run_id !== "string" || !c.routine_run_id.trim())
+  ) {
+    return null;
+  }
+  if (hasTraceId && (typeof c.trace_id !== "string" || !c.trace_id.trim())) {
+    return null;
+  }
+  if (
+    hasRoutineCapabilities &&
+    !isRoutineCapabilityArray(c.routine_capabilities)
+  ) return null;
   if (typeof c.iat !== "number" || !Number.isFinite(c.iat)) return null;
   if (typeof c.exp !== "number" || !Number.isFinite(c.exp)) return null;
   return c as unknown as SandboxActorTokenClaims;
@@ -308,6 +462,9 @@ export async function mintSandboxAuthToken(opts: {
   executionId?: string;
   hasBroadCallPermission: boolean;
   dependencyAppIds: string[];
+  /** Trusted host context only; never sourced from app arguments. */
+  routineContext?: RoutineTraceContext | null;
+  routineCapabilities?: RoutineActorCapabilityScope[] | null;
 }): Promise<string | null> {
   if (!opts.user?.id || !opts.user?.email) return null;
   const allowedAppIds = opts.hasBroadCallPermission
@@ -319,6 +476,8 @@ export async function mintSandboxAuthToken(opts: {
       appId: opts.appId,
       allowedAppIds,
       executionId: opts.executionId,
+      routineContext: opts.routineContext,
+      routineCapabilities: opts.routineCapabilities,
     });
     return token;
   } catch (err) {

@@ -5,7 +5,6 @@ import {
   getRoutine,
   listRoutines,
   pauseRoutine,
-  resumeRoutine,
   type RoutineCapabilityRow,
   type RoutineRunRow,
   type RoutineRunStatus,
@@ -13,6 +12,7 @@ import {
   type RoutineSummary,
   type StoredRoutine,
 } from "./routines.ts";
+import { executeRoutinePlatformAction } from "./routine-platform.ts";
 
 interface RoutineCapabilityStatusRow {
   routine_id: string;
@@ -547,7 +547,10 @@ export async function updateRoutineMonitorStatus(
   if (action === "pause" || status === "paused") {
     await pauseRoutine(userId, routineId);
   } else if (action === "resume" || status === "active") {
-    await resumeRoutine(userId, routineId);
+    await executeRoutinePlatformAction(userId, {
+      action: "resume",
+      routine_id: routineId,
+    });
   } else {
     throw new Error(
       "action must be pause/resume or status must be active/paused",
@@ -565,10 +568,10 @@ export async function queueRoutineMonitorRun(
 ): Promise<{ queued: true; run: RoutineRunRow; routine: RoutineMonitorItem }> {
   const detail = await getRoutineMonitorDetail(userId, routineId);
   if (!detail) throw new Error(`Routine ${routineId} not found`);
-  if (
-    detail.routine.status === "deleted" || detail.routine.status === "disabled"
-  ) {
-    throw new Error(`Routine ${routineId} is ${detail.routine.status}`);
+  if (detail.routine.status !== "active") {
+    throw new Error(
+      `Routine ${routineId} is ${detail.routine.status}; only an active, owner-approved routine can run now`,
+    );
   }
 
   const run = await createRoutineRun({

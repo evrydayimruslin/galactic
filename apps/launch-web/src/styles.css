@@ -3501,6 +3501,194 @@ button {
   font-size: 12.5px;
 }
 
+.routine-config-grid,
+.routine-budget-grid,
+.routine-timing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.routine-budget-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.routine-budget-label {
+  margin: 2px 0 8px;
+}
+
+.routine-budget-note {
+  margin-top: 8px;
+}
+
+.routine-readonly-field {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.routine-readonly-field > span {
+  color: var(--ul-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.routine-readonly-field > strong {
+  min-height: 38px;
+  padding: 9px 12px;
+  border: 1px solid var(--ul-border);
+  border-radius: 8px;
+  background: var(--ul-raised);
+  font-size: 13px;
+}
+
+.routine-operations-card {
+  display: grid;
+  gap: 16px;
+  border-color: var(--ul-green);
+}
+
+.routine-operation-head,
+.routine-actions,
+.routine-state-pills,
+.routine-capability-state,
+.routine-run-row > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.routine-operation-head {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.routine-operation-head .section-label {
+  margin-bottom: 7px;
+}
+
+.routine-timing-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.routine-stop-reason {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.07);
+  color: var(--ul-amber-deep);
+  font-size: 12.5px;
+}
+
+.routine-blockers,
+.routine-capability-section {
+  display: grid;
+  gap: 8px;
+}
+
+.routine-blockers > div {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.04);
+  color: var(--ul-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.routine-capability-list,
+.routine-run-list {
+  display: grid;
+  gap: 8px;
+}
+
+.routine-capability-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 11px;
+  border: 1px solid var(--ul-border);
+  border-radius: 8px;
+}
+
+.routine-capability-row > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.routine-capability-row > div:first-child > span:not(.mono) {
+  color: var(--ul-muted);
+  font-size: 11.5px;
+}
+
+.routine-run-row {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--ul-border);
+}
+
+.routine-run-row:last-child {
+  border-bottom: 0;
+}
+
+.routine-run-row > span {
+  overflow: hidden;
+  color: var(--ul-secondary);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .routine-budget-grid,
+  .routine-timing-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .routine-operation-head,
+  .routine-capability-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .routine-run-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .routine-run-row > span {
+    grid-column: 1 / -1;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 560px) {
+  .routine-config-grid,
+  .routine-budget-grid,
+  .routine-timing-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .routine-actions,
+  .routine-capability-state {
+    flex-wrap: wrap;
+  }
+
+  .routine-blockers > div {
+    grid-template-columns: 1fr;
+  }
+}
+
 .owned-tool-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

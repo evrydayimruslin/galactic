@@ -1,7 +1,12 @@
 # Launch Pivot Decisions
 
 Decided: 2026-06-10
-Status: ACTIVE — this document supersedes conflicting statements in
+Status: HISTORICAL — superseded on 2026-07-14 by the persistent-Agent contract in
+[LAUNCH_MVP_SCOPE.md](LAUNCH_MVP_SCOPE.md). This file preserves the earlier
+marketplace-first pivot and its implementation history; it must not be used as
+the active launch product or authorization contract.
+
+This document previously superseded conflicting statements in
 [LAUNCH_SITE_UPGRADES_IMPLEMENTATION_ROADMAP.md](LAUNCH_SITE_UPGRADES_IMPLEMENTATION_ROADMAP.md),
 [LAUNCH_NEXT_STEPS_PR_ROADMAP.md](LAUNCH_NEXT_STEPS_PR_ROADMAP.md),
 [LAUNCH_SCORECARD.md](LAUNCH_SCORECARD.md), and

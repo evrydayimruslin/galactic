@@ -5,13 +5,16 @@ import {
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 
 import {
+  approveRoutineCapabilities,
   createRoutine,
   createRoutineRun,
   listRoutines,
   normalizeRoutineCreateInput,
   recordRoutineRunStep,
   routineCapabilitiesFromManifest,
+  updateRoutine,
   updateRoutineRun,
+  validateRoutineActivation,
 } from "./routines.ts";
 
 function jsonResponse(value: unknown): Response {
@@ -114,6 +117,187 @@ Deno.test("routines: normalizes schedules, capability fan-out, and manifest capa
     Error,
     "access",
   );
+});
+
+Deno.test("routines: activation fails closed on required pending capabilities and materializes safe budgets", () => {
+  const validation = validateRoutineActivation({
+    schedule: { type: "interval", every_minutes: 5 },
+    budget_policy: {},
+    capabilities: [{
+      id: "cap-1",
+      required: true,
+      approved: false,
+    }] as never,
+  });
+  assertEquals(validation.budgetPolicy, {
+    max_light_per_run: 10,
+    max_light_per_day: 100,
+    max_light_per_month: 1000,
+    max_calls_per_run: 25,
+  });
+  assertEquals(validation.blockers[0].code, "pending_required_capabilities");
+
+  const unsafe = validateRoutineActivation({
+    schedule: { type: "interval", every_seconds: 30 },
+    budget_policy: {
+      max_light_per_run: 100,
+      max_light_per_day: 10,
+      max_light_per_month: 5,
+      max_calls_per_run: 0,
+    },
+    capabilities: [],
+  });
+  assertEquals(
+    unsafe.blockers.map((blocker) => blocker.code),
+    ["unsafe_cadence", "invalid_budget"],
+  );
+});
+
+Deno.test("routines: account session can approve exact capability ids", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  let approved = false;
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-key",
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    const method = init?.method || "GET";
+    if (url.includes("/user_routines?") && method === "GET") {
+      return jsonResponse([routineRow({
+        user_id: "user-1",
+        template_id: "primary",
+        name: "Primary",
+        handler_function: "run",
+        schedule: { type: "interval", every_minutes: 5 },
+        budget_policy: {},
+        approval_policy: {},
+      })]);
+    }
+    if (url.includes("/routine_capabilities?") && method === "GET") {
+      return jsonResponse([{
+        id: "cap-1",
+        routine_id: "routine-1",
+        user_id: "user-1",
+        app_id: null,
+        app_ref: "crm",
+        function_name: "write",
+        access: "write",
+        required: true,
+        purpose: null,
+        approved,
+        approved_at: approved ? "2026-07-14T12:00:00Z" : null,
+        approved_by_user_id: approved ? "user-1" : null,
+        pricing_snapshot: {},
+        constraints: {},
+        metadata: {},
+        created_at: "2026-07-14T12:00:00Z",
+        updated_at: "2026-07-14T12:00:00Z",
+      }]);
+    }
+    if (url.includes("/routine_capabilities?") && method === "PATCH") {
+      assertEquals(url.includes("id=in.(cap-1)"), true);
+      approved = true;
+      return jsonResponse([]);
+    }
+    if (url.includes("/routine_dashboard_bindings?")) return jsonResponse([]);
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    const routine = await approveRoutineCapabilities(
+      "user-1",
+      "routine-1",
+      ["cap-1"],
+    );
+    assertEquals(routine.capabilities[0].approved, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
+});
+
+Deno.test("routines: user metadata updates cannot erase server accounting or provenance", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  const authoritativeMetadata = {
+    budget_spend: { day: "2026-07-14", day_light: 41 },
+    auto_pause: { reason: "budget_run_exceeded" },
+    source: "ul.routine",
+    launch_primary: true,
+    approval_source: "account_session",
+    user_note: "keep me",
+  };
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-key",
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    const method = init?.method || "GET";
+    const body = init?.body
+      ? JSON.parse(String(init.body)) as Record<string, unknown>
+      : {};
+    if (url.includes("/user_routines?") && method === "PATCH") {
+      assertEquals("metadata" in body, false);
+      return jsonResponse([routineRow({
+        user_id: "user-1",
+        template_id: "primary",
+        name: "Primary",
+        handler_function: "run",
+        schedule: { type: "interval", every_minutes: 5 },
+        budget_policy: {},
+        approval_policy: {},
+        metadata: authoritativeMetadata,
+      })]);
+    }
+    if (url.includes("/rpc/merge_routine_user_metadata")) {
+      assertEquals(body.p_metadata, {
+        user_note: "updated",
+        tenant_flag: true,
+      });
+      return jsonResponse([routineRow({
+        user_id: "user-1",
+        template_id: "primary",
+        name: "Primary",
+        handler_function: "run",
+        schedule: { type: "interval", every_minutes: 5 },
+        budget_policy: {},
+        approval_policy: {},
+        metadata: {
+          ...authoritativeMetadata,
+          user_note: "updated",
+          tenant_flag: true,
+        },
+      })]);
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const routine = await updateRoutine("user-1", "routine-1", {
+      metadata: {
+        budget_spend: { day_light: 0 },
+        auto_pause: null,
+        source: "spoofed",
+        launch_primary: false,
+        approval_source: "self_approved",
+        user_note: "updated",
+        tenant_flag: true,
+      },
+    });
+    assertEquals(routine.metadata, {
+      ...authoritativeMetadata,
+      user_note: "updated",
+      tenant_flag: true,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
 });
 
 Deno.test("routines: creates routine instances with capabilities and dashboard bindings", async () => {
@@ -302,6 +486,12 @@ Deno.test("routines: records runs, steps, and terminal run status", async () => 
     });
 
     assertEquals(run.status, "running");
+    assertEquals(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        .test(run.trace_id || ""),
+      true,
+      "new runs receive a server-minted trace id",
+    );
     assertEquals(step.status, "succeeded");
     assertEquals(step.cost_light, 2.5);
     assertEquals(completed.status, "succeeded");

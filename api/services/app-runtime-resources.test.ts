@@ -186,6 +186,49 @@ Deno.test("app runtime resources: runtime env reports missing required per-user 
   );
 });
 
+Deno.test("app runtime resources: undeclared dormant secret rows never enter runtime bindings", async () => {
+  const decrypted: string[] = [];
+  const result = await resolveAppRuntimeEnvVars(
+    {
+      id: "app-123",
+      env_vars: {},
+      env_schema: {
+        ACTIVE_TOKEN: {
+          scope: "per_user",
+          input: "password",
+          required: true,
+        },
+      },
+      manifest: null,
+    },
+    "user-123",
+    {
+      decryptEnvVarsFn: async () => ({}),
+      decryptEnvVarFn: async (value: string) => {
+        decrypted.push(value);
+        return `plain:${value}`;
+      },
+      fetchFn: async () =>
+        new Response(
+          JSON.stringify([
+            { key: "ACTIVE_TOKEN", value_encrypted: "active" },
+            { key: "REMOVED_TOKEN", value_encrypted: "dormant" },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      supabaseUrl: "https://supabase.example",
+      supabaseServiceRoleKey: "service-role",
+    },
+  );
+
+  assertEquals(decrypted, ["active"]);
+  assertEquals(result.credentials, {
+    ACTIVE_TOKEN: { value: "plain:active", credential: undefined },
+  });
+  assertEquals(result.envVars, {});
+  assertEquals(result.missingRequiredSecrets, []);
+});
+
 Deno.test("app runtime resources: Supabase config prefers config_id before legacy fallbacks", async () => {
   const calls: string[] = [];
   const telemetry: Array<Record<string, unknown>> = [];

@@ -123,6 +123,20 @@ Deno.test("request auth: accepts scoped routine actor bearer tokens", async () =
       "log_lead",
     ]);
     assertEquals(authUser.scopes, ["apps:call"]);
+    assertEquals(authUser.routineContext, {
+      routineId: "routine-1",
+      routineRunId: "run-1",
+      traceId: "trace-1",
+    });
+    assertEquals(authUser.routineCapabilityCeiling, [
+      {
+        app_id: "crm-app-id",
+        app_ref: "crm",
+        function_name: "log_lead",
+        access: "write",
+        required: true,
+      },
+    ]);
     assertEquals(authUser.routineActor, {
       tokenId: "token-1",
       routineId: "routine-1",

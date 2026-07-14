@@ -21,6 +21,7 @@
 // Modeled on ai-spend-tracker.ts (same lifecycle + bounded TTL sweep backstop).
 
 import type { RuntimeConfig } from "../runtime/sandbox.ts";
+import type { RoutineTraceContext } from "./routine-trace.ts";
 
 export interface ExecutionContextEntry {
   /** The execution id the AI-spend ledger (ai-spend-tracker.ts) is keyed by. */
@@ -43,6 +44,8 @@ export interface ExecutionContextEntry {
    * isolate's frozen props (a stale hop would defeat the hop ceiling).
    */
   callerContextToken: string | null;
+  /** Server-authenticated routine identity for per-AI-call budget admission. */
+  routineContext?: RoutineTraceContext | null;
 }
 
 const registry = new Map<string, ExecutionContextEntry & { at: number }>();
@@ -86,6 +89,7 @@ export function resolveExecutionContext(
     cloudOperationMetering: entry.cloudOperationMetering,
     cloudOperationBillingConfig: entry.cloudOperationBillingConfig,
     callerContextToken: entry.callerContextToken,
+    routineContext: entry.routineContext ?? null,
   };
 }
 

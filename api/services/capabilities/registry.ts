@@ -196,6 +196,7 @@ const CAPABILITIES: Capability[] = [
     title: "Deploy code or publish a page",
     description: "Deploy code or publish a markdown page. " +
       'type="app" (default): deploy source code. No app_id = new app, with app_id = new version. ' +
+      "Connected API keys must pass the short-lived test_attestation from a successful gx.test of the exact same files. " +
       "Re-uploading files byte-identical to the live version is a no-op (returns " +
       "deduplicated:true, no new version) unless you pass an explicit version. " +
       'type="page": publish markdown as a live web page.',
@@ -252,6 +253,11 @@ const CAPABILITIES: Capability[] = [
           type: "string",
           description: "Explicit version. Default: patch bump.",
         },
+        test_attestation: {
+          type: "string",
+          description:
+            "Opaque short-lived proof returned by a successful gx.test of this exact decoded file set. Required for connected API-key uploads; account-session uploads may omit it.",
+        },
         // page fields
         content: {
           type: "string",
@@ -295,7 +301,8 @@ const CAPABILITIES: Capability[] = [
     title: "Test code in a sandbox",
     description:
       "Test and validate code in a real sandbox without deploying. " +
-      "Runs lint automatically before executing. Use lint_only=true to validate without running.",
+      "Runs lint automatically before executing. A successful zero-error run returns the short-lived source-bound attestation required by connected-key uploads. " +
+      "Use lint_only=true to validate without running or issuing an attestation.",
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -315,6 +322,12 @@ const CAPABILITIES: Capability[] = [
                 description: 'Relative file path (e.g. "index.ts")',
               },
               content: { type: "string", description: "File content" },
+              encoding: {
+                type: "string",
+                enum: ["text", "base64"],
+                description:
+                  "Default: text. Base64 is decoded before testing and source hashing.",
+              },
             },
             required: ["path", "content"],
           },
@@ -954,13 +967,13 @@ const CAPABILITIES: Capability[] = [
         extra_capabilities: {
           type: "array",
           description:
-            "Additional approved/downstream capabilities beyond the template default.",
+            "Additional proposed downstream capabilities beyond the template default. They remain pending until the account owner approves them.",
           items: { type: "object", additionalProperties: true },
         },
         approve_capabilities: {
           type: "boolean",
           description:
-            "Set true after user approval to mark requested routine capabilities approved for durable execution.",
+            "Deprecated input. Connected callers cannot approve capabilities; approval requires the authenticated account-session endpoint.",
         },
         dashboard_bindings: {
           type: "array",
@@ -971,7 +984,7 @@ const CAPABILITIES: Capability[] = [
         activate: {
           type: "boolean",
           description:
-            "For create: resume immediately after creation. Requires approve_capabilities=true when capabilities exist.",
+            "For create: request immediate activation. Account-session authorization is required, and all required capabilities must already be owner-approved.",
         },
         status: {
           type: "string",
@@ -1008,11 +1021,12 @@ const CAPABILITIES: Capability[] = [
       required: ["action"],
     },
     auth: {},
-    // Autonomous scheduled/interval agent runs (the routine executor dispatches
-    // due ones every minute). Demoted — money/side-effecting, not in the lean
-    // tools/list. MCP + CLI: `galactic routine <action>` proxies this.
+    // Persistent routines are the launch product, so their bounded proposal /
+    // inspection surface belongs in the lean tools/list. Action-level policy
+    // still reserves capability approval, activation, and execution for the
+    // authenticated owner session.
     surfaces: ["mcp", "cli"],
-    coreTool: false,
+    coreTool: true,
     cli: { command: "routine" },
     // Handler bound at load from platform-mcp (executeRoutinePlatformAction).
   },

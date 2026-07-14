@@ -87,12 +87,14 @@ import { getManifestAllowedDestinations } from "../services/trust.ts";
 import { parseAppManifest } from "../services/app-settings.ts";
 import {
   ANONYMOUS_USER_ID,
+  callerCanInvokeMcpTool,
   callerHasAppAccess,
   callerHasFunctionAccess,
   callerHasRequiredScope,
   callerUsesApiToken,
   callerUsesRoutineActorToken,
   callerUsesSandboxActorToken,
+  callerWithinRoutineCapabilityCeiling,
   type RequestCallerContext,
   resolveRequestCallerContext,
   deriveCallerEconomicState,
@@ -1638,7 +1640,42 @@ async function handleToolsCall(
 
   const { name, arguments: args } = callParams;
 
-  // Check if it's an SDK tool (always allowed) — supports both ultralight.* and ul.* prefixes
+  if (!callerCanInvokeMcpTool(callerContext, name)) {
+    return jsonRpcErrorResponse(
+      id,
+      -32003,
+      "Routine and sandbox actors cannot invoke synthetic SDK tools over MCP; use the manifest-permissioned in-sandbox binding.",
+      {
+        type: "ACTOR_SDK_TOOL_FORBIDDEN",
+        functionName: name,
+      },
+    );
+  }
+
+  const rawName = toRawMcpFunctionName(app.slug, name);
+  const functionAliases = getMcpFunctionNameAliases(app.slug, name);
+  if (
+    !callerWithinRoutineCapabilityCeiling(
+      callerContext,
+      [app.id, app.slug],
+      [rawName, ...functionAliases],
+    )
+  ) {
+    return jsonRpcErrorResponse(
+      id,
+      -32003,
+      `Routine is not approved to call '${rawName}' on this Agent.`,
+      {
+        type: "ROUTINE_CAPABILITY_REQUIRED",
+        targetAppId: app.id,
+        functionName: rawName,
+      },
+    );
+  }
+
+  // Legacy SDK-tool dispatch is available only to non-actor callers. Signed
+  // routine/sandbox actors were rejected above and must use the manifest-bound
+  // in-sandbox capabilities instead.
   if (name.startsWith("ultralight.") || name.startsWith("ul.")) {
     return await executeSDKTool(
       id,
@@ -1654,11 +1691,11 @@ async function handleToolsCall(
   }
 
   // Token function scoping: if the API token restricts callable functions, enforce it
-  const rawName = toRawMcpFunctionName(app.slug, name);
   if (
+    !callerContext.routineContext &&
     !callerHasFunctionAccess(
       callerContext,
-      getMcpFunctionNameAliases(app.slug, name),
+      functionAliases,
     )
   ) {
     const scopedFunctions = callerContext.tokenFunctionNames?.join(", ") ||
@@ -1973,6 +2010,7 @@ async function handleToolsCall(
       widgetAction,
       agenticSurfaceAction,
       routineContext: routineTraceContextFromCaller(callerContext),
+      routineCapabilityCeiling: callerContext.routineCapabilityCeiling,
       // Cross-Agent attribution: the grant authorizing this call (for spend
       // accounting) and the inbound hop (so this Agent's own sub-calls mint a
       // token at hop + 1).
@@ -2116,6 +2154,7 @@ async function executeSDKTool(
         try {
           const runtimeAI = await createRuntimeAIContext(callerContext.user, {
             freeMode: callerContext.freeMode,
+            routineContext: routineTraceContextFromCaller(callerContext),
           });
           result = await runtimeAI.aiService.call({
             messages: aiMessages,
@@ -2326,10 +2365,24 @@ async function handleGpuExecution(
     widgetAction?: WidgetActionCallMetadata;
     agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
     routineContext?: RoutineTraceContext;
+    routineCapabilityCeiling?: RequestCallerContext["routineCapabilityCeiling"];
     callerAppId?: string | null;
     callChainDepth?: number | null;
   },
 ): Promise<Response> {
+  if (meta?.routineContext) {
+    return jsonRpcErrorResponse(
+      id,
+      -32009,
+      "GPU functions are unavailable to routines until hard pre-execution GPU budget admission is configured.",
+      {
+        type: "ROUTINE_GPU_BUDGET_UNAVAILABLE",
+        app_id: app.id,
+        function_name: functionName,
+      },
+    );
+  }
+
   if (!isGpuSupportEnabled()) {
     return jsonRpcErrorResponse(
       id,
@@ -2438,6 +2491,7 @@ async function executeAppFunction(
     widgetAction?: WidgetActionCallMetadata;
     agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
     routineContext?: RoutineTraceContext;
+    routineCapabilityCeiling?: RequestCallerContext["routineCapabilityCeiling"];
     callerGrantId?: string | null;
     incomingHop?: number;
     // Skip the durable async dispatch: event-bus deliveries and queue-consumer
@@ -2684,6 +2738,7 @@ async function executeAppFunction(
         freeMode: callerContext.freeMode,
         inferenceSelection,
         attribution: { appId: app.id, functionName },
+        routineContext: meta?.routineContext ?? null,
       })
       : {
         route: null,
@@ -2900,6 +2955,8 @@ async function executeAppFunction(
       authToken: meta?.authToken,
       appCallDependencies,
       callerContextToken,
+      routineContext: meta?.routineContext,
+      routineCapabilityCeiling: meta?.routineCapabilityCeiling,
       slotBindings,
       workerSecret: getEnv("WORKER_SECRET") || undefined,
       timeoutMs,

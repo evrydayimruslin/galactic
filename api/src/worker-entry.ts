@@ -39,6 +39,11 @@ export { EmbedBinding } from './bindings/embed-binding.ts';
 export { MemoryBinding } from './bindings/memory-binding.ts';
 export { RunsBinding } from './bindings/runs-binding.ts';
 export { NotifyBinding } from './bindings/notify-binding.ts';
+export {
+  TestAIBinding,
+  TestEmbedBinding,
+  TestNotifyBinding,
+} from './bindings/test-runtime-bindings.ts';
 export { NetworkBinding } from './bindings/network-binding.ts';
 export { EventsBinding } from './bindings/events-binding.ts';
 export { OutboundBinding } from './bindings/outbound-binding.ts';

@@ -132,6 +132,87 @@ function privateOwnerTestApp(): Record<string, unknown> {
   };
 }
 
+function persistentRoutineRow(): Record<string, unknown> {
+  return {
+    id: 'routine-1',
+    user_id: 'user-1',
+    composer_app_id: 'app-private-1',
+    composer_app_slug: 'private-helper',
+    template_id: 'monitor',
+    template_version: 'v1',
+    name: 'Private monitor',
+    description: 'Checks the private system',
+    intent: 'Watch the private system and report meaningful changes.',
+    handler_function: 'inspect',
+    status: 'paused',
+    schedule: { type: 'interval', every_seconds: 300 },
+    config: { secret_value: 'must-not-leak' },
+    budget_policy: {
+      max_light_per_run: 10,
+      max_light_per_day: 50,
+      max_light_per_month: 500,
+      max_calls_per_run: 12,
+    },
+    approval_policy: { require_user_approval: true },
+    max_concurrency: 1,
+    next_run_at: null,
+    last_run_at: '2026-07-14T12:00:00.000Z',
+    last_success_at: null,
+    last_error_at: '2026-07-14T12:00:00.000Z',
+    failure_count: 1,
+    created_by_trace_id: 'trace-created',
+    metadata: {
+      secret_value: 'must-not-leak',
+      auto_pause: { reason: 'consecutive_failures' },
+    },
+    created_at: '2026-07-14T10:00:00.000Z',
+    updated_at: '2026-07-14T12:00:00.000Z',
+    deleted_at: null,
+  };
+}
+
+function persistentRoutineCapabilityRow(): Record<string, unknown> {
+  return {
+    id: 'capability-1',
+    routine_id: 'routine-1',
+    user_id: 'user-1',
+    app_id: 'app-private-1',
+    app_ref: 'private-helper',
+    function_name: 'inspect',
+    access: 'read',
+    required: true,
+    purpose: 'Read current private status',
+    approved: false,
+    approved_at: null,
+    approved_by_user_id: null,
+    pricing_snapshot: {},
+    constraints: {},
+    metadata: {},
+    created_at: '2026-07-14T10:00:00.000Z',
+    updated_at: '2026-07-14T10:00:00.000Z',
+  };
+}
+
+function persistentRoutineRunRow(): Record<string, unknown> {
+  return {
+    id: 'run-1',
+    routine_id: 'routine-1',
+    user_id: 'user-1',
+    status: 'failed',
+    trigger: 'scheduled',
+    trace_id: 'trace-run',
+    started_at: '2026-07-14T11:59:00.000Z',
+    completed_at: '2026-07-14T12:00:00.000Z',
+    duration_ms: 60_000,
+    total_light: 2,
+    summary: 'Inbox delivery did not complete.',
+    error: { code: 'inbox_unavailable', message: 'must-not-leak' },
+    run_config: { secret_value: 'must-not-leak' },
+    metadata: { secret_value: 'must-not-leak' },
+    created_at: '2026-07-14T11:59:00.000Z',
+  };
+}
+
 // Legacy-format API token (plaintext column) so the api_token auth path can be
 // exercised without reproducing salted-hash material in tests.
 const TEST_API_TOKEN = `ul_${'a'.repeat(32)}`;
@@ -265,15 +346,18 @@ Deno.test('launch facade: install instructions expose MCP and CLI targets', asyn
       promptInstruction?.configText || '',
       '"Authorization":"Bearer $GALACTIC_API_KEY"',
     );
-    // First-contact UX: the prompt must drive a real orientation (build+deploy,
-    // not "a few lines") rather than a terse capability list.
+    // First-contact UX: the prompt must drive the private persistent-Agent
+    // conjuring flow and stop at the owner activation boundary.
     assertStringIncludes(
       promptInstruction?.configText || '',
-      'build and deploy new Agents',
+      'one useful full-time Agent',
     );
-    assertStringIncludes(promptInstruction?.configText || '', 'not a few lines');
+    assertStringIncludes(
+      promptInstruction?.configText || '',
+      'explicit review of capabilities',
+    );
     assertEquals(
-      (promptInstruction?.configText || '').includes('in a few lines what you can now do'),
+      (promptInstruction?.configText || '').includes('public marketplace'),
       false,
     );
     const apiInstruction = body.instructions.find((instruction) => instruction.target === 'api');
@@ -448,11 +532,16 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
       endpoints: Record<string, string | undefined>;
       compatibilityPublicRoutes: string[];
       capabilities: { included: string[]; deferred: string[] };
+      policy: {
+        access: string;
+        activationAuthority: string;
+        budgetEnforcement: string;
+      };
     };
 
     assertEquals(response.status, 200);
     assertEquals(body.available, true);
-    assertEquals(body.version, 'launch-mvp-v1');
+    assertEquals(body.version, 'persistent-agent-mvp-v1');
     assertEquals(body.endpoints.openapi, '/api/launch/openapi.json');
     assertEquals(body.endpoints.mcpPlatform, '/mcp/platform');
     assertEquals(body.compatibilityPublicRoutes.includes('/discover'), true);
@@ -573,10 +662,14 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
       body.endpoints.walletEarnings,
       '/api/launch/wallet/earnings?agent={agentId}&limit=25&cursor={cursor}',
     );
-    assertEquals(body.capabilities.deferred.includes('desktop'), true);
-    assertEquals(body.capabilities.included.includes('credits_wallet'), true);
+    assertEquals(body.policy.access, 'private_owner_only');
+    assertEquals(body.policy.activationAuthority, 'account_session');
+    assertEquals(body.policy.budgetEnforcement, 'hard_pre_execution');
+    assertEquals(body.capabilities.deferred.includes('marketplace'), true);
+    assertEquals(body.capabilities.included.includes('credits_balance'), true);
+    assertEquals(body.capabilities.included.includes('full_time_routines'), true);
     assertEquals(body.capabilities.included.includes('byok'), true);
-    assertEquals(body.capabilities.included.includes('light_wallet'), false);
+    assertEquals(body.capabilities.included.includes('credits_wallet'), false);
     assertEquals(body.capabilities.deferred.includes('byok'), false);
   });
 });
@@ -667,7 +760,7 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
     assertEquals(Boolean(spec.components?.schemas?.ByokMutation), true);
     assertEquals(Boolean(spec.components?.schemas?.InferenceOptions), true);
     assertEquals(
-      spec['x-launch-scope']?.deferredCapabilities?.includes('desktop'),
+      spec['x-launch-scope']?.deferredCapabilities?.includes('marketplace'),
       true,
     );
     assertEquals(
@@ -950,6 +1043,190 @@ Deno.test('launch facade: owners can preview private tools', async () => {
             avatar_url: null,
           },
         ]);
+      }
+      return jsonResponse([]);
+    },
+  );
+});
+
+Deno.test('launch facade: owner routine overview is live, bounded, and secret-free', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request(
+          'https://ultralight.test/api/launch/agents/private-helper/routine',
+          { headers: { Authorization: 'Bearer browser-session-token' } },
+        ),
+      );
+      const body = await response.json() as {
+        routine?: {
+          mission?: string;
+          intervalSeconds?: number;
+          budgets?: Record<string, number>;
+          capabilities?: Array<{ id: string; approved: boolean }>;
+          blockers?: Array<{ code: string; capabilityIds?: string[] }>;
+          autoPauseReason?: string | null;
+          recentRuns?: Array<{ errorCode?: string | null }>;
+        } | null;
+      };
+
+      assertEquals(response.status, 200);
+      assertEquals(
+        body.routine?.mission,
+        'Watch the private system and report meaningful changes.',
+      );
+      assertEquals(body.routine?.intervalSeconds, 300);
+      assertEquals(body.routine?.budgets, {
+        maxLightPerRun: 10,
+        maxLightPerDay: 50,
+        maxLightPerMonth: 500,
+        maxCallsPerRun: 12,
+      });
+      assertEquals(body.routine?.capabilities, [{
+        id: 'capability-1',
+        appId: 'app-private-1',
+        appRef: 'private-helper',
+        functionName: 'inspect',
+        access: 'read',
+        required: true,
+        purpose: 'Read current private status',
+        approved: false,
+        approvedAt: null,
+      }]);
+      assertEquals(body.routine?.blockers?.[0]?.code, 'pending_required_capabilities');
+      assertEquals(body.routine?.blockers?.[0]?.capabilityIds, ['capability-1']);
+      assertEquals(body.routine?.autoPauseReason, 'consecutive_failures');
+      assertEquals(body.routine?.recentRuns?.[0]?.errorCode, 'inbox_unavailable');
+      const serialized = JSON.stringify(body);
+      assertEquals(serialized.includes('must-not-leak'), false);
+      assertEquals(serialized.includes('run_config'), false);
+      assertEquals(serialized.includes('metadata'), false);
+      assertEquals(serialized.includes('secret_value'), false);
+    },
+    async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === 'https://supabase.test/auth/v1/user') {
+        return jsonResponse({
+          id: 'user-1',
+          email: 'founder@example.com',
+          user_metadata: {},
+        });
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
+        return jsonResponse([{ id: 'user-1' }]);
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
+        return jsonResponse([{ tier: 'free' }]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+        return jsonResponse([privateOwnerTestApp()]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/user_routines?')) {
+        return new URL(url).searchParams.get('select') === 'id'
+          ? jsonResponse([{ id: 'routine-1' }])
+          : jsonResponse([persistentRoutineRow()]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/routine_capabilities?')) {
+        return jsonResponse([persistentRoutineCapabilityRow()]);
+      }
+      if (
+        url.startsWith('https://supabase.test/rest/v1/routine_dashboard_bindings?')
+      ) {
+        return jsonResponse([]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/routine_runs?')) {
+        return jsonResponse([persistentRoutineRunRow()]);
+      }
+      return jsonResponse([]);
+    },
+  );
+});
+
+Deno.test('launch facade: routine patch persists only mission, interval, and finite ceilings', async () => {
+  let routine = persistentRoutineRow();
+  let routinePatch: Record<string, unknown> | null = null;
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request(
+          'https://ultralight.test/api/launch/agents/private-helper/routine',
+          {
+            method: 'PATCH',
+            headers: {
+              Authorization: 'Bearer browser-session-token',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              mission: 'Check the private system every ten minutes.',
+              intervalSeconds: 600,
+              budgets: {
+                maxLightPerRun: 8,
+                maxLightPerDay: 40,
+                maxLightPerMonth: 400,
+                maxCallsPerRun: 10,
+              },
+            }),
+          },
+        ),
+      );
+      const body = await response.json() as {
+        routine?: { mission?: string; intervalSeconds?: number } | null;
+      };
+
+      assertEquals(response.status, 200);
+      assertEquals(body.routine?.mission, 'Check the private system every ten minutes.');
+      assertEquals(body.routine?.intervalSeconds, 600);
+      assertEquals(routinePatch?.intent, 'Check the private system every ten minutes.');
+      assertEquals(routinePatch?.schedule, { type: 'interval', every_seconds: 600 });
+      assertEquals(routinePatch?.budget_policy, {
+        max_light_per_run: 8,
+        max_light_per_day: 40,
+        max_light_per_month: 400,
+        max_calls_per_run: 10,
+      });
+      assertEquals('metadata' in (routinePatch || {}), false);
+      assertEquals('config' in (routinePatch || {}), false);
+      assertEquals('status' in (routinePatch || {}), false);
+    },
+    async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = init?.method || (input instanceof Request ? input.method : 'GET');
+      if (url === 'https://supabase.test/auth/v1/user') {
+        return jsonResponse({
+          id: 'user-1',
+          email: 'founder@example.com',
+          user_metadata: {},
+        });
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
+        return jsonResponse([{ id: 'user-1' }]);
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
+        return jsonResponse([{ tier: 'free' }]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+        return jsonResponse([privateOwnerTestApp()]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/user_routines?')) {
+        if (method === 'PATCH') {
+          routinePatch = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+          routine = { ...routine, ...routinePatch };
+          return jsonResponse([routine]);
+        }
+        return new URL(url).searchParams.get('select') === 'id'
+          ? jsonResponse([{ id: 'routine-1' }])
+          : jsonResponse([routine]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/routine_capabilities?')) {
+        return jsonResponse([persistentRoutineCapabilityRow()]);
+      }
+      if (
+        url.startsWith('https://supabase.test/rest/v1/routine_dashboard_bindings?')
+      ) {
+        return jsonResponse([]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/routine_runs?')) {
+        return jsonResponse([]);
       }
       return jsonResponse([]);
     },
@@ -1911,6 +2188,49 @@ Deno.test({
             'account session',
             attempt.path,
           );
+        }
+      },
+      apiTokenAuthMock(),
+    );
+  },
+});
+
+Deno.test({
+  name: 'launch facade: routine lifecycle rejects connected-agent API keys',
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    await withLaunchEnv(
+      async () => {
+        const attempts: Array<{ method: string; body?: unknown }> = [
+          { method: 'GET' },
+          {
+            method: 'PATCH',
+            body: { mission: 'Silently widen authority' },
+          },
+          {
+            method: 'POST',
+            body: { action: 'activate' },
+          },
+        ];
+        for (const attempt of attempts) {
+          const suffix = attempt.method === 'POST' ? '/actions' : '';
+          const response = await handleLaunch(
+            new Request(
+              `https://ultralight.test/api/launch/agents/private-helper/routine${suffix}`,
+              {
+                method: attempt.method,
+                headers: {
+                  Authorization: `Bearer ${TEST_API_TOKEN}`,
+                  'Content-Type': 'application/json',
+                },
+                ...(attempt.body ? { body: JSON.stringify(attempt.body) } : {}),
+              },
+            ),
+          );
+          const body = await response.json() as { error?: string };
+          assertEquals(response.status, 403, attempt.method);
+          assertStringIncludes(body.error || '', 'account session');
         }
       },
       apiTokenAuthMock(),

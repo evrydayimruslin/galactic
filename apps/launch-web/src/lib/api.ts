@@ -10,6 +10,9 @@ import type {
 import type {
   LaunchAgentAdminSummary,
   LaunchAgentFunctionsResponse,
+  LaunchAgentRoutineActionRequest,
+  LaunchAgentRoutineResponse,
+  LaunchAgentRoutineUpdateRequest,
   LaunchAgentSummary,
   LaunchApiKeyCreateRequest,
   LaunchApiKeyCreateResponse,
@@ -318,6 +321,39 @@ export class LaunchApiClient {
   agentFunctions(idOrSlug: string): Promise<LaunchAgentFunctionsResponse> {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/functions`,
+    );
+  }
+
+  /** Owner-only operational state for the Agent's one primary routine. */
+  agentRoutine(idOrSlug: string): Promise<LaunchAgentRoutineResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routine`,
+    );
+  }
+
+  updateAgentRoutine(
+    idOrSlug: string,
+    request: LaunchAgentRoutineUpdateRequest,
+  ): Promise<LaunchAgentRoutineResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routine`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  actOnAgentRoutine(
+    idOrSlug: string,
+    request: LaunchAgentRoutineActionRequest,
+  ): Promise<LaunchAgentRoutineResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routine/actions`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
     );
   }
 

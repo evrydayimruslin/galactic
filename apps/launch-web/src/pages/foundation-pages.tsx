@@ -29,6 +29,9 @@ import {
   type LaunchMoneyAmount,
   type LaunchPublisherPublishRequirement,
   type LaunchAgentInstallContext,
+  type LaunchAgentRoutineAction,
+  type LaunchAgentRoutineOverview,
+  type LaunchAgentRoutineResponse,
   type LaunchAgentRelationship,
   type LaunchAgentSummary,
   type LaunchFolder,
@@ -199,9 +202,9 @@ function buildConnectPrompt(key: string): string {
     },
   });
   return [
-    "Set up Galactic for me, then show me what it can do.",
+    "Connect Galactic to this coding agent, then help me conjure one useful full-time Agent.",
     "",
-    "Galactic is one MCP connection that opens onto a growing collection and public marketplace of Agents (apps) you can discover and run, plus everything you need to build and deploy new ones — with unified auth and per-call payments handled through this single connection.",
+    "Galactic hosts private persistent Agents. You write and test the Agent; Galactic keeps it scheduled, sandboxed, stateful, bounded by owner-approved budgets and capabilities, and visible through run history and inbox reports.",
     "",
     "1. Install the MCP server (pick whichever works in your environment):",
     `   - Claude Code: ${claudeCodeAdd}`,
@@ -211,7 +214,7 @@ function buildConnectPrompt(key: string): string {
     "2. Connect, then learn the platform: the server's initialize response carries the full platform guide, including a first-contact directive for how to orient me on this first connection. The same docs are also served at " +
     `${apiOrigin}/api/skills.`,
     "",
-    `3. Take a look around, then give me a real orientation — not a few lines. Call gx.discover with {"scope":"library"} to see the Agents already on this account, and {"scope":"appstore"} to sample what's published in the wider marketplace. Then follow the first-contact directive in your platform guide and write me an informative, structured first message. If for any reason that directive isn't in the guide, cover it yourself: explain how Galactic works (discover, call, build, deploy), tell me plainly that you can build and deploy new Agents for me — not only find and run existing ones — and invite me to ask you how to use or build anything. Lead with one or two real Agents you actually found, so it's concrete, not a generic pitch. Be my guide to it.`,
+    '3. Inspect only my private Agent library with gx.discover({ scope: "library" }). Then ask me for one recurring responsibility. Turn it into a mission, scaffold with gx.download({ full_time: true }), implement and test a representative wake, upload it privately, and stop for my explicit review of capabilities, grants, cadence, secrets, and hard budgets before activation.',
     "",
     "Treat the API key in this prompt as a secret: never echo it back, log it, or commit it anywhere.",
   ].join("\n");
@@ -224,13 +227,15 @@ function connectKeyName(): string {
   return `Agent connect ${stamp} ${suffix}`;
 }
 
-// Full-capability key (scopes omitted defaults to all): what a connected agent
-// may actually do at runtime stays governed by the user's per-Agent
-// permission policies, not the token.
+// Builder/operator key for the user's primary coding agent. Keep the grants
+// explicit: legacy wildcard keys intentionally do not inherit newly-added
+// control-plane capabilities, and owner approvals still require the website
+// account session even with these scopes.
 function mintConnectKey(): Promise<string> {
   return launchApi.createApiKey({
     expiresInDays: 90,
     name: connectKeyName(),
+    scopes: ["apps:read", "apps:call", "agents:build", "agents:operate"],
   }).then((response) => response.plaintextToken);
 }
 
@@ -890,7 +895,7 @@ export function AddToAgentButton({
         ? (
           <ConnectPromptModal
             buildPrompt={buildPrompt}
-            intro="This created a 90-day API key (full capability — your per-Agent permissions still govern every call) and baked it into the prompt below. The key is shown only here."
+            intro="This created a 90-day key scoped to read, call, build, and operate your private Agents. Owner approvals, secrets, billing, and publication still require your Galactic account session. The key is shown only here."
             mint={mintConnectKey}
             onClose={() => setOpen(false)}
           />
@@ -1628,6 +1633,10 @@ function AgentDetailSurface({
   const wiringRelevant = signedIn &&
     (tool.relationship === "owner" || tool.relationship === "installed");
   const pendingCount = live.data.agentWiring?.pendingRequests.length ?? 0;
+  const headerSummary = tool.relationship === "owner" &&
+      live.data.agentRoutine?.routine?.mission
+    ? live.data.agentRoutine.routine.mission
+    : tool.summary;
 
   // The Interface tab exists only when the facade reports renderable
   // interfaces (the feature kill switch): a stale ?tab=interface deep link
@@ -1661,7 +1670,7 @@ function AgentDetailSurface({
           <div className="tool-title-row">
             <h1>{tool.title}</h1>
           </div>
-          <p>{tool.summary}</p>
+          <p>{headerSummary}</p>
           <div className="tool-header-actions">
             <AgentConnectButton
               agentInstall={live.data.install?.agentInstall}
@@ -3785,8 +3794,9 @@ function AgentConnectionsCard(
         <Card>
           <p className="section-label">Data sources &amp; secrets</p>
           <p className="muted-note">
-            No data sources or secrets are declared yet. Add them from your
-            connected coding agent with <Mono>gx.set</Mono>.
+            No data sources or secrets are declared yet. Ask your connected
+            coding agent to declare the required settings in the Agent, then
+            enter their values here.
           </p>
         </Card>
       )
@@ -3945,6 +3955,44 @@ function AgentConnectionsCard(
   );
 }
 
+interface AgentRoutineDraft {
+  name: string;
+  mission: string;
+  cadenceMinutes: string;
+  maxLightPerRun: string;
+  maxLightPerDay: string;
+  maxLightPerMonth: string;
+  maxCallsPerRun: string;
+}
+
+function agentRoutineDraft(
+  tool: AgentDetailFixture,
+  routine: LaunchAgentRoutineOverview | null | undefined,
+): AgentRoutineDraft {
+  return {
+    name: tool.name,
+    mission: routine?.mission ?? "",
+    cadenceMinutes: routine ? String(routine.intervalSeconds / 60) : "",
+    maxLightPerRun: routine ? String(routine.budgets.maxLightPerRun) : "",
+    maxLightPerDay: routine ? String(routine.budgets.maxLightPerDay) : "",
+    maxLightPerMonth: routine ? String(routine.budgets.maxLightPerMonth) : "",
+    maxCallsPerRun: routine ? String(routine.budgets.maxCallsPerRun) : "",
+  };
+}
+
+function humanizeRoutineValue(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+function routineStatusTone(
+  value: LaunchAgentRoutineOverview["status"] | LaunchAgentRoutineOverview["health"],
+): "default" | "green" | "amber" | "red" {
+  if (value === "active") return "green";
+  if (value === "error") return "red";
+  if (value === "needs_approval" || value === "paused") return "amber";
+  return "default";
+}
+
 function AgentOverviewPanel({
   live,
   tool,
@@ -3955,32 +4003,76 @@ function AgentOverviewPanel({
   wiringRelevant: boolean;
 }): ReactElement {
   const isOwner = tool.relationship === "owner";
-  const [name, setName] = useState(tool.name);
-  const [mission, setMission] = useState(tool.summary);
+  const [routineResponse, setRoutineResponse] = useState<
+    LaunchAgentRoutineResponse | undefined
+  >(live.data.agentRoutine);
+  const routine = routineResponse?.routine;
+  const [draft, setDraft] = useState<AgentRoutineDraft>(() =>
+    agentRoutineDraft(tool, routine)
+  );
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [actionState, setActionState] = useState<LaunchAgentRoutineAction | null>(
+    null,
+  );
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
-    setName(tool.name);
-    setMission(tool.summary);
+    setRoutineResponse(live.data.agentRoutine);
+    setDraft(agentRoutineDraft(tool, live.data.agentRoutine?.routine));
     setSaveState("idle");
     setSaveError(null);
-  }, [tool.id, tool.name, tool.summary]);
+    setActionState(null);
+    setActionError(null);
+  }, [tool.id, tool.name, live.data.agentRoutine?.generatedAt]);
 
-  const dirty = name.trim() !== tool.name || mission.trim() !== tool.summary;
+  const parsedCadenceSeconds = Math.round(Number(draft.cadenceMinutes) * 60);
+  const routineDirty = routine !== null && routine !== undefined && (
+    draft.mission.trim() !== routine.mission ||
+    draft.cadenceMinutes !== String(routine.intervalSeconds / 60) ||
+    draft.maxLightPerRun !== String(routine.budgets.maxLightPerRun) ||
+    draft.maxLightPerDay !== String(routine.budgets.maxLightPerDay) ||
+    draft.maxLightPerMonth !== String(routine.budgets.maxLightPerMonth) ||
+    draft.maxCallsPerRun !== String(routine.budgets.maxCallsPerRun)
+  );
+  const dirty = draft.name.trim() !== tool.name || routineDirty;
   const save = async () => {
     if (!isOwner || !dirty || saveState === "saving") return;
     setSaveState("saving");
     setSaveError(null);
     try {
-      await launchApi.updateAgent(tool.id, {
-        ...(name.trim() !== tool.name ? { name: name.trim() } : {}),
-        ...(mission.trim() !== tool.summary
-          ? { description: mission.trim() }
-          : {}),
-      });
+      if (routineDirty && routine) {
+        const numericValues = [
+          parsedCadenceSeconds,
+          Number(draft.maxLightPerRun),
+          Number(draft.maxLightPerDay),
+          Number(draft.maxLightPerMonth),
+          Number(draft.maxCallsPerRun),
+        ];
+        if (numericValues.some((value) => !Number.isFinite(value))) {
+          throw new Error("Cadence and budget ceilings must be numbers.");
+        }
+        const updated = await launchApi.updateAgentRoutine(tool.id, {
+          mission: draft.mission.trim() || null,
+          intervalSeconds: parsedCadenceSeconds,
+          budgets: {
+            maxLightPerRun: Number(draft.maxLightPerRun),
+            maxLightPerDay: Number(draft.maxLightPerDay),
+            maxLightPerMonth: Number(draft.maxLightPerMonth),
+            maxCallsPerRun: Number(draft.maxCallsPerRun),
+          },
+        });
+        setRoutineResponse(updated);
+        setDraft((current) => ({
+          ...agentRoutineDraft(tool, updated.routine),
+          name: current.name,
+        }));
+      }
+      if (draft.name.trim() !== tool.name) {
+        await launchApi.updateAgent(tool.id, { name: draft.name.trim() });
+      }
       setSaveState("saved");
       live.reload();
     } catch (err) {
@@ -3990,6 +4082,36 @@ function AgentOverviewPanel({
           ? err.message
           : "Couldn't save changes. Please try again.",
       );
+    }
+  };
+
+  const runAction = async (
+    action: LaunchAgentRoutineAction,
+    capabilityIds?: string[],
+  ) => {
+    if (actionState) return;
+    if (dirty) {
+      setActionError("Save your configuration changes before changing runtime state.");
+      return;
+    }
+    setActionState(action);
+    setActionError(null);
+    try {
+      const updated = await launchApi.actOnAgentRoutine(tool.id, {
+        action,
+        ...(capabilityIds ? { capabilityIds } : {}),
+      });
+      setRoutineResponse(updated);
+      setDraft(agentRoutineDraft(tool, updated.routine));
+      live.reload();
+    } catch (err) {
+      setActionError(
+        err instanceof Error && err.message
+          ? err.message
+          : "The routine action could not be completed.",
+      );
+    } finally {
+      setActionState(null);
     }
   };
 
@@ -4013,7 +4135,7 @@ function AgentOverviewPanel({
               <div>
                 <p className="section-label">Overview</p>
                 <p className="muted-note">
-                  The Agent's name and ongoing responsibility.
+                  The Agent's identity and owner-approved ongoing responsibility.
                 </p>
               </div>
               <Button
@@ -4031,18 +4153,83 @@ function AgentOverviewPanel({
             <AdminField label="Name">
               <input
                 className="admin-input"
-                onChange={(event) => setName(event.target.value)}
-                value={name}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))}
+                value={draft.name}
               />
             </AdminField>
-            <AdminField label="Mission">
-              <textarea
-                className="admin-textarea"
-                onChange={(event) => setMission(event.target.value)}
-                rows={4}
-                value={mission}
-              />
-            </AdminField>
+            {routine
+              ? (
+                <>
+                  <AdminField label="Mission">
+                    <textarea
+                      className="admin-textarea"
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          mission: event.target.value,
+                        }))}
+                      rows={4}
+                      value={draft.mission}
+                    />
+                  </AdminField>
+                  <div className="routine-config-grid">
+                    <AdminField label="Cadence (minutes)">
+                      <input
+                        className="admin-input"
+                        min="1"
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            cadenceMinutes: event.target.value,
+                          }))}
+                        step="1"
+                        type="number"
+                        value={draft.cadenceMinutes}
+                      />
+                    </AdminField>
+                    <div className="routine-readonly-field">
+                      <span>Reporting destination</span>
+                      <strong>{routine.reportingDestination.label}</strong>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="section-label routine-budget-label">
+                      Hard cost / rate ceilings
+                    </p>
+                    <div className="routine-budget-grid">
+                      {([
+                        ["maxLightPerRun", "Light / run"],
+                        ["maxLightPerDay", "Light / day"],
+                        ["maxLightPerMonth", "Light / month"],
+                        ["maxCallsPerRun", "Calls / run"],
+                      ] as const).map(([key, label]) => (
+                        <AdminField key={key} label={label}>
+                          <input
+                            className="admin-input"
+                            min={key === "maxCallsPerRun" ? "1" : "0"}
+                            onChange={(event) =>
+                              setDraft((current) => ({
+                                ...current,
+                                [key]: event.target.value,
+                              }))}
+                            step={key === "maxCallsPerRun" ? "1" : "any"}
+                            type="number"
+                            value={draft[key]}
+                          />
+                        </AdminField>
+                      ))}
+                    </div>
+                    <p className="muted-note routine-budget-note">
+                      Reserved before each paid action. Manual runs count too.
+                    </p>
+                  </div>
+                </>
+              )
+              : null}
             {saveState === "error" && saveError
               ? <p className="agent-overview-error">{saveError}</p>
               : null}
@@ -4066,7 +4253,172 @@ function AgentOverviewPanel({
         </Pill>
       </Card>
 
-      {tool.fullTime
+      {isOwner
+        ? routine
+          ? (
+            <Card className="routine-operations-card">
+              <div className="routine-operation-head">
+                <div>
+                  <p className="section-label">Persistent routine</p>
+                  <div className="routine-state-pills">
+                    <Pill tone={routineStatusTone(routine.status)}>
+                      {humanizeRoutineValue(routine.status)}
+                    </Pill>
+                    <Pill tone={routineStatusTone(routine.health)}>
+                      {humanizeRoutineValue(routine.health)}
+                    </Pill>
+                  </div>
+                </div>
+                <div className="routine-actions">
+                  {routine.status === "active"
+                    ? (
+                      <Button
+                        disabled={Boolean(actionState) || dirty}
+                        onClick={() => void runAction("pause")}
+                        size="sm"
+                        variant="secondary"
+                      >
+                        {actionState === "pause" ? "Pausing…" : "Pause"}
+                      </Button>
+                    )
+                    : (
+                      <Button
+                        disabled={!routine.actions.canActivate || Boolean(actionState) || dirty}
+                        onClick={() => void runAction("activate")}
+                        size="sm"
+                      >
+                        {actionState === "activate" ? "Activating…" : "Activate"}
+                      </Button>
+                    )}
+                  <Button
+                    disabled={!routine.actions.canRunNow || Boolean(actionState) || dirty}
+                    onClick={() => void runAction("run_now")}
+                    size="sm"
+                    variant="secondary"
+                  >
+                    {actionState === "run_now" ? "Queuing…" : "Run now"}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="routine-timing-grid">
+                <MetaPair
+                  label="next wake"
+                  value={routine.nextRunAt
+                    ? relativeTime(routine.nextRunAt) || routine.nextRunAt
+                    : "not scheduled"}
+                />
+                <MetaPair
+                  label="last wake"
+                  value={routine.lastRunAt
+                    ? relativeTime(routine.lastRunAt) || routine.lastRunAt
+                    : "not run yet"}
+                />
+                <MetaPair
+                  label="failures"
+                  value={String(routine.failureCount)}
+                />
+              </div>
+
+              {routine.autoPauseReason || routine.errorReason
+                ? (
+                  <div className="routine-stop-reason">
+                    <strong>Needs attention</strong>
+                    <span>
+                      {humanizeRoutineValue(
+                        routine.autoPauseReason || routine.errorReason || "routine error",
+                      )}
+                    </span>
+                  </div>
+                )
+                : null}
+
+              {routine.blockers.length > 0
+                ? (
+                  <div className="routine-blockers">
+                    <p className="section-label">Activation blockers</p>
+                    {routine.blockers.map((blocker) => (
+                      <div key={`${blocker.code}-${blocker.message}`}>
+                        <Mono>{humanizeRoutineValue(blocker.code)}</Mono>
+                        <span>{blocker.message}</span>
+                      </div>
+                    ))}
+                  </div>
+                )
+                : null}
+
+              <div className="routine-capability-section">
+                <p className="section-label">Allowed actions</p>
+                {routine.capabilities.length === 0
+                  ? (
+                    <p className="muted-note">
+                      This routine requests no downstream Agent functions.
+                    </p>
+                  )
+                  : (
+                    <div className="routine-capability-list">
+                      {routine.capabilities.map((capability) => (
+                        <div className="routine-capability-row" key={capability.id}>
+                          <div>
+                            <Mono>
+                              {capability.appRef}.{capability.functionName}
+                            </Mono>
+                            {capability.purpose
+                              ? <span>{capability.purpose}</span>
+                              : null}
+                          </div>
+                          <div className="routine-capability-state">
+                            <Pill tone={capability.access === "write" ? "amber" : "default"}>
+                              {capability.access}
+                            </Pill>
+                            <Pill tone={capability.approved ? "green" : "amber"}>
+                              {capability.approved ? "approved" : "pending"}
+                            </Pill>
+                            {!capability.approved
+                              ? (
+                                <Button
+                                  disabled={Boolean(actionState) || dirty}
+                                  onClick={() =>
+                                    void runAction("approve_capabilities", [capability.id])}
+                                  size="sm"
+                                  variant="secondary"
+                                >
+                                  Approve
+                                </Button>
+                              )
+                              : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              </div>
+              {actionError
+                ? <p className="agent-overview-error">{actionError}</p>
+                : null}
+            </Card>
+          )
+          : routineResponse
+          ? (
+            <Card>
+              <EmptyState icon="spark" title="No routine proposal yet">
+                This Agent is private, but it has no stored ongoing job. Ask
+                your connected coding agent to scaffold with gx.download
+                (full_time: true), test it, and upload the proposal for review.
+              </EmptyState>
+            </Card>
+          )
+          : (
+            <Card>
+              <p className="section-label">Persistent routine</p>
+              <p className="muted-note">
+                {tool.visibility !== "private"
+                  ? "Persistent routines are launch-scoped to private, owner-only Agents."
+                  : "Routine state is unavailable. Refresh the page or reconnect your account session."}
+              </p>
+            </Card>
+          )
+        : tool.fullTime
         ? <FullTimeDisclosureCard fullTime={tool.fullTime} />
         : (
           <Card>
@@ -4087,11 +4439,41 @@ function AgentOverviewPanel({
         ? (
           <Card className="agent-logs-card">
             <p className="section-label">Logs</p>
-            <p>
-              Inspect recent runs and errors from your connected coding agent
-              with <Mono>gx.logs</Mono>. Live run history will appear here when
-              the routine monitor is joined to this Overview.
-            </p>
+            {routine && routine.recentRuns.length > 0
+              ? (
+                <div className="routine-run-list">
+                  {routine.recentRuns.map((run) => (
+                    <div className="routine-run-row" key={run.id}>
+                      <div>
+                        <Pill tone={run.status === "succeeded"
+                          ? "green"
+                          : run.status === "failed"
+                          ? "red"
+                          : run.status === "skipped"
+                          ? "amber"
+                          : "default"}
+                        >
+                          {run.status}
+                        </Pill>
+                        <Mono>{relativeTime(run.createdAt) || run.createdAt}</Mono>
+                      </div>
+                      <span>
+                        {run.summary || (run.errorCode
+                          ? humanizeRoutineValue(run.errorCode)
+                          : `${humanizeRoutineValue(run.trigger)} run`)}
+                      </span>
+                      <Mono>{formatNumber(run.totalLight)} Light</Mono>
+                    </div>
+                  ))}
+                </div>
+              )
+              : (
+                <p>
+                  {routine
+                    ? "No wakes have been recorded yet."
+                    : "Run history appears after a routine proposal is stored."}
+                </p>
+              )}
           </Card>
         )
         : null}

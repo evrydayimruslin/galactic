@@ -341,6 +341,57 @@ Deno.test("D1 usage debit emits exact read and write cloud usage events", async 
   }
 });
 
+Deno.test("routine KV/R2/D1 micro-operations are platform-sponsored", async () => {
+  let fetchCalls = 0;
+  const fetchFn = (() => {
+    fetchCalls += 1;
+    throw new Error("routine micro-operation must not reach billing RPC");
+  }) as typeof fetch;
+  const routineContext = {
+    routineId: "00000000-0000-4000-8000-000000000201",
+    routineRunId: "00000000-0000-4000-8000-000000000202",
+    traceId: "00000000-0000-4000-8000-000000000203",
+  };
+  const base = {
+    payerUserId: "00000000-0000-0000-0000-000000000101",
+    callerUserId: "00000000-0000-0000-0000-000000000102",
+    ownerUserId: "00000000-0000-0000-0000-000000000103",
+    appId: "00000000-0000-0000-0000-000000000201",
+    functionName: "work",
+    receiptId: "receipt-routine-storage",
+    source: "tools/call",
+    routineContext,
+  };
+
+  assertEquals(
+    await debitCloudOperation({
+      ...base,
+      resource: "kv_operation",
+      operation: "get",
+    }, { fetchFn }),
+    null,
+  );
+  assertEquals(
+    await debitCloudOperation({
+      ...base,
+      resource: "r2_operation",
+      operation: "put",
+      units: 2,
+    }, { fetchFn }),
+    null,
+  );
+  assertEquals(
+    await debitD1Usage({
+      ...base,
+      operation: "select",
+      rowsRead: 50_000,
+      rowsWritten: 4,
+    }, { fetchFn }),
+    null,
+  );
+  assertEquals(fetchCalls, 0);
+});
+
 Deno.test("cloud usage hold lifecycle maps reserve, settle, and release RPCs", async () => {
   const previousEnv = globalThis.__env;
   const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -710,8 +761,14 @@ Deno.test("peekCallerUsage maps the peek RPC rows to a counter->count map", asyn
       calls[0].url,
       "https://supabase.example/rest/v1/rpc/peek_app_caller_usage",
     );
-    assertEquals(calls[0].body.p_app_id, "00000000-0000-0000-0000-000000000201");
-    assertEquals(calls[0].body.p_user_id, "00000000-0000-0000-0000-000000000102");
+    assertEquals(
+      calls[0].body.p_app_id,
+      "00000000-0000-0000-0000-000000000201",
+    );
+    assertEquals(
+      calls[0].body.p_user_id,
+      "00000000-0000-0000-0000-000000000102",
+    );
     assertEquals(usage.get("__app__"), 4);
     assertEquals(usage.get("metered"), 1);
     assertEquals(usage.get("missing"), undefined);
@@ -765,10 +822,18 @@ Deno.test("per-load floor: added to the hold AND survives the duration true-down
       return Promise.resolve(
         new Response(
           JSON.stringify([{
-            hold_id: "hold-floor", payer_user_id: "u1", sponsor_user_id: null,
-            app_price_light: 0, app_charge_light: 0, free_call: false,
-            free_call_count: null, free_call_limit: 0, old_balance: 10,
-            new_balance: 9, held_amount_light: 1, held_deposit_light: 1,
+            hold_id: "hold-floor",
+            payer_user_id: "u1",
+            sponsor_user_id: null,
+            app_price_light: 0,
+            app_charge_light: 0,
+            free_call: false,
+            free_call_count: null,
+            free_call_limit: 0,
+            old_balance: 10,
+            new_balance: 9,
+            held_amount_light: 1,
+            held_deposit_light: 1,
             held_earned_light: 0,
           }]),
           { status: 200, headers: { "Content-Type": "application/json" } },
@@ -778,8 +843,10 @@ Deno.test("per-load floor: added to the hold AND survives the duration true-down
     return Promise.resolve(
       new Response(
         JSON.stringify([{
-          event_id: "e1", hold_id: "hold-floor",
-          settled_amount_light: 0.3, released_amount_light: 0,
+          event_id: "e1",
+          hold_id: "hold-floor",
+          settled_amount_light: 0.3,
+          released_amount_light: 0,
         }]),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -796,8 +863,14 @@ Deno.test("per-load floor: added to the hold AND survives the duration true-down
       workerLoadLightPerInvocation: 0.5,
     };
     const hold = await createRuntimeCloudHold({
-      callerUserId: "u1", ownerUserId: "u2", appId: "a1", functionName: "run",
-      receiptId: "r1", source: "run", timeoutMs: 30_000, appPriceLight: 0,
+      callerUserId: "u1",
+      ownerUserId: "u2",
+      appId: "a1",
+      functionName: "run",
+      receiptId: "r1",
+      source: "run",
+      timeoutMs: 30_000,
+      appPriceLight: 0,
       billingConfig: cfg,
     }, { fetchFn });
     // Reserved = duration (0.06) + floor (0.5) = 0.56.
@@ -807,7 +880,9 @@ Deno.test("per-load floor: added to the hold AND survives the duration true-down
     // A tiny 1ms call: duration component floors to 1 cloud unit = 0.002, but the
     // fixed 0.5 floor MUST survive — settled = 0.002 + 0.5 = 0.502, NOT 0.002.
     const settlement = await settleRuntimeCloudHold({
-      holdId: hold.holdId, durationMs: 1, billingConfig: cfg,
+      holdId: hold.holdId,
+      durationMs: 1,
+      billingConfig: cfg,
     }, { fetchFn });
     assertEquals(settlement.amountLight, 0.502);
     assertEquals(calls[1].body.p_amount_light, 0.502);

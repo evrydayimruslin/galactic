@@ -4,6 +4,7 @@ import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejec
 
 import {
   createGrant,
+  createPendingGrantProposal,
   recordGrantSpend,
   resolveCallerGrant,
 } from "./agent-grants.ts";
@@ -395,6 +396,79 @@ Deno.test("createGrant: rejects a self-referential grant", async () => {
       );
     },
   );
+});
+
+Deno.test("createPendingGrantProposal: API-key wiring stays pending until owner approval", async () => {
+  let inserted: Record<string, unknown> | null = null;
+  let prefer = "";
+  const handler: Handler = (url, init) => {
+    if (url.pathname.endsWith("/apps")) {
+      return jsonResponse([{
+        id: url.searchParams.get("id")?.includes("caller")
+          ? "app-caller"
+          : "app-target",
+        owner_id: "user-1",
+        visibility: "private",
+        slug: null,
+      }]);
+    }
+    if (url.pathname.endsWith("/agent_function_grants") && !init?.method) {
+      return jsonResponse([]);
+    }
+    if (url.pathname.endsWith("/agent_function_grants") && init?.method === "POST") {
+      inserted = JSON.parse(String(init.body))[0];
+      prefer = new Headers(init.headers).get("Prefer") || "";
+      return jsonResponse([grantRow(inserted)]);
+    }
+    return jsonResponse([]);
+  };
+
+  await withMockedDb(handler, async () => {
+    const grant = await createPendingGrantProposal("user-1", {
+      callerAppId: "app-caller",
+      targetAppId: "app-target",
+      targetFunction: "getStock",
+      monthlyCapCredits: 25,
+    });
+    assertEquals(grant.status, "pending");
+    assertEquals(inserted?.status, "pending");
+    assertEquals(inserted?.monthly_cap_credits, 25);
+    assert(prefer.includes("ignore-duplicates"));
+  });
+});
+
+Deno.test("createPendingGrantProposal: connected keys cannot wire public or cross-owner Agents", async () => {
+  for (const forbidden of ["public", "cross-owner"] as const) {
+    const handler: Handler = (url) => {
+      if (url.pathname.endsWith("/apps")) {
+        const isCaller = url.searchParams.get("id")?.includes("caller") === true;
+        return jsonResponse([{
+          id: isCaller ? "app-caller" : "app-target",
+          owner_id: forbidden === "cross-owner" && !isCaller
+            ? "user-2"
+            : "user-1",
+          visibility: forbidden === "public" && !isCaller
+            ? "public"
+            : "private",
+          slug: null,
+        }]);
+      }
+      return jsonResponse([]);
+    };
+
+    await withMockedDb(handler, async () => {
+      await assertRejects(
+        () =>
+          createPendingGrantProposal("user-1", {
+            callerAppId: "app-caller",
+            targetAppId: "app-target",
+            targetFunction: "read",
+          }),
+        Error,
+        "private Agents owned by this account",
+      );
+    });
+  }
 });
 
 Deno.test("recordGrantSpend: delegates to the atomic increment RPC", async () => {

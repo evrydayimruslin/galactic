@@ -17,6 +17,7 @@ import {
   _executionContextRegistrySize,
   resolveExecutionContext,
 } from "../services/execution-context-registry.ts";
+import { verifySandboxActorToken } from "../services/sandbox-actor.ts";
 import type { RuntimeConfig } from "./sandbox.ts";
 
 const BUNDLE_CODE = "export const noop = 1;";
@@ -141,6 +142,7 @@ function installHarness(): { captured: Captured; restore: () => void } {
     LOADER: loader,
     CODE_CACHE: { get: () => Promise.resolve(BUNDLE_CODE) },
     EXECUTED_LOADER_GET_REUSE: "1",
+    AGENT_CALLER_SECRET: "test-agent-caller-secret",
     // deno-lint-ignore no-explicit-any
   } as any;
 
@@ -163,6 +165,40 @@ function installHarness(): { captured: Captured; restore: () => void } {
           emit: () =>
             Promise.resolve({ ok: true, event_id: "e", rejected: null }),
         };
+      },
+      // Production bindings are captured separately so gx.test can prove it
+      // never falls through to providers/billing/inbox writes.
+      // deno-lint-ignore no-explicit-any
+      AIBinding: (input: any) => {
+        captured.bindingProps.AI = input?.props;
+        return { call: () => Promise.resolve({}) };
+      },
+      // deno-lint-ignore no-explicit-any
+      NotifyBinding: (input: any) => {
+        captured.bindingProps.NOTIFY = input?.props;
+        return { notifyOwner: () => Promise.resolve({ created: true }) };
+      },
+      // deno-lint-ignore no-explicit-any
+      EmbedBinding: (input: any) => {
+        captured.bindingProps.EMBED = input?.props;
+        return {
+          embed: () => Promise.resolve({ embeddings: [], usage: {} }),
+        };
+      },
+      // deno-lint-ignore no-explicit-any
+      TestAIBinding: (input: any) => {
+        captured.bindingProps.TEST_AI = input?.props;
+        return { call: () => Promise.resolve({}) };
+      },
+      // deno-lint-ignore no-explicit-any
+      TestEmbedBinding: (input: any) => {
+        captured.bindingProps.TEST_EMBED = input?.props;
+        return { embed: () => Promise.resolve({}) };
+      },
+      // deno-lint-ignore no-explicit-any
+      TestNotifyBinding: (input: any) => {
+        captured.bindingProps.TEST_NOTIFY = input?.props;
+        return { notifyOwner: () => Promise.resolve({ created: false }) };
       },
     },
     waitUntil: (p: Promise<unknown>) => {
@@ -321,6 +357,81 @@ Deno.test("get reuse: per-call data rides the fetch body, NOT the baked module c
       "caller-context token is baked into module content — a warm isolate " +
         "would reuse a stale hop",
     );
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("dynamic sandbox: outbound bearer carries host routine attribution, never tenant args", async () => {
+  const harness = installHarness();
+  try {
+    const config = baseConfig();
+    config.routineContext = {
+      routineId: "routine-host",
+      routineRunId: "run-host",
+      traceId: "trace-host",
+    };
+    config.permissions = [...config.permissions, "ai:embed"];
+    await executeInDynamicSandbox(config, "tenantFn", [{
+      routine_id: "routine-forged",
+      routine_run_id: "run-forged",
+      trace_id: "trace-forged",
+    }]);
+
+    const body = harness.captured.requestBodies[0] as {
+      authToken?: string;
+      args?: unknown[];
+    };
+    const verified = await verifySandboxActorToken(body.authToken || "");
+    assertEquals(verified?.claims.routine_id, "routine-host");
+    assertEquals(verified?.claims.routine_run_id, "run-host");
+    assertEquals(verified?.claims.trace_id, "trace-host");
+    assertEquals(body.args, [{
+      routine_id: "routine-forged",
+      routine_run_id: "run-forged",
+      trace_id: "trace-forged",
+    }]);
+    assertEquals(
+      (harness.captured.bindingProps.EMBED as { routineContext?: unknown })
+        ?.routineContext,
+      config.routineContext,
+    );
+
+    // Routine identity is per-call signed data, not reusable isolate content.
+    const allModules = Object.values(harness.captured.modules).join("\n");
+    assert(!allModules.includes("routine-host"));
+    assert(!allModules.includes("run-host"));
+    assert(!allModules.includes("trace-host"));
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("dynamic sandbox: gx.test uses only host test AI/embed/notify bindings", async () => {
+  const harness = installHarness();
+  try {
+    const config = baseConfig();
+    config.testMode = true;
+    config.permissions = ["ai:call", "ai:embed", "notify:owner"];
+    config.aiRoute = {
+      provider: "openrouter",
+      upstreamProvider: "openrouter",
+      baseUrl: "https://provider.example.test",
+      apiKey: "must-never-be-used",
+      model: "provider/model",
+      keySource: "platform_openrouter",
+      billingSource: "openrouter",
+      shouldDebitLight: true,
+      shouldRequireBalance: true,
+    };
+    await executeInDynamicSandbox(config, "testFn", []);
+
+    assertEquals(harness.captured.bindingProps.TEST_AI, {});
+    assertEquals(harness.captured.bindingProps.TEST_EMBED, {});
+    assertEquals(harness.captured.bindingProps.TEST_NOTIFY, {});
+    assertEquals(harness.captured.bindingProps.AI, undefined);
+    assertEquals(harness.captured.bindingProps.EMBED, undefined);
+    assertEquals(harness.captured.bindingProps.NOTIFY, undefined);
   } finally {
     harness.restore();
   }

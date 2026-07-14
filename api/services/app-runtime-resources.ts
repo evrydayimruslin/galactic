@@ -269,6 +269,7 @@ export async function resolveAppRuntimeEnvVars(
   const envVars = await resolveAppEnvVars(app, deps);
   const envSchema = resolveAppEnvSchema(app);
   const perUserEntries = getScopedEnvSchemaEntries(envSchema, "per_user");
+  const declaredPerUserKeys = new Set(perUserEntries.map(({ key }) => key));
   // All per-user values are resolved into this PARENT-SIDE map (host-side net.*
   // and the CredentialBinding resolve them by key). Non-secret CONFIG is ALSO
   // copied into envVars (readable) below; SECRETS live only here.
@@ -305,13 +306,17 @@ export async function resolveAppRuntimeEnvVars(
         : [];
 
       for (const secret of userSecrets) {
+        // The live manifest/schema is the authority boundary. Rows may outlive
+        // an older version's declaration; never decrypt or expose a dormant row
+        // merely because generated code guessed its historic key.
+        if (!declaredPerUserKeys.has(secret.key)) continue;
         try {
           const value = await decryptEnvVarFn(secret.value_encrypted);
           const entry = envSchema[secret.key];
-          credentials[secret.key] = { value, credential: entry?.credential };
+          credentials[secret.key] = { value, credential: entry.credential };
           // Non-secret per-user CONFIG (host/port/email/name) is readable in the
           // sandbox env, like a universal var. Actual SECRETS stay vaulted-only.
-          if (entry && !isVaultedSecret(entry)) {
+          if (!isVaultedSecret(entry)) {
             envVars[secret.key] = value;
           }
         } catch (err) {

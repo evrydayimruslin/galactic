@@ -3,10 +3,26 @@
 // The Dynamic Worker sees env.AI.call() but never has the API key.
 
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { CHAT_MIN_BALANCE_LIGHT, checkChatBalance, deductChatCost } from '../../services/chat-billing.ts';
+import {
+  calculateCostLight,
+  CHAT_MIN_BALANCE_LIGHT,
+  checkChatBalance,
+  deductChatCost,
+} from '../../services/chat-billing.ts';
 import { recordUnbilledAiUsage } from '../../services/ai-usage-events.ts';
 import { recordAiSpend } from '../../services/ai-spend-tracker.ts';
 import { resolveExecutionContext } from '../../services/execution-context-registry.ts';
+import {
+  reserveRoutineRunBudget,
+  settleRoutineRunBudgetReservation,
+} from '../../services/routine-budget.ts';
+import type { RoutineTraceContext } from '../../services/routine-trace.ts';
+import {
+  buildRoutineAIAttemptBudget,
+  routineAIAllAttemptsFailedSettlementLight,
+  routineAISuccessSettlementLight,
+  type RoutineAIAttemptBudgetPlan,
+} from '../../services/routine-ai-budget.ts';
 import { resolvePlatformInferenceModel } from '../../services/platform-inference-models.ts';
 import { resolveRequestedModel, shouldRetryWithFallbackModel } from './ai-model-precedence.ts';
 
@@ -17,6 +33,8 @@ import { resolveRequestedModel, shouldRetryWithFallbackModel } from './ai-model-
 // A hung provider (BYOK endpoint that never responds) must not idle the whole
 // execution to its sandbox abort — bound each provider call independently.
 const AI_FETCH_TIMEOUT_MS = 90_000;
+const AI_MAX_PROVIDER_ATTEMPTS = 2;
+const AI_BUDGET_SETTLEMENT_MARGIN_MS = 2 * 60_000;
 // Platform ceiling on a single completion. Tenant code passes max_tokens
 // straight through otherwise, maximizing both latency and per-call spend.
 const MAX_AI_MAX_TOKENS = 32_768;
@@ -61,6 +79,9 @@ interface AIBindingProps {
   // direct-binding bypass can never record spend against the stale frozen
   // props.executionId.
   requireExecCtx?: boolean;
+  // Safe only on fresh-load paths. Reused isolates resolve the current value
+  // from execution-context-registry instead.
+  routineContext?: RoutineTraceContext | null;
 }
 
 type ContentPart = { type: 'text'; text: string }
@@ -158,6 +179,8 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     // attribute call N's spend to call 1's function.
     let attributedAppId: string | null = this.ctx.props.appId ?? null;
     let attributedFunctionName: string | null = null;
+    let routineContext: RoutineTraceContext | null =
+      this.ctx.props.routineContext ?? null;
     if (execCtxHandle !== undefined || this.ctx.props.requireExecCtx) {
       const resolvedCtx = resolveExecutionContext(execCtxHandle);
       if (!resolvedCtx) {
@@ -172,6 +195,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       executionId = resolvedCtx.aiExecutionId;
       attributedAppId = resolvedCtx.appId ?? attributedAppId;
       attributedFunctionName = resolvedCtx.functionName;
+      routineContext = resolvedCtx.routineContext ?? null;
     } else {
       executionId = propExecutionId;
     }
@@ -244,6 +268,110 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       Math.max(1, Math.floor(request.max_tokens || 4096)),
       MAX_AI_MAX_TOKENS,
     );
+    const providerPayload = (modelToUse: string) => ({
+      // Keep this byte-for-byte aligned with attempt(). Defaults are included
+      // because they may carry provider-visible prompt/tool configuration.
+      ...(requestDefaults ?? {}),
+      model: modelToUse,
+      messages,
+      max_tokens: maxTokens,
+      temperature: request.temperature ?? 0.7,
+      ...(Array.isArray(request.tools) && request.tools.length > 0
+        ? { tools: request.tools }
+        : {}),
+    });
+
+    // Reserve the conservative maximum token cost BEFORE the provider sees the
+    // request. Byte length is an upper-bound token proxy for ordinary text and
+    // avoids the unsafe chars/4 shortcut; max_tokens is already platform-
+    // clamped. The same pricing function performs the eventual debit. BYOK
+    // calls reserve 0 Light but still consume one max_calls_per_run slot.
+    let routineBudgetReservationId: string | null = null;
+    let routineBudgetReservedLight = 0;
+    let routineBudgetPlan: RoutineAIAttemptBudgetPlan =
+      buildRoutineAIAttemptBudget(0);
+    if (routineContext) {
+      const billingModel = billingSource === 'platform_deepseek_direct'
+        ? canonicalModelId || defaultModel || model
+        : billingModelId || canonicalModelId || model;
+      const estimateFor = (providerModel: string, pricingModel: string) => {
+        const promptTokenUpperBound = new TextEncoder().encode(
+          JSON.stringify(providerPayload(providerModel)),
+        ).byteLength;
+        return shouldDebitLight
+          ? calculateCostLight(
+            {
+              prompt_tokens: promptTokenUpperBound,
+              completion_tokens: maxTokens,
+              total_tokens: promptTokenUpperBound + maxTokens,
+            },
+            pricingModel,
+            undefined,
+            {
+              billingSource: billingSource === 'platform_deepseek_direct'
+                ? 'platform_deepseek_direct'
+                : billingSource === 'openrouter'
+                ? 'openrouter'
+                : 'none',
+            },
+          )
+          : 0;
+      };
+      const primaryReserveLight = estimateFor(model, billingModel);
+      const fallbackEligible =
+        shouldRetryWithFallbackModel({
+          upstreamProvider,
+          attemptedModel: model,
+          fallbackModel: PLATFORM_FALLBACK_MODEL,
+          modelPinned,
+        });
+      const fallbackReserveLight = fallbackEligible
+        ? estimateFor(PLATFORM_FALLBACK_MODEL, PLATFORM_FALLBACK_MODEL)
+        : 0;
+      if (fallbackEligible) {
+        // A failed primary may still have consumed provider work before the
+        // fallback starts. Reserve both sequential attempts, not merely the
+        // more expensive one.
+        routineBudgetPlan = buildRoutineAIAttemptBudget(
+          primaryReserveLight,
+          fallbackReserveLight,
+        );
+      } else {
+        routineBudgetPlan = buildRoutineAIAttemptBudget(primaryReserveLight);
+      }
+      try {
+        const admission = await reserveRoutineRunBudget({
+          userId,
+          routine: routineContext,
+          reservationKey: `ai:${executionId || 'legacy'}:${crypto.randomUUID()}`,
+          kind: 'ai_call',
+          reserveLight: routineBudgetPlan.totalReservedLight,
+          expiresAt: new Date(
+            Date.now() + AI_FETCH_TIMEOUT_MS * AI_MAX_PROVIDER_ATTEMPTS +
+              AI_BUDGET_SETTLEMENT_MARGIN_MS,
+          ).toISOString(),
+        });
+        if (!admission.allowed || !admission.reservation) {
+          return {
+            content: '',
+            model,
+            usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
+            error: admission.message,
+          };
+        }
+        routineBudgetReservationId = admission.reservation.id;
+        routineBudgetReservedLight = admission.reservation.reservedLight;
+      } catch (budgetError) {
+        return {
+          content: '',
+          model,
+          usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
+          error: `Routine budget admission unavailable; AI call refused: ${
+            budgetError instanceof Error ? budgetError.message : String(budgetError)
+          }`,
+        };
+      }
+    }
 
     type CompletionData = {
       choices: Array<{ message: { content: string } }>;
@@ -272,21 +400,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
             'HTTP-Referer': 'https://api.connectgalactic.com',
             'X-Title': 'Galactic',
           },
-          body: JSON.stringify({
-            // Spread defaults FIRST so the clamped max_tokens (and explicit
-            // temperature) stay final even if a future platform default carries
-            // those keys. requestDefaults is platform-controlled, never tenant.
-            ...(requestDefaults ?? {}),
-            model: modelToUse,
-            messages,
-            max_tokens: maxTokens,
-            temperature: request.temperature ?? 0.7,
-            // Parity with the in-process path: forward tools to the provider when
-            // present. Response still returns text content only (no tool_calls).
-            ...(Array.isArray(request.tools) && request.tools.length > 0
-              ? { tools: request.tools }
-              : {}),
-          }),
+          body: JSON.stringify(providerPayload(modelToUse)),
           signal: abort.signal,
         });
         if (!response.ok) {
@@ -308,6 +422,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     // Attempt the resolved model; on failure retry once with the platform
     // fallback model when eligible (OpenRouter path only, and never for a
     // pinned model — see shouldRetryWithFallbackModel).
+    let fallbackUsed = false;
     let result = await attempt(model);
     if (
       'error' in result &&
@@ -318,6 +433,10 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
         modelPinned,
       })
     ) {
+      // The failed primary request may have completed upstream work even
+      // though no usage payload reached us. Count its full upper bound if a
+      // fallback response is ultimately returned.
+      fallbackUsed = true;
       const fallback = await attempt(PLATFORM_FALLBACK_MODEL);
       if ('data' in fallback) {
         model = PLATFORM_FALLBACK_MODEL;
@@ -326,6 +445,20 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     }
 
     if ('error' in result) {
+      if (routineBudgetReservationId) {
+        // Once a provider request starts, an error/timeout cannot prove that
+        // the upstream did no work. Charge the conservative reservation rather
+        // than restoring budget capacity after an ambiguous outcome. If this
+        // write is unavailable, leave it reserved for expiry reconciliation.
+        await settleRoutineRunBudgetReservation({
+          reservationId: routineBudgetReservationId,
+          userId,
+          actualLight: routineAIAllAttemptsFailedSettlementLight(
+            routineBudgetReservedLight,
+          ),
+          applySpend: true,
+        }).catch(() => {});
+      }
       return {
         content: '',
         model,
@@ -341,11 +474,61 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     const responseModel = data.model || model;
     let costLight = 0;
 
+    const modelForBilling = billingSource === 'platform_deepseek_direct'
+      ? responseModel
+      : billingModelId || canonicalModelId || responseModel;
+    const actualCostLight = shouldDebitLight
+      ? calculateCostLight(
+        {
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: promptTokens + completionTokens,
+          prompt_cache_hit_tokens: promptCacheHitTokens,
+          prompt_cache_miss_tokens: promptCacheMissTokens,
+        },
+        modelForBilling,
+        undefined,
+        {
+          billingSource: billingSource === 'platform_deepseek_direct'
+            ? 'platform_deepseek_direct'
+            : billingSource === 'openrouter'
+            ? 'openrouter'
+            : 'none',
+        },
+      )
+      : 0;
+    if (routineBudgetReservationId) {
+      try {
+        await settleRoutineRunBudgetReservation({
+          reservationId: routineBudgetReservationId,
+          userId,
+          actualLight: routineAISuccessSettlementLight(
+            routineBudgetPlan,
+            actualCostLight,
+            fallbackUsed,
+          ),
+          applySpend: true,
+        });
+      } catch (budgetError) {
+        // Provider result is withheld when authoritative settlement cannot
+        // prove it fits. This is intentionally fail-closed.
+        return {
+          content: '',
+          model: responseModel,
+          usage: {
+            input_tokens: promptTokens,
+            output_tokens: completionTokens,
+            cost_light: 0,
+          },
+          error: `Routine budget settlement failed; AI result withheld: ${
+            budgetError instanceof Error ? budgetError.message : String(budgetError)
+          }`,
+        };
+      }
+    }
+
     if (shouldDebitLight && promptTokens + completionTokens > 0) {
       try {
-        const modelForBilling = billingSource === 'platform_deepseek_direct'
-          ? responseModel
-          : billingModelId || canonicalModelId || responseModel;
         const billing = await deductChatCost(
           userId,
           {

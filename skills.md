@@ -96,12 +96,13 @@ Persistent cloud routines for ongoing delegated work.
 - `action: "pause"` / `"resume"` / `"delete"` — Control ongoing work.
 - `action: "run_now"` — Queue a manual run. Durable execution is claimed by the backend routine executor.
 
-### gx.upload({ files, name?, description?, visibility?, app_id?, type? })
+### gx.upload({ files, test_attestation?, name?, description?, visibility?, app_id?, type? })
 Deploy TypeScript app or publish markdown page.
 - `type: "page"`: publish markdown at a URL. Requires `content` + `slug`.
 - No `app_id`: creates new app at v1.0.0 (auto-live).
 - With `app_id`: adds new version (NOT live — use `gx.set` to activate).
 - `files`: array of `{ path: string, content: string, encoding?: "text" | "base64" }`.
+- Connected API keys must pass `test_attestation` from a successful `gx.test` of the exact same decoded file set. Account-session uploads may omit it.
 
 ### gx.download({ app_id?, name?, description?, version? })
 - With `app_id`: download app source code (respects download_access setting).
@@ -116,8 +117,8 @@ Test code in sandbox without deploying.
 - Use `d1_fixtures` to provide fixture-backed `galactic.db.run/all/first/batch` responses when you need D1 behavior before deploy.
 - `lint_only: true`: validate code conventions without executing (single-args check, no-shorthand-return, manifest sync, permission detection).
 - `strict: true`: lint warnings become errors.
-- Returns: `{ success, result?, error?, duration_ms, exports, logs?, lint? }`.
-- Always test before `gx.upload`.
+- A successful execution with zero lint errors returns `source_hash`, `test_attestation`, its runtime mode, and expiry. GPU proof is validation-only; `lint_only` does not issue proof.
+- Keep the response as `tested`, then upload the exact same files with `gx.upload({ files, test_attestation: tested.test_attestation, ... })`.
 
 ### gx.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_credits?, default_free_calls?, free_calls_scope?, function_prices?, search_hints?, show_metrics? })
 Batch configure app settings. Each field is optional — only provided fields are updated.
@@ -201,7 +202,7 @@ Manage your wallet: balance, earnings, conversions, withdrawals, payouts.
 
 ## Building Apps
 
-**Workflow:** `gx.download` (scaffold) → implement functions (reach for `galactic.ai()`, `galactic.call()`, `galactic.db`) → add an Interface (`interfaces[]`) for a human-facing UI → `gx.test` → `gx.upload` → `gx.set`. The richest Agents combine functions + AI + an Interface — see "The SDK" and "Interfaces" below.
+**Workflow:** `gx.download` (scaffold) → implement functions (reach for `galactic.ai()`, `galactic.call()`, `galactic.db`) → add an Interface (`interfaces[]`) for a human-facing UI → `tested = gx.test(...)` → `gx.upload({ ..., test_attestation: tested.test_attestation })` → `gx.set`. Upload the exact tested file set.
 
 **Always include a manifest.json** alongside index.ts. The manifest enables per-function pricing in the dashboard, typed parameter schemas for better agent tool use, permission grants, Settings surfaces on public app pages, and a declared `access_policy` hook for custom-coded permission/monetization logic. Without it, functions are auto-detected from exports but lack parameter/return metadata. Structure: `{ "functions": { "fnName": { "description": "...", "parameters": { "paramName": { "type": "string", "required": true, "description": "What this param does" } } } }, "access_policy": { "mode": "module", "module": "policy.ts", "export": "planAccess" }, "env_vars": { "MY_KEY": { "scope": "per_user", "input": "password", "description": "..." } } }`. Parameters must be an object keyed by parameter name (NOT an array). `access_policy.module` records the source file, and `access_policy.export` must be exported from the bundled app entry surface, e.g. `export { planAccess } from "./policy.ts";`. Policy functions receive `{ app, caller, subject, input, metadata, static }` and return `{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }` or `{ effect: "deny", reason }`. `gx.download` scaffolds the base manifest automatically.
 

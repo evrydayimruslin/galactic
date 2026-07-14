@@ -103,6 +103,10 @@ import {
   validatePerUserSettingsValues,
 } from "../services/user-app-settings.ts";
 import { buildAppSecretDiagnostics } from "../services/app-diagnostics.ts";
+import { isAccountSessionAuthSource } from "../services/control-plane-auth.ts";
+import { extractRequestAccessToken } from "../services/request-auth.ts";
+import { isRoutineActorToken } from "../services/routine-auth.ts";
+import { isSandboxActorToken } from "../services/sandbox-actor.ts";
 
 const appsLogger = createServerLogger("APPS");
 const docsLogger = createServerLogger("DOCS");
@@ -348,6 +352,54 @@ export async function handleApps(request: Request): Promise<Response> {
   const method = request.method;
 
   appsLogger.debug("Routing app handler request", { method, path });
+
+  // Tenant code can read its short-lived sandbox bearer. The legacy Apps REST
+  // reads authorize by user id and predate actor app/function scopes, so
+  // accepting that bearer here would let one Agent inspect every Agent the
+  // owner controls (source, call logs, health, and private metadata). Reject a
+  // VERIFIED actor credential before every route. Invalid/forged actor-shaped
+  // tokens still fall through as unauthenticated, preserving public reads.
+  const presentedToken = extractRequestAccessToken(request);
+  if (
+    presentedToken &&
+    (isRoutineActorToken(presentedToken) ||
+      isSandboxActorToken(presentedToken))
+  ) {
+    try {
+      const caller = await authenticate(request);
+      if (
+        caller.authSource === "routine_actor" ||
+        caller.authSource === "sandbox_actor"
+      ) {
+        return error(
+          "Agent runtime credentials cannot access the legacy Apps REST API. Use manifest-bound sandbox capabilities and scoped gx.* tools.",
+          403,
+        );
+      }
+    } catch {
+      // An invalid actor-shaped token grants no private access. Public routes
+      // retain their existing anonymous behavior; protected routes authenticate
+      // again below and fail normally.
+    }
+  }
+
+  // This legacy REST surface predates scoped Connect keys and cannot enforce
+  // gx.test attestations or per-action builder/operator scopes. Keep reads for
+  // compatibility, but require a browser/account session for every mutation.
+  // Connected coding agents use Platform MCP's gx.* control plane instead.
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    try {
+      const caller = await authenticate(request);
+      if (!isAccountSessionAuthSource(caller.authSource)) {
+        return error(
+          "App management through the legacy REST API requires an authenticated Galactic account session. Connected agents must use scoped gx.* tools.",
+          403,
+        );
+      }
+    } catch {
+      return error("Authentication required", 401);
+    }
+  }
 
   // GET /api/apps - List public apps
   if (path === "/api/apps" && method === "GET") {

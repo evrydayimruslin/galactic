@@ -220,6 +220,35 @@ Deno.test("dynamic sandbox: emit + net route through host-side RPC bindings", as
   }
 });
 
+Deno.test("dynamic sandbox: routines cannot emit deferred events outside their budget", async () => {
+  const harness = installSandboxHarness();
+  try {
+    const config = {
+      ...baseConfig(),
+      routineContext: {
+        routineId: "routine-1",
+        routineRunId: "run-1",
+        traceId: "trace-1",
+      },
+    } as RuntimeConfig;
+    await executeInDynamicSandbox(config, "noop", []);
+
+    assert(
+      harness.captured.setup.includes(
+        "galactic.emit is unavailable during routine execution: deferred event fanout is not yet budget-attributed.",
+      ),
+      "routine emit does not fail with the explicit budget-attribution error",
+    );
+    assert(
+      !harness.captured.envKeys.includes("EVENTS"),
+      "routine execution received an EVENTS binding",
+    );
+    assertEquals(harness.constructed.events, false);
+  } finally {
+    harness.restore();
+  }
+});
+
 Deno.test("dynamic sandbox: per-user credential values never enter the sandbox source (Phase 3 vault)", async () => {
   const harness = installSandboxHarness();
   try {

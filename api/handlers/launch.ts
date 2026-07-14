@@ -46,6 +46,7 @@ import {
   LAUNCH_PLATFORM_PRIMITIVES,
   LAUNCH_PUBLIC_ROUTES,
   LAUNCH_SCOPE_CONTRACT,
+  PERSISTENT_AGENT_LAUNCH_POLICY,
   type LaunchCallerFunctionPermissionsResponse,
   type LaunchCallerFunctionPermissionsUpdateRequest,
   type LaunchFunctionInferenceResponse,
@@ -77,6 +78,12 @@ import {
   type LaunchRelevanceSummary,
   type LaunchSemanticSubjectType,
   type LaunchAgentAdminSummary,
+  type LaunchAgentRoutineActionRequest,
+  type LaunchAgentRoutineBlocker,
+  type LaunchAgentRoutineOverview,
+  type LaunchAgentRoutineResponse,
+  type LaunchAgentRoutineRun,
+  type LaunchAgentRoutineUpdateRequest,
   type LaunchAgentFunctionsResponse,
   type LaunchAgentInstallContext,
   type LaunchAgentKind,
@@ -179,6 +186,30 @@ import type {
   AgentGrantUpdateRequest,
 } from "../../shared/contracts/agent-grants.ts";
 import type { SensitiveRoute } from "../services/sensitive-route-rate-limit.ts";
+import {
+  approveRoutineCapabilities,
+  getRoutine,
+  pauseRoutine,
+  resumeRoutine,
+  type StoredRoutine,
+  updateRoutine,
+  validateRoutineActivation,
+} from "../services/routines.ts";
+import {
+  getRoutineMonitorDetail,
+  queueRoutineMonitorRun,
+  type RoutineMonitorDetailResponse,
+} from "../services/routine-monitoring.ts";
+import {
+  RoutinePlatformError,
+  ROUTINE_PLATFORM_FORBIDDEN,
+  ROUTINE_PLATFORM_NOT_FOUND,
+  validateRoutineLaunchActivation,
+} from "../services/routine-platform.ts";
+import {
+  DEFAULT_ROUTINE_BUDGET_POLICY,
+  MIN_ROUTINE_INTERVAL_SECONDS,
+} from "../../shared/contracts/routine.ts";
 
 // Cross-Agent grant + settings mutations are sensitive. The SensitiveRoute enum
 // lives in sensitive-route-rate-limit.ts (outside this file's edit scope), so we
@@ -592,6 +623,30 @@ export async function handleLaunch(request: Request): Promise<Response> {
       return await handleLaunchSettings(request, method);
     }
 
+    const agentRoutineActionMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/routine\/actions$/,
+    );
+    if (agentRoutineActionMatch) {
+      return await handleLaunchAgentRoutine(
+        request,
+        agentRoutineActionMatch[1],
+        method,
+        true,
+      );
+    }
+
+    const agentRoutineMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/routine$/,
+    );
+    if (agentRoutineMatch) {
+      return await handleLaunchAgentRoutine(
+        request,
+        agentRoutineMatch[1],
+        method,
+        false,
+      );
+    }
+
     const agentWiringMatch = path.match(
       /^\/api\/launch\/agents\/([^/]+)\/wiring$/,
     );
@@ -827,6 +882,7 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
     available: true,
     version: LAUNCH_MVP_VERSION,
     thesis: LAUNCH_SCOPE_CONTRACT.thesis,
+    policy: PERSISTENT_AGENT_LAUNCH_POLICY,
     timestamp: new Date().toISOString(),
     baseUrl,
     publicRoutes: LAUNCH_PUBLIC_ROUTES,
@@ -848,6 +904,8 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       discover: "/api/launch/discover?query={query}",
       discoverAlias: "/api/launch/discover?query={query}",
       agentFunctions: "/api/launch/agents/{id}/functions",
+      agentRoutine: "/api/launch/agents/{id}/routine",
+      agentRoutineActions: "/api/launch/agents/{id}/routine/actions",
       // Deprecated alias keys kept for one rename window.
       toolFunctions: "/api/launch/agents/{id}/functions",
       functionRun: "/api/launch/agents/{id}/functions/{functionName}/run",
@@ -1691,6 +1749,68 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               }),
             },
             "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/routine": {
+        get: {
+          operationId: "getLaunchAgentRoutine",
+          summary: "Get the owner-safe state of a private Agent's primary routine",
+          description:
+            "Account-session and owner-only. Returns mission, interval cadence, finite hard budgets, exact capability approvals, blockers, and sanitized recent-run summaries. Secret values and routine config are never returned.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Private Agent id or slug",
+          }],
+          responses: {
+            "200": { description: "Primary routine overview, or an honest null proposal" },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+            "404": { description: "Owned Agent not found" },
+            "409": { description: "Agent is not private" },
+          },
+        },
+        patch: {
+          operationId: "updateLaunchAgentRoutine",
+          summary: "Update mission, interval cadence, and all hard budget ceilings",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          responses: {
+            "200": { description: "Updated primary routine overview" },
+            "400": { description: "Invalid cadence or budget ceilings" },
+            "403": { description: "Account session required" },
+            "404": { description: "Routine proposal not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/routine/actions": {
+        post: {
+          operationId: "actOnLaunchAgentRoutine",
+          summary: "Approve exact capabilities, activate, pause, or queue a manual wake",
+          description:
+            "Owner account-session only. Activation and manual wakes use the same centralized launch-safety invariants as the executor.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          responses: {
+            "200": { description: "Updated primary routine overview" },
+            "400": { description: "Invalid action or capability ids" },
+            "403": { description: "Account session required" },
+            "404": { description: "Routine proposal not found" },
+            "409": { description: "Activation or run blocked by launch-safety invariants" },
           },
         },
       },
@@ -3023,6 +3143,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
     "x-launch-scope": {
       version: LAUNCH_MVP_VERSION,
       thesis: LAUNCH_SCOPE_CONTRACT.thesis,
+      policy: PERSISTENT_AGENT_LAUNCH_POLICY,
       includedCapabilities: LAUNCH_INCLUDED_CAPABILITIES,
       deferredCapabilities: LAUNCH_DEFERRED_CAPABILITIES,
       publicRoutes: LAUNCH_PUBLIC_ROUTES,
@@ -4259,6 +4380,549 @@ async function setFolderMember(
     folderId: rawFolderId,
     generatedAt: new Date().toISOString(),
   });
+}
+
+interface PrimaryRoutineIdRow {
+  id: string;
+}
+
+const LAUNCH_ROUTINE_BUDGET_KEYS = [
+  "maxLightPerRun",
+  "maxLightPerDay",
+  "maxLightPerMonth",
+  "maxCallsPerRun",
+] as const;
+
+function requireAccountSessionForRoutine(user: AuthUser): void {
+  if (
+    user.authSource === "api_token" ||
+    user.authSource === "routine_actor" ||
+    user.authSource === "sandbox_actor"
+  ) {
+    throw new RequestValidationError(
+      "Persistent Agent routine management requires an account session",
+      403,
+    );
+  }
+}
+
+async function resolveOwnerPrivateRoutineAgent(
+  user: AuthUser,
+  encodedLocator: string,
+): Promise<LaunchAppRow | Response> {
+  const locator = parseLocator(encodedLocator);
+  const row = await fetchToolByLocator(locator, { ownerId: user.id });
+  if (!row) return error("Agent not found", 404);
+  if (row.visibility !== "private") {
+    return error(
+      "Persistent Agent routines are available only for private Agents you own",
+      409,
+    );
+  }
+  return row;
+}
+
+async function fetchPrimaryRoutineId(
+  userId: string,
+  appId: string,
+): Promise<string | null> {
+  const rows = await dbGet<PrimaryRoutineIdRow>(getDbConfig(), "user_routines", {
+    user_id: `eq.${userId}`,
+    composer_app_id: `eq.${appId}`,
+    deleted_at: "is.null",
+    select: "id",
+    order: "created_at.asc",
+    limit: "1",
+  });
+  return rows[0]?.id || null;
+}
+
+function routineIntervalSeconds(routine: StoredRoutine): number {
+  if (typeof routine.schedule.every_seconds === "number") {
+    return routine.schedule.every_seconds;
+  }
+  if (typeof routine.schedule.every_minutes === "number") {
+    return routine.schedule.every_minutes * 60;
+  }
+  return 0;
+}
+
+function safeRoutineReason(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9_.-]{0,79}$/u.test(normalized)
+    ? normalized
+    : null;
+}
+
+function routineAutoPauseReason(routine: StoredRoutine): string | null {
+  const metadata = asRecord(routine.metadata);
+  const autoPause = asRecord(metadata?.auto_pause);
+  return safeRoutineReason(autoPause?.reason);
+}
+
+function routineRunErrorCode(
+  run: RoutineMonitorDetailResponse["routine"]["recent_runs"][number] | undefined,
+): string | null {
+  if (!run) return null;
+  return safeRoutineReason(asRecord(run.error)?.code);
+}
+
+function toLaunchRoutineRun(
+  run: RoutineMonitorDetailResponse["routine"]["recent_runs"][number],
+): LaunchAgentRoutineRun {
+  return {
+    id: run.id,
+    status: run.status,
+    trigger: run.trigger,
+    traceId: run.trace_id,
+    startedAt: run.started_at,
+    completedAt: run.completed_at,
+    durationMs: run.duration_ms,
+    totalLight: Number.isFinite(run.total_light) ? Math.max(0, run.total_light) : 0,
+    summary: typeof run.summary === "string" ? run.summary.slice(0, 500) : null,
+    errorCode: routineRunErrorCode(run),
+    createdAt: run.created_at,
+  };
+}
+
+function activationErrorBlocker(err: unknown): LaunchAgentRoutineBlocker | null {
+  if (!(err instanceof RoutinePlatformError)) return null;
+  return {
+    code: err.code === ROUTINE_PLATFORM_FORBIDDEN
+      ? "private_owner_required"
+      : err.code === ROUTINE_PLATFORM_NOT_FOUND
+      ? "capability_target_not_found"
+      : "launch_invariant_failed",
+    message: err.message,
+  };
+}
+
+async function collectLaunchRoutineBlockers(
+  userId: string,
+  routine: StoredRoutine,
+): Promise<LaunchAgentRoutineBlocker[]> {
+  const blockers: LaunchAgentRoutineBlocker[] = validateRoutineActivation(routine)
+    .blockers.map((blocker) => ({
+      code: blocker.code,
+      message: blocker.message,
+      ...(blocker.capability_ids
+        ? { capabilityIds: blocker.capability_ids }
+        : {}),
+    }));
+  try {
+    await validateRoutineLaunchActivation(userId, routine);
+  } catch (err) {
+    const blocker = activationErrorBlocker(err);
+    if (!blocker) throw err;
+    blockers.push(blocker);
+  }
+  if (routine.status === "disabled") {
+    blockers.push({
+      code: "routine_disabled",
+      message: "This routine is disabled and cannot be activated.",
+    });
+  }
+  return blockers.filter((blocker, index, all) =>
+    all.findIndex((candidate) =>
+      candidate.code === blocker.code && candidate.message === blocker.message
+    ) === index
+  );
+}
+
+async function buildLaunchAgentRoutineResponse(
+  userId: string,
+  row: LaunchAppRow,
+  routineId: string | null,
+): Promise<LaunchAgentRoutineResponse> {
+  const agent = {
+    id: row.id,
+    slug: row.slug || row.id,
+    name: row.name || row.slug || row.id,
+  };
+  if (!routineId) {
+    return { agent, routine: null, generatedAt: new Date().toISOString() };
+  }
+
+  const detail = await getRoutineMonitorDetail(userId, routineId);
+  if (!detail) {
+    return { agent, routine: null, generatedAt: new Date().toISOString() };
+  }
+  const stored: StoredRoutine = {
+    ...detail.routine,
+    capabilities: detail.capabilities,
+    dashboard_bindings: detail.dashboard_bindings,
+  };
+  if (stored.status === "deleted") {
+    throw new Error("Deleted routine was returned by the active routine query");
+  }
+  const blockers = await collectLaunchRoutineBlockers(userId, stored);
+  const budgetPolicy = {
+    ...DEFAULT_ROUTINE_BUDGET_POLICY,
+    ...(stored.budget_policy || {}),
+  };
+  const autoPauseReason = stored.status === "active"
+    ? null
+    : routineAutoPauseReason(stored);
+  const lastFailedRun = detail.routine.recent_runs.find((run) =>
+    run.status === "failed" || run.status === "skipped"
+  );
+  const errorReason = stored.status === "error"
+    ? routineRunErrorCode(lastFailedRun || detail.routine.recent_runs[0]) ||
+      autoPauseReason || "routine_error"
+    : autoPauseReason;
+  const hasPendingCapabilities = detail.capabilities.some((capability) =>
+    !capability.approved
+  );
+  const activationReady = blockers.length === 0;
+  const routine: LaunchAgentRoutineOverview = {
+    id: stored.id,
+    status: stored.status,
+    health: detail.routine.health,
+    mission: stored.intent || "",
+    intervalSeconds: routineIntervalSeconds(stored),
+    budgets: {
+      maxLightPerRun: budgetPolicy.max_light_per_run,
+      maxLightPerDay: budgetPolicy.max_light_per_day,
+      maxLightPerMonth: budgetPolicy.max_light_per_month,
+      maxCallsPerRun: budgetPolicy.max_calls_per_run,
+    },
+    capabilities: detail.capabilities.map((capability) => ({
+      id: capability.id,
+      appId: capability.app_id,
+      appRef: capability.app_ref,
+      functionName: capability.function_name,
+      access: capability.access,
+      required: capability.required,
+      purpose: capability.purpose,
+      approved: capability.approved,
+      approvedAt: capability.approved_at,
+    })),
+    blockers,
+    reportingDestination: {
+      kind: "galactic_inbox",
+      label: "Galactic inbox",
+    },
+    nextRunAt: stored.next_run_at,
+    lastRunAt: stored.last_run_at,
+    lastSuccessAt: stored.last_success_at,
+    lastErrorAt: stored.last_error_at,
+    failureCount: stored.failure_count,
+    autoPauseReason,
+    errorReason,
+    recentRuns: detail.routine.recent_runs.slice(0, 5).map(toLaunchRoutineRun),
+    actions: {
+      canApproveCapabilities: hasPendingCapabilities,
+      canActivate: (stored.status === "paused" || stored.status === "error") &&
+        activationReady,
+      canPause: stored.status === "active",
+      canRunNow: stored.status === "active" && activationReady,
+    },
+  };
+  return { agent, routine, generatedAt: new Date().toISOString() };
+}
+
+function parseLaunchRoutineBudgets(
+  value: unknown,
+): LaunchAgentRoutineUpdateRequest["budgets"] {
+  const record = asRecord(value);
+  if (!record) {
+    throw new RequestValidationError("budgets must be an object");
+  }
+  const unknown = Object.keys(record).filter((key) =>
+    !LAUNCH_ROUTINE_BUDGET_KEYS.includes(
+      key as typeof LAUNCH_ROUTINE_BUDGET_KEYS[number],
+    )
+  );
+  if (unknown.length > 0) {
+    throw new RequestValidationError(`Unknown budget fields: ${unknown.join(", ")}`);
+  }
+  for (const key of LAUNCH_ROUTINE_BUDGET_KEYS) {
+    if (typeof record[key] !== "number" || !Number.isFinite(record[key])) {
+      throw new RequestValidationError(`budgets.${key} must be a finite number`);
+    }
+  }
+  const budgets = record as unknown as NonNullable<
+    LaunchAgentRoutineUpdateRequest["budgets"]
+  >;
+  if (
+    budgets.maxLightPerRun < 0 ||
+    budgets.maxLightPerDay < budgets.maxLightPerRun ||
+    budgets.maxLightPerMonth < budgets.maxLightPerDay ||
+    !Number.isSafeInteger(budgets.maxCallsPerRun) ||
+    budgets.maxCallsPerRun < 1
+  ) {
+    throw new RequestValidationError(
+      "Budget ceilings must be non-negative, calls must be a positive integer, and run ≤ day ≤ month",
+    );
+  }
+  return budgets;
+}
+
+async function updateLaunchAgentRoutine(
+  userId: string,
+  routine: StoredRoutine,
+  body: LaunchAgentRoutineUpdateRequest,
+): Promise<void> {
+  const suppliedKeys = Object.keys(body);
+  const unknown = suppliedKeys.filter((key) =>
+    key !== "mission" && key !== "intervalSeconds" && key !== "budgets"
+  );
+  if (unknown.length > 0) {
+    throw new RequestValidationError(`Unknown routine fields: ${unknown.join(", ")}`);
+  }
+  if (suppliedKeys.length === 0) {
+    throw new RequestValidationError("Provide mission, intervalSeconds, or budgets");
+  }
+  if (
+    body.mission !== undefined && body.mission !== null &&
+    typeof body.mission !== "string"
+  ) {
+    throw new RequestValidationError("mission must be a string or null");
+  }
+  if (
+    body.intervalSeconds !== undefined &&
+    (!Number.isSafeInteger(body.intervalSeconds) ||
+      body.intervalSeconds < MIN_ROUTINE_INTERVAL_SECONDS)
+  ) {
+    throw new RequestValidationError(
+      `intervalSeconds must be an integer of at least ${MIN_ROUTINE_INTERVAL_SECONDS}`,
+    );
+  }
+  if (
+    body.intervalSeconds !== undefined && routine.status === "active" &&
+    (!Number.isFinite(Date.now() + body.intervalSeconds * 1000) ||
+      Date.now() + body.intervalSeconds * 1000 > 8.64e15)
+  ) {
+    throw new RequestValidationError("intervalSeconds is too large to schedule");
+  }
+
+  const currentBudget = {
+    ...DEFAULT_ROUTINE_BUDGET_POLICY,
+    ...(routine.budget_policy || {}),
+  };
+  const budgets = body.budgets === undefined
+    ? {
+      maxLightPerRun: currentBudget.max_light_per_run,
+      maxLightPerDay: currentBudget.max_light_per_day,
+      maxLightPerMonth: currentBudget.max_light_per_month,
+      maxCallsPerRun: currentBudget.max_calls_per_run,
+    }
+    : parseLaunchRoutineBudgets(body.budgets)!;
+  const schedule = body.intervalSeconds === undefined
+    ? routine.schedule
+    : { type: "interval" as const, every_seconds: body.intervalSeconds };
+  const budgetPolicy = {
+    max_light_per_run: budgets.maxLightPerRun,
+    max_light_per_day: budgets.maxLightPerDay,
+    max_light_per_month: budgets.maxLightPerMonth,
+    max_calls_per_run: budgets.maxCallsPerRun,
+  };
+  const proposed: StoredRoutine = {
+    ...routine,
+    schedule,
+    budget_policy: budgetPolicy,
+  };
+  const safetyBlockers = validateRoutineActivation(proposed).blockers.filter((blocker) =>
+    blocker.code !== "pending_required_capabilities"
+  );
+  if (safetyBlockers.length > 0) {
+    throw new RequestValidationError(safetyBlockers.map((item) => item.message).join(" "));
+  }
+  // This validates private ownership, interval-only cadence, one-primary, and
+  // owned-private capability targets before any update is persisted.
+  await validateRoutineLaunchActivation(userId, proposed);
+
+  await updateRoutine(userId, routine.id, {
+    ...(body.mission !== undefined ? { intent: body.mission } : {}),
+    ...(body.intervalSeconds !== undefined
+      ? {
+        schedule,
+        next_run_at: routine.status === "active"
+          ? new Date(Date.now() + body.intervalSeconds * 1000).toISOString()
+          : routine.next_run_at,
+      }
+      : {}),
+    ...(body.budgets !== undefined ? { budget_policy: budgetPolicy } : {}),
+  });
+}
+
+function launchRoutineFailure(err: unknown): Response | null {
+  if (err instanceof RequestValidationError) {
+    return error(err.message, err.status);
+  }
+  if (err instanceof RoutinePlatformError) {
+    const status = err.code === ROUTINE_PLATFORM_FORBIDDEN
+      ? 403
+      : err.code === ROUTINE_PLATFORM_NOT_FOUND
+      ? 404
+      : 409;
+    return json({
+      error: err.message,
+      blockers: [activationErrorBlocker(err)],
+    }, status);
+  }
+  if (err instanceof Error) {
+    const withCode = err as Error & {
+      code?: string;
+      blockers?: Array<{ code: string; message: string; capability_ids?: string[] }>;
+    };
+    if (withCode.code === "ROUTINE_ACTIVATION_BLOCKED") {
+      return json({
+        error: err.message,
+        blockers: (withCode.blockers || []).map((blocker) => ({
+          code: blocker.code,
+          message: blocker.message,
+          ...(blocker.capability_ids
+            ? { capabilityIds: blocker.capability_ids }
+            : {}),
+        })),
+      }, 409);
+    }
+    if (
+      err.message.startsWith("Capabilities do not belong") ||
+      err.message.includes("must be")
+    ) {
+      return error(err.message, 400);
+    }
+  }
+  return null;
+}
+
+async function handleLaunchAgentRoutine(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+  actionsRoute: boolean,
+): Promise<Response> {
+  if (actionsRoute ? method !== "POST" : method !== "GET" && method !== "PATCH") {
+    return error("Method not allowed for persistent Agent routine", 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForRoutine(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(user, encodedLocator);
+  if (resolved instanceof Response) return resolved;
+  const row = resolved;
+  const routineId = await fetchPrimaryRoutineId(user.id, row.id);
+  if (!routineId) {
+    if (method !== "GET") return error("Agent has no routine proposal", 404);
+    return json(await buildLaunchAgentRoutineResponse(user.id, row, null));
+  }
+
+  try {
+    if (!actionsRoute && method === "PATCH") {
+      const routine = await getRoutine(user.id, routineId);
+      if (!routine) return error("Agent has no routine proposal", 404);
+      const rawBody = await readJsonBody<unknown>(request);
+      const body = asRecord(rawBody);
+      if (!body) throw new RequestValidationError("Request body must be an object");
+      await updateLaunchAgentRoutine(user.id, routine, body);
+    } else if (actionsRoute) {
+      const rawBody = await readJsonBody<unknown>(request);
+      const bodyRecord = asRecord(rawBody);
+      if (!bodyRecord) {
+        throw new RequestValidationError("Request body must be an object");
+      }
+      const unknownActionFields = Object.keys(bodyRecord).filter((key) =>
+        key !== "action" && key !== "capabilityIds"
+      );
+      if (unknownActionFields.length > 0) {
+        throw new RequestValidationError(
+          `Unknown routine action fields: ${unknownActionFields.join(", ")}`,
+        );
+      }
+      const body = bodyRecord as unknown as LaunchAgentRoutineActionRequest;
+      const routine = await getRoutine(user.id, routineId);
+      if (!routine) return error("Agent has no routine proposal", 404);
+      if (body.action === "approve_capabilities") {
+        if (
+          !Array.isArray(body.capabilityIds) || body.capabilityIds.length === 0 ||
+          body.capabilityIds.length > 200
+        ) {
+          throw new RequestValidationError(
+            "capabilityIds must list 1 to 200 exact pending capabilities to approve",
+          );
+        }
+        const capabilityIds = Array.from(new Set(body.capabilityIds));
+        if (capabilityIds.some((id) => typeof id !== "string" || !id.trim())) {
+          throw new RequestValidationError("capabilityIds must contain non-empty strings");
+        }
+        const pendingIds = new Set(
+          routine.capabilities.filter((capability) => !capability.approved).map((capability) =>
+            capability.id
+          ),
+        );
+        const notPending = capabilityIds.filter((id) => !pendingIds.has(id));
+        if (notPending.length > 0) {
+          throw new RequestValidationError(
+            `Capabilities are no longer pending: ${notPending.join(", ")}`,
+            409,
+          );
+        }
+        await approveRoutineCapabilities(user.id, routineId, capabilityIds);
+      } else if (body.action === "activate") {
+        if (body.capabilityIds !== undefined) {
+          throw new RequestValidationError(
+            "capabilityIds is valid only for approve_capabilities",
+          );
+        }
+        if (
+          routine.status !== "paused" && routine.status !== "error" &&
+          routine.status !== "active"
+        ) {
+          throw new RequestValidationError(
+            `Routine is ${routine.status} and cannot be activated`,
+            409,
+          );
+        }
+        await validateRoutineLaunchActivation(user.id, routine);
+        await resumeRoutine(user.id, routineId);
+      } else if (body.action === "pause") {
+        if (body.capabilityIds !== undefined) {
+          throw new RequestValidationError(
+            "capabilityIds is valid only for approve_capabilities",
+          );
+        }
+        if (routine.status === "disabled") {
+          throw new RequestValidationError(
+            "A disabled routine cannot be changed through the launch lifecycle",
+            409,
+          );
+        }
+        await pauseRoutine(user.id, routineId);
+      } else if (body.action === "run_now") {
+        if (body.capabilityIds !== undefined) {
+          throw new RequestValidationError(
+            "capabilityIds is valid only for approve_capabilities",
+          );
+        }
+        if (routine.status !== "active") {
+          throw new RequestValidationError(
+            `Routine is ${routine.status}; activate it before running manually`,
+            409,
+          );
+        }
+        const blockers = await collectLaunchRoutineBlockers(user.id, routine);
+        if (blockers.length > 0) {
+          return json({
+            error: "Routine cannot run until its launch-safety blockers are resolved",
+            blockers,
+          }, 409);
+        }
+        await queueRoutineMonitorRun(user.id, routineId);
+      } else {
+        throw new RequestValidationError(
+          "action must be approve_capabilities, activate, pause, or run_now",
+        );
+      }
+    }
+  } catch (err) {
+    const response = launchRoutineFailure(err);
+    if (response) return response;
+    throw err;
+  }
+
+  return json(await buildLaunchAgentRoutineResponse(user.id, row, routineId));
 }
 
 async function handleLaunchTool(
@@ -5619,9 +6283,9 @@ function buildInstallInstructions(
   const claudeCodeAddCommand =
     `claude mcp add --transport http --scope user galactic ${mcpUrl} --header "Authorization: ${bearer}"`;
   const connectPrompt = [
-    "Set up Galactic for me, then show me what it can do.",
+    "Connect Galactic to this coding agent, then help me conjure one useful full-time Agent.",
     "",
-    "Galactic is one MCP connection that opens onto a growing collection and public marketplace of Agents (apps) you can discover and run, plus everything you need to build and deploy new ones — with unified auth and per-call payments handled through this single connection.",
+    "Galactic hosts private persistent Agents. You write and test the Agent; Galactic keeps it scheduled, sandboxed, stateful, bounded by owner-approved budgets and capabilities, and visible through run history and inbox reports.",
     "",
     "1. Install the MCP server (pick whichever works in your environment):",
     `   - Claude Code: ${claudeCodeAddCommand}`,
@@ -5631,7 +6295,7 @@ function buildInstallInstructions(
     "2. Connect, then learn the platform: the server's initialize response carries the full platform guide, including a first-contact directive for how to orient me on this first connection. The same docs are also served at " +
     `${baseUrl}/api/skills.`,
     "",
-    `3. Take a look around, then give me a real orientation — not a few lines. Call gx.discover with {"scope":"library"} to see the Agents already on this account, and {"scope":"appstore"} to sample what's published in the wider marketplace. Then follow the first-contact directive in your platform guide and write me an informative, structured first message. If for any reason that directive isn't in the guide, cover it yourself: explain how Galactic works (discover, call, build, deploy), tell me plainly that you can build and deploy new Agents for me — not only find and run existing ones — and invite me to ask you how to use or build anything. Lead with one or two real Agents you actually found, so it's concrete, not a generic pitch. Be my guide to it.`,
+    '3. Inspect only my private Agent library with gx.discover({ scope: "library" }). Then ask me for one recurring responsibility. Turn it into a mission, scaffold with gx.download({ full_time: true }), implement and test a representative wake, upload it privately, and stop for my explicit review of capabilities, grants, cadence, secrets, and hard budgets before activation.',
     "",
     "Treat the API key in this prompt as a secret: never echo it back, log it, or commit it anywhere.",
   ].join("\n");
@@ -5821,7 +6485,7 @@ async function buildToolInstallContext(
     `   - Claude Code: claude mcp add --transport http --scope user ${tool.slug} ${agentMcpUrl} --header "Authorization: ${bearer}"`,
     `   - Any MCP config file: ${JSON.stringify(agentMcpConfig)}`,
     "",
-    `2. Connect, then run tools/list to see what "${tool.name}" can do. ${publicToolUrl} documents pricing and trust.`,
+    `2. Connect, then run tools/list to see what "${tool.name}" can do. ${publicToolUrl} shows its Overview, Functions, Interfaces, and connection status.`,
     "",
     `3. Prove it works: pick its most representative read-only function and call it, then tell me in a few lines how you can use "${tool.name}" for me going forward.`,
     "",
@@ -5848,7 +6512,7 @@ async function buildToolInstallContext(
       appIds: [tool.id],
     },
     agentHandoff: [
-      `Inspect ${publicToolUrl} for pricing and trust.`,
+      `Inspect ${publicToolUrl} for the Agent's mission, functions, interfaces, and runtime setup.`,
       `Connect via this Agent's dedicated MCP endpoint ${agentMcpUrl} (or the platform endpoint ${platformMcpUrl}) with a bearer API key scoped to app ${tool.id}.`,
       `Call this Agent through MCP/API, then return ${publicToolUrl} when UI is useful.`,
       "Preserve receipt_id values and credits balance errors in the final agent response.",

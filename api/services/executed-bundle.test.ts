@@ -9,6 +9,7 @@ import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals
 import {
   __resetVerdictCacheForTest,
   type BundleAttestation,
+  deleteLiveExecutedBundle,
   executedBundleVerifyMode,
   isExecutedBundleViolation,
   loadLiveExecutedBundle,
@@ -78,6 +79,22 @@ Deno.test("executed bundle: bundle + attestation are stored atomically (KV metad
     assert(entry.metadata, "attestation rides in KV metadata, not a separate key");
     // No separate sidecar key exists.
     assert(!kv.store.has("esm:app_1:latest:trust"));
+  } finally {
+    kv.restore();
+  }
+});
+
+Deno.test("executed bundle: ephemeral pointers can be deleted after gx.test", async () => {
+  const kv = installKv();
+  try {
+    await putLiveExecutedBundle({
+      appId: "test_ephemeral",
+      version: "test",
+      esmCode: "export const ok = true;",
+    });
+    assert(kv.store.has(KEY("test_ephemeral")));
+    await deleteLiveExecutedBundle("test_ephemeral");
+    assert(!kv.store.has(KEY("test_ephemeral")));
   } finally {
     kv.restore();
   }

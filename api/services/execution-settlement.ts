@@ -37,6 +37,12 @@ import { FREE_MODE_BALANCE_LIGHT } from "../../shared/contracts/ai.ts";
 import { functionUsesInference, isFreeModeEnabled } from "./free-mode.ts";
 import { recordRoutineCallContribution } from "./routine-rollups.ts";
 import {
+  releaseRoutineRunBudgetReservation,
+  reserveRoutineRunBudget,
+  type RoutineBudgetReservation,
+  settleRoutineRunBudgetReservation,
+} from "./routine-budget.ts";
+import {
   type RoutineTraceContext,
   routineTraceMetadata,
 } from "./routine-trace.ts";
@@ -131,6 +137,13 @@ export interface AppCallSettlementResult {
     | "access_policy_error"
     | "free_mode_paid_blocked"
     | "free_mode_ai_requires_byok"
+    | "routine_budget_calls_exhausted"
+    | "routine_budget_light_exhausted"
+    | "routine_budget_policy_missing"
+    | "routine_budget_reservation_in_flight"
+    | "routine_budget_reservation_finalized"
+    | "routine_budget_unavailable"
+    | "routine_run_not_active"
     | "settlement_unavailable";
   insufficientBalanceMessage?: string;
   receiptId?: string;
@@ -145,6 +158,8 @@ export interface RuntimeAppCallPricingPreflight {
   freeCallLimit: number;
   freeCallCounterKey: string | null;
   policySource?: string;
+  /** Server-side admission reservation; never accepted from tenant code. */
+  routineBudgetReservation?: RoutineBudgetReservation;
 }
 
 export interface RuntimeCloudSettlementForAppCall {
@@ -573,18 +588,18 @@ export async function preflightRuntimeCloudHold(
     // post-free-quota, so free/self/sponsored calls are naturally exempt); the
     // tax read only runs when a rate is configured, so an empty rate table adds
     // zero hot-path cost.
+    let preflightTaxLight = 0;
     if (hold.appChargeLight > 0) {
-      let taxLight = 0;
       if (isSalesTaxConfigured()) {
         const resolveTaxLocation = deps?.resolveBuyerTaxLocationFn ??
           resolveBuyerTaxLocation;
         const buyer = await resolveTaxLocation(params.userId);
-        taxLight = computeSalesTaxLight(
+        preflightTaxLight = computeSalesTaxLight(
           hold.appChargeLight,
           resolveSalesTaxRateBps(buyer?.location ?? null),
         );
       }
-      const requiredLight = hold.appChargeLight + taxLight;
+      const requiredLight = hold.appChargeLight + preflightTaxLight;
       if (hold.newBalance < requiredLight) {
         await releaseCloudUsageHold({ holdId: hold.holdId }, deps).catch(
           (releaseErr) =>
@@ -607,9 +622,78 @@ export async function preflightRuntimeCloudHold(
             billing_config_version: billingConfig.version,
             app_price_light: hold.appPriceLight,
             app_charge_light: hold.appChargeLight,
-            sales_tax_light: taxLight,
+            sales_tax_light: preflightTaxLight,
             required_with_tax_light: requiredLight,
             free_call_limit: freeCallLimit,
+          },
+        };
+      }
+    }
+
+    let routineBudgetReservation: RoutineBudgetReservation | undefined;
+    if (params.routineContext) {
+      try {
+        const admission = await reserveRoutineRunBudget({
+          userId: params.userId,
+          routine: params.routineContext,
+          reservationKey: `app:${params.receiptId || crypto.randomUUID()}`,
+          kind: "app_call",
+          // The runtime hold is sized from the execution timeout, so actual
+          // Worker usage cannot exceed it. App charge is fixed at preflight.
+          reserveLight: hold.expectedAmountLight + hold.appChargeLight +
+            preflightTaxLight,
+          expiresAt: new Date(
+            Date.now() + params.timeoutMs + 2 * 60_000,
+          ).toISOString(),
+        }, { fetchFn: deps?.fetchFn });
+        if (!admission.allowed || !admission.reservation) {
+          await releaseCloudUsageHold({ holdId: hold.holdId }, deps).catch(
+            (releaseErr) =>
+              console.error(
+                "[ROUTINE] Failed to release cloud hold after budget denial:",
+                releaseErr,
+              ),
+          );
+          return {
+            hold: null,
+            pricing: basePricing,
+            billingConfig,
+            insufficientBalance: true,
+            insufficientBalanceCode: admission.code === "ok"
+              ? "routine_budget_policy_missing"
+              : admission.code,
+            insufficientBalanceMessage: admission.message,
+            metadata: {
+              ...accessDecision.metadata,
+              routine_budget_denied: true,
+              routine_budget_code: admission.code,
+              routine_id: params.routineContext.routineId,
+              routine_run_id: params.routineContext.routineRunId,
+            },
+          };
+        }
+        routineBudgetReservation = admission.reservation;
+      } catch (budgetError) {
+        // A routine budget read is an authorization decision, not telemetry.
+        // Fail closed on database/RPC errors and release the economic hold.
+        await releaseCloudUsageHold({ holdId: hold.holdId }, deps).catch(
+          () => {},
+        );
+        return {
+          hold: null,
+          pricing: basePricing,
+          billingConfig,
+          insufficientBalance: true,
+          insufficientBalanceCode: "routine_budget_unavailable",
+          insufficientBalanceMessage:
+            "Routine budget admission is temporarily unavailable; the call was not executed.",
+          metadata: {
+            ...accessDecision.metadata,
+            routine_budget_denied: true,
+            routine_budget_code: "routine_budget_unavailable",
+            routine_budget_error: budgetError instanceof Error
+              ? budgetError.message
+              : String(budgetError),
           },
         };
       }
@@ -625,6 +709,7 @@ export async function preflightRuntimeCloudHold(
         freeCallLimit: hold.freeCallLimit,
         freeCallCounterKey: accessDecision.freeQuotaCounterKey,
         policySource: accessDecision.source,
+        ...(routineBudgetReservation ? { routineBudgetReservation } : {}),
       },
       billingConfig,
       insufficientBalance: false,
@@ -736,6 +821,7 @@ export function createRuntimeOperationMeteringContext(
     receiptId: params.receiptId,
     source: params.method,
     billingConfigVersion: params.preflight.billingConfig.version,
+    routineContext: params.routineContext ?? null,
     metadata: {
       ...routineTraceMetadata(params.routineContext),
       app_slug: params.app.slug,
@@ -812,6 +898,10 @@ export async function debitWidgetPullUsage(
 ): Promise<WidgetPullUsageResult | null> {
   const hold = params.preflight.hold;
   if (!hold) return null;
+
+  // Widget refresh micro-operations follow the same launch invariant as
+  // KV/R2/D1: a routine pays only the already-admitted runtime/app/AI costs.
+  if (params.routineContext) return null;
 
   const units = 1;
   const billingConfig = params.preflight.billingConfig;
@@ -1426,9 +1516,15 @@ export async function settleAndLogAppExecution(
     routineContext: params.routineContext,
   }, deps);
 
-  const routineCostLight = params.receiptId
-    ? settlement.appChargeLight
-    : settlement.chargedLight;
+  // The hard reservation covers the full caller-funded operation, so the run
+  // ledger must do the same before that reservation is released. Omitting the
+  // infra component here would restore reserved capacity without recording
+  // the corresponding spend and allow later calls to exceed the ceiling.
+  const routineCostLight = Math.max(
+    0,
+    settlement.appChargeLight + settlement.infraChargeLight +
+      settlement.taxAmountLight,
+  );
   const routineContribution = params.routineContext
     ? recordRoutineCallContribution({
       userId: params.userId,
@@ -1600,6 +1696,48 @@ export async function settleAndLogAppExecution(
   }
 
   const routineStep = routineContribution ? await routineContribution : null;
+
+  const budgetReservation = params.runtimePricingPreflight
+    ?.routineBudgetReservation;
+  if (budgetReservation && params.routineContext && routineStep) {
+    // recordRoutineCallContribution already applied this call's actual spend
+    // to routine_runs.total_light. Settling only releases the unused reserved
+    // capacity; applySpend=false prevents double accounting.
+    await settleRoutineRunBudgetReservation({
+      reservationId: budgetReservation.id,
+      userId: params.userId,
+      actualLight: routineCostLight,
+      applySpend: false,
+    }, { fetchFn: deps?.fetchFn }).catch((err) => {
+      // Conservative failure mode: leave the reservation live until expiry so
+      // a bookkeeping outage can never create extra budget capacity.
+      console.error("[ROUTINE] Failed to settle budget reservation:", err);
+    });
+  } else if (budgetReservation && params.routineContext && !routineStep) {
+    const actualLight = routineCostLight;
+    // A charged call must remain counted even when step/receipt telemetry is
+    // unavailable. Apply the authoritative settlement amount directly to the
+    // run instead of letting the reservation expire and undercount spend.
+    if (actualLight > 0 || params.success) {
+      await settleRoutineRunBudgetReservation({
+        reservationId: budgetReservation.id,
+        userId: params.userId,
+        actualLight,
+        applySpend: true,
+      }, { fetchFn: deps?.fetchFn }).catch((err) => {
+        // Leave the reservation live when the fallback write itself fails, so
+        // an outage cannot restore capacity while accounting is uncertain.
+        console.error("[ROUTINE] Failed to apply fallback budget spend:", err);
+      });
+    } else {
+      // A known zero-spend pre-execution failure may release monetary capacity;
+      // the reservation row still permanently consumes its call slot.
+      await releaseRoutineRunBudgetReservation({
+        reservationId: budgetReservation.id,
+        userId: params.userId,
+      }, { fetchFn: deps?.fetchFn }).catch(() => {});
+    }
+  }
 
   return {
     settlement,

@@ -41,6 +41,19 @@ export interface RoutineBudgetDefaults {
   max_calls_per_run?: number;
 }
 
+// Safe defaults for a newly-created persistent Agent. These are deliberately
+// defined in the shared contract so every creation surface (MCP, website, and
+// future clients) starts from the same bounded policy. Callers may lower or
+// raise an individual ceiling, but activation always materializes all four.
+export const DEFAULT_ROUTINE_BUDGET_POLICY: Required<RoutineBudgetDefaults> = {
+  max_light_per_run: 10,
+  max_light_per_day: 100,
+  max_light_per_month: 1_000,
+  max_calls_per_run: 25,
+};
+
+export const MIN_ROUTINE_INTERVAL_SECONDS = 60;
+
 export interface RoutineApprovalPolicy {
   require_user_approval?: boolean;
   require_paid_capability_approval?: boolean;

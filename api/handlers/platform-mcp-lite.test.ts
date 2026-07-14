@@ -13,6 +13,7 @@ const CORE = [
   'gx.grants',
   'gx.job',
   'gx.memory',
+  'gx.routine',
   'gx.secrets',
   'gx.set',
   'gx.test',
@@ -40,7 +41,7 @@ Deno.test('lite manifest (default ON) advertises only the launch-core tools', ()
     // Demoted tools are hidden from tools/list.
     assert(!names().includes('gx.marketplace'));
     assert(!names().includes('gx.wallet'));
-    assert(!names().includes('gx.routine'));
+    assert(names().includes('gx.routine'));
     // ul.auth.link is provisional-only — hidden for authenticated sessions.
     assert(!names().includes('gx.auth.link'));
     // PR1: legacy names are gone from the advertised list.
@@ -70,5 +71,40 @@ Deno.test('PLATFORM_MCP_LITE=0 restores the full manifest', () => {
     // PR1: legacy connect/connections never advertised, even in full mode.
     assert(!full.includes('gx.connect'));
     assert(!full.includes('gx.connections'));
+  });
+});
+
+Deno.test('tools/list hides control-plane tools from apps:call API keys', () => {
+  withEnv({}, () => {
+    const scoped = getPlatformTools({
+      auth: { authSource: 'api_token', scopes: ['apps:call'] },
+    }).map((tool) => tool.name).sort();
+
+    assert(scoped.includes('gx.call'));
+    assert(scoped.includes('gx.discover'));
+    assert(scoped.includes('gx.job'));
+    assert(scoped.includes('gx.verify'));
+    for (const hidden of [
+      'gx.upload',
+      'gx.test',
+      'gx.set',
+      'gx.secrets',
+      'gx.grants',
+    ]) {
+      assert(!scoped.includes(hidden), `${hidden} must not be advertised`);
+    }
+  });
+});
+
+Deno.test('tools/list exposes bounded build/operate tools to an explicit connect profile', () => {
+  withEnv({}, () => {
+    const scoped = getPlatformTools({
+      auth: {
+        authSource: 'api_token',
+        scopes: ['apps:read', 'apps:call', 'agents:build', 'agents:operate'],
+      },
+    }).map((tool) => tool.name).sort();
+
+    assertEquals(scoped, CORE);
   });
 });

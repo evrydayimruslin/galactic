@@ -6,6 +6,10 @@ import type {
   RoutineCapabilityDeclaration,
   RoutineScheduleDeclaration,
 } from "../../shared/contracts/routine.ts";
+import {
+  DEFAULT_ROUTINE_BUDGET_POLICY,
+  MIN_ROUTINE_INTERVAL_SECONDS,
+} from "../../shared/contracts/routine.ts";
 
 export type RoutineStatus =
   | "active"
@@ -383,9 +387,13 @@ function normalizeSchedule(input: unknown): NormalizedRoutineSchedule {
 }
 
 function normalizeBudgetPolicy(value: unknown): RoutineBudgetDefaults {
-  const budget = optionalObject(value, "budget_policy") as
+  const supplied = optionalObject(value, "budget_policy") as
     & RoutineBudgetDefaults
     & Record<string, unknown>;
+  const budget = {
+    ...DEFAULT_ROUTINE_BUDGET_POLICY,
+    ...supplied,
+  } as Required<RoutineBudgetDefaults> & Record<string, unknown>;
   for (
     const key of [
       "max_light_per_run",
@@ -399,8 +407,123 @@ function normalizeBudgetPolicy(value: unknown): RoutineBudgetDefaults {
     if (typeof amount !== "number" || !Number.isFinite(amount) || amount < 0) {
       throw new Error(`budget_policy.${key} must be a non-negative number`);
     }
+    if (key === "max_calls_per_run" && (!Number.isInteger(amount) || amount < 1)) {
+      throw new Error("budget_policy.max_calls_per_run must be a positive integer");
+    }
   }
   return budget;
+}
+
+export interface RoutineActivationValidation {
+  budgetPolicy: Required<RoutineBudgetDefaults>;
+  blockers: Array<{
+    code: "pending_required_capabilities" | "unsafe_cadence" | "invalid_budget";
+    message: string;
+    capability_ids?: string[];
+  }>;
+}
+
+const SERVER_OWNED_ROUTINE_METADATA_KEYS = new Set([
+  "budget_spend",
+  "auto_pause",
+  "source",
+  "launch_primary",
+]);
+
+function isServerOwnedRoutineMetadataKey(key: string): boolean {
+  return SERVER_OWNED_ROUTINE_METADATA_KEYS.has(key) ||
+    key.startsWith("approval_") || key.startsWith("approved_");
+}
+
+/**
+ * Routine metadata contains both user configuration and authoritative runtime
+ * accounting/approval state. User updates are merge-only and can never erase
+ * or replace the server-owned half of that document.
+ */
+function sanitizeRoutineUserMetadata(
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(input).filter(([key]) =>
+      !isServerOwnedRoutineMetadataKey(key)
+    ),
+  );
+}
+
+async function mergeRoutineUserMetadata(
+  userId: string,
+  routineId: string,
+  input: Record<string, unknown>,
+): Promise<RoutineSummary> {
+  const rows = await readRows<RoutineSummary>(
+    await fetch(supabaseUrl("rpc/merge_routine_user_metadata"), {
+      method: "POST",
+      headers: serviceHeaders("return=representation"),
+      body: JSON.stringify({
+        p_routine_id: routineId,
+        p_user_id: userId,
+        p_metadata: sanitizeRoutineUserMetadata(input),
+      }),
+    }),
+    "Failed to update routine metadata",
+  );
+  if (!rows[0]) throw new Error(`Routine ${routineId} not found`);
+  return rows[0];
+}
+
+/**
+ * Resolve the authoritative activation policy for a stored routine. Older
+ * rows may predate mandatory ceilings, so missing fields are safely
+ * materialized instead of making those Agents permanently unresumable.
+ */
+export function validateRoutineActivation(
+  routine: Pick<StoredRoutine, "schedule" | "budget_policy" | "capabilities">,
+): RoutineActivationValidation {
+  const budgetPolicy = {
+    ...DEFAULT_ROUTINE_BUDGET_POLICY,
+    ...(routine.budget_policy || {}),
+  } as Required<RoutineBudgetDefaults>;
+  const blockers: RoutineActivationValidation["blockers"] = [];
+  const pendingRequired = routine.capabilities.filter((capability) =>
+    capability.required && !capability.approved
+  );
+  if (pendingRequired.length > 0) {
+    blockers.push({
+      code: "pending_required_capabilities",
+      message: "Required capabilities must be approved by the account owner before activation.",
+      capability_ids: pendingRequired.map((capability) => capability.id),
+    });
+  }
+
+  if (routine.schedule.type === "interval") {
+    const seconds = typeof routine.schedule.every_seconds === "number"
+      ? routine.schedule.every_seconds
+      : typeof routine.schedule.every_minutes === "number"
+      ? routine.schedule.every_minutes * 60
+      : 0;
+    if (seconds < MIN_ROUTINE_INTERVAL_SECONDS) {
+      blockers.push({
+        code: "unsafe_cadence",
+        message: `Routine cadence must be at least ${MIN_ROUTINE_INTERVAL_SECONDS} seconds.`,
+      });
+    }
+  }
+
+  const { max_light_per_run, max_light_per_day, max_light_per_month, max_calls_per_run } =
+    budgetPolicy;
+  if (
+    !Number.isFinite(max_light_per_run) || max_light_per_run < 0 ||
+    !Number.isFinite(max_light_per_day) || max_light_per_day < max_light_per_run ||
+    !Number.isFinite(max_light_per_month) || max_light_per_month < max_light_per_day ||
+    !Number.isFinite(max_calls_per_run) ||
+    !Number.isInteger(max_calls_per_run) || max_calls_per_run < 1
+  ) {
+    blockers.push({
+      code: "invalid_budget",
+      message: "Budget ceilings must be finite, calls must be at least 1, and run ≤ day ≤ month.",
+    });
+  }
+  return { budgetPolicy, blockers };
 }
 
 function normalizeApprovalPolicy(value: unknown): RoutineApprovalPolicy {
@@ -729,6 +852,7 @@ export async function updateRoutine(
   routineId: string,
   input: Partial<RoutineCreateInput> & { status?: RoutineStatus },
 ): Promise<RoutineSummary> {
+  let metadataInput: Record<string, unknown> | null = null;
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
@@ -760,7 +884,7 @@ export async function updateRoutine(
     );
   }
   if ("metadata" in input) {
-    updates.metadata = optionalObject(input.metadata, "metadata");
+    metadataInput = optionalObject(input.metadata, "metadata");
   }
   if (input.status !== undefined) {
     if (
@@ -770,6 +894,11 @@ export async function updateRoutine(
     ) {
       throw new Error(
         "status must be active, paused, disabled, deleted, or error",
+      );
+    }
+    if (input.status === "active") {
+      throw new Error(
+        "Use resumeRoutine to activate a routine; activation requires owner approvals and safety validation",
       );
     }
     updates.status = input.status;
@@ -783,7 +912,9 @@ export async function updateRoutine(
     ROUTINE_SELECT,
   );
   if (!routine) throw new Error(`Routine ${routineId} not found`);
-  return routine;
+  return metadataInput
+    ? await mergeRoutineUserMetadata(userId, routineId, metadataInput)
+    : routine;
 }
 
 export function pauseRoutine(
@@ -793,11 +924,83 @@ export function pauseRoutine(
   return updateRoutine(userId, routineId, { status: "paused" });
 }
 
-export function resumeRoutine(
+export async function resumeRoutine(
   userId: string,
   routineId: string,
 ): Promise<RoutineSummary> {
-  return updateRoutine(userId, routineId, { status: "active" });
+  const routine = await getRoutine(userId, routineId);
+  if (!routine) throw new Error(`Routine ${routineId} not found`);
+  const validation = validateRoutineActivation(routine);
+  if (validation.blockers.length > 0) {
+    const error = new Error(
+      `Routine cannot be activated: ${validation.blockers.map((item) => item.message).join(" ")}`,
+    ) as Error & { code?: string; blockers?: RoutineActivationValidation["blockers"] };
+    error.code = "ROUTINE_ACTIVATION_BLOCKED";
+    error.blockers = validation.blockers;
+    throw error;
+  }
+  const [updated] = await patchRows<RoutineSummary>(
+    `user_routines?id=eq.${
+      encodeURIComponent(routineId)
+    }&user_id=eq.${userId}&deleted_at=is.null&status=in.(paused,error)`,
+    {
+      status: "active",
+      budget_policy: validation.budgetPolicy,
+      updated_at: new Date().toISOString(),
+    },
+    ROUTINE_SELECT,
+  );
+  if (updated) return updated;
+  // Idempotent resume for an already-active routine, while still validating
+  // approvals above. Never silently activates disabled/deleted rows.
+  if (routine.status === "active") return routine;
+  throw new Error(`Routine ${routineId} is ${routine.status} and cannot be activated`);
+}
+
+/**
+ * Account-session approval primitive. It is intentionally NOT exposed by the
+ * connected-agent platform service: HTTP handlers with account-session auth
+ * call this function after presenting the exact requested authority to a user.
+ * Omit capabilityIds to approve every capability currently requested.
+ */
+export async function approveRoutineCapabilities(
+  userId: string,
+  routineId: string,
+  capabilityIds?: string[],
+): Promise<StoredRoutine> {
+  const routine = await getRoutine(userId, routineId);
+  if (!routine) throw new Error(`Routine ${routineId} not found`);
+  const allIds = new Set(routine.capabilities.map((capability) => capability.id));
+  const requestedIds = capabilityIds === undefined
+    ? routine.capabilities.map((capability) => capability.id)
+    : Array.from(new Set(capabilityIds.map((id) => id.trim()).filter(Boolean)));
+  const unknown = requestedIds.filter((id) => !allIds.has(id));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Capabilities do not belong to routine ${routineId}: ${unknown.join(", ")}`,
+    );
+  }
+  if (requestedIds.length === 0) return routine;
+
+  const now = new Date().toISOString();
+  // Values have already been proven to be IDs on this routine. Encode each
+  // value independently while leaving PostgREST's in.(...) grammar intact.
+  const encodedIds = requestedIds.map(encodeURIComponent).join(",");
+  await patchRows<RoutineCapabilityRow>(
+    `routine_capabilities?routine_id=eq.${
+      encodeURIComponent(routineId)
+    }&user_id=eq.${encodeURIComponent(userId)}&id=in.(${encodedIds})`,
+    {
+      approved: true,
+      approved_at: now,
+      approved_by_user_id: userId,
+      updated_at: now,
+    },
+    CAPABILITY_SELECT,
+  );
+  const updated = await getRoutine(userId, routineId);
+  if (!updated) throw new Error(`Routine ${routineId} not found after approval`);
+  return updated;
 }
 
 export async function deleteRoutine(
@@ -841,12 +1044,17 @@ export async function createRoutineRun(params: {
   metadata?: Record<string, unknown>;
 }): Promise<RoutineRunRow> {
   const status = params.status ?? "queued";
+  // Every run needs an immutable trace before it can be claimed. Preserve an
+  // explicit upstream trace for internal correlation, but never persist the
+  // legacy null value: the executor signs this trace into the routine actor
+  // and downstream sandbox actors.
+  const traceId = params.traceId?.trim() || crypto.randomUUID();
   const [run] = await insertRows<RoutineRunRow>("routine_runs", {
     routine_id: params.routineId,
     user_id: params.userId,
     status,
     trigger: params.trigger ?? "scheduled",
-    trace_id: params.traceId ?? null,
+    trace_id: traceId,
     started_at: status === "running" ? new Date().toISOString() : null,
     run_config: params.runConfig ?? {},
     metadata: params.metadata ?? {},

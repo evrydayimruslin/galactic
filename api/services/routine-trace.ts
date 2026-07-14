@@ -7,8 +7,19 @@ export interface RoutineTraceContext {
 }
 
 export function routineTraceContextFromCaller(
-  caller: Pick<RequestCallerContext, "routineActor">,
+  caller: Pick<RequestCallerContext, "routineActor" | "routineContext">,
 ): RoutineTraceContext | undefined {
+  // A downstream sandbox actor carries attribution without routine-actor
+  // authority. Prefer that explicit context, then retain the routineActor
+  // fallback for callers/tests that construct the older shape directly.
+  const context = caller.routineContext;
+  if (context?.routineId && context.routineRunId) {
+    return {
+      routineId: context.routineId,
+      routineRunId: context.routineRunId,
+      ...(context.traceId ? { traceId: context.traceId } : {}),
+    };
+  }
   const actor = caller.routineActor;
   if (!actor?.routineId || !actor.routineRunId) return undefined;
   return {

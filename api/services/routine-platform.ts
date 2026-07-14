@@ -24,6 +24,7 @@ import {
   type RoutineCreateInput,
   type RoutineDashboardBindingInput,
   type RoutineStatus,
+  type StoredRoutine,
   updateRoutine,
 } from "./routines.ts";
 
@@ -79,11 +80,11 @@ export interface RoutineTemplateSummary extends RoutineIndexEntry {
   appVisibility?: string;
   appVersion?: string | null;
   appUpdatedAt?: string | null;
+  appOwnerId: string;
   createExample: {
     action: "create";
     app_id: string;
     template_id: string;
-    approve_capabilities: true;
   };
 }
 
@@ -201,11 +202,11 @@ function buildTemplatesForApp(
     appVisibility: app.visibility,
     appVersion: app.current_version ?? null,
     appUpdatedAt: app.updated_at ?? null,
+    appOwnerId: app.owner_id,
     createExample: {
       action: "create",
       app_id: app.id,
       template_id: template.id,
-      approve_capabilities: true,
     },
   }));
 }
@@ -299,45 +300,158 @@ async function listTemplateApps(
   userId: string,
   limit: number,
 ): Promise<RoutineTemplateApp[]> {
-  const [ownedApps, publicApps, savedRows] = await Promise.all([
-    fetchApps({
-      owner_id: `eq.${userId}`,
-      deleted_at: "is.null",
-      order: "updated_at.desc",
-      limit: String(limit),
-    }),
-    fetchApps({
-      visibility: "eq.public",
-      deleted_at: "is.null",
-      order: "updated_at.desc",
-      limit: String(limit * 2),
-    }),
-    readRows<{ app_id: string }>(
-      await fetch(
-        restUrl("user_app_library", {
-          user_id: `eq.${userId}`,
-          select: "app_id",
-          limit: String(limit),
-        }),
-        { headers: serviceHeaders() },
-      ),
-      "Failed to load saved routine template apps",
-    ).catch(() => []),
-  ]);
+  const ownedApps = await fetchApps({
+    owner_id: `eq.${userId}`,
+    visibility: "eq.private",
+    deleted_at: "is.null",
+    order: "updated_at.desc",
+    limit: String(limit),
+  });
+  return dedupeApps(ownedApps);
+}
 
-  let savedApps: RoutineTemplateApp[] = [];
-  const savedIds = savedRows
-    .map((row) => row.app_id)
-    .filter((id) => !!id && /^[a-zA-Z0-9-]+$/.test(id));
-  if (savedIds.length > 0) {
-    savedApps = await fetchApps({
-      id: `in.(${savedIds.join(",")})`,
-      deleted_at: "is.null",
-      limit: String(limit),
-    }).catch(() => []);
+function assertPrivateOwnedTemplate(
+  userId: string,
+  template: RoutineTemplateSummary,
+): void {
+  if (template.appOwnerId !== userId || template.appVisibility !== "private") {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_FORBIDDEN,
+      "Persistent Agents must be created from an Agent you own with private visibility.",
+    );
   }
+}
 
-  return dedupeApps([...ownedApps, ...savedApps, ...publicApps]);
+function assertIntervalSchedule(schedule: unknown): void {
+  if (!isRecord(schedule) || typeof schedule.cron === "string" || schedule.type === "cron") {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      "Launch routines use interval schedules only. Cron remains available internally but is not part of the launch contract.",
+    );
+  }
+  const seconds = typeof schedule.every_seconds === "number"
+    ? schedule.every_seconds
+    : typeof schedule.every_minutes === "number"
+    ? schedule.every_minutes * 60
+    : 0;
+  if (!Number.isFinite(seconds) || seconds < 60) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      "Routine cadence must be an interval of at least 60 seconds.",
+    );
+  }
+}
+
+async function assertNoExistingPrimaryRoutine(
+  userId: string,
+  composerAppId: string,
+  exceptRoutineId?: string,
+): Promise<void> {
+  const rows = await readRows<{ id: string }>(
+    await fetch(
+      restUrl("user_routines", {
+        user_id: `eq.${userId}`,
+        composer_app_id: `eq.${composerAppId}`,
+        deleted_at: "is.null",
+        select: "id",
+        limit: "2",
+      }),
+      { headers: serviceHeaders() },
+    ),
+    "Failed to check primary routine",
+  );
+  if (rows.some((row) => row.id !== exceptRoutineId)) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      "This Agent already has its primary routine. The launch contract supports one primary routine per Agent.",
+    );
+  }
+}
+
+function isLaunchPrimaryUniqueViolation(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes("idx_user_routines_one_launch_primary");
+}
+
+async function validateRequiredCapabilityTargets(
+  userId: string,
+  capabilities: RoutineCapabilityInput[],
+  options: { activation?: boolean } = {},
+): Promise<void> {
+  const authority = capabilities.filter((capability) =>
+    capability.required !== false ||
+    (options.activation && capability.approved === true)
+  );
+  await Promise.all(authority.map(async (capability) => {
+    const ref = optionalString(capability.app_id) ||
+      optionalString(capability.app_ref) || optionalString(capability.app);
+    if (!ref) return;
+    let target: RoutineTemplateApp;
+    try {
+      target = await loadAccessibleApp(userId, ref);
+    } catch (err) {
+      if (
+        err instanceof RoutinePlatformError &&
+        err.code === ROUTINE_PLATFORM_NOT_FOUND &&
+        !options.activation
+      ) {
+        // Slugs may resolve only after another private Agent is uploaded. It
+        // remains pending and cannot activate until account approval resolves it.
+        return;
+      }
+      if (
+        options.activation && err instanceof RoutinePlatformError &&
+        err.code === ROUTINE_PLATFORM_NOT_FOUND
+      ) {
+        throw new RoutinePlatformError(
+          ROUTINE_PLATFORM_INVALID_PARAMS,
+          `Capability target ${ref} must resolve to one of your private Agents before activation.`,
+        );
+      }
+      throw err;
+    }
+    if (target.owner_id !== userId || target.visibility !== "private") {
+      throw new RoutinePlatformError(
+        ROUTINE_PLATFORM_FORBIDDEN,
+        `Required capability target ${ref} must be one of your private Agents.`,
+      );
+    }
+  }));
+}
+
+/**
+ * Authoritative activation contract for the single-player launch surface.
+ * Every user-facing resume path and the executor defense-in-depth check call
+ * this same validator so a monitor/API path cannot silently weaken gx.routine.
+ */
+export async function validateRoutineLaunchActivation(
+  userId: string,
+  routine: StoredRoutine,
+): Promise<void> {
+  if (!routine.composer_app_id) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      "Routine has no composer Agent.",
+    );
+  }
+  const app = await loadAccessibleApp(userId, routine.composer_app_id);
+  if (app.owner_id !== userId || app.visibility !== "private") {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_FORBIDDEN,
+      "Only an owner-private Agent can be activated as a launch routine.",
+    );
+  }
+  assertIntervalSchedule(routine.schedule);
+  if (routine.max_concurrency !== 1) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      "Launch routines use max_concurrency=1.",
+    );
+  }
+  await assertNoExistingPrimaryRoutine(userId, app.id, routine.id);
+  await validateRequiredCapabilityTargets(userId, routine.capabilities, {
+    activation: true,
+  });
 }
 
 async function listRoutineTemplates(
@@ -449,11 +563,12 @@ function capabilityInputsFromArgs(
   const extraCapabilities = Array.isArray(args.extra_capabilities)
     ? args.extra_capabilities as RoutineCapabilityInput[]
     : [];
-  const approveCapabilities = args.approve_capabilities === true;
-
+  // Connected agents may propose authority, never grant it to themselves.
+  // Ignore embedded `approved` flags as untrusted input; approval is available
+  // only through the account-session service primitive.
   return [...baseCapabilities, ...extraCapabilities].map((capability) => ({
     ...capability,
-    approved: approveCapabilities || capability.approved === true,
+    approved: false,
   }));
 }
 
@@ -470,6 +585,19 @@ function buildRoutinePlan(
   template: RoutineTemplateSummary,
   args: Record<string, unknown>,
 ): PlannedRoutine {
+  if (args.approve_capabilities === true) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_FORBIDDEN,
+      "Connected agents cannot approve routine capabilities. Create the routine paused, then ask the account owner to approve it.",
+    );
+  }
+  if (args.max_concurrency !== undefined && args.max_concurrency !== 1) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      "Launch routines use max_concurrency=1.",
+    );
+  }
+  if (args.schedule !== undefined) assertIntervalSchedule(args.schedule);
   const capabilities = capabilityInputsFromArgs(template, args);
   const pendingCapabilities = capabilities.filter((capability) =>
     capability.approved !== true
@@ -510,17 +638,20 @@ function buildRoutinePlan(
     config,
     budget_policy: budgetPolicy,
     approval_policy: approvalPolicy,
-    max_concurrency: typeof args.max_concurrency === "number"
-      ? args.max_concurrency
-      : 1,
+    max_concurrency: 1,
     next_run_at: optionalString(args.next_run_at) || null,
     created_by_trace_id: optionalString(args.trace_id) || null,
     metadata: {
       ...(objectOrUndefined(args.metadata) || {}),
       source: "ul.routine",
+      // Server-owned marker used by the partial unique index. Keep the broader
+      // source marker for compatibility, but do not index historical source
+      // rows because they may legitimately contain pre-launch duplicates.
+      launch_primary: true,
       template_label: template.label,
       template_app_name: template.appName,
-      approval_confirmed: args.approve_capabilities === true,
+      approval_confirmed: false,
+      approval_source: "account_session_required",
     },
     capabilities,
     dashboard_bindings: dashboardBindings,
@@ -539,7 +670,6 @@ function buildRoutinePlan(
       schedule: routine.schedule,
       config: routine.config,
       budget_policy: routine.budget_policy,
-      approve_capabilities: true,
       activate: args.activate === true,
     },
   };
@@ -550,7 +680,13 @@ async function planRoutine(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const template = await resolveRoutineTemplate(userId, args);
+  assertPrivateOwnedTemplate(userId, template);
   const plan = buildRoutinePlan(template, args);
+  assertIntervalSchedule(plan.routine.schedule);
+  await validateRequiredCapabilityTargets(
+    userId,
+    plan.routine.capabilities as RoutineCapabilityInput[],
+  );
   return {
     template: plan.template,
     routine: plan.routine,
@@ -560,10 +696,7 @@ async function planRoutine(
       approved_count: plan.approvedCapabilities.length,
       pending_count: plan.pendingCapabilities.length,
       pending_capabilities: plan.pendingCapabilities,
-      approve_with_create: {
-        ...plan.createArgs,
-        approve_capabilities: true,
-      },
+      approval_required_via: "account_session",
     },
     command_surfaces: plan.routine.dashboard_bindings || [],
     create_args: plan.createArgs,
@@ -577,19 +710,41 @@ async function createRoutineFromTemplate(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const template = await resolveRoutineTemplate(userId, args);
+  assertPrivateOwnedTemplate(userId, template);
   const plan = buildRoutinePlan(template, args);
+  assertIntervalSchedule(plan.routine.schedule);
+  await validateRequiredCapabilityTargets(
+    userId,
+    plan.routine.capabilities as RoutineCapabilityInput[],
+  );
+  await assertNoExistingPrimaryRoutine(userId, template.appId);
   const activate = args.activate === true;
 
-  if (activate && plan.pendingCapabilities.length > 0) {
+  const pendingRequired = plan.pendingCapabilities.filter((capability) =>
+    capability.required !== false
+  );
+  if (activate && pendingRequired.length > 0) {
     throw new RoutinePlatformError(
       ROUTINE_PLATFORM_INVALID_PARAMS,
-      "Cannot activate a routine with pending capabilities. Pass approve_capabilities=true after user approval.",
-      { pending_capabilities: plan.pendingCapabilities },
+      "Cannot activate a routine with pending capabilities. The account owner must approve them first.",
+      { pending_capabilities: pendingRequired },
     );
   }
 
-  let routine = await createRoutine(userId, plan.routine);
+  let routine: Awaited<ReturnType<typeof createRoutine>>;
+  try {
+    routine = await createRoutine(userId, plan.routine);
+  } catch (error) {
+    if (isLaunchPrimaryUniqueViolation(error)) {
+      throw new RoutinePlatformError(
+        ROUTINE_PLATFORM_INVALID_PARAMS,
+        "This Agent already has its primary routine. The launch contract supports one primary routine per Agent.",
+      );
+    }
+    throw error;
+  }
   if (activate) {
+    await validateRoutineLaunchActivation(userId, routine);
     const activeRoutine = await resumeRoutine(userId, routine.id);
     routine = { ...routine, ...activeRoutine };
   }
@@ -618,6 +773,13 @@ async function updateRoutineFromArgs(
 ): Promise<Record<string, unknown>> {
   const routineId = requiredString(args.routine_id, "routine_id");
   const updates: Partial<RoutineCreateInput> & { status?: RoutineStatus } = {};
+  if (args.max_concurrency !== undefined && args.max_concurrency !== 1) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      "Launch routines use max_concurrency=1.",
+    );
+  }
+  if (args.schedule !== undefined) assertIntervalSchedule(args.schedule);
   for (
     const key of [
       "name",
@@ -653,10 +815,10 @@ async function runRoutineNow(
       `Routine ${routineId} not found`,
     );
   }
-  if (routine.status === "deleted" || routine.status === "disabled") {
+  if (routine.status !== "active") {
     throw new RoutinePlatformError(
       ROUTINE_PLATFORM_INVALID_PARAMS,
-      `Routine ${routineId} is ${routine.status} and cannot be queued`,
+      `Routine ${routineId} is ${routine.status}; only an active, owner-approved routine can run now`,
     );
   }
 
@@ -684,9 +846,8 @@ async function runRoutineNow(
       status: routine.status,
       handler_function: routine.handler_function,
     },
-    executor_status: "pending_pr5",
-    message:
-      "Run is queued. The durable routine executor added in PR5 will claim queued and due runs.",
+    executor_status: "queued",
+    message: "Run is queued for the durable routine executor.",
   };
 }
 
@@ -735,6 +896,14 @@ export async function executeRoutinePlatformAction(
     }
     case "resume": {
       const routineId = requiredString(args.routine_id, "routine_id");
+      const routine = await getRoutine(userId, routineId);
+      if (!routine) {
+        throw new RoutinePlatformError(
+          ROUTINE_PLATFORM_NOT_FOUND,
+          `Routine ${routineId} not found`,
+        );
+      }
+      await validateRoutineLaunchActivation(userId, routine);
       return { routine: await resumeRoutine(userId, routineId) };
     }
     case "delete": {

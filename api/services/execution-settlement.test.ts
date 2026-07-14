@@ -159,7 +159,11 @@ Deno.test("settleAppCall fails CLOSED when the settlement backend is unavailable
     __env?: Record<string, unknown>;
   };
   const previousEnv = globalWithEnv.__env;
-  globalWithEnv.__env = { ...(previousEnv || {}), SUPABASE_URL: "", SUPABASE_SERVICE_ROLE_KEY: "" };
+  globalWithEnv.__env = {
+    ...(previousEnv || {}),
+    SUPABASE_URL: "",
+    SUPABASE_SERVICE_ROLE_KEY: "",
+  };
   try {
     const result = await settleAppCall({
       app: createTestApp({ default_price_light: 10 }),
@@ -178,7 +182,10 @@ Deno.test("settleAppCall fails CLOSED when the settlement backend is unavailable
     assertEquals(result.insufficientBalanceCode, "settlement_unavailable");
     assertEquals(result.chargedLight, 0);
     assertEquals(result.developerRevenueLight, 0);
-    assertMatch(result.insufficientBalanceMessage ?? "", /temporarily unavailable/i);
+    assertMatch(
+      result.insufficientBalanceMessage ?? "",
+      /temporarily unavailable/i,
+    );
   } finally {
     globalWithEnv.__env = previousEnv;
   }
@@ -521,6 +528,18 @@ Deno.test("settleAndLogAppExecution settles app pricing across run/http style ca
       outputResult: { ok: true },
       callerAuthState: "authenticated",
       routineContext,
+      runtimeCloudSettlement: {
+        holdId: "hold-run-1",
+        eventId: "cloud-event-run-1",
+        payerUserId: "user_run",
+        ownerSponsoredInfra: false,
+        callerInfraFallback: false,
+        cloudUnits: 20,
+        amountLight: 2,
+        settledAmountLight: 2,
+        releasedAmountLight: 0,
+        billingConfigVersion: 1,
+      },
     }, {
       fetchFn: async (input, init) => {
         const url = String(input);
@@ -566,7 +585,7 @@ Deno.test("settleAndLogAppExecution settles app pricing across run/http style ca
           assertEquals(body.p_function_name, "search");
           assertEquals(body.p_receipt_id, "receipt-run-1");
           assertEquals(body.p_status, "succeeded");
-          assertEquals(body.p_cost_light, 10);
+          assertEquals(body.p_cost_light, 12);
           assertEquals(
             (body.p_metadata as Record<string, unknown>).trace_id,
             routineContext.traceId,
@@ -575,7 +594,7 @@ Deno.test("settleAndLogAppExecution settles app pricing across run/http style ca
             JSON.stringify([{
               step_id: "00000000-0000-4000-8000-000000000104",
               step_index: 0,
-              total_light: 10,
+              total_light: 12,
             }]),
             {
               status: 200,
@@ -597,7 +616,7 @@ Deno.test("settleAndLogAppExecution settles app pricing across run/http style ca
     assertEquals(result.settlement.feeWaivedLight, 0);
     assertEquals(result.settlement.insufficientBalance, false);
     assertEquals(result.routineStep?.step_index, 0);
-    assertEquals(result.routineStep?.total_light, 10);
+    assertEquals(result.routineStep?.total_light, 12);
     assertEquals(calls.length, 2);
     assert(logged !== null);
     const loggedEntry = logged as Record<string, unknown>;
@@ -605,13 +624,91 @@ Deno.test("settleAndLogAppExecution settles app pricing across run/http style ca
     assertEquals(loggedEntry.callChargeLight, 10);
     assertEquals(loggedEntry.appPriceLight, 10);
     assertEquals(loggedEntry.appChargeLight, 10);
-    assertEquals(loggedEntry.infraChargeLight, 0);
+    assertEquals(loggedEntry.infraChargeLight, 2);
     assertEquals(loggedEntry.platformFeeLight, 1.5);
     assertEquals(loggedEntry.developerNetLight, 8.5);
     assertEquals(loggedEntry.freeCall, false);
     assertEquals(loggedEntry.routineId, routineContext.routineId);
     assertEquals(loggedEntry.routineRunId, routineContext.routineRunId);
     assertEquals(loggedEntry.traceId, routineContext.traceId);
+  });
+});
+
+Deno.test("settleAndLogAppExecution applies charged spend when contribution telemetry fails", async () => {
+  await withMockedEnv(async () => {
+    const routineContext = {
+      routineId: "00000000-0000-4000-8000-000000000201",
+      routineRunId: "00000000-0000-4000-8000-000000000202",
+      traceId: "00000000-0000-4000-8000-000000000203",
+    };
+    let fallbackSettled = false;
+
+    const result = await settleAndLogAppExecution({
+      receiptId: "receipt-run-fallback-1",
+      app: createTestApp({ default_price_light: 10 }),
+      userId: "user_run",
+      user: null,
+      functionName: "search",
+      inputArgs: { query: "pricing" },
+      method: "run",
+      success: true,
+      durationMs: 120,
+      outputResult: { ok: true },
+      callerAuthState: "authenticated",
+      routineContext,
+      runtimePricingPreflight: {
+        appPriceLight: 10,
+        appChargeLight: 10,
+        freeCall: false,
+        freeCallCount: null,
+        freeCallLimit: 0,
+        freeCallCounterKey: null,
+        policySource: "static_config",
+        routineBudgetReservation: {
+          id: "00000000-0000-4000-8000-000000000204",
+          key: "app:receipt-run-fallback-1",
+          reservedLight: 10,
+          callsUsed: 1,
+          callsLimit: 25,
+          lightUsed: 0,
+          lightReserved: 10,
+          lightLimit: 100,
+        },
+      },
+    }, {
+      fetchFn: async (input, init) => {
+        const url = String(input);
+        const body = init?.body
+          ? JSON.parse(String(init.body)) as Record<string, unknown>
+          : {};
+        if (url.includes("/rpc/transfer_light")) {
+          return Response.json([{
+            from_new_balance: 90,
+            to_new_balance: 8.5,
+            platform_fee: 1.5,
+            transfer_id: "transfer-run-fallback-1",
+            fee_would_have_been: 1.5,
+            fee_waived: 0,
+            waiver_source: null,
+          }]);
+        }
+        if (url.includes("/rpc/record_routine_call_contribution")) {
+          return new Response("telemetry unavailable", { status: 503 });
+        }
+        if (url.includes("/rpc/settle_routine_run_budget_reservation")) {
+          assertEquals(body.p_actual_light, 10);
+          assertEquals(body.p_apply_spend, true);
+          fallbackSettled = true;
+          return Response.json(true);
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+      logMcpCallFn: () => {},
+    });
+
+    assertEquals(result.settlement.appChargeLight, 10);
+    assertEquals(result.routineStep, undefined);
+    assertEquals(fallbackSettled, true);
   });
 });
 
@@ -804,11 +901,6 @@ Deno.test("debitWidgetPullUsage records one widget pull cloud unit with runtime 
       widgetName: "email_inbox",
       widgetIntervalMs: 300_000,
       widgetPullReason: "scheduled",
-      routineContext: {
-        routineId: "00000000-0000-4000-8000-000000000201",
-        routineRunId: "00000000-0000-4000-8000-000000000202",
-        traceId: "00000000-0000-4000-8000-000000000203",
-      },
     }, {
       fetchFn: async (input, init) => {
         const url = String(input);
@@ -856,19 +948,47 @@ Deno.test("debitWidgetPullUsage records one widget pull cloud unit with runtime 
     assertEquals(metadata.widget_interval_ms, 300_000);
     assertEquals(metadata.widget_pull_reason, "scheduled");
     assertEquals(metadata.runtime_cloud_hold_id, "hold_widget_1");
-    assertEquals(
-      metadata.routine_id,
-      "00000000-0000-4000-8000-000000000201",
-    );
-    assertEquals(
-      metadata.routine_run_id,
-      "00000000-0000-4000-8000-000000000202",
-    );
-    assertEquals(
-      metadata.trace_id,
-      "00000000-0000-4000-8000-000000000203",
-    );
   });
+});
+
+Deno.test("routine widget pulls are platform-sponsored micro-operations", async () => {
+  let fetchCalls = 0;
+  const result = await debitWidgetPullUsage({
+    preflight: {
+      hold: {
+        holdId: "hold_widget_routine",
+        payerUserId: "user_widget",
+        sponsorUserId: null,
+        ownerSponsoredInfra: false,
+      },
+      billingConfig: {
+        version: 23,
+        widgetPullsPerCloudUnit: 1,
+        cloudUnitLightPer1k: 1,
+      },
+    } as any,
+    app: {
+      id: "app_widget",
+      owner_id: "owner_widget",
+      slug: "widget-app",
+    },
+    userId: "user_widget",
+    functionName: "widget_email_inbox_data",
+    receiptId: "receipt-widget-routine",
+    routineContext: {
+      routineId: "00000000-0000-4000-8000-000000000201",
+      routineRunId: "00000000-0000-4000-8000-000000000202",
+      traceId: "00000000-0000-4000-8000-000000000203",
+    },
+  }, {
+    fetchFn: (() => {
+      fetchCalls += 1;
+      throw new Error("routine widget pull must not reach billing RPC");
+    }) as typeof fetch,
+  });
+
+  assertEquals(result, null);
+  assertEquals(fetchCalls, 0);
 });
 
 Deno.test("logExecutionResult records computed telemetry alongside the provided context", () => {
@@ -1182,7 +1302,9 @@ Deno.test("settleAndLogAppExecution persists the db-diff tally as a galactic.db 
         deletes: 0,
         upserts: 0,
         rows_written: 4,
-        by_table: { emails: { inserts: 3, updates: 1, deletes: 0, upserts: 0, rows: 4 } },
+        by_table: {
+          emails: { inserts: 3, updates: 1, deletes: 0, upserts: 0, rows: 4 },
+        },
       },
     }, {
       fetchFn: (async (input: RequestInfo | URL, init?: RequestInit) => {

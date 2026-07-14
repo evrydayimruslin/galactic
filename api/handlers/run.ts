@@ -41,6 +41,7 @@ import {
 import { getManifestAllowedDestinations } from "../services/trust.ts";
 import { buildGpuStatusDiagnostics } from "../services/gpu/status.ts";
 import {
+  callerCanUseLegacyExecutionRoute,
   callerHasAppAccess,
   callerHasFunctionAccess,
   callerHasRequiredScope,
@@ -103,6 +104,15 @@ function createRuntimeMemoryAdapter(userId: string, appId: string) {
   };
 }
 
+export function callerCanUseRunAsyncDispatch(
+  caller: Pick<RequestCallerContext, "authSource" | "authState">,
+): boolean {
+  // Defense in depth behind the route-level actor rejection below. Durable
+  // jobs persist only account/app/function arguments and cannot reconstruct a
+  // signed routine budget/authority context if branch ordering ever changes.
+  return callerCanUseLegacyExecutionRoute(caller);
+}
+
 export async function handleRun(
   request: Request,
   appId: string,
@@ -136,6 +146,22 @@ export async function handleRun(
           },
         } as RunResponse,
         401,
+      );
+    }
+    if (!callerCanUseLegacyExecutionRoute(caller)) {
+      return json(
+        {
+          success: false,
+          result: null,
+          logs: [],
+          duration_ms: 0,
+          error: {
+            type: "ACTOR_ROUTE_UNSUPPORTED",
+            message:
+              "Signed routine and sandbox actors must execute Agent functions through MCP so capability ceilings, attribution, and hard budgets remain intact.",
+          },
+        } as RunResponse,
+        403,
       );
     }
     const { userId, user } = caller;
@@ -223,6 +249,23 @@ export async function handleRun(
 
     // ── GPU Runtime Branch ──
     if (app.runtime === "gpu") {
+      if (routineContext) {
+        return json(
+          {
+            success: false,
+            result: null,
+            logs: [],
+            duration_ms: 0,
+            error: {
+              type: "ROUTINE_GPU_BUDGET_UNAVAILABLE",
+              message:
+                "GPU functions are unavailable to routines until hard pre-execution GPU budget admission is configured.",
+            },
+          } as RunResponse,
+          409,
+        );
+      }
+
       if (!isGpuSupportEnabled()) {
         return json(
           {
@@ -334,7 +377,10 @@ export async function handleRun(
     // the caller gets { _async, job_id } immediately and polls
     // GET /api/launch/jobs/:id (or ul.job). Mirrors the per-app MCP dispatch;
     // the queue consumer runs the full pipeline with the extended budget.
-    if (args && typeof args === "object" && !Array.isArray(args)) {
+    if (
+      args && typeof args === "object" && !Array.isArray(args) &&
+      callerCanUseRunAsyncDispatch(caller)
+    ) {
       const argsRecord = args as Record<string, unknown>;
       const executionPolicy = resolveFunctionExecutionPolicy(app, functionName);
       if (executionPolicy.async || asyncOptIn) {
@@ -449,6 +495,7 @@ export async function handleRun(
         freeMode: caller.freeMode,
         inferenceSelection,
         attribution: { appId: app.id, functionName },
+        routineContext,
       })
       : {
         route: null,
