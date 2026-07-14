@@ -58,6 +58,10 @@ function launchPermissionTestApp(): Record<string, unknown> {
       functions: {
         deploy: {
           description: 'Deploy code',
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: true,
+          },
           parameters: {
             repo: {
               type: 'string',
@@ -992,6 +996,10 @@ Deno.test('launch facade: tool functions expose pricing, schemas, and policy', a
             required?: string[];
           } | null;
           outputSchema?: Record<string, unknown> | null;
+          annotations?: {
+            readOnlyHint?: boolean;
+            destructiveHint?: boolean;
+          } | null;
           pricing?: {
             defaultCallPrice?: { light: number; display: string } | null;
           } | null;
@@ -1024,6 +1032,8 @@ Deno.test('launch facade: tool functions expose pricing, schemas, and policy', a
       assertEquals(Boolean(deploy.inputSchema?.properties?.repo), true);
       assertEquals(deploy.inputSchema?.required, ['repo']);
       assertEquals(deploy.outputSchema?.type, 'object');
+      assertEquals(deploy.annotations?.readOnlyHint, false);
+      assertEquals(deploy.annotations?.destructiveHint, true);
       assertEquals(deploy.pricing?.defaultCallPrice?.light, 3);
       assertEquals(deploy.accessPolicy?.configured, true);
       assertEquals(deploy.accessPolicy?.mode, 'module');

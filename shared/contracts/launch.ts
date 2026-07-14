@@ -1,4 +1,5 @@
 import type { HealthWindows } from "../types/index.ts";
+import type { MCPToolAnnotations } from "./mcp.ts";
 
 export const LAUNCH_MVP_VERSION = "launch-mvp-v1" as const;
 
@@ -335,6 +336,8 @@ export interface LaunchFunctionSummary {
   description?: string | null;
   inputSchema?: Record<string, unknown> | null;
   outputSchema?: Record<string, unknown> | null;
+  /** Behavioral hints declared by the function's MCP manifest. */
+  annotations?: MCPToolAnnotations | null;
   pricing?: LaunchPricingSummary | null;
   accessPolicy?: LaunchAccessPolicySummary | null;
   callerPermission?: LaunchCallerFunctionPermissionSummary | null;

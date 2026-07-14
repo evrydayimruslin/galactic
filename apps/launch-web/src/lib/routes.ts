@@ -48,7 +48,7 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     key: "store",
     path: "/browse",
     label: "Browse",
-    nav: "primary",
+    nav: "hidden",
     apiRoutes: ["GET /api/launch/store", "GET /api/launch/leaderboard"],
   },
   {
@@ -89,7 +89,7 @@ export const launchRoutes: LaunchRouteDefinition[] = [
   {
     key: "settings",
     path: "/account",
-    label: "Account",
+    label: "Profile",
     nav: "account",
     apiRoutes: [
       "GET /api/launch/wallet",
