@@ -2577,6 +2577,15 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               type: ["object", "null"],
               additionalProperties: true,
             },
+            annotations: {
+              type: ["object", "null"],
+              properties: {
+                readOnlyHint: { type: "boolean" },
+                destructiveHint: { type: "boolean" },
+                idempotentHint: { type: "boolean" },
+                openWorldHint: { type: "boolean" },
+              },
+            },
             pricing: { $ref: "#/components/schemas/PricingSummary" },
             accessPolicy: {
               oneOf: [
@@ -6251,6 +6260,7 @@ async function buildLaunchFunctionSummaries(
       description: stringOrNull(functionDef?.description),
       inputSchema: inputSchemaForFunction(functionDef),
       outputSchema: outputSchemaForFunction(functionDef),
+      annotations: functionAnnotations(functionDef),
       pricing: pricingSummaryForFunction(row, name),
       accessPolicy,
       callerPermission: permissionByFunction.get(name) || null,
@@ -6260,6 +6270,27 @@ async function buildLaunchFunctionSummaries(
       usesInference: functionUsesInference(manifest, name),
     };
   });
+}
+
+function functionAnnotations(
+  functionDef: Record<string, unknown> | null,
+): NonNullable<LaunchFunctionSummary["annotations"]> | null {
+  const raw = asRecord(functionDef?.annotations);
+  if (!raw) return null;
+  const annotations: NonNullable<LaunchFunctionSummary["annotations"]> = {};
+  if (typeof raw.readOnlyHint === "boolean") {
+    annotations.readOnlyHint = raw.readOnlyHint;
+  }
+  if (typeof raw.destructiveHint === "boolean") {
+    annotations.destructiveHint = raw.destructiveHint;
+  }
+  if (typeof raw.idempotentHint === "boolean") {
+    annotations.idempotentHint = raw.idempotentHint;
+  }
+  if (typeof raw.openWorldHint === "boolean") {
+    annotations.openWorldHint = raw.openWorldHint;
+  }
+  return Object.keys(annotations).length > 0 ? annotations : null;
 }
 
 function accessPolicySummaryForTool(

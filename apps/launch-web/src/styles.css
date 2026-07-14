@@ -2523,15 +2523,16 @@ button {
   transform: translateY(1px) rotate(-135deg);
 }
 
-/* Compact tab dropdown (Functions / multi-Interface): scannable name + price,
-   no per-row descriptions — the selected item's detail lives in the panel. */
+/* Function / Interface tab dropdown. Function rows carry a concise description
+   plus behavioral badges so the callable surface can be understood at a glance. */
 .tab-select-menu {
   position: absolute;
   z-index: 20;
   top: calc(100% + 6px);
   left: 0;
-  min-width: 220px;
-  max-width: 360px;
+  min-width: 300px;
+  width: min(520px, calc(100vw - 32px));
+  max-width: 520px;
   display: grid;
   gap: 1px;
   max-height: 320px;
@@ -2547,8 +2548,8 @@ button {
   display: grid;
   grid-template-columns: 15px minmax(0, 1fr) auto;
   gap: 9px;
-  align-items: center;
-  padding: 7px 9px;
+  align-items: start;
+  padding: 9px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -2574,9 +2575,21 @@ button {
 }
 
 .tab-select-label {
+  display: grid;
+  gap: 2px;
   min-width: 0;
   overflow: hidden;
   font-size: 13px;
+}
+
+.tab-select-label small {
+  display: block;
+  overflow: hidden;
+  color: var(--ul-secondary);
+  font-family: var(--ul-font);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2586,6 +2599,39 @@ button {
   color: var(--ul-muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.function-menu-badges {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.function-badge {
+  display: inline-flex;
+  padding: 2px 6px;
+  border: 1px solid var(--ul-border);
+  border-radius: 999px;
+  background: var(--ul-raised);
+  color: var(--ul-secondary);
+  font-family: var(--ul-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.function-badge.write {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--ul-amber-deep);
+}
+
+.function-badge.ai {
+  border-color: rgba(124, 58, 237, 0.25);
+  background: rgba(124, 58, 237, 0.07);
+  color: #6d28d9;
 }
 
 /* The Installed button doubles as the uninstall control — hint on hover. */
@@ -3237,6 +3283,32 @@ button {
   min-width: 0;
 }
 
+.library-card-clickable {
+  display: block;
+  border-radius: 12px;
+  color: inherit;
+  cursor: pointer;
+  outline: none;
+  text-decoration: none;
+}
+
+.library-card-clickable .owned-tool-card {
+  transition: border-color 140ms ease, box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.library-card-clickable:hover .owned-tool-card,
+.library-card-clickable:focus-visible .owned-tool-card {
+  border-color: var(--ul-border-strong);
+  box-shadow: 0 8px 26px rgba(10, 10, 10, 0.07);
+  transform: translateY(-1px);
+}
+
+.library-card-clickable:focus-visible .owned-tool-card {
+  outline: 2px solid var(--ul-text);
+  outline-offset: 2px;
+}
+
 .library-card > .tool-card-button {
   width: 100%;
 }
@@ -3351,7 +3423,8 @@ button {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 20px 16px 10px;
+  min-height: 124px;
+  padding: 20px 42px 20px 16px;
 }
 
 .owned-tool-main .avatar {
@@ -3373,6 +3446,59 @@ button {
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.agent-overview-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.agent-overview-card-head,
+.agent-access-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-overview-card-head {
+  margin-bottom: 16px;
+}
+
+.agent-overview-card-head .section-label,
+.agent-access-card .section-label {
+  margin-bottom: 4px;
+}
+
+.agent-overview-editor {
+  display: grid;
+  gap: 14px;
+}
+
+.agent-overview-mission,
+.agent-access-card p,
+.agent-logs-card p {
+  margin: 0;
+  color: var(--ul-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.agent-overview-mission {
+  color: var(--ul-text);
+  font-size: 15px;
+}
+
+.agent-access-card strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 15px;
+}
+
+.agent-overview-error {
+  margin: 0;
+  color: var(--ul-red);
+  font-size: 12.5px;
 }
 
 .owned-tool-metrics {
@@ -5341,7 +5467,7 @@ button {
     left: 12px;
     z-index: 20;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 2px;
     padding: 6px;
     border: 1px solid var(--ul-border);
@@ -5363,6 +5489,19 @@ button {
   .launch-main {
     width: min(100% - 28px, var(--ul-max));
     padding: 34px 0 104px;
+  }
+
+  .tool-tabs {
+    position: relative;
+  }
+
+  .tool-tab-menu {
+    position: static;
+  }
+
+  .tab-select-menu {
+    right: auto;
+    left: 0;
   }
 
   .page-hero,

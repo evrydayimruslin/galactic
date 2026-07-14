@@ -136,6 +136,7 @@ const capabilityGlyphs: Record<AgentCapability["kind"], string> = {
 };
 
 interface AgentFunctionFixture {
+  access: "read" | "write";
   args: string[];
   description: string;
   name: string;
@@ -418,6 +419,8 @@ const installTargets: InstallTarget[] = [
   },
 ];
 
+// Legacy admin tab implementation remains temporarily for compatibility while
+// /admin/agents/:id redirects to the canonical Agent Overview.
 const adminTabs = [
   ["edit", "Edit"],
   ["pricing", "Pricing"],
@@ -426,26 +429,25 @@ const adminTabs = [
   ["receipts", "Receipts"],
   ["logs", "Logs"],
 ] as const;
-
 type AdminTabId = typeof adminTabs[number][0];
 type LibraryView = "installed" | "owned";
-type AgentPageTabId = "details" | "functions" | "interface";
+type AgentPageTabId = "overview" | "functions" | "interface";
 
 const visibilityOptions = [
   [
     "public",
     "Public",
-    "Listed in the Store, installable by anyone.",
+    "Anyone can view and connect. Eligible for Galactic showcases.",
   ],
   [
     "unlisted",
     "Unlisted",
-    "Reachable by direct link only. Not indexed in the Store.",
+    "Anyone with the link can view and connect. Not featured publicly.",
   ],
   [
     "private",
     "Private",
-    "Only you can see and call it. Hidden everywhere else.",
+    "Only you can view and call it.",
   ],
 ] as const;
 
@@ -555,6 +557,9 @@ function liveAgentFixture(
   // metrics the platform doesn't report are null, and trust fields exist only
   // when the Agent ships a trust card. Nothing here is fabricated.
   const functions = (options.functions || []).map((fn) => ({
+    access: fn.annotations?.readOnlyHint === true
+      ? "read" as const
+      : "write" as const,
     args: inputArgs(fn.inputSchema),
     description: fn.description || `Run ${fn.name}.`,
     name: fn.name,
@@ -1634,7 +1639,7 @@ function AgentDetailSurface({
 
   const activateToolTab = (nextTab: AgentPageTabId) => {
     setTab(nextTab);
-    syncSearchParams({ tab: nextTab === "functions" ? null : nextTab });
+    syncSearchParams({ tab: nextTab === "overview" ? null : nextTab });
   };
 
   return (
@@ -1645,8 +1650,8 @@ function AgentDetailSurface({
         ? (
           <div className="unlisted-banner">
             <Icon name="shield" size={13} />
-            Unlisted — visible only to people with the link. Not indexed in the
-            Store.
+            Unlisted — anyone with the link can view it; any signed-in Galactic
+            user can call it.
           </div>
         )
         : null}
@@ -1657,16 +1662,7 @@ function AgentDetailSurface({
             <h1>{tool.title}</h1>
           </div>
           <p>{tool.summary}</p>
-          <div className="tool-meta-row">
-            {tool.installs !== null
-              ? <span>{formatNumber(tool.installs)} installs</span>
-              : null}
-            {tool.callsPerDay !== null
-              ? <span>{formatNumber(tool.callsPerDay)} calls/day</span>
-              : null}
-          </div>
           <div className="tool-header-actions">
-            <AgentInstallButton tool={tool} />
             <AgentConnectButton
               agentInstall={live.data.install?.agentInstall}
               tool={tool}
@@ -1676,6 +1672,20 @@ function AgentDetailSurface({
       </section>
 
       <div className="tool-tabs" role="tablist" aria-label="Agent page sections">
+        <button
+          className={effectiveTab === "overview" ? "active" : ""}
+          onClick={() => {
+            setFnMenuOpen(false);
+            setIntMenuOpen(false);
+            activateToolTab("overview");
+          }}
+          type="button"
+        >
+          Overview
+          {wiringRelevant && pendingCount > 0
+            ? <Pill tone="amber">{pendingCount}</Pill>
+            : null}
+        </button>
         <div className="tool-tab-menu" ref={fnMenuRef}>
           <button
             aria-expanded={effectiveTab === "functions" && fnMenuOpen}
@@ -1709,8 +1719,22 @@ function AgentDetailSurface({
               <TabSelectMenu
                 items={tool.functions.map((fn) => ({
                   id: fn.name,
-                  label: <Mono>{fn.name}</Mono>,
-                  meta: <Mono>{formatAgentPrice(fn.price)}</Mono>,
+                  label: (
+                    <>
+                      <Mono>{fn.name}</Mono>
+                      <small>{fn.description}</small>
+                    </>
+                  ),
+                  meta: (
+                    <span className="function-menu-badges">
+                      <span className={`function-badge ${fn.access}`}>
+                        {fn.access === "read" ? "Read" : "Write"}
+                      </span>
+                      {fn.usesInference
+                        ? <span className="function-badge ai">AI</span>
+                        : null}
+                    </span>
+                  ),
                 }))}
                 onPick={(name) => {
                   setSelectedFunctionName(name);
@@ -1775,20 +1799,6 @@ function AgentDetailSurface({
               </button>
             ))
           : null}
-        <button
-          className={effectiveTab === "details" ? "active" : ""}
-          onClick={() => {
-            setFnMenuOpen(false);
-            setIntMenuOpen(false);
-            activateToolTab("details");
-          }}
-          type="button"
-        >
-          Details
-          {wiringRelevant && pendingCount > 0
-            ? <Pill tone="amber">{pendingCount}</Pill>
-            : null}
-        </button>
       </div>
 
       <div className="tool-detail-layout single">
@@ -1811,14 +1821,13 @@ function AgentDetailSurface({
               />
             )
             : null}
-          {effectiveTab === "details"
+          {effectiveTab === "overview"
             ? (
-              <>
-                <AgentDetailsPanel tool={tool} />
-                {wiringRelevant
-                  ? <AgentWiringPanel live={live} tool={tool} />
-                  : null}
-              </>
+              <AgentOverviewPanel
+                live={live}
+                tool={tool}
+                wiringRelevant={wiringRelevant}
+              />
             )
             : null}
         </main>
@@ -3770,7 +3779,19 @@ function AgentConnectionsCard(
     };
   }, [tool.id, hasInputs]);
 
-  if (!hasAnything) return null;
+  if (!hasAnything) {
+    return tool.relationship === "owner"
+      ? (
+        <Card>
+          <p className="section-label">Data sources &amp; secrets</p>
+          <p className="muted-note">
+            No data sources or secrets are declared yet. Add them from your
+            connected coding agent with <Mono>gx.set</Mono>.
+          </p>
+        </Card>
+      )
+      : null;
+  }
 
   const noPending = Object.values(values).every((v) => v.trim().length === 0);
 
@@ -3855,7 +3876,7 @@ function AgentConnectionsCard(
 
   return (
     <Card>
-      <p className="section-label">Capabilities &amp; connections</p>
+      <p className="section-label">Data sources &amp; secrets</p>
       {tool.capabilities.length > 0
         ? (
           <div className="capability-list">
@@ -3924,95 +3945,159 @@ function AgentConnectionsCard(
   );
 }
 
-function AgentDetailsPanel({ tool }: { tool: AgentDetailFixture }): ReactElement {
-  const paidFunctions = tool.functions.filter((fn) => fn.price > 0);
-  const minPrice = paidFunctions.length > 0
-    ? Math.min(...paidFunctions.map((fn) => fn.price))
-    : 0;
-  // Headline reflects what's provable. A signed SOURCE manifest means "ready to
-  // call" (capabilities disclosed, receipts on); it does NOT mean the running
-  // code is verified — that's the executedIntegrity chip / gx.verify.
-  const signed = tool.signedManifest;
-  const runtimeVerified = tool.executedIntegrity === "verified";
+function AgentOverviewPanel({
+  live,
+  tool,
+  wiringRelevant,
+}: {
+  live: LaunchPageProps["live"];
+  tool: AgentDetailFixture;
+  wiringRelevant: boolean;
+}): ReactElement {
+  const isOwner = tool.relationship === "owner";
+  const [name, setName] = useState(tool.name);
+  const [mission, setMission] = useState(tool.summary);
+  const [saveState, setSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setName(tool.name);
+    setMission(tool.summary);
+    setSaveState("idle");
+    setSaveError(null);
+  }, [tool.id, tool.name, tool.summary]);
+
+  const dirty = name.trim() !== tool.name || mission.trim() !== tool.summary;
+  const save = async () => {
+    if (!isOwner || !dirty || saveState === "saving") return;
+    setSaveState("saving");
+    setSaveError(null);
+    try {
+      await launchApi.updateAgent(tool.id, {
+        ...(name.trim() !== tool.name ? { name: name.trim() } : {}),
+        ...(mission.trim() !== tool.summary
+          ? { description: mission.trim() }
+          : {}),
+      });
+      setSaveState("saved");
+      live.reload();
+    } catch (err) {
+      setSaveState("error");
+      setSaveError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Couldn't save changes. Please try again.",
+      );
+    }
+  };
+
+  const accessLabel = tool.visibility === "private"
+    ? "Only you"
+    : tool.visibility === "unlisted"
+    ? "Link-accessible"
+    : "Public";
+  const accessCopy = tool.visibility === "private"
+    ? "Reach this Agent from any MCP client using your Galactic keys."
+    : tool.visibility === "unlisted"
+    ? "Anyone with the link can view it; any signed-in Galactic user can call its functions."
+    : "Anyone can view it; any signed-in Galactic user can call its functions.";
 
   return (
-    <div className="details-panel">
-      <Card className="trust-card">
-        <div className="trust-card-head">
-          <Icon name="shield" />
-          <div>
-            <h3>{signed ? "Ready to call" : "No trust card yet"}</h3>
-            <p>
-              {signed
-                ? runtimeVerified
-                  ? "Running code is verified against its signature; receipts and capability disclosure are live."
-                  : "Source is signed and receipts + capability disclosure are live. Run gx.verify to confirm the running code matches."
-                : "This Agent has not published a signed trust card. Receipts still apply to every call."}
-            </p>
-          </div>
+    <div className="details-panel agent-overview-panel">
+      {isOwner
+        ? (
+          <Card className="agent-overview-editor">
+            <div className="agent-overview-card-head">
+              <div>
+                <p className="section-label">Overview</p>
+                <p className="muted-note">
+                  The Agent's name and ongoing responsibility.
+                </p>
+              </div>
+              <Button
+                disabled={!dirty || saveState === "saving"}
+                onClick={() => void save()}
+                size="sm"
+              >
+                {saveState === "saving"
+                  ? "Saving…"
+                  : saveState === "saved" && !dirty
+                  ? "Saved"
+                  : "Save changes"}
+              </Button>
+            </div>
+            <AdminField label="Name">
+              <input
+                className="admin-input"
+                onChange={(event) => setName(event.target.value)}
+                value={name}
+              />
+            </AdminField>
+            <AdminField label="Mission">
+              <textarea
+                className="admin-textarea"
+                onChange={(event) => setMission(event.target.value)}
+                rows={4}
+                value={mission}
+              />
+            </AdminField>
+            {saveState === "error" && saveError
+              ? <p className="agent-overview-error">{saveError}</p>
+              : null}
+          </Card>
+        )
+        : (
+          <Card>
+            <p className="section-label">Mission</p>
+            <p className="agent-overview-mission">{tool.summary}</p>
+          </Card>
+        )}
+
+      <Card className="agent-access-card">
+        <div>
+          <p className="section-label">Access</p>
+          <strong>{accessLabel}</strong>
+          <p>{accessCopy}</p>
         </div>
-        <div className="trust-meta">
-          <MetaPair label="signer" value={tool.signer ?? "—"} />
-          <MetaPair label="version" value={tool.version ?? "—"} />
-          <MetaPair label="runtime" value={tool.runtime ?? "—"} />
-          <MetaPair label="receipts" value="enabled" />
-          <MetaPair label="visibility" value={tool.visibility} />
-        </div>
-        <div className="trust-chips">
-          <Pill tone={tool.publisherVerified ? "green" : "default"}>
-            {tool.publisherVerified ? "Verified publisher" : "Publisher unverified"}
-          </Pill>
-          <Pill tone={runtimeVerified ? "green" : "default"}>
-            {runtimeVerified
-              ? "Runtime verified"
-              : tool.executedIntegrity === "unverified"
-              ? "Runtime unverified"
-              : tool.signedManifest
-              ? "Source signed"
-              : "Unsigned"}
-          </Pill>
-          <Pill tone={tool.openCode ? "green" : "default"}>
-            {tool.openCode ? "Open code" : "Closed source"}
-          </Pill>
-          {(() => {
-            const h = overallHealthTone(tool.health);
-            return <Pill tone={h.tone}>{h.label}</Pill>;
-          })()}
-        </div>
+        <Pill tone={tool.visibility === "private" ? "green" : "amber"}>
+          {tool.visibility}
+        </Pill>
       </Card>
+
       {tool.fullTime
         ? <FullTimeDisclosureCard fullTime={tool.fullTime} />
-        : null}
-      <Card>
-        <p className="section-label">Pricing</p>
-        <div className="pricing-line">
-          <strong>Free to install</strong>
-          <Mono>{paidFunctions.length} paid functions</Mono>
-        </div>
-        <div className="trust-meta">
-          <MetaPair label="metering" value="per call" />
-          <MetaPair label="from" value={formatAgentPrice(minPrice)} />
-          {tool.callsPerDay !== null
-            ? (
-              <MetaPair
-                label="calls/day"
-                value={formatNumber(tool.callsPerDay)}
-              />
-            )
-            : null}
-        </div>
-      </Card>
+        : (
+          <Card>
+            <p className="section-label">Cadence</p>
+            <p className="muted-note">
+              This Agent does not currently declare an autonomous routine.
+            </p>
+          </Card>
+        )}
+
       <AgentConnectionsCard tool={tool} />
-      <Card>
-        <p className="section-label">Owner</p>
-        <div className="owner-row">
-          <div>
-            <strong>{tool.author}</strong>
-          </div>
-        </div>
-      </Card>
+
+      {wiringRelevant
+        ? <AgentWiringPanel live={live} tool={tool} />
+        : null}
+
+      {isOwner
+        ? (
+          <Card className="agent-logs-card">
+            <p className="section-label">Logs</p>
+            <p>
+              Inspect recent runs and errors from your connected coding agent
+              with <Mono>gx.logs</Mono>. Live run history will appear here when
+              the routine monitor is joined to this Overview.
+            </p>
+          </Card>
+        )
+        : null}
+
       <div className="works-with">
-        <p className="section-label">Works with</p>
+        <p className="section-label">Connect from anywhere</p>
         <div>
           {["Claude Code", "Cursor", "Codex", "MCP", "CLI", "API"].map((
             label,
@@ -4127,8 +4212,8 @@ function AgentNotFoundPage({
     <>
       <PageHeader
         actions={
-          <RouteButton navigate={navigate} size="lg" to="/browse">
-            Back to Browse
+          <RouteButton navigate={navigate} size="lg" to="/agents">
+            Back to Agents
           </RouteButton>
         }
         eyebrow="Agent preview"
@@ -4144,18 +4229,13 @@ function AgentNotFoundPage({
 }
 
 export function LibraryFoundationPage(
-  { live, location, navigate }: LaunchPageProps,
+  { live, navigate }: LaunchPageProps,
 ): ReactElement {
-  const [view, setView] = useState<LibraryView>(libraryViewFromSearch());
   const [busy, setBusy] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [folderMenuFor, setFolderMenuFor] = useState<string | null>(null);
   const loading = live.status !== "ready" && live.status !== "error";
-
-  useEffect(() => {
-    setView(libraryViewFromSearch());
-  }, [location.search]);
 
   // Close any open card / folder menu on an outside click or Escape.
   useEffect(() => {
@@ -4175,20 +4255,10 @@ export function LibraryFoundationPage(
     };
   }, [menuFor, folderMenuFor]);
 
-  const scope: LibraryView = view;
+  const scope: LibraryView = "owned";
   const library = live.data.library;
-  const rawAgents =
-    (scope === "installed" ? library?.installed : library?.owned) ?? [];
-  const folders =
-    (scope === "installed"
-      ? library?.folders?.installed
-      : library?.folders?.owned) ?? [];
-
-  const selectView = (nextView: LibraryView) => {
-    setView(nextView);
-    setFolderError(null);
-    syncSearchParams({ view: nextView === "installed" ? null : nextView });
-  };
+  const rawAgents = library?.owned ?? [];
+  const folders = library?.folders?.owned ?? [];
 
   const runFolderOp = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -4257,19 +4327,25 @@ export function LibraryFoundationPage(
       ? agent.folderId
       : null;
     const menuOpen = menuFor === agent.id;
+    const agentPath = `/agents/${fixture.slug}`;
     return (
       <div className="library-card" key={agent.id}>
-        {scope === "installed"
-          ? (
-            <button
-              className="tool-card-button"
-              onClick={() => navigate(`/agents/${fixture.slug}`)}
-              type="button"
-            >
-              <StoreAgentCard tool={fixture} />
-            </button>
-          )
-          : <OwnedAgentCard navigate={navigate} tool={fixture} />}
+        <a
+          aria-label={`Open ${fixture.title}`}
+          className="library-card-clickable"
+          href={agentPath}
+          onClick={(event) => {
+            if (
+              event.button === 0 && !event.metaKey && !event.ctrlKey &&
+              !event.shiftKey && !event.altKey
+            ) {
+              event.preventDefault();
+              navigate(agentPath);
+            }
+          }}
+        >
+          <OwnedAgentCard tool={fixture} />
+        </a>
         {hasLaunchAuthToken()
           ? (
             <div
@@ -4450,28 +4526,6 @@ export function LibraryFoundationPage(
   return (
     <div className="launch-page-narrow library-page">
       <ApiNotice live={live} noun="Agents" />
-      <div className="library-toolbar">
-        <div
-          className="account-subtabs"
-          role="tablist"
-          aria-label="Library view"
-        >
-          {([["installed", "Installed"], ["owned", "Owned"]] as const).map((
-            [id, label],
-          ) => (
-            <button
-              aria-selected={view === id}
-              className={view === id ? "active" : ""}
-              key={id}
-              onClick={() => selectView(id)}
-              role="tab"
-              type="button"
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
 
       {folderError
         ? <p className="library-folder-error" role="alert">{folderError}</p>
@@ -4499,15 +4553,9 @@ export function LibraryFoundationPage(
         ? null
         : hasLaunchAuthToken()
         ? (
-          <EmptyState
-            icon="grid"
-            title={scope === "installed"
-              ? "No installed Agents yet"
-              : "No Agents you own yet"}
-          >
-            {scope === "installed"
-              ? "Agents you install appear here, ready for your connected agent to call. Browse the catalog to add one."
-              : "Ship your first Agent from the CLI and it appears here."}
+          <EmptyState icon="grid" title="No Agents yet">
+            Ask your connected coding agent to build and upload one. It will
+            appear here with its persistent home.
           </EmptyState>
         )
         : (
@@ -4521,12 +4569,8 @@ export function LibraryFoundationPage(
         ? (
           <div className="library-empty-grid">
             <LibraryEmptyCard
-              body="Ship your first Agent from the CLI and it appears here."
-              title="Agents you own"
-            />
-            <LibraryEmptyCard
-              body="Agents you install from the Store appear here, ready for your connected agent to call."
-              title="Installed"
+              body="Ask your connected coding agent to scaffold, test, and upload your first persistent Agent."
+              title="Your Agents"
             />
           </div>
         )
@@ -4536,37 +4580,20 @@ export function LibraryFoundationPage(
 }
 
 export function AdminFoundationPage(
-  { live, location, navigate, route }: LaunchPageProps,
+  { navigate, route }: LaunchPageProps,
 ): ReactElement {
-  // Live data only — an inaccessible Agent shows an honest empty state, never
-  // a demo fixture posing as a manageable Agent.
-  const tool = liveDetailAgent(
-    live.data.adminAgent?.admin.agent ?? live.data.adminAgent?.admin.tool,
-    live.data.agentFunctions?.functions,
-    live.data.agentCallerPermissions,
-    live.data.adminAgent?.trustCard,
-  );
-  if (!tool) {
-    return (
-      <div className="launch-page-narrow admin-page">
-        <ApiNotice live={live} noun="Agent admin" />
-        {live.status === "idle" || live.status === "loading" ? null : (
-          <EmptyState icon="shield" title="Agent admin needs a live session">
-            Sign in as this Agent's owner to manage it. Nothing is shown here
-            without live data.
-          </EmptyState>
-        )}
-      </div>
-    );
-  }
+  // Manage/Edit is now the canonical Agent Overview. Redirect by the route
+  // handle itself so legacy links do not need to load the retired admin shell
+  // (or an authenticated admin payload) before reaching the Agent home.
+  const agentHandle = route.params.id;
+  useEffect(() => {
+    if (agentHandle) navigate(`/agents/${encodeURIComponent(agentHandle)}`);
+  }, [agentHandle, navigate]);
+
   return (
-    <AdminSurface
-      live={live}
-      locationSearch={location.search}
-      navigate={navigate}
-      routeId={route.params.id}
-      tool={tool}
-    />
+    <div className="launch-page-narrow admin-page">
+      <p className="muted-note">Opening Agent Overview…</p>
+    </div>
   );
 }
 
@@ -4745,10 +4772,8 @@ function AdminSurface({
 }
 
 function OwnedAgentCard({
-  navigate,
   tool,
 }: {
-  navigate: (to: string) => void;
   tool: AgentDetailFixture;
 }): ReactElement {
   return (
@@ -4758,23 +4783,6 @@ function OwnedAgentCard({
           <h3>{tool.title}</h3>
           <p>{tool.summary}</p>
         </div>
-      </div>
-      <div className="owned-tool-actions">
-        <RouteButton
-          navigate={navigate}
-          to={`/admin/agents/${tool.id}`}
-          variant="secondary"
-        >
-          Manage
-        </RouteButton>
-        <RouteButton
-          icon="external"
-          navigate={navigate}
-          to={agentPreviewPath(tool)}
-          variant="secondary"
-        >
-          Public page
-        </RouteButton>
       </div>
     </Card>
   );
@@ -5233,35 +5241,16 @@ function ProfileStrip({ canManage }: { canManage: boolean }): ReactElement {
 }
 
 export function AccountFoundationPage(
-  { live, location, navigate }: LaunchPageProps,
+  { live, navigate }: LaunchPageProps,
 ): ReactElement {
-  const canManageKeys = live.status !== "error";
-  const [tab, setTab] = useState<AccountTabId>(accountTabFromSearch());
-
-  // Settings (Preferences tab) state.
+  const canManageKeys = hasLaunchAuthToken() && live.status !== "error";
   const [newKeyVisible, setNewKeyVisible] = useState(false);
-  const [newAgentPermission, setNewAgentPermission] = useState<
-    "always" | "ask" | "never"
-  >("ask");
-  const [installedPermission, setInstalledPermission] = useState<
-    "always" | "ask" | "never"
-  >("ask");
   const [visibleKeys, setVisibleKeys] = useState<ApiKeyFixture[]>(() =>
     liveApiKeyFixtures(live.data.apiKeys?.apiKeys)
   );
-
-  // Wallet (Balance tab) state. Top up now lives behind the + Add funds button,
-  // and receipts are a secondary view of the balance ledger. Initial values
-  // honour legacy /wallet?tab=receipts|topup deep links.
   const [showTopUp, setShowTopUp] = useState(
     () => queryParam("tab") === "topup",
   );
-  // Earnings tab: the "Transfer to balance" modal (earnings → spendable).
-  const [showTransfer, setShowTransfer] = useState(false);
-
-  useEffect(() => {
-    setTab(accountTabFromSearch());
-  }, [location.search]);
 
   useEffect(() => {
     setVisibleKeys(liveApiKeyFixtures(live.data.apiKeys?.apiKeys));
@@ -5269,22 +5258,6 @@ export function AccountFoundationPage(
 
   const totals = liveWalletTotals(live.data.wallet?.wallet);
   const wallet = live.data.wallet?.wallet;
-  const transactions = live.data.walletDetail?.kind === "transactions"
-    ? live.data.walletDetail.items
-    : wallet?.recentTransactions;
-  const receipts = live.data.walletDetail?.kind === "receipts"
-    ? live.data.walletDetail.items
-    : wallet?.recentReceipts;
-  const earnings = live.data.walletDetail?.kind === "earnings"
-    ? live.data.walletDetail.items
-    : wallet?.recentEarnings;
-
-  const selectTab = (nextTab: AccountTabId) => {
-    setTab(nextTab);
-    setShowTopUp(false);
-    setShowTransfer(false);
-    syncSearchParams({ tab: nextTab === "preferences" ? null : nextTab });
-  };
 
   const revokeKey = async (apiKey: ApiKeyFixture) => {
     if (!apiKey.id) return;
@@ -5300,279 +5273,165 @@ export function AccountFoundationPage(
   return (
     <div className="launch-page-narrow account-page">
       <ApiNotice live={live} noun="account" />
+      <ProfileStrip canManage={canManageKeys} />
 
-      <div className="account-subtabs" role="tablist" aria-label="Account sections">
-        {([
-          ["preferences", "Preferences"],
-          ["balance", "Billing"],
-          ["earnings", "Earnings"],
-        ] as const).map(([id, label]) => (
-          <button
-            aria-selected={tab === id}
-            className={tab === id ? "active" : ""}
-            key={id}
-            onClick={() => selectTab(id)}
-            role="tab"
-            type="button"
+      <Card className="wallet-amount-card">
+        <WalletAmount
+          label="Credit balance"
+          value={wallet ? totals.spendable : null}
+        />
+        <div className="wallet-hero-actions">
+          <Button
+            onClick={() => setShowTopUp((open) => !open)}
+            variant={showTopUp ? "secondary" : "primary"}
           >
-            {label}
-          </button>
-        ))}
+            {showTopUp ? "Close" : "+ Add credits"}
+          </Button>
+        </div>
+      </Card>
+
+      {wallet?.freeMode
+        ? <FreeModeBanner onAddFunds={() => setShowTopUp(true)} />
+        : null}
+
+      <SettingsCard
+        action={canManageKeys
+          ? (
+            <Button onClick={() => setNewKeyVisible(true)} size="sm">
+              Create key
+            </Button>
+          )
+          : null}
+        collapsible
+        defaultExpanded={false}
+        subtitle="Tokens your connected agents use to call Galactic. New keys reveal once."
+        summary={visibleKeys.length > 0
+          ? <Pill>{visibleKeys.length} keys</Pill>
+          : null}
+        title="Galactic Keys"
+      >
+        <p className="settings-help">
+          {canManageKeys
+            ? "Keys are shown by prefix only — the full token is revealed once, at creation."
+            : "The live settings endpoint needs an account session before it can show or create API keys."}
+        </p>
+        <div className="api-key-list">
+          {visibleKeys.length > 0
+            ? visibleKeys.map((key) => (
+              <ApiKeyRow
+                key={key.id || key.prefix}
+                apiKey={key}
+                onRevoke={revokeKey}
+              />
+            ))
+            : (
+              <EmptyState icon="key" title="Sign in to load API keys">
+                Once the launch session is active, your real agent keys will
+                appear here.
+              </EmptyState>
+            )}
+        </div>
+      </SettingsCard>
+
+      <ByokSettingsCard live={live} navigate={navigate} />
+
+      <SettingsCard
+        collapsible
+        defaultExpanded={false}
+        subtitle="Connected-agent consent and Agent-to-Agent delegation controls."
+        title="Permissions"
+      >
+        <p className="settings-help">
+          Function-level Always / Ask / Never controls live on each Agent's
+          Functions tab. These settings do not create a cross-user whitelist.
+        </p>
+        <AgentGrantApprovalRow canManage={canManageKeys} live={live} />
+      </SettingsCard>
+
+      <SettingsCard
+        collapsible
+        defaultExpanded={false}
+        subtitle="Build on Galactic — the full platform guide, tool reference, and SDK globals."
+        title="Developer"
+      >
+        <a
+          className="settings-doc-link"
+          href={`${launchApiOrigin()}/api/skills`}
+          rel="noreferrer"
+          target="_blank"
+        >
+          <Icon name="terminal" />
+          <div>
+            <strong>Platform docs</strong>
+            <span>
+              Skills.md — building guide, Agent conventions, and resource URIs.
+            </span>
+          </div>
+          <Icon name="external" />
+        </a>
+      </SettingsCard>
+
+      <div className="connect-agent-callout">
+        <div>
+          <strong>Connecting an agent?</strong>
+          <p>
+            Use Add to agent. It bundles your API key into install instructions
+            without exposing it in the page.
+          </p>
+        </div>
+        <AddToAgentButton size="md" variant="secondary" />
       </div>
 
-      {tab === "preferences"
+      {canManageKeys
         ? (
-          <>
-            <ProfileStrip canManage={canManageKeys} />
-            <SettingsCard
-              action={canManageKeys
-                ? (
-                  <Button onClick={() => setNewKeyVisible(true)} size="sm">
-                    Create key
-                  </Button>
-                )
-                : null}
-              collapsible
-              defaultExpanded={false}
-              subtitle="Tokens your connected agents use to call Galactic. New keys reveal once."
-              summary={visibleKeys.length > 0
-                ? <Pill>{visibleKeys.length} keys</Pill>
-                : null}
-              title="Galactic Keys"
+          <div className="account-signout-row">
+            <Button
+              onClick={() => {
+                void signOutLaunch().finally(() => {
+                  window.location.href = "/";
+                });
+              }}
+              size="sm"
+              variant="secondary"
             >
-              <p className="settings-help">
-                {canManageKeys
-                  ? "Keys are shown by prefix only — the full token is revealed once, at creation."
-                  : "The live settings endpoint needs an account session before it can show or create API keys."}
-              </p>
-              <div className="api-key-list">
-                {visibleKeys.length > 0
-                  ? visibleKeys.map((key) => (
-                    <ApiKeyRow
-                      key={key.id || key.prefix}
-                      apiKey={key}
-                      onRevoke={revokeKey}
-                    />
-                  ))
-                  : (
-                    <EmptyState icon="key" title="Sign in to load API keys">
-                      Once the launch session is active, your real agent keys
-                      will appear here.
-                    </EmptyState>
-                  )}
-              </div>
-            </SettingsCard>
+              Sign out
+            </Button>
+          </div>
+        )
+        : null}
 
-            <ByokSettingsCard live={live} navigate={navigate} />
-
-            <SettingsCard
-              collapsible
-              defaultExpanded={false}
-              subtitle="Launch-safe defaults for how your connected agent may call Agent functions."
-              title="Permissions"
+      {showTopUp
+        ? (
+          <div
+            className="topup-modal-backdrop"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) setShowTopUp(false);
+            }}
+            role="presentation"
+          >
+            <div
+              aria-label="Add credits"
+              aria-modal="true"
+              className="topup-modal"
+              role="dialog"
             >
-              <PreferenceRow
-                control={
-                  <PermissionSelect
-                    onChange={setNewAgentPermission}
-                    value={newAgentPermission}
-                  />
-                }
-                description="How your connected agent may call functions on Agents you deploy."
-                title="Default permissions for new Agents"
-              />
-              <PreferenceRow
-                control={
-                  <PermissionSelect
-                    onChange={setInstalledPermission}
-                    value={installedPermission}
-                  />
-                }
-                description="How your connected agent may call functions on Agents you install."
-                title="Default permissions for installed Agents"
-              />
-              <AgentGrantApprovalRow canManage={canManageKeys} live={live} />
-            </SettingsCard>
-
-            <SettingsCard
-              collapsible
-              defaultExpanded={false}
-              subtitle="Build on Galactic — the full platform guide, tool reference, and SDK globals."
-              title="Developer"
-            >
-              <a
-                className="settings-doc-link"
-                href={`${launchApiOrigin()}/api/skills`}
-                rel="noreferrer"
-                target="_blank"
+              <button
+                aria-label="Close"
+                className="topup-modal-close"
+                onClick={() => setShowTopUp(false)}
+                type="button"
               >
-                <Icon name="terminal" />
-                <div>
-                  <strong>Platform docs</strong>
-                  <span>
-                    Skills.md — building guide, agent conventions, and resource
-                    URIs.
-                  </span>
-                </div>
-                <Icon name="external" />
-              </a>
-            </SettingsCard>
-
-            <div className="connect-agent-callout">
-              <div>
-                <strong>Connecting an agent?</strong>
-                <p>
-                  Use Add to agent. It bundles your API key into install
-                  instructions without exposing it in the page.
-                </p>
-              </div>
-              <AddToAgentButton size="md" variant="secondary" />
+                ✕
+              </button>
+              <WalletTopUpPanel
+                earnedCredits={totals.earned}
+                live={live}
+                publishableKey={wallet?.stripePublishableKey}
+                buyerEmail={wallet?.buyerEmail}
+                onClose={() => setShowTopUp(false)}
+              />
             </div>
-
-            {canManageKeys
-              ? (
-                <div className="account-signout-row">
-                  <Button
-                    onClick={() => {
-                      void signOutLaunch().finally(() => {
-                        window.location.href = "/";
-                      });
-                    }}
-                    size="sm"
-                    variant="secondary"
-                  >
-                    Sign out
-                  </Button>
-                </div>
-              )
-              : null}
-          </>
-        )
-        : null}
-
-      {tab === "balance"
-        ? (
-          <>
-            <Card className="wallet-amount-card">
-              <WalletAmount
-                label="Balance remaining"
-                value={wallet ? totals.spendable : null}
-              />
-              <div className="wallet-hero-actions">
-                <Button
-                  onClick={() => setShowTopUp((open) => !open)}
-                  variant={showTopUp ? "secondary" : "primary"}
-                >
-                  {showTopUp ? "Close" : "+ Add funds"}
-                </Button>
-              </div>
-            </Card>
-
-            {wallet?.freeMode
-              ? (
-                <FreeModeBanner
-                  onAddFunds={() => setShowTopUp(true)}
-                />
-              )
-              : null}
-
-            <WalletBalancePanel
-              rows={mergeWalletRows(transactions, receipts)}
-            />
-            {showTopUp
-              ? (
-                <div
-                  className="topup-modal-backdrop"
-                  onClick={(event) => {
-                    if (event.target === event.currentTarget) {
-                      setShowTopUp(false);
-                    }
-                  }}
-                  role="presentation"
-                >
-                  <div
-                    aria-label="Add funds"
-                    aria-modal="true"
-                    className="topup-modal"
-                    role="dialog"
-                  >
-                    <button
-                      aria-label="Close"
-                      className="topup-modal-close"
-                      onClick={() => setShowTopUp(false)}
-                      type="button"
-                    >
-                      ✕
-                    </button>
-                    <WalletTopUpPanel
-                      earnedCredits={totals.earned}
-                      live={live}
-                      publishableKey={wallet?.stripePublishableKey}
-                      buyerEmail={wallet?.buyerEmail}
-                      onClose={() => setShowTopUp(false)}
-                    />
-                  </div>
-                </div>
-              )
-              : null}
-          </>
-        )
-        : null}
-
-      {tab === "earnings"
-        ? (
-          <>
-            <Card className="wallet-amount-card">
-              <WalletAmount
-                label="Earnings available"
-                value={wallet ? totals.earned : null}
-              />
-              <div className="wallet-hero-actions">
-                <Button
-                  disabled={!wallet || totals.earned <= 0}
-                  onClick={() => setShowTransfer((open) => !open)}
-                  variant={showTransfer ? "secondary" : "primary"}
-                >
-                  {showTransfer ? "Close" : "⇄ Transfer to balance"}
-                </Button>
-              </div>
-            </Card>
-            <WalletEarningsPanel earnings={liveEarningRows(earnings)} />
-            {showTransfer
-              ? (
-                <div
-                  className="topup-modal-backdrop"
-                  onClick={(event) => {
-                    if (event.target === event.currentTarget) {
-                      setShowTransfer(false);
-                    }
-                  }}
-                  role="presentation"
-                >
-                  <div
-                    aria-label="Transfer earnings to balance"
-                    aria-modal="true"
-                    className="topup-modal"
-                    role="dialog"
-                  >
-                    <button
-                      aria-label="Close"
-                      className="topup-modal-close"
-                      onClick={() => setShowTransfer(false)}
-                      type="button"
-                    >
-                      ✕
-                    </button>
-                    <WalletTransferPanel
-                      earnedCredits={totals.earned}
-                      live={live}
-                      onClose={() => setShowTransfer(false)}
-                    />
-                  </div>
-                </div>
-              )
-              : null}
-          </>
+          </div>
         )
         : null}
 
@@ -7987,9 +7846,11 @@ function agentTabFromSearch(): AgentPageTabId {
   const tab = queryParam("tab");
   if (tab === "functions") return "functions";
   if (tab === "interface") return "interface";
-  // Wiring is now folded into Details, so legacy ?tab=wiring lands there too.
-  if (tab === "details" || tab === "wiring") return "details";
-  return "functions";
+  // Legacy Details/Wiring links now land on the unified Agent home.
+  if (tab === "overview" || tab === "details" || tab === "wiring") {
+    return "overview";
+  }
+  return "overview";
 }
 
 function adminTabFromSearch(): AdminTabId {

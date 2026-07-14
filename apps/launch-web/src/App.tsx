@@ -56,7 +56,7 @@ const routeTitles: Record<LaunchRouteKey, string> = {
   library: "Agents",
   store: "Browse",
   agent: "Agent",
-  settings: "Account",
+  settings: "Profile",
   adminAgent: "Agent admin",
   authCallback: "Signing in",
   terms: "Terms of Service",
@@ -136,10 +136,10 @@ export function App(): ReactElement {
 
   // Keep the top-nav item that LED here highlighted: the last primary/account
   // section the user visited sticks through detail pages (e.g. arriving at an
-  // agent from "Agents" keeps Agents lit; from "Browse" keeps Browse lit). A
-  // direct URL to a detail page has no prior section, so it defaults to Browse.
+  // agent from "Agents" keeps Agents lit). A direct URL to a detail page has
+  // no prior section, so it defaults to the user's Agent home.
   const [activeSection, setActiveSection] = useState<LaunchRouteKey>(
-    route.definition.nav === "hidden" ? "store" : route.definition.key,
+    route.definition.nav === "hidden" ? "library" : route.definition.key,
   );
   useEffect(() => {
     if (route.definition.nav !== "hidden") {
