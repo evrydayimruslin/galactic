@@ -519,33 +519,6 @@ export async function createAppD1Resources(
   };
 }
 
-export interface AppD1StorageDisclosure {
-  type: "d1";
-  status: App["d1_status"] | "unknown";
-  provisioned: boolean;
-  migration_version: number;
-  note: string;
-}
-
-export function resolveAppD1StorageDisclosure(
-  app: Pick<
-    App,
-    "d1_database_id" | "d1_status" | "d1_last_migration_version"
-  >,
-): AppD1StorageDisclosure | null {
-  if (!app.d1_database_id && !app.d1_status) return null;
-  return {
-    type: "d1",
-    status: app.d1_status || "unknown",
-    provisioned: Boolean(app.d1_database_id),
-    migration_version: Number.isInteger(app.d1_last_migration_version)
-      ? Math.max(0, app.d1_last_migration_version)
-      : 0,
-    note:
-      "Agent-owned Galactic D1 storage. Data remains scoped by Agent and user.",
-  };
-}
-
 export function resolveManifestPermissions(
   app: Pick<RuntimeApp, "manifest">,
   basePermissions: string[],
@@ -619,10 +592,11 @@ export function resolveFunctionExecutionPolicy(
     };
     return {
       async: executionClass === "async",
-      timeoutMs: typeof timeoutMs === "number" && Number.isFinite(timeoutMs) &&
+      timeoutMs:
+        typeof timeoutMs === "number" && Number.isFinite(timeoutMs) &&
           timeoutMs > 0
-        ? Math.min(Math.floor(timeoutMs), MAX_ASYNC_EXECUTION_MS)
-        : MAX_ASYNC_EXECUTION_MS,
+          ? Math.min(Math.floor(timeoutMs), MAX_ASYNC_EXECUTION_MS)
+          : MAX_ASYNC_EXECUTION_MS,
     };
   } catch {
     return fallback;
@@ -824,6 +798,7 @@ function collectManifestExternalFunctionDependencies(
     }
   }
 }
+
 
 function collectRoutineActorAppCallDependencies(
   caller: RuntimeCallerLike | undefined,

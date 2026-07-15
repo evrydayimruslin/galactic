@@ -7,7 +7,6 @@ import {
   classifyAppSupabaseConfigState,
   createAppD1Resources,
   fetchAppEntryCode,
-  resolveAppD1StorageDisclosure,
   resolveAppRuntimeEnvVars,
   resolveAppSupabaseConfig,
   resolveManifestPermissions,
@@ -699,33 +698,4 @@ Deno.test("app runtime resources: D1 setup stays disabled when provisioning cann
     d1DatabaseId: null,
     d1DataService: null,
   });
-});
-
-Deno.test("app runtime resources: D1 disclosure is accurate and never exposes the database id", () => {
-  const disclosure = resolveAppD1StorageDisclosure({
-    d1_database_id: "cloudflare-database-secret-id",
-    d1_status: "ready",
-    d1_last_migration_version: 3,
-  });
-
-  assertEquals(disclosure, {
-    type: "d1",
-    status: "ready",
-    provisioned: true,
-    migration_version: 3,
-    note:
-      "Agent-owned Galactic D1 storage. Data remains scoped by Agent and user.",
-  });
-  assertEquals(
-    JSON.stringify(disclosure).includes("cloudflare-database-secret-id"),
-    false,
-  );
-  assertEquals(
-    resolveAppD1StorageDisclosure({
-      d1_database_id: null,
-      d1_status: null,
-      d1_last_migration_version: 0,
-    }),
-    null,
-  );
 });

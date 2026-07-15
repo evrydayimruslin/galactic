@@ -18,8 +18,8 @@ import {
   canApiTokenStageExistingRuntime,
   filterPlatformMcpToolsForAuth,
   isApiTokenPlatformAuth,
-  type PlatformMcpAuthContext,
   shouldAutoLiveExistingUpload,
+  type PlatformMcpAuthContext,
   violatesPrivateAgentCreationPolicy,
 } from "../services/platform-mcp-authorization.ts";
 import {
@@ -84,8 +84,8 @@ import {
 import {
   checkPublisherPublishReadiness,
   isPublishReadinessError,
-  publishReadinessErrorPayload,
   type PublishReadinessOptions,
+  publishReadinessErrorPayload,
 } from "../services/tier-enforcement.ts";
 import {
   checkStorageQuota,
@@ -126,10 +126,7 @@ import {
   writeUserMemory,
 } from "../services/library.ts";
 import { createMemoryService } from "../services/memory.ts";
-import {
-  resolveAppD1StorageDisclosure,
-  resolveStrictManifestPermissions,
-} from "../services/app-runtime-resources.ts";
+import { resolveStrictManifestPermissions } from "../services/app-runtime-resources.ts";
 import {
   createUlTestAiResponse,
   createUlTestMemoryAdapter,
@@ -268,11 +265,7 @@ import {
   matchFilesAgainstHashes,
   readVersionSourceFiles,
 } from "../services/code-verification.ts";
-import {
-  emptyHealth,
-  getAppHealth,
-  isRecentlyHealthy,
-} from "../services/app-health.ts";
+import { emptyHealth, getAppHealth, isRecentlyHealthy } from "../services/app-health.ts";
 import {
   buildCallerPermissionConfigureUrl,
   enforceCallerFunctionPermission,
@@ -602,13 +595,6 @@ interface InspectPermissionRow {
 }
 
 type InspectStorageDetails =
-  | {
-    type: "d1";
-    status: App["d1_status"] | "unknown";
-    provisioned: boolean;
-    migration_version: number;
-    note: string;
-  }
   | {
     type: "supabase";
     config_id: string;
@@ -2517,7 +2503,9 @@ bindCapabilityHandler("test", async (args, ctx) => {
       await executeTest(ctx.userId, decodedArgs, ctx.user as UserContext),
     );
     const gpuLint = asToolArguments(result.lint);
-    const gpuLintErrors = Array.isArray(gpuLint.errors) ? gpuLint.errors : [];
+    const gpuLintErrors = Array.isArray(gpuLint.errors)
+      ? gpuLint.errors
+      : [];
     if (result.success === true && gpuLintErrors.length === 0) {
       const sourceHash = await computeDecodedSourceHash(testFiles);
       const issued = await issueTestAttestation({
@@ -2545,8 +2533,7 @@ bindCapabilityHandler("test", async (args, ctx) => {
     return {
       lint_passed: false,
       lint: lintResult,
-      tip:
-        "Fix lint errors before testing. Or set strict=false to test anyway.",
+      tip: "Fix lint errors before testing. Or set strict=false to test anyway.",
     };
   }
   const testResult = await executeTest(
@@ -2577,10 +2564,7 @@ bindCapabilityHandler("test", async (args, ctx) => {
 bindCapabilityHandler("set", async (args, ctx) => {
   const userId = ctx.userId;
   if (!args.app_id) {
-    throw new CapabilityError(
-      "invalid_input",
-      "Missing required parameter: app_id",
-    );
+    throw new CapabilityError("invalid_input", "Missing required parameter: app_id");
   }
   const setResults: Record<string, unknown> = {};
   let setCount = 0;
@@ -2846,11 +2830,10 @@ async function executeCall(
   // Post-call flag nudge: every executed call carries a receipt_id; surface
   // it at the envelope level with a structured prompt so the agent reports
   // the outcome via gx.flag (near-universal proof-of-use telemetry).
-  const callReceiptId =
-    unwrappedResult && typeof unwrappedResult === "object" &&
+  const callReceiptId = unwrappedResult && typeof unwrappedResult === "object" &&
       !Array.isArray(unwrappedResult)
-      ? (unwrappedResult as Record<string, unknown>).receipt_id
-      : undefined;
+    ? (unwrappedResult as Record<string, unknown>).receipt_id
+    : undefined;
   const flagNudge = typeof callReceiptId === "string"
     ? {
       receipt_id: callReceiptId,
@@ -2945,7 +2928,9 @@ async function executeCodemode(
   if (isFreeModeEnabled() && econ.freeMode) {
     throw new ToolError(
       INVALID_PARAMS,
-      `codemode is unavailable in free mode. Add credits at ${walletUrl()} to use it.`,
+      `codemode is unavailable in free mode. Add credits at ${
+        walletUrl()
+      } to use it.`,
     );
   }
   const recipeCode = args.code as string;
@@ -3043,7 +3028,9 @@ async function executeCodemode(
       },
     );
     const likedIds = likedRes.ok
-      ? (await readJsonArray<{ app_id: string }>(likedRes)).map((l) => l.app_id)
+      ? (await readJsonArray<{ app_id: string }>(likedRes)).map((l) =>
+        l.app_id
+      )
       : [];
 
     let likedApps: typeof ownedApps = [];
@@ -3238,10 +3225,8 @@ bindCapabilityHandler("codemode", (args, ctx) =>
 // Autonomous execution: routines (scheduled) + emit (pub/sub). Both keep their
 // executors in this module and throw ToolError natively, so runCapabilityForMcp
 // passes their errors through unchanged.
-bindCapabilityHandler(
-  "routine",
-  (args, ctx) => executeRoutinePlatformAction(ctx.userId, args),
-);
+bindCapabilityHandler("routine", (args, ctx) =>
+  executeRoutinePlatformAction(ctx.userId, args));
 
 bindCapabilityHandler("emit", (args, ctx) => executeEmit(ctx.userId, args));
 
@@ -3345,7 +3330,8 @@ function executeDiscoverTools(callerIsApiToken = false): {
   if (!isPlatformMcpLiteEnabled()) {
     return {
       tools: [],
-      note: "All platform tools are advertised in tools/list; none are hidden.",
+      note:
+        "All platform tools are advertised in tools/list; none are hidden.",
     };
   }
   const demoted = callerIsApiToken
@@ -3394,7 +3380,7 @@ function stripGpuPlatformDocs(docs: string): string {
     )
     .replace(
       '- Without `app_id`: scaffold a new app. Default runtime generates index.ts + manifest.json + .ultralightrc.json. With `runtime: "gpu"`, generates `ultralight.gpu.yaml`, `main.py`, `requirements.txt`, and `test_fixture.json`. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts, `full_time: true` for a running full-time-agent loop (see "Full-time Agents" below), `gpu_type`, `base: "python-cuda" | "torch-cuda"`.\n',
-      '- Without `app_id`: scaffold a new app. The enabled runtime generates index.ts + manifest.json + .ultralightrc.json. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts, `interface: true` for a working interfaces/main.html (agent UI) with the call bridge pre-wired, `full_time: true` for a running full-time-agent loop (see "Full-time Agents" below).\n',
+      "- Without `app_id`: scaffold a new app. The enabled runtime generates index.ts + manifest.json + .ultralightrc.json. Optional: `functions` array, `storage` type, `permissions` list, `policy: true` for policy.ts, `interface: true` for a working interfaces/main.html (agent UI) with the call bridge pre-wired, `full_time: true` for a running full-time-agent loop (see \"Full-time Agents\" below).\n",
     )
     .replace(
       "- GPU apps are validation-only in `gx.test`: it checks `ultralight.gpu.yaml`, `main.py`, `test_fixture.json`, pinned requirements, and rejects Dockerfiles. Actual Python/GPU execution happens after upload/build/benchmark.\n",
@@ -3722,8 +3708,7 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
  * Reusable by both buildInstructions() and resources/read.
  */
 function buildPlatformDocs(): string {
-  const docs =
-    `**Naming:** platform tools use the \`gx.\` prefix (e.g. \`gx.discover\`) and the in-Agent SDK is \`galactic.*\` (e.g. \`galactic.ai()\`). These are the canonical names this guide uses throughout. The older \`ul.*\` / \`ultralight.*\` names remain permanent aliases — either prefix is accepted on input, so nothing built against the old names breaks.
+  const docs = `**Naming:** platform tools use the \`gx.\` prefix (e.g. \`gx.discover\`) and the in-Agent SDK is \`galactic.*\` (e.g. \`galactic.ai()\`). These are the canonical names this guide uses throughout. The older \`ul.*\` / \`ultralight.*\` names remain permanent aliases — either prefix is accepted on input, so nothing built against the old names breaks.
 
 ## Calling Apps
 
@@ -4839,1370 +4824,1348 @@ async function handleToolsCall(
         request,
         widgetForwardArgs,
       });
-    } else {
-      switch (name) {
-        // ── 1. ul.discover ──────────────
-        // ul.discover dispatched via the capability registry pre-check above
-        // (handler bound from this module). The 4 scope aliases below still route
-        // here.
+    } else
+    switch (name) {
+      // ── 1. ul.discover ──────────────
+      // ul.discover dispatched via the capability registry pre-check above
+      // (handler bound from this module). The 4 scope aliases below still route
+      // here.
 
-        // ── 2. ul.command ──────────────
-        case "ul.command": {
-          const action = toolArgs.action as string | undefined;
-          if (!action) {
-            throw new ToolError(
-              INVALID_PARAMS,
-              "Missing required parameter: action",
-            );
-          }
-          switch (action) {
-            case "inventory":
-              result = await getCommandSurfaceInventory(userId, {
-                query: toolArgs.query,
-                surfaces: toolArgs.surfaces,
-                limit: toolArgs.limit,
-              });
-              break;
-            case "blueprint":
-              result = await createCommandDashboardBlueprint(userId, toolArgs);
-              break;
-            case "interface":
-              result = await planAgenticInterface(userId, toolArgs);
-              break;
-            case "interface_data": {
-              const reqUrl = new URL(request.url);
-              const host = request.headers.get("host") || reqUrl.host;
-              const proto = request.headers.get("x-forwarded-proto") ||
-                (host.includes("localhost") ? "http" : "https");
-              const baseUrl = `${proto}://${host}`;
-              const authToken = request.headers.get("Authorization")?.slice(7);
-              if (!authToken) {
-                throw new ToolError(
-                  INTERNAL_ERROR,
-                  "Missing auth token for interface data calls",
-                );
-              }
-              result = await resolveAgenticInterfaceData(userId, toolArgs, {
-                executeAppFunction: async ({ appId, functionName, args }) => {
-                  const rpcPayload = {
-                    jsonrpc: "2.0",
-                    id: crypto.randomUUID(),
-                    method: "tools/call",
-                    params: {
-                      name: functionName,
-                      arguments: args || {},
-                    },
-                  };
-                  // SELF binding: same-worker public-hostname fetch is blocked
-                  // by the CDN (error 1042); helper validates + encodes the id.
-                  const interfaceCall = resolveInternalMcpCall(appId, {
-                    baseUrl,
-                  });
-                  const callResponse = await interfaceCall.fetchFn(
-                    interfaceCall.url,
-                    {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${authToken}`,
-                      },
-                      body: JSON.stringify(rpcPayload),
-                    },
-                  );
-                  if (!callResponse.ok) {
-                    const errText = await callResponse.text().catch(() =>
-                      callResponse.statusText
-                    );
-                    throw new Error(
-                      `Call failed (${callResponse.status}): ${errText}`,
-                    );
-                  }
-                  const rpcResponse = await callResponse
-                    .json() as RpcToolCallResultEnvelope;
-                  if (rpcResponse.error) {
-                    throw new ToolError(
-                      rpcResponse.error.code || INTERNAL_ERROR,
-                      rpcResponse.error.message ||
-                        JSON.stringify(rpcResponse.error),
-                      rpcResponse.error.data,
-                    );
-                  }
-                  return unwrapToolCallResult(rpcResponse.result);
-                },
-              });
-              break;
-            }
-            case "interface_action": {
-              const reqUrl = new URL(request.url);
-              const host = request.headers.get("host") || reqUrl.host;
-              const proto = request.headers.get("x-forwarded-proto") ||
-                (host.includes("localhost") ? "http" : "https");
-              const baseUrl = `${proto}://${host}`;
-              const authToken = request.headers.get("Authorization")?.slice(7);
-              if (!authToken) {
-                throw new ToolError(
-                  INTERNAL_ERROR,
-                  "Missing auth token for interface action calls",
-                );
-              }
-              result = await executeAgenticInterfaceAction(userId, toolArgs, {
-                executeAppFunction: async ({ appId, functionName, args }) => {
-                  const rpcPayload = {
-                    jsonrpc: "2.0",
-                    id: crypto.randomUUID(),
-                    method: "tools/call",
-                    params: {
-                      name: functionName,
-                      arguments: args || {},
-                    },
-                  };
-                  // SELF binding: same-worker public-hostname fetch is blocked
-                  // by the CDN (error 1042); helper validates + encodes the id.
-                  const interfaceCall = resolveInternalMcpCall(appId, {
-                    baseUrl,
-                  });
-                  const callResponse = await interfaceCall.fetchFn(
-                    interfaceCall.url,
-                    {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${authToken}`,
-                      },
-                      body: JSON.stringify(rpcPayload),
-                    },
-                  );
-                  if (!callResponse.ok) {
-                    const errText = await callResponse.text().catch(() =>
-                      callResponse.statusText
-                    );
-                    throw new Error(
-                      `Call failed (${callResponse.status}): ${errText}`,
-                    );
-                  }
-                  const rpcResponse = await callResponse
-                    .json() as RpcToolCallResultEnvelope;
-                  if (rpcResponse.error) {
-                    throw new ToolError(
-                      rpcResponse.error.code || INTERNAL_ERROR,
-                      rpcResponse.error.message ||
-                        JSON.stringify(rpcResponse.error),
-                      rpcResponse.error.data,
-                    );
-                  }
-                  return unwrapToolCallResult(rpcResponse.result);
-                },
-              });
-              break;
-            }
-            case "save_interface":
-              result = await saveAgenticInterface(userId, toolArgs);
-              break;
-            case "list_interfaces":
-              result = await listAgenticInterfaces(userId);
-              break;
-            case "get_interface":
-              result = await getAgenticInterface(
-                userId,
-                toolArgs.interface_key,
-              );
-              break;
-            case "delete_interface":
-              result = await deleteAgenticInterface(
-                userId,
-                toolArgs.interface_key,
-              );
-              break;
-            case "save":
-              result = await saveCommandDashboardFromInput(userId, toolArgs);
-              break;
-            case "list":
-              result = await listCommandDashboardLayouts(userId);
-              break;
-            case "get":
-              result = await getCommandDashboardLayout(
-                userId,
-                toolArgs.dashboard_key,
-              );
-              break;
-            default:
-              throw new ToolError(
-                INVALID_PARAMS,
-                `Invalid action: ${action}. Use inventory|blueprint|interface|interface_data|interface_action|save_interface|list_interfaces|get_interface|delete_interface|save|list|get`,
-              );
-          }
-          break;
-        }
-
-        // ── 3. ul.routine ──────────────
-        // ul.routine migrated to the capability registry (id "routine",
-        // advertised gx.routine; handler bound from this module).
-
-        // ── 4. ul.download (+ scaffold when no app_id) ──────────────
-        // ul.download dispatched via the capability registry pre-check above.
-
-        // ul.test dispatched via the capability registry pre-check above.
-
-        // ul.upload dispatched via the capability registry pre-check above.
-
-        // ── 5. ul.set ──────────────
-        // ul.set dispatched via the capability registry pre-check above; the 6
-        // ul.set.* single-setting aliases below still route here.
-
-        // ── 6. ul.memory ──────────────
-        case "ul.memory": {
-          // Block memory for provisional (pre-auth) users
-          if (user?.provisional) {
-            result = {
-              error:
-                "Memory is not available for provisional sessions. Sign in at connectgalactic.com to unlock cross-session memory.",
-            };
-            break;
-          }
-          const memAction = toolArgs.action;
-          if (!memAction) {
-            throw new ToolError(
-              INVALID_PARAMS,
-              "Missing required parameter: action",
-            );
-          }
-          switch (memAction) {
-            case "read":
-              result = await executeMemoryRead(userId, toolArgs);
-              break;
-            case "write":
-              result = await executeMemoryWrite(userId, toolArgs);
-              break;
-            case "recall":
-              result = await executeMemoryRecall(userId, toolArgs);
-              break;
-            case "query":
-              result = await executeMemoryQuery(userId, toolArgs);
-              break;
-            default:
-              throw new ToolError(
-                INVALID_PARAMS,
-                `Invalid action: ${memAction}. Use read|write|recall|query`,
-              );
-          }
-          break;
-        }
-
-        // ── 7. ul.permissions ──────────────
-        case "ul.permissions": {
-          const permAction = toolArgs.action;
-          if (!permAction) {
-            throw new ToolError(
-              INVALID_PARAMS,
-              "Missing required parameter: action",
-            );
-          }
-          switch (permAction) {
-            case "grant":
-              result = await executePermissionsGrant(userId, toolArgs);
-              break;
-            case "revoke":
-              result = await executePermissionsRevoke(userId, toolArgs);
-              break;
-            case "list":
-              result = await executePermissionsList(userId, toolArgs);
-              break;
-            case "export":
-              result = await executePermissionsExport(userId, toolArgs);
-              break;
-            default:
-              throw new ToolError(
-                INVALID_PARAMS,
-                `Invalid action: ${permAction}. Use grant|revoke|list|export`,
-              );
-          }
-          break;
-        }
-
-        // ── ul.grants (cross-Agent wiring) ──────────────
-        case "ul.grants": {
-          result = await executeGrants(userId, toolArgs, callerIsApiToken);
-          break;
-        }
-
-        // ── ul.permit (connected-agent caller policy) ──────────────
-        // ul.permit dispatched via the capability registry pre-check above.
-
-        // ── ul.emit (publish a cross-Agent event) ──────────────
-        // ul.emit migrated to the capability registry (id "emit", advertised
-        // gx.emit; handler bound from this module).
-
-        // ── 8. ul.logs (+ health) ──────────────
-        case "ul.logs": {
-          if (toolArgs.health) {
-            result = await executeHealth(userId, toolArgs);
-          } else {
-            if (!toolArgs.app_id) {
-              throw new ToolError(
-                INVALID_PARAMS,
-                "Missing app_id for call logs. Use health=true for cross-app health.",
-              );
-            }
-            result = await executeLogs(userId, toolArgs);
-          }
-          break;
-        }
-
-        // ── 9. ul.rate (+ shortcomings) ──────────────
-        case "ul.rate": {
-          // Handle shortcoming report if present (fire-and-forget)
-          if (toolArgs.shortcoming) {
-            executeShortcomings(
-              userId,
-              asToolArguments(toolArgs.shortcoming),
-              sessionId,
-            );
-          }
-          // Handle rating if present
-          if (toolArgs.app_id && toolArgs.rating) {
-            result = await executeRate(userId, toolArgs);
-          } else if (toolArgs.shortcoming) {
-            result = { received: true };
-          } else {
-            throw new ToolError(
-              INVALID_PARAMS,
-              "Provide app_id + rating, or shortcoming, or both.",
-            );
-          }
-          break;
-        }
-
-        // ul.call dispatched via the capability registry pre-check above.
-
-        // ul.secrets dispatched via the capability registry pre-check above.
-
-        // ── Backward-compat aliases ──────────────
-        case "ul.discover.desk":
-          logAliasUsage(name);
-          result = await executeDiscoverDesk(userId);
-          break;
-        case "ul.discover.inspect":
-          logAliasUsage(name);
-          result = await executeDiscoverInspect(userId, toolArgs, econ);
-          break;
-        case "ul.discover.library":
-          logAliasUsage(name);
-          result = await executeDiscoverLibrary(userId, toolArgs);
-          break;
-        case "ul.discover.appstore":
-          logAliasUsage(name);
-          result = await executeDiscoverAppstore(userId, toolArgs);
-          break;
-        case "ul.set.version":
-          logAliasUsage(name);
-          result = await executeSetVersion(userId, toolArgs, {
-            callerIsApiToken,
-          });
-          break;
-        case "ul.set.visibility":
-          logAliasUsage(name);
-          result = await executeSetVisibility(userId, toolArgs);
-          break;
-        case "ul.set.download":
-          logAliasUsage(name);
-          result = await executeSetDownload(userId, toolArgs);
-          break;
-        case "ul.set.supabase":
-          logAliasUsage(name);
-          result = await executeSetSupabase(userId, toolArgs);
-          break;
-        case "ul.set.ratelimit":
-          logAliasUsage(name);
-          result = await executeSetRateLimit(userId, toolArgs);
-          break;
-        case "ul.set.pricing":
-          logAliasUsage(name);
-          result = await executeSetPricing(userId, toolArgs);
-          break;
-        case "ul.permissions.grant":
-          logAliasUsage(name);
-          result = await executePermissionsGrant(userId, toolArgs);
-          break;
-        case "ul.permissions.revoke":
-          logAliasUsage(name);
-          result = await executePermissionsRevoke(userId, toolArgs);
-          break;
-        case "ul.permissions.list":
-          logAliasUsage(name);
-          result = await executePermissionsList(userId, toolArgs);
-          break;
-        case "ul.permissions.export":
-          logAliasUsage(name);
-          result = await executePermissionsExport(userId, toolArgs);
-          break;
-        // ul.connect + ul.connections folded into the "secrets" registry
-        // capability (list-only) — dispatched via the pre-check above.
-        case "ul.memory.read":
-        case "ul.memory.write":
-        case "ul.memory.append":
-        case "ul.memory.recall":
-        case "ul.memory.remember":
-        case "ul.memory.query":
-        case "ul.memory.forget": {
-          logAliasUsage(name);
-          // Block memory aliases for provisional users (same as main ul.memory handler)
-          if (user?.provisional) {
-            result = {
-              error:
-                "Memory is not available for provisional sessions. Sign in at connectgalactic.com to unlock cross-session memory.",
-            };
-            break;
-          }
-          // Dispatch to original handlers
-          switch (name) {
-            case "ul.memory.read":
-              result = await executeMemoryRead(userId, toolArgs);
-              break;
-            case "ul.memory.write":
-              result = await executeMemoryWrite(userId, toolArgs);
-              break;
-            case "ul.memory.append":
-              result = await executeMemoryWrite(userId, {
-                ...toolArgs,
-                append: true,
-              });
-              break;
-            case "ul.memory.recall":
-              result = await executeMemoryRecall(userId, toolArgs);
-              break;
-            case "ul.memory.remember":
-              result = await executeMemoryRecall(userId, toolArgs);
-              break;
-            case "ul.memory.query":
-              result = await executeMemoryQuery(userId, toolArgs);
-              break;
-            case "ul.memory.forget":
-              result = await executeMemoryQuery(userId, {
-                ...toolArgs,
-                delete_key: toolArgs.key,
-              });
-              break;
-          }
-          break;
-        }
-        case "ul.markdown.publish":
-          logAliasUsage(name);
-          result = await executeMarkdown(userId, toolArgs);
-          break;
-        case "ul.markdown.list":
-          logAliasUsage(name);
-          result = await executePages(userId);
-          break;
-        case "ul.markdown.share":
-          logAliasUsage(name);
-          result = await executeMarkdownShare(userId, toolArgs);
-          break;
-        case "ul.like":
-          logAliasUsage(name);
-          result = await executeRate(userId, { ...toolArgs, rating: "like" });
-          break;
-        case "ul.dislike":
-          logAliasUsage(name);
-          result = await executeRate(userId, {
-            ...toolArgs,
-            rating: "dislike",
-          });
-          break;
-        case "ul.lint":
-          logAliasUsage(name);
-          result = executeLint(toolArgs);
-          break;
-        case "ul.scaffold":
-          logAliasUsage(name);
-          result = executeScaffold(toolArgs);
-          break;
-        case "ul.health":
-          logAliasUsage(name);
-          result = await executeHealth(userId, toolArgs);
-          break;
-        case "ul.gaps":
-          logAliasUsage(name);
-          result = await executeGaps(toolArgs);
-          break;
-        case "ul.shortcomings":
-          logAliasUsage(name);
-          result = executeShortcomings(userId, toolArgs, sessionId);
-          break;
-
-        // ── 11. ul.auth.link (cross-device merge) ──────────────
-        case "ul.auth.link": {
-          // Only provisional users can use this tool
-          if (!user?.provisional) {
-            result = {
-              message:
-                "Already linked to an authenticated account. No action needed.",
-            };
-            break;
-          }
-
-          const linkToken = toolArgs.token as string;
-          if (!linkToken || !isApiToken(linkToken)) {
-            throw new ToolError(
-              INVALID_PARAMS,
-              "Provide a valid API token (starts with gx_). Generate one at connectgalactic.com → API Keys.",
-            );
-          }
-
-          // Validate the target token to get the real user
-          const validated = await validateToken(linkToken);
-          if (!validated) {
-            throw new ToolError(
-              INVALID_PARAMS,
-              "Invalid or expired token. Generate a new one at connectgalactic.com → API Keys.",
-            );
-          }
-
-          // Prevent self-link
-          if (validated.user_id === userId) {
-            throw new ToolError(
-              INVALID_PARAMS,
-              "This token belongs to the current provisional account.",
-            );
-          }
-
-          // Target must not be another provisional user
-          if (await isProvisionalUser(validated.user_id)) {
-            throw new ToolError(
-              INVALID_PARAMS,
-              "Target token belongs to another provisional account. Use a token from a signed-in account.",
-            );
-          }
-
-          // Execute merge: current provisional → target real user
-          const mergeResult = await mergeProvisionalUser(
-            userId,
-            validated.user_id,
-            "mcp_auth_link",
+      // ── 2. ul.command ──────────────
+      case "ul.command": {
+        const action = toolArgs.action as string | undefined;
+        if (!action) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "Missing required parameter: action",
           );
-          result = {
-            success: true,
-            message:
-              "Account linked successfully! Your apps and data have been transferred to your real account.",
-            apps_moved: mergeResult.apps_moved,
-            tokens_moved: mergeResult.tokens_moved,
-            storage_transferred_bytes: mergeResult.storage_transferred_bytes,
-          };
-          break;
         }
-
-        // ── 12. ul.marketplace ──────────────
-        case "ul.marketplace": {
-          // Provisional users cannot participate in marketplace
-          if (user?.provisional) {
-            throw new ToolError(
-              FORBIDDEN,
-              "Marketplace requires an authenticated account. Use gx.auth.link to connect your account first.",
-            );
-          }
-          const mktAction = toolArgs.action as string;
-          if (!mktAction) {
-            throw new ToolError(
-              INVALID_PARAMS,
-              "Missing required parameter: action",
-            );
-          }
-          const {
-            placeBid,
-            setAskPrice,
-            acceptBid,
-            rejectBid,
-            cancelBid,
-            buyNow,
-            getOffers,
-            getHistory,
-            getListing,
-          } = await import("../services/marketplace.ts");
-
-          switch (mktAction) {
-            case "bid": {
-              const appIdOrSlug = toolArgs.app_id as string;
-              if (!appIdOrSlug) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "Missing required parameter: app_id",
-                );
-              }
-              const amountLight = toolArgs.amount_light as number;
-              if (!amountLight || amountLight <= 0) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "Missing or invalid amount_light (must be > 0)",
-                );
-              }
-              // Resolve app ID from slug if needed
-              const resolvedAppId = await resolveAppIdForMarketplace(
-                appIdOrSlug,
-              );
-              result = await placeBid(
-                userId,
-                resolvedAppId,
-                amountLight,
-                toolArgs.message as string | undefined,
-                toolArgs.expires_in_hours as number | undefined,
-              );
-              break;
-            }
-            case "ask": {
-              const appIdOrSlug = toolArgs.app_id as string;
-              if (!appIdOrSlug) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "Missing required parameter: app_id",
-                );
-              }
-              const resolvedAppId = await resolveAppIdForMarketplace(
-                appIdOrSlug,
-              );
-              result = await setAskPrice(
-                userId,
-                resolvedAppId,
-                toolArgs.price_light as number | null ?? null,
-                toolArgs.floor_light as number | null ?? null,
-                toolArgs.instant_buy as boolean | undefined,
-                toolArgs.note as string | undefined,
-              );
-              break;
-            }
-            case "accept": {
-              const bidId = toolArgs.bid_id as string;
-              if (!bidId) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "Missing required parameter: bid_id",
-                );
-              }
-              result = await acceptBid(userId, bidId);
-              break;
-            }
-            case "reject": {
-              const bidId = toolArgs.bid_id as string;
-              if (!bidId) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "Missing required parameter: bid_id",
-                );
-              }
-              await rejectBid(userId, bidId);
-              result = {
-                success: true,
-                message: "Bid rejected. Escrow refunded to bidder.",
-              };
-              break;
-            }
-            case "cancel": {
-              const bidId = toolArgs.bid_id as string;
-              if (!bidId) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "Missing required parameter: bid_id",
-                );
-              }
-              await cancelBid(userId, bidId);
-              result = {
-                success: true,
-                message: "Bid cancelled. Escrow refunded to your balance.",
-              };
-              break;
-            }
-            case "acquire":
-            case "buy_now": {
-              const appIdOrSlug = toolArgs.app_id as string;
-              if (!appIdOrSlug) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "Missing required parameter: app_id",
-                );
-              }
-              const resolvedAppId = await resolveAppIdForMarketplace(
-                appIdOrSlug,
-              );
-              result = await buyNow(userId, resolvedAppId);
-              break;
-            }
-            case "offers": {
-              const appIdOrSlug = toolArgs.app_id as string | undefined;
-              let resolvedAppId: string | undefined;
-              if (appIdOrSlug) {
-                resolvedAppId = await resolveAppIdForMarketplace(appIdOrSlug);
-              }
-              result = await getOffers(userId, resolvedAppId);
-              break;
-            }
-            case "history": {
-              const appIdOrSlug = toolArgs.app_id as string | undefined;
-              let resolvedAppId: string | undefined;
-              if (appIdOrSlug) {
-                resolvedAppId = await resolveAppIdForMarketplace(appIdOrSlug);
-              }
-              result = await getHistory(resolvedAppId, userId);
-              break;
-            }
-            case "listing": {
-              const appIdOrSlug = toolArgs.app_id as string;
-              if (!appIdOrSlug) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "Missing required parameter: app_id",
-                );
-              }
-              const resolvedAppId = await resolveAppIdForMarketplace(
-                appIdOrSlug,
-              );
-              result = await getListing(resolvedAppId, userId);
-              break;
-            }
-            default:
+        switch (action) {
+          case "inventory":
+            result = await getCommandSurfaceInventory(userId, {
+              query: toolArgs.query,
+              surfaces: toolArgs.surfaces,
+              limit: toolArgs.limit,
+            });
+            break;
+          case "blueprint":
+            result = await createCommandDashboardBlueprint(userId, toolArgs);
+            break;
+          case "interface":
+            result = await planAgenticInterface(userId, toolArgs);
+            break;
+          case "interface_data": {
+            const reqUrl = new URL(request.url);
+            const host = request.headers.get("host") || reqUrl.host;
+            const proto = request.headers.get("x-forwarded-proto") ||
+              (host.includes("localhost") ? "http" : "https");
+            const baseUrl = `${proto}://${host}`;
+            const authToken = request.headers.get("Authorization")?.slice(7);
+            if (!authToken) {
               throw new ToolError(
-                INVALID_PARAMS,
-                `Invalid action: ${mktAction}. Use bid|ask|accept|reject|cancel|acquire|buy_now|offers|history|listing`,
+                INTERNAL_ERROR,
+                "Missing auth token for interface data calls",
               );
-          }
-          break;
-        }
-
-        // ── 13. ul.wallet ──────────────
-        case "ul.wallet": {
-          if (user?.provisional) {
-            throw new ToolError(
-              FORBIDDEN,
-              "Wallet requires an authenticated account. Use gx.auth.link to connect your account first.",
-            );
-          }
-          const walletAction = toolArgs.action as string;
-          if (!walletAction) {
-            throw new ToolError(
-              INVALID_PARAMS,
-              "Missing required parameter: action",
-            );
-          }
-
-          const { SUPABASE_URL: wSbUrl, SUPABASE_SERVICE_ROLE_KEY: wSbKey } =
-            getSupabaseEnv();
-          const wHeaders = {
-            "apikey": wSbKey,
-            "Authorization": `Bearer ${wSbKey}`,
-          };
-
-          switch (walletAction) {
-            case "status": {
-              const [userRes, earningsRes, contentStorageRes] = await Promise
-                .all(
-                  [
-                    fetch(
-                      `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=balance_light,escrow_light,deposit_balance_light,earned_balance_light,escrow_deposit_light,escrow_earned_light,auto_add_earnings_to_balance,stripe_connect_account_id,stripe_connect_onboarded,stripe_connect_payouts_enabled,storage_used_bytes,data_storage_used_bytes,d1_storage_bytes,storage_limit_bytes,total_earned_light`,
-                      { headers: wHeaders },
-                    ),
-                    fetch(
-                      `${wSbUrl}/rest/v1/transfers?to_user_id=eq.${userId}&select=amount_light`,
-                      { headers: wHeaders },
-                    ),
-                    fetch(
-                      `${wSbUrl}/rest/v1/content?owner_id=eq.${userId}&type=in.(page,memory_md,library_md)&select=type,size`,
-                      { headers: wHeaders },
-                    ),
-                  ],
-                );
-
-              const wUserData = userRes.ok
-                ? await readJsonFirst<WalletUserRow>(userRes)
-                : null;
-              const wTransfers = earningsRes.ok
-                ? await readJsonArray<WalletTransferRow>(earningsRes)
-                : [];
-              const transferTotalEarned = wTransfers.reduce(
-                (s: number, t: { amount_light: number }) => s + t.amount_light,
-                0,
-              );
-              const totalEarned = wUserData?.total_earned_light ??
-                transferTotalEarned;
-              const balance = wUserData?.balance_light || 0;
-              const escrow = wUserData?.escrow_light || 0;
-              const earnedBalance = wUserData?.earned_balance_light ?? 0;
-
-              // Storage breakdown
-              const sourceBytes = wUserData?.storage_used_bytes || 0;
-              const dataBytes = wUserData?.data_storage_used_bytes || 0;
-              const d1Bytes = wUserData?.d1_storage_bytes || 0;
-              const contentRows = contentStorageRes.ok
-                ? await readJsonArray<
-                  { type?: string | null; size?: number | null }
-                >(
-                  contentStorageRes,
-                )
-                : [];
-              const contentBytes = contentRows.reduce(
-                (sum: number, row) => sum + (row.size || 0),
-                0,
-              );
-              const combinedBytes = sourceBytes + dataBytes + d1Bytes +
-                contentBytes;
-              const limitBytes = wUserData?.storage_limit_bytes ||
-                COMBINED_FREE_TIER_BYTES;
-              const toMb = (b: number) => (b / (1024 * 1024)).toFixed(2);
-              const storageOverageBytes = Math.max(
-                0,
-                combinedBytes - limitBytes,
-              );
-
-              result = {
-                balance_light: balance,
-                spendable_balance_light: balance,
-                balance_display: formatLight(balance),
-                escrow_light: escrow,
-                deposit_balance_light: wUserData?.deposit_balance_light || 0,
-                earned_balance_light: earnedBalance,
-                convertible_earnings_light: earnedBalance,
-                escrow_deposit_light: wUserData?.escrow_deposit_light || 0,
-                escrow_earned_light: wUserData?.escrow_earned_light || 0,
-                auto_add_earnings_to_balance:
-                  wUserData?.auto_add_earnings_to_balance || false,
-                available_light: balance,
-                available_display: formatLight(balance),
-                withdrawable_earnings_light: earnedBalance,
-                withdrawable_earnings_display: formatLight(earnedBalance),
-                total_earned_light: totalEarned,
-                total_earned_display: formatLight(totalEarned),
-                storage: {
-                  source_code_bytes: sourceBytes,
-                  source_code_mb: toMb(sourceBytes) + " MB",
-                  user_data_bytes: dataBytes,
-                  user_data_mb: toMb(dataBytes) + " MB",
-                  d1_storage_bytes: d1Bytes,
-                  d1_storage_mb: toMb(d1Bytes) + " MB",
-                  content_storage_bytes: contentBytes,
-                  content_storage_mb: toMb(contentBytes) + " MB",
-                  combined_bytes: combinedBytes,
-                  combined_mb: toMb(combinedBytes) + " MB",
-                  limit_bytes: limitBytes,
-                  limit_mb: toMb(limitBytes) + " MB",
-                  used_percent: limitBytes > 0
-                    ? Math.round((combinedBytes / limitBytes) * 100)
-                    : 0,
-                  overage_bytes: storageOverageBytes,
-                  overage_rate:
-                    `${LIGHT_SYMBOL}${STORAGE_LIGHT_PER_GB_MONTH}/GB-month after the storage soft cap`,
-                },
-                connect: {
-                  connected: !!wUserData?.stripe_connect_account_id,
-                  onboarded: wUserData?.stripe_connect_onboarded || false,
-                  payouts_enabled: wUserData?.stripe_connect_payouts_enabled ||
-                    false,
-                },
-                policy: {
-                  purchased_light:
-                    "Purchased credits are spend-only platform credit and are not payout eligible.",
-                  creator_earnings:
-                    "Creator earnings must be added to balance before they can be spent, or requested for payout while unconverted.",
-                  no_p2p_transfer:
-                    "Credits cannot be transferred directly between arbitrary accounts.",
-                  terms_url: "/terms",
-                },
-                can_withdraw:
-                  (wUserData?.stripe_connect_payouts_enabled || false) &&
-                  earnedBalance >= MIN_WITHDRAWAL_LIGHT,
-              };
-              break;
             }
-
-            case "earnings": {
-              const ePeriod = (toolArgs.period as string) || "30d";
-              let ePeriodDays = 30;
-              if (ePeriod === "7d") ePeriodDays = 7;
-              else if (ePeriod === "90d") ePeriodDays = 90;
-              else if (ePeriod === "all") ePeriodDays = 3650;
-              const eCutoff = new Date(
-                Date.now() - ePeriodDays * 24 * 60 * 60 * 1000,
-              ).toISOString();
-
-              const [ePeriodRes, eRecentRes, eUserRes] = await Promise.all([
-                fetch(
-                  `${wSbUrl}/rest/v1/transfers?to_user_id=eq.${userId}&created_at=gte.${eCutoff}&select=amount_light,app_id,function_name,reason,created_at&order=created_at.asc&limit=10000`,
-                  { headers: wHeaders },
-                ),
-                fetch(
-                  `${wSbUrl}/rest/v1/transfers?to_user_id=eq.${userId}&select=amount_light,app_id,function_name,reason,created_at&order=created_at.desc&limit=10`,
-                  { headers: wHeaders },
-                ),
-                fetch(
-                  `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=balance_light,deposit_balance_light,earned_balance_light,auto_add_earnings_to_balance`,
-                  { headers: wHeaders },
-                ),
-              ]);
-
-              const ePeriodTransfers = ePeriodRes.ok
-                ? (await ePeriodRes.json()) as Array<
-                  {
-                    amount_light: number;
-                    app_id: string | null;
-                    function_name: string | null;
-                    reason: string;
-                    created_at: string;
-                  }
-                >
-                : [];
-              const eRecentTransfers = eRecentRes.ok
-                ? (await eRecentRes.json()) as Array<
-                  {
-                    amount_light: number;
-                    app_id: string | null;
-                    function_name: string | null;
-                    reason: string;
-                    created_at: string;
-                  }
-                >
-                : [];
-              const ePeriodEarned = ePeriodTransfers.reduce(
-                (s: number, t: { amount_light: number }) => s + t.amount_light,
-                0,
-              );
-              const eUserData = eUserRes.ok
-                ? await readJsonFirst<WalletUserRow>(eUserRes)
-                : null;
-
-              const eAppMap = new Map<
-                string,
-                { earned_light: number; call_count: number }
-              >();
-              for (const t of ePeriodTransfers) {
-                const key = t.app_id || "unknown";
-                const entry = eAppMap.get(key) ||
-                  { earned_light: 0, call_count: 0 };
-                entry.earned_light += t.amount_light;
-                entry.call_count += 1;
-                eAppMap.set(key, entry);
-              }
-
-              result = {
-                period: ePeriod,
-                spendable_balance_light: eUserData?.balance_light || 0,
-                deposit_balance_light: eUserData?.deposit_balance_light || 0,
-                earned_balance_light: eUserData?.earned_balance_light || 0,
-                convertible_earnings_light: eUserData?.earned_balance_light ||
-                  0,
-                auto_add_earnings_to_balance:
-                  eUserData?.auto_add_earnings_to_balance || false,
-                period_earned_light: ePeriodEarned,
-                period_earned_display: formatLight(ePeriodEarned),
-                by_app: Array.from(eAppMap.entries())
-                  .map(([app_id, data]) => ({
-                    app_id,
-                    earned_light: data.earned_light,
-                    call_count: data.call_count,
-                  }))
-                  .sort((a, b) => b.earned_light - a.earned_light),
-                recent: eRecentTransfers.slice(0, 5),
-              };
-              break;
-            }
-
-            case "convert_earnings": {
-              if (toolArgs.terms_accepted !== true) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "terms_accepted must be true to add creator earnings to spendable balance.",
-                );
-              }
-
-              const convertAll = toolArgs.all === true;
-              let convertAmount = toolArgs.amount_light as number | undefined;
-              if (convertAll && convertAmount !== undefined) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "amount_light cannot be combined with all=true",
-                );
-              }
-
-              if (convertAll) {
-                const cUserRes = await fetch(
-                  `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=earned_balance_light`,
-                  { headers: wHeaders },
-                );
-                const cUserData = cUserRes.ok
-                  ? await readJsonFirst<WalletUserRow>(cUserRes)
-                  : null;
-                convertAmount = cUserData?.earned_balance_light || 0;
-              }
-
-              if (!convertAmount || convertAmount <= 0) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "No creator earnings are available to add to balance.",
-                );
-              }
-
-              const cRpcRes = await fetch(
-                `${wSbUrl}/rest/v1/rpc/convert_earnings_to_deposit`,
-                {
-                  method: "POST",
-                  headers: { ...wHeaders, "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    p_user_id: userId,
-                    p_amount_light: convertAmount,
-                    p_source: "manual",
-                    p_reference_table: "users",
-                    p_reference_id: userId,
-                    p_metadata: { source: "platform_mcp" },
-                  }),
-                },
-              );
-
-              if (!cRpcRes.ok) {
-                const cRpcErr = await cRpcRes.text();
-                throw new ToolError(
-                  cRpcErr.includes("Conversion exceeds earnings")
-                    ? INVALID_PARAMS
-                    : INTERNAL_ERROR,
-                  cRpcErr.includes("Conversion exceeds earnings")
-                    ? "Conversion exceeds available creator earnings."
-                    : "Failed to add earnings to balance.",
-                );
-              }
-
-              const cRows = await readJsonArray<{
-                conversion_id: string;
-                converted_light: number;
-                deposit_balance_light: number;
-                earned_balance_light: number;
-                balance_light: number;
-              }>(cRpcRes);
-              const cRow = cRows[0];
-              result = {
-                success: true,
-                conversion_id: cRow?.conversion_id || null,
-                converted_light: cRow?.converted_light || convertAmount,
-                converted_display: formatLight(
-                  cRow?.converted_light || convertAmount,
-                ),
-                balance_light: cRow?.balance_light || 0,
-                spendable_balance_light: cRow?.balance_light || 0,
-                deposit_balance_light: cRow?.deposit_balance_light || 0,
-                earned_balance_light: cRow?.earned_balance_light || 0,
-                convertible_earnings_light: cRow?.earned_balance_light || 0,
-              };
-              break;
-            }
-
-            case "set_auto_add_earnings": {
-              if (typeof toolArgs.enabled !== "boolean") {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "enabled must be a boolean.",
-                );
-              }
-
-              if (
-                toolArgs.enabled === true && toolArgs.terms_accepted !== true
-              ) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "terms_accepted must be true to auto-add future earnings to balance.",
-                );
-              }
-
-              const aaRes = await fetch(
-                `${wSbUrl}/rest/v1/users?id=eq.${userId}`,
-                {
-                  method: "PATCH",
-                  headers: {
-                    ...wHeaders,
-                    "Content-Type": "application/json",
-                    "Prefer": "return=minimal",
+            result = await resolveAgenticInterfaceData(userId, toolArgs, {
+              executeAppFunction: async ({ appId, functionName, args }) => {
+                const rpcPayload = {
+                  jsonrpc: "2.0",
+                  id: crypto.randomUUID(),
+                  method: "tools/call",
+                  params: {
+                    name: functionName,
+                    arguments: args || {},
                   },
-                  body: JSON.stringify({
-                    auto_add_earnings_to_balance: toolArgs.enabled,
-                  }),
-                },
-              );
-
-              if (!aaRes.ok) {
-                throw new ToolError(
-                  INTERNAL_ERROR,
-                  "Failed to update earnings auto-add setting.",
+                };
+                // SELF binding: same-worker public-hostname fetch is blocked
+                // by the CDN (error 1042); helper validates + encodes the id.
+                const interfaceCall = resolveInternalMcpCall(appId, {
+                  baseUrl,
+                });
+                const callResponse = await interfaceCall.fetchFn(
+                  interfaceCall.url,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "Authorization": `Bearer ${authToken}`,
+                    },
+                    body: JSON.stringify(rpcPayload),
+                  },
                 );
-              }
-
-              result = {
-                success: true,
-                auto_add_earnings_to_balance: toolArgs.enabled,
-              };
-              break;
-            }
-
-            case "estimate_fee": {
-              const estAmount = toolArgs.amount_light as number;
-              if (!estAmount || estAmount < MIN_WITHDRAWAL_LIGHT) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  `amount_light must be at least ${MIN_WITHDRAWAL_LIGHT} (${
-                    formatLight(MIN_WITHDRAWAL_LIGHT)
-                  } minimum)`,
-                );
-              }
-              const { estimatePayoutFee } = await import(
-                "../services/stripe-connect.ts"
-              );
-              const { calculateNextPayoutSchedule } = await import(
-                "../services/payout-policy.ts"
-              );
-              const estBillingConfig = await getBillingConfig();
-              const estimate = estimatePayoutFee(
-                estAmount,
-                false,
-                estBillingConfig.payoutLightPerUsd,
-              );
-              const estSchedule = calculateNextPayoutSchedule(new Date());
-              result = {
-                gross_light: estAmount,
-                gross_display: formatLight(estAmount),
-                gross_usd_cents: estimate.gross_usd_cents,
-                light_per_usd_snapshot: estBillingConfig.payoutLightPerUsd,
-                billing_config_version: estBillingConfig.version,
-                stripe_fee_cents: estimate.stripe_fee_cents,
-                fee_estimate_cents: estimate.fee_estimate_cents,
-                stripe_fee_dollars: "$" +
-                  (estimate.stripe_fee_cents / 100).toFixed(2),
-                net_cents: estimate.net_cents,
-                net_dollars: "$" + (estimate.net_cents / 100).toFixed(2),
-                scheduled_payout_date: estSchedule.scheduledPayoutDate,
-                release_at: estSchedule.releaseAt.toISOString(),
-                payout_cutoff_at: estSchedule.payoutCutoffAt.toISOString(),
-                payout_policy_version: estSchedule.payoutPolicyVersion,
-                request_cutoff_days: estSchedule.requestCutoffDays,
-                note:
-                  "Stripe payout fee (0.25% + $0.25). Requests are scheduled into the next eligible monthly payout run.",
-              };
-              break;
-            }
-
-            case "withdraw": {
-              if (toolArgs.terms_accepted !== true) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "terms_accepted must be true to request a payout. Review the Terms at /terms before retrying.",
-                );
-              }
-              const wdAmount = toolArgs.amount_light as number;
-              if (!wdAmount || wdAmount < MIN_WITHDRAWAL_LIGHT) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  `amount_light must be at least ${MIN_WITHDRAWAL_LIGHT} (${
-                    formatLight(MIN_WITHDRAWAL_LIGHT)
-                  } minimum)`,
-                );
-              }
-
-              // Validate connect status and balance
-              const wdUserRes = await fetch(
-                `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=stripe_connect_account_id,stripe_connect_payouts_enabled,balance_light,escrow_light,total_earned_light,earned_balance_light`,
-                { headers: wHeaders },
-              );
-              const wdUserData = wdUserRes.ok
-                ? await readJsonFirst<WalletUserRow>(wdUserRes)
-                : null;
-
-              if (
-                !wdUserData?.stripe_connect_account_id ||
-                !wdUserData?.stripe_connect_payouts_enabled
-              ) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  "Bank account not connected. Visit the Wallet page in your dashboard to complete Stripe onboarding first.",
-                );
-              }
-
-              // Earnings-only check
-              const wdPayoutsRes = await fetch(
-                `${wSbUrl}/rest/v1/payouts?user_id=eq.${userId}&status=in.(held,pending,processing,paid)&select=amount_light`,
-                { headers: wHeaders },
-              );
-              let wdTotalWithdrawn = 0;
-              if (wdPayoutsRes.ok) {
-                const wdPayoutsArr = await readJsonArray<WalletTransferRow>(
-                  wdPayoutsRes,
-                );
-                wdTotalWithdrawn = wdPayoutsArr.reduce(
-                  (s: number, p: { amount_light: number }) =>
-                    s + p.amount_light,
-                  0,
-                );
-              }
-              const wdLifetimeRemaining = Math.max(
-                0,
-                (wdUserData.total_earned_light || 0) - wdTotalWithdrawn,
-              );
-              const wdWithdrawable = Math.min(
-                wdUserData.earned_balance_light ?? wdLifetimeRemaining,
-                wdLifetimeRemaining,
-              );
-              if (wdWithdrawable < wdAmount) {
-                throw new ToolError(
-                  INVALID_PARAMS,
-                  `Only creator earnings can be paid out. Payout eligible: ${
-                    formatLight(wdWithdrawable)
-                  }, requested: ${formatLight(wdAmount)}.`,
-                );
-              }
-
-              const {
-                estimatePayoutFee: estFee,
-                getAccountStatus: wdGetStatus,
-              } = await import("../services/stripe-connect.ts");
-              const {
-                buildPayoutPolicyMessage: wdBuildPayoutPolicyMessage,
-                calculateNextPayoutSchedule: wdCalculateNextPayoutSchedule,
-              } = await import("../services/payout-policy.ts");
-
-              // Detect cross-border for accurate Stripe fee estimation
-              let wdIsCrossBorder = false;
-              try {
-                const wdConnectStatus = await wdGetStatus(
-                  wdUserData.stripe_connect_account_id,
-                );
-                wdIsCrossBorder = wdConnectStatus.country !== undefined &&
-                  wdConnectStatus.country !== "US";
-              } catch { /* Stripe unavailable — assume domestic */ }
-
-              const wdBillingConfig = await getBillingConfig();
-              const wdEstimate = estFee(
-                wdAmount,
-                wdIsCrossBorder,
-                wdBillingConfig.payoutLightPerUsd,
-              );
-              const wdSchedule = wdCalculateNextPayoutSchedule(new Date());
-
-              // Atomic debit + held record; Stripe transfer waits for the monthly run.
-              const wdRpcRes = await fetch(
-                `${wSbUrl}/rest/v1/rpc/create_payout_record`,
-                {
-                  method: "POST",
-                  headers: { ...wHeaders, "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    p_user_id: userId,
-                    p_amount_light: wdAmount,
-                    p_gross_cents: wdEstimate.gross_usd_cents,
-                    p_stripe_fee_cents: wdEstimate.stripe_fee_cents,
-                    p_fee_estimate_cents: wdEstimate.fee_estimate_cents,
-                    p_net_cents: wdEstimate.net_cents,
-                    p_light_per_usd_snapshot: wdBillingConfig.payoutLightPerUsd,
-                    p_billing_config_version: wdBillingConfig.version,
-                    p_release_at: wdSchedule.releaseAt.toISOString(),
-                    p_scheduled_payout_date: wdSchedule.scheduledPayoutDate,
-                    p_payout_cutoff_at: wdSchedule.payoutCutoffAt.toISOString(),
-                    p_payout_policy_version: wdSchedule.payoutPolicyVersion,
-                  }),
-                },
-              );
-
-              if (!wdRpcRes.ok) {
-                const wdRpcErr = await wdRpcRes.text();
-                if (wdRpcErr.includes("exceeds earnings")) {
-                  throw new ToolError(
-                    INVALID_PARAMS,
-                    "Payout request exceeds earned funds. Only creator earnings can be paid out.",
+                if (!callResponse.ok) {
+                  const errText = await callResponse.text().catch(() =>
+                    callResponse.statusText
+                  );
+                  throw new Error(
+                    `Call failed (${callResponse.status}): ${errText}`,
                   );
                 }
-                throw new ToolError(
-                  INTERNAL_ERROR,
-                  wdRpcErr.includes("Insufficient")
-                    ? "Insufficient balance"
-                    : "Failed to create payout",
-                );
-              }
-
-              const wdPayoutId = await wdRpcRes.json();
-
-              result = {
-                success: true,
-                payout_id: wdPayoutId,
-                amount_light: wdAmount,
-                amount_display: formatLight(wdAmount),
-                gross_usd_cents: wdEstimate.gross_usd_cents,
-                estimated_stripe_fee_dollars: "$" +
-                  (wdEstimate.stripe_fee_cents / 100).toFixed(2),
-                fee_pass_through_cents: wdEstimate.fee_estimate_cents,
-                estimated_net_dollars: "$" +
-                  (wdEstimate.net_cents / 100).toFixed(2),
-                light_per_usd_snapshot: wdBillingConfig.payoutLightPerUsd,
-                billing_config_version: wdBillingConfig.version,
-                status: "held",
-                release_at: wdSchedule.releaseAt.toISOString(),
-                scheduled_payout_date: wdSchedule.scheduledPayoutDate,
-                payout_cutoff_at: wdSchedule.payoutCutoffAt.toISOString(),
-                payout_policy_version: wdSchedule.payoutPolicyVersion,
-                request_cutoff_days: wdSchedule.requestCutoffDays,
-                terms_url: "/terms",
-                message:
-                  `Payout request for ${formatLight(wdAmount)} submitted. ` +
-                  `Stripe fees are deducted from payout proceeds. ` +
-                  `Estimated bank deposit: ~$${
-                    (wdEstimate.net_cents / 100).toFixed(2)
-                  }. ` +
-                  wdBuildPayoutPolicyMessage(wdSchedule),
-              };
-              break;
-            }
-
-            case "payouts": {
-              const pRes = await fetch(
-                `${wSbUrl}/rest/v1/payouts?user_id=eq.${userId}&select=*&order=created_at.desc&limit=20`,
-                { headers: wHeaders },
-              );
-              const pRows = pRes.ok
-                ? await readJsonArray<WalletPayoutRow>(pRes)
-                : [];
-              result = {
-                payouts: pRows.map((p) => ({
-                  id: p.id,
-                  amount_light: p.amount_light || 0,
-                  amount_display: formatLight(p.amount_light || 0),
-                  platform_fee_light: p.platform_fee_light || 0,
-                  stripe_fee_dollars: "$" +
-                    (((p.stripe_fee_cents || 0) / 100).toFixed(2)),
-                  fee_pass_through_cents: p.fee_estimate_cents ||
-                    p.stripe_fee_cents || 0,
-                  net_dollars: "$" + (((p.net_cents || 0) / 100).toFixed(2)),
-                  gross_dollars: "$" +
-                    (((p.gross_cents || 0) / 100).toFixed(2)),
-                  actual_transfer_dollars: "$" +
-                    (((p.stripe_transfer_amount_cents || 0) / 100).toFixed(2)),
-                  actual_payout_dollars: "$" +
-                    (((p.stripe_payout_amount_cents || 0) / 100).toFixed(2)),
-                  status: p.status,
-                  release_at: p.release_at,
-                  scheduled_payout_date: p.scheduled_payout_date || null,
-                  payout_cutoff_at: p.payout_cutoff_at || null,
-                  payout_policy_version: p.payout_policy_version || null,
-                  created_at: p.created_at,
-                  completed_at: p.completed_at,
-                })),
-                count: pRows.length,
-              };
-              break;
-            }
-
-            default:
-              throw new ToolError(
-                INVALID_PARAMS,
-                `Invalid action: ${walletAction}. Use status|earnings|convert_earnings|set_auto_add_earnings|withdraw|payouts|estimate_fee`,
-              );
+                const rpcResponse = await callResponse
+                  .json() as RpcToolCallResultEnvelope;
+                if (rpcResponse.error) {
+                  throw new ToolError(
+                    rpcResponse.error.code || INTERNAL_ERROR,
+                    rpcResponse.error.message ||
+                      JSON.stringify(rpcResponse.error),
+                    rpcResponse.error.data,
+                  );
+                }
+                return unwrapToolCallResult(rpcResponse.result);
+              },
+            });
+            break;
           }
+          case "interface_action": {
+            const reqUrl = new URL(request.url);
+            const host = request.headers.get("host") || reqUrl.host;
+            const proto = request.headers.get("x-forwarded-proto") ||
+              (host.includes("localhost") ? "http" : "https");
+            const baseUrl = `${proto}://${host}`;
+            const authToken = request.headers.get("Authorization")?.slice(7);
+            if (!authToken) {
+              throw new ToolError(
+                INTERNAL_ERROR,
+                "Missing auth token for interface action calls",
+              );
+            }
+            result = await executeAgenticInterfaceAction(userId, toolArgs, {
+              executeAppFunction: async ({ appId, functionName, args }) => {
+                const rpcPayload = {
+                  jsonrpc: "2.0",
+                  id: crypto.randomUUID(),
+                  method: "tools/call",
+                  params: {
+                    name: functionName,
+                    arguments: args || {},
+                  },
+                };
+                // SELF binding: same-worker public-hostname fetch is blocked
+                // by the CDN (error 1042); helper validates + encodes the id.
+                const interfaceCall = resolveInternalMcpCall(appId, {
+                  baseUrl,
+                });
+                const callResponse = await interfaceCall.fetchFn(
+                  interfaceCall.url,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "Authorization": `Bearer ${authToken}`,
+                    },
+                    body: JSON.stringify(rpcPayload),
+                  },
+                );
+                if (!callResponse.ok) {
+                  const errText = await callResponse.text().catch(() =>
+                    callResponse.statusText
+                  );
+                  throw new Error(
+                    `Call failed (${callResponse.status}): ${errText}`,
+                  );
+                }
+                const rpcResponse = await callResponse
+                  .json() as RpcToolCallResultEnvelope;
+                if (rpcResponse.error) {
+                  throw new ToolError(
+                    rpcResponse.error.code || INTERNAL_ERROR,
+                    rpcResponse.error.message ||
+                      JSON.stringify(rpcResponse.error),
+                    rpcResponse.error.data,
+                  );
+                }
+                return unwrapToolCallResult(rpcResponse.result);
+              },
+            });
+            break;
+          }
+          case "save_interface":
+            result = await saveAgenticInterface(userId, toolArgs);
+            break;
+          case "list_interfaces":
+            result = await listAgenticInterfaces(userId);
+            break;
+          case "get_interface":
+            result = await getAgenticInterface(userId, toolArgs.interface_key);
+            break;
+          case "delete_interface":
+            result = await deleteAgenticInterface(
+              userId,
+              toolArgs.interface_key,
+            );
+            break;
+          case "save":
+            result = await saveCommandDashboardFromInput(userId, toolArgs);
+            break;
+          case "list":
+            result = await listCommandDashboardLayouts(userId);
+            break;
+          case "get":
+            result = await getCommandDashboardLayout(
+              userId,
+              toolArgs.dashboard_key,
+            );
+            break;
+          default:
+            throw new ToolError(
+              INVALID_PARAMS,
+              `Invalid action: ${action}. Use inventory|blueprint|interface|interface_data|interface_action|save_interface|list_interfaces|get_interface|delete_interface|save|list|get`,
+            );
+        }
+        break;
+      }
+
+      // ── 3. ul.routine ──────────────
+      // ul.routine migrated to the capability registry (id "routine",
+      // advertised gx.routine; handler bound from this module).
+
+      // ── 4. ul.download (+ scaffold when no app_id) ──────────────
+      // ul.download dispatched via the capability registry pre-check above.
+
+      // ul.test dispatched via the capability registry pre-check above.
+
+      // ul.upload dispatched via the capability registry pre-check above.
+
+      // ── 5. ul.set ──────────────
+      // ul.set dispatched via the capability registry pre-check above; the 6
+      // ul.set.* single-setting aliases below still route here.
+
+      // ── 6. ul.memory ──────────────
+      case "ul.memory": {
+        // Block memory for provisional (pre-auth) users
+        if (user?.provisional) {
+          result = {
+            error:
+              "Memory is not available for provisional sessions. Sign in at connectgalactic.com to unlock cross-session memory.",
+          };
+          break;
+        }
+        const memAction = toolArgs.action;
+        if (!memAction) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "Missing required parameter: action",
+          );
+        }
+        switch (memAction) {
+          case "read":
+            result = await executeMemoryRead(userId, toolArgs);
+            break;
+          case "write":
+            result = await executeMemoryWrite(userId, toolArgs);
+            break;
+          case "recall":
+            result = await executeMemoryRecall(userId, toolArgs);
+            break;
+          case "query":
+            result = await executeMemoryQuery(userId, toolArgs);
+            break;
+          default:
+            throw new ToolError(
+              INVALID_PARAMS,
+              `Invalid action: ${memAction}. Use read|write|recall|query`,
+            );
+        }
+        break;
+      }
+
+      // ── 7. ul.permissions ──────────────
+      case "ul.permissions": {
+        const permAction = toolArgs.action;
+        if (!permAction) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "Missing required parameter: action",
+          );
+        }
+        switch (permAction) {
+          case "grant":
+            result = await executePermissionsGrant(userId, toolArgs);
+            break;
+          case "revoke":
+            result = await executePermissionsRevoke(userId, toolArgs);
+            break;
+          case "list":
+            result = await executePermissionsList(userId, toolArgs);
+            break;
+          case "export":
+            result = await executePermissionsExport(userId, toolArgs);
+            break;
+          default:
+            throw new ToolError(
+              INVALID_PARAMS,
+              `Invalid action: ${permAction}. Use grant|revoke|list|export`,
+            );
+        }
+        break;
+      }
+
+      // ── ul.grants (cross-Agent wiring) ──────────────
+      case "ul.grants": {
+        result = await executeGrants(userId, toolArgs, callerIsApiToken);
+        break;
+      }
+
+      // ── ul.permit (connected-agent caller policy) ──────────────
+      // ul.permit dispatched via the capability registry pre-check above.
+
+      // ── ul.emit (publish a cross-Agent event) ──────────────
+      // ul.emit migrated to the capability registry (id "emit", advertised
+      // gx.emit; handler bound from this module).
+
+      // ── 8. ul.logs (+ health) ──────────────
+      case "ul.logs": {
+        if (toolArgs.health) {
+          result = await executeHealth(userId, toolArgs);
+        } else {
+          if (!toolArgs.app_id) {
+            throw new ToolError(
+              INVALID_PARAMS,
+              "Missing app_id for call logs. Use health=true for cross-app health.",
+            );
+          }
+          result = await executeLogs(userId, toolArgs);
+        }
+        break;
+      }
+
+      // ── 9. ul.rate (+ shortcomings) ──────────────
+      case "ul.rate": {
+        // Handle shortcoming report if present (fire-and-forget)
+        if (toolArgs.shortcoming) {
+          executeShortcomings(
+            userId,
+            asToolArguments(toolArgs.shortcoming),
+            sessionId,
+          );
+        }
+        // Handle rating if present
+        if (toolArgs.app_id && toolArgs.rating) {
+          result = await executeRate(userId, toolArgs);
+        } else if (toolArgs.shortcoming) {
+          result = { received: true };
+        } else {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "Provide app_id + rating, or shortcoming, or both.",
+          );
+        }
+        break;
+      }
+
+      // ul.call dispatched via the capability registry pre-check above.
+
+
+
+      // ul.secrets dispatched via the capability registry pre-check above.
+
+      // ── Backward-compat aliases ──────────────
+      case "ul.discover.desk":
+        logAliasUsage(name);
+        result = await executeDiscoverDesk(userId);
+        break;
+      case "ul.discover.inspect":
+        logAliasUsage(name);
+        result = await executeDiscoverInspect(userId, toolArgs, econ);
+        break;
+      case "ul.discover.library":
+        logAliasUsage(name);
+        result = await executeDiscoverLibrary(userId, toolArgs);
+        break;
+      case "ul.discover.appstore":
+        logAliasUsage(name);
+        result = await executeDiscoverAppstore(userId, toolArgs);
+        break;
+      case "ul.set.version":
+        logAliasUsage(name);
+        result = await executeSetVersion(userId, toolArgs, {
+          callerIsApiToken,
+        });
+        break;
+      case "ul.set.visibility":
+        logAliasUsage(name);
+        result = await executeSetVisibility(userId, toolArgs);
+        break;
+      case "ul.set.download":
+        logAliasUsage(name);
+        result = await executeSetDownload(userId, toolArgs);
+        break;
+      case "ul.set.supabase":
+        logAliasUsage(name);
+        result = await executeSetSupabase(userId, toolArgs);
+        break;
+      case "ul.set.ratelimit":
+        logAliasUsage(name);
+        result = await executeSetRateLimit(userId, toolArgs);
+        break;
+      case "ul.set.pricing":
+        logAliasUsage(name);
+        result = await executeSetPricing(userId, toolArgs);
+        break;
+      case "ul.permissions.grant":
+        logAliasUsage(name);
+        result = await executePermissionsGrant(userId, toolArgs);
+        break;
+      case "ul.permissions.revoke":
+        logAliasUsage(name);
+        result = await executePermissionsRevoke(userId, toolArgs);
+        break;
+      case "ul.permissions.list":
+        logAliasUsage(name);
+        result = await executePermissionsList(userId, toolArgs);
+        break;
+      case "ul.permissions.export":
+        logAliasUsage(name);
+        result = await executePermissionsExport(userId, toolArgs);
+        break;
+      // ul.connect + ul.connections folded into the "secrets" registry
+      // capability (list-only) — dispatched via the pre-check above.
+      case "ul.memory.read":
+      case "ul.memory.write":
+      case "ul.memory.append":
+      case "ul.memory.recall":
+      case "ul.memory.remember":
+      case "ul.memory.query":
+      case "ul.memory.forget": {
+        logAliasUsage(name);
+        // Block memory aliases for provisional users (same as main ul.memory handler)
+        if (user?.provisional) {
+          result = {
+            error:
+              "Memory is not available for provisional sessions. Sign in at connectgalactic.com to unlock cross-session memory.",
+          };
+          break;
+        }
+        // Dispatch to original handlers
+        switch (name) {
+          case "ul.memory.read":
+            result = await executeMemoryRead(userId, toolArgs);
+            break;
+          case "ul.memory.write":
+            result = await executeMemoryWrite(userId, toolArgs);
+            break;
+          case "ul.memory.append":
+            result = await executeMemoryWrite(userId, {
+              ...toolArgs,
+              append: true,
+            });
+            break;
+          case "ul.memory.recall":
+            result = await executeMemoryRecall(userId, toolArgs);
+            break;
+          case "ul.memory.remember":
+            result = await executeMemoryRecall(userId, toolArgs);
+            break;
+          case "ul.memory.query":
+            result = await executeMemoryQuery(userId, toolArgs);
+            break;
+          case "ul.memory.forget":
+            result = await executeMemoryQuery(userId, {
+              ...toolArgs,
+              delete_key: toolArgs.key,
+            });
+            break;
+        }
+        break;
+      }
+      case "ul.markdown.publish":
+        logAliasUsage(name);
+        result = await executeMarkdown(userId, toolArgs);
+        break;
+      case "ul.markdown.list":
+        logAliasUsage(name);
+        result = await executePages(userId);
+        break;
+      case "ul.markdown.share":
+        logAliasUsage(name);
+        result = await executeMarkdownShare(userId, toolArgs);
+        break;
+      case "ul.like":
+        logAliasUsage(name);
+        result = await executeRate(userId, { ...toolArgs, rating: "like" });
+        break;
+      case "ul.dislike":
+        logAliasUsage(name);
+        result = await executeRate(userId, { ...toolArgs, rating: "dislike" });
+        break;
+      case "ul.lint":
+        logAliasUsage(name);
+        result = executeLint(toolArgs);
+        break;
+      case "ul.scaffold":
+        logAliasUsage(name);
+        result = executeScaffold(toolArgs);
+        break;
+      case "ul.health":
+        logAliasUsage(name);
+        result = await executeHealth(userId, toolArgs);
+        break;
+      case "ul.gaps":
+        logAliasUsage(name);
+        result = await executeGaps(toolArgs);
+        break;
+      case "ul.shortcomings":
+        logAliasUsage(name);
+        result = executeShortcomings(userId, toolArgs, sessionId);
+        break;
+
+      // ── 11. ul.auth.link (cross-device merge) ──────────────
+      case "ul.auth.link": {
+        // Only provisional users can use this tool
+        if (!user?.provisional) {
+          result = {
+            message:
+              "Already linked to an authenticated account. No action needed.",
+          };
           break;
         }
 
-        // ul.codemode + ul.execute dispatched via the capability registry pre-check above.
-
-        default:
-          return jsonRpcErrorResponse(
-            id,
+        const linkToken = toolArgs.token as string;
+        if (!linkToken || !isApiToken(linkToken)) {
+          throw new ToolError(
             INVALID_PARAMS,
-            `Unknown tool: ${name}`,
+            "Provide a valid API token (starts with gx_). Generate one at connectgalactic.com → API Keys.",
           );
+        }
+
+        // Validate the target token to get the real user
+        const validated = await validateToken(linkToken);
+        if (!validated) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "Invalid or expired token. Generate a new one at connectgalactic.com → API Keys.",
+          );
+        }
+
+        // Prevent self-link
+        if (validated.user_id === userId) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "This token belongs to the current provisional account.",
+          );
+        }
+
+        // Target must not be another provisional user
+        if (await isProvisionalUser(validated.user_id)) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "Target token belongs to another provisional account. Use a token from a signed-in account.",
+          );
+        }
+
+        // Execute merge: current provisional → target real user
+        const mergeResult = await mergeProvisionalUser(
+          userId,
+          validated.user_id,
+          "mcp_auth_link",
+        );
+        result = {
+          success: true,
+          message:
+            "Account linked successfully! Your apps and data have been transferred to your real account.",
+          apps_moved: mergeResult.apps_moved,
+          tokens_moved: mergeResult.tokens_moved,
+          storage_transferred_bytes: mergeResult.storage_transferred_bytes,
+        };
+        break;
       }
+
+      // ── 12. ul.marketplace ──────────────
+      case "ul.marketplace": {
+        // Provisional users cannot participate in marketplace
+        if (user?.provisional) {
+          throw new ToolError(
+            FORBIDDEN,
+            "Marketplace requires an authenticated account. Use gx.auth.link to connect your account first.",
+          );
+        }
+        const mktAction = toolArgs.action as string;
+        if (!mktAction) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "Missing required parameter: action",
+          );
+        }
+        const {
+          placeBid,
+          setAskPrice,
+          acceptBid,
+          rejectBid,
+          cancelBid,
+          buyNow,
+          getOffers,
+          getHistory,
+          getListing,
+        } = await import("../services/marketplace.ts");
+
+        switch (mktAction) {
+          case "bid": {
+            const appIdOrSlug = toolArgs.app_id as string;
+            if (!appIdOrSlug) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "Missing required parameter: app_id",
+              );
+            }
+            const amountLight = toolArgs.amount_light as number;
+            if (!amountLight || amountLight <= 0) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "Missing or invalid amount_light (must be > 0)",
+              );
+            }
+            // Resolve app ID from slug if needed
+            const resolvedAppId = await resolveAppIdForMarketplace(appIdOrSlug);
+            result = await placeBid(
+              userId,
+              resolvedAppId,
+              amountLight,
+              toolArgs.message as string | undefined,
+              toolArgs.expires_in_hours as number | undefined,
+            );
+            break;
+          }
+          case "ask": {
+            const appIdOrSlug = toolArgs.app_id as string;
+            if (!appIdOrSlug) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "Missing required parameter: app_id",
+              );
+            }
+            const resolvedAppId = await resolveAppIdForMarketplace(appIdOrSlug);
+            result = await setAskPrice(
+              userId,
+              resolvedAppId,
+              toolArgs.price_light as number | null ?? null,
+              toolArgs.floor_light as number | null ?? null,
+              toolArgs.instant_buy as boolean | undefined,
+              toolArgs.note as string | undefined,
+            );
+            break;
+          }
+          case "accept": {
+            const bidId = toolArgs.bid_id as string;
+            if (!bidId) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "Missing required parameter: bid_id",
+              );
+            }
+            result = await acceptBid(userId, bidId);
+            break;
+          }
+          case "reject": {
+            const bidId = toolArgs.bid_id as string;
+            if (!bidId) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "Missing required parameter: bid_id",
+              );
+            }
+            await rejectBid(userId, bidId);
+            result = {
+              success: true,
+              message: "Bid rejected. Escrow refunded to bidder.",
+            };
+            break;
+          }
+          case "cancel": {
+            const bidId = toolArgs.bid_id as string;
+            if (!bidId) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "Missing required parameter: bid_id",
+              );
+            }
+            await cancelBid(userId, bidId);
+            result = {
+              success: true,
+              message: "Bid cancelled. Escrow refunded to your balance.",
+            };
+            break;
+          }
+          case "acquire":
+          case "buy_now": {
+            const appIdOrSlug = toolArgs.app_id as string;
+            if (!appIdOrSlug) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "Missing required parameter: app_id",
+              );
+            }
+            const resolvedAppId = await resolveAppIdForMarketplace(appIdOrSlug);
+            result = await buyNow(userId, resolvedAppId);
+            break;
+          }
+          case "offers": {
+            const appIdOrSlug = toolArgs.app_id as string | undefined;
+            let resolvedAppId: string | undefined;
+            if (appIdOrSlug) {
+              resolvedAppId = await resolveAppIdForMarketplace(appIdOrSlug);
+            }
+            result = await getOffers(userId, resolvedAppId);
+            break;
+          }
+          case "history": {
+            const appIdOrSlug = toolArgs.app_id as string | undefined;
+            let resolvedAppId: string | undefined;
+            if (appIdOrSlug) {
+              resolvedAppId = await resolveAppIdForMarketplace(appIdOrSlug);
+            }
+            result = await getHistory(resolvedAppId, userId);
+            break;
+          }
+          case "listing": {
+            const appIdOrSlug = toolArgs.app_id as string;
+            if (!appIdOrSlug) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "Missing required parameter: app_id",
+              );
+            }
+            const resolvedAppId = await resolveAppIdForMarketplace(appIdOrSlug);
+            result = await getListing(resolvedAppId, userId);
+            break;
+          }
+          default:
+            throw new ToolError(
+              INVALID_PARAMS,
+              `Invalid action: ${mktAction}. Use bid|ask|accept|reject|cancel|acquire|buy_now|offers|history|listing`,
+            );
+        }
+        break;
+      }
+
+      // ── 13. ul.wallet ──────────────
+      case "ul.wallet": {
+        if (user?.provisional) {
+          throw new ToolError(
+            FORBIDDEN,
+            "Wallet requires an authenticated account. Use gx.auth.link to connect your account first.",
+          );
+        }
+        const walletAction = toolArgs.action as string;
+        if (!walletAction) {
+          throw new ToolError(
+            INVALID_PARAMS,
+            "Missing required parameter: action",
+          );
+        }
+
+        const { SUPABASE_URL: wSbUrl, SUPABASE_SERVICE_ROLE_KEY: wSbKey } =
+          getSupabaseEnv();
+        const wHeaders = {
+          "apikey": wSbKey,
+          "Authorization": `Bearer ${wSbKey}`,
+        };
+
+        switch (walletAction) {
+          case "status": {
+            const [userRes, earningsRes, contentStorageRes] = await Promise.all(
+              [
+                fetch(
+                  `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=balance_light,escrow_light,deposit_balance_light,earned_balance_light,escrow_deposit_light,escrow_earned_light,auto_add_earnings_to_balance,stripe_connect_account_id,stripe_connect_onboarded,stripe_connect_payouts_enabled,storage_used_bytes,data_storage_used_bytes,d1_storage_bytes,storage_limit_bytes,total_earned_light`,
+                  { headers: wHeaders },
+                ),
+                fetch(
+                  `${wSbUrl}/rest/v1/transfers?to_user_id=eq.${userId}&select=amount_light`,
+                  { headers: wHeaders },
+                ),
+                fetch(
+                  `${wSbUrl}/rest/v1/content?owner_id=eq.${userId}&type=in.(page,memory_md,library_md)&select=type,size`,
+                  { headers: wHeaders },
+                ),
+              ],
+            );
+
+            const wUserData = userRes.ok
+              ? await readJsonFirst<WalletUserRow>(userRes)
+              : null;
+            const wTransfers = earningsRes.ok
+              ? await readJsonArray<WalletTransferRow>(earningsRes)
+              : [];
+            const transferTotalEarned = wTransfers.reduce(
+              (s: number, t: { amount_light: number }) => s + t.amount_light,
+              0,
+            );
+            const totalEarned = wUserData?.total_earned_light ??
+              transferTotalEarned;
+            const balance = wUserData?.balance_light || 0;
+            const escrow = wUserData?.escrow_light || 0;
+            const earnedBalance = wUserData?.earned_balance_light ?? 0;
+
+            // Storage breakdown
+            const sourceBytes = wUserData?.storage_used_bytes || 0;
+            const dataBytes = wUserData?.data_storage_used_bytes || 0;
+            const d1Bytes = wUserData?.d1_storage_bytes || 0;
+            const contentRows = contentStorageRes.ok
+              ? await readJsonArray<
+                { type?: string | null; size?: number | null }
+              >(
+                contentStorageRes,
+              )
+              : [];
+            const contentBytes = contentRows.reduce(
+              (sum: number, row) => sum + (row.size || 0),
+              0,
+            );
+            const combinedBytes = sourceBytes + dataBytes + d1Bytes +
+              contentBytes;
+            const limitBytes = wUserData?.storage_limit_bytes ||
+              COMBINED_FREE_TIER_BYTES;
+            const toMb = (b: number) => (b / (1024 * 1024)).toFixed(2);
+            const storageOverageBytes = Math.max(0, combinedBytes - limitBytes);
+
+            result = {
+              balance_light: balance,
+              spendable_balance_light: balance,
+              balance_display: formatLight(balance),
+              escrow_light: escrow,
+              deposit_balance_light: wUserData?.deposit_balance_light || 0,
+              earned_balance_light: earnedBalance,
+              convertible_earnings_light: earnedBalance,
+              escrow_deposit_light: wUserData?.escrow_deposit_light || 0,
+              escrow_earned_light: wUserData?.escrow_earned_light || 0,
+              auto_add_earnings_to_balance:
+                wUserData?.auto_add_earnings_to_balance || false,
+              available_light: balance,
+              available_display: formatLight(balance),
+              withdrawable_earnings_light: earnedBalance,
+              withdrawable_earnings_display: formatLight(earnedBalance),
+              total_earned_light: totalEarned,
+              total_earned_display: formatLight(totalEarned),
+              storage: {
+                source_code_bytes: sourceBytes,
+                source_code_mb: toMb(sourceBytes) + " MB",
+                user_data_bytes: dataBytes,
+                user_data_mb: toMb(dataBytes) + " MB",
+                d1_storage_bytes: d1Bytes,
+                d1_storage_mb: toMb(d1Bytes) + " MB",
+                content_storage_bytes: contentBytes,
+                content_storage_mb: toMb(contentBytes) + " MB",
+                combined_bytes: combinedBytes,
+                combined_mb: toMb(combinedBytes) + " MB",
+                limit_bytes: limitBytes,
+                limit_mb: toMb(limitBytes) + " MB",
+                used_percent: limitBytes > 0
+                  ? Math.round((combinedBytes / limitBytes) * 100)
+                  : 0,
+                overage_bytes: storageOverageBytes,
+                overage_rate:
+                  `${LIGHT_SYMBOL}${STORAGE_LIGHT_PER_GB_MONTH}/GB-month after the storage soft cap`,
+              },
+              connect: {
+                connected: !!wUserData?.stripe_connect_account_id,
+                onboarded: wUserData?.stripe_connect_onboarded || false,
+                payouts_enabled: wUserData?.stripe_connect_payouts_enabled ||
+                  false,
+              },
+              policy: {
+                purchased_light:
+                  "Purchased credits are spend-only platform credit and are not payout eligible.",
+                creator_earnings:
+                  "Creator earnings must be added to balance before they can be spent, or requested for payout while unconverted.",
+                no_p2p_transfer:
+                  "Credits cannot be transferred directly between arbitrary accounts.",
+                terms_url: "/terms",
+              },
+              can_withdraw:
+                (wUserData?.stripe_connect_payouts_enabled || false) &&
+                earnedBalance >= MIN_WITHDRAWAL_LIGHT,
+            };
+            break;
+          }
+
+          case "earnings": {
+            const ePeriod = (toolArgs.period as string) || "30d";
+            let ePeriodDays = 30;
+            if (ePeriod === "7d") ePeriodDays = 7;
+            else if (ePeriod === "90d") ePeriodDays = 90;
+            else if (ePeriod === "all") ePeriodDays = 3650;
+            const eCutoff = new Date(
+              Date.now() - ePeriodDays * 24 * 60 * 60 * 1000,
+            ).toISOString();
+
+            const [ePeriodRes, eRecentRes, eUserRes] = await Promise.all([
+              fetch(
+                `${wSbUrl}/rest/v1/transfers?to_user_id=eq.${userId}&created_at=gte.${eCutoff}&select=amount_light,app_id,function_name,reason,created_at&order=created_at.asc&limit=10000`,
+                { headers: wHeaders },
+              ),
+              fetch(
+                `${wSbUrl}/rest/v1/transfers?to_user_id=eq.${userId}&select=amount_light,app_id,function_name,reason,created_at&order=created_at.desc&limit=10`,
+                { headers: wHeaders },
+              ),
+              fetch(
+                `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=balance_light,deposit_balance_light,earned_balance_light,auto_add_earnings_to_balance`,
+                { headers: wHeaders },
+              ),
+            ]);
+
+            const ePeriodTransfers = ePeriodRes.ok
+              ? (await ePeriodRes.json()) as Array<
+                {
+                  amount_light: number;
+                  app_id: string | null;
+                  function_name: string | null;
+                  reason: string;
+                  created_at: string;
+                }
+              >
+              : [];
+            const eRecentTransfers = eRecentRes.ok
+              ? (await eRecentRes.json()) as Array<
+                {
+                  amount_light: number;
+                  app_id: string | null;
+                  function_name: string | null;
+                  reason: string;
+                  created_at: string;
+                }
+              >
+              : [];
+            const ePeriodEarned = ePeriodTransfers.reduce(
+              (s: number, t: { amount_light: number }) => s + t.amount_light,
+              0,
+            );
+            const eUserData = eUserRes.ok
+              ? await readJsonFirst<WalletUserRow>(eUserRes)
+              : null;
+
+            const eAppMap = new Map<
+              string,
+              { earned_light: number; call_count: number }
+            >();
+            for (const t of ePeriodTransfers) {
+              const key = t.app_id || "unknown";
+              const entry = eAppMap.get(key) ||
+                { earned_light: 0, call_count: 0 };
+              entry.earned_light += t.amount_light;
+              entry.call_count += 1;
+              eAppMap.set(key, entry);
+            }
+
+            result = {
+              period: ePeriod,
+              spendable_balance_light: eUserData?.balance_light || 0,
+              deposit_balance_light: eUserData?.deposit_balance_light || 0,
+              earned_balance_light: eUserData?.earned_balance_light || 0,
+              convertible_earnings_light: eUserData?.earned_balance_light || 0,
+              auto_add_earnings_to_balance:
+                eUserData?.auto_add_earnings_to_balance || false,
+              period_earned_light: ePeriodEarned,
+              period_earned_display: formatLight(ePeriodEarned),
+              by_app: Array.from(eAppMap.entries())
+                .map(([app_id, data]) => ({
+                  app_id,
+                  earned_light: data.earned_light,
+                  call_count: data.call_count,
+                }))
+                .sort((a, b) => b.earned_light - a.earned_light),
+              recent: eRecentTransfers.slice(0, 5),
+            };
+            break;
+          }
+
+          case "convert_earnings": {
+            if (toolArgs.terms_accepted !== true) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "terms_accepted must be true to add creator earnings to spendable balance.",
+              );
+            }
+
+            const convertAll = toolArgs.all === true;
+            let convertAmount = toolArgs.amount_light as number | undefined;
+            if (convertAll && convertAmount !== undefined) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "amount_light cannot be combined with all=true",
+              );
+            }
+
+            if (convertAll) {
+              const cUserRes = await fetch(
+                `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=earned_balance_light`,
+                { headers: wHeaders },
+              );
+              const cUserData = cUserRes.ok
+                ? await readJsonFirst<WalletUserRow>(cUserRes)
+                : null;
+              convertAmount = cUserData?.earned_balance_light || 0;
+            }
+
+            if (!convertAmount || convertAmount <= 0) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "No creator earnings are available to add to balance.",
+              );
+            }
+
+            const cRpcRes = await fetch(
+              `${wSbUrl}/rest/v1/rpc/convert_earnings_to_deposit`,
+              {
+                method: "POST",
+                headers: { ...wHeaders, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  p_user_id: userId,
+                  p_amount_light: convertAmount,
+                  p_source: "manual",
+                  p_reference_table: "users",
+                  p_reference_id: userId,
+                  p_metadata: { source: "platform_mcp" },
+                }),
+              },
+            );
+
+            if (!cRpcRes.ok) {
+              const cRpcErr = await cRpcRes.text();
+              throw new ToolError(
+                cRpcErr.includes("Conversion exceeds earnings")
+                  ? INVALID_PARAMS
+                  : INTERNAL_ERROR,
+                cRpcErr.includes("Conversion exceeds earnings")
+                  ? "Conversion exceeds available creator earnings."
+                  : "Failed to add earnings to balance.",
+              );
+            }
+
+            const cRows = await readJsonArray<{
+              conversion_id: string;
+              converted_light: number;
+              deposit_balance_light: number;
+              earned_balance_light: number;
+              balance_light: number;
+            }>(cRpcRes);
+            const cRow = cRows[0];
+            result = {
+              success: true,
+              conversion_id: cRow?.conversion_id || null,
+              converted_light: cRow?.converted_light || convertAmount,
+              converted_display: formatLight(
+                cRow?.converted_light || convertAmount,
+              ),
+              balance_light: cRow?.balance_light || 0,
+              spendable_balance_light: cRow?.balance_light || 0,
+              deposit_balance_light: cRow?.deposit_balance_light || 0,
+              earned_balance_light: cRow?.earned_balance_light || 0,
+              convertible_earnings_light: cRow?.earned_balance_light || 0,
+            };
+            break;
+          }
+
+          case "set_auto_add_earnings": {
+            if (typeof toolArgs.enabled !== "boolean") {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "enabled must be a boolean.",
+              );
+            }
+
+            if (toolArgs.enabled === true && toolArgs.terms_accepted !== true) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "terms_accepted must be true to auto-add future earnings to balance.",
+              );
+            }
+
+            const aaRes = await fetch(
+              `${wSbUrl}/rest/v1/users?id=eq.${userId}`,
+              {
+                method: "PATCH",
+                headers: {
+                  ...wHeaders,
+                  "Content-Type": "application/json",
+                  "Prefer": "return=minimal",
+                },
+                body: JSON.stringify({
+                  auto_add_earnings_to_balance: toolArgs.enabled,
+                }),
+              },
+            );
+
+            if (!aaRes.ok) {
+              throw new ToolError(
+                INTERNAL_ERROR,
+                "Failed to update earnings auto-add setting.",
+              );
+            }
+
+            result = {
+              success: true,
+              auto_add_earnings_to_balance: toolArgs.enabled,
+            };
+            break;
+          }
+
+          case "estimate_fee": {
+            const estAmount = toolArgs.amount_light as number;
+            if (!estAmount || estAmount < MIN_WITHDRAWAL_LIGHT) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                `amount_light must be at least ${MIN_WITHDRAWAL_LIGHT} (${
+                  formatLight(MIN_WITHDRAWAL_LIGHT)
+                } minimum)`,
+              );
+            }
+            const { estimatePayoutFee } = await import(
+              "../services/stripe-connect.ts"
+            );
+            const { calculateNextPayoutSchedule } = await import(
+              "../services/payout-policy.ts"
+            );
+            const estBillingConfig = await getBillingConfig();
+            const estimate = estimatePayoutFee(
+              estAmount,
+              false,
+              estBillingConfig.payoutLightPerUsd,
+            );
+            const estSchedule = calculateNextPayoutSchedule(new Date());
+            result = {
+              gross_light: estAmount,
+              gross_display: formatLight(estAmount),
+              gross_usd_cents: estimate.gross_usd_cents,
+              light_per_usd_snapshot: estBillingConfig.payoutLightPerUsd,
+              billing_config_version: estBillingConfig.version,
+              stripe_fee_cents: estimate.stripe_fee_cents,
+              fee_estimate_cents: estimate.fee_estimate_cents,
+              stripe_fee_dollars: "$" +
+                (estimate.stripe_fee_cents / 100).toFixed(2),
+              net_cents: estimate.net_cents,
+              net_dollars: "$" + (estimate.net_cents / 100).toFixed(2),
+              scheduled_payout_date: estSchedule.scheduledPayoutDate,
+              release_at: estSchedule.releaseAt.toISOString(),
+              payout_cutoff_at: estSchedule.payoutCutoffAt.toISOString(),
+              payout_policy_version: estSchedule.payoutPolicyVersion,
+              request_cutoff_days: estSchedule.requestCutoffDays,
+              note:
+                "Stripe payout fee (0.25% + $0.25). Requests are scheduled into the next eligible monthly payout run.",
+            };
+            break;
+          }
+
+          case "withdraw": {
+            if (toolArgs.terms_accepted !== true) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "terms_accepted must be true to request a payout. Review the Terms at /terms before retrying.",
+              );
+            }
+            const wdAmount = toolArgs.amount_light as number;
+            if (!wdAmount || wdAmount < MIN_WITHDRAWAL_LIGHT) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                `amount_light must be at least ${MIN_WITHDRAWAL_LIGHT} (${
+                  formatLight(MIN_WITHDRAWAL_LIGHT)
+                } minimum)`,
+              );
+            }
+
+            // Validate connect status and balance
+            const wdUserRes = await fetch(
+              `${wSbUrl}/rest/v1/users?id=eq.${userId}&select=stripe_connect_account_id,stripe_connect_payouts_enabled,balance_light,escrow_light,total_earned_light,earned_balance_light`,
+              { headers: wHeaders },
+            );
+            const wdUserData = wdUserRes.ok
+              ? await readJsonFirst<WalletUserRow>(wdUserRes)
+              : null;
+
+            if (
+              !wdUserData?.stripe_connect_account_id ||
+              !wdUserData?.stripe_connect_payouts_enabled
+            ) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                "Bank account not connected. Visit the Wallet page in your dashboard to complete Stripe onboarding first.",
+              );
+            }
+
+            // Earnings-only check
+            const wdPayoutsRes = await fetch(
+              `${wSbUrl}/rest/v1/payouts?user_id=eq.${userId}&status=in.(held,pending,processing,paid)&select=amount_light`,
+              { headers: wHeaders },
+            );
+            let wdTotalWithdrawn = 0;
+            if (wdPayoutsRes.ok) {
+              const wdPayoutsArr = await readJsonArray<WalletTransferRow>(
+                wdPayoutsRes,
+              );
+              wdTotalWithdrawn = wdPayoutsArr.reduce(
+                (s: number, p: { amount_light: number }) => s + p.amount_light,
+                0,
+              );
+            }
+            const wdLifetimeRemaining = Math.max(
+              0,
+              (wdUserData.total_earned_light || 0) - wdTotalWithdrawn,
+            );
+            const wdWithdrawable = Math.min(
+              wdUserData.earned_balance_light ?? wdLifetimeRemaining,
+              wdLifetimeRemaining,
+            );
+            if (wdWithdrawable < wdAmount) {
+              throw new ToolError(
+                INVALID_PARAMS,
+                `Only creator earnings can be paid out. Payout eligible: ${
+                  formatLight(wdWithdrawable)
+                }, requested: ${formatLight(wdAmount)}.`,
+              );
+            }
+
+            const {
+              estimatePayoutFee: estFee,
+              getAccountStatus: wdGetStatus,
+            } = await import("../services/stripe-connect.ts");
+            const {
+              buildPayoutPolicyMessage: wdBuildPayoutPolicyMessage,
+              calculateNextPayoutSchedule: wdCalculateNextPayoutSchedule,
+            } = await import("../services/payout-policy.ts");
+
+            // Detect cross-border for accurate Stripe fee estimation
+            let wdIsCrossBorder = false;
+            try {
+              const wdConnectStatus = await wdGetStatus(
+                wdUserData.stripe_connect_account_id,
+              );
+              wdIsCrossBorder = wdConnectStatus.country !== undefined &&
+                wdConnectStatus.country !== "US";
+            } catch { /* Stripe unavailable — assume domestic */ }
+
+            const wdBillingConfig = await getBillingConfig();
+            const wdEstimate = estFee(
+              wdAmount,
+              wdIsCrossBorder,
+              wdBillingConfig.payoutLightPerUsd,
+            );
+            const wdSchedule = wdCalculateNextPayoutSchedule(new Date());
+
+            // Atomic debit + held record; Stripe transfer waits for the monthly run.
+            const wdRpcRes = await fetch(
+              `${wSbUrl}/rest/v1/rpc/create_payout_record`,
+              {
+                method: "POST",
+                headers: { ...wHeaders, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  p_user_id: userId,
+                  p_amount_light: wdAmount,
+                  p_gross_cents: wdEstimate.gross_usd_cents,
+                  p_stripe_fee_cents: wdEstimate.stripe_fee_cents,
+                  p_fee_estimate_cents: wdEstimate.fee_estimate_cents,
+                  p_net_cents: wdEstimate.net_cents,
+                  p_light_per_usd_snapshot: wdBillingConfig.payoutLightPerUsd,
+                  p_billing_config_version: wdBillingConfig.version,
+                  p_release_at: wdSchedule.releaseAt.toISOString(),
+                  p_scheduled_payout_date: wdSchedule.scheduledPayoutDate,
+                  p_payout_cutoff_at: wdSchedule.payoutCutoffAt.toISOString(),
+                  p_payout_policy_version: wdSchedule.payoutPolicyVersion,
+                }),
+              },
+            );
+
+            if (!wdRpcRes.ok) {
+              const wdRpcErr = await wdRpcRes.text();
+              if (wdRpcErr.includes("exceeds earnings")) {
+                throw new ToolError(
+                  INVALID_PARAMS,
+                  "Payout request exceeds earned funds. Only creator earnings can be paid out.",
+                );
+              }
+              throw new ToolError(
+                INTERNAL_ERROR,
+                wdRpcErr.includes("Insufficient")
+                  ? "Insufficient balance"
+                  : "Failed to create payout",
+              );
+            }
+
+            const wdPayoutId = await wdRpcRes.json();
+
+            result = {
+              success: true,
+              payout_id: wdPayoutId,
+              amount_light: wdAmount,
+              amount_display: formatLight(wdAmount),
+              gross_usd_cents: wdEstimate.gross_usd_cents,
+              estimated_stripe_fee_dollars: "$" +
+                (wdEstimate.stripe_fee_cents / 100).toFixed(2),
+              fee_pass_through_cents: wdEstimate.fee_estimate_cents,
+              estimated_net_dollars: "$" +
+                (wdEstimate.net_cents / 100).toFixed(2),
+              light_per_usd_snapshot: wdBillingConfig.payoutLightPerUsd,
+              billing_config_version: wdBillingConfig.version,
+              status: "held",
+              release_at: wdSchedule.releaseAt.toISOString(),
+              scheduled_payout_date: wdSchedule.scheduledPayoutDate,
+              payout_cutoff_at: wdSchedule.payoutCutoffAt.toISOString(),
+              payout_policy_version: wdSchedule.payoutPolicyVersion,
+              request_cutoff_days: wdSchedule.requestCutoffDays,
+              terms_url: "/terms",
+              message:
+                `Payout request for ${formatLight(wdAmount)} submitted. ` +
+                `Stripe fees are deducted from payout proceeds. ` +
+                `Estimated bank deposit: ~$${
+                  (wdEstimate.net_cents / 100).toFixed(2)
+                }. ` +
+                wdBuildPayoutPolicyMessage(wdSchedule),
+            };
+            break;
+          }
+
+          case "payouts": {
+            const pRes = await fetch(
+              `${wSbUrl}/rest/v1/payouts?user_id=eq.${userId}&select=*&order=created_at.desc&limit=20`,
+              { headers: wHeaders },
+            );
+            const pRows = pRes.ok
+              ? await readJsonArray<WalletPayoutRow>(pRes)
+              : [];
+            result = {
+              payouts: pRows.map((p) => ({
+                id: p.id,
+                amount_light: p.amount_light || 0,
+                amount_display: formatLight(p.amount_light || 0),
+                platform_fee_light: p.platform_fee_light || 0,
+                stripe_fee_dollars: "$" +
+                  (((p.stripe_fee_cents || 0) / 100).toFixed(2)),
+                fee_pass_through_cents: p.fee_estimate_cents ||
+                  p.stripe_fee_cents || 0,
+                net_dollars: "$" + (((p.net_cents || 0) / 100).toFixed(2)),
+                gross_dollars: "$" + (((p.gross_cents || 0) / 100).toFixed(2)),
+                actual_transfer_dollars: "$" +
+                  (((p.stripe_transfer_amount_cents || 0) / 100).toFixed(2)),
+                actual_payout_dollars: "$" +
+                  (((p.stripe_payout_amount_cents || 0) / 100).toFixed(2)),
+                status: p.status,
+                release_at: p.release_at,
+                scheduled_payout_date: p.scheduled_payout_date || null,
+                payout_cutoff_at: p.payout_cutoff_at || null,
+                payout_policy_version: p.payout_policy_version || null,
+                created_at: p.created_at,
+                completed_at: p.completed_at,
+              })),
+              count: pRows.length,
+            };
+            break;
+          }
+
+          default:
+            throw new ToolError(
+              INVALID_PARAMS,
+              `Invalid action: ${walletAction}. Use status|earnings|convert_earnings|set_auto_add_earnings|withdraw|payouts|estimate_fee`,
+            );
+        }
+        break;
+      }
+
+      // ul.codemode + ul.execute dispatched via the capability registry pre-check above.
+
+      default:
+        return jsonRpcErrorResponse(
+          id,
+          INVALID_PARAMS,
+          `Unknown tool: ${name}`,
+        );
     }
 
     const durationMs = Date.now() - execStart;
@@ -6469,9 +6432,8 @@ async function executeUpload(
   const testMode: TestAttestationMode = hasGpuRuntimeFiles(decodedFiles)
     ? "gpu_validation"
     : "deno_execution";
-  let verifiedTestMetadata:
-    | ReturnType<typeof persistedTestAttestation>
-    | undefined;
+  let verifiedTestMetadata: ReturnType<typeof persistedTestAttestation> |
+    undefined;
   if (options.callerIsApiToken) {
     const verification = await verifyTestAttestation({
       token: args.test_attestation,
@@ -6947,9 +6909,7 @@ async function executeUpload(
         throw new ToolError(
           VALIDATION_ERROR,
           quota.reason === "insufficient_storage_balance"
-            ? `Staged storage exceeds the included allowance and requires at least ${
-              quota.minimum_balance_light ?? 1000
-            } Light. Current balance: ${quota.current_balance_light ?? 0}.`
+            ? `Staged storage exceeds the included allowance and requires at least ${quota.minimum_balance_light ?? 1000} Light. Current balance: ${quota.current_balance_light ?? 0}.`
             : "Staged storage quota exceeded.",
           { type: "STORAGE_QUOTA_EXCEEDED" },
         );
@@ -7962,10 +7922,7 @@ export async function executeDownload(
   // published_sha256 + matches is the platform's attestation that those bytes
   // equal what was signed at publish time.
   const trust = getVersionTrust(app, version);
-  const matched = await matchFilesAgainstHashes(
-    sourceFiles,
-    trust?.artifact_hashes ?? {},
-  );
+  const matched = await matchFilesAgainstHashes(sourceFiles, trust?.artifact_hashes ?? {});
   const verification = {
     algorithm: "sha256" as const,
     signed: !!trust?.signature?.signature,
@@ -9388,9 +9345,7 @@ function buildScaffoldInterfaceHtml(
   <h1>${esc(name)}</h1>
   <p class="sub">${esc(description)}</p>
   <button id="go">Call ${esc(firstFn)}()</button>
-  <pre id="out">Click the button to call your agent's <code>${
-    esc(firstFn)
-  }</code> function.</pre>
+  <pre id="out">Click the button to call your agent's <code>${esc(firstFn)}</code> function.</pre>
 <script>
   // Your UI code. window.ul.call(functionName, args) returns a Promise with the
   // function's result — call any function your agent exports.
@@ -9431,7 +9386,7 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     `// ${description}`,
     "//",
     "// The loop (one wake): goal → journal → observe → reason → act → record.",
-    '// A routine (manifest.json "routines") wakes tick() on a schedule. After',
+    "// A routine (manifest.json \"routines\") wakes tick() on a schedule. After",
     "// deploy: gx.routine create (write the mission in `intent` — it arrives as",
     "// args._routine.intent every wake). Routines are created paused; ask the",
     "// owner to review capabilities, budgets, and activation in Galactic.",
@@ -9511,7 +9466,7 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     '          (recentRuns ? "Recent run outcomes: " + JSON.stringify(recentRuns) + "\\n" : "") +',
     '          "New observations: " + observations + "\\n" +',
     '          "Assess progress toward the goal, then return ONLY JSON: " +',
-    '          \'{ "assessment": "...", "actions": ["..."] }\',',
+    "          '{ \"assessment\": \"...\", \"actions\": [\"...\"] }',",
     "      }],",
     "    });",
     "    const plan = JSON.parse(completion.content);",
@@ -9713,18 +9668,14 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
         path: ".ultralightrc.json",
         content: JSON.stringify({ app_id: "", slug: "", name: name }, null, 2),
       },
-      {
-        path: "migrations/001_journal.sql",
-        content: migrationLines.join("\n"),
-      },
+      { path: "migrations/001_journal.sql", content: migrationLines.join("\n") },
     ],
     next_steps: [
       "Wire the two EXTENSION POINTs in index.ts tick(): a real observation source (allowlisted fetch / IMAP / galactic.call) and real actions.",
       'Test one wake without deploying and keep the successful response as `tested`: gx.test({ files: [...], function_name: "tick", test_args: { _routine: { trigger: "manual", attempt: 1, intent: "your mission here" } }, d1_fixtures: { responses: [{ method: "select", table: "journal", result: [] }, { method: "insert", table: "journal", result: { success: true, meta: { changes: 1 } } }] } }).',
-      'Deploy the exact same files with gx.upload({ files: [...], test_attestation: tested.test_attestation, name: "' +
-      name + '" }).',
+      'Deploy the exact same files with gx.upload({ files: [...], test_attestation: tested.test_attestation, name: "' + name + '" }).',
       'Create the paused loop: gx.routine({ action: "create", ... }) from the main_loop template — write the standing mission in `intent` and keep or tighten every prefilled ceiling. Then ask the owner to review capabilities, budgets, and activation in Galactic; connected-agent credentials cannot self-approve or activate it.',
-      'Watch it work: gx.routine({ action: "get" }) / the routine monitor for runs + auto-pause reasons; the agent itself reads galactic.runs.recent() each wake.',
+      "Watch it work: gx.routine({ action: \"get\" }) / the routine monitor for runs + auto-pause reasons; the agent itself reads galactic.runs.recent() each wake.",
     ],
     tip:
       "This scaffold runs as-is: each wake reasons about its goal and journals the outcome even before you wire observations/actions. Failed wakes throw after journaling so retries and the circuit breaker stay truthful; hard budgets are enforced before billable work.",
@@ -9907,9 +9858,7 @@ export function executeScaffold(args: Record<string, unknown>): unknown {
     );
     indexLines.push("");
     if (storage === "d1") {
-      indexLines.push(
-        "  // Example D1 queries (scoped: user_id is added for you):",
-      );
+      indexLines.push("  // Example D1 queries (scoped: user_id is added for you):");
       indexLines.push(
         '  // await galactic.db.insert("items", { id: crypto.randomUUID(), name });',
       );
@@ -10475,9 +10424,7 @@ export async function executeSetVersion(
     if (stagedMigrations.errors.length > 0) {
       throw new ToolError(
         VALIDATION_ERROR,
-        `Cannot promote version ${version}: migration validation failed: ${
-          stagedMigrations.errors.join("; ")
-        }`,
+        `Cannot promote version ${version}: migration validation failed: ${stagedMigrations.errors.join("; ")}`,
         {
           type: "STAGED_MIGRATION_VALIDATION_FAILED",
           errors: stagedMigrations.errors,
@@ -10580,12 +10527,7 @@ export async function executeSetVersion(
     if (!esmBundle) {
       // Fallback: rebuild ESM from this version's R2 source (mirrors the proven
       // rebuild pattern in api/handlers/apps.ts).
-      const candidateEntries = [
-        "index.tsx",
-        "index.ts",
-        "index.jsx",
-        "index.js",
-      ];
+      const candidateEntries = ["index.tsx", "index.ts", "index.jsx", "index.js"];
       let sourceCode: string | null = null;
       let entryFileName = "";
       for (const candidate of candidateEntries) {
@@ -11035,9 +10977,7 @@ async function executePermit(
   const functionName = typeof args.function_name === "string"
     ? args.function_name.trim()
     : "";
-  const decision = typeof args.decision === "string"
-    ? args.decision.trim()
-    : "";
+  const decision = typeof args.decision === "string" ? args.decision.trim() : "";
   if (!appRef || !functionName) {
     throw new ToolError(
       INVALID_PARAMS,
@@ -11217,10 +11157,7 @@ async function executeGrants(
 
       case "approve": {
         if (!grantId) {
-          throw new ToolError(
-            INVALID_PARAMS,
-            "grant_id is required for approve",
-          );
+          throw new ToolError(INVALID_PARAMS, "grant_id is required for approve");
         }
         // Approval is an account-session boundary. A connected agent can create
         // a pending proposal, but cannot approve its own authority expansion.
@@ -11242,10 +11179,7 @@ async function executeGrants(
 
       case "revoke": {
         if (!grantId) {
-          throw new ToolError(
-            INVALID_PARAMS,
-            "grant_id is required for revoke",
-          );
+          throw new ToolError(INVALID_PARAMS, "grant_id is required for revoke");
         }
         const grant = await setGrantStatus(userId, grantId, "revoked");
         if (!grant) {
@@ -13022,6 +12956,7 @@ async function executeLogs(
   };
 }
 
+
 // ── ul.connect ───────────────────────────────────
 
 async function executeConnect(
@@ -13610,14 +13545,10 @@ async function executeDiscoverInspect(
   const envSchema = resolveAppEnvSchema(app);
 
   // ── 2. Storage architecture detection ──
-  let storageBackend: "d1" | "kv" | "supabase" | "none" = "none";
+  let storageBackend: "kv" | "supabase" | "none" = "none";
   let storageDetails: InspectStorageDetails = {};
 
-  const d1Storage = resolveAppD1StorageDisclosure(app);
-  if (d1Storage) {
-    storageBackend = "d1";
-    storageDetails = d1Storage;
-  } else if (app.supabase_enabled && app.supabase_config_id) {
+  if (app.supabase_enabled && app.supabase_config_id) {
     storageBackend = "supabase";
     storageDetails = {
       type: "supabase",
@@ -13809,9 +13740,7 @@ async function executeDiscoverInspect(
   let skillsMd = app.skills_md || null;
   // Free Mode: prepend the notice so the served skills doc tells the agent the
   // priced/AI functions it lists are unavailable + how to top up.
-  if (
-    skillsMd && isFreeModeEnabled() && econ.freeMode && app.owner_id !== userId
-  ) {
+  if (skillsMd && isFreeModeEnabled() && econ.freeMode && app.owner_id !== userId) {
     skillsMd = `${freeModeNotice(walletUrl())}\n\n${skillsMd}`;
   }
 
