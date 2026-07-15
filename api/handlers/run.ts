@@ -53,12 +53,19 @@ import {
 } from "../services/request-caller-context.ts";
 import { routineTraceContextFromCaller } from "../services/routine-trace.ts";
 import {
+  calculateExpectedRuntimeHoldAmount,
   createRuntimeOperationMeteringContext,
   preflightRuntimeCloudHold,
   settleAndLogAppExecution,
   settleAndLogGpuExecution,
   settleRuntimeCloudPreflight,
 } from "../services/execution-settlement.ts";
+import {
+  accountCapacityErrorDetails,
+  releaseAccountCapacity,
+  reserveAccountCapacity,
+  settleAccountCapacity,
+} from "../services/account-capacity.ts";
 import { createExecutionReceiptId } from "../services/call-logger.ts";
 import {
   createMemoryService,
@@ -117,6 +124,8 @@ export async function handleRun(
   request: Request,
   appId: string,
 ): Promise<Response> {
+  let capacityReservation: { id: string; userId: string } | null = null;
+  let capacityOperationLight = 0;
   try {
     const body: RunRequest = await request.json();
     const { function: functionName, args = [] } = body;
@@ -490,9 +499,13 @@ export async function handleRun(
         functionName,
       })
       : null;
+    const subscriptionCapacityMode =
+      getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
+      app.visibility === "private" && app.owner_id === userId;
     const runtimeAI = usesAi
       ? await createRuntimeAIContext(user, {
         freeMode: caller.freeMode,
+        byokOnly: subscriptionCapacityMode,
         inferenceSelection,
         attribution: { appId: app.id, functionName },
         routineContext,
@@ -531,6 +544,7 @@ export async function handleRun(
       routineContext,
       freeMode: caller.freeMode,
       byokPresent: caller.byokPresent,
+      subscriptionCapacity: subscriptionCapacityMode,
     });
     if (cloudPreflight.insufficientBalance) {
       return json(
@@ -550,6 +564,41 @@ export async function handleRun(
         402,
       );
     }
+    if (subscriptionCapacityMode) {
+      const admission = await reserveAccountCapacity({
+        userId,
+        idempotencyKey: `run:${receiptId}`,
+        reserveLight: calculateExpectedRuntimeHoldAmount(
+          timeoutMs,
+          cloudPreflight.billingConfig,
+        ),
+        expiresAt: new Date(Date.now() + timeoutMs + 120_000).toISOString(),
+        metadata: {
+          surface: "run",
+          app_id: app.id,
+          function_name: functionName,
+          receipt_id: receiptId,
+        },
+      });
+      if (!admission.allowed || !admission.reservationId) {
+        return json(
+          {
+            success: false,
+            result: null,
+            logs: [],
+            duration_ms: 0,
+            receipt_id: receiptId,
+            error: {
+              type: "CAPACITY_WAITING",
+              message: `Account capacity is ${admission.state}. Work can resume at ${admission.nextEligibleAt}.`,
+              details: accountCapacityErrorDetails(admission),
+            },
+          } as RunResponse,
+          429,
+        );
+      }
+      capacityReservation = { id: admission.reservationId, userId };
+    }
     const cloudOperationMetering = createRuntimeOperationMeteringContext({
       preflight: cloudPreflight,
       app,
@@ -559,6 +608,15 @@ export async function handleRun(
       method: "run",
       metadata: { surface: "run" },
       routineContext,
+      ...(subscriptionCapacityMode
+        ? {
+          capacityMeter: {
+            addLight: (amountLight: number) => {
+              capacityOperationLight += Math.max(0, amountLight);
+            },
+          },
+        }
+        : {}),
     });
     const workerDataUrl = getEnv("WORKER_DATA_URL");
     const workerSecret = getEnv("WORKER_SECRET");
@@ -640,6 +698,18 @@ export async function handleRun(
       undefined,
       result.reuseKeyHash,
     );
+    let subscriptionCapacityLight: number | undefined;
+    if (capacityReservation) {
+      subscriptionCapacityLight = calculateExpectedRuntimeHoldAmount(
+        result.durationMs,
+        cloudPreflight.billingConfig,
+      ) + capacityOperationLight;
+      await settleAccountCapacity({
+        reservationId: capacityReservation.id,
+        userId: capacityReservation.userId,
+        actualLight: subscriptionCapacityLight,
+      });
+    }
     const { settlement } = await settleAndLogAppExecution({
       receiptId,
       userId,
@@ -659,6 +729,9 @@ export async function handleRun(
       callerAuthState: caller.authState,
       runtimePricingPreflight: cloudPreflight.pricing,
       runtimeCloudSettlement: cloudSettlement,
+      ...(subscriptionCapacityLight !== undefined
+        ? { subscriptionCapacityLight }
+        : {}),
       routineContext,
     });
 
@@ -692,6 +765,12 @@ export async function handleRun(
 
     return json(response);
   } catch (err) {
+    if (capacityReservation) {
+      await releaseAccountCapacity({
+        reservationId: capacityReservation.id,
+        userId: capacityReservation.userId,
+      }).catch(() => false);
+    }
     console.error("Run error:", err);
     return error(err instanceof Error ? err.message : "Execution failed", 500);
   }

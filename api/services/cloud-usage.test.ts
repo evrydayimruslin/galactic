@@ -899,3 +899,56 @@ Deno.test("per-load floor: absent config field defaults to 0 (behavior-preservin
   // 0.3 Light + 0.005-style thousandths add cleanly (no float drift at this scale).
   assertEquals(0.3 + 0.2, 0.5);
 });
+
+Deno.test("subscription capacity meter collects KV/R2 work without touching the wallet", async () => {
+  let meteredLight = 0;
+  const result = await debitCloudOperation({
+    payerUserId: "u1",
+    source: "tools/call",
+    resource: "kv_operation",
+    operation: "put",
+    units: 3,
+    capacityMeter: { addLight: (value) => meteredLight += value },
+    billingConfig: {
+      version: 1,
+      cloudUnitLightPer1k: 2,
+      r2OpsPerCloudUnit: 1,
+      kvOpsPerCloudUnit: 2,
+    },
+  });
+  assertEquals(result?.amountDebited, 0.004);
+  assertEquals(meteredLight, 0.004);
+});
+
+Deno.test("subscription capacity meter includes D1 reads and writes for routines", async () => {
+  let meteredLight = 0;
+  const result = await debitD1Usage({
+    payerUserId: "u1",
+    source: "tools/call",
+    operation: "batch",
+    rowsRead: 101,
+    rowsWritten: 2,
+    routineContext: {
+      routineId: "routine-1",
+      routineRunId: "run-1",
+      traceId: null,
+      budgetPolicy: {
+        max_light_per_run: 10,
+        max_light_per_day: 100,
+        max_light_per_month: 1000,
+        max_calls_per_run: 10,
+      },
+    },
+    capacityMeter: { addLight: (value) => meteredLight += value },
+    billingConfig: {
+      version: 1,
+      cloudUnitLightPer1k: 1,
+      d1ReadRowsPerCloudUnit: 100,
+      d1WriteRowsPerCloudUnit: 1,
+    },
+  });
+  assertEquals(result?.readCloudUnits, 2);
+  assertEquals(result?.writeCloudUnits, 2);
+  assertEquals(result?.amountLight, 0.004);
+  assertEquals(meteredLight, 0.004);
+});

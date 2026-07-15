@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Launch-focused Galactic web surface for Agent install, discovery, public Agent pages, and the wallet.",
+  "description": "Launch-focused Galactic home for conjuring and operating persistent private Agents.",
   "engines": {
     "node": ">=20.0.0"
   },

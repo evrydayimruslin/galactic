@@ -29,6 +29,7 @@ export interface Env {
   STRIPE_SECRET_KEY: string;
   STRIPE_PUBLISHABLE_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
+  STRIPE_PRO_PRICE_ID: string;
   OPENROUTER_API_KEY: string;
   DEEPSEEK_API_KEY: string;
   BYOK_ENCRYPTION_KEY: string;
@@ -61,6 +62,8 @@ export interface Env {
   TIER_CHANGE_SECRET: string;
   GPU_SECRET: string;
   BASE_URL: string;
+  LAUNCH_WEB_BASE_URL: string;
+  SUBSCRIPTION_CAPACITY_ENABLED: string;
   ENVIRONMENT: string;
   CORS_ALLOWED_ORIGINS: string;
   PLATFORM_MCP_DISABLED_ALIASES: string;

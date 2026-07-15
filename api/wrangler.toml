@@ -131,6 +131,7 @@ GPU_SUPPORT_ENABLED = "false"
 # Requires migration 20260625000000_free_mode_hold_gate (the p_free_mode hold
 # arg) to be applied first — it ships ahead of the API via the supabase-db CI.
 FREE_MODE = "1"
+SUBSCRIPTION_CAPACITY_ENABLED = "1"
 # Autonomous routines (docs/CAPABILITY_REGISTRY_MIGRATION.md, routines-feature-flag.ts):
 # the minute-cron routine executor dispatches due scheduled/interval routines.
 # Enabled for prod now that the routines schema (20260517120000/130000/140000) is
@@ -206,6 +207,7 @@ dead_letter_queue = "ultralight-events-staging-dlq"
 [env.staging.vars]
 BASE_URL = "https://ultralight-api-staging.rgn4jz429m.workers.dev"
 LAUNCH_WEB_BASE_URL = "https://staging.ultralight-launch-web.pages.dev"
+SUBSCRIPTION_CAPACITY_ENABLED = "1"
 INTERFACE_SANDBOX_BASE_URL = "https://ultralight-interfaces-staging.rgn4jz429m.workers.dev"
 ENVIRONMENT = "staging"
 # Executed-bundle integrity enforcement (see [vars] above). enforce now also

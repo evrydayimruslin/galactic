@@ -202,6 +202,8 @@ export interface PreflightRuntimeCloudHoldParams {
   // includes grant-resolved dependencies/slots that are INVISIBLE to the
   // manifest. Absent/false → the per-call floor applies (never under-charges).
   reuseEligibleForBilling?: boolean;
+  /** P2.1 private-Agent path: reserve shared plan capacity instead of a wallet hold. */
+  subscriptionCapacity?: boolean;
 }
 
 export interface RuntimeCloudPreflightResult {
@@ -243,6 +245,7 @@ export interface RuntimeOperationMeteringContextParams {
   method: string;
   metadata?: Record<string, unknown>;
   routineContext?: RoutineTraceContext | null;
+  capacityMeter?: { addLight: (amountLight: number) => void };
 }
 
 export interface DebitWidgetPullUsageParams {
@@ -393,6 +396,8 @@ export interface SettleAndLogAppExecutionParams {
   flightDbTally?: DbDiffTally | null;
   widgetAction?: WidgetActionCallMetadata;
   agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
+  /** Actual private weighted work already settled against account capacity. */
+  subscriptionCapacityLight?: number;
 }
 
 interface ExecutionSettlementDeps {
@@ -497,6 +502,78 @@ export async function preflightRuntimeCloudHold(
     freeCallCounterKey: accessDecision.freeQuotaCounterKey,
     policySource: accessDecision.source,
   };
+
+  if (params.subscriptionCapacity) {
+    if (
+      !params.byokPresent &&
+      functionUsesInference(params.app.manifest, params.functionName)
+    ) {
+      return {
+        hold: null,
+        pricing: basePricing,
+        billingConfig,
+        insufficientBalance: true,
+        insufficientBalanceCode: "free_mode_ai_requires_byok",
+        insufficientBalanceMessage:
+          "This Agent uses AI and needs a configured BYOK provider API key.",
+        metadata: {
+          ...accessDecision.metadata,
+          byok_required: true,
+          billing_config_version: billingConfig.version,
+        },
+      };
+    }
+    let routineBudgetReservation: RoutineBudgetReservation | undefined;
+    if (params.routineContext) {
+      const reserveLight = calculateExpectedRuntimeHoldAmount(
+        params.timeoutMs,
+        billingConfig,
+      );
+      const admission = await reserveRoutineRunBudget({
+        userId: params.userId,
+        routine: params.routineContext,
+        reservationKey: `app:${params.receiptId || crypto.randomUUID()}`,
+        kind: "app_call",
+        reserveLight,
+        expiresAt: new Date(Date.now() + params.timeoutMs + 120_000).toISOString(),
+      }, { fetchFn: deps?.fetchFn });
+      if (!admission.allowed || !admission.reservation) {
+        return {
+          hold: null,
+          pricing: basePricing,
+          billingConfig,
+          insufficientBalance: true,
+          insufficientBalanceCode: admission.code === "ok"
+            ? "routine_budget_policy_missing"
+            : admission.code,
+          insufficientBalanceMessage: admission.message,
+          metadata: {
+            ...accessDecision.metadata,
+            routine_budget_denied: true,
+            routine_budget_code: admission.code,
+          },
+        };
+      }
+      routineBudgetReservation = admission.reservation;
+    }
+    return {
+      hold: null,
+      pricing: {
+        ...basePricing,
+        appPriceLight: 0,
+        appChargeLight: 0,
+        freeCall: true,
+        ...(routineBudgetReservation ? { routineBudgetReservation } : {}),
+      },
+      billingConfig,
+      insufficientBalance: false,
+      metadata: {
+        ...accessDecision.metadata,
+        subscription_capacity: true,
+        billing_config_version: billingConfig.version,
+      },
+    };
+  }
 
   if (
     params.userId !== params.app.owner_id &&
@@ -807,13 +884,13 @@ export function createRuntimeOperationMeteringContext(
   params: RuntimeOperationMeteringContextParams,
 ): CloudOperationMeteringContext | null {
   const hold = params.preflight.hold;
-  if (!hold) {
+  if (!hold && !params.capacityMeter) {
     return null;
   }
 
   return {
-    payerUserId: hold.payerUserId,
-    sponsorUserId: hold.sponsorUserId,
+    payerUserId: hold?.payerUserId ?? params.userId,
+    sponsorUserId: hold?.sponsorUserId ?? null,
     callerUserId: params.userId,
     ownerUserId: params.app.owner_id,
     appId: params.app.id,
@@ -821,13 +898,18 @@ export function createRuntimeOperationMeteringContext(
     receiptId: params.receiptId,
     source: params.method,
     billingConfigVersion: params.preflight.billingConfig.version,
+    ...(params.capacityMeter ? { capacityMeter: params.capacityMeter } : {}),
     routineContext: params.routineContext ?? null,
     metadata: {
       ...routineTraceMetadata(params.routineContext),
       app_slug: params.app.slug,
-      runtime_cloud_hold_id: hold.holdId,
-      owner_sponsored_infra: hold.ownerSponsoredInfra,
-      caller_infra_fallback: hold.callerInfraFallback,
+      ...(hold
+        ? {
+          runtime_cloud_hold_id: hold.holdId,
+          owner_sponsored_infra: hold.ownerSponsoredInfra,
+          caller_infra_fallback: hold.callerInfraFallback,
+        }
+        : { subscription_capacity: true }),
       ...(params.metadata ?? {}),
     },
   };
@@ -1501,7 +1583,32 @@ export async function settleAndLogAppExecution(
   receiptId?: string;
   routineStep?: { step_id: string; step_index: number; total_light: number };
 }> {
-  const settlement = await settleAppCall({
+  const settlement = params.subscriptionCapacityLight !== undefined
+    ? buildBaseSettlement({
+      app: params.app,
+      userId: params.userId,
+      functionName: params.functionName,
+      inputArgs: params.inputArgs,
+      successful: params.success,
+      receiptId: params.receiptId,
+      method: params.method,
+      callerAuthState: params.callerAuthState,
+      routineContext: params.routineContext,
+    }, {
+      appPriceLight: 0,
+      appChargeLight: 0,
+      developerRevenueLight: 0,
+      platformFeeLight: 0,
+      infraChargeLight: Math.max(0, params.subscriptionCapacityLight),
+      infraPayerUserId: params.userId,
+      ownerSponsoredInfra: false,
+      callerInfraFallback: false,
+      freeCall: true,
+      freeCallCount: null,
+      freeCallLimit: 0,
+      billingConfigVersion: params.runtimeCloudSettlement?.billingConfigVersion ?? null,
+    })
+    : await settleAppCall({
     app: params.app,
     userId: params.userId,
     functionName: params.functionName,
@@ -1514,7 +1621,7 @@ export async function settleAndLogAppExecution(
     runtimePricingPreflight: params.runtimePricingPreflight,
     runtimeCloudSettlement: params.runtimeCloudSettlement,
     routineContext: params.routineContext,
-  }, deps);
+    }, deps);
 
   // The hard reservation covers the full caller-funded operation, so the run
   // ledger must do the same before that reservation is released. Omitting the
@@ -2148,7 +2255,7 @@ async function resolveDailyLoadFloor(
   }
 }
 
-function calculateExpectedRuntimeHoldAmount(
+export function calculateExpectedRuntimeHoldAmount(
   timeoutMs: number,
   billingConfig: Pick<
     BillingConfig,

@@ -16,6 +16,12 @@ import {
 } from "./routines.ts";
 import { createNotification } from "./notifications.ts";
 import { validateRoutineLaunchActivation } from "./routine-platform.ts";
+import {
+  attachDeferredWakeToRun,
+  recordDeferredRoutineWake,
+  releaseAccountCapacity,
+  reserveAccountCapacity,
+} from "./account-capacity.ts";
 
 const ROUTINE_SELECT =
   "id,user_id,composer_app_id,composer_app_slug,template_id,template_version,name,description,intent,handler_function,status,schedule,config,budget_policy,approval_policy,max_concurrency,next_run_at,last_run_at,last_success_at,last_error_at,failure_count,created_by_trace_id,metadata,created_at,updated_at,deleted_at,lease_id,lease_expires_at";
@@ -86,6 +92,13 @@ function withTimeout<T>(
       },
     );
   });
+}
+
+class AccountCapacityWaitingError extends Error {
+  constructor(readonly retryAt: string) {
+    super(`Account capacity is waiting until ${retryAt}`);
+    this.name = "AccountCapacityWaitingError";
+  }
 }
 
 export interface RoutineExecutorSummary {
@@ -758,12 +771,14 @@ async function releaseRoutineLease(
 async function insertScheduledRun(
   routine: ExecutorRoutineRow,
   now: Date,
+  runId?: string,
 ): Promise<ExecutorRunRow> {
   const policy = retryPolicyFrom(routine);
   const [run] = await insertRows<ExecutorRunRow>(
     "routine_runs",
     { select: RUN_SELECT },
     {
+      ...(runId ? { id: runId } : {}),
       routine_id: routine.id,
       user_id: routine.user_id,
       // Created "queued", NOT "running": the cron only enqueues; the queue
@@ -831,8 +846,66 @@ async function prepareDueScheduledRuns(
     if (!claimedRoutine) continue;
 
     try {
-      const run = await insertScheduledRun(claimedRoutine, now);
       const nextRunAt = computeNextRoutineRunAt(claimedRoutine.schedule, now);
+      const capacityEnabled = getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
+        claimedRoutine.metadata?.launch_primary === true;
+      const runId = capacityEnabled ? crypto.randomUUID() : undefined;
+      let capacityReservationId: string | null = null;
+      if (capacityEnabled && runId) {
+        const admission = await reserveAccountCapacity({
+          userId: claimedRoutine.user_id,
+          idempotencyKey: `routine-run:${runId}`,
+          reserveLight: 1,
+          expiresAt: new Date(now.getTime() + leaseMs + 120_000).toISOString(),
+          now: iso(now),
+          metadata: {
+            routine_id: claimedRoutine.id,
+            routine_run_id: runId,
+            trigger: "scheduled",
+          },
+        });
+        if (!admission.allowed || !admission.reservationId) {
+          const nextEligibleAt = admission.nextEligibleAt ||
+            admission.weekly.resetsAt;
+          await recordDeferredRoutineWake({
+            routineId: claimedRoutine.id,
+            userId: claimedRoutine.user_id,
+            scheduledAt: iso(now),
+            nextEligibleAt,
+          });
+          const capacityResumeAt = new Date(nextEligibleAt);
+          const resumeAt = nextRunAt && nextRunAt <= capacityResumeAt
+            ? nextRunAt
+            : capacityResumeAt;
+          await releaseRoutineLease(claimedRoutine.id, now, {
+            // Preserve frequent cadences so each missed tick is counted, but
+            // never strand a sparse routine past the first capacity reset.
+            next_run_at: iso(resumeAt),
+          });
+          continue;
+        }
+        capacityReservationId = admission.reservationId;
+      }
+
+      let run: ExecutorRunRow;
+      try {
+        run = await insertScheduledRun(claimedRoutine, now, runId);
+      } catch (insertError) {
+        if (capacityReservationId) {
+          await releaseAccountCapacity({
+            reservationId: capacityReservationId,
+            userId: claimedRoutine.user_id,
+          }).catch(() => {});
+        }
+        throw insertError;
+      }
+      if (capacityEnabled) {
+        await attachDeferredWakeToRun(
+          claimedRoutine.id,
+          claimedRoutine.user_id,
+          run.id,
+        );
+      }
       await releaseRoutineLease(claimedRoutine.id, now, {
         next_run_at: nextRunAt ? iso(nextRunAt) : null,
         last_run_at: iso(now),
@@ -1052,9 +1125,19 @@ async function invokeRoutineHandler(
 
   const rpc = await response.json() as {
     result?: unknown;
-    error?: { message?: string; code?: number };
+    error?: {
+      message?: string;
+      code?: number;
+      data?: { type?: string; retry_at?: string };
+    };
   };
   if (rpc.error) {
+    if (
+      rpc.error.code === -32010 && rpc.error.data?.type === "capacity_waiting" &&
+      typeof rpc.error.data.retry_at === "string"
+    ) {
+      throw new AccountCapacityWaitingError(rpc.error.data.retry_at);
+    }
     throw new Error(
       rpc.error.message || `Routine MCP error ${rpc.error.code ?? ""}`.trim(),
     );
@@ -1414,6 +1497,25 @@ async function executeClaimedRun(
     result = await invokeRoutineHandler(routine, run, options);
   } catch (err) {
     const completedAt = clock();
+    if (err instanceof AccountCapacityWaitingError) {
+      const deferred = await recordDeferredRoutineWake({
+        routineId: routine.id,
+        userId: routine.user_id,
+        scheduledAt: iso(completedAt),
+        nextEligibleAt: err.retryAt,
+        manualRequested: run.trigger === "manual",
+      });
+      await finishRun(run, "skipped", completedAt, {
+        summary:
+          `Capacity wait: ${deferred.deferredWakeCount} wake(s) coalesced; resumes at ${err.retryAt}.`,
+        error: {
+          code: "capacity_waiting",
+          retry_at: err.retryAt,
+          deferred_wake_count: deferred.deferredWakeCount,
+        },
+      });
+      return { status: "skipped", budgetSkipped: true };
+    }
     const policy = retryPolicyFrom(routine, run);
     const willRetry = run.attempt_count < policy.maxAttempts;
     // Failed runs spend too — fold terminal attempts into the rollup. Retried

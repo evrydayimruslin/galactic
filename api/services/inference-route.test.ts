@@ -521,3 +521,42 @@ Deno.test("inference route: pinSelectedModel without a selection model does not 
   assertEquals(route.model, "openai/gpt-4o-mini");
   assertEquals(route.modelPinned, false);
 });
+
+Deno.test("inference route: BYOK-only Agent refuses the platform fallback", async () => {
+  const error = await assertRejects(
+    () => resolveInferenceRoute({
+      userId: "user-1",
+      userEmail: "auth@example.com",
+      byokOnly: true,
+      userService: {
+        getUser: async () => makeUser(),
+        getDecryptedApiKey: async () => null,
+      },
+      getOrCreateOpenRouterKey: async () => {
+        throw new Error("platform key must never be provisioned");
+      },
+    }),
+    InferenceRouteError,
+    "configured BYOK provider",
+  );
+  assertEquals(error.code, "byok_provider_not_configured");
+  assertEquals(error.status, 409);
+});
+
+Deno.test("inference route: BYOK-only Agent rejects an explicit Light override", async () => {
+  const error = await assertRejects(
+    () => resolveInferenceRoute({
+      userId: "user-1",
+      userEmail: "auth@example.com",
+      byokOnly: true,
+      selection: { billingMode: "light", model: "openai/gpt-4o-mini" },
+      userService: {
+        getUser: async () => makeUser(),
+        getDecryptedApiKey: async () => null,
+      },
+    }),
+    InferenceRouteError,
+    "requires a configured BYOK provider",
+  );
+  assertEquals(error.code, "byok_provider_not_configured");
+});

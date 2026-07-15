@@ -8,6 +8,7 @@ import {
   type LaunchAgentHomeRelease,
   type LaunchAgentHomeRequirement,
   type LaunchAgentHomeResponse,
+  type LaunchCapacityResponse,
   type LaunchAgentRoutineBlocker,
   type LaunchAgentRoutineOverview,
   type LaunchFunctionSummary,
@@ -84,6 +85,8 @@ export interface AgentHomeBuildInput {
   disclosure: LaunchNetworkDisclosure;
   budgetUsage: AgentHomeBudgetUsage | null;
   callsByRun: ReadonlyMap<string, number>;
+  capacity?: LaunchCapacityResponse | null;
+  byokConfigured?: boolean;
   release: AgentHomeReleaseInput;
 }
 
@@ -476,6 +479,31 @@ function setupRequirements(
     updatedAt: null,
     actions: [],
   });
+  const usesInference = input.effectivePermissions.includes("ai:call") ||
+    input.effectivePermissions.includes("ai:embed");
+  if (usesInference) {
+    requirements.push({
+      id: "inference:byok",
+      actionId: null,
+      kind: "capability",
+      label: "BYOK inference provider",
+      description:
+        "This Agent uses AI and needs one of your configured provider API keys. Galactic never supplies a model key.",
+      required: true,
+      configured: input.byokConfigured === true,
+      blocking: input.byokConfigured !== true,
+      secret: true,
+      settingKey: null,
+      settingScope: null,
+      input: null,
+      placeholder: null,
+      help: null,
+      group: "Inference",
+      destination: "/account",
+      updatedAt: null,
+      actions: [],
+    });
+  }
   for (const setting of input.settings) {
     requirements.push({
       id: `setting:${setting.key}`,
@@ -717,7 +745,7 @@ export function buildAgentHomeResponse(
   }
   const budget: LaunchAgentHomeBudget | null = input.routine && input.budgetUsage
     ? {
-      unit: "credits",
+      unit: "work_units",
       ceilings: {
         perRun: input.routine.budgets.maxLightPerRun,
         daily: input.routine.budgets.maxLightPerDay,
@@ -780,6 +808,7 @@ export function buildAgentHomeResponse(
       requirements,
     },
     authority: { items: authorityItems(input) },
+    capacity: input.capacity ?? null,
     budget,
     release,
     recentRuns: (input.routine?.recentRuns || []).slice(0, 5).map((run) => ({
@@ -790,7 +819,7 @@ export function buildAgentHomeResponse(
       startedAt: run.startedAt,
       completedAt: run.completedAt,
       durationMs: run.durationMs,
-      credits: finiteNonNegative(run.totalLight),
+      workUnits: finiteNonNegative(run.totalLight),
       calls: input.callsByRun.get(run.id) || 0,
       summary: run.summary,
       errorCode: run.errorCode,

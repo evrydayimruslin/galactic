@@ -307,6 +307,93 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
   }
 });
 
+Deno.test("routine executor: exhausted capacity coalesces a scheduled wake without creating a run", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  globalThis.__env = {
+    ...(globalThis.__env || {}),
+    SUBSCRIPTION_CAPACITY_ENABLED: "1",
+  };
+  const calls: Array<{ table: string; method: string; body: Record<string, unknown> }> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    calls.push({ table, method, body });
+
+    if (table === "reserve_account_capacity") {
+      return jsonResponse([{
+        allowed: false,
+        code: "capacity_waiting",
+        reservation_id: null,
+        plan_code: "free",
+        capacity_state: "waiting",
+        burst_state: "available",
+        weekly_state: "waiting",
+        burst_resets_at: "2026-05-17T17:00:00.000Z",
+        weekly_resets_at: "2026-05-24T12:00:00.000Z",
+        next_eligible_at: "2026-05-24T12:00:00.000Z",
+        burst_remaining_light: 1,
+        weekly_remaining_light: 0,
+      }]);
+    }
+    if (table === "record_deferred_routine_wake") {
+      return jsonResponse({
+        routine_id: "routine-1",
+        user_id: "user-1",
+        first_deferred_at: NOW.toISOString(),
+        latest_deferred_at: NOW.toISOString(),
+        deferred_wake_count: 1,
+        next_eligible_at: "2026-05-24T12:00:00.000Z",
+        manual_requested: false,
+      });
+    }
+    if (table === "user_routines" && method === "GET") {
+      return jsonResponse([routineRow({ metadata: { launch_primary: true } })]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      return jsonResponse([{
+        ...routineRow({ metadata: { launch_primary: true } }),
+        ...body,
+      }]);
+    }
+    if (table === "routine_runs" && method === "GET") return jsonResponse([]);
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    const summary = await runRoutineExecutorCycle({
+      now: NOW,
+      clock: () => NOW,
+      limit: 5,
+      baseUrl: "https://api.example.test",
+      invokeMcp: async () => {
+        throw new Error("capacity-waiting routines must not execute");
+      },
+    });
+
+    assertEquals(summary.executed, 0);
+    assertEquals(
+      calls.filter((call) => call.table === "routine_runs" && call.method === "POST").length,
+      0,
+    );
+    assertEquals(
+      calls.filter((call) => call.table === "record_deferred_routine_wake").length,
+      1,
+    );
+    const cadencePatch = calls.find((call) =>
+      call.table === "user_routines" && call.method === "PATCH" &&
+      call.body.next_run_at
+    );
+    assertEquals(cadencePatch?.body.next_run_at, "2026-05-17T12:05:00.000Z");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
 Deno.test("routine executor: a post-success bookkeeping failure does NOT re-run the handler", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;

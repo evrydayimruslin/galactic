@@ -84,6 +84,7 @@ import {
   recordPendingLightDeposit,
   type StripeWebhookEvent,
 } from "../services/stripe-deposits.ts";
+import { projectStripeSubscriptionEvent } from "../services/subscriptions.ts";
 import {
   createWalletExpressPaymentIntent,
   WalletFundingError,
@@ -517,6 +518,13 @@ export async function handleUser(request: Request): Promise<Response> {
 
       let handled = false;
       try {
+        if (await projectStripeSubscriptionEvent(event)) {
+          handled = true;
+          stripeLogger.info("Projected Stripe subscription entitlement", {
+            event_id: event.id,
+            event_type: event.type,
+          });
+        }
         const pendingDeposit = buildStripeDepositPending(event);
         if (pendingDeposit) {
           await recordPendingLightDeposit(pendingDeposit);

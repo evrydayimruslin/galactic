@@ -53,6 +53,7 @@ import {
   isGpuSupportEnabled,
 } from "../services/gpu/feature-flag.ts";
 import {
+  calculateExpectedRuntimeHoldAmount,
   createRuntimeOperationMeteringContext,
   debitWidgetPullUsage,
   preflightRuntimeCloudHold,
@@ -60,6 +61,12 @@ import {
   settleAndLogGpuExecution,
   settleRuntimeCloudPreflight,
 } from "../services/execution-settlement.ts";
+import {
+  accountCapacityErrorDetails,
+  releaseAccountCapacity,
+  reserveAccountCapacity,
+  settleAccountCapacity,
+} from "../services/account-capacity.ts";
 import {
   type AgenticSurfaceActionCallMetadata,
   createExecutionReceiptId,
@@ -2508,6 +2515,9 @@ async function executeAppFunction(
     executionTimeoutMs?: number;
   },
 ): Promise<Response> {
+  let accountCapacityReservationId: string | null = null;
+  let accountCapacityActualLight = 0;
+  let accountCapacityOperationLight = 0;
   try {
     // The reserved _async argument is platform routing, never function input —
     // strip it before ANY execution branch (GPU included) sees the args.
@@ -2732,10 +2742,14 @@ async function executeAppFunction(
         functionName,
       })
       : null;
+    const subscriptionCapacityMode =
+      getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
+      app.visibility === "private" && app.owner_id === userId;
     const runtimeAI = permissions.includes("ai:call") ||
         permissions.includes("ai:embed")
       ? await createRuntimeAIContext(user, {
         freeMode: callerContext.freeMode,
+        byokOnly: subscriptionCapacityMode,
         inferenceSelection,
         attribution: { appId: app.id, functionName },
         routineContext: meta?.routineContext ?? null,
@@ -2795,6 +2809,7 @@ async function executeAppFunction(
       routineContext: meta?.routineContext,
       freeMode: callerContext.freeMode,
       byokPresent: callerContext.byokPresent,
+      subscriptionCapacity: subscriptionCapacityMode,
       // Per-day load-floor dedup eligibility — uses the SAME predicate the
       // runtime uses to choose loader.get() vs load() (incl. GRANT-resolved
       // deps/slots, invisible to the manifest), so billing can never deem an app
@@ -2838,7 +2853,38 @@ async function executeAppFunction(
       );
     }
 
-    const widgetPullUsage = widgetPull
+    if (subscriptionCapacityMode) {
+      const reserveLight = calculateExpectedRuntimeHoldAmount(
+        timeoutMs,
+        cloudPreflight.billingConfig,
+      );
+      const admission = await reserveAccountCapacity({
+        userId,
+        idempotencyKey: meta?.routineContext
+          ? `routine-run:${meta.routineContext.routineRunId}`
+          : `execution:${executionId}`,
+        reserveLight,
+        expiresAt: new Date(Date.now() + timeoutMs + 120_000).toISOString(),
+        metadata: {
+          app_id: app.id,
+          function_name: functionName,
+          execution_id: executionId,
+          routine_id: meta?.routineContext?.routineId ?? null,
+          routine_run_id: meta?.routineContext?.routineRunId ?? null,
+        },
+      });
+      if (!admission.allowed || !admission.reservationId) {
+        return jsonRpcErrorResponse(
+          id,
+          -32010,
+          `Account capacity is ${admission.state}. Work can resume at ${admission.nextEligibleAt}.`,
+          accountCapacityErrorDetails(admission),
+        );
+      }
+      accountCapacityReservationId = admission.reservationId;
+    }
+
+    const widgetPullUsage = widgetPull && !subscriptionCapacityMode
       ? await (async () => {
         try {
           return await debitWidgetPullUsage({
@@ -2900,6 +2946,15 @@ async function executeAppFunction(
         widget_pull_amount_light: widgetPullUsage?.amountLight,
       },
       routineContext: meta?.routineContext,
+      ...(subscriptionCapacityMode
+        ? {
+          capacityMeter: {
+            addLight: (amountLight: number) => {
+              accountCapacityOperationLight += Math.max(0, amountLight);
+            },
+          },
+        }
+        : {}),
     });
     // Use Worker-backed data service if configured (native R2 bindings, ~10x faster)
     // Wrap with metered service when userId is present to track user data storage.
@@ -3006,6 +3061,17 @@ async function executeAppFunction(
         undefined,
         result.reuseKeyHash,
       );
+      if (accountCapacityReservationId) {
+        accountCapacityActualLight = calculateExpectedRuntimeHoldAmount(
+          result.durationMs,
+          cloudPreflight.billingConfig,
+        ) + accountCapacityOperationLight;
+        await settleAccountCapacity({
+          reservationId: accountCapacityReservationId,
+          userId,
+          actualLight: accountCapacityActualLight,
+        });
+      }
       const { settlement } = await settleAndLogAppExecution({
         receiptId,
         userId,
@@ -3029,6 +3095,9 @@ async function executeAppFunction(
         callChainDepth: callerContext.callerApp?.hop ?? null,
         runtimePricingPreflight: cloudPreflight.pricing,
         runtimeCloudSettlement: cloudSettlement,
+        ...(subscriptionCapacityMode
+          ? { subscriptionCapacityLight: accountCapacityActualLight }
+          : {}),
         routineContext: meta?.routineContext,
         flightAiExchanges: flightRecorderEnabled ? result.flightAi : undefined,
         flightDbTally: flightRecorderEnabled ? result.flightDb : undefined,
@@ -3129,6 +3198,12 @@ async function executeAppFunction(
       return jsonRpcResponse(id, formatToolError(result.error, receiptId));
     }
   } catch (err) {
+    if (accountCapacityReservationId) {
+      await releaseAccountCapacity({
+        reservationId: accountCapacityReservationId,
+        userId,
+      }).catch(() => {});
+    }
     console.error(`App function ${functionName} error:`, err);
     return jsonRpcResponse(id, formatToolError(err));
   }

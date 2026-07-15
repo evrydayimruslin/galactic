@@ -832,19 +832,19 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
     );
     assertEquals(
       body.apiRoutes.includes('GET /api/launch/wallet/topup/quote'),
-      true,
+      false,
     );
     assertEquals(
       body.apiRoutes.includes('POST /api/launch/wallet/topup/intent'),
-      true,
+      false,
     );
     assertEquals(
       body.apiRoutes.includes('GET /api/launch/wallet/transactions'),
-      true,
+      false,
     );
     assertEquals(
       body.apiRoutes.includes('GET /api/launch/wallet/earnings'),
-      true,
+      false,
     );
     assertEquals(
       body.apiRoutes.some((route) => route.includes('/widgets')),
@@ -913,27 +913,18 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
       body.endpoints.callerPermissions,
       '/api/launch/agents/{id}/caller-permissions',
     );
-    assertEquals(
-      body.endpoints.walletTopUpQuote,
-      '/api/launch/wallet/topup/quote?amount_credits=2500&method=card',
-    );
-    assertEquals(
-      body.endpoints.walletTopUpIntent,
-      '/api/launch/wallet/topup/intent',
-    );
-    assertEquals(
-      body.endpoints.walletTransactions,
-      '/api/launch/wallet/transactions?limit=25&cursor={cursor}',
-    );
-    assertEquals(
-      body.endpoints.walletEarnings,
-      '/api/launch/wallet/earnings?agent={agentId}&limit=25&cursor={cursor}',
-    );
+    assertEquals(body.endpoints.walletTopUpQuote, undefined);
+    assertEquals(body.endpoints.walletTopUpIntent, undefined);
+    assertEquals(body.endpoints.walletTransactions, undefined);
+    assertEquals(body.endpoints.walletEarnings, undefined);
+    assertEquals(body.endpoints.subscription, '/api/launch/subscription');
+    assertEquals(body.endpoints.capacity, '/api/launch/capacity');
     assertEquals(body.policy.access, 'private_owner_only');
     assertEquals(body.policy.activationAuthority, 'account_session');
     assertEquals(body.policy.budgetEnforcement, 'hard_pre_execution');
     assertEquals(body.capabilities.deferred.includes('marketplace'), true);
-    assertEquals(body.capabilities.included.includes('credits_balance'), true);
+    assertEquals(body.capabilities.included.includes('credits_balance'), false);
+    assertEquals(body.capabilities.included.includes('subscription_capacity'), true);
     assertEquals(body.capabilities.included.includes('full_time_routines'), true);
     assertEquals(body.capabilities.included.includes('byok'), true);
     assertEquals(body.capabilities.included.includes('credits_wallet'), false);
@@ -965,12 +956,16 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
     assertEquals(spec.servers[0].url, 'https://ultralight.test');
     assertEquals(Boolean(spec.paths['/api/launch/store']), true);
     assertEquals(Boolean(spec.paths['/api/launch/discover']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/transactions']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/receipts']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/earnings']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/payouts']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/topup/quote']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/topup/intent']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/wallet/transactions']), false);
+    assertEquals(Boolean(spec.paths['/api/launch/wallet/receipts']), false);
+    assertEquals(Boolean(spec.paths['/api/launch/wallet/earnings']), false);
+    assertEquals(Boolean(spec.paths['/api/launch/wallet/payouts']), false);
+    assertEquals(Boolean(spec.paths['/api/launch/wallet/topup/quote']), false);
+    assertEquals(Boolean(spec.paths['/api/launch/wallet/topup/intent']), false);
+    assertEquals(Boolean(spec.paths['/api/launch/subscription']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/capacity']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/subscription/checkout']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/subscription/portal']), true);
     assertEquals(Boolean(spec.paths['/api/launch/api-keys']), true);
     assertEquals(Boolean(spec.paths['/api/launch/api-keys/{id}']), true);
     assertEquals(Boolean(spec.paths['/api/launch/byok']), true);
@@ -1016,11 +1011,11 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
       true,
     );
     assertEquals(Boolean(spec.components?.schemas?.FunctionRunResponse), true);
-    assertEquals(Boolean(spec.components?.schemas?.WalletSummary), true);
-    assertEquals(Boolean(spec.components?.schemas?.WalletPage), true);
-    assertEquals(Boolean(spec.components?.schemas?.WalletTransaction), true);
-    assertEquals(Boolean(spec.components?.schemas?.WalletEarning), true);
-    assertEquals(Boolean(spec.components?.schemas?.WalletFundingQuote), true);
+    assertEquals(Boolean(spec.components?.schemas?.WalletSummary), false);
+    assertEquals(Boolean(spec.components?.schemas?.WalletPage), false);
+    assertEquals(Boolean(spec.components?.schemas?.WalletTransaction), false);
+    assertEquals(Boolean(spec.components?.schemas?.WalletEarning), false);
+    assertEquals(Boolean(spec.components?.schemas?.WalletFundingQuote), false);
     assertEquals(Boolean(spec.components?.schemas?.ByokSummary), true);
     assertEquals(Boolean(spec.components?.schemas?.ByokProviderOption), true);
     assertEquals(Boolean(spec.components?.schemas?.ByokUpsertRequest), true);
@@ -1844,7 +1839,7 @@ Deno.test('launch facade: API key metadata requires authentication', async () =>
   });
 });
 
-Deno.test('launch facade: wallet top-up quote accepts amount_credits and emits both aliases', async () => {
+Deno.test('launch facade: wallet top-up is retired from the launch surface', async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
@@ -1853,6 +1848,8 @@ Deno.test('launch facade: wallet top-up quote accepts amount_credits and emits b
           { headers: { Authorization: 'Bearer browser-session-token' } },
         ),
       );
+      assertEquals(response.status, 410);
+      return;
       const body = await response.json() as {
         quote: {
           method: string;
@@ -1905,7 +1902,7 @@ Deno.test('launch facade: wallet top-up quote accepts amount_credits and emits b
   );
 });
 
-Deno.test('launch facade: wallet transactions support cursor pagination', async () => {
+Deno.test('launch facade: wallet transactions are retired from the launch surface', async () => {
   const transactionUrls: string[] = [];
   await withLaunchEnv(
     async () => {
@@ -1915,6 +1912,8 @@ Deno.test('launch facade: wallet transactions support cursor pagination', async 
           { headers: { Authorization: 'Bearer browser-session-token' } },
         ),
       );
+      assertEquals(response.status, 410);
+      return;
       const body = await response.json() as {
         kind: string;
         items: Array<{
@@ -2006,7 +2005,7 @@ Deno.test('launch facade: wallet transactions support cursor pagination', async 
   );
 });
 
-Deno.test('launch facade: wallet earnings can filter by tool', async () => {
+Deno.test('launch facade: wallet earnings are retired from the launch surface', async () => {
   const transferUrls: string[] = [];
   await withLaunchEnv(
     async () => {
@@ -2016,6 +2015,8 @@ Deno.test('launch facade: wallet earnings can filter by tool', async () => {
           { headers: { Authorization: 'Bearer browser-session-token' } },
         ),
       );
+      assertEquals(response.status, 410);
+      return;
       const body = await response.json() as {
         kind: string;
         items: Array<{ appId?: string | null; reason: string }>;
@@ -2072,7 +2073,7 @@ Deno.test('launch facade: platform primitives can be query-filtered', async () =
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
       new Request(
-        'https://ultralight.test/api/launch/platform-primitives?q=wallet',
+        'https://ultralight.test/api/launch/platform-primitives?q=deploy',
       ),
     );
     const body = await response.json() as {
@@ -2080,7 +2081,7 @@ Deno.test('launch facade: platform primitives can be query-filtered', async () =
     };
 
     assertEquals(response.status, 200);
-    assertEquals(body.suggestions[0].primitive, 'wallet');
+    assertEquals(body.suggestions[0].primitive, 'deploy');
   });
 });
 
@@ -2370,7 +2371,7 @@ Deno.test('launch facade: mutation methods are rejected', async () => {
   });
 });
 
-Deno.test('launch facade: wallet top-up quote still accepts deprecated amount_light', async () => {
+Deno.test('launch facade: deprecated wallet aliases are retired too', async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
@@ -2379,6 +2380,8 @@ Deno.test('launch facade: wallet top-up quote still accepts deprecated amount_li
           { headers: { Authorization: 'Bearer browser-session-token' } },
         ),
       );
+      assertEquals(response.status, 410);
+      return;
       const body = await response.json() as {
         quote: { amountCredits: number; amountLight: number };
       };
@@ -2609,7 +2612,7 @@ Deno.test('launch Agent Home: canonical snapshot is secret-free and its revision
       assertEquals(second.response.status, 200, second.raw);
       assertEquals(first.response.headers.get('cache-control'), 'private, no-store');
       assertEquals(first.response.headers.get('vary'), 'Cookie, Authorization');
-      assertEquals(first.body.contractVersion, '2026-07-14.v1');
+      assertEquals(first.body.contractVersion, '2026-07-15.p2.1');
       assertEquals(first.body.revision, `ah1:${HOME_APP_ID}:7`);
       // Run progress and usage deliberately do not churn the owner-config CAS.
       assertEquals(second.body.revision, first.body.revision);
@@ -3414,7 +3417,7 @@ Deno.test('launch facade: byok summary lists providers without key material', as
   );
 });
 
-Deno.test('launch facade: inference options report credits billing without byok', async () => {
+Deno.test('launch facade: inference options remain BYOK-only without a configured key', async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
@@ -3426,7 +3429,7 @@ Deno.test('launch facade: inference options report credits billing without byok'
         billingMode: string;
         primaryProvider: string | null;
         configuredProviders: string[];
-        credits: {
+        credits?: {
           spendable: number | null;
           minimumForPlatformInference: number;
           usable: boolean;
@@ -3435,13 +3438,10 @@ Deno.test('launch facade: inference options report credits billing without byok'
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.billingMode, 'credits');
+      assertEquals(body.billingMode, 'byok');
       assertEquals(body.primaryProvider, null);
       assertEquals(body.configuredProviders, []);
-      assertEquals(body.credits.spendable, 5000);
-      assertEquals(body.credits.minimumForPlatformInference, 25);
-      assertEquals(body.credits.usable, true);
-      assertEquals(body.credits.display, '5,000 credits');
+      assertEquals(body.credits, undefined);
     },
     byokSessionMock(byokUserRow(), 5000),
   );
@@ -3459,15 +3459,14 @@ Deno.test('launch facade: inference options report byok billing when primary con
         billingMode: string;
         primaryProvider: string | null;
         configuredProviders: string[];
-        credits: { spendable: number | null; usable: boolean };
+        credits?: { spendable: number | null; usable: boolean };
       };
 
       assertEquals(response.status, 200);
       assertEquals(body.billingMode, 'byok');
       assertEquals(body.primaryProvider, 'openrouter');
       assertEquals(body.configuredProviders, ['openrouter']);
-      assertEquals(body.credits.spendable, 0);
-      assertEquals(body.credits.usable, false);
+      assertEquals(body.credits, undefined);
     },
     byokSessionMock(
       byokUserRow({

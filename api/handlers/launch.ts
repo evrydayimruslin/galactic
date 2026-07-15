@@ -75,6 +75,8 @@ import {
   type LaunchPlatformPrimitive,
   type LaunchPlatformPrimitiveSuggestion,
   type LaunchPricingSummary,
+  type LaunchSubscriptionCheckoutRequest,
+  type LaunchSubscriptionRedirectResponse,
   type LaunchPublicRoute,
   type LaunchRelevanceSummary,
   type LaunchSemanticSubjectType,
@@ -256,6 +258,17 @@ import {
   executeSetVersion,
   inspectLiveAppStorageAccounting,
 } from "./platform-mcp.ts";
+import {
+  createSubscriptionCheckout,
+  createSubscriptionPortal,
+  getLaunchSubscription,
+  toLaunchCapacityResponse,
+} from "../services/subscriptions.ts";
+import {
+  claimAgentActivationSlot,
+  getAccountCapacityStatus,
+  releaseAgentActivationSlot,
+} from "../services/account-capacity.ts";
 
 // Cross-Agent grant + settings mutations are sensitive. The SensitiveRoute enum
 // lives in sensitive-route-rate-limit.ts (outside this file's edit scope), so we
@@ -265,6 +278,13 @@ import {
 const LAUNCH_GRANT_WRITE_LIMIT: SensitiveRoute = "apps:user_settings_update";
 const LAUNCH_GRANT_SETTINGS_WRITE_LIMIT: SensitiveRoute =
   "apps:user_settings_update";
+
+function privateLaunchJson(data: unknown, status = 200): Response {
+  const response = json(data, status);
+  response.headers.set("Cache-Control", "private, no-store");
+  response.headers.set("Vary", "Cookie, Authorization");
+  return response;
+}
 
 const APP_SELECT = [
   "id",
@@ -520,36 +540,6 @@ const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
     route: "/",
     apiRoute: "GET /api/launch/install",
   },
-  publish: {
-    label: "Publish for discovery",
-    description: "Make a deployed Agent public or unlisted for installs.",
-    route: "/admin/agents/:id",
-    apiRoute: "GET /api/launch/admin/agents/:id",
-  },
-  store: {
-    label: "Browse",
-    description: "Find public Agents.",
-    route: "/browse",
-    apiRoute: "GET /api/launch/store",
-  },
-  wallet: {
-    label: "Credits wallet",
-    description: "Manage spendable credits for installs, calls, and hosting.",
-    route: "/account",
-    apiRoute: "GET /api/launch/wallet",
-  },
-  pricing: {
-    label: "Agent pricing",
-    description: "Inspect per-call pricing and free-call configuration.",
-    route: "/admin/agents/:id",
-    apiRoute: "GET /api/launch/admin/agents/:id",
-  },
-  receipts: {
-    label: "Receipts",
-    description: "Track monetized Agent usage and marketplace receipts.",
-    route: "/admin/agents/:id",
-    apiRoute: "GET /api/launch/admin/agents/:id",
-  },
   api_keys: {
     label: "API keys",
     description: "Create API tokens for MCP, CLI, and direct API access.",
@@ -558,7 +548,7 @@ const PRIMITIVE_METADATA: Record<LaunchPlatformPrimitive, PrimitiveMetadata> = {
   },
   owner_admin: {
     label: "Owner admin",
-    description: "Manage visibility, pricing, logs, and receipts.",
+    description: "Manage the Agent home, runtime settings, secrets, and logs.",
     route: "/admin/agents/:id",
     apiRoute: "GET /api/launch/admin/agents/:id",
   },
@@ -600,6 +590,58 @@ export async function handleLaunch(request: Request): Promise<Response> {
   const method = request.method;
 
   try {
+    if (path === "/api/launch/subscription" && method === "GET") {
+      const user = await requireLaunchUser(request);
+      return privateLaunchJson(await getLaunchSubscription(user.id));
+    }
+
+    if (path === "/api/launch/capacity" && method === "GET") {
+      const user = await requireLaunchUser(request);
+      return privateLaunchJson(
+        toLaunchCapacityResponse(await getAccountCapacityStatus(user.id)),
+      );
+    }
+
+    if (
+      path === "/api/launch/subscription/checkout" ||
+      path === "/api/launch/subscription/portal"
+    ) {
+      if (method !== "POST") return error("Method not allowed", 405);
+      const user = await requireLaunchUser(request);
+      if (!isAccountSessionAuthSource(user.authSource)) {
+        return error("Subscription management requires an account session", 403);
+      }
+      const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+      if (path.endsWith("/checkout") && body.plan !== "pro") {
+        return error("plan must be pro", 400);
+      }
+      const siteOrigin = getEnv("LAUNCH_WEB_BASE_URL") || new URL(request.url).origin;
+      const returnUrl = typeof body.returnUrl === "string" ? body.returnUrl : null;
+      const redirectUrl = path.endsWith("/checkout")
+        ? await createSubscriptionCheckout({
+          userId: user.id,
+          plan: (body as unknown as LaunchSubscriptionCheckoutRequest).plan,
+          requestOrigin: siteOrigin,
+          returnUrl,
+        })
+        : await createSubscriptionPortal({
+          userId: user.id,
+          requestOrigin: siteOrigin,
+          returnUrl,
+        });
+      return privateLaunchJson({
+        url: redirectUrl,
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchSubscriptionRedirectResponse);
+    }
+
+    if (path === "/api/launch/platform-model" || path.startsWith("/api/launch/wallet")) {
+      return error(
+        "This credits endpoint is not part of the persistent-Agent launch. Use BYOK and subscription capacity.",
+        410,
+      );
+    }
+
     if (
       path === "/api/launch/api-keys" ||
       path.startsWith("/api/launch/api-keys/")
@@ -983,26 +1025,20 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       settings: "/api/launch/settings",
       platformPrimitives: "/api/launch/platform-primitives?q={query}",
       leaderboard: "/api/launch/leaderboard?kind=builder&period=30d",
-      wallet: "/api/launch/wallet",
-      walletTransactions:
-        "/api/launch/wallet/transactions?limit=25&cursor={cursor}",
-      walletReceipts: "/api/launch/wallet/receipts?limit=25&cursor={cursor}",
-      walletEarnings:
-        "/api/launch/wallet/earnings?agent={agentId}&limit=25&cursor={cursor}",
-      walletPayouts: "/api/launch/wallet/payouts?limit=25&cursor={cursor}",
-      walletTopUpQuote:
-        "/api/launch/wallet/topup/quote?amount_credits=2500&method=card",
-      walletTopUpIntent: "/api/launch/wallet/topup/intent",
+      subscription: "/api/launch/subscription",
+      subscriptionCheckout: "/api/launch/subscription/checkout",
+      subscriptionPortal: "/api/launch/subscription/portal",
+      capacity: "/api/launch/capacity",
       mcpPlatform: "/mcp/platform",
       mcpDiscovery: "/.well-known/mcp.json",
       website: "/",
     },
     externalAgentLoop: [
       "Install Galactic MCP, CLI, or direct API access.",
-      "Browse the store for relevant Agents and platform primitives.",
-      "Inspect Agent functions, pricing, and trust.",
+      "Inspect your private Agents and platform primitives.",
+      "Inspect Agent functions, permissions, capacity, and runtime health.",
       "Call Agents through MCP/API and return public Agent links when UI matters.",
-      "Preserve credit receipts and errors in the final response.",
+      "Preserve structured capacity waits and retry timestamps in the final response.",
     ],
   };
 }
@@ -1147,12 +1183,12 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
     },
   });
 
-  return {
+  const spec = {
     openapi: "3.1.0",
     info: {
       title: "Galactic Launch API",
       description:
-        "Launch-scoped API facade for existing agents to install, discover, inspect, compose, and pay for Galactic Agents.",
+        "Launch-scoped API facade for existing agents to connect, conjure, inspect, and operate persistent Galactic Agents.",
       version: LAUNCH_MVP_VERSION,
       contact: { name: "Galactic", url: baseUrl },
     },
@@ -2713,29 +2749,13 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "billingMode",
             "primaryProvider",
             "configuredProviders",
-            "credits",
           ],
           properties: {
-            billingMode: { type: "string", enum: ["byok", "credits"] },
+            billingMode: { type: "string", const: "byok" },
             primaryProvider: { type: ["string", "null"] },
             configuredProviders: {
               type: "array",
               items: { type: "string" },
-            },
-            credits: {
-              type: "object",
-              required: [
-                "spendable",
-                "minimumForPlatformInference",
-                "usable",
-                "display",
-              ],
-              properties: {
-                spendable: { type: ["number", "null"] },
-                minimumForPlatformInference: { type: "number" },
-                usable: { type: "boolean" },
-                display: { type: "string" },
-              },
             },
             generatedAt: { type: "string", format: "date-time" },
           },
@@ -3577,6 +3597,55 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       apiRoutes: LAUNCH_API_ROUTES,
     },
   };
+  const publicSpec = spec as unknown as {
+    paths: Record<string, unknown>;
+    components: { schemas: Record<string, unknown> };
+  };
+  for (const path of Object.keys(publicSpec.paths)) {
+    if (path.startsWith("/api/launch/wallet")) delete publicSpec.paths[path];
+  }
+  for (const schema of Object.keys(publicSpec.components.schemas)) {
+    if (schema.startsWith("Wallet")) delete publicSpec.components.schemas[schema];
+  }
+  publicSpec.paths["/api/launch/subscription"] = {
+    get: {
+      operationId: "getLaunchSubscription",
+      summary: "Get the account plan, Stripe state, and shared Agent capacity",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        "200": { description: "Subscription and capacity summary" },
+        "401": { description: "Authentication required" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/capacity"] = {
+    get: {
+      operationId: "getLaunchCapacity",
+      summary: "Get safe shared-capacity state and reset timestamps",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        "200": { description: "Free raw allowances are deliberately omitted" },
+        "401": { description: "Authentication required" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/subscription/checkout"] = {
+    post: {
+      operationId: "createLaunchSubscriptionCheckout",
+      summary: "Create a Stripe Checkout Session for Pro",
+      security: [{ bearerAuth: [] }],
+      responses: { "200": { description: "Stripe-hosted checkout redirect" } },
+    },
+  };
+  publicSpec.paths["/api/launch/subscription/portal"] = {
+    post: {
+      operationId: "createLaunchSubscriptionPortal",
+      summary: "Create a Stripe Billing Portal Session",
+      security: [{ bearerAuth: [] }],
+      responses: { "200": { description: "Stripe-hosted billing portal redirect" } },
+    },
+  };
+  return spec;
 }
 
 async function handleLaunchApiKeys(
@@ -4348,31 +4417,11 @@ async function handleLaunchInferenceOptions(
     .map((config) => config.provider);
   const primaryConfigured = profile.byok_provider !== null &&
     configuredProviders.includes(profile.byok_provider);
-  const billingMode = profile.byok_enabled && primaryConfigured
-    ? "byok"
-    : "credits";
-
-  let spendable: number | null = null;
-  try {
-    spendable = await checkChatBalance(user.id);
-  } catch (err) {
-    console.error("[LAUNCH] Inference options balance check failed:", err);
-    spendable = null;
-  }
-  const usable = spendable !== null && spendable >= CHAT_MIN_BALANCE_LIGHT;
-
   return json(
     {
-      billingMode,
-      primaryProvider: profile.byok_provider,
-      platformModel: profile.platform_inference_model,
+      billingMode: "byok",
+      primaryProvider: primaryConfigured ? profile.byok_provider : null,
       configuredProviders,
-      credits: {
-        spendable,
-        minimumForPlatformInference: CHAT_MIN_BALANCE_LIGHT,
-        usable,
-        display: money(spendable ?? 0).display,
-      },
       generatedAt: new Date().toISOString(),
     } satisfies LaunchInferenceOptionsResponse,
   );
@@ -5118,6 +5167,8 @@ async function buildLaunchAgentHomeSnapshotAttempt(
     budget,
     liveBundle,
     callTargets,
+    capacityStatus,
+    profile,
   ] = await Promise.all([
     loadAgentHomeSettingStatuses(user.id, row),
     buildLaunchFunctionSummaries(row, user.id),
@@ -5128,6 +5179,11 @@ async function buildLaunchAgentHomeSnapshotAttempt(
       ? loadLiveExecutedBundle(row.id)
       : Promise.resolve({ code: null, attestation: null }),
     loadAgentHomeCallTargets(user.id, routine, dependencies),
+    getAccountCapacityStatus(user.id).catch((err) => {
+      console.error("[CAPACITY] Agent Home status unavailable:", err);
+      return null;
+    }),
+    userService.getUser(user.id),
   ]);
   // One atomic KV read supplies both executed bytes and their attestation.
   // Bind the verdict to the DB live version so a validly signed old bundle is
@@ -5187,6 +5243,13 @@ async function buildLaunchAgentHomeSnapshotAttempt(
     disclosure: buildAppNetworkDisclosure(manifest, connectedKeys),
     budgetUsage: budget.usage,
     callsByRun: budget.callsByRun,
+    capacity: capacityStatus ? toLaunchCapacityResponse(capacityStatus) : null,
+    byokConfigured: Boolean(
+      profile?.byok_enabled && profile.byok_provider &&
+        profile.byok_configs.some((config) =>
+          config.provider === profile.byok_provider && config.has_key
+        ),
+    ),
     release: {
       versions,
       currentVersion: row.current_version || null,
@@ -5709,6 +5772,9 @@ async function performLaunchAgentHomeAction(
       userId: user.id,
       authSource: user.authSource,
     });
+    await releaseAgentActivationSlot(user.id, row.id).catch((slotError) => {
+      console.warn("[CAPACITY] Failed to release paused Agent slot", slotError);
+    });
     return {
       kind: "completed",
       requestId: body.idempotencyKey,
@@ -5904,15 +5970,27 @@ async function performLaunchAgentHomeAction(
             throw err;
           }
           await validateRoutineLaunchActivation(user.id, routine);
-          await updateAgentHomeRoutineStatusCAS({
-            appId: row.id,
-            userId: user.id,
-            routineId,
-            expectedRevision,
-            authSource: user.authSource,
-            status: "active",
-            nextRunAt: new Date().toISOString(),
-          });
+          const slot = await claimAgentActivationSlot(user.id, row.id);
+          if (!slot.allowed) {
+            throw new RequestValidationError(
+              "Free includes one active Agent. Pause the currently active Agent before activating this one.",
+              409,
+            );
+          }
+          try {
+            await updateAgentHomeRoutineStatusCAS({
+              appId: row.id,
+              userId: user.id,
+              routineId,
+              expectedRevision,
+              authSource: user.authSource,
+              status: "active",
+              nextRunAt: new Date().toISOString(),
+            });
+          } catch (activationError) {
+            await releaseAgentActivationSlot(user.id, row.id).catch(() => {});
+            throw activationError;
+          }
         }
       } else if (action === "run_now") {
         if (routine.status !== "active") {
@@ -7144,24 +7222,16 @@ async function handleLaunchFunctionInferenceOverride(
       ? body.provider.trim()
       : "";
     const providerKind = providerRaw.toLowerCase();
-    if (
-      providerRaw === "" || providerKind === "galactic" ||
-      providerKind === "light"
-    ) {
-      await setFunctionInferenceOverride({
-        userId: user.id,
-        appId,
-        functionName,
-        billingMode: "light",
-        provider: null,
-        model,
-        allowedFunctionNames: functionNames,
-      });
+    if (providerRaw === "" || providerKind === "galactic" || providerKind === "light") {
+      return error(
+        "Galactic AI is not available in the launch plan. Choose a configured BYOK provider.",
+        400,
+      );
     } else {
       const entry = resolveLaunchByokProvider(providerRaw);
       if (!entry) {
         return error(
-          "Unsupported provider. Use 'galactic' or a configured BYOK provider.",
+          "Unsupported provider. Choose a configured BYOK provider.",
           400,
         );
       }
@@ -7242,11 +7312,16 @@ async function buildLaunchFunctionInferenceResponse(
     publicUrl: tool.publicUrl,
     adminUrl: tool.adminUrl,
   };
-  const overrides = await listFunctionInferenceOverrides({
+  const overrides = (await listFunctionInferenceOverrides({
     userId: user.id,
     appId: row.id,
     functionNames: extractFunctionNames(row),
-  });
+  })).filter((override) => override.billingMode === "byok" && override.provider)
+    .map((override) => ({
+      ...override,
+      billingMode: "byok" as const,
+      provider: override.provider!,
+    }));
   return {
     agent: handle,
     tool: handle,
