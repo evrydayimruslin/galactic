@@ -132,7 +132,7 @@ GPU_SUPPORT_ENABLED = "false"
 # arg) to be applied first — it ships ahead of the API via the supabase-db CI.
 FREE_MODE = "1"
 SUBSCRIPTION_CAPACITY_ENABLED = "1"
-STRIPE_PRO_PRICE_ID = "price_1TtbpD5RkjlBogikCwSKhuds"
+STRIPE_PRO_PRICE_ID = "price_1TtbpD5RkjIBogikCwSKhuds"
 # Autonomous routines (docs/CAPABILITY_REGISTRY_MIGRATION.md, routines-feature-flag.ts):
 # the minute-cron routine executor dispatches due scheduled/interval routines.
 # Enabled for prod now that the routines schema (20260517120000/130000/140000) is
