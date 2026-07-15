@@ -1,13 +1,20 @@
-import type { RequestCallerContext } from "./request-caller-context.ts";
-
 export interface RoutineTraceContext {
   routineId: string;
   routineRunId: string;
   traceId?: string;
 }
 
+// Keep this trace helper below the request-auth and sandbox dependency graph.
+// Importing RequestCallerContext here creates a type-only cycle through
+// request-auth -> sandbox-actor -> routine-trace and sandbox -> routine-trace.
+// Trace extraction needs only this stable structural subset.
+interface RoutineTraceCaller {
+  routineActor?: RoutineTraceContext;
+  routineContext?: RoutineTraceContext;
+}
+
 export function routineTraceContextFromCaller(
-  caller: Pick<RequestCallerContext, "routineActor" | "routineContext">,
+  caller: RoutineTraceCaller,
 ): RoutineTraceContext | undefined {
   // A downstream sandbox actor carries attribution without routine-actor
   // authority. Prefer that explicit context, then retain the routineActor
