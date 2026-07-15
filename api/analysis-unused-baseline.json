@@ -389,7 +389,7 @@
     },
     {
       "duplicates": [
-        "{\"0\":{\"col\":17,\"line\":228,\"name\":\"calculateCloudUsageLight\",\"pos\":5992},\"1\":{\"col\":14,\"line\":242,\"name\":\"calcCloudUsageLight\",\"pos\":6481}}"
+        "{\"0\":{\"col\":17,\"line\":241,\"name\":\"calculateCloudUsageLight\",\"pos\":6472},\"1\":{\"col\":14,\"line\":255,\"name\":\"calcCloudUsageLight\",\"pos\":6961}}"
       ],
       "file": "services/cloud-usage.ts",
       "types": [
@@ -482,6 +482,12 @@
       "types": [
         "ConnectReconcileResult",
         "ConnectVerificationInput"
+      ]
+    },
+    {
+      "file": "services/connected-upload-admission.ts",
+      "types": [
+        "ConnectedUploadFile"
       ]
     },
     {
@@ -583,9 +589,6 @@
       ]
     },
     {
-      "exports": [
-        "getEmbeddingLightRatePer1kTokens"
-      ],
       "file": "services/embedding-billing.ts",
       "types": [
         "RecordEmbeddingChargeInput"
@@ -1002,6 +1005,12 @@
       ]
     },
     {
+      "file": "services/manifest-authority.ts",
+      "types": [
+        "ManifestAuthorityChange"
+      ]
+    },
+    {
       "file": "services/marketplace-maintenance.ts",
       "types": [
         "ExpireMarketplaceBidsResult"
@@ -1167,6 +1176,16 @@
       ]
     },
     {
+      "exports": [
+        "requiredPlatformMcpScopes"
+      ],
+      "file": "services/platform-mcp-authorization.ts",
+      "types": [
+        "PlatformMcpAuthorizationDecision",
+        "PlatformMcpScope"
+      ]
+    },
+    {
       "file": "services/platform-request-validation.ts",
       "types": [
         "UploadOptionInput",
@@ -1218,6 +1237,12 @@
       ]
     },
     {
+      "file": "services/release-version.ts",
+      "types": [
+        "InitialReleaseVersionState"
+      ]
+    },
+    {
       "file": "services/request-auth.ts",
       "types": [
         "ResolvedPendingPermissionRow",
@@ -1253,6 +1278,13 @@
       ]
     },
     {
+      "file": "services/routine-budget.ts",
+      "types": [
+        "RoutineBudgetAdmission",
+        "RoutineBudgetReservationKind"
+      ]
+    },
+    {
       "file": "services/routine-executor.ts",
       "types": [
         "RoutineExecutorOptions",
@@ -1262,9 +1294,6 @@
     {
       "file": "services/routine-monitoring.ts",
       "types": [
-        "RoutineMonitorAction",
-        "RoutineMonitorDetailResponse",
-        "RoutineMonitorItem",
         "RoutineMonitorOptions",
         "RoutineMonitorResponse",
         "RoutineMonitorSummary"
@@ -1273,9 +1302,7 @@
     {
       "exports": [
         "ROUTINE_PLATFORM_ACTIONS",
-        "ROUTINE_PLATFORM_FORBIDDEN",
-        "ROUTINE_PLATFORM_INVALID_PARAMS",
-        "ROUTINE_PLATFORM_NOT_FOUND"
+        "ROUTINE_PLATFORM_INVALID_PARAMS"
       ],
       "file": "services/routine-platform.ts",
       "types": [
@@ -1361,6 +1388,12 @@
         "SkillPullPricing",
         "SkillPullReceipt",
         "SkillPullResult"
+      ]
+    },
+    {
+      "file": "services/staged-migrations.ts",
+      "types": [
+        "StagedMigrationValidation"
       ]
     },
     {
@@ -1482,6 +1515,16 @@
       ]
     },
     {
+      "file": "services/test-attestation.ts",
+      "types": [
+        "DecodedSourceFile",
+        "EncodedSourceFile",
+        "TestAttestationClaims",
+        "TestAttestationVerification",
+        "TestAttestationVerificationReason"
+      ]
+    },
+    {
       "exports": [
         "PublishReadinessError"
       ],
@@ -1547,6 +1590,12 @@
     },
     {
       "exports": [
+        "UL_TEST_AI_CONTENT"
+      ],
+      "file": "services/ul-test-runtime.ts"
+    },
+    {
+      "exports": [
         "extractExports"
       ],
       "file": "services/upload-pipeline.ts",
@@ -1585,6 +1634,18 @@
       "files": [
         "src/bindings/ai-model-precedence.test.ts"
       ]
+    },
+    {
+      "file": "src/bindings/embed-binding.test.ts",
+      "files": [
+        "src/bindings/embed-binding.test.ts"
+      ]
+    },
+    {
+      "exports": [
+        "EMBEDDING_RESERVATION_TOKEN_OVERHEAD"
+      ],
+      "file": "src/bindings/embedding-budget.ts"
     },
     {
       "file": "src/bindings/memory-binding-scope.test.ts",
