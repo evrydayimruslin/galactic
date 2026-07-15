@@ -57,6 +57,16 @@ export interface VersionMetadata {
     created_at: string;
     trust?: VersionTrustMetadata;
     source_hash?: string;
+    test_attestation?: VersionTestAttestationMetadata;
+}
+export interface VersionTestAttestationMetadata {
+    schema_version: 1;
+    attestation_id: string;
+    mode: "deno_execution" | "gpu_validation";
+    source_hash: string;
+    tested_at: string;
+    token_expires_at: string;
+    verified_at: string;
 }
 export interface VersionTrustSignature {
     algorithm: "HMAC-SHA256";

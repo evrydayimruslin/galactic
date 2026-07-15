@@ -32,6 +32,8 @@ export interface RoutineBudgetDefaults {
     max_light_per_month?: number;
     max_calls_per_run?: number;
 }
+export declare const DEFAULT_ROUTINE_BUDGET_POLICY: Required<RoutineBudgetDefaults>;
+export declare const MIN_ROUTINE_INTERVAL_SECONDS = 60;
 export interface RoutineApprovalPolicy {
     require_user_approval?: boolean;
     require_paid_capability_approval?: boolean;
