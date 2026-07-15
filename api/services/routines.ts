@@ -387,7 +387,9 @@ function normalizeSchedule(input: unknown): NormalizedRoutineSchedule {
   return schedule;
 }
 
-function normalizeBudgetPolicy(value: unknown): RoutineBudgetDefaults {
+export function normalizeRoutineBudgetPolicy(
+  value: unknown,
+): Required<RoutineBudgetDefaults> {
   const supplied = optionalObject(value, "budget_policy") as
     & RoutineBudgetDefaults
     & Record<string, unknown>;
@@ -411,6 +413,14 @@ function normalizeBudgetPolicy(value: unknown): RoutineBudgetDefaults {
     if (key === "max_calls_per_run" && (!Number.isInteger(amount) || amount < 1)) {
       throw new Error("budget_policy.max_calls_per_run must be a positive integer");
     }
+  }
+  if (
+    budget.max_light_per_run > budget.max_light_per_day ||
+    budget.max_light_per_day > budget.max_light_per_month
+  ) {
+    throw new Error(
+      "Budget ceilings must satisfy max_light_per_run ≤ max_light_per_day ≤ max_light_per_month",
+    );
   }
   return budget;
 }
@@ -690,7 +700,7 @@ export function normalizeRoutineCreateInput(
       status: "paused",
       schedule: normalizeSchedule(scheduleInput),
       config: optionalObject(input.config, "config"),
-      budget_policy: normalizeBudgetPolicy(input.budget_policy),
+      budget_policy: normalizeRoutineBudgetPolicy(input.budget_policy),
       approval_policy: normalizeApprovalPolicy(input.approval_policy),
       max_concurrency: normalizeMaxConcurrency(input.max_concurrency),
       next_run_at: optionalIsoTimestamp(input.next_run_at, "next_run_at"),
@@ -870,7 +880,7 @@ export async function updateRoutine(
     updates.config = optionalObject(input.config, "config");
   }
   if ("budget_policy" in input) {
-    updates.budget_policy = normalizeBudgetPolicy(input.budget_policy);
+    updates.budget_policy = normalizeRoutineBudgetPolicy(input.budget_policy);
   }
   if ("approval_policy" in input) {
     updates.approval_policy = normalizeApprovalPolicy(input.approval_policy);

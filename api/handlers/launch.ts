@@ -218,6 +218,7 @@ import {
 import {
   agentHomeCallTargetKey,
   buildAgentHomeResponse,
+  versionWasUploadedAfterLive,
   type AgentHomeBudgetUsage,
   type AgentHomeSettingStatus,
 } from "../services/agent-home.ts";
@@ -4901,10 +4902,12 @@ function newestTestedCandidateVersion(row: LaunchAppRow): string | null {
   for (const entry of canonicalVersionMetadata(row)) {
     latestMetadata.set(entry.version, entry);
   }
+  const canonicalMetadata = [...latestMetadata.values()];
   return [...latestMetadata.values()]
     .filter((entry) =>
       entry.version !== current && available.has(entry.version) &&
-      findPersistedTestAttestation([entry], entry.version) !== null
+      findPersistedTestAttestation([entry], entry.version) !== null &&
+      versionWasUploadedAfterLive(canonicalMetadata, current, entry.version)
     )
     .sort((left, right) =>
       (Date.parse(right.created_at) || 0) - (Date.parse(left.created_at) || 0)

@@ -172,6 +172,43 @@ Deno.test("routine platform: lists and plans routine templates", async () => {
     });
     assertEquals(plan.approvals.pending_count, 2);
     assertEquals(plan.command_surfaces.length, 1);
+    assertEquals(plan.routine.budget_policy, {
+      max_light_per_run: 10,
+      max_light_per_day: 250,
+      max_light_per_month: 1000,
+      max_calls_per_run: 25,
+    });
+
+    await assertRejects(
+      () => executeRoutinePlatformAction("user-1", {
+        action: "plan",
+        template_id: "sales_followup_loop",
+        budget_policy: {
+          max_light_per_run: 20,
+          max_light_per_day: 10,
+        },
+      }),
+      Error,
+      "max_light_per_run ≤ max_light_per_day ≤ max_light_per_month",
+    );
+    await assertRejects(
+      () => executeRoutinePlatformAction("user-1", {
+        action: "plan",
+        template_id: "sales_followup_loop",
+        budget_policy: { max_calls_per_run: 0 },
+      }),
+      Error,
+      "max_calls_per_run must be a positive integer",
+    );
+    await assertRejects(
+      () => executeRoutinePlatformAction("user-1", {
+        action: "plan",
+        template_id: "sales_followup_loop",
+        budget_policy: { max_light_per_run: null },
+      }),
+      Error,
+      "max_light_per_run must be a non-negative number",
+    );
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.__env = originalEnv;

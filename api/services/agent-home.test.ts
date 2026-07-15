@@ -455,6 +455,43 @@ Deno.test("agent home: chooses the newest tested staged release and surfaces int
   assert(home.state.blockers.some((item) => item.code === "executed_release_unverified"));
 });
 
+Deno.test("agent home: does not present an older tested release as a staged candidate", () => {
+  const proof = (version: string, createdAt: string) => ({
+    version,
+    size_bytes: 12,
+    created_at: createdAt,
+    source_hash: version.repeat(16).slice(0, 64),
+    test_attestation: {
+      schema_version: 1 as const,
+      attestation_id: crypto.randomUUID(),
+      mode: "deno_execution" as const,
+      source_hash: version.repeat(16).slice(0, 64),
+      tested_at: createdAt,
+      token_expires_at: "2026-07-14T23:00:00.000Z",
+      verified_at: createdAt,
+    },
+  });
+  const home = buildAgentHomeResponse(input({
+    release: {
+      versions: ["1.0.0", "1.1.0"],
+      currentVersion: "1.1.0",
+      versionMetadata: [
+        proof("1.0.0", "2026-07-14T18:00:00.000Z"),
+        proof("1.1.0", "2026-07-14T19:00:00.000Z"),
+      ],
+      promotedAt: "2026-07-14T19:01:00.000Z",
+      executedVersion: "1.1.0",
+      integrity: "verified",
+      candidateAuthorityChanges: [],
+      candidateManifestAvailable: false,
+      candidatePreflightReady: false,
+    },
+  }));
+
+  assertEquals(home.release.candidate, null);
+  assertEquals(home.release.candidateCount, 0);
+});
+
 Deno.test("agent home: never serializes setting values or attestation tokens", () => {
   const serialized = JSON.stringify(buildAgentHomeResponse(input()));
   assert(!serialized.includes("super-secret-value"));
