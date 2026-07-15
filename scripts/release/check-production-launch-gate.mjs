@@ -3,6 +3,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { ensureNode20, parseArgs, repoRoot } from "../analysis/_shared.mjs";
+import { matchesWorkflowRunName } from "./workflow-run-name.mjs";
 
 ensureNode20();
 
@@ -104,7 +105,7 @@ async function fetchWorkflowRuns() {
 
 function pickLatestRun(runs, workflowName) {
   return runs
-    .filter((run) => run.name === workflowName)
+    .filter((run) => matchesWorkflowRunName(run.name, workflowName))
     .sort((left, right) => {
       const leftAttempt = Number(left.run_attempt || 0);
       const rightAttempt = Number(right.run_attempt || 0);
