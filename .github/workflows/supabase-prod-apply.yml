@@ -1,17 +1,16 @@
 name: Supabase Prod — one-shot apply
 
-# Deliberate, manual prod migration apply. Run "dryrun" first to see exactly
-# which migrations are pending on prod (Local vs Remote), then re-run "apply"
-# with confirm=APPLY to push them. Uses the GitHub prod secrets — no credentials
-# are ever pasted anywhere. The branch you dispatch this from supplies the
-# migration files (so you can apply a feature branch's migrations to prod without
-# merging to main first).
+# Deliberate, manual prod migration apply. Run "dryrun" first to execute the
+# real database push planner, then re-run "apply" with confirm=APPLY. Crossing
+# a historical gap additionally requires include_all=true and
+# confirm=APPLY_ALL. Uses the GitHub prod secrets — no credentials are ever
+# pasted anywhere. The dispatched branch supplies the migration files.
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'dryrun = list pending only (no changes); apply = push migrations to prod'
+        description: 'dryrun = plan pending migrations (no changes); apply = push migrations to prod'
         required: true
         default: dryrun
         type: choice
@@ -19,9 +18,14 @@ on:
           - dryrun
           - apply
       confirm:
-        description: 'Type APPLY to confirm a real production migration push (apply mode only)'
+        description: 'Type APPLY, or APPLY_ALL when include_all is enabled (apply mode only)'
         required: false
         default: ''
+      include_all:
+        description: 'Explicitly cross historical migration gaps (--include-all)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -53,21 +57,25 @@ jobs:
       SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PRODUCTION_PROJECT_ID }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_PRODUCTION_DB_PASSWORD }}
       SUPABASE_ENV_NAME: production
+      SUPABASE_INCLUDE_ALL: ${{ inputs.include_all && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: supabase/setup-cli@v1
         with:
           version: latest
 
-      # Apply mode is a real prod mutation — refuse unless the operator typed
-      # APPLY, so a mis-click on "apply" with an empty confirm box does nothing.
-      - name: Guard — apply requires confirm=APPLY
-        if: ${{ inputs.mode == 'apply' && inputs.confirm != 'APPLY' }}
+      # Applying across a historical gap is materially broader than a normal
+      # forward push, so it has a distinct confirmation phrase.
+      - name: Guard — apply requires the matching confirmation
+        if: >-
+          inputs.mode == 'apply' &&
+          ((inputs.include_all && inputs.confirm != 'APPLY_ALL') ||
+           (!inputs.include_all && inputs.confirm != 'APPLY'))
         run: |
-          echo "::error::Apply mode requires the confirm input to be exactly 'APPLY'. Re-run with confirm=APPLY."
+          echo "::error::Use confirm=APPLY for a normal push or confirm=APPLY_ALL when include_all is enabled."
           exit 1
 
-      - name: Dry run — list pending production migrations (no changes)
+      - name: Dry run — plan pending production migrations (no changes)
         if: ${{ inputs.mode == 'dryrun' }}
         env:
           DRY_RUN: "1"
