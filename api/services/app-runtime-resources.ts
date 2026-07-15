@@ -519,7 +519,7 @@ export async function createAppD1Resources(
   };
 }
 
-export interface AppD1StorageDisclosure {
+interface AppD1StorageDisclosure {
   type: "d1";
   status: App["d1_status"] | "unknown";
   provisioned: boolean;
