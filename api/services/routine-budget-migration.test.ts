@@ -18,6 +18,11 @@ const agentHomeMigration = await Deno.readTextFile(new URL(
   import.meta.url,
 ));
 
+const plpgsqlConflictPolicyMigration = await Deno.readTextFile(new URL(
+  "../../supabase/migrations/20260714163000_launch_p2_plpgsql_conflict_policy.sql",
+  import.meta.url,
+));
+
 Deno.test("routine budget migration: expired in-flight work is charged conservatively", () => {
   assertStringIncludes(
     budgetMigration,
@@ -81,4 +86,23 @@ Deno.test("Agent Home migration revokes PUBLIC from authoritative budget RPCs", 
       signature,
     );
   }
+});
+
+Deno.test("P2 migration pins table-column resolution for TABLE-returning launch RPCs", () => {
+  assertStringIncludes(
+    plpgsqlConflictPolicyMigration,
+    "public.reserve_routine_run_budget(uuid,uuid,uuid,text,text,double precision,timestamp with time zone)",
+  );
+  assertStringIncludes(
+    plpgsqlConflictPolicyMigration,
+    "public.claim_agent_home_action(uuid,uuid,bigint,text,text,jsonb)",
+  );
+  assertStringIncludes(
+    plpgsqlConflictPolicyMigration,
+    "#variable_conflict use_column",
+  );
+  assertStringIncludes(
+    plpgsqlConflictPolicyMigration,
+    "IF v_fixed = v_definition THEN",
+  );
 });
