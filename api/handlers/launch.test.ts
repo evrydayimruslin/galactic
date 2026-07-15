@@ -3320,6 +3320,49 @@ Deno.test('launch Agent Home: malformed persisted test proof is never a candidat
   );
 });
 
+Deno.test('launch Agent Home: superseded tested releases are history, not candidates', async () => {
+  const proof = (version: string, createdAt: string, sourceHash: string) => ({
+    version,
+    size_bytes: 100,
+    created_at: createdAt,
+    source_hash: sourceHash,
+    test_attestation: {
+      schema_version: 1,
+      attestation_id: crypto.randomUUID(),
+      mode: 'deno_execution',
+      source_hash: sourceHash,
+      tested_at: createdAt,
+      token_expires_at: '2026-07-15T00:00:00.000Z',
+      verified_at: createdAt,
+    },
+  });
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/home',
+        { headers: { Authorization: 'Bearer browser-session-token' } },
+      ));
+      const body = await response.json() as {
+        release?: { candidate?: unknown; candidateCount?: number };
+      };
+      assertEquals(response.status, 200);
+      assertEquals(body.release?.candidate, null);
+      assertEquals(body.release?.candidateCount, 0);
+    },
+    agentHomeFetchMock({
+      app: () => agentHomeTestApp({
+        current_version: '1.1.0',
+        current_version_promoted_at: '2026-07-14T19:01:00.000Z',
+        versions: ['1.0.0', '1.1.0'],
+        version_metadata: [
+          proof('1.0.0', '2026-07-14T18:00:00.000Z', 'a'.repeat(64)),
+          proof('1.1.0', '2026-07-14T19:00:00.000Z', 'b'.repeat(64)),
+        ],
+      }),
+    }),
+  );
+});
+
 Deno.test('launch facade: byok summary lists providers without key material', async () => {
   await withLaunchEnv(
     async () => {

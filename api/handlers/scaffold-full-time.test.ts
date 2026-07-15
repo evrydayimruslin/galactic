@@ -95,6 +95,13 @@ Deno.test("full-time scaffold: manifest passes the real validator with routine t
   // Functions match the exports.
   assert(manifest.functions.tick, "tick declared");
   assert(manifest.functions.status, "status declared");
+  assertEquals(manifest.functions.tick.annotations.readOnlyHint, false);
+  assertEquals(manifest.functions.status.annotations, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  });
 
   // The routine template: handler wired to tick, schedule + budgets prefilled.
   assertEquals(manifest.routines.length, 1);
@@ -121,6 +128,10 @@ Deno.test("full-time scaffold: manifest passes the real validator with routine t
 
 Deno.test("full-time scaffold: gx.test derives only declared runtime authority", () => {
   const generated = scaffold(true);
+  assert(
+    !file(generated, "index.ts").includes("fetch("),
+    "comments do not imply undeclared net:fetch authority",
+  );
   assertEquals(resolveUlTestRuntimeManifest(generated.files), {
     permissions: ["ai:call", "notify:owner"],
     allowedDestinations: [],

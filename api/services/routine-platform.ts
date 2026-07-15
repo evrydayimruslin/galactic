@@ -28,6 +28,7 @@ import {
   deleteRoutine,
   getRoutine,
   listRoutines,
+  normalizeRoutineBudgetPolicy,
   pauseRoutine,
   resumeRoutine,
   routineCapabilitiesFromManifest,
@@ -727,10 +728,19 @@ function buildRoutinePlan(
   const dashboardBindings = Array.isArray(args.dashboard_bindings)
     ? args.dashboard_bindings as RoutineDashboardBindingInput[]
     : bindingsFromTemplateSurfaces(template);
-  const budgetPolicy =
-    (args.budget_policy !== undefined
-      ? args.budget_policy
-      : template.budgetDefaults || {}) as RoutineBudgetDefaults;
+  let budgetPolicy: Required<RoutineBudgetDefaults>;
+  try {
+    budgetPolicy = normalizeRoutineBudgetPolicy(
+      args.budget_policy !== undefined
+        ? args.budget_policy
+        : template.budgetDefaults || {},
+    );
+  } catch (error) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      error instanceof Error ? error.message : "Invalid budget_policy.",
+    );
+  }
   const approvalPolicy =
     (args.approval_policy !== undefined
       ? args.approval_policy

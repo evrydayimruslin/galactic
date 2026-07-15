@@ -9441,10 +9441,10 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     "  }",
     "",
     "  // 2. Take in new information. ── EXTENSION POINT ──",
-    "  // Replace with your real observation source: an allowlisted fetch()",
+    "  // Replace with your real observation source: an allowlisted HTTP request",
     "  // (declare the host in manifest network.allowed_destinations),",
     "  // galactic.net.imapFetchUnseen(...), or galactic.call to another agent.",
-    '  // const res = await fetch("https://example.com/feed.json");',
+    '  // For example, call the standard web API for "https://example.com/feed.json".',
     '  const observations = "No observation source wired yet.";',
     "",
     "  // 3. Reason: assess progress against the goal, choose the next actions.",
@@ -9611,6 +9611,12 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
           },
         },
         returns: { type: "object" },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
       },
       status: {
         description: "Recent journal entries and totals.",
@@ -9621,6 +9627,12 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
           },
         },
         returns: { type: "object" },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
       },
     },
     routines: [{

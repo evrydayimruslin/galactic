@@ -243,10 +243,12 @@ function mintAgentConnectKey(
 ): Promise<string> {
   const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
   const suffix = Math.random().toString(36).slice(2, 6);
+  const nameTail = ` connect ${stamp} ${suffix}`;
+  const keyName = `${agent.slug.slice(0, 50 - nameTail.length)}${nameTail}`;
   return launchApi.createApiKey({
     appIds: [agent.id],
     expiresInDays: 90,
-    name: `${agent.slug} connect ${stamp} ${suffix}`,
+    name: keyName,
     scopes: ["apps:call"],
   }).then((response) => response.plaintextToken);
 }

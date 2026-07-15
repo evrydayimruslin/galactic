@@ -607,13 +607,40 @@ function versionSummary(
   };
 }
 
+export function versionWasUploadedAfterLive(
+  metadata: VersionMetadata[],
+  currentVersion: string | null,
+  candidateVersion: string,
+): boolean {
+  const currentCreatedAt = Date.parse(
+    metadataForVersion(metadata, currentVersion)?.created_at || "",
+  );
+  if (!Number.isFinite(currentCreatedAt)) return true;
+  const candidateCreatedAt = Date.parse(
+    metadataForVersion(metadata, candidateVersion)?.created_at || "",
+  );
+  return Number.isFinite(candidateCreatedAt) &&
+    candidateCreatedAt > currentCreatedAt;
+}
+
 function buildRelease(input: AgentHomeReleaseInput): LaunchAgentHomeRelease {
   const metadata = Array.isArray(input.versionMetadata) ? input.versionMetadata : [];
   const candidates = [...new Set(input.versions)].filter((version) => {
     if (!version || version === input.currentVersion) return false;
     const entry = metadataForVersion(metadata, version);
-    return entry?.test_attestation !== undefined &&
-      entry.test_attestation.source_hash === entry.source_hash;
+    if (
+      entry?.test_attestation === undefined ||
+      entry.test_attestation.source_hash !== entry.source_hash
+    ) return false;
+    // A staged candidate is a release uploaded after the live release. Older
+    // tested artifacts remain valid history, but presenting one as "latest"
+    // would disguise a rollback as a forward promotion. Legacy rows without a
+    // usable live timestamp retain the old behavior until they are promoted.
+    return versionWasUploadedAfterLive(
+      metadata,
+      input.currentVersion,
+      version,
+    );
   }).sort((left, right) => {
     const leftAt = Date.parse(metadataForVersion(metadata, left)?.created_at || "");
     const rightAt = Date.parse(metadataForVersion(metadata, right)?.created_at || "");
