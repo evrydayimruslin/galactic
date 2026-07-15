@@ -7,6 +7,10 @@ const migration = await Deno.readTextFile(new URL(
   "../../supabase/migrations/20260715120000_subscription_capacity_foundation.sql",
   import.meta.url,
 ));
+const capacityAmbiguityRepair = await Deno.readTextFile(new URL(
+  "../../supabase/migrations/20260715121000_fix_capacity_plan_code_ambiguity.sql",
+  import.meta.url,
+));
 
 Deno.test("P2.1 migration defines the plan and entitlement source of truth", () => {
   assertStringIncludes(migration, "CREATE TABLE IF NOT EXISTS public.billing_plans");
@@ -25,11 +29,20 @@ Deno.test("P2.1 capacity reservations are idempotent, locked, and server-only", 
   assertStringIncludes(migration, "UNIQUE (user_id, idempotency_key)");
   assertStringIncludes(migration, "ON CONFLICT (user_id, idempotency_key) DO NOTHING");
   assertStringIncludes(migration, "CREATE OR REPLACE FUNCTION public.reserve_account_capacity");
+  assertStringIncludes(migration, "WHERE plans.code = v_ent.plan_code");
   assertStringIncludes(migration, "CREATE OR REPLACE FUNCTION public.reap_expired_account_capacity");
   assertStringIncludes(migration, "FOR UPDATE;");
   assertStringIncludes(migration, "CREATE OR REPLACE FUNCTION public.settle_account_capacity");
   assertStringIncludes(migration, "REVOKE ALL ON FUNCTION public.reserve_account_capacity");
   assertStringIncludes(migration, "GRANT EXECUTE ON FUNCTION public.reserve_account_capacity");
+});
+
+Deno.test("P2.1 repairs the capacity plan lookup in already-migrated environments", () => {
+  assertStringIncludes(capacityAmbiguityRepair, "pg_get_functiondef(v_signature)");
+  assertStringIncludes(
+    capacityAmbiguityRepair,
+    "FROM public.billing_plans AS plans WHERE plans.code = v_ent.plan_code",
+  );
 });
 
 Deno.test("P2.1 Stripe projection rejects stale events and enforces Free activation", () => {

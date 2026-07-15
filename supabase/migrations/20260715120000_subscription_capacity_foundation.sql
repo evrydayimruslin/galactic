@@ -438,7 +438,9 @@ BEGIN
   END IF;
 
   v_ent := public.ensure_account_entitlement(p_user_id);
-  SELECT * INTO v_plan FROM public.billing_plans WHERE code = v_ent.plan_code;
+  SELECT * INTO v_plan
+  FROM public.billing_plans AS plans
+  WHERE plans.code = v_ent.plan_code;
   IF v_plan.code IS NULL THEN RAISE EXCEPTION 'Account plan is unavailable'; END IF;
 
   v_burst_start := public.capacity_window_start(
