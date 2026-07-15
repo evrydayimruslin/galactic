@@ -1,9 +1,9 @@
 // Isolation invariants for the Worker Loader get() reuse key. These are the
 // security-critical properties: a warm isolate must NEVER be shared across
 // users, and any change to a baked per-user input must mint a fresh key.
-// The caller-context token is the one deliberate exception: its PRESENCE is
-// fingerprinted (it decides whether the EVENTS binding exists) but its VALUE
-// is per-call and rides the fetch body — otherwise reuse would never hit.
+// Per-call signed identity values are deliberate exceptions: their PRESENCE is
+// fingerprinted when it changes baked bindings/source, while the VALUE rides
+// the fetch body — otherwise reuse would never hit.
 
 import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
@@ -122,6 +122,34 @@ Deno.test("reuse key: caller-context token PRESENCE changes the key (EVENTS bind
   absent.callerContextToken = undefined;
   const b = await derive(absent);
   assertNotEquals(a, b);
+});
+
+Deno.test("reuse key: routine-context PRESENCE changes the key (routine EVENTS denial is baked)", async () => {
+  const interactive = await derive(base());
+  const routine = base();
+  routine.routineContext = {
+    routineId: "routine-1",
+    routineRunId: "run-1",
+    traceId: "trace-1",
+  };
+  assertNotEquals(interactive, await derive(routine));
+
+  // Values remain per-call registry data; two routine runs can reuse the same
+  // routine-safe setup because neither receives an EVENTS binding.
+  const nextRun = base();
+  nextRun.routineContext = {
+    routineId: "routine-1",
+    routineRunId: "run-2",
+    traceId: "trace-2",
+  };
+  assertEquals(await derive(routine), await derive(nextRun));
+});
+
+Deno.test("reuse key: gx.test mode changes the key (host stub bindings are baked)", async () => {
+  const production = await derive(base());
+  const test = base();
+  test.testMode = true;
+  assertNotEquals(production, await derive(test));
 });
 
 Deno.test("reuse key: AI route / unavailable-reason change → different key", async () => {

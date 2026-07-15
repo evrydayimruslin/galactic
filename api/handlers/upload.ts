@@ -11,6 +11,7 @@ import {
 import type {
   BuildLogEntry,
   UploadResponse,
+  VersionTestAttestationMetadata,
 } from "../../shared/types/index.ts";
 import {
   ALLOWED_EXTENSIONS,
@@ -75,6 +76,8 @@ import {
 } from "../services/trust.ts";
 import { putLiveExecutedBundle } from "../services/executed-bundle.ts";
 import { createServerLogger } from "../services/logging.ts";
+import { isAccountSessionAuthSource } from "../services/control-plane-auth.ts";
+import { initialReleaseVersionState } from "../services/release-version.ts";
 
 // Export file type for programmatic uploads
 export interface UploadFile {
@@ -204,6 +207,12 @@ export async function handleUpload(request: Request): Promise<Response> {
     let userId: string;
     try {
       const user = await authenticate(request);
+      if (!isAccountSessionAuthSource(user.authSource)) {
+        return error(
+          "Legacy REST uploads require an authenticated Galactic account session. Connected agents must use the attested gx.test → gx.upload flow.",
+          403,
+        );
+      }
       userId = user.id;
       uploadLogger.info("Upload request authenticated", { user_id: userId });
     } catch (authErr: unknown) {
@@ -553,6 +562,7 @@ export async function handleUpload(request: Request): Promise<Response> {
             name: appName,
             description: appDescription,
             storage_key: storageKey,
+            ...initialReleaseVersionState(version),
             exports: gpuExports,
             manifest: manifest ? JSON.stringify(manifest) : null,
             env_schema: manifest ? resolveManifestEnvSchema(manifest) : {},
@@ -803,6 +813,7 @@ export async function handleUpload(request: Request): Promise<Response> {
             name: appName,
             description: summary,
             storage_key: storageKey,
+            ...initialReleaseVersionState(version),
             exports: [],
             manifest: null,
             app_type: "skill",
@@ -1099,6 +1110,7 @@ export async function handleUpload(request: Request): Promise<Response> {
           name: appName,
           description: appDescription,
           storage_key: storageKey,
+          ...initialReleaseVersionState(version),
           exports,
           // Store manifest data for later use
           manifest: manifest ? JSON.stringify(manifest) : null,
@@ -1360,6 +1372,12 @@ export async function handleDraftUpload(
     let userId: string;
     try {
       const user = await authenticate(request);
+      if (!isAccountSessionAuthSource(user.authSource)) {
+        return error(
+          "Legacy REST draft uploads require an authenticated Galactic account session. Connected agents must use gx.upload to stage a tested version.",
+          403,
+        );
+      }
       userId = user.id;
     } catch (authErr: unknown) {
       uploadLogger.warn("Draft upload authentication failed", {
@@ -1735,6 +1753,10 @@ interface UploadOptions {
   app_type?: "mcp";
   functions_entry?: string; // e.g., "functions.ts"
   gap_id?: string; // Links upload to a platform gap for assessment
+  // Internal platform-MCP proof fields. These are computed and verified by the
+  // caller; they are never accepted from an HTTP form upload.
+  source_hash?: string;
+  test_attestation?: VersionTestAttestationMetadata;
 }
 
 /**
@@ -1948,6 +1970,7 @@ export async function handleUploadFiles(
     description: appDescription,
     visibility: requestedVisibility,
     storage_key: storageKey,
+    ...initialReleaseVersionState(version),
     exports,
     manifest: manifest ? JSON.stringify(manifest) : null,
     env_schema: manifest ? resolveManifestEnvSchema(manifest) : {},
@@ -1966,7 +1989,13 @@ export async function handleUploadFiles(
       }
       : {}),
     version_metadata: [
-      buildVersionMetadataEntry(version, totalUploadSizeBytes, versionTrust),
+      buildVersionMetadataEntry(
+        version,
+        totalUploadSizeBytes,
+        versionTrust,
+        options.source_hash,
+        options.test_attestation,
+      ),
     ],
   };
   if (validatedOptions.gap_id) createPayload.gap_id = validatedOptions.gap_id;

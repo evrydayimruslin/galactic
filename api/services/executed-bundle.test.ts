@@ -9,7 +9,9 @@ import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals
 import {
   __resetVerdictCacheForTest,
   type BundleAttestation,
+  deleteLiveExecutedBundle,
   executedBundleVerifyMode,
+  handleExecutedBundleVerdict,
   isExecutedBundleViolation,
   loadLiveExecutedBundle,
   putLiveExecutedBundle,
@@ -83,12 +85,31 @@ Deno.test("executed bundle: bundle + attestation are stored atomically (KV metad
   }
 });
 
-Deno.test("executed bundle: a swapped bundle (stale attestation) → hash_mismatch", async () => {
+Deno.test("executed bundle: ephemeral pointers can be deleted after gx.test", async () => {
+  const kv = installKv();
+  try {
+    await putLiveExecutedBundle({
+      appId: "test_ephemeral",
+      version: "test",
+      esmCode: "export const ok = true;",
+    });
+    assert(kv.store.has(KEY("test_ephemeral")));
+    await deleteLiveExecutedBundle("test_ephemeral");
+    assert(!kv.store.has(KEY("test_ephemeral")));
+  } finally {
+    kv.restore();
+  }
+});
+
+Deno.test("executed bundle: a cached good verdict cannot mask swapped bytes", async () => {
   const kv = installKv();
   try {
     await putLiveExecutedBundle({ appId: "app_1", version: "1.0.0", esmCode: "GOOD" });
+    assertEquals((await verifyLive("app_1")).status, "ok");
     const att = kv.store.get(KEY("app_1"))!.metadata;
-    // Raw KV swap of the bytes WITHOUT a fresh attestation — the RUG-2 divergence.
+    // Raw KV swap of the bytes WITHOUT a fresh attestation — the RUG-2
+    // divergence. Do not reset the verdict cache: exact-byte hashing must make
+    // the earlier `ok` ineligible for these new bytes.
     kv.store.set(KEY("app_1"), { value: "EVIL", metadata: att });
     const r = await verifyLive("app_1");
     assertEquals(r.status, "hash_mismatch");
@@ -196,5 +217,43 @@ Deno.test("executed bundle: verify mode parses off/observe/enforce with observe 
     assertEquals(executedBundleVerifyMode(), "observe");
   } finally {
     g.__env = prev;
+  }
+});
+
+Deno.test("executed bundle: persistent routines require verified-ok in every rollout mode", () => {
+  const originalWarn = console.warn;
+  console.warn = () => undefined;
+  try {
+    for (const mode of ["off", "observe", "enforce"] as const) {
+      assertEquals(
+        handleExecutedBundleVerdict(
+          "app_routine",
+          { status: "version_mismatch" },
+          mode,
+          true,
+        ),
+        true,
+      );
+      assertEquals(
+        handleExecutedBundleVerdict(
+          "app_routine",
+          { status: "no_attestation" },
+          mode,
+          true,
+        ),
+        true,
+      );
+      assertEquals(
+        handleExecutedBundleVerdict(
+          "app_routine",
+          { status: "ok" },
+          mode,
+          true,
+        ),
+        false,
+      );
+    }
+  } finally {
+    console.warn = originalWarn;
   }
 });

@@ -19,6 +19,8 @@ const CORE_GUIDANCE = [
   "`skill_reader(args: { skill_id: string })`",
   "Generated skills.md function docs are always free",
   "`gx.download({ name, description, policy: true })`",
+  "test_attestation: tested.test_attestation",
+  "exact same decoded file set",
   "custom code path for functions",
   "default_price_credits",
 ];
@@ -180,16 +182,32 @@ Deno.test("initialize instructions carry the first-contact directive that shapes
     assertStringIncludes(instructions, "## First contact");
     assertStringIncludes(
       instructions,
-      "I can build and deploy new Agents for you",
+      "I can build and deploy a private Agent that keeps",
     );
-    // It must teach (the four verbs) and invite follow-ups / teaching.
-    for (const verb of ["**Discover**", "**Call**", "**Build**", "**Deploy**"]) {
+    // It must teach the complete durable delegation flow.
+    for (
+      const verb of [
+        "**Describe**",
+        "**Scaffold**",
+        "**Test**",
+        "**Deploy**",
+        "**Activate**",
+        "**Supervise**",
+      ]
+    ) {
       assertStringIncludes(instructions, verb);
     }
-    assertStringIncludes(instructions, "ongoing guide");
-    // Awe-but-true guardrails travel with the directive.
-    assertStringIncludes(instructions, "awe that is true");
-    assertStringIncludes(instructions, "never the internal");
+    assertStringIncludes(instructions, "one recurring job");
+    assertStringIncludes(instructions, "private and owner-only");
+    assertStringIncludes(instructions, "hard routine ceiling");
+    assertStringIncludes(instructions, "short-lived `test_attestation`");
+    assertStringIncludes(instructions, "exact tested files");
+    assertStringIncludes(instructions, "new version is staged before");
+    assertStringIncludes(
+      instructions,
+      "Connected-agent credentials cannot approve or activate",
+    );
+    assertEquals(instructions.includes("full public marketplace"), false);
     // The directive heads the instructions, before the dense reference.
     const firstContactAt = instructions.indexOf("## First contact");
     const platformToolsAt = instructions.indexOf("## Platform Tools");

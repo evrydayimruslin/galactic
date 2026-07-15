@@ -12,8 +12,10 @@ import {
   type RoutineRunRow,
   type RoutineRunStatus,
   type StoredRoutine,
+  validateRoutineActivation,
 } from "./routines.ts";
 import { createNotification } from "./notifications.ts";
+import { validateRoutineLaunchActivation } from "./routine-platform.ts";
 
 const ROUTINE_SELECT =
   "id,user_id,composer_app_id,composer_app_slug,template_id,template_version,name,description,intent,handler_function,status,schedule,config,budget_policy,approval_policy,max_concurrency,next_run_at,last_run_at,last_success_at,last_error_at,failure_count,created_by_trace_id,metadata,created_at,updated_at,deleted_at,lease_id,lease_expires_at";
@@ -427,18 +429,16 @@ function nextRetryAt(
 // ---------------------------------------------------------------------------
 // Budget enforcement + circuit breaker.
 //
-// budget_policy caps (shared/contracts/routine.ts) are enforced here with no
-// schema changes:
-// - Day/month caps gate SCHEDULED wakes before the handler runs. Spend is
-//   rolled up on the routine row (metadata.budget_spend) from each terminal
-//   run's total_light, so the gate costs zero extra queries. An exhausted
-//   budget records ONE skipped run and defers next_run_at to the budget reset
-//   boundary (next UTC midnight / first of next UTC month) instead of
-//   re-skipping every cadence tick. Manual run_now bypasses these gates — it
-//   is an explicit user action.
-// - Per-run caps (max_light_per_run, max_calls_per_run) cannot stop a
-//   synchronous handler mid-flight; a violation auto-pauses the routine after
-//   the run, limiting a runaway loop to a single wake.
+// This executor provides a coarse wake-level gate and circuit breaker. The
+// authoritative run/day/month/call decision happens atomically before every
+// billable app/AI operation in reserve_routine_run_budget.
+// - The metadata day/month rollup avoids waking an Agent that is already known
+//   to be exhausted and defers next_run_at to the UTC reset boundary. It is an
+//   optimization only; manual and scheduled work remain subject to the same
+//   database-backed admission limits even if this best-effort rollup is stale.
+// - Per-run Light/call ceilings stop new billable operations before execution.
+//   The post-run check below remains a defense-in-depth circuit breaker for
+//   legacy/nonbillable contribution anomalies.
 // - The circuit breaker auto-pauses after consecutive failed attempts
 //   (failure_count already resets on success), so a routine that can never
 //   succeed — e.g. wallet below the inference floor — stops rescheduling
@@ -898,6 +898,10 @@ async function claimQueuedRunForExecution(
     },
     {
       status: "running",
+      // Backfill legacy queued rows atomically with the claim. New runs already
+      // carry a trace, but no actor token may be minted from an incomplete
+      // routine/run/trace tuple.
+      trace_id: run.trace_id || crypto.randomUUID(),
       started_at: run.started_at ?? iso(now),
       lease_id: crypto.randomUUID(),
       lease_expires_at: iso(addMs(now, leaseMs)),
@@ -1276,21 +1280,89 @@ async function executeClaimedRun(
     return { status: "failed" };
   }
 
-  // "paused" is included so an auto-pause (circuit breaker / budget) also
-  // stops queued retries that were claimed before the pause landed.
-  if (
-    routine.status === "deleted" || routine.status === "disabled" ||
-    routine.status === "paused"
-  ) {
+  // Only active routines may execute. This also stops queued retries claimed
+  // before any pause, disable, delete, or terminal error transition landed.
+  if (routine.status !== "active") {
     await finishRun(run, "skipped", now, {
       summary: `Routine is ${routine.status}`,
     });
     return { status: "skipped" };
   }
 
-  // Day/month budget gate for scheduled wakes. Manual run_now bypasses it —
-  // an explicit user action, and a debugging path while a budget is spent.
-  if (run.trigger === "scheduled") {
+  // Defense in depth for legacy rows that were activated before owner-only
+  // capability approval became mandatory. The executor must never turn a
+  // stale/hand-edited active row into authority. Pause it atomically enough
+  // for the shared runner and leave an actionable run error + notification.
+  const activation = validateRoutineActivation(routine);
+  const activationBlockers: Array<{
+    code: string;
+    message: string;
+    capability_ids?: string[];
+  }> = [...activation.blockers];
+  const launchPrimary = routine.metadata?.launch_primary === true;
+  const legacyLaunchRoutine = routine.metadata?.source === "ul.routine";
+  if (legacyLaunchRoutine && !launchPrimary) {
+    activationBlockers.push({
+      code: "noncanonical_launch_routine",
+      message:
+        "This legacy launch routine is not the Agent's canonical primary routine and must be reconciled before execution.",
+    });
+  } else if (launchPrimary) {
+    try {
+      await validateRoutineLaunchActivation(routine.user_id, routine);
+    } catch (err) {
+      activationBlockers.push({
+        code: "launch_invariant_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (activationBlockers.length > 0) {
+    const completedAt = clock();
+    await finishRun(run, "skipped", completedAt, {
+      summary: "Routine failed launch-safety validation and was paused.",
+      error: {
+        code: "routine_activation_blocked",
+        blockers: activationBlockers,
+      },
+    });
+    await patchRows<ExecutorRoutineRow>(
+      "user_routines",
+      { id: `eq.${routine.id}`, status: "eq.active", select: ROUTINE_SELECT },
+      {
+        status: "paused",
+        updated_at: iso(completedAt),
+        metadata: {
+          ...(routine.metadata || {}),
+          auto_pause: {
+            reason: "activation_validation_failed",
+            at: iso(completedAt),
+            blockers: activationBlockers,
+          },
+        },
+      },
+      "Failed to pause routine with pending capabilities",
+    ).catch(() => {});
+    await createNotification({
+      userId: routine.user_id,
+      kind: "routine_activation_blocked",
+      severity: "critical",
+      title: `${routine.name} needs attention`,
+      body:
+        `The Agent was paused before execution: ${
+          activationBlockers.map((item) => item.message).join(" ")
+        }`,
+      entityType: "routine",
+      entityId: routine.id,
+      dedupeKey: `routine_activation_blocked:${routine.id}`,
+    });
+    return { status: "skipped", autoPaused: true };
+  }
+
+  // Day/month budget gate for every wake. Manual owner-triggered runs are not
+  // a budget escape hatch; an explicit override can be added later as a
+  // separately authorized one-shot operation.
+  {
     const gate = budgetGate(routine, now);
     if (gate) {
       const label = gate.period === "daily" ? "Daily" : "Monthly";
@@ -1698,4 +1770,3 @@ export async function runRoutineExecutorCycle(
 
   return summary;
 }
-

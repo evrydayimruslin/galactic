@@ -186,6 +186,121 @@ Deno.test("app runtime resources: runtime env reports missing required per-user 
   );
 });
 
+Deno.test("app runtime resources: universal credentials stay parent-side and are never injected", async () => {
+  const credential = {
+    destination: "archive.example.com",
+    inject: {
+      as: "header" as const,
+      name: "Authorization",
+      prefix: "Bearer ",
+    },
+  };
+  const result = await resolveAppRuntimeEnvVars(
+    {
+      id: "app-123",
+      env_vars: {
+        ARCHIVE_TOKEN: "enc-token",
+        REGION: "enc-region",
+      },
+      env_schema: {
+        ARCHIVE_TOKEN: {
+          scope: "universal",
+          required: true,
+          credential,
+        },
+        REGION: { scope: "universal", required: true },
+      },
+      manifest: null,
+    },
+    "user-123",
+    {
+      decryptEnvVarsFn: async (values) =>
+        Object.fromEntries(
+          Object.entries(values).map(([key, value]) => [key, `plain:${value}`]),
+        ),
+      fetchFn: async () => new Response(JSON.stringify([]), { status: 200 }),
+      supabaseUrl: "https://supabase.example",
+      supabaseServiceRoleKey: "service-role",
+    },
+  );
+
+  assertEquals(result.envVars, { REGION: "plain:enc-region" });
+  assertEquals(result.credentials, {
+    ARCHIVE_TOKEN: { value: "plain:enc-token", credential },
+  });
+  assertEquals(result.missingRequiredSecrets, []);
+});
+
+Deno.test("app runtime resources: undecryptable required universal settings fail closed", async () => {
+  const result = await resolveAppRuntimeEnvVars(
+    {
+      id: "app-123",
+      env_vars: { REQUIRED_SETTING: "malformed-ciphertext" },
+      env_schema: {
+        REQUIRED_SETTING: { scope: "universal", required: true },
+      },
+      manifest: null,
+    },
+    "user-123",
+    {
+      decryptEnvVarsFn: async () => {
+        throw new Error("cannot decrypt");
+      },
+      fetchFn: async () => new Response(JSON.stringify([]), { status: 200 }),
+      supabaseUrl: "https://supabase.example",
+      supabaseServiceRoleKey: "service-role",
+      logger: { error: () => undefined },
+    },
+  );
+
+  assertEquals(result.envVars, {});
+  assertEquals(result.credentials, {});
+  assertEquals(result.missingRequiredSecrets, ["REQUIRED_SETTING"]);
+});
+
+Deno.test("app runtime resources: undeclared dormant secret rows never enter runtime bindings", async () => {
+  const decrypted: string[] = [];
+  const result = await resolveAppRuntimeEnvVars(
+    {
+      id: "app-123",
+      env_vars: {},
+      env_schema: {
+        ACTIVE_TOKEN: {
+          scope: "per_user",
+          input: "password",
+          required: true,
+        },
+      },
+      manifest: null,
+    },
+    "user-123",
+    {
+      decryptEnvVarsFn: async () => ({}),
+      decryptEnvVarFn: async (value: string) => {
+        decrypted.push(value);
+        return `plain:${value}`;
+      },
+      fetchFn: async () =>
+        new Response(
+          JSON.stringify([
+            { key: "ACTIVE_TOKEN", value_encrypted: "active" },
+            { key: "REMOVED_TOKEN", value_encrypted: "dormant" },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      supabaseUrl: "https://supabase.example",
+      supabaseServiceRoleKey: "service-role",
+    },
+  );
+
+  assertEquals(decrypted, ["active"]);
+  assertEquals(result.credentials, {
+    ACTIVE_TOKEN: { value: "plain:active", credential: undefined },
+  });
+  assertEquals(result.envVars, {});
+  assertEquals(result.missingRequiredSecrets, []);
+});
+
 Deno.test("app runtime resources: Supabase config prefers config_id before legacy fallbacks", async () => {
   const calls: string[] = [];
   const telemetry: Array<Record<string, unknown>> = [];

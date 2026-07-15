@@ -105,6 +105,7 @@ import {
   stripeCustomerExists,
 } from "../services/stripe-customers.ts";
 import { isGpuSupportEnabled } from "../services/gpu/feature-flag.ts";
+import { isAccountSessionAuthSource } from "../services/control-plane-auth.ts";
 
 const stripeLogger = createServerLogger("STRIPE");
 const userLogger = createServerLogger("USER");
@@ -1104,6 +1105,18 @@ export async function handleUser(request: Request): Promise<Response> {
     return error("Authentication required", 401);
   }
 
+  // Generic user/account REST routes include token management, provider keys,
+  // billing, publication-era marketplace actions, and other owner authority.
+  // They predate scoped Connect credentials, so allowing an api_token here
+  // would bypass Platform MCP's build/operate boundaries (and could mint a new
+  // broader key). Connected agents use gx.*; all remaining routes are owner UI.
+  if (!isAccountSessionAuthSource(authSource)) {
+    return error(
+      "Account and control-plane settings require an authenticated Galactic account session",
+      403,
+    );
+  }
+
   // BYOK key management is account-session-only, matching the launch facade
   // (requireAccountSessionForByok): agent API tokens and routine actors must
   // not be able to install or rotate the user's provider keys.
@@ -1532,6 +1545,23 @@ export async function handleUser(request: Request): Promise<Response> {
   // ============================================
   // GET/PATCH/POST /api/user/routines - Command routine monitoring
   // ============================================
+  // Reading routine status is safe for an authenticated owner credential, but
+  // activation and manual execution are account-session authority boundaries.
+  // Connected-agent API keys propose routines through gx.routine; they cannot
+  // bypass human approval by calling the older user endpoint directly.
+  const isRoutineMutation = path.startsWith("/api/user/routines/") &&
+    (method === "PATCH" || method === "POST");
+  if (
+    isRoutineMutation &&
+    (authSource === "api_token" || authSource === "routine_actor" ||
+      authSource === "sandbox_actor")
+  ) {
+    return error(
+      "Routine activation and manual runs require an account session",
+      403,
+    );
+  }
+
   if (path === "/api/user/routines" && method === "GET") {
     try {
       const { listRoutineMonitor } = await import(

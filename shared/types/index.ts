@@ -106,6 +106,20 @@ export interface VersionMetadata {
   // pipeline). Used to dedup a re-upload of byte-identical files so a redeploy
   // loop can't spam versions. Absent on versions deployed before this shipped.
   source_hash?: string;
+  // Verified gx.test proof persisted only after the server accepts a signed,
+  // unexpired token for this exact raw source hash. The opaque token itself is
+  // intentionally not stored (it is replayable until expiry).
+  test_attestation?: VersionTestAttestationMetadata;
+}
+
+export interface VersionTestAttestationMetadata {
+  schema_version: 1;
+  attestation_id: string;
+  mode: "deno_execution" | "gpu_validation";
+  source_hash: string;
+  tested_at: string;
+  token_expires_at: string;
+  verified_at: string;
 }
 
 export interface VersionTrustSignature {

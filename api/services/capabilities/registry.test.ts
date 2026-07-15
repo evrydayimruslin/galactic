@@ -124,6 +124,7 @@ Deno.test("registry: MCP projection honors LITE (core-only) and Free Mode", () =
       "gx.set",
       "gx.consent",
       "gx.secrets",
+      "gx.routine",
     ]
   ) {
     assert(lite.includes(name), `${name} should be in the LITE manifest`);
@@ -133,16 +134,13 @@ Deno.test("registry: MCP projection honors LITE (core-only) and Free Mode", () =
   // and the progressive-disclosure list.
   assert(!lite.includes("gx.flag"), "gx.flag is demoted — not in LITE");
   assert(full.includes("gx.flag"), "gx.flag should be in the full manifest");
-  // routine + emit are demoted (autonomous-execution tools, not in the lean set)
-  // but present in the full manifest.
-  assert(!lite.includes("gx.routine"), "gx.routine is demoted — not in LITE");
-  assert(full.includes("gx.routine"), "gx.routine should be in the full manifest");
+  // Manual event fanout remains demoted, while routines are launch-core above.
   assert(!lite.includes("gx.emit"), "gx.emit is demoted — not in LITE");
   assert(full.includes("gx.emit"), "gx.emit should be in the full manifest");
   // Demoted registry tools, in registration order (for the scope="tools" list).
   assertEquals(
     registryDemotedMcpTools().map((t) => t.name),
-    ["gx.download", "gx.db", "gx.notifications", "gx.flag", "gx.routine", "gx.emit"],
+    ["gx.download", "gx.db", "gx.notifications", "gx.flag", "gx.emit"],
   );
 });
 

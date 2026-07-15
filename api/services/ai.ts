@@ -132,6 +132,18 @@ const formatOpenAICompatibleRequest = (request: AIRequest, model: string): unkno
   tools: request.tools,
 });
 
+/** Exact provider body used by the shared OpenAI-compatible runtime path. */
+export function buildAIProviderRequestBody(
+  request: AIRequest,
+  model: string,
+  requestDefaults: Record<string, unknown> = {},
+): unknown {
+  const formattedBody = formatOpenAICompatibleRequest(request, model);
+  return typeof formattedBody === 'object' && formattedBody !== null
+    ? { ...(formattedBody as Record<string, unknown>), ...requestDefaults }
+    : formattedBody;
+}
+
 const parseOpenAICompatibleResponse = (data: unknown): AIResponse => {
   const d = data as {
     choices?: Array<{ message?: { content?: string } }>;
@@ -221,10 +233,14 @@ export class AIService {
 
     const url = `${providerConfig.baseUrl.replace(/\/$/, '')}${providerConfig.endpoint}`;
     const headers = providerConfig.formatHeaders(this.apiKey);
-    const formattedBody = providerConfig.formatRequest(request, model);
-    const body = typeof formattedBody === 'object' && formattedBody !== null
-      ? { ...(formattedBody as Record<string, unknown>), ...this.requestDefaults }
-      : formattedBody;
+    const body = providerConfig.formatRequest === formatOpenAICompatibleRequest
+      ? buildAIProviderRequestBody(request, model, this.requestDefaults)
+      : (() => {
+        const formattedBody = providerConfig.formatRequest(request, model);
+        return typeof formattedBody === 'object' && formattedBody !== null
+          ? { ...(formattedBody as Record<string, unknown>), ...this.requestDefaults }
+          : formattedBody;
+      })();
 
     const response = await fetch(url, {
       method: 'POST',

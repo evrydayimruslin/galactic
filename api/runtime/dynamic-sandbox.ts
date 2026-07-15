@@ -52,7 +52,7 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-10.embed.v1";
+const SANDBOX_TEMPLATE_VERSION = "2026-07-14.routine-emit-test-runtime.v2";
 
 // Reuse eligibility lives in its own dependency-light module (imported above) so
 // billing imports the SAME predicate — a divergent copy is a money bug (see the
@@ -72,10 +72,10 @@ export { isolateReuseEligibility };
  *     grant/dependency change, BYOK key, envVars, user, egress allowlist, AI
  *     route) ⇒ a fresh isolate, so a warm one never serves stale secrets/grants.
  *
- * The caller-context token's PRESENCE is fingerprinted (it decides whether the
- * EVENTS binding exists in the baked env) but its VALUE is not — the value is
- * per-call (hop/function/expiry) and is resolved per-RPC from the execution-
- * context registry, never from baked content. Only functionName/args/authToken/
+ * The caller-context token's and routine context's PRESENCE are fingerprinted
+ * (together they decide whether the EVENTS binding exists in the baked env),
+ * but their VALUES are not — per-call identity resolves through the execution-
+ * context registry, never baked content. Only functionName/args/authToken/
  * callerCtx/execCtxHandle vary within a key; those ride the fetch body.
  * Exported for unit-testing the isolation invariants.
  */
@@ -87,6 +87,7 @@ export async function deriveIsolateReuseKey(
     | "user"
     | "envVars"
     | "permissions"
+    | "testMode"
     | "credentials"
     | "appCallDependencies"
     | "slotBindings"
@@ -94,6 +95,7 @@ export async function deriveIsolateReuseKey(
     | "aiRoute"
     | "aiUnavailableReason"
     | "callerContextToken"
+    | "routineContext"
     | "supabase"
     | "baseUrl"
     | "workerBaseUrl"
@@ -121,6 +123,8 @@ export async function deriveIsolateReuseKey(
     user: config.user ?? null,
     env: config.envVars ?? {},
     perms: [...(config.permissions ?? [])].sort(),
+    // Changes AI/embed/notify from production RPC bindings to host-only stubs.
+    testMode: config.testMode === true,
     // Credential VALUES are included: a rotation changes the fingerprint and
     // mints a fresh isolate, so a warm one never serves a stale secret.
     creds: config.credentials ?? {},
@@ -131,6 +135,11 @@ export async function deriveIsolateReuseKey(
     aiUnavailable: config.aiUnavailableReason ?? null,
     // Presence only — the token value is per-call and rides the fetch body.
     hasCallerCtx: !!config.callerContextToken,
+    // Routine execution deliberately has no EVENTS binding (deferred fanout is
+    // not yet attributable to the originating routine budget). This decision
+    // is baked into setup.js/loadConfig.env, so routine and interactive calls
+    // must never share a warm-isolate key.
+    hasRoutineContext: !!config.routineContext,
     supabase: config.supabase ?? null,
     callBase: config.baseUrl || config.workerBaseUrl || "",
     dests: allowedDestinations ?? [],
@@ -217,6 +226,9 @@ interface DynamicWorkerEntrypointExports {
       };
     },
   ): unknown;
+  TestAIBinding(input: { props: Record<string, never> }): unknown;
+  TestEmbedBinding(input: { props: Record<string, never> }): unknown;
+  TestNotifyBinding(input: { props: Record<string, never> }): unknown;
   AIBinding(input: {
     props: {
       userId: string;
@@ -237,6 +249,7 @@ interface DynamicWorkerEntrypointExports {
       modelPinned?: boolean;
       unavailableReason?: string | null;
       requireExecCtx?: boolean;
+      routineContext?: RuntimeConfig["routineContext"] | null;
     };
   }): unknown;
   EmbedBinding(input: {
@@ -247,6 +260,7 @@ interface DynamicWorkerEntrypointExports {
       executionId?: string | null;
       userApiKey?: string | null;
       requireExecCtx?: boolean;
+      routineContext?: RuntimeConfig["routineContext"] | null;
     };
   }): unknown;
   NetworkBinding(input: {
@@ -357,14 +371,21 @@ export async function executeInDynamicSandbox(
     // observe (default) only warns. Legacy (no attestation) + infra/secret errors
     // never block.
     const bundleVerifyMode = executedBundleVerifyMode();
-    if (bundleVerifyMode !== "off") {
+    if (bundleVerifyMode !== "off" || config.routineContext) {
       const verdict = await verifyExecutedBundle({
         appId: config.appId,
         esmCode,
         attestation,
         expectedVersion: config.expectedVersion,
       });
-      if (handleExecutedBundleVerdict(config.appId, verdict, bundleVerifyMode)) {
+      if (
+        handleExecutedBundleVerdict(
+          config.appId,
+          verdict,
+          bundleVerifyMode,
+          Boolean(config.routineContext),
+        )
+      ) {
         return {
           success: false,
           result: null,
@@ -399,6 +420,8 @@ export async function executeInDynamicSandbox(
       dependencyAppIds: (config.appCallDependencies || [])
         .map((dependency) => dependency.app)
         .filter(Boolean),
+      routineContext: config.routineContext,
+      routineCapabilities: config.routineCapabilityCeiling,
     });
     const slotBindingsJson = JSON.stringify(config.slotBindings || []);
     const callDependenciesJson = JSON.stringify(
@@ -559,6 +582,7 @@ globalThis.ultralight = {
   // user + hop unforgeably. The platform worker secret never enters the sandbox.
   // Capped per execution to bound emit storms.
   async emit(topic, payload) {
+    if (${!!config.routineContext}) throw new Error('galactic.emit is unavailable during routine execution: deferred event fanout is not yet budget-attributed.');
     if (!topic || typeof topic !== 'string') throw new Error('emit requires a topic string');
     var e = globalThis.__rpcEnv;
     if (!e || !e.EVENTS) throw new Error('emit requires an authenticated user context');
@@ -798,80 +822,100 @@ export default {
       });
     }
 
-    // Owner notifications (manifest notify:owner): self-notification only —
-    // the (appId, userId) identity is baked host-side, the kind is fixed to
-    // agent_report, dedupe keys are namespaced per app, and writes are
-    // rate-capped per (user, app, day). See services/agent-notify.ts.
-    if (
-      config.permissions.includes("notify:owner") && ctx?.exports?.NotifyBinding
-    ) {
-      bindings.NOTIFY = ctx.exports.NotifyBinding({
-        props: {
-          appId: config.appId,
-          userId: config.userId,
-          requireExecCtx: useGetReuse,
-        },
-      });
+    // gx.test is a host-selected execution mode: declared capabilities remain
+    // visible to the code, but provider/billing/inbox side effects are replaced
+    // with deterministic parent-worker RPC stubs. If a test binding export is
+    // missing, fail closed by leaving the capability unavailable; never fall
+    // through to its production binding.
+    if (config.permissions.includes("notify:owner")) {
+      if (config.testMode === true) {
+        if (ctx?.exports?.TestNotifyBinding) {
+          bindings.NOTIFY = ctx.exports.TestNotifyBinding({ props: {} });
+        }
+      } else if (ctx?.exports?.NotifyBinding) {
+        // Owner notifications (manifest notify:owner): self-notification only.
+        bindings.NOTIFY = ctx.exports.NotifyBinding({
+          props: {
+            appId: config.appId,
+            userId: config.userId,
+            requireExecCtx: useGetReuse,
+          },
+        });
+      }
     }
 
-    if (config.permissions.includes("ai:call") && ctx?.exports?.AIBinding) {
-      bindings.AI = ctx.exports.AIBinding({
-        props: {
-          userId: config.userId,
-          // appId is stable for the isolate's lifetime (reuse key includes the
-          // app), so props are a safe legacy fallback — unlike functionName,
-          // which is per-call and resolves via the execution context only.
-          appId: config.appId || null,
-          executionId: config.executionId || null,
-          apiKey: config.aiRoute?.apiKey || config.userApiKey,
-          provider: config.aiRoute?.provider || null,
-          upstreamProvider: config.aiRoute?.upstreamProvider ||
-            config.aiRoute?.provider || null,
-          baseUrl: config.aiRoute?.baseUrl || null,
-          defaultModel: config.aiRoute?.model || null,
-          canonicalModelId: config.aiRoute?.canonicalModelId || null,
-          billingModelId: config.aiRoute?.billingModelId || null,
-          billingSource: config.aiRoute?.billingSource || null,
-          keySource: config.aiRoute?.keySource || null,
-          requestDefaults: config.aiRoute?.requestDefaults || null,
-          shouldDebitLight: !!config.aiRoute?.shouldDebitLight,
-          shouldRequireBalance: !!config.aiRoute?.shouldRequireBalance,
-          modelPinned: !!config.aiRoute?.modelPinned,
-          unavailableReason: config.aiUnavailableReason || null,
-          requireExecCtx: useGetReuse,
-        },
-      });
+    if (config.permissions.includes("ai:call")) {
+      if (config.testMode === true) {
+        if (ctx?.exports?.TestAIBinding) {
+          bindings.AI = ctx.exports.TestAIBinding({ props: {} });
+        }
+      } else if (ctx?.exports?.AIBinding) {
+        bindings.AI = ctx.exports.AIBinding({
+          props: {
+            userId: config.userId,
+            // appId is stable for the isolate's lifetime (reuse key includes the
+            // app), so props are a safe legacy fallback — unlike functionName,
+            // which is per-call and resolves via the execution context only.
+            appId: config.appId || null,
+            executionId: config.executionId || null,
+            apiKey: config.aiRoute?.apiKey || config.userApiKey,
+            provider: config.aiRoute?.provider || null,
+            upstreamProvider: config.aiRoute?.upstreamProvider ||
+              config.aiRoute?.provider || null,
+            baseUrl: config.aiRoute?.baseUrl || null,
+            defaultModel: config.aiRoute?.model || null,
+            canonicalModelId: config.aiRoute?.canonicalModelId || null,
+            billingModelId: config.aiRoute?.billingModelId || null,
+            billingSource: config.aiRoute?.billingSource || null,
+            keySource: config.aiRoute?.keySource || null,
+            requestDefaults: config.aiRoute?.requestDefaults || null,
+            shouldDebitLight: !!config.aiRoute?.shouldDebitLight,
+            shouldRequireBalance: !!config.aiRoute?.shouldRequireBalance,
+            modelPinned: !!config.aiRoute?.modelPinned,
+            unavailableReason: config.aiUnavailableReason || null,
+            routineContext: config.routineContext ?? null,
+            requireExecCtx: useGetReuse,
+          },
+        });
+      }
     }
 
-    if (
-      config.permissions.includes("ai:embed") && ctx?.exports?.EmbedBinding
-    ) {
-      bindings.EMBED = ctx.exports.EmbedBinding({
-        props: {
-          userId: config.userId,
-          appId: config.appId,
-          appVersion: config.expectedVersion ?? null,
-          executionId: config.executionId ?? null,
-          // EmbeddingService calls OpenRouter's /embeddings endpoint directly.
-          // Only pass a genuine user OpenRouter BYOK key; a platform route key
-          // or a direct-provider BYOK key belongs to a different endpoint and
-          // must never be misclassified as unbilled OpenRouter usage.
-          userApiKey:
-            config.aiRoute?.keySource === "user_byok" &&
-              config.aiRoute?.upstreamProvider === "openrouter"
-              ? config.aiRoute.apiKey
-              : null,
-          requireExecCtx: useGetReuse,
-        },
-      });
+    if (config.permissions.includes("ai:embed")) {
+      if (config.testMode === true) {
+        if (ctx?.exports?.TestEmbedBinding) {
+          bindings.EMBED = ctx.exports.TestEmbedBinding({ props: {} });
+        }
+      } else if (ctx?.exports?.EmbedBinding) {
+        bindings.EMBED = ctx.exports.EmbedBinding({
+          props: {
+            userId: config.userId,
+            appId: config.appId,
+            appVersion: config.expectedVersion ?? null,
+            executionId: config.executionId ?? null,
+            // Only pass a genuine user OpenRouter BYOK key; another route key
+            // belongs to a different endpoint and must never be misclassified.
+            userApiKey:
+              config.aiRoute?.keySource === "user_byok" &&
+                config.aiRoute?.upstreamProvider === "openrouter"
+                ? config.aiRoute.apiKey
+                : null,
+            routineContext: config.routineContext ?? null,
+            requireExecCtx: useGetReuse,
+          },
+        });
+      }
     }
 
     // Events (pub/sub emit): host-side RPC binding. The signed caller-context
     // token (emitter app + user + hop, unforgeable) is passed as a prop and
     // verified inside the binding — the platform WORKER_SECRET never enters the
-    // sandbox isolate. Only present for authenticated executions (the token is
-    // minted only for a real user), matching the prior emit auth requirement.
-    if (config.callerContextToken && ctx?.exports?.EventsBinding) {
+    // sandbox isolate. Only present for authenticated, non-routine executions.
+    // Event delivery does not yet persist the originating routine/run/trace or
+    // reserve downstream fanout, so routine EVENTS would escape hard budgets.
+    if (
+      config.callerContextToken && !config.routineContext &&
+      ctx?.exports?.EventsBinding
+    ) {
       bindings.EVENTS = ctx.exports.EventsBinding({
         props: {
           callerContextToken: config.callerContextToken,
@@ -981,6 +1025,7 @@ export default {
       cloudOperationMetering: config.cloudOperationMetering,
       cloudOperationBillingConfig: config.cloudOperationBillingConfig,
       callerContextToken: config.callerContextToken ?? null,
+      routineContext: config.routineContext ?? null,
     });
 
     // 5b. Warm-isolate reuse (Cloudflare Worker Loader get()). Reusing a warm

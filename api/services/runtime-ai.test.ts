@@ -1,4 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
+import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejects.ts";
 import { assertStringIncludes } from "https://deno.land/std@0.210.0/assert/assert_string_includes.ts";
 import type { ResolvedInferenceRoute } from "./inference-route.ts";
 import { createRoutedRuntimeAIService, createRuntimeAIContext } from "./runtime-ai.ts";
@@ -201,6 +202,265 @@ Deno.test("runtime AI: Galactic direct DeepSeek disables thinking and debits cac
     assertEquals(response.usage.cost_light, 0.0365);
     assertEquals(debitBody?.p_amount_light, 0.0365);
     assertEquals((debitBody?.p_metadata as Record<string, unknown>)?.billing_source, "platform_deepseek_direct");
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalWithEnv.__env = previousEnv;
+  }
+});
+
+Deno.test("runtime AI: routine admission prices the complete provider payload", async () => {
+  const previousFetch = globalThis.fetch;
+  const globalWithEnv = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
+  const previousEnv = globalWithEnv.__env;
+  let reservedLight = 0;
+  let providerBody: Record<string, unknown> = {};
+  const largeDefault = "d".repeat(50_000);
+  const largeTool = "t".repeat(50_000);
+
+  try {
+    globalWithEnv.__env = {
+      ...(previousEnv || {}),
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    };
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : {};
+      if (url.includes("/rpc/reserve_routine_run_budget")) {
+        reservedLight = body.p_reserve_light as number;
+        return Response.json([{
+          allowed: true,
+          code: "ok",
+          message: "reserved",
+          reservation_id: "44444444-4444-4444-8444-444444444444",
+          reservation_key: body.p_reservation_key,
+          reserved_light: reservedLight,
+          calls_used: 1,
+          calls_limit: 25,
+          light_used: 0,
+          light_reserved: reservedLight,
+          light_limit: 100,
+        }]);
+      }
+      if (url.includes("/chat/completions")) {
+        providerBody = body;
+        return Response.json({
+          model: "deepseek/deepseek-v4-flash",
+          choices: [{ message: { content: "ok" } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        });
+      }
+      if (url.includes("/rpc/settle_routine_run_budget_reservation")) {
+        return Response.json(true);
+      }
+      if (url.includes("/rpc/debit_light")) {
+        return Response.json([{
+          old_balance: 100,
+          new_balance: 99.99,
+          was_depleted: false,
+          amount_debited: body.p_amount_light,
+        }]);
+      }
+      if (url.includes("/billing_transactions")) {
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const service = createRoutedRuntimeAIService(
+      makeCreditsRoute({
+        requestDefaults: { platform_prompt: largeDefault },
+      }),
+      "user-1",
+      async () => 1000,
+      {
+        routineContext: {
+          routineId: "11111111-1111-4111-8111-111111111111",
+          routineRunId: "22222222-2222-4222-8222-222222222222",
+          traceId: "33333333-3333-4333-8333-333333333333",
+        },
+      },
+    );
+    const response = await service.call({
+      messages: [{ role: "user", content: "small message" }],
+      max_tokens: 1,
+      tools: [{
+        name: "large_tool",
+        description: largeTool,
+        parameters: { type: "object" },
+      }],
+    });
+
+    assertEquals(response.content, "ok");
+    assertEquals(providerBody.platform_prompt, largeDefault);
+    assertEquals(
+      (providerBody.tools as Array<Record<string, unknown>>)[0].description,
+      largeTool,
+    );
+    // A messages-only estimate for this request is effectively zero; the
+    // substantial reservation proves tools + platform defaults were included.
+    assertEquals(reservedLight > 0.1, true);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalWithEnv.__env = previousEnv;
+  }
+});
+
+Deno.test("runtime AI: ambiguous provider failure consumes the conservative reservation", async () => {
+  const previousFetch = globalThis.fetch;
+  const globalWithEnv = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
+  const previousEnv = globalWithEnv.__env;
+  let settledBody: Record<string, unknown> | null = null;
+  let released = false;
+
+  try {
+    globalWithEnv.__env = {
+      ...(previousEnv || {}),
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    };
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : {};
+      if (url.includes("/rpc/reserve_routine_run_budget")) {
+        return Response.json([{
+          allowed: true,
+          code: "ok",
+          message: "reserved",
+          reservation_id: "44444444-4444-4444-8444-444444444444",
+          reservation_key: body.p_reservation_key,
+          reserved_light: 7.5,
+          calls_used: 1,
+          calls_limit: 25,
+          light_used: 0,
+          light_reserved: 7.5,
+          light_limit: 100,
+        }]);
+      }
+      if (url.includes("/chat/completions")) {
+        return new Response("provider timeout after dispatch", { status: 504 });
+      }
+      if (url.includes("/rpc/settle_routine_run_budget_reservation")) {
+        settledBody = body;
+        return Response.json(true);
+      }
+      if (url.includes("/rpc/release_routine_run_budget_reservation")) {
+        released = true;
+        return Response.json(true);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const service = createRoutedRuntimeAIService(
+      makeCreditsRoute(),
+      "user-1",
+      async () => 1000,
+      {
+        routineContext: {
+          routineId: "11111111-1111-4111-8111-111111111111",
+          routineRunId: "22222222-2222-4222-8222-222222222222",
+          traceId: "33333333-3333-4333-8333-333333333333",
+        },
+      },
+    );
+    await assertRejects(
+      () =>
+        service.call({
+          messages: [{ role: "user", content: "perform work" }],
+          max_tokens: 10,
+        }),
+      Error,
+      "AI provider error (504)",
+    );
+    const settlement = settledBody as Record<string, unknown> | null;
+    assertEquals(settlement?.p_actual_light, 7.5);
+    assertEquals(settlement?.p_apply_spend, true);
+    assertEquals(released, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalWithEnv.__env = previousEnv;
+  }
+});
+
+Deno.test("runtime AI: routine BYOK reserves zero Light but still creates a call slot", async () => {
+  const previousFetch = globalThis.fetch;
+  const globalWithEnv = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
+  const previousEnv = globalWithEnv.__env;
+  let reserveBody: Record<string, unknown> | null = null;
+
+  try {
+    globalWithEnv.__env = {
+      ...(previousEnv || {}),
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    };
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : {};
+      if (url.includes("/rpc/reserve_routine_run_budget")) {
+        reserveBody = body;
+        return Response.json([{
+          allowed: true,
+          code: "ok",
+          message: "reserved",
+          reservation_id: "44444444-4444-4444-8444-444444444444",
+          reservation_key: body.p_reservation_key,
+          reserved_light: body.p_reserve_light,
+          calls_used: 1,
+          calls_limit: 25,
+          light_used: 0,
+          light_reserved: 0,
+          light_limit: 100,
+        }]);
+      }
+      if (url.includes("/chat/completions")) {
+        return Response.json({
+          model: "deepseek-v4-pro",
+          choices: [{ message: { content: "ok" } }],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        });
+      }
+      if (url.includes("/rpc/settle_routine_run_budget_reservation")) {
+        return Response.json(true);
+      }
+      if (url.includes("/ai_usage_events")) {
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const service = createRoutedRuntimeAIService(
+      makeRoute(),
+      "user-1",
+      undefined,
+      {
+        routineContext: {
+          routineId: "11111111-1111-4111-8111-111111111111",
+          routineRunId: "22222222-2222-4222-8222-222222222222",
+          traceId: "33333333-3333-4333-8333-333333333333",
+        },
+      },
+    );
+    const response = await service.call({
+      messages: [{ role: "user", content: "BYOK" }],
+    });
+
+    assertEquals(response.content, "ok");
+    const reservation = reserveBody as Record<string, unknown> | null;
+    assertEquals(reservation?.p_reserve_light, 0);
+    assertEquals(reservation?.p_kind, "ai_call");
   } finally {
     globalThis.fetch = previousFetch;
     globalWithEnv.__env = previousEnv;

@@ -3,6 +3,7 @@
 // Pure utility — no API calls, no side effects.
 
 import { parse as parseYaml } from 'yaml';
+import { isCanonicalAppVersion } from '../../../shared/contracts/manifest.ts';
 import type { GpuBaseProfile, GpuConfig, GpuType } from './types.ts';
 import { GPU_BASE_PROFILES, isValidGpuType } from './types.ts';
 
@@ -142,10 +143,10 @@ export function parseGpuConfig(yamlContent: string): GpuConfigValidation {
   // safe as an R2 path segment (apps/{appId}/{version}/).
   let version: string | undefined;
   if (parsed.version !== undefined) {
-    const rawVersion = String(parsed.version).trim();
-    if (!/^\d+\.\d+\.\d+$/.test(rawVersion)) {
+    const rawVersion = String(parsed.version);
+    if (!isCanonicalAppVersion(rawVersion)) {
       errors.push(
-        `"version" must be semver x.y.z (e.g. 1.2.0), got "${String(parsed.version)}"`,
+        `"version" must be canonical semver x.y.z (e.g. 1.2.0), got "${String(parsed.version)}"`,
       );
     } else {
       version = rawVersion;

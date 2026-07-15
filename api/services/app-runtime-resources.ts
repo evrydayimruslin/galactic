@@ -268,7 +268,9 @@ export async function resolveAppRuntimeEnvVars(
   const logger = deps?.logger ?? createServerLogger("APP-RUNTIME");
   const envVars = await resolveAppEnvVars(app, deps);
   const envSchema = resolveAppEnvSchema(app);
+  const universalEntries = getScopedEnvSchemaEntries(envSchema, "universal");
   const perUserEntries = getScopedEnvSchemaEntries(envSchema, "per_user");
+  const declaredPerUserKeys = new Set(perUserEntries.map(({ key }) => key));
   // All per-user values are resolved into this PARENT-SIDE map (host-side net.*
   // and the CredentialBinding resolve them by key). Non-secret CONFIG is ALSO
   // copied into envVars (readable) below; SECRETS live only here.
@@ -278,6 +280,17 @@ export async function resolveAppRuntimeEnvVars(
   // port, the user's email, etc.), injected into the sandbox like a universal var.
   const isVaultedSecret = (entry: EnvSchemaEntry): boolean =>
     entry.input === "password" || !!entry.credential;
+  // Credential bindings are always parent-side, regardless of who owns the
+  // value. Universal credentials are decrypted from the Agent store, moved to
+  // the host credential map, and removed before sandbox env injection.
+  for (const { key, entry } of universalEntries) {
+    if (!entry.credential) continue;
+    const value = envVars[key];
+    if (typeof value === "string") {
+      credentials[key] = { value, credential: entry.credential };
+    }
+    delete envVars[key];
+  }
   // Remove any app-level default for a per-user SECRET key — secrets must never
   // sit in the sandbox env, even as a developer default.
   for (const { key, entry } of perUserEntries) {
@@ -305,13 +318,17 @@ export async function resolveAppRuntimeEnvVars(
         : [];
 
       for (const secret of userSecrets) {
+        // The live manifest/schema is the authority boundary. Rows may outlive
+        // an older version's declaration; never decrypt or expose a dormant row
+        // merely because generated code guessed its historic key.
+        if (!declaredPerUserKeys.has(secret.key)) continue;
         try {
           const value = await decryptEnvVarFn(secret.value_encrypted);
           const entry = envSchema[secret.key];
-          credentials[secret.key] = { value, credential: entry?.credential };
+          credentials[secret.key] = { value, credential: entry.credential };
           // Non-secret per-user CONFIG (host/port/email/name) is readable in the
           // sandbox env, like a universal var. Actual SECRETS stay vaulted-only.
-          if (entry && !isVaultedSecret(entry)) {
+          if (!isVaultedSecret(entry)) {
             envVars[secret.key] = value;
           }
         } catch (err) {
@@ -332,10 +349,23 @@ export async function resolveAppRuntimeEnvVars(
     }
   }
 
-  const missingRequiredSecrets = perUserEntries
+  const missingRequiredUniversal = universalEntries
+    .filter(({ entry }) => entry.required)
+    .map(({ key, entry }) => ({ key, credential: Boolean(entry.credential) }))
+    .filter(({ key, credential }) =>
+      credential
+        ? !credentials[key] || credentials[key].value.length === 0
+        : typeof envVars[key] !== "string" || envVars[key].length === 0
+    )
+    .map(({ key }) => key);
+  const missingRequiredPerUser = perUserEntries
     .filter(({ entry }) => entry.required)
     .map(({ key }) => key)
-    .filter((key) => !credentials[key]);
+    .filter((key) => !credentials[key] || credentials[key].value.length === 0);
+  const missingRequiredSecrets = [
+    ...missingRequiredUniversal,
+    ...missingRequiredPerUser,
+  ];
 
   return { envVars, credentials, envSchema, missingRequiredSecrets };
 }

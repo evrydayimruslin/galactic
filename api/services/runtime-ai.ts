@@ -6,11 +6,25 @@ import type {
 } from "../../shared/contracts/ai.ts";
 import { CHAT_MIN_BALANCE_LIGHT } from "../../shared/contracts/ai.ts";
 import type { RuntimeAIRoute } from "../runtime/sandbox.ts";
-import { createAIService } from "./ai.ts";
+import { buildAIProviderRequestBody, createAIService } from "./ai.ts";
 import { recordUnbilledAiUsage } from "./ai-usage-events.ts";
-import { checkChatBalance, deductChatCost } from "./chat-billing.ts";
+import {
+  calculateCostLight,
+  checkChatBalance,
+  deductChatCost,
+} from "./chat-billing.ts";
 import { isFreeModeEnabled } from "./free-mode.ts";
 import { selectInferenceModel } from "./inference-client.ts";
+import {
+  releaseRoutineRunBudgetReservation,
+  reserveRoutineRunBudget,
+  settleRoutineRunBudgetReservation,
+} from "./routine-budget.ts";
+import type { RoutineTraceContext } from "./routine-trace.ts";
+import {
+  buildRoutineAIAttemptBudget,
+  routineAIAllAttemptsFailedSettlementLight,
+} from "./routine-ai-budget.ts";
 import {
   InferenceRouteError,
   resolveInferenceRoute,
@@ -85,6 +99,7 @@ function toChatUsage(response: AIResponse): ChatUsage {
 interface RuntimeAIAttribution {
   appId?: string | null;
   functionName?: string | null;
+  routineContext?: RoutineTraceContext | null;
 }
 
 export function createRoutedRuntimeAIService(
@@ -93,11 +108,23 @@ export function createRoutedRuntimeAIService(
   checkBalance: typeof checkChatBalance = checkChatBalance,
   attribution: RuntimeAIAttribution = {},
 ): RuntimeAIService {
+  const requestDefaults = { ...(route.requestDefaults || {}) };
+  if (
+    typeof requestDefaults.max_tokens === "number" &&
+    Number.isFinite(requestDefaults.max_tokens)
+  ) {
+    requestDefaults.max_tokens = Math.min(
+      32_768,
+      Math.max(1, Math.floor(requestDefaults.max_tokens)),
+    );
+  } else if ("max_tokens" in requestDefaults) {
+    delete requestDefaults.max_tokens;
+  }
   const service = createAIService(
     route.upstreamProvider,
     route.apiKey,
     route.model,
-    route.requestDefaults,
+    requestDefaults,
   );
   // A metered route re-checks the wallet on EVERY ai() call. The context-build
   // gate (createRuntimeAIContext) only fires once; without this a buyer could
@@ -109,6 +136,62 @@ export function createRoutedRuntimeAIService(
   return {
     call: async (request: AIRequest): Promise<AIResponse> => {
       const model = selectInferenceModel(route, request.model);
+      const boundedRequest = {
+        ...request,
+        model,
+        max_tokens: Math.min(
+          32_768,
+          Math.max(1, Math.floor(request.max_tokens || 4096)),
+        ),
+      };
+      let budgetReservationId: string | null = null;
+      let budgetReservedLight = 0;
+      if (attribution.routineContext) {
+        const providerPayload = buildAIProviderRequestBody(
+          boundedRequest,
+          model,
+          requestDefaults,
+        ) as Record<string, unknown>;
+        const maxTokens = typeof providerPayload.max_tokens === "number"
+          ? Math.min(32_768, Math.max(1, Math.floor(providerPayload.max_tokens)))
+          : boundedRequest.max_tokens;
+        const promptTokens = new TextEncoder().encode(
+          JSON.stringify(providerPayload),
+        ).byteLength;
+        const billingModel = route.billingSource === "platform_deepseek_direct"
+          ? route.canonicalModelId ?? model
+          : route.billingModelId ?? model;
+        let reserveLight = route.shouldDebitLight
+          ? calculateCostLight({
+            prompt_tokens: promptTokens,
+            completion_tokens: maxTokens,
+            total_tokens: promptTokens + maxTokens,
+          }, billingModel, undefined, { billingSource: route.billingSource })
+          : 0;
+        reserveLight = buildRoutineAIAttemptBudget(reserveLight)
+          .totalReservedLight;
+        try {
+          const admission = await reserveRoutineRunBudget({
+            userId,
+            routine: attribution.routineContext,
+            reservationKey: `ai:in-process:${crypto.randomUUID()}`,
+            kind: "ai_call",
+            reserveLight,
+          });
+          if (!admission.allowed || !admission.reservation) {
+            return emptyAIResponse(model, admission.message);
+          }
+          budgetReservationId = admission.reservation.id;
+          budgetReservedLight = admission.reservation.reservedLight;
+        } catch (error) {
+          return emptyAIResponse(
+            model,
+            `Routine budget admission unavailable; AI call refused: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
 
       if (metered) {
         // Fail OPEN on a balance-read error (match the context-build gate's
@@ -125,6 +208,12 @@ export function createRoutedRuntimeAIService(
           );
         }
         if (balance !== null && balance < CHAT_MIN_BALANCE_LIGHT) {
+          if (budgetReservationId) {
+            await releaseRoutineRunBudgetReservation({
+              reservationId: budgetReservationId,
+              userId,
+            }).catch(() => {});
+          }
           return emptyAIResponse(
             model,
             `Platform inference requires at least ${CHAT_MIN_BALANCE_LIGHT} credits ` +
@@ -134,8 +223,61 @@ export function createRoutedRuntimeAIService(
         }
       }
 
-      const response = await service.call({ ...request, model });
+      let response: AIResponse;
+      try {
+        response = await service.call(boundedRequest);
+      } catch (error) {
+        if (budgetReservationId) {
+          // The provider may have completed work before a transport failure.
+          // Conservatively finalize the full reservation; on RPC failure leave
+          // it reserved so expiry reconciliation charges the same maximum.
+          await settleRoutineRunBudgetReservation({
+            reservationId: budgetReservationId,
+            userId,
+            actualLight: routineAIAllAttemptsFailedSettlementLight(
+              budgetReservedLight,
+            ),
+            applySpend: true,
+          }).catch(() => {});
+        }
+        throw error;
+      }
       const usage = toChatUsage(response);
+
+      if (response.error && budgetReservationId) {
+        await settleRoutineRunBudgetReservation({
+          reservationId: budgetReservationId,
+          userId,
+          actualLight: routineAIAllAttemptsFailedSettlementLight(
+            budgetReservedLight,
+          ),
+          applySpend: true,
+        }).catch(() => {});
+      } else if (budgetReservationId) {
+        const billingModel = route.billingSource === "platform_deepseek_direct"
+          ? response.model || model
+          : route.billingModelId ?? response.model ?? model;
+        const actualLight = route.shouldDebitLight
+          ? calculateCostLight(usage, billingModel, undefined, {
+            billingSource: route.billingSource,
+          })
+          : 0;
+        try {
+          await settleRoutineRunBudgetReservation({
+            reservationId: budgetReservationId,
+            userId,
+            actualLight,
+            applySpend: true,
+          });
+        } catch (error) {
+          return emptyAIResponse(
+            response.model || model,
+            `Routine budget settlement failed; AI result withheld: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
 
       if (route.shouldDebitLight && usage.total_tokens > 0) {
         try {
@@ -225,6 +367,7 @@ export interface CreateRuntimeAIContextOptions {
   // App + entry-function attribution stamped onto this execution's billing
   // and usage rows. Omitted on surfaces with no app context (e.g. chat).
   attribution?: RuntimeAIAttribution;
+  routineContext?: RoutineTraceContext | null;
 }
 
 export async function createRuntimeAIContext(
@@ -310,7 +453,10 @@ export async function createRuntimeAIContext(
         route,
         user.id,
         checkBalance,
-        options.attribution ?? {},
+        {
+          ...(options.attribution ?? {}),
+          routineContext: options.routineContext ?? null,
+        },
       ),
       userApiKey: route.apiKey,
       unavailableReason: null,

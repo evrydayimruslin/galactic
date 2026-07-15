@@ -6,6 +6,12 @@ import {
   resolveUlTestEnvVars,
   resolveUlTestInvocation,
 } from "./ul-test-inputs.ts";
+import {
+  createUlTestAiResponse,
+  createUlTestEmbedResponse,
+  createUlTestMemoryAdapter,
+  createUlTestNotifyResponse,
+} from "./ul-test-runtime.ts";
 
 Deno.test("ul test inputs: extracts exported functions from entry code", () => {
   const exports = extractUlTestExports(`
@@ -128,4 +134,33 @@ Deno.test("ul test inputs: validates explicit D1 fixture config", () => {
       ],
     },
   );
+});
+
+Deno.test("ul test runtime: host stubs are deterministic and side-effect free", () => {
+  const ai = createUlTestAiResponse();
+  assertEquals(JSON.parse(ai.content), {
+    assessment: "gx.test deterministic AI response",
+    actions: [],
+  });
+  assertEquals(ai.usage.cost_light, 0);
+  assertEquals(createUlTestEmbedResponse(), {
+    embedding: [0, 0, 0, 0],
+    model: "gx-test-embedding-stub",
+    dimensions: 4,
+    usage: { input_tokens: 0, total_tokens: 0, cost_light: 0 },
+  });
+  assertEquals(createUlTestNotifyResponse(), {
+    created: false,
+    reason: "test_mode",
+  });
+});
+
+Deno.test("ul test runtime: memory is invocation-local and starts empty", async () => {
+  const first = createUlTestMemoryAdapter();
+  assertEquals(await first.recall("mission"), null);
+  await first.remember("mission", { state: "working" });
+  assertEquals(await first.recall("mission"), { state: "working" });
+
+  const nextInvocation = createUlTestMemoryAdapter();
+  assertEquals(await nextInvocation.recall("mission"), null);
 });

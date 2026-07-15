@@ -4,6 +4,7 @@ import { toRawMcpFunctionName } from "./mcp-function-names.ts";
 import { logLegacyPermissionNameCompatibility } from "./permission-name-telemetry.ts";
 import {
   isRoutineActorToken,
+  type RoutineActorCapabilityScope,
   type RoutineActorTokenClaims,
   verifyRoutineActorToken,
 } from "./routine-auth.ts";
@@ -11,6 +12,7 @@ import {
   isSandboxActorToken,
   verifySandboxActorToken,
 } from "./sandbox-actor.ts";
+import type { RoutineTraceContext } from "./routine-trace.ts";
 import { getUserFromToken, isApiToken } from "./tokens.ts";
 
 export type RequestTokenSourcePolicy = "bearer_only" | "bearer_or_cookie";
@@ -36,6 +38,14 @@ export interface AuthenticatedRequestUser {
   tokenAppIds?: string[] | null;
   tokenFunctionNames?: string[] | null;
   scopes?: string[];
+  /**
+   * Immutable execution attribution recovered from a server-signed actor
+   * token. Unlike routineActor, this may be present on a downstream
+   * sandbox_actor and confers no root-handler privileges.
+   */
+  routineContext?: RoutineTraceContext;
+  /** Exact approved routine target/function pairs, signed into actor tokens. */
+  routineCapabilityCeiling?: RoutineActorCapabilityScope[];
   routineActor?: {
     tokenId: string;
     routineId: string;
@@ -46,6 +56,10 @@ export interface AuthenticatedRequestUser {
     handlerFunction?: string;
     budgetPolicy?: RoutineActorTokenClaims["budget_policy"];
     capabilities: RoutineActorTokenClaims["capabilities"];
+  };
+  sandboxActor?: {
+    /** Executing Agent identity signed into the sandbox bearer. */
+    appId: string;
   };
   user_metadata?: Record<string, string>;
 }
@@ -161,6 +175,12 @@ export async function authenticateRequest(
       tokenAppIds: claims.app_ids,
       tokenFunctionNames: claims.function_names,
       scopes: claims.scopes,
+      routineContext: {
+        routineId: claims.routine_id,
+        routineRunId: claims.routine_run_id,
+        ...(claims.trace_id ? { traceId: claims.trace_id } : {}),
+      },
+      routineCapabilityCeiling: claims.capabilities,
       routineActor: {
         tokenId: claims.jti,
         routineId: claims.routine_id,
@@ -200,6 +220,17 @@ export async function authenticateRequest(
       tokenAppIds: claims.app_ids,
       tokenFunctionNames: claims.function_names,
       scopes: claims.scopes,
+      routineCapabilityCeiling: claims.routine_capabilities ?? [],
+      sandboxActor: { appId: claims.app_id },
+      ...(claims.routine_id && claims.routine_run_id
+        ? {
+          routineContext: {
+            routineId: claims.routine_id,
+            routineRunId: claims.routine_run_id,
+            ...(claims.trace_id ? { traceId: claims.trace_id } : {}),
+          },
+        }
+        : {}),
     };
   }
 

@@ -460,6 +460,7 @@ export function buildVersionMetadataEntry(
   sizeBytes: number,
   trust: VersionTrustMetadata,
   sourceHash?: string,
+  testAttestation?: VersionMetadata["test_attestation"],
 ): VersionMetadata {
   return {
     version,
@@ -467,22 +468,31 @@ export function buildVersionMetadataEntry(
     created_at: new Date().toISOString(),
     trust,
     ...(sourceHash ? { source_hash: sourceHash } : {}),
+    ...(testAttestation ? { test_attestation: testAttestation } : {}),
   };
 }
 
 /**
  * Deterministic hash of a RAW uploaded file-set — developer intent, before any
  * deploy-pipeline transform. Sort by path, hash each file's content, then hash
- * the canonical {path: contentHash} map. Two identical uploads produce the same
- * hash; any change to a file's path or content (including manifest.json) changes
- * it. Used to dedup a re-upload of byte-identical files.
+ * the canonical [[path, contentHash], ...] sequence. An array is intentional:
+ * object assignment has magic keys such as "__proto__" that can disappear from
+ * an ordinary record and create a source-attestation collision. Two identical
+ * uploads produce the same hash; any change to a file's path or content
+ * (including manifest.json) changes it. Used to dedup a re-upload of
+ * byte-identical files.
  */
 export async function computeUploadSourceHash(
   files: Array<{ path: string; content: string }>,
 ): Promise<string> {
-  const perFile: Record<string, string> = {};
+  const perFile: Array<[string, string]> = [];
+  const seen = new Set<string>();
   for (const f of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
-    perFile[f.path] = await sha256Hex(f.content);
+    if (seen.has(f.path)) {
+      throw new Error(`Duplicate source file path: ${f.path}`);
+    }
+    seen.add(f.path);
+    perFile.push([f.path, await sha256Hex(f.content)]);
   }
   return await sha256Hex(canonicalJson(perFile));
 }

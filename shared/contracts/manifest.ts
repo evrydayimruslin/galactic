@@ -595,7 +595,7 @@ export function normalizeEnvSchema(
     const entry = value as Record<string, unknown>;
     const description = typeof entry.description === 'string' ? entry.description : undefined;
     normalized[key] = {
-      scope: normalizeEnvScope(entry.scope),
+      scope: normalizeEnvScope(entry.scope ?? entry.type),
       description,
       required: typeof entry.required === 'boolean' ? entry.required : undefined,
       label: typeof entry.label === 'string' && entry.label.trim()
@@ -604,6 +604,9 @@ export function normalizeEnvSchema(
       input: normalizeEnvInput(entry.input, key, description),
       placeholder: typeof entry.placeholder === 'string' ? entry.placeholder : undefined,
       help: typeof entry.help === 'string' ? entry.help : undefined,
+      group: typeof entry.group === 'string' && entry.group.trim()
+        ? entry.group.trim()
+        : undefined,
       credential: normalizeEnvCredential(entry.credential),
     };
   }
@@ -2803,6 +2806,26 @@ function validateEnvCredential(
   }
 }
 
+// Versions are used as R2 path segments and KV key suffixes. Keep the accepted
+// form narrower than general SemVer so reserved aliases such as `latest`, path
+// fragments, whitespace-normalized variants, and unbounded numeric segments
+// can never collide with platform-owned storage keys.
+export const CANONICAL_APP_VERSION_PATTERN =
+  /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
+
+export function isCanonicalAppVersion(value: unknown): value is string {
+  return typeof value === 'string' && CANONICAL_APP_VERSION_PATTERN.test(value);
+}
+
+export function nextCanonicalAppPatchVersion(
+  current: string | null | undefined,
+): string | null {
+  if (!isCanonicalAppVersion(current)) return '1.0.1';
+  const [major, minor, patch] = current.split('.').map(Number);
+  if (patch >= 999_999_999) return null;
+  return `${major}.${minor}.${patch + 1}`;
+}
+
 export function validateManifest(input: unknown): ManifestValidationResult {
   const errors: ManifestValidationError[] = [];
   const warnings: string[] = [];
@@ -2836,6 +2859,12 @@ export function validateManifest(input: unknown): ManifestValidationResult {
     errors.push({
       path: 'version',
       message: 'version is required and must be a string',
+    });
+  } else if (!isCanonicalAppVersion(manifest.version)) {
+    errors.push({
+      path: 'version',
+      message:
+        'version must be canonical x.y.z numeric semver (for example 1.2.3)',
     });
   }
 

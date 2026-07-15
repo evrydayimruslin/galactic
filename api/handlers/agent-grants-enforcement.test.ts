@@ -8,6 +8,8 @@ import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 
 import { handleMcp } from "./mcp.ts";
 import { mintCallerContextToken } from "../services/agent-caller-context.ts";
+import { createRoutineActorToken } from "../services/routine-auth.ts";
+import { createSandboxActorToken } from "../services/sandbox-actor.ts";
 
 const TARGET_ID = "33333333-3333-4333-8333-333333333333";
 const CALLER_APP_ID = "44444444-4444-4444-8444-444444444444";
@@ -69,6 +71,7 @@ function installHarness(options: HarnessOptions = {}): () => void {
     SUPABASE_SERVICE_ROLE_KEY: "service-key",
     SUPABASE_ANON_KEY: "anon-key",
     AGENT_CALLER_SECRET: "agent-caller-secret",
+    ROUTINE_ACTOR_TOKEN_SECRET: "routine-actor-secret",
     BASE_URL: "https://ultralight.test",
     ENVIRONMENT: "test",
   } as typeof globalThis.__env;
@@ -106,9 +109,10 @@ function installHarness(options: HarnessOptions = {}): () => void {
 async function callTarget(
   callerHeader: string | null,
   fnName = "getStock",
+  bearer = USER_TOKEN,
 ): Promise<Record<string, unknown>> {
   const headers: Record<string, string> = {
-    "Authorization": `Bearer ${USER_TOKEN}`,
+    "Authorization": `Bearer ${bearer}`,
     "Content-Type": "application/json",
   };
   if (callerHeader) headers["X-Galactic-Caller"] = callerHeader;
@@ -127,6 +131,85 @@ async function callTarget(
   );
   return await response.json() as Record<string, unknown>;
 }
+
+Deno.test("chokepoint: signed actors cannot bypass manifest bindings through synthetic SDK tools", async () => {
+  const cleanup = installHarness();
+  try {
+    const { token: routineToken } = await createRoutineActorToken({
+      user: { id: USER_ID, email: "operator@example.com", tier: "pro" },
+      routine: {
+        id: "routine-1",
+        composerAppId: TARGET_ID,
+        composerAppSlug: "inventory",
+        handlerFunction: "getStock",
+      },
+      routineRunId: "run-1",
+      traceId: "trace-1",
+      tokenId: "routine-token-1",
+      capabilities: [],
+    });
+    const { token: sandboxToken } = await createSandboxActorToken({
+      user: { id: USER_ID, email: "operator@example.com", tier: "pro" },
+      appId: TARGET_ID,
+      allowedAppIds: [TARGET_ID],
+      executionId: "sandbox-exec-1",
+      routineContext: {
+        routineId: "routine-1",
+        routineRunId: "run-1",
+        traceId: "trace-1",
+      },
+      routineCapabilities: [],
+    });
+    const sandboxCallerContext = await mintCallerContextToken({
+      callerAppId: TARGET_ID,
+      userId: USER_ID,
+      callerFunction: "getStock",
+    });
+
+    for (
+      const actor of [
+        { bearer: routineToken, callerHeader: null },
+        { bearer: sandboxToken, callerHeader: sandboxCallerContext },
+      ]
+    ) {
+      for (
+        const tool of [
+          "ultralight.ai",
+          "ultralight.store",
+          "ultralight.remove",
+          "ultralight.remember",
+        ]
+      ) {
+        const body = await callTarget(
+          actor.callerHeader,
+          tool,
+          actor.bearer,
+        );
+        const rpcError = body.error as {
+          code?: number;
+          data?: { type?: string };
+        };
+        assertEquals(rpcError.code, -32003);
+        assertEquals(rpcError.data?.type, "ACTOR_SDK_TOOL_FORBIDDEN");
+      }
+    }
+
+    // A tenant export remains on the normal self-call path. It may fail later
+    // in this intentionally execution-free harness, but never at the SDK gate.
+    const tenantCall = await callTarget(
+      sandboxCallerContext,
+      "getStock",
+      sandboxToken,
+    );
+    const tenantError = tenantCall.error as {
+      data?: { type?: string };
+    } | undefined;
+    assert(tenantError?.data?.type !== "ACTOR_SDK_TOOL_FORBIDDEN");
+    assert(tenantError?.data?.type !== "ROUTINE_CAPABILITY_REQUIRED");
+  } finally {
+    cleanup();
+  }
+});
 
 function activeGrantRow() {
   return {

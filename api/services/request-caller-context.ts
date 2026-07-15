@@ -35,7 +35,10 @@ export interface RequestCallerContext {
   tokenAppIds: string[] | null;
   tokenFunctionNames: string[] | null;
   scopes?: string[];
+  routineContext?: AuthenticatedRequestUser['routineContext'];
+  routineCapabilityCeiling?: AuthenticatedRequestUser['routineCapabilityCeiling'];
   routineActor?: AuthenticatedRequestUser['routineActor'];
+  sandboxActor?: AuthenticatedRequestUser['sandboxActor'];
   // Verified cross-Agent caller identity (from a valid X-Galactic-Caller
   // header). Present only when this request is one Agent calling another on
   // behalf of the user; drives the cross-Agent grant check.
@@ -80,7 +83,10 @@ function buildAnonymousContext(
     tokenAppIds: null,
     tokenFunctionNames: null,
     scopes: undefined,
+    routineContext: undefined,
+    routineCapabilityCeiling: undefined,
     routineActor: undefined,
+    sandboxActor: undefined,
   };
 }
 
@@ -173,7 +179,10 @@ export async function resolveRequestCallerContext(
       tokenAppIds: authUser.tokenAppIds || null,
       tokenFunctionNames: authUser.tokenFunctionNames || null,
       scopes: authUser.scopes,
+      routineContext: authUser.routineContext,
+      routineCapabilityCeiling: authUser.routineCapabilityCeiling,
       routineActor: authUser.routineActor,
+      sandboxActor: authUser.sandboxActor,
     };
   } catch (err) {
     if (allowAnonymous && invalidAuthPolicy === 'ignore') {
@@ -207,6 +216,55 @@ export function callerHasFunctionAccess(
   return caller.tokenFunctionNames.some(identifier => allowedIdentifiers.has(identifier));
 }
 
+/**
+ * Enforce a routine's exact approved `(target Agent, function)` authority.
+ * Flattened app/function token scopes are intentionally insufficient because
+ * they permit the cross-product A.g/B.f when only A.f and B.g were approved.
+ */
+export function callerWithinRoutineCapabilityCeiling(
+  caller: Pick<
+    RequestCallerContext,
+    | 'routineContext'
+    | 'routineCapabilityCeiling'
+    | 'routineActor'
+    | 'sandboxActor'
+  >,
+  targetAppIdentifiers: Array<string | null | undefined>,
+  functionIdentifiers: Array<string | null | undefined>,
+): boolean {
+  if (!caller.routineContext) return true;
+
+  const targets = new Set(
+    targetAppIdentifiers.filter((value): value is string => !!value),
+  );
+  const functions = new Set(
+    functionIdentifiers.filter((value): value is string => !!value),
+  );
+
+  // The root routine actor may invoke only its signed composer handler.
+  const composerMatches = [
+    caller.routineActor?.composerAppId,
+    caller.routineActor?.composerAppSlug,
+  ].some((identifier) => !!identifier && targets.has(identifier));
+  if (
+    composerMatches && caller.routineActor?.handlerFunction &&
+    functions.has(caller.routineActor.handlerFunction)
+  ) return true;
+
+  // Once inside a sandbox, calls back into that same executing Agent do not
+  // expand authority. Use the signed bearer app_id, never a caller-supplied
+  // header, to establish this self-call exception.
+  if (
+    caller.sandboxActor?.appId && targets.has(caller.sandboxActor.appId)
+  ) return true;
+
+  return (caller.routineCapabilityCeiling ?? []).some((capability) => {
+    const targetMatches = [capability.app_id, capability.app_ref]
+      .some((identifier) => !!identifier && targets.has(identifier));
+    return targetMatches && functions.has(capability.function_name);
+  });
+}
+
 export function callerHasRequiredScope(
   caller: Pick<RequestCallerContext, 'scopes'>,
   requiredScope: string,
@@ -230,4 +288,34 @@ export function callerUsesSandboxActorToken(
   caller: Pick<RequestCallerContext, 'authSource' | 'authState'>,
 ): boolean {
   return caller.authState === 'authenticated' && caller.authSource === 'sandbox_actor';
+}
+
+/**
+ * Synthetic MCP SDK tools are a legacy host-control surface, not tenant
+ * exports. A signed routine/sandbox actor must use the in-sandbox bindings,
+ * where manifest permissions and routine attribution are enforced. Otherwise
+ * a routine could call self `ultralight.ai`/storage/memory over MCP even when
+ * those capabilities were never bound into its sandbox.
+ */
+export function callerCanInvokeMcpTool(
+  caller: Pick<RequestCallerContext, 'authSource' | 'authState'>,
+  toolName: string,
+): boolean {
+  const syntheticSdkTool = toolName.startsWith('ultralight.') ||
+    toolName.startsWith('ul.');
+  if (!syntheticSdkTool) return true;
+  return !callerUsesRoutineActorToken(caller) &&
+    !callerUsesSandboxActorToken(caller);
+}
+
+/**
+ * Legacy /run and /http execution do not propagate the signed routine
+ * capability ceiling or immutable actor attribution into nested sandbox work.
+ * Keep actor execution on MCP until those routes carry the complete context.
+ */
+export function callerCanUseLegacyExecutionRoute(
+  caller: Pick<RequestCallerContext, 'authSource' | 'authState'>,
+): boolean {
+  return caller.authSource !== 'routine_actor' &&
+    caller.authSource !== 'sandbox_actor';
 }

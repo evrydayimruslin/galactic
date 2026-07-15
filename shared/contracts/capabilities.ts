@@ -50,6 +50,12 @@ export class CapabilityError extends Error {
 export interface CapabilityContext {
   userId: string;
   provisional: boolean;
+  /**
+   * Authentication class established by the surface's verifier. Authorization
+   * must use this value rather than re-reading a bearer header: credentials may
+   * arrive through another supported transport (for example an auth cookie).
+   */
+  authSource?: "supabase" | "api_token" | "routine_actor" | "sandbox_actor";
   /** The surface the call arrived on — for telemetry, never for authorization. */
   surface: CapabilitySurface;
   /**

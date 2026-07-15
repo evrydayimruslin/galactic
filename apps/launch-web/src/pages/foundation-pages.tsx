@@ -1,4 +1,5 @@
 import {
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
   type ReactNode,
   useEffect,
@@ -9,9 +10,7 @@ import {
 import type {
   AgentCallerTrustSummary,
   AgentGrantSummary,
-  AgentImportSlot,
   AgentWiringTarget,
-  AgentWiringView,
 } from "../../../../shared/contracts/agent-grants.ts";
 import { DEFAULT_GRANT_MONTHLY_CAP_CREDITS } from "../../../../shared/contracts/agent-grants.ts";
 import {
@@ -86,6 +85,7 @@ import agentClaudeUrl from "../assets/agents/agent-claude.png";
 import agentCodexUrl from "../assets/agents/agent-codex.png";
 import agentCursorUrl from "../assets/agents/agent-cursor.png";
 import agentOpenclawUrl from "../assets/agents/agent-openclaw.png";
+import { AgentHomeOverview } from "../components/agent-home-overview";
 
 // `null` metric fields mean "no real data" — the platform doesn't report this
 // stat (yet). Render an honest gap (omit/—), never a fabricated number.
@@ -199,9 +199,9 @@ function buildConnectPrompt(key: string): string {
     },
   });
   return [
-    "Set up Galactic for me, then show me what it can do.",
+    "Connect Galactic to this coding agent, then help me conjure one useful full-time Agent.",
     "",
-    "Galactic is one MCP connection that opens onto a growing collection and public marketplace of Agents (apps) you can discover and run, plus everything you need to build and deploy new ones — with unified auth and per-call payments handled through this single connection.",
+    "Galactic hosts private persistent Agents. You write and test the Agent; Galactic keeps it scheduled, sandboxed, stateful, bounded by owner-approved budgets and capabilities, and visible through run history and inbox reports.",
     "",
     "1. Install the MCP server (pick whichever works in your environment):",
     `   - Claude Code: ${claudeCodeAdd}`,
@@ -211,7 +211,7 @@ function buildConnectPrompt(key: string): string {
     "2. Connect, then learn the platform: the server's initialize response carries the full platform guide, including a first-contact directive for how to orient me on this first connection. The same docs are also served at " +
     `${apiOrigin}/api/skills.`,
     "",
-    `3. Take a look around, then give me a real orientation — not a few lines. Call gx.discover with {"scope":"library"} to see the Agents already on this account, and {"scope":"appstore"} to sample what's published in the wider marketplace. Then follow the first-contact directive in your platform guide and write me an informative, structured first message. If for any reason that directive isn't in the guide, cover it yourself: explain how Galactic works (discover, call, build, deploy), tell me plainly that you can build and deploy new Agents for me — not only find and run existing ones — and invite me to ask you how to use or build anything. Lead with one or two real Agents you actually found, so it's concrete, not a generic pitch. Be my guide to it.`,
+    '3. Inspect only my private Agent library with gx.discover({ scope: "library" }). Then ask me for one recurring responsibility. Turn it into a mission, scaffold with gx.download({ full_time: true }), implement and test a representative wake, upload it privately, and stop for my explicit review of capabilities, grants, cadence, secrets, and hard budgets before activation.',
     "",
     "Treat the API key in this prompt as a secret: never echo it back, log it, or commit it anywhere.",
   ].join("\n");
@@ -224,13 +224,15 @@ function connectKeyName(): string {
   return `Agent connect ${stamp} ${suffix}`;
 }
 
-// Full-capability key (scopes omitted defaults to all): what a connected agent
-// may actually do at runtime stays governed by the user's per-Agent
-// permission policies, not the token.
+// Builder/operator key for the user's primary coding agent. Keep the grants
+// explicit: legacy wildcard keys intentionally do not inherit newly-added
+// control-plane capabilities, and owner approvals still require the website
+// account session even with these scopes.
 function mintConnectKey(): Promise<string> {
   return launchApi.createApiKey({
     expiresInDays: 90,
     name: connectKeyName(),
+    scopes: ["apps:read", "apps:call", "agents:build", "agents:operate"],
   }).then((response) => response.plaintextToken);
 }
 
@@ -890,7 +892,7 @@ export function AddToAgentButton({
         ? (
           <ConnectPromptModal
             buildPrompt={buildPrompt}
-            intro="This created a 90-day API key (full capability — your per-Agent permissions still govern every call) and baked it into the prompt below. The key is shown only here."
+            intro="This created a 90-day key scoped to read, call, build, and operate your private Agents. Owner approvals, secrets, billing, and publication still require your Galactic account session. The key is shown only here."
             mint={mintConnectKey}
             onClose={() => setOpen(false)}
           />
@@ -1610,6 +1612,11 @@ function AgentDetailSurface({
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (fnMenuOpen) {
+          fnMenuRef.current?.querySelector<HTMLButtonElement>(":scope > button")?.focus();
+        } else if (intMenuOpen) {
+          intMenuRef.current?.querySelector<HTMLButtonElement>(":scope > button")?.focus();
+        }
         setFnMenuOpen(false);
         setIntMenuOpen(false);
       }
@@ -1622,12 +1629,14 @@ function AgentDetailSurface({
     };
   }, [fnMenuOpen, intMenuOpen]);
 
-  // Wiring is meaningful only when signed in and the Agent is the user's own
-  // (owner) or one they've installed. Public, signed-out views hide the tab.
   const signedIn = hasLaunchAuthToken();
-  const wiringRelevant = signedIn &&
-    (tool.relationship === "owner" || tool.relationship === "installed");
-  const pendingCount = live.data.agentWiring?.pendingRequests.length ?? 0;
+  const pendingCount = tool.relationship === "owner"
+    ? live.data.agentHome?.state.blockers.length ?? 0
+    : 0;
+  const home = tool.relationship === "owner" ? live.data.agentHome : undefined;
+  const headerTitle = home?.agent.name || tool.title;
+  const headerSummary = home?.responsibility.mission || home?.agent.description ||
+    tool.summary;
 
   // The Interface tab exists only when the facade reports renderable
   // interfaces (the feature kill switch): a stale ?tab=interface deep link
@@ -1640,6 +1649,35 @@ function AgentDetailSurface({
   const activateToolTab = (nextTab: AgentPageTabId) => {
     setTab(nextTab);
     syncSearchParams({ tab: nextTab === "overview" ? null : nextTab });
+  };
+
+  const tabPrefix = `agent-${tool.id}-tab`;
+  const panelId = `${tabPrefix}-panel`;
+  const activeTabId = effectiveTab === "functions"
+    ? `${tabPrefix}-functions`
+    : effectiveTab === "interface"
+    ? `${tabPrefix}-interface`
+    : `${tabPrefix}-overview`;
+  const moveTabFocus = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (
+      event.key !== "ArrowLeft" && event.key !== "ArrowRight" &&
+      event.key !== "Home" && event.key !== "End"
+    ) return;
+    const tabs = Array.from(
+      event.currentTarget.closest("[role=tablist]")?.querySelectorAll<HTMLButtonElement>(
+        "button[role=tab]",
+      ) ?? [],
+    );
+    const current = tabs.indexOf(event.currentTarget);
+    if (current < 0 || tabs.length === 0) return;
+    event.preventDefault();
+    const index = event.key === "Home"
+      ? 0
+      : event.key === "End"
+      ? tabs.length - 1
+      : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[index]?.focus();
+    tabs[index]?.click();
   };
 
   return (
@@ -1659,9 +1697,9 @@ function AgentDetailSurface({
       <section className="public-tool-header">
         <div>
           <div className="tool-title-row">
-            <h1>{tool.title}</h1>
+            <h1>{headerTitle}</h1>
           </div>
-          <p>{tool.summary}</p>
+          <p>{headerSummary}</p>
           <div className="tool-header-actions">
             <AgentConnectButton
               agentInstall={live.data.install?.agentInstall}
@@ -1673,24 +1711,34 @@ function AgentDetailSurface({
 
       <div className="tool-tabs" role="tablist" aria-label="Agent page sections">
         <button
+          aria-controls={panelId}
+          aria-selected={effectiveTab === "overview"}
           className={effectiveTab === "overview" ? "active" : ""}
+          id={`${tabPrefix}-overview`}
+          onKeyDown={moveTabFocus}
           onClick={() => {
             setFnMenuOpen(false);
             setIntMenuOpen(false);
             activateToolTab("overview");
           }}
           type="button"
+          role="tab"
+          tabIndex={effectiveTab === "overview" ? 0 : -1}
         >
           Overview
-          {wiringRelevant && pendingCount > 0
+          {pendingCount > 0
             ? <Pill tone="amber">{pendingCount}</Pill>
             : null}
         </button>
         <div className="tool-tab-menu" ref={fnMenuRef}>
           <button
+            aria-controls={panelId}
             aria-expanded={effectiveTab === "functions" && fnMenuOpen}
             aria-haspopup="listbox"
+            aria-selected={effectiveTab === "functions"}
             className={effectiveTab === "functions" ? "active" : ""}
+            id={`${tabPrefix}-functions`}
+            onKeyDown={moveTabFocus}
             onClick={() => {
               setIntMenuOpen(false);
               if (effectiveTab !== "functions") {
@@ -1701,6 +1749,8 @@ function AgentDetailSurface({
               }
             }}
             type="button"
+            role="tab"
+            tabIndex={effectiveTab === "functions" ? 0 : -1}
           >
             <span>Functions</span>
             {tool.functions.length > 0
@@ -1739,6 +1789,7 @@ function AgentDetailSurface({
                 onPick={(name) => {
                   setSelectedFunctionName(name);
                   setFnMenuOpen(false);
+                  fnMenuRef.current?.querySelector<HTMLButtonElement>(":scope > button")?.focus();
                 }}
                 selectedId={selectedFunction.name}
               />
@@ -1750,9 +1801,13 @@ function AgentDetailSurface({
             ? (
               <div className="tool-tab-menu" ref={intMenuRef}>
                 <button
+                  aria-controls={panelId}
                   aria-expanded={effectiveTab === "interface" && intMenuOpen}
                   aria-haspopup="listbox"
+                  aria-selected={effectiveTab === "interface"}
                   className={effectiveTab === "interface" ? "active" : ""}
+                  id={`${tabPrefix}-interface`}
+                  onKeyDown={moveTabFocus}
                   onClick={() => {
                     setFnMenuOpen(false);
                     if (effectiveTab !== "interface") {
@@ -1763,6 +1818,8 @@ function AgentDetailSurface({
                     }
                   }}
                   type="button"
+                  role="tab"
+                  tabIndex={effectiveTab === "interface" ? 0 : -1}
                 >
                   <span>Interfaces</span>
                   <span
@@ -1782,6 +1839,7 @@ function AgentDetailSurface({
                       onPick={(id) => {
                         setSelectedInterfaceId(id);
                         setIntMenuOpen(false);
+                        intMenuRef.current?.querySelector<HTMLButtonElement>(":scope > button")?.focus();
                       }}
                       selectedId={selectedInterface.id}
                     />
@@ -1791,8 +1849,14 @@ function AgentDetailSurface({
             )
             : (
               <button
+                aria-controls={panelId}
+                aria-selected={effectiveTab === "interface"}
                 className={effectiveTab === "interface" ? "active" : ""}
+                id={`${tabPrefix}-interface`}
+                onKeyDown={moveTabFocus}
                 onClick={() => activateToolTab("interface")}
+                role="tab"
+                tabIndex={effectiveTab === "interface" ? 0 : -1}
                 type="button"
               >
                 Interface
@@ -1802,7 +1866,13 @@ function AgentDetailSurface({
       </div>
 
       <div className="tool-detail-layout single">
-        <main className="tool-main-panel">
+        <section
+          aria-labelledby={activeTabId}
+          className="tool-main-panel"
+          id={panelId}
+          role="tabpanel"
+          tabIndex={0}
+        >
           {effectiveTab === "functions"
             ? (
               <AgentFunctionsPanel
@@ -1826,11 +1896,10 @@ function AgentDetailSurface({
               <AgentOverviewPanel
                 live={live}
                 tool={tool}
-                wiringRelevant={wiringRelevant}
               />
             )
             : null}
-        </main>
+        </section>
       </div>
     </div>
   );
@@ -1945,8 +2014,40 @@ function TabSelectMenu({
   onPick: (id: string) => void;
   selectedId: string;
 }): ReactElement {
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    menuRef.current?.querySelector<HTMLButtonElement>(
+      '[role="option"][aria-selected="true"]',
+    )?.focus();
+  }, [selectedId]);
+
+  const moveOptionFocus = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (
+      event.key !== "ArrowUp" && event.key !== "ArrowDown" &&
+      event.key !== "Home" && event.key !== "End"
+    ) return;
+    const options = Array.from(
+      menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? [],
+    );
+    const current = options.indexOf(event.currentTarget);
+    if (current < 0 || options.length === 0) return;
+    event.preventDefault();
+    const index = event.key === "Home"
+      ? 0
+      : event.key === "End"
+      ? options.length - 1
+      : (current + (event.key === "ArrowDown" ? 1 : -1) + options.length) %
+        options.length;
+    options[index]?.focus();
+  };
+
   return (
-    <div className="tab-select-menu" role="listbox">
+    <div
+      aria-label="Available choices"
+      className="tab-select-menu"
+      ref={menuRef}
+      role="listbox"
+    >
       {items.map((item) => {
         const active = item.id === selectedId;
         return (
@@ -1954,8 +2055,10 @@ function TabSelectMenu({
             aria-selected={active}
             className={active ? "active" : ""}
             key={item.id}
+            onKeyDown={moveOptionFocus}
             onClick={() => onPick(item.id)}
             role="option"
+            tabIndex={active ? 0 : -1}
             type="button"
           >
             <span className="tab-select-check" aria-hidden="true">
@@ -2638,10 +2741,9 @@ function FunctionSettingsModal({
   );
 }
 
-// Per-function slice of the agent's wiring, shown under the permission control:
-// who may call THIS function (inbound, incl. pending approvals) and which
-// functions fire when it runs (outbound). The Details tab keeps the full,
-// agent-wide wiring view.
+// Per-function wiring stays beside the function it governs: who may call this
+// function and which Agent functions it can call. Overview discloses the
+// effective authority envelope without duplicating these configuration tools.
 function FunctionWiring(
   { fn, live }: { fn: AgentFunctionFixture; live: LaunchPageProps["live"] },
 ): ReactElement | null {
@@ -2916,104 +3018,7 @@ function CallerTrustChip(
   );
 }
 
-// One-click default-deny inbox: pending cross-Agent requests awaiting the
-// user's approval. This is the heart of the wiring UX.
-function PendingInbox({
-  callerTrustByApp,
-  live,
-  pending,
-}: {
-  // Trust keyed by CALLER app id — the inbox warns about the agent that
-  // receives the data, which for inbound requests is NOT the page agent.
-  callerTrustByApp: Record<string, AgentCallerTrustSummary>;
-  live: LaunchPageProps["live"];
-  pending: AgentGrantSummary[];
-}): ReactElement {
-  const [busyId, setBusyId] = useState<string | null>(null);
-
-  const act = async (
-    grantId: string,
-    run: () => Promise<unknown>,
-  ) => {
-    setBusyId(grantId);
-    try {
-      await run();
-      live.reload();
-    } catch {
-      // Surface nothing destructive; the row stays so the user can retry.
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  return (
-    <Card className="wiring-inbox-card">
-      <div className="wiring-section-head">
-        <div>
-          <h3>Pending approvals</h3>
-          <p>
-            A call was denied by default and is waiting for you. Approve once to
-            wire it; deny to keep it blocked.
-          </p>
-        </div>
-        {pending.length > 0 ? <Pill tone="amber">{pending.length}</Pill> : null}
-      </div>
-      {pending.length === 0
-        ? (
-          <EmptyState icon="shield" title="No pending requests">
-            When another Agent tries to call this one without a grant, the
-            request lands here for one-click approval.
-          </EmptyState>
-        )
-        : (
-          <div className="wiring-row-list">
-            {pending.map((request) => (
-              <div className="wiring-pending-row" key={request.id}>
-                <div className="wiring-pending-main">
-                  <strong>
-                    <Mono>{grantAppLabel(request.callerApp)}</Mono>
-                    {" → "}
-                    <Mono>
-                      {grantAppLabel(request.targetApp)}.{request.targetFunction}
-                    </Mono>
-                  </strong>
-                  {request.callerFunction
-                    ? (
-                      <span className="muted-note">
-                        only while <Mono>{request.callerFunction}</Mono> runs
-                      </span>
-                    )
-                    : null}
-                  <CallerTrustChip
-                    trust={callerTrustByApp[request.callerApp.id] ?? null}
-                  />
-                </div>
-                <div className="wiring-row-actions">
-                  <Button
-                    onClick={() =>
-                      act(request.id, () => launchApi.approveGrant(request.id))}
-                    size="sm"
-                  >
-                    {busyId === request.id ? "Working" : "Approve"}
-                  </Button>
-                  <Button
-                    onClick={() =>
-                      act(request.id, () => launchApi.revokeGrant(request.id))}
-                    size="sm"
-                    variant="secondary"
-                  >
-                    Deny
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-    </Card>
-  );
-}
-
-// A monthly-cap display with inline edit (updateGrant). null cap = uncapped.
+// Monthly cap control shared by the retained per-function wiring rows.
 function GrantCapControl({
   grant,
   live,
@@ -3089,202 +3094,7 @@ function GrantCapControl({
   );
 }
 
-// Bind a declared slot to an eligible target Agent + one of its functions.
-function SlotBindControl({
-  callerAppId,
-  callerTrust,
-  live,
-  slot,
-  targets,
-}: {
-  callerAppId: string;
-  // The slot owner (= this page's Agent) is the caller that will receive the
-  // target's data — show its egress trust before the user wires it.
-  callerTrust?: AgentCallerTrustSummary | null;
-  live: LaunchPageProps["live"];
-  slot: AgentImportSlot;
-  targets: AgentWiringTarget[];
-}): ReactElement {
-  const [open, setOpen] = useState(false);
-  const [targetAppId, setTargetAppId] = useState("");
-  const [targetFunction, setTargetFunction] = useState("");
-  const [binding, setBinding] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const selectedTarget = targets.find((entry) => entry.app.id === targetAppId);
-  const eligibleTargets = slot.expectedFunctions.length > 0
-    ? targets.filter((entry) =>
-      entry.functions.some((fn) => slot.expectedFunctions.includes(fn.name))
-    )
-    : targets;
-
-  const bind = async () => {
-    if (!targetAppId || !targetFunction) return;
-    setBinding(true);
-    setError(null);
-    try {
-      await launchApi.createGrant({
-        callerAppId,
-        targetAppId,
-        targetFunction,
-        slot: slot.name,
-      });
-      setOpen(false);
-      setTargetAppId("");
-      setTargetFunction("");
-      live.reload();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBinding(false);
-    }
-  };
-
-  if (!open) {
-    return (
-      <Button onClick={() => setOpen(true)} size="sm" variant="secondary">
-        Bind slot
-      </Button>
-    );
-  }
-
-  return (
-    <div className="slot-bind">
-      <label>
-        <span>Target Agent</span>
-        <select
-          onChange={(event) => {
-            setTargetAppId(event.target.value);
-            setTargetFunction("");
-          }}
-          value={targetAppId}
-        >
-          <option value="">Pick an Agent…</option>
-          {eligibleTargets.map((entry) => (
-            <option key={entry.app.id} value={entry.app.id}>
-              {grantAppLabel(entry.app)} · {entry.relationship}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <span>Function</span>
-        <select
-          disabled={!selectedTarget}
-          onChange={(event) => setTargetFunction(event.target.value)}
-          value={targetFunction}
-        >
-          <option value="">Pick a function…</option>
-          {(selectedTarget?.functions ?? []).map((fn) => (
-            <option key={fn.name} value={fn.name}>{fn.name}</option>
-          ))}
-        </select>
-      </label>
-      {selectedTarget && selectedTarget.visibility === "private"
-        ? (
-          <Pill tone="amber">
-            Binds a published Agent to your private Agent
-          </Pill>
-        )
-        : null}
-      <CallerTrustChip trust={callerTrust} />
-      {error ? <p className="api-notice warning">{error}</p> : null}
-      <div className="wiring-row-actions">
-        <Button
-          onClick={bind}
-          size="sm"
-        >
-          {binding ? "Binding" : "Bind"}
-        </Button>
-        <button
-          className="route-link"
-          onClick={() => setOpen(false)}
-          type="button"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function SlotCard({
-  callerAppId,
-  callerTrust,
-  live,
-  slot,
-  targets,
-}: {
-  callerAppId: string;
-  callerTrust?: AgentCallerTrustSummary | null;
-  live: LaunchPageProps["live"];
-  slot: AgentImportSlot;
-  targets: AgentWiringTarget[];
-}): ReactElement {
-  const unbind = async () => {
-    if (!slot.binding) return;
-    try {
-      await launchApi.revokeGrant(slot.binding.id);
-      live.reload();
-    } catch {
-      // Leave the binding visible; the user can retry the unbind.
-    }
-  };
-
-  return (
-    <div className="wiring-slot">
-      <div className="wiring-slot-head">
-        <div>
-          <strong>
-            <Mono>{slot.name}</Mono>
-          </strong>
-          {slot.description ? <span>{slot.description}</span> : null}
-          {slot.signature
-            ? <code className="wiring-slot-sig">{slot.signature}</code>
-            : null}
-          {slot.expectedFunctions.length > 0
-            ? (
-              <span className="muted-note">
-                expects {slot.expectedFunctions.join(", ")}
-              </span>
-            )
-            : null}
-        </div>
-        {slot.binding
-          ? (
-            <Button onClick={unbind} size="sm" variant="secondary">
-              Unbind
-            </Button>
-          )
-          : (
-            <SlotBindControl
-              callerAppId={callerAppId}
-              callerTrust={callerTrust}
-              live={live}
-              slot={slot}
-              targets={targets}
-            />
-          )}
-      </div>
-      {slot.binding
-        ? (
-          <div className="wiring-slot-binding">
-            <span>
-              bound to{" "}
-              <Mono>
-                {grantAppLabel(slot.binding.targetApp)}.{slot.binding
-                  .targetFunction}
-              </Mono>
-            </span>
-            <GrantCapControl grant={slot.binding} live={live} />
-          </div>
-        )
-        : <span className="muted-note">Not bound yet.</span>}
-    </div>
-  );
-}
-
-// A raw outbound/inbound grant row (slot === null) with revoke + cap edit.
+// A raw inbound/outbound grant scoped to the selected function.
 function GrantRow({
   direction,
   grant,
@@ -3335,737 +3145,32 @@ function GrantRow({
   );
 }
 
-// One subscribe-grant row. A "subscription" is inbound (this Agent's function
-// reacts to an emitter's event); a "publication" is outbound (this Agent's
-// event triggers a subscriber). Both carry a cap + revoke.
-function SubscriptionRow({
-  kind,
-  grant,
-  live,
-}: {
-  kind: "subscription" | "publication";
-  grant: AgentGrantSummary;
-  live: LaunchPageProps["live"];
-}): ReactElement {
-  const revoke = async () => {
-    try {
-      await launchApi.revokeGrant(grant.id);
-      live.reload();
-    } catch {
-      // Keep the row; revoke can be retried.
-    }
-  };
-
-  return (
-    <div className="wiring-grant-row">
-      <div className="wiring-grant-main">
-        <strong>
-          {/* caller is always the emitter, target always the subscriber — only
-              the framing copy differs between the two lists. */}
-          <Mono>{grantAppLabel(grant.callerApp)}</Mono>
-          {" emits "}
-          <Mono>{grant.topic ?? "—"}</Mono>
-          {" → "}
-          <Mono>
-            {grantAppLabel(grant.targetApp)}.{grant.targetFunction}
-          </Mono>
-        </strong>
-        {kind === "subscription"
-          ? (
-            <CallerTrustChip
-              trust={live.data.agentWiring?.callerTrustByApp[grant.callerApp.id]}
-            />
-          )
-          : null}
-        <GrantCapControl grant={grant} live={live} />
-      </div>
-      <Button onClick={revoke} size="sm" variant="secondary">
-        Revoke
-      </Button>
-    </div>
-  );
-}
-
-// Build a subscription: pick an emitter + one of its declared topics, then a
-// handler function on THIS Agent. The resulting subscribe grant means "when the
-// emitter publishes the topic, call this Agent's handler".
-function SubscribeBuilder({
-  subscriberAppId,
-  subscriberFunctions,
-  emitters,
-  live,
-}: {
-  subscriberAppId: string;
-  subscriberFunctions: { name: string; description: string | null }[];
-  emitters: AgentWiringTarget[];
-  live: LaunchPageProps["live"];
-}): ReactElement {
-  const [open, setOpen] = useState(false);
-  const [emitterAppId, setEmitterAppId] = useState("");
-  const [topic, setTopic] = useState("");
-  const [handler, setHandler] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const selectedEmitter = emitters.find((e) => e.app.id === emitterAppId);
-
-  const subscribe = async () => {
-    if (!emitterAppId || !topic || !handler) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await launchApi.createGrant({
-        callerAppId: emitterAppId,
-        targetAppId: subscriberAppId,
-        targetFunction: handler,
-        mode: "subscribe",
-        topic,
-      });
-      setOpen(false);
-      setEmitterAppId("");
-      setTopic("");
-      setHandler("");
-      live.reload();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (emitters.length === 0) {
-    return (
-      <p className="muted-note">
-        No Agent you control declares emitted events yet. An Agent advertises
-        topics with a manifest <Mono>emits</Mono> list.
-      </p>
-    );
-  }
-
-  if (!open) {
-    return (
-      <Button onClick={() => setOpen(true)} size="sm" variant="secondary">
-        Add subscription
-      </Button>
-    );
-  }
-
-  return (
-    <div className="slot-bind">
-      <label>
-        <span>Emitter Agent</span>
-        <select
-          onChange={(event) => {
-            setEmitterAppId(event.target.value);
-            setTopic("");
-          }}
-          value={emitterAppId}
-        >
-          <option value="">Pick an Agent…</option>
-          {emitters.map((entry) => (
-            <option key={entry.app.id} value={entry.app.id}>
-              {grantAppLabel(entry.app)} · {entry.relationship}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <span>Topic</span>
-        <select
-          disabled={!selectedEmitter}
-          onChange={(event) => setTopic(event.target.value)}
-          value={topic}
-        >
-          <option value="">Pick a topic…</option>
-          {(selectedEmitter?.emits ?? []).map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <span>Handler function</span>
-        <select
-          onChange={(event) => setHandler(event.target.value)}
-          value={handler}
-        >
-          <option value="">Pick a function…</option>
-          {subscriberFunctions.map((fn) => (
-            <option key={fn.name} value={fn.name}>{fn.name}</option>
-          ))}
-        </select>
-      </label>
-      {error ? <p className="api-notice warning">{error}</p> : null}
-      <div className="wiring-row-actions">
-        <Button onClick={subscribe} size="sm">
-          {saving ? "Subscribing" : "Subscribe"}
-        </Button>
-        <button
-          className="route-link"
-          onClick={() => setOpen(false)}
-          type="button"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function AgentWiringPanel({
-  live,
-  tool,
-}: {
-  live: LaunchPageProps["live"];
-  tool: AgentDetailFixture;
-}): ReactElement {
-  const wiring = live.data.agentWiring;
-  // The page Agent IS the caller for every outbound bind / raw grant, so its
-  // own trust summary is the right one to show in the bind flow.
-  const pageCallerTrust = live.data.agentCallerTrust;
-  const [targets, setTargets] = useState<AgentWiringTarget[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    launchApi.wiringTargets()
-      .then((response) => {
-        if (!cancelled) setTargets(response.targets);
-      })
-      .catch(() => {
-        if (!cancelled) setTargets([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [tool.id]);
-
-  if (!wiring) {
-    return (
-      <div className="wiring-panel">
-        <EmptyState icon="shield" title="Wiring needs a live session">
-          Sign in and reload to bind this Agent's slots, review the grants it
-          holds, and approve pending requests.
-        </EmptyState>
-      </div>
-    );
-  }
-
-  // For the subscription builder: any controlled Agent that declares emitted
-  // topics is an eligible event source, and this page Agent's own functions are
-  // the handler candidates.
-  const emitters = targets.filter((t) => t.emits.length > 0);
-  const subscriberFunctions =
-    targets.find((t) => t.app.id === wiring.app.id)?.functions ?? [];
-
-  return (
-    <div className="wiring-panel">
-      <PendingInbox
-        callerTrustByApp={wiring.callerTrustByApp ?? {}}
-        live={live}
-        pending={wiring.pendingRequests}
-      />
-
-      <Card>
-        <div className="wiring-section-head">
-          <div>
-            <h3>Outbound — this Agent's slots</h3>
-            <p>
-              Bind each declared slot to a target Agent + function. Binding a
-              slot is a grant: it lets this Agent call the target on your behalf.
-            </p>
-          </div>
-        </div>
-        {wiring.slots.length === 0
-          ? (
-            <p className="muted-note">
-              This Agent declares no import slots.
-            </p>
-          )
-          : (
-            <div className="wiring-slot-list">
-              {wiring.slots.map((slot) => (
-                <SlotCard
-                  callerAppId={wiring.app.id}
-                  callerTrust={pageCallerTrust}
-                  key={slot.name}
-                  live={live}
-                  slot={slot}
-                  targets={targets}
-                />
-              ))}
-            </div>
-          )}
-
-        <div className="wiring-subsection">
-          <p className="section-label">Raw outbound grants</p>
-          {wiring.outboundGrants.length === 0
-            ? (
-              <p className="muted-note">
-                No raw grants — this Agent only calls through bound slots.
-              </p>
-            )
-            : (
-              <div className="wiring-row-list">
-                {wiring.outboundGrants.map((grant) => (
-                  <GrantRow
-                    direction="outbound"
-                    grant={grant}
-                    key={grant.id}
-                    live={live}
-                  />
-                ))}
-              </div>
-            )}
-        </div>
-      </Card>
-
-      <Card>
-        <div className="wiring-section-head">
-          <div>
-            <h3>Inbound — Agents that call this one</h3>
-            <p>
-              Active grants letting other Agents call <Mono>{tool.slug}</Mono>.
-              Adjust the monthly cap or revoke access.
-            </p>
-          </div>
-        </div>
-        {wiring.inboundGrants.length === 0
-          ? (
-            <p className="muted-note">
-              No other Agent is wired to call this one.
-            </p>
-          )
-          : (
-            <div className="wiring-row-list">
-              {wiring.inboundGrants.map((grant) => (
-                <GrantRow
-                  direction="inbound"
-                  grant={grant}
-                  key={grant.id}
-                  live={live}
-                />
-              ))}
-            </div>
-          )}
-      </Card>
-
-      <Card>
-        <div className="wiring-section-head">
-          <div>
-            <h3>Reactive events</h3>
-            <p>
-              Subscriptions let this Agent's functions react to events other
-              Agents emit. Each subscription is grant-gated and capped — only the
-              sources you wire here can trigger it.
-            </p>
-          </div>
-        </div>
-
-        {(wiring.emits ?? []).length > 0
-          ? (
-            <div className="wiring-subsection">
-              <p className="section-label">Topics this Agent emits</p>
-              <div className="capability-list">
-                {(wiring.emits ?? []).map((topic) => (
-                  <Pill key={topic} tone="default">{topic}</Pill>
-                ))}
-              </div>
-            </div>
-          )
-          : null}
-
-        <div className="wiring-subsection">
-          <div className="wiring-section-head">
-            <p className="section-label">
-              Subscriptions — events this Agent reacts to
-            </p>
-            <SubscribeBuilder
-              emitters={emitters}
-              live={live}
-              subscriberAppId={wiring.app.id}
-              subscriberFunctions={subscriberFunctions}
-            />
-          </div>
-          {(wiring.subscriptions ?? []).length === 0
-            ? (
-              <p className="muted-note">
-                This Agent reacts to no events yet.
-              </p>
-            )
-            : (
-              <div className="wiring-row-list">
-                {(wiring.subscriptions ?? []).map((grant) => (
-                  <SubscriptionRow
-                    grant={grant}
-                    key={grant.id}
-                    kind="subscription"
-                    live={live}
-                  />
-                ))}
-              </div>
-            )}
-        </div>
-
-        <div className="wiring-subsection">
-          <p className="section-label">
-            Publications — this Agent's events that trigger others
-          </p>
-          {(wiring.publications ?? []).length === 0
-            ? (
-              <p className="muted-note">
-                No other Agent reacts to this one's events.
-              </p>
-            )
-            : (
-              <div className="wiring-row-list">
-                {(wiring.publications ?? []).map((grant) => (
-                  <SubscriptionRow
-                    grant={grant}
-                    key={grant.id}
-                    kind="publication"
-                    live={live}
-                  />
-                ))}
-              </div>
-            )}
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-// Phase 4: the "Capabilities & connections" card on the details tab. Renders the
-// outbound destinations, the per-user secrets bound to each (as write-only secure
-// inputs with the enforced "only sent to X" assurance), and the unbound general
-// settings. Values are never rendered back — only connected status.
-function AgentConnectionsCard(
-  { tool }: { tool: AgentDetailFixture },
-): ReactElement | null {
-  const disclosure = tool.networkDisclosure;
-  const destinations = disclosure?.destinations ?? [];
-  const general = disclosure?.general_settings ?? [];
-  const hasInputs = destinations.some((d) => d.credentials.length > 0) ||
-    general.length > 0;
-  const hasAnything = destinations.length > 0 || general.length > 0 ||
-    tool.capabilities.length > 0;
-
-  const [connected, setConnected] = useState<Set<string>>(new Set());
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [status, setStatus] = useState<
-    "idle" | "loading" | "saving" | "locked"
-  >("idle");
-  const [message, setMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!hasInputs) return;
-    let cancelled = false;
-    setStatus("loading");
-    launchApi.agentSettings(tool.id)
-      .then((res) => {
-        if (cancelled) return;
-        setConnected(new Set(res.connected_keys));
-        setStatus("idle");
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setStatus("locked");
-        setMessage(
-          err instanceof LaunchApiAuthenticationError
-            ? "Sign in and install this Agent to connect your own keys."
-            : "Install this Agent to connect your own keys.",
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [tool.id, hasInputs]);
-
-  if (!hasAnything) {
-    return tool.relationship === "owner"
-      ? (
-        <Card>
-          <p className="section-label">Data sources &amp; secrets</p>
-          <p className="muted-note">
-            No data sources or secrets are declared yet. Add them from your
-            connected coding agent with <Mono>gx.set</Mono>.
-          </p>
-        </Card>
-      )
-      : null;
-  }
-
-  const noPending = Object.values(values).every((v) => v.trim().length === 0);
-
-  const onSave = async () => {
-    const pending = Object.entries(values).filter(([, v]) =>
-      v.trim().length > 0
-    );
-    if (pending.length === 0) return;
-    setStatus("saving");
-    setMessage(null);
-    try {
-      const res = await launchApi.updateAgentSettings(
-        tool.id,
-        Object.fromEntries(pending),
-      );
-      setConnected(new Set(res.connected_keys));
-      setValues({});
-      setStatus("idle");
-      setMessage("Saved.");
-    } catch (err) {
-      setStatus("idle");
-      setMessage(
-        err instanceof LaunchApiRequestError ? err.message : "Could not save.",
-      );
-    }
-  };
-
-  const field = (
-    key: string,
-    label: string,
-    required: boolean,
-    opts: { secret: boolean; host?: string | null; note?: string | null },
-  ): ReactElement => {
-    const isSet = connected.has(key);
-    const disabled = status === "locked" || status === "saving";
-    return (
-      <div className="connection-field" key={key}>
-        <label>
-          <span>
-            {required
-              ? (
-                <span aria-label="required" className="connection-req-star">
-                  *
-                </span>
-              )
-              : null}
-            {label}
-          </span>
-        </label>
-        <div className="connection-input-wrap">
-          <input
-            type={opts.secret ? "password" : "text"}
-            autoComplete="off"
-            placeholder={opts.secret && isSet ? "••••••••" : opts.note ?? ""}
-            value={values[key] ?? ""}
-            disabled={disabled}
-            onChange={(event) =>
-              setValues((prev) => ({ ...prev, [key]: event.target.value }))}
-          />
-          {isSet
-            ? (
-              <span
-                className="connection-setmark"
-                title={(opts.secret ? "Connected" : "Configured") +
-                  " — type to replace"}
-              >
-                ✓
-              </span>
-            )
-            : null}
-        </div>
-        {opts.host
-          ? (
-            <p className="connection-note">
-              Only ever sent to <Mono>{opts.host}</Mono>.
-            </p>
-          )
-          : null}
-      </div>
-    );
-  };
-
-  return (
-    <Card>
-      <p className="section-label">Data sources &amp; secrets</p>
-      {tool.capabilities.length > 0
-        ? (
-          <div className="capability-list">
-            {tool.capabilities.map((capability) => (
-              <AgentCapabilityPill
-                capability={capability}
-                key={`${capability.kind}-${capability.text}`}
-              />
-            ))}
-          </div>
-        )
-        : null}
-
-      {destinations.map((dest) => (
-        <div className="connection-dest" key={dest.host}>
-          <div className="connection-dest-head">
-            <Mono>{dest.host}</Mono>
-            {dest.label ? <strong>{dest.label}</strong> : null}
-            {dest.credentials.length === 0
-              ? <span className="connection-transparent">no credentials sent</span>
-              : null}
-          </div>
-          {dest.description
-            ? <p className="connection-note">{dest.description}</p>
-            : null}
-          {dest.credentials.map((cred) =>
-            field(cred.key, cred.label, cred.required, {
-              secret: true,
-              host: dest.host,
-            })
-          )}
-        </div>
-      ))}
-
-      {general.length > 0
-        ? (
-          <div className="connection-general">
-            <p className="connection-sublabel">App settings</p>
-            {general.map((setting) =>
-              field(setting.key, setting.label, setting.required, {
-                secret: setting.secret,
-                note: setting.description,
-              })
-            )}
-          </div>
-        )
-        : null}
-
-      {hasInputs
-        ? (
-          <div className="connection-actions">
-            <button
-              type="button"
-              onClick={() => void onSave()}
-              disabled={status === "locked" || status === "saving" || noPending}
-            >
-              {status === "saving" ? "Saving…" : "Save"}
-            </button>
-            {message
-              ? <span className="connection-message">{message}</span>
-              : null}
-          </div>
-        )
-        : null}
-    </Card>
-  );
-}
-
 function AgentOverviewPanel({
   live,
   tool,
-  wiringRelevant,
 }: {
   live: LaunchPageProps["live"];
   tool: AgentDetailFixture;
-  wiringRelevant: boolean;
 }): ReactElement {
-  const isOwner = tool.relationship === "owner";
-  const [name, setName] = useState(tool.name);
-  const [mission, setMission] = useState(tool.summary);
-  const [saveState, setSaveState] = useState<
-    "idle" | "saving" | "saved" | "error"
-  >("idle");
-  const [saveError, setSaveError] = useState<string | null>(null);
+  if (tool.relationship === "owner") {
+    return (
+      <AgentHomeOverview
+        agentId={tool.id}
+        home={live.data.agentHome}
+        loadError={live.data.agentHomeError}
+        reload={live.reload}
+      />
+    );
+  }
 
-  useEffect(() => {
-    setName(tool.name);
-    setMission(tool.summary);
-    setSaveState("idle");
-    setSaveError(null);
-  }, [tool.id, tool.name, tool.summary]);
-
-  const dirty = name.trim() !== tool.name || mission.trim() !== tool.summary;
-  const save = async () => {
-    if (!isOwner || !dirty || saveState === "saving") return;
-    setSaveState("saving");
-    setSaveError(null);
-    try {
-      await launchApi.updateAgent(tool.id, {
-        ...(name.trim() !== tool.name ? { name: name.trim() } : {}),
-        ...(mission.trim() !== tool.summary
-          ? { description: mission.trim() }
-          : {}),
-      });
-      setSaveState("saved");
-      live.reload();
-    } catch (err) {
-      setSaveState("error");
-      setSaveError(
-        err instanceof Error && err.message
-          ? err.message
-          : "Couldn't save changes. Please try again.",
-      );
-    }
-  };
-
-  const accessLabel = tool.visibility === "private"
-    ? "Only you"
-    : tool.visibility === "unlisted"
-    ? "Link-accessible"
-    : "Public";
-  const accessCopy = tool.visibility === "private"
-    ? "Reach this Agent from any MCP client using your Galactic keys."
-    : tool.visibility === "unlisted"
-    ? "Anyone with the link can view it; any signed-in Galactic user can call its functions."
-    : "Anyone can view it; any signed-in Galactic user can call its functions.";
-
+  // Historical public/installed Agents retain a narrow read-only disclosure.
+  // New launch Agents are private and always use the owner contract above.
   return (
     <div className="details-panel agent-overview-panel">
-      {isOwner
-        ? (
-          <Card className="agent-overview-editor">
-            <div className="agent-overview-card-head">
-              <div>
-                <p className="section-label">Overview</p>
-                <p className="muted-note">
-                  The Agent's name and ongoing responsibility.
-                </p>
-              </div>
-              <Button
-                disabled={!dirty || saveState === "saving"}
-                onClick={() => void save()}
-                size="sm"
-              >
-                {saveState === "saving"
-                  ? "Saving…"
-                  : saveState === "saved" && !dirty
-                  ? "Saved"
-                  : "Save changes"}
-              </Button>
-            </div>
-            <AdminField label="Name">
-              <input
-                className="admin-input"
-                onChange={(event) => setName(event.target.value)}
-                value={name}
-              />
-            </AdminField>
-            <AdminField label="Mission">
-              <textarea
-                className="admin-textarea"
-                onChange={(event) => setMission(event.target.value)}
-                rows={4}
-                value={mission}
-              />
-            </AdminField>
-            {saveState === "error" && saveError
-              ? <p className="agent-overview-error">{saveError}</p>
-              : null}
-          </Card>
-        )
-        : (
-          <Card>
-            <p className="section-label">Mission</p>
-            <p className="agent-overview-mission">{tool.summary}</p>
-          </Card>
-        )}
-
-      <Card className="agent-access-card">
-        <div>
-          <p className="section-label">Access</p>
-          <strong>{accessLabel}</strong>
-          <p>{accessCopy}</p>
-        </div>
-        <Pill tone={tool.visibility === "private" ? "green" : "amber"}>
-          {tool.visibility}
-        </Pill>
+      <Card>
+        <p className="section-label">Mission</p>
+        <p className="agent-overview-mission">{tool.summary}</p>
       </Card>
-
       {tool.fullTime
         ? <FullTimeDisclosureCard fullTime={tool.fullTime} />
         : (
@@ -4076,26 +3181,6 @@ function AgentOverviewPanel({
             </p>
           </Card>
         )}
-
-      <AgentConnectionsCard tool={tool} />
-
-      {wiringRelevant
-        ? <AgentWiringPanel live={live} tool={tool} />
-        : null}
-
-      {isOwner
-        ? (
-          <Card className="agent-logs-card">
-            <p className="section-label">Logs</p>
-            <p>
-              Inspect recent runs and errors from your connected coding agent
-              with <Mono>gx.logs</Mono>. Live run history will appear here when
-              the routine monitor is joined to this Overview.
-            </p>
-          </Card>
-        )
-        : null}
-
       <div className="works-with">
         <p className="section-label">Connect from anywhere</p>
         <div>
@@ -4108,21 +3193,20 @@ function AgentOverviewPanel({
   );
 }
 
-// Viewer-facing disclosure that an Agent runs autonomously (full-time). Purely
-// informational — what it does on its own, from its manifest routine
-// declaration. Owners activate/manage it in the routine monitor, not here.
+// Viewer-facing disclosure for historical non-owner Agent pages. New private
+// launch Agents use the canonical owner home above.
 function FullTimeDisclosureCard(
   { fullTime }: { fullTime: LaunchFullTimeDisclosure },
 ): ReactElement {
-  const light = (n: number | null): string | null =>
-    n === null ? null : `${formatNumber(n)} Light`;
+  const credits = (n: number | null): string | null =>
+    n === null ? null : `${formatNumber(n)} credits`;
   const budgetParts = [
-    light(fullTime.budget.perRunLight) &&
-    `${light(fullTime.budget.perRunLight)}/run`,
-    light(fullTime.budget.perDayLight) &&
-    `${light(fullTime.budget.perDayLight)}/day`,
-    light(fullTime.budget.perMonthLight) &&
-    `${light(fullTime.budget.perMonthLight)}/month`,
+    credits(fullTime.budget.perRunLight) &&
+    `${credits(fullTime.budget.perRunLight)}/run`,
+    credits(fullTime.budget.perDayLight) &&
+    `${credits(fullTime.budget.perDayLight)}/day`,
+    credits(fullTime.budget.perMonthLight) &&
+    `${credits(fullTime.budget.perMonthLight)}/month`,
   ].filter((part): part is string => Boolean(part));
 
   return (

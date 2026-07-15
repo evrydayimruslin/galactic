@@ -54,6 +54,7 @@ import {
 } from "../services/app-runtime-resources.ts";
 import { buildGpuStatusDiagnostics } from "../services/gpu/status.ts";
 import {
+  callerCanUseLegacyExecutionRoute,
   callerHasAppAccess,
   callerHasFunctionAccess,
   callerHasRequiredScope,
@@ -112,6 +113,12 @@ function createRuntimeMemoryAdapter(userId: string, appId: string) {
       return await service.recall(userId, `app:${appId}`, key);
     },
   };
+}
+
+export function callerCanUseHttpExecutionRoute(
+  caller: Pick<RequestCallerContext, "authSource" | "authState">,
+): boolean {
+  return callerCanUseLegacyExecutionRoute(caller);
 }
 
 /**
@@ -264,6 +271,15 @@ export async function handleHttpEndpoint(
           error: err instanceof Error ? err.message : "Authentication required",
           type: "AUTH_REQUIRED",
         }, 401),
+      );
+    }
+    if (!callerCanUseHttpExecutionRoute(caller)) {
+      return finalize(
+        json({
+          error:
+            "Signed routine and sandbox actors must execute Agent functions through MCP so capability ceilings, attribution, and hard budgets remain intact.",
+          type: "ACTOR_ROUTE_UNSUPPORTED",
+        }, 403),
       );
     }
     const { user } = caller;
@@ -431,6 +447,20 @@ export async function handleHttpEndpoint(
 
     // ── GPU Runtime Branch ──
     if (app.runtime === "gpu") {
+      if (routineContext) {
+        return finalize(
+          json(
+            {
+              error: "Routine GPU budget admission unavailable",
+              type: "ROUTINE_GPU_BUDGET_UNAVAILABLE",
+              message:
+                "GPU functions are unavailable to routines until hard pre-execution GPU budget admission is configured.",
+            },
+            409,
+          ),
+        );
+      }
+
       if (!isGpuSupportEnabled()) {
         return finalize(
           json({
@@ -601,6 +631,7 @@ export async function handleHttpEndpoint(
         freeMode: caller.freeMode,
         inferenceSelection,
         attribution: { appId: app.id, functionName },
+        routineContext,
       })
       : {
         route: null,
@@ -688,12 +719,11 @@ export async function handleHttpEndpoint(
       : rawAppDataService;
     const baseUrl = getEnv("BASE_URL") || undefined;
     const appCallDependencies = resolveRuntimeAppCallDependencies(app, caller);
-    const memoryAdapter =
-      caller.authState === "authenticated" &&
+    const memoryAdapter = caller.authState === "authenticated" &&
         (httpPermissions.includes("memory:read") ||
           httpPermissions.includes("memory:write"))
-        ? createRuntimeMemoryAdapter(caller.userId, app.id)
-        : null;
+      ? createRuntimeMemoryAdapter(caller.userId, app.id)
+      : null;
     const result = await executeInDynamicSandbox(
       {
         appId: app.id,
@@ -705,7 +735,8 @@ export async function handleHttpEndpoint(
         permissions: httpPermissions,
         // Read-back only on the HTTP surface: runs.recent works for the
         // authenticated caller; nothing is recorded here (no routine context).
-        flightRecorder: parseAppManifest(app.manifest)?.flight_recorder === true,
+        flightRecorder:
+          parseAppManifest(app.manifest)?.flight_recorder === true,
         allowedDestinations: getManifestAllowedDestinations(app.manifest),
         userApiKey: runtimeAI.userApiKey,
         aiUnavailableReason: runtimeAI.unavailableReason,

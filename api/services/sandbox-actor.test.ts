@@ -1,5 +1,6 @@
 import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
+import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejects.ts";
 
 import {
   createSandboxActorToken,
@@ -9,6 +10,11 @@ import {
   verifySandboxActorToken,
 } from "./sandbox-actor.ts";
 import { authenticateRequest } from "./request-auth.ts";
+import {
+  callerCanInvokeMcpTool,
+  callerWithinRoutineCapabilityCeiling,
+} from "./request-caller-context.ts";
+import { routineTraceContextFromCaller } from "./routine-trace.ts";
 
 // WORKER_SECRET is deliberately DIFFERENT from the signing secret: it is the
 // secret that IS exposed to sandbox code, and must not be able to forge tokens.
@@ -36,6 +42,63 @@ async function withEnv<T>(
 
 const USER = { id: "user-1", email: "dev@example.com", tier: "pro" };
 
+Deno.test("signed actors cannot use synthetic MCP SDK tools", () => {
+  const sdkTools = [
+    "ultralight.ai",
+    "ultralight.store",
+    "ultralight.remove",
+    "ultralight.remember",
+  ];
+  for (const authSource of ["routine_actor", "sandbox_actor"] as const) {
+    for (const tool of sdkTools) {
+      assertEquals(
+        callerCanInvokeMcpTool({
+          authState: "authenticated",
+          authSource,
+        }, tool),
+        false,
+        `${authSource} unexpectedly reached ${tool}`,
+      );
+    }
+    assertEquals(
+      callerCanInvokeMcpTool({
+        authState: "authenticated",
+        authSource,
+      }, "approved_tenant_export"),
+      true,
+    );
+  }
+});
+
+Deno.test("sandbox actor keeps the tenant-export self-call exception", () => {
+  const caller = {
+    authState: "authenticated" as const,
+    authSource: "sandbox_actor" as const,
+    routineContext: {
+      routineId: "routine-1",
+      routineRunId: "run-1",
+      traceId: "trace-1",
+    },
+    routineCapabilityCeiling: [],
+    routineActor: undefined,
+    sandboxActor: {
+      appId: "app-a",
+    },
+  };
+  assertEquals(
+    callerCanInvokeMcpTool(caller, "approved_tenant_export"),
+    true,
+  );
+  assertEquals(
+    callerWithinRoutineCapabilityCeiling(
+      caller,
+      ["app-a"],
+      ["approved_tenant_export"],
+    ),
+    true,
+  );
+});
+
 Deno.test("sandbox actor: mint then verify round-trips identity + scope", async () => {
   await withEnv(async () => {
     const nowMs = Date.UTC(2026, 5, 11, 12, 0, 0);
@@ -56,10 +119,178 @@ Deno.test("sandbox actor: mint then verify round-trips identity + scope", async 
     assertEquals(claims.app_ids.sort(), ["app-a", "app-b", "app-c"]);
     assertEquals(claims.scopes, ["apps:call"]);
     assertEquals(claims.jti, "exec-9");
+    assertEquals(claims.routine_id, undefined);
+    assertEquals(claims.routine_run_id, undefined);
+    assertEquals(claims.trace_id, undefined);
 
     const verified = await verifySandboxActorToken(token, nowMs);
     assert(verified !== null);
     assertEquals(verified?.claims.app_ids.sort(), ["app-a", "app-b", "app-c"]);
+  });
+});
+
+Deno.test("sandbox actor: signed routine attribution survives repeated Agent hops", async () => {
+  await withEnv(async () => {
+    const routineContext = {
+      routineId: "routine-immutable",
+      routineRunId: "run-immutable",
+      traceId: "trace-immutable",
+    };
+    const routineCapabilities = [
+      {
+        app_id: "app-b",
+        app_ref: "agent-b",
+        function_name: "read_b",
+        access: "read" as const,
+        required: true,
+      },
+      {
+        app_id: "app-c",
+        app_ref: "agent-c",
+        function_name: "write_c",
+        access: "write" as const,
+        required: true,
+      },
+    ];
+    const firstHop = await mintSandboxAuthToken({
+      user: USER,
+      appId: "app-a",
+      executionId: "exec-a",
+      hasBroadCallPermission: false,
+      dependencyAppIds: ["app-b"],
+      routineContext,
+      routineCapabilities,
+    });
+    assert(firstHop !== null);
+
+    const firstAuth = await authenticateRequest(
+      new Request("https://ultralight.test/mcp/app-b", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${firstHop}` },
+      }),
+      "bearer_only",
+    );
+    assertEquals(firstAuth.authSource, "sandbox_actor");
+    assertEquals(firstAuth.routineContext, routineContext);
+    assertEquals(firstAuth.routineCapabilityCeiling, routineCapabilities);
+    // Attribution does not turn a downstream bearer into a root routine actor;
+    // it must not gain the handler self-invocation bypass or capability policy.
+    assertEquals(firstAuth.routineActor, undefined);
+    assertEquals(
+      routineTraceContextFromCaller({
+        routineContext: firstAuth.routineContext,
+        routineActor: firstAuth.routineActor,
+      }),
+      routineContext,
+    );
+
+    // App B executes and calls App C: the host re-mints a new app-scoped token
+    // from authenticated server context, preserving the same routine identity.
+    const secondHop = await mintSandboxAuthToken({
+      user: USER,
+      appId: "app-b",
+      executionId: "exec-b",
+      hasBroadCallPermission: false,
+      dependencyAppIds: ["app-c"],
+      routineContext: firstAuth.routineContext,
+      routineCapabilities: firstAuth.routineCapabilityCeiling,
+    });
+    assert(secondHop !== null);
+    const verified = await verifySandboxActorToken(secondHop!);
+    assertEquals(verified?.claims.routine_id, routineContext.routineId);
+    assertEquals(verified?.claims.routine_run_id, routineContext.routineRunId);
+    assertEquals(verified?.claims.trace_id, routineContext.traceId);
+    assertEquals(verified?.claims.app_id, "app-b");
+    assertEquals(verified?.claims.app_ids.sort(), [
+      "agent-b",
+      "agent-c",
+      "app-b",
+      "app-c",
+    ]);
+    assertEquals(verified?.claims.function_names.sort(), ["read_b", "write_c"]);
+    assertEquals(verified?.claims.routine_capabilities, routineCapabilities);
+
+    const secondAuth = await authenticateRequest(
+      new Request("https://ultralight.test/mcp/app-c", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${secondHop}` },
+      }),
+      "bearer_only",
+    );
+    // Exact-pair enforcement: the flattened token scopes contain both app and
+    // function names, but may not authorize their unapproved cross-product.
+    assertEquals(
+      callerWithinRoutineCapabilityCeiling(
+        secondAuth,
+        ["app-c", "agent-c"],
+        ["write_c"],
+      ),
+      true,
+    );
+    assertEquals(
+      callerWithinRoutineCapabilityCeiling(
+        secondAuth,
+        ["app-c", "agent-c"],
+        ["read_b"],
+      ),
+      false,
+    );
+    // Signed executing-app identity allows self calls without widening the
+    // routine to any other Agent/function pair.
+    assertEquals(
+      callerWithinRoutineCapabilityCeiling(
+        secondAuth,
+        ["app-b"],
+        ["local_helper"],
+      ),
+      true,
+    );
+  });
+});
+
+Deno.test("sandbox actor: tenant-shaped identity fields cannot override host routine context", async () => {
+  await withEnv(async () => {
+    // A tenant-controlled object may contain look-alike snake_case fields, but
+    // the mint reads routine attribution exclusively from the host-only option.
+    const tenantShapedUser = {
+      ...USER,
+      routine_id: "routine-forged-by-app",
+      routine_run_id: "run-forged-by-app",
+      trace_id: "trace-forged-by-app",
+    };
+    const token = await mintSandboxAuthToken({
+      user: tenantShapedUser,
+      appId: "app-a",
+      hasBroadCallPermission: true,
+      dependencyAppIds: [],
+      routineContext: {
+        routineId: "routine-host",
+        routineRunId: "run-host",
+        traceId: "trace-host",
+      },
+    });
+    const verified = await verifySandboxActorToken(token!);
+    assertEquals(verified?.claims.routine_id, "routine-host");
+    assertEquals(verified?.claims.routine_run_id, "run-host");
+    assertEquals(verified?.claims.trace_id, "trace-host");
+  });
+});
+
+Deno.test("sandbox actor: host refuses partial routine attribution", async () => {
+  await withEnv(async () => {
+    await assertRejects(
+      () =>
+        createSandboxActorToken({
+          user: USER,
+          appId: "app-a",
+          routineContext: {
+            routineId: "routine-1",
+            routineRunId: "",
+          },
+        }),
+      Error,
+      "routineContext requires routineId and routineRunId",
+    );
   });
 });
 
@@ -239,5 +470,7 @@ Deno.test("sandbox actor: authenticateRequest resolves user + app scope", async 
     assertEquals(user.authSource, "sandbox_actor");
     assertEquals(user.tokenAppIds?.sort(), ["app-a", "app-b"]);
     assertEquals(user.scopes, ["apps:call"]);
+    assertEquals(user.routineContext, undefined);
+    assertEquals(user.routineActor, undefined);
   });
 });

@@ -5,7 +5,6 @@ import {
   getRoutine,
   listRoutines,
   pauseRoutine,
-  resumeRoutine,
   type RoutineCapabilityRow,
   type RoutineRunRow,
   type RoutineRunStatus,
@@ -13,6 +12,7 @@ import {
   type RoutineSummary,
   type StoredRoutine,
 } from "./routines.ts";
+import { executeRoutinePlatformAction } from "./routine-platform.ts";
 
 interface RoutineCapabilityStatusRow {
   routine_id: string;
@@ -75,7 +75,7 @@ export interface RoutineMonitorDetailResponse {
 }
 
 const RUN_SELECT =
-  "id,routine_id,user_id,status,trigger,trace_id,started_at,completed_at,duration_ms,total_light,summary,error,run_config,metadata,created_at";
+  "id,routine_id,user_id,status,trigger,trace_id,started_at,completed_at,duration_ms,total_light,summary,error,run_config,metadata,agent_home_action_request_id,created_at";
 const CAPABILITY_STATUS_SELECT = "routine_id,approved";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_LIMIT = 50;
@@ -547,7 +547,10 @@ export async function updateRoutineMonitorStatus(
   if (action === "pause" || status === "paused") {
     await pauseRoutine(userId, routineId);
   } else if (action === "resume" || status === "active") {
-    await resumeRoutine(userId, routineId);
+    await executeRoutinePlatformAction(userId, {
+      action: "resume",
+      routine_id: routineId,
+    });
   } else {
     throw new Error(
       "action must be pause/resume or status must be active/paused",
@@ -562,13 +565,14 @@ export async function updateRoutineMonitorStatus(
 export async function queueRoutineMonitorRun(
   userId: string,
   routineId: string,
+  options: { agentHomeActionRequestId?: string } = {},
 ): Promise<{ queued: true; run: RoutineRunRow; routine: RoutineMonitorItem }> {
   const detail = await getRoutineMonitorDetail(userId, routineId);
   if (!detail) throw new Error(`Routine ${routineId} not found`);
-  if (
-    detail.routine.status === "deleted" || detail.routine.status === "disabled"
-  ) {
-    throw new Error(`Routine ${routineId} is ${detail.routine.status}`);
+  if (detail.routine.status !== "active") {
+    throw new Error(
+      `Routine ${routineId} is ${detail.routine.status}; only an active, owner-approved routine can run now`,
+    );
   }
 
   const run = await createRoutineRun({
@@ -578,12 +582,12 @@ export async function queueRoutineMonitorRun(
     traceId: crypto.randomUUID(),
     status: "queued",
     metadata: { source: "command_monitor.run_now" },
+    agentHomeActionRequestId: options.agentHomeActionRequestId,
   });
 
-  const updatedDetail = await getRoutineMonitorDetail(userId, routineId);
   return {
     queued: true,
     run,
-    routine: updatedDetail?.routine ?? detail.routine,
+    routine: detail.routine,
   };
 }

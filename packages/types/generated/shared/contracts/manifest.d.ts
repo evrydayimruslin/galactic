@@ -236,5 +236,8 @@ export declare function resolveManifestEnvSchema(manifest: {
 } | null | undefined): Record<string, EnvSchemaEntry>;
 export declare function normalizeEnvSchema(input: unknown): Record<string, EnvSchemaEntry>;
 export declare function normalizeManifestParameters(params: unknown): Record<string, ManifestParameter> | undefined;
+export declare const CANONICAL_APP_VERSION_PATTERN: RegExp;
+export declare function isCanonicalAppVersion(value: unknown): value is string;
+export declare function nextCanonicalAppPatchVersion(current: string | null | undefined): string | null;
 export declare function validateManifest(input: unknown): ManifestValidationResult;
 export declare function manifestToMCPTools(manifest: AppManifest, _appId: string, appSlug: string): MCPTool[];

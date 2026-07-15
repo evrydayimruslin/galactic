@@ -513,7 +513,7 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
   }
 });
 
-Deno.test("routine executor: skips scheduled run and defers to budget reset when the daily budget is exhausted", async () => {
+Deno.test("routine executor: manual runs cannot bypass an exhausted daily budget", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;
   const routinePatches: Array<{ body: Record<string, unknown>; url: string }> =
@@ -557,7 +557,7 @@ Deno.test("routine executor: skips scheduled run and defers to budget reset when
     if (table === "routine_runs" && method === "GET") {
       if (isReaperQuery(url)) return jsonResponse([]); // nothing stale to reap
       if (url.searchParams.get("id")?.startsWith("eq.")) {
-        return jsonResponse([queuedRunRow()]); // getRunById -> claimable
+        return jsonResponse([queuedRunRow({ trigger: "manual" })]); // explicit owner run
       }
       return jsonResponse([]);
     }
@@ -912,6 +912,7 @@ Deno.test("processQueuedRoutineRun: claims the queued run and executes the handl
   const originalFetch = globalThis.fetch;
   let handlerInvoked = false;
   let claimStatusFilter: string | null = null;
+  let invokedTraceId: string | null = null;
   const runPatches: Array<Record<string, unknown>> = [];
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -921,7 +922,7 @@ Deno.test("processQueuedRoutineRun: claims the queued run and executes the handl
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     // getRunById loads the enqueued run; it is still "queued" until claimed here.
     if (table === "routine_runs" && method === "GET") {
-      return jsonResponse([queuedRunRow()]);
+      return jsonResponse([queuedRunRow({ trace_id: null })]);
     }
     if (table === "routine_runs" && method === "PATCH") {
       if ((body as Record<string, unknown>)?.status === "running") {
@@ -946,13 +947,81 @@ Deno.test("processQueuedRoutineRun: claims the queued run and executes the handl
         now: NOW,
         clock: () => NOW,
         baseUrl: "https://api.example.test",
-        invokeMcp: async () => { handlerInvoked = true; return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ ok: true }) }] } }); },
+        invokeMcp: async (request) => {
+          handlerInvoked = true;
+          const body = await request.json() as {
+            params: { arguments: { _routine: { trace_id: string } } };
+          };
+          invokedTraceId = body.params.arguments._routine.trace_id;
+          return jsonResponse({
+            result: {
+              content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+            },
+          });
+        },
       },
     );
 
     assertEquals(handlerInvoked, true);
     assertEquals(claimStatusFilter, "eq.queued"); // at-most-once: claim only a queued row
+    const claim = runPatches.find((patch) => patch.status === "running");
+    assert(
+      typeof claim?.trace_id === "string" && claim.trace_id.length > 0,
+      "claim backfills a legacy null trace before execution",
+    );
+    assertEquals(invokedTraceId, claim?.trace_id);
     assert(runPatches.some((p) => p.status === "succeeded"));
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("processQueuedRoutineRun: never executes a queued run after the routine enters error", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  let handlerInvoked = false;
+  const runPatches: Array<Record<string, unknown>> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body
+      ? JSON.parse(String(init.body)) as Record<string, unknown>
+      : {};
+    if (table === "routine_runs" && method === "GET") {
+      return jsonResponse([queuedRunRow()]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      runPatches.push(body);
+      return jsonResponse([runRow(body)]);
+    }
+    if (table === "user_routines" && method === "GET") {
+      return jsonResponse([routineRow({ status: "error" })]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    await processQueuedRoutineRun(
+      { routineRunId: "run-1" },
+      {
+        now: NOW,
+        clock: () => NOW,
+        invokeMcp: async () => {
+          handlerInvoked = true;
+          return jsonResponse({ result: { content: [] } });
+        },
+      },
+    );
+
+    assertEquals(handlerInvoked, false);
+    assert(
+      runPatches.some((patch) =>
+        patch.status === "skipped" && patch.summary === "Routine is error"
+      ),
+    );
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv();
@@ -980,6 +1049,130 @@ Deno.test("processQueuedRoutineRun: duplicate delivery (claim matches nothing) i
     );
     assertEquals(outcome, "ack");
     assertEquals(handlerInvoked, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("processQueuedRoutineRun: a database concurrency denial never invokes the Agent", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+  let handlerInvoked = false;
+  let claimAttempted = false;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    if (table === "routine_runs" && method === "GET") {
+      return jsonResponse([queuedRunRow()]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      claimAttempted = true;
+      return jsonResponse({
+        code: "P0001",
+        details: JSON.stringify({
+          code: "ROUTINE_RUN_CONCURRENCY_LIMIT",
+          running: 1,
+          maxConcurrency: 1,
+        }),
+      }, 409);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+  console.error = () => {};
+
+  try {
+    const outcome = await processQueuedRoutineRun(
+      { routineRunId: "run-1" },
+      {
+        now: NOW,
+        invokeMcp: async () => {
+          handlerInvoked = true;
+          return jsonResponse({ result: { content: [] } });
+        },
+      },
+    );
+    assertEquals(outcome, "ack");
+    assertEquals(claimAttempted, true);
+    assertEquals(handlerInvoked, false);
+  } finally {
+    console.error = originalConsoleError;
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("processQueuedRoutineRun: an unmarked legacy launch routine is quarantined", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  let handlerInvoked = false;
+  const runPatches: Array<Record<string, unknown>> = [];
+  const routinePatches: Array<Record<string, unknown>> = [];
+  const legacy = routineRow({
+    metadata: { source: "ul.routine" },
+    budget_policy: {
+      max_light_per_run: 10,
+      max_light_per_day: 100,
+      max_light_per_month: 1000,
+      max_calls_per_run: 5,
+    },
+  });
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body
+      ? JSON.parse(String(init.body)) as Record<string, unknown>
+      : {};
+    if (table === "routine_runs" && method === "GET") {
+      return jsonResponse([queuedRunRow()]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      runPatches.push(body);
+      return jsonResponse([runRow(body)]);
+    }
+    if (table === "user_routines" && method === "GET") {
+      return jsonResponse([legacy]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      routinePatches.push(body);
+      return jsonResponse([{ ...legacy, ...body }]);
+    }
+    if (table === "routine_capabilities" ||
+      table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "user_notifications" && method === "POST") {
+      return jsonResponse([{ id: "notification-1" }]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    await processQueuedRoutineRun(
+      { routineRunId: "run-1" },
+      {
+        now: NOW,
+        clock: () => NOW,
+        invokeMcp: async () => {
+          handlerInvoked = true;
+          return jsonResponse({ result: { content: [] } });
+        },
+      },
+    );
+    assertEquals(handlerInvoked, false);
+    const skipped = runPatches.find((body) => body.status === "skipped");
+    assert(skipped);
+    const blockers = ((skipped?.error as Record<string, unknown>)?.blockers ||
+      []) as Array<Record<string, unknown>>;
+    assert(
+      blockers.some((blocker) =>
+        blocker.code === "noncanonical_launch_routine"
+      ),
+    );
+    assert(routinePatches.some((body) => body.status === "paused"));
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv();

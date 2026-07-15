@@ -16,6 +16,8 @@ import type { D1TestFixtureConfig } from "../services/d1-test-fixtures.ts";
 import type { CloudOperationMeteringContext } from "../services/cloud-usage.ts";
 import { buildEconomicIdempotencyKey } from "../services/economic-idempotency.ts";
 import { mintSandboxAuthToken } from "../services/sandbox-actor.ts";
+import type { RoutineActorCapabilityScope } from "../services/routine-auth.ts";
+import type { RoutineTraceContext } from "../services/routine-trace.ts";
 
 // User context passed to apps (subset of full user, safe to expose)
 export interface UserContext {
@@ -43,6 +45,10 @@ export interface RuntimeConfig {
   executionId: string;
   code: string;
   permissions: string[];
+  // Host-only gx.test switch. Dynamic Workers replace production inference and
+  // notification bindings with deterministic no-side-effect RPC stubs. This is
+  // never derived from tenant args or a manifest field.
+  testMode?: boolean;
   // Default-deny egress allowlist (manifest network.allowed_destinations as
   // canonical hosts). Undefined is treated as [] in the sandbox — no outbound.
   allowedDestinations?: string[];
@@ -92,6 +98,13 @@ export interface RuntimeConfig {
   // Asserts only the caller's OWN app id, so an app reading it cannot forge a
   // different caller.
   callerContextToken?: string;
+  // Server-derived routine attribution. Dynamic/legacy sandboxes use this only
+  // when minting the signed outbound sandbox actor; it is never exposed as
+  // mutable tenant input.
+  routineContext?: RoutineTraceContext;
+  // Exact approved routine call pairs. Signed into each sandbox actor and
+  // preserved across hops; never derived from tenant code or broad deps.
+  routineCapabilityCeiling?: RoutineActorCapabilityScope[];
   // Logical slot -> concrete target bindings for ultralight.use(slot).
   slotBindings?: Array<{ slot: string; targetAppId: string; functions: string[] }>;
   // Internal service auth for TCP protocol endpoints (/api/net/*)
@@ -1729,6 +1742,8 @@ export async function executeInSandbox(
     dependencyAppIds: (config.appCallDependencies || [])
       .map((dependency) => dependency.app)
       .filter(Boolean),
+    routineContext: config.routineContext,
+    routineCapabilities: config.routineCapabilityCeiling,
   });
 
   const capturedConsole = {
@@ -2169,6 +2184,11 @@ export async function executeInSandbox(
         }
         if (!config.embeddingService) {
           throw new Error("Embedding service not available");
+        }
+        if (config.routineContext) {
+          throw new Error(
+            "Routine embeddings require the dynamic runtime budget binding.",
+          );
         }
         const response = await config.embeddingService.embed(input);
         return {

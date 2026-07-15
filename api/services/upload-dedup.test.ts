@@ -48,6 +48,21 @@ Deno.test("dedup hash: adding or removing a file flips the hash", async () => {
   assert(base !== withExtra, "a new file must change the hash");
 });
 
+Deno.test("dedup hash: prototype-named files are represented and content-bound", async () => {
+  const benign = await computeUploadSourceHash([
+    ...FILES,
+    { path: "__proto__", content: "export const value = 'benign';" },
+  ]);
+  const changed = await computeUploadSourceHash([
+    ...FILES,
+    { path: "__proto__", content: "export const value = 'changed';" },
+  ]);
+  assert(
+    benign !== changed,
+    "magic object keys must not disappear from the canonical file set",
+  );
+});
+
 Deno.test("getLatestVersionSourceHash: returns the LIVE version's stored hash only", () => {
   const app = {
     current_version: "1.1",

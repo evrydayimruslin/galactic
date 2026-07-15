@@ -1,5 +1,4 @@
 import type {
-  AgentCallerTrustSummary,
   AgentGrantApproveRequest,
   AgentGrantCreateRequest,
   AgentGrantSummary,
@@ -10,6 +9,14 @@ import type {
 import type {
   LaunchAgentAdminSummary,
   LaunchAgentFunctionsResponse,
+  LaunchAgentHomeActionRequest,
+  LaunchAgentHomeIdentityUpdateRequest,
+  LaunchAgentHomeResponse,
+  LaunchAgentHomeRoutineUpdateRequest,
+  LaunchAgentHomeSettingsUpdateRequest,
+  LaunchAgentRoutineActionRequest,
+  LaunchAgentRoutineResponse,
+  LaunchAgentRoutineUpdateRequest,
   LaunchAgentSummary,
   LaunchApiKeyCreateRequest,
   LaunchApiKeyCreateResponse,
@@ -134,7 +141,13 @@ export class LaunchApiAuthenticationError extends Error {
 
 export class LaunchApiRequestError extends Error {
   override name = "LaunchApiRequestError";
-  constructor(message: string, public readonly status: number) {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly code: string | null = null,
+    public readonly details: unknown = null,
+    public readonly responseBody: unknown = null,
+  ) {
     super(message);
   }
 }
@@ -318,6 +331,113 @@ export class LaunchApiClient {
   agentFunctions(idOrSlug: string): Promise<LaunchAgentFunctionsResponse> {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/functions`,
+    );
+  }
+
+  /** Canonical owner-only snapshot for a private persistent Agent home. */
+  agentHome(idOrSlug: string): Promise<LaunchAgentHomeResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home`,
+    );
+  }
+
+  updateAgentHomeIdentity(
+    idOrSlug: string,
+    request: LaunchAgentHomeIdentityUpdateRequest,
+  ): Promise<LaunchAgentHomeResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/identity`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  updateAgentHomeRoutine(
+    idOrSlug: string,
+    request: LaunchAgentHomeRoutineUpdateRequest,
+  ): Promise<LaunchAgentHomeResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/routine`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  updateAgentHomeSettings(
+    idOrSlug: string,
+    request: LaunchAgentHomeSettingsUpdateRequest,
+  ): Promise<LaunchAgentHomeResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/settings`,
+      {
+        method: "PUT",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  actOnAgentHome(
+    idOrSlug: string,
+    request: LaunchAgentHomeActionRequest,
+  ): Promise<LaunchAgentHomeResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/actions`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  /** Safety-only stop lane; independent of Home aggregation/action sagas. */
+  pauseAgentHome(
+    idOrSlug: string,
+  ): Promise<{
+    paused: true;
+    routineId: string;
+    revision: string;
+    generatedAt: string;
+  }> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/pause`,
+      { method: "POST" },
+    );
+  }
+
+  /** Owner-only operational state for the Agent's one primary routine. */
+  agentRoutine(idOrSlug: string): Promise<LaunchAgentRoutineResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routine`,
+    );
+  }
+
+  updateAgentRoutine(
+    idOrSlug: string,
+    request: LaunchAgentRoutineUpdateRequest,
+  ): Promise<LaunchAgentRoutineResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routine`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  actOnAgentRoutine(
+    idOrSlug: string,
+    request: LaunchAgentRoutineActionRequest,
+  ): Promise<LaunchAgentRoutineResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routine/actions`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
     );
   }
 
@@ -665,13 +785,6 @@ export class LaunchApiClient {
     );
   }
 
-  // Egress-trust signal for the caller Agent shown at bind/approve time.
-  agentCallerTrust(idOrSlug: string): Promise<AgentCallerTrustSummary> {
-    return this.fetchJson(
-      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/caller-trust`,
-    );
-  }
-
   listGrants(
     query: LaunchGrantListQuery = {},
   ): Promise<LaunchGrantListResponse> {
@@ -853,11 +966,17 @@ export class LaunchApiClient {
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       let message = text;
+      let responseBody: unknown = null;
+      let errorCode: string | null = null;
+      let errorDetails: unknown = null;
       try {
         const parsed = JSON.parse(text) as {
+          code?: unknown;
+          details?: unknown;
           error?: unknown;
           message?: unknown;
         };
+        responseBody = parsed;
         // The API returns errors either as a string or a structured object
         // ({ type, message, details }). Pull the human-readable message out —
         // never String() the object (that yields the useless "[object Object]").
@@ -872,6 +991,23 @@ export class LaunchApiClient {
         } else if (typeof parsed.message === "string") {
           message = parsed.message;
         }
+        if (typeof parsed.code === "string") {
+          errorCode = parsed.code;
+        } else if (
+          errField && typeof errField === "object" &&
+          typeof (errField as { code?: unknown }).code === "string"
+        ) {
+          errorCode = (errField as { code: string }).code;
+        } else if (
+          errField && typeof errField === "object" &&
+          typeof (errField as { type?: unknown }).type === "string"
+        ) {
+          errorCode = (errField as { type: string }).type;
+        }
+        errorDetails = parsed.details ??
+          (errField && typeof errField === "object"
+            ? (errField as { details?: unknown }).details ?? null
+            : null);
         // else: fall through to the raw `text` (already assigned above).
       } catch {
         // Non-JSON error body (e.g. an upstream HTML error page): never
@@ -895,6 +1031,9 @@ export class LaunchApiClient {
       throw new LaunchApiRequestError(
         message || `Launch API request failed (${response.status})`,
         response.status,
+        errorCode,
+        errorDetails,
+        responseBody,
       );
     }
     return await response.json() as T;

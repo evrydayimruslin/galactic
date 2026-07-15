@@ -67,4 +67,8 @@ Deno.test("scaffold interface: the generated manifest PASSES the real validator"
 Deno.test("scaffold interface: adds an edit-the-UI next step", () => {
   const steps = scaffold(true).next_steps.join("\n");
   assert(/interfaces\/main\.html/.test(steps), "next steps point at the UI file");
+  assert(
+    steps.includes("test_attestation: tested.test_attestation"),
+    "generic scaffold carries successful gx.test proof into gx.upload",
+  );
 });

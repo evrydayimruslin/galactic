@@ -1,7 +1,12 @@
 import { assertEquals } from 'https://deno.land/std@0.210.0/assert/assert_equals.ts';
 import { assertStringIncludes } from 'https://deno.land/std@0.210.0/assert/assert_string_includes.ts';
 
-import { handleLaunch } from './launch.ts';
+import {
+  classifyLaunchAgentHomePromotionReconciliation,
+  handleLaunch,
+} from './launch.ts';
+import { putLiveExecutedBundle } from '../services/executed-bundle.ts';
+import { encryptEnvVar } from '../services/envvars.ts';
 
 const TEST_ENV = {
   BASE_URL: 'https://ultralight.test',
@@ -9,10 +14,50 @@ const TEST_ENV = {
   SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
 };
 
+Deno.test('launch Agent Home: promotion reconciliation fails closed on every partial phase', () => {
+  assertEquals(
+    classifyLaunchAgentHomePromotionReconciliation({
+      databaseAtTarget: false,
+      liveAtTarget: false,
+    }),
+    'not_applied',
+  );
+  assertEquals(
+    classifyLaunchAgentHomePromotionReconciliation({
+      databaseAtTarget: false,
+      liveAtTarget: true,
+    }),
+    'repair_required',
+  );
+  assertEquals(
+    classifyLaunchAgentHomePromotionReconciliation({
+      databaseAtTarget: true,
+      liveAtTarget: false,
+    }),
+    'repair_required',
+  );
+  assertEquals(
+    classifyLaunchAgentHomePromotionReconciliation({
+      databaseAtTarget: true,
+      liveAtTarget: true,
+      storageCurrent: false,
+    }),
+    'repair_required',
+  );
+  assertEquals(
+    classifyLaunchAgentHomePromotionReconciliation({
+      databaseAtTarget: true,
+      liveAtTarget: true,
+      storageCurrent: true,
+    }),
+    'applied',
+  );
+});
+
 async function withLaunchEnv<T>(
   fn: () => Promise<T>,
   fetchMock?: typeof fetch,
-  envOverrides: Record<string, string | undefined> = {},
+  envOverrides: Record<string, unknown> = {},
 ): Promise<T> {
   const previousEnv = globalThis.__env;
   const previousFetch = globalThis.fetch;
@@ -132,6 +177,87 @@ function privateOwnerTestApp(): Record<string, unknown> {
   };
 }
 
+function persistentRoutineRow(): Record<string, unknown> {
+  return {
+    id: 'routine-1',
+    user_id: 'user-1',
+    composer_app_id: 'app-private-1',
+    composer_app_slug: 'private-helper',
+    template_id: 'monitor',
+    template_version: 'v1',
+    name: 'Private monitor',
+    description: 'Checks the private system',
+    intent: 'Watch the private system and report meaningful changes.',
+    handler_function: 'inspect',
+    status: 'paused',
+    schedule: { type: 'interval', every_seconds: 300 },
+    config: { secret_value: 'must-not-leak' },
+    budget_policy: {
+      max_light_per_run: 10,
+      max_light_per_day: 50,
+      max_light_per_month: 500,
+      max_calls_per_run: 12,
+    },
+    approval_policy: { require_user_approval: true },
+    max_concurrency: 1,
+    next_run_at: null,
+    last_run_at: '2026-07-14T12:00:00.000Z',
+    last_success_at: null,
+    last_error_at: '2026-07-14T12:00:00.000Z',
+    failure_count: 1,
+    created_by_trace_id: 'trace-created',
+    metadata: {
+      secret_value: 'must-not-leak',
+      auto_pause: { reason: 'consecutive_failures' },
+    },
+    created_at: '2026-07-14T10:00:00.000Z',
+    updated_at: '2026-07-14T12:00:00.000Z',
+    deleted_at: null,
+  };
+}
+
+function persistentRoutineCapabilityRow(): Record<string, unknown> {
+  return {
+    id: 'capability-1',
+    routine_id: 'routine-1',
+    user_id: 'user-1',
+    app_id: 'app-private-1',
+    app_ref: 'private-helper',
+    function_name: 'inspect',
+    access: 'read',
+    required: true,
+    purpose: 'Read current private status',
+    approved: false,
+    approved_at: null,
+    approved_by_user_id: null,
+    pricing_snapshot: {},
+    constraints: {},
+    metadata: {},
+    created_at: '2026-07-14T10:00:00.000Z',
+    updated_at: '2026-07-14T10:00:00.000Z',
+  };
+}
+
+function persistentRoutineRunRow(): Record<string, unknown> {
+  return {
+    id: 'run-1',
+    routine_id: 'routine-1',
+    user_id: 'user-1',
+    status: 'failed',
+    trigger: 'scheduled',
+    trace_id: 'trace-run',
+    started_at: '2026-07-14T11:59:00.000Z',
+    completed_at: '2026-07-14T12:00:00.000Z',
+    duration_ms: 60_000,
+    total_light: 2,
+    summary: 'Inbox delivery did not complete.',
+    error: { code: 'inbox_unavailable', message: 'must-not-leak' },
+    run_config: { secret_value: 'must-not-leak' },
+    metadata: { secret_value: 'must-not-leak' },
+    created_at: '2026-07-14T11:59:00.000Z',
+  };
+}
+
 // Legacy-format API token (plaintext column) so the api_token auth path can be
 // exercised without reproducing salted-hash material in tests.
 const TEST_API_TOKEN = `ul_${'a'.repeat(32)}`;
@@ -168,6 +294,228 @@ function apiTokenAuthMock(): typeof fetch {
         provisional: false,
         last_active_at: null,
       });
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+}
+
+const HOME_APP_ID = '11111111-1111-4111-8111-111111111111';
+const HOME_ROUTINE_ID = '22222222-2222-4222-8222-222222222222';
+const HOME_RUN_ID = '33333333-3333-4333-8333-333333333333';
+const HOME_ACTION_ID = '44444444-4444-4444-8444-444444444444';
+const HOME_IDEMPOTENCY_KEY = '55555555-5555-4555-8555-555555555555';
+const HOME_ACTION_LEASE_TOKEN = '66666666-6666-4666-8666-666666666666';
+
+function agentHomeTestApp(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const envSchema = {
+    OWNER_TOKEN: {
+      scope: 'universal',
+      required: true,
+      input: 'password',
+      label: 'Owner token',
+    },
+    USER_TOKEN: {
+      scope: 'per_user',
+      required: true,
+      input: 'password',
+      label: 'User token',
+    },
+  };
+  return {
+    ...privateOwnerTestApp(),
+    id: HOME_APP_ID,
+    slug: 'home-agent',
+    name: 'Home Agent',
+    description: 'Owns one ongoing responsibility.',
+    current_version: null,
+    current_version_promoted_at: null,
+    versions: [],
+    version_metadata: [],
+    exports: ['inspect'],
+    env_schema: envSchema,
+    manifest: {
+      permissions: ['notify:owner', 'ai:call', 'unknown:scope'],
+      env_vars: envSchema,
+      functions: {
+        inspect: {
+          description: 'Inspect the system.',
+          annotations: { readOnlyHint: true },
+        },
+      },
+    },
+    ...overrides,
+  };
+}
+
+function agentHomeRoutineRow(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ...persistentRoutineRow(),
+    id: HOME_ROUTINE_ID,
+    composer_app_id: HOME_APP_ID,
+    composer_app_slug: 'home-agent',
+    name: 'Home Agent routine',
+    status: 'paused',
+    ...overrides,
+  };
+}
+
+function agentHomeRunRow(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ...persistentRoutineRunRow(),
+    id: HOME_RUN_ID,
+    routine_id: HOME_ROUTINE_ID,
+    ...overrides,
+  };
+}
+
+function agentHomeBudgetRow(): Record<string, unknown> {
+  return {
+    day_started_at: '2026-07-14T00:00:00.000Z',
+    month_started_at: '2026-07-01T00:00:00.000Z',
+    day_settled_light: 3,
+    day_reserved_light: 1,
+    day_total_light: 4,
+    month_settled_light: 8,
+    month_reserved_light: 2,
+    month_total_light: 10,
+    last_run_id: HOME_RUN_ID,
+    last_run_settled_light: 2,
+    last_run_reserved_light: 0.5,
+    last_run_total_light: 2.5,
+    last_run_calls: 4,
+    calls_by_run: { [HOME_RUN_ID]: 4 },
+  };
+}
+
+interface AgentHomeFetchMockOptions {
+  revisionSequence?: string[];
+  app?: () => Record<string, unknown>;
+  routine?: () => Record<string, unknown>;
+  runs?: () => Record<string, unknown>[];
+  agentEnvVars?: () => Record<string, string>;
+  userSecretRows?: () => Record<string, unknown>[];
+  rpc?: (
+    name: string,
+    body: Record<string, unknown>,
+  ) => Response | undefined | Promise<Response | undefined>;
+}
+
+function agentHomeFetchMock(
+  options: AgentHomeFetchMockOptions = {},
+): typeof fetch {
+  let revisionCall = 0;
+  return (async (input: Request | URL | string, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === 'https://supabase.test/auth/v1/user') {
+      return jsonResponse({
+        id: 'user-1',
+        email: 'founder@example.com',
+        user_metadata: {},
+      });
+    }
+    if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
+      return jsonResponse([{ id: 'user-1' }]);
+    }
+    if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
+      return jsonResponse([{ tier: 'free' }]);
+    }
+    if (url.startsWith('https://supabase.test/rest/v1/rpc/')) {
+      const name = url.slice(url.lastIndexOf('/') + 1);
+      const rawBody = init?.body ?? (input instanceof Request
+        ? await input.clone().text()
+        : '{}');
+      const body = JSON.parse(String(rawBody || '{}')) as Record<string, unknown>;
+      const custom = await options.rpc?.(name, body);
+      if (custom) return custom;
+      if (name === 'get_agent_home_revision') {
+        const sequence = options.revisionSequence || ['7'];
+        const revision = sequence[Math.min(revisionCall, sequence.length - 1)];
+        revisionCall += 1;
+        return jsonResponse(revision);
+      }
+      if (name === 'get_agent_home_budget_usage') {
+        return jsonResponse([agentHomeBudgetRow()]);
+      }
+      return jsonResponse([]);
+    }
+    if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+      if ((new URL(url).searchParams.get('select') || '').includes('env_vars')) {
+        const app = options.app?.() || agentHomeTestApp();
+        return jsonResponse([{
+          id: HOME_APP_ID,
+          env_vars: options.agentEnvVars?.() || {
+            OWNER_TOKEN: 'owner-secret-sentinel',
+          },
+          env_schema: app.env_schema,
+          manifest: app.manifest,
+        }]);
+      }
+      return jsonResponse([options.app?.() || agentHomeTestApp()]);
+    }
+    if (url.startsWith('https://supabase.test/rest/v1/user_routines?')) {
+      return new URL(url).searchParams.get('select') === 'id'
+        ? jsonResponse([{ id: HOME_ROUTINE_ID }])
+        : jsonResponse([options.routine?.() || agentHomeRoutineRow()]);
+    }
+    if (url.startsWith('https://supabase.test/rest/v1/routine_capabilities?')) {
+      return jsonResponse([{
+        ...persistentRoutineCapabilityRow(),
+        id: '66666666-6666-4666-8666-666666666666',
+        routine_id: HOME_ROUTINE_ID,
+        app_id: HOME_APP_ID,
+        app_ref: 'home-agent',
+        approved: true,
+        approved_at: '2026-07-14T10:05:00.000Z',
+        approved_by_user_id: 'user-1',
+      }]);
+    }
+    if (
+      url.startsWith(
+        'https://supabase.test/rest/v1/routine_dashboard_bindings?',
+      )
+    ) {
+      return jsonResponse([]);
+    }
+    if (url.startsWith('https://supabase.test/rest/v1/routine_runs?')) {
+      return jsonResponse(options.runs?.() || [agentHomeRunRow()]);
+    }
+    if (url.startsWith('https://supabase.test/rest/v1/user_app_secrets?')) {
+      if (url.includes('value_encrypted')) {
+        return jsonResponse(options.userSecretRows?.() || []);
+      }
+      return jsonResponse(options.userSecretRows?.() || [{
+        key: 'USER_TOKEN',
+        updated_at: '2026-07-14T10:10:00.000Z',
+        value_encrypted: 'per-user-secret-sentinel',
+      }]);
+    }
+    if (
+      url.startsWith(
+        'https://supabase.test/rest/v1/user_agent_permission_defaults?',
+      )
+    ) {
+      return jsonResponse([{
+        user_id: 'user-1',
+        default_policy: 'ask',
+        default_health_gate: true,
+      }]);
+    }
+    if (
+      url.startsWith(
+        'https://supabase.test/rest/v1/user_agent_function_permissions?',
+      ) ||
+      url.startsWith(
+        'https://supabase.test/rest/v1/user_function_inference_overrides?',
+      ) ||
+      url.startsWith('https://supabase.test/rest/v1/agent_function_grants?')
+    ) {
+      return jsonResponse([]);
     }
     return jsonResponse([]);
   }) as typeof fetch;
@@ -265,15 +613,18 @@ Deno.test('launch facade: install instructions expose MCP and CLI targets', asyn
       promptInstruction?.configText || '',
       '"Authorization":"Bearer $GALACTIC_API_KEY"',
     );
-    // First-contact UX: the prompt must drive a real orientation (build+deploy,
-    // not "a few lines") rather than a terse capability list.
+    // First-contact UX: the prompt must drive the private persistent-Agent
+    // conjuring flow and stop at the owner activation boundary.
     assertStringIncludes(
       promptInstruction?.configText || '',
-      'build and deploy new Agents',
+      'one useful full-time Agent',
     );
-    assertStringIncludes(promptInstruction?.configText || '', 'not a few lines');
+    assertStringIncludes(
+      promptInstruction?.configText || '',
+      'explicit review of capabilities',
+    );
     assertEquals(
-      (promptInstruction?.configText || '').includes('in a few lines what you can now do'),
+      (promptInstruction?.configText || '').includes('public marketplace'),
       false,
     );
     const apiInstruction = body.instructions.find((instruction) => instruction.target === 'api');
@@ -448,11 +799,16 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
       endpoints: Record<string, string | undefined>;
       compatibilityPublicRoutes: string[];
       capabilities: { included: string[]; deferred: string[] };
+      policy: {
+        access: string;
+        activationAuthority: string;
+        budgetEnforcement: string;
+      };
     };
 
     assertEquals(response.status, 200);
     assertEquals(body.available, true);
-    assertEquals(body.version, 'launch-mvp-v1');
+    assertEquals(body.version, 'persistent-agent-mvp-v1');
     assertEquals(body.endpoints.openapi, '/api/launch/openapi.json');
     assertEquals(body.endpoints.mcpPlatform, '/mcp/platform');
     assertEquals(body.compatibilityPublicRoutes.includes('/discover'), true);
@@ -573,10 +929,14 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
       body.endpoints.walletEarnings,
       '/api/launch/wallet/earnings?agent={agentId}&limit=25&cursor={cursor}',
     );
-    assertEquals(body.capabilities.deferred.includes('desktop'), true);
-    assertEquals(body.capabilities.included.includes('credits_wallet'), true);
+    assertEquals(body.policy.access, 'private_owner_only');
+    assertEquals(body.policy.activationAuthority, 'account_session');
+    assertEquals(body.policy.budgetEnforcement, 'hard_pre_execution');
+    assertEquals(body.capabilities.deferred.includes('marketplace'), true);
+    assertEquals(body.capabilities.included.includes('credits_balance'), true);
+    assertEquals(body.capabilities.included.includes('full_time_routines'), true);
     assertEquals(body.capabilities.included.includes('byok'), true);
-    assertEquals(body.capabilities.included.includes('light_wallet'), false);
+    assertEquals(body.capabilities.included.includes('credits_wallet'), false);
     assertEquals(body.capabilities.deferred.includes('byok'), false);
   });
 });
@@ -667,7 +1027,7 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
     assertEquals(Boolean(spec.components?.schemas?.ByokMutation), true);
     assertEquals(Boolean(spec.components?.schemas?.InferenceOptions), true);
     assertEquals(
-      spec['x-launch-scope']?.deferredCapabilities?.includes('desktop'),
+      spec['x-launch-scope']?.deferredCapabilities?.includes('marketplace'),
       true,
     );
     assertEquals(
@@ -950,6 +1310,177 @@ Deno.test('launch facade: owners can preview private tools', async () => {
             avatar_url: null,
           },
         ]);
+      }
+      return jsonResponse([]);
+    },
+  );
+});
+
+Deno.test('launch facade: owner routine overview is live, bounded, and secret-free', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request(
+          'https://ultralight.test/api/launch/agents/private-helper/routine',
+          { headers: { Authorization: 'Bearer browser-session-token' } },
+        ),
+      );
+      const body = await response.json() as {
+        routine?: {
+          mission?: string;
+          intervalSeconds?: number;
+          budgets?: Record<string, number>;
+          capabilities?: Array<{ id: string; approved: boolean }>;
+          blockers?: Array<{ code: string; capabilityIds?: string[] }>;
+          autoPauseReason?: string | null;
+          recentRuns?: Array<{ errorCode?: string | null }>;
+        } | null;
+      };
+
+      assertEquals(response.status, 200);
+      assertEquals(
+        body.routine?.mission,
+        'Watch the private system and report meaningful changes.',
+      );
+      assertEquals(body.routine?.intervalSeconds, 300);
+      assertEquals(body.routine?.budgets, {
+        maxLightPerRun: 10,
+        maxLightPerDay: 50,
+        maxLightPerMonth: 500,
+        maxCallsPerRun: 12,
+      });
+      assertEquals(body.routine?.capabilities, [{
+        id: 'capability-1',
+        appId: 'app-private-1',
+        appRef: 'private-helper',
+        functionName: 'inspect',
+        access: 'read',
+        required: true,
+        purpose: 'Read current private status',
+        approved: false,
+        approvedAt: null,
+      }]);
+      assertEquals(body.routine?.blockers?.[0]?.code, 'pending_required_capabilities');
+      assertEquals(body.routine?.blockers?.[0]?.capabilityIds, ['capability-1']);
+      assertEquals(body.routine?.autoPauseReason, 'consecutive_failures');
+      assertEquals(body.routine?.recentRuns?.[0]?.errorCode, 'inbox_unavailable');
+      const serialized = JSON.stringify(body);
+      assertEquals(serialized.includes('must-not-leak'), false);
+      assertEquals(serialized.includes('run_config'), false);
+      assertEquals(serialized.includes('metadata'), false);
+      assertEquals(serialized.includes('secret_value'), false);
+    },
+    async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === 'https://supabase.test/auth/v1/user') {
+        return jsonResponse({
+          id: 'user-1',
+          email: 'founder@example.com',
+          user_metadata: {},
+        });
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
+        return jsonResponse([{ id: 'user-1' }]);
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
+        return jsonResponse([{ tier: 'free' }]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+        return jsonResponse([privateOwnerTestApp()]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/user_routines?')) {
+        return new URL(url).searchParams.get('select') === 'id'
+          ? jsonResponse([{ id: 'routine-1' }])
+          : jsonResponse([persistentRoutineRow()]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/routine_capabilities?')) {
+        return jsonResponse([persistentRoutineCapabilityRow()]);
+      }
+      if (
+        url.startsWith('https://supabase.test/rest/v1/routine_dashboard_bindings?')
+      ) {
+        return jsonResponse([]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/routine_runs?')) {
+        return jsonResponse([persistentRoutineRunRow()]);
+      }
+      return jsonResponse([]);
+    },
+  );
+});
+
+Deno.test('launch facade: legacy routine mutations cannot bypass Agent Home CAS', async () => {
+  let routine = persistentRoutineRow();
+  let routinePatch: Record<string, unknown> | null = null;
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request(
+          'https://ultralight.test/api/launch/agents/private-helper/routine',
+          {
+            method: 'PATCH',
+            headers: {
+              Authorization: 'Bearer browser-session-token',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              mission: 'Check the private system every ten minutes.',
+              intervalSeconds: 600,
+              budgets: {
+                maxLightPerRun: 8,
+                maxLightPerDay: 40,
+                maxLightPerMonth: 400,
+                maxCallsPerRun: 10,
+              },
+            }),
+          },
+        ),
+      );
+      const body = await response.json() as { error?: string };
+
+      assertEquals(response.status, 410);
+      assertEquals(body.error?.includes('legacy mutation route is retired'), true);
+      assertEquals(routinePatch, null);
+    },
+    async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = init?.method || (input instanceof Request ? input.method : 'GET');
+      if (url === 'https://supabase.test/auth/v1/user') {
+        return jsonResponse({
+          id: 'user-1',
+          email: 'founder@example.com',
+          user_metadata: {},
+        });
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
+        return jsonResponse([{ id: 'user-1' }]);
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
+        return jsonResponse([{ tier: 'free' }]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+        return jsonResponse([privateOwnerTestApp()]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/user_routines?')) {
+        if (method === 'PATCH') {
+          routinePatch = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+          routine = { ...routine, ...routinePatch };
+          return jsonResponse([routine]);
+        }
+        return new URL(url).searchParams.get('select') === 'id'
+          ? jsonResponse([{ id: 'routine-1' }])
+          : jsonResponse([routine]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/routine_capabilities?')) {
+        return jsonResponse([persistentRoutineCapabilityRow()]);
+      }
+      if (
+        url.startsWith('https://supabase.test/rest/v1/routine_dashboard_bindings?')
+      ) {
+        return jsonResponse([]);
+      }
+      if (url.startsWith('https://supabase.test/rest/v1/routine_runs?')) {
+        return jsonResponse([]);
       }
       return jsonResponse([]);
     },
@@ -1918,6 +2449,877 @@ Deno.test({
   },
 });
 
+Deno.test({
+  name: 'launch facade: routine lifecycle rejects connected-agent API keys',
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    await withLaunchEnv(
+      async () => {
+        const attempts: Array<{ method: string; body?: unknown }> = [
+          { method: 'GET' },
+          {
+            method: 'PATCH',
+            body: { mission: 'Silently widen authority' },
+          },
+          {
+            method: 'POST',
+            body: { action: 'activate' },
+          },
+        ];
+        for (const attempt of attempts) {
+          const suffix = attempt.method === 'POST' ? '/actions' : '';
+          const response = await handleLaunch(
+            new Request(
+              `https://ultralight.test/api/launch/agents/private-helper/routine${suffix}`,
+              {
+                method: attempt.method,
+                headers: {
+                  Authorization: `Bearer ${TEST_API_TOKEN}`,
+                  'Content-Type': 'application/json',
+                },
+                ...(attempt.body ? { body: JSON.stringify(attempt.body) } : {}),
+              },
+            ),
+          );
+          const body = await response.json() as { error?: string };
+          assertEquals(response.status, 403, attempt.method);
+          assertStringIncludes(body.error || '', 'account session');
+        }
+      },
+      apiTokenAuthMock(),
+    );
+  },
+});
+
+Deno.test({
+  name: 'launch Agent Home: every route is account-session only and private/no-store',
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    await withLaunchEnv(
+      async () => {
+        const attempts: Array<{ path: string; method: string; body?: unknown }> = [
+          { path: '/api/launch/agents/private-helper/home', method: 'GET' },
+          {
+            path: '/api/launch/agents/private-helper/home/identity',
+            method: 'PATCH',
+            body: { expectedRevision: 'opaque', name: 'Compromised' },
+          },
+          {
+            path: '/api/launch/agents/private-helper/home/routine',
+            method: 'PATCH',
+            body: { expectedRevision: 'opaque', mission: 'Compromised' },
+          },
+          {
+            path: '/api/launch/agents/private-helper/home/settings',
+            method: 'PUT',
+            body: { expectedRevision: 'opaque', values: { API_KEY: 'stolen' } },
+          },
+          {
+            path: '/api/launch/agents/private-helper/home/actions',
+            method: 'POST',
+            body: { expectedRevision: 'opaque', action: 'activate' },
+          },
+          {
+            path: '/api/launch/agents/private-helper/home/pause',
+            method: 'POST',
+          },
+        ];
+        for (const attempt of attempts) {
+          const response = await handleLaunch(
+            new Request(`https://ultralight.test${attempt.path}`, {
+              method: attempt.method,
+              headers: {
+                Authorization: `Bearer ${TEST_API_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              ...(attempt.body ? { body: JSON.stringify(attempt.body) } : {}),
+            }),
+          );
+          const body = await response.json() as { error?: string };
+          assertEquals(response.status, 403, `${attempt.method} ${attempt.path}`);
+          assertStringIncludes(body.error || '', 'account session');
+          assertEquals(response.headers.get('cache-control'), 'private, no-store');
+          assertEquals(response.headers.get('vary'), 'Cookie, Authorization');
+        }
+
+        const methodRejected = await handleLaunch(new Request(
+          'https://ultralight.test/api/launch/agents/private-helper/home',
+          { method: 'DELETE' },
+        ));
+        await methodRejected.body?.cancel();
+        assertEquals(methodRejected.status, 405);
+        assertEquals(
+          methodRejected.headers.get('cache-control'),
+          'private, no-store',
+        );
+        assertEquals(
+          methodRejected.headers.get('vary'),
+          'Cookie, Authorization',
+        );
+      },
+      apiTokenAuthMock(),
+    );
+  },
+});
+
+Deno.test('launch Agent Home: canonical snapshot is secret-free and its revision is stable across wakes', async () => {
+  let runRead = 0;
+  let ownerCiphertext = '';
+  let userCiphertext = '';
+  await withLaunchEnv(
+    async () => {
+      ownerCiphertext = await encryptEnvVar('owner-secret-sentinel');
+      userCiphertext = await encryptEnvVar('per-user-secret-sentinel');
+      const readHome = async () => {
+        const response = await handleLaunch(new Request(
+          'https://ultralight.test/api/launch/agents/home-agent/home',
+          { headers: { Authorization: 'Bearer browser-session-token' } },
+        ));
+        const raw = await response.text();
+        return {
+          response,
+          raw,
+          body: JSON.parse(raw) as {
+            contractVersion: string;
+            revision: string;
+            responsibility: { reporting: { configured: boolean } };
+            state: { blockers: Array<{ code: string }> };
+            setup: {
+              requirements: Array<{
+                settingKey: string | null;
+                configured: boolean;
+              }>;
+            };
+            authority: {
+              items: Array<{ label: string; effective: boolean }>;
+            };
+            budget: {
+              usage: { lastRun: number; lastRunCalls: number; daily: number };
+            } | null;
+            recentRuns: Array<{ summary: string | null; calls: number }>;
+          },
+        };
+      };
+
+      const first = await readHome();
+      const second = await readHome();
+      assertEquals(first.response.status, 200, first.raw);
+      assertEquals(second.response.status, 200, second.raw);
+      assertEquals(first.response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(first.response.headers.get('vary'), 'Cookie, Authorization');
+      assertEquals(first.body.contractVersion, '2026-07-14.v1');
+      assertEquals(first.body.revision, `ah1:${HOME_APP_ID}:7`);
+      // Run progress and usage deliberately do not churn the owner-config CAS.
+      assertEquals(second.body.revision, first.body.revision);
+      assertEquals(first.body.recentRuns[0]?.summary, 'Wake 1');
+      assertEquals(
+        second.body.recentRuns[0]?.summary === first.body.recentRuns[0]?.summary,
+        false,
+      );
+      assertEquals(first.body.recentRuns[0]?.calls, 4);
+      assertEquals(first.body.responsibility.reporting.configured, true);
+      assertEquals(
+        first.body.authority.items.find((item) => item.label === 'unknown:scope')
+          ?.effective,
+        false,
+      );
+      assertEquals(first.body.budget?.usage, {
+        lastRun: 2.5,
+        lastRunCalls: 4,
+        daily: 4,
+        monthly: 10,
+        dayStartedAt: '2026-07-14T00:00:00.000Z',
+        monthStartedAt: '2026-07-01T00:00:00.000Z',
+      });
+      for (const key of ['OWNER_TOKEN', 'USER_TOKEN']) {
+        assertEquals(
+          first.body.setup.requirements.find((item) => item.settingKey === key)
+            ?.configured,
+          true,
+        );
+      }
+      assertEquals(
+        first.body.state.blockers.some((item) => item.code === 'live_release_required'),
+        true,
+      );
+      for (const sentinel of [
+        'owner-secret-sentinel',
+        'per-user-secret-sentinel',
+        'must-not-leak',
+        'secret_value',
+        'run_config',
+        'value_encrypted',
+      ]) {
+        assertEquals(first.raw.includes(sentinel), false, sentinel);
+      }
+    },
+    agentHomeFetchMock({
+      agentEnvVars: () => ({ OWNER_TOKEN: ownerCiphertext }),
+      userSecretRows: () => [{
+        key: 'USER_TOKEN',
+        updated_at: '2026-07-14T10:10:00.000Z',
+        value_encrypted: userCiphertext,
+      }],
+      runs: () => {
+        runRead += 1;
+        return [agentHomeRunRow({ summary: `Wake ${runRead}` })];
+      },
+    }),
+    { ENV_VARS_ENCRYPTION_KEY: 'agent-home-test-encryption-key' },
+  );
+});
+
+Deno.test('launch Agent Home: revision bracketing retries a concurrent config commit', async () => {
+  let revisionReads = 0;
+  let currentName = 'Before commit';
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/home',
+        { headers: { Authorization: 'Bearer browser-session-token' } },
+      ));
+      const body = await response.json() as {
+        revision?: string;
+        agent?: { name?: string };
+        error?: string;
+      };
+      assertEquals(response.status, 200, body.error || '');
+      assertEquals(revisionReads, 4);
+      assertEquals(body.revision, `ah1:${HOME_APP_ID}:8`);
+      assertEquals(body.agent?.name, 'After commit');
+    },
+    agentHomeFetchMock({
+      app: () => agentHomeTestApp({ name: currentName }),
+      rpc: (name) => {
+        if (name !== 'get_agent_home_revision') return undefined;
+        revisionReads += 1;
+        if (revisionReads === 1) return jsonResponse('7');
+        if (revisionReads === 2) {
+          currentName = 'After commit';
+          return jsonResponse('8');
+        }
+        return jsonResponse('8');
+      },
+    }),
+  );
+});
+
+Deno.test({
+  name: 'launch Agent Home: bearer API key cannot escalate through a valid session cookie',
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const apiMock = apiTokenAuthMock();
+    await withLaunchEnv(
+      async () => {
+        const response = await handleLaunch(new Request(
+          'https://ultralight.test/api/launch/agents/home-agent/home',
+          {
+            headers: {
+              Authorization: `Bearer ${TEST_API_TOKEN}`,
+              Cookie: '__Host-ul_session=browser-session-token',
+            },
+          },
+        ));
+        const body = await response.json() as { error?: string };
+        assertEquals(response.status, 403);
+        assertStringIncludes(body.error || '', 'account session');
+        assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      },
+      async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url === 'https://supabase.test/auth/v1/user') {
+          return jsonResponse({
+            id: 'user-1',
+            email: 'founder@example.com',
+            user_metadata: {},
+          });
+        }
+        return await apiMock(input, init);
+      },
+    );
+  },
+});
+
+Deno.test('launch Agent Home: non-owner public and private locators are indistinguishable 404s', async () => {
+  await withLaunchEnv(
+    async () => {
+      const bodies: string[] = [];
+      for (const locator of ['someone-private', 'someone-public']) {
+        const response = await handleLaunch(new Request(
+          `https://ultralight.test/api/launch/agents/${locator}/home`,
+          { headers: { Authorization: 'Bearer browser-session-token' } },
+        ));
+        bodies.push(await response.text());
+        assertEquals(response.status, 404);
+        assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      }
+      assertEquals(bodies[0], bodies[1]);
+      assertEquals(JSON.parse(bodies[0]).error, 'Agent not found');
+    },
+    async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === 'https://supabase.test/auth/v1/user') {
+        return jsonResponse({
+          id: 'user-1',
+          email: 'founder@example.com',
+          user_metadata: {},
+        });
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
+        return jsonResponse([{ id: 'user-1' }]);
+      }
+      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
+        return jsonResponse([{ tier: 'free' }]);
+      }
+      return jsonResponse([]);
+    },
+  );
+});
+
+Deno.test('launch Agent Home: stale identity CAS returns 412 with a fresh current snapshot', async () => {
+  let mutationBody: Record<string, unknown> | null = null;
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/home/identity',
+        {
+          method: 'PATCH',
+          headers: {
+            Authorization: 'Bearer browser-session-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            expectedRevision: `ah1:${HOME_APP_ID}:7`,
+            name: 'Stale write',
+          }),
+        },
+      ));
+      const body = await response.json() as {
+        code?: string;
+        currentRevision?: string;
+        current?: { revision?: string; agent?: { name?: string } };
+      };
+      assertEquals(response.status, 412);
+      assertEquals(body.code, 'AGENT_HOME_REVISION_CONFLICT');
+      assertEquals(body.currentRevision, `ah1:${HOME_APP_ID}:8`);
+      assertEquals(body.current?.revision, body.currentRevision);
+      assertEquals(body.current?.agent?.name, 'Home Agent');
+      assertEquals(mutationBody?.p_expected_revision, '7');
+      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+    },
+    agentHomeFetchMock({
+      revisionSequence: ['8'],
+      rpc: (name, body) => {
+        if (name !== 'update_agent_home_identity') return undefined;
+        mutationBody = body;
+        return jsonResponse({
+          details: JSON.stringify({
+            code: 'AGENT_HOME_REVISION_CONFLICT',
+            expectedRevision: '7',
+            actualRevision: '8',
+          }),
+        }, 409);
+      },
+    }),
+  );
+});
+
+Deno.test('launch Agent Home: settings encrypt plaintext before the atomic mutation', async () => {
+  let mutationBody: Record<string, unknown> | null = null;
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/home/settings',
+        {
+          method: 'PUT',
+          headers: {
+            Authorization: 'Bearer browser-session-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            expectedRevision: `ah1:${HOME_APP_ID}:7`,
+            values: {
+              OWNER_TOKEN: 'universal-plaintext',
+              USER_TOKEN: 'user-plaintext',
+            },
+          }),
+        },
+      ));
+      const raw = await response.text();
+      assertEquals(response.status, 200, raw);
+      const serializedMutation = JSON.stringify(mutationBody);
+      assertEquals(serializedMutation.includes('universal-plaintext'), false);
+      assertEquals(serializedMutation.includes('user-plaintext'), false);
+      assertStringIncludes(serializedMutation, 'p_agent_ciphertexts');
+      assertStringIncludes(serializedMutation, 'p_per_user_ciphertexts');
+      assertEquals(raw.includes('universal-plaintext'), false);
+      assertEquals(raw.includes('user-plaintext'), false);
+      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+    },
+    agentHomeFetchMock({
+      revisionSequence: ['8'],
+      rpc: (name, body) => {
+        if (name !== 'update_agent_home_settings') return undefined;
+        mutationBody = body;
+        return jsonResponse([{ new_revision: '8' }]);
+      },
+    }),
+    { ENV_VARS_ENCRYPTION_KEY: 'agent-home-test-encryption-key' },
+  );
+});
+
+Deno.test('launch Agent Home: pending and failed action replays remain non-success responses', async () => {
+  const failedKey = '77777777-7777-4777-8777-777777777777';
+  await withLaunchEnv(
+    async () => {
+      const invoke = async (idempotencyKey: string) => {
+        const response = await handleLaunch(new Request(
+          'https://ultralight.test/api/launch/agents/home-agent/home/actions',
+          {
+            method: 'POST',
+            headers: {
+              Authorization: 'Bearer browser-session-token',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              expectedRevision: `ah1:${HOME_APP_ID}:7`,
+              idempotencyKey,
+              action: 'activate',
+            }),
+          },
+        ));
+        return { response, body: await response.json() as Record<string, unknown> };
+      };
+      const pending = await invoke(HOME_IDEMPOTENCY_KEY);
+      assertEquals(pending.response.status, 409);
+      assertEquals(pending.body.code, 'AGENT_HOME_ACTION_IN_PROGRESS');
+      assertEquals(pending.body.status, 'pending');
+      assertEquals(pending.body.terminal, false);
+      assertEquals(pending.body.requestId, HOME_ACTION_ID);
+      const failed = await invoke(failedKey);
+      assertEquals(failed.response.status, 422);
+      assertEquals(failed.body.status, 'failed');
+      assertEquals(failed.body.terminal, true);
+      assertEquals(failed.body.error, 'Previous activation failed');
+      assertEquals(JSON.stringify(failed.body).includes('db-only-detail'), false);
+    },
+    agentHomeFetchMock({
+      rpc: (name, body) => {
+        if (name !== 'claim_agent_home_action') return undefined;
+        const failed = body.p_idempotency_key === failedKey;
+        return jsonResponse([{
+          request_id: HOME_ACTION_ID,
+          request_lease_token: HOME_ACTION_LEASE_TOKEN,
+          is_new: false,
+          request_status: failed ? 'failed' : 'in_progress',
+          request_response: failed
+            ? {
+              error: 'Previous activation failed',
+              code: 'AGENT_HOME_ACTION_BLOCKED',
+              status: 422,
+              internal: 'db-only-detail',
+            }
+            : {},
+          request_fingerprint: 'a'.repeat(64),
+          current_revision: '7',
+        }]);
+      },
+    }),
+  );
+});
+
+Deno.test('launch Agent Home: lost browser keys expose only owner-scoped recovery data', async () => {
+  const recoveryKey = '77777777-7777-4777-8777-777777777777';
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/home/actions',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer browser-session-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            expectedRevision: `ah1:${HOME_APP_ID}:7`,
+            idempotencyKey: HOME_IDEMPOTENCY_KEY,
+            action: 'activate',
+          }),
+        },
+      ));
+      const body = await response.json() as Record<string, unknown>;
+      assertEquals(response.status, 409);
+      assertEquals(body.code, 'AGENT_HOME_ACTION_RECOVERY_REQUIRED');
+      assertEquals(body.terminal, false);
+      assertEquals(body.recovery, {
+        requestId: HOME_ACTION_ID,
+        idempotencyKey: recoveryKey,
+        action: 'promote_candidate',
+        requestPayload: {
+          action: 'promote_candidate',
+          capabilityIds: [],
+          version: '1.2.3',
+        },
+      });
+      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+    },
+    agentHomeFetchMock({
+      rpc: (name) => {
+        if (name !== 'claim_agent_home_action') return undefined;
+        return jsonResponse({
+          code: 'P0001',
+          details: JSON.stringify({
+            code: 'AGENT_HOME_ACTION_RECOVERY_REQUIRED',
+            requestId: HOME_ACTION_ID,
+            idempotencyKey: recoveryKey,
+            action: 'promote_candidate',
+            requestPayload: {
+              action: 'promote_candidate',
+              capabilityIds: [],
+              version: '1.2.3',
+            },
+          }),
+        }, 400);
+      },
+    }),
+  );
+});
+
+Deno.test('launch Agent Home: a linked run reconciles a lost queue acknowledgement without duplication', async () => {
+  let completionBody: Record<string, unknown> | null = null;
+  let queueCalls = 0;
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/home/actions',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer browser-session-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            expectedRevision: `ah1:${HOME_APP_ID}:7`,
+            idempotencyKey: HOME_IDEMPOTENCY_KEY,
+            action: 'run_now',
+          }),
+        },
+      ));
+      assertEquals(response.status, 200);
+      assertEquals(queueCalls, 0);
+      assertEquals(completionBody?.p_status, 'completed');
+      assertEquals(completionBody?.p_lease_token, HOME_ACTION_LEASE_TOKEN);
+    },
+    agentHomeFetchMock({
+      runs: () => [agentHomeRunRow({
+        agent_home_action_request_id: HOME_ACTION_ID,
+      })],
+      rpc: (name, body) => {
+        if (name === 'claim_agent_home_action') {
+          return jsonResponse([{
+            request_id: HOME_ACTION_ID,
+            request_lease_token: HOME_ACTION_LEASE_TOKEN,
+            is_new: false,
+            request_status: 'in_progress',
+            request_response: {},
+            request_fingerprint: 'c'.repeat(64),
+            current_revision: '7',
+          }]);
+        }
+        if (name === 'queue_agent_home_routine_run') {
+          queueCalls += 1;
+          return jsonResponse([{ run_id: HOME_RUN_ID, is_new: false }]);
+        }
+        if (name === 'complete_agent_home_action') {
+          completionBody = body;
+          return jsonResponse([{
+            request_id: HOME_ACTION_ID,
+            request_status: 'completed',
+            request_response: body.p_response,
+          }]);
+        }
+        return undefined;
+      },
+    }),
+  );
+});
+
+Deno.test('launch Agent Home: an ambiguous persistence failure stays nonterminal', async () => {
+  let completionBody: Record<string, unknown> | null = null;
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/home/actions',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer browser-session-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            expectedRevision: `ah1:${HOME_APP_ID}:7`,
+            idempotencyKey: HOME_IDEMPOTENCY_KEY,
+            action: 'activate',
+          }),
+        },
+      ));
+      const body = await response.json() as Record<string, unknown>;
+      assertEquals(response.status, 503);
+      assertEquals(body.status, 'unknown');
+      assertEquals(body.terminal, false);
+      assertEquals(body.requestId, HOME_ACTION_ID);
+      assertEquals(body.code, 'AGENT_HOME_ACTION_STATUS_UNKNOWN');
+      assertEquals(completionBody, null);
+    },
+    agentHomeFetchMock({
+      rpc: (name, body) => {
+        if (name === 'claim_agent_home_action') {
+          return jsonResponse([{
+            request_id: HOME_ACTION_ID,
+            request_lease_token: HOME_ACTION_LEASE_TOKEN,
+            is_new: true,
+            request_status: 'in_progress',
+            request_response: {},
+            request_fingerprint: 'd'.repeat(64),
+            current_revision: '7',
+          }]);
+        }
+        if (name === 'get_agent_home_revision') {
+          return jsonResponse({ message: 'database unavailable' }, 500);
+        }
+        if (name === 'complete_agent_home_action') {
+          completionBody = body;
+          return jsonResponse([{
+            request_id: HOME_ACTION_ID,
+            request_status: 'failed',
+            request_response: body.p_response,
+          }]);
+        }
+        return undefined;
+      },
+    }),
+  );
+});
+
+Deno.test('launch Agent Home: emergency pause bypasses aggregation and action serialization', async () => {
+  let lifecycleWrite = false;
+  let budgetReads = 0;
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/home/pause',
+        {
+          method: 'POST',
+          headers: { Authorization: 'Bearer browser-session-token' },
+        },
+      ));
+      const body = await response.json() as {
+        paused?: boolean;
+        routineId?: string;
+      };
+      assertEquals(response.status, 200);
+      assertEquals(lifecycleWrite, true);
+      assertEquals(body.paused, true);
+      assertEquals(body.routineId, HOME_ROUTINE_ID);
+      assertEquals(budgetReads, 0);
+    },
+    agentHomeFetchMock({
+      routine: () => agentHomeRoutineRow({
+        status: lifecycleWrite ? 'paused' : 'active',
+      }),
+      rpc: (name, body) => {
+        if (name === 'pause_agent_home_routine_emergency') {
+          assertEquals(body, {
+            p_app_id: HOME_APP_ID,
+            p_user_id: 'user-1',
+          });
+          lifecycleWrite = true;
+          return jsonResponse([{
+            routine_id: HOME_ROUTINE_ID,
+            routine_status: 'paused',
+            new_revision: '8',
+          }]);
+        }
+        if (name === 'get_agent_home_budget_usage') {
+          budgetReads += 1;
+          return jsonResponse({ message: 'budget ledger unavailable' }, 500);
+        }
+        return undefined;
+      },
+    }),
+  );
+});
+
+Deno.test('launch Agent Home: activation is durably failed before any lifecycle write when blockers remain', async () => {
+  let completionBody: Record<string, unknown> | null = null;
+  let lifecycleWrite = false;
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/home/actions',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer browser-session-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            expectedRevision: `ah1:${HOME_APP_ID}:7`,
+            idempotencyKey: HOME_IDEMPOTENCY_KEY,
+            action: 'activate',
+          }),
+        },
+      ));
+      const body = await response.json() as {
+        blockers?: Array<{ code: string }>;
+      };
+      assertEquals(response.status, 409);
+      assertEquals(
+        body.blockers?.some((blocker) => blocker.code === 'live_release_required'),
+        true,
+      );
+      assertEquals(lifecycleWrite, false);
+      assertEquals(completionBody?.p_status, 'failed');
+      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+    },
+    agentHomeFetchMock({
+      rpc: (name, body) => {
+        if (name === 'claim_agent_home_action') {
+          return jsonResponse([{
+            request_id: HOME_ACTION_ID,
+            request_lease_token: HOME_ACTION_LEASE_TOKEN,
+            is_new: true,
+            request_status: 'in_progress',
+            request_response: {},
+            request_fingerprint: 'b'.repeat(64),
+            current_revision: '7',
+          }]);
+        }
+        if (name === 'complete_agent_home_action') {
+          completionBody = body;
+          assertEquals(body.p_lease_token, HOME_ACTION_LEASE_TOKEN);
+          return jsonResponse([{
+            request_id: HOME_ACTION_ID,
+            request_status: body.p_status,
+            request_response: body.p_response,
+          }]);
+        }
+        if (name === 'update_agent_home_routine_status') {
+          lifecycleWrite = true;
+          return jsonResponse([{ new_revision: '8' }]);
+        }
+        return undefined;
+      },
+    }),
+  );
+});
+
+Deno.test('launch Agent Home: one bundle read rejects a correctly signed old executed version', async () => {
+  let storedCode: string | null = null;
+  let storedMetadata: unknown = null;
+  let bundleReads = 0;
+  const codeCache = {
+    put: async (
+      _key: string,
+      value: string,
+      options?: { metadata?: unknown },
+    ) => {
+      storedCode = value;
+      storedMetadata = options?.metadata ?? null;
+    },
+    getWithMetadata: async () => {
+      bundleReads += 1;
+      return { value: storedCode, metadata: storedMetadata };
+    },
+  };
+  await withLaunchEnv(
+    async () => {
+      await putLiveExecutedBundle({
+        appId: HOME_APP_ID,
+        version: '1.0.0',
+        esmCode: 'export const inspect = () => "ok";',
+      });
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/home',
+        { headers: { Authorization: 'Bearer browser-session-token' } },
+      ));
+      const body = await response.json() as {
+        release?: {
+          live?: { integrity?: string; executedVersion?: string } | null;
+        };
+        state?: { blockers?: Array<{ code: string }> };
+      };
+      assertEquals(response.status, 200);
+      assertEquals(bundleReads, 1);
+      assertEquals(body.release?.live?.executedVersion, '1.0.0');
+      assertEquals(body.release?.live?.integrity, 'unverified');
+      assertEquals(
+        body.state?.blockers?.some((blocker) =>
+          blocker.code === 'executed_release_unverified'
+        ),
+        true,
+      );
+    },
+    agentHomeFetchMock({
+      app: () => agentHomeTestApp({
+        current_version: '2.0.0',
+        current_version_promoted_at: '2026-07-14T12:30:00.000Z',
+        versions: ['2.0.0'],
+        version_metadata: [{
+          version: '2.0.0',
+          size_bytes: 100,
+          created_at: '2026-07-14T12:00:00.000Z',
+          source_hash: 'c'.repeat(64),
+        }],
+      }),
+    }),
+    {
+      CODE_CACHE: codeCache,
+      TRUST_SIGNING_SECRET: 'agent-home-test-trust-secret',
+    },
+  );
+});
+
+Deno.test('launch Agent Home: malformed persisted test proof is never a candidate', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/home',
+        { headers: { Authorization: 'Bearer browser-session-token' } },
+      ));
+      const body = await response.json() as {
+        release?: { candidate?: unknown; candidateCount?: number };
+      };
+      assertEquals(response.status, 200);
+      assertEquals(body.release?.candidate, null);
+      assertEquals(body.release?.candidateCount, 0);
+    },
+    agentHomeFetchMock({
+      app: () => agentHomeTestApp({
+        versions: ['1.1.0'],
+        version_metadata: [{
+          version: '1.1.0',
+          size_bytes: 100,
+          created_at: '2026-07-14T12:00:00.000Z',
+          source_hash: 'e'.repeat(64),
+          test_attestation: {
+            schema_version: 99,
+            attestation_id: 'malformed-but-truthy',
+            mode: 'deno_execution',
+            source_hash: 'e'.repeat(64),
+            tested_at: '2026-07-14T12:01:00.000Z',
+            token_expires_at: '2026-07-14T13:01:00.000Z',
+            verified_at: '2026-07-14T12:01:01.000Z',
+          },
+        }],
+      }),
+    }),
+  );
+});
+
 Deno.test('launch facade: byok summary lists providers without key material', async () => {
   await withLaunchEnv(
     async () => {
@@ -2209,6 +3611,14 @@ Deno.test({
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ agentGrantAutoApprove: true }),
+            },
+          },
+          {
+            path: '/api/launch/agents/deploy-helper/settings',
+            init: {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ values: { API_KEY: 'must-not-write' } }),
             },
           },
         ];

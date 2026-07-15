@@ -426,6 +426,7 @@ export async function generateSkillsForVersion(
   app: App,
   storageKey: string,
   _version: string,
+  options: { persistAppProjection?: boolean } = {},
 ): Promise<VersionArtifacts> {
   const r2Service = createR2Service();
 
@@ -552,22 +553,26 @@ export async function generateSkillsForVersion(
     console.error("Failed to store skills artifacts in R2:", err);
   }
 
-  // Update the app record — skills_parsed from parser directly (no round-trip), manifest stored
-  try {
-    const appsService = createAppsService();
-    await appsService.update(app.id, {
-      skills_md: skillsMd,
-      skills_parsed: skillsParsed,
-      manifest: manifestJson,
-      env_schema: resolveManifestEnvSchema(manifest),
-      docs_generated_at: new Date().toISOString(),
-    } as Partial<AppWithDraft>);
+  // A staged version must not rewrite the live Agent projection. Its artifacts
+  // remain version-addressed in R2 and are projected onto the app row only when
+  // that version is promoted.
+  if (options.persistAppProjection !== false) {
+    try {
+      const appsService = createAppsService();
+      await appsService.update(app.id, {
+        skills_md: skillsMd,
+        skills_parsed: skillsParsed,
+        manifest: manifestJson,
+        env_schema: resolveManifestEnvSchema(manifest),
+        docs_generated_at: new Date().toISOString(),
+      } as Partial<AppWithDraft>);
 
-    if (embeddingJson) {
-      await appsService.updateEmbedding(app.id, embeddingJson);
+      if (embeddingJson) {
+        await appsService.updateEmbedding(app.id, embeddingJson);
+      }
+    } catch (err) {
+      console.error("Failed to update app with skills:", err);
     }
-  } catch (err) {
-    console.error("Failed to update app with skills:", err);
   }
 
   return { skillsMd, libraryTxt, embeddingJson, semanticEmbeddings };

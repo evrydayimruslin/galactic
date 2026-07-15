@@ -1,19 +1,40 @@
 import type { HealthWindows } from "../types/index.ts";
 import type { MCPToolAnnotations } from "./mcp.ts";
 
-export const LAUNCH_MVP_VERSION = "launch-mvp-v1" as const;
+export const LAUNCH_MVP_VERSION = "persistent-agent-mvp-v1" as const;
+export const AGENT_HOME_CONTRACT_VERSION = "2026-07-14.v1" as const;
+
+// Machine-readable safety/product invariants for the private persistent-Agent
+// launch. Capability-basin code may support broader modes, but the Conjure and
+// Agent-home paths must never silently widen these choices.
+export const PERSISTENT_AGENT_LAUNCH_POLICY = {
+  access: "private_owner_only",
+  primaryRoutinesPerAgent: 1,
+  scheduleSurface: "interval_only",
+  reportingDestination: "galactic_inbox",
+  activationAuthority: "account_session",
+  connectedAgentAuthority: "scoped_builder_operator",
+  crossAgentTargets: "owned_private_agents_only",
+  crossAgentApproval: "account_session",
+  budgetEnforcement: "hard_pre_execution",
+  manualRunsCountTowardBudgets: true,
+  updatePromotion: "test_then_promote",
+  expandedCapabilitiesRequireReapproval: true,
+} as const;
 
 export const LAUNCH_INCLUDED_CAPABILITIES = [
-  "install",
-  "tool_library",
-  "tool_discovery",
-  "public_tool_pages",
-  "owner_admin",
-  "credits_wallet",
+  "private_agent_library",
+  "persistent_agent_home",
+  "full_time_routines",
+  "sandboxed_execution",
+  "owned_agent_composition",
+  "runtime_monitoring",
+  "owner_inbox_reporting",
+  "hard_budget_limits",
+  "encrypted_runtime_settings",
   "byok",
-  "builder_leaderboard",
-  "fee_credit_leaderboard",
-  "launch_embeddings",
+  "credits_balance",
+  "scoped_builder_connection",
   "cli_api_mcp",
 ] as const;
 
@@ -21,15 +42,23 @@ export type LaunchIncludedCapability =
   typeof LAUNCH_INCLUDED_CAPABILITIES[number];
 
 export const LAUNCH_DEFERRED_CAPABILITIES = [
-  "desktop",
-  "web_search",
-  "cerebras",
-  "standalone_agent",
+  "marketplace",
+  "public_discovery",
+  "public_agent_pages",
+  "agent_installation",
+  "public_unlisted_publication",
+  "seller_monetization",
+  "earnings_payouts_referrals",
+  "leaderboards",
+  "marketplace_trust_reputation",
+  "cross_user_sharing",
+  "external_reporting_destinations",
+  "multi_routine_agent_home",
+  "cron_timezone_configuration",
   "command_cards",
   "command_dashboards",
   "agentic_ui_composer",
-  "routines",
-  "tool_builder_agent",
+  "standalone_website_builder",
 ] as const;
 
 export type LaunchDeferredCapability =
@@ -83,6 +112,13 @@ export const LAUNCH_API_ROUTES = [
   "GET /api/launch/store",
   "GET /api/launch/discover",
   "GET /api/launch/agents/:id",
+  "GET /api/launch/agents/:id/home",
+  "PATCH /api/launch/agents/:id/home/identity",
+  "PATCH /api/launch/agents/:id/home/routine",
+  "PUT /api/launch/agents/:id/home/settings",
+  "POST /api/launch/agents/:id/home/actions",
+  "POST /api/launch/agents/:id/home/pause",
+  "GET /api/launch/agents/:id/routine",
   "GET /api/launch/agents/:id/functions",
   "POST /api/launch/agents/:id/functions/:functionName/run",
   "POST /api/launch/agents/:id/install",
@@ -198,6 +234,7 @@ export type LaunchPlatformPrimitive = typeof LAUNCH_PLATFORM_PRIMITIVES[number];
 export interface LaunchScopeContract {
   version: typeof LAUNCH_MVP_VERSION;
   thesis: string;
+  policy: typeof PERSISTENT_AGENT_LAUNCH_POLICY;
   includedCapabilities: readonly LaunchIncludedCapability[];
   deferredCapabilities: readonly LaunchDeferredCapability[];
   publicRoutes: readonly LaunchPublicRoute[];
@@ -717,6 +754,344 @@ export interface LaunchFullTimeDisclosure {
   }>;
 }
 
+export type LaunchAgentRoutineStatus =
+  | "active"
+  | "paused"
+  | "disabled"
+  | "error";
+
+export type LaunchAgentRoutineHealth =
+  | "active"
+  | "paused"
+  | "running"
+  | "needs_approval"
+  | "error";
+
+export interface LaunchAgentRoutineBudget {
+  maxLightPerRun: number;
+  maxLightPerDay: number;
+  maxLightPerMonth: number;
+  maxCallsPerRun: number;
+}
+
+export interface LaunchAgentRoutineCapability {
+  id: string;
+  appId: string | null;
+  appRef: string;
+  functionName: string;
+  access: "read" | "write";
+  required: boolean;
+  purpose: string | null;
+  approved: boolean;
+  approvedAt: string | null;
+}
+
+export interface LaunchAgentRoutineBlocker {
+  code: string;
+  message: string;
+  capabilityIds?: string[];
+}
+
+export interface LaunchAgentRoutineRun {
+  id: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
+  trigger: string;
+  traceId: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  totalLight: number;
+  summary: string | null;
+  errorCode: string | null;
+  createdAt: string;
+}
+
+/**
+ * Owner-only projection of the one primary routine stored for a private Agent.
+ * It intentionally omits routine config, metadata, run arguments, and secret
+ * values. The Agent settings endpoint separately reports secret presence only.
+ */
+export interface LaunchAgentRoutineOverview {
+  id: string;
+  status: LaunchAgentRoutineStatus;
+  health: LaunchAgentRoutineHealth;
+  mission: string;
+  intervalSeconds: number;
+  budgets: LaunchAgentRoutineBudget;
+  capabilities: LaunchAgentRoutineCapability[];
+  blockers: LaunchAgentRoutineBlocker[];
+  reportingDestination: {
+    kind: "galactic_inbox";
+    label: "Galactic inbox";
+  };
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastSuccessAt: string | null;
+  lastErrorAt: string | null;
+  failureCount: number;
+  autoPauseReason: string | null;
+  errorReason: string | null;
+  recentRuns: LaunchAgentRoutineRun[];
+  actions: {
+    canApproveCapabilities: boolean;
+    canActivate: boolean;
+    canPause: boolean;
+    canRunNow: boolean;
+  };
+}
+
+export interface LaunchAgentRoutineResponse {
+  agent: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  routine: LaunchAgentRoutineOverview | null;
+  generatedAt: string;
+}
+
+export interface LaunchAgentRoutineUpdateRequest {
+  mission?: string | null;
+  intervalSeconds?: number;
+  /** When supplied, all four hard ceilings are required. */
+  budgets?: LaunchAgentRoutineBudget;
+}
+
+export type LaunchAgentRoutineAction =
+  | "approve_capabilities"
+  | "activate"
+  | "pause"
+  | "run_now";
+
+export interface LaunchAgentRoutineActionRequest {
+  action: LaunchAgentRoutineAction;
+  /** Exact requested capability ids; valid only for approve_capabilities. */
+  capabilityIds?: string[];
+}
+
+export type LaunchAgentHomeLifecycleState =
+  | "needs_setup"
+  | "ready"
+  | "active"
+  | "paused"
+  | "disabled";
+
+export type LaunchAgentHomeExecutionState = "idle" | "queued" | "running";
+
+export type LaunchAgentHomeHealth =
+  | "unknown"
+  | "healthy"
+  | "degraded"
+  | "failing";
+
+export interface LaunchAgentHomeRequirement {
+  id: string;
+  /** Exact opaque id accepted by the corresponding action, when applicable. */
+  actionId: string | null;
+  kind: "routine" | "setting" | "capability" | "grant" | "release";
+  label: string;
+  description: string | null;
+  required: boolean;
+  configured: boolean;
+  blocking: boolean;
+  secret: boolean;
+  settingKey: string | null;
+  settingScope: "agent" | "per_user" | null;
+  input: string | null;
+  placeholder: string | null;
+  help: string | null;
+  group: string | null;
+  destination: string | null;
+  updatedAt: string | null;
+  actions: Array<"set" | "replace" | "remove" | "approve" | "promote">;
+}
+
+export type LaunchAgentHomeAuthorityKind =
+  | "function"
+  | "agent_call"
+  | "network"
+  | "ai"
+  | "storage"
+  | "memory"
+  | "reporting"
+  | "compute"
+  | "other";
+
+export interface LaunchAgentHomeAuthorityItem {
+  id: string;
+  /** Exact capability/grant id accepted by an approval action, if any. */
+  actionId: string | null;
+  kind: LaunchAgentHomeAuthorityKind;
+  direction: "inbound" | "outbound" | "internal";
+  label: string;
+  target: string | null;
+  access: "read" | "write" | "execute";
+  source: "manifest" | "routine" | "platform";
+  requested: boolean;
+  approved: boolean;
+  approvalBasis:
+    | "live_release"
+    | "owner_capability_approval"
+    | "platform_policy"
+    | "pending";
+  effective: boolean;
+  required: boolean;
+  purpose: string | null;
+  badges: Array<"Read" | "Write" | "AI">;
+}
+
+export interface LaunchAgentHomeBudget {
+  unit: "credits";
+  ceilings: {
+    perRun: number;
+    daily: number;
+    monthly: number;
+    callsPerRun: number;
+  };
+  usage: {
+    lastRun: number;
+    lastRunCalls: number;
+    daily: number;
+    monthly: number;
+    dayStartedAt: string;
+    monthStartedAt: string;
+  };
+}
+
+export interface LaunchAgentHomeRun {
+  id: string;
+  status: LaunchAgentRoutineRun["status"];
+  trigger: string;
+  traceId: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  credits: number;
+  calls: number;
+  summary: string | null;
+  errorCode: string | null;
+  createdAt: string;
+  detailUrl: string | null;
+}
+
+export interface LaunchAgentHomeReleaseVersion {
+  version: string;
+  sourceFingerprint: string | null;
+  uploadedAt: string | null;
+  testedAt: string | null;
+}
+
+export interface LaunchAgentHomeRelease {
+  live: (LaunchAgentHomeReleaseVersion & {
+    promotedAt: string | null;
+    executedVersion: string | null;
+    integrity: "verified" | "unverified" | "unknown";
+  }) | null;
+  candidate: (LaunchAgentHomeReleaseVersion & {
+    authorityChanges: Array<{
+      change: "added" | "removed" | "changed";
+      path: string;
+      label: string;
+    }>;
+    reviewStatus: "ready" | "owner_review_required" | "unavailable";
+    canPromote: boolean;
+  }) | null;
+  candidateCount: number;
+}
+
+/**
+ * Canonical owner-only read model for the private persistent Agent home.
+ * Secret values, routine config/metadata, run arguments/results, and raw source
+ * are intentionally excluded. `revision` is an opaque owner-configuration
+ * concurrency token; it deliberately excludes run progress, usage, and
+ * scheduling timestamps so a wake cannot make an unrelated edit stale. It must
+ * be supplied to every Agent-home mutation.
+ */
+export interface LaunchAgentHomeResponse {
+  contractVersion: typeof AGENT_HOME_CONTRACT_VERSION;
+  revision: string;
+  generatedAt: string;
+  agent: {
+    id: string;
+    slug: string;
+    name: string;
+    description: string | null;
+    visibility: "private";
+  };
+  responsibility: {
+    mission: string;
+    cadence: {
+      kind: "interval";
+      intervalSeconds: number;
+      label: string;
+    } | null;
+    reporting: {
+      kind: "galactic_inbox";
+      label: "Galactic inbox";
+      configured: boolean;
+    };
+  };
+  state: {
+    lifecycle: LaunchAgentHomeLifecycleState;
+    execution: LaunchAgentHomeExecutionState;
+    health: LaunchAgentHomeHealth;
+    nextRunAt: string | null;
+    lastRunAt: string | null;
+    lastSuccessAt: string | null;
+    lastErrorAt: string | null;
+    failureCount: number;
+    blockers: LaunchAgentRoutineBlocker[];
+  };
+  setup: {
+    ready: boolean;
+    requirements: LaunchAgentHomeRequirement[];
+  };
+  authority: {
+    items: LaunchAgentHomeAuthorityItem[];
+  };
+  budget: LaunchAgentHomeBudget | null;
+  release: LaunchAgentHomeRelease;
+  recentRuns: LaunchAgentHomeRun[];
+  actions: {
+    canEditIdentity: boolean;
+    canEditRoutine: boolean;
+    canManageSettings: boolean;
+    canApproveCapabilities: boolean;
+    canActivate: boolean;
+    canPause: boolean;
+    canRunNow: boolean;
+    canPromoteCandidate: boolean;
+  };
+}
+
+export interface LaunchAgentHomeMutationBase {
+  expectedRevision: string;
+}
+
+export interface LaunchAgentHomeIdentityUpdateRequest
+  extends LaunchAgentHomeMutationBase {
+  name?: string;
+  description?: string | null;
+}
+
+export interface LaunchAgentHomeRoutineUpdateRequest
+  extends LaunchAgentHomeMutationBase, LaunchAgentRoutineUpdateRequest {}
+
+export interface LaunchAgentHomeSettingsUpdateRequest
+  extends LaunchAgentHomeMutationBase {
+  values: Record<string, string | null>;
+}
+
+export type LaunchAgentHomeAction = LaunchAgentRoutineAction | "promote_candidate";
+
+export interface LaunchAgentHomeActionRequest extends LaunchAgentHomeMutationBase {
+  action: LaunchAgentHomeAction;
+  /** Client-generated UUID; retries with the same key return the first action. */
+  idempotencyKey: string;
+  capabilityIds?: string[];
+  version?: string;
+}
+
 export interface LaunchAgentSummary {
   id: string;
   slug: string;
@@ -1108,7 +1483,8 @@ export interface LaunchLeaderboardResponse {
 export const LAUNCH_SCOPE_CONTRACT: LaunchScopeContract = {
   version: LAUNCH_MVP_VERSION,
   thesis:
-    "Deploy tools any existing agent can install, run, compose, and pay for.",
+    "Conjure a private persistent Agent; Galactic keeps it working, bounded, and portable.",
+  policy: PERSISTENT_AGENT_LAUNCH_POLICY,
   includedCapabilities: LAUNCH_INCLUDED_CAPABILITIES,
   deferredCapabilities: LAUNCH_DEFERRED_CAPABILITIES,
   publicRoutes: LAUNCH_PUBLIC_ROUTES,
