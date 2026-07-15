@@ -1,9 +1,9 @@
 import { getEnv } from "../lib/env.ts";
 
-export type AccountPlanCode = "free" | "pro" | "max_5x" | "max_10x";
-export type AccountCapacityState = "available" | "low" | "waiting";
+type AccountPlanCode = "free" | "pro" | "max_5x" | "max_10x";
+type AccountCapacityState = "available" | "low" | "waiting";
 
-export interface AccountCapacityStatus {
+interface AccountCapacityStatus {
   planCode: AccountPlanCode;
   state: AccountCapacityState;
   activeAgentLimit: number | null;
@@ -25,20 +25,20 @@ export interface AccountCapacityStatus {
   limitsPublic: boolean;
 }
 
-export interface AccountCapacityAdmission extends AccountCapacityStatus {
+interface AccountCapacityAdmission extends AccountCapacityStatus {
   allowed: boolean;
   code: "ok" | "capacity_waiting" | "released" | "expired";
   reservationId: string | null;
 }
 
-export interface AgentActivationSlotDecision {
+interface AgentActivationSlotDecision {
   allowed: boolean;
   code: "ok" | "active_agent_limit";
   activeAgentLimit: number | null;
   occupiedBy: string | null;
 }
 
-export interface DeferredRoutineWake {
+interface DeferredRoutineWake {
   routineId: string;
   userId: string;
   firstDeferredAt: string;
@@ -329,32 +329,6 @@ export async function recordDeferredRoutineWake(input: {
     deferredWakeCount: Number(payload.deferred_wake_count),
     nextEligibleAt: String(payload.next_eligible_at),
     manualRequested: payload.manual_requested === true,
-  };
-}
-
-export async function claimDeferredRoutineWake(
-  routineId: string,
-  userId: string,
-  deps: CapacityDeps = {},
-): Promise<DeferredRoutineWake | null> {
-  const response = await rpc("claim_deferred_routine_wake", {
-    p_routine_id: routineId,
-    p_user_id: userId,
-  }, deps);
-  if (!response.ok) throw new Error(`Failed to claim deferred wake (${response.status})`);
-  const payload = await response.json().catch(() => null);
-  const row = (Array.isArray(payload) ? payload[0] : payload) as
-    | Record<string, unknown>
-    | null;
-  if (!row) return null;
-  return {
-    routineId: String(row.routine_id),
-    userId: String(row.user_id),
-    firstDeferredAt: String(row.first_deferred_at),
-    latestDeferredAt: String(row.latest_deferred_at),
-    deferredWakeCount: Number(row.deferred_wake_count),
-    nextEligibleAt: String(row.next_eligible_at),
-    manualRequested: row.manual_requested === true,
   };
 }
 
