@@ -126,7 +126,10 @@ import {
   writeUserMemory,
 } from "../services/library.ts";
 import { createMemoryService } from "../services/memory.ts";
-import { resolveStrictManifestPermissions } from "../services/app-runtime-resources.ts";
+import {
+  resolveAppD1StorageDisclosure,
+  resolveStrictManifestPermissions,
+} from "../services/app-runtime-resources.ts";
 import {
   createUlTestAiResponse,
   createUlTestMemoryAdapter,
@@ -595,6 +598,13 @@ interface InspectPermissionRow {
 }
 
 type InspectStorageDetails =
+  | {
+    type: "d1";
+    status: App["d1_status"] | "unknown";
+    provisioned: boolean;
+    migration_version: number;
+    note: string;
+  }
   | {
     type: "supabase";
     config_id: string;
@@ -13545,10 +13555,14 @@ async function executeDiscoverInspect(
   const envSchema = resolveAppEnvSchema(app);
 
   // ── 2. Storage architecture detection ──
-  let storageBackend: "kv" | "supabase" | "none" = "none";
+  let storageBackend: "d1" | "kv" | "supabase" | "none" = "none";
   let storageDetails: InspectStorageDetails = {};
 
-  if (app.supabase_enabled && app.supabase_config_id) {
+  const d1Storage = resolveAppD1StorageDisclosure(app);
+  if (d1Storage) {
+    storageBackend = "d1";
+    storageDetails = d1Storage;
+  } else if (app.supabase_enabled && app.supabase_config_id) {
     storageBackend = "supabase";
     storageDetails = {
       type: "supabase",
