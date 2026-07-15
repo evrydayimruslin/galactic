@@ -9,6 +9,7 @@
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 import { executeInDynamicSandbox } from "./dynamic-sandbox.ts";
+import { putLiveExecutedBundle } from "../services/executed-bundle.ts";
 import type { RuntimeConfig } from "./sandbox.ts";
 
 const SECRET = "SUPER_SECRET_WORKER_VALUE_DO_NOT_LEAK_7f3a9c";
@@ -31,6 +32,8 @@ function installSandboxHarness(): {
   const prevCtx = globalThis.__ctx;
   const prevAgentSecret = Deno.env.get("AGENT_CALLER_SECRET");
   Deno.env.set("AGENT_CALLER_SECRET", "test-agent-caller-secret");
+  let liveCode = "export const noop = 1;";
+  let liveMetadata: unknown = null;
 
   const loader = {
     // deno-lint-ignore no-explicit-any
@@ -61,7 +64,21 @@ function installSandboxHarness(): {
 
   globalThis.__env = {
     LOADER: loader,
-    CODE_CACHE: { get: () => Promise.resolve("export const noop = 1;") },
+    CODE_CACHE: {
+      get: () => Promise.resolve(liveCode),
+      getWithMetadata: () =>
+        Promise.resolve({ value: liveCode, metadata: liveMetadata }),
+      put: (
+        _key: string,
+        value: string,
+        options?: { metadata?: unknown },
+      ) => {
+        liveCode = value;
+        liveMetadata = options?.metadata ?? null;
+        return Promise.resolve();
+      },
+    },
+    TRUST_SIGNING_SECRET: "test-executed-bundle-secret",
     // deno-lint-ignore no-explicit-any
   } as any;
 
@@ -231,6 +248,11 @@ Deno.test("dynamic sandbox: routines cannot emit deferred events outside their b
         traceId: "trace-1",
       },
     } as RuntimeConfig;
+    await putLiveExecutedBundle({
+      appId: config.appId,
+      version: "1.0.0",
+      esmCode: "export const noop = 1;",
+    });
     await executeInDynamicSandbox(config, "noop", []);
 
     assert(

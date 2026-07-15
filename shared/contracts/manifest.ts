@@ -595,7 +595,7 @@ export function normalizeEnvSchema(
     const entry = value as Record<string, unknown>;
     const description = typeof entry.description === 'string' ? entry.description : undefined;
     normalized[key] = {
-      scope: normalizeEnvScope(entry.scope),
+      scope: normalizeEnvScope(entry.scope ?? entry.type),
       description,
       required: typeof entry.required === 'boolean' ? entry.required : undefined,
       label: typeof entry.label === 'string' && entry.label.trim()
@@ -604,6 +604,9 @@ export function normalizeEnvSchema(
       input: normalizeEnvInput(entry.input, key, description),
       placeholder: typeof entry.placeholder === 'string' ? entry.placeholder : undefined,
       help: typeof entry.help === 'string' ? entry.help : undefined,
+      group: typeof entry.group === 'string' && entry.group.trim()
+        ? entry.group.trim()
+        : undefined,
       credential: normalizeEnvCredential(entry.credential),
     };
   }

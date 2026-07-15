@@ -11,6 +11,7 @@ import {
   type BundleAttestation,
   deleteLiveExecutedBundle,
   executedBundleVerifyMode,
+  handleExecutedBundleVerdict,
   isExecutedBundleViolation,
   loadLiveExecutedBundle,
   putLiveExecutedBundle,
@@ -100,12 +101,15 @@ Deno.test("executed bundle: ephemeral pointers can be deleted after gx.test", as
   }
 });
 
-Deno.test("executed bundle: a swapped bundle (stale attestation) → hash_mismatch", async () => {
+Deno.test("executed bundle: a cached good verdict cannot mask swapped bytes", async () => {
   const kv = installKv();
   try {
     await putLiveExecutedBundle({ appId: "app_1", version: "1.0.0", esmCode: "GOOD" });
+    assertEquals((await verifyLive("app_1")).status, "ok");
     const att = kv.store.get(KEY("app_1"))!.metadata;
-    // Raw KV swap of the bytes WITHOUT a fresh attestation — the RUG-2 divergence.
+    // Raw KV swap of the bytes WITHOUT a fresh attestation — the RUG-2
+    // divergence. Do not reset the verdict cache: exact-byte hashing must make
+    // the earlier `ok` ineligible for these new bytes.
     kv.store.set(KEY("app_1"), { value: "EVIL", metadata: att });
     const r = await verifyLive("app_1");
     assertEquals(r.status, "hash_mismatch");
@@ -213,5 +217,43 @@ Deno.test("executed bundle: verify mode parses off/observe/enforce with observe 
     assertEquals(executedBundleVerifyMode(), "observe");
   } finally {
     g.__env = prev;
+  }
+});
+
+Deno.test("executed bundle: persistent routines require verified-ok in every rollout mode", () => {
+  const originalWarn = console.warn;
+  console.warn = () => undefined;
+  try {
+    for (const mode of ["off", "observe", "enforce"] as const) {
+      assertEquals(
+        handleExecutedBundleVerdict(
+          "app_routine",
+          { status: "version_mismatch" },
+          mode,
+          true,
+        ),
+        true,
+      );
+      assertEquals(
+        handleExecutedBundleVerdict(
+          "app_routine",
+          { status: "no_attestation" },
+          mode,
+          true,
+        ),
+        true,
+      );
+      assertEquals(
+        handleExecutedBundleVerdict(
+          "app_routine",
+          { status: "ok" },
+          mode,
+          true,
+        ),
+        false,
+      );
+    }
+  } finally {
+    console.warn = originalWarn;
   }
 });

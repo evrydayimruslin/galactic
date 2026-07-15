@@ -5,6 +5,7 @@ import { authenticate } from "./auth.ts";
 import { handleRun } from "./run.ts";
 import { error, json } from "./response.ts";
 import { getEnv } from "../lib/env.ts";
+import { isAccountSessionAuthSource } from "../services/control-plane-auth.ts";
 import {
   getAgentFeeWaiverLeaderboard,
   getFeeWaiverLeaderboard,
@@ -78,6 +79,8 @@ import {
   type LaunchRelevanceSummary,
   type LaunchSemanticSubjectType,
   type LaunchAgentAdminSummary,
+  type LaunchAgentHomeActionRequest,
+  type LaunchAgentHomeResponse,
   type LaunchAgentRoutineActionRequest,
   type LaunchAgentRoutineBlocker,
   type LaunchAgentRoutineOverview,
@@ -109,6 +112,7 @@ import {
   type LaunchWalletTransaction,
 } from "../../shared/contracts/launch.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
+import { validateEnvVarValue } from "../../shared/contracts/env.ts";
 import {
   BYOK_PROVIDERS,
   isActiveBYOKProvider,
@@ -117,6 +121,7 @@ import type {
   ActiveBYOKProvider,
   BYOKProviderInfo,
   RunResponse,
+  VersionMetadata,
 } from "../../shared/types/index.ts";
 import { createUserService } from "../services/user.ts";
 import { validateAPIKey } from "../services/ai.ts";
@@ -210,6 +215,46 @@ import {
   DEFAULT_ROUTINE_BUDGET_POLICY,
   MIN_ROUTINE_INTERVAL_SECONDS,
 } from "../../shared/contracts/routine.ts";
+import {
+  agentHomeCallTargetKey,
+  buildAgentHomeResponse,
+  type AgentHomeBudgetUsage,
+  type AgentHomeSettingStatus,
+} from "../services/agent-home.ts";
+import {
+  approveAgentHomeCapabilitiesCAS,
+  assertAgentHomeRevision,
+  claimAgentHomeAction,
+  commitAgentHomePromotionAppRecord,
+  completeAgentHomeAction,
+  fenceAgentHomePromotionStep,
+  getAgentHomeRevision,
+  getAgentHomeBudgetUsage,
+  AgentHomeRevisionError,
+  parseAgentHomeRevision,
+  pauseAgentHomeRoutineEmergency,
+  queueAgentHomeRoutineRun,
+  updateAgentHomeIdentityCAS,
+  updateAgentHomeRoutineCAS,
+  updateAgentHomeRoutineStatusCAS,
+  updateAgentHomeSettingsCAS,
+} from "../services/agent-home-revision.ts";
+import {
+  resolveAppRuntimeEnvVars,
+  resolveRuntimeAppCallDependencies,
+  resolveStrictManifestPermissions,
+} from "../services/app-runtime-resources.ts";
+import {
+  loadLiveExecutedBundle,
+  verifyExecutedBundle,
+} from "../services/executed-bundle.ts";
+import { readVersionSourceFiles } from "../services/code-verification.ts";
+import { findPersistedTestAttestation } from "../services/test-attestation.ts";
+import { summarizeManifestAuthorityChanges } from "../services/manifest-authority.ts";
+import {
+  executeSetVersion,
+  inspectLiveAppStorageAccounting,
+} from "./platform-mcp.ts";
 
 // Cross-Agent grant + settings mutations are sensitive. The SensitiveRoute enum
 // lives in sensitive-route-rate-limit.ts (outside this file's edit scope), so we
@@ -230,6 +275,8 @@ const APP_SELECT = [
   "visibility",
   "download_access",
   "current_version",
+  "current_version_promoted_at",
+  "versions",
   "manifest",
   "exports",
   "pricing_config",
@@ -279,6 +326,8 @@ interface LaunchAppRow {
   visibility: string | null;
   download_access?: string | null;
   current_version?: string | null;
+  current_version_promoted_at?: string | null;
+  versions?: string[] | null;
   manifest?: unknown;
   exports?: string[] | null;
   pricing_config?: unknown;
@@ -623,6 +672,18 @@ export async function handleLaunch(request: Request): Promise<Response> {
       return await handleLaunchSettings(request, method);
     }
 
+    const agentHomeMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/home(?:\/(identity|routine|settings|actions|pause))?$/,
+    );
+    if (agentHomeMatch) {
+      return await handleLaunchAgentHomeRoute(
+        request,
+        agentHomeMatch[1],
+        method,
+        agentHomeMatch[2] || null,
+      );
+    }
+
     const agentRoutineActionMatch = path.match(
       /^\/api\/launch\/agents\/([^/]+)\/routine\/actions$/,
     );
@@ -904,8 +965,10 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       discover: "/api/launch/discover?query={query}",
       discoverAlias: "/api/launch/discover?query={query}",
       agentFunctions: "/api/launch/agents/{id}/functions",
+      agentHome: "/api/launch/agents/{id}/home",
+      agentHomeActions: "/api/launch/agents/{id}/home/actions",
+      agentHomePause: "/api/launch/agents/{id}/home/pause",
       agentRoutine: "/api/launch/agents/{id}/routine",
-      agentRoutineActions: "/api/launch/agents/{id}/routine/actions",
       // Deprecated alias keys kept for one rename window.
       toolFunctions: "/api/launch/agents/{id}/functions",
       functionRun: "/api/launch/agents/{id}/functions/{functionName}/run",
@@ -1752,6 +1815,250 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           },
         },
       },
+      "/api/launch/agents/{id}/home": {
+        get: {
+          operationId: "getLaunchAgentHome",
+          summary: "Read the canonical private persistent Agent Home snapshot",
+          description:
+            "Owner account-session only. Returns one versioned read model for identity, responsibility, lifecycle/execution/health, setup blockers, secret-safe setting status, effective authority, exact budget usage, recent runs, and live/tested release state. Responses are private, no-store and vary on Cookie and Authorization.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Owned private Agent id or slug",
+          }],
+          responses: {
+            "200": {
+              description: "Canonical Agent Home snapshot; secret values are never returned",
+              content: jsonContent({ $ref: "#/components/schemas/AgentHome" }),
+            },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+            "404": { description: "Owned Agent not found" },
+            "409": { description: "Agent is not private" },
+            "503": { description: "An authoritative subsystem is unavailable" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/home/identity": {
+        patch: {
+          operationId: "updateLaunchAgentHomeIdentity",
+          summary: "Atomically update Agent identity with optimistic concurrency",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              type: "object",
+              additionalProperties: false,
+              required: ["expectedRevision"],
+              properties: {
+                expectedRevision: { type: "string" },
+                name: { type: "string", minLength: 1, maxLength: 200 },
+                description: { type: ["string", "null"], maxLength: 5000 },
+              },
+            }),
+          },
+          responses: {
+            "200": {
+              description: "Refreshed Agent Home snapshot",
+              content: jsonContent({ $ref: "#/components/schemas/AgentHome" }),
+            },
+            "400": { description: "Invalid mutation" },
+            "403": { description: "Account session required" },
+            "412": {
+              description: "Stale revision, with currentRevision and current snapshot",
+            },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/home/routine": {
+        patch: {
+          operationId: "updateLaunchAgentHomeRoutine",
+          summary: "Atomically update mission, interval cadence, or hard ceilings",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              type: "object",
+              additionalProperties: false,
+              required: ["expectedRevision"],
+              properties: {
+                expectedRevision: { type: "string" },
+                mission: { type: ["string", "null"], maxLength: 1000 },
+                intervalSeconds: {
+                  type: "integer",
+                  minimum: MIN_ROUTINE_INTERVAL_SECONDS,
+                },
+                budgets: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: [
+                    "maxLightPerRun",
+                    "maxLightPerDay",
+                    "maxLightPerMonth",
+                    "maxCallsPerRun",
+                  ],
+                  properties: {
+                    maxLightPerRun: { type: "number", minimum: 0 },
+                    maxLightPerDay: { type: "number", minimum: 0 },
+                    maxLightPerMonth: { type: "number", minimum: 0 },
+                    maxCallsPerRun: { type: "integer", minimum: 1 },
+                  },
+                },
+              },
+            }),
+          },
+          responses: {
+            "200": {
+              description: "Refreshed Agent Home snapshot",
+              content: jsonContent({ $ref: "#/components/schemas/AgentHome" }),
+            },
+            "400": { description: "Invalid cadence or budget ceilings" },
+            "403": { description: "Account session required" },
+            "404": { description: "Routine proposal not found" },
+            "412": { description: "Stale revision with the current snapshot" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/home/settings": {
+        put: {
+          operationId: "updateLaunchAgentHomeSettings",
+          summary: "Atomically set, replace, or remove declared Agent settings",
+          description:
+            "Values are encrypted before the CAS transaction and never appear in the response. Use null to remove a value.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              type: "object",
+              additionalProperties: false,
+              required: ["expectedRevision", "values"],
+              properties: {
+                expectedRevision: { type: "string" },
+                values: {
+                  type: "object",
+                  minProperties: 1,
+                  maxProperties: 50,
+                  additionalProperties: { type: ["string", "null"] },
+                },
+              },
+            }),
+          },
+          responses: {
+            "200": {
+              description: "Refreshed secret-safe Agent Home snapshot",
+              content: jsonContent({ $ref: "#/components/schemas/AgentHome" }),
+            },
+            "400": { description: "Unknown or invalid setting" },
+            "403": { description: "Account session required" },
+            "412": { description: "Stale revision with the current snapshot" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/home/actions": {
+        post: {
+          operationId: "actOnLaunchAgentHome",
+          summary: "Approve, activate, pause, wake, or safely promote an Agent",
+          description:
+            "Owner account-session only. Activation and manual wakes require every setup, grant, reporting, and executed-integrity blocker to be resolved. Promotion reuses the tested-version promotion transaction and never patches the generic Apps endpoint.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              type: "object",
+              additionalProperties: false,
+              required: ["expectedRevision", "idempotencyKey", "action"],
+              properties: {
+                expectedRevision: { type: "string" },
+                idempotencyKey: {
+                  type: "string",
+                  format: "uuid",
+                  description:
+                    "Stable across retries of this exact action; generate a new UUID for a new intent.",
+                },
+                action: {
+                  type: "string",
+                  enum: [
+                    "approve_capabilities",
+                    "activate",
+                    "pause",
+                    "run_now",
+                    "promote_candidate",
+                  ],
+                },
+                capabilityIds: {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: 100,
+                  uniqueItems: true,
+                  items: { type: "string" },
+                },
+                version: { type: "string" },
+              },
+            }),
+          },
+          responses: {
+            "200": {
+              description: "Refreshed Agent Home snapshot",
+              content: jsonContent({ $ref: "#/components/schemas/AgentHome" }),
+            },
+            "400": { description: "Invalid action" },
+            "403": { description: "Account session required" },
+            "409": {
+              description:
+                "Action blocked, previously failed, or an identical action is still in progress",
+            },
+            "412": { description: "Stale revision with the current snapshot" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/home/pause": {
+        post: {
+          operationId: "pauseLaunchAgentHome",
+          summary: "Emergency-pause a private persistent Agent",
+          description:
+            "Owner account-session only. This idempotent stop lane intentionally bypasses Home aggregation, optimistic revision checks, and promotion/action leases so it remains available during degraded or partially repaired runtime state.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          responses: {
+            "200": { description: "Primary routine is paused" },
+            "403": { description: "Account session required" },
+            "404": { description: "Agent or routine proposal not found" },
+            "409": { description: "Routine is disabled" },
+          },
+        },
+      },
       "/api/launch/agents/{id}/routine": {
         get: {
           operationId: "getLaunchAgentRoutine",
@@ -1775,8 +2082,9 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           },
         },
         patch: {
-          operationId: "updateLaunchAgentRoutine",
-          summary: "Update mission, interval cadence, and all hard budget ceilings",
+          deprecated: true,
+          operationId: "retiredUpdateLaunchAgentRoutine",
+          summary: "Retired: use PATCH /home/routine with expectedRevision",
           security: [{ bearerAuth: [] }],
           parameters: [{
             name: "id",
@@ -1785,19 +2093,19 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             schema: { type: "string" },
           }],
           responses: {
-            "200": { description: "Updated primary routine overview" },
-            "400": { description: "Invalid cadence or budget ceilings" },
             "403": { description: "Account session required" },
             "404": { description: "Routine proposal not found" },
+            "410": { description: "Legacy mutation route retired" },
           },
         },
       },
       "/api/launch/agents/{id}/routine/actions": {
         post: {
-          operationId: "actOnLaunchAgentRoutine",
-          summary: "Approve exact capabilities, activate, pause, or queue a manual wake",
+          deprecated: true,
+          operationId: "retiredActOnLaunchAgentRoutine",
+          summary: "Retired: use /home/actions or /home/pause",
           description:
-            "Owner account-session only. Activation and manual wakes use the same centralized launch-safety invariants as the executor.",
+            "Retired so callers cannot bypass Agent Home CAS, durable idempotency, promotion serialization, or run concurrency gates.",
           security: [{ bearerAuth: [] }],
           parameters: [{
             name: "id",
@@ -1806,11 +2114,9 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             schema: { type: "string" },
           }],
           responses: {
-            "200": { description: "Updated primary routine overview" },
-            "400": { description: "Invalid action or capability ids" },
             "403": { description: "Account session required" },
             "404": { description: "Routine proposal not found" },
-            "409": { description: "Activation or run blocked by launch-safety invariants" },
+            "410": { description: "Legacy mutation route retired" },
           },
         },
       },
@@ -2818,6 +3124,124 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               items: { $ref: "#/components/schemas/CallerFunctionPermission" },
             },
             generatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        AgentHome: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "contractVersion",
+            "revision",
+            "generatedAt",
+            "agent",
+            "responsibility",
+            "state",
+            "setup",
+            "authority",
+            "budget",
+            "release",
+            "recentRuns",
+            "actions",
+          ],
+          properties: {
+            contractVersion: { type: "string" },
+            revision: {
+              type: "string",
+              description: "Opaque CAS token required by every Home mutation.",
+            },
+            generatedAt: { type: "string", format: "date-time" },
+            agent: {
+              type: "object",
+              required: ["id", "slug", "name", "description", "visibility"],
+              properties: {
+                id: { type: "string" },
+                slug: { type: "string" },
+                name: { type: "string" },
+                description: { type: ["string", "null"] },
+                visibility: { type: "string", const: "private" },
+              },
+            },
+            responsibility: {
+              type: "object",
+              required: ["mission", "cadence", "reporting"],
+              properties: {
+                mission: { type: "string" },
+                cadence: {
+                  type: ["object", "null"],
+                  properties: {
+                    kind: { type: "string", const: "interval" },
+                    intervalSeconds: { type: "integer" },
+                    label: { type: "string" },
+                  },
+                },
+                reporting: {
+                  type: "object",
+                  properties: {
+                    kind: { type: "string", const: "galactic_inbox" },
+                    configured: { type: "boolean" },
+                  },
+                },
+              },
+            },
+            state: {
+              type: "object",
+              required: ["lifecycle", "execution", "health", "blockers"],
+              properties: {
+                lifecycle: {
+                  type: "string",
+                  enum: ["needs_setup", "ready", "active", "paused", "disabled"],
+                },
+                execution: {
+                  type: "string",
+                  enum: ["idle", "queued", "running"],
+                },
+                health: {
+                  type: "string",
+                  enum: ["unknown", "healthy", "degraded", "failing"],
+                },
+                blockers: { type: "array", items: { type: "object" } },
+              },
+            },
+            setup: {
+              type: "object",
+              description:
+                "Secret-safe requirements expose configured status and permitted actions, never values.",
+              properties: {
+                ready: { type: "boolean" },
+                requirements: { type: "array", items: { type: "object" } },
+              },
+            },
+            authority: {
+              type: "object",
+              properties: {
+                items: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    required: [
+                      "id",
+                      "kind",
+                      "requested",
+                      "approved",
+                      "effective",
+                      "badges",
+                    ],
+                  },
+                },
+              },
+            },
+            budget: {
+              type: ["object", "null"],
+              description:
+                "Hard ceilings plus authoritative UTC run/reservation-ledger usage.",
+            },
+            release: {
+              type: "object",
+              description:
+                "Live executed version/integrity plus newest exactly-tested candidate and structured authority delta.",
+            },
+            recentRuns: { type: "array", maxItems: 5, items: { type: "object" } },
+            actions: { type: "object" },
           },
         },
         ToolSummary: {
@@ -4386,6 +4810,1413 @@ interface PrimaryRoutineIdRow {
   id: string;
 }
 
+interface AgentHomeSettingsAppRow {
+  id: string;
+  env_vars: Record<string, string> | null;
+  env_schema: Record<string, unknown> | null;
+  manifest: unknown;
+}
+
+const AGENT_HOME_PRIVATE_CACHE_CONTROL = "private, no-store";
+
+function withAgentHomePrivacy(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", AGENT_HOME_PRIVATE_CACHE_CONTROL);
+  headers.set("Vary", "Cookie, Authorization");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function agentHomeJson(data: unknown, status = 200): Response {
+  return withAgentHomePrivacy(json(data, status));
+}
+
+function agentHomeError(message: string, status: number, code?: string): Response {
+  return agentHomeJson({
+    error: message,
+    ...(code ? { code } : {}),
+  }, status);
+}
+
+function requireAccountSessionForAgentHome(user: AuthUser): void {
+  if (!isAccountSessionAuthSource(user.authSource)) {
+    throw new RequestValidationError(
+      "Agent Home requires an authenticated account session",
+      403,
+    );
+  }
+}
+
+function launchAgentHomeMethodAllowed(
+  section: string | null,
+  method: string,
+): boolean {
+  if (section === null) return method === "GET";
+  if (section === "identity" || section === "routine") return method === "PATCH";
+  if (section === "settings") return method === "PUT";
+  if (section === "actions" || section === "pause") return method === "POST";
+  return false;
+}
+
+function versionMetadata(row: LaunchAppRow): VersionMetadata[] {
+  return Array.isArray(row.version_metadata)
+    ? row.version_metadata.filter((entry): entry is VersionMetadata =>
+      Boolean(entry && typeof entry === "object")
+    ) as VersionMetadata[]
+    : [];
+}
+
+function canonicalVersionMetadata(row: LaunchAppRow): VersionMetadata[] {
+  const latest = new Map<string, VersionMetadata>();
+  for (const entry of versionMetadata(row)) latest.set(entry.version, entry);
+  return [...latest.values()].map((entry) => {
+    if (
+      !entry.test_attestation ||
+      findPersistedTestAttestation([entry], entry.version)
+    ) {
+      return entry;
+    }
+    // Preserve safe release metadata while stripping malformed proof material
+    // so the pure read-model builder cannot mistake it for a tested candidate.
+    const { test_attestation: _invalidProof, ...safeEntry } = entry;
+    return safeEntry;
+  });
+}
+
+function newestTestedCandidateVersion(row: LaunchAppRow): string | null {
+  const current = row.current_version || null;
+  const available = new Set(
+    Array.isArray(row.versions)
+      ? row.versions
+      : versionMetadata(row).map((entry) => entry.version),
+  );
+  // Uploads enforce unique versions, but legacy/corrupt rows can contain
+  // duplicate metadata. Match the read-model rule exactly: the last row is
+  // authoritative for a version, and an invalid replacement must not fall
+  // back to a stale proof for potentially overwritten artifacts.
+  const latestMetadata = new Map<string, VersionMetadata>();
+  for (const entry of canonicalVersionMetadata(row)) {
+    latestMetadata.set(entry.version, entry);
+  }
+  return [...latestMetadata.values()]
+    .filter((entry) =>
+      entry.version !== current && available.has(entry.version) &&
+      findPersistedTestAttestation([entry], entry.version) !== null
+    )
+    .sort((left, right) =>
+      (Date.parse(right.created_at) || 0) - (Date.parse(left.created_at) || 0)
+    )[0]?.version || null;
+}
+
+async function loadAgentHomeCandidateManifest(
+  row: LaunchAppRow,
+  candidateVersion: string | null,
+): Promise<AppManifest | null> {
+  if (!candidateVersion || row.runtime === "gpu") return null;
+  try {
+    const files = await readVersionSourceFiles(row.id, candidateVersion);
+    const manifestFile = files.find((file) => file.path === "manifest.json");
+    if (!manifestFile) return null;
+    const parsed = JSON.parse(manifestFile.content);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as AppManifest
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadAgentHomeSettingStatuses(
+  userId: string,
+  row: LaunchAppRow,
+): Promise<AgentHomeSettingStatus[]> {
+  const schema = resolveAppEnvSchema(row as never);
+  const entries = Object.entries(schema);
+  if (entries.length === 0) return [];
+
+  const settingsRows = await dbGet<AgentHomeSettingsAppRow>(
+    getDbConfig(),
+    "apps",
+    {
+      id: `eq.${row.id}`,
+      owner_id: `eq.${userId}`,
+      deleted_at: "is.null",
+      select: "id,env_vars,env_schema,manifest",
+      limit: "1",
+    },
+  );
+  const settingsRow = settingsRows[0];
+  if (!settingsRow) {
+    throw new LaunchServiceUnavailableError(
+      "Agent Home settings state is unavailable",
+    );
+  }
+  const runtimeApp = {
+    id: settingsRow.id,
+    env_vars: settingsRow.env_vars || {},
+    env_schema: settingsRow.env_schema || {},
+    manifest: settingsRow.manifest,
+  } as unknown as Parameters<typeof resolveAppRuntimeEnvVars>[0];
+  const [runtimeSettings, userSecretRows] = await Promise.all([
+    resolveAppRuntimeEnvVars(runtimeApp, userId),
+    dbGet<UserAppSecretStatusRow>(getDbConfig(), "user_app_secrets", {
+      user_id: `eq.${userId}`,
+      app_id: `eq.${row.id}`,
+      select: "key,updated_at",
+      limit: "100",
+    }),
+  ]);
+  const perUserUpdatedAt = new Map(
+    userSecretRows.map((secret) => [secret.key, secret.updated_at || null]),
+  );
+  return entries.map(([key, entry]) => {
+    const perUser = entry.scope === "per_user";
+    const credentialBound = Boolean(entry.credential);
+    const configured = perUser || credentialBound
+      ? Boolean(runtimeSettings.credentials[key]?.value)
+      : Boolean(runtimeSettings.envVars[key]);
+    return {
+      key,
+      scope: perUser ? "per_user" : "agent",
+      label: entry.label || key,
+      description: entry.description || null,
+      help: entry.help || null,
+      input: entry.input || "text",
+      placeholder: entry.placeholder || null,
+      group: entry.group || null,
+      required: entry.required ?? false,
+      configured,
+      secret: entry.input === "password" || credentialBound,
+      destination: entry.credential?.destination || null,
+      updatedAt: perUser ? perUserUpdatedAt.get(key) || null : row.updated_at || null,
+    } satisfies AgentHomeSettingStatus;
+  });
+}
+
+async function loadAgentHomeBudgetUsage(
+  userId: string,
+  routine: LaunchAgentRoutineOverview | null,
+): Promise<{
+  usage: AgentHomeBudgetUsage | null;
+  callsByRun: Map<string, number>;
+}> {
+  if (!routine) return { usage: null, callsByRun: new Map() };
+  const exact = await getAgentHomeBudgetUsage({
+    userId,
+    routineId: routine.id,
+    recentRunIds: routine.recentRuns.map((run) => run.id),
+  });
+  return {
+    usage: {
+      lastRun: exact.lastRun,
+      lastRunCalls: exact.lastRunCalls,
+      daily: exact.daily,
+      monthly: exact.monthly,
+      dayStartedAt: exact.dayStartedAt,
+      monthStartedAt: exact.monthStartedAt,
+    },
+    callsByRun: new Map(exact.callsByRun),
+  };
+}
+
+async function loadAgentHomeCallTargets(
+  userId: string,
+  routine: LaunchAgentRoutineOverview | null,
+  dependencies: Array<{ app: string; functions: string[] }>,
+): Promise<Map<string, { valid: boolean; targetAppId: string | null }>> {
+  const requested = new Map<string, { appRef: string; functionName: string }>();
+  for (const capability of routine?.capabilities || []) {
+    const appRef = capability.appId || capability.appRef;
+    requested.set(agentHomeCallTargetKey(appRef, capability.functionName), {
+      appRef,
+      functionName: capability.functionName,
+    });
+  }
+  for (const dependency of dependencies) {
+    for (const functionName of dependency.functions) {
+      requested.set(agentHomeCallTargetKey(dependency.app, functionName), {
+        appRef: dependency.app,
+        functionName,
+      });
+    }
+  }
+  if (requested.size > 200) {
+    throw new LaunchServiceUnavailableError(
+      "Agent Home authority exceeds the supported target inspection bound",
+    );
+  }
+
+  const result = new Map<string, { valid: boolean; targetAppId: string | null }>();
+  await Promise.all([...requested.entries()].map(async ([key, request]) => {
+    let target: LaunchAppRow | null = null;
+    try {
+      target = await fetchToolByLocator(parseLocator(request.appRef), {
+        ownerId: userId,
+      });
+    } catch {
+      target = null;
+    }
+    const targetManifest = target ? parseManifest(target.manifest) : null;
+    const exposesFunction = Boolean(
+      targetManifest?.functions &&
+        Object.prototype.hasOwnProperty.call(
+          targetManifest.functions,
+          request.functionName,
+        ),
+    );
+    result.set(key, {
+      valid: Boolean(target && target.visibility === "private" && exposesFunction),
+      targetAppId: target?.id || null,
+    });
+  }));
+  return result;
+}
+
+function agentHomeCallTargetFingerprint(
+  targets: ReadonlyMap<string, { valid: boolean; targetAppId: string | null }>,
+): string {
+  return JSON.stringify(
+    [...targets.entries()].sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+async function buildLaunchAgentHomeSnapshotAttempt(
+  user: AuthUser,
+  row: LaunchAppRow,
+  revision: string,
+): Promise<LaunchAgentHomeResponse | null> {
+  const now = new Date();
+  const routineId = await fetchPrimaryRoutineId(user.id, row.id);
+  const routineResponse = await buildLaunchAgentRoutineResponse(
+    user.id,
+    row,
+    routineId,
+  );
+  const routine = routineResponse.routine;
+  const candidateVersion = newestTestedCandidateVersion(row);
+  const manifest = parseManifest(row.manifest);
+  const runtimeManifest = typeof row.manifest === "string"
+    ? row.manifest
+    : row.manifest
+    ? JSON.stringify(row.manifest)
+    : null;
+  const dependencies = resolveRuntimeAppCallDependencies({
+    manifest: runtimeManifest,
+  });
+
+  const [
+    settings,
+    functions,
+    grants,
+    candidateManifest,
+    budget,
+    liveBundle,
+    callTargets,
+  ] = await Promise.all([
+    loadAgentHomeSettingStatuses(user.id, row),
+    buildLaunchFunctionSummaries(row, user.id),
+    listGrantSummaries({ userId: user.id, callerAppId: row.id }),
+    loadAgentHomeCandidateManifest(row, candidateVersion),
+    loadAgentHomeBudgetUsage(user.id, routine),
+    row.current_version
+      ? loadLiveExecutedBundle(row.id)
+      : Promise.resolve({ code: null, attestation: null }),
+    loadAgentHomeCallTargets(user.id, routine, dependencies),
+  ]);
+  // One atomic KV read supplies both executed bytes and their attestation.
+  // Bind the verdict to the DB live version so a validly signed old bundle is
+  // still surfaced as unverified rather than certifying a replay/downgrade.
+  const integrity = !row.current_version || liveBundle.code === null
+    ? "unknown" as const
+    : await verifyExecutedBundle({
+      appId: row.id,
+      esmCode: liveBundle.code,
+      attestation: liveBundle.attestation,
+      expectedVersion: row.current_version,
+    }).then((verdict) =>
+      verdict.status === "ok"
+        ? "verified" as const
+        : verdict.status === "error"
+        ? "unknown" as const
+        : "unverified" as const
+    );
+  const permissionResolution = resolveStrictManifestPermissions({
+    manifest: runtimeManifest,
+  });
+  const connectedKeys = new Set(
+    settings.filter((setting) =>
+      setting.scope === "per_user" && setting.configured
+    ).map((setting) => setting.key),
+  );
+  const versions = Array.isArray(row.versions)
+    ? row.versions
+    : versionMetadata(row).map((entry) => entry.version);
+  const candidateAuthorityChanges = candidateManifest
+    ? summarizeManifestAuthorityChanges(manifest, candidateManifest)
+    : [];
+  // executeSetVersion performs the final proof, manifest, migration, bundle,
+  // and live-pointer checks. GPU promotion is intentionally unavailable until
+  // its staged build is version-addressable.
+  const candidatePreflightReady = Boolean(candidateManifest) &&
+    row.runtime !== "gpu";
+
+  const home = buildAgentHomeResponse({
+    now,
+    revision,
+    agent: {
+      id: row.id,
+      slug: row.slug || row.id,
+      name: row.name || row.slug || row.id,
+      description: row.description || null,
+    },
+    manifest,
+    effectivePermissions: permissionResolution.permissions,
+    ignoredPermissions: permissionResolution.ignoredPermissions,
+    functions,
+    dependencies,
+    callTargets,
+    grants,
+    routine,
+    settings,
+    disclosure: buildAppNetworkDisclosure(manifest, connectedKeys),
+    budgetUsage: budget.usage,
+    callsByRun: budget.callsByRun,
+    release: {
+      versions,
+      currentVersion: row.current_version || null,
+      versionMetadata: canonicalVersionMetadata(row),
+      promotedAt: row.current_version_promoted_at || null,
+      executedVersion: liveBundle.attestation?.version || null,
+      integrity,
+      candidateAuthorityChanges,
+      candidateManifestAvailable: Boolean(candidateManifest),
+      candidatePreflightReady,
+    },
+  });
+  const confirmedTargets = await loadAgentHomeCallTargets(
+    user.id,
+    routine,
+    dependencies,
+  );
+  if (
+    agentHomeCallTargetFingerprint(confirmedTargets) !==
+      agentHomeCallTargetFingerprint(callTargets)
+  ) return null;
+  return home;
+}
+
+async function reloadLaunchAgentHomeRow(
+  userId: string,
+  appId: string,
+): Promise<LaunchAppRow> {
+  const rows = await dbGet<LaunchAppRow>(getDbConfig(), "apps", {
+    id: `eq.${appId}`,
+    owner_id: `eq.${userId}`,
+    deleted_at: "is.null",
+    select: APP_SELECT,
+    limit: "1",
+  });
+  const row = rows[0];
+  if (!row) throw new RequestValidationError("Agent not found", 404);
+  if (row.visibility !== "private") {
+    throw new RequestValidationError(
+      "Persistent Agent Home is available only for private Agents you own",
+      409,
+    );
+  }
+  return row;
+}
+
+async function buildLaunchAgentHomeSnapshot(
+  user: AuthUser,
+  initialRow: LaunchAppRow,
+): Promise<LaunchAgentHomeResponse> {
+  // The Home revision certifies configuration, not volatile execution state.
+  // Re-read the app and every aggregate dependency between two revision reads;
+  // retry when a configuration transaction commits during composition so a
+  // returned token can never certify a mixed before/after projection.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const startedAtRevision = await getAgentHomeRevision(
+      initialRow.id,
+      user.id,
+    );
+    if (!startedAtRevision) {
+      throw new LaunchServiceUnavailableError(
+        "Agent Home revision state is unavailable",
+      );
+    }
+    const row = await reloadLaunchAgentHomeRow(user.id, initialRow.id);
+    const home = await buildLaunchAgentHomeSnapshotAttempt(
+      user,
+      row,
+      startedAtRevision,
+    );
+    if (!home) continue;
+    const completedAtRevision = await getAgentHomeRevision(
+      initialRow.id,
+      user.id,
+    );
+    if (completedAtRevision === startedAtRevision) return home;
+  }
+  throw new LaunchServiceUnavailableError(
+    "Agent Home changed repeatedly while its snapshot was being assembled",
+  );
+}
+
+class AgentHomeStaleMutationError extends Error {
+  constructor(readonly currentRevision: string) {
+    super("Agent Home changed since this page was loaded");
+  }
+}
+
+function requireExpectedAgentHomeRevision(
+  body: Record<string, unknown>,
+  appId: string,
+): string {
+  if (typeof body.expectedRevision !== "string" || !body.expectedRevision.trim()) {
+    throw new RequestValidationError("expectedRevision is required");
+  }
+  const revision = body.expectedRevision.trim();
+  parseAgentHomeRevision(revision, appId);
+  return revision;
+}
+
+function rejectUnknownAgentHomeFields(
+  body: Record<string, unknown>,
+  allowed: readonly string[],
+): void {
+  const allowedSet = new Set(allowed);
+  const unknown = Object.keys(body).filter((key) => !allowedSet.has(key));
+  if (unknown.length > 0) {
+    throw new RequestValidationError(
+      `Unknown Agent Home fields: ${unknown.join(", ")}`,
+    );
+  }
+}
+
+async function refreshLaunchAgentHome(
+  user: AuthUser,
+  encodedLocator: string,
+): Promise<LaunchAgentHomeResponse> {
+  const resolved = await resolveOwnerPrivateRoutineAgent(user, encodedLocator);
+  if (resolved instanceof Response) {
+    throw new RequestValidationError("Agent not found", resolved.status);
+  }
+  return await buildLaunchAgentHomeSnapshot(user, resolved);
+}
+
+async function updateLaunchAgentHomeIdentity(
+  user: AuthUser,
+  row: LaunchAppRow,
+  body: Record<string, unknown>,
+): Promise<void> {
+  rejectUnknownAgentHomeFields(body, ["expectedRevision", "name", "description"]);
+  const expectedRevision = requireExpectedAgentHomeRevision(body, row.id);
+  if (!("name" in body) && !("description" in body)) {
+    throw new RequestValidationError("Provide name or description");
+  }
+  if (
+    "name" in body &&
+    (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 200)
+  ) {
+    throw new RequestValidationError("name must be 1 to 200 characters");
+  }
+  if (
+    "description" in body && body.description !== null &&
+    (typeof body.description !== "string" || body.description.length > 5000)
+  ) {
+    throw new RequestValidationError(
+      "description must be null or at most 5,000 characters",
+    );
+  }
+  await updateAgentHomeIdentityCAS({
+    appId: row.id,
+    userId: user.id,
+    expectedRevision,
+    authSource: user.authSource,
+    ...("name" in body ? { name: (body.name as string).trim() } : {}),
+    ...("description" in body
+      ? { description: body.description as string | null }
+      : {}),
+  });
+}
+
+async function updateLaunchAgentHomeRoutine(
+  user: AuthUser,
+  row: LaunchAppRow,
+  routine: StoredRoutine,
+  body: Record<string, unknown>,
+): Promise<void> {
+  rejectUnknownAgentHomeFields(body, [
+    "expectedRevision",
+    "mission",
+    "intervalSeconds",
+    "budgets",
+  ]);
+  const expectedRevision = requireExpectedAgentHomeRevision(body, row.id);
+  const hasMission = "mission" in body;
+  const hasInterval = "intervalSeconds" in body;
+  const hasBudgets = "budgets" in body;
+  if (!hasMission && !hasInterval && !hasBudgets) {
+    throw new RequestValidationError(
+      "Provide mission, intervalSeconds, or budgets",
+    );
+  }
+  if (
+    hasMission && body.mission !== null &&
+    (typeof body.mission !== "string" || body.mission.trim().length > 1000)
+  ) {
+    throw new RequestValidationError(
+      "mission must be null or at most 1,000 characters",
+    );
+  }
+  if (
+    hasInterval &&
+    (!Number.isSafeInteger(body.intervalSeconds) ||
+      (body.intervalSeconds as number) < MIN_ROUTINE_INTERVAL_SECONDS)
+  ) {
+    throw new RequestValidationError(
+      `intervalSeconds must be an integer of at least ${MIN_ROUTINE_INTERVAL_SECONDS}`,
+    );
+  }
+  if (
+    hasInterval && routine.status === "active" &&
+    (!Number.isFinite(Date.now() + (body.intervalSeconds as number) * 1000) ||
+      Date.now() + (body.intervalSeconds as number) * 1000 > 8.64e15)
+  ) {
+    throw new RequestValidationError("intervalSeconds is too large to schedule");
+  }
+  const budgets = hasBudgets ? parseLaunchRoutineBudgets(body.budgets) : undefined;
+  const schedule = hasInterval
+    ? { type: "interval" as const, every_seconds: body.intervalSeconds as number }
+    : routine.schedule;
+  const budgetPolicy = budgets
+    ? {
+      max_light_per_run: budgets.maxLightPerRun,
+      max_light_per_day: budgets.maxLightPerDay,
+      max_light_per_month: budgets.maxLightPerMonth,
+      max_calls_per_run: budgets.maxCallsPerRun,
+    }
+    : routine.budget_policy;
+  const proposed: StoredRoutine = {
+    ...routine,
+    schedule,
+    budget_policy: budgetPolicy,
+  };
+  const safetyBlockers = validateRoutineActivation(proposed).blockers.filter(
+    (blocker) => blocker.code !== "pending_required_capabilities",
+  );
+  if (safetyBlockers.length > 0) {
+    throw new RequestValidationError(
+      safetyBlockers.map((blocker) => blocker.message).join(" "),
+    );
+  }
+  await updateAgentHomeRoutineCAS({
+    appId: row.id,
+    userId: user.id,
+    routineId: routine.id,
+    expectedRevision,
+    authSource: user.authSource,
+    ...(hasMission ? { mission: body.mission as string | null } : {}),
+    ...(hasInterval ? { intervalSeconds: body.intervalSeconds as number } : {}),
+    ...(hasBudgets && budgets ? { budgets } : {}),
+  });
+}
+
+async function updateLaunchAgentHomeSettings(
+  user: AuthUser,
+  row: LaunchAppRow,
+  body: Record<string, unknown>,
+): Promise<void> {
+  rejectUnknownAgentHomeFields(body, ["expectedRevision", "values"]);
+  const expectedRevision = requireExpectedAgentHomeRevision(body, row.id);
+  const values = asRecord(body.values);
+  if (!values || Object.keys(values).length === 0) {
+    throw new RequestValidationError("values must be a non-empty object");
+  }
+  if (Object.keys(values).length > 50) {
+    throw new RequestValidationError("At most 50 settings may be updated at once");
+  }
+  const schema = resolveAppEnvSchema(row as never);
+  const agentValues: Record<string, string | null> = {};
+  const perUserValues: Record<string, string | null> = {};
+  for (const [key, value] of Object.entries(values)) {
+    const entry = schema[key];
+    if (!entry) {
+      throw new RequestValidationError(
+        `${key}: not a declared setting for this Agent`,
+      );
+    }
+    if (value !== null && typeof value !== "string") {
+      throw new RequestValidationError(`${key}: value must be a string or null`);
+    }
+    if (typeof value === "string") {
+      if (!value) {
+        throw new RequestValidationError(
+          `${key}: use null to remove a setting; empty values are not accepted`,
+        );
+      }
+      const validation = validateEnvVarValue(value);
+      if (!validation.valid) {
+        throw new RequestValidationError(`${key}: ${validation.error}`);
+      }
+    }
+    const encrypted = value === null ? null : await encryptEnvVar(value);
+    (entry.scope === "per_user" ? perUserValues : agentValues)[key] = encrypted;
+  }
+  await updateAgentHomeSettingsCAS({
+    appId: row.id,
+    userId: user.id,
+    expectedRevision,
+    authSource: user.authSource,
+    agentCiphertexts: agentValues,
+    perUserCiphertexts: perUserValues,
+  });
+}
+
+async function assertLaunchAgentHomeRevision(
+  user: AuthUser,
+  row: LaunchAppRow,
+  expectedRevision: string,
+): Promise<void> {
+  await assertAgentHomeRevision({
+    appId: row.id,
+    userId: user.id,
+    expectedRevision,
+    authSource: user.authSource,
+  });
+}
+
+interface LaunchAgentHomeActionOutcome {
+  kind: "completed" | "pending" | "failed";
+  requestId: string;
+  replayed: boolean;
+  response: Record<string, unknown>;
+}
+
+class LaunchAgentHomeActionStatusUnknownError extends Error {
+  constructor(readonly requestId: string) {
+    super("The Agent Home action ran, but its durable result could not be confirmed");
+    this.name = "LaunchAgentHomeActionStatusUnknownError";
+  }
+}
+
+function launchAgentHomeActionFailure(err: unknown): Record<string, unknown> {
+  if (err instanceof AgentHomeRevisionError) {
+    return { error: err.message, code: err.code, status: err.status };
+  }
+  if (err instanceof RequestValidationError) {
+    return { error: err.message, code: "AGENT_HOME_ACTION_BLOCKED", status: err.status };
+  }
+  if (err instanceof RoutinePlatformError) {
+    return { error: err.message, code: "AGENT_HOME_ACTION_BLOCKED", status: 409 };
+  }
+  if (err instanceof Error && err.name === "ToolError") {
+    const code = (err as Error & { code?: number }).code;
+    return {
+      error: err.message,
+      code: "AGENT_HOME_PROMOTION_FAILED",
+      status: code === -32003 ? 403 : code === -32602
+        ? 400
+        : code === -32006
+        ? 409
+        : 503,
+    };
+  }
+  return {
+    error: "Agent Home action failed",
+    code: "AGENT_HOME_ACTION_FAILED",
+    status: 500,
+  };
+}
+
+function isDeterministicLaunchAgentHomeActionFailure(err: unknown): boolean {
+  if (err instanceof AgentHomeStaleMutationError) return true;
+  if (err instanceof RequestValidationError || err instanceof RoutinePlatformError) {
+    return true;
+  }
+  if (err instanceof Error && err.name === "ToolError") {
+    const code = (err as Error & { code?: number }).code;
+    return code === -32003 || code === -32006 || code === -32602;
+  }
+  return err instanceof AgentHomeRevisionError && err.status < 500;
+}
+
+type LaunchAgentHomeActionReconciliation =
+  | "not_applied"
+  | "applied"
+  | "repair_required";
+
+export function classifyLaunchAgentHomePromotionReconciliation(input: {
+  databaseAtTarget: boolean;
+  liveAtTarget: boolean;
+  storageCurrent?: boolean;
+}): LaunchAgentHomeActionReconciliation {
+  if (!input.databaseAtTarget && !input.liveAtTarget) return "not_applied";
+  if (!input.databaseAtTarget || !input.liveAtTarget) return "repair_required";
+  return input.storageCurrent === true ? "applied" : "repair_required";
+}
+
+async function reconcileLaunchAgentHomeAction(input: {
+  user: AuthUser;
+  row: LaunchAppRow;
+  action: LaunchAgentHomeActionRequest["action"];
+  requestId: string;
+  capabilityIds?: string[];
+  version?: string;
+}): Promise<LaunchAgentHomeActionReconciliation> {
+  // The durable run link is sufficient proof even if the routine was deleted
+  // or ceased to be launch-primary after the queue insert committed.
+  if (input.action === "run_now") {
+    const runs = await dbGet<{ id: string }>(getDbConfig(), "routine_runs", {
+      user_id: `eq.${input.user.id}`,
+      agent_home_action_request_id: `eq.${input.requestId}`,
+      select: "id",
+      limit: "1",
+    });
+    return runs.length > 0 ? "applied" : "not_applied";
+  }
+  if (input.action === "promote_candidate") {
+    if (!input.version) return "not_applied";
+    const current = await reloadLaunchAgentHomeRow(input.user.id, input.row.id);
+    const live = await loadLiveExecutedBundle(current.id);
+    const liveAtTarget = live.code
+      ? (await verifyExecutedBundle({
+        appId: current.id,
+        esmCode: live.code,
+        attestation: live.attestation,
+        expectedVersion: input.version,
+      })).status === "ok"
+      : false;
+    const databaseAtTarget = current.current_version === input.version;
+    if (!databaseAtTarget || !liveAtTarget) {
+      return classifyLaunchAgentHomePromotionReconciliation({
+        databaseAtTarget,
+        liveAtTarget,
+      });
+    }
+
+    const storage = await inspectLiveAppStorageAccounting(
+      input.user.id,
+      current.id,
+      input.version,
+    );
+    return classifyLaunchAgentHomePromotionReconciliation({
+      databaseAtTarget,
+      liveAtTarget,
+      storageCurrent: storage.current,
+    });
+  }
+
+  const routineId = await fetchPrimaryRoutineId(input.user.id, input.row.id);
+  if (!routineId) return "not_applied";
+  const routine = await getRoutine(input.user.id, routineId);
+  if (!routine) return "not_applied";
+  if (input.action === "activate") {
+    return routine.status === "active" ? "applied" : "not_applied";
+  }
+  if (input.action === "pause") {
+    return routine.status === "paused" ? "applied" : "not_applied";
+  }
+  if (input.action === "approve_capabilities") {
+    const approved = new Set(
+      routine.capabilities.filter((capability) => capability.approved).map(
+        (capability) => capability.id,
+      ),
+    );
+    return Boolean(input.capabilityIds?.length) &&
+        input.capabilityIds!.every((id) => approved.has(id))
+      ? "applied"
+      : "not_applied";
+  }
+  return "not_applied";
+}
+
+async function performLaunchAgentHomeAction(
+  user: AuthUser,
+  row: LaunchAppRow,
+  body: Record<string, unknown>,
+): Promise<LaunchAgentHomeActionOutcome> {
+  rejectUnknownAgentHomeFields(body, [
+    "expectedRevision",
+    "idempotencyKey",
+    "action",
+    "capabilityIds",
+    "version",
+  ]);
+  const expectedRevision = requireExpectedAgentHomeRevision(body, row.id);
+  if (typeof body.idempotencyKey !== "string" || !isUuid(body.idempotencyKey)) {
+    throw new RequestValidationError("idempotencyKey must be a UUID");
+  }
+  if (typeof body.action !== "string") {
+    throw new RequestValidationError("action is required");
+  }
+  const action = body.action as LaunchAgentHomeActionRequest["action"];
+  if (![
+    "approve_capabilities",
+    "activate",
+    "pause",
+    "run_now",
+    "promote_candidate",
+  ].includes(action)) {
+    throw new RequestValidationError(
+      "action must be approve_capabilities, activate, pause, run_now, or promote_candidate",
+    );
+  }
+  let capabilityIds: string[] | undefined;
+  let version: string | undefined;
+  if (action === "approve_capabilities") {
+    if (
+      !Array.isArray(body.capabilityIds) || body.capabilityIds.length === 0 ||
+      body.capabilityIds.length > 100 ||
+      body.capabilityIds.some((id) => typeof id !== "string" || !id.trim())
+    ) {
+      throw new RequestValidationError(
+        "capabilityIds must list 1 to 100 exact pending capabilities to approve",
+      );
+    }
+    capabilityIds = [...new Set(body.capabilityIds as string[])].sort();
+  } else if (body.capabilityIds !== undefined) {
+    throw new RequestValidationError(
+      "capabilityIds is valid only for approve_capabilities",
+    );
+  }
+  if (action === "promote_candidate") {
+    if (typeof body.version !== "string" || !body.version.trim()) {
+      throw new RequestValidationError("version is required for promotion");
+    }
+    version = body.version.trim();
+  } else if (body.version !== undefined) {
+    throw new RequestValidationError(
+      "version is valid only for promote_candidate",
+    );
+  }
+
+  if (action === "pause") {
+    // Pause is deliberately outside the serialized action saga. It is an
+    // idempotent, owner/private, primary-routine stop lane and must remain
+    // available while a promotion lease is slow, expired, or being repaired.
+    // The executor re-checks active status before every delivery, so this also
+    // fences already-queued work from starting after the pause commits.
+    await pauseAgentHomeRoutineEmergency({
+      appId: row.id,
+      userId: user.id,
+      authSource: user.authSource,
+    });
+    return {
+      kind: "completed",
+      requestId: body.idempotencyKey,
+      replayed: false,
+      response: { code: "AGENT_HOME_ACTION_COMPLETED", action },
+    };
+  }
+
+  const claim = await claimAgentHomeAction({
+    appId: row.id,
+    userId: user.id,
+    expectedRevision,
+    authSource: user.authSource,
+    idempotencyKey: body.idempotencyKey,
+    action,
+    requestPayload: {
+      ...(capabilityIds ? { capabilityIds } : {}),
+      ...(version ? { version } : {}),
+    },
+  });
+  if (!claim.isNew) {
+    if (claim.status === "in_progress") {
+      let reconciliation: LaunchAgentHomeActionReconciliation = "not_applied";
+      try {
+        reconciliation = await reconcileLaunchAgentHomeAction({
+          user,
+          row,
+          action,
+          requestId: claim.requestId,
+          capabilityIds,
+          version,
+        });
+      } catch {
+        throw new LaunchAgentHomeActionStatusUnknownError(claim.requestId);
+      }
+      if (reconciliation === "applied") {
+        const response = {
+          code: "AGENT_HOME_ACTION_COMPLETED",
+          action,
+          requestFingerprint: claim.requestFingerprint,
+        };
+        try {
+          await completeAgentHomeAction({
+            appId: row.id,
+            userId: user.id,
+            requestId: claim.requestId,
+            leaseToken: claim.leaseToken,
+            authSource: user.authSource,
+            status: "completed",
+            response,
+          });
+        } catch {
+          throw new LaunchAgentHomeActionStatusUnknownError(claim.requestId);
+        }
+        return {
+          kind: "completed",
+          requestId: claim.requestId,
+          replayed: true,
+          response,
+        };
+      }
+    }
+    return {
+      kind: claim.status === "completed"
+        ? "completed"
+        : claim.status === "failed"
+        ? "failed"
+        : "pending",
+      requestId: claim.requestId,
+      replayed: true,
+      response: claim.response,
+    };
+  }
+
+  let sideEffectFinished = false;
+  let repairRequired = false;
+  // A reclaimed lease may represent a side effect that committed before its
+  // completion acknowledgement. Reconcile before attempting it again.
+  try {
+    const reconciliation = await reconcileLaunchAgentHomeAction({
+      user,
+      row,
+      action,
+      requestId: claim.requestId,
+      capabilityIds,
+      version,
+    });
+    if (reconciliation === "applied") {
+      sideEffectFinished = true;
+    } else if (reconciliation === "repair_required") {
+      repairRequired = true;
+    }
+  } catch {
+    throw new LaunchAgentHomeActionStatusUnknownError(claim.requestId);
+  }
+  try {
+    const home = sideEffectFinished || repairRequired
+      ? null
+      : await buildLaunchAgentHomeSnapshot(user, row);
+    if (home && home.revision !== expectedRevision) {
+      throw new AgentHomeStaleMutationError(home.revision);
+    }
+    if (sideEffectFinished) {
+      // Reconciliation proved the original side effect already committed.
+    } else if (action === "promote_candidate") {
+      if (!repairRequired && (
+        home!.release.candidate?.version !== version ||
+        !home!.actions.canPromoteCandidate
+      )) {
+        throw new RequestValidationError(
+          "That tested candidate is unavailable for safe promotion",
+          409,
+        );
+      }
+      if (!repairRequired) {
+        await assertLaunchAgentHomeRevision(user, row, expectedRevision);
+      }
+      await executeSetVersion(
+        user.id,
+        { app_id: row.id, version },
+        {
+          requireTestAttestation: true,
+          beforeIrreversibleStep: async (step) => {
+            await fenceAgentHomePromotionStep({
+              appId: row.id,
+              userId: user.id,
+              requestId: claim.requestId,
+              leaseToken: claim.leaseToken,
+              authSource: user.authSource,
+              step,
+            });
+          },
+          applyAppRecord: async (record) => {
+            await commitAgentHomePromotionAppRecord({
+              appId: row.id,
+              userId: user.id,
+              requestId: claim.requestId,
+              leaseToken: claim.leaseToken,
+              authSource: user.authSource,
+              version: record.version,
+              storageKey: record.storageKey,
+              exports: record.exports,
+              manifest: record.manifest,
+              envSchema: record.envSchema,
+            });
+          },
+        },
+      );
+    } else {
+      const routineId = await fetchPrimaryRoutineId(user.id, row.id);
+      if (!routineId) {
+        throw new RequestValidationError("Agent has no routine proposal", 404);
+      }
+      const routine = await getRoutine(user.id, routineId);
+      if (!routine) {
+        throw new RequestValidationError("Agent has no routine proposal", 404);
+      }
+      if (action === "approve_capabilities") {
+        const pendingIds = new Set(
+          routine.capabilities.filter((capability) => !capability.approved).map(
+            (capability) => capability.id,
+          ),
+        );
+        const notPending = (capabilityIds || []).filter((id) => !pendingIds.has(id));
+        if (notPending.length > 0) {
+          throw new RequestValidationError(
+            `Capabilities are no longer pending: ${notPending.join(", ")}`,
+            409,
+          );
+        }
+        await approveAgentHomeCapabilitiesCAS({
+          appId: row.id,
+          userId: user.id,
+          routineId,
+          expectedRevision,
+          authSource: user.authSource,
+          capabilityIds: capabilityIds || [],
+        });
+      } else if (action === "activate") {
+        if (routine.status !== "active") {
+          if (routine.status !== "paused" && routine.status !== "error") {
+            throw new RequestValidationError(
+              `Routine is ${routine.status} and cannot be activated`,
+              409,
+            );
+          }
+          if (!home!.actions.canActivate) {
+            const err = new RequestValidationError(
+              "Agent cannot activate until every setup and integrity blocker is resolved",
+              409,
+            ) as RequestValidationError & { blockers?: LaunchAgentRoutineBlocker[] };
+            err.blockers = home!.state.blockers;
+            throw err;
+          }
+          await validateRoutineLaunchActivation(user.id, routine);
+          await updateAgentHomeRoutineStatusCAS({
+            appId: row.id,
+            userId: user.id,
+            routineId,
+            expectedRevision,
+            authSource: user.authSource,
+            status: "active",
+            nextRunAt: new Date().toISOString(),
+          });
+        }
+      } else if (action === "run_now") {
+        if (routine.status !== "active") {
+          throw new RequestValidationError(
+            `Routine is ${routine.status}; activate it before running manually`,
+            409,
+          );
+        }
+        if (!home!.actions.canRunNow) {
+          throw new RequestValidationError(
+            "Agent cannot run until every setup and integrity blocker is resolved",
+            409,
+          );
+        }
+        await queueAgentHomeRoutineRun({
+          appId: row.id,
+          userId: user.id,
+          routineId,
+          requestId: claim.requestId,
+          leaseToken: claim.leaseToken,
+          expectedRevision,
+          authSource: user.authSource,
+        });
+      }
+    }
+    sideEffectFinished = true;
+    const response = {
+      code: "AGENT_HOME_ACTION_COMPLETED",
+      action,
+      requestFingerprint: claim.requestFingerprint,
+    };
+    await completeAgentHomeAction({
+      appId: row.id,
+      userId: user.id,
+      requestId: claim.requestId,
+      leaseToken: claim.leaseToken,
+      authSource: user.authSource,
+      status: "completed",
+      response,
+    });
+    return {
+      kind: "completed",
+      requestId: claim.requestId,
+      replayed: false,
+      response,
+    };
+  } catch (err) {
+    // A completion write can fail after the side effect committed. Never
+    // overwrite that indeterminate request as failed; the client must retain
+    // the same key and reconcile it on retry.
+    if (sideEffectFinished) {
+      throw new LaunchAgentHomeActionStatusUnknownError(claim.requestId);
+    }
+    let reconciliation: LaunchAgentHomeActionReconciliation = "not_applied";
+    try {
+      reconciliation = await reconcileLaunchAgentHomeAction({
+        user,
+        row,
+        action,
+        requestId: claim.requestId,
+        capabilityIds,
+        version,
+      });
+    } catch {
+      throw new LaunchAgentHomeActionStatusUnknownError(claim.requestId);
+    }
+    if (reconciliation === "applied") {
+      const response = {
+        code: "AGENT_HOME_ACTION_COMPLETED",
+        action,
+        requestFingerprint: claim.requestFingerprint,
+      };
+      try {
+        await completeAgentHomeAction({
+          appId: row.id,
+          userId: user.id,
+          requestId: claim.requestId,
+          leaseToken: claim.leaseToken,
+          authSource: user.authSource,
+          status: "completed",
+          response,
+        });
+      } catch {
+        throw new LaunchAgentHomeActionStatusUnknownError(claim.requestId);
+      }
+      return {
+        kind: "completed",
+        requestId: claim.requestId,
+        replayed: false,
+        response,
+      };
+    }
+    if (
+      reconciliation === "repair_required" ||
+      !isDeterministicLaunchAgentHomeActionFailure(err)
+    ) {
+      throw new LaunchAgentHomeActionStatusUnknownError(claim.requestId);
+    }
+    const response = launchAgentHomeActionFailure(err);
+    try {
+      await completeAgentHomeAction({
+        appId: row.id,
+        userId: user.id,
+        requestId: claim.requestId,
+        leaseToken: claim.leaseToken,
+        authSource: user.authSource,
+        status: "failed",
+        response,
+      });
+    } catch {
+      throw new LaunchAgentHomeActionStatusUnknownError(claim.requestId);
+    }
+    const storedStatus = response.status;
+    if (
+      typeof storedStatus === "number" && Number.isInteger(storedStatus) &&
+      storedStatus >= 500 && storedStatus <= 599
+    ) {
+      return {
+        kind: "failed",
+        requestId: claim.requestId,
+        replayed: false,
+        response,
+      };
+    }
+    throw err;
+  }
+}
+
+async function launchAgentHomeConflictResponse(
+  user: AuthUser,
+  encodedLocator: string,
+): Promise<Response> {
+  const current = await refreshLaunchAgentHome(user, encodedLocator);
+  return agentHomeJson({
+    error: "Agent Home changed since this page was loaded",
+    code: "AGENT_HOME_REVISION_CONFLICT",
+    currentRevision: current.revision,
+    current,
+  }, 412);
+}
+
+async function handleLaunchAgentHomeRoute(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+  section: string | null,
+): Promise<Response> {
+  let user: AuthUser | null = null;
+  try {
+    if (!launchAgentHomeMethodAllowed(section, method)) {
+      return agentHomeError("Method not allowed for Agent Home", 405);
+    }
+    user = await requireLaunchUser(request);
+    requireAccountSessionForAgentHome(user);
+    const resolved = await resolveOwnerPrivateRoutineAgent(user, encodedLocator);
+    if (resolved instanceof Response) return withAgentHomePrivacy(resolved);
+    const row = resolved;
+
+    if (section === null) {
+      return agentHomeJson(await buildLaunchAgentHomeSnapshot(user, row));
+    }
+    if (section === "pause") {
+      const paused = await pauseAgentHomeRoutineEmergency({
+        appId: row.id,
+        userId: user.id,
+        authSource: user.authSource,
+      });
+      return agentHomeJson({
+        paused: true,
+        routineId: paused.routineId,
+        revision: paused.revision,
+        generatedAt: new Date().toISOString(),
+      });
+    }
+    const rawBody = await readJsonBody<unknown>(request);
+    const body = asRecord(rawBody);
+    if (!body) throw new RequestValidationError("Request body must be an object");
+
+    if (section === "identity") {
+      await updateLaunchAgentHomeIdentity(user, row, body);
+    } else if (section === "routine") {
+      const routineId = await fetchPrimaryRoutineId(user.id, row.id);
+      if (!routineId) {
+        return agentHomeError("Agent has no routine proposal", 404);
+      }
+      const routine = await getRoutine(user.id, routineId);
+      if (!routine) return agentHomeError("Agent has no routine proposal", 404);
+      await updateLaunchAgentHomeRoutine(user, row, routine, body);
+    } else if (section === "settings") {
+      return withAgentHomePrivacy(await withSensitiveRouteRateLimit(
+        user.id,
+        "apps:user_settings_update",
+        async () => {
+          await updateLaunchAgentHomeSettings(user!, row, body);
+          return agentHomeJson(
+            await refreshLaunchAgentHome(user!, encodedLocator),
+          );
+        },
+      ));
+    } else if (section === "actions") {
+      const outcome = await performLaunchAgentHomeAction(user, row, body);
+      if (outcome.kind === "pending") {
+        return agentHomeJson({
+          error: "An identical Agent Home action is already in progress",
+          code: "AGENT_HOME_ACTION_IN_PROGRESS",
+          status: "pending",
+          terminal: false,
+          requestId: outcome.requestId,
+          replayed: outcome.replayed,
+        }, 409);
+      }
+      if (outcome.kind === "failed") {
+        const storedStatus = outcome.response.status;
+        const status = typeof storedStatus === "number" &&
+            Number.isInteger(storedStatus) && storedStatus >= 400 &&
+            storedStatus <= 599
+          ? storedStatus
+          : 409;
+        return agentHomeJson({
+          status: "failed",
+          terminal: true,
+          requestId: outcome.requestId,
+          replayed: outcome.replayed,
+          error: typeof outcome.response.error === "string"
+            ? outcome.response.error
+            : "Agent Home action failed",
+          ...(typeof outcome.response.code === "string"
+            ? { code: outcome.response.code }
+            : {}),
+        }, status);
+      }
+    }
+    return agentHomeJson(await refreshLaunchAgentHome(user, encodedLocator));
+  } catch (err) {
+    if (err instanceof LaunchAgentHomeActionStatusUnknownError) {
+      return agentHomeJson({
+        error:
+          "The action result is still being reconciled. Retry with the same request key.",
+        code: "AGENT_HOME_ACTION_STATUS_UNKNOWN",
+        status: "unknown",
+        terminal: false,
+        requestId: err.requestId,
+      }, 503);
+    }
+    if (
+      user &&
+      (err instanceof AgentHomeStaleMutationError ||
+        (err instanceof AgentHomeRevisionError &&
+          err.code === "AGENT_HOME_REVISION_CONFLICT"))
+    ) {
+      try {
+        return await launchAgentHomeConflictResponse(user, encodedLocator);
+      } catch (refreshErr) {
+        console.error("[LAUNCH] Failed to refresh stale Agent Home:", refreshErr);
+        return agentHomeError("Agent Home state is temporarily unavailable", 503);
+      }
+    }
+    if (err instanceof AgentHomeRevisionError) {
+      if (
+        err.code === "AGENT_HOME_ACTION_RECOVERY_REQUIRED" && err.recovery
+      ) {
+        // This route is already account-session, owner, and private-Agent
+        // scoped. Returning the exact durable request lets the browser finish
+        // an expired prior action after sessionStorage was lost, without
+        // exposing recovery material on any public/read surface.
+        return agentHomeJson({
+          error: err.message,
+          code: err.code,
+          terminal: false,
+          recovery: err.recovery,
+        }, err.status);
+      }
+      return agentHomeError(err.message, err.status, err.code);
+    }
+    if (err instanceof RequestValidationError) {
+      const blockers = (err as RequestValidationError & {
+        blockers?: LaunchAgentRoutineBlocker[];
+      }).blockers;
+      return agentHomeJson({
+        error: err.message,
+        ...(blockers ? { blockers } : {}),
+      }, err.status);
+    }
+    if (err instanceof RoutinePlatformError) {
+      const status = err.code === ROUTINE_PLATFORM_FORBIDDEN
+        ? 403
+        : err.code === ROUTINE_PLATFORM_NOT_FOUND
+        ? 404
+        : 409;
+      return agentHomeJson({
+        error: err.message,
+        blockers: [activationErrorBlocker(err)],
+      }, status);
+    }
+    if (err instanceof LaunchServiceUnavailableError) {
+      return agentHomeError(err.message, 503);
+    }
+    if (err instanceof Error && err.name === "ToolError") {
+      const code = (err as Error & { code?: number }).code;
+      const status = code === -32003 ? 403 : code === -32602 ? 400 : 503;
+      return agentHomeError(err.message, status, "AGENT_HOME_PROMOTION_FAILED");
+    }
+    console.error("[LAUNCH] Agent Home request failed:", err);
+    return agentHomeError("Agent Home request failed", 500);
+  }
+}
+
 const LAUNCH_ROUTINE_BUDGET_KEYS = [
   "maxLightPerRun",
   "maxLightPerDay",
@@ -4430,6 +6261,7 @@ async function fetchPrimaryRoutineId(
     user_id: `eq.${userId}`,
     composer_app_id: `eq.${appId}`,
     deleted_at: "is.null",
+    "metadata->>launch_primary": "eq.true",
     select: "id",
     order: "created_at.asc",
     limit: "1",
@@ -4729,9 +6561,10 @@ async function updateLaunchAgentRoutine(
   if (safetyBlockers.length > 0) {
     throw new RequestValidationError(safetyBlockers.map((item) => item.message).join(" "));
   }
-  // This validates private ownership, interval-only cadence, one-primary, and
-  // owned-private capability targets before any update is persisted.
-  await validateRoutineLaunchActivation(userId, proposed);
+  // Edits must remain available while setup is incomplete so the owner can
+  // repair a blocked Agent. Structural schedule/budget invariants are enforced
+  // above; the full settings, reporting, grant, and executed-release contract
+  // is enforced only at activation/run boundaries.
 
   await updateRoutine(userId, routine.id, {
     ...(body.mission !== undefined ? { intent: body.mission } : {}),
@@ -4803,6 +6636,12 @@ async function handleLaunchAgentRoutine(
   const resolved = await resolveOwnerPrivateRoutineAgent(user, encodedLocator);
   if (resolved instanceof Response) return resolved;
   const row = resolved;
+  if (actionsRoute || method === "PATCH") {
+    return error(
+      "This legacy mutation route is retired. Use the Agent Home CAS/action endpoints; emergency pause is POST /home/pause.",
+      410,
+    );
+  }
   const routineId = await fetchPrimaryRoutineId(user.id, row.id);
   if (!routineId) {
     if (method !== "GET") return error("Agent has no routine proposal", 404);
@@ -5169,6 +7008,9 @@ async function handleLaunchAgentSettings(
   method: string,
 ): Promise<Response> {
   const user = await requireLaunchUser(request);
+  if (method === "PUT" || method === "POST") {
+    requireAccountSessionForAgentHome(user);
+  }
   const resolved = await resolveAgentPermissionTool(user, encodedLocator);
   if (!resolved) return error("Agent not found", 404);
   const row = resolved.row;

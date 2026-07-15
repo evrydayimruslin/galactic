@@ -4,6 +4,7 @@ import {
   buildPerUserSettingsStatus,
   validatePerUserSettingsValues,
 } from "./user-app-settings.ts";
+import { resolveAppEnvSchema } from "./app-settings.ts";
 
 Deno.test("user app settings: builds connected and missing-required status", () => {
   const schema = {
@@ -96,4 +97,16 @@ Deno.test("user app settings: rejects non-string values", () => {
 
   assertEquals(result.entries, []);
   assertEquals(result.errors, ["API_KEY: Value must be a string"]);
+});
+
+Deno.test("app settings: stored legacy type preserves per-user scope after backfill", () => {
+  const schema = resolveAppEnvSchema({
+    env_schema: {
+      TOKEN: { type: "per_user", required: true },
+      REGION: { scope: "universal" },
+    },
+    manifest: null,
+  });
+  assertEquals(schema.TOKEN?.scope, "per_user");
+  assertEquals(schema.REGION?.scope, "universal");
 });

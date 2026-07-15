@@ -10219,10 +10219,53 @@ async function resolveVersionStorageBytesForLiveSwitch(
   return totalBytes;
 }
 
-async function executeSetVersion(
+/**
+ * Read-only postcondition used by Agent Home action reconciliation. The
+ * underlying accounting RPC updates app and user totals in one transaction,
+ * so an exact app byte match also proves the user delta committed.
+ */
+export async function inspectLiveAppStorageAccounting(
+  userId: string,
+  appId: string,
+  version: string,
+): Promise<{
+  current: boolean;
+  expectedBytes: number;
+  recordedBytes: number;
+}> {
+  const app = await resolveApp(userId, appId);
+  const expectedBytes = await resolveVersionStorageBytesForLiveSwitch(
+    app,
+    version,
+    `apps/${app.id}/${version}/`,
+    createR2Service(),
+  );
+  const recordedBytes = Math.max(0, Math.trunc(app.storage_bytes || 0));
+  return {
+    current: recordedBytes === expectedBytes,
+    expectedBytes,
+    recordedBytes,
+  };
+}
+
+export async function executeSetVersion(
   userId: string,
   args: Record<string, unknown>,
-  options: { callerIsApiToken?: boolean } = {},
+  options: {
+    callerIsApiToken?: boolean;
+    requireTestAttestation?: boolean;
+    beforeIrreversibleStep?: (
+      step: "d1" | "live_bundle" | "app_record" | "storage_accounting",
+    ) => Promise<void>;
+    applyAppRecord?: (record: {
+      appId: string;
+      version: string;
+      storageKey: string;
+      exports: string[];
+      manifest: string | null;
+      envSchema: Record<string, EnvSchemaEntry> | null;
+    }) => Promise<void>;
+  } = {},
 ): Promise<unknown> {
   const appIdOrSlug = args.app_id as string;
   const version = args.version as string;
@@ -10272,7 +10315,10 @@ async function executeSetVersion(
     app.version_metadata,
     version,
   );
-  if (options.callerIsApiToken && !persistedTestProof) {
+  if (
+    (options.callerIsApiToken || options.requireTestAttestation) &&
+    !persistedTestProof
+  ) {
     throw new ToolError(
       FORBIDDEN,
       "Connected builder keys may only promote a version that was staged with a verified gx.test attestation for its exact source hash.",
@@ -10308,7 +10354,7 @@ async function executeSetVersion(
     envSchema = null;
   }
 
-  if (options.callerIsApiToken) {
+  if (options.callerIsApiToken || options.requireTestAttestation) {
     if (!targetManifest) {
       throw new ToolError(
         FORBIDDEN,
@@ -10321,7 +10367,7 @@ async function executeSetVersion(
       app.manifest,
       targetManifest,
     );
-    if (authorityExpansions.length > 0) {
+    if (options.callerIsApiToken && authorityExpansions.length > 0) {
       throw new ToolError(
         FORBIDDEN,
         "This version expands the live Agent's authority and requires owner review in an authenticated Galactic account session.",
@@ -10387,6 +10433,7 @@ async function executeSetVersion(
       }
     }
     if (stagedMigrations.migrations.length > 0) {
+      await options.beforeIrreversibleStep?.("d1");
       const { provisionAndMigrate } = await import(
         "../services/upload-pipeline.ts"
       );
@@ -10509,6 +10556,7 @@ async function executeSetVersion(
     }
 
     // Repoint the live pointer. Fatal: if this fails we must NOT advance the DB.
+    await options.beforeIrreversibleStep?.("live_bundle");
     await putLiveExecutedBundle({
       appId: app.id,
       version,
@@ -10516,16 +10564,31 @@ async function executeSetVersion(
     });
   }
 
-  // Update app
+  // Update the live app record. Agent Home supplies a promotion-saga RPC so
+  // this commit carries the same lease token as the KV/D1 phases; legacy
+  // callers retain the existing AppsService path.
   const appsService = createAppsService();
-  await appsService.update(app.id, {
-    current_version: version,
-    storage_key: newStorageKey,
-    exports,
-    ...(manifestJson
-      ? { manifest: manifestJson, env_schema: envSchema || {} }
-      : {}),
-  });
+  await options.beforeIrreversibleStep?.("app_record");
+  if (options.applyAppRecord) {
+    await options.applyAppRecord({
+      appId: app.id,
+      version,
+      storageKey: newStorageKey,
+      exports,
+      manifest: manifestJson,
+      envSchema,
+    });
+  } else {
+    await appsService.update(app.id, {
+      current_version: version,
+      storage_key: newStorageKey,
+      exports,
+      ...(manifestJson
+        ? { manifest: manifestJson, env_schema: envSchema || {} }
+        : {}),
+    });
+  }
+  await options.beforeIrreversibleStep?.("storage_accounting");
   await recordLiveAppStorage(userId, app.id, version, liveStorageBytes);
 
   // Invalidate in-memory R2 code cache so the HTTP/entry-file path re-reads

@@ -2,6 +2,7 @@ import type { HealthWindows } from "../types/index.ts";
 import type { MCPToolAnnotations } from "./mcp.ts";
 
 export const LAUNCH_MVP_VERSION = "persistent-agent-mvp-v1" as const;
+export const AGENT_HOME_CONTRACT_VERSION = "2026-07-14.v1" as const;
 
 // Machine-readable safety/product invariants for the private persistent-Agent
 // launch. Capability-basin code may support broader modes, but the Conjure and
@@ -111,9 +112,13 @@ export const LAUNCH_API_ROUTES = [
   "GET /api/launch/store",
   "GET /api/launch/discover",
   "GET /api/launch/agents/:id",
+  "GET /api/launch/agents/:id/home",
+  "PATCH /api/launch/agents/:id/home/identity",
+  "PATCH /api/launch/agents/:id/home/routine",
+  "PUT /api/launch/agents/:id/home/settings",
+  "POST /api/launch/agents/:id/home/actions",
+  "POST /api/launch/agents/:id/home/pause",
   "GET /api/launch/agents/:id/routine",
-  "PATCH /api/launch/agents/:id/routine",
-  "POST /api/launch/agents/:id/routine/actions",
   "GET /api/launch/agents/:id/functions",
   "POST /api/launch/agents/:id/functions/:functionName/run",
   "POST /api/launch/agents/:id/install",
@@ -862,6 +867,229 @@ export interface LaunchAgentRoutineActionRequest {
   action: LaunchAgentRoutineAction;
   /** Exact requested capability ids; valid only for approve_capabilities. */
   capabilityIds?: string[];
+}
+
+export type LaunchAgentHomeLifecycleState =
+  | "needs_setup"
+  | "ready"
+  | "active"
+  | "paused"
+  | "disabled";
+
+export type LaunchAgentHomeExecutionState = "idle" | "queued" | "running";
+
+export type LaunchAgentHomeHealth =
+  | "unknown"
+  | "healthy"
+  | "degraded"
+  | "failing";
+
+export interface LaunchAgentHomeRequirement {
+  id: string;
+  /** Exact opaque id accepted by the corresponding action, when applicable. */
+  actionId: string | null;
+  kind: "routine" | "setting" | "capability" | "grant" | "release";
+  label: string;
+  description: string | null;
+  required: boolean;
+  configured: boolean;
+  blocking: boolean;
+  secret: boolean;
+  settingKey: string | null;
+  settingScope: "agent" | "per_user" | null;
+  input: string | null;
+  placeholder: string | null;
+  help: string | null;
+  group: string | null;
+  destination: string | null;
+  updatedAt: string | null;
+  actions: Array<"set" | "replace" | "remove" | "approve" | "promote">;
+}
+
+export type LaunchAgentHomeAuthorityKind =
+  | "function"
+  | "agent_call"
+  | "network"
+  | "ai"
+  | "storage"
+  | "memory"
+  | "reporting"
+  | "compute"
+  | "other";
+
+export interface LaunchAgentHomeAuthorityItem {
+  id: string;
+  /** Exact capability/grant id accepted by an approval action, if any. */
+  actionId: string | null;
+  kind: LaunchAgentHomeAuthorityKind;
+  direction: "inbound" | "outbound" | "internal";
+  label: string;
+  target: string | null;
+  access: "read" | "write" | "execute";
+  source: "manifest" | "routine" | "platform";
+  requested: boolean;
+  approved: boolean;
+  approvalBasis:
+    | "live_release"
+    | "owner_capability_approval"
+    | "platform_policy"
+    | "pending";
+  effective: boolean;
+  required: boolean;
+  purpose: string | null;
+  badges: Array<"Read" | "Write" | "AI">;
+}
+
+export interface LaunchAgentHomeBudget {
+  unit: "credits";
+  ceilings: {
+    perRun: number;
+    daily: number;
+    monthly: number;
+    callsPerRun: number;
+  };
+  usage: {
+    lastRun: number;
+    lastRunCalls: number;
+    daily: number;
+    monthly: number;
+    dayStartedAt: string;
+    monthStartedAt: string;
+  };
+}
+
+export interface LaunchAgentHomeRun {
+  id: string;
+  status: LaunchAgentRoutineRun["status"];
+  trigger: string;
+  traceId: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  credits: number;
+  calls: number;
+  summary: string | null;
+  errorCode: string | null;
+  createdAt: string;
+  detailUrl: string | null;
+}
+
+export interface LaunchAgentHomeReleaseVersion {
+  version: string;
+  sourceFingerprint: string | null;
+  uploadedAt: string | null;
+  testedAt: string | null;
+}
+
+export interface LaunchAgentHomeRelease {
+  live: (LaunchAgentHomeReleaseVersion & {
+    promotedAt: string | null;
+    executedVersion: string | null;
+    integrity: "verified" | "unverified" | "unknown";
+  }) | null;
+  candidate: (LaunchAgentHomeReleaseVersion & {
+    authorityChanges: Array<{
+      change: "added" | "removed" | "changed";
+      path: string;
+      label: string;
+    }>;
+    reviewStatus: "ready" | "owner_review_required" | "unavailable";
+    canPromote: boolean;
+  }) | null;
+  candidateCount: number;
+}
+
+/**
+ * Canonical owner-only read model for the private persistent Agent home.
+ * Secret values, routine config/metadata, run arguments/results, and raw source
+ * are intentionally excluded. `revision` is an opaque owner-configuration
+ * concurrency token; it deliberately excludes run progress, usage, and
+ * scheduling timestamps so a wake cannot make an unrelated edit stale. It must
+ * be supplied to every Agent-home mutation.
+ */
+export interface LaunchAgentHomeResponse {
+  contractVersion: typeof AGENT_HOME_CONTRACT_VERSION;
+  revision: string;
+  generatedAt: string;
+  agent: {
+    id: string;
+    slug: string;
+    name: string;
+    description: string | null;
+    visibility: "private";
+  };
+  responsibility: {
+    mission: string;
+    cadence: {
+      kind: "interval";
+      intervalSeconds: number;
+      label: string;
+    } | null;
+    reporting: {
+      kind: "galactic_inbox";
+      label: "Galactic inbox";
+      configured: boolean;
+    };
+  };
+  state: {
+    lifecycle: LaunchAgentHomeLifecycleState;
+    execution: LaunchAgentHomeExecutionState;
+    health: LaunchAgentHomeHealth;
+    nextRunAt: string | null;
+    lastRunAt: string | null;
+    lastSuccessAt: string | null;
+    lastErrorAt: string | null;
+    failureCount: number;
+    blockers: LaunchAgentRoutineBlocker[];
+  };
+  setup: {
+    ready: boolean;
+    requirements: LaunchAgentHomeRequirement[];
+  };
+  authority: {
+    items: LaunchAgentHomeAuthorityItem[];
+  };
+  budget: LaunchAgentHomeBudget | null;
+  release: LaunchAgentHomeRelease;
+  recentRuns: LaunchAgentHomeRun[];
+  actions: {
+    canEditIdentity: boolean;
+    canEditRoutine: boolean;
+    canManageSettings: boolean;
+    canApproveCapabilities: boolean;
+    canActivate: boolean;
+    canPause: boolean;
+    canRunNow: boolean;
+    canPromoteCandidate: boolean;
+  };
+}
+
+export interface LaunchAgentHomeMutationBase {
+  expectedRevision: string;
+}
+
+export interface LaunchAgentHomeIdentityUpdateRequest
+  extends LaunchAgentHomeMutationBase {
+  name?: string;
+  description?: string | null;
+}
+
+export interface LaunchAgentHomeRoutineUpdateRequest
+  extends LaunchAgentHomeMutationBase, LaunchAgentRoutineUpdateRequest {}
+
+export interface LaunchAgentHomeSettingsUpdateRequest
+  extends LaunchAgentHomeMutationBase {
+  values: Record<string, string | null>;
+}
+
+export type LaunchAgentHomeAction = LaunchAgentRoutineAction | "promote_candidate";
+
+export interface LaunchAgentHomeActionRequest extends LaunchAgentHomeMutationBase {
+  action: LaunchAgentHomeAction;
+  /** Client-generated UUID; retries with the same key return the first action. */
+  idempotencyKey: string;
+  capabilityIds?: string[];
+  version?: string;
 }
 
 export interface LaunchAgentSummary {

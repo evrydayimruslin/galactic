@@ -2,6 +2,11 @@
 
 Locked: 2026-07-14
 
+Current delivery milestones:
+
+- Launch P0 — Persistent-Agent Safety (2026-07-14)
+- [Launch P1 — Agent Home Contract (2026-07-14)](LAUNCH_P1_AGENT_HOME_CONTRACT_2026-07-14.md)
+
 This is the active launch contract for Galactic. It supersedes the
 marketplace-first scope recorded on 2026-06-10. The repository remains the
 capability basin: launch narrows what Galactic exposes and promises; it does not

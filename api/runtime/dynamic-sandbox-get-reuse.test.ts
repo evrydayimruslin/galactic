@@ -18,6 +18,7 @@ import {
   resolveExecutionContext,
 } from "../services/execution-context-registry.ts";
 import { verifySandboxActorToken } from "../services/sandbox-actor.ts";
+import { putLiveExecutedBundle } from "../services/executed-bundle.ts";
 import type { RuntimeConfig } from "./sandbox.ts";
 
 const BUNDLE_CODE = "export const noop = 1;";
@@ -55,6 +56,8 @@ function installHarness(): { captured: Captured; restore: () => void } {
   const prevCtx = globalThis.__ctx;
   const prevAgentSecret = Deno.env.get("AGENT_CALLER_SECRET");
   Deno.env.set("AGENT_CALLER_SECRET", "test-agent-caller-secret");
+  let liveCode = BUNDLE_CODE;
+  let liveMetadata: unknown = null;
 
   // Resolve the body's handle against the REAL registry (as a binding would) and
   // record which user's context it points at. Called inside each fetch, while
@@ -140,9 +143,23 @@ function installHarness(): { captured: Captured; restore: () => void } {
 
   globalThis.__env = {
     LOADER: loader,
-    CODE_CACHE: { get: () => Promise.resolve(BUNDLE_CODE) },
+    CODE_CACHE: {
+      get: () => Promise.resolve(liveCode),
+      getWithMetadata: () =>
+        Promise.resolve({ value: liveCode, metadata: liveMetadata }),
+      put: (
+        _key: string,
+        value: string,
+        options?: { metadata?: unknown },
+      ) => {
+        liveCode = value;
+        liveMetadata = options?.metadata ?? null;
+        return Promise.resolve();
+      },
+    },
     EXECUTED_LOADER_GET_REUSE: "1",
     AGENT_CALLER_SECRET: "test-agent-caller-secret",
+    TRUST_SIGNING_SECRET: "test-executed-bundle-secret",
     // deno-lint-ignore no-explicit-any
   } as any;
 
@@ -372,6 +389,11 @@ Deno.test("dynamic sandbox: outbound bearer carries host routine attribution, ne
       traceId: "trace-host",
     };
     config.permissions = [...config.permissions, "ai:embed"];
+    await putLiveExecutedBundle({
+      appId: config.appId,
+      version: "1.0.0",
+      esmCode: BUNDLE_CODE,
+    });
     await executeInDynamicSandbox(config, "tenantFn", [{
       routine_id: "routine-forged",
       routine_run_id: "run-forged",

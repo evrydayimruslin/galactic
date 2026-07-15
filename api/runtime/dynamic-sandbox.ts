@@ -371,14 +371,21 @@ export async function executeInDynamicSandbox(
     // observe (default) only warns. Legacy (no attestation) + infra/secret errors
     // never block.
     const bundleVerifyMode = executedBundleVerifyMode();
-    if (bundleVerifyMode !== "off") {
+    if (bundleVerifyMode !== "off" || config.routineContext) {
       const verdict = await verifyExecutedBundle({
         appId: config.appId,
         esmCode,
         attestation,
         expectedVersion: config.expectedVersion,
       });
-      if (handleExecutedBundleVerdict(config.appId, verdict, bundleVerifyMode)) {
+      if (
+        handleExecutedBundleVerdict(
+          config.appId,
+          verdict,
+          bundleVerifyMode,
+          Boolean(config.routineContext),
+        )
+      ) {
         return {
           success: false,
           result: null,

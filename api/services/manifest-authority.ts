@@ -296,3 +296,54 @@ export function findManifestAuthorityExpansions(
 
   return [...new Set(expansions)].sort();
 }
+
+export interface ManifestAuthorityChange {
+  change: "added" | "removed" | "changed";
+  path: string;
+  label: string;
+}
+
+function publicAuthorityPath(value: string): string {
+  return value
+    .replaceAll("\0", ".")
+    .replace(/[\u0000-\u001f\u007f]/gu, "")
+    .slice(0, 240);
+}
+
+function authorityChangeLabel(path: string): string {
+  return publicAuthorityPath(path)
+    .replaceAll("_", " ")
+    .replace(/\.+/gu, " › ")
+    .replace(":", " › ");
+}
+
+/**
+ * Symmetric, sanitized owner-facing authority delta. The enforcement helper
+ * above intentionally returns internal canonical keys; this projection never
+ * exposes their NUL separators and distinguishes expansion from removal.
+ */
+export function summarizeManifestAuthorityChanges(
+  currentManifest: unknown,
+  targetManifest: unknown,
+): ManifestAuthorityChange[] {
+  const added = new Set(
+    findManifestAuthorityExpansions(currentManifest, targetManifest).map(
+      publicAuthorityPath,
+    ),
+  );
+  const removed = new Set(
+    findManifestAuthorityExpansions(targetManifest, currentManifest).map(
+      publicAuthorityPath,
+    ),
+  );
+  const paths = [...new Set([...added, ...removed])].sort();
+  return paths.map((path) => ({
+    change: added.has(path) && removed.has(path)
+      ? "changed"
+      : added.has(path)
+      ? "added"
+      : "removed",
+    path,
+    label: authorityChangeLabel(path),
+  }));
+}

@@ -3,7 +3,10 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 
-import { findManifestAuthorityExpansions } from "./manifest-authority.ts";
+import {
+  findManifestAuthorityExpansions,
+  summarizeManifestAuthorityChanges,
+} from "./manifest-authority.ts";
 
 Deno.test("manifest authority: ordinary implementation and function changes are builder-safe", () => {
   const current = {
@@ -188,4 +191,26 @@ Deno.test("manifest authority: widget and command-card dependencies require owne
       path.startsWith("widgets.dependencies:calendar") && path.endsWith("list")
     ),
   );
+});
+
+Deno.test("manifest authority: owner-facing delta is symmetric and strips internal separators", () => {
+  const changes = summarizeManifestAuthorityChanges(
+    {
+      permissions: ["storage:read", "memory:read"],
+      external_functions: [{ app: "calendar", functions: ["list"] }],
+    },
+    {
+      permissions: ["storage:read", "storage:write"],
+      external_functions: [{ app: "mail", functions: ["send"] }],
+    },
+  );
+
+  assert(changes.some((item) =>
+    item.change === "added" && item.path.includes("storage:write")
+  ));
+  assert(changes.some((item) =>
+    item.change === "removed" && item.path.includes("memory:read")
+  ));
+  assert(changes.every((item) => !item.path.includes("\0")));
+  assert(changes.every((item) => !item.label.includes("\0")));
 });

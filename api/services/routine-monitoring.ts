@@ -75,7 +75,7 @@ export interface RoutineMonitorDetailResponse {
 }
 
 const RUN_SELECT =
-  "id,routine_id,user_id,status,trigger,trace_id,started_at,completed_at,duration_ms,total_light,summary,error,run_config,metadata,created_at";
+  "id,routine_id,user_id,status,trigger,trace_id,started_at,completed_at,duration_ms,total_light,summary,error,run_config,metadata,agent_home_action_request_id,created_at";
 const CAPABILITY_STATUS_SELECT = "routine_id,approved";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_LIMIT = 50;
@@ -565,6 +565,7 @@ export async function updateRoutineMonitorStatus(
 export async function queueRoutineMonitorRun(
   userId: string,
   routineId: string,
+  options: { agentHomeActionRequestId?: string } = {},
 ): Promise<{ queued: true; run: RoutineRunRow; routine: RoutineMonitorItem }> {
   const detail = await getRoutineMonitorDetail(userId, routineId);
   if (!detail) throw new Error(`Routine ${routineId} not found`);
@@ -581,12 +582,12 @@ export async function queueRoutineMonitorRun(
     traceId: crypto.randomUUID(),
     status: "queued",
     metadata: { source: "command_monitor.run_now" },
+    agentHomeActionRequestId: options.agentHomeActionRequestId,
   });
 
-  const updatedDetail = await getRoutineMonitorDetail(userId, routineId);
   return {
     queued: true,
     run,
-    routine: updatedDetail?.routine ?? detail.routine,
+    routine: detail.routine,
   };
 }

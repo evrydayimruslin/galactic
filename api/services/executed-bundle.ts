@@ -254,11 +254,25 @@ export async function verifyExecutedBundle(input: {
     return { status: "bad_signature", detail: "app_id mismatch" };
   }
 
-  const cacheKey = `${appId}:${attestation.sig}:${expectedVersion ?? ""}`;
+  // Hash the exact bytes on every verification. Caching only by the signed
+  // metadata would let a later raw KV byte swap reuse an earlier `ok` verdict
+  // as long as the attacker preserved the old attestation sidecar.
+  let actualHash: string;
+  try {
+    actualHash = await sha256Hex(esmCode);
+  } catch {
+    return { status: "error", detail: "hash failed" };
+  }
+  const cacheKey =
+    `${appId}:${attestation.sig}:${expectedVersion ?? ""}:${actualHash}`;
   const cached = VERDICT_CACHE.get(cacheKey);
   if (cached !== undefined) return { status: cached };
 
-  const result = await computeVerdict(esmCode, attestation, expectedVersion);
+  const result = await computeVerdict(
+    attestation,
+    expectedVersion,
+    actualHash,
+  );
   if (result.status !== "error") {
     if (VERDICT_CACHE.size >= VERDICT_CACHE_MAX) VERDICT_CACHE.clear();
     VERDICT_CACHE.set(cacheKey, result.status);
@@ -267,9 +281,9 @@ export async function verifyExecutedBundle(input: {
 }
 
 async function computeVerdict(
-  esmCode: string,
   att: BundleAttestation,
   expectedVersion: string | null | undefined,
+  actualHash: string,
 ): Promise<BundleVerifyResult> {
   const { sig, ...body } = att;
   let expectedSig: string;
@@ -286,12 +300,6 @@ async function computeVerdict(
   }
   if (!timingSafeEqual(sig, expectedSig)) return { status: "bad_signature" };
 
-  let actualHash: string;
-  try {
-    actualHash = await sha256Hex(esmCode);
-  } catch {
-    return { status: "error", detail: "hash failed" };
-  }
   if (actualHash !== att.bundle_hash) {
     return {
       status: "hash_mismatch",
@@ -326,18 +334,24 @@ export function handleExecutedBundleVerdict(
   appId: string,
   verdict: BundleVerifyResult,
   mode: ExecutedBundleVerifyMode,
+  requireVerified = false,
 ): boolean {
   if (verdict.status === "ok") return false;
   const requireAttestation = executedBundleRequireAttestation();
-  const block = mode === "enforce" &&
-    (verdict.status === "error" ||
-      isExecutedBundleViolation(verdict.status, requireAttestation));
-  if (verdict.status !== "no_attestation" || mode === "enforce") {
+  // Persistent routine execution has a stronger contract than the global
+  // observe/enforce rollout: the exact atomically loaded bytes must verify
+  // `ok`, even if general interactive execution is still in observe/off mode.
+  const block = requireVerified ||
+    (mode === "enforce" &&
+      (verdict.status === "error" ||
+        isExecutedBundleViolation(verdict.status, requireAttestation)));
+  if (requireVerified || verdict.status !== "no_attestation" || mode === "enforce") {
     console.warn("[BUNDLE-VERIFY] executed bundle not verified-ok", {
       appId,
       status: verdict.status,
       detail: verdict.detail,
       mode,
+      requireVerified,
       blocked: block,
     });
   }

@@ -5,7 +5,11 @@ import { assertMatch } from "https://deno.land/std@0.210.0/assert/assert_match.t
 
 import { handleHttpEndpoint } from "./http.ts";
 import { handleMcp } from "./mcp.ts";
-import { handlePlatformMcp } from "./platform-mcp.ts";
+import {
+  executeSetVersion,
+  handlePlatformMcp,
+  inspectLiveAppStorageAccounting,
+} from "./platform-mcp.ts";
 import { handleRun } from "./run.ts";
 import { getCodeCache } from "../services/codecache.ts";
 import { encryptEnvVar } from "../services/envvars.ts";
@@ -191,6 +195,7 @@ class Wave3Harness {
   readonly callerUsage = new Map<string, number>();
   readonly appData = new Map<string, Map<string, unknown>>();
   readonly memory = new Map<string, Map<string, unknown>>();
+  failNextStorageAccounting = false;
 
   private originalFetch: typeof fetch | null = null;
   private originalEnv: Record<string, unknown> | undefined;
@@ -792,6 +797,12 @@ class Wave3Harness {
       }
       case "/rest/v1/rpc/record_upload_storage":
       case "/rest/v1/rpc/set_app_storage_bytes": {
+        if (this.failNextStorageAccounting) {
+          this.failNextStorageAccounting = false;
+          return Response.json({ message: "injected storage failure" }, {
+            status: 503,
+          });
+        }
         const user = this.users.find((row) => row.id === body.p_user_id);
         const app = this.apps.find((row) => row.id === body.p_app_id);
         const previousBytes = Number(app?.storage_bytes || 0);
@@ -1896,6 +1907,34 @@ Deno.test({
       );
 
       await t.step(
+        "promotion fencing aborts before the first guarded external write",
+        async () => {
+          const beforeLive = harness.codeCache.read(`esm:${appId}:latest`);
+          const beforeVersion = row.current_version;
+          let stoppedAt: string | null = null;
+          let threw = false;
+          try {
+            await executeSetVersion(
+              OWNER_ID,
+              { app_id: appId, version: "1.0.0" },
+              {
+                beforeIrreversibleStep: async (step) => {
+                  stoppedAt = step;
+                  throw new Error("lease lost");
+                },
+              },
+            );
+          } catch {
+            threw = true;
+          }
+          assertEquals(threw, true);
+          assertEquals(stoppedAt, "live_bundle");
+          assertEquals(harness.codeCache.read(`esm:${appId}:latest`), beforeLive);
+          assertEquals(row.current_version, beforeVersion);
+        },
+      );
+
+      await t.step(
         "fast path: set version=1.0.0 copies the retained per-version bundle to :latest",
         async () => {
           // Precondition: the runtime is serving v2.
@@ -1907,6 +1946,68 @@ Deno.test({
 
           // The bundle the runtime loads is now v1 — the actual rollback.
           assertEquals(harness.codeCache.read(`esm:${appId}:latest`), V1_BUNDLE);
+        },
+      );
+
+      await t.step(
+        "every irreversible promotion phase is fenced in order",
+        async () => {
+          const steps: string[] = [];
+          await executeSetVersion(
+            OWNER_ID,
+            { app_id: appId, version: "2.0.0" },
+            {
+              beforeIrreversibleStep: async (step) => {
+                steps.push(step);
+              },
+            },
+          );
+          assertEquals(steps, [
+            "live_bundle",
+            "app_record",
+            "storage_accounting",
+          ]);
+          assertEquals(row.current_version, "2.0.0");
+          assertEquals(harness.codeCache.read(`esm:${appId}:latest`), V2_BUNDLE);
+        },
+      );
+
+      await t.step(
+        "a post-switch accounting failure remains detectable and repairable",
+        async () => {
+          const recordedBefore = Number(row.storage_bytes || 0);
+          harness.failNextStorageAccounting = true;
+          let threw = false;
+          try {
+            await executeSetVersion(OWNER_ID, {
+              app_id: appId,
+              version: "1.0.0",
+            });
+          } catch {
+            threw = true;
+          }
+          assertEquals(threw, true);
+          assertEquals(row.current_version, "1.0.0");
+          assertEquals(harness.codeCache.read(`esm:${appId}:latest`), V1_BUNDLE);
+          assertEquals(Number(row.storage_bytes || 0), recordedBefore);
+
+          const partial = await inspectLiveAppStorageAccounting(
+            OWNER_ID,
+            appId,
+            "1.0.0",
+          );
+          assertEquals(partial.current, false);
+
+          await executeSetVersion(OWNER_ID, {
+            app_id: appId,
+            version: "1.0.0",
+          });
+          const repaired = await inspectLiveAppStorageAccounting(
+            OWNER_ID,
+            appId,
+            "1.0.0",
+          );
+          assertEquals(repaired.current, true);
         },
       );
 

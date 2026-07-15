@@ -13,6 +13,11 @@ const metadataMigration = await Deno.readTextFile(new URL(
   import.meta.url,
 ));
 
+const agentHomeMigration = await Deno.readTextFile(new URL(
+  "../../supabase/migrations/20260714162000_agent_home_revision.sql",
+  import.meta.url,
+));
+
 Deno.test("routine budget migration: expired in-flight work is charged conservatively", () => {
   assertStringIncludes(
     budgetMigration,
@@ -52,4 +57,28 @@ Deno.test("routine metadata migration: unique index excludes historical launch r
     false,
   );
   assertStringIncludes(metadataMigration, "'launch_primary'");
+  assertStringIncludes(
+    metadataMigration,
+    "FROM PUBLIC, anon, authenticated",
+  );
+});
+
+Deno.test("Agent Home migration revokes PUBLIC from authoritative budget RPCs", () => {
+  const compactMigration = agentHomeMigration.replace(/\s+/g, " ")
+    .replace(/\(\s+/g, "(")
+    .replace(/\s+\)/g, ")");
+  for (
+    const signature of [
+      "reserve_routine_run_budget(uuid, uuid, uuid, text, text, double precision, timestamp with time zone)",
+      "settle_routine_run_budget_reservation(uuid, uuid, double precision, boolean)",
+      "release_routine_run_budget_reservation(uuid, uuid)",
+      "record_routine_call_contribution(uuid, uuid, uuid, uuid, text, text, text, uuid, text, integer, double precision, jsonb, jsonb, jsonb, jsonb)",
+    ]
+  ) {
+    assertStringIncludes(
+      compactMigration,
+      `REVOKE ALL ON FUNCTION public.${signature} FROM PUBLIC, anon, authenticated;`,
+      signature,
+    );
+  }
 });

@@ -1299,7 +1299,15 @@ async function executeClaimedRun(
     message: string;
     capability_ids?: string[];
   }> = [...activation.blockers];
-  if (routine.metadata?.source === "ul.routine") {
+  const launchPrimary = routine.metadata?.launch_primary === true;
+  const legacyLaunchRoutine = routine.metadata?.source === "ul.routine";
+  if (legacyLaunchRoutine && !launchPrimary) {
+    activationBlockers.push({
+      code: "noncanonical_launch_routine",
+      message:
+        "This legacy launch routine is not the Agent's canonical primary routine and must be reconciled before execution.",
+    });
+  } else if (launchPrimary) {
     try {
       await validateRoutineLaunchActivation(routine.user_id, routine);
     } catch (err) {

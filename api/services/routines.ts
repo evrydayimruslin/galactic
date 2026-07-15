@@ -217,6 +217,7 @@ export interface RoutineRunRow {
   error: Record<string, unknown> | null;
   run_config: Record<string, unknown>;
   metadata: Record<string, unknown>;
+  agent_home_action_request_id?: string | null;
   created_at: string;
 }
 
@@ -250,7 +251,7 @@ const CAPABILITY_SELECT =
 const DASHBOARD_BINDING_SELECT =
   "id,routine_id,user_id,dashboard_key,app_id,app_ref,widget_id,card_id,config,created_at";
 const RUN_SELECT =
-  "id,routine_id,user_id,status,trigger,trace_id,started_at,completed_at,duration_ms,total_light,summary,error,run_config,metadata,created_at";
+  "id,routine_id,user_id,status,trigger,trace_id,started_at,completed_at,duration_ms,total_light,summary,error,run_config,metadata,agent_home_action_request_id,created_at";
 const STEP_SELECT =
   "id,run_id,routine_id,user_id,step_index,app_id,app_ref,function_name,receipt_id,tool_invocation_id,status,started_at,completed_at,duration_ms,cost_light,args_preview,result_preview,error,metadata,created_at";
 
@@ -414,7 +415,7 @@ function normalizeBudgetPolicy(value: unknown): RoutineBudgetDefaults {
   return budget;
 }
 
-export interface RoutineActivationValidation {
+interface RoutineActivationValidation {
   budgetPolicy: Required<RoutineBudgetDefaults>;
   blockers: Array<{
     code: "pending_required_capabilities" | "unsafe_cadence" | "invalid_budget";
@@ -1042,6 +1043,7 @@ export async function createRoutineRun(params: {
   status?: RoutineRunStatus;
   runConfig?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  agentHomeActionRequestId?: string | null;
 }): Promise<RoutineRunRow> {
   const status = params.status ?? "queued";
   // Every run needs an immutable trace before it can be claimed. Preserve an
@@ -1058,6 +1060,7 @@ export async function createRoutineRun(params: {
     started_at: status === "running" ? new Date().toISOString() : null,
     run_config: params.runConfig ?? {},
     metadata: params.metadata ?? {},
+    agent_home_action_request_id: params.agentHomeActionRequestId ?? null,
   }, RUN_SELECT);
   if (!run) throw new Error("Routine run insert returned no row");
   return run;

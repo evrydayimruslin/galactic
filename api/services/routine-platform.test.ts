@@ -4,6 +4,7 @@ import {
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 
 import { executeRoutinePlatformAction } from "./routine-platform.ts";
+import { putLiveExecutedBundle } from "./executed-bundle.ts";
 
 const APP_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -24,6 +25,7 @@ function routineComposerApp() {
     current_version: "1.2.3",
     updated_at: "2026-05-17T12:00:00Z",
     manifest: {
+      permissions: ["notify:owner"],
       functions: {
         poll_email_followups: {
           description: "Poll inbox and prepare follow-up drafts.",
@@ -455,11 +457,28 @@ Deno.test("routine platform: resume applies the centralized launch contract", as
   const originalFetch = globalThis.fetch;
   const originalEnv = globalThis.__env;
   let activated = false;
+  let liveCode: string | null = null;
+  let liveMetadata: unknown = null;
   globalThis.__env = {
     ...(originalEnv || {}),
     SUPABASE_URL: "https://supabase.example",
     SUPABASE_SERVICE_ROLE_KEY: "service-key",
+    TRUST_SIGNING_SECRET: "routine-platform-test-secret-with-enough-entropy",
+    CODE_CACHE: {
+      put: (_key: string, value: string, options?: { metadata?: unknown }) => {
+        liveCode = value;
+        liveMetadata = options?.metadata || null;
+        return Promise.resolve();
+      },
+      getWithMetadata: () =>
+        Promise.resolve({ value: liveCode, metadata: liveMetadata }),
+    },
   };
+  await putLiveExecutedBundle({
+    appId: APP_ID,
+    version: "1.2.3",
+    esmCode: "export async function poll_email_followups() {}",
+  });
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString();
     const method = init?.method || "GET";

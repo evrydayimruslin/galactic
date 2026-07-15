@@ -1055,6 +1055,130 @@ Deno.test("processQueuedRoutineRun: duplicate delivery (claim matches nothing) i
   }
 });
 
+Deno.test("processQueuedRoutineRun: a database concurrency denial never invokes the Agent", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+  let handlerInvoked = false;
+  let claimAttempted = false;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    if (table === "routine_runs" && method === "GET") {
+      return jsonResponse([queuedRunRow()]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      claimAttempted = true;
+      return jsonResponse({
+        code: "P0001",
+        details: JSON.stringify({
+          code: "ROUTINE_RUN_CONCURRENCY_LIMIT",
+          running: 1,
+          maxConcurrency: 1,
+        }),
+      }, 409);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+  console.error = () => {};
+
+  try {
+    const outcome = await processQueuedRoutineRun(
+      { routineRunId: "run-1" },
+      {
+        now: NOW,
+        invokeMcp: async () => {
+          handlerInvoked = true;
+          return jsonResponse({ result: { content: [] } });
+        },
+      },
+    );
+    assertEquals(outcome, "ack");
+    assertEquals(claimAttempted, true);
+    assertEquals(handlerInvoked, false);
+  } finally {
+    console.error = originalConsoleError;
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("processQueuedRoutineRun: an unmarked legacy launch routine is quarantined", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  let handlerInvoked = false;
+  const runPatches: Array<Record<string, unknown>> = [];
+  const routinePatches: Array<Record<string, unknown>> = [];
+  const legacy = routineRow({
+    metadata: { source: "ul.routine" },
+    budget_policy: {
+      max_light_per_run: 10,
+      max_light_per_day: 100,
+      max_light_per_month: 1000,
+      max_calls_per_run: 5,
+    },
+  });
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body
+      ? JSON.parse(String(init.body)) as Record<string, unknown>
+      : {};
+    if (table === "routine_runs" && method === "GET") {
+      return jsonResponse([queuedRunRow()]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      runPatches.push(body);
+      return jsonResponse([runRow(body)]);
+    }
+    if (table === "user_routines" && method === "GET") {
+      return jsonResponse([legacy]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      routinePatches.push(body);
+      return jsonResponse([{ ...legacy, ...body }]);
+    }
+    if (table === "routine_capabilities" ||
+      table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "user_notifications" && method === "POST") {
+      return jsonResponse([{ id: "notification-1" }]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    await processQueuedRoutineRun(
+      { routineRunId: "run-1" },
+      {
+        now: NOW,
+        clock: () => NOW,
+        invokeMcp: async () => {
+          handlerInvoked = true;
+          return jsonResponse({ result: { content: [] } });
+        },
+      },
+    );
+    assertEquals(handlerInvoked, false);
+    const skipped = runPatches.find((body) => body.status === "skipped");
+    assert(skipped);
+    const blockers = ((skipped?.error as Record<string, unknown>)?.blockers ||
+      []) as Array<Record<string, unknown>>;
+    assert(
+      blockers.some((blocker) =>
+        blocker.code === "noncanonical_launch_routine"
+      ),
+    );
+    assert(routinePatches.some((body) => body.status === "paused"));
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
 Deno.test("routine executor: reaps a run orphaned in 'running' past its lease", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;

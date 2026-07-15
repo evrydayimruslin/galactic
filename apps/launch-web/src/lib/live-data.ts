@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type {
-  AgentCallerTrustSummary,
-  AgentWiringView,
-} from "../../../../shared/contracts/agent-grants.ts";
+import type { AgentWiringView } from "../../../../shared/contracts/agent-grants.ts";
 import type {
   LaunchAgentFunctionsResponse,
-  LaunchAgentRoutineResponse,
+  LaunchAgentHomeResponse,
   LaunchApiKeyListResponse,
   LaunchByokSummaryResponse,
   LaunchCallerFunctionPermissionsResponse,
@@ -41,10 +38,10 @@ export interface LaunchRouteLiveData {
   library?: LaunchLibraryResponse;
   agent?: LaunchAgentResponse;
   agentFunctions?: LaunchAgentFunctionsResponse;
-  agentRoutine?: LaunchAgentRoutineResponse;
+  agentHome?: LaunchAgentHomeResponse;
+  agentHomeError?: string;
   agentCallerPermissions?: LaunchCallerFunctionPermissionsResponse;
   agentWiring?: AgentWiringView;
-  agentCallerTrust?: AgentCallerTrustSummary;
   wallet?: LaunchWalletResponse;
   walletDetail?: LaunchWalletDetailResponse;
   adminAgent?: LaunchAgentAdminResponse;
@@ -104,6 +101,11 @@ export function useLaunchRouteLiveData(
     // below. A first visit still shows "loading"; a same-route reload() keeps the
     // current data on screen.
     const cached = routeCache.get(identity);
+    // Agent Home is an aggregate view and can be slower or temporarily
+    // unavailable while its independent emergency-pause lane is still healthy.
+    // Accumulate its result separately so the core Agent page can render—and
+    // expose Pause—without waiting for Home aggregation to settle.
+    let accumulated = cached ?? {};
     setState((current) =>
       routeChanged
         ? (cached ? { data: cached, status: "ready" } : { data: {}, status: "loading" })
@@ -113,11 +115,19 @@ export function useLaunchRouteLiveData(
         }
     );
 
+    loadAgentHomeRouteData(route)?.then((homeData) => {
+      if (cancelled) return;
+      accumulated = { ...accumulated, ...homeData };
+      routeCache.set(identity, accumulated);
+      setState((current) => ({ ...current, data: accumulated }));
+    });
+
     loadRouteData(location, route)
       .then((data) => {
         if (cancelled) return;
-        routeCache.set(identity, data);
-        setState({ data, status: "ready" });
+        accumulated = { ...accumulated, ...data };
+        routeCache.set(identity, accumulated);
+        setState({ data: accumulated, status: "ready" });
       })
       .catch((err) => {
         if (cancelled) return;
@@ -183,15 +193,13 @@ async function loadRouteData(
     case "agent": {
       const id = route.params.slug || "";
       if (!id) return {};
-      // Wiring + caller-trust require an account session; they degrade to
-      // undefined when signed out (the page renders an empty wiring state).
+      // Per-function wiring requires an account session and degrades to
+      // undefined when signed out.
       const [
         agent,
         agentFunctions,
-        agentRoutine,
         agentCallerPermissions,
         agentWiring,
-        agentCallerTrust,
         install,
         byok,
         inferenceOptions,
@@ -199,11 +207,8 @@ async function loadRouteData(
         .all([
           launchApi.agent(id),
           optional(() => launchApi.agentFunctions(id)),
-          // Owner-only. Public/installed compatibility pages simply omit it.
-          optional(() => launchApi.agentRoutine(id)),
           optional(() => launchApi.agentCallerPermissions(id)),
           optional(() => launchApi.agentWiring(id)),
-          optional(() => launchApi.agentCallerTrust(id)),
           // Per-agent install context (dedicated MCP URL + connect prompt).
           optional(() => launchApi.install({ agent: id })),
           // Loaded so the per-function inference control can list the viewer's
@@ -214,9 +219,7 @@ async function loadRouteData(
       return {
         agent,
         agentCallerPermissions,
-        agentCallerTrust,
         agentFunctions,
-        agentRoutine,
         agentWiring,
         byok,
         inferenceOptions,
@@ -258,11 +261,41 @@ async function loadRouteData(
   }
 }
 
+function loadAgentHomeRouteData(
+  route: ResolvedLaunchRoute,
+): Promise<LoadResult> | undefined {
+  if (route.definition.key !== "agent") return undefined;
+  const id = route.params.slug || "";
+  if (!id) return undefined;
+  // The canonical Agent home is owner-only. Preserve an explicit load failure
+  // so an owner never sees a misleading "no routine" state; public
+  // compatibility pages ignore the result. Crucially, this promise is not
+  // awaited by the core route load, so a hung aggregate cannot hide Pause.
+  return attempted(() => launchApi.agentHome(id)).then((result) => ({
+    agentHome: result.value,
+    agentHomeError: result.error,
+  }));
+}
+
 async function optional<T>(load: () => Promise<T>): Promise<T | undefined> {
   try {
     return await load();
   } catch {
     return undefined;
+  }
+}
+
+async function attempted<T>(
+  load: () => Promise<T>,
+): Promise<{ value?: T; error?: string }> {
+  try {
+    return { value: await load() };
+  } catch (err) {
+    return {
+      error: err instanceof Error && err.message
+        ? err.message
+        : "Agent home could not be loaded.",
+    };
   }
 }
 

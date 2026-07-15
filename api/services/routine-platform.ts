@@ -6,7 +6,18 @@ import {
   type RoutineCapabilityDeclaration,
   type RoutineScheduleDeclaration,
 } from "../../shared/contracts/routine.ts";
-import { parseAppManifest } from "./app-settings.ts";
+import {
+  parseAppManifest,
+} from "./app-settings.ts";
+import {
+  resolveAppRuntimeEnvVars,
+  resolveStrictManifestPermissions,
+} from "./app-runtime-resources.ts";
+import { resolveCallerGrant } from "./agent-grants.ts";
+import {
+  loadLiveExecutedBundle,
+  verifyExecutedBundle,
+} from "./executed-bundle.ts";
 import {
   buildRoutineIndexForApp,
   type RoutineIndexEntry,
@@ -48,7 +59,7 @@ export const ROUTINE_PLATFORM_NOT_FOUND = -32002;
 export const ROUTINE_PLATFORM_FORBIDDEN = -32003;
 
 const APP_SELECT =
-  "id,owner_id,slug,name,description,visibility,manifest,current_version,updated_at";
+  "id,owner_id,slug,name,description,visibility,manifest,current_version,updated_at,env_schema,env_vars";
 
 export class RoutinePlatformError extends Error {
   code: number;
@@ -72,6 +83,8 @@ interface RoutineTemplateApp {
   manifest?: unknown;
   current_version?: string | null;
   updated_at?: string | null;
+  env_schema?: unknown;
+  env_vars?: Record<string, string> | null;
 }
 
 export interface RoutineTemplateSummary extends RoutineIndexEntry {
@@ -419,6 +432,104 @@ async function validateRequiredCapabilityTargets(
   }));
 }
 
+async function assertRequiredRoutineSettings(
+  userId: string,
+  app: RoutineTemplateApp,
+): Promise<void> {
+  const resolved = await resolveAppRuntimeEnvVars(
+    app as Parameters<typeof resolveAppRuntimeEnvVars>[0],
+    userId,
+  );
+  const missing = resolved.missingRequiredSecrets;
+  if (missing.length > 0) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      `Required Agent settings are missing: ${missing.join(", ")}.`,
+      { missing_settings: missing },
+    );
+  }
+}
+
+async function assertRoutineReportingAndIntegrity(
+  app: RoutineTemplateApp,
+): Promise<void> {
+  const permissions = resolveStrictManifestPermissions({
+    manifest: typeof app.manifest === "string"
+      ? app.manifest
+      : app.manifest
+      ? JSON.stringify(app.manifest)
+      : null,
+  }).permissions;
+  if (!permissions.includes("notify:owner")) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      'Persistent launch Agents must declare the "notify:owner" permission for Galactic inbox reporting.',
+    );
+  }
+  if (!app.current_version) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      "A live Agent version is required before routine activation.",
+    );
+  }
+  const { code, attestation } = await loadLiveExecutedBundle(app.id);
+  if (!code) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      "The live Agent bundle is unavailable and cannot be activated.",
+    );
+  }
+  const verdict = await verifyExecutedBundle({
+    appId: app.id,
+    esmCode: code,
+    attestation,
+    expectedVersion: app.current_version,
+  });
+  if (verdict.status !== "ok") {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_INVALID_PARAMS,
+      `The live Agent bundle is not verified (${verdict.status}); repair or promote a tested version before activation.`,
+      { executed_integrity: verdict.status },
+    );
+  }
+}
+
+async function assertRequiredCapabilityGrants(
+  userId: string,
+  routine: StoredRoutine,
+): Promise<void> {
+  for (const capability of routine.capabilities) {
+    if (capability.required === false) continue;
+    const targetRef = optionalString(capability.app_id) ||
+      optionalString(capability.app_ref);
+    if (!targetRef) continue;
+    const target = await loadAccessibleApp(userId, targetRef);
+    const targetFunctions = new Set(
+      Object.keys(parseAppManifest(target.manifest)?.functions || {}),
+    );
+    if (!targetFunctions.has(capability.function_name)) {
+      throw new RoutinePlatformError(
+        ROUTINE_PLATFORM_INVALID_PARAMS,
+        `Required capability ${target.slug}.${capability.function_name} no longer exists.`,
+      );
+    }
+    const grant = await resolveCallerGrant({
+      userId,
+      callerAppId: routine.composer_app_id!,
+      callerFunction: null,
+      targetAppId: target.id,
+      targetFunction: capability.function_name,
+    });
+    if (!grant.allowed) {
+      throw new RoutinePlatformError(
+        ROUTINE_PLATFORM_INVALID_PARAMS,
+        `Required capability ${target.slug}.${capability.function_name} needs an active bounded grant.`,
+        { grant_reason: grant.reason || "no_grant" },
+      );
+    }
+  }
+}
+
 /**
  * Authoritative activation contract for the single-player launch surface.
  * Every user-facing resume path and the executor defense-in-depth check call
@@ -452,6 +563,9 @@ export async function validateRoutineLaunchActivation(
   await validateRequiredCapabilityTargets(userId, routine.capabilities, {
     activation: true,
   });
+  await assertRequiredRoutineSettings(userId, app);
+  await assertRoutineReportingAndIntegrity(app);
+  await assertRequiredCapabilityGrants(userId, routine);
 }
 
 async function listRoutineTemplates(

@@ -48,6 +48,6 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.merge_routine_user_metadata(uuid, uuid, jsonb)
-  FROM anon, authenticated;
+  FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.merge_routine_user_metadata(uuid, uuid, jsonb)
   TO service_role;
