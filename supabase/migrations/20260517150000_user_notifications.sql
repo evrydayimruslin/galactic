@@ -30,17 +30,45 @@ CREATE TABLE IF NOT EXISTS public.user_notifications (
 
 ALTER TABLE public.user_notifications OWNER TO postgres;
 
-ALTER TABLE ONLY public.user_notifications
-  ADD CONSTRAINT user_notifications_pkey PRIMARY KEY (id);
+-- Production may already contain this table from the pre-migration rollout.
+-- Reconcile constraints by semantic role/name so the canonical migration can
+-- safely record history without attempting a second primary key.
+DO $migration$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public.user_notifications'::regclass
+      AND contype = 'p'
+  ) THEN
+    ALTER TABLE ONLY public.user_notifications
+      ADD CONSTRAINT user_notifications_pkey PRIMARY KEY (id);
+  END IF;
 
-ALTER TABLE ONLY public.user_notifications
-  ADD CONSTRAINT user_notifications_user_id_fkey
-  FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public.user_notifications'::regclass
+      AND conname = 'user_notifications_user_id_fkey'
+  ) THEN
+    ALTER TABLE ONLY public.user_notifications
+      ADD CONSTRAINT user_notifications_user_id_fkey
+      FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+  END IF;
 
--- The idempotency guard for createNotification's on-conflict-do-nothing.
-ALTER TABLE ONLY public.user_notifications
-  ADD CONSTRAINT user_notifications_user_dedupe_key
-  UNIQUE (user_id, dedupe_key);
+  -- The idempotency guard for createNotification's on-conflict-do-nothing.
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public.user_notifications'::regclass
+      AND conname = 'user_notifications_user_dedupe_key'
+  ) THEN
+    ALTER TABLE ONLY public.user_notifications
+      ADD CONSTRAINT user_notifications_user_dedupe_key
+      UNIQUE (user_id, dedupe_key);
+  END IF;
+END;
+$migration$;
 
 -- Inbox read: newest-first, with a cheap unread filter.
 CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created
