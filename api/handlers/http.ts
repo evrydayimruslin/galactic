@@ -34,12 +34,19 @@ import {
   type RouteCorsPolicyInput,
 } from "../services/cors.ts";
 import {
+  calculateExpectedRuntimeHoldAmount,
   createRuntimeOperationMeteringContext,
   preflightRuntimeCloudHold,
   settleAndLogAppExecution,
   settleAndLogGpuExecution,
   settleRuntimeCloudPreflight,
 } from "../services/execution-settlement.ts";
+import {
+  accountCapacityErrorDetails,
+  releaseAccountCapacity,
+  reserveAccountCapacity,
+  settleAccountCapacity,
+} from "../services/account-capacity.ts";
 import { createExecutionReceiptId } from "../services/call-logger.ts";
 import {
   buildMissingAppSecretsErrorDetails,
@@ -152,6 +159,8 @@ export async function handleHttpEndpoint(
   let auditRateLimited = false;
   let auditReceiptId: string | null = null;
   let activeRouteCorsPolicy: RouteCorsPolicyInput = {};
+  let capacityReservation: { id: string; userId: string } | null = null;
+  let capacityOperationLight = 0;
 
   function finalize(response: Response): Response {
     applyRouteCorsHeaders(response.headers, request, activeRouteCorsPolicy);
@@ -626,9 +635,14 @@ export async function handleHttpEndpoint(
         functionName,
       })
       : null;
+    const subscriptionCapacityMode =
+      getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
+      app.visibility === "private" &&
+      app.owner_id === httpRuntime.payerUserId;
     const runtimeAI = usesModel
       ? await createRuntimeAIContext(billingRuntimeUser, {
         freeMode: caller.freeMode,
+        byokOnly: subscriptionCapacityMode,
         inferenceSelection,
         attribution: { appId: app.id, functionName },
         routineContext,
@@ -662,6 +676,7 @@ export async function handleHttpEndpoint(
       routineContext,
       freeMode: caller.freeMode,
       byokPresent: caller.byokPresent,
+      subscriptionCapacity: subscriptionCapacityMode,
     });
     if (cloudPreflight.insufficientBalance) {
       return finalize(
@@ -684,6 +699,52 @@ export async function handleHttpEndpoint(
         ),
       );
     }
+    if (subscriptionCapacityMode) {
+      const admission = await reserveAccountCapacity({
+        userId: httpRuntime.payerUserId,
+        idempotencyKey: `http:${receiptId}`,
+        reserveLight: calculateExpectedRuntimeHoldAmount(
+          timeoutMs,
+          cloudPreflight.billingConfig,
+        ),
+        expiresAt: new Date(Date.now() + timeoutMs + 120_000).toISOString(),
+        metadata: {
+          surface: "http",
+          app_id: app.id,
+          function_name: functionName,
+          receipt_id: receiptId,
+        },
+      });
+      if (!admission.allowed || !admission.reservationId) {
+        return finalize(
+          new Response(
+            JSON.stringify({
+              error: `Account capacity is ${admission.state}. Work can resume at ${admission.nextEligibleAt}.`,
+              type: "CAPACITY_WAITING",
+              receipt_id: receiptId,
+              details: accountCapacityErrorDetails(admission),
+            }),
+            {
+              status: 429,
+              headers: {
+                "Content-Type": "application/json",
+                "Retry-After": admission.nextEligibleAt
+                  ? String(Math.max(1, Math.ceil(
+                    (Date.parse(admission.nextEligibleAt) - Date.now()) / 1000,
+                  )))
+                  : "300",
+                "X-Light-Receipt-Id": receiptId,
+                ...buildCorsHeaders(request),
+              },
+            },
+          ),
+        );
+      }
+      capacityReservation = {
+        id: admission.reservationId,
+        userId: httpRuntime.payerUserId,
+      };
+    }
     const cloudOperationMetering = createRuntimeOperationMeteringContext({
       preflight: cloudPreflight,
       app,
@@ -693,6 +754,15 @@ export async function handleHttpEndpoint(
       method: "http",
       metadata: { surface: "http" },
       routineContext,
+      ...(subscriptionCapacityMode
+        ? {
+          capacityMeter: {
+            addLight: (amountLight: number) => {
+              capacityOperationLight += Math.max(0, amountLight);
+            },
+          },
+        }
+        : {}),
     });
     const workerDataUrl = getEnv("WORKER_DATA_URL");
     const workerSecret = getEnv("WORKER_SECRET");
@@ -784,6 +854,18 @@ export async function handleHttpEndpoint(
       undefined,
       result.reuseKeyHash,
     );
+    let subscriptionCapacityLight: number | undefined;
+    if (capacityReservation) {
+      subscriptionCapacityLight = calculateExpectedRuntimeHoldAmount(
+        result.durationMs,
+        cloudPreflight.billingConfig,
+      ) + capacityOperationLight;
+      await settleAccountCapacity({
+        reservationId: capacityReservation.id,
+        userId: capacityReservation.userId,
+        actualLight: subscriptionCapacityLight,
+      });
+    }
 
     const { settlement } = await settleAndLogAppExecution({
       receiptId,
@@ -804,6 +886,9 @@ export async function handleHttpEndpoint(
       callerAuthState: caller.authState,
       runtimePricingPreflight: cloudPreflight.pricing,
       runtimeCloudSettlement: cloudSettlement,
+      ...(subscriptionCapacityLight !== undefined
+        ? { subscriptionCapacityLight }
+        : {}),
       routineContext,
     });
 
@@ -897,6 +982,12 @@ export async function handleHttpEndpoint(
       ),
     );
   } catch (err) {
+    if (capacityReservation) {
+      await releaseAccountCapacity({
+        reservationId: capacityReservation.id,
+        userId: capacityReservation.userId,
+      }).catch(() => false);
+    }
     console.error("[HTTP] Error:", err);
     return finalize(
       json({

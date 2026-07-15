@@ -2,7 +2,7 @@ import type { HealthWindows } from "../types/index.ts";
 import type { MCPToolAnnotations } from "./mcp.ts";
 
 export const LAUNCH_MVP_VERSION = "persistent-agent-mvp-v1" as const;
-export const AGENT_HOME_CONTRACT_VERSION = "2026-07-14.v1" as const;
+export const AGENT_HOME_CONTRACT_VERSION = "2026-07-15.p2.1" as const;
 
 // Machine-readable safety/product invariants for the private persistent-Agent
 // launch. Capability-basin code may support broader modes, but the Conjure and
@@ -33,7 +33,8 @@ export const LAUNCH_INCLUDED_CAPABILITIES = [
   "hard_budget_limits",
   "encrypted_runtime_settings",
   "byok",
-  "credits_balance",
+  "subscription_capacity",
+  "coalesced_capacity_waiting",
   "scoped_builder_connection",
   "cli_api_mcp",
 ] as const;
@@ -102,8 +103,11 @@ export const LAUNCH_API_ROUTES = [
   "PUT /api/launch/byok/:provider",
   "DELETE /api/launch/byok/:provider",
   "POST /api/launch/byok/primary",
-  "PUT /api/launch/platform-model",
   "GET /api/launch/inference-options",
+  "GET /api/launch/subscription",
+  "POST /api/launch/subscription/checkout",
+  "POST /api/launch/subscription/portal",
+  "GET /api/launch/capacity",
   "GET /api/launch/library",
   "POST /api/launch/folders",
   "PATCH /api/launch/folders/:id",
@@ -141,13 +145,6 @@ export const LAUNCH_API_ROUTES = [
   "GET /api/launch/wiring/targets",
   "GET /api/launch/settings",
   "PATCH /api/launch/settings",
-  "GET /api/launch/wallet",
-  "GET /api/launch/wallet/transactions",
-  "GET /api/launch/wallet/receipts",
-  "GET /api/launch/wallet/earnings",
-  "GET /api/launch/wallet/payouts",
-  "GET /api/launch/wallet/topup/quote",
-  "POST /api/launch/wallet/topup/intent",
   "GET /api/launch/jobs/:id",
   "GET /api/launch/leaderboard",
   "GET /api/launch/platform-primitives",
@@ -220,11 +217,6 @@ export type LaunchLeaderboardKind = typeof LAUNCH_LEADERBOARD_KINDS[number];
 export const LAUNCH_PLATFORM_PRIMITIVES = [
   "install",
   "deploy",
-  "publish",
-  "store",
-  "wallet",
-  "pricing",
-  "receipts",
   "api_keys",
   "owner_admin",
 ] as const;
@@ -472,17 +464,17 @@ export interface LaunchCallerFunctionPermissionsResponse {
   generatedAt: string;
 }
 
-/** Per-(viewer, app, function) galactic.ai() override. provider null = Galactic AI (credits). */
+/** Per-(viewer, app, function) galactic.ai() override. Launch inference is BYOK-only. */
 export interface LaunchFunctionInferenceOverrideSummary {
   appId: string;
   functionName: string;
-  billingMode: "light" | "byok";
-  provider: string | null;
+  billingMode: "byok";
+  provider: string;
   model: string | null;
   updatedAt?: string | null;
 }
 
-/** PUT body (alongside functionName): provider 'galactic'/'light' => credits, else a BYOK provider id. */
+/** PUT body (alongside functionName): provider must be a configured Class 1 BYOK provider. */
 export interface LaunchFunctionInferenceOverrideRequest {
   provider: string;
   model?: string;
@@ -620,6 +612,63 @@ export interface LaunchByokPrimaryRequest {
   provider: string;
 }
 
+export type LaunchPlanCode = "free" | "pro" | "max_5x" | "max_10x";
+export type LaunchCapacityState = "available" | "low" | "waiting";
+
+export interface LaunchCapacityWindow {
+  state: LaunchCapacityState;
+  resetsAt: string;
+  /** Deliberately omitted when the plan's exact allowance is unpublished. */
+  usedPercent?: number;
+}
+
+export interface LaunchCapacityResponse {
+  plan: LaunchPlanCode;
+  state: LaunchCapacityState;
+  burst: LaunchCapacityWindow;
+  weekly: LaunchCapacityWindow;
+  nextEligibleAt: string | null;
+  activeAgentLimit: number | null;
+  deferredWakeCount?: number;
+  generatedAt: string;
+}
+
+export type LaunchSubscriptionStatus =
+  | "inactive"
+  | "incomplete"
+  | "incomplete_expired"
+  | "trialing"
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "unpaid"
+  | "paused";
+
+export interface LaunchSubscriptionResponse {
+  plan: LaunchPlanCode;
+  planName: string;
+  priceCents: number;
+  currency: "usd";
+  interval: "month";
+  status: LaunchSubscriptionStatus;
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  canSubscribe: boolean;
+  canManage: boolean;
+  capacity: LaunchCapacityResponse;
+  generatedAt: string;
+}
+
+export interface LaunchSubscriptionCheckoutRequest {
+  plan: "pro";
+  returnUrl?: string;
+}
+
+export interface LaunchSubscriptionRedirectResponse {
+  url: string;
+  generatedAt: string;
+}
+
 /** Set the platform (credits) OpenRouter model. No key required; empty clears it. */
 export interface LaunchPlatformModelRequest {
   model: string;
@@ -631,12 +680,13 @@ export interface LaunchPlatformModelResponse {
 }
 
 export interface LaunchInferenceOptionsResponse {
-  billingMode: "byok" | "credits";
+  billingMode: "byok";
   primaryProvider: string | null;
-  /** The user's chosen platform (credits) OpenRouter model slug; null = default. */
-  platformModel: string | null;
   configuredProviders: string[];
-  credits: {
+  /** @deprecated Legacy compatibility only; launch responses omit it. */
+  platformModel?: string | null;
+  /** @deprecated Legacy compatibility only; launch responses omit wallet state. */
+  credits?: {
     spendable: number | null;
     minimumForPlatformInference: number;
     usable: boolean;
@@ -941,7 +991,7 @@ export interface LaunchAgentHomeAuthorityItem {
 }
 
 export interface LaunchAgentHomeBudget {
-  unit: "credits";
+  unit: "work_units";
   ceilings: {
     perRun: number;
     daily: number;
@@ -966,7 +1016,7 @@ export interface LaunchAgentHomeRun {
   startedAt: string | null;
   completedAt: string | null;
   durationMs: number | null;
-  credits: number;
+  workUnits: number;
   calls: number;
   summary: string | null;
   errorCode: string | null;
@@ -1049,6 +1099,7 @@ export interface LaunchAgentHomeResponse {
   authority: {
     items: LaunchAgentHomeAuthorityItem[];
   };
+  capacity: LaunchCapacityResponse | null;
   budget: LaunchAgentHomeBudget | null;
   release: LaunchAgentHomeRelease;
   recentRuns: LaunchAgentHomeRun[];

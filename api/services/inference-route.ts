@@ -75,6 +75,8 @@ export interface ResolveInferenceRouteParams {
   pinSelectedModel?: boolean;
   userService?: Pick<UserService, "getUser" | "getDecryptedApiKey">;
   getOrCreateOpenRouterKey?: typeof getOrCreateOpenRouterKey;
+  /** Persistent Agent launch path: never provision or fall back to platform inference. */
+  byokOnly?: boolean;
 }
 
 export class InferenceRouteError extends Error {
@@ -263,6 +265,13 @@ export async function resolveInferenceRoute(
   const selectedProvider = getSelectionProvider(params.selection);
 
   if (selectedBillingMode === "light") {
+    if (params.byokOnly) {
+      throw new InferenceRouteError(
+        "byok_provider_not_configured",
+        "This Agent requires a configured BYOK provider; Galactic does not supply inference keys.",
+        409,
+      );
+    }
     return await buildLightRoute(params, user);
   }
 
@@ -281,6 +290,14 @@ export async function resolveInferenceRoute(
   const byokProvider = getPrimaryByokProvider(user);
   if (byokProvider) {
     return await buildByokRoute(user, params, byokProvider);
+  }
+
+  if (params.byokOnly) {
+    throw new InferenceRouteError(
+      "byok_provider_not_configured",
+      "This Agent requires a configured BYOK provider; add a provider API key in Account.",
+      409,
+    );
   }
 
   return await buildLightRoute(params, user);

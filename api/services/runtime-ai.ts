@@ -368,6 +368,7 @@ export interface CreateRuntimeAIContextOptions {
   // and usage rows. Omitted on surfaces with no app context (e.g. chat).
   attribution?: RuntimeAIAttribution;
   routineContext?: RoutineTraceContext | null;
+  byokOnly?: boolean;
 }
 
 export async function createRuntimeAIContext(
@@ -397,6 +398,7 @@ export async function createRuntimeAIContext(
       // when it names a model, pin it so the dev's per-call ai({model})
       // argument cannot outrank the user's choice.
       pinSelectedModel: Boolean(options.inferenceSelection?.model?.trim()),
+      byokOnly: options.byokOnly === true,
     });
 
     // Pre-call balance gate for credits-billed routes (BYOK routes set

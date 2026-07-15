@@ -10,6 +10,10 @@ import {
   DEFAULT_ROUTINE_BUDGET_POLICY,
   MIN_ROUTINE_INTERVAL_SECONDS,
 } from "../../shared/contracts/routine.ts";
+import {
+  claimAgentActivationSlot,
+  releaseAgentActivationSlot,
+} from "./account-capacity.ts";
 
 export type RoutineStatus =
   | "active"
@@ -928,11 +932,20 @@ export async function updateRoutine(
     : routine;
 }
 
-export function pauseRoutine(
+export async function pauseRoutine(
   userId: string,
   routineId: string,
 ): Promise<RoutineSummary> {
-  return updateRoutine(userId, routineId, { status: "paused" });
+  const routine = getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1"
+    ? await getRoutine(userId, routineId)
+    : null;
+  const paused = await updateRoutine(userId, routineId, { status: "paused" });
+  if (routine?.composer_app_id && routine.metadata?.launch_primary === true) {
+    await releaseAgentActivationSlot(userId, routine.composer_app_id).catch(
+      (err) => console.error("[CAPACITY] Failed to release activation slot:", err),
+    );
+  }
+  return paused;
 }
 
 export async function resumeRoutine(
@@ -950,21 +963,55 @@ export async function resumeRoutine(
     error.blockers = validation.blockers;
     throw error;
   }
-  const [updated] = await patchRows<RoutineSummary>(
-    `user_routines?id=eq.${
-      encodeURIComponent(routineId)
-    }&user_id=eq.${userId}&deleted_at=is.null&status=in.(paused,error)`,
-    {
-      status: "active",
-      budget_policy: validation.budgetPolicy,
-      updated_at: new Date().toISOString(),
-    },
-    ROUTINE_SELECT,
-  );
+  let activationClaimed = false;
+  if (
+    getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
+    routine.composer_app_id && routine.metadata?.launch_primary === true
+  ) {
+    const activation = await claimAgentActivationSlot(
+      userId,
+      routine.composer_app_id,
+    );
+    if (!activation.allowed) {
+      const error = new Error(
+        "Free accounts can keep one Agent active at a time. Pause the active Agent or upgrade to Pro.",
+      ) as Error & { code?: string; occupiedBy?: string | null };
+      error.code = "ACTIVE_AGENT_LIMIT";
+      error.occupiedBy = activation.occupiedBy;
+      throw error;
+    }
+    activationClaimed = true;
+  }
+  let updated: RoutineSummary | undefined;
+  try {
+    [updated] = await patchRows<RoutineSummary>(
+      `user_routines?id=eq.${
+        encodeURIComponent(routineId)
+      }&user_id=eq.${userId}&deleted_at=is.null&status=in.(paused,error)`,
+      {
+        status: "active",
+        budget_policy: validation.budgetPolicy,
+        updated_at: new Date().toISOString(),
+      },
+      ROUTINE_SELECT,
+    );
+  } catch (err) {
+    if (activationClaimed && routine.composer_app_id) {
+      await releaseAgentActivationSlot(userId, routine.composer_app_id).catch(
+        () => false,
+      );
+    }
+    throw err;
+  }
   if (updated) return updated;
   // Idempotent resume for an already-active routine, while still validating
   // approvals above. Never silently activates disabled/deleted rows.
   if (routine.status === "active") return routine;
+  if (activationClaimed && routine.composer_app_id) {
+    await releaseAgentActivationSlot(userId, routine.composer_app_id).catch(
+      () => false,
+    );
+  }
   throw new Error(`Routine ${routineId} is ${routine.status} and cannot be activated`);
 }
 

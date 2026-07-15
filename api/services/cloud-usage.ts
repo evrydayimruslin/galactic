@@ -50,6 +50,12 @@ export interface CloudOperationMeteringContext {
    * budget authorization decision.
    */
   routineContext?: RoutineTraceContext | null;
+  /**
+   * Subscription-capacity executions collect weighted infrastructure work in
+   * memory and settle it against the enclosing hard reservation. They never
+   * touch the legacy wallet ledger.
+   */
+  capacityMeter?: { addLight: (amountLight: number) => void };
 }
 
 export interface DebitCloudOperationParams
@@ -360,6 +366,18 @@ export async function debitCloudOperation(
     config.cloudUnitLightPer1k,
   );
 
+  if (params.capacityMeter) {
+    params.capacityMeter.addLight(amountLight);
+    return {
+      eventId: `capacity:${crypto.randomUUID()}`,
+      oldBalance: 0,
+      newBalance: 0,
+      amountDebited: amountLight,
+      depositDebited: 0,
+      earnedDebited: 0,
+    };
+  }
+
   // Launch invariant: routine KV/R2 micro-operations are platform-sponsored.
   // The binding calls this before touching storage, but D1 exposes row counts
   // only after executing. Applying one consistent rule across all three keeps
@@ -425,6 +443,49 @@ export async function debitD1Usage(
     rowsWritten,
     config.d1WriteRowsPerCloudUnit,
   );
+
+  if (params.capacityMeter) {
+    const readAmountLight = calculateCloudUsageLight(
+      readCloudUnits,
+      config.cloudUnitLightPer1k,
+    );
+    const writeAmountLight = calculateCloudUsageLight(
+      writeCloudUnits,
+      config.cloudUnitLightPer1k,
+    );
+    const events: CloudUsageDebitResult[] = [];
+    if (readAmountLight > 0) {
+      events.push({
+        eventId: `capacity:${crypto.randomUUID()}`,
+        oldBalance: 0,
+        newBalance: 0,
+        amountDebited: readAmountLight,
+        depositDebited: 0,
+        earnedDebited: 0,
+      });
+    }
+    if (writeAmountLight > 0) {
+      events.push({
+        eventId: `capacity:${crypto.randomUUID()}`,
+        oldBalance: 0,
+        newBalance: 0,
+        amountDebited: writeAmountLight,
+        depositDebited: 0,
+        earnedDebited: 0,
+      });
+    }
+    params.capacityMeter.addLight(readAmountLight + writeAmountLight);
+    return {
+      rowsRead,
+      rowsWritten,
+      readCloudUnits,
+      writeCloudUnits,
+      amountLight: readAmountLight + writeAmountLight,
+      readEventId: events[0]?.eventId,
+      writeEventId: events[readAmountLight > 0 ? 1 : 0]?.eventId,
+      events,
+    };
+  }
 
   // See debitCloudOperation: D1 row cost is unknowable until the query has
   // executed, so routine D1 is deliberately non-billable for the launch MVP.

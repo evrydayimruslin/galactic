@@ -13,6 +13,7 @@ import type {
   LaunchLibraryResponse,
   LaunchStoreRequest,
   LaunchStoreResponse,
+  LaunchSubscriptionResponse,
   LaunchWalletDetailResponse,
 } from "../../../../shared/contracts/launch.ts";
 import {
@@ -44,6 +45,7 @@ export interface LaunchRouteLiveData {
   agentWiring?: AgentWiringView;
   wallet?: LaunchWalletResponse;
   walletDetail?: LaunchWalletDetailResponse;
+  subscription?: LaunchSubscriptionResponse;
   adminAgent?: LaunchAgentAdminResponse;
   platformPrimitives?: LaunchPlatformPrimitivesResponse;
 }
@@ -212,7 +214,7 @@ async function loadRouteData(
           // Per-agent install context (dedicated MCP URL + connect prompt).
           optional(() => launchApi.install({ agent: id })),
           // Loaded so the per-function inference control can list the viewer's
-          // providers (Galactic AI + their configured BYOK keys).
+          // providers configured with the user's own API keys.
           optional(() => launchApi.byok()),
           optional(() => launchApi.inferenceOptions()),
         ]);
@@ -230,17 +232,14 @@ async function loadRouteData(
       return { library: await launchApi.library() };
     }
     case "settings": {
-      // The account page merges wallet + settings, so it loads both payloads.
-      const detailKind = walletDetailKind(search.get("tab"), search.get("view"));
-      const [apiKeys, byok, inferenceOptions, wallet, walletDetail] =
+      const [apiKeys, byok, inferenceOptions, subscription] =
         await Promise.all([
           launchApi.apiKeys(),
           optional(() => launchApi.byok()),
           optional(() => launchApi.inferenceOptions()),
-          optional(() => launchApi.wallet()),
-          optional(() => launchApi.walletDetail(detailKind, { limit: 25 })),
+          launchApi.subscription(),
         ]);
-      return { apiKeys, byok, inferenceOptions, wallet, walletDetail };
+      return { apiKeys, byok, inferenceOptions, subscription };
     }
     case "adminAgent": {
       const id = route.params.id || "";

@@ -1149,13 +1149,55 @@ export function AgentHomeOverview({
           )}
       </Card>
 
+      {snapshot.capacity
+        ? (
+          <Card className="agent-home-budget-card">
+            <div className="agent-home-card-head">
+              <div>
+                <p className="section-label">Shared account capacity</p>
+                <p className="muted-note">
+                  Every active Agent on this account contributes to the same burst and weekly windows.
+                </p>
+              </div>
+              <Pill tone={snapshot.capacity.state === "waiting"
+                ? "amber"
+                : snapshot.capacity.state === "low"
+                ? "default"
+                : "green"}
+              >
+                {snapshot.capacity.state}
+              </Pill>
+            </div>
+            <div className="agent-home-budget-table-wrap">
+              <table className="agent-home-budget-table">
+                <caption className="sr-only">Shared account capacity windows</caption>
+                <thead><tr><th scope="col">Window</th><th scope="col">State</th><th scope="col">Resets</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row">Five hours</th><td>{snapshot.capacity.burst.state}</td><td>{absoluteTime(snapshot.capacity.burst.resetsAt)}</td></tr>
+                  <tr><th scope="row">Weekly</th><td>{snapshot.capacity.weekly.state}</td><td>{absoluteTime(snapshot.capacity.weekly.resetsAt)}</td></tr>
+                </tbody>
+              </table>
+            </div>
+            {snapshot.capacity.state === "waiting"
+              ? (
+                <p className="muted-note" role="status">
+                  This Agent remains active. Its missed wakes are coalesced and resume automatically at {absoluteTime(
+                    snapshot.capacity.nextEligibleAt,
+                  )}.
+                </p>
+              )
+              : null}
+          </Card>
+        )
+        : null}
+
       <Card className="agent-home-budget-card">
         <div className="agent-home-card-head">
           <div>
             <p className="section-label">Cost &amp; rate limits</p>
-            <p className="muted-note">Hard ceilings are reserved before paid work. Manual runs count too.</p>
+            <p className="muted-note">Hard work ceilings are reserved before execution. Manual runs count too.</p>
           </div>
-          <Pill>Credits</Pill>
+          <Pill>Work units</Pill>
         </div>
         {snapshot.budget
           ? (
@@ -1165,18 +1207,18 @@ export function AgentHomeOverview({
                   <caption className="sr-only">Agent budget ceilings and current usage</caption>
                   <thead><tr><th scope="col">Window</th><th scope="col">Used</th><th scope="col">Ceiling</th></tr></thead>
                   <tbody>
-                    <tr><th scope="row">Last run</th><td>{formatNumber(snapshot.budget.usage.lastRun)} credits</td><td>{formatNumber(snapshot.budget.ceilings.perRun)} credits</td></tr>
-                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.dayStartedAt)}`}>Today (UTC)</th><td>{formatNumber(snapshot.budget.usage.daily)} credits</td><td>{formatNumber(snapshot.budget.ceilings.daily)} credits</td></tr>
-                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.monthStartedAt)}`}>This month (UTC)</th><td>{formatNumber(snapshot.budget.usage.monthly)} credits</td><td>{formatNumber(snapshot.budget.ceilings.monthly)} credits</td></tr>
+                    <tr><th scope="row">Last run</th><td>{formatNumber(snapshot.budget.usage.lastRun)} units</td><td>{formatNumber(snapshot.budget.ceilings.perRun)} units</td></tr>
+                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.dayStartedAt)}`}>Today (UTC)</th><td>{formatNumber(snapshot.budget.usage.daily)} units</td><td>{formatNumber(snapshot.budget.ceilings.daily)} units</td></tr>
+                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.monthStartedAt)}`}>This month (UTC)</th><td>{formatNumber(snapshot.budget.usage.monthly)} units</td><td>{formatNumber(snapshot.budget.ceilings.monthly)} units</td></tr>
                     <tr><th scope="row">Calls / last run</th><td>{formatNumber(snapshot.budget.usage.lastRunCalls)} calls</td><td>{formatNumber(snapshot.budget.ceilings.callsPerRun)} calls</td></tr>
                   </tbody>
                 </table>
               </div>
               <div className="agent-home-budget-inputs">
                 {([
-                  ["perRun", "Credits / run", false],
-                  ["daily", "Credits / day", false],
-                  ["monthly", "Credits / month", false],
+                  ["perRun", "Work units / run", false],
+                  ["daily", "Work units / day", false],
+                  ["monthly", "Work units / month", false],
                   ["callsPerRun", "Calls / run", true],
                 ] as const).map(([key, label, integer]) => (
                   <label className="agent-home-field" key={key}>
@@ -1341,7 +1383,7 @@ export function AgentHomeOverview({
                     <span>{statusLabel(run.trigger)} · {formatDuration(run.durationMs)}</span>
                   </div>
                   <div className="agent-home-run-usage">
-                    <Mono>{formatNumber(run.credits)} credits</Mono>
+                    <Mono>{formatNumber(run.workUnits)} work units</Mono>
                     <Mono>{formatNumber(run.calls)} calls</Mono>
                   </div>
                 </article>

@@ -116,6 +116,7 @@ function input(
       permissions: ["ai:call", "app:call", "notify:owner"],
     },
     effectivePermissions: ["ai:call", "app:call", "notify:owner"],
+    byokConfigured: true,
     ignoredPermissions: [],
     functions,
     dependencies: [{ app: "archive", functions: ["store"], access: "write" }],
@@ -191,7 +192,7 @@ function input(
 
 Deno.test("agent home: derives an initial ready Agent without conflating health", () => {
   const home = buildAgentHomeResponse(input());
-  assertEquals(home.contractVersion, "2026-07-14.v1");
+  assertEquals(home.contractVersion, "2026-07-15.p2.1");
   assertEquals(home.state.lifecycle, "ready");
   assertEquals(home.state.execution, "idle");
   assertEquals(home.state.health, "unknown");

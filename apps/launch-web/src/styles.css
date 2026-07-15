@@ -5269,6 +5269,67 @@ button {
   letter-spacing: 0;
 }
 
+.subscription-capacity-card {
+  align-items: stretch;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(300px, 1.4fr) auto;
+}
+
+.subscription-plan-summary,
+.subscription-capacity-summary {
+  min-width: 0;
+}
+
+.subscription-plan-summary p,
+.subscription-capacity-summary p {
+  margin: 6px 0 0;
+}
+
+.subscription-plan-title,
+.subscription-capacity-heading,
+.subscription-window-row {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subscription-plan-title strong {
+  font-size: 18px;
+}
+
+.subscription-window-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.subscription-window-row {
+  color: var(--ul-secondary);
+  font-size: 13px;
+}
+
+.subscription-window-row span:last-child {
+  text-align: right;
+}
+
+.subscription-capacity-card .wallet-hero-actions {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+@media (max-width: 820px) {
+  .subscription-capacity-card {
+    grid-template-columns: 1fr;
+  }
+
+  .subscription-capacity-card .wallet-hero-actions {
+    align-items: stretch;
+  }
+}
+
 /* The figure's label sits tight above the number (the grid gap handles spacing). */
 .wallet-amount .section-label {
   margin: 0;

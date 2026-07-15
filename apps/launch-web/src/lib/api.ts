@@ -50,6 +50,8 @@ import type {
   LaunchPlatformPrimitiveSuggestion,
   LaunchStoreRequest,
   LaunchStoreResponse,
+  LaunchSubscriptionResponse,
+  LaunchSubscriptionRedirectResponse,
   LaunchTrustCard,
   LaunchWalletDetailKind,
   LaunchWalletDetailResponse,
@@ -579,6 +581,28 @@ export class LaunchApiClient {
 
   wallet(): Promise<LaunchWalletResponse> {
     return this.fetchJson("/api/launch/wallet");
+  }
+
+  subscription(): Promise<LaunchSubscriptionResponse> {
+    return this.fetchJson("/api/launch/subscription");
+  }
+
+  createSubscriptionCheckout(
+    returnUrl = `${window.location.origin}/account`,
+  ): Promise<LaunchSubscriptionRedirectResponse> {
+    return this.fetchJson("/api/launch/subscription/checkout", {
+      method: "POST",
+      body: JSON.stringify({ plan: "pro", returnUrl }),
+    });
+  }
+
+  createSubscriptionPortal(
+    returnUrl = `${window.location.origin}/account`,
+  ): Promise<LaunchSubscriptionRedirectResponse> {
+    return this.fetchJson("/api/launch/subscription/portal", {
+      method: "POST",
+      body: JSON.stringify({ returnUrl }),
+    });
   }
 
   walletDetail(

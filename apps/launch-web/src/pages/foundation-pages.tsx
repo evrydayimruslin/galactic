@@ -2476,10 +2476,8 @@ function FunctionSandboxCard({
   );
 }
 
-// Per-function galactic.ai() provider+model override. The viewer pins which
-// provider (Galactic AI = credits, or one of their BYOK keys) and model this
-// function's galactic.ai() calls use. Unset => the default fallback chain
-// (dev per-call model > the viewer's global platform model > deepseek-v4).
+// Per-function galactic.ai() provider+model override. Launch inference uses
+// only the viewer's configured Class 1 BYOK providers.
 function FunctionInferenceModal({
   fn,
   live,
@@ -2494,25 +2492,18 @@ function FunctionInferenceModal({
   const byokProviders =
     (live.data.byok ? live.data.byok.providers : byokProviderFixtures)
       .filter((option) => option.configured);
-  const galacticDefault = live.data.inferenceOptions?.platformModel ||
-    GALACTIC_DEFAULT_MODEL;
-  const providerOptions = [
-    { value: "galactic", label: "Galactic AI", defaultModel: galacticDefault },
-    ...byokProviders.map((option) => ({
+  const providerOptions = byokProviders.map((option) => ({
       value: option.id,
       label: option.name,
       defaultModel: option.model || option.defaultModel || "",
-    })),
-  ];
+    }));
+  const firstProvider = providerOptions[0]?.value || "";
   const defaultModelFor = (value: string) =>
-    providerOptions.find((option) => option.value === value)?.defaultModel ||
-    galacticDefault;
+    providerOptions.find((option) => option.value === value)?.defaultModel || "";
 
   const initialProvider = fn.inferenceOverride
-    ? (fn.inferenceOverride.billingMode === "byok"
-      ? (fn.inferenceOverride.provider || "galactic")
-      : "galactic")
-    : "galactic";
+    ? (fn.inferenceOverride.provider || firstProvider)
+    : firstProvider;
   const [provider, setProvider] = useState(initialProvider);
   const [model, setModel] = useState(
     fn.inferenceOverride?.model || defaultModelFor(initialProvider),
@@ -2522,6 +2513,11 @@ function FunctionInferenceModal({
 
   const save = async () => {
     if (state === "saving") return;
+    if (!provider) {
+      setState("error");
+      setMessage("Add a BYOK provider key on the Account page first.");
+      return;
+    }
     if (!model.trim()) {
       setState("error");
       setMessage("Enter a model slug.");
@@ -2558,9 +2554,17 @@ function FunctionInferenceModal({
           <h2>AI model for this function</h2>
         </div>
         <p>
-          Which provider and model this function's galactic.ai() calls use.
-          Galactic AI bills credits; a BYOK provider uses your own key.
+          Choose which of your provider keys and models this function's
+          galactic.ai() calls use.
         </p>
+        {providerOptions.length === 0
+          ? (
+            <p className="settings-help error">
+              No BYOK provider is configured. Add one on the Account page before
+              activating AI functions.
+            </p>
+          )
+          : null}
         <form
           className="byok-modal-form"
           onSubmit={(event) => {
@@ -2577,6 +2581,7 @@ function FunctionInferenceModal({
                 setModel(defaultModelFor(value));
               }}
               value={provider}
+              disabled={providerOptions.length === 0}
             >
               {providerOptions.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -4334,16 +4339,29 @@ export function AccountFoundationPage(
   const [visibleKeys, setVisibleKeys] = useState<ApiKeyFixture[]>(() =>
     liveApiKeyFixtures(live.data.apiKeys?.apiKeys)
   );
-  const [showTopUp, setShowTopUp] = useState(
-    () => queryParam("tab") === "topup",
-  );
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingError, setBillingError] = useState("");
 
   useEffect(() => {
     setVisibleKeys(liveApiKeyFixtures(live.data.apiKeys?.apiKeys));
   }, [live.data.apiKeys]);
 
-  const totals = liveWalletTotals(live.data.wallet?.wallet);
-  const wallet = live.data.wallet?.wallet;
+  const subscription = live.data.subscription;
+
+  const openBilling = async (mode: "checkout" | "portal") => {
+    if (billingBusy) return;
+    setBillingBusy(true);
+    setBillingError("");
+    try {
+      const response = mode === "checkout"
+        ? await launchApi.createSubscriptionCheckout()
+        : await launchApi.createSubscriptionPortal();
+      window.location.assign(response.url);
+    } catch (err) {
+      setBillingError(err instanceof Error ? err.message : String(err));
+      setBillingBusy(false);
+    }
+  };
 
   const revokeKey = async (apiKey: ApiKeyFixture) => {
     if (!apiKey.id) return;
@@ -4361,24 +4379,93 @@ export function AccountFoundationPage(
       <ApiNotice live={live} noun="account" />
       <ProfileStrip canManage={canManageKeys} />
 
-      <Card className="wallet-amount-card">
-        <WalletAmount
-          label="Credit balance"
-          value={wallet ? totals.spendable : null}
-        />
+      <Card className="wallet-amount-card subscription-capacity-card">
+        <div className="subscription-plan-summary">
+          <p className="section-label">Plan</p>
+          <div className="subscription-plan-title">
+            <strong>{subscription?.planName ?? "Free"}</strong>
+            <Pill>
+              {subscription
+                ? subscription.priceCents === 0
+                  ? "$0"
+                  : `$${(subscription.priceCents / 100).toLocaleString()} / month`
+                : "Checking…"}
+            </Pill>
+          </div>
+          <p>
+            {subscription?.plan === "free"
+              ? "One active Agent with shared five-hour and weekly capacity."
+              : "Unlimited active Agents share your five-hour and weekly capacity."}
+          </p>
+        </div>
+        <div className="subscription-capacity-summary">
+          <div className="subscription-capacity-heading">
+            <p className="section-label">Capacity</p>
+            <Pill tone={!subscription
+              ? "default"
+              : subscription.capacity.state === "waiting"
+              ? "amber"
+              : subscription.capacity.state === "low"
+              ? "default"
+              : "green"}
+            >
+              {subscription?.capacity.state ?? "checking"}
+            </Pill>
+          </div>
+          {subscription
+            ? (
+              <div className="subscription-window-list">
+                {([
+                  ["Five-hour window", subscription.capacity.burst],
+                  ["Weekly window", subscription.capacity.weekly],
+                ] as const).map(([label, window]) => (
+                  <div className="subscription-window-row" key={label}>
+                    <span>{label}</span>
+                    <span>
+                      {window.usedPercent !== undefined
+                        ? `${window.usedPercent}% used · `
+                        : ""}
+                      resets {new Date(window.resetsAt).toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )
+            : <p>Loading account capacity…</p>}
+          {subscription?.capacity.state === "waiting"
+            ? (
+              <p className="settings-help" role="status">
+                Agents are waiting and resume automatically at {new Date(
+                  subscription.capacity.nextEligibleAt ||
+                    subscription.capacity.weekly.resetsAt,
+                ).toLocaleString()}.
+              </p>
+            )
+            : null}
+        </div>
         <div className="wallet-hero-actions">
-          <Button
-            onClick={() => setShowTopUp((open) => !open)}
-            variant={showTopUp ? "secondary" : "primary"}
-          >
-            {showTopUp ? "Close" : "+ Add credits"}
-          </Button>
+          {subscription?.canManage
+            ? (
+              <Button
+                disabled={billingBusy}
+                onClick={() => void openBilling("portal")}
+                variant="secondary"
+              >
+                Manage subscription
+              </Button>
+            )
+            : (
+              <Button
+                disabled={billingBusy || !canManageKeys}
+                onClick={() => void openBilling("checkout")}
+                variant="primary"
+              >
+                Upgrade to Pro · $20/month
+              </Button>
+            )}
+          {billingError ? <p className="profile-name-error">{billingError}</p> : null}
         </div>
       </Card>
-
-      {wallet?.freeMode
-        ? <FreeModeBanner onAddFunds={() => setShowTopUp(true)} />
-        : null}
 
       <SettingsCard
         action={canManageKeys
@@ -4482,41 +4569,6 @@ export function AccountFoundationPage(
             >
               Sign out
             </Button>
-          </div>
-        )
-        : null}
-
-      {showTopUp
-        ? (
-          <div
-            className="topup-modal-backdrop"
-            onClick={(event) => {
-              if (event.target === event.currentTarget) setShowTopUp(false);
-            }}
-            role="presentation"
-          >
-            <div
-              aria-label="Add credits"
-              aria-modal="true"
-              className="topup-modal"
-              role="dialog"
-            >
-              <button
-                aria-label="Close"
-                className="topup-modal-close"
-                onClick={() => setShowTopUp(false)}
-                type="button"
-              >
-                ✕
-              </button>
-              <WalletTopUpPanel
-                earnedCredits={totals.earned}
-                live={live}
-                publishableKey={wallet?.stripePublishableKey}
-                buyerEmail={wallet?.buyerEmail}
-                onClose={() => setShowTopUp(false)}
-              />
-            </div>
           </div>
         )
         : null}
@@ -6033,9 +6085,6 @@ function ByokSettingsCard({
   const [modalProvider, setModalProvider] = useState<
     LaunchByokProviderOption | null
   >(null);
-  // The Galactic AI (platform credits) model modal — settable WITHOUT a key,
-  // distinct from the per-provider BYOK key+model modal.
-  const [galacticModelOpen, setGalacticModelOpen] = useState(false);
 
   const runProviderAction = async (
     provider: string,
@@ -6061,34 +6110,12 @@ function ByokSettingsCard({
     <SettingsCard
       collapsible
       defaultExpanded={false}
-      subtitle="Bring your own inference key, or let platform runs bill credits. Stored keys are encrypted and never shown again."
+      subtitle="Bring your own inference key. Stored keys are encrypted and never shown again."
       title="BYOK Settings"
     >
       {canManageKeys
         ? (
           <div className="byok-provider-list">
-            <div className="preference-row byok-provider-row">
-              <div>
-                <strong>Galactic AI</strong>
-                <span>
-                  Current model:{" "}
-                  {live.data.inferenceOptions?.platformModel ||
-                    GALACTIC_DEFAULT_MODEL}{" "}
-                  · no BYOK key required
-                </span>
-              </div>
-              <Button
-                onClick={() => {
-                  setFormState("idle");
-                  setFormMessage("");
-                  setGalacticModelOpen(true);
-                }}
-                size="sm"
-                variant="secondary"
-              >
-                Choose model
-              </Button>
-            </div>
             {providers.map((option) => (
               <ByokProviderRow
                 busy={busyProvider === option.id}
@@ -6142,21 +6169,6 @@ function ByokSettingsCard({
               live.reload();
             }}
             provider={modalProvider}
-          />
-        )
-        : null}
-      {galacticModelOpen
-        ? (
-          <GalacticModelModal
-            inference={live.data.inferenceOptions}
-            navigate={navigate}
-            onClose={() => setGalacticModelOpen(false)}
-            onSaved={(message) => {
-              setGalacticModelOpen(false);
-              setFormState("idle");
-              setFormMessage(message);
-              live.reload();
-            }}
           />
         )
         : null}
@@ -6218,7 +6230,7 @@ function GalacticModelModal({
           The OpenRouter model galactic.ai() uses for credit-billed platform runs
           (chat and autonomous agent functions). No key required.
         </p>
-        {inference
+        {inference?.credits
           ? (
             <p className="settings-help">
               Billed from your balance ·{" "}

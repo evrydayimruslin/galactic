@@ -98,11 +98,12 @@ export async function listFunctionInferenceOverrides(
     return names.flatMap((functionName) => {
       const row = byFunction.get(functionName);
       if (!row) return [];
+      if (row.billing_mode !== "byok" || !row.provider) return [];
       const summary: LaunchFunctionInferenceOverrideSummary = {
         appId: input.appId,
         functionName,
-        billingMode: row.billing_mode === "byok" ? "byok" : "light",
-        provider: row.provider ?? null,
+        billingMode: "byok",
+        provider: row.provider,
         model: row.model ?? null,
         updatedAt: row.updated_at || null,
       };
