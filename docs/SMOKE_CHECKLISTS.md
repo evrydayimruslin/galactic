@@ -173,8 +173,9 @@ Notes:
 
 - `--exercise-chat` sends one tiny streaming prompt and incurs a small real API
   cost.
-- Use a real staging test account with enough balance to pass
-  `/debug/chat-preflight`.
+- Confirm the retired `/debug/chat-preflight` billing/key diagnostic remains
+  unavailable with HTTP 404. BYOK configuration is verified through the
+  authenticated account-session browser journey instead.
 - If alias retirement is being trialed with
   `PLATFORM_MCP_DISABLED_ALIASES=removable`, include one manual MCP call using a
   removable alias such as `ul.execute` or `ul.lint` and confirm the response
