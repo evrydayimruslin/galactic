@@ -85,7 +85,7 @@ Use this structure verbatim or keep it very close:
 | Supabase DB / Supabase Production DB | | | |
 | API Deploy | | | |
 | Launch Web Deploy | | | |
-| Desktop Build / Desktop Release | | | |
+| Desktop Build / Desktop Release | not-applicable | | Deferred; desktop uses `desktop-v*` tags |
 | Staging Launch Gate / Production Launch Gate | | | |
 
 ### Smoke artifacts
@@ -118,17 +118,17 @@ List only the audits relevant to this candidate.
 
 | Check | Result | Evidence | Notes |
 | --- | --- | --- | --- |
-| Desktop sign-in | | `manual/desktop-smoke-notes.md` | |
-| First chat / core flow | | `manual/desktop-smoke-notes.md` | |
-| Sign out | | `manual/desktop-smoke-notes.md` | |
-| Embedded dashboard / widget flow | | `manual/desktop-smoke-notes.md` | |
-| Shared-page / share-link flow | | `manual/desktop-smoke-notes.md` | |
+| Website sign-in and account projection | | `manual/canonical-journey.md` | |
+| Conjure/test/upload private Agent | | `manual/canonical-journey.md` | |
+| Agent Home configure/activate/wake/report | | `manual/canonical-journey.md` | |
+| BYOK and capacity state/reset projection | | `manual/canonical-journey.md` | |
+| Pro checkout/webhook/portal | | `manual/canonical-journey.md` | |
 | Launch website public routes (`/`, `/install`, `/store`, `/tools/:slug`) | | `smoke/launch-web-pages.md` | |
-| Launch website authenticated SPA routes (`/library`, `/wallet`, `/settings`, `/admin/tools/:id`) | | `smoke/launch-web-pages.md` | |
+| Launch website authenticated SPA routes (`/agents`, `/account`, `/agents/:slug`) | | `smoke/launch-web-pages.md` | |
 | Launch website API status/OpenAPI/store from Pages origin | | `smoke/launch-web-pages.md` | |
 | Launch website API CORS preflight from Pages origin | | `smoke/launch-web-pages.md` | |
 | Launch website authenticated API probes | | `smoke/launch-web-pages.md` | token supplied / skipped |
-| Updater smoke, if applicable | | `manual/desktop-smoke-notes.md` | |
+| Desktop/updater | not-applicable | | Deferred from launch scope |
 
 ### Recovery evidence
 
@@ -161,7 +161,7 @@ List only what is still relevant to this candidate.
 - [ ] required workflow runs succeeded
 - [ ] required smoke passed
 - [ ] launch-web Pages smoke passed with exact Pages/API URLs recorded
-- [ ] manual desktop checks completed
+- [ ] canonical website + connected-agent journey completed
 - [ ] required audits reviewed
 - [ ] restore / rollback evidence reviewed when in scope
 - [ ] unresolved exceptions explicitly accepted or cleared

@@ -75,7 +75,7 @@ const metadata = {
     'bad_staging_deploy',
     'bad_production_api_deploy',
     'bad_production_db_migration',
-    'bad_desktop_release_or_updater',
+    'bad_launch_pages_deploy',
   ],
   artifact_paths: {
     notes: 'notes.md',
@@ -127,16 +127,18 @@ const notes = `# Rollback Rehearsal Notes
 - time to identify correct playbook:
 - issues found:
 
-## Scenario 4: Bad Desktop Release Or Updater
+## Scenario 4: Bad Launch Pages Deploy
 
 - trigger we are simulating:
 - first safe action:
 - who communicates / where:
 - preferred recovery path:
-- whether updater, installers, or both are impacted:
+- how the last known-good Pages deployment is identified:
 - do-not-do warnings:
 - time to identify correct playbook:
 - issues found:
+
+Desktop release/updater: not applicable to the persistent-Agent launch.
 
 ## Cross-Cutting Gaps
 

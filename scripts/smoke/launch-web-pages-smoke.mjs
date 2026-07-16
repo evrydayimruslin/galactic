@@ -38,10 +38,10 @@ if (!["staging", "production"].includes(target)) {
 }
 
 const defaultPagesUrl = target === "production"
-  ? "https://ultralightagent.com"
+  ? "https://connectgalactic.com"
   : "https://staging.ultralight-launch-web.pages.dev";
 const defaultApiUrl = target === "production"
-  ? "https://api.ultralightagent.com"
+  ? "https://api.connectgalactic.com"
   : "https://ultralight-api-staging.rgn4jz429m.workers.dev";
 
 const pagesBase = normalizeBaseUrl(
@@ -79,16 +79,9 @@ const outputMarkdownPath = join(smokeDir, "launch-web-pages.md");
 
 const pageRoutes = [
   { name: "page-home", path: "/", auth: false },
-  { name: "page-install", path: "/install", auth: false },
-  { name: "page-store", path: "/store", auth: false },
-  {
-    name: "page-public-tool",
-    path: `/agents/${encodeURIComponent(toolSlug)}`,
-    auth: false,
-  },
-  { name: "page-library", path: "/library", auth: true },
-  { name: "page-wallet", path: "/wallet", auth: true },
-  { name: "page-settings", path: "/settings", auth: true },
+  { name: "page-agents", path: "/agents", auth: true },
+  { name: "page-profile", path: "/account", auth: true },
+  { name: "page-agent-home", path: `/agents/${encodeURIComponent(toolSlug)}`, auth: true },
   {
     name: "page-admin-tool",
     path: `/admin/agents/${encodeURIComponent(adminToolId)}`,
@@ -109,24 +102,28 @@ const publicApiProbes = [
     failureClass: "api-openapi",
     validate: validateOpenApi,
   },
-  {
-    name: "api-launch-store",
-    path: "/api/launch/store?limit=1",
-    failureClass: "api-data",
-    validate: validateStore,
-  },
 ];
 
 const authenticatedApiProbes = [
   {
-    name: "api-launch-library",
-    path: "/api/launch/library",
+    name: "api-launch-subscription",
+    path: "/api/launch/subscription",
     failureClass: "auth-api",
+    validate: validateSubscription,
   },
   {
-    name: "api-launch-wallet",
+    name: "api-launch-capacity",
+    path: "/api/launch/capacity",
+    failureClass: "auth-api",
+    validate: validateCapacity,
+  },
+  {
+    name: "api-launch-wallet-retired",
     path: "/api/launch/wallet",
     failureClass: "auth-api",
+    expectStatus: 410,
+    expectBodyPattern: /not part of the persistent-Agent launch/i,
+    expected: "Customer-facing credits endpoint is retired with HTTP 410",
   },
   {
     // API-key management is browser-account-session ONLY (Tier-2 lockdown):
@@ -353,9 +350,11 @@ async function runAuthenticatedApiProbe(probe) {
   const corsOk = acao(raw.headers) === pagesBase;
   // For non-200 expectations, also require the gate's own message so a generic
   // 403 (e.g. a WAF) can't fake a pass.
+  const payload = parseJson(raw.body_text);
   const bodyOk = !probe.expectBodyPattern ||
-    probe.expectBodyPattern.test(parseJson(raw.body_text)?.error || "");
-  const passed = raw.status_code === expectStatus && corsOk && bodyOk &&
+    probe.expectBodyPattern.test(payload?.error || "");
+  const shape = probe.validate ? probe.validate(raw) : { ok: true, message: "" };
+  const passed = raw.status_code === expectStatus && corsOk && bodyOk && shape.ok &&
     /application\/json/i.test(contentType(raw.headers));
   return {
     name: probe.name,
@@ -375,9 +374,34 @@ async function runAuthenticatedApiProbe(probe) {
       access_control_allow_origin: acao(raw.headers) || null,
       final_url: raw.final_url,
       error: raw.error || null,
+      validation: shape.message || null,
     },
     request: raw.request,
   };
+}
+
+function validateCapacity(raw) {
+  const payload = parseJson(raw.body_text);
+  const states = new Set(["available", "low", "waiting"]);
+  const plans = new Set(["free", "pro", "max_5x", "max_10x"]);
+  const ok = Boolean(payload && plans.has(payload.plan) && states.has(payload.state) &&
+    states.has(payload.burst?.state) && states.has(payload.weekly?.state) &&
+    typeof payload.burst?.resetsAt === "string" &&
+    typeof payload.weekly?.resetsAt === "string" &&
+    !Object.prototype.hasOwnProperty.call(payload, "balance") &&
+    !Object.prototype.hasOwnProperty.call(payload, "credits"));
+  return { ok, message: ok ? "safe capacity state/reset projection detected" : "capacity shape or hidden-balance invariant failed" };
+}
+
+function validateSubscription(raw) {
+  const payload = parseJson(raw.body_text);
+  const ok = Boolean(payload && typeof payload.plan === "string" &&
+    typeof payload.planName === "string" && payload.currency === "usd" &&
+    payload.interval === "month" && payload.capacity &&
+    validateCapacity({ body_text: JSON.stringify(payload.capacity) }).ok &&
+    !Object.prototype.hasOwnProperty.call(payload, "processingFee") &&
+    !Object.prototype.hasOwnProperty.call(payload, "agentFee"));
+  return { ok, message: ok ? "BYOK subscription and shared-capacity projection detected" : "subscription shape or no-fee invariant failed" };
 }
 
 function validateLaunchStatus(raw) {
@@ -406,19 +430,6 @@ function validateOpenApi(raw) {
     failureClass: ok ? null : "api-openapi",
     expected: "GET /api/launch/openapi.json returns an OpenAPI document",
     message: ok ? "openapi field detected" : "missing openapi field",
-  };
-}
-
-function validateStore(raw) {
-  const payload = parseJson(raw.body_text);
-  const ok = Boolean(
-    payload && typeof payload === "object" && Array.isArray(payload.results),
-  );
-  return {
-    ok,
-    failureClass: ok ? null : "api-data",
-    expected: "GET /api/launch/store returns discovery JSON with results array",
-    message: ok ? "results array detected" : "missing results array",
   };
 }
 

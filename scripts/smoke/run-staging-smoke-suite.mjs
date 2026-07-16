@@ -2,7 +2,7 @@
 // G1 smoke-suite orchestrator — runs the WHOLE smoke pass into one evidence dir
 // so "run the staging smoke" is a single command. It wraps run-release-smoke
 // (guardrails / auth / API / CORS / chat) and the standalone smokes
-// (launch-web-pages, durable-exec, interface-deploy, free-mode-e2e), records
+// (launch-web-pages, durable-exec, interface-deploy), records
 // each one's exit code, and writes a top-level g1-smoke-suite-summary.{json,md}.
 //
 // A smoke is SKIPPED (not failed) when its required inputs aren't provided, so
@@ -13,10 +13,8 @@
 //   node scripts/smoke/run-staging-smoke-suite.mjs \
 //     --target staging \
 //     --token <ul_ api token> \
-//     --user-id <smoke account uuid>          # enables free-mode-e2e
-//     --service-role-key <SUPABASE_SERVICE_ROLE_KEY>  # enables free-mode-e2e
 //     --durable-app <agent id> --durable-function <fn>  # enables durable-exec
-//     [--exercise-chat]                        # real chat send (costs credits)
+//     [--exercise-chat]                        # legacy chat only; not launch certification
 //     [--output-dir <dir>]                     # default: docs/_generated/launch/<target>/<candidate-id>
 //
 // Evidence lands in docs/_generated/launch/<target>/<candidate-id>/ (gitignored).
@@ -37,16 +35,16 @@ if (!["staging", "production"].includes(target)) {
 const apiBase = String(
   args.get("--url") || process.env.ULTRALIGHT_API_URL ||
     (target === "production"
-      ? "https://api.ultralightagent.com"
+      ? "https://api.connectgalactic.com"
       : "https://ultralight-api-staging.rgn4jz429m.workers.dev"),
 ).replace(/\/$/, "");
 const supabaseUrl = String(
   args.get("--supabase-url") || process.env.ULTRALIGHT_SUPABASE_URL ||
-    "https://uavjzycsltdnwblwutmb.supabase.co",
+    (target === "production"
+      ? "https://uavjzycsltdnwblwutmb.supabase.co"
+      : "https://mtekfhozmsboxizxxxyn.supabase.co"),
 ).replace(/\/$/, "");
 const token = String(args.get("--token") || process.env.ULTRALIGHT_TOKEN || "").trim();
-const userId = String(args.get("--user-id") || process.env.ULTRALIGHT_SMOKE_USER_ID || "").trim();
-const serviceRoleKey = String(args.get("--service-role-key") || process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 const durableApp = String(args.get("--durable-app") || "").trim();
 const durableFn = String(args.get("--durable-function") || "").trim();
 const exerciseChat = args.has("--exercise-chat");
@@ -128,24 +126,7 @@ results.push(await runStep({
   ],
 }));
 
-// 3. Free Mode E2E — the gates with FREE_MODE on (needs service-role + user-id).
-results.push(await runStep({
-  name: "free-mode-e2e",
-  command: "node",
-  commandArgs: [
-    "scripts/smoke/free-mode-e2e-smoke.mjs",
-    "--url", apiBase,
-    "--supabase-url", supabaseUrl,
-    "--output-dir", smokeDir,
-    ...(token ? ["--token", token] : []),
-    ...(userId ? ["--user-id", userId] : []),
-    ...(serviceRoleKey ? ["--service-role-key", serviceRoleKey] : []),
-  ],
-  skipReason: (token && userId && serviceRoleKey)
-    ? "" : "needs --token + --user-id + --service-role-key",
-}));
-
-// 4. Durable-execution spine (needs a real async-capable agent + function).
+// 3. Durable-execution spine (needs a real async-capable Agent + function).
 results.push(await runStep({
   name: "durable-exec",
   command: "node",
@@ -160,13 +141,13 @@ results.push(await runStep({
     ? "" : "needs --token + --durable-app + --durable-function",
 }));
 
-// 5. Interface deploy+render (uploads the reference interface agent, private).
+// 4. Interface deploy+render (uploads the fixed reference Agent, private).
 results.push(await runStep({
   name: "interface-deploy",
   command: "node",
   commandArgs: ["scripts/smoke/interface-deploy-smoke.mjs", "--url", apiBase],
   env: { ULTRALIGHT_TOKEN: token },
-  skipReason: token ? "" : "needs --token (upload scope)",
+  skipReason: token ? "" : "needs --token (agents:build scope)",
 }));
 
 // ── Aggregate ──

@@ -865,6 +865,7 @@ export function AddToAgentButton({
   variant?: "primary" | "secondary" | "ghost";
 }): ReactElement {
   const [open, setOpen] = useState(false);
+  const [mintPromise, setMintPromise] = useState<Promise<string> | null>(null);
   const openSignIn = useSignInModal();
   // Signed out there is no key to mint — prompt sign-in first; the same button
   // mints the key + copies the prompt once a session exists.
@@ -884,18 +885,23 @@ export function AddToAgentButton({
     <>
       <Button
         icon="copy"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          // Start the side effect in the user event, outside the modal's
+          // StrictMode-remounted effect. One click must mint exactly one key.
+          setMintPromise(mintConnectKey());
+          setOpen(true);
+        }}
         size={size}
         variant={variant}
       >
         {label}
       </Button>
-      {open
+      {open && mintPromise
         ? (
           <ConnectPromptModal
             buildPrompt={buildPrompt}
             intro="This created a 90-day key scoped to read, call, build, and operate your private Agents. Owner approvals, secrets, billing, and publication still require your Galactic account session. The key is shown only here."
-            mint={mintConnectKey}
+            mintPromise={mintPromise}
             onClose={() => setOpen(false)}
           />
         )
@@ -907,27 +913,22 @@ export function AddToAgentButton({
 function ConnectPromptModal({
   buildPrompt,
   intro,
-  mint,
+  mintPromise,
   onClose,
 }: {
   buildPrompt: (key: string) => string;
   intro: string;
-  mint: () => Promise<string>;
+  mintPromise: Promise<string>;
   onClose: () => void;
 }): ReactElement {
   const [prompt, setPrompt] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [autoCopied, setAutoCopied] = useState(false);
-  // Both StrictMode dev mounts must share ONE mint — a key is a server-side
-  // credential, so the effect cannot simply re-run.
-  const mintOnce = useRef<Promise<string> | null>(null);
-
-  // Mint exactly once per modal open; the click that opened the modal is the
-  // consent to create a key.
+  // The parent creates this promise in the click handler. Effects may mount
+  // twice under React StrictMode, but they only observe the same server write.
   useEffect(() => {
     let cancelled = false;
-    if (!mintOnce.current) mintOnce.current = mint();
-    mintOnce.current
+    mintPromise
       .then(async (token) => {
         if (cancelled) return;
         const text = buildPrompt(token);
@@ -947,8 +948,10 @@ function ConnectPromptModal({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mint once per open
-  }, []);
+    // buildPrompt is a pure formatter recreated by the parent; the credential
+    // promise is the only side-effect identity for this modal open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mintPromise]);
 
   return (
     <div
@@ -1470,6 +1473,7 @@ function AgentConnectButton({
   tool: AgentDetailFixture;
 }): ReactElement {
   const [open, setOpen] = useState(false);
+  const [mintPromise, setMintPromise] = useState<Promise<string> | null>(null);
   // Signed out there is no key to mint — sign in and land back on this page.
   if (!hasLaunchAuthToken()) {
     return (
@@ -1488,15 +1492,22 @@ function AgentConnectButton({
       : buildAgentConnectPrompt(tool, key);
   return (
     <>
-      <Button icon="copy" onClick={() => setOpen(true)} size="lg">
+      <Button
+        icon="copy"
+        onClick={() => {
+          setMintPromise(mintAgentConnectKey(tool));
+          setOpen(true);
+        }}
+        size="lg"
+      >
         Add direct to agent
       </Button>
-      {open
+      {open && mintPromise
         ? (
           <ConnectPromptModal
             buildPrompt={buildPrompt}
             intro={`This created a 90-day API key scoped to ${tool.title} only and baked it into the prompt below. The key is shown only here.`}
-            mint={() => mintAgentConnectKey(tool)}
+            mintPromise={mintPromise}
             onClose={() => setOpen(false)}
           />
         )

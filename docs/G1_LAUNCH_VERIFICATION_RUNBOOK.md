@@ -1,154 +1,114 @@
-# G1 — Launch Verification Runbook
+# G1 — Persistent-Agent Launch Verification Runbook
 
-The code is launch-complete. **G1 is the operational gate**: run the dry-runs against
-live environments and capture the evidence the release packet requires. This runbook
-turns that into a copy-paste sequence. Evidence lands under
-`docs/_generated/launch/<target>/<candidate-id>/` (gitignored — local/operator only).
+P2.2 is the operational gate for the web/API launch. Evidence is written under
+`docs/_generated/launch/<target>/<candidate-id>/` and uploaded by CI; credentials
+and raw database dumps are never artifacts.
 
-> Status going in: G2 (secrets) complete, **Stripe on TEST keys in prod** (intentional);
-> G3/G4 clear. The only gate left is executing what's below.
+## Owners
 
----
+- Release lead: Russell In
+- Rollback owner: Russell In
+- Communications owner: Russell In
 
-## 0. Prerequisites & setup
+## Prerequisites
 
-You need:
-- **Node 20**: `source ~/.nvm/nvm.sh && nvm use`
-- A **smoke API token** (`ul_…`, `apps:call` scope) for a **dedicated smoke account** (not a real customer).
-- The smoke account's **user UUID** and the **Supabase service-role key** (for the free-mode smoke's balance snapshot/restore).
-- (Optional) an **async-capable agent id + function** for the durable-execution smoke.
-- An **isolated Supabase project** to restore into (for the backup/restore drill).
+- Node 20.
+- `ULTRALIGHT_TOKEN`: a builder/operator key containing `agents:build` and
+  `agents:operate` for the launch account.
+- `GALACTIC_SMOKE_APP_ID`: the one fixed private smoke Agent owned by that
+  account. The automation may version this Agent but must never create ad-hoc
+  duplicates.
+- Production and isolated restore database passwords stored as GitHub Actions
+  secrets. Do not place passwords in a command line, log, evidence file, or PR.
+- Optional async-capable Agent/function inputs for the durable-execution smoke.
 
-Set up the candidate + evidence dir once:
+## 1. Staging certification
 
-```bash
-source ~/.nvm/nvm.sh && nvm use
-export TOK='ul_…'                       # smoke account API token
-export UID='00000000-…'                 # smoke account user uuid
-export SRK='…'                          # SUPABASE_SERVICE_ROLE_KEY
-export TARGET=staging
-export CID="$(date -u +%F)-main-$(git rev-parse --short=7 HEAD)"   # e.g. 2026-06-25-main-ef036a9
-export DIR="docs/_generated/launch/$TARGET/$CID"
-mkdir -p "$DIR"
-echo "candidate: $CID  →  $DIR"
-```
+Run the `G1 Launch Smoke` workflow with `target=staging`. It performs:
 
----
+1. Worker/Supabase/auth/BYOK/subscription-capacity preflight.
+2. Release packet initialization with named owners.
+3. Core API, CORS, Pages, subscription/capacity, retired-wallet, fixed-Agent
+   interface deploy, and optional durable-execution smokes.
 
-## 1. Secrets preflight (fast — catch a missing secret before the slow smoke)
+Any executed smoke failure is stop-ship. A missing fixed-Agent credential is a
+failure, not a pass. A durable smoke may be explicitly marked not applicable
+only when the candidate did not change the durable execution spine.
 
-```bash
-node scripts/ops/verify-secrets.mjs --target staging --token "$TOK"
-# repeat for production once it's deployed:
-node scripts/ops/verify-secrets.mjs --target production --token "$TOK"
-```
-Critical probes must be **OK** (health, Supabase, models, auth). **Stripe is WARN-only** —
-"responds" is enough; you're on test keys on purpose. A `FAIL` means a missing/wrong
-Worker secret — fix before continuing.
+## 2. Canonical browser journey
 
-## 2. Initialize the release packet (scaffolds the decision doc)
+Using the authenticated launch account, record in `manual/canonical-journey.md`:
 
-```bash
-node scripts/ops/init-release-packet.mjs \
-  --target "$TARGET" --commit-sha "$(git rev-parse HEAD)" --git-ref main \
-  --operator "$USER" --output-dir "$DIR"
-# writes $DIR/release-packet.md + $DIR/metadata.json (all results 'pending')
-```
+- Agents, Profile, and Agent Home load without marketplace/credit UI.
+- The connected coding agent downloads the full-time scaffold, tests it, and
+  uploads the exact attested files to the fixed private Agent.
+- Mission, interval cadence, secrets/readiness, approved actions, reporting,
+  finite limits, pause/resume, recent runs, and logs are visible or editable in
+  Agent Home as designed.
+- An AI Agent is activation-blocked without BYOK; after a provider key is
+  configured, inference uses that provider rather than Galactic credits.
+- Capacity always shows `available`, `low`, or `waiting` plus reset time. A wait
+  is distinguishable from breakage.
+- Pro checkout/webhook/account projection and Billing Portal work. Reuse the
+  recorded real transaction unless the billing code or Stripe configuration
+  changed; do not create needless live charges.
 
-## 3. Run the staging smoke suite (one command, all smokes → one evidence dir)
+## 3. Backup/restore drill
 
-```bash
-node scripts/smoke/run-staging-smoke-suite.mjs \
-  --target staging --token "$TOK" \
-  --user-id "$UID" --service-role-key "$SRK" \
-  # optional async spine: --durable-app <agentId> --durable-function <fn> \
-  # optional real chat (costs credits): --exercise-chat \
-  --output-dir "$DIR"
-```
-This runs, into `$DIR/smoke/`: **release-smoke** (guardrails / auth / API / CORS / chat),
-**launch-web-pages**, **free-mode-e2e** (the gates with `FREE_MODE` on), **durable-exec**
-(if you pass the agent), and **interface-deploy**. It writes `$DIR/g1-smoke-suite-summary.{json,md}`.
-Exit 0 = every run smoke passed; a smoke with missing inputs is **skipped**, not failed.
+Dispatch `P2.2 Supabase Restore Drill` with the required confirmation string.
+The workflow:
 
-**Stop-ship:** any smoke `failed`. The free-mode smoke is the new must-pass — it proves a
-<$0.25 balance blocks paid + AI-without-BYOK and allows free, live.
+- creates an encrypted-in-transit, ephemeral custom-format dump;
+- replaces only the isolated restore target's `public` application schema;
+- compares source/target public-table counts and schema fingerprints;
+- deletes the raw dump before artifact upload;
+- uploads a sanitized JSON/Markdown result with timings.
 
-> Not covered automatically (do manually, record in `$DIR/manual/`): the **payment top-up**
-> flow (test-mode card → webhook → balance). It has unit tests + `docs/PAYMENTS_LAUNCH_QA.md`;
-> run that checklist once on staging and note the result.
+The target must never receive production traffic. Restore failure, count drift,
+schema drift, or accidental raw-dump artifacting is stop-ship.
 
-## 4. Backup / restore drill (never run — prove your data is recoverable)
+## 4. Rollback rehearsal
 
-```bash
-node scripts/ops/init-backup-restore-drill.mjs \
-  --source-environment production \
-  --restore-target '<isolated-supabase-project-ref>' \
-  --output-dir "$DIR/restore-drill"
-# then: actually restore a real backup into the isolated target, run the
-# validation queries, and fill $DIR/restore-drill/notes.md with:
-#   source backup ref + timestamp, seed-row checks, start/finish times,
-#   RTO + RPO, and any operator gaps.
-```
-**Pass** = restore completed into an isolated target, validation queries returned expected
-seed rows/counts, and RTO/RPO are recorded. This is an ops exercise, not a test — it must
-actually run once.
-
-## 5. Rollback rehearsal (never run — tabletop the recovery paths)
+Initialize the rehearsal:
 
 ```bash
 node scripts/ops/init-rollback-rehearsal.mjs \
-  --target production --candidate-id "$CID" \
+  --target production \
+  --candidate-id "$CID" \
+  --operator "Russell In" \
   --output-dir "$DIR/rollback-rehearsal"
-# then tabletop the 4 scenarios in notes.md and record for each: trigger,
-# first safe action, comms point, recovery path, time-to-identify, gaps:
-#   1) bad staging deploy  2) bad production API deploy
-#   3) bad production DB migration  4) bad desktop release/updater (N/A if no desktop)
 ```
-**Pass** = all four walked through, timings + gaps recorded, runbook updated if the
-rehearsal exposed a gap.
 
-## 6. Production smoke (after the production deploy)
+Walk through bad staging Worker, bad production Worker, bad database migration,
+and bad Pages deploy. For each, record trigger, first safe action, recovery path,
+communications point, time to identify the playbook, and gaps. Database recovery
+uses the restore evidence; destructive rollback is never improvised.
 
-A push of `b8ad5df`/`81d34c7` already deploys via `branches: [main]`. Once prod is live:
+## 5. Candidate and production certification
+
+Merge the exact green commit, tag it `vX.Y.Z`, and wait for the required DB/API/
+Pages production workflows and `Production Launch Gate`. Ordinary `v*` tags do
+not build desktop; desktop is deferred and uses `desktop-v*` tags.
+
+Then dispatch `G1 Launch Smoke` with `target=production`, complete the canonical
+browser journey, attach the restore/rehearsal evidence, accept the documented
+shared R2/KV staging exception, and fill the release packet.
+
+Do not announce until production smoke is green and Russell In records `go`.
+
+## Local command reference
+
 ```bash
-export TARGET=production
-export CID="$(date -u +%F)-$(git describe --tags --abbrev=0 2>/dev/null || echo main)-$(git rev-parse --short=7 HEAD)"
-export DIR="docs/_generated/launch/$TARGET/$CID"; mkdir -p "$DIR"
-node scripts/ops/verify-secrets.mjs --target production --token "$TOK"
-node scripts/smoke/run-staging-smoke-suite.mjs --target production --token "$TOK" \
-  --user-id "$UID" --service-role-key "$SRK" --output-dir "$DIR"
+node scripts/ops/verify-secrets.mjs --target staging --token "$TOK"
+node scripts/smoke/run-staging-smoke-suite.mjs \
+  --target staging --token "$TOK" --output-dir "$DIR"
+node scripts/ops/init-release-packet.mjs \
+  --target staging --commit-sha "$(git rev-parse HEAD)" --git-ref main \
+  --operator "Russell In" --release-lead "Russell In" \
+  --rollback-owner "Russell In" --communications-owner "Russell In" \
+  --output-dir "$DIR"
 ```
-**Stop-ship:** do **not** announce until the production smoke is green and attached.
 
-## 7. Fill the release packet → sign off
-
-Edit `$DIR/release-packet.md`:
-- Fill every smoke / workflow / audit cell from the evidence under `$DIR/`.
-- Name **release lead**, **rollback owner**, **comms owner** (missing rollback/comms owner = stop-ship).
-- Set **decision**: `go` / `no-go` / `conditional`. Any exception → register it in
-  `docs/ENVIRONMENT_ISOLATION_MATRIX.md` with owner + risk + follow-up.
-
-### Stop-ship checklist (any TRUE = no-go) — from `docs/LAUNCH_SIGNOFF_POLICY.md`
-- [ ] a required workflow / launch gate failed, missing, or pending
-- [ ] staging smoke failed or missing for a prod promotion
-- [ ] prod smoke failed or missing before announcement
-- [ ] release packet incomplete
-- [ ] a required operational item has no candidate evidence (e.g. restore drill / rollback rehearsal not run)
-- [ ] a new staging↔prod coupling not in the isolation matrix
-- [ ] rollback owner or comms owner missing
-
----
-
-## Quick reference
-
-| Thing | Command |
-|---|---|
-| Secrets preflight | `node scripts/ops/verify-secrets.mjs --target <t> --token $TOK` |
-| Whole smoke suite | `node scripts/smoke/run-staging-smoke-suite.mjs --target <t> --token $TOK --user-id $UID --service-role-key $SRK --output-dir $DIR` |
-| Free-mode only | `node scripts/smoke/free-mode-e2e-smoke.mjs --url <api> --token $TOK --user-id $UID --supabase-url <sb> --service-role-key $SRK --output-dir $DIR/smoke` |
-| Release packet | `node scripts/ops/init-release-packet.mjs --target <t> --commit-sha $(git rev-parse HEAD) --git-ref main --operator $USER --output-dir $DIR` |
-| Restore drill | `node scripts/ops/init-backup-restore-drill.mjs --source-environment production --restore-target <ref> --output-dir $DIR/restore-drill` |
-| Rollback rehearsal | `node scripts/ops/init-rollback-rehearsal.mjs --target production --candidate-id $CID --output-dir $DIR/rollback-rehearsal` |
-
-Evidence root: `docs/_generated/launch/<target>/<candidate-id>/` (gitignored).
-Candidate-id: `YYYY-MM-DD-{main|vX.Y.Z}-{7-char-sha}`.
+The Free Mode credit smoke is retained as historical compatibility coverage but
+is not a P2.2 launch gate. Customer-facing credits, wallet top-ups, platform AI,
+marketplace, public sharing, and desktop are outside this release contract.

@@ -10,7 +10,7 @@
 //   node scripts/ops/verify-secrets.mjs --target production --token <ul_ api token>
 //
 // Exit 0 = all critical probes OK · 1 = a critical probe failed.
-// Stripe is reported but NOT failed on (you're intentionally on TEST keys).
+// Stripe checkout itself is verified through an authenticated browser session.
 
 import { parseArgs } from "../analysis/_shared.mjs";
 
@@ -19,7 +19,7 @@ const target = String(args.get("--target") || "staging").trim().toLowerCase();
 const apiBase = String(
   args.get("--url") || process.env.ULTRALIGHT_API_URL ||
     (target === "production"
-      ? "https://api.ultralightagent.com"
+      ? "https://api.connectgalactic.com"
       : "https://ultralight-api-staging.rgn4jz429m.workers.dev"),
 ).replace(/\/$/, "");
 const token = String(args.get("--token") || process.env.ULTRALIGHT_TOKEN || "").trim();
@@ -54,13 +54,7 @@ console.log(`Secrets preflight — ${target} — ${apiBase}\n`);
   const r = await get("/api/discover/status");
   record("/api/discover/status", r.status === 200 ? "OK" : "FAIL", "SUPABASE_URL + keys", r.status === 200 ? "" : `status ${r.status}`);
 }
-// 3. Inference catalog present (OPENROUTER_API_KEY / provider config).
-{
-  const r = await get("/chat/models");
-  const ok = r.status === 200 && Array.isArray(r.body?.models) && r.body.models.length > 0;
-  record("/chat/models", ok ? "OK" : "FAIL", "OPENROUTER_API_KEY / models", ok ? `${r.body.models.length} models` : `status ${r.status}`);
-}
-// 4. Auth works end-to-end with the token (Supabase keys + a valid token).
+// 3. Auth works end-to-end with the token (Supabase keys + a valid token).
 if (token) {
   const r = await get("/auth/user", authHeaders);
   const ok = r.status === 200 && !!r.body?.email;
@@ -68,38 +62,28 @@ if (token) {
 } else {
   record("/auth/user", "SKIP", "auth (needs --token)", "");
 }
-// 5. CRITICAL: platform inference actually ROUTES (not just "models list").
-//    /chat/models loading is necessary but NOT sufficient — a key can be present
-//    yet unusable (legacy-plaintext entry, missing DeepSeek key, etc.). The
-//    authoritative signal is chat-preflight.ok for the DEFAULT model.
+// 4. BYOK-only launch projection. A platform inference route is intentionally
+//    not required: each account supplies its own provider key.
 if (token) {
-  const r = await get("/debug/chat-preflight", authHeaders);
-  if (r.status === 200 && r.body?.ok === true) {
-    record("inference route (default model)", "OK", "platform AI routes", `${r.body?.model || ""} → ${r.body?.route?.upstream_provider || "?"}`);
-  } else {
-    const failed = Array.isArray(r.body?.checks)
-      ? r.body.checks.filter((c) => c && c.ok === false).map((c) => `${c.check}: ${c.result || ""}`)
-      : [];
-    record("inference route (default model)", "FAIL", "platform AI is BROKEN",
-      failed.length ? failed.join("  |  ") : `status ${r.status}`);
-  }
+  const r = await get("/api/launch/inference-options", authHeaders);
+  const ok = r.status === 200 && r.body?.billingMode === "byok" &&
+    !Object.prototype.hasOwnProperty.call(r.body || {}, "credits") &&
+    !Object.prototype.hasOwnProperty.call(r.body || {}, "platformModel");
+  record("BYOK launch inference", ok ? "OK" : "FAIL", "billingMode=byok; no credits/platform model", ok ? "" : `status ${r.status}`);
 } else {
-  record("inference route (default model)", "SKIP", "inference (needs --token)", "");
+  record("BYOK launch inference", "SKIP", "inference projection (needs --token)", "");
 }
-// 6. Stripe — WARN/SKIP only (test keys are expected; wallet route is session-gated).
+// 5. Subscription/capacity projection. Checkout and portal require a browser
+//    account session and are exercised in the canonical-journey run.
 if (token) {
-  const r = await get("/api/launch/wallet/topup/quote?amount_credits=2500&method=card", authHeaders);
-  if (r.status === 200) {
-    record("Stripe top-up quote", "OK", "STRIPE_* configured", "responds — verify TEST vs LIVE in the Stripe dashboard");
-  } else if (r.status === 503) {
-    record("Stripe top-up quote", "WARN", "STRIPE_* MISSING", "503 not-configured — top-ups will not work");
-  } else if (r.status === 403) {
-    record("Stripe top-up quote", "SKIP", "Stripe (session-gated)", "wallet route needs a browser session — verify keys via the Stripe/Cloudflare dashboard");
-  } else {
-    record("Stripe top-up quote", "WARN", "STRIPE_* (unclear)", `status ${r.status}`);
-  }
+  const subscription = await get("/api/launch/subscription", authHeaders);
+  const capacity = await get("/api/launch/capacity", authHeaders);
+  const ok = subscription.status === 200 && capacity.status === 200 &&
+    ["free", "pro", "max_5x", "max_10x"].includes(subscription.body?.plan) &&
+    ["available", "low", "waiting"].includes(capacity.body?.state);
+  record("subscription capacity", ok ? "OK" : "FAIL", "Stripe projection + capacity RPC", ok ? `${subscription.body.plan}/${capacity.body.state}` : `statuses ${subscription.status}/${capacity.status}`);
 } else {
-  record("Stripe top-up quote", "SKIP", "Stripe (needs --token)", "");
+  record("subscription capacity", "SKIP", "subscription projection (needs --token)", "");
 }
 
 const failed = rows.filter((r) => r.status === "FAIL");
@@ -109,4 +93,4 @@ if (failed.length) {
   console.error("→ A failing critical probe usually means a missing/wrong Worker secret. Fix before the G1 smoke.");
   process.exit(1);
 }
-console.log("Secrets preflight: all critical probes OK (Stripe is informational — test keys expected).");
+console.log("Secrets preflight: all critical launch probes OK.");
