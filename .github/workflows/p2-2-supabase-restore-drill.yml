@@ -34,7 +34,10 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
 
       - name: Run isolated restore and validation
         id: drill
@@ -55,20 +58,36 @@ jobs:
           fi
 
           resolve_pooler() {
-            local project_ref="$1" password="$2" region="$3" shard conn
+            local project_ref="$1" password="$2" region="$3" shard host address conn error_file
+            error_file="$RUNNER_TEMP/pooler-${project_ref}.error"
             for shard in 0 1; do
-              conn="host=aws-${shard}-${region}.pooler.supabase.com port=5432 user=postgres.${project_ref} dbname=postgres sslmode=require connect_timeout=15"
-              if PGPASSWORD="$password" psql "$conn" -X -v ON_ERROR_STOP=1 -Atqc 'select 1' >/dev/null 2>&1; then
-                printf '%s' "$conn"
-                return 0
-              fi
+              host="aws-${shard}-${region}.pooler.supabase.com"
+              while read -r address; do
+                [[ -n "$address" ]] || continue
+                # Password rotations can briefly be uneven across pooler
+                # nodes. Prove and pin one address for the entire drill.
+                conn="host=${host} hostaddr=${address} port=5432 user=postgres.${project_ref} dbname=postgres sslmode=require connect_timeout=15"
+                if PGPASSWORD="$password" psql "$conn" -X -v ON_ERROR_STOP=1 -Atqc 'select 1' >/dev/null 2>"$error_file"; then
+                  rm -f "$error_file"
+                  printf '%s' "$conn"
+                  return 0
+                fi
+              done < <(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u)
             done
+            echo "No reachable session-pooler shard for project ${project_ref}. Last safe diagnostic:" >&2
+            [[ -f "$error_file" ]] && cat "$error_file" >&2
+            rm -f "$error_file"
             return 1
           }
 
           SOURCE_CONN=""
           TARGET_CONN=""
           DUMP_PATH="$RUNNER_TEMP/p2-2-production-public.dump"
+          AUTH_DUMP_PATH="$RUNNER_TEMP/p2-2-production-auth-anchors.dump"
+          SOURCE_SCHEMA_PATH="$RUNNER_TEMP/p2-2-source-schema.sql"
+          TARGET_SCHEMA_PATH="$RUNNER_TEMP/p2-2-target-schema.sql"
+          SOURCE_SCHEMA_INVENTORY="$RUNNER_TEMP/p2-2-source-schema.tsv"
+          TARGET_SCHEMA_INVENTORY="$RUNNER_TEMP/p2-2-target-schema.tsv"
           EVIDENCE_DIR="$RUNNER_TEMP/p2-2-restore-evidence"
           mkdir -p "$EVIDENCE_DIR"
           STARTED_AT="$(date -u +%FT%TZ)"
@@ -77,19 +96,32 @@ jobs:
           FAILURE_STEP="initialization"
           SOURCE_SCHEMA_SHA=""
           TARGET_SCHEMA_SHA=""
+          SOURCE_ACL_SHA=""
+          TARGET_ACL_SHA=""
           SOURCE_TABLES="0"
           TARGET_TABLES="0"
           SOURCE_ROWS="0"
           TARGET_ROWS="0"
+          SOURCE_AUTH_USERS="0"
+          TARGET_AUTH_USERS="0"
+          SOURCE_AUTH_IDENTITIES="0"
+          TARGET_AUTH_IDENTITIES="0"
 
           finish() {
             local exit_code=$?
-            rm -f "$DUMP_PATH"
+            if [[ -f "$SOURCE_SCHEMA_INVENTORY" && -f "$TARGET_SCHEMA_INVENTORY" ]]; then
+              diff -u "$SOURCE_SCHEMA_INVENTORY" "$TARGET_SCHEMA_INVENTORY" > "$EVIDENCE_DIR/schema-inventory.diff" || true
+            fi
+            if [[ -f "$RUNNER_TEMP/source-acl.tsv" && -f "$RUNNER_TEMP/target-acl.tsv" ]]; then
+              diff -u "$RUNNER_TEMP/source-acl.tsv" "$RUNNER_TEMP/target-acl.tsv" > "$EVIDENCE_DIR/runtime-acl.diff" || true
+            fi
+            rm -f "$DUMP_PATH" "$AUTH_DUMP_PATH" "$SOURCE_SCHEMA_PATH" "$TARGET_SCHEMA_PATH"
             local finished_at duration
             finished_at="$(date -u +%FT%TZ)"
             duration="$(( $(date +%s) - START_EPOCH ))"
             export STATUS FAILURE_STEP STARTED_AT="$STARTED_AT" FINISHED_AT="$finished_at" DURATION_SECONDS="$duration"
-            export SOURCE_SCHEMA_SHA TARGET_SCHEMA_SHA SOURCE_TABLES TARGET_TABLES SOURCE_ROWS TARGET_ROWS
+            export SOURCE_SCHEMA_SHA TARGET_SCHEMA_SHA SOURCE_ACL_SHA TARGET_ACL_SHA SOURCE_TABLES TARGET_TABLES SOURCE_ROWS TARGET_ROWS
+            export SOURCE_AUTH_USERS TARGET_AUTH_USERS SOURCE_AUTH_IDENTITIES TARGET_AUTH_IDENTITIES
             export EVIDENCE_DIR SOURCE_REF TARGET_REF EXIT_CODE="$exit_code"
             node <<'NODE'
           const fs = require('node:fs');
@@ -101,12 +133,26 @@ jobs:
             failure_step: e.STATUS === 'passed' ? null : e.FAILURE_STEP,
             source_project_ref: e.SOURCE_REF,
             target_project_ref: e.TARGET_REF,
-            scope: 'public schema/data; managed Supabase schemas preserved; stable core-table counts compared',
+            scope: 'public schema/data, public-scoped extensions, and auth identity anchors; other managed Supabase data not restored; stable counts compared',
             started_at: e.STARTED_AT,
             finished_at: e.FINISHED_AT,
             duration_seconds: Number(e.DURATION_SECONDS || 0),
-            source: { schema_sha256: e.SOURCE_SCHEMA_SHA || null, table_count: Number(e.SOURCE_TABLES || 0), row_count: Number(e.SOURCE_ROWS || 0) },
-            target: { schema_sha256: e.TARGET_SCHEMA_SHA || null, table_count: Number(e.TARGET_TABLES || 0), row_count: Number(e.TARGET_ROWS || 0) },
+            source: {
+              schema_sha256: e.SOURCE_SCHEMA_SHA || null,
+              acl_sha256: e.SOURCE_ACL_SHA || null,
+              table_count: Number(e.SOURCE_TABLES || 0),
+              row_count: Number(e.SOURCE_ROWS || 0),
+              auth_user_count: Number(e.SOURCE_AUTH_USERS || 0),
+              auth_identity_count: Number(e.SOURCE_AUTH_IDENTITIES || 0),
+            },
+            target: {
+              schema_sha256: e.TARGET_SCHEMA_SHA || null,
+              acl_sha256: e.TARGET_ACL_SHA || null,
+              table_count: Number(e.TARGET_TABLES || 0),
+              row_count: Number(e.TARGET_ROWS || 0),
+              auth_user_count: Number(e.TARGET_AUTH_USERS || 0),
+              auth_identity_count: Number(e.TARGET_AUTH_IDENTITIES || 0),
+            },
             raw_dump_uploaded: false,
             exit_code: Number(e.EXIT_CODE || 0),
           };
@@ -118,8 +164,11 @@ jobs:
             `- isolated target: \`${summary.target_project_ref}\``,
             `- duration_seconds: ${summary.duration_seconds}`,
             `- schema fingerprints match: ${summary.source.schema_sha256 && summary.source.schema_sha256 === summary.target.schema_sha256}`,
+            `- runtime ACL fingerprints match: ${summary.source.acl_sha256 && summary.source.acl_sha256 === summary.target.acl_sha256}`,
             `- source/target tables: ${summary.source.table_count}/${summary.target.table_count}`,
             `- source/target rows: ${summary.source.row_count}/${summary.target.row_count}`,
+            `- source/target auth users: ${summary.source.auth_user_count}/${summary.target.auth_user_count}`,
+            `- source/target auth identities: ${summary.source.auth_identity_count}/${summary.target.auth_identity_count}`,
             '- raw dump uploaded: false',
             summary.failure_step ? `- failure_step: ${summary.failure_step}` : '', ''
           ].filter(Boolean).join('\n'));
@@ -128,6 +177,36 @@ jobs:
             return "$exit_code"
           }
           trap finish EXIT
+
+          schema_inventory() {
+            local schema_path="$1" inventory_path="$2"
+            node - "$schema_path" "$inventory_path" <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const [schemaPath, inventoryPath] = process.argv.slice(2);
+          const lines = fs.readFileSync(schemaPath, 'utf8').split('\n');
+          const header = /^-- Name: (.*); Type: (.*); Schema: (.*); Owner: .*$/;
+          const records = [];
+          let current = null;
+          for (const line of lines) {
+            const match = line.match(header);
+            if (match) {
+              if (current) records.push(current);
+              current = { name: match[1], type: match[2], schema: match[3], lines: [] };
+              continue;
+            }
+            if (current && !line.startsWith('--') && !line.startsWith('\\restrict ') && !line.startsWith('\\unrestrict ') && line.trim()) {
+              current.lines.push(line);
+            }
+          }
+          if (current) records.push(current);
+          const output = records.map((record) => {
+            const hash = crypto.createHash('sha256').update(record.lines.join('\n')).digest('hex');
+            return [record.type, record.schema, record.name, hash].join('\t');
+          }).sort().join('\n');
+          fs.writeFileSync(inventoryPath, output + (output ? '\n' : ''));
+          NODE
+          }
 
           FAILURE_STEP="source-connectivity"
           SOURCE_CONN="$(resolve_pooler "$SOURCE_REF" "$SOURCE_PASSWORD" us-east-2)"
@@ -140,16 +219,83 @@ jobs:
           PGPASSWORD="$SOURCE_PASSWORD" psql "$SOURCE_CONN" -X -v ON_ERROR_STOP=1 -AtF $'\t' <<< "$count_queries" > "$RUNNER_TEMP/source-counts.tsv"
           SOURCE_TABLES="$(wc -l < "$RUNNER_TEMP/source-counts.tsv" | tr -d ' ')"
           SOURCE_ROWS="$(awk -F '\t' '{s += $2} END {print s + 0}' "$RUNNER_TEMP/source-counts.tsv")"
+          SOURCE_AUTH_USERS="$(PGPASSWORD="$SOURCE_PASSWORD" psql "$SOURCE_CONN" -X -v ON_ERROR_STOP=1 -Atqc 'select count(*) from auth.users')"
+          SOURCE_AUTH_IDENTITIES="$(PGPASSWORD="$SOURCE_PASSWORD" psql "$SOURCE_CONN" -X -v ON_ERROR_STOP=1 -Atqc 'select count(*) from auth.identities')"
+
+          acl_query="$(cat <<'SQL'
+          select acl_row from (
+            select concat_ws('|', 'table', table_name, grantee, privilege_type, is_grantable) as acl_row
+            from information_schema.table_privileges
+            where table_schema='public' and grantee in ('anon','authenticated','service_role','PUBLIC')
+            union all
+            select concat_ws('|', 'routine', routine_name, grantee, privilege_type, is_grantable)
+            from information_schema.routine_privileges
+            where routine_schema='public' and grantee in ('anon','authenticated','service_role','PUBLIC')
+              and (
+                grantee='PUBLIC' or not exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace pn on pn.oid=p.pronamespace
+                  join pg_depend d on d.classid='pg_proc'::regclass and d.objid=p.oid and d.deptype='e'
+                  where pn.nspname='public' and p.proname=routine_name
+                )
+              )
+            union all
+            select concat_ws('|', 'usage', object_type, object_name, grantee, privilege_type, is_grantable)
+            from information_schema.usage_privileges
+            where object_schema='public' and grantee in ('anon','authenticated','service_role','PUBLIC')
+            union all
+            select concat_ws('|', 'schema', role_name,
+              has_schema_privilege(role_name, 'public', 'USAGE'),
+              has_schema_privilege(role_name, 'public', 'CREATE'))
+            from unnest(array['anon','authenticated','service_role']) as role_name
+          ) inventory order by acl_row
+          SQL
+          )"
+          PGPASSWORD="$SOURCE_PASSWORD" psql "$SOURCE_CONN" -X -v ON_ERROR_STOP=1 -Atqc "$acl_query" > "$RUNNER_TEMP/source-acl.tsv"
+          SOURCE_ACL_SHA="$(sha256sum "$RUNNER_TEMP/source-acl.tsv" | awk '{print $1}')"
 
           FAILURE_STEP="source-schema-fingerprint"
-          SOURCE_SCHEMA_SHA="$(PGPASSWORD="$SOURCE_PASSWORD" pg_dump --dbname="$SOURCE_CONN" --schema=public --schema-only --no-owner --no-privileges | sed '/^--/d;/^\\restrict /d;/^\\unrestrict /d;/^$/d' | sha256sum | awk '{print $1}')"
+          PGPASSWORD="$SOURCE_PASSWORD" pg_dump --dbname="$SOURCE_CONN" --schema=public --schema-only --no-owner --no-privileges --file="$SOURCE_SCHEMA_PATH"
+          schema_inventory "$SOURCE_SCHEMA_PATH" "$SOURCE_SCHEMA_INVENTORY"
+          SOURCE_SCHEMA_SHA="$(sha256sum "$SOURCE_SCHEMA_INVENTORY" | awk '{print $1}')"
 
           FAILURE_STEP="production-dump"
-          PGPASSWORD="$SOURCE_PASSWORD" pg_dump --dbname="$SOURCE_CONN" --schema=public --format=custom --no-owner --no-privileges --file="$DUMP_PATH"
+          PGPASSWORD="$SOURCE_PASSWORD" pg_dump --dbname="$SOURCE_CONN" --schema=public --format=custom --no-owner --file="$DUMP_PATH"
           test -s "$DUMP_PATH"
+          PGPASSWORD="$SOURCE_PASSWORD" pg_dump --dbname="$SOURCE_CONN" --data-only --table=auth.users --table=auth.identities --format=custom --no-owner --file="$AUTH_DUMP_PATH"
+          test -s "$AUTH_DUMP_PATH"
+
+          public_extension_sql="$(PGPASSWORD="$SOURCE_PASSWORD" psql "$SOURCE_CONN" -X -v ON_ERROR_STOP=1 -Atqc \
+            "select format('drop extension if exists %I cascade; create extension %I with schema public version %L;', extname, extname, extversion) from pg_extension e join pg_namespace n on n.oid=e.extnamespace where n.nspname='public' order by extname")"
+          public_schema_comment_sql="$(PGPASSWORD="$SOURCE_PASSWORD" psql "$SOURCE_CONN" -X -v ON_ERROR_STOP=1 -Atqc \
+            "select format('comment on schema public is %L;', obj_description('public'::regnamespace, 'pg_namespace'))")"
 
           FAILURE_STEP="isolated-target-restore"
-          PGPASSWORD="$TARGET_PASSWORD" pg_restore --dbname="$TARGET_CONN" --schema=public --clean --if-exists --no-owner --no-privileges --exit-on-error "$DUMP_PATH"
+          # Replace application-owned state and the auth identity anchors its
+          # foreign keys require. Sessions, refresh tokens, Storage, Vault, and
+          # other managed state remain the isolated target project's own.
+          PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -qc 'drop schema if exists public cascade'
+          PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -qc 'create schema public'
+          # Delete only the identity anchors. Any unexpected dependent managed
+          # state makes the transaction fail closed instead of being cascaded.
+          PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -qc \
+            'begin; delete from auth.identities; delete from auth.users; commit;'
+          pg_restore --data-only --no-owner --file=- "$AUTH_DUMP_PATH" |
+            PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1
+          if [[ -n "$public_extension_sql" ]]; then
+            PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -qc "$public_extension_sql"
+          fi
+          PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -qc \
+            'grant usage on schema public to anon, authenticated, service_role; revoke create on schema public from anon, authenticated, service_role;'
+          if [[ -n "$public_schema_comment_sql" ]]; then
+            PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -qc "$public_schema_comment_sql"
+          fi
+          {
+            printf '%s\n' "set maintenance_work_mem = '128MB';"
+            pg_restore --schema=public --no-owner --file=- "$DUMP_PATH" |
+              sed '/^ALTER DEFAULT PRIVILEGES /d'
+          } | PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1
 
           FAILURE_STEP="target-inventory"
           target_queries="$(PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -Atqc \
@@ -157,13 +303,23 @@ jobs:
           PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -AtF $'\t' <<< "$target_queries" > "$RUNNER_TEMP/target-counts.tsv"
           TARGET_TABLES="$(wc -l < "$RUNNER_TEMP/target-counts.tsv" | tr -d ' ')"
           TARGET_ROWS="$(awk -F '\t' '{s += $2} END {print s + 0}' "$RUNNER_TEMP/target-counts.tsv")"
+          TARGET_AUTH_USERS="$(PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -Atqc 'select count(*) from auth.users')"
+          TARGET_AUTH_IDENTITIES="$(PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -Atqc 'select count(*) from auth.identities')"
+          PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -Atqc "$acl_query" > "$RUNNER_TEMP/target-acl.tsv"
+          TARGET_ACL_SHA="$(sha256sum "$RUNNER_TEMP/target-acl.tsv" | awk '{print $1}')"
 
           FAILURE_STEP="target-schema-fingerprint"
-          TARGET_SCHEMA_SHA="$(PGPASSWORD="$TARGET_PASSWORD" pg_dump --dbname="$TARGET_CONN" --schema=public --schema-only --no-owner --no-privileges | sed '/^--/d;/^\\restrict /d;/^\\unrestrict /d;/^$/d' | sha256sum | awk '{print $1}')"
+          PGPASSWORD="$TARGET_PASSWORD" pg_dump --dbname="$TARGET_CONN" --schema=public --schema-only --no-owner --no-privileges --file="$TARGET_SCHEMA_PATH"
+          schema_inventory "$TARGET_SCHEMA_PATH" "$TARGET_SCHEMA_INVENTORY"
+          TARGET_SCHEMA_SHA="$(sha256sum "$TARGET_SCHEMA_INVENTORY" | awk '{print $1}')"
 
           FAILURE_STEP="validation"
           cmp -s "$RUNNER_TEMP/source-counts.tsv" "$RUNNER_TEMP/target-counts.tsv"
+          cmp -s "$RUNNER_TEMP/source-acl.tsv" "$RUNNER_TEMP/target-acl.tsv"
+          cmp -s "$SOURCE_SCHEMA_INVENTORY" "$TARGET_SCHEMA_INVENTORY"
           [[ "$SOURCE_SCHEMA_SHA" == "$TARGET_SCHEMA_SHA" ]]
+          [[ "$SOURCE_AUTH_USERS" == "$TARGET_AUTH_USERS" ]]
+          [[ "$SOURCE_AUTH_IDENTITIES" == "$TARGET_AUTH_IDENTITIES" ]]
           STATUS="passed"
           FAILURE_STEP=""
 
