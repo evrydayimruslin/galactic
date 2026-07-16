@@ -25,11 +25,11 @@ on:
           - staging
           - production
       durable_app:
-        description: 'Optional async-capable agent id (enables durable-exec smoke)'
+        description: 'Optional override for the fixed durable-smoke Agent id'
         required: false
         default: ''
       durable_function:
-        description: 'Optional async function name on that agent'
+        description: 'Optional override for the durable function (default: get_greeting)'
         required: false
         default: ''
 

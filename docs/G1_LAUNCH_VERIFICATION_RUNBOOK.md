@@ -23,7 +23,8 @@ and raw database dumps are never artifacts.
   must never create ad-hoc duplicates.
 - Production and isolated restore database passwords stored as GitHub Actions
   secrets. Do not place passwords in a command line, log, evidence file, or PR.
-- Optional async-capable Agent/function inputs for the durable-execution smoke.
+- The fixed private smoke Agent exposes `get_greeting`; optional workflow
+  inputs may override the Agent/function for a specialized certification.
 
 ## 1. Staging certification
 
@@ -32,11 +33,10 @@ Run the `G1 Launch Smoke` workflow with `target=staging`. It performs:
 1. Worker/Supabase/auth/BYOK/subscription-capacity preflight.
 2. Release packet initialization with named owners.
 3. Core API, CORS, Pages, subscription/capacity, retired-wallet, fixed-Agent
-   interface deploy, and optional durable-execution smokes.
+   interface deploy, and durable-execution smokes.
 
-Any executed smoke failure is stop-ship. A missing fixed-Agent credential is a
-failure, not a pass. A durable smoke may be explicitly marked not applicable
-only when the candidate did not change the durable execution spine.
+Any smoke failure is stop-ship. A missing fixed-Agent credential is a failure,
+not a pass, and the release workflow must not skip durable execution.
 
 ## 2. Canonical browser journey
 
