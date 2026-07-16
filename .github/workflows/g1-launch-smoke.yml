@@ -65,7 +65,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CID="$(date -u +%F)-${GITHUB_REF_NAME}-$(git rev-parse --short=7 HEAD)"
+          SAFE_REF="$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9._-' '-')"
+          CID="$(date -u +%F)-${SAFE_REF}-$(git rev-parse --short=7 HEAD)"
           DIR="docs/_generated/launch/${{ inputs.target }}/$CID"
           mkdir -p "$DIR"
           echo "cid=$CID" >> "$GITHUB_OUTPUT"
