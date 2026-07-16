@@ -38,6 +38,12 @@ Run the `G1 Launch Smoke` workflow with `target=staging`. It performs:
 Any smoke failure is stop-ship. A missing fixed-Agent credential is a failure,
 not a pass, and the release workflow must not skip durable execution.
 
+If the final candidate SHA contains only documentation or release-evidence
+changes and therefore had no push-triggered `Staging Launch Gate`, dispatch
+that gate with the exact `candidate_sha` before tagging. The production gate
+accepts this exact-SHA manual staging certification, but it accepts production
+DB/API/Pages evidence only from the release tag's push workflows.
+
 ## 2. Canonical browser journey
 
 Using the authenticated launch account, record in `manual/canonical-journey.md`:
