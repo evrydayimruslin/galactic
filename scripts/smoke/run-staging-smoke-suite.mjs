@@ -13,7 +13,7 @@
 //   node scripts/smoke/run-staging-smoke-suite.mjs \
 //     --target staging \
 //     --token <ul_ api token> \
-//     --durable-app <agent id> --durable-function <fn>  # enables durable-exec
+//     [--durable-app <agent id>] [--durable-function <fn>] # fixture overrides
 //     [--exercise-chat]                        # legacy chat only; not launch certification
 //     [--output-dir <dir>]                     # default: docs/_generated/launch/<target>/<candidate-id>
 //
@@ -45,8 +45,14 @@ const supabaseUrl = String(
       : "https://mtekfhozmsboxizxxxyn.supabase.co"),
 ).replace(/\/$/, "");
 const token = String(args.get("--token") || process.env.ULTRALIGHT_TOKEN || "").trim();
-const durableApp = String(args.get("--durable-app") || "").trim();
-const durableFn = String(args.get("--durable-function") || "").trim();
+// CI supplies the same fixed private Agent used by interface-deploy. That
+// reference fixture exposes get_greeting, so durability is a default launch
+// gate instead of an easy-to-miss optional check. Local operators may still
+// override either value when certifying a different fixture.
+const durableApp = String(
+  args.get("--durable-app") || process.env.GALACTIC_SMOKE_APP_ID || "",
+).trim();
+const durableFn = String(args.get("--durable-function") || "get_greeting").trim();
 const exerciseChat = args.has("--exercise-chat");
 
 function sh(cmd) {
@@ -126,7 +132,7 @@ results.push(await runStep({
   ],
 }));
 
-// 3. Durable-execution spine (needs a real async-capable Agent + function).
+// 3. Durable-execution spine (uses the fixed interface fixture by default).
 results.push(await runStep({
   name: "durable-exec",
   command: "node",
@@ -138,7 +144,7 @@ results.push(await runStep({
     "--function", durableFn,
   ],
   skipReason: (token && durableApp && durableFn)
-    ? "" : "needs --token + --durable-app + --durable-function",
+    ? "" : "needs --token + GALACTIC_SMOKE_APP_ID (or --durable-app)",
 }));
 
 // 4. Interface deploy+render (uploads the fixed reference Agent, private).

@@ -84,6 +84,11 @@ node scripts/smoke/durable-exec-smoke.mjs \
 Exit 0 = full pass; exit 2 = spine worked but the function itself failed
 (verify that is expected for the chosen function).
 
+`G1 Launch Smoke` runs this check by default against the environment's fixed
+private interface fixture (`get_greeting`). Its workflow inputs are overrides,
+not an opt-in switch; a launch candidate cannot certify while silently
+skipping durable execution.
+
 Manual durable-execution + interop checks (record outcomes in the release
 packet):
 
