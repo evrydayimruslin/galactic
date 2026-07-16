@@ -54,8 +54,20 @@ jobs:
             exit 2
           fi
 
-          SOURCE_CONN="host=aws-0-us-east-2.pooler.supabase.com port=5432 user=postgres.${SOURCE_REF} dbname=postgres sslmode=require connect_timeout=15"
-          TARGET_CONN="host=aws-0-us-east-1.pooler.supabase.com port=5432 user=postgres.${TARGET_REF} dbname=postgres sslmode=require connect_timeout=15"
+          resolve_pooler() {
+            local project_ref="$1" password="$2" region="$3" shard conn
+            for shard in 0 1; do
+              conn="host=aws-${shard}-${region}.pooler.supabase.com port=5432 user=postgres.${project_ref} dbname=postgres sslmode=require connect_timeout=15"
+              if PGPASSWORD="$password" psql "$conn" -X -v ON_ERROR_STOP=1 -Atqc 'select 1' >/dev/null 2>&1; then
+                printf '%s' "$conn"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          SOURCE_CONN=""
+          TARGET_CONN=""
           DUMP_PATH="$RUNNER_TEMP/p2-2-production-public.dump"
           EVIDENCE_DIR="$RUNNER_TEMP/p2-2-restore-evidence"
           mkdir -p "$EVIDENCE_DIR"
@@ -118,9 +130,9 @@ jobs:
           trap finish EXIT
 
           FAILURE_STEP="source-connectivity"
-          PGPASSWORD="$SOURCE_PASSWORD" psql "$SOURCE_CONN" -X -v ON_ERROR_STOP=1 -Atqc 'select 1' >/dev/null
+          SOURCE_CONN="$(resolve_pooler "$SOURCE_REF" "$SOURCE_PASSWORD" us-east-2)"
           FAILURE_STEP="target-connectivity"
-          PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -Atqc 'select 1' >/dev/null
+          TARGET_CONN="$(resolve_pooler "$TARGET_REF" "$TARGET_PASSWORD" us-east-1)"
 
           count_queries="$(PGPASSWORD="$SOURCE_PASSWORD" psql "$SOURCE_CONN" -X -v ON_ERROR_STOP=1 -Atqc \
             "select format('select %L as table_name, count(*)::bigint from %I.%I;', table_name, table_schema, table_name) from information_schema.tables where table_schema='public' and table_type='BASE TABLE' and table_name in ('apps','users','user_api_tokens','user_routines','billing_plans','account_entitlements','account_subscriptions') order by table_name")"
