@@ -94,6 +94,7 @@ import {
 } from "../services/storage-quota.ts";
 import {
   countConnectedNonLiveVersions,
+  decideConnectedUploadAdmission,
   MAX_CONNECTED_NON_LIVE_VERSIONS,
   retainedNonLiveVersionBytes,
   validateConnectedUploadFileSet,
@@ -6497,11 +6498,49 @@ async function executeUpload(
         { type: "ACCOUNT_SESSION_REQUIRED" },
       );
     }
-    if (
-      options.callerIsApiToken &&
-      countConnectedNonLiveVersions(app.versions, app.current_version) >=
-        MAX_CONNECTED_NON_LIVE_VERSIONS
-    ) {
+    // Dedup must precede the connected-builder staged-version ceiling. An
+    // identical retry is a verified no-op and must remain safe even when the
+    // Agent already retains the maximum number of drafts.
+    let verifiedIdenticalLiveDenoRedeploy = false;
+    if (app.runtime !== "gpu" && !gpuYamlContent) {
+      const liveSourceHash = getLatestVersionSourceHash(app);
+      const visibilityUnchanged = !args.visibility ||
+        args.visibility === app.visibility;
+      if (
+        liveSourceHash && liveSourceHash === uploadSourceHash &&
+        !args.version && visibilityUnchanged
+      ) {
+        // Matching hashes are NOT enough: the deploy writes the DB row (which
+        // carries source_hash + current_version) BEFORE the live KV bundle. If
+        // that KV write failed, the natural repair is re-uploading the same
+        // files. Only dedup when the live bundle attests current_version.
+        const { attestation } = await loadLiveExecutedBundle(app.id);
+        verifiedIdenticalLiveDenoRedeploy = Boolean(
+          attestation?.version &&
+            attestation.version === app.current_version,
+        );
+      }
+    }
+    const connectedAdmission = decideConnectedUploadAdmission({
+      verifiedIdenticalLiveDenoRedeploy,
+      enforceStagedVersionLimit: Boolean(options.callerIsApiToken),
+      retainedNonLiveVersions: countConnectedNonLiveVersions(
+        app.versions,
+        app.current_version,
+      ),
+    });
+    if (connectedAdmission === "deduplicate") {
+      return {
+        deduplicated: true,
+        app_id: app.id,
+        slug: app.slug,
+        version: app.current_version,
+        is_live: true,
+        message:
+          "No changes — the uploaded files are byte-identical to the live version, so no new version was created.",
+      };
+    }
+    if (connectedAdmission === "staged_version_limit") {
       throw new ToolError(
         VALIDATION_ERROR,
         `Connected builders may retain at most ${MAX_CONNECTED_NON_LIVE_VERSIONS} non-live staged versions per Agent. Delete or promote a staged version from the authenticated Agent Overview before uploading another.`,
@@ -6773,37 +6812,6 @@ async function executeUpload(
     }
 
     // ── Deno existing app version — uses shared pipeline ──
-    // Dedup: if the raw uploaded file-set is byte-identical to the live version
-    // — and the caller isn't forcing a version or changing visibility — skip the
-    // version bump + rebundle entirely, so a redeploy loop can't spam versions.
-    const liveSourceHash = getLatestVersionSourceHash(app);
-    const visibilityUnchanged = !args.visibility ||
-      args.visibility === app.visibility;
-    if (
-      liveSourceHash && liveSourceHash === uploadSourceHash &&
-      !args.version && visibilityUnchanged
-    ) {
-      // Matching hashes are NOT enough: the deploy writes the DB row (which
-      // carries source_hash + current_version) BEFORE the live KV bundle. If
-      // that KV write failed, the natural repair is re-uploading the identical
-      // files — deduping here would no-op the repair and strand the app on a
-      // stale bundle forever. So only dedup when the LIVE bundle's attestation
-      // proves it actually serves current_version; anything else (missing
-      // bundle, legacy no-attestation, version skew) falls through and deploys.
-      const { attestation } = await loadLiveExecutedBundle(app.id);
-      if (attestation?.version === app.current_version) {
-        return {
-          deduplicated: true,
-          app_id: app.id,
-          slug: app.slug,
-          version: app.current_version,
-          is_live: true,
-          message:
-            "No changes — the uploaded files are byte-identical to the live version, so no new version was created.",
-        };
-      }
-    }
-
     const { processUploadPipeline, provisionAndMigrate } = await import(
       "../services/upload-pipeline.ts"
     );
