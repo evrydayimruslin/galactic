@@ -3,7 +3,10 @@ name: Desktop Release
 on:
   push:
     tags:
-      - 'v*'
+      # Desktop is outside the persistent-Agent web/API launch. Give desktop
+      # artifacts an explicit namespace so ordinary Galactic release tags do
+      # not create a misleading failed Desktop Release check.
+      - 'desktop-v*'
 
 permissions:
   contents: write

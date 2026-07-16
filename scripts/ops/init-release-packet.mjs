@@ -16,6 +16,9 @@ Options:
   --commit-sha <sha>              Candidate commit SHA
   --version-tag <tag>             Version tag such as v0.1.0
   --operator <name>               Operator name or redacted id (default: $USER)
+  --release-lead <name>           Release decision owner
+  --rollback-owner <name>         Rollback execution owner
+  --communications-owner <name>   Launch/status communications owner
   --output-dir <path>             Output directory (defaults to $UL_LAUNCH_EVIDENCE_DIR)
   --force                         Overwrite existing release-packet.md
   --help                          Show this help
@@ -32,6 +35,11 @@ if (args.has("--help")) {
 const target = String(args.get("--target") || "staging").trim();
 const operator = String(args.get("--operator") || process.env.USER || "unknown")
   .trim();
+const releaseLead = String(args.get("--release-lead") || "Russell In").trim();
+const rollbackOwner = String(args.get("--rollback-owner") || "Russell In").trim();
+const communicationsOwner = String(
+  args.get("--communications-owner") || "Russell In",
+).trim();
 const force = Boolean(args.has("--force"));
 const configuredOutput = String(args.get("--output-dir") || "").trim();
 const envOutput = process.env.UL_LAUNCH_EVIDENCE_DIR
@@ -83,9 +91,9 @@ const packet = `# Release Packet
 ## Decision Summary
 
 - decision: pending
-- release lead:
-- rollback owner:
-- communications owner:
+- release lead: ${releaseLead}
+- rollback owner: ${rollbackOwner}
+- communications owner: ${communicationsOwner}
 - stop-ship items present: unknown
 - release summary:
 
@@ -114,9 +122,7 @@ const packet = `# Release Packet
 } | pending | | |
 | API Deploy | pending | | |
 | Launch Web Deploy | pending | | |
-| ${
-  target === "production" ? "Desktop Release" : "Desktop Build"
-} | pending | | |
+| Desktop build/release | not-applicable | | Deferred from persistent-Agent web/API launch |
 | ${
   target === "production" ? "Production Launch Gate" : "Staging Launch Gate"
 } | pending | | |
@@ -145,18 +151,17 @@ List only the audits relevant to this candidate.
 
 ## Manual Checks
 
-### Desktop and product checks
+### Canonical product checks
 
 | Check | Result | Evidence | Notes |
 | --- | --- | --- | --- |
-| Desktop sign-in | pending | manual/desktop-smoke-notes.md | |
-| First chat / core flow | pending | manual/desktop-smoke-notes.md | |
-| Sign out | pending | manual/desktop-smoke-notes.md | |
-| Embedded dashboard / widget flow | pending | manual/desktop-smoke-notes.md | |
-| Shared-page / share-link flow | pending | manual/desktop-smoke-notes.md | |
-| Updater smoke, if applicable | ${
-  target === "production" ? "pending" : "not-applicable"
-} | manual/desktop-smoke-notes.md | |
+| Sign in and account projection | pending | manual/canonical-journey.md | |
+| Conjure, test, upload fixed private Agent | pending | smoke/interface-deploy.log | |
+| Configure mission/cadence/authority | pending | manual/canonical-journey.md | |
+| Activate, wake, observe report | pending | manual/canonical-journey.md | |
+| Capacity state/reset projection | pending | smoke/launch-web-pages.md | |
+| Subscription checkout/portal | pending | manual/canonical-journey.md | |
+| Desktop/updater | not-applicable | | Deferred from launch scope |
 
 ### Recovery evidence
 
@@ -188,7 +193,7 @@ List only what is still relevant to this candidate.
 
 - [ ] required workflow runs succeeded
 - [ ] required smoke passed
-- [ ] manual desktop checks completed
+- [ ] canonical website + connected-agent journey completed
 - [ ] required audits reviewed
 - [ ] restore / rollback evidence reviewed when in scope
 - [ ] unresolved exceptions explicitly accepted or cleared
@@ -200,8 +205,8 @@ List only what is still relevant to this candidate.
 
 - decision time:
 - approver:
-- rollback owner:
-- communications owner:
+- rollback owner: ${rollbackOwner}
+- communications owner: ${communicationsOwner}
 - announcement blocked until production smoke complete: ${
   target === "production" ? "yes" : "n/a"
 }

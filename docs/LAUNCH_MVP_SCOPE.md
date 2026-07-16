@@ -6,6 +6,9 @@ Current delivery milestones:
 
 - Launch P0 — Persistent-Agent Safety (2026-07-14)
 - [Launch P1 — Agent Home Contract (2026-07-14)](LAUNCH_P1_AGENT_HOME_CONTRACT_2026-07-14.md)
+- Launch P2 — Canonical Conjuring Journey (2026-07-15)
+- [Launch P2.1 — BYOK Subscription Capacity (2026-07-15)](LAUNCH_P2_1_SUBSCRIPTION_CAPACITY_2026-07-15.md)
+- [Launch P2.2 — Launch Certification (2026-07-15)](LAUNCH_P2_2_CERTIFICATION_2026-07-15.md)
 
 This is the active launch contract for Galactic. It supersedes the
 marketplace-first scope recorded on 2026-06-10. The repository remains the
@@ -39,12 +42,12 @@ running cheaply before Galactic introduces a market around them.
   edit, `tested = gx.test(...)`, upload the exact same files with
   `test_attestation: tested.test_attestation`, create a paused routine, owner
   approval, resume.
-- Sandboxed execution with Galactic AI, storage, memory, network policy,
+- Sandboxed execution with BYOK inference, storage, memory, network policy,
   Agent-to-Agent calls, receipts, tracing, and run journals.
 - Owner-owned Agent-to-Agent composition through explicit, bounded grants.
 - Galactic inbox reporting for anomalies and meaningful milestones.
-- Encrypted runtime settings, Galactic keys, BYOK selection, credit balance, and
-  credit top-up. Credits are an operating-cost mechanism, not a marketplace.
+- Encrypted runtime settings, scoped Galactic keys, BYOK selection, and shared
+  account capacity with visible state and reset times.
 
 ## Locked launch decisions
 
@@ -95,7 +98,7 @@ running cheaply before Galactic introduces a market around them.
     manifest declarations or conservative inference hints. Runtime permissions,
     grants, network policy, and budgets remain authoritative.
 
-Exact numerical defaults—starter credits, default interval, default cost limits,
+Exact numerical defaults—private capacity limits, default interval, default cost limits,
 notification frequency, and run retention—may evolve without changing these
 safety invariants. Defaults must always be finite and launch-safe.
 
@@ -110,7 +113,7 @@ not directly visible on the website:
 - sandbox tenant isolation, egress policy, encrypted credentials;
 - D1 journals, memory, flight-recorder steps, receipts, cost attribution,
   traces;
-- BYOK routing, wallet metering, hard routine budgets, rate limits;
+- BYOK routing, private cost metering, hard routine budgets, rate limits;
 - Agent grants, caller identity, hop limits, event delivery, and monitoring;
 - integrity/authentication/audit evidence used to protect execution.
 
@@ -146,7 +149,7 @@ discovery, or launch claims.
    owner/source/runtime-bound `test_attestation`.
 6. Upload the exact tested files and attestation as a new private Agent or a
    non-live version of an existing Agent.
-7. Configure required secrets and choose BYOK or Galactic credits.
+7. Configure required secrets and a BYOK inference provider when the Agent uses AI.
 8. Create one routine in a paused state with a mission and finite limits.
 9. Review and approve exact capabilities, grants, cadence, and budgets in the
    authenticated website session.

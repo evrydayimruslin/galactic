@@ -1,0 +1,173 @@
+name: P2.2 Supabase Restore Drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type RESTORE_PUUWCYNLVAWZLDBCKPRM to replace the isolated target public schema'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p2-2-supabase-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    name: Restore production public schema into isolated target
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SOURCE_PASSWORD: ${{ secrets.SUPABASE_PRODUCTION_DB_PASSWORD }}
+      TARGET_PASSWORD: ${{ secrets.SUPABASE_RESTORE_DB_PASSWORD }}
+      SOURCE_REF: uavjzycsltdnwblwutmb
+      TARGET_REF: puuwcynlvawzldbckprm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Run isolated restore and validation
+        id: drill
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          if [[ "$CONFIRMATION" != "RESTORE_PUUWCYNLVAWZLDBCKPRM" ]]; then
+            echo "Confirmation did not match the isolated target." >&2
+            exit 2
+          fi
+          if [[ -z "$SOURCE_PASSWORD" || -z "$TARGET_PASSWORD" ]]; then
+            echo "Both database password secrets are required." >&2
+            exit 2
+          fi
+
+          SOURCE_CONN="host=aws-0-us-east-2.pooler.supabase.com port=5432 user=postgres.${SOURCE_REF} dbname=postgres sslmode=require connect_timeout=15"
+          TARGET_CONN="host=aws-0-us-east-1.pooler.supabase.com port=5432 user=postgres.${TARGET_REF} dbname=postgres sslmode=require connect_timeout=15"
+          DUMP_PATH="$RUNNER_TEMP/p2-2-production-public.dump"
+          EVIDENCE_DIR="$RUNNER_TEMP/p2-2-restore-evidence"
+          mkdir -p "$EVIDENCE_DIR"
+          STARTED_AT="$(date -u +%FT%TZ)"
+          START_EPOCH="$(date +%s)"
+          STATUS="failed"
+          FAILURE_STEP="initialization"
+          SOURCE_SCHEMA_SHA=""
+          TARGET_SCHEMA_SHA=""
+          SOURCE_TABLES="0"
+          TARGET_TABLES="0"
+          SOURCE_ROWS="0"
+          TARGET_ROWS="0"
+
+          finish() {
+            local exit_code=$?
+            rm -f "$DUMP_PATH"
+            local finished_at duration
+            finished_at="$(date -u +%FT%TZ)"
+            duration="$(( $(date +%s) - START_EPOCH ))"
+            export STATUS FAILURE_STEP STARTED_AT="$STARTED_AT" FINISHED_AT="$finished_at" DURATION_SECONDS="$duration"
+            export SOURCE_SCHEMA_SHA TARGET_SCHEMA_SHA SOURCE_TABLES TARGET_TABLES SOURCE_ROWS TARGET_ROWS
+            export EVIDENCE_DIR SOURCE_REF TARGET_REF EXIT_CODE="$exit_code"
+            node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const e = process.env;
+          const summary = {
+            drill: 'p2-2-supabase-restore',
+            status: e.STATUS,
+            failure_step: e.STATUS === 'passed' ? null : e.FAILURE_STEP,
+            source_project_ref: e.SOURCE_REF,
+            target_project_ref: e.TARGET_REF,
+            scope: 'public schema/data; managed Supabase schemas preserved; stable core-table counts compared',
+            started_at: e.STARTED_AT,
+            finished_at: e.FINISHED_AT,
+            duration_seconds: Number(e.DURATION_SECONDS || 0),
+            source: { schema_sha256: e.SOURCE_SCHEMA_SHA || null, table_count: Number(e.SOURCE_TABLES || 0), row_count: Number(e.SOURCE_ROWS || 0) },
+            target: { schema_sha256: e.TARGET_SCHEMA_SHA || null, table_count: Number(e.TARGET_TABLES || 0), row_count: Number(e.TARGET_ROWS || 0) },
+            raw_dump_uploaded: false,
+            exit_code: Number(e.EXIT_CODE || 0),
+          };
+          fs.writeFileSync(path.join(e.EVIDENCE_DIR, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
+          fs.writeFileSync(path.join(e.EVIDENCE_DIR, 'summary.md'), [
+            '# P2.2 Supabase Restore Drill', '',
+            `- status: **${summary.status}**`,
+            `- source: \`${summary.source_project_ref}\``,
+            `- isolated target: \`${summary.target_project_ref}\``,
+            `- duration_seconds: ${summary.duration_seconds}`,
+            `- schema fingerprints match: ${summary.source.schema_sha256 && summary.source.schema_sha256 === summary.target.schema_sha256}`,
+            `- source/target tables: ${summary.source.table_count}/${summary.target.table_count}`,
+            `- source/target rows: ${summary.source.row_count}/${summary.target.row_count}`,
+            '- raw dump uploaded: false',
+            summary.failure_step ? `- failure_step: ${summary.failure_step}` : '', ''
+          ].filter(Boolean).join('\n'));
+          NODE
+            echo "evidence_dir=$EVIDENCE_DIR" >> "$GITHUB_OUTPUT"
+            return "$exit_code"
+          }
+          trap finish EXIT
+
+          FAILURE_STEP="source-connectivity"
+          PGPASSWORD="$SOURCE_PASSWORD" psql "$SOURCE_CONN" -X -v ON_ERROR_STOP=1 -Atqc 'select 1' >/dev/null
+          FAILURE_STEP="target-connectivity"
+          PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -Atqc 'select 1' >/dev/null
+
+          count_queries="$(PGPASSWORD="$SOURCE_PASSWORD" psql "$SOURCE_CONN" -X -v ON_ERROR_STOP=1 -Atqc \
+            "select format('select %L as table_name, count(*)::bigint from %I.%I;', table_name, table_schema, table_name) from information_schema.tables where table_schema='public' and table_type='BASE TABLE' and table_name in ('apps','users','user_api_tokens','user_routines','billing_plans','account_entitlements','account_subscriptions') order by table_name")"
+          FAILURE_STEP="source-inventory"
+          PGPASSWORD="$SOURCE_PASSWORD" psql "$SOURCE_CONN" -X -v ON_ERROR_STOP=1 -AtF $'\t' <<< "$count_queries" > "$RUNNER_TEMP/source-counts.tsv"
+          SOURCE_TABLES="$(wc -l < "$RUNNER_TEMP/source-counts.tsv" | tr -d ' ')"
+          SOURCE_ROWS="$(awk -F '\t' '{s += $2} END {print s + 0}' "$RUNNER_TEMP/source-counts.tsv")"
+
+          FAILURE_STEP="source-schema-fingerprint"
+          SOURCE_SCHEMA_SHA="$(PGPASSWORD="$SOURCE_PASSWORD" pg_dump --dbname="$SOURCE_CONN" --schema=public --schema-only --no-owner --no-privileges | sed '/^--/d;/^\\restrict /d;/^\\unrestrict /d;/^$/d' | sha256sum | awk '{print $1}')"
+
+          FAILURE_STEP="production-dump"
+          PGPASSWORD="$SOURCE_PASSWORD" pg_dump --dbname="$SOURCE_CONN" --schema=public --format=custom --no-owner --no-privileges --file="$DUMP_PATH"
+          test -s "$DUMP_PATH"
+
+          FAILURE_STEP="isolated-target-restore"
+          PGPASSWORD="$TARGET_PASSWORD" pg_restore --dbname="$TARGET_CONN" --schema=public --clean --if-exists --no-owner --no-privileges --exit-on-error "$DUMP_PATH"
+
+          FAILURE_STEP="target-inventory"
+          target_queries="$(PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -Atqc \
+            "select format('select %L as table_name, count(*)::bigint from %I.%I;', table_name, table_schema, table_name) from information_schema.tables where table_schema='public' and table_type='BASE TABLE' and table_name in ('apps','users','user_api_tokens','user_routines','billing_plans','account_entitlements','account_subscriptions') order by table_name")"
+          PGPASSWORD="$TARGET_PASSWORD" psql "$TARGET_CONN" -X -v ON_ERROR_STOP=1 -AtF $'\t' <<< "$target_queries" > "$RUNNER_TEMP/target-counts.tsv"
+          TARGET_TABLES="$(wc -l < "$RUNNER_TEMP/target-counts.tsv" | tr -d ' ')"
+          TARGET_ROWS="$(awk -F '\t' '{s += $2} END {print s + 0}' "$RUNNER_TEMP/target-counts.tsv")"
+
+          FAILURE_STEP="target-schema-fingerprint"
+          TARGET_SCHEMA_SHA="$(PGPASSWORD="$TARGET_PASSWORD" pg_dump --dbname="$TARGET_CONN" --schema=public --schema-only --no-owner --no-privileges | sed '/^--/d;/^\\restrict /d;/^\\unrestrict /d;/^$/d' | sha256sum | awk '{print $1}')"
+
+          FAILURE_STEP="validation"
+          cmp -s "$RUNNER_TEMP/source-counts.tsv" "$RUNNER_TEMP/target-counts.tsv"
+          [[ "$SOURCE_SCHEMA_SHA" == "$TARGET_SCHEMA_SHA" ]]
+          STATUS="passed"
+          FAILURE_STEP=""
+
+      - name: Publish drill summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f "${{ steps.drill.outputs.evidence_dir }}/summary.md" ]]; then
+            cat "${{ steps.drill.outputs.evidence_dir }}/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload sanitized evidence
+        if: always() && steps.drill.outputs.evidence_dir != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2-2-supabase-restore-${{ github.run_id }}
+          path: ${{ steps.drill.outputs.evidence_dir }}
+          if-no-files-found: error
+          retention-days: 30
