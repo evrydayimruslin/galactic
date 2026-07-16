@@ -4,22 +4,26 @@
 // crashed on Node's __filename server-side) yet still passed `test:full`,
 // because nothing actually deployed an interface agent and checked it renders.
 //
-// This uploads the reference interface agent through ul.upload and asserts:
+// This tests and uploads the reference interface agent through gx.test →
+// gx.upload and asserts:
 //   1. the interface HTML is in the bundle (guards the CLI .html-drop class)
-//   2. ul.upload succeeds (guards the server __filename / bundle-parse class)
-//   3. the launch facade returns the interface with a sandbox url + functions
+//   2. gx.test issues a source-bound upload attestation
+//   3. gx.upload succeeds (guards the server __filename / bundle-parse class)
+//   4. the launch facade returns the interface with a sandbox url + functions
 //      (guards hash-stamping + facade exposure)
-//   4. the sandbox worker serves the artifact: 200, text/html, non-empty
+//   5. the sandbox worker serves the artifact: 200, text/html, non-empty
 //      (guards R2 + interfaces-worker)
-//   5. (opt-in --exercise-run, costs a function call) a bridge function runs
+//   6. (opt-in --exercise-run, costs a function call) a bridge function runs
 //
 // Usage:
 //   GALACTIC_TOKEN=gx_... node scripts/smoke/interface-deploy-smoke.mjs \
 //     [--url https://api.connectgalactic.com] [--app-id <id>] \
 //     [--dir examples/interface-demo] [--exercise-run] [--allow-create]
 //
-// --app-id (or GALACTIC_SMOKE_APP_ID) keeps it idempotent: re-uploads a new
-// VERSION of the same PRIVATE app instead of creating a new one every run.
+// --app-id (or GALACTIC_SMOKE_APP_ID) keeps it idempotent: re-deploys the exact
+// tested source to the same PRIVATE app. The server's source+live-attestation
+// dedup keeps routine CI runs from consuming the connected-builder staged-
+// version allowance.
 // The token needs upload scope; the agent stays private (never goes live).
 //
 // FAIL-CLOSED: with no app id resolved the smoke ABORTS instead of minting a
@@ -124,29 +128,82 @@ async function callTool(name, toolArgs) {
   try { return txt ? JSON.parse(txt) : r; } catch { return { text: txt }; }
 }
 
-// 1. Upload (private). Exercises bundle parse (__filename) + interface stamping.
-// Re-versioning a FIXED app needs a fresh, monotonic version each run, or the
-// server rejects the duplicate ("Version X already exists"). A wall-clock base
-// gives both uniqueness and monotonicity; the create path (no app_id) leaves the
-// initial version to the server.
-const verBase = Date.now();
+const canonicalVersion = /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
+
+function incrementVersion(version) {
+  const parts = version.split('.').map(Number);
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    if (parts[i] < 999_999_999) {
+      parts[i] += 1;
+      return parts.join('.');
+    }
+    parts[i] = 0;
+  }
+  throw new Error('smoke fixture exhausted the canonical version range');
+}
+
+async function nextFixtureVersion(locator) {
+  const res = await fetch(`${apiBase}/api/apps/${encodeURIComponent(locator)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(`could not read fixture versions: HTTP ${res.status}`);
+  }
+  const versions = [...new Set([
+    ...(Array.isArray(body.versions) ? body.versions : []),
+    body.current_version,
+  ])].filter((version) => canonicalVersion.test(String(version)));
+  if (versions.length === 0) return '1.0.1';
+  versions.sort((a, b) => {
+    const left = String(a).split('.').map(Number);
+    const right = String(b).split('.').map(Number);
+    return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+  });
+  return incrementVersion(String(versions.at(-1)));
+}
+
+// 1. Test the exact bundle. Connected builders must prove successful execution
+// before upload; the returned proof is owner-, source-, and mode-bound.
+let testAttestation = '';
+try {
+  const tested = await callTool('gx.test', {
+    files,
+    function_name: 'get_greeting',
+    test_args: { name: 'smoke' },
+  });
+  testAttestation = String(tested?.test_attestation || '');
+  check('gx.test attestation', Boolean(testAttestation));
+} catch (err) {
+  check('gx.test attestation', false, String(err?.message || err));
+}
+
+// 2. Upload (private). Exercises bundle parse (__filename) + interface stamping.
+// Existing fixtures intentionally omit an explicit version: byte-identical
+// source with a valid live-bundle attestation deduplicates without consuming a
+// staged-version slot. The one-time bootstrap below still creates one new
+// version to exercise the interface re-version regression explicitly.
 let result = null;
 try {
-  const uploadArgs = { files, name: 'Interface Demo (smoke)', visibility: 'private' };
+  const uploadArgs = {
+    files,
+    test_attestation: testAttestation,
+    name: 'Interface Demo (smoke)',
+    visibility: 'private',
+  };
   if (appId) {
     uploadArgs.app_id = appId;
-    uploadArgs.version = `1.0.${verBase}`;
   }
-  result = await callTool('ul.upload', uploadArgs);
-  check('ul.upload', true);
+  result = await callTool('gx.upload', uploadArgs);
+  check('gx.upload', true);
 } catch (err) {
-  check('ul.upload', false, String(err?.message || err));
+  check('gx.upload', false, String(err?.message || err));
 }
 const id = result?.app_id || result?.id || '';
 const slug = result?.slug || '';
 check('upload returned an app id', Boolean(id), JSON.stringify(result || {}).slice(0, 200));
 
-// 2. Launch facade exposes the interface (hash stamped + surfaced).
+// 3. Launch facade exposes the interface (hash stamped + surfaced).
 let iface = null;
 if (id || slug) {
   try {
@@ -166,7 +223,7 @@ if (id || slug) {
   }
 }
 
-// 3. Sandbox worker serves the artifact.
+// 4. Sandbox worker serves the artifact.
 if (iface?.url) {
   try {
     const a = await fetch(iface.url);
@@ -180,12 +237,22 @@ if (iface?.url) {
   }
 }
 
-// 4. Re-version guard: re-upload the same files as a NEW version (same app-id)
-// and assert the interface SURVIVES. Re-versioning used to persist an unstamped
-// manifest and drop the interface — this is the regression that bug fixed.
-if (id) {
+// 5. One-time bootstrap re-version guard: upload the same files as a NEW
+// version and assert the interface SURVIVES. Re-versioning used to persist an
+// unstamped manifest and drop the interface. Routine fixed-fixture runs prove
+// the verified idempotent redeploy path above without filling its three staged
+// version slots.
+if (id && !appId) {
   try {
-    await callTool('ul.upload', { files, name: 'Interface Demo (smoke)', visibility: 'private', app_id: id, version: `1.0.${verBase + 1}` });
+    const nextVersion = await nextFixtureVersion(id);
+    await callTool('gx.upload', {
+      files,
+      test_attestation: testAttestation,
+      name: 'Interface Demo (smoke)',
+      visibility: 'private',
+      app_id: id,
+      version: nextVersion,
+    });
     const after = await fetch(`${apiBase}/api/launch/agents/${id}`, {
       headers: { Authorization: `Bearer ${token}` },
     }).then((r) => r.json());
@@ -195,9 +262,15 @@ if (id) {
   } catch (err) {
     check('interface survives re-version', false, String(err?.message || err));
   }
+} else if (id) {
+  check(
+    'verified redeploy preserves interface',
+    Boolean(iface?.url),
+    `interfaces after redeploy: ${JSON.stringify(iface ?? null)}`,
+  );
 }
 
-// 5. (opt-in) a function actually runs — via the agent's own MCP endpoint,
+// 6. (opt-in) a function actually runs — via the agent's own MCP endpoint,
 // which an API token CAN call (the launch-web /functions/:fn/run path requires
 // a browser account session, so it 403s for tokens). Best-effort/informational:
 // it costs a function call and is not part of the deploy+render pass/fail gate.

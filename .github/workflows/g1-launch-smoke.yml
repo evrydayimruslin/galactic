@@ -4,8 +4,10 @@
 # live, and uploads the evidence dir as an artifact for the release packet.
 #
 # Credentials (repo secrets):
-#   ULTRALIGHT_TOKEN            — builder/operator token with agents:build
-#   GALACTIC_SMOKE_APP_ID       — one fixed private smoke Agent
+#   ULTRALIGHT_TOKEN_STAGING      — staging-only builder/operator token
+#   GALACTIC_SMOKE_APP_ID_STAGING — fixed private staging smoke Agent
+#   ULTRALIGHT_TOKEN              — production builder/operator token
+#   GALACTIC_SMOKE_APP_ID         — fixed private production smoke Agent
 # Missing required inputs fail closed; certification cannot silently skip the
 # canonical deploy surface.
 
@@ -44,11 +46,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN }}
+      # Never send a production credential to staging (or vice versa). The
+      # environments use isolated Supabase users/token hashes and Agent rows.
+      ULTRALIGHT_TOKEN: ${{ (inputs.target == 'staging' && secrets.ULTRALIGHT_TOKEN_STAGING) || (inputs.target == 'production' && secrets.ULTRALIGHT_TOKEN) }}
       # Fixed smoke fixture app — interface-deploy-smoke refuses to run without
       # it (creating apps ad hoc was the duplicate-Interface-Demo bug).
-      GALACTIC_SMOKE_APP_ID: ${{ secrets.GALACTIC_SMOKE_APP_ID }}
-      ULTRALIGHT_SMOKE_APP_ID: ${{ secrets.ULTRALIGHT_SMOKE_APP_ID }}
+      GALACTIC_SMOKE_APP_ID: ${{ (inputs.target == 'staging' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || (inputs.target == 'production' && secrets.GALACTIC_SMOKE_APP_ID) }}
 
     steps:
       - uses: actions/checkout@v4

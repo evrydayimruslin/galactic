@@ -13,11 +13,14 @@ and raw database dumps are never artifacts.
 ## Prerequisites
 
 - Node 20.
-- `ULTRALIGHT_TOKEN`: a builder/operator key containing `agents:build` and
-  `agents:operate` for the launch account.
-- `GALACTIC_SMOKE_APP_ID`: the one fixed private smoke Agent owned by that
-  account. The automation may version this Agent but must never create ad-hoc
-  duplicates.
+- Environment-isolated builder/operator credentials containing `agents:build`
+  and `agents:operate`: `ULTRALIGHT_TOKEN_STAGING` for staging and
+  `ULTRALIGHT_TOKEN` for production. Never reuse one environment's token in the
+  other.
+- Environment-isolated fixed private smoke Agents:
+  `GALACTIC_SMOKE_APP_ID_STAGING` for staging and `GALACTIC_SMOKE_APP_ID` for
+  production. The automation redeploys the exact tested source idempotently and
+  must never create ad-hoc duplicates.
 - Production and isolated restore database passwords stored as GitHub Actions
   secrets. Do not place passwords in a command line, log, evidence file, or PR.
 - Optional async-capable Agent/function inputs for the durable-execution smoke.
