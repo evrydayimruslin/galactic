@@ -1,6 +1,6 @@
 # Rollback Rehearsal
 
-Last reviewed: `2026-04-21`
+Last reviewed: `2026-07-16`
 
 This document is the Wave 6 recovery and rollback rehearsal kit for Galactic.
 
@@ -29,7 +29,11 @@ This rehearsal kit covers four launch-relevant incident classes:
 1. bad staging deploy
 2. bad production API deploy
 3. bad production database migration
-4. bad desktop release or updater issue
+4. bad launch Pages deploy
+
+Desktop release/updater recovery is not part of the persistent-Agent web/API
+launch. Ordinary `v*` tags do not publish desktop artifacts; desktop retains
+its separate `desktop-v*` recovery procedure for a later milestone.
 
 ## Evidence Location
 
@@ -63,7 +67,7 @@ These are the minimum rehearsal artifacts.
 | Bad staging deploy | staging gate fails, staging smoke fails, or staging app behavior is clearly broken before tag | stop the release; do not tag | note the blocking SHA and evidence in the release packet / team incident channel | fix forward on `main`, rerun staging gate and staging smoke | do not tag anyway; do not bypass staging because “the change is small” |
 | Bad production API deploy | tag shipped, production deploy or smoke fails, or production API behavior regresses | stop release announcement; capture the failing tag and gate summary | declare a production release incident with the tag, SHA, and failing workflow/smoke step | hotfix or revert on `main`, then cut a new patch tag such as `v0.1.1` | do not move or reuse the existing tag; do not deploy an unreviewed manual patch from a laptop |
 | Bad production DB migration | migration causes incompatible schema, data corruption risk, or user-visible production failure | freeze additional schema changes and treat it as a DB recovery incident | escalate to the DB owner / incident lead immediately with migration id and timing | prefer additive fix-forward if safe; if severe, use the restore path proven by the backup drill and validate recovery steps deliberately | do not assume an automatic DB rollback exists; do not run panic SQL without recording intent and effect |
-| Bad desktop release / updater | signed desktop release is broken, updater metadata is wrong, or install/update flows regress after publication | stop release announcement and capture affected platforms plus the published tag | announce the platform-specific impact and whether updater/manual download is affected | ship a hotfix patch release; if needed, direct users to the prior signed GitHub Release artifact while the patch is prepared | do not overwrite or reuse the published tag; do not mutate signed assets casually without recording why and how clients are affected |
+| Bad launch Pages deploy | Pages deploy fails, deep links stop serving the SPA shell, or the launch site points at the wrong API | stop release announcement and preserve the API/DB state while isolating the web failure | record the tag, commit, Pages deployment URL, and failing route in the release packet / incident channel | use Cloudflare Pages deployment rollback to the prior known-good deployment, or fix forward on `main` and cut a new patch tag | do not roll back a healthy API or database to compensate for a Pages-only failure; do not repoint production DNS ad hoc |
 
 ## Scenario Playbooks
 
@@ -139,32 +143,31 @@ What success looks like:
 - no one assumed automatic DB rollback existed
 - the recovery path used the backup/restore drill evidence instead of guesswork
 
-### 4. Bad Desktop Release Or Updater
+### 4. Bad Launch Pages Deploy
 
 Use this when:
 
-- signed installers are bad
-- updater metadata points clients at a broken build
-- production desktop smoke or updater smoke fails after publication
+- the production Pages deploy fails
+- a launch-site deep link no longer serves the SPA shell
+- the launch site loads but targets the wrong API origin
 
 Operator sequence:
 
-1. Stop announcement and mark desktop release as degraded.
-2. Record:
-   - tag
-   - platform(s) affected
-   - whether manual installers or updater are impacted
-   - relevant workflow and smoke evidence
-3. Prefer a hotfix patch release.
-4. If users need an immediate safe fallback, direct them to the prior signed
-   GitHub Release artifact.
-5. Update the release packet with platform-specific notes.
+1. Stop announcement and record the tag, SHA, failing routes, Pages deployment
+   URL, and production smoke evidence.
+2. Confirm the API and database are healthy before changing either one.
+3. Identify the prior known-good Pages deployment in Cloudflare deployment
+   history.
+4. Roll Pages back to that immutable deployment, or fix forward on `main` and
+   cut a new patch tag when rollback is not suitable.
+5. Re-run production Pages/API smoke and update the release packet.
 
 What success looks like:
 
-- the team can tell users which version is safe
-- updater risk is understood separately from installer risk
-- the next patch tag becomes the recovery point
+- the launch site and deep links serve the expected SPA shell
+- the launch site targets the production API origin
+- API/database state was not changed to compensate for a web-only incident
+- the recovered Pages deployment or corrective patch tag is recorded
 
 ## Rehearsal Procedure
 
@@ -211,22 +214,12 @@ complete.
 The point is not to “pass” the first tabletop. The point is to remove
 avoidable confusion before a real incident.
 
-## Desktop-Specific Recovery Notes
+## Desktop Recovery Is Deferred
 
-The desktop release model has a few special constraints:
-
-- production desktop releases are tag-driven
-- updater clients read `latest.json` from GitHub Releases
-- signed assets should be treated as immutable release history once published
-
-That means:
-
-- prefer a new patch release over trying to reuse a tag
-- prefer directing users to a prior signed artifact over ad hoc binary sharing
-- document whether the issue affects:
-  - fresh installs
-  - in-app updates
-  - both
+Desktop has a separate tag family and release procedure. It is deliberately
+not rehearsed or certified by P2.2; see
+[docs/DESKTOP_RELEASE_PIPELINE.md](DESKTOP_RELEASE_PIPELINE.md) when that launch
+surface returns to scope.
 
 ## Database-Specific Recovery Notes
 
@@ -246,7 +239,8 @@ The rehearsal kit is ready when:
 
 - each incident class has a documented playbook
 - the helper script creates a rehearsal packet in the evidence tree
-- the runbook and desktop release docs point at the same recovery model
+- the launch runbook and Pages deployment workflow point at the same recovery
+  model
 - operators can tell the difference between fix-forward, rollback, and manual
   recovery without improvising definitions
 
