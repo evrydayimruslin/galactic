@@ -4,10 +4,10 @@ import {
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 
 import {
-  countConnectedNonLiveVersions,
+  countConnectedStagedVersions,
   decideConnectedUploadAdmission,
   MAX_CONNECTED_NON_LIVE_VERSIONS,
-  retainedNonLiveVersionBytes,
+  retainedConnectedStagedVersionBytes,
   validateConnectedUploadFileSet,
 } from "./connected-upload-admission.ts";
 import {
@@ -24,7 +24,8 @@ Deno.test("connected upload admission enforces file count, extension, and UTF-8 
     new TextEncoder().encode("export const emoji = '🪐';{}").byteLength,
   );
   assertThrows(
-    () => validateConnectedUploadFileSet([{ path: "binary.exe", content: "x" }]),
+    () =>
+      validateConnectedUploadFileSet([{ path: "binary.exe", content: "x" }]),
     Error,
     "File type not allowed",
   );
@@ -52,25 +53,63 @@ Deno.test("connected upload admission enforces file count, extension, and UTF-8 
 
 Deno.test("connected upload admission bounds and accounts retained staged versions", () => {
   assertEquals(MAX_CONNECTED_NON_LIVE_VERSIONS, 3);
+  const live = {
+    version: "1.0.0",
+    created_at: "2026-07-14T12:00:00.000Z",
+    size_bytes: 999,
+  };
+  const staged = (
+    version: string,
+    createdAt: string,
+    sizeBytes: number | string,
+  ) => ({
+    version,
+    created_at: createdAt,
+    size_bytes: sizeBytes,
+    source_hash: `${version}-hash`,
+    test_attestation: { source_hash: `${version}-hash` },
+  });
+  const metadata = [
+    // Legacy and previously promoted releases are history, not staged drafts.
+    {
+      version: "0.9.0",
+      created_at: "2026-07-13T12:00:00.000Z",
+      size_bytes: 500,
+    },
+    live,
+    staged("1.1.0", "2026-07-14T13:00:00.000Z", 10),
+    staged("1.2.0", "2026-07-14T14:00:00.000Z", "20"),
+    staged("1.1.0", "2026-07-14T15:00:00.000Z", 15),
+    // A hash without a source-bound gx.test proof is legacy, not a candidate.
+    {
+      version: "legacy",
+      created_at: "2026-07-14T16:00:00.000Z",
+      size_bytes: 700,
+      source_hash: "legacy-hash",
+    },
+  ];
   assertEquals(
-    countConnectedNonLiveVersions(
-      ["1.0.0", "1.1.0", "1.1.0", "1.2.0", "1.3.0"],
-      "1.0.0",
-    ),
-    3,
+    countConnectedStagedVersions(metadata, "1.0.0"),
+    2,
   );
   assertEquals(
-    retainedNonLiveVersionBytes(
-      [
-        { version: "1.0.0", size_bytes: 999 },
-        { version: "1.1.0", size_bytes: 10 },
-        { version: "1.2.0", size_bytes: "20" },
-        { version: "1.1.0", size_bytes: 15 },
-        { version: "bad", size_bytes: -1 },
-      ],
-      "1.0.0",
-    ),
+    retainedConnectedStagedVersionBytes(metadata, "1.0.0"),
     35,
+  );
+});
+
+Deno.test("legacy non-live release history does not exhaust connected staged admission", () => {
+  const metadata = Array.from({ length: 142 }, (_, index) => ({
+    version: `1.0.${index}`,
+    created_at: new Date(Date.UTC(2026, 5, 1, 0, index)).toISOString(),
+    size_bytes: 9701,
+    ...(index > 60 ? { source_hash: "legacy-source-hash" } : {}),
+  }));
+
+  assertEquals(countConnectedStagedVersions(metadata, "1.0.1"), 0);
+  assertEquals(
+    retainedConnectedStagedVersionBytes(metadata, "1.0.1"),
+    0,
   );
 });
 
