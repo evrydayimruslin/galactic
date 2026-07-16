@@ -323,9 +323,6 @@ subsystem owners:
 | `POST /api/net/smtp-send`                                                         | Service              | `X-Worker-Secret`      | Partial    | No | Email send              | Internal Platform Ops | P1   | Service-to-service TCP bridge            |
 | `GET /internal/gpu/code/:path`                                                    | Service              | Shared secret header   | Weak       | No | Code delivery           | Internal Platform Ops | P1   | RunPod/GPU worker code proxy             |
 | `POST /internal/d1/query`                                                         | Service              | Shared secret header   | Partial    | No | DB execution            | Internal Platform Ops | P1   | D1 proxy for GPU workers                 |
-| `GET /debug/auth-test`                                                            | Authenticated caller | Bearer token           | Weak       | No | Token diagnostics       | Auth & Identity       | P1   | Returns auth diagnostic data             |
-| `POST /debug/add-credits`                                                         | Authenticated caller | Bearer or auth cookies | Weak       | No | Balance credit          | Billing & Marketplace | P0   | Temporary dev-only money mutation route  |
-| `GET /debug/chat-preflight`                                                       | Authenticated caller | Bearer or auth cookies | Weak       | No | Billing/key diagnostics | AI Runtime            | P1   | Debug preflight                          |
 | `GET /` and `GET /health` on data worker                                          | Public               | None                   | Weak       | No | Health read             | Data Worker           | P3   | Separate Cloudflare Worker deployment    |
 | `POST /code/fetch` on data worker                                                 | Service              | `X-Worker-Secret`      | Partial    | No | Code read/cache         | Data Worker           | P1   | R2 + KV fetch                            |
 | `POST /code/invalidate` on data worker                                            | Service              | `X-Worker-Secret`      | Partial    | No | Code cache invalidation | Data Worker           | P1   | Acknowledges invalidation intent         |
@@ -363,6 +360,6 @@ content.
   uploads, and admin write paths. Remaining gaps are mostly lower-risk
   debug/operator surfaces and whatever future sensitive routes land without the
   shared helper.
-- `P1`: there are still debug and temporary routes in the live tree
-  (`/api/imap-test`, `/debug/*`, `/debug/add-credits`) that should be either
-  gated harder, removed, or explicitly classed as non-production.
+- `P1`: `/api/imap-test` remains a temporary route that should be gated harder,
+  removed, or explicitly classed as non-production. The `/debug/*` auth,
+  credit, and chat-preflight routes were removed by the P0 launch hardening.

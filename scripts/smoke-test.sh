@@ -113,13 +113,6 @@ else:
 PY
 }
 
-url_encode() {
-  python3 - "$1" <<'PY'
-import sys, urllib.parse
-print(urllib.parse.quote(sys.argv[1], safe=''))
-PY
-}
-
 fetch_json() {
   local label="$1"
   local url="$2"
@@ -217,24 +210,18 @@ else
     fail "/auth/user failed (status $AUTH_USER_STATUS)"
   fi
 
-  echo -n "6. /debug/chat-preflight... "
+  echo -n "6. retired /debug/chat-preflight... "
   PREFLIGHT_JSON="$TMP_DIR/chat-preflight.json"
-  ENCODED_CHAT_MODEL="$(url_encode "$CHAT_MODEL")"
-  PREFLIGHT_STATUS=$(fetch_json "chat preflight" "$API_URL/debug/chat-preflight?model=$ENCODED_CHAT_MODEL" "$PREFLIGHT_JSON" "${AUTH_HEADER[@]}")
-  if [[ "$PREFLIGHT_STATUS" == "200" ]] && [[ "$(json_get "$PREFLIGHT_JSON" "ok")" == "true" ]]; then
-    ROUTE_UPSTREAM="$(json_get "$PREFLIGHT_JSON" "route.upstream_provider")"
-    ROUTE_MODEL="$(json_get "$PREFLIGHT_JSON" "route.model")"
-    # All platform (Light) models route via OpenRouter — DeepSeek-direct was
-    # retired 2026-06-25 (buildLightRoute maps legacy ids to OpenRouter slugs).
-    if [[ "$CHAT_MODEL" == ultralight/deepseek-v4-* ]] && [[ "$ROUTE_UPSTREAM" != "openrouter" ]]; then
-      fail "chat preflight resolved $CHAT_MODEL to unexpected upstream: ${ROUTE_UPSTREAM:-unknown}"
-    elif [[ "$CHAT_MODEL" == "ultralight/deepseek-v4-flash" ]] && [[ "$ROUTE_MODEL" != "deepseek/deepseek-v4-flash" ]]; then
-      fail "chat preflight mapped $CHAT_MODEL to unexpected slug: ${ROUTE_MODEL:-unknown}"
-    else
-      pass "chat preflight checks all passed (upstream: ${ROUTE_UPSTREAM:-unknown}, model: ${ROUTE_MODEL:-unknown})"
-    fi
+  PREFLIGHT_STATUS=$(fetch_json "retired chat preflight" "$API_URL/debug/chat-preflight" "$PREFLIGHT_JSON" "${AUTH_HEADER[@]}")
+  if [[ "$PREFLIGHT_STATUS" == "404" ]]; then
+    # P0 intentionally removed debug routes that exposed auth, balance, and
+    # provider-key diagnostics. Their absence is a security assertion; launch
+    # BYOK behavior is covered by the account-session browser journey.
+    pass "retired billing/key diagnostic route remains unavailable"
+  elif [[ "$PREFLIGHT_STATUS" == "200" ]]; then
+    fail "retired /debug/chat-preflight is unexpectedly exposed"
   else
-    fail "/debug/chat-preflight failed (status $PREFLIGHT_STATUS)"
+    fail "retired /debug/chat-preflight returned unexpected status $PREFLIGHT_STATUS"
   fi
 
   if [[ "$EXERCISE_CHAT" -eq 1 ]]; then
