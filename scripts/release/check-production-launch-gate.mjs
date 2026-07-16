@@ -3,15 +3,27 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { ensureNode20, parseArgs, repoRoot } from "../analysis/_shared.mjs";
-import { matchesWorkflowRunName } from "./workflow-run-name.mjs";
+import { pickLatestWorkflowRun } from "./production-launch-gate-runs.mjs";
 
 ensureNode20();
 
 const REQUIRED_RUNS = [
-  { name: "Staging Launch Gate", category: "staging_reference" },
-  { name: "Supabase Production DB", category: "production" },
-  { name: "API Deploy", category: "production" },
-  { name: "Launch Web Deploy", category: "production" },
+  {
+    name: "Staging Launch Gate",
+    category: "staging_reference",
+    allowedEvents: ["push", "workflow_dispatch"],
+  },
+  {
+    name: "Supabase Production DB",
+    category: "production",
+    allowedEvents: ["push"],
+  },
+  { name: "API Deploy", category: "production", allowedEvents: ["push"] },
+  {
+    name: "Launch Web Deploy",
+    category: "production",
+    allowedEvents: ["push"],
+  },
 ];
 
 function printHelp() {
@@ -81,7 +93,6 @@ async function fetchWorkflowRuns() {
     `https://api.github.com/repos/${repository}/actions/runs`,
   );
   url.searchParams.set("head_sha", candidateSha);
-  url.searchParams.set("event", "push");
   url.searchParams.set("per_page", "100");
 
   const response = await fetch(url, {
@@ -101,19 +112,6 @@ async function fetchWorkflowRuns() {
 
   const payload = await response.json();
   return Array.isArray(payload.workflow_runs) ? payload.workflow_runs : [];
-}
-
-function pickLatestRun(runs, workflowName) {
-  return runs
-    .filter((run) => matchesWorkflowRunName(run.name, workflowName))
-    .sort((left, right) => {
-      const leftAttempt = Number(left.run_attempt || 0);
-      const rightAttempt = Number(right.run_attempt || 0);
-      if (rightAttempt !== leftAttempt) {
-        return rightAttempt - leftAttempt;
-      }
-      return Number(right.id || 0) - Number(left.id || 0);
-    })[0] || null;
 }
 
 function classifyRun(spec, run) {
@@ -247,7 +245,10 @@ try {
   while (true) {
     const runs = await fetchWorkflowRuns();
     gateResults = REQUIRED_RUNS.map((spec) =>
-      classifyRun(spec, pickLatestRun(runs, spec.name))
+      classifyRun(
+        spec,
+        pickLatestWorkflowRun({ runs, spec, releaseTag }),
+      )
     );
 
     const waitingResults = gateResults.filter((result) =>
