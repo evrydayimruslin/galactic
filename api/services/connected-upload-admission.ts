@@ -6,6 +6,33 @@ import {
 
 export const MAX_CONNECTED_NON_LIVE_VERSIONS = 3;
 
+type ConnectedUploadAdmissionDecision =
+  | "deduplicate"
+  | "stage"
+  | "staged_version_limit";
+
+export function decideConnectedUploadAdmission({
+  verifiedIdenticalLiveDenoRedeploy,
+  enforceStagedVersionLimit,
+  retainedNonLiveVersions,
+}: {
+  verifiedIdenticalLiveDenoRedeploy: boolean;
+  enforceStagedVersionLimit: boolean;
+  retainedNonLiveVersions: number;
+}): ConnectedUploadAdmissionDecision {
+  // A retry of the exact live Deno bundle is a no-op, not another staged
+  // version. Evaluate this first so a full draft history cannot turn a safe,
+  // idempotent retry into a false admission failure.
+  if (verifiedIdenticalLiveDenoRedeploy) return "deduplicate";
+  if (
+    enforceStagedVersionLimit &&
+    retainedNonLiveVersions >= MAX_CONNECTED_NON_LIVE_VERSIONS
+  ) {
+    return "staged_version_limit";
+  }
+  return "stage";
+}
+
 export interface ConnectedUploadFile {
   path: string;
   content: string;

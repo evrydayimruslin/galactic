@@ -5,6 +5,7 @@ import {
 
 import {
   countConnectedNonLiveVersions,
+  decideConnectedUploadAdmission,
   MAX_CONNECTED_NON_LIVE_VERSIONS,
   retainedNonLiveVersionBytes,
   validateConnectedUploadFileSet,
@@ -70,5 +71,32 @@ Deno.test("connected upload admission bounds and accounts retained staged versio
       "1.0.0",
     ),
     35,
+  );
+});
+
+Deno.test("verified identical live redeploy wins before the staged-version ceiling", () => {
+  assertEquals(
+    decideConnectedUploadAdmission({
+      verifiedIdenticalLiveDenoRedeploy: true,
+      enforceStagedVersionLimit: true,
+      retainedNonLiveVersions: MAX_CONNECTED_NON_LIVE_VERSIONS,
+    }),
+    "deduplicate",
+  );
+  assertEquals(
+    decideConnectedUploadAdmission({
+      verifiedIdenticalLiveDenoRedeploy: false,
+      enforceStagedVersionLimit: true,
+      retainedNonLiveVersions: MAX_CONNECTED_NON_LIVE_VERSIONS,
+    }),
+    "staged_version_limit",
+  );
+  assertEquals(
+    decideConnectedUploadAdmission({
+      verifiedIdenticalLiveDenoRedeploy: false,
+      enforceStagedVersionLimit: false,
+      retainedNonLiveVersions: MAX_CONNECTED_NON_LIVE_VERSIONS,
+    }),
+    "stage",
   );
 });
