@@ -93,10 +93,10 @@ import {
   recordUploadStorage as recordLiveAppStorage,
 } from "../services/storage-quota.ts";
 import {
-  countConnectedNonLiveVersions,
+  countConnectedStagedVersions,
   decideConnectedUploadAdmission,
   MAX_CONNECTED_NON_LIVE_VERSIONS,
-  retainedNonLiveVersionBytes,
+  retainedConnectedStagedVersionBytes,
   validateConnectedUploadFileSet,
 } from "../services/connected-upload-admission.ts";
 import { handleUploadFiles, type UploadFile } from "./upload.ts";
@@ -6524,8 +6524,8 @@ async function executeUpload(
     const connectedAdmission = decideConnectedUploadAdmission({
       verifiedIdenticalLiveDenoRedeploy,
       enforceStagedVersionLimit: Boolean(options.callerIsApiToken),
-      retainedNonLiveVersions: countConnectedNonLiveVersions(
-        app.versions,
+      retainedNonLiveVersions: countConnectedStagedVersions(
+        app.version_metadata,
         app.current_version,
       ),
     });
@@ -6907,7 +6907,7 @@ async function executeUpload(
         (sum, file) => sum + file.content.byteLength,
         0,
       );
-      const retainedBytes = retainedNonLiveVersionBytes(
+      const retainedBytes = retainedConnectedStagedVersionBytes(
         app.version_metadata,
         app.current_version,
       );

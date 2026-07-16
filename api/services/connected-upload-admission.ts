@@ -51,45 +51,94 @@ export function validateConnectedUploadFileSet(
   let totalBytes = 0;
   for (const file of files) {
     const lowerPath = file.path.toLowerCase();
-    if (!ALLOWED_EXTENSIONS.some((extension) => lowerPath.endsWith(extension))) {
+    if (
+      !ALLOWED_EXTENSIONS.some((extension) => lowerPath.endsWith(extension))
+    ) {
       throw new Error(`File type not allowed: ${file.path}`);
     }
     totalBytes += new TextEncoder().encode(file.content).byteLength;
     if (totalBytes > MAX_UPLOAD_SIZE_BYTES) {
       throw new Error(
-        `Total upload size exceeds ${MAX_UPLOAD_SIZE_BYTES / 1024 / 1024}MB limit`,
+        `Total upload size exceeds ${
+          MAX_UPLOAD_SIZE_BYTES / 1024 / 1024
+        }MB limit`,
       );
     }
   }
   return { totalBytes };
 }
 
-export function countConnectedNonLiveVersions(
-  versions: unknown,
+function connectedStagedVersionMetadata(
+  metadata: unknown,
+  currentVersion: string | null | undefined,
+): Array<Record<string, unknown> & { version: string }> {
+  if (!Array.isArray(metadata)) return [];
+
+  const currentEntry = [...metadata].reverse().find((rawEntry) => {
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+      return false;
+    }
+    return (rawEntry as Record<string, unknown>).version === currentVersion;
+  }) as Record<string, unknown> | undefined;
+  const currentCreatedAt = Date.parse(
+    typeof currentEntry?.created_at === "string" ? currentEntry.created_at : "",
+  );
+
+  return metadata.filter(
+    (rawEntry): rawEntry is Record<string, unknown> & { version: string } => {
+      if (
+        !rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)
+      ) {
+        return false;
+      }
+      const entry = rawEntry as Record<string, unknown>;
+      if (
+        typeof entry.version !== "string" || entry.version === currentVersion ||
+        typeof entry.source_hash !== "string" ||
+        !entry.test_attestation ||
+        typeof entry.test_attestation !== "object" ||
+        Array.isArray(entry.test_attestation) ||
+        (entry.test_attestation as Record<string, unknown>).source_hash !==
+          entry.source_hash
+      ) {
+        return false;
+      }
+
+      // This is the same forward-candidate boundary Agent Home uses. Historical
+      // releases (including legacy rows created before staged promotion existed)
+      // remain valid history, but they are not retained connected-builder drafts.
+      if (!Number.isFinite(currentCreatedAt)) return true;
+      const candidateCreatedAt = Date.parse(
+        typeof entry.created_at === "string" ? entry.created_at : "",
+      );
+      return Number.isFinite(candidateCreatedAt) &&
+        candidateCreatedAt > currentCreatedAt;
+    },
+  );
+}
+
+export function countConnectedStagedVersions(
+  metadata: unknown,
   currentVersion: string | null | undefined,
 ): number {
-  if (!Array.isArray(versions)) return 0;
   return new Set(
-    versions.filter((version): version is string =>
-      typeof version === "string" && version !== currentVersion
+    connectedStagedVersionMetadata(metadata, currentVersion).map((entry) =>
+      entry.version
     ),
   ).size;
 }
 
-export function retainedNonLiveVersionBytes(
+export function retainedConnectedStagedVersionBytes(
   metadata: unknown,
   currentVersion: string | null | undefined,
 ): number {
-  if (!Array.isArray(metadata)) return 0;
   const bytesByVersion = new Map<string, number>();
-  for (const rawEntry of metadata) {
-    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
-      continue;
-    }
-    const entry = rawEntry as Record<string, unknown>;
-    if (typeof entry.version !== "string" || entry.version === currentVersion) {
-      continue;
-    }
+  for (
+    const entry of connectedStagedVersionMetadata(
+      metadata,
+      currentVersion,
+    )
+  ) {
     const bytes = typeof entry.size_bytes === "number"
       ? entry.size_bytes
       : typeof entry.size_bytes === "string"
