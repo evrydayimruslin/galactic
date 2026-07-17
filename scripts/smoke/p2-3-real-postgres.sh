@@ -401,8 +401,12 @@ FREE_RESULT_COUNT="$(awk 'NF { count++ } END { print count + 0 }' \
   || fail "exactly one of two Free Agent activations must be admitted"
 
 WINNING_FREE_AGENT_ID="$(psql_smoke --quiet --tuples-only --no-align \
-  --set=free_user_id="$FREE_USER_ID" \
-  --command="SELECT free_agent_id FROM public.account_entitlements WHERE user_id = :'free_user_id'::uuid")"
+  --set=free_user_id="$FREE_USER_ID" <<'SQL'
+SELECT free_agent_id
+FROM public.account_entitlements
+WHERE user_id = :'free_user_id'::uuid;
+SQL
+)"
 case "$WINNING_FREE_AGENT_ID" in
   "$FREE_AGENT_A_ID")
     WINNING_SIBLING_ID="$FREE_A_SIBLING_ID"
@@ -426,8 +430,16 @@ esac
 
 SIBLING_RESULT="$(psql_smoke --quiet --tuples-only --no-align --field-separator='|' \
   --set=free_user_id="$FREE_USER_ID" \
-  --set=sibling_id="$WINNING_SIBLING_ID" \
-  --command="SET statement_timeout='20s'; SELECT allowed::integer, code FROM public.activate_managed_routine_with_slot(:'free_user_id'::uuid, :'sibling_id'::uuid, '{\"max_light_per_run\":1,\"max_light_per_day\":10,\"max_light_per_month\":100,\"max_calls_per_run\":10}'::jsonb)")"
+  --set=sibling_id="$WINNING_SIBLING_ID" <<'SQL'
+SET statement_timeout = '20s';
+SELECT allowed::integer, code
+FROM public.activate_managed_routine_with_slot(
+  :'free_user_id'::uuid,
+  :'sibling_id'::uuid,
+  '{"max_light_per_run":1,"max_light_per_day":10,"max_light_per_month":100,"max_calls_per_run":10}'::jsonb
+);
+SQL
+)"
 [[ "$SIBLING_RESULT" == "1|ok" ]] \
   || fail "a sibling routine on the selected Free Agent must activate"
 
@@ -500,8 +512,15 @@ SQL
 echo "P2.3 real-Postgres smoke: atomic per-Agent capacity admission"
 CAP_RESULT="$(psql_smoke --quiet --tuples-only --no-align --field-separator='|' \
   --set=pro_user_id="$PRO_USER_ID" \
-  --set=pro_agent_id="$PRO_AGENT_ID" \
-  --command="SELECT capacity_agent_id, agent_cap_basis_points FROM public.set_agent_capacity_policy(:'pro_user_id'::uuid, :'pro_agent_id'::uuid, 100)")"
+  --set=pro_agent_id="$PRO_AGENT_ID" <<'SQL'
+SELECT capacity_agent_id, agent_cap_basis_points
+FROM public.set_agent_capacity_policy(
+  :'pro_user_id'::uuid,
+  :'pro_agent_id'::uuid,
+  100
+);
+SQL
+)"
 [[ "$CAP_RESULT" == "$PRO_AGENT_ID|100" ]] \
   || fail "Pro Agent capacity cap was not set to one percent"
 
