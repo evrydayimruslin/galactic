@@ -63,6 +63,7 @@ Deno.test("createNotification inserts idempotently (ignore-duplicates) and retur
       jsonResponse([{
         id: "n1",
         user_id: "u1",
+        agent_id: "a1",
         kind: "routine_paused",
         severity: "critical",
         title: "X was paused",
@@ -77,6 +78,7 @@ Deno.test("createNotification inserts idempotently (ignore-duplicates) and retur
     );
     const row = await createNotification({
       userId: "u1",
+      agentId: "a1",
       kind: "routine_paused",
       severity: "critical",
       title: "X was paused",
@@ -95,6 +97,7 @@ Deno.test("createNotification inserts idempotently (ignore-duplicates) and retur
     const body = calls[0].body as Record<string, unknown>;
     assertEquals(body.dedupe_key, "routine_paused:r1:2026-07-08T12:00:00.000Z");
     assertEquals(body.severity, "critical");
+    assertEquals(body.agent_id, "a1");
   } finally {
     restore();
   }
@@ -160,6 +163,26 @@ Deno.test("listNotifications clamps limit to [1,200]", async () => {
   }
 });
 
+Deno.test("notification reads and unread counts can be scoped to one Agent", async () => {
+  const restore = installEnv();
+  try {
+    const { fetchFn, calls } = capturingFetch((call) =>
+      call.url.includes("select=id")
+        ? new Response("[]", {
+          status: 200,
+          headers: { "Content-Type": "application/json", "Content-Range": "0-0/0" },
+        })
+        : jsonResponse([])
+    );
+    const { countUnread } = await import("./notifications.ts");
+    await listNotifications("u1", { agentId: "a1" }, { fetchFn });
+    await countUnread("u1", { agentId: "a1" }, { fetchFn });
+    assert(calls.every((call) => call.url.includes("agent_id=eq.a1")));
+  } finally {
+    restore();
+  }
+});
+
 Deno.test("markNotificationsRead patches only the owner's unread rows and counts them", async () => {
   const restore = installEnv();
   try {
@@ -190,6 +213,25 @@ Deno.test("markNotificationsRead with no ids is a no-op (no request)", async () 
   }
 });
 
+Deno.test("markNotificationsRead respects the Agent filter for selected ids", async () => {
+  const restore = installEnv();
+  try {
+    const { fetchFn, calls } = capturingFetch(() => jsonResponse([{ id: "a" }]));
+    const n = await markNotificationsRead(
+      "u1",
+      ["a"],
+      { agentId: "agent-1" },
+      { fetchFn },
+    );
+    assertEquals(n, 1);
+    assert(calls[0].url.includes("user_id=eq.u1"));
+    assert(calls[0].url.includes("agent_id=eq.agent-1"));
+    assert(calls[0].url.includes("id=in.(a)"));
+  } finally {
+    restore();
+  }
+});
+
 Deno.test("markAllNotificationsRead patches all unread rows for the owner", async () => {
   const restore = installEnv();
   try {
@@ -198,6 +240,18 @@ Deno.test("markAllNotificationsRead patches all unread rows for the owner", asyn
     assertEquals(n, 1);
     assert(calls[0].url.includes("user_id=eq.u1"));
     assert(calls[0].url.includes("read_at=is.null"));
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("markAllNotificationsRead respects the Agent filter", async () => {
+  const restore = installEnv();
+  try {
+    const { fetchFn, calls } = capturingFetch(() => jsonResponse([{ id: "a" }]));
+    const n = await markAllNotificationsRead("u1", { agentId: "agent-1" }, { fetchFn });
+    assertEquals(n, 1);
+    assert(calls[0].url.includes("agent_id=eq.agent-1"));
   } finally {
     restore();
   }

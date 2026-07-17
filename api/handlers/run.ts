@@ -62,6 +62,7 @@ import {
 } from "../services/execution-settlement.ts";
 import {
   accountCapacityErrorDetails,
+  accountCapacityErrorMessage,
   releaseAccountCapacity,
   reserveAccountCapacity,
   settleAccountCapacity,
@@ -76,6 +77,7 @@ import {
   buildCallerPermissionConfigureUrl,
   enforceCallerFunctionPermission,
 } from "../services/caller-function-permissions.ts";
+import { mintCallerContextToken } from "../services/agent-caller-context.ts";
 
 function toLogEntries(lines: string[]): LogEntry[] {
   return lines.map((message) => ({
@@ -567,6 +569,9 @@ export async function handleRun(
     if (subscriptionCapacityMode) {
       const admission = await reserveAccountCapacity({
         userId,
+        // Legacy /run rejects actor tokens above, so this is a direct call and
+        // the target Agent starts the capacity-attribution chain.
+        capacityAgentId: app.id,
         idempotencyKey: `run:${receiptId}`,
         reserveLight: calculateExpectedRuntimeHoldAmount(
           timeoutMs,
@@ -576,6 +581,7 @@ export async function handleRun(
         metadata: {
           surface: "run",
           app_id: app.id,
+          capacity_agent_id: app.id,
           function_name: functionName,
           receipt_id: receiptId,
         },
@@ -589,8 +595,8 @@ export async function handleRun(
             duration_ms: 0,
             receipt_id: receiptId,
             error: {
-              type: "CAPACITY_WAITING",
-              message: `Account capacity is ${admission.state}. Work can resume at ${admission.nextEligibleAt}.`,
+              type: admission.code.toUpperCase(),
+              message: accountCapacityErrorMessage(admission),
               details: accountCapacityErrorDetails(admission),
             },
           } as RunResponse,
@@ -641,6 +647,21 @@ export async function handleRun(
     );
     const baseUrl = getEnv("BASE_URL") || undefined;
     const appCallDependencies = resolveRuntimeAppCallDependencies(app, caller);
+    let callerContextToken: string | undefined;
+    try {
+      callerContextToken = await mintCallerContextToken({
+        callerAppId: app.id,
+        capacityAgentId: app.id,
+        userId,
+        callerFunction: functionName,
+        incomingHop: 0,
+        ttlSeconds: Math.ceil(timeoutMs / 1000) + 120,
+      });
+    } catch (err) {
+      // Match MCP's fail-closed behavior: this execution may continue, but an
+      // outbound Agent call cannot authenticate if signing is unavailable.
+      console.warn("[RUN] Failed to mint caller context token:", err);
+    }
     const memoryAdapter = permissions.includes("memory:read") ||
         permissions.includes("memory:write")
       ? createRuntimeMemoryAdapter(userId, app.id)
@@ -672,6 +693,7 @@ export async function handleRun(
         baseUrl,
         authToken: caller.authToken,
         appCallDependencies,
+        callerContextToken,
         workerSecret: workerSecret || undefined,
         timeoutMs,
         cloudOperationMetering,

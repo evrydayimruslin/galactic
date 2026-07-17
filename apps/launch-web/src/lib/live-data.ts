@@ -3,10 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentWiringView } from "../../../../shared/contracts/agent-grants.ts";
 import type {
   LaunchAgentFunctionsResponse,
+  LaunchAgentCapacityResponse,
   LaunchAgentHomeResponse,
+  LaunchAgentRoutinesResponse,
   LaunchApiKeyListResponse,
   LaunchByokSummaryResponse,
   LaunchCallerFunctionPermissionsResponse,
+  LaunchFleetResponse,
   LaunchInferenceOptionsResponse,
   LaunchInstallResponse,
   LaunchLeaderboardResponse,
@@ -23,6 +26,7 @@ import {
   type LaunchPlatformPrimitivesResponse,
   type LaunchWalletResponse,
 } from "./api";
+import { hasLaunchAuthToken } from "./auth";
 import type { ResolvedLaunchRoute } from "./routes";
 
 export type LaunchLoadStatus = "idle" | "loading" | "ready" | "error";
@@ -37,9 +41,12 @@ export interface LaunchRouteLiveData {
   agentFeeLeaderboard?: LaunchLeaderboardResponse;
   feeLeaderboard?: LaunchLeaderboardResponse;
   library?: LaunchLibraryResponse;
+  fleet?: LaunchFleetResponse;
   agent?: LaunchAgentResponse;
   agentFunctions?: LaunchAgentFunctionsResponse;
+  agentCapacity?: LaunchAgentCapacityResponse;
   agentHome?: LaunchAgentHomeResponse;
+  agentRoutines?: LaunchAgentRoutinesResponse;
   agentHomeError?: string;
   agentCallerPermissions?: LaunchCallerFunctionPermissionsResponse;
   agentWiring?: AgentWiringView;
@@ -169,13 +176,16 @@ async function loadRouteData(
   const search = new URLSearchParams(location.search);
   switch (route.definition.key) {
     case "home": {
-      const [status, install, primitives, store] = await Promise.all([
+      if (hasLaunchAuthToken()) {
+        const fleet = await launchApi.fleet();
+        return { fleet };
+      }
+      const [status, install, primitives] = await Promise.all([
         optional(() => launchApi.status()),
         optional(() => launchApi.install()),
         optional(() => launchApi.platformPrimitives()),
-        optional(() => launchApi.store({ limit: 6 })),
       ]);
-      return { status, install, platformPrimitives: primitives, store };
+      return { status, install, platformPrimitives: primitives };
     }
     case "store": {
       const request: LaunchStoreRequest = {
@@ -202,44 +212,66 @@ async function loadRouteData(
         agentFunctions,
         agentCallerPermissions,
         agentWiring,
+        agentCapacity,
+        agentRoutines,
         install,
         byok,
         inferenceOptions,
+        fleet,
       ] = await Promise
         .all([
           launchApi.agent(id),
           optional(() => launchApi.agentFunctions(id)),
           optional(() => launchApi.agentCallerPermissions(id)),
           optional(() => launchApi.agentWiring(id)),
+          optional(() => launchApi.agentCapacity(id)),
+          optional(() => launchApi.agentRoutines(id)),
           // Per-agent install context (dedicated MCP URL + connect prompt).
           optional(() => launchApi.install({ agent: id })),
           // Loaded so the per-function inference control can list the viewer's
           // providers configured with the user's own API keys.
           optional(() => launchApi.byok()),
           optional(() => launchApi.inferenceOptions()),
+          optional(() => launchApi.fleet()),
         ]);
       return {
         agent,
         agentCallerPermissions,
         agentFunctions,
+        agentCapacity,
+        agentRoutines,
         agentWiring,
         byok,
         inferenceOptions,
         install,
+        fleet,
       };
     }
     case "library": {
-      return { library: await launchApi.library() };
+      if (hasLaunchAuthToken()) {
+        const fleet = await launchApi.fleet();
+        return { fleet };
+      }
+      const [library, fleet] = await Promise.all([
+        launchApi.library(),
+        optional(() => launchApi.fleet()),
+      ]);
+      return { fleet, library };
     }
     case "settings": {
-      const [apiKeys, byok, inferenceOptions, subscription] =
+      if (hasLaunchAuthToken()) {
+        const fleet = await launchApi.fleet();
+        return { fleet };
+      }
+      const [apiKeys, byok, inferenceOptions, subscription, fleet] =
         await Promise.all([
           launchApi.apiKeys(),
           optional(() => launchApi.byok()),
           optional(() => launchApi.inferenceOptions()),
           launchApi.subscription(),
+          optional(() => launchApi.fleet()),
         ]);
-      return { apiKeys, byok, inferenceOptions, subscription };
+      return { apiKeys, byok, inferenceOptions, subscription, fleet };
     }
     case "adminAgent": {
       const id = route.params.id || "";

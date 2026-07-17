@@ -16,7 +16,7 @@ import type { RuntimeConfig } from "./sandbox.ts";
 
 // Bump this in lockstep with SANDBOX_TEMPLATE_VERSION whenever the generated
 // setup.js / wrapper.js template changes.
-const PINNED_TEMPLATE_VERSION = "2026-07-14.routine-emit-test-runtime.v2";
+const PINNED_TEMPLATE_VERSION = "2026-07-17.agent-capacity-errors.v3";
 
 // Stable separator between the two captured modules for the snapshot hash.
 const SEP = "\n----MODULE-BOUNDARY----\n";
@@ -161,10 +161,10 @@ Deno.test("sandbox template: snapshot pinned -- a template change must bump SAND
     // TEMPLATE_HASH below to the new value. This forces the reuse key to rotate
     // so a cached old isolate cannot serve new template content.
     const TEMPLATE_HASH =
-      "63dee139cf8fcf1f6c6ae4cbfa1d2bb6490aade7d9b41c82da116df03acb4f29";
+      "f70c2a1272b035c8cd616e345ed9eb3d43729aaf73252c706633ab7257af5255";
     assertEquals(
       PINNED_TEMPLATE_VERSION,
-      "2026-07-14.routine-emit-test-runtime.v2",
+      "2026-07-17.agent-capacity-errors.v3",
       "PINNED_TEMPLATE_VERSION drifted from the pinned literal",
     );
     assertEquals(

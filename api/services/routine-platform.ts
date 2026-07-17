@@ -6,9 +6,7 @@ import {
   type RoutineCapabilityDeclaration,
   type RoutineScheduleDeclaration,
 } from "../../shared/contracts/routine.ts";
-import {
-  parseAppManifest,
-} from "./app-settings.ts";
+import { parseAppManifest } from "./app-settings.ts";
 import {
   resolveAppRuntimeEnvVars,
   resolveStrictManifestPermissions,
@@ -27,6 +25,8 @@ import {
   createRoutineRun,
   deleteRoutine,
   getRoutine,
+  isLaunchManagedRoutine,
+  launchRoutineRole,
   listRoutines,
   normalizeRoutineBudgetPolicy,
   pauseRoutine,
@@ -39,6 +39,10 @@ import {
   type StoredRoutine,
   updateRoutine,
 } from "./routines.ts";
+import {
+  normalizeRoutineSchedule,
+  RoutineScheduleValidationError,
+} from "./routine-schedule.ts";
 
 export const ROUTINE_PLATFORM_ACTIONS = [
   "templates",
@@ -109,6 +113,8 @@ interface PlannedRoutine {
   approvedCapabilities: RoutineCapabilityInput[];
   createArgs: Record<string, unknown>;
 }
+
+type LaunchRoutineRole = "primary" | "routine";
 
 function serviceHeaders(): Record<string, string> {
   const key = getEnv("SUPABASE_SERVICE_ROLE_KEY");
@@ -336,55 +342,44 @@ function assertPrivateOwnedTemplate(
   }
 }
 
-function assertIntervalSchedule(schedule: unknown): void {
-  if (!isRecord(schedule) || typeof schedule.cron === "string" || schedule.type === "cron") {
-    throw new RoutinePlatformError(
-      ROUTINE_PLATFORM_INVALID_PARAMS,
-      "Launch routines use interval schedules only. Cron remains available internally but is not part of the launch contract.",
-    );
-  }
-  const seconds = typeof schedule.every_seconds === "number"
-    ? schedule.every_seconds
-    : typeof schedule.every_minutes === "number"
-    ? schedule.every_minutes * 60
-    : 0;
-  if (!Number.isFinite(seconds) || seconds < 60) {
-    throw new RoutinePlatformError(
-      ROUTINE_PLATFORM_INVALID_PARAMS,
-      "Routine cadence must be an interval of at least 60 seconds.",
-    );
+function assertLaunchSchedule(schedule: unknown): void {
+  try {
+    normalizeRoutineSchedule(schedule);
+  } catch (error) {
+    if (error instanceof RoutineScheduleValidationError) {
+      throw new RoutinePlatformError(
+        ROUTINE_PLATFORM_INVALID_PARAMS,
+        error.message,
+        { code: error.code, path: error.path },
+      );
+    }
+    throw error;
   }
 }
 
-async function assertNoExistingPrimaryRoutine(
+async function hasExistingLaunchPrimaryRoutine(
   userId: string,
   composerAppId: string,
-  exceptRoutineId?: string,
-): Promise<void> {
-  const rows = await readRows<{ id: string }>(
+): Promise<boolean> {
+  const rows = await readRows<{ metadata?: unknown }>(
     await fetch(
       restUrl("user_routines", {
         user_id: `eq.${userId}`,
         composer_app_id: `eq.${composerAppId}`,
         deleted_at: "is.null",
-        select: "id",
-        limit: "2",
+        select: "metadata",
       }),
       { headers: serviceHeaders() },
     ),
-    "Failed to check primary routine",
+    "Failed to check Agent routine roles",
   );
-  if (rows.some((row) => row.id !== exceptRoutineId)) {
-    throw new RoutinePlatformError(
-      ROUTINE_PLATFORM_INVALID_PARAMS,
-      "This Agent already has its primary routine. The launch contract supports one primary routine per Agent.",
-    );
-  }
+  return rows.some((row) => launchRoutineRole(row.metadata) === "primary");
 }
 
 function isLaunchPrimaryUniqueViolation(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  return error.message.includes("idx_user_routines_one_launch_primary");
+  return error.message.includes("idx_user_routines_one_launch_primary") ||
+    error.message.includes("idx_user_routines_one_launch_primary_role");
 }
 
 async function validateRequiredCapabilityTargets(
@@ -532,7 +527,7 @@ async function assertRequiredCapabilityGrants(
 }
 
 /**
- * Authoritative activation contract for the single-player launch surface.
+ * Authoritative activation contract for the owner-private launch surface.
  * Every user-facing resume path and the executor defense-in-depth check call
  * this same validator so a monitor/API path cannot silently weaken gx.routine.
  */
@@ -540,6 +535,12 @@ export async function validateRoutineLaunchActivation(
   userId: string,
   routine: StoredRoutine,
 ): Promise<void> {
+  if (!isLaunchManagedRoutine(routine)) {
+    throw new RoutinePlatformError(
+      ROUTINE_PLATFORM_FORBIDDEN,
+      "Only a Galactic-managed Agent routine can use the launch activation path.",
+    );
+  }
   if (!routine.composer_app_id) {
     throw new RoutinePlatformError(
       ROUTINE_PLATFORM_INVALID_PARAMS,
@@ -553,14 +554,13 @@ export async function validateRoutineLaunchActivation(
       "Only an owner-private Agent can be activated as a launch routine.",
     );
   }
-  assertIntervalSchedule(routine.schedule);
+  assertLaunchSchedule(routine.schedule);
   if (routine.max_concurrency !== 1) {
     throw new RoutinePlatformError(
       ROUTINE_PLATFORM_INVALID_PARAMS,
       "Launch routines use max_concurrency=1.",
     );
   }
-  await assertNoExistingPrimaryRoutine(userId, app.id, routine.id);
   await validateRequiredCapabilityTargets(userId, routine.capabilities, {
     activation: true,
   });
@@ -699,6 +699,7 @@ function scheduleFromArgs(
 function buildRoutinePlan(
   template: RoutineTemplateSummary,
   args: Record<string, unknown>,
+  launchRole: LaunchRoutineRole,
 ): PlannedRoutine {
   if (args.approve_capabilities === true) {
     throw new RoutinePlatformError(
@@ -712,7 +713,7 @@ function buildRoutinePlan(
       "Launch routines use max_concurrency=1.",
     );
   }
-  if (args.schedule !== undefined) assertIntervalSchedule(args.schedule);
+  if (args.schedule !== undefined) assertLaunchSchedule(args.schedule);
   const capabilities = capabilityInputsFromArgs(template, args);
   const pendingCapabilities = capabilities.filter((capability) =>
     capability.approved !== true
@@ -768,10 +769,13 @@ function buildRoutinePlan(
     metadata: {
       ...(objectOrUndefined(args.metadata) || {}),
       source: "ul.routine",
-      // Server-owned marker used by the partial unique index. Keep the broader
-      // source marker for compatibility, but do not index historical source
-      // rows because they may legitimately contain pre-launch duplicates.
-      launch_primary: true,
+      // Explicit managed/role markers allow an Agent to own many independently
+      // scheduled routines while retaining one optional compatibility primary.
+      // `launch_primary` remains truthy only for that primary because older
+      // launch readers and executor deployments still use it during rollout.
+      launch_managed: true,
+      launch_role: launchRole,
+      launch_primary: launchRole === "primary",
       template_label: template.label,
       template_app_name: template.appName,
       approval_confirmed: false,
@@ -805,8 +809,16 @@ async function planRoutine(
 ): Promise<Record<string, unknown>> {
   const template = await resolveRoutineTemplate(userId, args);
   assertPrivateOwnedTemplate(userId, template);
-  const plan = buildRoutinePlan(template, args);
-  assertIntervalSchedule(plan.routine.schedule);
+  const hasPrimary = await hasExistingLaunchPrimaryRoutine(
+    userId,
+    template.appId,
+  );
+  const plan = buildRoutinePlan(
+    template,
+    args,
+    hasPrimary ? "routine" : "primary",
+  );
+  assertLaunchSchedule(plan.routine.schedule);
   await validateRequiredCapabilityTargets(
     userId,
     plan.routine.capabilities as RoutineCapabilityInput[],
@@ -835,13 +847,20 @@ async function createRoutineFromTemplate(
 ): Promise<Record<string, unknown>> {
   const template = await resolveRoutineTemplate(userId, args);
   assertPrivateOwnedTemplate(userId, template);
-  const plan = buildRoutinePlan(template, args);
-  assertIntervalSchedule(plan.routine.schedule);
+  const hasPrimary = await hasExistingLaunchPrimaryRoutine(
+    userId,
+    template.appId,
+  );
+  const plan = buildRoutinePlan(
+    template,
+    args,
+    hasPrimary ? "routine" : "primary",
+  );
+  assertLaunchSchedule(plan.routine.schedule);
   await validateRequiredCapabilityTargets(
     userId,
     plan.routine.capabilities as RoutineCapabilityInput[],
   );
-  await assertNoExistingPrimaryRoutine(userId, template.appId);
   const activate = args.activate === true;
 
   const pendingRequired = plan.pendingCapabilities.filter((capability) =>
@@ -859,13 +878,17 @@ async function createRoutineFromTemplate(
   try {
     routine = await createRoutine(userId, plan.routine);
   } catch (error) {
-    if (isLaunchPrimaryUniqueViolation(error)) {
-      throw new RoutinePlatformError(
-        ROUTINE_PLATFORM_INVALID_PARAMS,
-        "This Agent already has its primary routine. The launch contract supports one primary routine per Agent.",
-      );
-    }
-    throw error;
+    if (!isLaunchPrimaryUniqueViolation(error)) throw error;
+    // Two first-routine creates can race after the role precheck. The database
+    // elects exactly one primary; the loser is still a valid managed sibling.
+    const metadata = objectOrUndefined(plan.routine.metadata) || {};
+    plan.routine.metadata = {
+      ...metadata,
+      launch_managed: true,
+      launch_role: "routine",
+      launch_primary: false,
+    };
+    routine = await createRoutine(userId, plan.routine);
   }
   if (activate) {
     await validateRoutineLaunchActivation(userId, routine);
@@ -903,7 +926,7 @@ async function updateRoutineFromArgs(
       "Launch routines use max_concurrency=1.",
     );
   }
-  if (args.schedule !== undefined) assertIntervalSchedule(args.schedule);
+  if (args.schedule !== undefined) assertLaunchSchedule(args.schedule);
   for (
     const key of [
       "name",

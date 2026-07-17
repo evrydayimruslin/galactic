@@ -83,10 +83,16 @@ import {
   type LaunchAgentAdminSummary,
   type LaunchAgentHomeActionRequest,
   type LaunchAgentHomeResponse,
+  type LaunchAgentCapacityResponse,
+  type LaunchAgentCapacityUpdateRequest,
   type LaunchAgentRoutineActionRequest,
+  type LaunchAgentManagedRoutineActionRequest,
+  type LaunchAgentManagedRoutineUpdateRequest,
   type LaunchAgentRoutineBlocker,
   type LaunchAgentRoutineOverview,
   type LaunchAgentRoutineResponse,
+  type LaunchAgentRoutinesResponse,
+  type LaunchAgentRoutineSchedule,
   type LaunchAgentRoutineRun,
   type LaunchAgentRoutineUpdateRequest,
   type LaunchAgentFunctionsResponse,
@@ -96,6 +102,10 @@ import {
   type LaunchAgentRelationship,
   type LaunchAgentSummary,
   type LaunchFolder,
+  type LaunchFleetActivity,
+  type LaunchFleetAgentHealth,
+  type LaunchFleetAgentState,
+  type LaunchFleetResponse,
   type LaunchFullTimeDisclosure,
   type LaunchInterfaceSummary,
   type LaunchAgentVisibility,
@@ -196,12 +206,18 @@ import type { SensitiveRoute } from "../services/sensitive-route-rate-limit.ts";
 import {
   approveRoutineCapabilities,
   getRoutine,
+  launchRoutineRole,
   pauseRoutine,
   resumeRoutine,
   type StoredRoutine,
   updateRoutine,
   validateRoutineActivation,
 } from "../services/routines.ts";
+import {
+  normalizeRoutineSchedule,
+  previewRoutineRunTimes,
+  RoutineScheduleValidationError,
+} from "../services/routine-schedule.ts";
 import {
   getRoutineMonitorDetail,
   queueRoutineMonitorRun,
@@ -238,8 +254,8 @@ import {
   pauseAgentHomeRoutineEmergency,
   queueAgentHomeRoutineRun,
   updateAgentHomeIdentityCAS,
-  updateAgentHomeRoutineCAS,
-  updateAgentHomeRoutineStatusCAS,
+  updateAgentHomeManagedRoutineCAS,
+  updateAgentHomeManagedRoutineStatusCAS,
   updateAgentHomeSettingsCAS,
 } from "../services/agent-home-revision.ts";
 import {
@@ -265,9 +281,12 @@ import {
   toLaunchCapacityResponse,
 } from "../services/subscriptions.ts";
 import {
-  claimAgentActivationSlot,
   getAccountCapacityStatus,
+  getAgentCapacityStatus,
   releaseAgentActivationSlot,
+  setAgentCapacityCap,
+  type AccountCapacityStatus,
+  type AgentCapacityStatus,
 } from "../services/account-capacity.ts";
 
 // Cross-Agent grant + settings mutations are sensitive. The SensitiveRoute enum
@@ -281,9 +300,29 @@ const LAUNCH_GRANT_SETTINGS_WRITE_LIMIT: SensitiveRoute =
 
 function privateLaunchJson(data: unknown, status = 200): Response {
   const response = json(data, status);
+  return withPrivateLaunchPrivacy(response);
+}
+
+function withPrivateLaunchPrivacy(response: Response): Response {
   response.headers.set("Cache-Control", "private, no-store");
   response.headers.set("Vary", "Cookie, Authorization");
   return response;
+}
+
+async function privateLaunchRoute(
+  operation: () => Promise<Response>,
+): Promise<Response> {
+  try {
+    return withPrivateLaunchPrivacy(await operation());
+  } catch (err) {
+    if (err instanceof RequestValidationError) {
+      return privateLaunchJson({ error: err.message }, err.status);
+    }
+    if (err instanceof LaunchServiceUnavailableError) {
+      return privateLaunchJson({ error: err.message }, 503);
+    }
+    throw err;
+  }
 }
 
 const APP_SELECT = [
@@ -371,6 +410,28 @@ interface LaunchAppRow {
   hosting_suspended?: boolean | null;
   updated_at?: string | null;
   created_at?: string | null;
+}
+
+interface LaunchFleetSnapshotRow {
+  agent_id: string;
+  routine_count?: number | string | null;
+  active_routine_count?: number | string | null;
+  state?: string | null;
+  health?: string | null;
+  next_wake_at?: string | null;
+  last_run_at?: string | null;
+  deferred_wake_count?: number | string | null;
+  unread_alert_count?: number | string | null;
+  recent_activity?: unknown;
+  capacity_state?: string | null;
+  capacity_burst_state?: string | null;
+  capacity_weekly_state?: string | null;
+  capacity_burst_resets_at?: string | null;
+  capacity_weekly_resets_at?: string | null;
+  capacity_next_eligible_at?: string | null;
+  capacity_cap_basis_points?: number | string | null;
+  capacity_burst_used_percent?: number | string | null;
+  capacity_weekly_used_percent?: number | string | null;
 }
 
 interface OwnerRow {
@@ -661,7 +722,9 @@ export async function handleLaunch(request: Request): Promise<Response> {
     }
 
     if (path === "/api/launch/notifications") {
-      return await handleLaunchNotifications(request, method);
+      return await privateLaunchRoute(() =>
+        handleLaunchNotifications(request, method)
+      );
     }
 
     if (
@@ -724,6 +787,49 @@ export async function handleLaunch(request: Request): Promise<Response> {
         agentHomeMatch[1],
         method,
         agentHomeMatch[2] || null,
+      );
+    }
+
+    const agentCapacityMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/capacity$/,
+    );
+    if (agentCapacityMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchAgentCapacity(
+          request,
+          agentCapacityMatch[1],
+          method,
+        )
+      );
+    }
+
+    const agentManagedRoutineActionMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/routines\/([^/]+)\/actions$/,
+    );
+    if (agentManagedRoutineActionMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchAgentManagedRoutines(
+          request,
+          agentManagedRoutineActionMatch[1],
+          method,
+          agentManagedRoutineActionMatch[2],
+          true,
+        )
+      );
+    }
+
+    const agentManagedRoutineMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/routines(?:\/([^/]+))?$/,
+    );
+    if (agentManagedRoutineMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchAgentManagedRoutines(
+          request,
+          agentManagedRoutineMatch[1],
+          method,
+          agentManagedRoutineMatch[2] || null,
+          false,
+        )
       );
     }
 
@@ -874,6 +980,11 @@ export async function handleLaunch(request: Request): Promise<Response> {
 
     if (path === "/api/launch/library") {
       return await handleLaunchLibrary(request);
+    }
+
+    if (path === "/api/launch/fleet") {
+      if (method !== "GET") return error("Method not allowed", 405);
+      return await privateLaunchRoute(() => handleLaunchFleet(request));
     }
 
     if (path === "/api/launch/inference-options") {
@@ -1919,7 +2030,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       "/api/launch/agents/{id}/home/routine": {
         patch: {
           operationId: "updateLaunchAgentHomeRoutine",
-          summary: "Atomically update mission, interval cadence, or hard ceilings",
+          summary: "Atomically update mission, interval/cron cadence, or hard ceilings",
           security: [{ bearerAuth: [] }],
           parameters: [{
             name: "id",
@@ -1939,6 +2050,32 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                 intervalSeconds: {
                   type: "integer",
                   minimum: MIN_ROUTINE_INTERVAL_SECONDS,
+                },
+                schedule: {
+                  oneOf: [
+                    {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["kind", "intervalSeconds"],
+                      properties: {
+                        kind: { type: "string", const: "interval" },
+                        intervalSeconds: {
+                          type: "integer",
+                          minimum: MIN_ROUTINE_INTERVAL_SECONDS,
+                        },
+                      },
+                    },
+                    {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["kind", "expression"],
+                      properties: {
+                        kind: { type: "string", const: "cron" },
+                        expression: { type: "string" },
+                        timezone: { type: "string", default: "UTC" },
+                      },
+                    },
+                  ],
                 },
                 budgets: {
                   type: "object",
@@ -3159,6 +3296,9 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "state",
             "setup",
             "authority",
+            "routines",
+            "capacity",
+            "agentCapacity",
             "budget",
             "release",
             "recentRuns",
@@ -3188,12 +3328,28 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               properties: {
                 mission: { type: "string" },
                 cadence: {
-                  type: ["object", "null"],
-                  properties: {
-                    kind: { type: "string", const: "interval" },
-                    intervalSeconds: { type: "integer" },
-                    label: { type: "string" },
-                  },
+                  oneOf: [
+                    { type: "null" },
+                    {
+                      type: "object",
+                      required: ["kind", "intervalSeconds", "label"],
+                      properties: {
+                        kind: { type: "string", const: "interval" },
+                        intervalSeconds: { type: "integer", minimum: 60 },
+                        label: { type: "string" },
+                      },
+                    },
+                    {
+                      type: "object",
+                      required: ["kind", "expression", "timezone", "label"],
+                      properties: {
+                        kind: { type: "string", const: "cron" },
+                        expression: { type: "string" },
+                        timezone: { type: "string" },
+                        label: { type: "string" },
+                      },
+                    },
+                  ],
                 },
                 reporting: {
                   type: "object",
@@ -3251,6 +3407,9 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                 },
               },
             },
+            routines: { type: "object" },
+            capacity: { type: ["object", "null"] },
+            agentCapacity: { type: ["object", "null"] },
             budget: {
               type: ["object", "null"],
               description:
@@ -3271,6 +3430,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             id: { type: "string" },
             slug: { type: "string" },
             name: { type: "string" },
+            iconUrl: { type: ["string", "null"] },
             description: { type: ["string", "null"] },
             kind: { type: "string", enum: ["mcp", "http", "markdown", "gpu"] },
             visibility: {
@@ -3629,6 +3789,206 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       },
     },
   };
+  publicSpec.paths["/api/launch/fleet"] = {
+    get: {
+      operationId: "getLaunchFleet",
+      summary: "Get the signed-in owner's compact private Agent fleet",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        "200": { description: "Batched Agent state, activity, Alerts, and shared capacity" },
+        "401": { description: "Authentication required" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/agents/{id}/capacity"] = {
+    get: {
+      operationId: "getLaunchAgentCapacity",
+      summary: "Get one Agent's share and ceiling within shared account capacity",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        "200": { description: "Agent and account-combined capacity state" },
+        "403": { description: "Owner account session required" },
+        "404": { description: "Owned private Agent not found" },
+      },
+    },
+    patch: {
+      operationId: "updateLaunchAgentCapacity",
+      summary: "Set one paid-plan Agent's percentage ceiling",
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: ["capPercent"],
+          properties: {
+            capPercent: {
+              type: "number",
+              minimum: 0.01,
+              maximum: 100,
+              multipleOf: 0.01,
+            },
+          },
+        }),
+      },
+      responses: {
+        "200": { description: "Updated Agent capacity state" },
+        "409": { description: "Free has a fixed qualitative capacity policy" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/agents/{id}/routines"] = {
+    get: {
+      operationId: "listLaunchAgentRoutines",
+      summary: "List all launch-managed routines for an owned private Agent",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        "200": { description: "Bounded routine collection with aggregate state" },
+        "403": { description: "Owner account session required" },
+        "404": { description: "Owned private Agent not found" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/agents/{id}/routines/{routineId}"] = {
+    get: {
+      operationId: "getLaunchAgentManagedRoutine",
+      summary: "Get one owner-safe managed routine",
+      security: [{ bearerAuth: [] }],
+      responses: { "200": { description: "Managed routine detail" } },
+    },
+    patch: {
+      operationId: "updateLaunchAgentManagedRoutine",
+      summary: "CAS-update one managed routine, including cron and timezone",
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: ["expectedRevision"],
+          properties: {
+            expectedRevision: { type: "string" },
+            name: { type: "string", minLength: 1, maxLength: 120 },
+            description: { type: ["string", "null"], maxLength: 500 },
+            mission: { type: ["string", "null"], maxLength: 1000 },
+            intervalSeconds: { type: "integer", minimum: 60 },
+            schedule: {
+              oneOf: [
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["kind", "intervalSeconds"],
+                  properties: {
+                    kind: { type: "string", const: "interval" },
+                    intervalSeconds: { type: "integer", minimum: 60 },
+                  },
+                },
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["kind", "expression"],
+                  properties: {
+                    kind: { type: "string", const: "cron" },
+                    expression: { type: "string" },
+                    timezone: { type: "string" },
+                  },
+                },
+              ],
+            },
+            budgets: { type: "object" },
+          },
+        }),
+      },
+      responses: {
+        "200": { description: "Updated managed routine and new revision" },
+        "412": { description: "Agent Home revision conflict" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/agents/{id}/routines/{routineId}/actions"] = {
+    post: {
+      operationId: "actOnLaunchAgentManagedRoutine",
+      summary: "Idempotently approve, activate, pause, or wake one managed routine",
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: ["expectedRevision", "idempotencyKey", "action"],
+          properties: {
+            expectedRevision: { type: "string" },
+            idempotencyKey: { type: "string", format: "uuid" },
+            action: {
+              type: "string",
+              enum: ["approve_capabilities", "activate", "pause", "run_now"],
+            },
+            capabilityIds: {
+              type: "array",
+              minItems: 1,
+              maxItems: 100,
+              uniqueItems: true,
+              items: { type: "string" },
+            },
+          },
+        }),
+      },
+      responses: {
+        "200": { description: "Updated managed routine and revision" },
+        "409": { description: "Blocked or already in progress" },
+        "412": { description: "Agent Home revision conflict" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/notifications"] = {
+    get: {
+      operationId: "listLaunchNotifications",
+      summary: "List owner Alerts, optionally filtered to one private Agent",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: "agent", in: "query", schema: { type: "string" } },
+        { name: "unread", in: "query", schema: { type: "string", enum: ["1"] } },
+        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200 } },
+      ],
+      responses: {
+        "200": { description: "Newest-first owner Alerts and filtered unread count" },
+        "401": { description: "Authentication required" },
+      },
+    },
+    patch: {
+      operationId: "markLaunchNotificationsRead",
+      summary: "Mark selected or filtered owner Alerts read",
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            agent: { type: "string", minLength: 1 },
+            all: { type: "boolean", const: true },
+            ids: {
+              type: "array",
+              minItems: 1,
+              maxItems: 200,
+              uniqueItems: true,
+              items: { type: "string", format: "uuid" },
+            },
+          },
+          oneOf: [
+            { required: ["all"], not: { required: ["ids"] } },
+            { required: ["ids"], not: { required: ["all"] } },
+          ],
+        }),
+      },
+      responses: {
+        "200": { description: "Number of Alerts marked read" },
+        "400": { description: "Invalid or ambiguous Alert selection" },
+        "401": { description: "Authentication required" },
+        "403": { description: "Owner account session required" },
+      },
+    },
+  };
   publicSpec.paths["/api/launch/subscription/checkout"] = {
     post: {
       operationId: "createLaunchSubscriptionCheckout",
@@ -3937,11 +4297,7 @@ async function handleLaunchNotifications(
   // api_token / routine_actor / sandbox_actor so in-sandbox app code (or a
   // routine handler) can't read the owner's inbox or silently mark their
   // "agent paused" alerts read. Agents read notifications via gx.notifications.
-  if (
-    user.authSource === "api_token" ||
-    user.authSource === "routine_actor" ||
-    user.authSource === "sandbox_actor"
-  ) {
+  if (!isAccountSessionAuthSource(user.authSource)) {
     return error("Notifications require an account session", 403);
   }
   const {
@@ -3953,25 +4309,93 @@ async function handleLaunchNotifications(
 
   if (method === "GET") {
     const url = new URL(request.url);
-    const unreadOnly = url.searchParams.get("unread") === "1";
-    const rawLimit = Number(url.searchParams.get("limit"));
-    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
+    const unread = url.searchParams.get("unread");
+    if (unread !== null && unread !== "1") {
+      throw new RequestValidationError("unread must be 1 when supplied");
+    }
+    const unreadOnly = unread === "1";
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam === null
+      ? 50
+      : /^\d+$/u.test(limitParam)
+      ? Number(limitParam)
+      : NaN;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+      throw new RequestValidationError("limit must be an integer from 1 to 200");
+    }
+    const agentLocator = url.searchParams.get("agent")?.trim() || null;
+    let agentId: string | undefined;
+    if (agentLocator) {
+      const resolved = await resolveOwnerPrivateRoutineAgent(
+        user,
+        encodeURIComponent(agentLocator),
+      );
+      if (resolved instanceof Response) return resolved;
+      agentId = resolved.id;
+    }
     const [notifications, unreadCount] = await Promise.all([
-      listNotifications(user.id, { unreadOnly, limit }),
-      countUnread(user.id),
+      listNotifications(user.id, { unreadOnly, limit, agentId }),
+      countUnread(user.id, { agentId }),
     ]);
-    return json({ notifications, unread_count: unreadCount });
+    return privateLaunchJson({
+      notifications,
+      unread_count: unreadCount,
+      ...(agentId ? { agent_id: agentId } : {}),
+    });
   }
 
   if (method === "PATCH") {
     const body = asRecord(await readJsonBody<unknown>(request)) || {};
-    const marked = body.all === true
-      ? await markAllNotificationsRead(user.id)
+    const unknown = Object.keys(body).filter((key) =>
+      key !== "agent" && key !== "all" && key !== "ids"
+    );
+    if (unknown.length > 0) {
+      throw new RequestValidationError(
+        `Unknown notification fields: ${unknown.join(", ")}`,
+      );
+    }
+    const markAll = body.all === true;
+    if (body.all !== undefined && body.all !== true) {
+      throw new RequestValidationError("all must be true when supplied");
+    }
+    if (markAll && body.ids !== undefined) {
+      throw new RequestValidationError("Provide all or ids, not both");
+    }
+    const ids = Array.isArray(body.ids)
+      ? [...new Set(body.ids)]
+      : null;
+    if (
+      !markAll &&
+      (!ids || ids.length < 1 || ids.length > 200 ||
+        ids.some((id) => typeof id !== "string" || !isUuid(id)))
+    ) {
+      throw new RequestValidationError(
+        "ids must list 1 to 200 notification UUIDs, or set all to true",
+      );
+    }
+    const agentLocator = typeof body.agent === "string" && body.agent.trim()
+      ? body.agent.trim()
+      : undefined;
+    if (body.agent !== undefined && !agentLocator) {
+      throw new RequestValidationError("agent must be a non-empty locator");
+    }
+    let agentId: string | undefined;
+    if (agentLocator) {
+      const resolved = await resolveOwnerPrivateRoutineAgent(
+        user,
+        encodeURIComponent(agentLocator),
+      );
+      if (resolved instanceof Response) return resolved;
+      agentId = resolved.id;
+    }
+    const marked = markAll
+      ? await markAllNotificationsRead(user.id, { agentId })
       : await markNotificationsRead(
         user.id,
-        Array.isArray(body.ids) ? body.ids.map(String) : [],
+        ids as string[],
+        { agentId },
       );
-    return json({ ok: true, marked });
+    return privateLaunchJson({ ok: true, marked });
   }
 
   return error("Method not allowed for launch notifications", 405);
@@ -4600,6 +5024,305 @@ async function handleLaunchLibrary(request: Request): Promise<Response> {
   });
 }
 
+function launchFleetState(value: unknown): LaunchFleetAgentState {
+  return value === "active" || value === "paused" || value === "error" ||
+      value === "idle" || value === "unconfigured"
+    ? value
+    : "unconfigured";
+}
+
+function launchFleetHealth(value: unknown): LaunchFleetAgentHealth {
+  return value === "healthy" || value === "waiting" || value === "paused" ||
+      value === "error" || value === "idle"
+    ? value
+    : "idle";
+}
+
+function launchFleetCapacityState(
+  value: unknown,
+): LaunchAgentCapacityResponse["state"] | null {
+  return value === "available" || value === "low" || value === "waiting"
+    ? value
+    : null;
+}
+
+function finiteFleetNumber(value: unknown): number | null {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim()
+    ? Number(value)
+    : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function fleetTimestamp(value: unknown): string | null {
+  return typeof value === "string" && Number.isFinite(Date.parse(value))
+    ? value
+    : null;
+}
+
+/** Map the bounded SQL Fleet projection without one status RPC per Agent. */
+export function toLaunchFleetAgentCapacity(
+  row: LaunchFleetSnapshotRow,
+  generatedAt = new Date().toISOString(),
+): LaunchAgentCapacityResponse | null {
+  const state = launchFleetCapacityState(row.capacity_state);
+  const burstState = launchFleetCapacityState(row.capacity_burst_state);
+  const weeklyState = launchFleetCapacityState(row.capacity_weekly_state);
+  const burstResetsAt = fleetTimestamp(row.capacity_burst_resets_at);
+  const weeklyResetsAt = fleetTimestamp(row.capacity_weekly_resets_at);
+  if (!state || !burstState || !weeklyState || !burstResetsAt || !weeklyResetsAt) {
+    return null;
+  }
+  const basisPoints = finiteFleetNumber(row.capacity_cap_basis_points);
+  const paidCap = basisPoints !== null && Number.isInteger(basisPoints) &&
+      basisPoints >= 1 && basisPoints <= 10_000
+    ? basisPoints
+    : null;
+  const capPercent = paidCap === null ? null : paidCap / 100;
+  const window = (
+    windowState: LaunchAgentCapacityResponse["state"],
+    resetsAt: string,
+    rawShare: unknown,
+  ): LaunchAgentCapacityResponse["burst"] => {
+    const parsedShare = finiteFleetNumber(rawShare);
+    const shareUsedPercent = capPercent !== null && parsedShare !== null
+      ? Math.min(100, Math.max(0, parsedShare))
+      : undefined;
+    const capUsedPercent = shareUsedPercent !== undefined && capPercent! > 0
+      ? Math.min(100, Math.max(0, shareUsedPercent / capPercent! * 100))
+      : undefined;
+    return {
+      state: windowState,
+      resetsAt,
+      ...(shareUsedPercent === undefined ? {} : { shareUsedPercent }),
+      ...(capUsedPercent === undefined ? {} : { capUsedPercent }),
+    };
+  };
+  return {
+    agentId: row.agent_id,
+    capPercent,
+    state,
+    burst: window(
+      burstState,
+      burstResetsAt,
+      row.capacity_burst_used_percent,
+    ),
+    weekly: window(
+      weeklyState,
+      weeklyResetsAt,
+      row.capacity_weekly_used_percent,
+    ),
+    nextEligibleAt: fleetTimestamp(row.capacity_next_eligible_at),
+    blocker: null,
+    generatedAt,
+  };
+}
+
+function launchFleetActivities(value: unknown): LaunchFleetActivity[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry): LaunchFleetActivity[] => {
+    const item = asRecord(entry);
+    if (!item || typeof item.id !== "string" || typeof item.createdAt !== "string") {
+      return [];
+    }
+    const kind = item.kind === "alert" ? "alert" : item.kind === "run" ? "run" : null;
+    if (!kind) return [];
+    return [{
+      id: item.id,
+      kind,
+      title: typeof item.title === "string" && item.title.trim()
+        ? item.title
+        : kind === "run"
+        ? "Agent wake"
+        : "Agent Alert",
+      summary: typeof item.summary === "string" ? item.summary : null,
+      status: typeof item.status === "string" ? item.status : "unknown",
+      routineId: typeof item.routineId === "string" ? item.routineId : null,
+      createdAt: item.createdAt,
+    }];
+  }).slice(0, 3);
+}
+
+async function handleLaunchFleet(request: Request): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  if (!isAccountSessionAuthSource(user.authSource)) {
+    return error("Fleet access requires an account session", 403);
+  }
+  const db = getDbConfig();
+  const [ownedRows, accountCapacity, snapshotResponse] = await Promise.all([
+    fetchOwnedApps(user.id),
+    getAccountCapacityStatus(user.id),
+    fetch(`${db.baseUrl}/rest/v1/rpc/get_launch_fleet_snapshot`, {
+      method: "POST",
+      headers: db.headers,
+      body: JSON.stringify({ p_user_id: user.id }),
+    }),
+  ]);
+  const snapshotRows = await readRows<LaunchFleetSnapshotRow>(
+    snapshotResponse,
+    "Failed to fetch Fleet snapshot",
+  );
+  const snapshotByAgent = new Map(snapshotRows.map((row) => [row.agent_id, row]));
+  const privateRows = ownedRows.filter((row) => row.visibility === "private");
+  const owners = await fetchOwnerMap(privateRows.map((row) => row.owner_id));
+  const installedIds = new Set(privateRows.map((row) => row.id));
+
+  const generatedAt = new Date().toISOString();
+  const response: LaunchFleetResponse = {
+    agents: privateRows.map((row) => {
+      const snapshot = snapshotByAgent.get(row.id);
+      return {
+        agent: toLaunchAgentSummary(row, {
+          owners,
+          viewerId: user.id,
+          installedIds,
+        }),
+        state: launchFleetState(snapshot?.state),
+        health: launchFleetHealth(snapshot?.health),
+        routineCount: Math.max(0, Math.floor(numeric(snapshot?.routine_count))),
+        activeRoutineCount: Math.max(
+          0,
+          Math.floor(numeric(snapshot?.active_routine_count)),
+        ),
+        nextWakeAt: snapshot?.next_wake_at ?? null,
+        lastRunAt: snapshot?.last_run_at ?? null,
+        deferredWakeCount: Math.max(
+          0,
+          Math.floor(numeric(snapshot?.deferred_wake_count)),
+        ),
+        unreadAlertCount: Math.max(
+          0,
+          Math.floor(numeric(snapshot?.unread_alert_count)),
+        ),
+        recentActivity: launchFleetActivities(snapshot?.recent_activity),
+        capacity: snapshot
+          ? toLaunchFleetAgentCapacity(snapshot, generatedAt)
+          : null,
+      };
+    }),
+    accountCapacity: toLaunchCapacityResponse(accountCapacity),
+    generatedAt,
+  };
+  return privateLaunchJson(response);
+}
+
+function toLaunchAgentCapacityResponse(
+  status: AgentCapacityStatus,
+  account: AccountCapacityStatus,
+): LaunchAgentCapacityResponse {
+  const combinedState = (
+    left: AgentCapacityStatus["state"],
+    right: AccountCapacityStatus["state"],
+  ) => left === "waiting" || right === "waiting"
+    ? "waiting" as const
+    : left === "low" || right === "low"
+    ? "low" as const
+    : "available" as const;
+  const window = (
+    agentWindow: AgentCapacityStatus["burst"],
+    accountWindow: AccountCapacityStatus["burst"],
+  ) => {
+    const capPercent = status.capBasisPoints === null
+      ? null
+      : status.capBasisPoints / 100;
+    const shareUsedPercent = capPercent !== null &&
+        agentWindow.usedPercent !== undefined
+      ? Math.min(
+        100,
+        Math.max(0, agentWindow.usedPercent * capPercent / 100),
+      )
+      : undefined;
+    return {
+      state: combinedState(agentWindow.state, accountWindow.state),
+      resetsAt: accountWindow.resetsAt,
+      ...(shareUsedPercent === undefined ? {} : { shareUsedPercent }),
+      ...(agentWindow.usedPercent === undefined
+        ? {}
+        : { capUsedPercent: agentWindow.usedPercent }),
+    };
+  };
+  return {
+    agentId: status.agentId,
+    capPercent: status.capBasisPoints === null
+      ? null
+      : status.capBasisPoints / 100,
+    state: combinedState(status.state, account.state),
+    burst: window(status.burst, account.burst),
+    weekly: window(status.weekly, account.weekly),
+    nextEligibleAt: [status.nextEligibleAt, account.nextEligibleAt]
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null,
+    blocker: null,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function handleLaunchAgentCapacity(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+): Promise<Response> {
+  if (method !== "GET" && method !== "PATCH") {
+    return error("Method not allowed for Agent capacity", 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForRoutine(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(user, encodedLocator);
+  if (resolved instanceof Response) return resolved;
+  let account: AccountCapacityStatus | null = null;
+  if (method === "PATCH") {
+    const body = asRecord(await readJsonBody<unknown>(request));
+    if (!body || Object.keys(body).some((key) => key !== "capPercent")) {
+      throw new RequestValidationError(
+        "Agent capacity body must contain only capPercent",
+      );
+    }
+    const requestBody = body as unknown as LaunchAgentCapacityUpdateRequest;
+    const basisPoints = typeof requestBody.capPercent === "number"
+      ? Math.round(requestBody.capPercent * 100)
+      : NaN;
+    if (
+      !Number.isFinite(requestBody.capPercent) ||
+      !Number.isInteger(basisPoints) || basisPoints < 1 || basisPoints > 10_000 ||
+      Math.abs(basisPoints / 100 - requestBody.capPercent) > 1e-9
+    ) {
+      throw new RequestValidationError(
+        "capPercent must be between 0.01 and 100 with at most two decimal places",
+      );
+    }
+    account = await getAccountCapacityStatus(user.id);
+    if (account.planCode === "free") {
+      throw new RequestValidationError(
+        "Free capacity is fixed; Agent caps are available on paid plans",
+        409,
+      );
+    }
+    try {
+      await setAgentCapacityCap({
+        userId: user.id,
+        agentId: resolved.id,
+        capBasisPoints: basisPoints,
+      });
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("Free")) {
+        throw new RequestValidationError(
+          "Free capacity is fixed; Agent caps are available on paid plans",
+          409,
+        );
+      }
+      throw err;
+    }
+  }
+  const [agent, resolvedAccount] = await Promise.all([
+    getAgentCapacityStatus(user.id, resolved.id),
+    account
+      ? Promise.resolve(account)
+      : getAccountCapacityStatus(user.id),
+  ]);
+  return privateLaunchJson(toLaunchAgentCapacityResponse(agent, resolvedAccount));
+}
+
 // ── Library folders (launch-web "Agents" page) ──────────────────────────────
 // Browser-only, per-user organization of the library. CRITICAL: every read and
 // write filters owner_user_id = the session user EXPLICITLY — getDbConfig() uses
@@ -4856,8 +5579,10 @@ async function setFolderMember(
   });
 }
 
-interface PrimaryRoutineIdRow {
+interface ManagedRoutineIdRow {
   id: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
 }
 
 interface AgentHomeSettingsAppRow {
@@ -5168,6 +5893,8 @@ async function buildLaunchAgentHomeSnapshotAttempt(
     liveBundle,
     callTargets,
     capacityStatus,
+    agentCapacityStatus,
+    routines,
     profile,
   ] = await Promise.all([
     loadAgentHomeSettingStatuses(user.id, row),
@@ -5183,6 +5910,14 @@ async function buildLaunchAgentHomeSnapshotAttempt(
       console.error("[CAPACITY] Agent Home status unavailable:", err);
       return null;
     }),
+    getAgentCapacityStatus(user.id, row.id).catch((err) => {
+      console.error("[CAPACITY] Agent-specific Home status unavailable:", err);
+      return null;
+    }),
+    // The enclosing Home snapshot already brackets every dependency with this
+    // exact revision, so the nested collection must not consume an independent
+    // token (which would make one concurrent commit trigger nested retries).
+    buildLaunchAgentRoutinesResponse(user.id, row, revision),
     userService.getUser(user.id),
   ]);
   // One atomic KV read supplies both executed bytes and their attestation.
@@ -5262,6 +5997,16 @@ async function buildLaunchAgentHomeSnapshotAttempt(
       candidatePreflightReady,
     },
   });
+  if (routines.revision !== revision) return null;
+  home.routines = {
+    revision: routines.revision,
+    primaryRoutineId: routines.primaryRoutineId,
+    routines: routines.routines,
+    aggregate: routines.aggregate,
+  };
+  home.agentCapacity = agentCapacityStatus && capacityStatus
+    ? toLaunchAgentCapacityResponse(agentCapacityStatus, capacityStatus)
+    : null;
   const confirmedTargets = await loadAgentHomeCallTargets(
     user.id,
     routine,
@@ -5420,75 +6165,27 @@ async function updateLaunchAgentHomeRoutine(
     "expectedRevision",
     "mission",
     "intervalSeconds",
+    "schedule",
     "budgets",
   ]);
   const expectedRevision = requireExpectedAgentHomeRevision(body, row.id);
-  const hasMission = "mission" in body;
-  const hasInterval = "intervalSeconds" in body;
-  const hasBudgets = "budgets" in body;
-  if (!hasMission && !hasInterval && !hasBudgets) {
-    throw new RequestValidationError(
-      "Provide mission, intervalSeconds, or budgets",
-    );
-  }
-  if (
-    hasMission && body.mission !== null &&
-    (typeof body.mission !== "string" || body.mission.trim().length > 1000)
-  ) {
-    throw new RequestValidationError(
-      "mission must be null or at most 1,000 characters",
-    );
-  }
-  if (
-    hasInterval &&
-    (!Number.isSafeInteger(body.intervalSeconds) ||
-      (body.intervalSeconds as number) < MIN_ROUTINE_INTERVAL_SECONDS)
-  ) {
-    throw new RequestValidationError(
-      `intervalSeconds must be an integer of at least ${MIN_ROUTINE_INTERVAL_SECONDS}`,
-    );
-  }
-  if (
-    hasInterval && routine.status === "active" &&
-    (!Number.isFinite(Date.now() + (body.intervalSeconds as number) * 1000) ||
-      Date.now() + (body.intervalSeconds as number) * 1000 > 8.64e15)
-  ) {
-    throw new RequestValidationError("intervalSeconds is too large to schedule");
-  }
-  const budgets = hasBudgets ? parseLaunchRoutineBudgets(body.budgets) : undefined;
-  const schedule = hasInterval
-    ? { type: "interval" as const, every_seconds: body.intervalSeconds as number }
-    : routine.schedule;
-  const budgetPolicy = budgets
-    ? {
-      max_light_per_run: budgets.maxLightPerRun,
-      max_light_per_day: budgets.maxLightPerDay,
-      max_light_per_month: budgets.maxLightPerMonth,
-      max_calls_per_run: budgets.maxCallsPerRun,
-    }
-    : routine.budget_policy;
-  const proposed: StoredRoutine = {
-    ...routine,
-    schedule,
-    budget_policy: budgetPolicy,
-  };
-  const safetyBlockers = validateRoutineActivation(proposed).blockers.filter(
-    (blocker) => blocker.code !== "pending_required_capabilities",
-  );
-  if (safetyBlockers.length > 0) {
-    throw new RequestValidationError(
-      safetyBlockers.map((blocker) => blocker.message).join(" "),
-    );
-  }
-  await updateAgentHomeRoutineCAS({
+  const { expectedRevision: _expected, ...update } = body as unknown as
+    LaunchAgentManagedRoutineUpdateRequest;
+  const prepared = prepareLaunchRoutineMutation(routine, update);
+  await updateAgentHomeManagedRoutineCAS({
     appId: row.id,
     userId: user.id,
     routineId: routine.id,
     expectedRevision,
     authSource: user.authSource,
-    ...(hasMission ? { mission: body.mission as string | null } : {}),
-    ...(hasInterval ? { intervalSeconds: body.intervalSeconds as number } : {}),
-    ...(hasBudgets && budgets ? { budgets } : {}),
+    ...(prepared.mission !== undefined ? { mission: prepared.mission } : {}),
+    ...(prepared.schedule
+      ? {
+        schedule: prepared.schedule,
+        activeNextRunAt: prepared.activeNextRunAt ?? null,
+      }
+      : {}),
+    ...(prepared.budgets !== undefined ? { budgets: prepared.budgets } : {}),
   });
 }
 
@@ -5632,6 +6329,7 @@ async function reconcileLaunchAgentHomeAction(input: {
   action: LaunchAgentHomeActionRequest["action"];
   requestId: string;
   capabilityIds?: string[];
+  routineId?: string;
   version?: string;
 }): Promise<LaunchAgentHomeActionReconciliation> {
   // The durable run link is sufficient proof even if the routine was deleted
@@ -5677,7 +6375,8 @@ async function reconcileLaunchAgentHomeAction(input: {
     });
   }
 
-  const routineId = await fetchPrimaryRoutineId(input.user.id, input.row.id);
+  const routineId = input.routineId ||
+    await fetchPrimaryRoutineId(input.user.id, input.row.id);
   if (!routineId) return "not_applied";
   const routine = await getRoutine(input.user.id, routineId);
   if (!routine) return "not_applied";
@@ -5705,6 +6404,7 @@ async function performLaunchAgentHomeAction(
   user: AuthUser,
   row: LaunchAppRow,
   body: Record<string, unknown>,
+  managedRoutineId?: string,
 ): Promise<LaunchAgentHomeActionOutcome> {
   rejectUnknownAgentHomeFields(body, [
     "expectedRevision",
@@ -5761,7 +6461,7 @@ async function performLaunchAgentHomeAction(
     );
   }
 
-  if (action === "pause") {
+  if (action === "pause" && !managedRoutineId) {
     // Pause is deliberately outside the serialized action saga. It is an
     // idempotent, owner/private, primary-routine stop lane and must remain
     // available while a promotion lease is slow, expired, or being repaired.
@@ -5792,6 +6492,7 @@ async function performLaunchAgentHomeAction(
     action,
     requestPayload: {
       ...(capabilityIds ? { capabilityIds } : {}),
+      ...(managedRoutineId ? { routineId: managedRoutineId } : {}),
       ...(version ? { version } : {}),
     },
   });
@@ -5805,6 +6506,7 @@ async function performLaunchAgentHomeAction(
           action,
           requestId: claim.requestId,
           capabilityIds,
+          routineId: managedRoutineId,
           version,
         });
       } catch {
@@ -5860,6 +6562,7 @@ async function performLaunchAgentHomeAction(
       action,
       requestId: claim.requestId,
       capabilityIds,
+      routineId: managedRoutineId,
       version,
     });
     if (reconciliation === "applied") {
@@ -5924,7 +6627,8 @@ async function performLaunchAgentHomeAction(
         },
       );
     } else {
-      const routineId = await fetchPrimaryRoutineId(user.id, row.id);
+      const routineId = managedRoutineId ||
+        await fetchPrimaryRoutineId(user.id, row.id);
       if (!routineId) {
         throw new RequestValidationError("Agent has no routine proposal", 404);
       }
@@ -5961,24 +6665,22 @@ async function performLaunchAgentHomeAction(
               409,
             );
           }
-          if (!home!.actions.canActivate) {
+          const managedBlockers = managedRoutineId
+            ? await collectLaunchRoutineBlockers(user.id, routine)
+            : home!.state.blockers;
+          if (
+            managedRoutineId ? managedBlockers.length > 0 : !home!.actions.canActivate
+          ) {
             const err = new RequestValidationError(
               "Agent cannot activate until every setup and integrity blocker is resolved",
               409,
             ) as RequestValidationError & { blockers?: LaunchAgentRoutineBlocker[] };
-            err.blockers = home!.state.blockers;
+            err.blockers = managedBlockers;
             throw err;
           }
           await validateRoutineLaunchActivation(user.id, routine);
-          const slot = await claimAgentActivationSlot(user.id, row.id);
-          if (!slot.allowed) {
-            throw new RequestValidationError(
-              "Free includes one active Agent. Pause the currently active Agent before activating this one.",
-              409,
-            );
-          }
-          try {
-            await updateAgentHomeRoutineStatusCAS({
+          if (managedRoutineId) {
+            await updateAgentHomeManagedRoutineStatusCAS({
               appId: row.id,
               userId: user.id,
               routineId,
@@ -5987,11 +6689,31 @@ async function performLaunchAgentHomeAction(
               status: "active",
               nextRunAt: new Date().toISOString(),
             });
-          } catch (activationError) {
-            await releaseAgentActivationSlot(user.id, row.id).catch(() => {});
-            throw activationError;
+          } else {
+            // Compatibility primary action. The managed status RPC is also
+            // valid for legacy launch_primary rows and closes the historical
+            // Free-slot claim/status race.
+            await updateAgentHomeManagedRoutineStatusCAS({
+              appId: row.id,
+              userId: user.id,
+              routineId,
+              expectedRevision,
+              authSource: user.authSource,
+              status: "active",
+              nextRunAt: new Date().toISOString(),
+            });
           }
         }
+      } else if (action === "pause") {
+        await updateAgentHomeManagedRoutineStatusCAS({
+          appId: row.id,
+          userId: user.id,
+          routineId,
+          expectedRevision,
+          authSource: user.authSource,
+          status: "paused",
+          nextRunAt: null,
+        });
       } else if (action === "run_now") {
         if (routine.status !== "active") {
           throw new RequestValidationError(
@@ -5999,7 +6721,12 @@ async function performLaunchAgentHomeAction(
             409,
           );
         }
-        if (!home!.actions.canRunNow) {
+        const managedBlockers = managedRoutineId
+          ? await collectLaunchRoutineBlockers(user.id, routine)
+          : home!.state.blockers;
+        if (
+          managedRoutineId ? managedBlockers.length > 0 : !home!.actions.canRunNow
+        ) {
           throw new RequestValidationError(
             "Agent cannot run until every setup and integrity blocker is resolved",
             409,
@@ -6051,8 +6778,9 @@ async function performLaunchAgentHomeAction(
         row,
         action,
         requestId: claim.requestId,
-        capabilityIds,
-        version,
+      capabilityIds,
+      routineId: managedRoutineId,
+      version,
       });
     } catch {
       throw new LaunchAgentHomeActionStatusUnknownError(claim.requestId);
@@ -6338,26 +7066,55 @@ async function fetchPrimaryRoutineId(
   userId: string,
   appId: string,
 ): Promise<string | null> {
-  const rows = await dbGet<PrimaryRoutineIdRow>(getDbConfig(), "user_routines", {
+  const rows = await fetchManagedRoutineIds(userId, appId);
+  return rows.find((row) => launchRoutineRole(row.metadata) === "primary")?.id ||
+    rows[0]?.id || null;
+}
+
+async function fetchManagedRoutineIds(
+  userId: string,
+  appId: string,
+): Promise<ManagedRoutineIdRow[]> {
+  return await dbGet<ManagedRoutineIdRow>(getDbConfig(), "user_routines", {
     user_id: `eq.${userId}`,
     composer_app_id: `eq.${appId}`,
     deleted_at: "is.null",
-    "metadata->>launch_primary": "eq.true",
-    select: "id",
-    order: "created_at.asc",
-    limit: "1",
+    or: "(metadata->>launch_managed.eq.true,metadata->>launch_primary.eq.true)",
+    select: "id,metadata,created_at",
+    order: "created_at.asc,id.asc",
+    limit: "100",
   });
-  return rows[0]?.id || null;
 }
 
-function routineIntervalSeconds(routine: StoredRoutine): number {
-  if (typeof routine.schedule.every_seconds === "number") {
-    return routine.schedule.every_seconds;
+function launchRoutineSchedule(
+  routine: StoredRoutine,
+): { schedule: LaunchAgentRoutineSchedule; nextOccurrences: string[] } {
+  const normalized = normalizeRoutineSchedule(routine.schedule);
+  const nextOccurrences = previewRoutineRunTimes(normalized, new Date(), 3)
+    .map((value) => value.toISOString());
+  if (normalized.type === "cron") {
+    return {
+      schedule: {
+        kind: "cron",
+        expression: normalized.cron,
+        timezone: normalized.timezone,
+        label: `${normalized.cron} (${normalized.timezone})`,
+      },
+      nextOccurrences,
+    };
   }
-  if (typeof routine.schedule.every_minutes === "number") {
-    return routine.schedule.every_minutes * 60;
-  }
-  return 0;
+  const seconds = normalized.every_seconds;
+  const label = seconds % 86_400 === 0
+    ? `Every ${seconds / 86_400} day${seconds === 86_400 ? "" : "s"}`
+    : seconds % 3_600 === 0
+    ? `Every ${seconds / 3_600} hour${seconds === 3_600 ? "" : "s"}`
+    : seconds % 60 === 0
+    ? `Every ${seconds / 60} minute${seconds === 60 ? "" : "s"}`
+    : `Every ${seconds} seconds`;
+  return {
+    schedule: { kind: "interval", intervalSeconds: seconds, label },
+    nextOccurrences,
+  };
 }
 
 function safeRoutineReason(value: unknown): string | null {
@@ -6488,12 +7245,21 @@ async function buildLaunchAgentRoutineResponse(
     !capability.approved
   );
   const activationReady = blockers.length === 0;
+  const cadence = launchRoutineSchedule(stored);
+  const role = launchRoutineRole(stored.metadata) || "routine";
   const routine: LaunchAgentRoutineOverview = {
     id: stored.id,
+    name: stored.name,
+    description: stored.description,
+    role,
     status: stored.status,
     health: detail.routine.health,
     mission: stored.intent || "",
-    intervalSeconds: routineIntervalSeconds(stored),
+    schedule: cadence.schedule,
+    nextOccurrences: cadence.nextOccurrences,
+    ...(cadence.schedule.kind === "interval"
+      ? { intervalSeconds: cadence.schedule.intervalSeconds }
+      : {}),
     budgets: {
       maxLightPerRun: budgetPolicy.max_light_per_run,
       maxLightPerDay: budgetPolicy.max_light_per_day,
@@ -6535,6 +7301,112 @@ async function buildLaunchAgentRoutineResponse(
   return { agent, routine, generatedAt: new Date().toISOString() };
 }
 
+async function assembleLaunchAgentRoutinesResponse(
+  userId: string,
+  row: LaunchAppRow,
+  revision: string,
+): Promise<LaunchAgentRoutinesResponse> {
+  const managed = await fetchManagedRoutineIds(userId, row.id);
+  const responses = await Promise.all(managed.map((item) =>
+    buildLaunchAgentRoutineResponse(userId, row, item.id)
+  ));
+  const routines = responses.flatMap((response) =>
+    response.routine ? [response.routine] : []
+  );
+  const primaryRoutineId = routines.find((routine) => routine.role === "primary")
+    ?.id || routines[0]?.id || null;
+  const times = routines.flatMap((routine) =>
+    routine.nextRunAt ? [routine.nextRunAt] : []
+  ).sort();
+  const lastRuns = routines.flatMap((routine) =>
+    routine.lastRunAt ? [routine.lastRunAt] : []
+  ).sort().reverse();
+  return {
+    revision,
+    agent: {
+      id: row.id,
+      slug: row.slug || row.id,
+      name: row.name || row.slug || row.id,
+    },
+    primaryRoutineId,
+    routines,
+    aggregate: {
+      total: routines.length,
+      active: routines.filter((routine) => routine.status === "active").length,
+      paused: routines.filter((routine) => routine.status === "paused").length,
+      failing: routines.filter((routine) =>
+        routine.status === "error" || routine.health === "error"
+      ).length,
+      running: routines.filter((routine) => routine.health === "running").length,
+      nextRunAt: times[0] || null,
+      lastRunAt: lastRuns[0] || null,
+    },
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function buildLaunchAgentRoutinesResponse(
+  userId: string,
+  row: LaunchAppRow,
+  enclosingRevision?: string,
+): Promise<LaunchAgentRoutinesResponse> {
+  if (enclosingRevision) {
+    return await assembleLaunchAgentRoutinesResponse(
+      userId,
+      row,
+      enclosingRevision,
+    );
+  }
+  // `revision` is an actionable CAS token, not decorative metadata. Fence the
+  // complete collection read so it can never certify a mixed before/after set
+  // of sibling routine configurations.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const revision = await getAgentHomeRevision(row.id, userId);
+    if (!revision) {
+      throw new LaunchServiceUnavailableError(
+        "Agent routine revision is unavailable",
+      );
+    }
+    const response = await assembleLaunchAgentRoutinesResponse(
+      userId,
+      row,
+      revision,
+    );
+    const completedAtRevision = await getAgentHomeRevision(row.id, userId);
+    if (completedAtRevision !== revision) continue;
+    return response;
+  }
+  throw new LaunchServiceUnavailableError(
+    "Agent routines changed repeatedly while their snapshot was assembled",
+  );
+}
+
+async function buildStableLaunchAgentRoutineResponse(
+  userId: string,
+  row: LaunchAppRow,
+  routineId: string,
+): Promise<LaunchAgentRoutineResponse | null> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const revision = await getAgentHomeRevision(row.id, userId);
+    if (!revision) {
+      throw new LaunchServiceUnavailableError(
+        "Agent routine revision is unavailable",
+      );
+    }
+    const managed = await fetchManagedRoutineIds(userId, row.id);
+    const isManaged = managed.some((candidate) => candidate.id === routineId);
+    const response = isManaged
+      ? await buildLaunchAgentRoutineResponse(userId, row, routineId)
+      : null;
+    const completedAtRevision = await getAgentHomeRevision(row.id, userId);
+    if (completedAtRevision !== revision) continue;
+    return response?.routine ? { ...response, revision } : null;
+  }
+  throw new LaunchServiceUnavailableError(
+    "Agent routine changed repeatedly while its snapshot was assembled",
+  );
+}
+
 function parseLaunchRoutineBudgets(
   value: unknown,
 ): LaunchAgentRoutineUpdateRequest["budgets"] {
@@ -6572,44 +7444,108 @@ function parseLaunchRoutineBudgets(
   return budgets;
 }
 
-async function updateLaunchAgentRoutine(
-  userId: string,
+function parseLaunchRoutineSchedule(
+  body: LaunchAgentRoutineUpdateRequest,
+  current: StoredRoutine["schedule"],
+): ReturnType<typeof normalizeRoutineSchedule> {
+  if (body.intervalSeconds !== undefined && body.schedule !== undefined) {
+    throw new RequestValidationError(
+      "Provide schedule or the legacy intervalSeconds field, not both",
+    );
+  }
+  const raw = body.schedule !== undefined
+    ? (() => {
+      const value = asRecord(body.schedule);
+      if (!value || (value.kind !== "interval" && value.kind !== "cron")) {
+        throw new RequestValidationError(
+          "schedule.kind must be interval or cron",
+        );
+      }
+      const unknown = Object.keys(value).filter((key) =>
+        value.kind === "interval"
+          ? key !== "kind" && key !== "intervalSeconds"
+          : key !== "kind" && key !== "expression" && key !== "timezone"
+      );
+      if (unknown.length > 0) {
+        throw new RequestValidationError(
+          `Unknown schedule fields: ${unknown.join(", ")}`,
+        );
+      }
+      return value.kind === "interval"
+        ? { type: "interval", every_seconds: value.intervalSeconds }
+        : {
+          type: "cron",
+          cron: value.expression,
+          ...(value.timezone === undefined ? {} : { timezone: value.timezone }),
+        };
+    })()
+    : body.intervalSeconds !== undefined
+    ? { type: "interval", every_seconds: body.intervalSeconds }
+    : current;
+  try {
+    return normalizeRoutineSchedule(raw);
+  } catch (err) {
+    if (err instanceof RoutineScheduleValidationError) {
+      throw new RequestValidationError(err.message);
+    }
+    throw err;
+  }
+}
+
+interface PreparedLaunchRoutineMutation {
+  name?: string;
+  description?: string | null;
+  mission?: string | null;
+  schedule?: ReturnType<typeof normalizeRoutineSchedule>;
+  activeNextRunAt?: string | null;
+  budgets?: NonNullable<LaunchAgentRoutineUpdateRequest["budgets"]>;
+  budgetPolicy: {
+    max_light_per_run: number;
+    max_light_per_day: number;
+    max_light_per_month: number;
+    max_calls_per_run: number;
+  };
+}
+
+function prepareLaunchRoutineMutation(
   routine: StoredRoutine,
   body: LaunchAgentRoutineUpdateRequest,
-): Promise<void> {
+): PreparedLaunchRoutineMutation {
   const suppliedKeys = Object.keys(body);
   const unknown = suppliedKeys.filter((key) =>
-    key !== "mission" && key !== "intervalSeconds" && key !== "budgets"
+    key !== "name" && key !== "description" && key !== "mission" &&
+    key !== "intervalSeconds" && key !== "schedule" && key !== "budgets"
   );
   if (unknown.length > 0) {
     throw new RequestValidationError(`Unknown routine fields: ${unknown.join(", ")}`);
   }
   if (suppliedKeys.length === 0) {
-    throw new RequestValidationError("Provide mission, intervalSeconds, or budgets");
-  }
-  if (
-    body.mission !== undefined && body.mission !== null &&
-    typeof body.mission !== "string"
-  ) {
-    throw new RequestValidationError("mission must be a string or null");
-  }
-  if (
-    body.intervalSeconds !== undefined &&
-    (!Number.isSafeInteger(body.intervalSeconds) ||
-      body.intervalSeconds < MIN_ROUTINE_INTERVAL_SECONDS)
-  ) {
     throw new RequestValidationError(
-      `intervalSeconds must be an integer of at least ${MIN_ROUTINE_INTERVAL_SECONDS}`,
+      "Provide name, description, mission, schedule, or budgets",
     );
   }
   if (
-    body.intervalSeconds !== undefined && routine.status === "active" &&
-    (!Number.isFinite(Date.now() + body.intervalSeconds * 1000) ||
-      Date.now() + body.intervalSeconds * 1000 > 8.64e15)
+    body.name !== undefined &&
+    (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 120)
   ) {
-    throw new RequestValidationError("intervalSeconds is too large to schedule");
+    throw new RequestValidationError("name must be 1 to 120 characters");
   }
-
+  if (
+    body.description !== undefined && body.description !== null &&
+    (typeof body.description !== "string" || body.description.length > 500)
+  ) {
+    throw new RequestValidationError(
+      "description must be null or at most 500 characters",
+    );
+  }
+  if (
+    body.mission !== undefined && body.mission !== null &&
+    (typeof body.mission !== "string" || body.mission.trim().length > 1_000)
+  ) {
+    throw new RequestValidationError(
+      "mission must be null or at most 1,000 characters",
+    );
+  }
   const currentBudget = {
     ...DEFAULT_ROUTINE_BUDGET_POLICY,
     ...(routine.budget_policy || {}),
@@ -6622,9 +7558,9 @@ async function updateLaunchAgentRoutine(
       maxCallsPerRun: currentBudget.max_calls_per_run,
     }
     : parseLaunchRoutineBudgets(body.budgets)!;
-  const schedule = body.intervalSeconds === undefined
-    ? routine.schedule
-    : { type: "interval" as const, every_seconds: body.intervalSeconds };
+  const schedule = parseLaunchRoutineSchedule(body, routine.schedule);
+  const scheduleChanged = body.intervalSeconds !== undefined ||
+    body.schedule !== undefined;
   const budgetPolicy = {
     max_light_per_run: budgets.maxLightPerRun,
     max_light_per_day: budgets.maxLightPerDay,
@@ -6647,17 +7583,46 @@ async function updateLaunchAgentRoutine(
   // above; the full settings, reporting, grant, and executed-release contract
   // is enforced only at activation/run boundaries.
 
-  await updateRoutine(userId, routine.id, {
-    ...(body.mission !== undefined ? { intent: body.mission } : {}),
-    ...(body.intervalSeconds !== undefined
+  return {
+    ...(body.name !== undefined ? { name: body.name.trim() } : {}),
+    ...(body.description !== undefined ? { description: body.description } : {}),
+    ...(body.mission !== undefined ? { mission: body.mission } : {}),
+    ...(scheduleChanged
       ? {
         schedule,
+        activeNextRunAt: routine.status === "active"
+          ? previewRoutineRunTimes(schedule, new Date(), 1)[0]?.toISOString() || null
+          : null,
+      }
+      : {}),
+    ...(body.budgets !== undefined ? { budgets } : {}),
+    budgetPolicy,
+  };
+}
+
+async function updateLaunchAgentRoutine(
+  userId: string,
+  routine: StoredRoutine,
+  body: LaunchAgentRoutineUpdateRequest,
+): Promise<void> {
+  const prepared = prepareLaunchRoutineMutation(routine, body);
+  await updateRoutine(userId, routine.id, {
+    ...(prepared.name !== undefined ? { name: prepared.name } : {}),
+    ...(prepared.description !== undefined
+      ? { description: prepared.description }
+      : {}),
+    ...(prepared.mission !== undefined ? { intent: prepared.mission } : {}),
+    ...(prepared.schedule
+      ? {
+        schedule: prepared.schedule,
         next_run_at: routine.status === "active"
-          ? new Date(Date.now() + body.intervalSeconds * 1000).toISOString()
+          ? prepared.activeNextRunAt ?? null
           : routine.next_run_at,
       }
       : {}),
-    ...(body.budgets !== undefined ? { budget_policy: budgetPolicy } : {}),
+    ...(prepared.budgets !== undefined
+      ? { budget_policy: prepared.budgetPolicy }
+      : {}),
   });
 }
 
@@ -6701,6 +7666,178 @@ function launchRoutineFailure(err: unknown): Response | null {
     }
   }
   return null;
+}
+
+async function handleLaunchAgentManagedRoutines(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+  encodedRoutineId: string | null,
+  actionsRoute: boolean,
+): Promise<Response> {
+  const allowed = actionsRoute ? method === "POST" : encodedRoutineId
+    ? method === "GET" || method === "PATCH"
+    : method === "GET";
+  if (!allowed) return error("Method not allowed for Agent routines", 405);
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForRoutine(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(user, encodedLocator);
+  if (resolved instanceof Response) return resolved;
+  const row = resolved;
+  const managed = await fetchManagedRoutineIds(user.id, row.id);
+  if (!encodedRoutineId) {
+    return privateLaunchJson(
+      await buildLaunchAgentRoutinesResponse(user.id, row),
+    );
+  }
+  const routineId = decodeURIComponent(encodedRoutineId).trim();
+  if (!isUuid(routineId) || !managed.some((candidate) => candidate.id === routineId)) {
+    return error("Managed routine not found for this Agent", 404);
+  }
+  if (method === "GET") {
+    const response = await buildStableLaunchAgentRoutineResponse(
+      user.id,
+      row,
+      routineId,
+    );
+    return response
+      ? privateLaunchJson(response)
+      : error("Managed routine not found for this Agent", 404);
+  }
+  const routine = await getRoutine(user.id, routineId);
+  if (!routine) return error("Managed routine not found for this Agent", 404);
+  if (!actionsRoute && method === "PATCH") {
+    try {
+      const raw = asRecord(await readJsonBody<unknown>(request));
+      if (!raw) throw new RequestValidationError("Request body must be an object");
+      const expectedRevision = requireExpectedAgentHomeRevision(raw, row.id);
+      const { expectedRevision: _expected, ...update } = raw as unknown as
+        LaunchAgentManagedRoutineUpdateRequest;
+      const prepared = prepareLaunchRoutineMutation(routine, update);
+      await updateAgentHomeManagedRoutineCAS({
+        appId: row.id,
+        userId: user.id,
+        routineId,
+        expectedRevision,
+        authSource: user.authSource,
+        ...(prepared.name !== undefined ? { name: prepared.name } : {}),
+        ...(prepared.description !== undefined
+          ? { description: prepared.description }
+          : {}),
+        ...(prepared.mission !== undefined ? { mission: prepared.mission } : {}),
+        ...(prepared.schedule
+          ? {
+            schedule: prepared.schedule,
+            activeNextRunAt: prepared.activeNextRunAt ?? null,
+          }
+          : {}),
+        ...(prepared.budgets !== undefined ? { budgets: prepared.budgets } : {}),
+      });
+      const response = await buildStableLaunchAgentRoutineResponse(
+        user.id,
+        row,
+        routineId,
+      );
+      return response
+        ? privateLaunchJson(response)
+        : error("Managed routine not found for this Agent", 404);
+    } catch (err) {
+      if (
+        err instanceof AgentHomeRevisionError &&
+        err.code === "AGENT_HOME_REVISION_CONFLICT"
+      ) {
+        return await launchAgentHomeConflictResponse(user, encodedLocator);
+      }
+      const failure = launchRoutineFailure(err);
+      if (failure) return failure;
+      throw err;
+    }
+  }
+  if (actionsRoute) {
+    try {
+      const body = asRecord(await readJsonBody<unknown>(request));
+      if (!body) throw new RequestValidationError("Request body must be an object");
+      const actionBody = body as unknown as LaunchAgentManagedRoutineActionRequest;
+      if (![
+        "approve_capabilities",
+        "activate",
+        "pause",
+        "run_now",
+      ].includes(actionBody.action)) {
+        throw new RequestValidationError(
+          "action must be approve_capabilities, activate, pause, or run_now",
+        );
+      }
+      const outcome = await performLaunchAgentHomeAction(
+        user,
+        row,
+        body,
+        routineId,
+      );
+      if (outcome.kind === "pending") {
+        return privateLaunchJson({
+          error: "An identical managed routine action is already in progress",
+          code: "AGENT_HOME_ACTION_IN_PROGRESS",
+          status: "pending",
+          terminal: false,
+          requestId: outcome.requestId,
+          replayed: outcome.replayed,
+        }, 409);
+      }
+      if (outcome.kind === "failed") {
+        const storedStatus = outcome.response.status;
+        const status = typeof storedStatus === "number" &&
+            Number.isInteger(storedStatus) && storedStatus >= 400 &&
+            storedStatus <= 599
+          ? storedStatus
+          : 409;
+        return privateLaunchJson({
+          error: typeof outcome.response.error === "string"
+            ? outcome.response.error
+            : "Managed routine action failed",
+          ...(typeof outcome.response.code === "string"
+            ? { code: outcome.response.code }
+            : {}),
+          status: "failed",
+          terminal: true,
+          requestId: outcome.requestId,
+          replayed: outcome.replayed,
+        }, status);
+      }
+      const response = await buildStableLaunchAgentRoutineResponse(
+        user.id,
+        row,
+        routineId,
+      );
+      return response
+        ? privateLaunchJson(response)
+        : error("Managed routine not found for this Agent", 404);
+    } catch (err) {
+      if (err instanceof LaunchAgentHomeActionStatusUnknownError) {
+        return privateLaunchJson({
+          error: "The action result is still being reconciled. Retry with the same request key.",
+          code: "AGENT_HOME_ACTION_STATUS_UNKNOWN",
+          status: "unknown",
+          terminal: false,
+          requestId: err.requestId,
+        }, 503);
+      }
+      if (
+        err instanceof AgentHomeStaleMutationError ||
+        (err instanceof AgentHomeRevisionError &&
+          err.code === "AGENT_HOME_REVISION_CONFLICT")
+      ) {
+        return await launchAgentHomeConflictResponse(user, encodedLocator);
+      }
+      if (err instanceof AgentHomeRevisionError) {
+        return privateLaunchJson({ error: err.message, code: err.code }, err.status);
+      }
+      const failure = launchRoutineFailure(err);
+      if (failure) return failure;
+      throw err;
+    }
+  }
+  return error("Unsupported managed routine mutation", 400);
 }
 
 async function handleLaunchAgentRoutine(
@@ -9090,6 +10227,7 @@ function toLaunchAgentSummary(
     id: row.id,
     slug,
     name: row.name || slug,
+    iconUrl: row.icon_url ?? null,
     description: row.description,
     kind: inferToolKind(row),
     visibility: normalizeVisibility(row.visibility),

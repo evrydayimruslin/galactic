@@ -94,6 +94,9 @@ async function hmac(payload: string, secret: string): Promise<string> {
 
 export interface MintCallerContextInput {
   callerAppId: string;
+  // Preserve the root/origin Agent across nested calls. A direct Agent call
+  // starts a new chain and therefore defaults to callerAppId.
+  capacityAgentId?: string;
   userId: string;
   callerFunction?: string | null;
   // Hop of the INCOMING context (0 for a top-level user/agent call). The minted
@@ -126,6 +129,7 @@ export async function mintCallerContextToken(
   const claims: AgentCallerContextClaims = {
     v: 1,
     callerAppId,
+    capacityAgentId: input.capacityAgentId?.trim() || callerAppId,
     userId,
     callerFunction: input.callerFunction?.trim() || null,
     hop,
@@ -149,6 +153,10 @@ function parseClaims(value: unknown): AgentCallerContextClaims | null {
   const c = value as Record<string, unknown>;
   if (c.v !== 1) return null;
   if (typeof c.callerAppId !== "string" || !c.callerAppId) return null;
+  if (
+    c.capacityAgentId !== undefined &&
+    (typeof c.capacityAgentId !== "string" || !c.capacityAgentId)
+  ) return null;
   if (typeof c.userId !== "string" || !c.userId) return null;
   if (c.callerFunction !== null && typeof c.callerFunction !== "string") {
     return null;
@@ -207,8 +215,10 @@ export async function verifyCallerContextToken(
     parsed = parseClaims(
       JSON.parse(
         new TextDecoder().decode(
-          Uint8Array.from(base64UrlToString(encodedClaims), (ch) =>
-            ch.charCodeAt(0)),
+          Uint8Array.from(
+            base64UrlToString(encodedClaims),
+            (ch) => ch.charCodeAt(0),
+          ),
         ),
       ),
     );

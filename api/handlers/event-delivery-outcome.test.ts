@@ -25,6 +25,76 @@ Deno.test("delivery outcome: JSON-RPC error → failed, message surfaced", () =>
   assertEquals(outcome.error, "Insufficient balance");
 });
 
+Deno.test("delivery outcome: structured account-capacity denial is safely deferrable", () => {
+  const outcome = parseDeliveryOutcome(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      error: {
+        code: -32010,
+        message: "Account capacity is waiting",
+        data: {
+          type: "capacity_waiting",
+          retry_at: "2026-07-17T18:00:00.000Z",
+          capacity_agent_id: "agent-root",
+          binding_constraint: "account",
+        },
+      },
+    } as JsonRpcResponse,
+  );
+  assertEquals(outcome.success, false);
+  assertEquals(outcome.admission, {
+    code: "capacity_waiting",
+    nextEligibleAt: "2026-07-17T18:00:00.000Z",
+    capacityAgentId: "agent-root",
+    bindingConstraint: "account",
+  });
+});
+
+Deno.test("delivery outcome: capacity-looking data on another error code stays terminal", () => {
+  const outcome = parseDeliveryOutcome(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      error: {
+        code: -32603,
+        message: "Handler failed",
+        data: {
+          type: "capacity_waiting",
+          retry_at: "2026-07-17T18:00:00.000Z",
+        },
+      },
+    } as JsonRpcResponse,
+  );
+  assertEquals(outcome.success, false);
+  assertEquals(outcome.admission, undefined);
+});
+
+Deno.test("delivery outcome: too-small Agent cap is structured but has no reset", () => {
+  const outcome = parseDeliveryOutcome(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      error: {
+        code: -32010,
+        message: "Increase this Agent's cap",
+        data: {
+          type: "agent_cap_too_low_for_request",
+          retry_at: null,
+          capacity_agent_id: "agent-root",
+          binding_constraint: "agent",
+        },
+      },
+    } as JsonRpcResponse,
+  );
+  assertEquals(outcome.admission, {
+    code: "agent_cap_too_low_for_request",
+    nextEligibleAt: null,
+    capacityAgentId: "agent-root",
+    bindingConstraint: "agent",
+  });
+});
+
 Deno.test("delivery outcome: isError tool result → FAILED (not delivered), receipt kept", () => {
   const outcome = parseDeliveryOutcome(rpc({
     isError: true,

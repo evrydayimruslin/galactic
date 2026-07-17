@@ -52,7 +52,7 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-14.routine-emit-test-runtime.v2";
+const SANDBOX_TEMPLATE_VERSION = "2026-07-17.agent-capacity-errors.v3";
 
 // Reuse eligibility lives in its own dependency-light module (imported above) so
 // billing imports the SAME predicate — a divergent copy is a money bug (see the
@@ -565,7 +565,13 @@ globalThis.ultralight = {
     }
     var rpcResponse = await response.json();
     if (rpcResponse.error) {
-      throw new Error('galactic.call RPC error: ' + (rpcResponse.error.message || JSON.stringify(rpcResponse.error)));
+      var __rpcDetails = rpcResponse.error.data || null;
+      var __rpcType = __rpcDetails && __rpcDetails.type;
+      var __rpcError = new Error('galactic.call RPC error: ' + (rpcResponse.error.message || JSON.stringify(rpcResponse.error)));
+      if (__rpcType === 'agent_cap_too_low_for_request') __rpcError.name = 'AgentCapacityCapTooLowError';
+      else if (__rpcType === 'agent_cap_waiting' || __rpcType === 'capacity_waiting') __rpcError.name = 'AgentCapacityWaitingError';
+      if (__rpcType && (__rpcError.name === 'AgentCapacityCapTooLowError' || __rpcError.name === 'AgentCapacityWaitingError')) __rpcError.galacticDetails = __rpcDetails;
+      throw __rpcError;
     }
     var result = rpcResponse.result;
     if (result && Array.isArray(result.content)) {
@@ -722,7 +728,7 @@ export default {
     } catch (err) {
       return Response.json({
         success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
-        error: { type: err.constructor?.name || 'Error', message: err.message || String(err) },
+        error: { type: err.name || err.constructor?.name || 'Error', message: err.message || String(err), ...(err.galacticDetails ? { details: err.galacticDetails } : {}) },
       });
     }
   }

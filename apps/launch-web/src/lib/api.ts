@@ -9,13 +9,18 @@ import type {
 import type {
   LaunchAgentAdminSummary,
   LaunchAgentFunctionsResponse,
+  LaunchAgentCapacityResponse,
+  LaunchAgentCapacityUpdateRequest,
   LaunchAgentHomeActionRequest,
   LaunchAgentHomeIdentityUpdateRequest,
   LaunchAgentHomeResponse,
   LaunchAgentHomeRoutineUpdateRequest,
   LaunchAgentHomeSettingsUpdateRequest,
   LaunchAgentRoutineActionRequest,
+  LaunchAgentManagedRoutineActionRequest,
+  LaunchAgentManagedRoutineUpdateRequest,
   LaunchAgentRoutineResponse,
+  LaunchAgentRoutinesResponse,
   LaunchAgentRoutineUpdateRequest,
   LaunchAgentSummary,
   LaunchApiKeyCreateRequest,
@@ -46,6 +51,7 @@ import type {
   LaunchLeaderboardResponse,
   LaunchFolderMemberMutationResponse,
   LaunchFolderMutationResponse,
+  LaunchFleetResponse,
   LaunchLibraryResponse,
   LaunchPlatformPrimitiveSuggestion,
   LaunchStoreRequest,
@@ -266,6 +272,11 @@ export class LaunchApiClient {
     return this.fetchJson("/api/launch/library");
   }
 
+  /** Compact owner-only projection used by the merged Home/Fleet surface. */
+  fleet(): Promise<LaunchFleetResponse> {
+    return this.fetchJson("/api/launch/fleet");
+  }
+
   createFolder(
     scope: "owned" | "installed",
     name: string,
@@ -333,6 +344,22 @@ export class LaunchApiClient {
   agentFunctions(idOrSlug: string): Promise<LaunchAgentFunctionsResponse> {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/functions`,
+    );
+  }
+
+  agentCapacity(idOrSlug: string): Promise<LaunchAgentCapacityResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/capacity`,
+    );
+  }
+
+  updateAgentCapacity(
+    idOrSlug: string,
+    request: LaunchAgentCapacityUpdateRequest,
+  ): Promise<LaunchAgentCapacityResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/capacity`,
+      { method: "PATCH", body: JSON.stringify(request) },
     );
   }
 
@@ -414,6 +441,43 @@ export class LaunchApiClient {
   agentRoutine(idOrSlug: string): Promise<LaunchAgentRoutineResponse> {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routine`,
+    );
+  }
+
+  agentRoutines(idOrSlug: string): Promise<LaunchAgentRoutinesResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routines`,
+    );
+  }
+
+  agentManagedRoutine(
+    idOrSlug: string,
+    routineId: string,
+  ): Promise<LaunchAgentRoutineResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routines/${encodeURIComponent(routineId)}`,
+    );
+  }
+
+  updateAgentManagedRoutine(
+    idOrSlug: string,
+    routineId: string,
+    request: LaunchAgentManagedRoutineUpdateRequest,
+  ): Promise<LaunchAgentRoutineResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routines/${encodeURIComponent(routineId)}`,
+      { method: "PATCH", body: JSON.stringify(request) },
+    );
+  }
+
+  actOnAgentManagedRoutine(
+    idOrSlug: string,
+    routineId: string,
+    request: LaunchAgentManagedRoutineActionRequest,
+  ): Promise<LaunchAgentRoutineResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routines/${encodeURIComponent(routineId)}/actions`,
+      { method: "POST", body: JSON.stringify(request) },
     );
   }
 
@@ -904,6 +968,21 @@ export class LaunchApiClient {
     });
   }
 
+  /** Upload a static or animated Agent icon. The server validates bytes,
+   * dimensions, animation frames, and ownership; it returns a content-addressed
+   * URL so replacing an icon cannot leave a stale browser cache behind. */
+  uploadAgentIcon(
+    id: string,
+    file: File,
+  ): Promise<{ success: true; icon_url: string }> {
+    const body = new FormData();
+    body.set("icon", file);
+    return this.fetchJson(`/api/apps/${encodeURIComponent(id)}/icon`, {
+      method: "POST",
+      body,
+    });
+  }
+
   apiKeys(): Promise<LaunchApiKeyListResponse> {
     return this.fetchJson("/api/launch/api-keys");
   }
@@ -924,11 +1003,12 @@ export class LaunchApiClient {
   }
 
   listNotifications(
-    options: { unreadOnly?: boolean; limit?: number } = {},
+    options: { unreadOnly?: boolean; limit?: number; agent?: string } = {},
   ): Promise<LaunchNotificationsResponse> {
     const params = new URLSearchParams();
     if (options.unreadOnly) params.set("unread", "1");
     if (options.limit) params.set("limit", String(options.limit));
+    if (options.agent) params.set("agent", options.agent);
     const qs = params.toString();
     return this.fetchJson(
       `/api/launch/notifications${qs ? `?${qs}` : ""}`,
@@ -936,7 +1016,7 @@ export class LaunchApiClient {
   }
 
   markNotificationsRead(
-    body: { ids?: string[]; all?: boolean },
+    body: { ids?: string[]; all?: boolean; agent?: string },
   ): Promise<LaunchNotificationsMarkReadResponse> {
     return this.fetchJson("/api/launch/notifications", {
       method: "PATCH",
@@ -950,7 +1030,9 @@ export class LaunchApiClient {
     token: string | null,
   ): Promise<Response> {
     const headers = new Headers({ Accept: "application/json" });
-    if (init.body) headers.set("Content-Type", "application/json");
+    if (typeof init.body === "string") {
+      headers.set("Content-Type", "application/json");
+    }
     if (token) headers.set("Authorization", `Bearer ${token}`);
     if (init.headers) {
       new Headers(init.headers).forEach((value, key) => {

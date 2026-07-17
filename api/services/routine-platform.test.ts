@@ -121,12 +121,19 @@ function storedRoutine() {
     budget_policy: { max_light_per_day: 250 },
     approval_policy: {},
     status: "active",
+    metadata: {
+      source: "ul.routine",
+      launch_managed: true,
+      launch_role: "primary",
+      launch_primary: true,
+    },
   });
 }
 
 Deno.test("routine platform: lists and plans routine templates", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnv = globalThis.__env;
+  let hasPrimary = false;
   globalThis.__env = {
     ...(originalEnv || {}),
     SUPABASE_URL: "https://supabase.example",
@@ -141,6 +148,11 @@ Deno.test("routine platform: lists and plans routine templates", async () => {
       return jsonResponse([]);
     }
     if (url.includes("/user_app_library?")) return jsonResponse([]);
+    if (url.includes("/user_routines?")) {
+      return jsonResponse(
+        hasPrimary ? [{ metadata: { launch_primary: true } }] : [],
+      );
+    }
     return jsonResponse([]);
   }) as typeof fetch;
 
@@ -179,33 +191,45 @@ Deno.test("routine platform: lists and plans routine templates", async () => {
       max_calls_per_run: 25,
     });
 
+    hasPrimary = true;
+    const siblingPlan = await executeRoutinePlatformAction("user-1", {
+      action: "plan",
+      template_id: "sales_followup_loop",
+    }) as { routine: { metadata: Record<string, unknown> } };
+    assertEquals(siblingPlan.routine.metadata.launch_managed, true);
+    assertEquals(siblingPlan.routine.metadata.launch_role, "routine");
+    assertEquals(siblingPlan.routine.metadata.launch_primary, false);
+
     await assertRejects(
-      () => executeRoutinePlatformAction("user-1", {
-        action: "plan",
-        template_id: "sales_followup_loop",
-        budget_policy: {
-          max_light_per_run: 20,
-          max_light_per_day: 10,
-        },
-      }),
+      () =>
+        executeRoutinePlatformAction("user-1", {
+          action: "plan",
+          template_id: "sales_followup_loop",
+          budget_policy: {
+            max_light_per_run: 20,
+            max_light_per_day: 10,
+          },
+        }),
       Error,
       "max_light_per_run ≤ max_light_per_day ≤ max_light_per_month",
     );
     await assertRejects(
-      () => executeRoutinePlatformAction("user-1", {
-        action: "plan",
-        template_id: "sales_followup_loop",
-        budget_policy: { max_calls_per_run: 0 },
-      }),
+      () =>
+        executeRoutinePlatformAction("user-1", {
+          action: "plan",
+          template_id: "sales_followup_loop",
+          budget_policy: { max_calls_per_run: 0 },
+        }),
       Error,
       "max_calls_per_run must be a positive integer",
     );
     await assertRejects(
-      () => executeRoutinePlatformAction("user-1", {
-        action: "plan",
-        template_id: "sales_followup_loop",
-        budget_policy: { max_light_per_run: null },
-      }),
+      () =>
+        executeRoutinePlatformAction("user-1", {
+          action: "plan",
+          template_id: "sales_followup_loop",
+          budget_policy: { max_light_per_run: null },
+        }),
       Error,
       "max_light_per_run must be a non-negative number",
     );
@@ -287,6 +311,8 @@ Deno.test("routine platform: creates routines paused with owner approval pending
       (routineInsert?.body as Record<string, unknown>).metadata,
       {
         source: "ul.routine",
+        launch_managed: true,
+        launch_role: "primary",
         launch_primary: true,
         template_label: "Sales follow-up loop",
         template_app_name: "Email Ops",
@@ -310,7 +336,7 @@ Deno.test("routine platform: creates routines paused with owner approval pending
   }
 });
 
-Deno.test("routine platform: concurrent primary insert maps to the one-primary contract", async () => {
+Deno.test("routine platform: concurrent first creates elect one primary and retry the sibling as managed", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnv = globalThis.__env;
   globalThis.__env = {
@@ -318,6 +344,8 @@ Deno.test("routine platform: concurrent primary insert maps to the one-primary c
     SUPABASE_URL: "https://supabase.example",
     SUPABASE_SERVICE_ROLE_KEY: "service-key",
   };
+  let insertAttempts = 0;
+  const insertBodies: Record<string, unknown>[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString();
     const method = init?.method || "GET";
@@ -331,26 +359,44 @@ Deno.test("routine platform: concurrent primary insert maps to the one-primary c
       return jsonResponse([]);
     }
     if (url.includes("/user_routines") && method === "POST") {
-      return new Response(JSON.stringify({
-        code: "23505",
-        message:
-          'duplicate key value violates unique constraint "idx_user_routines_one_launch_primary"',
-      }), { status: 409, headers: { "Content-Type": "application/json" } });
+      insertAttempts += 1;
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      insertBodies.push(body);
+      if (insertAttempts === 1) {
+        return new Response(
+          JSON.stringify({
+            code: "23505",
+            message:
+              'duplicate key value violates unique constraint "idx_user_routines_one_launch_primary"',
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return jsonResponse([routineRow(body)]);
+    }
+    if (url.includes("/routine_capabilities") && method === "POST") {
+      return jsonResponse([]);
+    }
+    if (url.includes("/routine_dashboard_bindings") && method === "POST") {
+      return jsonResponse([]);
     }
     return jsonResponse([]);
   }) as typeof fetch;
 
   try {
-    await assertRejects(
-      () =>
-        executeRoutinePlatformAction("user-1", {
-          action: "create",
-          app_id: APP_ID,
-          template_id: "sales_followup_loop",
-        }),
-      Error,
-      "already has its primary routine",
-    );
+    const result = await executeRoutinePlatformAction("user-1", {
+      action: "create",
+      app_id: APP_ID,
+      template_id: "sales_followup_loop",
+    }) as { routine: { metadata: Record<string, unknown> } };
+    const retriedMetadata = insertBodies[1]?.metadata as
+      | Record<string, unknown>
+      | undefined;
+    assertEquals(insertAttempts, 2);
+    assertEquals(retriedMetadata?.launch_managed, true);
+    assertEquals(retriedMetadata?.launch_role, "routine");
+    assertEquals(retriedMetadata?.launch_primary, false);
+    assertEquals(result.routine.metadata, retriedMetadata);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.__env = originalEnv;
@@ -508,8 +554,12 @@ Deno.test("routine platform: resume applies the centralized launch contract", as
         return Promise.resolve();
       },
       getWithMetadata: () =>
-        Promise.resolve({ value: liveCode, metadata: liveMetadata }),
-    },
+        Promise.resolve({
+          value: liveCode,
+          metadata: liveMetadata,
+          cacheStatus: null,
+        }),
+    } as unknown as KVNamespace,
   };
   await putLiveExecutedBundle({
     appId: APP_ID,
@@ -550,7 +600,9 @@ Deno.test("routine platform: resume applies the centralized launch contract", as
     const result = await executeRoutinePlatformAction("user-1", {
       action: "resume",
       routine_id: "routine-1",
-    }) as { routine: { status: string; budget_policy: Record<string, number> } };
+    }) as {
+      routine: { status: string; budget_policy: Record<string, number> };
+    };
     assertEquals(result.routine.status, "active");
     assertEquals(activated, true);
   } finally {

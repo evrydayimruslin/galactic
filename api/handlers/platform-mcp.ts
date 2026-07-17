@@ -11268,6 +11268,7 @@ async function executeEmit(
     const out = await emitEvent({
       userId,
       emitterAppId: app.id,
+      capacityAgentId: app.id,
       topic,
       payload,
       emitHop: 1,

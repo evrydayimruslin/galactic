@@ -90,6 +90,7 @@ export async function notifyOwnerFromAgent(
 
   const row = await createNotification({
     userId,
+    agentId: appId,
     kind: AGENT_NOTIFY_KIND,
     severity: severity as "info" | "warning" | "critical",
     title: title.slice(0, TITLE_MAX),

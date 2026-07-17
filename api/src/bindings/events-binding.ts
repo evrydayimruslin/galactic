@@ -26,7 +26,11 @@ interface EventsBindingProps {
 interface EmitResult {
   ok: boolean;
   event_id: string | null;
-  rejected: "hop_exceeded" | "not_configured" | null;
+  rejected:
+    | "hop_exceeded"
+    | "not_configured"
+    | "private_owner_required"
+    | null;
 }
 
 export class EventsBinding
@@ -59,6 +63,8 @@ export class EventsBinding
     const out = await emitEvent({
       userId: verified.claims.userId,
       emitterAppId: verified.claims.callerAppId,
+      capacityAgentId: verified.claims.capacityAgentId ||
+        verified.claims.callerAppId,
       topic,
       payload: (payload && typeof payload === "object")
         ? payload as Record<string, unknown>

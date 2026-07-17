@@ -72,6 +72,19 @@ function subscribeGrantRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function privateOwnerAppRow(
+  id = "app-emitter",
+  ownerId = "user-1",
+  visibility = "private",
+) {
+  return {
+    id,
+    owner_id: ownerId,
+    visibility,
+    deleted_at: null,
+  };
+}
+
 const NOW = Date.UTC(2026, 5, 10, 12, 0, 0);
 
 // ── emitEvent ────────────────────────────────────────────────────────────
@@ -163,12 +176,15 @@ Deno.test("emitEvent: a dropped emit (storage unconfigured) reports not_configur
 });
 
 Deno.test("emitEvent: enqueues a pending row and returns its id", async () => {
-  let body: Record<string, unknown> | null = null;
+  const bodies: Record<string, unknown>[] = [];
   await withMockedDb(
     (url, init) => {
+      if (url.pathname.endsWith("/rest/v1/apps")) {
+        return jsonResponse([privateOwnerAppRow()]);
+      }
       assert(url.pathname.endsWith("/rest/v1/agent_events"));
       const parsed = JSON.parse(String(init?.body));
-      body = Array.isArray(parsed) ? parsed[0] : parsed;
+      bodies.push(Array.isArray(parsed) ? parsed[0] : parsed);
       return jsonResponse([{ id: "evt-1" }], 201);
     },
     async () => {
@@ -183,13 +199,68 @@ Deno.test("emitEvent: enqueues a pending row and returns its id", async () => {
       assertEquals(out.rejected, undefined);
     },
   );
-  assert(body, "expected an enqueue body");
+  assertEquals(bodies.length, 1);
+  const body = bodies[0];
   // Identity + status come from the caller-verified inputs, not the payload.
-  assertEquals(body!.user_id, "user-1");
-  assertEquals(body!.emitter_app_id, "app-emitter");
-  assertEquals(body!.topic, "sale.created"); // trimmed
-  assertEquals(body!.status, "pending");
-  assertEquals((body!.payload as Record<string, unknown>).orderId, "o-99");
+  assertEquals(body.user_id, "user-1");
+  assertEquals(body.emitter_app_id, "app-emitter");
+  assertEquals(body.capacity_agent_id, "app-emitter");
+  assertEquals(body.topic, "sale.created"); // trimmed
+  assertEquals(body.status, "pending");
+  assertEquals((body.payload as Record<string, unknown>).orderId, "o-99");
+});
+
+Deno.test("emitEvent: rejects a non-private or non-owner emitter before enqueue", async () => {
+  let eventInsert = false;
+  const out = await withMockedDb(
+    (url) => {
+      if (url.pathname.endsWith("/rest/v1/apps")) {
+        return jsonResponse([
+          privateOwnerAppRow("app-emitter", "user-1", "public"),
+        ]);
+      }
+      eventInsert = true;
+      return jsonResponse([{ id: "evt-unsafe" }], 201);
+    },
+    () =>
+      emitEvent({
+        userId: "user-1",
+        emitterAppId: "app-emitter",
+        topic: "sale.created",
+        emitHop: 1,
+      }),
+  );
+  assertEquals(out, { eventId: null, rejected: "private_owner_required" });
+  assertEquals(eventInsert, false);
+});
+
+Deno.test("emitEvent: persists a distinct signed root Agent after validating both identities", async () => {
+  const checkedApps: string[] = [];
+  const eventBodies: Record<string, unknown>[] = [];
+  const out = await withMockedDb(
+    (url, init) => {
+      if (url.pathname.endsWith("/rest/v1/apps")) {
+        const appId = url.searchParams.get("id")?.replace(/^eq\./, "") ?? "";
+        checkedApps.push(appId);
+        return jsonResponse([privateOwnerAppRow(appId)]);
+      }
+      const rows = JSON.parse(String(init?.body)) as Record<string, unknown>[];
+      eventBodies.push(rows[0]);
+      return jsonResponse([{ id: "evt-root" }], 201);
+    },
+    () =>
+      emitEvent({
+        userId: "user-1",
+        emitterAppId: "app-emitter",
+        capacityAgentId: "app-root",
+        topic: "sale.created",
+        emitHop: 2,
+      }),
+  );
+  assertEquals(out.eventId, "evt-root");
+  assertEquals(checkedApps, ["app-emitter", "app-root"]);
+  assertEquals(eventBodies[0].emitter_app_id, "app-emitter");
+  assertEquals(eventBodies[0].capacity_agent_id, "app-root");
 });
 
 // ── resolveSubscribeGrant ──────────────────────────────────────────────────
@@ -216,7 +287,10 @@ Deno.test("resolveSubscribeGrant: a cap-reached grant denies delivery (bounds re
   await withMockedDb(
     () =>
       jsonResponse([
-        subscribeGrantRow({ spent_credits_period: 500, monthly_cap_credits: 500 }),
+        subscribeGrantRow({
+          spent_credits_period: 500,
+          monthly_cap_credits: 500,
+        }),
       ]),
     async () => {
       const result = await resolveSubscribeGrant({
@@ -262,8 +336,16 @@ Deno.test("resolveSubscribers: returns the active subscribe grants for an emitte
       assert(url.search.includes("mode=eq.subscribe"));
       assert(url.search.includes("status=eq.active"));
       return jsonResponse([
-        subscribeGrantRow({ id: "sub-1", target_app_id: "app-a", target_function: "onSale" }),
-        subscribeGrantRow({ id: "sub-2", target_app_id: "app-b", target_function: "ship" }),
+        subscribeGrantRow({
+          id: "sub-1",
+          target_app_id: "app-a",
+          target_function: "onSale",
+        }),
+        subscribeGrantRow({
+          id: "sub-2",
+          target_app_id: "app-b",
+          target_function: "ship",
+        }),
       ]);
     },
     async () => {
@@ -278,7 +360,6 @@ Deno.test("resolveSubscribers: returns the active subscribe grants for an emitte
     },
   );
 });
-
 
 // ── PR4: queue-driven dispatch ──────────────────────────────────────────────
 
@@ -332,6 +413,9 @@ Deno.test("emitEvent: enqueues {eventId} to EVENT_QUEUE after the row insert", a
   const queue: QueueCapture = { sent: [] };
   const out = await withMockedDbAndQueue(
     (url) => {
+      if (url.pathname.endsWith("/apps")) {
+        return jsonResponse([privateOwnerAppRow()]);
+      }
       if (url.pathname.endsWith("/agent_events")) {
         return jsonResponse([{ id: "evt-9" }], 201);
       }
@@ -353,7 +437,10 @@ Deno.test("emitEvent: enqueues {eventId} to EVENT_QUEUE after the row insert", a
 Deno.test("emitEvent: a failed queue send still returns the eventId (sweeper recovers)", async () => {
   const queue: QueueCapture = { sent: [], failSend: true };
   const out = await withMockedDbAndQueue(
-    () => jsonResponse([{ id: "evt-9" }], 201),
+    (url) =>
+      url.pathname.endsWith("/apps")
+        ? jsonResponse([privateOwnerAppRow()])
+        : jsonResponse([{ id: "evt-9" }], 201),
     queue,
     () =>
       emitEvent({
@@ -383,6 +470,7 @@ Deno.test("claimEventById: read-then-claim through the pending/expired-lease fil
   const filter = patches[0].url.searchParams.get("or") ?? "";
   assert(filter.includes("status.eq.pending"));
   assert(filter.includes("status.eq.delivering,lease_until.lt."));
+  assert(filter.includes("status.eq.waiting,next_eligible_at.lte."));
   assertEquals(patches[0].body.status, "delivering");
   // attempts counts dispatch passes, derived from the read row.
   assertEquals(patches[0].body.attempts, 3);
@@ -427,6 +515,7 @@ Deno.test("sweeper with queue bound: re-enqueues stuck rows only, never dispatch
   // Grace window: pending rows younger than the cutoff belong to the queue
   // consumer; sweeping them would race its claim every tick.
   const filter = requests[0].url.searchParams.get("or") ?? "";
+  assert(filter.includes("status.eq.waiting,next_eligible_at.lte."));
   const match = filter.match(/status\.eq\.pending,created_at\.lt\.([^)]+)/);
   assert(match, "pending arm must carry a created_at cutoff");
   assertEquals(new Date(match[1]).getTime(), NOW - 2 * 60_000);
@@ -452,6 +541,9 @@ Deno.test("sweeper without queue (dev): scans without grace and dispatches inlin
             ? [eventRow({ status: "delivering", attempts: 1 })]
             : [],
         );
+      }
+      if (url.pathname.endsWith("/apps")) {
+        return jsonResponse([privateOwnerAppRow()]);
       }
       // resolveSubscribers → no grants: zero-subscriber fan-out.
       return jsonResponse([]);

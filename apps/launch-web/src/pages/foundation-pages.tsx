@@ -1196,9 +1196,8 @@ function DeveloperDocsButton(
 }
 
 export function HomeFoundationPage(
-  { live, navigate }: LaunchPageProps,
+  { live }: LaunchPageProps,
 ): ReactElement {
-  const homeTools = liveStoreAgents(live.data.store?.results).slice(0, 6);
   const installInstructions = live.data.install?.instructions;
   return (
     <div className="launch-page-narrow home-page">
@@ -1206,26 +1205,18 @@ export function HomeFoundationPage(
       <section className="home-hero">
         <div className="home-hero-copy">
           <h1>
-            Connect once.<br />Access every tool.
+            Agents work here.
           </h1>
           <p>
-            Add Galactic to your agent so it can call any tool published to
-            the platform, with your auth, payments, and preferences in one
-            place. Pay per call. Nothing to subscribe to.
+            Conjure a private, persistent agent with Codex, Claude Code,
+            Cursor, or any MCP client. Galactic keeps it scheduled, sandboxed,
+            and reporting back while you bring your own inference key.
           </p>
           <div className="hero-actions left">
             <AddToAgentButton
               instructions={installInstructions}
-              label="Add to your agent"
+              label="Connect Galactic"
             />
-            <RouteButton
-              navigate={navigate}
-              size="lg"
-              to="/browse"
-              variant="secondary"
-            >
-              Browse agents
-            </RouteButton>
             <DeveloperDocsButton />
           </div>
         </div>
@@ -1235,66 +1226,44 @@ export function HomeFoundationPage(
       <ValueProps />
 
       <section className="shared-core-section">
-        <h2>Every agent draws from one source.</h2>
+        <h2>Your fleet has one base of operation.</h2>
         <p>
-          The same context, tools, auth, and payments — wherever you work.
+          Routines, memory, secrets, and alerts stay with each Agent — wherever
+          you choose to command it.
         </p>
         <SharedCore />
       </section>
 
-      {homeTools.length > 0
-        ? (
-          <Section
-            action={
-              <RouteLink navigate={navigate} to="/browse">Browse all</RouteLink>
-            }
-            title="Agents shipping now"
-          >
-            <div className="home-tool-grid">
-              {homeTools.map((tool) => (
-                <CompactAgentCard
-                  key={tool.id}
-                  tool={tool}
-                />
-              ))}
-            </div>
-          </Section>
-        )
-        : null}
-
       <section className="endpoint-section">
         <div>
-          <h2>One endpoint. Every capability.</h2>
+          <h2>One connection. Your whole fleet.</h2>
           <p>
-            Point your connected agent at a single MCP server. It discovers the
-            whole catalog, calls any Agent, and settles in credits.
+            Point your existing coding agent at Galactic once. It can create,
+            test, deploy, and supervise private Agents that wake when needed
+            and remember their work.
           </p>
-          <AddToAgentButton instructions={installInstructions} />
+          <AddToAgentButton
+            instructions={installInstructions}
+            label="Connect Galactic"
+          />
         </div>
         <ConfigPreview />
       </section>
 
       <section className="closing-band">
         <div>
-          <h2>Give your connected agent the Agent layer.</h2>
+          <h2>Conjure your first full-time Agent.</h2>
           <p>
-            One endpoint for every capability: discover, call, and settle in
-            credits.
+            Keep one active Agent free. Pro and Max plans give an unlimited
+            fleet more shared five-hour and weekly capacity.
           </p>
         </div>
         <div className="hero-actions left">
           <AddToAgentButton
             instructions={installInstructions}
+            label="Connect Galactic"
             variant="secondary"
           />
-          <RouteButton
-            navigate={navigate}
-            size="lg"
-            to="/browse"
-            variant="ghost"
-          >
-            Browse
-          </RouteButton>
         </div>
       </section>
     </div>
@@ -6625,23 +6594,23 @@ function ValueProps(): ReactElement {
   const items = [
     [
       "01",
-      "Single source",
-      "Your context, memory, balance, and preferences live in one place, and follow you to any agent you use.",
+      "Persistent by default",
+      "Agents wake on schedules and events, remember their work, and report back without a laptop left running.",
     ],
     [
       "02",
-      "Pay per call",
-      "Your agent spends only on what it uses. Never a monthly seat.",
+      "Private fleet",
+      "Conjure and operate your own Agents in isolated sandboxes. The launch experience is single-player by design.",
     ],
     [
       "03",
-      "No setup, ever",
-      "New tools work the moment they're published. No accounts to create, no per-vendor keys, no integrations to maintain.",
+      "Bring your own AI",
+      "Choose a supported inference provider and keep control of its key. Galactic supplies the runtime, not model credits.",
     ],
     [
       "04",
-      "Yours to leave with",
-      "Switch agents tomorrow and everything comes with you. Galactic belongs to you, not to any one platform.",
+      "Take it anywhere",
+      "Command the same fleet from Codex, Claude Code, Cursor, or another MCP client without rebuilding its home.",
     ],
   ] as const;
   return (
@@ -6660,7 +6629,7 @@ function ValueProps(): ReactElement {
 function SharedCore(): ReactElement {
   return (
     <div className="shared-core">
-      {["Context", "Tools", "Auth", "Payments"].map((item) => (
+      {["Routines", "Memory", "Secrets", "Alerts"].map((item) => (
         <span key={item}>{item}</span>
       ))}
     </div>
@@ -6767,28 +6736,6 @@ function highlightSnippet(text: string, highlight: string): ReactNode {
       {index < parts.length - 1 ? <mark>{highlight}</mark> : null}
     </span>
   ));
-}
-
-function CompactAgentCard({ tool }: { tool: AgentFixture }): ReactElement {
-  const free = tool.free || tool.callPrice === 0;
-  return (
-    <Card className="compact-tool-card">
-      <div className="compact-tool-title">
-        <Mono>{tool.name}</Mono>
-      </div>
-      <p>{tool.summary}</p>
-      <div className="compact-tool-footer">
-        <Mono>
-          {tool.installs !== null
-            ? `${formatNumber(tool.installs)} installs`
-            : ""}
-        </Mono>
-        {free
-          ? <span>Free</span>
-          : <span>{formatCredits(tool.callPrice)}/call</span>}
-      </div>
-    </Card>
-  );
 }
 
 function SearchControls({

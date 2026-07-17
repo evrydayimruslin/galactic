@@ -64,6 +64,7 @@ export interface Env {
   BASE_URL: string;
   LAUNCH_WEB_BASE_URL: string;
   SUBSCRIPTION_CAPACITY_ENABLED: string;
+  AGENT_CAPACITY_ENABLED: string;
   ENVIRONMENT: string;
   CORS_ALLOWED_ORIGINS: string;
   PLATFORM_MCP_DISABLED_ALIASES: string;

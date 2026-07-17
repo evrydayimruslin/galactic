@@ -2612,7 +2612,7 @@ Deno.test('launch Agent Home: canonical snapshot is secret-free and its revision
       assertEquals(second.response.status, 200, second.raw);
       assertEquals(first.response.headers.get('cache-control'), 'private, no-store');
       assertEquals(first.response.headers.get('vary'), 'Cookie, Authorization');
-      assertEquals(first.body.contractVersion, '2026-07-15.p2.1');
+      assertEquals(first.body.contractVersion, '2026-07-17.p2.3');
       assertEquals(first.body.revision, `ah1:${HOME_APP_ID}:7`);
       // Run progress and usage deliberately do not churn the owner-config CAS.
       assertEquals(second.body.revision, first.body.revision);
@@ -4163,5 +4163,297 @@ Deno.test('launch folders: a non-uuid folder id is a 404, not a query', async ()
       assertEquals(response.status, 404);
     },
     folderSessionMock([]),
+  );
+});
+
+// ---- P2.3 private multi-routine facade -----------------------------------
+
+Deno.test({
+  name: 'launch P2.3 routine and capacity routes reject connected-Agent keys',
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const routineId = '77777777-7777-4777-8777-777777777777';
+    await withLaunchEnv(
+      async () => {
+        const attempts: Array<{ path: string; method: string; body?: unknown }> = [
+          {
+            path: '/api/launch/agents/private-helper/capacity',
+            method: 'GET',
+          },
+          {
+            path: '/api/launch/agents/private-helper/capacity',
+            method: 'PATCH',
+            body: { capPercent: 25 },
+          },
+          {
+            path: '/api/launch/agents/private-helper/routines',
+            method: 'GET',
+          },
+          {
+            path: `/api/launch/agents/private-helper/routines/${routineId}`,
+            method: 'GET',
+          },
+          {
+            path: `/api/launch/agents/private-helper/routines/${routineId}`,
+            method: 'PATCH',
+            body: { expectedRevision: 'opaque', mission: 'widen access' },
+          },
+          {
+            path:
+              `/api/launch/agents/private-helper/routines/${routineId}/actions`,
+            method: 'POST',
+            body: {
+              expectedRevision: 'opaque',
+              idempotencyKey: '88888888-8888-4888-8888-888888888888',
+              action: 'activate',
+            },
+          },
+        ];
+        for (const attempt of attempts) {
+          const response = await handleLaunch(new Request(
+            `https://ultralight.test${attempt.path}`,
+            {
+              method: attempt.method,
+              headers: {
+                Authorization: `Bearer ${TEST_API_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              body: attempt.body === undefined
+                ? undefined
+                : JSON.stringify(attempt.body),
+            },
+          ));
+          const body = await response.json() as { error?: string };
+          assertEquals(
+            response.status,
+            403,
+            `${attempt.method} ${attempt.path}`,
+          );
+          assertStringIncludes(body.error || '', 'account session');
+          assertEquals(
+            response.headers.get('cache-control'),
+            'private, no-store',
+          );
+          assertEquals(response.headers.get('vary'), 'Cookie, Authorization');
+        }
+      },
+      apiTokenAuthMock(),
+    );
+  },
+});
+
+Deno.test('launch managed routine detail returns a stable actionable revision', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        `https://ultralight.test/api/launch/agents/home-agent/routines/${HOME_ROUTINE_ID}`,
+        { headers: { Authorization: 'Bearer browser-session-token' } },
+      ));
+      const raw = await response.text();
+      assertEquals(response.status, 200, raw);
+      const body = JSON.parse(raw) as {
+        revision?: string;
+        routine?: { id?: string } | null;
+      };
+      // The first read straddles a configuration commit; the route retries and
+      // returns the revision that actually certifies the returned detail.
+      assertEquals(body.revision, `ah1:${HOME_APP_ID}:8`);
+      assertEquals(body.routine?.id, HOME_ROUTINE_ID);
+      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+    },
+    agentHomeFetchMock({
+      revisionSequence: ['7', '8', '8', '8'],
+      routine: () =>
+        agentHomeRoutineRow({
+          metadata: {
+            launch_managed: true,
+            launch_role: 'primary',
+          },
+        }),
+    }),
+  );
+});
+
+Deno.test('launch managed routine collection fences its aggregate revision', async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/routines',
+        { headers: { Authorization: 'Bearer browser-session-token' } },
+      ));
+      const raw = await response.text();
+      assertEquals(response.status, 200, raw);
+      const body = JSON.parse(raw) as {
+        revision?: string;
+        routines?: Array<{ id?: string }>;
+        aggregate?: { total?: number };
+      };
+      assertEquals(body.revision, `ah1:${HOME_APP_ID}:8`);
+      assertEquals(body.routines?.map((routine) => routine.id), [HOME_ROUTINE_ID]);
+      assertEquals(body.aggregate?.total, 1);
+    },
+    agentHomeFetchMock({
+      revisionSequence: ['7', '8', '8', '8'],
+      routine: () =>
+        agentHomeRoutineRow({
+          metadata: {
+            launch_managed: true,
+            launch_role: 'primary',
+          },
+        }),
+    }),
+  );
+});
+
+Deno.test('launch managed routine detail rejects an exact non-member id', async () => {
+  await withLaunchEnv(
+    async () => {
+      const otherRoutine = '99999999-9999-4999-8999-999999999999';
+      const response = await handleLaunch(new Request(
+        `https://ultralight.test/api/launch/agents/home-agent/routines/${otherRoutine}`,
+        { headers: { Authorization: 'Bearer browser-session-token' } },
+      ));
+      assertEquals(response.status, 404);
+      const body = await response.json() as { error?: string };
+      assertEquals(body.error, 'Managed routine not found for this Agent');
+    },
+    agentHomeFetchMock({
+      routine: () =>
+        agentHomeRoutineRow({
+          metadata: {
+            launch_managed: true,
+            launch_role: 'primary',
+          },
+        }),
+    }),
+  );
+});
+
+Deno.test('launch Agent capacity validates the percentage before any policy write', async () => {
+  let policyWrites = 0;
+  await withLaunchEnv(
+    async () => {
+      for (const capPercent of [0, 10.001, 100.01, '25']) {
+        const response = await handleLaunch(new Request(
+          'https://ultralight.test/api/launch/agents/home-agent/capacity',
+          {
+            method: 'PATCH',
+            headers: {
+              Authorization: 'Bearer browser-session-token',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ capPercent }),
+          },
+        ));
+        assertEquals(response.status, 400, String(capPercent));
+      }
+      assertEquals(policyWrites, 0);
+    },
+    agentHomeFetchMock({
+      rpc: (name) => {
+        if (name === 'set_agent_capacity_policy') policyWrites += 1;
+        return undefined;
+      },
+    }),
+  );
+});
+
+Deno.test('launch Free capacity rejects even a nominal 100 percent cap write', async () => {
+  let policyWrites = 0;
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(new Request(
+        'https://ultralight.test/api/launch/agents/home-agent/capacity',
+        {
+          method: 'PATCH',
+          headers: {
+            Authorization: 'Bearer browser-session-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ capPercent: 100 }),
+        },
+      ));
+      const body = await response.json() as { error?: string };
+      assertEquals(response.status, 409);
+      assertStringIncludes(body.error || '', 'Free capacity is fixed');
+      assertEquals(policyWrites, 0);
+    },
+    agentHomeFetchMock({
+      rpc: (name) => {
+        if (name === 'set_agent_capacity_policy') {
+          policyWrites += 1;
+          return jsonResponse([]);
+        }
+        if (name === 'get_account_capacity_status') {
+          return jsonResponse([{
+            plan_code: 'free',
+            limits_public: false,
+            active_agent_limit: 1,
+            capacity_state: 'available',
+            burst_state: 'available',
+            weekly_state: 'available',
+            burst_resets_at: '2026-07-17T15:00:00.000Z',
+            weekly_resets_at: '2026-07-20T10:00:00.000Z',
+            next_eligible_at: null,
+            burst_limit_light: 1,
+            burst_used_light: 0,
+            weekly_limit_light: 20,
+            weekly_used_light: 0,
+          }]);
+        }
+        return undefined;
+      },
+    }),
+  );
+});
+
+Deno.test('launch Alerts reject ambiguous writes and malformed pagination', async () => {
+  await withLaunchEnv(
+    async () => {
+      const attempts: Array<{ path: string; method: string; body?: unknown }> = [
+        {
+          path: '/api/launch/notifications?limit=1.5',
+          method: 'GET',
+        },
+        {
+          path: '/api/launch/notifications?unread=0',
+          method: 'GET',
+        },
+        {
+          path: '/api/launch/notifications',
+          method: 'PATCH',
+          body: {},
+        },
+        {
+          path: '/api/launch/notifications',
+          method: 'PATCH',
+          body: { all: true, ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'] },
+        },
+        {
+          path: '/api/launch/notifications',
+          method: 'PATCH',
+          body: { ids: ['not-a-uuid'] },
+        },
+      ];
+      for (const attempt of attempts) {
+        const response = await handleLaunch(new Request(
+          `https://ultralight.test${attempt.path}`,
+          {
+            method: attempt.method,
+            headers: {
+              Authorization: 'Bearer browser-session-token',
+              'Content-Type': 'application/json',
+            },
+            body: attempt.body === undefined
+              ? undefined
+              : JSON.stringify(attempt.body),
+          },
+        ));
+        assertEquals(response.status, 400, attempt.path);
+        assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      }
+    },
+    agentHomeFetchMock(),
   );
 });

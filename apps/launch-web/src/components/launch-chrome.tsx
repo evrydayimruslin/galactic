@@ -113,28 +113,38 @@ export function LaunchShell({
           <Wordmark />
         </button>
         <nav className="desktop-nav" aria-label="Primary">
-          {navRoutes.map((route) => (
-            <button
-              className={navClass(activeRoute, route.key)}
-              data-label={route.label}
-              key={route.key}
-              onClick={() => navigate(route.path)}
-              type="button"
-            >
-              <span>{route.label}</span>
-            </button>
-          ))}
-          <button
-            className={navClass(activeRoute, "settings")}
-            data-label="Profile"
-            onClick={() => navigate("/account")}
-            type="button"
-          >
-            <span>Profile</span>
-          </button>
+          {signedIn
+            ? (
+              <>
+                {navRoutes.map((route) => (
+                  <button
+                    className={navClass(activeRoute, route.key)}
+                    data-label={route.label}
+                    key={route.key}
+                    onClick={() => navigate(route.path)}
+                    type="button"
+                  >
+                    <span>{route.label}</span>
+                  </button>
+                ))}
+                <button
+                  className={navClass(activeRoute, "settings")}
+                  data-label="Profile"
+                  onClick={() => navigate("/account")}
+                  type="button"
+                >
+                  <span>Profile</span>
+                </button>
+              </>
+            )
+            : null}
         </nav>
         <div className="top-actions">
-          <AddToAgentButton size="sm" variant="ghost" />
+          <AddToAgentButton
+            label={signedIn ? "Add to agent" : "Connect Galactic"}
+            size="sm"
+            variant="ghost"
+          />
           {signedIn
             ? <NotificationBell navigate={navigate} />
             : (
@@ -154,24 +164,31 @@ export function LaunchShell({
           <Icon name="menu" />
         </button>
         <span className="mobile-title">{title}</span>
-        <AddToAgentButton label="Add" size="sm" />
+        <AddToAgentButton
+          label={signedIn ? "Add" : "Connect"}
+          size="sm"
+        />
       </header>
 
       <main className="launch-main">{children}</main>
 
-      <nav className="bottom-nav" aria-label="Account">
-        {[...navRoutes, ...accountRoutes].map((route) => (
-          <button
-            className={navClass(activeRoute, route.key)}
-            data-label={route.label}
-            key={route.key}
-            onClick={() => navigate(route.path)}
-            type="button"
-          >
-            <span>{route.label}</span>
-          </button>
-        ))}
-      </nav>
+      {signedIn
+        ? (
+          <nav className="bottom-nav" aria-label="Account">
+            {[...navRoutes, ...accountRoutes].map((route) => (
+              <button
+                className={navClass(activeRoute, route.key)}
+                data-label={route.label}
+                key={route.key}
+                onClick={() => navigate(route.path)}
+                type="button"
+              >
+                <span>{route.label}</span>
+              </button>
+            ))}
+          </nav>
+        )
+        : null}
     </div>
   );
 }

@@ -167,22 +167,6 @@ function resolveRoutineGrant(
   };
 }
 
-function intervalLabel(seconds: number): string {
-  if (seconds % 86400 === 0) {
-    const days = seconds / 86400;
-    return days === 1 ? "Every day" : `Every ${days} days`;
-  }
-  if (seconds % 3600 === 0) {
-    const hours = seconds / 3600;
-    return hours === 1 ? "Every hour" : `Every ${hours} hours`;
-  }
-  if (seconds % 60 === 0) {
-    const minutes = seconds / 60;
-    return minutes === 1 ? "Every minute" : `Every ${minutes} minutes`;
-  }
-  return seconds === 1 ? "Every second" : `Every ${seconds} seconds`;
-}
-
 function lifecycleState(
   routine: LaunchAgentRoutineOverview | null,
   blockers: LaunchAgentRoutineBlocker[],
@@ -779,13 +763,7 @@ export function buildAgentHomeResponse(
     },
     responsibility: {
       mission: input.routine?.mission || "",
-      cadence: input.routine
-        ? {
-          kind: "interval",
-          intervalSeconds: input.routine.intervalSeconds,
-          label: intervalLabel(input.routine.intervalSeconds),
-        }
-        : null,
+      cadence: input.routine?.schedule || null,
       reporting: {
         kind: "galactic_inbox",
         label: "Galactic inbox",

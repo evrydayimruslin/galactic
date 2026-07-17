@@ -192,6 +192,9 @@ export interface AgentCallerContextClaims {
   v: 1;
   // The Agent making the call.
   callerAppId: string;
+  // The signed root/origin Agent whose shared subscription capacity this
+  // entire call chain consumes. Defaults to callerAppId for pre-P2.3 tokens.
+  capacityAgentId?: string;
   // The user the call runs on behalf of.
   userId: string;
   // The caller's executing function at mint time (for caller_function grants).
@@ -214,12 +217,21 @@ export const MAX_EVENT_FANOUT = 100;
 // Max dispatch attempts before an event/delivery is marked failed.
 export const MAX_EVENT_DELIVERY_ATTEMPTS = 5;
 
-export type AgentEventStatus = "pending" | "delivering" | "delivered" | "failed";
+export type AgentEventStatus =
+  | "pending"
+  | "delivering"
+  | "waiting"
+  | "delivered"
+  | "failed";
 
 export interface AgentEvent {
   id: string;
   userId: string;
   emitterAppId: string;
+  // Immutable root/origin Agent for account + per-Agent capacity attribution.
+  // Historical rows fall back to emitterAppId while the additive migration
+  // rolls out.
+  capacityAgentId: string;
   topic: string;
   payload: Record<string, unknown>;
   status: AgentEventStatus;
@@ -227,9 +239,15 @@ export interface AgentEvent {
   emitHop: number;
   createdAt: string;
   dispatchedAt: string | null;
+  nextEligibleAt: string | null;
 }
 
-export type AgentEventDeliveryStatus = "pending" | "delivered" | "failed" | "denied";
+export type AgentEventDeliveryStatus =
+  | "pending"
+  | "waiting"
+  | "delivered"
+  | "failed"
+  | "denied";
 
 export interface AgentEventDelivery {
   id: string;
@@ -240,6 +258,7 @@ export interface AgentEventDelivery {
   status: AgentEventDeliveryStatus;
   attempts: number;
   receiptId: string | null;
+  nextEligibleAt: string | null;
   createdAt: string;
   deliveredAt: string | null;
 }

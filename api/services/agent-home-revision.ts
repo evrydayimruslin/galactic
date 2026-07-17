@@ -1,6 +1,11 @@
 import { getEnv } from "../lib/env.ts";
 import { isAccountSessionAuthSource } from "./control-plane-auth.ts";
 import type { RequestAuthSource } from "./request-auth.ts";
+import {
+  normalizeRoutineSchedule,
+  type NormalizedProductionRoutineSchedule,
+  RoutineScheduleValidationError,
+} from "./routine-schedule.ts";
 
 const REVISION_TOKEN_PREFIX = "ah1";
 const POSITIVE_DECIMAL = /^[1-9][0-9]*$/;
@@ -17,6 +22,7 @@ type AgentHomeRevisionErrorCode =
   | "AGENT_HOME_PRIVATE_REQUIRED"
   | "AGENT_HOME_ROUTINE_NOT_FOUND"
   | "AGENT_HOME_ROUTINE_DISABLED"
+  | "AGENT_HOME_ACTIVE_AGENT_LIMIT"
   | "AGENT_HOME_CAPABILITY_NOT_FOUND"
   | "AGENT_HOME_ACTION_NOT_FOUND"
   | "AGENT_HOME_ACTION_IN_PROGRESS"
@@ -202,6 +208,7 @@ function databaseErrorCode(value: unknown): AgentHomeRevisionErrorCode | null {
     case "AGENT_HOME_PRIVATE_REQUIRED":
     case "AGENT_HOME_ROUTINE_NOT_FOUND":
     case "AGENT_HOME_ROUTINE_DISABLED":
+    case "AGENT_HOME_ACTIVE_AGENT_LIMIT":
     case "AGENT_HOME_CAPABILITY_NOT_FOUND":
     case "AGENT_HOME_ACTION_NOT_FOUND":
     case "AGENT_HOME_ACTION_IN_PROGRESS":
@@ -241,6 +248,7 @@ function mappedStatus(code: AgentHomeRevisionErrorCode): number {
     case "AGENT_HOME_ACTION_RECOVERY_REQUIRED":
     case "AGENT_HOME_RUN_CONCURRENCY_LIMIT":
     case "AGENT_HOME_ROUTINE_DISABLED":
+    case "AGENT_HOME_ACTIVE_AGENT_LIMIT":
       return 409;
     case "AGENT_HOME_NOT_FOUND":
     case "AGENT_HOME_ROUTINE_NOT_FOUND":
@@ -296,6 +304,8 @@ async function responseError(
       ? "The Agent Home action request was not found."
       : code === "AGENT_HOME_ROUTINE_DISABLED"
       ? "A disabled routine cannot be paused."
+      : code === "AGENT_HOME_ACTIVE_AGENT_LIMIT"
+      ? "Free includes one active Agent. Pause the active Agent or upgrade before activating this one."
       : code === "AGENT_HOME_ACTION_IN_PROGRESS"
       ? "The Agent Home action is owned by another active attempt."
       : code === "AGENT_HOME_ACTION_RECOVERY_REQUIRED"
@@ -516,6 +526,61 @@ interface AgentHomeBudgetPolicyInput {
   maxCallsPerRun: number;
 }
 
+function invalidMutation(message: string): AgentHomeRevisionError {
+  return new AgentHomeRevisionError({
+    code: "AGENT_HOME_INVALID_MUTATION",
+    status: 400,
+    message,
+  });
+}
+
+function requireNormalizedSchedule(
+  value: unknown,
+): NormalizedProductionRoutineSchedule {
+  let normalized: NormalizedProductionRoutineSchedule;
+  try {
+    normalized = normalizeRoutineSchedule(value);
+  } catch (error) {
+    if (error instanceof RoutineScheduleValidationError) {
+      throw invalidMutation(`The routine schedule is invalid: ${error.message}`);
+    }
+    throw error;
+  }
+  const supplied = asRecord(value);
+  if (!supplied) {
+    throw invalidMutation("The routine schedule must use normalized JSON.");
+  }
+  const expectedKeys = normalized.type === "interval"
+    ? ["every_seconds", "type"]
+    : ["cron", "timezone", "type"];
+  const suppliedKeys = Object.keys(supplied).sort();
+  const hasExactKeys = suppliedKeys.length === expectedKeys.length &&
+    suppliedKeys.every((key, index) => key === expectedKeys[index]);
+  const hasExactValues = normalized.type === "interval"
+    ? supplied.type === "interval" &&
+      supplied.every_seconds === normalized.every_seconds
+    : supplied.type === "cron" && supplied.cron === normalized.cron &&
+      supplied.timezone === normalized.timezone;
+  if (!hasExactKeys || !hasExactValues) {
+    throw invalidMutation(
+      "The routine schedule must be normalized before the CAS mutation.",
+    );
+  }
+  return normalized;
+}
+
+function optionalActiveNextRunAt(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") {
+    throw invalidMutation("activeNextRunAt must be an ISO timestamp or null.");
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    throw invalidMutation("activeNextRunAt must be a valid ISO timestamp.");
+  }
+  return new Date(parsed).toISOString();
+}
+
 export async function updateAgentHomeRoutineCAS(input: {
   appId: string;
   userId: string;
@@ -545,6 +610,89 @@ export async function updateAgentHomeRoutineCAS(input: {
       p_mission: setMission ? input.mission ?? null : null,
       p_set_interval: setInterval,
       p_interval_seconds: setInterval ? input.intervalSeconds ?? null : null,
+      p_set_budget: setBudget,
+      p_budget_policy: setBudget && budget
+        ? {
+          max_light_per_run: budget.maxLightPerRun,
+          max_light_per_day: budget.maxLightPerDay,
+          max_light_per_month: budget.maxLightPerMonth,
+          max_calls_per_run: budget.maxCallsPerRun,
+        }
+        : null,
+    },
+    base.appId,
+    deps,
+  );
+  return revisionFromMutation(payload, base.appId);
+}
+
+/**
+ * Edit any launch-managed routine belonging to an owner-private Agent.
+ *
+ * Unlike the legacy primary-routine helper above, this contract accepts the
+ * full normalized interval-or-cron schedule. The trusted API computes the
+ * active routine's next occurrence and supplies it as `activeNextRunAt`; the
+ * database never attempts to reinterpret cron or timezone semantics.
+ */
+export async function updateAgentHomeManagedRoutineCAS(input: {
+  appId: string;
+  userId: string;
+  routineId: string;
+  expectedRevision: string;
+  authSource: RequestAuthSource | string | null | undefined;
+  name?: string;
+  description?: string | null;
+  mission?: string | null;
+  schedule?: NormalizedProductionRoutineSchedule;
+  activeNextRunAt?: string | null;
+  budgets?: AgentHomeBudgetPolicyInput;
+}, deps: AgentHomeDatabaseDeps = {}): Promise<string> {
+  const base = mutationBase(input);
+  const setName = Object.prototype.hasOwnProperty.call(input, "name");
+  const setDescription = Object.prototype.hasOwnProperty.call(
+    input,
+    "description",
+  );
+  const setMission = Object.prototype.hasOwnProperty.call(input, "mission");
+  const setSchedule = Object.prototype.hasOwnProperty.call(input, "schedule");
+  const setBudget = Object.prototype.hasOwnProperty.call(input, "budgets");
+  const suppliedNextRun = Object.prototype.hasOwnProperty.call(
+    input,
+    "activeNextRunAt",
+  );
+  if (
+    !setName && !setDescription && !setMission && !setSchedule && !setBudget
+  ) {
+    throw invalidMutation("At least one managed routine field is required.");
+  }
+  if (suppliedNextRun && !setSchedule) {
+    throw invalidMutation(
+      "activeNextRunAt may be supplied only with a schedule mutation.",
+    );
+  }
+  const schedule = setSchedule
+    ? requireNormalizedSchedule(input.schedule)
+    : null;
+  const activeNextRunAt = setSchedule
+    ? optionalActiveNextRunAt(input.activeNextRunAt)
+    : null;
+  const budget = input.budgets;
+  const payload = await callRpc(
+    "update_agent_home_managed_routine",
+    {
+      p_app_id: base.appId,
+      p_user_id: base.userId,
+      p_routine_id: requireUuid(input.routineId, "routineId"),
+      p_expected_revision: base.expectedRevision,
+      p_set_name: setName,
+      p_name: setName ? input.name ?? null : null,
+      p_set_description: setDescription,
+      p_description: setDescription ? input.description ?? null : null,
+      p_set_mission: setMission,
+      p_mission: setMission ? input.mission ?? null : null,
+      p_set_schedule: setSchedule,
+      p_schedule: schedule,
+      p_active_next_run_at: activeNextRunAt,
       p_set_budget: setBudget,
       p_budget_policy: setBudget && budget
         ? {
@@ -608,6 +756,49 @@ export async function updateAgentHomeRoutineStatusCAS(input: {
       p_expected_revision: base.expectedRevision,
       p_status: input.status,
       p_next_run_at: input.nextRunAt ?? null,
+    },
+    base.appId,
+    deps,
+  );
+  return revisionFromMutation(payload, base.appId);
+}
+
+/**
+ * Atomically activate or pause one launch-managed routine under Agent Home
+ * revision CAS. The database serializes the Free Agent slot with the status
+ * write and releases it only when the last active sibling has stopped.
+ */
+export async function updateAgentHomeManagedRoutineStatusCAS(input: {
+  appId: string;
+  userId: string;
+  routineId: string;
+  expectedRevision: string;
+  authSource: RequestAuthSource | string | null | undefined;
+  status: "active" | "paused";
+  nextRunAt?: string | null;
+}, deps: AgentHomeDatabaseDeps = {}): Promise<string> {
+  const base = mutationBase(input);
+  if (input.status !== "active" && input.status !== "paused") {
+    throw invalidMutation("status must be active or paused.");
+  }
+  const nextRunAt = optionalActiveNextRunAt(input.nextRunAt);
+  if (input.status === "active" && nextRunAt === null) {
+    throw invalidMutation(
+      "nextRunAt is required when activating a managed routine.",
+    );
+  }
+  if (input.status === "paused" && nextRunAt !== null) {
+    throw invalidMutation("A paused managed routine cannot have nextRunAt.");
+  }
+  const payload = await callRpc(
+    "update_agent_home_managed_routine_status",
+    {
+      p_app_id: base.appId,
+      p_user_id: base.userId,
+      p_routine_id: requireUuid(input.routineId, "routineId"),
+      p_expected_revision: base.expectedRevision,
+      p_status: input.status,
+      p_next_run_at: nextRunAt,
     },
     base.appId,
     deps,
@@ -691,6 +882,7 @@ interface AgentHomeActionClaim {
 
 interface AgentHomeActionRequestPayload {
   capabilityIds?: string[];
+  routineId?: string;
   version?: string;
 }
 
@@ -717,10 +909,14 @@ function canonicalActionPayload(
       message: "version must be a string.",
     });
   }
+  const routineId = payload.routineId === undefined
+    ? undefined
+    : requireUuid(payload.routineId, "routineId");
   return {
     action: requireIdentifier(action, "action"),
     capabilityIds,
     version: payload.version ?? null,
+    ...(routineId ? { routineId } : {}),
   };
 }
 

@@ -35,10 +35,29 @@ Deno.test("caller context: mint then verify round-trips identity + hop", async (
     assertEquals(error, undefined);
     assert(claims !== null);
     assertEquals(claims?.callerAppId, "app-caller");
+    assertEquals(claims?.capacityAgentId, "app-caller");
     assertEquals(claims?.userId, "user-1");
     assertEquals(claims?.callerFunction, "processOrder");
     // incomingHop 0 ⇒ minted hop is 1.
     assertEquals(claims?.hop, 1);
+  });
+});
+
+Deno.test("caller context: nested calls preserve the signed root capacity Agent", async () => {
+  await withEnv(async () => {
+    const nowMs = Date.UTC(2026, 5, 10, 12, 0, 0);
+    const token = await mintCallerContextToken({
+      callerAppId: "app-child",
+      capacityAgentId: "app-root",
+      userId: "user-1",
+      incomingHop: 2,
+      nowMs,
+    });
+    const { claims, error } = await verifyCallerContextToken(token, nowMs);
+    assertEquals(error, undefined);
+    assertEquals(claims?.callerAppId, "app-child");
+    assertEquals(claims?.capacityAgentId, "app-root");
+    assertEquals(claims?.hop, 3);
   });
 });
 

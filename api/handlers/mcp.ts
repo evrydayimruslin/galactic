@@ -63,6 +63,7 @@ import {
 } from "../services/execution-settlement.ts";
 import {
   accountCapacityErrorDetails,
+  accountCapacityErrorMessage,
   releaseAccountCapacity,
   reserveAccountCapacity,
   settleAccountCapacity,
@@ -102,9 +103,9 @@ import {
   callerUsesRoutineActorToken,
   callerUsesSandboxActorToken,
   callerWithinRoutineCapabilityCeiling,
+  deriveCallerEconomicState,
   type RequestCallerContext,
   resolveRequestCallerContext,
-  deriveCallerEconomicState,
 } from "../services/request-caller-context.ts";
 import {
   type RoutineTraceContext,
@@ -158,7 +159,11 @@ import {
   buildCallerPermissionConfigureUrl,
   enforceCallerFunctionPermission,
 } from "../services/caller-function-permissions.ts";
-import { emptyHealth, getAppHealth, isRecentlyHealthy } from "../services/app-health.ts";
+import {
+  emptyHealth,
+  getAppHealth,
+  isRecentlyHealthy,
+} from "../services/app-health.ts";
 
 // ============================================
 // MEMORY SERVICE (lazy singleton)
@@ -910,6 +915,8 @@ export async function handleMcp(
     }
     callerContext.callerApp = {
       appId: verified.claims.callerAppId,
+      capacityAgentId: verified.claims.capacityAgentId ||
+        verified.claims.callerAppId,
       callerFunction: verified.claims.callerFunction,
       hop: verified.claims.hop,
     };
@@ -1582,7 +1589,10 @@ async function handleToolsList(
       !isFunctionBlockedInFreeMode(
         app,
         toRawMcpFunctionName(app.slug, tool.name),
-        { userId: callerContext.userId, byokPresent: callerContext.byokPresent },
+        {
+          userId: callerContext.userId,
+          byokPresent: callerContext.byokPresent,
+        },
         usage,
       )
     );
@@ -1739,7 +1749,11 @@ async function handleToolsCall(
           resolution.reason === "no_grant" && knownExports.length > 0 &&
           !knownExports.includes(rawName)
         ) {
-          return jsonRpcErrorResponse(id, INVALID_PARAMS, `Unknown tool: ${name}`);
+          return jsonRpcErrorResponse(
+            id,
+            INVALID_PARAMS,
+            `Unknown tool: ${name}`,
+          );
         }
         let pendingRequestId = resolution.pendingRequestId ?? null;
         if (resolution.reason === "no_grant") {
@@ -2023,6 +2037,8 @@ async function handleToolsCall(
       // token at hop + 1).
       callerGrantId,
       incomingHop: callerContext.callerApp?.hop ?? 0,
+      capacityAgentId: callerContext.callerApp?.capacityAgentId ||
+        callerContext.routineActor?.composerAppId || app.id,
     },
   );
 }
@@ -2298,8 +2314,7 @@ async function executeSDKTool(
           result = {
             job_id: jobId,
             status: "queued",
-            message:
-              "Waiting to be picked up. Poll again in a few seconds.",
+            message: "Waiting to be picked up. Poll again in a few seconds.",
           };
         } else if (job.status === "running") {
           const elapsed = Date.now() - new Date(job.created_at).getTime();
@@ -2501,6 +2516,8 @@ async function executeAppFunction(
     routineCapabilityCeiling?: RequestCallerContext["routineCapabilityCeiling"];
     callerGrantId?: string | null;
     incomingHop?: number;
+    // Signed root/origin Agent for subscription-capacity attribution.
+    capacityAgentId?: string;
     // Skip the durable async dispatch: event-bus deliveries and queue-consumer
     // executions consume results inline — handing them a job envelope would
     // read as a timeout (deliveries) or recurse (consumer).
@@ -2581,6 +2598,9 @@ async function executeAppFunction(
               sessionId: meta?.sessionId,
               userQuery: meta?.userQuery,
               executionTimeoutMs: executionPolicy.timeoutMs,
+              capacityAgentId: meta?.capacityAgentId ||
+                callerContext.callerApp?.capacityAgentId ||
+                callerContext.routineActor?.composerAppId || app.id,
             },
           });
           let enqueued = false;
@@ -2695,6 +2715,13 @@ async function executeAppFunction(
       app,
       callerContext,
     );
+    // The token must remain valid for an outbound call made at the very end
+    // of the sandbox lifetime (queued executions may run for five minutes).
+    const timeoutMs = meta?.executionTimeoutMs
+      ? Math.min(meta.executionTimeoutMs, MAX_ASYNC_EXECUTION_MS)
+      : permissions.includes("ai:call") || permissions.includes("ai:embed")
+      ? 120_000
+      : 30_000;
     // P5: a user's active cross-Agent grants (and slot bindings) let granted
     // calls be EXPRESSED in-sandbox even when the developer never declared
     // them; the target still authorizes each call via the grant check. One
@@ -2718,9 +2745,13 @@ async function executeAppFunction(
       try {
         callerContextToken = await mintCallerContextToken({
           callerAppId: app.id,
+          capacityAgentId: meta?.capacityAgentId ||
+            callerContext.callerApp?.capacityAgentId ||
+            callerContext.routineActor?.composerAppId || app.id,
           userId,
           callerFunction: functionName,
           incomingHop: meta?.incomingHop ?? 0,
+          ttlSeconds: Math.ceil(timeoutMs / 1000) + 120,
         });
       } catch (err) {
         console.warn("[MCP] Failed to mint caller context token:", err);
@@ -2730,11 +2761,6 @@ async function executeAppFunction(
     // Queue-consumer executions (meta.executionTimeoutMs) get an extended
     // budget, hard-capped at the platform ceiling; sync requests keep the
     // 120s (AI) / 30s windows. The same value sizes the cloud-usage hold.
-    const timeoutMs = meta?.executionTimeoutMs
-      ? Math.min(meta.executionTimeoutMs, MAX_ASYNC_EXECUTION_MS)
-      : permissions.includes("ai:call") || permissions.includes("ai:embed")
-      ? 120_000
-      : 30_000;
     const inferenceSelection = permissions.includes("ai:call")
       ? await resolveFunctionInferenceOverride({
         userId,
@@ -2860,15 +2886,22 @@ async function executeAppFunction(
       );
       const admission = await reserveAccountCapacity({
         userId,
-        idempotencyKey: meta?.routineContext
-          ? `routine-run:${meta.routineContext.routineRunId}`
-          : `execution:${executionId}`,
+        capacityAgentId: meta?.capacityAgentId ||
+          callerContext.callerApp?.capacityAgentId ||
+          callerContext.routineActor?.composerAppId || app.id,
+        // Every sandbox execution gets a distinct hold. Reusing a routine-run
+        // key made all downstream calls alias the root call's reservation and
+        // silently under-admit multi-call routine chains.
+        idempotencyKey: `execution:${executionId}`,
         reserveLight,
         expiresAt: new Date(Date.now() + timeoutMs + 120_000).toISOString(),
         metadata: {
           app_id: app.id,
           function_name: functionName,
           execution_id: executionId,
+          capacity_agent_id: meta?.capacityAgentId ||
+            callerContext.callerApp?.capacityAgentId ||
+            callerContext.routineActor?.composerAppId || app.id,
           routine_id: meta?.routineContext?.routineId ?? null,
           routine_run_id: meta?.routineContext?.routineRunId ?? null,
         },
@@ -2877,7 +2910,7 @@ async function executeAppFunction(
         return jsonRpcErrorResponse(
           id,
           -32010,
-          `Account capacity is ${admission.state}. Work can resume at ${admission.nextEligibleAt}.`,
+          accountCapacityErrorMessage(admission),
           accountCapacityErrorDetails(admission),
         );
       }
@@ -3085,7 +3118,7 @@ async function executeAppFunction(
         source: callSource,
         inputArgs: args,
         outputResult: result.success ? result.result : result.error,
-      runtimeLogs: result.logs,
+        runtimeLogs: result.logs,
         aiCostLight: result.aiCostLight || 0,
         sessionId: meta?.sessionId,
         sequenceNumber: nextSequenceNumber(meta?.sessionId),
@@ -3143,14 +3176,19 @@ async function executeAppFunction(
         "../services/async-jobs.ts"
       );
       if (result.success && settlement.insufficientBalance) {
-        await failJob(meta.queuedJobId, {
-          type: settlement.insufficientBalanceCode || "LIGHT_REQUIRED",
-          message: settlement.insufficientBalanceMessage ||
-            "Credits balance required to call this app.",
-        }, result.durationMs, {
-          aiCostLight: result.aiCostLight,
-          logs: result.logs,
-        });
+        await failJob(
+          meta.queuedJobId,
+          {
+            type: settlement.insufficientBalanceCode || "LIGHT_REQUIRED",
+            message: settlement.insufficientBalanceMessage ||
+              "Credits balance required to call this app.",
+          },
+          result.durationMs,
+          {
+            aiCostLight: result.aiCostLight,
+            logs: result.logs,
+          },
+        );
       } else {
         await completeJob(meta.queuedJobId, {
           success: result.success,
@@ -3225,13 +3263,20 @@ export async function executeEventDelivery(input: {
   payload: Record<string, unknown>;
   userId: string;
   emitterAppId: string;
+  // Immutable root/origin Agent. The emitter remains the permission/caller
+  // identity; this value alone drives account + per-Agent capacity.
+  capacityAgentId: string;
   grantId: string;
   hop: number;
-}): Promise<{ success: boolean; receiptId: string | null; error?: string }> {
+}): Promise<EventDeliveryOutcome> {
   const appsService = createAppsService();
   const app = await appsService.findById(input.subscriberAppId);
   if (!app || app.deleted_at) {
-    return { success: false, receiptId: null, error: "Subscriber Agent not found" };
+    return {
+      success: false,
+      receiptId: null,
+      error: "Subscriber Agent not found",
+    };
   }
 
   let user: UserContext | null = null;
@@ -3268,6 +3313,7 @@ export async function executeEventDelivery(input: {
     // outbound caller-context (minted at hop + 1 inside executeAppFunction).
     callerApp: {
       appId: input.emitterAppId,
+      capacityAgentId: input.capacityAgentId,
       callerFunction: null,
       hop: input.hop,
     },
@@ -3284,6 +3330,7 @@ export async function executeEventDelivery(input: {
     {
       callerGrantId: input.grantId,
       incomingHop: input.hop,
+      capacityAgentId: input.capacityAgentId,
       sessionId: undefined,
       disableAsyncPromotion: true,
     },
@@ -3293,7 +3340,11 @@ export async function executeEventDelivery(input: {
     const body = await response.json() as JsonRpcResponse;
     return parseDeliveryOutcome(body);
   } catch {
-    return { success: false, receiptId: null, error: "Unreadable delivery response" };
+    return {
+      success: false,
+      receiptId: null,
+      error: "Unreadable delivery response",
+    };
   }
 }
 
@@ -3303,8 +3354,12 @@ export async function executeEventDelivery(input: {
 // them as success would mask every handler failure as a delivered event.
 export function parseDeliveryOutcome(
   body: JsonRpcResponse,
-): { success: boolean; receiptId: string | null; error?: string } {
+): EventDeliveryOutcome {
   if (body.error) {
+    const admission = parseEventDeliveryAdmission(
+      body.error.code,
+      (body.error as { data?: unknown }).data,
+    );
     return {
       success: false,
       // Billing-relevant errors (e.g. -32009 insufficient balance AFTER a
@@ -3313,6 +3368,7 @@ export function parseDeliveryOutcome(
         (body.error as { data?: unknown }).data,
       ),
       error: body.error.message || "Delivery failed",
+      ...(admission ? { admission } : {}),
     };
   }
   const receiptId = extractReceiptIdFromResult(body.result);
@@ -3354,6 +3410,56 @@ export function parseDeliveryOutcome(
     return { success: false, receiptId, error };
   }
   return { success: true, receiptId };
+}
+
+export type EventDeliveryAdmissionCode =
+  | "capacity_waiting"
+  | "agent_cap_waiting"
+  | "agent_cap_too_low_for_request";
+
+export interface EventDeliveryAdmission {
+  code: EventDeliveryAdmissionCode;
+  nextEligibleAt: string | null;
+  capacityAgentId: string | null;
+  bindingConstraint: "account" | "agent" | null;
+}
+
+export interface EventDeliveryOutcome {
+  success: boolean;
+  receiptId: string | null;
+  error?: string;
+  // Present only when the execution was rejected before tenant code ran. The
+  // event dispatcher may safely defer and retry these outcomes; every other
+  // failure remains terminal to preserve at-most-once side effects.
+  admission?: EventDeliveryAdmission;
+}
+
+function parseEventDeliveryAdmission(
+  errorCode: number,
+  value: unknown,
+): EventDeliveryAdmission | null {
+  if (errorCode !== -32010 || !value || typeof value !== "object") return null;
+  const data = value as Record<string, unknown>;
+  const code = data.type;
+  if (
+    code !== "capacity_waiting" && code !== "agent_cap_waiting" &&
+    code !== "agent_cap_too_low_for_request"
+  ) return null;
+  const bindingConstraint = data.binding_constraint === "account" ||
+      data.binding_constraint === "agent"
+    ? data.binding_constraint
+    : null;
+  return {
+    code,
+    nextEligibleAt: typeof data.retry_at === "string" && data.retry_at
+      ? data.retry_at
+      : null,
+    capacityAgentId:
+      typeof data.capacity_agent_id === "string" && data.capacity_agent_id
+        ? data.capacity_agent_id
+        : null,
+    bindingConstraint,
+  };
 }
 
 // ============================================
@@ -3429,6 +3535,9 @@ export async function executeQueuedJob(
     callerApp: job.caller_app_id
       ? {
         appId: job.caller_app_id,
+        capacityAgentId: typeof job.meta?.capacityAgentId === "string"
+          ? job.meta.capacityAgentId
+          : job.caller_app_id,
         callerFunction: null,
         hop: job.hop ?? 1,
       }
@@ -3490,6 +3599,9 @@ export async function executeQueuedJob(
       queuedJobId: job.id,
       executionId: job.execution_id || undefined,
       executionTimeoutMs: metaTimeout ?? undefined,
+      capacityAgentId: typeof job.meta?.capacityAgentId === "string"
+        ? job.meta.capacityAgentId
+        : job.app_id,
     },
   );
 
@@ -3520,7 +3632,8 @@ export async function executeQueuedJob(
   }
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function extractReceiptIdFromResult(result: unknown): string | null {
   // executeAppFunction stamps the receipt id into structuredContent (success:
@@ -3530,15 +3643,18 @@ function extractReceiptIdFromResult(result: unknown): string | null {
   // would otherwise leave the delivery row stuck 'pending'.
   if (!result || typeof result !== "object") return null;
   const r = result as Record<string, unknown>;
-  const structured = (r.structuredContent && typeof r.structuredContent === "object")
-    ? r.structuredContent as Record<string, unknown>
-    : null;
-  for (const candidate of [
-    structured?.receipt_id,
-    structured?.receiptId,
-    r.receipt_id,
-    r.receiptId,
-  ]) {
+  const structured =
+    (r.structuredContent && typeof r.structuredContent === "object")
+      ? r.structuredContent as Record<string, unknown>
+      : null;
+  for (
+    const candidate of [
+      structured?.receipt_id,
+      structured?.receiptId,
+      r.receipt_id,
+      r.receiptId,
+    ]
+  ) {
     if (typeof candidate === "string" && UUID_RE.test(candidate)) {
       return candidate;
     }
@@ -3617,6 +3733,10 @@ function formatToolError(
   const message = err instanceof Error
     ? err.message
     : (err as { message?: string })?.message || String(err);
+  const errorType = err instanceof Error
+    ? err.name
+    : (err as { type?: string })?.type;
+  const errorDetails = (err as { details?: Record<string, unknown> })?.details;
 
   return {
     content: [
@@ -3631,9 +3751,12 @@ function formatToolError(
         }]
         : []),
     ],
-    structuredContent: receiptId
-      ? { error: message, receipt_id: receiptId }
-      : undefined,
+    structuredContent: {
+      error: message,
+      ...(errorType ? { error_type: errorType } : {}),
+      ...(errorDetails ? { error_details: errorDetails } : {}),
+      ...(receiptId ? { receipt_id: receiptId } : {}),
+    },
     isError: true,
   };
 }

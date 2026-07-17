@@ -517,6 +517,8 @@ export function createApp() {
           const out = await emitEvent({
             userId: verified.claims.userId,
             emitterAppId: verified.claims.callerAppId,
+            capacityAgentId: verified.claims.capacityAgentId ||
+              verified.claims.callerAppId,
             topic: typeof body.topic === "string" ? body.topic : "",
             payload: (body.payload && typeof body.payload === "object")
               ? body.payload as Record<string, unknown>
