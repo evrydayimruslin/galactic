@@ -15,6 +15,9 @@ type NotificationSeverity = "info" | "warning" | "critical";
 
 interface NotificationInput {
   userId: string;
+  // Stable Agent attribution for Fleet/Agent inbox filters. This is separate
+  // from entityType/entityId, which may point at a specific routine or action.
+  agentId?: string | null;
   kind: string;
   severity?: NotificationSeverity;
   title: string;
@@ -30,6 +33,7 @@ interface NotificationInput {
 interface NotificationRow {
   id: string;
   user_id: string;
+  agent_id: string | null;
   kind: string;
   severity: NotificationSeverity;
   title: string;
@@ -47,7 +51,7 @@ interface NotificationDeps {
 }
 
 const NOTIFICATION_COLUMNS =
-  "id,user_id,kind,severity,title,body,entity_type,entity_id,action_url," +
+  "id,user_id,agent_id,kind,severity,title,body,entity_type,entity_id,action_url," +
   "delivered_channels,created_at,read_at";
 
 // 90-day retention (hourly sweep). Matches the call-log sweep horizon.
@@ -68,6 +72,7 @@ export async function createNotification(
       `/rest/v1/user_notifications?select=${NOTIFICATION_COLUMNS}`,
       {
         user_id: input.userId,
+        agent_id: input.agentId ?? null,
         kind: input.kind,
         severity: input.severity ?? "info",
         title: input.title,
@@ -97,7 +102,7 @@ export async function createNotification(
 
 export async function listNotifications(
   userId: string,
-  options: { unreadOnly?: boolean; limit?: number } = {},
+  options: { unreadOnly?: boolean; limit?: number; agentId?: string } = {},
   deps?: NotificationDeps,
 ): Promise<NotificationRow[]> {
   const supabase = createSupabaseRestClient({ fetchFn: deps?.fetchFn });
@@ -106,6 +111,9 @@ export async function listNotifications(
     encodeURIComponent(userId)
   }&select=${NOTIFICATION_COLUMNS}&order=created_at.desc&limit=${limit}`;
   if (options.unreadOnly) path += `&read_at=is.null`;
+  if (options.agentId) {
+    path += `&agent_id=eq.${encodeURIComponent(options.agentId)}`;
+  }
   const res = await supabase.request(path);
   if (!res.ok) {
     throw new Error(
@@ -119,13 +127,25 @@ export async function listNotifications(
 
 export async function countUnread(
   userId: string,
+  optionsOrDeps: { agentId?: string } | NotificationDeps = {},
   deps?: NotificationDeps,
 ): Promise<number> {
-  const supabase = createSupabaseRestClient({ fetchFn: deps?.fetchFn });
+  // Keep the pre-Agent-filter `(userId, deps)` call shape working while the
+  // launch API adopts `(userId, options, deps)`.
+  const legacyDeps = "fetchFn" in optionsOrDeps || "now" in optionsOrDeps;
+  const options: { agentId?: string } = legacyDeps
+    ? {}
+    : optionsOrDeps as { agentId?: string };
+  const resolvedDeps = legacyDeps ? optionsOrDeps as NotificationDeps : deps;
+  const supabase = createSupabaseRestClient({ fetchFn: resolvedDeps?.fetchFn });
   const res = await supabase.request(
     `/rest/v1/user_notifications?user_id=eq.${
       encodeURIComponent(userId)
-    }&read_at=is.null&select=id`,
+    }&read_at=is.null${
+      options.agentId
+        ? `&agent_id=eq.${encodeURIComponent(options.agentId)}`
+        : ""
+    }&select=id`,
     { headers: { "Prefer": "count=exact", "Range-Unit": "items", "Range": "0-0" } },
   );
   if (!res.ok) return 0;
@@ -140,14 +160,27 @@ export async function countUnread(
 export async function markNotificationsRead(
   userId: string,
   ids: string[],
+  optionsOrDeps: { agentId?: string } | NotificationDeps = {},
   deps?: NotificationDeps,
 ): Promise<number> {
+  // Preserve the historical `(userId, ids, deps)` call shape while allowing
+  // the Agent-filtered browser pane to keep selected-id writes inside the
+  // exact same Agent boundary as its read.
+  const legacyDeps = "fetchFn" in optionsOrDeps || "now" in optionsOrDeps;
+  const options: { agentId?: string } = legacyDeps
+    ? {}
+    : optionsOrDeps as { agentId?: string };
+  const resolvedDeps = legacyDeps ? optionsOrDeps as NotificationDeps : deps;
   const clean = ids.filter((id) => typeof id === "string" && id.length > 0);
   if (clean.length === 0) return 0;
-  const supabase = createSupabaseRestClient({ fetchFn: deps?.fetchFn });
+  const supabase = createSupabaseRestClient({ fetchFn: resolvedDeps?.fetchFn });
   const res = await supabase.patch(
     `/rest/v1/user_notifications?user_id=eq.${
       encodeURIComponent(userId)
+    }${
+      options.agentId
+        ? `&agent_id=eq.${encodeURIComponent(options.agentId)}`
+        : ""
     }&id=in.(${clean.map((id) => encodeURIComponent(id)).join(",")})` +
       `&read_at=is.null&select=id`,
     { read_at: new Date().toISOString() },
@@ -167,13 +200,24 @@ export async function markNotificationsRead(
 // Mark all of a user's unread notifications read. Returns how many flipped.
 export async function markAllNotificationsRead(
   userId: string,
+  optionsOrDeps: { agentId?: string } | NotificationDeps = {},
   deps?: NotificationDeps,
 ): Promise<number> {
-  const supabase = createSupabaseRestClient({ fetchFn: deps?.fetchFn });
+  // Backward compatible with the former `(userId, deps)` signature.
+  const legacyDeps = "fetchFn" in optionsOrDeps || "now" in optionsOrDeps;
+  const options: { agentId?: string } = legacyDeps
+    ? {}
+    : optionsOrDeps as { agentId?: string };
+  const resolvedDeps = legacyDeps ? optionsOrDeps as NotificationDeps : deps;
+  const supabase = createSupabaseRestClient({ fetchFn: resolvedDeps?.fetchFn });
   const res = await supabase.patch(
     `/rest/v1/user_notifications?user_id=eq.${
       encodeURIComponent(userId)
-    }&read_at=is.null&select=id`,
+    }&read_at=is.null${
+      options.agentId
+        ? `&agent_id=eq.${encodeURIComponent(options.agentId)}`
+        : ""
+    }&select=id`,
     { read_at: new Date().toISOString() },
     "return=representation",
   );

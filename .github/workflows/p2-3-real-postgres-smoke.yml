@@ -1,0 +1,209 @@
+name: P2.3 Real-Postgres Smoke
+run-name: P2.3 DB smoke — ${{ inputs.target }} @ ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Supabase target protected by the matching GitHub environment'
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      confirmation:
+        description: 'Type SMOKE_STAGING or SMOKE_PRODUCTION for the selected target'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Disposable concurrency certification (${{ inputs.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.target }}
+    concurrency:
+      # Serialize against the matching migration deploy. The smoke creates
+      # disposable rows and must never race a schema push on the same target.
+      group: supabase-${{ inputs.target }}-db
+      cancel-in-progress: false
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Select staging credentials
+        if: ${{ inputs.target == 'staging' }}
+        shell: bash
+        env:
+          SELECTED_PROJECT_ID: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
+          SELECTED_DB_PASSWORD: ${{ secrets.SUPABASE_STAGING_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          expected_ref='mtekfhozmsboxizxxxyn'
+          if [[ -z "$SUPABASE_ACCESS_TOKEN" || -z "$SELECTED_PROJECT_ID" || -z "$SELECTED_DB_PASSWORD" ]]; then
+            echo "::error::The staging environment is missing a required Supabase secret."
+            exit 2
+          fi
+          if [[ "$SELECTED_PROJECT_ID" != "$expected_ref" ]]; then
+            echo "::error::The staging project secret does not match the certified staging project ref."
+            exit 2
+          fi
+          printf 'SUPABASE_PROJECT_ID=%s\n' "$SELECTED_PROJECT_ID" >> "$GITHUB_ENV"
+          printf 'SUPABASE_DB_PASSWORD=%s\n' "$SELECTED_DB_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Select production credentials
+        if: ${{ inputs.target == 'production' }}
+        shell: bash
+        env:
+          SELECTED_PROJECT_ID: ${{ secrets.SUPABASE_PRODUCTION_PROJECT_ID }}
+          SELECTED_DB_PASSWORD: ${{ secrets.SUPABASE_PRODUCTION_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          expected_ref='uavjzycsltdnwblwutmb'
+          if [[ -z "$SUPABASE_ACCESS_TOKEN" || -z "$SELECTED_PROJECT_ID" || -z "$SELECTED_DB_PASSWORD" ]]; then
+            echo "::error::The production environment is missing a required Supabase secret."
+            exit 2
+          fi
+          if [[ "$SELECTED_PROJECT_ID" != "$expected_ref" ]]; then
+            echo "::error::The production project secret does not match the certified production project ref."
+            exit 2
+          fi
+          printf 'SUPABASE_PROJECT_ID=%s\n' "$SELECTED_PROJECT_ID" >> "$GITHUB_ENV"
+          printf 'SUPABASE_DB_PASSWORD=%s\n' "$SELECTED_DB_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Guard target and link project
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+            staging)
+              expected_confirmation='SMOKE_STAGING'
+              expected_ref='mtekfhozmsboxizxxxyn'
+              ;;
+            production)
+              expected_confirmation='SMOKE_PRODUCTION'
+              expected_ref='uavjzycsltdnwblwutmb'
+              ;;
+            *)
+              echo "::error::Unsupported smoke target."
+              exit 2
+              ;;
+          esac
+          if [[ "$CONFIRMATION" != "$expected_confirmation" ]]; then
+            echo "::error::Confirmation must be ${expected_confirmation} for target ${TARGET}."
+            exit 2
+          fi
+          if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" || -z "${SUPABASE_PROJECT_ID:-}" || -z "${SUPABASE_DB_PASSWORD:-}" ]]; then
+            echo "::error::The selected environment is missing its existing Supabase secrets."
+            exit 2
+          fi
+          if [[ "$SUPABASE_PROJECT_ID" != "$expected_ref" ]]; then
+            echo "::error::The selected project ref does not match the certified ${TARGET} project."
+            exit 2
+          fi
+          supabase link \
+            --project-ref "$SUPABASE_PROJECT_ID" \
+            --password "$SUPABASE_DB_PASSWORD" \
+            --workdir .
+
+      - name: Run disposable real-Postgres smoke
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+
+          DB_URL_FILE="$RUNNER_TEMP/p2-3-database-url"
+          rm -f "$DB_URL_FILE"
+          cleanup_url() {
+            rm -f "$DB_URL_FILE"
+          }
+          trap cleanup_url EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          linked_ref_file='supabase/.temp/project-ref'
+          pooler_url_file='supabase/.temp/pooler-url'
+          if [[ ! -s "$linked_ref_file" || ! -s "$pooler_url_file" ]]; then
+            echo "::error::Supabase link did not produce its authoritative project and pooler metadata."
+            exit 2
+          fi
+          linked_ref="$(tr -d '\r\n' < "$linked_ref_file")"
+          if [[ "$linked_ref" != "$SUPABASE_PROJECT_ID" ]]; then
+            echo "::error::Supabase linked a different project than the guarded target."
+            exit 2
+          fi
+
+          LINKED_POOLER_URL="$(tr -d '\r\n' < "$pooler_url_file")" \
+          DB_URL_FILE="$DB_URL_FILE" \
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const poolerUrl = new URL(process.env.LINKED_POOLER_URL);
+          const projectRef = process.env.SUPABASE_PROJECT_ID;
+          const expectedUsername = `postgres.${projectRef}`;
+          if (poolerUrl.protocol !== 'postgresql:') {
+            throw new Error('Linked pooler URL is not PostgreSQL.');
+          }
+          if (decodeURIComponent(poolerUrl.username) !== expectedUsername) {
+            throw new Error('Linked pooler URL does not belong to the guarded project.');
+          }
+          if (!poolerUrl.hostname.endsWith('.pooler.supabase.com')) {
+            throw new Error('Linked database host is not a Supabase pooler.');
+          }
+          if (poolerUrl.port !== '5432' || poolerUrl.pathname !== '/postgres') {
+            throw new Error('Linked pooler URL is not the expected session-pooler endpoint.');
+          }
+
+          // WHATWG URL setters percent-encode credentials. Keep the completed
+          // URL in a mode-0600 file; never write it or the encoded password to logs.
+          poolerUrl.username = expectedUsername;
+          poolerUrl.password = process.env.SUPABASE_DB_PASSWORD;
+          poolerUrl.searchParams.set('sslmode', 'require');
+          poolerUrl.searchParams.set('connect_timeout', '15');
+          fs.writeFileSync(process.env.DB_URL_FILE, poolerUrl.toString(), { mode: 0o600 });
+          NODE
+
+          if [[ ! -s "$DB_URL_FILE" ]]; then
+            echo "::error::Could not construct the guarded database connection."
+            exit 1
+          fi
+
+          if ! PGAPPNAME="galactic-p2.3-smoke-probe" \
+            psql "$(<"$DB_URL_FILE")" --no-psqlrc --set=ON_ERROR_STOP=1 \
+              --tuples-only --no-align --command='select 1' \
+              >/dev/null 2>"$RUNNER_TEMP/p2-3-pooler-probe.err"; then
+            rm -f "$RUNNER_TEMP/p2-3-pooler-probe.err"
+            echo "::error::The linked session pooler rejected the selected Supabase credentials."
+            exit 1
+          fi
+          rm -f "$RUNNER_TEMP/p2-3-pooler-probe.err"
+
+          DATABASE_URL="$(<"$DB_URL_FILE")" \
+            bash ./scripts/smoke/p2-3-real-postgres.sh

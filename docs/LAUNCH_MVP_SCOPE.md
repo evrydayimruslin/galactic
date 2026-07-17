@@ -1,6 +1,6 @@
 # Persistent Agent Launch Scope
 
-Locked: 2026-07-14
+Locked: 2026-07-14; amended by P2.3 on 2026-07-17
 
 Current delivery milestones:
 
@@ -9,6 +9,7 @@ Current delivery milestones:
 - Launch P2 — Canonical Conjuring Journey (2026-07-15)
 - [Launch P2.1 — BYOK Subscription Capacity (2026-07-15)](LAUNCH_P2_1_SUBSCRIPTION_CAPACITY_2026-07-15.md)
 - [Launch P2.2 — Launch Certification (2026-07-15)](LAUNCH_P2_2_CERTIFICATION_2026-07-15.md)
+- [Launch P2.3 — Agent Fleet and Developer Schedules (2026-07-17)](LAUNCH_P2_3_AGENT_FLEET_2026-07-17.md)
 
 This is the active launch contract for Galactic. It supersedes the
 marketplace-first scope recorded on 2026-06-10. The repository remains the
@@ -31,11 +32,15 @@ running cheaply before Galactic introduces a market around them.
 
 ## Included in the MVP
 
-- A Cloudflare Pages website with Agents and Profile as its primary surfaces.
-- A private Agent home with Overview, Functions, and Interfaces.
-- One primary persistent routine per owned Agent.
-- Mission, interval cadence, setup readiness, approved actions, reporting state,
-  cost ceilings, recent runs, and owner controls on the Agent Overview.
+- A Cloudflare Pages Fleet that merges Home and Agents, with account Settings,
+  Alerts, and private Agent operations presented as focused overlays.
+- A private Agent surface with Alerts, Interfaces, Routines, Functions, and
+  Settings; runtime memory remains available to code without a website pane.
+- One compatibility primary plus any number of additional persistent routines
+  per owned Agent, sharing the account and per-Agent capacity ceilings.
+- Mission, interval or cron/timezone cadence, reactive triggers, setup readiness,
+  approved actions, reporting state, cost ceilings, recent activity, and owner
+  controls on the Agent surface.
 - The platform MCP and per-Agent MCP endpoints for Codex, Claude Code, Cursor,
   and other MCP clients.
 - The existing coding-agent conjuring flow: `gx.download({ full_time: true })`,
@@ -54,14 +59,15 @@ running cheaply before Galactic introduces a market around them.
 1. **Private and owner-only.** New launch Agents are private. Public, unlisted,
    install, and cross-user sharing semantics remain compatibility-only and are
    not available through the Conjure path.
-2. **One Agent, one primary routine.** The backend may retain multiple-routine
-   support, but the launch product creates and presents one primary routine.
+2. **One Agent, many managed routines.** One routine remains the compatibility
+   primary, while developers may create and operate additional independently
+   scheduled routines on the same private Agent.
 3. **The mission is live state.** “Mission” means `user_routines.intent`, the
    directive injected on every wake. Package description remains separate
    metadata.
-4. **Interval cadence only on the launch surface.** Cron, timezone scheduling,
-   and event delivery remain in the basin but are not launch configuration
-   options.
+4. **Developer scheduling is first-class.** Managed routines support safe
+   intervals, strict five-field cron with IANA timezones, and durable reactive
+   events. Capacity-waiting work resumes without replay storms.
 5. **Human activation boundary.** A connected coding agent may scaffold, test,
    upload, and propose a routine. Only an authenticated account session may
    approve capabilities, activate a routine, widen grants, or increase its
@@ -130,8 +136,7 @@ auditability.
 - Marketplace trust cards, reputation, ranking, and public verification copy.
 - Cross-user whitelists or link sharing; future collaboration needs an explicit
   member/operator model rather than reusing per-function invocation permissions.
-- Multiple routines on one Agent home.
-- Cron/timezone configuration and arbitrary external reporting destinations.
+- Arbitrary external reporting destinations.
 - A separate website Agent builder. The user's existing coding agent is the
   builder.
 
@@ -150,11 +155,12 @@ discovery, or launch claims.
 6. Upload the exact tested files and attestation as a new private Agent or a
    non-live version of an existing Agent.
 7. Configure required secrets and a BYOK inference provider when the Agent uses AI.
-8. Create one routine in a paused state with a mission and finite limits.
+8. Create one or more routines in a paused state with missions, schedules, and
+   finite limits; one is elected primary for compatibility.
 9. Review and approve exact capabilities, grants, cadence, and budgets in the
    authenticated website session.
-10. Activate, then supervise through Overview, recent runs, receipts, and inbox
-    reports. Updates repeat the test/promotion process.
+10. Activate, then supervise through Fleet, the Agent overlay, recent activity,
+    receipts, and Alerts. Updates repeat the test/promotion process.
 
 ## Implementation boundary
 

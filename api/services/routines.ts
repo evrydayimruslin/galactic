@@ -10,10 +10,11 @@ import {
   DEFAULT_ROUTINE_BUDGET_POLICY,
   MIN_ROUTINE_INTERVAL_SECONDS,
 } from "../../shared/contracts/routine.ts";
+import { releaseAgentActivationSlot } from "./account-capacity.ts";
 import {
-  claimAgentActivationSlot,
-  releaseAgentActivationSlot,
-} from "./account-capacity.ts";
+  normalizeRoutineSchedule as normalizeProductionRoutineSchedule,
+  RoutineScheduleValidationError,
+} from "./routine-schedule.ts";
 
 export type RoutineStatus =
   | "active"
@@ -108,6 +109,7 @@ export interface NormalizedRoutineSchedule {
   type: "interval" | "cron";
   cron?: string;
   every_seconds?: number;
+  /** Legacy persisted shape; normalization writes every_seconds. */
   every_minutes?: number;
   timezone?: string;
 }
@@ -333,62 +335,14 @@ function optionalIsoTimestamp(value: unknown, field: string): string | null {
 }
 
 function normalizeSchedule(input: unknown): NormalizedRoutineSchedule {
-  if (typeof input === "string") {
-    const cron = input.trim();
-    if (!cron) throw new Error("schedule must not be empty");
-    return { type: "cron", cron };
-  }
-  if (!isRecord(input)) {
-    throw new Error("schedule must be a cron string or object");
-  }
-
-  const cron = typeof input.cron === "string" && input.cron.trim()
-    ? input.cron.trim()
-    : null;
-  const everySeconds = input.every_seconds;
-  const everyMinutes = input.every_minutes;
-  const hasEverySeconds = everySeconds !== undefined && everySeconds !== null;
-  const hasEveryMinutes = everyMinutes !== undefined && everyMinutes !== null;
-
-  if (cron) {
-    return {
-      type: "cron",
-      cron,
-      ...(typeof input.timezone === "string" && input.timezone.trim()
-        ? { timezone: input.timezone.trim() }
-        : {}),
-    };
-  }
-
-  if (!hasEverySeconds && !hasEveryMinutes) {
-    throw new Error(
-      "schedule must define cron, every_seconds, or every_minutes",
-    );
-  }
-
-  const schedule: NormalizedRoutineSchedule = { type: "interval" };
-  if (hasEverySeconds) {
-    if (
-      typeof everySeconds !== "number" || !Number.isFinite(everySeconds) ||
-      everySeconds <= 0
-    ) {
-      throw new Error("schedule.every_seconds must be a positive number");
+  try {
+    return normalizeProductionRoutineSchedule(input);
+  } catch (error) {
+    if (error instanceof RoutineScheduleValidationError) {
+      throw new Error(error.message);
     }
-    schedule.every_seconds = Math.floor(everySeconds);
+    throw error;
   }
-  if (hasEveryMinutes) {
-    if (
-      typeof everyMinutes !== "number" || !Number.isFinite(everyMinutes) ||
-      everyMinutes <= 0
-    ) {
-      throw new Error("schedule.every_minutes must be a positive number");
-    }
-    schedule.every_minutes = Math.floor(everyMinutes);
-  }
-  if (typeof input.timezone === "string" && input.timezone.trim()) {
-    schedule.timezone = input.timezone.trim();
-  }
-  return schedule;
 }
 
 export function normalizeRoutineBudgetPolicy(
@@ -414,8 +368,12 @@ export function normalizeRoutineBudgetPolicy(
     if (typeof amount !== "number" || !Number.isFinite(amount) || amount < 0) {
       throw new Error(`budget_policy.${key} must be a non-negative number`);
     }
-    if (key === "max_calls_per_run" && (!Number.isInteger(amount) || amount < 1)) {
-      throw new Error("budget_policy.max_calls_per_run must be a positive integer");
+    if (
+      key === "max_calls_per_run" && (!Number.isInteger(amount) || amount < 1)
+    ) {
+      throw new Error(
+        "budget_policy.max_calls_per_run must be a positive integer",
+      );
     }
   }
   if (
@@ -442,8 +400,33 @@ const SERVER_OWNED_ROUTINE_METADATA_KEYS = new Set([
   "budget_spend",
   "auto_pause",
   "source",
+  "launch_managed",
+  "launch_role",
   "launch_primary",
 ]);
+
+export type LaunchRoutineRole = "primary" | "routine";
+
+/**
+ * Resolve the server-owned launch lifecycle role without breaking routines
+ * created before multi-routine Agents. `launch_primary` was the original
+ * protected marker and therefore remains both managed and primary. New rows
+ * use the explicit `launch_managed` + `launch_role` pair.
+ */
+export function launchRoutineRole(
+  metadata: unknown,
+): LaunchRoutineRole | null {
+  if (!isRecord(metadata)) return null;
+  if (metadata.launch_primary === true) return "primary";
+  if (metadata.launch_managed !== true) return null;
+  return metadata.launch_role === "primary" ? "primary" : "routine";
+}
+
+export function isLaunchManagedRoutine(
+  routine: Pick<RoutineRow, "metadata"> | { metadata?: unknown } | null,
+): boolean {
+  return launchRoutineRole(routine?.metadata) !== null;
+}
 
 function isServerOwnedRoutineMetadataKey(key: string): boolean {
   return SERVER_OWNED_ROUTINE_METADATA_KEYS.has(key) ||
@@ -505,37 +488,42 @@ export function validateRoutineActivation(
   if (pendingRequired.length > 0) {
     blockers.push({
       code: "pending_required_capabilities",
-      message: "Required capabilities must be approved by the account owner before activation.",
+      message:
+        "Required capabilities must be approved by the account owner before activation.",
       capability_ids: pendingRequired.map((capability) => capability.id),
     });
   }
 
-  if (routine.schedule.type === "interval") {
-    const seconds = typeof routine.schedule.every_seconds === "number"
-      ? routine.schedule.every_seconds
-      : typeof routine.schedule.every_minutes === "number"
-      ? routine.schedule.every_minutes * 60
-      : 0;
-    if (seconds < MIN_ROUTINE_INTERVAL_SECONDS) {
-      blockers.push({
-        code: "unsafe_cadence",
-        message: `Routine cadence must be at least ${MIN_ROUTINE_INTERVAL_SECONDS} seconds.`,
-      });
-    }
+  try {
+    normalizeProductionRoutineSchedule(routine.schedule);
+  } catch (error) {
+    blockers.push({
+      code: "unsafe_cadence",
+      message: error instanceof Error
+        ? error.message
+        : `Routine cadence must be at least ${MIN_ROUTINE_INTERVAL_SECONDS} seconds.`,
+    });
   }
 
-  const { max_light_per_run, max_light_per_day, max_light_per_month, max_calls_per_run } =
-    budgetPolicy;
+  const {
+    max_light_per_run,
+    max_light_per_day,
+    max_light_per_month,
+    max_calls_per_run,
+  } = budgetPolicy;
   if (
     !Number.isFinite(max_light_per_run) || max_light_per_run < 0 ||
-    !Number.isFinite(max_light_per_day) || max_light_per_day < max_light_per_run ||
-    !Number.isFinite(max_light_per_month) || max_light_per_month < max_light_per_day ||
+    !Number.isFinite(max_light_per_day) ||
+    max_light_per_day < max_light_per_run ||
+    !Number.isFinite(max_light_per_month) ||
+    max_light_per_month < max_light_per_day ||
     !Number.isFinite(max_calls_per_run) ||
     !Number.isInteger(max_calls_per_run) || max_calls_per_run < 1
   ) {
     blockers.push({
       code: "invalid_budget",
-      message: "Budget ceilings must be finite, calls must be at least 1, and run ≤ day ≤ month.",
+      message:
+        "Budget ceilings must be finite, calls must be at least 1, and run ≤ day ≤ month.",
     });
   }
   return { budgetPolicy, blockers };
@@ -927,25 +915,101 @@ export async function updateRoutine(
     ROUTINE_SELECT,
   );
   if (!routine) throw new Error(`Routine ${routineId} not found`);
-  return metadataInput
+  const updated = metadataInput
     ? await mergeRoutineUserMetadata(userId, routineId, metadataInput)
     : routine;
+  if (
+    input.status !== undefined &&
+    getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
+    updated.composer_app_id && isLaunchManagedRoutine(updated)
+  ) {
+    await releaseActivationSlotIfAgentInactive(
+      userId,
+      updated.composer_app_id,
+    ).catch((err) =>
+      console.error("[CAPACITY] Failed to release activation slot:", err)
+    );
+  }
+  return updated;
+}
+
+async function releaseActivationSlotIfAgentInactive(
+  userId: string,
+  appId: string,
+): Promise<void> {
+  // Keep this application-side sibling check during the rolling migration so
+  // code deployed before the guarded release RPC cannot clear an Agent slot
+  // merely because one of its several routines paused. The replacement RPC
+  // repeats the predicate under the entitlement lock to close the race.
+  const activeRows = await readRows<Array<{ metadata?: unknown }>[number]>(
+    await fetch(
+      supabaseUrl(
+        `user_routines?user_id=eq.${encodeURIComponent(userId)}` +
+          `&composer_app_id=eq.${encodeURIComponent(appId)}` +
+          "&status=eq.active&deleted_at=is.null&select=metadata",
+      ),
+      { headers: serviceHeaders("return=representation") },
+    ),
+    "Failed to check active Agent routines",
+  );
+  if (
+    activeRows.some((row) => launchRoutineRole(row.metadata) !== null)
+  ) return;
+  await releaseAgentActivationSlot(userId, appId);
+}
+
+interface ManagedRoutineActivationDecision {
+  allowed: boolean;
+  code: string;
+  active_agent_limit: number | null;
+  occupied_by: string | null;
+  routine_record: RoutineSummary | null;
+}
+
+async function activateManagedRoutineWithSlot(
+  userId: string,
+  routineId: string,
+  budgetPolicy: Required<RoutineBudgetDefaults>,
+): Promise<RoutineSummary> {
+  const rows = await readRows<ManagedRoutineActivationDecision>(
+    await fetch(supabaseUrl("rpc/activate_managed_routine_with_slot"), {
+      method: "POST",
+      headers: serviceHeaders("return=representation"),
+      body: JSON.stringify({
+        p_user_id: userId,
+        p_routine_id: routineId,
+        p_budget_policy: budgetPolicy,
+      }),
+    }),
+    "Failed to atomically activate managed routine",
+  );
+  const decision = rows[0];
+  if (!decision) {
+    throw new Error("Managed routine activation returned no decision");
+  }
+  if (!decision.allowed) {
+    const error = new Error(
+      decision.code === "active_agent_limit"
+        ? "Free accounts can keep one Agent active at a time. Pause the active Agent or upgrade to Pro."
+        : `Routine ${routineId} cannot be activated in its current state.`,
+    ) as Error & { code?: string; occupiedBy?: string | null };
+    error.code = decision.code === "active_agent_limit"
+      ? "ACTIVE_AGENT_LIMIT"
+      : "ROUTINE_ACTIVATION_BLOCKED";
+    error.occupiedBy = decision.occupied_by;
+    throw error;
+  }
+  if (!decision.routine_record) {
+    throw new Error("Managed routine activation returned no routine");
+  }
+  return decision.routine_record;
 }
 
 export async function pauseRoutine(
   userId: string,
   routineId: string,
 ): Promise<RoutineSummary> {
-  const routine = getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1"
-    ? await getRoutine(userId, routineId)
-    : null;
-  const paused = await updateRoutine(userId, routineId, { status: "paused" });
-  if (routine?.composer_app_id && routine.metadata?.launch_primary === true) {
-    await releaseAgentActivationSlot(userId, routine.composer_app_id).catch(
-      (err) => console.error("[CAPACITY] Failed to release activation slot:", err),
-    );
-  }
-  return paused;
+  return await updateRoutine(userId, routineId, { status: "paused" });
 }
 
 export async function resumeRoutine(
@@ -957,62 +1021,54 @@ export async function resumeRoutine(
   const validation = validateRoutineActivation(routine);
   if (validation.blockers.length > 0) {
     const error = new Error(
-      `Routine cannot be activated: ${validation.blockers.map((item) => item.message).join(" ")}`,
-    ) as Error & { code?: string; blockers?: RoutineActivationValidation["blockers"] };
+      `Routine cannot be activated: ${
+        validation.blockers.map((item) => item.message).join(" ")
+      }`,
+    ) as Error & {
+      code?: string;
+      blockers?: RoutineActivationValidation["blockers"];
+    };
     error.code = "ROUTINE_ACTIVATION_BLOCKED";
     error.blockers = validation.blockers;
     throw error;
   }
-  let activationClaimed = false;
+  if (!["paused", "error", "active"].includes(routine.status)) {
+    throw new Error(
+      `Routine ${routineId} is ${routine.status} and cannot be activated`,
+    );
+  }
+  if (isLaunchManagedRoutine(routine) && routine.max_concurrency !== 1) {
+    throw new Error("Galactic-managed Agent routines use max_concurrency=1");
+  }
   if (
     getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
-    routine.composer_app_id && routine.metadata?.launch_primary === true
+    routine.composer_app_id && isLaunchManagedRoutine(routine)
   ) {
-    const activation = await claimAgentActivationSlot(
+    return await activateManagedRoutineWithSlot(
       userId,
-      routine.composer_app_id,
+      routineId,
+      validation.budgetPolicy,
     );
-    if (!activation.allowed) {
-      const error = new Error(
-        "Free accounts can keep one Agent active at a time. Pause the active Agent or upgrade to Pro.",
-      ) as Error & { code?: string; occupiedBy?: string | null };
-      error.code = "ACTIVE_AGENT_LIMIT";
-      error.occupiedBy = activation.occupiedBy;
-      throw error;
-    }
-    activationClaimed = true;
   }
   let updated: RoutineSummary | undefined;
-  try {
-    [updated] = await patchRows<RoutineSummary>(
-      `user_routines?id=eq.${
-        encodeURIComponent(routineId)
-      }&user_id=eq.${userId}&deleted_at=is.null&status=in.(paused,error)`,
-      {
-        status: "active",
-        budget_policy: validation.budgetPolicy,
-        updated_at: new Date().toISOString(),
-      },
-      ROUTINE_SELECT,
-    );
-  } catch (err) {
-    if (activationClaimed && routine.composer_app_id) {
-      await releaseAgentActivationSlot(userId, routine.composer_app_id).catch(
-        () => false,
-      );
-    }
-    throw err;
-  }
+  [updated] = await patchRows<RoutineSummary>(
+    `user_routines?id=eq.${
+      encodeURIComponent(routineId)
+    }&user_id=eq.${userId}&deleted_at=is.null&status=in.(paused,error)`,
+    {
+      status: "active",
+      budget_policy: validation.budgetPolicy,
+      updated_at: new Date().toISOString(),
+    },
+    ROUTINE_SELECT,
+  );
   if (updated) return updated;
   // Idempotent resume for an already-active routine, while still validating
   // approvals above. Never silently activates disabled/deleted rows.
   if (routine.status === "active") return routine;
-  if (activationClaimed && routine.composer_app_id) {
-    await releaseAgentActivationSlot(userId, routine.composer_app_id).catch(
-      () => false,
-    );
-  }
-  throw new Error(`Routine ${routineId} is ${routine.status} and cannot be activated`);
+  throw new Error(
+    `Routine ${routineId} is ${routine.status} and cannot be activated`,
+  );
 }
 
 /**
@@ -1028,14 +1084,18 @@ export async function approveRoutineCapabilities(
 ): Promise<StoredRoutine> {
   const routine = await getRoutine(userId, routineId);
   if (!routine) throw new Error(`Routine ${routineId} not found`);
-  const allIds = new Set(routine.capabilities.map((capability) => capability.id));
+  const allIds = new Set(
+    routine.capabilities.map((capability) => capability.id),
+  );
   const requestedIds = capabilityIds === undefined
     ? routine.capabilities.map((capability) => capability.id)
     : Array.from(new Set(capabilityIds.map((id) => id.trim()).filter(Boolean)));
   const unknown = requestedIds.filter((id) => !allIds.has(id));
   if (unknown.length > 0) {
     throw new Error(
-      `Capabilities do not belong to routine ${routineId}: ${unknown.join(", ")}`,
+      `Capabilities do not belong to routine ${routineId}: ${
+        unknown.join(", ")
+      }`,
     );
   }
   if (requestedIds.length === 0) return routine;
@@ -1057,7 +1117,9 @@ export async function approveRoutineCapabilities(
     CAPABILITY_SELECT,
   );
   const updated = await getRoutine(userId, routineId);
-  if (!updated) throw new Error(`Routine ${routineId} not found after approval`);
+  if (!updated) {
+    throw new Error(`Routine ${routineId} not found after approval`);
+  }
   return updated;
 }
 

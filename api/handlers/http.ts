@@ -43,6 +43,7 @@ import {
 } from "../services/execution-settlement.ts";
 import {
   accountCapacityErrorDetails,
+  accountCapacityErrorMessage,
   releaseAccountCapacity,
   reserveAccountCapacity,
   settleAccountCapacity,
@@ -95,6 +96,7 @@ import {
   type MemoryService as MemoryServiceImpl,
 } from "../services/memory.ts";
 import { getEnv } from "../lib/env.ts";
+import { mintCallerContextToken } from "../services/agent-caller-context.ts";
 
 let memoryService: MemoryServiceImpl | null | undefined;
 
@@ -702,6 +704,9 @@ export async function handleHttpEndpoint(
     if (subscriptionCapacityMode) {
       const admission = await reserveAccountCapacity({
         userId: httpRuntime.payerUserId,
+        // HTTP ingress is direct; any nested calls inherit this Agent through
+        // their server-signed caller context.
+        capacityAgentId: app.id,
         idempotencyKey: `http:${receiptId}`,
         reserveLight: calculateExpectedRuntimeHoldAmount(
           timeoutMs,
@@ -711,6 +716,7 @@ export async function handleHttpEndpoint(
         metadata: {
           surface: "http",
           app_id: app.id,
+          capacity_agent_id: app.id,
           function_name: functionName,
           receipt_id: receiptId,
         },
@@ -719,8 +725,8 @@ export async function handleHttpEndpoint(
         return finalize(
           new Response(
             JSON.stringify({
-              error: `Account capacity is ${admission.state}. Work can resume at ${admission.nextEligibleAt}.`,
-              type: "CAPACITY_WAITING",
+              error: accountCapacityErrorMessage(admission),
+              type: admission.code.toUpperCase(),
               receipt_id: receiptId,
               details: accountCapacityErrorDetails(admission),
             }),
@@ -728,11 +734,17 @@ export async function handleHttpEndpoint(
               status: 429,
               headers: {
                 "Content-Type": "application/json",
-                "Retry-After": admission.nextEligibleAt
-                  ? String(Math.max(1, Math.ceil(
-                    (Date.parse(admission.nextEligibleAt) - Date.now()) / 1000,
-                  )))
-                  : "300",
+                ...(admission.nextEligibleAt
+                  ? {
+                    "Retry-After": String(Math.max(
+                      1,
+                      Math.ceil(
+                        (Date.parse(admission.nextEligibleAt) - Date.now()) /
+                          1000,
+                      ),
+                    )),
+                  }
+                  : {}),
                 "X-Light-Receipt-Id": receiptId,
                 ...buildCorsHeaders(request),
               },
@@ -789,6 +801,21 @@ export async function handleHttpEndpoint(
       : rawAppDataService;
     const baseUrl = getEnv("BASE_URL") || undefined;
     const appCallDependencies = resolveRuntimeAppCallDependencies(app, caller);
+    let callerContextToken: string | undefined;
+    if (caller.authState === "authenticated") {
+      try {
+        callerContextToken = await mintCallerContextToken({
+          callerAppId: app.id,
+          capacityAgentId: app.id,
+          userId: caller.userId,
+          callerFunction: functionName,
+          incomingHop: 0,
+          ttlSeconds: Math.ceil(timeoutMs / 1000) + 120,
+        });
+      } catch (err) {
+        console.warn("[HTTP] Failed to mint caller context token:", err);
+      }
+    }
     const memoryAdapter = caller.authState === "authenticated" &&
         (httpPermissions.includes("memory:read") ||
           httpPermissions.includes("memory:write"))
@@ -827,6 +854,7 @@ export async function handleHttpEndpoint(
         baseUrl,
         authToken: caller.authToken,
         appCallDependencies,
+        callerContextToken,
         workerSecret: workerSecret || undefined,
         timeoutMs,
         cloudOperationMetering,

@@ -6,6 +6,7 @@ import {
 } from "./routine-auth.ts";
 import {
   getRoutine,
+  isLaunchManagedRoutine,
   type NormalizedRoutineSchedule,
   recordRoutineRunStep,
   type RoutineCapabilityRow,
@@ -22,6 +23,10 @@ import {
   releaseAccountCapacity,
   reserveAccountCapacity,
 } from "./account-capacity.ts";
+import {
+  computeNextRoutineRunAt as computeProductionRoutineRunAt,
+  RoutineScheduleValidationError,
+} from "./routine-schedule.ts";
 
 const ROUTINE_SELECT =
   "id,user_id,composer_app_id,composer_app_slug,template_id,template_version,name,description,intent,handler_function,status,schedule,config,budget_policy,approval_policy,max_concurrency,next_run_at,last_run_at,last_success_at,last_error_at,failure_count,created_by_trace_id,metadata,created_at,updated_at,deleted_at,lease_id,lease_expires_at";
@@ -34,7 +39,6 @@ const DEFAULT_LEASE_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_SECONDS = 60;
 const MAX_RETRY_DELAY_SECONDS = 15 * 60;
-const MIN_INTERVAL_SECONDS = 60;
 // Circuit breaker: consecutive failed ATTEMPTS (failure_count resets to 0 on
 // any success) before the routine is auto-paused. At the default retry policy
 // (3 attempts/run) the default trips after ~3-4 fully failed runs. Overridable
@@ -98,6 +102,15 @@ class AccountCapacityWaitingError extends Error {
   constructor(readonly retryAt: string) {
     super(`Account capacity is waiting until ${retryAt}`);
     this.name = "AccountCapacityWaitingError";
+  }
+}
+
+class AgentCapacityCapTooLowError extends Error {
+  constructor(readonly details: Record<string, unknown>) {
+    super(
+      "The Agent capacity cap is too low to admit one execution. Increase the cap before resuming.",
+    );
+    this.name = "AgentCapacityCapTooLowError";
   }
 }
 
@@ -285,81 +298,18 @@ function addMs(date: Date, ms: number): Date {
   return new Date(date.getTime() + ms);
 }
 
-function nextMinuteAfter(date: Date): Date {
-  const next = new Date(date.getTime());
-  next.setUTCSeconds(0, 0);
-  next.setUTCMinutes(next.getUTCMinutes() + 1);
-  return next;
-}
-
-function parseCronField(field: string, min: number, max: number): number[] {
-  const values: number[] = [];
-  for (const segment of field.split(",")) {
-    if (segment === "*") {
-      for (let value = min; value <= max; value++) values.push(value);
-    } else if (segment.startsWith("*/")) {
-      const step = Number.parseInt(segment.slice(2), 10);
-      if (!Number.isFinite(step) || step <= 0) throw new Error("bad step");
-      for (let value = min; value <= max; value += step) values.push(value);
-    } else if (segment.includes("-")) {
-      const [start, end] = segment.split("-").map((part) =>
-        Number.parseInt(part, 10)
-      );
-      if (!Number.isFinite(start) || !Number.isFinite(end)) {
-        throw new Error("bad range");
-      }
-      for (let value = start; value <= end; value++) values.push(value);
-    } else {
-      const value = Number.parseInt(segment, 10);
-      if (!Number.isFinite(value)) throw new Error("bad value");
-      values.push(value);
-    }
-  }
-  return [...new Set(values.filter((value) => value >= min && value <= max))]
-    .sort((a, b) => a - b);
-}
-
-function cronMatches(expression: string, date: Date): boolean {
-  const parts = expression.trim().split(/\s+/);
-  if (parts.length !== 5) return false;
-  try {
-    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
-    return parseCronField(minute, 0, 59).includes(date.getUTCMinutes()) &&
-      parseCronField(hour, 0, 23).includes(date.getUTCHours()) &&
-      parseCronField(dayOfMonth, 1, 31).includes(date.getUTCDate()) &&
-      parseCronField(month, 1, 12).includes(date.getUTCMonth() + 1) &&
-      parseCronField(dayOfWeek, 0, 6).includes(date.getUTCDay());
-  } catch {
-    return false;
-  }
-}
-
 export function computeNextRoutineRunAt(
   schedule: NormalizedRoutineSchedule,
   from: Date,
 ): Date | null {
-  if (!isRecord(schedule)) return null;
-
-  if (schedule.type === "interval") {
-    const seconds = typeof schedule.every_seconds === "number"
-      ? schedule.every_seconds
-      : typeof schedule.every_minutes === "number"
-      ? schedule.every_minutes * 60
-      : 5 * 60;
-    const guardedSeconds = Math.max(MIN_INTERVAL_SECONDS, Math.floor(seconds));
-    return addMs(from, guardedSeconds * 1000);
+  try {
+    return computeProductionRoutineRunAt(schedule, from);
+  } catch (error) {
+    // Creation/update reject malformed schedules. Legacy invalid rows must not
+    // crash the shared scheduler cycle while operators repair them.
+    if (error instanceof RoutineScheduleValidationError) return null;
+    throw error;
   }
-
-  if (schedule.type === "cron" && typeof schedule.cron === "string") {
-    let candidate = nextMinuteAfter(from);
-    const maxMinutes = 366 * 24 * 60;
-    for (let i = 0; i < maxMinutes; i++) {
-      if (cronMatches(schedule.cron, candidate)) return candidate;
-      candidate = addMs(candidate, 60 * 1000);
-    }
-  }
-
-  return null;
 }
 
 function sanitizePreview(
@@ -551,7 +501,10 @@ interface BudgetGateResult {
   resumeAt: Date;
 }
 
-function budgetGate(routine: StoredRoutine, now: Date): BudgetGateResult | null {
+function budgetGate(
+  routine: StoredRoutine,
+  now: Date,
+): BudgetGateResult | null {
   const budget = routine.budget_policy || {};
   const dayCap = budgetCap(budget.max_light_per_day);
   const monthCap = budgetCap(budget.max_light_per_month);
@@ -848,23 +801,65 @@ async function prepareDueScheduledRuns(
     try {
       const nextRunAt = computeNextRoutineRunAt(claimedRoutine.schedule, now);
       const capacityEnabled = getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
-        claimedRoutine.metadata?.launch_primary === true;
+        isLaunchManagedRoutine(claimedRoutine);
       const runId = capacityEnabled ? crypto.randomUUID() : undefined;
       let capacityReservationId: string | null = null;
       if (capacityEnabled && runId) {
         const admission = await reserveAccountCapacity({
           userId: claimedRoutine.user_id,
-          idempotencyKey: `routine-run:${runId}`,
-          reserveLight: 1,
+          capacityAgentId: claimedRoutine.composer_app_id ?? undefined,
+          // This is only a cheap scheduler admission probe. The actual MCP
+          // execution creates its own predicted hold with a unique execution
+          // key, so nested calls cannot alias one routine-wide reservation.
+          idempotencyKey: `routine-wake:${runId}`,
+          // With Agent enforcement the zero-Light probe asks whether either
+          // window is already exhausted without guessing this handler's
+          // runtime hold. MCP performs the authoritative predicted hold.
+          reserveLight: getEnv("AGENT_CAPACITY_ENABLED") === "1" ? 0 : 1,
           expiresAt: new Date(now.getTime() + leaseMs + 120_000).toISOString(),
           now: iso(now),
           metadata: {
             routine_id: claimedRoutine.id,
             routine_run_id: runId,
+            capacity_agent_id: claimedRoutine.composer_app_id,
             trigger: "scheduled",
           },
         });
         if (!admission.allowed || !admission.reservationId) {
+          if (admission.code === "agent_cap_too_low_for_request") {
+            const at = iso(now);
+            await releaseRoutineLease(claimedRoutine.id, now, {
+              status: "paused",
+              next_run_at: null,
+              last_error_at: at,
+              metadata: {
+                ...(claimedRoutine.metadata || {}),
+                capacity_blocked: {
+                  code: admission.code,
+                  at,
+                  capacity_agent_id: admission.agentCapacity?.agentId ??
+                    claimedRoutine.composer_app_id,
+                  cap_basis_points: admission.agentCapacity?.capBasisPoints ??
+                    null,
+                },
+              },
+            });
+            await createNotification({
+              userId: claimedRoutine.user_id,
+              agentId: claimedRoutine.composer_app_id,
+              kind: "routine_capacity_blocked",
+              severity: "critical",
+              title: `${claimedRoutine.name} needs a higher Agent capacity cap`,
+              body:
+                "Its current per-Agent cap cannot admit even one scheduled wake. Increase the cap, then resume the routine.",
+              entityType: "routine",
+              entityId: claimedRoutine.id,
+              dedupeKey: `routine_capacity_too_low:${claimedRoutine.id}:${
+                admission.agentCapacity?.capBasisPoints ?? "unknown"
+              }`,
+            });
+            continue;
+          }
           const nextEligibleAt = admission.nextEligibleAt ||
             admission.weekly.resetsAt;
           await recordDeferredRoutineWake({
@@ -890,6 +885,13 @@ async function prepareDueScheduledRuns(
       let run: ExecutorRunRow;
       try {
         run = await insertScheduledRun(claimedRoutine, now, runId);
+        if (capacityEnabled) {
+          await attachDeferredWakeToRun(
+            claimedRoutine.id,
+            claimedRoutine.user_id,
+            run.id,
+          );
+        }
       } catch (insertError) {
         if (capacityReservationId) {
           await releaseAccountCapacity({
@@ -899,12 +901,14 @@ async function prepareDueScheduledRuns(
         }
         throw insertError;
       }
-      if (capacityEnabled) {
-        await attachDeferredWakeToRun(
-          claimedRoutine.id,
-          claimedRoutine.user_id,
-          run.id,
-        );
+      if (capacityReservationId) {
+        // The queued execution performs authoritative admission with its
+        // expected runtime hold. Releasing this 1-Light probe avoids double
+        // reserving while the queue owns the run.
+        await releaseAccountCapacity({
+          reservationId: capacityReservationId,
+          userId: claimedRoutine.user_id,
+        });
       }
       await releaseRoutineLease(claimedRoutine.id, now, {
         next_run_at: nextRunAt ? iso(nextRunAt) : null,
@@ -1057,7 +1061,9 @@ function buildRoutineArgs(
 async function invokeRoutineHandler(
   routine: StoredRoutine,
   run: ExecutorRunRow,
-  options: Required<Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">>,
+  options: Required<
+    Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">
+  >,
 ): Promise<unknown> {
   const composerAppId = routine.composer_app_id || routine.composer_app_slug;
   if (!composerAppId) {
@@ -1090,9 +1096,9 @@ async function invokeRoutineHandler(
   // caller-permission, dynamic sandbox, settlement, flight recorder) with no
   // network hop. A backstop timeout guards the shared cron against a wedge.
   const mcpRequest = new Request(
-    `${
-      options.baseUrl.replace(/\/+$/, "")
-    }/mcp/${encodeURIComponent(composerAppId)}`,
+    `${options.baseUrl.replace(/\/+$/, "")}/mcp/${
+      encodeURIComponent(composerAppId)
+    }`,
     {
       method: "POST",
       headers: {
@@ -1128,12 +1134,25 @@ async function invokeRoutineHandler(
     error?: {
       message?: string;
       code?: number;
-      data?: { type?: string; retry_at?: string };
+      data?: {
+        type?: string;
+        retry_at?: string;
+        capacity_agent_id?: string | null;
+        agent_cap_basis_points?: number | null;
+      };
     };
   };
   if (rpc.error) {
     if (
-      rpc.error.code === -32010 && rpc.error.data?.type === "capacity_waiting" &&
+      rpc.error.code === -32010 &&
+      rpc.error.data?.type === "agent_cap_too_low_for_request"
+    ) {
+      throw new AgentCapacityCapTooLowError(rpc.error.data);
+    }
+    if (
+      rpc.error.code === -32010 &&
+      (rpc.error.data?.type === "capacity_waiting" ||
+        rpc.error.data?.type === "agent_cap_waiting") &&
       typeof rpc.error.data.retry_at === "string"
     ) {
       throw new AccountCapacityWaitingError(rpc.error.data.retry_at);
@@ -1148,6 +1167,22 @@ async function invokeRoutineHandler(
   // failed handler — e.g. a never-built app's "Run rebuild first" — would be
   // recorded as a SUCCEEDED run and never retried.
   if (isRecord(rpc.result) && rpc.result.isError === true) {
+    const structured = isRecord(rpc.result.structuredContent)
+      ? rpc.result.structuredContent
+      : null;
+    const propagatedType = structured?.error_type;
+    const propagatedDetails = isRecord(structured?.error_details)
+      ? structured.error_details
+      : {};
+    if (propagatedType === "AgentCapacityCapTooLowError") {
+      throw new AgentCapacityCapTooLowError(propagatedDetails);
+    }
+    if (
+      propagatedType === "AgentCapacityWaitingError" &&
+      typeof propagatedDetails.retry_at === "string"
+    ) {
+      throw new AccountCapacityWaitingError(propagatedDetails.retry_at);
+    }
     const content = rpc.result.content;
     const textBlock = Array.isArray(content)
       ? content.find((entry) =>
@@ -1308,6 +1343,7 @@ async function updateRoutineAfterRun(
       : "Paused by the circuit breaker.";
     await createNotification({
       userId: routine.user_id,
+      agentId: routine.composer_app_id,
       kind: "routine_paused",
       severity: "critical",
       title: `${routine.name} was paused`,
@@ -1349,7 +1385,9 @@ async function recordRootStep(
 
 async function executeClaimedRun(
   claimed: ClaimedRun,
-  options: Required<Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">>,
+  options: Required<
+    Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">
+  >,
   now: Date,
   clock: () => Date,
 ): Promise<RunOutcome> {
@@ -1382,15 +1420,15 @@ async function executeClaimedRun(
     message: string;
     capability_ids?: string[];
   }> = [...activation.blockers];
-  const launchPrimary = routine.metadata?.launch_primary === true;
+  const launchManaged = isLaunchManagedRoutine(routine);
   const legacyLaunchRoutine = routine.metadata?.source === "ul.routine";
-  if (legacyLaunchRoutine && !launchPrimary) {
+  if (legacyLaunchRoutine && !launchManaged) {
     activationBlockers.push({
       code: "noncanonical_launch_routine",
       message:
         "This legacy launch routine is not the Agent's canonical primary routine and must be reconciled before execution.",
     });
-  } else if (launchPrimary) {
+  } else if (launchManaged) {
     try {
       await validateRoutineLaunchActivation(routine.user_id, routine);
     } catch (err) {
@@ -1428,13 +1466,13 @@ async function executeClaimedRun(
     ).catch(() => {});
     await createNotification({
       userId: routine.user_id,
+      agentId: routine.composer_app_id,
       kind: "routine_activation_blocked",
       severity: "critical",
       title: `${routine.name} needs attention`,
-      body:
-        `The Agent was paused before execution: ${
-          activationBlockers.map((item) => item.message).join(" ")
-        }`,
+      body: `The Agent was paused before execution: ${
+        activationBlockers.map((item) => item.message).join(" ")
+      }`,
       entityType: "routine",
       entityId: routine.id,
       dedupeKey: `routine_activation_blocked:${routine.id}`,
@@ -1471,6 +1509,7 @@ async function executeClaimedRun(
       const periodLabel = gate.period === "daily" ? "daily" : "monthly";
       await createNotification({
         userId: routine.user_id,
+        agentId: routine.composer_app_id,
         kind: "routine_budget_exhausted",
         severity: "info",
         title: `${routine.name} hit its ${periodLabel} budget`,
@@ -1479,8 +1518,9 @@ async function executeClaimedRun(
           `Runs resume automatically at ${iso(gate.resumeAt)}.`,
         entityType: "routine",
         entityId: routine.id,
-        dedupeKey:
-          `routine_budget:${routine.id}:${gate.period}:${iso(gate.resumeAt)}`,
+        dedupeKey: `routine_budget:${routine.id}:${gate.period}:${
+          iso(gate.resumeAt)
+        }`,
       });
       return { status: "skipped", budgetSkipped: true };
     }
@@ -1497,6 +1537,53 @@ async function executeClaimedRun(
     result = await invokeRoutineHandler(routine, run, options);
   } catch (err) {
     const completedAt = clock();
+    if (err instanceof AgentCapacityCapTooLowError) {
+      const at = iso(completedAt);
+      await finishRun(run, "failed", completedAt, {
+        summary: err.message,
+        error: {
+          code: "agent_cap_too_low_for_request",
+          ...err.details,
+        },
+      });
+      await patchRows<ExecutorRoutineRow>(
+        "user_routines",
+        { id: `eq.${routine.id}`, select: ROUTINE_SELECT },
+        {
+          status: "paused",
+          next_run_at: null,
+          last_error_at: at,
+          failure_count: routine.failure_count + 1,
+          metadata: {
+            ...(routine.metadata || {}),
+            capacity_blocked: {
+              code: "agent_cap_too_low_for_request",
+              at,
+              capacity_agent_id: err.details.capacity_agent_id ??
+                routine.composer_app_id,
+              cap_basis_points: err.details.agent_cap_basis_points ?? null,
+            },
+          },
+          updated_at: at,
+        },
+        "Failed to pause routine blocked by its Agent capacity cap",
+      );
+      await createNotification({
+        userId: routine.user_id,
+        agentId: routine.composer_app_id,
+        kind: "routine_capacity_blocked",
+        severity: "critical",
+        title: `${routine.name} needs a higher Agent capacity cap`,
+        body:
+          "Its current per-Agent cap cannot admit one execution. Increase the cap, then resume the routine.",
+        entityType: "routine",
+        entityId: routine.id,
+        dedupeKey: `routine_capacity_too_low:${routine.id}:${
+          err.details.agent_cap_basis_points ?? "unknown"
+        }`,
+      });
+      return { status: "failed" };
+    }
     if (err instanceof AccountCapacityWaitingError) {
       const deferred = await recordDeferredRoutineWake({
         routineId: routine.id,
@@ -1593,7 +1680,8 @@ async function executeClaimedRun(
     // Best-effort: get the run out of "running" so the reaper doesn't later
     // fail it and drive a retry of an already-succeeded handler.
     await finishRun(run, "succeeded", completedAt, {
-      summary: "Routine handler completed successfully (bookkeeping incomplete).",
+      summary:
+        "Routine handler completed successfully (bookkeeping incomplete).",
     }).catch(() => {});
     return { status: "succeeded", autoPaused: false };
   }
@@ -1604,7 +1692,9 @@ async function executeClaimedRun(
 // the queue consumer.
 function resolveInvocationOptions(
   options: RoutineExecutorOptions,
-): Required<Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">> {
+): Required<
+  Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">
+> {
   return {
     baseUrl: options.baseUrl || getEnv("BASE_URL") ||
       "https://api.connectgalactic.com",
@@ -1646,7 +1736,11 @@ async function claimAndExecuteRun(
 ): Promise<RunOutcome | null> {
   const now = options.now ?? new Date();
   const clock = options.clock || (() => new Date());
-  const leaseMs = positiveInteger(options.leaseMs, DEFAULT_LEASE_MS, 60 * 60 * 1000);
+  const leaseMs = positiveInteger(
+    options.leaseMs,
+    DEFAULT_LEASE_MS,
+    60 * 60 * 1000,
+  );
   const invocation = resolveInvocationOptions(options);
 
   const claimed = await claimQueuedRunForExecution(runId, now, leaseMs);

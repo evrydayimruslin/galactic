@@ -2,7 +2,7 @@ import type { HealthWindows } from "../types/index.ts";
 import type { MCPToolAnnotations } from "./mcp.ts";
 
 export const LAUNCH_MVP_VERSION = "persistent-agent-mvp-v1" as const;
-export const AGENT_HOME_CONTRACT_VERSION = "2026-07-15.p2.1" as const;
+export const AGENT_HOME_CONTRACT_VERSION = "2026-07-17.p2.3" as const;
 
 // Machine-readable safety/product invariants for the private persistent-Agent
 // launch. Capability-basin code may support broader modes, but the Conjure and
@@ -10,8 +10,10 @@ export const AGENT_HOME_CONTRACT_VERSION = "2026-07-15.p2.1" as const;
 export const PERSISTENT_AGENT_LAUNCH_POLICY = {
   access: "private_owner_only",
   primaryRoutinesPerAgent: 1,
-  scheduleSurface: "interval_only",
+  additionalRoutinesPerAgent: "unbounded_within_shared_capacity",
+  scheduleSurface: "interval_and_cron",
   reportingDestination: "galactic_inbox",
+  perAgentCapacityCeiling: "owner_configured_share_of_account_windows",
   activationAuthority: "account_session",
   connectedAgentAuthority: "scoped_builder_operator",
   crossAgentTargets: "owned_private_agents_only",
@@ -26,6 +28,9 @@ export const LAUNCH_INCLUDED_CAPABILITIES = [
   "private_agent_library",
   "persistent_agent_home",
   "full_time_routines",
+  "multi_routine_agents",
+  "cron_timezone_scheduling",
+  "durable_event_triggers",
   "sandboxed_execution",
   "owned_agent_composition",
   "runtime_monitoring",
@@ -35,6 +40,10 @@ export const LAUNCH_INCLUDED_CAPABILITIES = [
   "byok",
   "subscription_capacity",
   "coalesced_capacity_waiting",
+  "per_agent_capacity_caps",
+  "agent_filtered_alerts",
+  "compact_owner_fleet",
+  "animated_agent_icons",
   "scoped_builder_connection",
   "cli_api_mcp",
 ] as const;
@@ -54,8 +63,6 @@ export const LAUNCH_DEFERRED_CAPABILITIES = [
   "marketplace_trust_reputation",
   "cross_user_sharing",
   "external_reporting_destinations",
-  "multi_routine_agent_home",
-  "cron_timezone_configuration",
   "command_cards",
   "command_dashboards",
   "agentic_ui_composer",
@@ -108,6 +115,9 @@ export const LAUNCH_API_ROUTES = [
   "POST /api/launch/subscription/checkout",
   "POST /api/launch/subscription/portal",
   "GET /api/launch/capacity",
+  "GET /api/launch/fleet",
+  "GET /api/launch/notifications",
+  "PATCH /api/launch/notifications",
   "GET /api/launch/library",
   "POST /api/launch/folders",
   "PATCH /api/launch/folders/:id",
@@ -122,6 +132,12 @@ export const LAUNCH_API_ROUTES = [
   "PUT /api/launch/agents/:id/home/settings",
   "POST /api/launch/agents/:id/home/actions",
   "POST /api/launch/agents/:id/home/pause",
+  "GET /api/launch/agents/:id/routines",
+  "GET /api/launch/agents/:id/routines/:routineId",
+  "PATCH /api/launch/agents/:id/routines/:routineId",
+  "POST /api/launch/agents/:id/routines/:routineId/actions",
+  "GET /api/launch/agents/:id/capacity",
+  "PATCH /api/launch/agents/:id/capacity",
   "GET /api/launch/agents/:id/routine",
   "GET /api/launch/agents/:id/functions",
   "POST /api/launch/agents/:id/functions/:functionName/run",
@@ -633,6 +649,32 @@ export interface LaunchCapacityResponse {
   generatedAt: string;
 }
 
+export interface LaunchAgentCapacityWindow {
+  state: LaunchCapacityState;
+  resetsAt: string;
+  /** Agent usage as a share of the account window. Paid plans only. */
+  shareUsedPercent?: number;
+  /** How much of this Agent's configured ceiling has been consumed. */
+  capUsedPercent?: number;
+}
+
+export interface LaunchAgentCapacityResponse {
+  agentId: string;
+  /** Free remains fixed/qualitative; paid plans expose the owner-set ceiling. */
+  capPercent: number | null;
+  state: LaunchCapacityState;
+  burst: LaunchAgentCapacityWindow;
+  weekly: LaunchAgentCapacityWindow;
+  nextEligibleAt: string | null;
+  blocker?: "agent_cap_too_low_for_request" | null;
+  generatedAt: string;
+}
+
+export interface LaunchAgentCapacityUpdateRequest {
+  /** Percent of both shared windows, with up to two decimal places. */
+  capPercent: number;
+}
+
 export type LaunchSubscriptionStatus =
   | "inactive"
   | "incomplete"
@@ -759,6 +801,7 @@ export interface LaunchInterfaceSummary {
 // later). The website bell + gx.notifications read the same rows.
 export interface LaunchNotification {
   id: string;
+  agent_id?: string | null;
   kind: string;
   severity: "info" | "warning" | "critical";
   title: string;
@@ -856,17 +899,39 @@ export interface LaunchAgentRoutineRun {
   createdAt: string;
 }
 
+export type LaunchAgentRoutineRole = "primary" | "routine";
+
+export type LaunchAgentRoutineSchedule =
+  | {
+    kind: "interval";
+    intervalSeconds: number;
+    label: string;
+  }
+  | {
+    kind: "cron";
+    expression: string;
+    timezone: string;
+    label: string;
+  };
+
 /**
- * Owner-only projection of the one primary routine stored for a private Agent.
+ * Owner-only projection of one managed routine stored for a private Agent.
  * It intentionally omits routine config, metadata, run arguments, and secret
  * values. The Agent settings endpoint separately reports secret presence only.
  */
 export interface LaunchAgentRoutineOverview {
   id: string;
+  name: string;
+  description: string | null;
+  role: LaunchAgentRoutineRole;
   status: LaunchAgentRoutineStatus;
   health: LaunchAgentRoutineHealth;
   mission: string;
-  intervalSeconds: number;
+  schedule: LaunchAgentRoutineSchedule;
+  /** Bounded server-computed preview, useful for cron/DST review before activation. */
+  nextOccurrences: string[];
+  /** @deprecated Read schedule when available. Retained for older clients. */
+  intervalSeconds?: number;
   budgets: LaunchAgentRoutineBudget;
   capabilities: LaunchAgentRoutineCapability[];
   blockers: LaunchAgentRoutineBlocker[];
@@ -891,6 +956,7 @@ export interface LaunchAgentRoutineOverview {
 }
 
 export interface LaunchAgentRoutineResponse {
+  revision?: string;
   agent: {
     id: string;
     slug: string;
@@ -900,11 +966,38 @@ export interface LaunchAgentRoutineResponse {
   generatedAt: string;
 }
 
+export interface LaunchAgentRoutinesResponse {
+  revision: string;
+  agent: LaunchAgentRoutineResponse["agent"];
+  primaryRoutineId: string | null;
+  routines: LaunchAgentRoutineOverview[];
+  aggregate: {
+    total: number;
+    active: number;
+    paused: number;
+    failing: number;
+    running: number;
+    nextRunAt: string | null;
+    lastRunAt: string | null;
+  };
+  generatedAt: string;
+}
+
 export interface LaunchAgentRoutineUpdateRequest {
+  name?: string;
+  description?: string | null;
   mission?: string | null;
   intervalSeconds?: number;
+  schedule?:
+    | { kind: "interval"; intervalSeconds: number }
+    | { kind: "cron"; expression: string; timezone?: string };
   /** When supplied, all four hard ceilings are required. */
   budgets?: LaunchAgentRoutineBudget;
+}
+
+export interface LaunchAgentManagedRoutineUpdateRequest
+  extends LaunchAgentRoutineUpdateRequest {
+  expectedRevision: string;
 }
 
 export type LaunchAgentRoutineAction =
@@ -917,6 +1010,13 @@ export interface LaunchAgentRoutineActionRequest {
   action: LaunchAgentRoutineAction;
   /** Exact requested capability ids; valid only for approve_capabilities. */
   capabilityIds?: string[];
+}
+
+export interface LaunchAgentManagedRoutineActionRequest
+  extends LaunchAgentRoutineActionRequest {
+  expectedRevision: string;
+  /** Stable across retries of this exact action. */
+  idempotencyKey: string;
 }
 
 export type LaunchAgentHomeLifecycleState =
@@ -1070,11 +1170,7 @@ export interface LaunchAgentHomeResponse {
   };
   responsibility: {
     mission: string;
-    cadence: {
-      kind: "interval";
-      intervalSeconds: number;
-      label: string;
-    } | null;
+    cadence: LaunchAgentRoutineSchedule | null;
     reporting: {
       kind: "galactic_inbox";
       label: "Galactic inbox";
@@ -1099,7 +1195,10 @@ export interface LaunchAgentHomeResponse {
   authority: {
     items: LaunchAgentHomeAuthorityItem[];
   };
+  /** Aggregate managed-routine state; primary fields above remain compatibility aliases. */
+  routines?: Omit<LaunchAgentRoutinesResponse, "agent" | "generatedAt">;
   capacity: LaunchCapacityResponse | null;
+  agentCapacity?: LaunchAgentCapacityResponse | null;
   budget: LaunchAgentHomeBudget | null;
   release: LaunchAgentHomeRelease;
   recentRuns: LaunchAgentHomeRun[];
@@ -1147,6 +1246,7 @@ export interface LaunchAgentSummary {
   id: string;
   slug: string;
   name: string;
+  iconUrl?: string | null;
   description?: string | null;
   kind: LaunchAgentKind;
   visibility: LaunchAgentVisibility;
@@ -1171,6 +1271,50 @@ export interface LaunchAgentSummary {
   // manifest declares a routine (full-time agent) — the autonomous-behavior
   // disclosure card.
   fullTime?: LaunchFullTimeDisclosure | null;
+}
+
+export type LaunchFleetAgentState =
+  | "active"
+  | "paused"
+  | "error"
+  | "idle"
+  | "unconfigured";
+
+export type LaunchFleetAgentHealth =
+  | "healthy"
+  | "waiting"
+  | "paused"
+  | "error"
+  | "idle";
+
+export interface LaunchFleetActivity {
+  id: string;
+  kind: "run" | "alert";
+  title: string;
+  summary?: string | null;
+  status: string;
+  routineId?: string | null;
+  createdAt: string;
+}
+
+export interface LaunchFleetAgentSummary {
+  agent: LaunchAgentSummary;
+  state: LaunchFleetAgentState;
+  health: LaunchFleetAgentHealth;
+  routineCount: number;
+  activeRoutineCount: number;
+  nextWakeAt: string | null;
+  lastRunAt: string | null;
+  deferredWakeCount: number;
+  unreadAlertCount: number;
+  recentActivity: LaunchFleetActivity[];
+  capacity?: LaunchAgentCapacityResponse | null;
+}
+
+export interface LaunchFleetResponse {
+  agents: LaunchFleetAgentSummary[];
+  accountCapacity: LaunchCapacityResponse;
+  generatedAt: string;
 }
 
 export interface LaunchAgentAdminSummary {

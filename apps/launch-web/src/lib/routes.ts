@@ -42,6 +42,7 @@ export const launchRoutes: LaunchRouteDefinition[] = [
       "GET /api/launch/openapi.json",
       "GET /api/launch/install",
       "GET /api/launch/platform-primitives",
+      "GET /api/launch/fleet",
     ],
   },
   {
@@ -56,7 +57,7 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     path: "/agents",
     label: "Agents",
     nav: "primary",
-    apiRoutes: ["GET /api/launch/library"],
+    apiRoutes: ["GET /api/launch/library", "GET /api/launch/fleet"],
   },
   {
     key: "agent",
@@ -66,6 +67,12 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     apiRoutes: [
       "GET /api/launch/agents/:id",
       "GET /api/launch/agents/:id/functions",
+      "GET /api/launch/agents/:id/capacity",
+      "PATCH /api/launch/agents/:id/capacity",
+      "GET /api/launch/agents/:id/routines",
+      "GET /api/launch/agents/:id/routines/:routineId",
+      "PATCH /api/launch/agents/:id/routines/:routineId",
+      "POST /api/launch/agents/:id/routines/:routineId/actions",
       "POST /api/launch/agents/:id/functions/:functionName/run",
       "POST /api/launch/agents/:id/install",
       "DELETE /api/launch/agents/:id/install",

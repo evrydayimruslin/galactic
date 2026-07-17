@@ -156,12 +156,12 @@ Deno.test("routine executor: computes interval and cron next runs", () => {
     computeNextRoutineRunAt(
       { type: "interval", every_seconds: 5 },
       NOW,
-    )?.toISOString(),
-    "2026-05-17T12:01:00.000Z",
+    ),
+    null,
   );
   assertEquals(
     computeNextRoutineRunAt(
-      { type: "cron", cron: "*/15 * * * *" },
+      { type: "cron", cron: "*/15 * * * *", timezone: "UTC" },
       NOW,
     )?.toISOString(),
     "2026-05-17T12:15:00.000Z",
@@ -313,6 +313,7 @@ Deno.test("routine executor: exhausted capacity coalesces a scheduled wake witho
   globalThis.__env = {
     ...(globalThis.__env || {}),
     SUBSCRIPTION_CAPACITY_ENABLED: "1",
+    AGENT_CAPACITY_ENABLED: "1",
   };
   const calls: Array<{ table: string; method: string; body: Record<string, unknown> }> = [];
 
@@ -323,10 +324,10 @@ Deno.test("routine executor: exhausted capacity coalesces a scheduled wake witho
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     calls.push({ table, method, body });
 
-    if (table === "reserve_account_capacity") {
+    if (table === "reserve_account_capacity_v2") {
       return jsonResponse([{
         allowed: false,
-        code: "capacity_waiting",
+        code: "agent_cap_waiting",
         reservation_id: null,
         plan_code: "free",
         capacity_state: "waiting",
@@ -337,6 +338,11 @@ Deno.test("routine executor: exhausted capacity coalesces a scheduled wake witho
         next_eligible_at: "2026-05-24T12:00:00.000Z",
         burst_remaining_light: 1,
         weekly_remaining_light: 0,
+        capacity_agent_id: "composer-app-1",
+        agent_cap_basis_points: 5000,
+        binding_constraint: "agent",
+        agent_burst_remaining_light: 0.5,
+        agent_weekly_remaining_light: 0,
       }]);
     }
     if (table === "record_deferred_routine_wake") {
@@ -351,11 +357,15 @@ Deno.test("routine executor: exhausted capacity coalesces a scheduled wake witho
       });
     }
     if (table === "user_routines" && method === "GET") {
-      return jsonResponse([routineRow({ metadata: { launch_primary: true } })]);
+      return jsonResponse([routineRow({
+        metadata: { launch_managed: true, launch_role: "secondary" },
+      })]);
     }
     if (table === "user_routines" && method === "PATCH") {
       return jsonResponse([{
-        ...routineRow({ metadata: { launch_primary: true } }),
+        ...routineRow({
+          metadata: { launch_managed: true, launch_role: "secondary" },
+        }),
         ...body,
       }]);
     }
@@ -383,6 +393,11 @@ Deno.test("routine executor: exhausted capacity coalesces a scheduled wake witho
       calls.filter((call) => call.table === "record_deferred_routine_wake").length,
       1,
     );
+    const admission = calls.find((call) =>
+      call.table === "reserve_account_capacity_v2"
+    );
+    assertEquals(admission?.body.p_capacity_agent_id, "composer-app-1");
+    assertEquals(admission?.body.p_reserve_light, 0);
     const cadencePatch = calls.find((call) =>
       call.table === "user_routines" && call.method === "PATCH" &&
       call.body.next_run_at
@@ -783,6 +798,7 @@ Deno.test("routine executor: auto-pauses the routine after consecutive failed at
     // The owner is notified their agent stopped (idempotent per pause event).
     const pauseNotif = notifications.find((n) => n.kind === "routine_paused");
     assert(pauseNotif, "expected an owner notification on auto-pause");
+    assertEquals(pauseNotif?.agent_id, "composer-app-1");
     assertEquals(pauseNotif?.severity, "critical");
     assertEquals(pauseNotif?.entity_type, "routine");
     assert(

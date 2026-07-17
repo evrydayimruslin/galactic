@@ -1,12 +1,16 @@
 {
   "version": "5",
   "specifiers": {
+    "npm:@resvg/resvg-wasm@2.6.2": "2.6.2",
     "npm:@supabase/supabase-js@2.103.2": "2.103.2",
     "npm:esbuild-wasm@0.24.2": "0.24.2",
     "npm:typescript@5.9.3": "5.9.3",
     "npm:yaml@2.8.3": "2.8.3"
   },
   "npm": {
+    "@resvg/resvg-wasm@2.6.2": {
+      "integrity": "sha512-FqALmHI8D4o6lk/LRWDnhw95z5eO+eAa6ORjVg09YRR7BkcM6oPHU9uyC0gtQG5vpFLvgpeU4+zEAz2H8APHNw=="
+    },
     "@supabase/auth-js@2.103.2": {
       "integrity": "sha512-gHCp8J7TJ3ZrNsT5NiJt8Sa5SK7QnotUtxkBEaJ/vuimZ6MsWn6p4JWoDc01uZBmJTiISH3gQqTF2/S+kglDIw==",
       "dependencies": [

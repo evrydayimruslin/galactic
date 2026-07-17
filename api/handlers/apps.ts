@@ -5,6 +5,19 @@ import { error, json, toResponseBody } from "./response.ts";
 import { authenticate } from "./auth.ts";
 import { createAppsService } from "../services/apps.ts";
 import { createR2Service, type R2Service } from "../services/storage.ts";
+import {
+  ICON_EXTENSIONS,
+  iconContentVersion,
+  iconContentType,
+  isIconContentVersion,
+  isIconExtension,
+  legacyIconObjectKey,
+  parseIconReference,
+  selectVersionedIconKeysForDeletion,
+  type IconExtension,
+  validateIconImage,
+  versionedIconObjectKey,
+} from "../services/icon-image.ts";
 import { getCodeCache } from "../services/codecache.ts";
 import { bundleCode } from "../services/bundler.ts";
 import { ogCardKey, renderAgentOgCard } from "../services/og-card.ts";
@@ -2462,6 +2475,69 @@ async function handleDeleteVersion(
 /**
  * Upload app icon
  */
+function canonicalIconUrl(
+  appId: string,
+  extension: IconExtension,
+  version: string,
+): string {
+  return `/api/apps/${encodeURIComponent(appId)}/icon?format=${extension}&v=${version}`;
+}
+
+async function fetchOrPromoteVersionedIcon(
+  r2: R2Service,
+  appId: string,
+  extension: IconExtension,
+  version: string,
+  allowLegacyPromotion: boolean,
+): Promise<Uint8Array | null> {
+  const versionedKey = versionedIconObjectKey(appId, extension, version);
+  try {
+    return await r2.fetchFile(versionedKey);
+  } catch {
+    if (!allowLegacyPromotion) return null;
+  }
+
+  // Deployments before content-addressed R2 keys wrote a version into the URL
+  // while still storing bytes at icon.<ext>. Promote only after checking that
+  // those bytes actually hash to the requested version. A stale mutable object
+  // can therefore never impersonate an immutable URL.
+  try {
+    const legacyBytes = await r2.fetchFile(legacyIconObjectKey(appId, extension));
+    const computedVersion = await iconContentVersion(legacyBytes);
+    if (
+      computedVersion !== version &&
+      !(version.length === 16 && computedVersion.startsWith(version))
+    ) return null;
+    await r2.uploadFile(versionedKey, {
+      name: `${version}.${extension}`,
+      content: legacyBytes,
+      contentType: iconContentType(extension),
+    });
+    return legacyBytes;
+  } catch {
+    return null;
+  }
+}
+
+function iconResponse(
+  bytes: Uint8Array,
+  extension: IconExtension,
+  isPrivate: boolean,
+  immutable: boolean,
+): Response {
+  const headers = new Headers({
+    "Content-Type": iconContentType(extension),
+    "Cache-Control": isPrivate
+      ? "private, no-store"
+      : immutable
+      ? "public, max-age=31536000, immutable"
+      : "public, max-age=300",
+    "X-Content-Type-Options": "nosniff",
+  });
+  if (isPrivate) headers.set("Vary", "Authorization, Cookie");
+  return new Response(toResponseBody(bytes), { headers });
+}
+
 async function handleUploadIcon(
   request: Request,
   appId: string,
@@ -2490,40 +2566,92 @@ async function handleUploadIcon(
       return error("No icon file provided", 400);
     }
 
-    // Validate file type
-    const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
-    if (!allowedTypes.includes(iconFile.type)) {
-      return error("Invalid file type. Use PNG, JPG, or WebP.", 400);
+    const maxBytes = iconFile.type === "image/gif" ? 2 * 1024 * 1024 : 1024 * 1024;
+    if (iconFile.size > maxBytes) {
+      return error(
+        iconFile.type === "image/gif"
+          ? "Animated icons must be less than 2MB"
+          : "Icon must be less than 1MB",
+        400,
+      );
     }
 
-    // Validate file size (1MB max)
-    if (iconFile.size > 1024 * 1024) {
-      return error("Icon must be less than 1MB", 400);
-    }
-
-    // Get file extension
-    const ext = iconFile.type === "image/png"
-      ? "png"
-      : iconFile.type === "image/jpeg"
-      ? "jpg"
-      : "webp";
-    const iconKey = `apps/${appId}/icon.${ext}`;
-
-    // Upload to R2
+    // Trust decoded bytes, never the multipart MIME claim. Validation also
+    // bounds dimensions and GIF frame count before a browser ever decodes it.
     const content = new Uint8Array(await iconFile.arrayBuffer());
+    let validated: ReturnType<typeof validateIconImage>;
+    try {
+      validated = validateIconImage(iconFile.type, content);
+    } catch (validationError) {
+      return error(
+        validationError instanceof Error ? validationError.message : "Invalid icon image",
+        400,
+      );
+    }
+    const ext = validated.extension;
+    const version = await iconContentVersion(content);
+    const iconKey = versionedIconObjectKey(appId, ext, version);
+    const previousReference = parseIconReference(app.icon_url);
+    let previousVersionedKey: string | null = null;
+
+    // Preserve the immediately previous pseudo-versioned URL when upgrading
+    // from the old mutable object layout.
+    if (previousReference?.extension && previousReference.version) {
+      const previousBytes = await fetchOrPromoteVersionedIcon(
+        r2Service,
+        appId,
+        previousReference.extension,
+        previousReference.version,
+        true,
+      );
+      if (previousBytes) {
+        previousVersionedKey = versionedIconObjectKey(
+          appId,
+          previousReference.extension,
+          previousReference.version,
+        );
+      }
+    }
+
     await r2Service.uploadFile(iconKey, {
-      name: `icon.${ext}`,
+      name: `${version}.${ext}`,
       content,
-      contentType: iconFile.type,
+      contentType: iconContentType(ext),
     });
 
-    // Generate icon URL (using the app route to serve it)
-    const iconUrl = `/api/apps/${appId}/icon`;
+    const iconUrl = canonicalIconUrl(appId, ext, version);
 
     // Update app record
     await appsService.update(appId, { icon_url: iconUrl });
 
-    return json({ success: true, icon_url: iconUrl });
+    // Best-effort bounded history. Correctness never depends on cleanup: every
+    // retained URL maps to exactly one content-addressed object, while removed
+    // history returns 404 instead of silently serving replacement bytes.
+    try {
+      const prefix = `apps/${appId}/icons/`;
+      const protectedKeys = new Set([iconKey]);
+      if (previousVersionedKey) protectedKeys.add(previousVersionedKey);
+      const versionedKeys = await r2Service.listFiles(prefix);
+      await Promise.all(
+        selectVersionedIconKeysForDeletion(versionedKeys, protectedKeys)
+          .map((key) => r2Service.deleteFile(key)),
+      );
+      await Promise.all(
+        ICON_EXTENSIONS.map((candidate) =>
+          r2Service.deleteFile(legacyIconObjectKey(appId, candidate)).catch(() => {})
+        ),
+      );
+    } catch (cleanupError) {
+      console.warn("Failed to clean up historical icon objects:", cleanupError);
+    }
+
+    return json({
+      success: true,
+      icon_url: iconUrl,
+      width: validated.width,
+      height: validated.height,
+      animated: ext === "gif" && validated.frameCount > 1,
+    });
   } catch (err) {
     if (err instanceof Error && err.message.includes("Authentication")) {
       return error("Authentication required", 401);
@@ -2549,36 +2677,65 @@ async function handleGetIcon(
     }
 
     const r2Service = createR2Service();
+    const requestUrl = new URL(request.url);
+    const requestedFormat = requestUrl.searchParams.get("format");
+    const requestedVersion = requestUrl.searchParams.get("v");
+    const currentReference = parseIconReference(app.icon_url);
+    const isPrivate = app.visibility === "private";
 
-    // Try different extensions
-    const extensions = ["png", "jpg", "webp"];
-    let iconContent: Uint8Array | null = null;
-    let contentType = "image/png";
-
-    for (const ext of extensions) {
-      try {
-        iconContent = await r2Service.fetchFile(`apps/${appId}/icon.${ext}`);
-        contentType = ext === "png"
-          ? "image/png"
-          : ext === "jpg"
-          ? "image/jpeg"
-          : "image/webp";
-        break;
-      } catch {
-        // Try next extension
+    if (requestedFormat !== null || requestedVersion !== null) {
+      if (
+        !isIconExtension(requestedFormat) ||
+        !isIconContentVersion(requestedVersion)
+      ) {
+        return error("Icon not found", 404);
       }
+      const isCurrentReference = currentReference?.extension === requestedFormat &&
+        currentReference.version === requestedVersion;
+      const bytes = await fetchOrPromoteVersionedIcon(
+        r2Service,
+        appId,
+        requestedFormat,
+        requestedVersion,
+        isCurrentReference,
+      );
+      if (!bytes) return error("Icon not found", 404);
+      return iconResponse(bytes, requestedFormat, isPrivate, true);
     }
 
-    if (!iconContent) {
+    if (currentReference?.extension && currentReference.version) {
+      const headers = new Headers({
+        "Location": canonicalIconUrl(
+          appId,
+          currentReference.extension,
+          currentReference.version,
+        ),
+        "Cache-Control": isPrivate ? "private, no-store" : "public, max-age=300",
+      });
+      if (isPrivate) headers.set("Vary", "Authorization, Cookie");
+      return new Response(null, { status: 302, headers });
+    }
+
+    // Mutable-key probing exists only for a persisted legacy, unversioned
+    // reference. New and malformed references never fall through to it.
+    if (!app.icon_url || !currentReference || currentReference.version !== null) {
       return error("Icon not found", 404);
     }
-
-    return new Response(toResponseBody(iconContent), {
-      headers: {
-        "Content-Type": contentType,
-        "Cache-Control": "public, max-age=86400", // Cache for 1 day
-      },
-    });
+    const extensions: IconExtension[] = currentReference.extension
+      ? [
+        currentReference.extension,
+        ...ICON_EXTENSIONS.filter((candidate) => candidate !== currentReference.extension),
+      ]
+      : [...ICON_EXTENSIONS];
+    for (const extension of extensions) {
+      try {
+        const bytes = await r2Service.fetchFile(legacyIconObjectKey(appId, extension));
+        return iconResponse(bytes, extension, isPrivate, false);
+      } catch {
+        // Try the next legacy format.
+      }
+    }
+    return error("Icon not found", 404);
   } catch (err) {
     console.error("Failed to get icon:", err);
     return error("Failed to get icon", 500);
@@ -2596,11 +2753,6 @@ async function handleGetIcon(
  */
 const OG_APP_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const OG_ICON_EXTS: ReadonlyArray<readonly [string, string]> = [
-  ["png", "image/png"],
-  ["jpg", "image/jpeg"],
-  ["webp", "image/webp"],
-];
 
 export async function handleOgCard(
   request: Request,
@@ -2633,17 +2785,40 @@ export async function handleOgCard(
       });
     } catch { /* not rendered yet — fall through */ }
 
-    // 2. The agent's uploaded icon, if any.
-    for (const [ext, contentType] of OG_ICON_EXTS) {
+    // 2. The agent's uploaded icon, if any. Versioned references resolve only
+    //    their exact object; mutable-key probing is reserved for persisted
+    //    legacy references.
+    const iconReference = parseIconReference(app.icon_url);
+    if (iconReference?.extension && iconReference.version) {
       try {
-        const bytes = await r2.fetchFile(`apps/${appId}/icon.${ext}`);
+        const bytes = await r2.fetchFile(
+          versionedIconObjectKey(appId, iconReference.extension, iconReference.version),
+        );
         return new Response(toResponseBody(bytes), {
           headers: {
-            "Content-Type": contentType,
+            "Content-Type": iconContentType(iconReference.extension),
             "Cache-Control": "public, max-age=300",
           },
         });
-      } catch { /* try next extension */ }
+      } catch { /* fall through to the generic card */ }
+    } else if (app.icon_url && iconReference?.version === null) {
+      const extensions: IconExtension[] = iconReference.extension
+        ? [
+          iconReference.extension,
+          ...ICON_EXTENSIONS.filter((candidate) => candidate !== iconReference.extension),
+        ]
+        : [...ICON_EXTENSIONS];
+      for (const extension of extensions) {
+        try {
+          const bytes = await r2.fetchFile(legacyIconObjectKey(appId, extension));
+          return new Response(toResponseBody(bytes), {
+            headers: {
+              "Content-Type": iconContentType(extension),
+              "Cache-Control": "public, max-age=300",
+            },
+          });
+        } catch { /* try next legacy extension */ }
+      }
     }
 
     // 3. Generic Galactic card — so og:image is never a broken link, even for

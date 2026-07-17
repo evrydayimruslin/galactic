@@ -44,6 +44,7 @@ export interface RequestCallerContext {
   // behalf of the user; drives the cross-Agent grant check.
   callerApp?: {
     appId: string;
+    capacityAgentId?: string;
     callerFunction: string | null;
     hop: number;
   };

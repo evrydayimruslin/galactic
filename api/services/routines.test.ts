@@ -8,9 +8,13 @@ import {
   approveRoutineCapabilities,
   createRoutine,
   createRoutineRun,
+  isLaunchManagedRoutine,
+  launchRoutineRole,
   listRoutines,
   normalizeRoutineCreateInput,
+  pauseRoutine,
   recordRoutineRunStep,
+  resumeRoutine,
   routineCapabilitiesFromManifest,
   updateRoutine,
   updateRoutineRun,
@@ -72,7 +76,7 @@ Deno.test("routines: normalizes schedules, capability fan-out, and manifest capa
 
   assertEquals(normalized.routine.schedule, {
     type: "interval",
-    every_minutes: 5,
+    every_seconds: 300,
   });
   assertEquals(normalized.capabilities.length, 2);
   assertEquals(normalized.capabilities[0].access, "write");
@@ -150,6 +154,27 @@ Deno.test("routines: activation fails closed on required pending capabilities an
   assertEquals(
     unsafe.blockers.map((blocker) => blocker.code),
     ["unsafe_cadence", "invalid_budget"],
+  );
+});
+
+Deno.test("routines: explicit and legacy launch metadata resolve to protected lifecycle roles", () => {
+  assertEquals(launchRoutineRole({ launch_primary: true }), "primary");
+  assertEquals(
+    launchRoutineRole({ launch_managed: true, launch_role: "primary" }),
+    "primary",
+  );
+  assertEquals(
+    launchRoutineRole({ launch_managed: true, launch_role: "routine" }),
+    "routine",
+  );
+  assertEquals(
+    launchRoutineRole({ launch_managed: true, launch_role: "invalid" }),
+    "routine",
+  );
+  assertEquals(launchRoutineRole({ launch_primary: false }), null);
+  assertEquals(
+    isLaunchManagedRoutine({ metadata: { launch_managed: true } }),
+    true,
   );
 });
 
@@ -283,6 +308,8 @@ Deno.test("routines: user metadata updates cannot erase server accounting or pro
         budget_spend: { day_light: 0 },
         auto_pause: null,
         source: "spoofed",
+        launch_managed: false,
+        launch_role: "routine",
         launch_primary: false,
         approval_source: "self_approved",
         user_note: "updated",
@@ -294,6 +321,177 @@ Deno.test("routines: user metadata updates cannot erase server accounting or pro
       user_note: "updated",
       tenant_flag: true,
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
+});
+
+Deno.test("routines: pausing one managed sibling preserves the Agent activation slot", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  let releaseCalls = 0;
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-key",
+    SUBSCRIPTION_CAPACITY_ENABLED: "1",
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    const method = init?.method || "GET";
+    if (url.includes("/user_routines?") && method === "PATCH") {
+      return jsonResponse([routineRow({
+        user_id: "user-1",
+        composer_app_id: "app-1",
+        template_id: "primary",
+        name: "Primary",
+        handler_function: "run",
+        schedule: { type: "interval", every_minutes: 5 },
+        budget_policy: {},
+        approval_policy: {},
+        status: "paused",
+        metadata: {
+          launch_managed: true,
+          launch_role: "primary",
+          launch_primary: true,
+        },
+      })]);
+    }
+    if (
+      url.includes("/user_routines?") && method === "GET" &&
+      url.includes("status=eq.active")
+    ) {
+      return jsonResponse([{
+        metadata: { launch_managed: true, launch_role: "routine" },
+      }]);
+    }
+    if (url.includes("/rpc/release_agent_activation_slot")) {
+      releaseCalls += 1;
+      return jsonResponse(true);
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await pauseRoutine("user-1", "routine-1");
+    assertEquals(releaseCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
+});
+
+Deno.test("routines: stopping the final managed sibling releases the Agent activation slot", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  let releaseCalls = 0;
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-key",
+    SUBSCRIPTION_CAPACITY_ENABLED: "1",
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    const method = init?.method || "GET";
+    if (url.includes("/user_routines?") && method === "PATCH") {
+      return jsonResponse([routineRow({
+        user_id: "user-1",
+        composer_app_id: "app-1",
+        template_id: "worker",
+        name: "Worker",
+        handler_function: "run",
+        schedule: { type: "interval", every_minutes: 5 },
+        budget_policy: {},
+        approval_policy: {},
+        status: "paused",
+        metadata: { launch_managed: true, launch_role: "routine" },
+      })]);
+    }
+    if (
+      url.includes("/user_routines?") && method === "GET" &&
+      url.includes("status=eq.active")
+    ) {
+      return jsonResponse([]);
+    }
+    if (url.includes("/rpc/release_agent_activation_slot")) {
+      releaseCalls += 1;
+      return jsonResponse(true);
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await pauseRoutine("user-1", "routine-1");
+    assertEquals(releaseCalls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
+});
+
+Deno.test("routines: managed resume claims the Free slot and activates atomically", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  let atomicCalls = 0;
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-key",
+    SUBSCRIPTION_CAPACITY_ENABLED: "1",
+  };
+  const paused = routineRow({
+    user_id: "user-1",
+    composer_app_id: "app-1",
+    template_id: "worker",
+    name: "Worker",
+    handler_function: "run",
+    schedule: { type: "interval", every_minutes: 5 },
+    budget_policy: {},
+    approval_policy: {},
+    status: "paused",
+    metadata: { launch_managed: true, launch_role: "routine" },
+  });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    const method = init?.method || "GET";
+    if (url.includes("/user_routines?") && method === "GET") {
+      return jsonResponse([paused]);
+    }
+    if (url.includes("/routine_capabilities?")) return jsonResponse([]);
+    if (url.includes("/routine_dashboard_bindings?")) return jsonResponse([]);
+    if (url.includes("/rpc/activate_managed_routine_with_slot")) {
+      atomicCalls += 1;
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      assertEquals(body.p_user_id, "user-1");
+      assertEquals(body.p_routine_id, "routine-1");
+      assertEquals(body.p_budget_policy, {
+        max_light_per_run: 10,
+        max_light_per_day: 100,
+        max_light_per_month: 1000,
+        max_calls_per_run: 25,
+      });
+      return jsonResponse([{
+        allowed: true,
+        code: "ok",
+        active_agent_limit: 1,
+        occupied_by: "app-1",
+        routine_record: { ...paused, status: "active" },
+      }]);
+    }
+    if (
+      url.includes("/rpc/claim_agent_activation_slot") || method === "PATCH"
+    ) {
+      throw new Error("managed resume must not split claim and activation");
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const active = await resumeRoutine("user-1", "routine-1");
+    assertEquals(active.status, "active");
+    assertEquals(atomicCalls, 1);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.__env = originalEnv;
@@ -364,7 +562,11 @@ Deno.test("routines: creates routine instances with capabilities and dashboard b
 
     assertEquals(routine.id, "routine-1");
     assertEquals(routine.status, "paused");
-    assertEquals(routine.schedule, { type: "cron", cron: "*/5 * * * *" });
+    assertEquals(routine.schedule, {
+      type: "cron",
+      cron: "*/5 * * * *",
+      timezone: "UTC",
+    });
     assertEquals(routine.capabilities[0].app_ref, "email-drafter");
     assertEquals(routine.dashboard_bindings[0].widget_id, "email_ops");
     assertEquals(calls.length, 3);

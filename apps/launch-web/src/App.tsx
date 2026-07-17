@@ -28,6 +28,7 @@ import {
   TermsPage,
 } from "./pages/foundation-pages";
 import { LaunchShell } from "./components/launch-chrome";
+import { NebulaFleetApp } from "./components/nebula-fleet";
 import { SignInModalProvider } from "./components/sign-in-modal";
 import {
   exchangeLaunchBridgeToken,
@@ -147,9 +148,26 @@ export function App(): ReactElement {
     }
   }, [route.definition.key, route.definition.nav]);
 
+  const nebulaRoute = Boolean(getLaunchAuthToken()) && (
+    route.definition.key === "home" ||
+    route.definition.key === "library" ||
+    route.definition.key === "settings" ||
+    (route.definition.key === "agent" &&
+      (live.data.agent?.agent ?? live.data.agent?.tool)?.relationship === "owner")
+  );
+
   return (
     <SignInModalProvider>
-      <LaunchShell
+      {nebulaRoute && !providerCodeMisrouted
+        ? (
+          <NebulaFleetApp
+            live={live}
+            location={location}
+            route={route}
+            navigate={navigate}
+          />
+        )
+        : <LaunchShell
         accountRoutes={accountRoutes()}
         activeRoute={activeSection}
         navigate={navigate}
@@ -164,7 +182,7 @@ export function App(): ReactElement {
             navigate={navigate}
           />
         )}
-      </LaunchShell>
+      </LaunchShell>}
     </SignInModalProvider>
   );
 }

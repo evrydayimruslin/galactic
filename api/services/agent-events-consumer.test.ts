@@ -7,6 +7,8 @@ import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 
 import { processEventMessage } from "./agent-events-consumer.ts";
+import { dispatchClaimedEvent } from "./agent-events.ts";
+import type { AgentEvent } from "../../shared/contracts/agent-grants.ts";
 
 const TEST_ENV = {
   SUPABASE_URL: "https://supabase.test",
@@ -99,6 +101,15 @@ function subscribeGrantRow(n: number) {
   };
 }
 
+function privateOwnerAppRow(id: string) {
+  return {
+    id,
+    owner_id: "user-1",
+    visibility: "private",
+    deleted_at: null,
+  };
+}
+
 Deno.test("event consumer: malformed message acks without touching the database", async () => {
   const { result, requests } = await withMockedDb(
     () => new Response("[]", { status: 200 }),
@@ -163,12 +174,19 @@ Deno.test("event consumer: failed delivery is recorded per-row and the event end
         if (method === "POST") {
           return new Response(JSON.stringify([{ id: "d-1" }]), { status: 201 });
         }
+        if (method === "GET") return new Response("[]", { status: 200 });
         deliveryPatches.push(body as Record<string, unknown>);
         return new Response("[]", { status: 200 });
       }
       if (url.pathname.endsWith("/rest/v1/apps")) {
-        // The subscriber Agent no longer exists — the delivery fails.
-        return new Response("[]", { status: 200 });
+        const appId = url.searchParams.get("id")?.replace(/^eq\./, "") ?? "";
+        // The emitter remains valid, but the subscriber no longer exists.
+        return new Response(
+          JSON.stringify(
+            appId === "app-emitter" ? [privateOwnerAppRow(appId)] : [],
+          ),
+          { status: 200 },
+        );
       }
       return new Response("[]", { status: 200 });
     },
@@ -184,6 +202,216 @@ Deno.test("event consumer: failed delivery is recorded per-row and the event end
     String(eventPatches[0].last_error ?? "").includes("1 of 1"),
     "last_error should summarize the failed deliveries",
   );
+});
+
+Deno.test("reactive delivery: capacity wait persists, preserves root attribution, and resumes once", async () => {
+  const resetAt = new Date(Date.now() + 5 * 60_000).toISOString();
+  const eventPatches: Record<string, unknown>[] = [];
+  const deliveryPatches: Record<string, unknown>[] = [];
+  const notifications: Record<string, unknown>[] = [];
+  const executionInputs: Array<Record<string, unknown>> = [];
+  let inserted = false;
+  let delivery = {
+    id: "d-wait",
+    grant_id: "sub-1",
+    subscriber_app_id: "app-subscriber-1",
+    target_function: "onSale",
+    status: "pending",
+    attempts: 1,
+    next_eligible_at: null as string | null,
+  };
+
+  const handler = (url: URL, init: RequestInit | undefined): Response => {
+    const method = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    if (url.pathname.endsWith("/rest/v1/apps")) {
+      const appId = url.searchParams.get("id")?.replace(/^eq\./, "") ?? "";
+      return new Response(JSON.stringify([privateOwnerAppRow(appId)]), {
+        status: 200,
+      });
+    }
+    if (url.pathname.endsWith("/agent_function_grants")) {
+      return new Response(JSON.stringify([subscribeGrantRow(1)]), {
+        status: 200,
+      });
+    }
+    if (url.pathname.endsWith("/agent_event_deliveries")) {
+      if (method === "POST") {
+        if (inserted) return new Response("[]", { status: 201 });
+        inserted = true;
+        return new Response(JSON.stringify([{ id: delivery.id }]), {
+          status: 201,
+        });
+      }
+      if (method === "PATCH") {
+        deliveryPatches.push(body as Record<string, unknown>);
+        delivery = { ...delivery, ...(body as typeof delivery) };
+        return new Response(
+          body?.status === "pending" ? JSON.stringify([delivery]) : "[]",
+          { status: 200 },
+        );
+      }
+      if (url.searchParams.get("status") === "eq.failed") {
+        return new Response("[]", { status: 200 });
+      }
+      if (url.searchParams.get("status") === "eq.waiting") {
+        return new Response(
+          delivery.status === "waiting" ? JSON.stringify([delivery]) : "[]",
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify([delivery]), { status: 200 });
+    }
+    if (url.pathname.endsWith("/agent_events") && method === "PATCH") {
+      eventPatches.push(body as Record<string, unknown>);
+      return new Response("[]", { status: 200 });
+    }
+    if (url.pathname.endsWith("/user_notifications") && method === "POST") {
+      notifications.push(body as Record<string, unknown>);
+      return new Response("[]", { status: 201 });
+    }
+    return new Response("[]", { status: 200 });
+  };
+
+  const claimedEvent: AgentEvent = {
+    id: "evt-wait",
+    userId: "user-1",
+    emitterAppId: "app-emitter",
+    capacityAgentId: "app-root",
+    topic: "sale.created",
+    payload: { orderId: 7 },
+    status: "delivering",
+    attempts: 1,
+    emitHop: 2,
+    createdAt: new Date().toISOString(),
+    dispatchedAt: null,
+    nextEligibleAt: null,
+  };
+  const executeDelivery = async (input: unknown) => {
+    executionInputs.push(input as Record<string, unknown>);
+    if (executionInputs.length === 1) {
+      return {
+        success: false,
+        receiptId: null,
+        error: "Agent capacity is waiting",
+        admission: {
+          code: "agent_cap_waiting" as const,
+          nextEligibleAt: resetAt,
+          capacityAgentId: "app-root",
+          bindingConstraint: "agent" as const,
+        },
+      };
+    }
+    return { success: true, receiptId: null };
+  };
+
+  await withMockedDb(
+    handler,
+    () => dispatchClaimedEvent(claimedEvent, Date.now(), { executeDelivery }),
+  );
+  assertEquals(delivery.status, "waiting");
+  assertEquals(delivery.next_eligible_at, resetAt);
+  assertEquals(eventPatches.at(-1)?.status, "waiting");
+  assertEquals(eventPatches.at(-1)?.next_eligible_at, resetAt);
+  assertEquals(executionInputs[0].emitterAppId, "app-emitter");
+  assertEquals(executionInputs[0].capacityAgentId, "app-root");
+  assertEquals(notifications[0]?.agent_id, "app-subscriber-1");
+  assertEquals(notifications[0]?.kind, "event_delivery_waiting");
+
+  await withMockedDb(
+    handler,
+    () =>
+      dispatchClaimedEvent(
+        { ...claimedEvent, attempts: 2 },
+        new Date(resetAt).getTime() + 1,
+        { executeDelivery },
+      ),
+  );
+  assertEquals(
+    executionInputs.length,
+    2,
+    "waiting delivery resumes exactly once",
+  );
+  assertEquals(delivery.status, "delivered");
+  assertEquals(eventPatches.at(-1)?.status, "delivered");
+  assertEquals(
+    deliveryPatches.filter((patch) => patch.status === "pending").length,
+    1,
+    "only the due waiting row may re-enter the executable state",
+  );
+});
+
+Deno.test("reactive delivery: a subscriber that leaves owner-private scope is denied with an Agent Alert", async () => {
+  const deliveryPatches: Record<string, unknown>[] = [];
+  const notifications: Record<string, unknown>[] = [];
+  let executions = 0;
+  const handler = (url: URL, init: RequestInit | undefined): Response => {
+    const method = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    if (url.pathname.endsWith("/rest/v1/apps")) {
+      const appId = url.searchParams.get("id")?.replace(/^eq\./, "") ?? "";
+      return new Response(
+        JSON.stringify([{
+          ...privateOwnerAppRow(appId),
+          visibility: appId === "app-subscriber-1" ? "public" : "private",
+        }]),
+        { status: 200 },
+      );
+    }
+    if (url.pathname.endsWith("/agent_function_grants")) {
+      return new Response(JSON.stringify([subscribeGrantRow(1)]), {
+        status: 200,
+      });
+    }
+    if (url.pathname.endsWith("/agent_event_deliveries")) {
+      if (method === "POST") {
+        return new Response(JSON.stringify([{ id: "d-blocked" }]), {
+          status: 201,
+        });
+      }
+      if (method === "PATCH") {
+        deliveryPatches.push(body as Record<string, unknown>);
+      }
+      return new Response("[]", { status: 200 });
+    }
+    if (url.pathname.endsWith("/user_notifications") && method === "POST") {
+      notifications.push(body as Record<string, unknown>);
+      return new Response("[]", { status: 201 });
+    }
+    return new Response("[]", { status: 200 });
+  };
+  const event: AgentEvent = {
+    id: "evt-blocked",
+    userId: "user-1",
+    emitterAppId: "app-emitter",
+    capacityAgentId: "app-emitter",
+    topic: "sale.created",
+    payload: {},
+    status: "delivering",
+    attempts: 1,
+    emitHop: 1,
+    createdAt: new Date().toISOString(),
+    dispatchedAt: null,
+    nextEligibleAt: null,
+  };
+  await withMockedDb(
+    handler,
+    () =>
+      dispatchClaimedEvent(event, Date.now(), {
+        executeDelivery: async () => {
+          executions++;
+          return { success: true, receiptId: null };
+        },
+      }),
+  );
+  assertEquals(
+    executions,
+    0,
+    "owner-private isolation is checked pre-execution",
+  );
+  assertEquals(deliveryPatches[0]?.status, "denied");
+  assertEquals(notifications[0]?.agent_id, "app-subscriber-1");
+  assertEquals(notifications[0]?.kind, "event_delivery_blocked");
 });
 
 Deno.test("event consumer: a fan-out beyond the pass budget re-enqueues, and the continuation pass actually progresses", async () => {
@@ -232,6 +460,15 @@ Deno.test("event consumer: a fan-out beyond the pass budget re-enqueues, and the
         );
       }
       return new Response("[]", { status: 200 });
+    }
+    if (url.pathname.endsWith("/rest/v1/apps")) {
+      const appId = url.searchParams.get("id")?.replace(/^eq\./, "") ?? "";
+      return new Response(
+        JSON.stringify(
+          appId === "app-emitter" ? [privateOwnerAppRow(appId)] : [],
+        ),
+        { status: 200 },
+      );
     }
     // Subscriber apps all missing — each attempted delivery fails fast.
     return new Response("[]", { status: 200 });

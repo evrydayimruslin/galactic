@@ -94,7 +94,7 @@ function responsibilityDraft(
 ): ResponsibilityDraft {
   return {
     mission: home?.responsibility.mission ?? "",
-    cadenceMinutes: home?.responsibility.cadence
+    cadenceMinutes: home?.responsibility.cadence?.kind === "interval"
       ? String(home.responsibility.cadence.intervalSeconds / 60)
       : "",
   };
@@ -123,8 +123,9 @@ function isResponsibilityDirty(
 ): boolean {
   if (!home.responsibility.cadence) return false;
   return draft.mission.trim() !== home.responsibility.mission ||
-    draft.cadenceMinutes !==
-      String(home.responsibility.cadence.intervalSeconds / 60);
+    (home.responsibility.cadence.kind === "interval" &&
+      draft.cadenceMinutes !==
+        String(home.responsibility.cadence.intervalSeconds / 60));
 }
 
 function isBudgetDirty(
@@ -612,9 +613,13 @@ export function AgentHomeOverview({
   };
 
   const saveResponsibility = () => {
+    const cadence = snapshot.responsibility.cadence;
     const minutes = Number(responsibility.cadenceMinutes);
     const intervalSeconds = minutes * 60;
-    if (!Number.isFinite(minutes) || minutes < 1 || !Number.isSafeInteger(intervalSeconds)) {
+    if (
+      cadence?.kind === "interval" &&
+      (!Number.isFinite(minutes) || minutes < 1 || !Number.isSafeInteger(intervalSeconds))
+    ) {
       setNotice({
         tone: "error",
         message: "Cadence must be a whole number of seconds and at least one minute.",
@@ -627,7 +632,7 @@ export function AgentHomeOverview({
         launchApi.updateAgentHomeRoutine(agentId, {
           expectedRevision,
           mission: responsibility.mission.trim() || null,
-          intervalSeconds,
+          ...(cadence?.kind === "interval" ? { intervalSeconds } : {}),
         }),
       { reset: "responsibility", success: "Responsibility saved." },
     );
@@ -954,21 +959,31 @@ export function AgentHomeOverview({
                 />
               </label>
               <div className="agent-home-form-grid">
-                <label className="agent-home-field">
-                  <span>Cadence (minutes)</span>
-                  <input
-                    disabled={!snapshot.actions.canEditRoutine || mutationDisabled}
-                    min="1"
-                    onChange={(event) =>
-                      setResponsibility((current) => ({
-                        ...current,
-                        cadenceMinutes: event.target.value,
-                      }))}
-                    step="1"
-                    type="number"
-                    value={responsibility.cadenceMinutes}
-                  />
-                </label>
+                {snapshot.responsibility.cadence.kind === "interval"
+                  ? (
+                    <label className="agent-home-field">
+                      <span>Cadence (minutes)</span>
+                      <input
+                        disabled={!snapshot.actions.canEditRoutine || mutationDisabled}
+                        min="1"
+                        onChange={(event) =>
+                          setResponsibility((current) => ({
+                            ...current,
+                            cadenceMinutes: event.target.value,
+                          }))}
+                        step="1"
+                        type="number"
+                        value={responsibility.cadenceMinutes}
+                      />
+                    </label>
+                  )
+                  : (
+                    <div className="agent-home-readonly-field">
+                      <span>Cron cadence</span>
+                      <strong>{snapshot.responsibility.cadence.expression}</strong>
+                      <small>{snapshot.responsibility.cadence.timezone}</small>
+                    </div>
+                  )}
                 <div className="agent-home-readonly-field">
                   <span>Reporting destination</span>
                   <strong>{snapshot.responsibility.reporting.label}</strong>

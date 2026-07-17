@@ -44,9 +44,18 @@ function routine(
 ): LaunchAgentRoutineOverview {
   return {
     id: ROUTINE_ID,
+    name: "Inbox watch",
+    description: null,
+    role: "primary",
     status: "paused",
     health: "paused",
     mission: "Watch the launch inbox and archive actionable reports.",
+    schedule: {
+      kind: "interval",
+      intervalSeconds: 3600,
+      label: "Every hour",
+    },
+    nextOccurrences: [],
     intervalSeconds: 3600,
     budgets: {
       maxLightPerRun: 10,
@@ -192,7 +201,7 @@ function input(
 
 Deno.test("agent home: derives an initial ready Agent without conflating health", () => {
   const home = buildAgentHomeResponse(input());
-  assertEquals(home.contractVersion, "2026-07-15.p2.1");
+  assertEquals(home.contractVersion, "2026-07-17.p2.3");
   assertEquals(home.state.lifecycle, "ready");
   assertEquals(home.state.execution, "idle");
   assertEquals(home.state.health, "unknown");
