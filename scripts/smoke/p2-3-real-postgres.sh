@@ -37,6 +37,7 @@ new_uuid() {
 RUN_UUID="$(new_uuid)"
 RUN_TOKEN="${RUN_UUID//-/}"
 RUN_TOKEN="${RUN_TOKEN:0:16}"
+BARRIER_KEY_NAMESPACE=$((16#${RUN_TOKEN:0:7}))
 RUN_MARKER="p23-smoke-${RUN_TOKEN}"
 FREE_USER_ID="$(new_uuid)"
 PRO_USER_ID="$(new_uuid)"
@@ -115,7 +116,8 @@ run_pair() {
   local status_a=0 status_b=0 holder_status=0
   local holder_ready=0 waiters_ready=0 observed=""
   PAIR_SEQUENCE=$((PAIR_SEQUENCE + 1))
-  local barrier_name="${RUN_MARKER}:pair:${PAIR_SEQUENCE}"
+  local barrier_key_a="$BARRIER_KEY_NAMESPACE"
+  local barrier_key_b="$PAIR_SEQUENCE"
   local holder_app="g-p23:${RUN_TOKEN}:p${PAIR_SEQUENCE}:holder"
   local app_a="g-p23:${RUN_TOKEN}:p${PAIR_SEQUENCE}:a"
   local app_b="g-p23:${RUN_TOKEN}:p${PAIR_SEQUENCE}:b"
@@ -136,8 +138,8 @@ run_pair() {
   {
     echo "BEGIN;"
     echo "SET LOCAL statement_timeout = '45s';"
-    printf "DO \$barrier\$ BEGIN PERFORM pg_advisory_xact_lock(hashtextextended('%s', 0)); END \$barrier\$;\n" \
-      "$barrier_name"
+    printf "DO \$barrier\$ BEGIN PERFORM pg_advisory_xact_lock(%s, %s); END \$barrier\$;\n" \
+      "$barrier_key_a" "$barrier_key_b"
   } >&9
 
   for _ in {1..100}; do
@@ -145,12 +147,14 @@ run_pair() {
       break
     fi
     observed="$(psql_smoke --quiet --tuples-only --no-align \
-      --set=holder_app="$holder_app" <<'SQL'
+      --set=barrier_key_a="$barrier_key_a" \
+      --set=barrier_key_b="$barrier_key_b" <<'SQL'
 SELECT count(*)
-FROM pg_catalog.pg_stat_activity AS activity
-JOIN pg_catalog.pg_locks AS held ON held.pid = activity.pid
-WHERE activity.application_name = :'holder_app'
-  AND held.locktype = 'advisory'
+FROM pg_catalog.pg_locks AS held
+WHERE held.locktype = 'advisory'
+  AND held.classid = :'barrier_key_a'::oid
+  AND held.objid = :'barrier_key_b'::oid
+  AND held.objsubid = 2
   AND held.granted
   AND held.mode = 'ExclusiveLock';
 SQL
@@ -171,7 +175,7 @@ SQL
     return 1
   fi
 
-  barrier_acquire_sql="BEGIN; SET LOCAL statement_timeout = '45s'; DO \$barrier\$ BEGIN PERFORM pg_advisory_xact_lock_shared(hashtextextended('$barrier_name', 0)); END \$barrier\$;"
+  barrier_acquire_sql="BEGIN; SET LOCAL statement_timeout = '45s'; DO \$barrier\$ BEGIN PERFORM pg_advisory_xact_lock_shared($barrier_key_a, $barrier_key_b); END \$barrier\$;"
   PGAPPNAME_OVERRIDE="$app_a" psql_smoke --quiet --tuples-only --no-align \
     --field-separator='|' --command="$barrier_acquire_sql" \
     --file="$sql_a" --command='COMMIT;' >"$output_a" 2>"$error_a" &
@@ -186,33 +190,16 @@ SQL
   # instead of merely starting two local processes close together.
   for _ in {1..100}; do
     observed="$(psql_smoke --quiet --tuples-only --no-align \
-      --set=holder_app="$holder_app" --set=app_a="$app_a" --set=app_b="$app_b" <<'SQL'
-WITH held_key AS (
-  SELECT held.database, held.classid, held.objid, held.objsubid
-  FROM pg_catalog.pg_stat_activity AS holder
-  JOIN pg_catalog.pg_locks AS held ON held.pid = holder.pid
-  WHERE holder.application_name = :'holder_app'
-    AND held.locktype = 'advisory'
-    AND held.granted
-    AND held.mode = 'ExclusiveLock'
-), waiting_backends AS (
-  SELECT DISTINCT waiter.pid
-  FROM held_key
-  JOIN pg_catalog.pg_locks AS waiting_lock
-    ON waiting_lock.locktype = 'advisory'
-   AND waiting_lock.database IS NOT DISTINCT FROM held_key.database
-   AND waiting_lock.classid = held_key.classid
-   AND waiting_lock.objid = held_key.objid
-   AND waiting_lock.objsubid = held_key.objsubid
-   AND NOT waiting_lock.granted
-   AND waiting_lock.mode = 'ShareLock'
-  JOIN pg_catalog.pg_stat_activity AS waiter ON waiter.pid = waiting_lock.pid
-  WHERE waiter.application_name IN (:'app_a', :'app_b')
-    AND waiter.state = 'active'
-    AND waiter.wait_event_type = 'Lock'
-    AND waiter.wait_event = 'advisory'
-)
-SELECT count(*) FROM waiting_backends;
+      --set=barrier_key_a="$barrier_key_a" \
+      --set=barrier_key_b="$barrier_key_b" <<'SQL'
+SELECT count(DISTINCT waiting_lock.pid)
+FROM pg_catalog.pg_locks AS waiting_lock
+WHERE waiting_lock.locktype = 'advisory'
+  AND waiting_lock.classid = :'barrier_key_a'::oid
+  AND waiting_lock.objid = :'barrier_key_b'::oid
+  AND waiting_lock.objsubid = 2
+  AND NOT waiting_lock.granted
+  AND waiting_lock.mode = 'ShareLock';
 SQL
 )" || observed=""
     if [[ "$observed" == "2" ]]; then
