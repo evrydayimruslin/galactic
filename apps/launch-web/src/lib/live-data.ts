@@ -69,6 +69,11 @@ interface LocationLike {
   search: string;
 }
 
+interface LaunchLiveDataContext {
+  authenticated: boolean;
+  suspend?: boolean;
+}
+
 type LoadResult = LaunchRouteLiveData;
 
 // Session-lived cache of the last payload fetched per route identity. Lets a
@@ -81,6 +86,7 @@ const routeCache = new Map<string, LaunchRouteLiveData>();
 export function useLaunchRouteLiveData(
   location: LocationLike,
   route: ResolvedLaunchRoute,
+  { authenticated, suspend = false }: LaunchLiveDataContext,
 ): LaunchRouteLiveState {
   const [version, setVersion] = useState(0);
   const [state, setState] = useState<Omit<LaunchRouteLiveState, "reload">>({
@@ -95,10 +101,34 @@ export function useLaunchRouteLiveData(
   );
   const reload = useCallback(() => setVersion((value) => value + 1), []);
   const identityRef = useRef("");
-  const identity = `${routeKey}|${paramsKey}|${location.pathname}`;
+  const identity = launchRouteDataIdentity({
+    authenticated,
+    paramsKey,
+    pathname: location.pathname,
+    routeKey,
+  });
 
   useEffect(() => {
     let cancelled = false;
+    const authScopeChanged = (): boolean => {
+      if (sameLaunchAuthScope(authenticated, hasLaunchAuthToken())) return false;
+      // API requests can silently refresh an expired session. Never commit a
+      // response under the public cache key when it was authorized midway
+      // through the request (or vice versa); the empty update makes App render
+      // again and this effect restarts under the new session scope.
+      setState({ data: {}, status: "loading" });
+      return true;
+    };
+    // Never fetch or surface cached route data while a refresh cookie is being
+    // revalidated. In particular, this prevents an expired owner session from
+    // painting its last private Agent payload before authorization is known.
+    if (suspend) {
+      identityRef.current = identity;
+      setState({ data: {}, status: "loading" });
+      return () => {
+        cancelled = true;
+      };
+    }
     // Navigating to a DIFFERENT route must drop the previous route's payload
     // and report "loading" — otherwise pages render stale data (or definitive
     // empty/not-found states) under the new URL while the fetch is in flight.
@@ -125,7 +155,7 @@ export function useLaunchRouteLiveData(
     );
 
     loadAgentHomeRouteData(route)?.then((homeData) => {
-      if (cancelled) return;
+      if (cancelled || authScopeChanged()) return;
       accumulated = { ...accumulated, ...homeData };
       routeCache.set(identity, accumulated);
       setState((current) => ({ ...current, data: accumulated }));
@@ -133,13 +163,13 @@ export function useLaunchRouteLiveData(
 
     loadRouteData(location, route)
       .then((data) => {
-        if (cancelled) return;
+        if (cancelled || authScopeChanged()) return;
         accumulated = { ...accumulated, ...data };
         routeCache.set(identity, accumulated);
         setState({ data: accumulated, status: "ready" });
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (cancelled || authScopeChanged()) return;
         setState((current) => ({
           data: current.data,
           error: err instanceof Error ? err.message : String(err),
@@ -150,7 +180,17 @@ export function useLaunchRouteLiveData(
     return () => {
       cancelled = true;
     };
-  }, [location.pathname, location.search, route, routeKey, paramsKey, version]);
+  }, [
+    authenticated,
+    identity,
+    location.pathname,
+    location.search,
+    paramsKey,
+    route,
+    routeKey,
+    suspend,
+    version,
+  ]);
 
   // Derive the displayed state DURING render, not only in the effect above. On a
   // route change the committed `state` still holds the PREVIOUS route's payload,
@@ -158,6 +198,8 @@ export function useLaunchRouteLiveData(
   // state before the effect swaps in this route's cached data. When we have a
   // cached payload for the new identity, surface it immediately (the effect
   // still revalidates); otherwise show loading. Same-route renders use `state`.
+  if (suspend) return { data: {}, reload, status: "loading" };
+
   let effective = state;
   if (identity !== identityRef.current) {
     const cached = routeCache.get(identity);
@@ -167,6 +209,28 @@ export function useLaunchRouteLiveData(
   }
 
   return { ...effective, reload };
+}
+
+export function launchRouteDataIdentity({
+  authenticated,
+  paramsKey,
+  pathname,
+  routeKey,
+}: {
+  authenticated: boolean;
+  paramsKey: string;
+  pathname: string;
+  routeKey: string;
+}): string {
+  const sessionScope = authenticated ? "authenticated" : "public";
+  return `${sessionScope}|${routeKey}|${paramsKey}|${pathname}`;
+}
+
+export function sameLaunchAuthScope(
+  capturedAuthenticated: boolean,
+  currentAuthenticated: boolean,
+): boolean {
+  return capturedAuthenticated === currentAuthenticated;
 }
 
 async function loadRouteData(

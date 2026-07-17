@@ -577,6 +577,42 @@ function AddAgentCard({ number }: { number: number }): ReactElement {
   );
 }
 
+export function NebulaSessionRestoringShell({
+  agentOpen,
+  onAgentClose,
+}: {
+  agentOpen: boolean;
+  onAgentClose: () => void;
+}): ReactElement {
+  return (
+    <div className="nebula-root" aria-busy="true">
+      <Starfield />
+      <div className="neb-nebula n1" aria-hidden="true" />
+      <div className="neb-nebula n2" aria-hidden="true" />
+      <div className="neb-nebula n3" aria-hidden="true" />
+      <div className="neb-grain" aria-hidden="true" />
+
+      <main className="neb-app">
+        <header className="neb-topbar">
+          <div className="neb-wordmark"><span className="dot" />galactic</div>
+        </header>
+        <section className="neb-hero">
+          <h1>Agents work here</h1>
+        </section>
+      </main>
+
+      {agentOpen
+        ? (
+          <Modal className="agent-modal" label="Loading Agent" onClose={onAgentClose}>
+            <CloseButton onClose={onAgentClose} />
+            <div className="neb-modal-content"><p className="neb-ov-note">Restoring session…</p></div>
+          </Modal>
+        )
+        : null}
+    </div>
+  );
+}
+
 export function NebulaFleetApp({
   live,
   navigate,

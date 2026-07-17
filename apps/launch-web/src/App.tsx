@@ -17,6 +17,7 @@ import {
   type LaunchRouteLiveState,
   useLaunchRouteLiveData,
 } from "./lib/live-data";
+import { shouldUseNebulaRoute } from "./lib/nebula-route";
 import {
   AccountFoundationPage,
   AdminFoundationPage,
@@ -28,7 +29,10 @@ import {
   TermsPage,
 } from "./pages/foundation-pages";
 import { LaunchShell } from "./components/launch-chrome";
-import { NebulaFleetApp } from "./components/nebula-fleet";
+import {
+  NebulaFleetApp,
+  NebulaSessionRestoringShell,
+} from "./components/nebula-fleet";
 import { SignInModalProvider } from "./components/sign-in-modal";
 import {
   exchangeLaunchBridgeToken,
@@ -68,6 +72,10 @@ export function App(): ReactElement {
   const [location, setLocation] = useState<LocationState>(() =>
     currentLocation()
   );
+  const [sessionRestoreFailed, setSessionRestoreFailed] = useState(false);
+  const authToken = getLaunchAuthToken();
+  const sessionRestoring = !authToken && isLaunchRefreshAvailable() &&
+    !sessionRestoreFailed;
 
   useEffect(() => {
     const onPopState = () => setLocation(currentLocation());
@@ -75,21 +83,31 @@ export function App(): ReactElement {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  // Silent session restore on load: the access token only lives ~1h, but the
-  // API may hold a refresh cookie. Without this the chrome renders signed-out
-  // until some API call happens to refresh.
+  // The access token only lives ~1h, while the API may retain an HttpOnly
+  // refresh cookie. Revalidate on initial load and whenever a render observes
+  // an expired token; the UI uses a stateless Nebula loading shell meanwhile.
   useEffect(() => {
-    if (getLaunchAuthToken() || !isLaunchRefreshAvailable()) return;
+    if (authToken) {
+      if (sessionRestoreFailed) setSessionRestoreFailed(false);
+      return;
+    }
+    if (!sessionRestoring) return;
     let cancelled = false;
     refreshLaunchSession()
       .then((token) => {
-        if (token && !cancelled) setLocation(currentLocation());
+        if (cancelled) return;
+        setSessionRestoreFailed(!token);
+        setLocation(currentLocation());
       })
-      .catch(() => {});
+      .catch(() => {
+        if (cancelled) return;
+        setSessionRestoreFailed(true);
+        setLocation(currentLocation());
+      });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authToken, sessionRestoreFailed, sessionRestoring]);
 
   const navigate = useCallback((to: string) => {
     const next = new URL(to, window.location.origin);
@@ -106,7 +124,10 @@ export function App(): ReactElement {
     () => resolveLaunchRoute(location.pathname),
     [location.pathname],
   );
-  const live = useLaunchRouteLiveData(location, route);
+  const live = useLaunchRouteLiveData(location, route, {
+    authenticated: Boolean(authToken),
+    suspend: sessionRestoring,
+  });
 
   // Per-page tab title: "<Page> | Galactic"; agent pages use the agent's name
   // ("Story Builder | Galactic"); the home page is just "Galactic".
@@ -148,25 +169,32 @@ export function App(): ReactElement {
     }
   }, [route.definition.key, route.definition.nav]);
 
-  const nebulaRoute = Boolean(getLaunchAuthToken()) && (
-    route.definition.key === "home" ||
-    route.definition.key === "library" ||
-    route.definition.key === "settings" ||
-    (route.definition.key === "agent" &&
-      (live.data.agent?.agent ?? live.data.agent?.tool)?.relationship === "owner")
-  );
-
+  const agentSummary = live.data.agent?.agent ?? live.data.agent?.tool;
+  const nebulaRoute = shouldUseNebulaRoute({
+    agentRelationship: sessionRestoring ? undefined : agentSummary?.relationship,
+    authenticated: Boolean(authToken),
+    loadStatus: live.status,
+    routeKey: route.definition.key,
+    sessionRestoring,
+  });
   return (
     <SignInModalProvider>
       {nebulaRoute && !providerCodeMisrouted
-        ? (
-          <NebulaFleetApp
-            live={live}
-            location={location}
-            route={route}
-            navigate={navigate}
-          />
-        )
+        ? sessionRestoring
+          ? (
+            <NebulaSessionRestoringShell
+              agentOpen={route.definition.key === "agent"}
+              onAgentClose={() => navigate("/")}
+            />
+          )
+          : (
+            <NebulaFleetApp
+              live={live}
+              location={location}
+              route={route}
+              navigate={navigate}
+            />
+          )
         : <LaunchShell
         accountRoutes={accountRoutes()}
         activeRoute={activeSection}
