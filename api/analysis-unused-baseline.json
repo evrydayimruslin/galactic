@@ -57,6 +57,14 @@
       ]
     },
     {
+      "file": "services/account-capacity.ts",
+      "types": [
+        "AccountCapacityAdmission",
+        "AccountCapacityAdmissionCode",
+        "AgentCapacityAdmissionDetails"
+      ]
+    },
+    {
       "file": "services/admin-request-validation.ts",
       "types": [
         "ApproveAssessmentPayload",
@@ -947,6 +955,14 @@
       ]
     },
     {
+      "file": "services/icon-image.ts",
+      "types": [
+        "IconReference",
+        "SupportedIconMime",
+        "ValidatedIcon"
+      ]
+    },
+    {
       "file": "services/inference-client.ts",
       "types": [
         "InferenceFetchOptions"
@@ -1318,6 +1334,19 @@
     },
     {
       "exports": [
+        "DEFAULT_ROUTINE_SCHEDULE_TIMEZONE",
+        "MAX_ROUTINE_SCHEDULE_PREVIEW_COUNT",
+        "MIN_ROUTINE_SCHEDULE_INTERVAL_SECONDS"
+      ],
+      "file": "services/routine-schedule.ts",
+      "types": [
+        "ParsedRoutineCron",
+        "RoutineScheduleValidationCode",
+        "RoutineScheduleValidationResult"
+      ]
+    },
+    {
+      "exports": [
         "ROUTINES_FLAG_ENV"
       ],
       "file": "services/routines-feature-flag.ts"
@@ -1325,6 +1354,7 @@
     {
       "file": "services/routines.ts",
       "types": [
+        "LaunchRoutineRole",
         "NormalizedRoutineCapabilityInput",
         "NormalizedRoutineCreateInput",
         "NormalizedRoutineDashboardBindingInput",
