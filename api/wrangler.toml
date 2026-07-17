@@ -135,7 +135,7 @@ SUBSCRIPTION_CAPACITY_ENABLED = "1"
 # Rollout gate for migration 20260717130000. Keep off until the additive v2
 # capacity RPC is applied; then flip without redeploying code. Off is the
 # instant rollback path to the existing account-only admission RPC.
-AGENT_CAPACITY_ENABLED = "0"
+AGENT_CAPACITY_ENABLED = "1"
 STRIPE_PRO_PRICE_ID = "price_1TtbpD5RkjIBogikCwSKhuds"
 # Autonomous routines (docs/CAPABILITY_REGISTRY_MIGRATION.md, routines-feature-flag.ts):
 # the minute-cron routine executor dispatches due scheduled/interval routines.
@@ -213,7 +213,7 @@ dead_letter_queue = "ultralight-events-staging-dlq"
 BASE_URL = "https://ultralight-api-staging.rgn4jz429m.workers.dev"
 LAUNCH_WEB_BASE_URL = "https://staging.ultralight-launch-web.pages.dev"
 SUBSCRIPTION_CAPACITY_ENABLED = "1"
-AGENT_CAPACITY_ENABLED = "0"
+AGENT_CAPACITY_ENABLED = "1"
 INTERFACE_SANDBOX_BASE_URL = "https://ultralight-interfaces-staging.rgn4jz429m.workers.dev"
 ENVIRONMENT = "staging"
 # Executed-bundle integrity enforcement (see [vars] above). enforce now also
