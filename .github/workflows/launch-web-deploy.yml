@@ -13,6 +13,7 @@ on:
       - 'scripts/smoke/launch-web-pages-smoke.mjs'
       - 'scripts/smoke/launch-web-asset-integrity.mjs'
       - 'scripts/smoke/launch-web-asset-integrity.test.mjs'
+      - 'scripts/smoke/wait-for-pages-deployment.mjs'
       - '.github/workflows/launch-web-deploy.yml'
   workflow_dispatch:
     inputs:
@@ -62,7 +63,9 @@ jobs:
 
       - name: Test launch-web asset-integrity smoke helper
         working-directory: .
-        run: node --test scripts/smoke/launch-web-asset-integrity.test.mjs
+        run: |
+          node --test scripts/smoke/launch-web-asset-integrity.test.mjs
+          node --check scripts/smoke/wait-for-pages-deployment.mjs
 
       - name: Build staging bundle
         run: pnpm run build:staging
@@ -178,6 +181,16 @@ jobs:
       - name: Deploy staging Pages branch
         run: pnpm dlx wrangler@4.67.0 pages deploy dist --project-name ultralight-launch-web --branch staging
 
+      - name: Wait for exact staging Pages assets to propagate
+        working-directory: .
+        run: |
+          node scripts/smoke/wait-for-pages-deployment.mjs \
+            --pages-url https://staging.ultralight-launch-web.pages.dev \
+            --dist-dir apps/launch-web/dist \
+            --timeout-ms 300000 \
+            --interval-ms 3000 \
+            --consecutive-passes 2
+
   deploy_production:
     name: Deploy launch web to production Pages
     runs-on: ubuntu-latest
@@ -264,3 +277,13 @@ jobs:
 
       - name: Deploy production Pages branch
         run: pnpm dlx wrangler@4.67.0 pages deploy dist --project-name ultralight-launch-web --branch main
+
+      - name: Wait for exact production Pages assets to propagate
+        working-directory: .
+        run: |
+          node scripts/smoke/wait-for-pages-deployment.mjs \
+            --pages-url https://connectgalactic.com \
+            --dist-dir apps/launch-web/dist \
+            --timeout-ms 300000 \
+            --interval-ms 3000 \
+            --consecutive-passes 2

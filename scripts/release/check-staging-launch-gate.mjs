@@ -64,6 +64,7 @@ const WORKFLOW_SPECS = [
       "scripts/smoke/launch-web-pages-smoke.mjs",
       "scripts/smoke/launch-web-asset-integrity.mjs",
       "scripts/smoke/launch-web-asset-integrity.test.mjs",
+      "scripts/smoke/wait-for-pages-deployment.mjs",
       ".github/workflows/launch-web-deploy.yml",
     ],
   },

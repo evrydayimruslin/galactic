@@ -27,6 +27,8 @@ Options:
   --admin-tool-id <id>              Agent id for /admin/agents/:id route and optional admin API probe (default: example)
   --output-dir <path>               Evidence output directory (defaults to UL_LAUNCH_EVIDENCE_DIR)
   --timeout-ms <ms>                 Per-request timeout (default: 15000)
+  --asset-settle-timeout-ms <ms>    Bounded Pages propagation wait (production: 120000; staging: 60000)
+  --asset-settle-interval-ms <ms>   Delay between asset propagation probes (default: 2500)
   --skip-auth-api                   Skip authenticated launch API probes even when token is set
   --help                            Show this help
 `);
@@ -66,6 +68,13 @@ const outputDir = String(
   args.get("--output-dir") || process.env.UL_LAUNCH_EVIDENCE_DIR || "",
 ).trim();
 const timeoutMs = Number.parseInt(String(args.get("--timeout-ms") || "15000"), 10);
+const assetSettleTimeoutMs = Number.parseInt(String(
+  args.get("--asset-settle-timeout-ms") ||
+    (target === "production" ? "120000" : "60000"),
+), 10);
+const assetSettleIntervalMs = Number.parseInt(String(
+  args.get("--asset-settle-interval-ms") || "2500",
+), 10);
 const skipAuthApi = Boolean(args.has("--skip-auth-api"));
 
 if (!outputDir) {
@@ -75,6 +84,16 @@ if (!outputDir) {
 
 if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
   console.error("--timeout-ms must be a positive integer.");
+  process.exit(1);
+}
+
+if (!Number.isFinite(assetSettleTimeoutMs) || assetSettleTimeoutMs <= 0) {
+  console.error("--asset-settle-timeout-ms must be a positive integer.");
+  process.exit(1);
+}
+
+if (!Number.isFinite(assetSettleIntervalMs) || assetSettleIntervalMs <= 0) {
+  console.error("--asset-settle-interval-ms must be a positive integer.");
   process.exit(1);
 }
 
@@ -158,6 +177,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function sleep(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
 function normalizeBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
@@ -171,13 +194,17 @@ function redactHeaders(headers) {
 
 async function fetchProbe(url, options = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const headers = options.headers || {};
+  const probeTimeoutMs = Number.isFinite(options.probeTimeoutMs)
+    ? Math.max(1, Number(options.probeTimeoutMs))
+    : timeoutMs;
+  const { probeTimeoutMs: _probeTimeoutMs, ...fetchOptions } = options;
+  const timeout = setTimeout(() => controller.abort(), probeTimeoutMs);
+  const headers = fetchOptions.headers || {};
   const startedAt = nowIso();
 
   try {
     const response = await fetch(url, {
-      ...options,
+      ...fetchOptions,
       headers,
       signal: controller.signal,
     });
@@ -191,7 +218,7 @@ async function fetchProbe(url, options = {}) {
       headers: Object.fromEntries(response.headers.entries()),
       body_text: text,
       request: {
-        method: options.method || "GET",
+        method: fetchOptions.method || "GET",
         url,
         headers: redactHeaders(headers),
       },
@@ -207,7 +234,7 @@ async function fetchProbe(url, options = {}) {
       body_text: "",
       error: error instanceof Error ? error.message : String(error),
       request: {
-        method: options.method || "GET",
+        method: fetchOptions.method || "GET",
         url,
         headers: redactHeaders(headers),
       },
@@ -257,6 +284,11 @@ async function runPageAssetProbes(shell) {
   const documentUrl = shell.final_url || `${pagesBase}/`;
   const discovery = discoverLaunchAssets(shell.body_text || "", documentUrl);
   const probes = [];
+  // One shared propagation budget covers the complete asset batch. The exact
+  // generation match is enforced by wait-for-pages-deployment in the deploy
+  // job; this smoke only tolerates temporary asset availability at its POP.
+  const assetSettleStartedAt = Date.now();
+  const assetSettleDeadline = assetSettleStartedAt + assetSettleTimeoutMs;
   const discoveryPassed = shell.ok && shell.status_code === 200 &&
     discovery.errors.length === 0;
   probes.push({
@@ -282,16 +314,44 @@ async function runPageAssetProbes(shell) {
   const kindCounts = { module: 0, stylesheet: 0 };
   for (const asset of discovery.assets) {
     kindCounts[asset.kind] += 1;
-    const raw = await fetchProbe(asset.url, {
-      headers: {
-        "Accept": asset.kind === "module"
-          ? "application/javascript,*/*;q=0.8"
-          : "text/css,*/*;q=0.8",
-        "Cache-Control": "no-cache",
-        "User-Agent": "ultralight-launch-web-pages-smoke",
-      },
-    });
-    const validation = validateReferencedAssetResponse(asset, raw);
+    const settleStartedAt = Date.now();
+    const settleDeadline = assetSettleDeadline;
+    let attempts = 0;
+    let raw;
+    let validation;
+    let evidenceRaw;
+    let evidenceValidation;
+    do {
+      attempts += 1;
+      raw = await fetchProbe(asset.url, {
+        probeTimeoutMs: Math.min(
+          timeoutMs,
+          Math.max(1, settleDeadline - Date.now()),
+        ),
+        headers: {
+          "Accept": asset.kind === "module"
+            ? "application/javascript,*/*;q=0.8"
+            : "text/css,*/*;q=0.8",
+          "User-Agent": "ultralight-launch-web-pages-smoke",
+        },
+      });
+      validation = validateReferencedAssetResponse(asset, raw);
+      if (raw.status_code !== null || !evidenceRaw) {
+        evidenceRaw = raw;
+        evidenceValidation = validation;
+      }
+      if (validation.passed || Date.now() >= settleDeadline) break;
+      await sleep(Math.min(
+        assetSettleIntervalMs,
+        Math.max(1, settleDeadline - Date.now()),
+      ));
+    } while (true);
+
+    if (!validation.passed && raw.status_code === null && evidenceRaw) {
+      raw = evidenceRaw;
+      validation = evidenceValidation;
+    }
+
     probes.push({
       name: `page-${asset.kind}-asset-${kindCounts[asset.kind]}`,
       surface: "pages",
@@ -305,6 +365,8 @@ async function runPageAssetProbes(shell) {
         content_type: validation.contentType || null,
         final_url: raw.final_url,
         bytes: String(raw.body_text || "").length,
+        attempts,
+        settle_elapsed_ms: Date.now() - settleStartedAt,
         html_detected: validation.htmlDetected,
         validation: validation.reason,
         error: raw.error || null,
@@ -315,19 +377,51 @@ async function runPageAssetProbes(shell) {
 
   const missingPath = `/assets/__galactic-smoke-missing-${randomUUID()}.js`;
   const missingUrl = new URL(missingPath, documentUrl);
+  let missingSettled = false;
   for (const attempt of [1, 2]) {
-    const missing = await fetchProbe(missingUrl.href, {
-      headers: {
-        "Accept": "application/javascript,*/*;q=0.8",
-        "Cache-Control": "no-cache",
-        "User-Agent": "ultralight-launch-web-pages-smoke",
-      },
-    });
-    const missingValidation = validateMissingAssetResponse(
-      missing,
-      shell.body_text || "",
-      missingUrl.origin,
-    );
+    const settleStartedAt = Date.now();
+    const settleDeadline = attempt === 1 ? assetSettleDeadline : Date.now();
+    let settleAttempts = 0;
+    let missing;
+    let missingValidation;
+    let evidenceMissing;
+    let evidenceMissingValidation;
+    do {
+      settleAttempts += 1;
+      missing = await fetchProbe(missingUrl.href, {
+        probeTimeoutMs: Math.min(
+          timeoutMs,
+          Math.max(1, assetSettleDeadline - Date.now()),
+        ),
+        headers: {
+          "Accept": "application/javascript,*/*;q=0.8",
+          "User-Agent": "ultralight-launch-web-pages-smoke",
+        },
+      });
+      missingValidation = validateMissingAssetResponse(
+        missing,
+        shell.body_text || "",
+        missingUrl.origin,
+      );
+      if (missing.status_code !== null || !evidenceMissing) {
+        evidenceMissing = missing;
+        evidenceMissingValidation = missingValidation;
+      }
+      if (missingValidation.passed || Date.now() >= settleDeadline) break;
+      await sleep(Math.min(
+        assetSettleIntervalMs,
+        Math.max(1, settleDeadline - Date.now()),
+      ));
+    } while (true);
+    if (
+      !missingValidation.passed && missing.status_code === null &&
+      evidenceMissing
+    ) {
+      missing = evidenceMissing;
+      missingValidation = evidenceMissingValidation;
+    }
+    if (attempt === 1) missingSettled = missingValidation.passed;
+
     probes.push({
       name: attempt === 1
         ? "page-missing-asset-fails-closed"
@@ -340,6 +434,9 @@ async function runPageAssetProbes(shell) {
         "The same unique missing asset repeatedly returns no-store HTTP 404 instead of the launch SPA shell",
       observed: {
         attempt,
+        settle_attempts: settleAttempts,
+        settle_elapsed_ms: Date.now() - settleStartedAt,
+        first_attempt_settled: missingSettled,
         status_code: missing.status_code,
         content_type: responseContentType(missing.headers) || null,
         cache_control: missingValidation.cacheControl || null,

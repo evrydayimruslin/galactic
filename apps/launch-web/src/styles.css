@@ -30,7 +30,7 @@
   /* Kept in emitted CSS as an asset-routing revision. The cache-poisoning
      repair must rotate both the JS and CSS filenames so clients with a stale
      immutable response never reuse either previous production URL. */
-  --launch-asset-routing-revision: 1;
+  --launch-asset-routing-revision: 2;
   /* Shared content width for every non-home/landing page, so their left/right
      edges line up exactly when navigating between them. Single source of truth —
      don't set per-page widths; they drift out of alignment. */
