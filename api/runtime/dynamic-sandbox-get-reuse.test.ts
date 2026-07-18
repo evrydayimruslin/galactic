@@ -12,6 +12,7 @@ import { assertNotEquals } from "https://deno.land/std@0.210.0/assert/assert_not
 import {
   deriveIsolateReuseKey,
   executeInDynamicSandbox,
+  resolveRpcBindingMetering,
 } from "./dynamic-sandbox.ts";
 import {
   _executionContextRegistrySize,
@@ -23,6 +24,7 @@ import type { RuntimeConfig } from "./sandbox.ts";
 
 const BUNDLE_CODE = "export const noop = 1;";
 const CALLER_CTX = "gxc1.distinctive-caller-ctx-value-3k9q.sig";
+const BINDING_METER_SENTINEL_LIGHT = 0.123456789;
 
 interface Captured {
   loadCalls: number;
@@ -38,7 +40,11 @@ interface Captured {
   // actual cross-execution isolation signal — a handle must resolve to its OWN
   // execution's context, never a concurrent sibling's (we encode the user in
   // the executionId so a cross-USER bleed is directly detectable).
-  contexts: Array<{ fn: unknown; execId: string | null }>;
+  contexts: Array<{
+    fn: unknown;
+    execId: string | null;
+    hasCapacityMeter: boolean;
+  }>;
 }
 
 function installHarness(): { captured: Captured; restore: () => void } {
@@ -60,6 +66,12 @@ function installHarness(): { captured: Captured; restore: () => void } {
   Deno.env.set("AGENT_CALLER_SECRET", "test-agent-caller-secret");
   let liveCode = BUNDLE_CODE;
   let liveMetadata: unknown = null;
+  let appDataBindingInstance: {
+    store: () => Promise<void>;
+    load: (key: string, execCtxHandle?: string) => Promise<unknown>;
+    remove: () => Promise<void>;
+    list: () => Promise<unknown[]>;
+  } | null = null;
 
   // Resolve the body's handle against the REAL registry (as a binding would) and
   // record which user's context it points at. Called inside each fetch, while
@@ -70,6 +82,9 @@ function installHarness(): { captured: Captured; restore: () => void } {
     captured.contexts.push({
       fn: body?.functionName,
       execId: rc?.aiExecutionId ?? null,
+      hasCapacityMeter:
+        typeof rc?.cloudOperationMetering?.capacityMeter?.addLight ===
+          "function",
     });
   };
 
@@ -81,6 +96,17 @@ function installHarness(): { captured: Captured; restore: () => void } {
           const body = await request.json().catch(() => null);
           captured.requestBodies.push(body);
           recordContext(body);
+          if (
+            body && typeof body === "object" &&
+            (body as Record<string, unknown>).functionName ===
+              "capacityCloneProbe"
+          ) {
+            const handle = (body as Record<string, unknown>).execCtxHandle;
+            await appDataBindingInstance?.load(
+              "__capacity_probe__",
+              typeof handle === "string" ? handle : undefined,
+            );
+          }
           return new Response(
             JSON.stringify({
               success: true,
@@ -172,12 +198,17 @@ function installHarness(): { captured: Captured; restore: () => void } {
       // deno-lint-ignore no-explicit-any
       AppDataBinding: (input: any) => {
         captured.bindingProps.DATA = input?.props;
-        return {
+        appDataBindingInstance = {
           store: () => Promise.resolve(),
-          load: () => Promise.resolve(null),
+          load: (_key: string, execCtxHandle?: string) => {
+            resolveExecutionContext(execCtxHandle)?.cloudOperationMetering
+              ?.capacityMeter?.addLight(BINDING_METER_SENTINEL_LIGHT);
+            return Promise.resolve(null);
+          },
           remove: () => Promise.resolve(),
           list: () => Promise.resolve([]),
         };
+        return appDataBindingInstance;
       },
       // deno-lint-ignore no-explicit-any
       EventsBinding: (input: any) => {
@@ -495,6 +526,84 @@ Deno.test("get reuse: flag OFF keeps requireExecCtx false (today's binding behav
   }
 });
 
+Deno.test("RPC binding metering config is clone-safe in capacity mode and preserves wallet fallback", () => {
+  const capacity = resolveRpcBindingMetering({
+    cloudOperationMetering: {
+      payerUserId: "user_a",
+      source: "mcp_tools_call",
+      capacityMeter: { addLight() {} },
+    },
+  }, false);
+  assertEquals(capacity.operationMetering, null);
+  assertEquals(capacity.requireExecCtx, true);
+  // DB, DATA, and MEMORY all consume this shared result for their props.
+  structuredClone(capacity);
+
+  const walletMetering = {
+    payerUserId: "user_a",
+    source: "mcp_tools_call",
+    receiptId: "receipt_wallet",
+  };
+  const wallet = resolveRpcBindingMetering({
+    cloudOperationMetering: walletMetering,
+  }, false);
+  assertEquals(wallet.operationMetering, walletMetering);
+  assertEquals(wallet.requireExecCtx, false);
+  structuredClone(wallet);
+});
+
+Deno.test("capacity meter stays host-local and forces execution handles even when reuse is off", async () => {
+  const harness = installHarness();
+  try {
+    // Exercise the load() path explicitly: ineligible production executions
+    // still use it even while warm reuse is enabled globally. The closure-backed
+    // meter must never enter WorkerEntrypoint props in either loader mode.
+    // deno-lint-ignore no-explicit-any
+    (globalThis.__env as any).EXECUTED_LOADER_GET_REUSE = "";
+    const config = baseConfig();
+    const meteredAmounts: number[] = [];
+    config.cloudOperationMetering = {
+      payerUserId: "user_a",
+      source: "mcp_tools_call",
+      capacityMeter: {
+        addLight(amountLight: number) {
+          meteredAmounts.push(amountLight);
+        },
+      },
+    };
+
+    const result = await executeInDynamicSandbox(
+      config,
+      "capacityCloneProbe",
+      [],
+    );
+    assertEquals(result.success, true);
+    const dataProps = harness.captured.bindingProps.DATA as {
+      operationMetering?: unknown;
+      requireExecCtx?: boolean;
+    };
+    assertEquals(dataProps.operationMetering, null);
+    assertEquals(dataProps.requireExecCtx, true);
+    // Regression proof for the production exception: these exact props now
+    // cross a structured-clone boundary without carrying addLight().
+    structuredClone(dataProps);
+    assertEquals(harness.captured.contexts, [{
+      fn: "capacityCloneProbe",
+      execId: "exec_get_reuse",
+      hasCapacityMeter: true,
+    }]);
+    assertEquals(
+      meteredAmounts.filter((amount) =>
+        amount === BINDING_METER_SENTINEL_LIGHT
+      ),
+      [BINDING_METER_SENTINEL_LIGHT],
+      "the binding must resolve the handle and mutate the original host-local meter exactly once",
+    );
+  } finally {
+    harness.restore();
+  }
+});
+
 Deno.test("get reuse: same config → same key across calls; different user → different key", async () => {
   const harness = installHarness();
   try {
@@ -610,7 +719,10 @@ Deno.test("get reuse: CONCURRENT two-user load — no execution resolves another
       runs.push(executeInDynamicSandbox(cfgB(), `b${i}`, [i]));
     }
     const results = await Promise.all(runs);
-    assert(results.every((r) => r.success), "all concurrent executions succeed");
+    assert(
+      results.every((r) => r.success),
+      "all concurrent executions succeed",
+    );
 
     // THE ISOLATION GUARANTEE: every execution's body handle resolved to ITS
     // OWN user's context — an 'a*' function NEVER saw exec_user_b and vice
@@ -633,7 +745,11 @@ Deno.test("get reuse: CONCURRENT two-user load — no execution resolves another
     // The reuse id pins userId, so exactly TWO distinct isolates are ever
     // requested (one per user) — never a cross-user shared one.
     const uniqueIds = new Set(harness.captured.getIds);
-    assertEquals(uniqueIds.size, 2, "exactly two cached isolates (one per user)");
+    assertEquals(
+      uniqueIds.size,
+      2,
+      "exactly two cached isolates (one per user)",
+    );
     assertEquals(harness.captured.getCalls, 24);
 
     // Every registered per-call context deregistered in its finally — no handle
