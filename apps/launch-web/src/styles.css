@@ -27,6 +27,10 @@
   --ul-mono: "Newsreader", Georgia, "Times New Roman", serif;
   --ul-shadow: 0 12px 40px rgba(0, 0, 0, 0.08);
   --ul-max: 1120px;
+  /* Kept in emitted CSS as an asset-routing revision. The cache-poisoning
+     repair must rotate both the JS and CSS filenames so clients with a stale
+     immutable response never reuse either previous production URL. */
+  --launch-asset-routing-revision: 1;
   /* Shared content width for every non-home/landing page, so their left/right
      edges line up exactly when navigating between them. Single source of truth —
      don't set per-page widths; they drift out of alignment. */
