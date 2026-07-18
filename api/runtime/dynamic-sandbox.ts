@@ -52,7 +52,9 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-17.agent-capacity-errors.v3";
+const SANDBOX_TEMPLATE_VERSION = "2026-07-18.trusted-tail-attribution.v10";
+
+const CAPACITY_TAIL_MARKER = "GALACTIC_CAPACITY_EXECUTION_V1 ";
 
 // Reuse eligibility lives in its own dependency-light module (imported above) so
 // billing imports the SAME predicate — a divergent copy is a money bug (see the
@@ -291,6 +293,7 @@ interface DynamicWorkerEntrypointExports {
       credentials: Record<string, ResolvedCredential>;
     };
   }): unknown;
+  CapacityDynamicTail(input: { props: Record<string, never> }): unknown;
 }
 
 type DynamicWorkerExecutionContext = ExecutionContext & {
@@ -313,6 +316,22 @@ export async function executeInDynamicSandbox(
   // DISTINCT isolate identity (once per CF-billable worker/day). Declared here so
   // both the success and error returns can carry it.
   let reuseKeyHash: string | null = null;
+  let dynamicWorkerIdentityCreated = false;
+  let dynamicWorkerInvoked = false;
+
+  if (config.capacityReceiptId) {
+    // The producer trace covers the entire admitted API invocation, including
+    // bundle reads and validation that can fail before a Dynamic Worker starts.
+    // Logging at the boundary keeps those real CPU milliseconds attributable;
+    // the internal request header below correlates the child trace when present.
+    console.log(
+      `${CAPACITY_TAIL_MARKER}${
+        JSON.stringify({
+          receipt_id: config.capacityReceiptId,
+        })
+      }`,
+    );
+  }
 
   if (!loader) {
     return {
@@ -549,28 +568,45 @@ globalThis.ultralight = {
     // would report a stale hop and defeat the hop ceiling.
     var __callerCtx = (globalThis.__ulReq && globalThis.__ulReq.callerCtx) || '';
     if (__callerCtx) __headers['X-Galactic-Caller'] = __callerCtx;
-    var response = await fetchFn(endpoint, {
-      method: 'POST',
-      headers: __headers,
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: crypto.randomUUID(),
-        method: 'tools/call',
-        params: { name: functionName, arguments: callArgs || {} }
-      })
-    });
-    if (!response.ok) {
-      var errorText = await response.text().catch(function() { return response.statusText; });
-      throw new Error('galactic.call failed (' + response.status + '): ' + errorText);
+    var rpcResponse = null;
+    // One short in-place retry handles transient distributed concurrency
+    // without re-running the caller (which may already have side effects).
+    // The target's admission denial proves target code did not start.
+    for (var __callAttempt = 0; __callAttempt < 2; __callAttempt++) {
+      var response = await fetchFn(endpoint, {
+        method: 'POST',
+        headers: __headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: crypto.randomUUID(),
+          method: 'tools/call',
+          params: { name: functionName, arguments: callArgs || {} }
+        })
+      });
+      if (!response.ok) {
+        var errorText = await response.text().catch(function() { return response.statusText; });
+        throw new Error('galactic.call failed (' + response.status + '): ' + errorText);
+      }
+      rpcResponse = await response.json();
+      var __waitDetails = rpcResponse && rpcResponse.error && rpcResponse.error.data;
+      if (__callAttempt === 0 && __waitDetails && __waitDetails.type === 'concurrency_waiting') {
+        var __retryAtMs = Date.parse(__waitDetails.retry_at || '');
+        var __retryDelayMs = Number.isFinite(__retryAtMs)
+          ? Math.min(15000, Math.max(250, __retryAtMs - Date.now() + 50))
+          : 1000;
+        await new Promise(function(resolve) { setTimeout(resolve, __retryDelayMs); });
+        continue;
+      }
+      break;
     }
-    var rpcResponse = await response.json();
     if (rpcResponse.error) {
       var __rpcDetails = rpcResponse.error.data || null;
       var __rpcType = __rpcDetails && __rpcDetails.type;
       var __rpcError = new Error('galactic.call RPC error: ' + (rpcResponse.error.message || JSON.stringify(rpcResponse.error)));
       if (__rpcType === 'agent_cap_too_low_for_request') __rpcError.name = 'AgentCapacityCapTooLowError';
       else if (__rpcType === 'agent_cap_waiting' || __rpcType === 'capacity_waiting') __rpcError.name = 'AgentCapacityWaitingError';
-      if (__rpcType && (__rpcError.name === 'AgentCapacityCapTooLowError' || __rpcError.name === 'AgentCapacityWaitingError')) __rpcError.galacticDetails = __rpcDetails;
+      else if (__rpcType === 'concurrency_waiting') __rpcError.name = 'ConcurrencyWaitingError';
+      if (__rpcType && (__rpcError.name === 'AgentCapacityCapTooLowError' || __rpcError.name === 'AgentCapacityWaitingError' || __rpcError.name === 'ConcurrencyWaitingError')) __rpcError.galacticDetails = __rpcDetails;
       throw __rpcError;
     }
     var result = rpcResponse.result;
@@ -588,7 +624,8 @@ globalThis.ultralight = {
   // user + hop unforgeably. The platform worker secret never enters the sandbox.
   // Capped per execution to bound emit storms.
   async emit(topic, payload) {
-    if (${!!config.routineContext}) throw new Error('galactic.emit is unavailable during routine execution: deferred event fanout is not yet budget-attributed.');
+    if (${!!config
+      .routineContext}) throw new Error('galactic.emit is unavailable during routine execution: deferred event fanout is not yet budget-attributed.');
     if (!topic || typeof topic !== 'string') throw new Error('emit requires a topic string');
     var e = globalThis.__rpcEnv;
     if (!e || !e.EVENTS) throw new Error('emit requires an authenticated user context');
@@ -664,6 +701,19 @@ import * as appModule from './app.js';
 
 export default {
   async fetch(request, env) {
+    // A warm Worker Loader isolate may receive concurrent fetches. The SDK's
+    // compatibility globals are per-isolate, so serialize each isolate's
+    // request bodies: without this gate one call can overwrite another call's
+    // opaque execution handle, routine context, flight capture, or logs while
+    // the first is awaiting IO. Account/Agent concurrency still runs across
+    // distinct isolates; correctness takes precedence over same-isolate
+    // overlap until the SDK moves to request-local async context.
+    const __previousExecution = globalThis.__galacticExecutionTail || Promise.resolve();
+    let __releaseExecution;
+    const __executionDone = new Promise(function(resolve) { __releaseExecution = resolve; });
+    globalThis.__galacticExecutionTail = __previousExecution.catch(function() {}).then(function() { return __executionDone; });
+    await __previousExecution.catch(function() {});
+    try {
     // Set RPC bindings for lazy getters in ultralight SDK
     globalThis.__rpcEnv = env;
     // Per-request payload — the ONLY per-execution data, read fresh each fetch so
@@ -671,10 +721,8 @@ export default {
     // select what runs; authToken is the scoped inter-app call token; callerCtx
     // is the signed caller-context header value; execCtxHandle is the opaque
     // billing-context handle (the parent registered the real context under it —
-    // payer/receipt identity never enters the sandbox). NOTE: concurrent
-    // requests in one isolate share globalThis, so these can interleave — the
-    // reuse key pins (appId, userId), so any race is intra-user misattribution
-    // at worst, never cross-tenant.
+    // payer/receipt identity never enters the sandbox). The per-isolate gate
+    // above prevents these compatibility globals from crossing requests.
     let __req = {};
     try { __req = await request.json(); } catch (_e) { __req = {}; }
     globalThis.__execHandle = (__req && __req.execCtxHandle) || null;
@@ -730,6 +778,8 @@ export default {
         success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
         error: { type: err.name || err.constructor?.name || 'Error', message: err.message || String(err), ...(err.galacticDetails ? { details: err.galacticDetails } : {}) },
       });
+    } finally {
+      __releaseExecution();
     }
   }
 };
@@ -900,11 +950,10 @@ export default {
             executionId: config.executionId ?? null,
             // Only pass a genuine user OpenRouter BYOK key; another route key
             // belongs to a different endpoint and must never be misclassified.
-            userApiKey:
-              config.aiRoute?.keySource === "user_byok" &&
+            userApiKey: config.aiRoute?.keySource === "user_byok" &&
                 config.aiRoute?.upstreamProvider === "openrouter"
-                ? config.aiRoute.apiKey
-                : null,
+              ? config.aiRoute.apiKey
+              : null,
             routineContext: config.routineContext ?? null,
             requireExecCtx: useGetReuse,
           },
@@ -985,6 +1034,9 @@ export default {
       // high until the staging smoke verifies what counts (net:fetch apps
       // make direct outbound fetches; batch/async jobs make many SDK calls).
       limits: { cpuMs: 10_000, subRequests: 512 },
+      ...(ctx?.exports?.CapacityDynamicTail
+        ? { tails: [ctx.exports.CapacityDynamicTail({ props: {} })] }
+        : {}),
     };
     // Network-capable apps get raw outbound fetch() — but routed through the
     // egress interceptor (OutboundBinding), which enforces an SSRF / private-
@@ -1025,6 +1077,7 @@ export default {
     // resolve it per-RPC — so under future warm-isolate reuse the context is
     // the CURRENT call's, not a stale baked one. (See execution-context-registry.)
     execCtxHandle = registerExecutionContext({
+      capacityReceiptId: config.capacityReceiptId ?? null,
       aiExecutionId: config.executionId,
       appId: config.appId ?? null,
       functionName: functionName ?? null,
@@ -1032,6 +1085,7 @@ export default {
       cloudOperationBillingConfig: config.cloudOperationBillingConfig,
       callerContextToken: config.callerContextToken ?? null,
       routineContext: config.routineContext ?? null,
+      executionDeadlineAtMs: Date.now() + (config.timeoutMs || 30_000),
     });
 
     // 5b. Warm-isolate reuse (Cloudflare Worker Loader get()). Reusing a warm
@@ -1069,32 +1123,53 @@ export default {
     } else {
       worker = loader.load(loadConfig);
     }
+    // Once Loader returns a Worker handle, the Dynamic Worker identity/load
+    // has been attempted and may be billable even if entrypoint resolution or
+    // fetch fails. Mark it before either operation can throw.
+    dynamicWorkerIdentityCreated = true;
+
+    // Resolve the entrypoint before arming the fetch timer: entrypoint
+    // resolution itself has no in-flight request to abort, and a thrown
+    // resolution must not strand a timer in this isolate.
+    const entrypoint = worker.getEntrypoint();
 
     // 6. Execute with timeout
     const timeoutMs = config.timeoutMs || 30_000;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-    const entrypoint = worker.getEntrypoint();
-    const response = await entrypoint.fetch(
-      new Request("http://internal/execute", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // Per-request payload — the only per-execution data, kept OUT of the
-        // (potentially cached) isolate content so a warm isolate is reusable
-        // across this user's calls. The sandbox never receives payer/receipt
-        // identity — only the opaque handle.
-        body: JSON.stringify({
-          execCtxHandle,
-          functionName,
-          args,
-          authToken: sandboxAuthToken || "",
-          callerCtx: config.callerContextToken || "",
+    let response: Response;
+    try {
+      // Dynamic Workers bill each fetch separately. Keep this distinct from
+      // Loader identity creation so entrypoint-resolution failures do not
+      // invent a request or wait forever for a child Tail event that cannot
+      // exist.
+      dynamicWorkerInvoked = true;
+      response = await entrypoint.fetch(
+        new Request("http://internal/execute", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(config.capacityReceiptId
+              ? { "x-galactic-capacity-receipt": config.capacityReceiptId }
+              : {}),
+          },
+          // Per-request payload — the only per-execution data, kept OUT of the
+          // (potentially cached) isolate content so a warm isolate is reusable
+          // across this user's calls. The sandbox never receives payer/receipt
+          // identity — only the opaque handle.
+          body: JSON.stringify({
+            execCtxHandle,
+            functionName,
+            args,
+            authToken: sandboxAuthToken || "",
+            callerCtx: config.callerContextToken || "",
+          }),
         }),
-      }),
-      { signal: controller.signal },
-    );
-    clearTimeout(timeoutId);
+        { signal: controller.signal },
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const data = (await response.json()) as {
       success: boolean;
@@ -1146,6 +1221,8 @@ export default {
       logs: data.logs || [],
       durationMs: Date.now() - startTime,
       aiCostLight,
+      dynamicWorkerIdentityCreated,
+      dynamicWorkerInvoked,
       ...(Array.isArray(data.flight?.ai) && data.flight.ai.length > 0
         ? { flightAi: data.flight.ai }
         : {}),
@@ -1163,6 +1240,8 @@ export default {
       // completed before the failure — report the real debited spend so the
       // receipt and grant-cap accounting stay truthful.
       aiCostLight: consumeAiSpend(config.executionId),
+      dynamicWorkerIdentityCreated,
+      dynamicWorkerInvoked,
       // Likewise capture any galactic.db mutations that landed before the
       // failure (also frees the tracker entry so it can't leak).
       ...(() => {

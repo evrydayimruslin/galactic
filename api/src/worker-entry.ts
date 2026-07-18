@@ -29,6 +29,7 @@ import {
 import { getEnv } from '../lib/env.ts';
 import { applyCorsHeaders, buildCorsPreflightResponse } from '../services/cors.ts';
 import { createServerLogger } from '../services/logging.ts';
+import { runCapacityTelemetryReconciliationCycle } from '../services/capacity-telemetry-reconciliation.ts';
 
 // RPC entrypoints exposed through ctx.exports for dynamic worker bindings.
 export { DatabaseBinding } from './bindings/database-binding.ts';
@@ -48,6 +49,7 @@ export { NetworkBinding } from './bindings/network-binding.ts';
 export { EventsBinding } from './bindings/events-binding.ts';
 export { OutboundBinding } from './bindings/outbound-binding.ts';
 export { CredentialBinding } from './bindings/credential-binding.ts';
+export { CapacityDynamicTail } from './bindings/capacity-dynamic-tail.ts';
 
 // ============================================
 // SECURITY & CORS HEADERS
@@ -178,6 +180,10 @@ export default {
       ({ processEventMessage: process } = await import(
         '../services/agent-events-consumer.ts'
       ));
+    } else if (batch.queue.includes('ultralight-capacity-telemetry')) {
+      ({ processCapacityTelemetryMessage: process } = await import(
+        '../services/capacity-telemetry-consumer.ts'
+      ));
     } else {
       cronLogger.error('Message from unknown queue dropped', {
         queue: batch.queue,
@@ -284,6 +290,7 @@ async function runMinuteJobs(): Promise<void> {
   const results = await Promise.allSettled([
     cleanupStaleJobs(),
     releaseExpiredCloudUsageHolds(),
+    runCapacityTelemetryReconciliationCycle(),
     processNullEmbeddings(),
     processGpuBuilds(),
     // Platform-owned durable routines: LIVE in prod and staging (both declare
@@ -299,6 +306,7 @@ async function runMinuteJobs(): Promise<void> {
       const names = [
         'asyncJobCleanup',
         'cloudUsageHoldRelease',
+        'capacityTelemetryReconciliation',
         'embeddingProcessor',
         'gpuBuildProcessor',
         'routineExecutor',
@@ -372,7 +380,15 @@ async function runHourlyJobs(): Promise<void> {
 
   for (const [i, result] of results.entries()) {
     if (result.status === 'rejected') {
-      const names = ['hostingBilling', 'payoutProcessor', 'marketplaceBidExpiry', 'callLogRetentionSweep', 'connectVerificationReconcile', 'executedBundleIntegrity'];
+      const names = [
+        'hostingBilling',
+        'payoutProcessor',
+        'marketplaceBidExpiry',
+        'callLogRetentionSweep',
+        'notificationInboxRetentionSweep',
+        'connectVerificationReconcile',
+        'executedBundleIntegrity',
+      ];
       cronLogger.error('Hourly cron job failed', {
         job: names[i],
         error: result.reason,

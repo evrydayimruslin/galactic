@@ -15,6 +15,41 @@ export type CloudUsageResource =
   | "widget_pull"
   | "storage_at_rest";
 
+/**
+ * Atomic resource facts collected for subscription capacity. These are kept
+ * separate from the legacy wallet cloud-usage event enum because subscription
+ * capacity also records resources (request and Dynamic Worker identity) that
+ * were historically folded into a runtime duration estimate.
+ */
+export type CapacityResource =
+  | "worker_cpu"
+  | "worker_request"
+  | "dynamic_worker_identity"
+  | "r2_operation"
+  | "kv_operation"
+  | "d1_read"
+  | "d1_write"
+  | "widget_pull"
+  | "queue_operation"
+  | "other";
+
+export interface CapacityResourceFact {
+  resource: CapacityResource;
+  units: number;
+  cloudUnits: number;
+  amountLight: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CapacityResourceMeter {
+  /** Backward-compatible aggregate input for callers not yet emitting facts. */
+  addLight: (amountLight: number) => void;
+  /** Preferred path: preserves the billable resource and its raw quantity. */
+  addResource: (fact: CapacityResourceFact) => void;
+  snapshot: () => CapacityResourceFact[];
+  totalLight: () => number;
+}
+
 export interface CloudUsageContext {
   payerUserId: string;
   source: string;
@@ -55,7 +90,9 @@ export interface CloudOperationMeteringContext {
    * memory and settle it against the enclosing hard reservation. They never
    * touch the legacy wallet ledger.
    */
-  capacityMeter?: { addLight: (amountLight: number) => void };
+  capacityMeter?:
+    & Pick<CapacityResourceMeter, "addLight">
+    & Partial<Pick<CapacityResourceMeter, "addResource">>;
 }
 
 export interface DebitCloudOperationParams
@@ -63,13 +100,27 @@ export interface DebitCloudOperationParams
   resource: Extract<CloudUsageResource, "r2_operation" | "kv_operation">;
   operation: string;
   units?: number;
-  billingConfig?: Pick<
-    BillingConfig,
-    | "version"
-    | "cloudUnitLightPer1k"
-    | "r2OpsPerCloudUnit"
-    | "kvOpsPerCloudUnit"
-  >;
+  billingConfig?:
+    & Pick<
+      BillingConfig,
+      | "version"
+      | "cloudUnitLightPer1k"
+      | "r2OpsPerCloudUnit"
+      | "kvOpsPerCloudUnit"
+    >
+    & Partial<
+      Pick<
+        BillingConfig,
+        | "capacityRateCardVersion"
+        | "capacityKvReadLightPerMillionOperations"
+        | "capacityKvWriteLightPerMillionOperations"
+        | "capacityKvDeleteLightPerMillionOperations"
+        | "capacityKvListLightPerMillionOperations"
+        | "capacityR2ClassALightPerMillionOperations"
+        | "capacityR2ClassBLightPerMillionOperations"
+        | "capacityR2DeleteLightPerMillionOperations"
+      >
+    >;
   metadata?: Record<string, unknown>;
 }
 
@@ -77,13 +128,22 @@ export interface DebitD1UsageParams extends CloudOperationMeteringContext {
   rowsRead?: number;
   rowsWritten?: number;
   operation: string;
-  billingConfig?: Pick<
-    BillingConfig,
-    | "version"
-    | "cloudUnitLightPer1k"
-    | "d1ReadRowsPerCloudUnit"
-    | "d1WriteRowsPerCloudUnit"
-  >;
+  billingConfig?:
+    & Pick<
+      BillingConfig,
+      | "version"
+      | "cloudUnitLightPer1k"
+      | "d1ReadRowsPerCloudUnit"
+      | "d1WriteRowsPerCloudUnit"
+    >
+    & Partial<
+      Pick<
+        BillingConfig,
+        | "capacityRateCardVersion"
+        | "capacityD1ReadLightPerMillionRows"
+        | "capacityD1WriteLightPerMillionRows"
+      >
+    >;
   metadata?: Record<string, unknown>;
 }
 
@@ -275,6 +335,394 @@ export function calcWorkerCloudUnits(
   return Math.max(1, Math.ceil(durationMs / workerMsPerCloudUnit));
 }
 
+/**
+ * Cloudflare bills aggregate CPU milliseconds, not started 250ms wall-clock
+ * intervals. Capacity therefore keeps the existing versioned rate but applies
+ * it continuously to observed CPU. `calcWorkerCloudUnits` remains unchanged
+ * for the legacy wallet hold path.
+ */
+export function calcWorkerCpuCloudUnits(
+  cpuMs: number,
+  workerMsPerCloudUnit = DEFAULT_BILLING_CONFIG.workerMsPerCloudUnit,
+): number {
+  if (!Number.isFinite(cpuMs) || cpuMs < 0) {
+    throw new Error("Worker CPU time must be a non-negative finite number");
+  }
+  if (!Number.isFinite(workerMsPerCloudUnit) || workerMsPerCloudUnit <= 0) {
+    throw new Error(
+      "Worker cloud unit interval must be a positive finite number",
+    );
+  }
+  return cpuMs / workerMsPerCloudUnit;
+}
+
+export function calculateWorkerCpuLight(
+  cpuMs: number,
+  billingConfig: Pick<
+    BillingConfig,
+    "workerMsPerCloudUnit" | "cloudUnitLightPer1k"
+  > = DEFAULT_BILLING_CONFIG,
+): number {
+  return calculateCloudUsageLight(
+    calcWorkerCpuCloudUnits(cpuMs, billingConfig.workerMsPerCloudUnit),
+    billingConfig.cloudUnitLightPer1k,
+  );
+}
+
+export function calculateWorkerRequestLight(
+  requestCount: number,
+  workerRequestLightPerInvocation =
+    DEFAULT_BILLING_CONFIG.workerRequestLightPerInvocation,
+): number {
+  if (!Number.isFinite(requestCount) || requestCount < 0) {
+    throw new Error(
+      "Worker request count must be a non-negative finite number",
+    );
+  }
+  if (
+    !Number.isFinite(workerRequestLightPerInvocation) ||
+    workerRequestLightPerInvocation < 0
+  ) {
+    throw new Error(
+      "Worker request Light rate must be non-negative and finite",
+    );
+  }
+  return requestCount * workerRequestLightPerInvocation;
+}
+
+const CAPACITY_RATE_UNIT_SCALE = 1_000_000;
+
+export function calculateCapacityMarginalLight(
+  units: number,
+  lightPerMillionUnits: number,
+): number {
+  if (!Number.isFinite(units) || units < 0) {
+    throw new Error("Capacity units must be non-negative and finite");
+  }
+  if (
+    !Number.isFinite(lightPerMillionUnits) || lightPerMillionUnits < 0
+  ) {
+    throw new Error(
+      "Capacity marginal Light rate must be non-negative and finite",
+    );
+  }
+  return (units * lightPerMillionUnits) / CAPACITY_RATE_UNIT_SCALE;
+}
+
+type CapacityOperationClass =
+  | "r2_class_a"
+  | "r2_class_b"
+  | "r2_delete"
+  | "kv_read"
+  | "kv_write"
+  | "kv_delete"
+  | "kv_list";
+
+interface CapacityOperationCharge {
+  operationClass: CapacityOperationClass;
+  units: number;
+  lightPerMillionUnits: number;
+}
+
+function normalizedOperation(operation: string): string {
+  return operation.trim().toLowerCase();
+}
+
+/**
+ * Map the host-controlled operation vocabulary to Cloudflare's actual paid
+ * operation classes. Unknown operations fail closed instead of silently
+ * picking a made-up price; every current caller is covered below.
+ */
+function classifyCapacityCloudOperation(
+  resource: Extract<CapacityResource, "r2_operation" | "kv_operation">,
+  operation: string,
+  units: number,
+  config: Partial<BillingConfig> = DEFAULT_BILLING_CONFIG,
+): CapacityOperationCharge[] {
+  if (!Number.isFinite(units) || units < 0) {
+    throw new Error("Cloud operation units must be non-negative and finite");
+  }
+  if (units === 0) return [];
+  const op = normalizedOperation(operation);
+
+  if (resource === "r2_operation") {
+    // remember is exactly one Class B GET followed by one Class A PUT. It was
+    // historically passed as an undifferentiated `units: 2`; retain the caller
+    // contract while recording the two billable classes independently.
+    if (op === "memory.remember") {
+      if (units !== 2) {
+        throw new Error(
+          "memory.remember must meter exactly one get and one put",
+        );
+      }
+      return [{
+        operationClass: "r2_class_b",
+        units: 1,
+        lightPerMillionUnits:
+          config.capacityR2ClassBLightPerMillionOperations ??
+            DEFAULT_BILLING_CONFIG.capacityR2ClassBLightPerMillionOperations,
+      }, {
+        operationClass: "r2_class_a",
+        units: 1,
+        lightPerMillionUnits:
+          config.capacityR2ClassALightPerMillionOperations ??
+            DEFAULT_BILLING_CONFIG.capacityR2ClassALightPerMillionOperations,
+      }];
+    }
+
+    const classA = new Set([
+      "put",
+      "store",
+      "write",
+      "copy",
+      "list",
+      "appdata.store",
+      "appdata.list",
+      "appdata.batch_store",
+    ]);
+    const classB = new Set([
+      "get",
+      "head",
+      "memory.recall",
+      "appdata.load",
+      "appdata.batch_load",
+    ]);
+    const deletes = new Set([
+      "delete",
+      "remove",
+      "appdata.remove",
+      "appdata.batch_remove",
+    ]);
+    if (classA.has(op)) {
+      return [{
+        operationClass: "r2_class_a",
+        units,
+        lightPerMillionUnits:
+          config.capacityR2ClassALightPerMillionOperations ??
+            DEFAULT_BILLING_CONFIG.capacityR2ClassALightPerMillionOperations,
+      }];
+    }
+    if (classB.has(op)) {
+      return [{
+        operationClass: "r2_class_b",
+        units,
+        lightPerMillionUnits:
+          config.capacityR2ClassBLightPerMillionOperations ??
+            DEFAULT_BILLING_CONFIG.capacityR2ClassBLightPerMillionOperations,
+      }];
+    }
+    if (deletes.has(op)) {
+      return [{
+        operationClass: "r2_delete",
+        units,
+        lightPerMillionUnits:
+          config.capacityR2DeleteLightPerMillionOperations ??
+            DEFAULT_BILLING_CONFIG.capacityR2DeleteLightPerMillionOperations,
+      }];
+    }
+  } else {
+    const leaf = op.split(".").at(-1) ?? op;
+    if (leaf === "get" || leaf === "read") {
+      return [{
+        operationClass: "kv_read",
+        units,
+        lightPerMillionUnits: config.capacityKvReadLightPerMillionOperations ??
+          DEFAULT_BILLING_CONFIG.capacityKvReadLightPerMillionOperations,
+      }];
+    }
+    if (["put", "set", "write", "store"].includes(leaf)) {
+      return [{
+        operationClass: "kv_write",
+        units,
+        lightPerMillionUnits: config.capacityKvWriteLightPerMillionOperations ??
+          DEFAULT_BILLING_CONFIG.capacityKvWriteLightPerMillionOperations,
+      }];
+    }
+    if (leaf === "delete" || leaf === "remove") {
+      return [{
+        operationClass: "kv_delete",
+        units,
+        lightPerMillionUnits:
+          config.capacityKvDeleteLightPerMillionOperations ??
+            DEFAULT_BILLING_CONFIG.capacityKvDeleteLightPerMillionOperations,
+      }];
+    }
+    if (leaf === "list") {
+      return [{
+        operationClass: "kv_list",
+        units,
+        lightPerMillionUnits: config.capacityKvListLightPerMillionOperations ??
+          DEFAULT_BILLING_CONFIG.capacityKvListLightPerMillionOperations,
+      }];
+    }
+  }
+
+  throw new Error(`Unsupported capacity ${resource} operation: ${operation}`);
+}
+
+/**
+ * Record an attributable Cloudflare Queue operation on an enclosing execution.
+ * Customer EXEC producers and consumers call this when the broker operation
+ * is correlated to the same capacity receipt. The CPU telemetry and
+ * settlement-recovery queues deliberately do not: those are platform control
+ * plane overhead. EVENT fan-out attaches one consumer lifecycle to the first
+ * delivery receipt that actually settles, so subscriber count never
+ * multiplies Queue cost. A cycle with no receipt (no subscribers or every
+ * candidate rejected before execution) remains explicit platform
+ * reconciliation overhead because there is no customer settlement sink.
+ */
+export function addCapacityQueueOperations(
+  meter: Pick<CapacityResourceMeter, "addResource">,
+  units: number,
+  operation: "write" | "read" | "delete",
+  billingConfig: Partial<
+    Pick<
+      BillingConfig,
+      "capacityRateCardVersion" | "capacityQueueLightPerMillionOperations"
+    >
+  > = DEFAULT_BILLING_CONFIG,
+): CapacityResourceFact {
+  const rate = billingConfig.capacityQueueLightPerMillionOperations ??
+    DEFAULT_BILLING_CONFIG.capacityQueueLightPerMillionOperations;
+  const amountLight = calculateCapacityMarginalLight(units, rate);
+  const fact: CapacityResourceFact = {
+    resource: "queue_operation",
+    units,
+    cloudUnits: units / CAPACITY_RATE_UNIT_SCALE,
+    amountLight,
+    metadata: {
+      operation,
+      rate_card_version: billingConfig.capacityRateCardVersion ??
+        DEFAULT_BILLING_CONFIG.capacityRateCardVersion,
+      light_per_million_operations: rate,
+      attribution: "customer_execution",
+    },
+  };
+  meter.addResource(fact);
+  return fact;
+}
+
+interface CapacityQueueOperationEnvelope {
+  write: number;
+  read: number;
+  delete: number;
+  total: number;
+}
+
+/**
+ * Validate a trusted EXEC/EVENT Queue envelope and add its three operation
+ * facts. This keeps consumer integration to one call and makes malformed
+ * internal metadata fail closed instead of becoming an arbitrary capacity
+ * debit.
+ */
+export function addCapacityQueueOperationEnvelope(
+  meter: Pick<CapacityResourceMeter, "addResource">,
+  value: unknown,
+  billingConfig: Partial<
+    Pick<
+      BillingConfig,
+      "capacityRateCardVersion" | "capacityQueueLightPerMillionOperations"
+    >
+  > = DEFAULT_BILLING_CONFIG,
+): CapacityQueueOperationEnvelope {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Capacity Queue operation envelope is invalid");
+  }
+  const raw = value as Record<string, unknown>;
+  const fields = ["write", "read", "delete", "total"] as const;
+  const parsed = Object.fromEntries(fields.map((field) => {
+    const count = raw[field];
+    if (
+      typeof count !== "number" || !Number.isSafeInteger(count) || count < 0
+    ) {
+      throw new Error(`Capacity Queue ${field} count is invalid`);
+    }
+    return [field, count];
+  })) as unknown as CapacityQueueOperationEnvelope;
+  if (parsed.total !== parsed.write + parsed.read + parsed.delete) {
+    throw new Error("Capacity Queue operation total does not match its parts");
+  }
+  if (parsed.write > 0) {
+    addCapacityQueueOperations(meter, parsed.write, "write", billingConfig);
+  }
+  if (parsed.read > 0) {
+    addCapacityQueueOperations(meter, parsed.read, "read", billingConfig);
+  }
+  if (parsed.delete > 0) {
+    addCapacityQueueOperations(meter, parsed.delete, "delete", billingConfig);
+  }
+  return parsed;
+}
+
+/** Collect resource facts without touching the legacy wallet ledger. */
+export function createCapacityResourceMeter(): CapacityResourceMeter {
+  const facts: CapacityResourceFact[] = [];
+  let unattributedLight = 0;
+  const normalize = (value: number, field: string): number => {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(`${field} must be non-negative and finite`);
+    }
+    return value;
+  };
+  return {
+    addLight(amountLight) {
+      const amount = normalize(amountLight, "Capacity Light");
+      if (amount > 0) unattributedLight += amount;
+    },
+    addResource(fact) {
+      const units = normalize(fact.units, "Capacity resource units");
+      const cloudUnits = normalize(
+        fact.cloudUnits,
+        "Capacity resource cloud units",
+      );
+      const amountLight = normalize(
+        fact.amountLight,
+        "Capacity resource Light",
+      );
+      if (units === 0 && cloudUnits === 0 && amountLight === 0) return;
+      facts.push({
+        resource: fact.resource,
+        units,
+        cloudUnits,
+        amountLight,
+        ...(fact.metadata ? { metadata: { ...fact.metadata } } : {}),
+      });
+    },
+    snapshot() {
+      return [
+        ...facts.map((fact) => ({
+          ...fact,
+          ...(fact.metadata ? { metadata: { ...fact.metadata } } : {}),
+        })),
+        ...(unattributedLight > 0
+          ? [{
+            resource: "other" as const,
+            units: 0,
+            cloudUnits: 0,
+            amountLight: unattributedLight,
+            metadata: { source: "legacy_aggregate" },
+          }]
+          : []),
+      ];
+    },
+    totalLight() {
+      return unattributedLight + facts.reduce(
+        (total, fact) => total + fact.amountLight,
+        0,
+      );
+    },
+  };
+}
+
+function addCapacityResource(
+  meter: CloudOperationMeteringContext["capacityMeter"],
+  fact: CapacityResourceFact,
+): void {
+  if (!meter) return;
+  if (meter.addResource) meter.addResource(fact);
+  else meter.addLight(fact.amountLight);
+}
+
 export function calcOperationCloudUnits(
   units: number,
   operationsPerCloudUnit: number,
@@ -357,17 +805,35 @@ export async function debitCloudOperation(
   }
 
   const config = params.billingConfig ?? DEFAULT_BILLING_CONFIG;
-  const operationsPerCloudUnit = params.resource === "r2_operation"
-    ? config.r2OpsPerCloudUnit
-    : config.kvOpsPerCloudUnit;
-  const cloudUnits = calcOperationCloudUnits(units, operationsPerCloudUnit);
-  const amountLight = calculateCloudUsageLight(
-    cloudUnits,
-    config.cloudUnitLightPer1k,
-  );
-
   if (params.capacityMeter) {
-    params.capacityMeter.addLight(amountLight);
+    const charges = classifyCapacityCloudOperation(
+      params.resource,
+      params.operation,
+      units,
+      config,
+    );
+    const rateCardVersion = config.capacityRateCardVersion ??
+      DEFAULT_BILLING_CONFIG.capacityRateCardVersion;
+    let amountLight = 0;
+    for (const charge of charges) {
+      const chargeLight = calculateCapacityMarginalLight(
+        charge.units,
+        charge.lightPerMillionUnits,
+      );
+      amountLight += chargeLight;
+      addCapacityResource(params.capacityMeter, {
+        resource: params.resource,
+        units: charge.units,
+        cloudUnits: charge.units / CAPACITY_RATE_UNIT_SCALE,
+        amountLight: chargeLight,
+        metadata: {
+          operation: params.operation,
+          operation_class: charge.operationClass,
+          rate_card_version: rateCardVersion,
+          light_per_million_operations: charge.lightPerMillionUnits,
+        },
+      });
+    }
     return {
       eventId: `capacity:${crypto.randomUUID()}`,
       oldBalance: 0,
@@ -377,6 +843,15 @@ export async function debitCloudOperation(
       earnedDebited: 0,
     };
   }
+
+  const operationsPerCloudUnit = params.resource === "r2_operation"
+    ? config.r2OpsPerCloudUnit
+    : config.kvOpsPerCloudUnit;
+  const cloudUnits = calcOperationCloudUnits(units, operationsPerCloudUnit);
+  const amountLight = calculateCloudUsageLight(
+    cloudUnits,
+    config.cloudUnitLightPer1k,
+  );
 
   // Launch invariant: routine KV/R2 micro-operations are platform-sponsored.
   // The binding calls this before touching storage, but D1 exposes row counts
@@ -435,26 +910,22 @@ export async function debitD1Usage(
   }
 
   const config = params.billingConfig ?? DEFAULT_BILLING_CONFIG;
-  const readCloudUnits = calcD1ReadCloudUnits(
-    rowsRead,
-    config.d1ReadRowsPerCloudUnit,
-  );
-  const writeCloudUnits = calcD1WriteCloudUnits(
-    rowsWritten,
-    config.d1WriteRowsPerCloudUnit,
-  );
-
   if (params.capacityMeter) {
-    const readAmountLight = calculateCloudUsageLight(
-      readCloudUnits,
-      config.cloudUnitLightPer1k,
-    );
-    const writeAmountLight = calculateCloudUsageLight(
-      writeCloudUnits,
-      config.cloudUnitLightPer1k,
+    const rateCardVersion = config.capacityRateCardVersion ??
+      DEFAULT_BILLING_CONFIG.capacityRateCardVersion;
+    const readRate = config.capacityD1ReadLightPerMillionRows ??
+      DEFAULT_BILLING_CONFIG.capacityD1ReadLightPerMillionRows;
+    const writeRate = config.capacityD1WriteLightPerMillionRows ??
+      DEFAULT_BILLING_CONFIG.capacityD1WriteLightPerMillionRows;
+    const readCloudUnits = rowsRead / CAPACITY_RATE_UNIT_SCALE;
+    const writeCloudUnits = rowsWritten / CAPACITY_RATE_UNIT_SCALE;
+    const readAmountLight = calculateCapacityMarginalLight(rowsRead, readRate);
+    const writeAmountLight = calculateCapacityMarginalLight(
+      rowsWritten,
+      writeRate,
     );
     const events: CloudUsageDebitResult[] = [];
-    if (readAmountLight > 0) {
+    if (rowsRead > 0) {
       events.push({
         eventId: `capacity:${crypto.randomUUID()}`,
         oldBalance: 0,
@@ -463,8 +934,19 @@ export async function debitD1Usage(
         depositDebited: 0,
         earnedDebited: 0,
       });
+      addCapacityResource(params.capacityMeter, {
+        resource: "d1_read",
+        units: rowsRead,
+        cloudUnits: readCloudUnits,
+        amountLight: readAmountLight,
+        metadata: {
+          operation: params.operation,
+          rate_card_version: rateCardVersion,
+          light_per_million_rows: readRate,
+        },
+      });
     }
-    if (writeAmountLight > 0) {
+    if (rowsWritten > 0) {
       events.push({
         eventId: `capacity:${crypto.randomUUID()}`,
         oldBalance: 0,
@@ -473,19 +955,42 @@ export async function debitD1Usage(
         depositDebited: 0,
         earnedDebited: 0,
       });
+      addCapacityResource(params.capacityMeter, {
+        resource: "d1_write",
+        units: rowsWritten,
+        cloudUnits: writeCloudUnits,
+        amountLight: writeAmountLight,
+        metadata: {
+          operation: params.operation,
+          rate_card_version: rateCardVersion,
+          light_per_million_rows: writeRate,
+        },
+      });
     }
-    params.capacityMeter.addLight(readAmountLight + writeAmountLight);
+    const readEventId = rowsRead > 0 ? events[0]?.eventId : undefined;
+    const writeEventId = rowsWritten > 0
+      ? events[rowsRead > 0 ? 1 : 0]?.eventId
+      : undefined;
     return {
       rowsRead,
       rowsWritten,
       readCloudUnits,
       writeCloudUnits,
       amountLight: readAmountLight + writeAmountLight,
-      readEventId: events[0]?.eventId,
-      writeEventId: events[readAmountLight > 0 ? 1 : 0]?.eventId,
+      readEventId,
+      writeEventId,
       events,
     };
   }
+
+  const readCloudUnits = calcD1ReadCloudUnits(
+    rowsRead,
+    config.d1ReadRowsPerCloudUnit,
+  );
+  const writeCloudUnits = calcD1WriteCloudUnits(
+    rowsWritten,
+    config.d1WriteRowsPerCloudUnit,
+  );
 
   // See debitCloudOperation: D1 row cost is unknowable until the query has
   // executed, so routine D1 is deliberately non-billable for the launch MVP.

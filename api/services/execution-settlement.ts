@@ -525,10 +525,11 @@ export async function preflightRuntimeCloudHold(
     }
     let routineBudgetReservation: RoutineBudgetReservation | undefined;
     if (params.routineContext) {
-      const reserveLight = calculateExpectedRuntimeHoldAmount(
-        params.timeoutMs,
-        billingConfig,
-      );
+      // Subscription capacity no longer treats a timeout as spend. The
+      // routine's hard ledger still atomically consumes one call slot here,
+      // but its Light amount is settled from actual resource facts after the
+      // execution (with observed CPU reconciled asynchronously).
+      const reserveLight = 0;
       const admission = await reserveRoutineRunBudget({
         userId: params.userId,
         routine: params.routineContext,
@@ -2255,7 +2256,7 @@ async function resolveDailyLoadFloor(
   }
 }
 
-export function calculateExpectedRuntimeHoldAmount(
+function calculateExpectedRuntimeHoldAmount(
   timeoutMs: number,
   billingConfig: Pick<
     BillingConfig,

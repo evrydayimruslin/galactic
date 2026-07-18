@@ -1312,20 +1312,49 @@ export const CLOUD_UNIT_LIGHT_PER_1K = 1;
 export const WORKER_MS_PER_CLOUD_UNIT = 250;
 
 /**
- * Fixed Light charged per sandbox execution to recover Cloudflare's Dynamic
- * Worker (Worker Loader) per-load fee (~$0.002 = ~0.2 Light after the 1,000
- * free loads/month). The duration meter above is CPU-ms-shaped and cannot
- * recover a fixed per-invocation cost.
+ * Marginal Cloudflare Workers request cost, expressed in canonical Light.
+ *
+ * Cloudflare's paid Workers rate is $0.30 / million requests. At the canonical
+ * 100 Light / USD exchange rate that is 0.00003 Light per request. Unlike the
+ * five-hour/weekly plan ceilings, this is a resource fact rather than an
+ * admission estimate: one admitted execution records the requests it actually
+ * caused and never charges a hypothetical timeout.
+ */
+export const WORKER_REQUEST_LIGHT_PER_INVOCATION = 0.00003;
+
+/**
+ * Subscription-capacity marginal rate card. Values are canonical Light per
+ * million billable units (100 Light / USD), matching Cloudflare's current
+ * paid marginal prices. These rates are intentionally separate from the
+ * legacy wallet cloud-unit weights below: changing capacity economics must
+ * never rewrite historical marketplace/wallet behavior.
+ */
+export const CAPACITY_RATE_CARD_VERSION = 1;
+export const CAPACITY_D1_READ_LIGHT_PER_MILLION_ROWS = 0.1;
+export const CAPACITY_D1_WRITE_LIGHT_PER_MILLION_ROWS = 100;
+export const CAPACITY_KV_READ_LIGHT_PER_MILLION_OPERATIONS = 50;
+export const CAPACITY_KV_WRITE_LIGHT_PER_MILLION_OPERATIONS = 500;
+export const CAPACITY_KV_DELETE_LIGHT_PER_MILLION_OPERATIONS = 500;
+export const CAPACITY_KV_LIST_LIGHT_PER_MILLION_OPERATIONS = 500;
+export const CAPACITY_R2_CLASS_A_LIGHT_PER_MILLION_OPERATIONS = 450;
+export const CAPACITY_R2_CLASS_B_LIGHT_PER_MILLION_OPERATIONS = 36;
+export const CAPACITY_R2_DELETE_LIGHT_PER_MILLION_OPERATIONS = 0;
+export const CAPACITY_QUEUE_LIGHT_PER_MILLION_OPERATIONS = 40;
+
+/**
+ * Safety-priced Light for a billable Dynamic Worker identity/load
+ * (~$0.002 = ~0.2 Light after the included allowance). The capacity resource
+ * ledger de-duplicates this rate by actual worker identity and UTC day, so a
+ * warm worker is not charged again on every invocation. The legacy config name
+ * is retained for receipt compatibility.
  *
  * LIVE at 0.5 Light (=$0.005): Cloudflare confirmed Dynamic Workers is a GA
  * PAID product (a deploy without the paid plan fails with code 10195), so the
  * per-load fee is real, recurring, and mandatory. 0.5 is exactly
  * float-representable and covers the ~$0.002 load with margin. Rides the
  * existing infra hold cascade (owner-sponsor → caller → block), so free-call
- * sponsorship is unchanged. (load()→get() warm reuse — which would make this
- * near-pure margin by cutting the real cost to ~1 load/(agent,user)/day — is
- * deferred: it needs a billing-context rearchitecture so warm-reused bindings
- * don't misattribute AI spend / cloud metering. See PR #67 review + memory.)
+ * sponsorship is unchanged. Runtime CPU and request cost are recorded
+ * separately from this fixed identity fact.
  */
 export const WORKER_LOAD_LIGHT_PER_INVOCATION = 0.5;
 

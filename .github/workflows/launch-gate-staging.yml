@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'api/**'
+      - 'capacity-tail-worker/**'
       - 'apps/**'
       - 'shared/**'
       - 'supabase/**'
@@ -20,6 +21,7 @@ on:
       - '.nvmrc'
       - '.github/workflows/api-ci.yml'
       - '.github/workflows/api-deploy.yml'
+      - '.github/workflows/launch-gate-production.yml'
       - '.github/workflows/desktop-build.yml'
       - '.github/workflows/launch-web-deploy.yml'
       - '.github/workflows/launch-guardrails.yml'

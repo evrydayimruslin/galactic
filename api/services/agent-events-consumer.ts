@@ -44,7 +44,12 @@ export async function processEventMessage(
   // dispatchClaimedEvent handles its own failures (per-delivery rows; the
   // fan-out-level catch re-queues or fails the event by attempt ceiling).
   // Never retry the message post-claim.
-  await dispatchClaimedEvent(event, Date.now()).catch((err) => {
+  await dispatchClaimedEvent(event, Date.now(), {
+    // One normal EVENT_QUEUE lifecycle. Re-enqueues are separate consumer
+    // invocations and receive a fresh envelope when their message is claimed.
+    capacityQueueOperations: { write: 1, read: 1, delete: 1, total: 3 },
+    capacityRootWorkerRequest: true,
+  }).catch((err) => {
     console.error(`[QUEUE-EVENTS] Dispatch crashed for event ${eventId}:`, err);
   });
   return "ack";

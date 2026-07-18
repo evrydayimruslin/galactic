@@ -210,6 +210,7 @@ Deno.test("reactive delivery: capacity wait persists, preserves root attribution
   const deliveryPatches: Record<string, unknown>[] = [];
   const notifications: Record<string, unknown>[] = [];
   const executionInputs: Array<Record<string, unknown>> = [];
+  const queueOperations = { write: 1, read: 1, delete: 1, total: 3 };
   let inserted = false;
   let delivery = {
     id: "d-wait",
@@ -299,15 +300,21 @@ Deno.test("reactive delivery: capacity wait persists, preserves root attribution
           nextEligibleAt: resetAt,
           capacityAgentId: "app-root",
           bindingConstraint: "agent" as const,
+          concurrencyScope: null,
         },
       };
     }
-    return { success: true, receiptId: null };
+    return { success: true, receiptId: "receipt-after-reset" };
   };
 
   await withMockedDb(
     handler,
-    () => dispatchClaimedEvent(claimedEvent, Date.now(), { executeDelivery }),
+    () =>
+      dispatchClaimedEvent(claimedEvent, Date.now(), {
+        executeDelivery,
+        capacityQueueOperations: queueOperations,
+        capacityRootWorkerRequest: true,
+      }),
   );
   assertEquals(delivery.status, "waiting");
   assertEquals(delivery.next_eligible_at, resetAt);
@@ -315,6 +322,8 @@ Deno.test("reactive delivery: capacity wait persists, preserves root attribution
   assertEquals(eventPatches.at(-1)?.next_eligible_at, resetAt);
   assertEquals(executionInputs[0].emitterAppId, "app-emitter");
   assertEquals(executionInputs[0].capacityAgentId, "app-root");
+  assertEquals(executionInputs[0].capacityQueueOperations, queueOperations);
+  assertEquals(executionInputs[0].capacityRootWorkerRequest, true);
   assertEquals(notifications[0]?.agent_id, "app-subscriber-1");
   assertEquals(notifications[0]?.kind, "event_delivery_waiting");
 
@@ -324,7 +333,11 @@ Deno.test("reactive delivery: capacity wait persists, preserves root attribution
       dispatchClaimedEvent(
         { ...claimedEvent, attempts: 2 },
         new Date(resetAt).getTime() + 1,
-        { executeDelivery },
+        {
+          executeDelivery,
+          capacityQueueOperations: queueOperations,
+          capacityRootWorkerRequest: true,
+        },
       ),
   );
   assertEquals(
@@ -333,12 +346,93 @@ Deno.test("reactive delivery: capacity wait persists, preserves root attribution
     "waiting delivery resumes exactly once",
   );
   assertEquals(delivery.status, "delivered");
+  assertEquals(executionInputs[1].capacityQueueOperations, queueOperations);
+  assertEquals(executionInputs[1].capacityRootWorkerRequest, true);
   assertEquals(eventPatches.at(-1)?.status, "delivered");
   assertEquals(
     deliveryPatches.filter((patch) => patch.status === "pending").length,
     1,
     "only the due waiting row may re-enter the executable state",
   );
+});
+
+Deno.test("reactive fan-out: one receipt owns the EVENT Queue cycle regardless of subscriber count", async () => {
+  const grants = [subscribeGrantRow(1), subscribeGrantRow(2)];
+  const executionInputs: Array<Record<string, unknown>> = [];
+  const queueOperations = { write: 1, read: 1, delete: 1, total: 3 };
+  let deliverySequence = 0;
+
+  const handler = (url: URL, init: RequestInit | undefined): Response => {
+    const method = init?.method ?? "GET";
+    if (url.pathname.endsWith("/rest/v1/apps")) {
+      const appId = url.searchParams.get("id")?.replace(/^eq\./, "") ?? "";
+      return new Response(JSON.stringify([privateOwnerAppRow(appId)]), {
+        status: 200,
+      });
+    }
+    if (url.pathname.endsWith("/agent_function_grants")) {
+      const target = url.searchParams.get("target_app_id")?.replace(
+        /^eq\./,
+        "",
+      );
+      return new Response(
+        JSON.stringify(
+          target
+            ? grants.filter((grant) => grant.target_app_id === target)
+            : grants,
+        ),
+        { status: 200 },
+      );
+    }
+    if (url.pathname.endsWith("/agent_event_deliveries")) {
+      if (method === "POST") {
+        deliverySequence++;
+        return new Response(
+          JSON.stringify([{ id: `delivery-${deliverySequence}` }]),
+          { status: 201 },
+        );
+      }
+      return new Response("[]", { status: 200 });
+    }
+    if (url.pathname.endsWith("/agent_events") && method === "PATCH") {
+      return new Response("[]", { status: 200 });
+    }
+    return new Response("[]", { status: 200 });
+  };
+
+  const event: AgentEvent = {
+    id: "evt-queue-attribution",
+    userId: "user-1",
+    emitterAppId: "app-emitter",
+    capacityAgentId: "app-emitter",
+    topic: "sale.created",
+    payload: { orderId: 7 },
+    status: "delivering",
+    attempts: 1,
+    emitHop: 1,
+    createdAt: new Date().toISOString(),
+    dispatchedAt: null,
+    nextEligibleAt: null,
+  };
+
+  await withMockedDb(handler, () =>
+    dispatchClaimedEvent(event, Date.now(), {
+      capacityQueueOperations: queueOperations,
+      capacityRootWorkerRequest: true,
+      executeDelivery: async (input) => {
+        executionInputs.push(input as unknown as Record<string, unknown>);
+        return {
+          success: true,
+          receiptId: `receipt-${executionInputs.length}`,
+        };
+      },
+    }));
+
+  assertEquals(executionInputs.length, 2);
+  assertEquals(executionInputs[0].capacityQueueOperations, queueOperations);
+  assertEquals(executionInputs[0].capacityRootWorkerRequest, true);
+  assertEquals(executionInputs[1].capacityQueueOperations, undefined);
+  assertEquals(executionInputs[1].capacityRootWorkerRequest, false);
 });
 
 Deno.test("reactive delivery: a subscriber that leaves owner-private scope is denied with an Agent Alert", async () => {

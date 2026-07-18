@@ -274,7 +274,10 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
       call.method === "PATCH" &&
       new URL(call.url).searchParams.get("lease_expires_at")?.startsWith("lt.")
     );
-    assert(clearExpiredPatch, "expected an expired-lease clear before claiming");
+    assert(
+      clearExpiredPatch,
+      "expected an expired-lease clear before claiming",
+    );
     const rpcBody = mcpCalls[0].body as {
       params: { name: string; arguments: Record<string, unknown> };
     };
@@ -315,7 +318,9 @@ Deno.test("routine executor: exhausted capacity coalesces a scheduled wake witho
     SUBSCRIPTION_CAPACITY_ENABLED: "1",
     AGENT_CAPACITY_ENABLED: "1",
   };
-  const calls: Array<{ table: string; method: string; body: Record<string, unknown> }> = [];
+  const calls: Array<
+    { table: string; method: string; body: Record<string, unknown> }
+  > = [];
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input.toString());
@@ -324,7 +329,7 @@ Deno.test("routine executor: exhausted capacity coalesces a scheduled wake witho
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     calls.push({ table, method, body });
 
-    if (table === "reserve_account_capacity_v2") {
+    if (table === "reserve_account_capacity_v3") {
       return jsonResponse([{
         allowed: false,
         code: "agent_cap_waiting",
@@ -343,6 +348,7 @@ Deno.test("routine executor: exhausted capacity coalesces a scheduled wake witho
         binding_constraint: "agent",
         agent_burst_remaining_light: 0.5,
         agent_weekly_remaining_light: 0,
+        concurrency_scope: null,
       }]);
     }
     if (table === "record_deferred_routine_wake") {
@@ -386,18 +392,26 @@ Deno.test("routine executor: exhausted capacity coalesces a scheduled wake witho
 
     assertEquals(summary.executed, 0);
     assertEquals(
-      calls.filter((call) => call.table === "routine_runs" && call.method === "POST").length,
+      calls.filter((call) =>
+        call.table === "routine_runs" && call.method === "POST"
+      ).length,
       0,
     );
     assertEquals(
-      calls.filter((call) => call.table === "record_deferred_routine_wake").length,
+      calls.filter((call) => call.table === "record_deferred_routine_wake")
+        .length,
       1,
     );
     const admission = calls.find((call) =>
-      call.table === "reserve_account_capacity_v2"
+      call.table === "reserve_account_capacity_v3"
     );
     assertEquals(admission?.body.p_capacity_agent_id, "composer-app-1");
     assertEquals(admission?.body.p_reserve_light, 0);
+    assertEquals(admission?.body.p_routine_id, "routine-1");
+    assert(
+      typeof admission?.body.p_routine_run_id === "string" &&
+        admission.body.p_routine_run_id.length > 0,
+    );
     const cadencePatch = calls.find((call) =>
       call.table === "user_routines" && call.method === "PATCH" &&
       call.body.next_run_at
@@ -434,7 +448,10 @@ Deno.test("routine executor: a post-success bookkeeping failure does NOT re-run 
       if ((body as Record<string, unknown>)?.last_success_at) {
         return new Response("boom", { status: 500 });
       }
-      return jsonResponse([{ ...routineRow(), ...(body as Record<string, unknown>) }]);
+      return jsonResponse([{
+        ...routineRow(),
+        ...(body as Record<string, unknown>),
+      }]);
     }
     if (table === "routine_runs" && method === "GET") {
       if (isReaperQuery(url)) return jsonResponse([]);
@@ -468,7 +485,9 @@ Deno.test("routine executor: a post-success bookkeeping failure does NOT re-run 
       invokeMcp: async () => {
         handlerInvocations += 1;
         return jsonResponse({
-          result: { content: [{ type: "text", text: JSON.stringify({ ok: true }) }] },
+          result: {
+            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          },
         });
       },
     });
@@ -534,7 +553,9 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
       if (url.searchParams.get("status") === "eq.queued") {
         queuedCandidatesFilter = url.searchParams.get("or");
       }
-      return jsonResponse([queuedRunRow({ trigger: "manual", attempt_count: 1 })]);
+      return jsonResponse([
+        queuedRunRow({ trigger: "manual", attempt_count: 1 }),
+      ]);
     }
     if (table === "routine_runs" && method === "PATCH") {
       runPatches.push({
@@ -735,7 +756,10 @@ Deno.test("routine executor: auto-pauses the routine after consecutive failed at
 
     if (table === "user_notifications" && method === "POST") {
       notifications.push(body as Record<string, unknown>);
-      return jsonResponse([{ id: "notif-1", ...(body as Record<string, unknown>) }]);
+      return jsonResponse([{
+        id: "notif-1",
+        ...(body as Record<string, unknown>),
+      }]);
     }
     if (table === "user_routines" && method === "GET") {
       if (url.searchParams.get("status") === "eq.active") {
@@ -758,7 +782,9 @@ Deno.test("routine executor: auto-pauses the routine after consecutive failed at
       // Final attempt (2) already spent: the claim increments to 3 = max, so the
       // failing handler terminates the run and trips the breaker. getRunById and
       // queuedRunCandidates return the same pending run.
-      return jsonResponse([queuedRunRow({ trigger: "manual", attempt_count: 2 })]);
+      return jsonResponse([
+        queuedRunRow({ trigger: "manual", attempt_count: 2 }),
+      ]);
     }
     if (table === "routine_runs" && method === "PATCH") {
       return jsonResponse([runRow(body as Record<string, unknown>)]);
@@ -908,7 +934,10 @@ Deno.test("routine executor: a hung handler invocation times out into a retry (n
       return jsonResponse([routineRow({ budget_policy: {} })]);
     }
     if (table === "user_routines" && method === "PATCH") {
-      return jsonResponse([{ ...routineRow(), ...(body as Record<string, unknown>) }]);
+      return jsonResponse([{
+        ...routineRow(),
+        ...(body as Record<string, unknown>),
+      }]);
     }
     if (table === "routine_runs" && method === "GET") {
       if (isReaperQuery(url)) return jsonResponse([]); // nothing stale to reap
@@ -948,7 +977,10 @@ Deno.test("routine executor: a hung handler invocation times out into a retry (n
     assertEquals(summary.executed, 1);
     assertEquals(summary.retried, 1);
     const retryPatch = runPatches.find((b) => b.status === "queued");
-    assert(retryPatch, "hung run must be re-queued for retry, not left running");
+    assert(
+      retryPatch,
+      "hung run must be re-queued for retry, not left running",
+    );
     assertEquals(
       (retryPatch?.error as Record<string, unknown>).message,
       "Routine handler invocation timed out",
@@ -970,8 +1002,15 @@ Deno.test("routine executor: dispatches claimed runs to the queue instead of run
     const table = url.pathname.split("/").pop() || "";
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    if (table === "user_routines" && method === "GET") return jsonResponse([routineRow()]);
-    if (table === "user_routines" && method === "PATCH") return jsonResponse([{ ...routineRow(), ...(body as Record<string, unknown>) }]);
+    if (table === "user_routines" && method === "GET") {
+      return jsonResponse([routineRow()]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      return jsonResponse([{
+        ...routineRow(),
+        ...(body as Record<string, unknown>),
+      }]);
+    }
     if (table === "routine_runs" && method === "GET") {
       if (isReaperQuery(url)) return jsonResponse([]); // nothing stale to reap
       if (url.searchParams.get("id")?.startsWith("eq.")) {
@@ -979,8 +1018,12 @@ Deno.test("routine executor: dispatches claimed runs to the queue instead of run
       }
       return jsonResponse([]);
     }
-    if (table === "routine_runs" && method === "POST") return jsonResponse([runRow(body as Record<string, unknown>)]);
-    if (table === "routine_runs" && method === "PATCH") return jsonResponse([runRow(body as Record<string, unknown>)]);
+    if (table === "routine_runs" && method === "POST") {
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      return jsonResponse([runRow(body as Record<string, unknown>)]);
+    }
     if (table === "routine_capabilities") return jsonResponse(capabilityRows());
     if (table === "routine_dashboard_bindings") return jsonResponse([]);
     if (table === "users") return jsonResponse([userRow()]);
@@ -993,9 +1036,18 @@ Deno.test("routine executor: dispatches claimed runs to the queue instead of run
       clock: () => NOW,
       limit: 5,
       baseUrl: "https://api.example.test",
-      execQueue: { send: async (b) => { sent.push(b as { routineRunId: string }); } },
+      execQueue: {
+        send: async (b) => {
+          sent.push(b as { routineRunId: string });
+        },
+      },
       // If this ever runs inline, the flag flips — it must NOT in the cron cycle.
-      invokeMcp: async () => { handlerInvoked = true; return jsonResponse({ result: { content: [{ type: "text", text: "{}" }] } }); },
+      invokeMcp: async () => {
+        handlerInvoked = true;
+        return jsonResponse({
+          result: { content: [{ type: "text", text: "{}" }] },
+        });
+      },
     });
 
     assertEquals(summary.claimed_scheduled, 1);
@@ -1016,6 +1068,7 @@ Deno.test("processQueuedRoutineRun: claims the queued run and executes the handl
   let handlerInvoked = false;
   let claimStatusFilter: string | null = null;
   let invokedTraceId: string | null = null;
+  let capacityAttribution: Record<string, unknown> | undefined;
   const runPatches: Array<Record<string, unknown>> = [];
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1039,7 +1092,9 @@ Deno.test("processQueuedRoutineRun: claims the queued run and executes the handl
     if (table === "routine_capabilities") return jsonResponse(capabilityRows());
     if (table === "routine_dashboard_bindings") return jsonResponse([]);
     if (table === "users") return jsonResponse([userRow()]);
-    if (table === "routine_run_steps" && method === "POST") return jsonResponse([{ id: "step-1" }]);
+    if (table === "routine_run_steps" && method === "POST") {
+      return jsonResponse([{ id: "step-1" }]);
+    }
     return jsonResponse([]);
   }) as typeof fetch;
 
@@ -1050,8 +1105,9 @@ Deno.test("processQueuedRoutineRun: claims the queued run and executes the handl
         now: NOW,
         clock: () => NOW,
         baseUrl: "https://api.example.test",
-        invokeMcp: async (request) => {
+        invokeMcp: async (request, _appId, internalCapacityAttribution) => {
           handlerInvoked = true;
+          capacityAttribution = internalCapacityAttribution;
           const body = await request.json() as {
             params: { arguments: { _routine: { trace_id: string } } };
           };
@@ -1073,7 +1129,186 @@ Deno.test("processQueuedRoutineRun: claims the queued run and executes the handl
       "claim backfills a legacy null trace before execution",
     );
     assertEquals(invokedTraceId, claim?.trace_id);
+    assertEquals(capacityAttribution, {
+      capacityQueueOperations: { write: 1, read: 1, delete: 1, total: 3 },
+      capacityRootWorkerRequest: true,
+    });
     assert(runPatches.some((p) => p.status === "succeeded"));
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("processQueuedRoutineRun: concurrency admission coalesces and retries a sparse routine at lease release", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  const retryAt = "2026-05-17T12:03:00.000Z";
+  const runPatches: Array<Record<string, unknown>> = [];
+  const routinePatches: Array<Record<string, unknown>> = [];
+  const deferredCalls: Array<Record<string, unknown>> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body
+      ? JSON.parse(String(init.body)) as Record<string, unknown>
+      : {};
+    if (table === "routine_runs" && method === "GET") {
+      return jsonResponse([queuedRunRow()]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      runPatches.push(body);
+      return jsonResponse([runRow(body)]);
+    }
+    if (table === "user_routines" && method === "GET") {
+      return jsonResponse([routineRow({
+        next_run_at: "2026-05-18T12:00:00.000Z",
+      })]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      routinePatches.push(body);
+      return jsonResponse([routineRow(body)]);
+    }
+    if (table === "routine_capabilities") return jsonResponse(capabilityRows());
+    if (table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "users") return jsonResponse([userRow()]);
+    if (table === "record_deferred_routine_wake") {
+      deferredCalls.push(body);
+      return jsonResponse({
+        routine_id: "routine-1",
+        user_id: "user-1",
+        first_deferred_at: NOW.toISOString(),
+        latest_deferred_at: NOW.toISOString(),
+        deferred_wake_count: 4,
+        next_eligible_at: retryAt,
+        manual_requested: false,
+      });
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    await processQueuedRoutineRun(
+      { routineRunId: "run-1" },
+      {
+        now: NOW,
+        clock: () => NOW,
+        baseUrl: "https://api.example.test",
+        invokeMcp: async () =>
+          jsonResponse({
+            error: {
+              code: -32010,
+              message: "Too many routine wakes are already in progress",
+              data: {
+                type: "concurrency_waiting",
+                retry_at: retryAt,
+                concurrency_scope: "routine",
+              },
+            },
+          }),
+      },
+    );
+
+    assertEquals(deferredCalls.length, 1);
+    assertEquals(deferredCalls[0].p_next_eligible_at, retryAt);
+    const skipped = runPatches.find((patch) => patch.status === "skipped");
+    assertEquals(
+      (skipped?.error as Record<string, unknown>)?.code,
+      "concurrency_waiting",
+    );
+    assertEquals(
+      (skipped?.error as Record<string, unknown>)?.concurrency_scope,
+      "routine",
+    );
+    assert(
+      !runPatches.some((patch) => patch.status === "queued"),
+      "admission denial must not consume a normal failure retry",
+    );
+    assertEquals(
+      routinePatches.find((patch) => patch.next_run_at === retryAt)
+        ?.next_run_at,
+      retryAt,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("processQueuedRoutineRun: nested concurrency wait never replays an already-started wake", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  const runPatches: Array<Record<string, unknown>> = [];
+  let deferredCalls = 0;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body
+      ? JSON.parse(String(init.body)) as Record<string, unknown>
+      : {};
+    if (table === "routine_runs" && method === "GET") {
+      return jsonResponse([queuedRunRow()]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      runPatches.push(body);
+      return jsonResponse([runRow(body)]);
+    }
+    if (table === "user_routines") return jsonResponse([routineRow()]);
+    if (table === "routine_capabilities") return jsonResponse(capabilityRows());
+    if (table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "users") return jsonResponse([userRow()]);
+    if (table === "routine_run_steps") return jsonResponse([{ id: "step-1" }]);
+    if (table === "record_deferred_routine_wake") {
+      deferredCalls += 1;
+      return jsonResponse({});
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    await processQueuedRoutineRun(
+      { routineRunId: "run-1" },
+      {
+        now: NOW,
+        clock: () => NOW,
+        baseUrl: "https://api.example.test",
+        invokeMcp: async () =>
+          jsonResponse({
+            result: {
+              isError: true,
+              content: [{ type: "text", text: "nested call is waiting" }],
+              structuredContent: {
+                error: "nested call is waiting",
+                error_type: "ConcurrencyWaitingError",
+                error_details: {
+                  type: "concurrency_waiting",
+                  retry_at: "2026-05-17T12:00:15.000Z",
+                  concurrency_scope: "ai",
+                },
+              },
+            },
+          }),
+      },
+    );
+
+    assertEquals(deferredCalls, 0);
+    assert(
+      !runPatches.some((patch) => patch.status === "queued"),
+      "an already-started outer handler must never be replayed automatically",
+    );
+    const skipped = runPatches.find((patch) => patch.status === "skipped");
+    assertEquals(
+      (skipped?.error as Record<string, unknown>)?.code,
+      "nested_concurrency_waiting",
+    );
+    assertEquals(
+      (skipped?.error as Record<string, unknown>)?.replay_safe,
+      false,
+    );
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv();
@@ -1148,7 +1383,13 @@ Deno.test("processQueuedRoutineRun: duplicate delivery (claim matches nothing) i
   try {
     const outcome = await processQueuedRoutineRun(
       { routineRunId: "run-1" },
-      { now: NOW, invokeMcp: async () => { handlerInvoked = true; return jsonResponse({ result: { content: [] } }); } },
+      {
+        now: NOW,
+        invokeMcp: async () => {
+          handlerInvoked = true;
+          return jsonResponse({ result: { content: [] } });
+        },
+      },
     );
     assertEquals(outcome, "ack");
     assertEquals(handlerInvoked, false);
@@ -1245,8 +1486,10 @@ Deno.test("processQueuedRoutineRun: an unmarked legacy launch routine is quarant
       routinePatches.push(body);
       return jsonResponse([{ ...legacy, ...body }]);
     }
-    if (table === "routine_capabilities" ||
-      table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (
+      table === "routine_capabilities" ||
+      table === "routine_dashboard_bindings"
+    ) return jsonResponse([]);
     if (table === "user_notifications" && method === "POST") {
       return jsonResponse([{ id: "notification-1" }]);
     }
@@ -1307,7 +1550,10 @@ Deno.test("routine executor: reaps a run orphaned in 'running' past its lease", 
       return jsonResponse([]);
     }
     if (table === "routine_runs" && method === "PATCH") {
-      runPatches.push({ body: body as Record<string, unknown>, url: url.toString() });
+      runPatches.push({
+        body: body as Record<string, unknown>,
+        url: url.toString(),
+      });
       return jsonResponse([{ id: "orphan-1" }]);
     }
     return jsonResponse([]);

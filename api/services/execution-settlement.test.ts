@@ -420,6 +420,65 @@ Deno.test("preflightRuntimeCloudHold allows when balance covers app charge + tax
   });
 });
 
+Deno.test("subscription routine preflight reserves a call slot without inventing timeout spend", async () => {
+  await withMockedEnv(async () => {
+    invalidateBillingConfigCache();
+    let reservationBody: Record<string, unknown> | null = null;
+    try {
+      const result = await preflightRuntimeCloudHold({
+        app: createTestApp(),
+        userId: "user_subscription_routine",
+        functionName: "run",
+        inputArgs: {},
+        receiptId: "receipt-subscription-routine",
+        method: "run",
+        timeoutMs: 120_000,
+        callerAuthState: "authenticated",
+        subscriptionCapacity: true,
+        byokPresent: true,
+        routineContext: {
+          routineId: "00000000-0000-4000-8000-000000000211",
+          routineRunId: "00000000-0000-4000-8000-000000000212",
+        },
+      }, {
+        fetchFn: async (input, init) => {
+          const url = String(input);
+          if (url.includes("/platform_billing_config")) {
+            return Response.json([{ id: "singleton", version: 1 }]);
+          }
+          if (url.includes("/rpc/reserve_routine_run_budget")) {
+            reservationBody = JSON.parse(String(init?.body));
+            return Response.json([{
+              allowed: true,
+              code: "ok",
+              message: "Routine budget reserved.",
+              reservation_id: "00000000-0000-4000-8000-000000000213",
+              reservation_key: "app:receipt-subscription-routine",
+              reserved_light: 0,
+              calls_used: 1,
+              calls_limit: 10,
+              light_used: 0,
+              light_reserved: 0,
+              light_limit: 100,
+            }]);
+          }
+          throw new Error(`Unexpected fetch: ${url}`);
+        },
+      });
+
+      assertEquals(result.insufficientBalance, false);
+      assertEquals(result.hold, null);
+      assert(reservationBody !== null, "routine budget RPC should be called");
+      assertEquals(
+        (reservationBody as unknown as Record<string, unknown>).p_reserve_light,
+        0,
+      );
+    } finally {
+      invalidateBillingConfigCache();
+    }
+  });
+});
+
 Deno.test("preflightRuntimeCloudHold fails closed when runtime policy denies", async () => {
   await withMockedEnv(async () => {
     const result = await preflightRuntimeCloudHold({

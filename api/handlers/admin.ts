@@ -16,6 +16,7 @@
 //   PATCH /api/admin/billing-config — Update Light economics config
 //   GET   /api/admin/cloud-economics — Cloud usage, call receipt, and fee summary
 //   GET   /api/admin/cloud-usage/reconciliation — Cloud usage hold/event/ledger drift report
+//   GET   /api/admin/capacity-telemetry/reconciliation — CPU observation inbox/settlement health
 //   GET   /api/admin/payouts/reconciliation — Payout liability/retry summary
 //   POST  /api/admin/payouts/process — Process or retry due payout operations
 //   GET   /api/admin/analytics?days=30  — Distribution pipeline analytics dashboard
@@ -68,6 +69,7 @@ import {
 import { getPlatformBalance } from "../services/stripe-connect.ts";
 import { processHeldPayouts } from "../services/payout-processor.ts";
 import { getCloudUsageReconciliationReport } from "../services/cloud-usage-reconciliation.ts";
+import { getCapacityTelemetryReconciliationSummary } from "../services/capacity-telemetry-reconciliation.ts";
 
 interface UserIdRow {
   id: string;
@@ -380,6 +382,15 @@ export async function handleAdmin(request: Request): Promise<Response> {
   // GET /api/admin/cloud-usage/reconciliation — read-only cloud usage drift report
   if (path === "/api/admin/cloud-usage/reconciliation" && method === "GET") {
     return getCloudUsageReconciliation(url);
+  }
+
+  // GET /api/admin/capacity-telemetry/reconciliation — read-only durable
+  // observation inbox and settlement health. Reconciliation itself is owned
+  // by the minute cron; a read must never mutate or replay production work.
+  if (
+    path === "/api/admin/capacity-telemetry/reconciliation" && method === "GET"
+  ) {
+    return getCapacityTelemetryReconciliation(url);
   }
 
   // GET /api/admin/payouts/reconciliation — payout liabilities and retry state
@@ -1398,6 +1409,36 @@ async function getCloudUsageReconciliation(url: URL): Promise<Response> {
   } catch (err) {
     console.error("[ADMIN] cloud usage reconciliation failed:", err);
     return error("Cloud usage reconciliation failed", 500);
+  }
+}
+
+async function getCapacityTelemetryReconciliation(url: URL): Promise<Response> {
+  const periodDays = Math.max(
+    1,
+    Math.min(parseInt(url.searchParams.get("days") || "7", 10) || 7, 365),
+  );
+  const pendingAgeMinutes = Math.max(
+    1,
+    Math.min(
+      parseInt(url.searchParams.get("pending_age_minutes") || "5", 10) || 5,
+      24 * 60,
+    ),
+  );
+  try {
+    const summary = await getCapacityTelemetryReconciliationSummary({
+      since: new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000)
+        .toISOString(),
+      pendingAgeMinutes,
+    });
+    return json({
+      success: true,
+      period_days: periodDays,
+      pending_age_minutes: pendingAgeMinutes,
+      summary,
+    });
+  } catch (err) {
+    console.error("[ADMIN] capacity telemetry reconciliation failed:", err);
+    return error("Capacity telemetry reconciliation failed", 500);
   }
 }
 

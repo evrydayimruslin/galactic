@@ -2818,6 +2818,44 @@ export async function inbox_overview(_args: Record<string, never> = {}): Promise
   };
 }
 
+// One cold-load invocation for the Inbox Interface. Each read model settles
+// independently so a data-specific failure can still render the other half of
+// the page; platform admission failures happen before this function and remain
+// a single structured capacity response to the Interface.
+export async function inbox_snapshot(args: {
+  status?: string;
+  limit?: number;
+} = {}): Promise<unknown> {
+  let overview: unknown = null;
+  let conversations: unknown = null;
+  const errors: Array<{ part: string; message: string }> = [];
+  try {
+    overview = await inbox_overview({});
+  } catch (error) {
+    errors.push({
+      part: 'overview',
+      message: error instanceof Error ? error.message : 'Inbox overview failed',
+    });
+  }
+  try {
+    conversations = await conversations_list({
+      status: args.status || 'active',
+      limit: args.limit || 50,
+    });
+  } catch (error) {
+    errors.push({
+      part: 'conversations',
+      message: error instanceof Error ? error.message : 'Conversation list failed',
+    });
+  }
+  return {
+    overview,
+    conversations,
+    partial: errors.length > 0,
+    errors,
+  };
+}
+
 // The Report tab's whole data model: what the agent did in a window, as
 // counts + capped item lists. Read-only aggregation over the app's own
 // ledgers — no platform run-ledger dependency.
@@ -3189,6 +3227,37 @@ export async function knowledge_gaps(args: { limit?: number } = {}): Promise<unk
     .sort((a, b) => b.count - a.count || b.last_seen.localeCompare(a.last_seen));
   const limit = Math.max(1, Math.min(args.limit || 20, 100));
   return { gaps: all.slice(0, limit), total_open: all.length };
+}
+
+// The Teach Interface needs both datasets to render, but neither should blank
+// the other. Keep the cold load to one Agent invocation while returning an
+// explicit partial result if one read model fails.
+export async function teach_snapshot(args: { limit?: number } = {}): Promise<unknown> {
+  let gaps: unknown = null;
+  let conventions: unknown = null;
+  const errors: Array<{ part: string; message: string }> = [];
+  try {
+    gaps = await knowledge_gaps({ limit: args.limit || 10 });
+  } catch (error) {
+    errors.push({
+      part: 'gaps',
+      message: error instanceof Error ? error.message : 'Knowledge gaps failed',
+    });
+  }
+  try {
+    conventions = await conventions_get({});
+  } catch (error) {
+    errors.push({
+      part: 'conventions',
+      message: error instanceof Error ? error.message : 'Conventions failed',
+    });
+  }
+  return {
+    gaps,
+    conventions,
+    partial: errors.length > 0,
+    errors,
+  };
 }
 
 // "Don't ask about this" — a gap the operator deliberately won't answer must

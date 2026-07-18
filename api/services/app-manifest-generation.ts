@@ -105,8 +105,10 @@ export function generateManifestFromParseResult(
   const functions: Record<string, ManifestFunction> = {};
   // For apps that can run inference at all, record uses_inference explicitly
   // (true AND false) so the Free Mode AI gate can tell "analyzed, no AI" from
-  // "old manifest, unknown". Apps without ai:call never write the flag.
-  const appHasInference = parseResult.permissions.includes('ai:call');
+  // "old manifest, unknown". Both generation and embedding are provider-backed
+  // inference, so either capability must preserve the per-function signal.
+  const appHasInference = parseResult.permissions.includes('ai:call') ||
+    parseResult.permissions.includes('ai:embed');
 
   for (const fn of parseResult.functions) {
     const parameters: Record<string, ManifestParameter> = {};
@@ -233,10 +235,13 @@ export function mergeManifestWithParseResult(
     }
 
     // uses_inference is upload-derived (Free Mode signal); overlay it so the
-    // derived value wins even on developer-authored manifests. For ai:call apps
+    // derived value wins even on developer-authored manifests. For inference apps
     // it's written explicitly (true AND false) for per-function precision; true
     // is sticky — a function can't shed the flag by omission or by declaring false.
-    if (mergedManifest.permissions?.includes('ai:call')) {
+    if (
+      mergedManifest.permissions?.includes('ai:call') ||
+      mergedManifest.permissions?.includes('ai:embed')
+    ) {
       for (const fn of parseResult.functions) {
         const target = mergedManifest.functions?.[fn.name];
         if (target) {

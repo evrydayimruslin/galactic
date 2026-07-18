@@ -31,6 +31,7 @@ interface Captured {
   cbInvocations: number;
   modules: Record<string, string>;
   requestBodies: unknown[];
+  requestHeaders: Array<Record<string, string>>;
   bindingProps: Record<string, unknown>;
   // Per-fetch: the function requested + the aiExecutionId that the body's
   // execCtxHandle RESOLVES to in the real parent-side registry. This is the
@@ -48,6 +49,7 @@ function installHarness(): { captured: Captured; restore: () => void } {
     getIds: [],
     modules: {},
     requestBodies: [],
+    requestHeaders: [],
     bindingProps: {},
     contexts: [],
   };
@@ -75,6 +77,7 @@ function installHarness(): { captured: Captured; restore: () => void } {
     getEntrypoint() {
       return {
         fetch: async (request: Request) => {
+          captured.requestHeaders.push(Object.fromEntries(request.headers));
           const body = await request.json().catch(() => null);
           captured.requestBodies.push(body);
           recordContext(body);
@@ -115,6 +118,7 @@ function installHarness(): { captured: Captured; restore: () => void } {
         getEntrypoint() {
           return {
             fetch: async (request: Request) => {
+              captured.requestHeaders.push(Object.fromEntries(request.headers));
               if (!self.cache.has(id)) {
                 captured.cbInvocations += 1;
                 self.cache.set(id, await cb());
@@ -554,6 +558,23 @@ Deno.test("get reuse: WARM HIT — callback runs once (frozen isolate); per-call
   }
 });
 
+Deno.test("get reuse: host receipt rides a header for exact Cloudflare CPU attribution", async () => {
+  const harness = installHarness();
+  try {
+    const config = baseConfig();
+    config.capacityReceiptId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await executeInDynamicSandbox(config, "noop", []);
+    assertEquals(
+      harness.captured.requestHeaders[0]?.["x-galactic-capacity-receipt"],
+      config.capacityReceiptId,
+    );
+    const body = harness.captured.requestBodies[0] as Record<string, unknown>;
+    assertEquals("capacityReceiptId" in body, false);
+  } finally {
+    harness.restore();
+  }
+});
+
 Deno.test("get reuse: CONCURRENT two-user load — no execution resolves another user's context + no isolate sharing + no handle leak", async () => {
   const harness = installHarness();
   try {
@@ -625,5 +646,42 @@ Deno.test("get reuse: CONCURRENT two-user load — no execution resolves another
     );
   } finally {
     harness.restore();
+  }
+});
+
+Deno.test("dynamic identity and request remain distinct when entrypoint resolution fails", async () => {
+  const previousEnv = globalThis.__env;
+  const previousCtx = globalThis.__ctx;
+  globalThis.__env = {
+    LOADER: {
+      load: () => ({
+        getEntrypoint: () => {
+          throw new Error("entrypoint unavailable");
+        },
+      }),
+    },
+    CODE_CACHE: {
+      get: () => Promise.resolve(BUNDLE_CODE),
+      getWithMetadata: () =>
+        Promise.resolve({ value: BUNDLE_CODE, metadata: null }),
+    },
+    EXECUTED_LOADER_GET_REUSE: "0",
+  } as unknown as typeof globalThis.__env;
+  globalThis.__ctx = {
+    exports: {},
+    waitUntil: (promise: Promise<unknown>) => promise.catch(() => {}),
+  } as unknown as typeof globalThis.__ctx;
+  try {
+    const result = await executeInDynamicSandbox(baseConfig(), "noop", []);
+    assertEquals(result.success, false);
+    assertEquals(result.dynamicWorkerIdentityCreated, true);
+    assertEquals(result.dynamicWorkerInvoked, false);
+    assert(
+      result.error?.message.includes("entrypoint unavailable"),
+      "entrypoint error should remain observable",
+    );
+  } finally {
+    globalThis.__env = previousEnv;
+    globalThis.__ctx = previousCtx;
   }
 });

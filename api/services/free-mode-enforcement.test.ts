@@ -23,7 +23,9 @@ function withEnv<T>(
   env: Record<string, unknown>,
   fn: () => Promise<T> | T,
 ): Promise<T> {
-  const g = globalThis as typeof globalThis & { __env?: Record<string, unknown> };
+  const g = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
   const prev = g.__env;
   g.__env = { ...(prev || {}), ...env };
   return (async () => {
@@ -37,7 +39,10 @@ function withEnv<T>(
 
 const AI_MANIFEST = JSON.stringify({
   permissions: ["ai:call"],
-  functions: { chat: { uses_inference: true }, plain: { uses_inference: false } },
+  functions: {
+    chat: { uses_inference: true },
+    plain: { uses_inference: false },
+  },
 });
 const NON_AI_MANIFEST = JSON.stringify({
   permissions: ["storage:read"],
@@ -59,6 +64,16 @@ Deno.test("free mode: functionUsesInference is false when the app has no ai:call
   assertEquals(functionUsesInference(NON_AI_MANIFEST, "get"), false);
 });
 
+Deno.test("free mode: functionUsesInference recognizes embedding-only apps", () => {
+  assertEquals(
+    functionUsesInference({
+      permissions: ["ai:embed"],
+      functions: { vectorize: { uses_inference: true } },
+    }, "vectorize"),
+    true,
+  );
+});
+
 Deno.test("free mode: functionUsesInference backfills ai:call apps with no flag as true", () => {
   // Old manifest: app declares ai:call but the function carries no flag.
   assertEquals(functionUsesInference(LEGACY_AI_MANIFEST, "legacy"), true);
@@ -69,10 +84,22 @@ Deno.test("free mode: functionUsesInference backfills ai:call apps with no flag 
 // ── isFreeModeEnabled (the master switch, default OFF) ─────────────────
 
 Deno.test("free mode: enforcement flag is off by default and parses truthy values", async () => {
-  await withEnv({ FREE_MODE: "" }, () => assertEquals(isFreeModeEnabled(), false));
-  await withEnv({ FREE_MODE: "off" }, () => assertEquals(isFreeModeEnabled(), false));
-  await withEnv({ FREE_MODE: "1" }, () => assertEquals(isFreeModeEnabled(), true));
-  await withEnv({ FREE_MODE: "true" }, () => assertEquals(isFreeModeEnabled(), true));
+  await withEnv(
+    { FREE_MODE: "" },
+    () => assertEquals(isFreeModeEnabled(), false),
+  );
+  await withEnv(
+    { FREE_MODE: "off" },
+    () => assertEquals(isFreeModeEnabled(), false),
+  );
+  await withEnv(
+    { FREE_MODE: "1" },
+    () => assertEquals(isFreeModeEnabled(), true),
+  );
+  await withEnv(
+    { FREE_MODE: "true" },
+    () => assertEquals(isFreeModeEnabled(), true),
+  );
 });
 
 // ── Route-level fail-closed gate (runtime-ai) ─────────────────────────
@@ -143,21 +170,27 @@ Deno.test("free mode: discovery keeps a free, non-AI function", () => {
 
 Deno.test("free mode: discovery hides an AI function without BYOK, keeps it with BYOK", () => {
   assert(isFunctionBlockedInFreeMode(DISCOVERY_APP, "aiFn", callerNoByok));
-  assert(!isFunctionBlockedInFreeMode(DISCOVERY_APP, "aiFn", {
-    userId: "caller-1",
-    byokPresent: true,
-  }));
+  assert(
+    !isFunctionBlockedInFreeMode(DISCOVERY_APP, "aiFn", {
+      userId: "caller-1",
+      byokPresent: true,
+    }),
+  );
 });
 
 Deno.test("free mode: the owner (self-call) is never filtered", () => {
-  assert(!isFunctionBlockedInFreeMode(DISCOVERY_APP, "paidFn", {
-    userId: "owner-1",
-    byokPresent: false,
-  }));
-  assert(!isFunctionBlockedInFreeMode(DISCOVERY_APP, "aiFn", {
-    userId: "owner-1",
-    byokPresent: false,
-  }));
+  assert(
+    !isFunctionBlockedInFreeMode(DISCOVERY_APP, "paidFn", {
+      userId: "owner-1",
+      byokPresent: false,
+    }),
+  );
+  assert(
+    !isFunctionBlockedInFreeMode(DISCOVERY_APP, "aiFn", {
+      userId: "owner-1",
+      byokPresent: false,
+    }),
+  );
 });
 
 // ── Phase 3: free-allowance honoring (peek RPC) ───────────────────────
@@ -175,19 +208,25 @@ const ALLOWANCE_APP = {
 Deno.test("free mode: a priced function with free-allowance left stays visible", () => {
   // 2 of 3 free calls used -> the next call is free -> not blocked.
   const usage = new Map([["metered", 2]]);
-  assert(!isFunctionBlockedInFreeMode(ALLOWANCE_APP, "metered", callerNoByok, usage));
+  assert(
+    !isFunctionBlockedInFreeMode(ALLOWANCE_APP, "metered", callerNoByok, usage),
+  );
 });
 
 Deno.test("free mode: a priced function with its allowance exhausted is hidden", () => {
   // 3 of 3 used -> the next call would charge -> blocked.
   const usage = new Map([["metered", 3]]);
-  assert(isFunctionBlockedInFreeMode(ALLOWANCE_APP, "metered", callerNoByok, usage));
+  assert(
+    isFunctionBlockedInFreeMode(ALLOWANCE_APP, "metered", callerNoByok, usage),
+  );
 });
 
 Deno.test("free mode: without usage data a priced+allowance function stays hidden", () => {
   // No peek result -> we can't prove headroom -> conservative (Phase-2) hide.
   assert(isFunctionBlockedInFreeMode(ALLOWANCE_APP, "metered", callerNoByok));
-  assert(isFunctionBlockedInFreeMode(ALLOWANCE_APP, "metered", callerNoByok, null));
+  assert(
+    isFunctionBlockedInFreeMode(ALLOWANCE_APP, "metered", callerNoByok, null),
+  );
 });
 
 Deno.test("free mode: app-scope allowance reads the shared __app__ counter", () => {
@@ -202,8 +241,12 @@ Deno.test("free mode: app-scope allowance reads the shared __app__ counter", () 
   } as unknown as Parameters<typeof isFunctionBlockedInFreeMode>[0];
   // 4 shared calls used across the app -> still one free call left for any fn.
   const withHeadroom = new Map([["__app__", 4]]);
-  assert(!isFunctionBlockedInFreeMode(appScoped, "a", callerNoByok, withHeadroom));
-  assert(!isFunctionBlockedInFreeMode(appScoped, "b", callerNoByok, withHeadroom));
+  assert(
+    !isFunctionBlockedInFreeMode(appScoped, "a", callerNoByok, withHeadroom),
+  );
+  assert(
+    !isFunctionBlockedInFreeMode(appScoped, "b", callerNoByok, withHeadroom),
+  );
   // 5 used -> shared allowance spent -> every function is now paid.
   const spent = new Map([["__app__", 5]]);
   assert(isFunctionBlockedInFreeMode(appScoped, "a", callerNoByok, spent));
@@ -224,15 +267,21 @@ const MODULE_POLICY_APP = {
 Deno.test("free mode: module-priced apps are hidden even when statically free", () => {
   // Price is decided at call time by dev code; we can't classify it cheaply at
   // discovery, so every function of the app is hidden (fail-safe).
-  assert(isFunctionBlockedInFreeMode(MODULE_POLICY_APP, "anything", callerNoByok));
-  assert(isFunctionBlockedInFreeMode(MODULE_POLICY_APP, "alsoFree", callerNoByok));
+  assert(
+    isFunctionBlockedInFreeMode(MODULE_POLICY_APP, "anything", callerNoByok),
+  );
+  assert(
+    isFunctionBlockedInFreeMode(MODULE_POLICY_APP, "alsoFree", callerNoByok),
+  );
 });
 
 Deno.test("free mode: the owner still sees their own module-priced functions", () => {
-  assert(!isFunctionBlockedInFreeMode(MODULE_POLICY_APP, "anything", {
-    userId: "owner-1",
-    byokPresent: false,
-  }));
+  assert(
+    !isFunctionBlockedInFreeMode(MODULE_POLICY_APP, "anything", {
+      userId: "owner-1",
+      byokPresent: false,
+    }),
+  );
 });
 
 // ── Platform tools: codemode drop + the agent notice ──────────────────

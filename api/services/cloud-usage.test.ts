@@ -1,12 +1,19 @@
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejects.ts";
 import {
+  addCapacityQueueOperationEnvelope,
+  addCapacityQueueOperations,
   calcD1ReadCloudUnits,
   calcD1WriteCloudUnits,
   calcOperationCloudUnits,
+  calculateCapacityMarginalLight,
   calculateCloudUsageLight,
+  calculateWorkerCpuLight,
+  calculateWorkerRequestLight,
   calcWorkerCloudUnits,
+  calcWorkerCpuCloudUnits,
   CloudUsageRpcError,
+  createCapacityResourceMeter,
   createCloudUsageHold,
   createRuntimeCloudHold,
   debitCloudOperation,
@@ -38,6 +45,56 @@ Deno.test("cloud usage billing uses exact fractional Light per cloud unit", () =
   assertEquals(calcD1ReadCloudUnits(101), 2);
   assertEquals(calcD1WriteCloudUnits(0), 0);
   assertEquals(calcD1WriteCloudUnits(3), 3);
+});
+
+Deno.test("subscription CPU metering is continuous and never rounds wall time into CPU", () => {
+  assertEquals(calcWorkerCpuCloudUnits(0, 250), 0);
+  assertEquals(calcWorkerCpuCloudUnits(2.5, 250), 0.01);
+  assertEquals(calcWorkerCpuCloudUnits(250, 250), 1);
+  assertEquals(
+    calculateWorkerCpuLight(2.5, {
+      workerMsPerCloudUnit: 250,
+      cloudUnitLightPer1k: 1,
+    }),
+    0.00001,
+  );
+  assertEquals(calculateWorkerRequestLight(1, 0.00003), 0.00003);
+  assertEquals(calculateWorkerRequestLight(2, 0.00003), 0.00006);
+});
+
+Deno.test("subscription marginal operation rates are continuous per raw unit", () => {
+  assertEquals(
+    Math.abs(calculateCapacityMarginalLight(1, 0.1) - 0.0000001) < 1e-15,
+    true,
+  );
+  assertEquals(calculateCapacityMarginalLight(1, 100), 0.0001);
+  assertEquals(calculateCapacityMarginalLight(1_000_000, 450), 450);
+});
+
+Deno.test("subscription capacity meter preserves resource facts without double counting", () => {
+  const meter = createCapacityResourceMeter();
+  meter.addResource({
+    resource: "d1_read",
+    units: 100,
+    cloudUnits: 1,
+    amountLight: 0.001,
+    metadata: { operation: "select" },
+  });
+  meter.addLight(0.002);
+  assertEquals(meter.totalLight(), 0.003);
+  assertEquals(meter.snapshot(), [{
+    resource: "d1_read",
+    units: 100,
+    cloudUnits: 1,
+    amountLight: 0.001,
+    metadata: { operation: "select" },
+  }, {
+    resource: "other",
+    units: 0,
+    cloudUnits: 0,
+    amountLight: 0.002,
+    metadata: { source: "legacy_aggregate" },
+  }]);
 });
 
 Deno.test("cloud usage debit calls atomic no-partial RPC with fractional amount", async () => {
@@ -900,7 +957,7 @@ Deno.test("per-load floor: absent config field defaults to 0 (behavior-preservin
   assertEquals(0.3 + 0.2, 0.5);
 });
 
-Deno.test("subscription capacity meter collects KV/R2 work without touching the wallet", async () => {
+Deno.test("subscription capacity meter uses direct KV marginal rates without touching the wallet", async () => {
   let meteredLight = 0;
   const result = await debitCloudOperation({
     payerUserId: "u1",
@@ -916,11 +973,11 @@ Deno.test("subscription capacity meter collects KV/R2 work without touching the 
       kvOpsPerCloudUnit: 2,
     },
   });
-  assertEquals(result?.amountDebited, 0.004);
-  assertEquals(meteredLight, 0.004);
+  assertEquals(result?.amountDebited, 0.0015);
+  assertEquals(meteredLight, 0.0015);
 });
 
-Deno.test("subscription capacity meter includes D1 reads and writes for routines", async () => {
+Deno.test("subscription capacity meter includes exact D1 row rates for routines", async () => {
   let meteredLight = 0;
   const result = await debitD1Usage({
     payerUserId: "u1",
@@ -947,8 +1004,97 @@ Deno.test("subscription capacity meter includes D1 reads and writes for routines
       d1WriteRowsPerCloudUnit: 1,
     },
   });
-  assertEquals(result?.readCloudUnits, 2);
-  assertEquals(result?.writeCloudUnits, 2);
-  assertEquals(result?.amountLight, 0.004);
-  assertEquals(meteredLight, 0.004);
+  assertEquals(result?.readCloudUnits, 0.000101);
+  assertEquals(result?.writeCloudUnits, 0.000002);
+  assertEquals(result?.amountLight, 0.0002101);
+  assertEquals(meteredLight, 0.0002101);
+});
+
+Deno.test("capacity R2 classification splits memory get+put and preserves batch counts", async () => {
+  const meter = createCapacityResourceMeter();
+  const base = {
+    payerUserId: "u1",
+    source: "tools/call",
+    resource: "r2_operation" as const,
+    capacityMeter: meter,
+  };
+  const remember = await debitCloudOperation({
+    ...base,
+    operation: "memory.remember",
+    units: 2,
+  });
+  const batchStore = await debitCloudOperation({
+    ...base,
+    operation: "appdata.batch_store",
+    units: 4,
+  });
+  const batchRemove = await debitCloudOperation({
+    ...base,
+    operation: "appdata.batch_remove",
+    units: 9,
+  });
+  const list = await debitCloudOperation({
+    ...base,
+    operation: "appdata.list",
+    units: 2,
+  });
+
+  assertEquals(remember?.amountDebited, 0.000486);
+  assertEquals(batchStore?.amountDebited, 0.0018);
+  assertEquals(batchRemove?.amountDebited, 0);
+  assertEquals(list?.amountDebited, 0.0009);
+  assertEquals(
+    meter.snapshot().map((fact) => [
+      fact.units,
+      fact.amountLight,
+      fact.metadata?.operation_class,
+    ]),
+    [
+      [1, 0.000036, "r2_class_b"],
+      [1, 0.00045, "r2_class_a"],
+      [4, 0.0018, "r2_class_a"],
+      [9, 0, "r2_delete"],
+      [2, 0.0009, "r2_class_a"],
+    ],
+  );
+});
+
+Deno.test("capacity Queue facts price customer operations and label control-plane overhead separately", () => {
+  const meter = createCapacityResourceMeter();
+  addCapacityQueueOperations(meter, 1, "write");
+  addCapacityQueueOperations(meter, 2, "read");
+  addCapacityQueueOperations(meter, 1, "delete");
+  assertEquals(meter.totalLight(), 0.00016);
+  assertEquals(
+    meter.snapshot().map((fact) => [
+      fact.units,
+      fact.amountLight,
+      fact.metadata?.operation,
+      fact.metadata?.attribution,
+    ]),
+    [
+      [1, 0.00004, "write", "customer_execution"],
+      [2, 0.00008, "read", "customer_execution"],
+      [1, 0.00004, "delete", "customer_execution"],
+    ],
+  );
+});
+
+Deno.test("capacity Queue envelope validates its total before settlement", () => {
+  const meter = createCapacityResourceMeter();
+  assertEquals(
+    addCapacityQueueOperationEnvelope(meter, {
+      write: 3,
+      read: 3,
+      delete: 3,
+      total: 9,
+    }),
+    {
+      write: 3,
+      read: 3,
+      delete: 3,
+      total: 9,
+    },
+  );
+  assertEquals(meter.totalLight(), 0.00036);
 });

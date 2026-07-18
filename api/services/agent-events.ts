@@ -301,6 +301,10 @@ interface EventDeliveryExecutionInput {
   capacityAgentId: string;
   grantId: string;
   hop: number;
+  /** Trusted EVENT_QUEUE facts owned by at most one delivery per pass. */
+  capacityQueueOperations?: unknown;
+  /** Owns the surrounding Queue consumer's one Standard Worker request. */
+  capacityRootWorkerRequest?: boolean;
 }
 
 interface EventDeliveryExecutionOutcome {
@@ -311,10 +315,12 @@ interface EventDeliveryExecutionOutcome {
     code:
       | "capacity_waiting"
       | "agent_cap_waiting"
-      | "agent_cap_too_low_for_request";
+      | "agent_cap_too_low_for_request"
+      | "concurrency_waiting";
     nextEligibleAt: string | null;
     capacityAgentId: string | null;
     bindingConstraint: "account" | "agent" | null;
+    concurrencyScope: "account" | "agent" | "ai" | "routine" | null;
   };
 }
 
@@ -322,6 +328,9 @@ interface EventDispatchDeps {
   executeDelivery?: (
     input: EventDeliveryExecutionInput,
   ) => Promise<EventDeliveryExecutionOutcome>;
+  /** Internal-only Queue facts supplied by processEventMessage. */
+  capacityQueueOperations?: unknown;
+  capacityRootWorkerRequest?: boolean;
 }
 
 /**
@@ -440,6 +449,11 @@ type DeliveryOutcomeKind =
 interface DeliveryOutcome {
   kind: DeliveryOutcomeKind;
   nextEligibleAt?: string;
+  /**
+   * True only when the delivery returned a receipt, proving its settlement can
+   * own this pass's indivisible Queue lifecycle without double counting.
+   */
+  capacityQueueAllocated?: boolean;
 }
 
 async function runFanOut(
@@ -522,6 +536,7 @@ async function runFanOut(
   let index = 0;
   let attempted = 0;
   let incomplete = false;
+  let capacityQueueAllocated = deps.capacityQueueOperations === undefined;
 
   while (index < subscribers.length) {
     if (
@@ -533,8 +548,36 @@ async function runFanOut(
     }
     const wave = subscribers.slice(index, index + EVENT_DELIVERY_CONCURRENCY);
     index += wave.length;
-    const outcomes = await Promise.all(
-      wave.map((grant) => deliverToSubscriber(db, event, grant, nowMs, deps)),
+    const outcomes: DeliveryOutcome[] = [];
+
+    // A Queue invocation is one indivisible customer-attributable lifecycle,
+    // not one lifecycle per subscriber. Walk candidates serially only until an
+    // actual execution returns a receipt; that one receipt owns write/read/
+    // delete + the consumer's Standard Worker request. Already/denied/waiting
+    // candidates return no receipt, so ownership remains available for the
+    // next real delivery. Once allocated, the remainder fan out concurrently.
+    while (!capacityQueueAllocated && wave.length > 0) {
+      const grant = wave.shift()!;
+      const outcome = await deliverToSubscriber(db, event, grant, nowMs, {
+        ...deps,
+        capacityQueueOperations: deps.capacityQueueOperations,
+        capacityRootWorkerRequest: deps.capacityRootWorkerRequest === true,
+      });
+      outcomes.push(outcome);
+      if (outcome.capacityQueueAllocated === true) {
+        capacityQueueAllocated = true;
+      }
+    }
+    outcomes.push(
+      ...await Promise.all(
+        wave.map((grant) =>
+          deliverToSubscriber(db, event, grant, nowMs, {
+            ...deps,
+            capacityQueueOperations: undefined,
+            capacityRootWorkerRequest: false,
+          })
+        ),
+      ),
     );
     for (const outcome of outcomes) {
       // Only outcomes that ran the expensive path consume the pass budget.
@@ -748,7 +791,10 @@ async function deliverToSubscriber(
       capacityAgentId: event.capacityAgentId,
       grantId: grant.id,
       hop: event.emitHop,
+      capacityQueueOperations: deps.capacityQueueOperations,
+      capacityRootWorkerRequest: deps.capacityRootWorkerRequest === true,
     });
+    const capacityQueueAllocated = outcome.receiptId != null;
 
     if (outcome.success) {
       await patchDelivery(db, deliveryId, {
@@ -756,7 +802,7 @@ async function deliverToSubscriber(
         receipt_id: outcome.receiptId,
         delivered_at: new Date(nowMs).toISOString(),
       });
-      return { kind: "delivered" };
+      return { kind: "delivered", capacityQueueAllocated };
     }
 
     if (outcome.admission) {
@@ -785,7 +831,7 @@ async function deliverToSubscriber(
             outcome.error ?? outcome.admission.code
           }`,
         });
-        return { kind: "denied" };
+        return { kind: "denied", capacityQueueAllocated };
       }
 
       await patchDelivery(db, deliveryId, {
@@ -804,7 +850,11 @@ async function deliverToSubscriber(
         title: "Reactive trigger is waiting for capacity",
         body: `Topic ${event.topic} will resume after ${retryAt}.`,
       });
-      return { kind: "waiting", nextEligibleAt: retryAt };
+      return {
+        kind: "waiting",
+        nextEligibleAt: retryAt,
+        capacityQueueAllocated,
+      };
     }
     await patchDelivery(db, deliveryId, {
       status: "failed",
@@ -827,7 +877,7 @@ async function deliverToSubscriber(
       }`,
       severity: "critical",
     });
-    return { kind: "failed" };
+    return { kind: "failed", capacityQueueAllocated };
   } catch (err) {
     // The delivery row is claimed — the handler may have run and settled, so
     // this delivery must never be re-attempted. Record the failure on the row

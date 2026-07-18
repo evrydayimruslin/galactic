@@ -24,6 +24,8 @@ import type { RuntimeConfig } from "../runtime/sandbox.ts";
 import type { RoutineTraceContext } from "./routine-trace.ts";
 
 export interface ExecutionContextEntry {
+  /** Opaque settlement receipt used only to correlate this host RPC's CPU. */
+  capacityReceiptId?: string | null;
   /** The execution id the AI-spend ledger (ai-spend-tracker.ts) is keyed by. */
   aiExecutionId: string | null;
   /**
@@ -46,6 +48,12 @@ export interface ExecutionContextEntry {
   callerContextToken: string | null;
   /** Server-authenticated routine identity for per-AI-call budget admission. */
   routineContext?: RoutineTraceContext | null;
+  /**
+   * Absolute host deadline for this execution. Provider bindings use the
+   * remaining budget across all attempts, so a fallback can never outlive the
+   * sandbox that requested it. Per-call because warm isolates reuse bindings.
+   */
+  executionDeadlineAtMs?: number | null;
 }
 
 const registry = new Map<string, ExecutionContextEntry & { at: number }>();
@@ -82,7 +90,18 @@ export function resolveExecutionContext(
   if (!handle) return null;
   const entry = registry.get(handle);
   if (!entry) return null;
+  if (entry.capacityReceiptId) {
+    // Each ctx.exports/Service Binding invocation is a distinct TailItem. Mark
+    // it with the owning execution so CPU remains attributable even when one
+    // top-level request contains several nested Agent calls/receipts.
+    console.log(
+      `GALACTIC_CAPACITY_EXECUTION_V1 ${
+        JSON.stringify({ receipt_id: entry.capacityReceiptId })
+      }`,
+    );
+  }
   return {
+    capacityReceiptId: entry.capacityReceiptId ?? null,
     aiExecutionId: entry.aiExecutionId,
     appId: entry.appId,
     functionName: entry.functionName,
@@ -90,6 +109,7 @@ export function resolveExecutionContext(
     cloudOperationBillingConfig: entry.cloudOperationBillingConfig,
     callerContextToken: entry.callerContextToken,
     routineContext: entry.routineContext ?? null,
+    executionDeadlineAtMs: entry.executionDeadlineAtMs ?? null,
   };
 }
 

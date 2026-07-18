@@ -36,6 +36,7 @@ shared/contracts/*.d.ts.map
 node_modules/
 package-lock.json
 !api/package-lock.json
+!capacity-tail-worker/package-lock.json
 *.tgz
 
 # wrangler files

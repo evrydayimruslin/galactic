@@ -1,4 +1,15 @@
 import {
+  CAPACITY_D1_READ_LIGHT_PER_MILLION_ROWS,
+  CAPACITY_D1_WRITE_LIGHT_PER_MILLION_ROWS,
+  CAPACITY_KV_DELETE_LIGHT_PER_MILLION_OPERATIONS,
+  CAPACITY_KV_LIST_LIGHT_PER_MILLION_OPERATIONS,
+  CAPACITY_KV_READ_LIGHT_PER_MILLION_OPERATIONS,
+  CAPACITY_KV_WRITE_LIGHT_PER_MILLION_OPERATIONS,
+  CAPACITY_QUEUE_LIGHT_PER_MILLION_OPERATIONS,
+  CAPACITY_R2_CLASS_A_LIGHT_PER_MILLION_OPERATIONS,
+  CAPACITY_R2_CLASS_B_LIGHT_PER_MILLION_OPERATIONS,
+  CAPACITY_R2_DELETE_LIGHT_PER_MILLION_OPERATIONS,
+  CAPACITY_RATE_CARD_VERSION,
   CARD_MINIMUM_CENTS,
   CLOUD_UNIT_LIGHT_PER_1K,
   COMBINED_FREE_TIER_BYTES,
@@ -17,8 +28,9 @@ import {
   STORAGE_LIGHT_PER_GB_MONTH,
   WIDGET_PULLS_PER_CLOUD_UNIT,
   WIRE_MINIMUM_CENTS,
-  WORKER_MS_PER_CLOUD_UNIT,
   WORKER_LOAD_LIGHT_PER_INVOCATION,
+  WORKER_MS_PER_CLOUD_UNIT,
+  WORKER_REQUEST_LIGHT_PER_INVOCATION,
 } from "../../shared/types/index.ts";
 import { getEnv } from "../lib/env.ts";
 
@@ -35,7 +47,19 @@ export interface BillingConfig {
   wireMinimumCents: number;
   cloudUnitLightPer1k: number;
   workerMsPerCloudUnit: number;
+  workerRequestLightPerInvocation: number;
   workerLoadLightPerInvocation: number;
+  capacityRateCardVersion: number;
+  capacityD1ReadLightPerMillionRows: number;
+  capacityD1WriteLightPerMillionRows: number;
+  capacityKvReadLightPerMillionOperations: number;
+  capacityKvWriteLightPerMillionOperations: number;
+  capacityKvDeleteLightPerMillionOperations: number;
+  capacityKvListLightPerMillionOperations: number;
+  capacityR2ClassALightPerMillionOperations: number;
+  capacityR2ClassBLightPerMillionOperations: number;
+  capacityR2DeleteLightPerMillionOperations: number;
+  capacityQueueLightPerMillionOperations: number;
   d1ReadRowsPerCloudUnit: number;
   d1WriteRowsPerCloudUnit: number;
   r2OpsPerCloudUnit: number;
@@ -63,7 +87,19 @@ interface BillingConfigRow {
   wire_minimum_cents?: number | null;
   cloud_unit_light_per_1k?: number | null;
   worker_ms_per_cloud_unit?: number | null;
+  worker_request_light_per_invocation?: number | null;
   worker_load_light_per_invocation?: number | null;
+  capacity_rate_card_version?: number | null;
+  capacity_d1_read_light_per_million_rows?: number | null;
+  capacity_d1_write_light_per_million_rows?: number | null;
+  capacity_kv_read_light_per_million_operations?: number | null;
+  capacity_kv_write_light_per_million_operations?: number | null;
+  capacity_kv_delete_light_per_million_operations?: number | null;
+  capacity_kv_list_light_per_million_operations?: number | null;
+  capacity_r2_class_a_light_per_million_operations?: number | null;
+  capacity_r2_class_b_light_per_million_operations?: number | null;
+  capacity_r2_delete_light_per_million_operations?: number | null;
+  capacity_queue_light_per_million_operations?: number | null;
   d1_read_rows_per_cloud_unit?: number | null;
   d1_write_rows_per_cloud_unit?: number | null;
   r2_ops_per_cloud_unit?: number | null;
@@ -118,7 +154,27 @@ export const DEFAULT_BILLING_CONFIG: BillingConfig = {
   wireMinimumCents: WIRE_MINIMUM_CENTS,
   cloudUnitLightPer1k: CLOUD_UNIT_LIGHT_PER_1K,
   workerMsPerCloudUnit: WORKER_MS_PER_CLOUD_UNIT,
+  workerRequestLightPerInvocation: WORKER_REQUEST_LIGHT_PER_INVOCATION,
   workerLoadLightPerInvocation: WORKER_LOAD_LIGHT_PER_INVOCATION,
+  capacityRateCardVersion: CAPACITY_RATE_CARD_VERSION,
+  capacityD1ReadLightPerMillionRows: CAPACITY_D1_READ_LIGHT_PER_MILLION_ROWS,
+  capacityD1WriteLightPerMillionRows: CAPACITY_D1_WRITE_LIGHT_PER_MILLION_ROWS,
+  capacityKvReadLightPerMillionOperations:
+    CAPACITY_KV_READ_LIGHT_PER_MILLION_OPERATIONS,
+  capacityKvWriteLightPerMillionOperations:
+    CAPACITY_KV_WRITE_LIGHT_PER_MILLION_OPERATIONS,
+  capacityKvDeleteLightPerMillionOperations:
+    CAPACITY_KV_DELETE_LIGHT_PER_MILLION_OPERATIONS,
+  capacityKvListLightPerMillionOperations:
+    CAPACITY_KV_LIST_LIGHT_PER_MILLION_OPERATIONS,
+  capacityR2ClassALightPerMillionOperations:
+    CAPACITY_R2_CLASS_A_LIGHT_PER_MILLION_OPERATIONS,
+  capacityR2ClassBLightPerMillionOperations:
+    CAPACITY_R2_CLASS_B_LIGHT_PER_MILLION_OPERATIONS,
+  capacityR2DeleteLightPerMillionOperations:
+    CAPACITY_R2_DELETE_LIGHT_PER_MILLION_OPERATIONS,
+  capacityQueueLightPerMillionOperations:
+    CAPACITY_QUEUE_LIGHT_PER_MILLION_OPERATIONS,
   d1ReadRowsPerCloudUnit: D1_READ_ROWS_PER_CLOUD_UNIT,
   d1WriteRowsPerCloudUnit: D1_WRITE_ROWS_PER_CLOUD_UNIT,
   r2OpsPerCloudUnit: R2_OPS_PER_CLOUD_UNIT,
@@ -204,10 +260,58 @@ export function normalizeBillingConfigRow(
       row.worker_ms_per_cloud_unit,
       DEFAULT_BILLING_CONFIG.workerMsPerCloudUnit,
     ),
+    workerRequestLightPerInvocation: finiteNonNegative(
+      row.worker_request_light_per_invocation,
+      DEFAULT_BILLING_CONFIG.workerRequestLightPerInvocation,
+    ),
     // finiteNonNegative: the load floor legitimately defaults to 0 (OFF).
     workerLoadLightPerInvocation: finiteNonNegative(
       row.worker_load_light_per_invocation,
       DEFAULT_BILLING_CONFIG.workerLoadLightPerInvocation,
+    ),
+    capacityRateCardVersion: positiveInteger(
+      row.capacity_rate_card_version,
+      DEFAULT_BILLING_CONFIG.capacityRateCardVersion,
+    ),
+    capacityD1ReadLightPerMillionRows: finiteNonNegative(
+      row.capacity_d1_read_light_per_million_rows,
+      DEFAULT_BILLING_CONFIG.capacityD1ReadLightPerMillionRows,
+    ),
+    capacityD1WriteLightPerMillionRows: finiteNonNegative(
+      row.capacity_d1_write_light_per_million_rows,
+      DEFAULT_BILLING_CONFIG.capacityD1WriteLightPerMillionRows,
+    ),
+    capacityKvReadLightPerMillionOperations: finiteNonNegative(
+      row.capacity_kv_read_light_per_million_operations,
+      DEFAULT_BILLING_CONFIG.capacityKvReadLightPerMillionOperations,
+    ),
+    capacityKvWriteLightPerMillionOperations: finiteNonNegative(
+      row.capacity_kv_write_light_per_million_operations,
+      DEFAULT_BILLING_CONFIG.capacityKvWriteLightPerMillionOperations,
+    ),
+    capacityKvDeleteLightPerMillionOperations: finiteNonNegative(
+      row.capacity_kv_delete_light_per_million_operations,
+      DEFAULT_BILLING_CONFIG.capacityKvDeleteLightPerMillionOperations,
+    ),
+    capacityKvListLightPerMillionOperations: finiteNonNegative(
+      row.capacity_kv_list_light_per_million_operations,
+      DEFAULT_BILLING_CONFIG.capacityKvListLightPerMillionOperations,
+    ),
+    capacityR2ClassALightPerMillionOperations: finiteNonNegative(
+      row.capacity_r2_class_a_light_per_million_operations,
+      DEFAULT_BILLING_CONFIG.capacityR2ClassALightPerMillionOperations,
+    ),
+    capacityR2ClassBLightPerMillionOperations: finiteNonNegative(
+      row.capacity_r2_class_b_light_per_million_operations,
+      DEFAULT_BILLING_CONFIG.capacityR2ClassBLightPerMillionOperations,
+    ),
+    capacityR2DeleteLightPerMillionOperations: finiteNonNegative(
+      row.capacity_r2_delete_light_per_million_operations,
+      DEFAULT_BILLING_CONFIG.capacityR2DeleteLightPerMillionOperations,
+    ),
+    capacityQueueLightPerMillionOperations: finiteNonNegative(
+      row.capacity_queue_light_per_million_operations,
+      DEFAULT_BILLING_CONFIG.capacityQueueLightPerMillionOperations,
     ),
     d1ReadRowsPerCloudUnit: positiveInteger(
       row.d1_read_rows_per_cloud_unit,
@@ -311,6 +415,7 @@ export function toPublicBillingConfig(config: BillingConfig) {
     ach_minimum_cents: config.wireMinimumCents,
     cloud_unit_light_per_1k: config.cloudUnitLightPer1k,
     worker_ms_per_cloud_unit: config.workerMsPerCloudUnit,
+    worker_request_light_per_invocation: config.workerRequestLightPerInvocation,
     worker_load_light_per_invocation: config.workerLoadLightPerInvocation,
     d1_read_rows_per_cloud_unit: config.d1ReadRowsPerCloudUnit,
     d1_write_rows_per_cloud_unit: config.d1WriteRowsPerCloudUnit,

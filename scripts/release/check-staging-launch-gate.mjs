@@ -11,6 +11,7 @@ const WORKFLOW_SPECS = [
     name: "API CI",
     patterns: [
       "api/**",
+      "capacity-tail-worker/**",
       "apps/**",
       "shared/**",
       "scripts/checks/**",
@@ -24,6 +25,7 @@ const WORKFLOW_SPECS = [
     name: "Launch Guardrails",
     patterns: [
       "api/**",
+      "capacity-tail-worker/**",
       "desktop/**",
       "shared/**",
       "sdk/**",
@@ -47,6 +49,7 @@ const WORKFLOW_SPECS = [
     name: "API Deploy",
     patterns: [
       "api/**",
+      "capacity-tail-worker/**",
       "shared/**",
       ".github/workflows/api-deploy.yml",
     ],
@@ -56,6 +59,8 @@ const WORKFLOW_SPECS = [
     patterns: [
       "apps/launch-web/**",
       "shared/contracts/launch.ts",
+      "scripts/release/wait-for-workflow-run.mjs",
+      "scripts/release/wait-for-workflow-run.test.mjs",
       ".github/workflows/launch-web-deploy.yml",
     ],
   },

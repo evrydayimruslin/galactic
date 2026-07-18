@@ -43,6 +43,17 @@
       else {
         var err = new Error((m.error && m.error.message) || "Call failed");
         err.code = m.error && m.error.type;
+        err.type = err.code;
+        err.status = m.error && m.error.status;
+        err.details = m.error && m.error.details;
+        err.retryAt = m.error && m.error.retryAt;
+        err.retryable = !!(m.error && m.error.retryable);
+        err.scope = m.error && m.error.scope;
+        err.autoResumes = !!(m.error && m.error.autoResumes);
+        err.ownerActionRequired = !!(m.error && m.error.ownerActionRequired);
+        err.executionMode = m.error && m.error.executionMode;
+        err.jobId = m.error && m.error.jobId;
+        err.completionUnknown = !!(m.error && m.error.completionUnknown);
         item.reject(err);
       }
     };
@@ -158,6 +169,7 @@ function titleCase(s) {
 
 /* ---------- call queue: max 4 in flight ---------- */
 var CQ = [], inflight = 0;
+var capacityRetryTimer = null;
 function call(fn, args) {
   return new Promise(function (resolve, reject) {
     CQ.push({ fn: fn, args: args || {}, resolve: resolve, reject: reject });
@@ -196,12 +208,27 @@ function human(err) {
   var m = (err && err.message) || "";
   if (t === "SIGN_IN_REQUIRED") return "Sign in to use this.";
   if (t === "RATE_LIMITED" || t === "BUSY") return "Give it a few seconds — too many requests at once.";
+  if (err && (err.ownerActionRequired || String(t || "").toLowerCase() === "agent_cap_too_low_for_request")) {
+    return "This Agent's capacity cap is too low for this action. Raise the cap in Agent Settings.";
+  }
+  if (isCapacityErr(err)) {
+    var raw = (err && err.retryAt) || (err && err.details && (err.details.retry_at || err.details.retryAt));
+    var date = raw ? new Date(raw) : null;
+    var when = date && !isNaN(date) ? " at " + date.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}) : "";
+    if (err && err.autoResumes) return "Agent work is waiting for capacity and resumes automatically" + when + ".";
+    return "This action was not queued. Try again when capacity is available" + when + ".";
+  }
+  if (err && err.completionUnknown) return "This action was queued, but its result can't be checked right now. Verify before trying it again.";
   if (t === "RUN_FAILED") {
     if (/SMTP auth/i.test(m)) return "Couldn't sign in to your mailbox to send — check the email password in Settings.";
     if (/MISSING_SECRETS|IMAP|SMTP/i.test(m)) return "Your mailbox isn't connected yet. Add your email settings in the agent's Settings, then try again.";
     if (m && /\s/.test(m) && !/[A-Z_]{6,}|ECONN|ETIMEDOUT|EAI_|ENOTFOUND/.test(m)) return m;
   }
   return null;
+}
+function isCapacityErr(err) {
+  var t = String((err && (err.code || err.type)) || "").toLowerCase();
+  return t === "capacity_waiting" || t === "agent_cap_waiting" || t === "agent_cap_too_low_for_request" || t === "concurrency_waiting" || t === "concurrencywaitingerror";
 }
 function errHtml(err, lead) {
   var h = human(err);
@@ -212,7 +239,7 @@ function errHtml(err, lead) {
 
 /* ---------- state ---------- */
 var S = {
-  load: "loading", loadErr: null,
+  load: "loading", loadErr: null, partialErr: null,
   gaps: [], totalOpen: 0,
   conv: [],
   search: ""
@@ -253,7 +280,7 @@ function render() {
   if (!ul.context || !ul.context.signedIn) html = signedOutHtml();
   else if (S.load === "loading") html = '<div class="loadbox">Loading what it wants to learn…</div>';
   else if (S.load === "error") html = loadErrHtml();
-  else html = gapsHtml() + knowledgeHtml() + pendingStartersHtml() + footerHtml();
+  else html = (S.partialErr ? errHtml(S.partialErr, "Some information couldn’t refresh.") : "") + gapsHtml() + knowledgeHtml() + pendingStartersHtml() + footerHtml();
 
   app.innerHTML = html;
 
@@ -287,8 +314,11 @@ function signedOutHtml() {
 }
 
 function loadErrHtml() {
-  return "<h1>Teach</h1>" + errHtml(S.loadErr, "Couldn’t load this page.") +
-    '<p><button class="btn2" data-act="retry-load">Try again</button></p>' + footerHtml();
+  var waiting = isCapacityErr(S.loadErr) && S.loadErr && S.loadErr.autoResumes;
+  return "<h1>Teach</h1>" + errHtml(S.loadErr, "Couldn’t load live data.") +
+    (waiting
+      ? '<p class="muted">The Interface is ready and will show live data when Agent work can run.</p>'
+      : '<p><button class="btn2" data-act="retry-load">Try again</button></p>') + footerHtml();
 }
 
 function gapsHtml() {
@@ -533,20 +563,31 @@ function pendingStartersHtml() {
 
 /* ---------- data loading ---------- */
 function coldLoad() {
+  if (capacityRetryTimer) { clearTimeout(capacityRetryTimer); capacityRetryTimer = null; }
   S.load = "loading";
+  S.partialErr = null;
   render();
-  Promise.all([
-    callRetry("knowledge_gaps", { limit: 10 }),
-    callRetry("conventions_get", {})
-  ]).then(function (res) {
-    S.gaps = (res[0] && res[0].gaps) || [];
-    S.totalOpen = (res[0] && res[0].total_open) || S.gaps.length;
-    S.conv = ((res[1] && res[1].conventions) || []).filter(function (c) { return c && c.category !== "_deleted"; });
+  callRetry("teach_snapshot", { limit: 10 }).then(function (res) {
+    var gapData = res && res.gaps;
+    var conventionData = res && res.conventions;
+    S.gaps = (gapData && gapData.gaps) || [];
+    S.totalOpen = (gapData && gapData.total_open) || S.gaps.length;
+    S.conv = ((conventionData && conventionData.conventions) || []).filter(function (c) { return c && c.category !== "_deleted"; });
+    if (res && res.partial) {
+      S.partialErr = {code:"PARTIAL_READ", message:"One Teach data source was unavailable."};
+    }
     S.load = "ready";
     render();
   }).catch(function (e) {
     S.load = "error";
     S.loadErr = e;
+    if (isCapacityErr(e) && e.autoResumes && !e.ownerActionRequired) {
+      var raw = (e && e.retryAt) || (e && e.details && (e.details.retry_at || e.details.retryAt));
+      var resumeMs = raw ? new Date(raw).getTime() : NaN;
+      if (isFinite(resumeMs)) {
+        capacityRetryTimer = setTimeout(function(){ capacityRetryTimer=null; coldLoad(); }, Math.min(Math.max(1000, resumeMs-Date.now()+1000), 2147483647));
+      }
+    }
     render();
   });
 }

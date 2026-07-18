@@ -108,6 +108,26 @@ Deno.test("assertExecutionContext: required + live handle → passes", () => {
   deregisterExecutionContext(h);
 });
 
+Deno.test("registry: host RPC resolution emits only its owning capacity marker", () => {
+  const receiptId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const messages: string[] = [];
+  const originalLog = console.log;
+  console.log = (...parts: unknown[]) => messages.push(parts.map(String).join(" "));
+  const h = registerExecutionContext({
+    ...entry(receiptId, "exec-capacity"),
+    capacityReceiptId: receiptId,
+  });
+  try {
+    assert(resolveExecutionContext(h));
+    assertEquals(messages, [
+      `GALACTIC_CAPACITY_EXECUTION_V1 {"receipt_id":"${receiptId}"}`,
+    ]);
+  } finally {
+    deregisterExecutionContext(h);
+    console.log = originalLog;
+  }
+});
+
 Deno.test("assertExecutionContext: required + missing/forged/expired handle → throws (operation refused)", () => {
   // Missing entirely (direct-binding bypass that omits the handle).
   assertThrows(() => assertExecutionContext(undefined, true));

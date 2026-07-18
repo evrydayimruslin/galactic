@@ -48,6 +48,34 @@ Deno.test("delivery outcome: structured account-capacity denial is safely deferr
     nextEligibleAt: "2026-07-17T18:00:00.000Z",
     capacityAgentId: "agent-root",
     bindingConstraint: "account",
+    concurrencyScope: null,
+  });
+});
+
+Deno.test("delivery outcome: concurrency admission is safely deferrable with its scope", () => {
+  const outcome = parseDeliveryOutcome(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      error: {
+        code: -32010,
+        message: "Too many AI calls are already in progress",
+        data: {
+          type: "concurrency_waiting",
+          retry_at: "2026-07-17T18:00:10.000Z",
+          capacity_agent_id: "agent-root",
+          binding_constraint: null,
+          concurrency_scope: "ai",
+        },
+      },
+    } as JsonRpcResponse,
+  );
+  assertEquals(outcome.admission, {
+    code: "concurrency_waiting",
+    nextEligibleAt: "2026-07-17T18:00:10.000Z",
+    capacityAgentId: "agent-root",
+    bindingConstraint: null,
+    concurrencyScope: "ai",
   });
 });
 
@@ -92,6 +120,7 @@ Deno.test("delivery outcome: too-small Agent cap is structured but has no reset"
     nextEligibleAt: null,
     capacityAgentId: "agent-root",
     bindingConstraint: "agent",
+    concurrencyScope: null,
   });
 });
 

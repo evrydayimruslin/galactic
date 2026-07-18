@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'api/**'
+      - 'capacity-tail-worker/**'
       - 'desktop/**'
       - 'shared/**'
       - 'sdk/**'
@@ -17,6 +18,7 @@ on:
     branches: [main]
     paths:
       - 'api/**'
+      - 'capacity-tail-worker/**'
       - 'desktop/**'
       - 'shared/**'
       - 'sdk/**'
