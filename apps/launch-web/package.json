@@ -10,13 +10,14 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5178",
     "generate:og": "node scripts/generate-og.mjs",
-    "build": "npm run generate:og && tsc && vite build",
-    "build:staging": "npm run generate:og && tsc && vite build --mode staging",
-    "build:production": "npm run generate:og && tsc && vite build --mode production",
+    "build": "npm run generate:og && tsc && vite build && npm run verify:pages-output",
+    "build:staging": "npm run generate:og && tsc && vite build --mode staging && npm run verify:pages-output",
+    "build:production": "npm run generate:og && tsc && vite build --mode production && npm run verify:pages-output",
     "pages:deploy:staging": "npm run build:staging && pnpm dlx wrangler@4.67.0 pages deploy dist --project-name ultralight-launch-web --branch staging",
     "pages:deploy:production": "npm run build:production && pnpm dlx wrangler@4.67.0 pages deploy dist --project-name ultralight-launch-web --branch main",
     "preview": "vite preview --host 127.0.0.1 --port 4178",
     "test": "vitest run",
+    "verify:pages-output": "node scripts/verify-pages-output.mjs",
     "typecheck": "tsc --noEmit"
   },
   "packageManager": "pnpm@10.28.2",

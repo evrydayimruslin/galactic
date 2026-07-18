@@ -59,9 +59,10 @@ export async function onRequestGet(context: PagesContext): Promise<Response> {
     : params.slug || "";
 
   // Always serve the SPA shell so the client app hydrates for human visitors.
-  // Fetch the original request: Pages applies _redirects (/* -> /index.html 200)
-  // and returns the shell at 200. (Fetching "/index.html" directly would 308 to
-  // "/" via Pages' canonicalization.)
+  // With no top-level 404.html, the Pages asset server applies its native SPA
+  // fallback and returns index.html at 200. (Fetching "/index.html" directly
+  // would 308 to "/" via Pages' canonicalization.) A nested assets/404.html
+  // independently keeps missing hashed assets out of that fallback.
   const shell = await env.ASSETS.fetch(request);
 
   let agent: AgentSummary | null = null;

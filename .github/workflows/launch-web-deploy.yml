@@ -10,6 +10,9 @@ on:
       - 'shared/contracts/launch.ts'
       - 'scripts/release/wait-for-workflow-run.mjs'
       - 'scripts/release/wait-for-workflow-run.test.mjs'
+      - 'scripts/smoke/launch-web-pages-smoke.mjs'
+      - 'scripts/smoke/launch-web-asset-integrity.mjs'
+      - 'scripts/smoke/launch-web-asset-integrity.test.mjs'
       - '.github/workflows/launch-web-deploy.yml'
   workflow_dispatch:
     inputs:
@@ -56,6 +59,10 @@ jobs:
       - name: Test release-order workflow helper
         working-directory: .
         run: node --test scripts/release/wait-for-workflow-run.test.mjs
+
+      - name: Test launch-web asset-integrity smoke helper
+        working-directory: .
+        run: node --test scripts/smoke/launch-web-asset-integrity.test.mjs
 
       - name: Build staging bundle
         run: pnpm run build:staging

@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 
+import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { ensureNode20, parseArgs, repoRoot } from "../analysis/_shared.mjs";
+import {
+  discoverLaunchAssets,
+  responseContentType,
+  validateMissingAssetResponse,
+  validateReferencedAssetResponse,
+} from "./launch-web-asset-integrity.mjs";
 
 ensureNode20();
 
@@ -246,11 +253,119 @@ function classifyPageProbe(raw, route) {
   };
 }
 
+async function runPageAssetProbes(shell) {
+  const documentUrl = shell.final_url || `${pagesBase}/`;
+  const discovery = discoverLaunchAssets(shell.body_text || "", documentUrl);
+  const probes = [];
+  const discoveryPassed = shell.ok && shell.status_code === 200 &&
+    discovery.errors.length === 0;
+  probes.push({
+    name: "page-asset-discovery",
+    surface: "pages",
+    route: "/",
+    status: discoveryPassed ? "passed" : "failed",
+    failure_class: discoveryPassed ? null : "pages-asset-discovery",
+    expected:
+      "Root launch HTML references same-origin /assets/ modules and stylesheets",
+    observed: {
+      status_code: shell.status_code,
+      content_type: contentType(shell.headers) || null,
+      final_url: shell.final_url,
+      module_count: discovery.assets.filter((asset) => asset.kind === "module").length,
+      stylesheet_count: discovery.assets.filter((asset) => asset.kind === "stylesheet").length,
+      errors: discovery.errors,
+      error: shell.error || null,
+    },
+    request: shell.request,
+  });
+
+  const kindCounts = { module: 0, stylesheet: 0 };
+  for (const asset of discovery.assets) {
+    kindCounts[asset.kind] += 1;
+    const raw = await fetchProbe(asset.url, {
+      headers: {
+        "Accept": asset.kind === "module"
+          ? "application/javascript,*/*;q=0.8"
+          : "text/css,*/*;q=0.8",
+        "Cache-Control": "no-cache",
+        "User-Agent": "ultralight-launch-web-pages-smoke",
+      },
+    });
+    const validation = validateReferencedAssetResponse(asset, raw);
+    probes.push({
+      name: `page-${asset.kind}-asset-${kindCounts[asset.kind]}`,
+      surface: "pages",
+      route: asset.route,
+      status: validation.passed ? "passed" : "failed",
+      failure_class: validation.failureClass,
+      expected:
+        "Referenced launch asset returns HTTP 200 with executable MIME and never HTML",
+      observed: {
+        status_code: raw.status_code,
+        content_type: validation.contentType || null,
+        final_url: raw.final_url,
+        bytes: String(raw.body_text || "").length,
+        html_detected: validation.htmlDetected,
+        validation: validation.reason,
+        error: raw.error || null,
+      },
+      request: raw.request,
+    });
+  }
+
+  const missingPath = `/assets/__galactic-smoke-missing-${randomUUID()}.js`;
+  const missingUrl = new URL(missingPath, documentUrl);
+  for (const attempt of [1, 2]) {
+    const missing = await fetchProbe(missingUrl.href, {
+      headers: {
+        "Accept": "application/javascript,*/*;q=0.8",
+        "Cache-Control": "no-cache",
+        "User-Agent": "ultralight-launch-web-pages-smoke",
+      },
+    });
+    const missingValidation = validateMissingAssetResponse(
+      missing,
+      shell.body_text || "",
+      missingUrl.origin,
+    );
+    probes.push({
+      name: attempt === 1
+        ? "page-missing-asset-fails-closed"
+        : "page-missing-asset-repeat-fails-closed",
+      surface: "pages",
+      route: missingPath,
+      status: missingValidation.passed ? "passed" : "failed",
+      failure_class: missingValidation.failureClass,
+      expected:
+        "The same unique missing asset repeatedly returns no-store HTTP 404 instead of the launch SPA shell",
+      observed: {
+        attempt,
+        status_code: missing.status_code,
+        content_type: responseContentType(missing.headers) || null,
+        cache_control: missingValidation.cacheControl || null,
+        shell_detected: missingValidation.shellDetected,
+        immutable: missingValidation.immutable,
+        no_store: missingValidation.noStore,
+        validation: missingValidation.reason,
+        final_url: missing.final_url,
+        error: missing.error || null,
+      },
+      request: missing.request,
+    });
+  }
+
+  return probes;
+}
+
 async function runPageRoute(route) {
   const raw = await fetchProbe(`${pagesBase}${route.path}`, {
-    headers: { "User-Agent": "ultralight-launch-web-pages-smoke" },
+    headers: {
+      "Accept": "text/html",
+      "Cache-Control": "no-cache",
+      "User-Agent": "ultralight-launch-web-pages-smoke",
+    },
   });
-  return classifyPageProbe(raw, route);
+  return { raw, result: classifyPageProbe(raw, route) };
 }
 
 async function runPublicApiProbe(probe) {
@@ -480,6 +595,10 @@ function summarizeMarkdown(summary) {
     "",
     "- `pages-routing`: Cloudflare Pages did not return the SPA route.",
     "- `pages-spa-shell`: Pages responded, but not with the launch SPA shell.",
+    "- `pages-asset-discovery`: root HTML omitted its module/stylesheet or referenced an unsafe asset URL.",
+    "- `pages-asset-delivery`: a referenced client asset was missing, empty, or redirected off-origin.",
+    "- `pages-asset-mime`: a referenced client asset used the wrong executable MIME type.",
+    "- `pages-asset-fallback`: an asset request returned HTML or a missing asset fell through to the SPA shell.",
     "- `api-status`: launch status endpoint failed or returned the wrong shape.",
     "- `api-openapi`: OpenAPI endpoint failed or returned the wrong shape.",
     "- `api-data`: public launch API data shape was wrong.",
@@ -495,10 +614,26 @@ function summarizeMarkdown(summary) {
 }
 
 const results = [];
+let rootPageProbe = null;
 
 for (const route of pageRoutes) {
-  results.push(await runPageRoute(route));
+  const pageProbe = await runPageRoute(route);
+  results.push(pageProbe.result);
+  if (route.path === "/") rootPageProbe = pageProbe.raw;
 }
+
+// pageRoutes always contains `/`; keep the fallback defensive so a future
+// route-list refactor cannot silently drop the asset-integrity gate.
+if (!rootPageProbe) {
+  rootPageProbe = await fetchProbe(`${pagesBase}/`, {
+    headers: {
+      "Accept": "text/html",
+      "Cache-Control": "no-cache",
+      "User-Agent": "ultralight-launch-web-pages-smoke",
+    },
+  });
+}
+results.push(...await runPageAssetProbes(rootPageProbe));
 
 for (const probe of publicApiProbes) {
   results.push(await runPublicApiProbe(probe));
