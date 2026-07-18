@@ -370,6 +370,34 @@ export function clampInterfaceHeight(value: number): number {
   return Math.min(INTERFACE_MAX_HEIGHT, Math.max(INTERFACE_MIN_HEIGHT, value));
 }
 
+export function postInterfaceBridgeResult(
+  port: Pick<MessagePort, "postMessage">,
+  id: string | number,
+  payload: InterfaceBridgeCallResult,
+): void {
+  try {
+    port.postMessage({ type: "result", id, ...payload });
+  } catch {
+    // Do not strand the Interface if a future runtime regression returns a
+    // non-cloneable value. This fallback contains primitives only, so a live
+    // port can always settle the caller's Promise with an actionable error.
+    try {
+      port.postMessage({
+        type: "result",
+        id,
+        success: false,
+        error: {
+          type: "UNSERIALIZABLE_RESULT",
+          message:
+            "The Agent returned a result the Interface could not safely receive.",
+        },
+      });
+    } catch {
+      // The port itself is gone; there is no remaining receiver to notify.
+    }
+  }
+}
+
 // Attaches the bridge for one iframe. Returns a cleanup function; call it on
 // unmount or before re-attaching with different options.
 export function attachInterfaceBridge(
@@ -386,11 +414,7 @@ export function attachInterfaceBridge(
     payload: InterfaceBridgeCallResult,
   ) => {
     if (disposed || port !== activePort) return;
-    try {
-      port.postMessage({ type: "result", id, ...payload });
-    } catch {
-      // Result not structured-cloneable or port gone — nothing to deliver.
-    }
+    postInterfaceBridgeResult(port, id, payload);
   };
 
   const refuse = (

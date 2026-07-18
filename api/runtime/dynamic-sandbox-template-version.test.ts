@@ -17,7 +17,7 @@ import type { RuntimeConfig } from "./sandbox.ts";
 
 // Bump this in lockstep with SANDBOX_TEMPLATE_VERSION whenever the generated
 // setup.js / wrapper.js template changes.
-const PINNED_TEMPLATE_VERSION = "2026-07-18.syntax-valid-wrapper.v11";
+const PINNED_TEMPLATE_VERSION = "2026-07-18.capacity-rpc-meter.v12";
 
 // Stable separator between the two captured modules for the snapshot hash.
 const SEP = "\n----MODULE-BOUNDARY----\n";
@@ -221,7 +221,7 @@ Deno.test("sandbox template: snapshot pinned -- a template change must bump SAND
       "fbf94aec1c0f24177ee0b1d2c68de7abb986fa6a553470f7fb402df148b28dc0";
     assertEquals(
       PINNED_TEMPLATE_VERSION,
-      "2026-07-18.syntax-valid-wrapper.v11",
+      "2026-07-18.capacity-rpc-meter.v12",
       "PINNED_TEMPLATE_VERSION drifted from the pinned literal",
     );
     assertEquals(

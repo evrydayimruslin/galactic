@@ -52,9 +52,35 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-18.syntax-valid-wrapper.v11";
+const SANDBOX_TEMPLATE_VERSION = "2026-07-18.capacity-rpc-meter.v12";
 
 const CAPACITY_TAIL_MARKER = "GALACTIC_CAPACITY_EXECUTION_V1 ";
+
+export function resolveRpcBindingMetering(
+  config: Pick<RuntimeConfig, "cloudOperationMetering">,
+  useGetReuse: boolean,
+): {
+  operationMetering: RuntimeConfig["cloudOperationMetering"];
+  requireExecCtx: boolean;
+} {
+  // Subscription-capacity metering owns an in-memory collector whose methods
+  // are intentionally host-local. Cloudflare RPC binding props are structured
+  // cloned, so passing that collector across the boundary rejects the binding
+  // before Agent code can run ("addLight(...) could not be cloned"). The
+  // execution-context registry already carries the complete per-call context;
+  // require the opaque handle for this mode and keep the RPC props JSON-only.
+  // Legacy wallet metering remains clone-safe and preserves its load()-mode
+  // props fallback.
+  const hasHostLocalCapacityMeter =
+    typeof config.cloudOperationMetering?.capacityMeter?.addLight ===
+      "function";
+  return {
+    operationMetering: hasHostLocalCapacityMeter
+      ? null
+      : config.cloudOperationMetering,
+    requireExecCtx: useGetReuse || hasHostLocalCapacityMeter,
+  };
+}
 
 // Reuse eligibility lives in its own dependency-light module (imported above) so
 // billing imports the SAME predicate — a divergent copy is a money bug (see the
@@ -795,6 +821,11 @@ export default {
       typeof loader.get === "function" &&
       isolateReuseEligibility(config).eligible;
 
+    const {
+      operationMetering: bindingOperationMetering,
+      requireExecCtx: requireBindingExecCtx,
+    } = resolveRpcBindingMetering(config, useGetReuse);
+
     // 4. Create RPC bindings
     const ctx = globalThis.__ctx as DynamicWorkerExecutionContext;
     const bindings: Record<string, unknown> = {};
@@ -823,9 +854,9 @@ export default {
             databaseId: dbId,
             appId: config.appId,
             userId: config.userId,
-            operationMetering: config.cloudOperationMetering,
+            operationMetering: bindingOperationMetering,
             operationBillingConfig: config.cloudOperationBillingConfig,
-            requireExecCtx: useGetReuse,
+            requireExecCtx: requireBindingExecCtx,
           },
         });
       }
@@ -842,9 +873,9 @@ export default {
         props: {
           appId: config.appId,
           userId: config.userId,
-          operationMetering: config.cloudOperationMetering,
+          operationMetering: bindingOperationMetering,
           operationBillingConfig: config.cloudOperationBillingConfig,
-          requireExecCtx: useGetReuse,
+          requireExecCtx: requireBindingExecCtx,
         },
       });
     }
@@ -859,9 +890,9 @@ export default {
           // keyed by appId so remember/recall can't collide across the agents a
           // user runs. scope:"user" still reaches the shared per-user notebook.
           appId: config.appId,
-          operationMetering: config.cloudOperationMetering,
+          operationMetering: bindingOperationMetering,
           operationBillingConfig: config.cloudOperationBillingConfig,
-          requireExecCtx: useGetReuse,
+          requireExecCtx: requireBindingExecCtx,
         },
       });
     }

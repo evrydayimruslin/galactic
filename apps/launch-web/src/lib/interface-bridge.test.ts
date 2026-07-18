@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { LaunchApiRequestError } from "./api";
 import {
   normalizeInterfaceBridgeError,
+  postInterfaceBridgeResult,
   runInterfaceFunctionDurably,
 } from "./interface-bridge";
 import type {
@@ -120,6 +121,34 @@ describe("normalizeInterfaceBridgeError", () => {
       autoResumes: false,
       ownerActionRequired: true,
     });
+  });
+});
+
+describe("postInterfaceBridgeResult", () => {
+  it("settles the caller with a clone-safe error when a result cannot be cloned", () => {
+    const delivered: unknown[] = [];
+    const port = {
+      postMessage(message: unknown) {
+        structuredClone(message);
+        delivered.push(message);
+      },
+    };
+
+    postInterfaceBridgeResult(port, "call-1", {
+      success: true,
+      result: { addLight() {} },
+    });
+
+    expect(delivered).toEqual([{
+      type: "result",
+      id: "call-1",
+      success: false,
+      error: {
+        type: "UNSERIALIZABLE_RESULT",
+        message:
+          "The Agent returned a result the Interface could not safely receive.",
+      },
+    }]);
   });
 });
 
