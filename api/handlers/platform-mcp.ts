@@ -8888,6 +8888,68 @@ interface LintIssue {
   suggestion?: string;
 }
 
+/**
+ * Count parameters in the text captured between a function signature's outer
+ * parentheses. TypeScript formatters commonly leave a trailing comma after a
+ * single multiline parameter; that comma is not a second positional argument.
+ *
+ * This is intentionally a small lexical scanner rather than a plain comma
+ * count so commas inside object types, tuples, generics, callbacks, and quoted
+ * default values do not create false positives in gx.test linting.
+ */
+export function countTopLevelFunctionParameters(signature: string): number {
+  const segments: string[] = [];
+  let start = 0;
+  let curlyDepth = 0;
+  let squareDepth = 0;
+  let roundDepth = 0;
+  let angleDepth = 0;
+  let quote: "'" | '"' | "`" | null = null;
+  let escaped = false;
+
+  for (let index = 0; index < signature.length; index++) {
+    const char = signature[index];
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+      continue;
+    }
+
+    if (char === "{") curlyDepth++;
+    else if (char === "}") curlyDepth = Math.max(0, curlyDepth - 1);
+    else if (char === "[") squareDepth++;
+    else if (char === "]") squareDepth = Math.max(0, squareDepth - 1);
+    else if (char === "(") roundDepth++;
+    else if (char === ")") roundDepth = Math.max(0, roundDepth - 1);
+    else if (char === "<") angleDepth++;
+    else if (char === ">") angleDepth = Math.max(0, angleDepth - 1);
+    else if (
+      char === "," &&
+      curlyDepth === 0 &&
+      squareDepth === 0 &&
+      roundDepth === 0 &&
+      angleDepth === 0
+    ) {
+      segments.push(signature.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+
+  segments.push(signature.slice(start).trim());
+  return segments.filter(Boolean).length;
+}
+
 function executeLint(args: Record<string, unknown>): unknown {
   const files = args.files as
     | Array<{ path: string; content: string }>
@@ -8984,16 +9046,9 @@ function executeLint(args: Record<string, unknown>): unknown {
     if (sigMatch) {
       const params = sigMatch[1].trim();
       if (params) {
-        // Count top-level commas (outside braces/angles) to detect positional params
-        let depth = 0;
-        let commaCount = 0;
-        for (const ch of params) {
-          if (ch === "{" || ch === "<" || ch === "(") depth++;
-          else if (ch === "}" || ch === ">" || ch === ")") depth--;
-          else if (ch === "," && depth === 0) commaCount++;
-        }
+        const parameterCount = countTopLevelFunctionParameters(params);
 
-        if (commaCount > 0) {
+        if (parameterCount > 1) {
           issues.push({
             severity: "error",
             rule: "single-args-object",
@@ -9008,7 +9063,9 @@ function executeLint(args: Record<string, unknown>): unknown {
         const hasArgsPattern = /^args\s*[?]?\s*:\s*\{/.test(params) ||
           /^args\s*[?]?\s*:\s*Record/.test(params);
         const hasObjectDestructure = /^\{/.test(params);
-        if (!hasArgsPattern && !hasObjectDestructure && commaCount === 0) {
+        if (
+          !hasArgsPattern && !hasObjectDestructure && parameterCount === 1
+        ) {
           // Single param but not object-typed — could be fine (like a simple string param in some cases)
           // but warn about it
           issues.push({
