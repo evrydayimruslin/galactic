@@ -236,6 +236,10 @@ Deno.test("Tail observations persist before correlation and reconcile with bound
   assertStringIncludes(migration, "status IN ('pending', 'applied')");
   assertStringIncludes(
     migration,
+    "ON CONFLICT ON CONSTRAINT capacity_cpu_observation_inbox_pkey DO NOTHING",
+  );
+  assertStringIncludes(
+    migration,
     "CONSTRAINT capacity_cpu_observation_final_check CHECK (final)",
   );
   assertStringIncludes(migration, "final boolean NOT NULL,");

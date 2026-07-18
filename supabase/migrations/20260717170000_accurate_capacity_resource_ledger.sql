@@ -1388,7 +1388,9 @@ BEGIN
     p_observation_id, p_receipt_id, p_cpu_time_ms, p_wall_time_ms,
     COALESCE(p_observed_at, now()), p_source, p_final,
     COALESCE(p_metadata, '{}'::jsonb)
-  ) ON CONFLICT (observation_id) DO NOTHING;
+  -- The function's RETURNS TABLE column is also named observation_id. Naming
+  -- the table constraint keeps PL/pgSQL conflict resolution unambiguous.
+  ) ON CONFLICT ON CONSTRAINT capacity_cpu_observation_inbox_pkey DO NOTHING;
   GET DIAGNOSTICS v_row_count = ROW_COUNT;
   v_inserted := v_row_count = 1;
 
