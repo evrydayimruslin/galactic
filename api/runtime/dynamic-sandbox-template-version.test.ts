@@ -11,12 +11,13 @@
 
 import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
+import ts from "typescript";
 import { executeInDynamicSandbox } from "./dynamic-sandbox.ts";
 import type { RuntimeConfig } from "./sandbox.ts";
 
 // Bump this in lockstep with SANDBOX_TEMPLATE_VERSION whenever the generated
 // setup.js / wrapper.js template changes.
-const PINNED_TEMPLATE_VERSION = "2026-07-18.trusted-tail-attribution.v10";
+const PINNED_TEMPLATE_VERSION = "2026-07-18.syntax-valid-wrapper.v11";
 
 // Stable separator between the two captured modules for the snapshot hash.
 const SEP = "\n----MODULE-BOUNDARY----\n";
@@ -170,6 +171,41 @@ Deno.test("sandbox template: warm-isolate requests serialize compatibility globa
   }
 });
 
+Deno.test("sandbox template: every generated JavaScript module parses", async () => {
+  const h = installHarness();
+  try {
+    await executeInDynamicSandbox(fixedConfig(), "noop", []);
+    for (
+      const [name, source] of [
+        ["setup.js", h.captured.setup],
+        ["wrapper.js", h.captured.wrapper],
+      ] as const
+    ) {
+      const transpiled = ts.transpileModule(source, {
+        fileName: name,
+        compilerOptions: {
+          module: ts.ModuleKind.ESNext,
+          target: ts.ScriptTarget.ESNext,
+        },
+        reportDiagnostics: true,
+      });
+      assertEquals(
+        (transpiled.diagnostics ?? [])
+          .filter((diagnostic) =>
+            diagnostic.category === ts.DiagnosticCategory.Error
+          )
+          .map((diagnostic) =>
+            ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
+          ),
+        [],
+        `${name} must be valid JavaScript before it is sent to Worker Loader`,
+      );
+    }
+  } finally {
+    h.restore();
+  }
+});
+
 Deno.test("sandbox template: snapshot pinned -- a template change must bump SANDBOX_TEMPLATE_VERSION", async () => {
   const h = installHarness();
   try {
@@ -182,10 +218,10 @@ Deno.test("sandbox template: snapshot pinned -- a template change must bump SAND
     // TEMPLATE_HASH below to the new value. This forces the reuse key to rotate
     // so a cached old isolate cannot serve new template content.
     const TEMPLATE_HASH =
-      "f6939f0d8c7f9d6800a0ff49dde9da9c833937f3d2bdf0cc2cf4946fe0ab066c";
+      "fbf94aec1c0f24177ee0b1d2c68de7abb986fa6a553470f7fb402df148b28dc0";
     assertEquals(
       PINNED_TEMPLATE_VERSION,
-      "2026-07-18.trusted-tail-attribution.v10",
+      "2026-07-18.syntax-valid-wrapper.v11",
       "PINNED_TEMPLATE_VERSION drifted from the pinned literal",
     );
     assertEquals(

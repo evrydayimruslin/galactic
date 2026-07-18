@@ -173,7 +173,11 @@ try {
     test_args: { name: 'smoke' },
   });
   testAttestation = String(tested?.test_attestation || '');
-  check('gx.test attestation', Boolean(testAttestation));
+  check(
+    'gx.test attestation',
+    Boolean(testAttestation),
+    JSON.stringify(tested?.error ?? tested ?? null).slice(0, 500),
+  );
 } catch (err) {
   check('gx.test attestation', false, String(err?.message || err));
 }

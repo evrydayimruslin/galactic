@@ -52,7 +52,7 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-18.trusted-tail-attribution.v10";
+const SANDBOX_TEMPLATE_VERSION = "2026-07-18.syntax-valid-wrapper.v11";
 
 const CAPACITY_TAIL_MARKER = "GALACTIC_CAPACITY_EXECUTION_V1 ";
 
@@ -778,6 +778,7 @@ export default {
         success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
         error: { type: err.name || err.constructor?.name || 'Error', message: err.message || String(err), ...(err.galacticDetails ? { details: err.galacticDetails } : {}) },
       });
+    }
     } finally {
       __releaseExecution();
     }
