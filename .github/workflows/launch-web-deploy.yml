@@ -8,6 +8,8 @@ on:
     paths:
       - 'apps/launch-web/**'
       - 'shared/contracts/launch.ts'
+      - 'scripts/release/wait-for-workflow-run.mjs'
+      - 'scripts/release/wait-for-workflow-run.test.mjs'
       - '.github/workflows/launch-web-deploy.yml'
   workflow_dispatch:
     inputs:
@@ -22,6 +24,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   verify:
@@ -50,6 +53,10 @@ jobs:
       - name: Test
         run: pnpm run test
 
+      - name: Test release-order workflow helper
+        working-directory: .
+        run: node --test scripts/release/wait-for-workflow-run.test.mjs
+
       - name: Build staging bundle
         run: pnpm run build:staging
 
@@ -74,6 +81,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Required to decide whether this main push also changed the API
+          # deployment surface. Manual Pages deploys deliberately skip the
+          # cross-workflow wait so they cannot deadlock waiting for a run they
+          # did not trigger.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -84,6 +97,37 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Wait for matching staging API/Tail deployment when required
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          BASE_SHA="${{ github.event.before }}"
+          ZERO_SHA="0000000000000000000000000000000000000000"
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" == "$ZERO_SHA" ]] || \
+             ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            BASE_SHA="$(git rev-parse "${GITHUB_SHA}^")"
+          fi
+
+          if git diff --quiet "$BASE_SHA" "$GITHUB_SHA" -- \
+            api capacity-tail-worker shared .github/workflows/api-deploy.yml; then
+            echo "No API/Tail deployment change in this push; Pages may deploy independently."
+            exit 0
+          fi
+
+          node scripts/release/wait-for-workflow-run.mjs \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow api-deploy.yml \
+            --workflow-name "API Deploy" \
+            --sha "$GITHUB_SHA" \
+            --ref-name "$GITHUB_REF_NAME" \
+            --event push \
+            --timeout-seconds 2400 \
+            --poll-interval-seconds 20
 
       - name: Build staging bundle
         run: pnpm run build:staging
@@ -155,6 +199,22 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Wait for matching production API/Tail deployment
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/release/wait-for-workflow-run.mjs \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow api-deploy.yml \
+            --workflow-name "API Deploy" \
+            --sha "$GITHUB_SHA" \
+            --ref-name "$GITHUB_REF_NAME" \
+            --event push \
+            --timeout-seconds 3000 \
+            --poll-interval-seconds 20
 
       - name: Build production bundle
         run: pnpm run build:production

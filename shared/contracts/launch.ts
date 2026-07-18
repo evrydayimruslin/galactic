@@ -444,6 +444,14 @@ export interface LaunchJobStatusResponse {
   error: unknown;
   durationMs: number | null;
   aiCostCredits: number;
+  /** Structured pre-execution wait; null for an ordinary queue backlog. */
+  admissionWait: {
+    code: "capacity_waiting" | "agent_cap_waiting" | "concurrency_waiting";
+    retryAt: string;
+    nextAttemptAt: string | null;
+    scope: "account" | "agent" | "ai" | "routine" | null;
+    message: string | null;
+  } | null;
   /** Links the job to its execution receipt and AI-spend ledger entries. */
   executionId: string | null;
   createdAt: string;

@@ -8,8 +8,11 @@ import {
   claimAgentActivationSlot,
   getAccountCapacityStatus,
   getAgentCapacityStatus,
+  reconcileCapacitySettlementAttribution,
+  recordObservedCapacityCpu,
   reserveAccountCapacity,
   setAgentCapacityCap,
+  settleAccountCapacityResources,
 } from "./account-capacity.ts";
 
 function jsonResponse(value: unknown, status = 200): Response {
@@ -194,7 +197,7 @@ Deno.test("account capacity: invalid reservation never reaches the database", as
   );
 });
 
-Deno.test("account capacity: Agent enforcement uses v2 with authoritative attribution", async () => {
+Deno.test("account capacity: Agent enforcement uses v3 with authoritative attribution and concurrency facts", async () => {
   let calledUrl = "";
   let calledBody: Record<string, unknown> = {};
   const admission = await reserveAccountCapacity({
@@ -203,6 +206,9 @@ Deno.test("account capacity: Agent enforcement uses v2 with authoritative attrib
     idempotencyKey: "execution:unique-1",
     reserveLight: 0.25,
     expiresAt: "2026-07-15T15:05:00.000Z",
+    usesInference: true,
+    routineId: "routine-1",
+    routineRunId: "routine-run-1",
   }, {
     supabaseUrl: "https://db.example",
     serviceRoleKey: "service-role",
@@ -228,8 +234,11 @@ Deno.test("account capacity: Agent enforcement uses v2 with authoritative attrib
       }]);
     },
   });
-  assertEquals(calledUrl.endsWith("/rpc/reserve_account_capacity_v2"), true);
+  assertEquals(calledUrl.endsWith("/rpc/reserve_account_capacity_v3"), true);
   assertEquals(calledBody.p_capacity_agent_id, "agent-root");
+  assertEquals(calledBody.p_uses_inference, true);
+  assertEquals(calledBody.p_routine_id, "routine-1");
+  assertEquals(calledBody.p_routine_run_id, "routine-run-1");
   assertEquals(admission.agentCapacity, {
     agentId: "agent-root",
     capBasisPoints: 2500,
@@ -237,6 +246,340 @@ Deno.test("account capacity: Agent enforcement uses v2 with authoritative attrib
     burstRemainingLight: 1,
     weeklyRemainingLight: 20,
   });
+});
+
+Deno.test("account capacity: concurrency denial preserves economic status and retry scope", async () => {
+  const admission = await reserveAccountCapacity({
+    userId: "user-1",
+    capacityAgentId: "agent-root",
+    idempotencyKey: "execution:concurrency",
+    reserveLight: 0,
+    expiresAt: "2026-07-15T15:05:00.000Z",
+    usesInference: true,
+  }, {
+    supabaseUrl: "https://db.example",
+    serviceRoleKey: "service-role",
+    agentCapacityEnabled: true,
+    fetchFn: async () =>
+      jsonResponse([{
+        allowed: false,
+        code: "concurrency_waiting",
+        reservation_id: null,
+        plan_code: "pro",
+        capacity_state: "available",
+        burst_state: "available",
+        weekly_state: "available",
+        burst_resets_at: "2026-07-15T15:00:00.000Z",
+        weekly_resets_at: "2026-07-20T10:00:00.000Z",
+        next_eligible_at: "2026-07-15T14:01:00.000Z",
+        burst_remaining_light: 4,
+        weekly_remaining_light: 90,
+        capacity_agent_id: "agent-root",
+        agent_cap_basis_points: 10_000,
+        concurrency_scope: "ai",
+      }]),
+  });
+  assertEquals(admission.code, "concurrency_waiting");
+  assertEquals(admission.state, "available");
+  assertEquals(admission.concurrencyScope, "ai");
+  assertEquals(
+    accountCapacityErrorMessage(admission),
+    "Too many AI calls are already in progress. Retry after 2026-07-15T14:01:00.000Z.",
+  );
+  assertEquals(
+    accountCapacityErrorDetails(admission).concurrency_scope,
+    "ai",
+  );
+});
+
+Deno.test("account capacity: immediate resource settlement never sends wall duration", async () => {
+  let calledUrl = "";
+  let calledBody: Record<string, unknown> = {};
+  const settlement = await settleAccountCapacityResources({
+    reservationId: "reservation-1",
+    userId: "user-1",
+    receiptId: "receipt-1",
+    executionId: "execution-1",
+    executedAt: "2026-07-17T20:00:00.000Z",
+    resourceFacts: [{
+      resource: "d1_read",
+      units: 100,
+      cloudUnits: 1,
+      amountLight: 0.001,
+    }],
+    reuseKeyHash: "stable-worker-hash",
+    workerRequestCount: 1,
+    billingConfig: {
+      version: 7,
+      workerMsPerCloudUnit: 250,
+      cloudUnitLightPer1k: 1,
+      workerRequestLightPerInvocation: 0.00003,
+      workerLoadLightPerInvocation: 0.5,
+    },
+  }, {
+    supabaseUrl: "https://db.example",
+    serviceRoleKey: "service-role",
+    fetchFn: async (input, init) => {
+      calledUrl = String(input);
+      calledBody = JSON.parse(String(init?.body));
+      return jsonResponse([{
+        settlement_id: "settlement-1",
+        status: "pending_cpu",
+        immediate_light: 0.50103,
+        operation_light: 0.001,
+        worker_request_light: 0.00003,
+        dynamic_worker_light: 0.5,
+        cpu_light: 0,
+        total_light: 0.50103,
+        dynamic_worker_charged: true,
+        billing_config_version: 7,
+      }]);
+    },
+  });
+  assertEquals(
+    calledUrl.endsWith("/rpc/settle_account_capacity_resources"),
+    true,
+  );
+  assertEquals(calledBody.p_operation_light, 0.001);
+  assertEquals(calledBody.p_executed_at, "2026-07-17T20:00:00.000Z");
+  assertEquals(calledBody.p_worker_load_mode, "reuse");
+  assertEquals(calledBody.p_worker_identity_hash, "stable-worker-hash");
+  assertEquals(calledBody.p_dynamic_worker_invoked, true);
+  assertEquals(calledBody.p_expected_cpu_sources, [
+    "cloudflare_tail_parent",
+    "cloudflare_dynamic_tail",
+  ]);
+  assertEquals("p_duration_ms" in calledBody, false);
+  assertEquals("p_timeout_ms" in calledBody, false);
+  assertEquals(settlement.status, "pending_cpu");
+  assertEquals(settlement.totalLight, 0.50103);
+});
+
+Deno.test("account capacity: receipt/routine attribution reconciliation preserves exact delta", async () => {
+  let calledBody: Record<string, unknown> = {};
+  const result = await reconcileCapacitySettlementAttribution({
+    receiptId: "receipt-1",
+    userId: "user-1",
+  }, {
+    supabaseUrl: "https://db.example",
+    serviceRoleKey: "service-role",
+    fetchFn: async (input, init) => {
+      assertEquals(
+        String(input).endsWith(
+          "/rpc/reconcile_capacity_settlement_attribution",
+        ),
+        true,
+      );
+      calledBody = JSON.parse(String(init?.body));
+      return jsonResponse([{
+        reconciled: true,
+        total_light: 0.75,
+        delta_light: 0.25,
+      }]);
+    },
+  });
+  assertEquals(calledBody, {
+    p_receipt_id: "receipt-1",
+    p_user_id: "user-1",
+  });
+  assertEquals(result, {
+    reconciled: true,
+    totalLight: 0.75,
+    deltaLight: 0.25,
+  });
+});
+
+Deno.test("account capacity: execution shape declares exactly the CPU sources it expects", async () => {
+  let calledBody: Record<string, unknown> = {};
+  await settleAccountCapacityResources({
+    reservationId: "reservation-parent-only",
+    userId: "user-1",
+    receiptId: "receipt-parent-only",
+    executedAt: "2026-07-17T20:01:00.000Z",
+    dynamicWorkerInvoked: false,
+    workerRequestCount: 1,
+    billingConfig: {
+      version: 7,
+      workerMsPerCloudUnit: 250,
+      cloudUnitLightPer1k: 1,
+      workerRequestLightPerInvocation: 0.00003,
+      workerLoadLightPerInvocation: 0.5,
+    },
+  }, {
+    supabaseUrl: "https://db.example",
+    serviceRoleKey: "service-role",
+    fetchFn: async (_input, init) => {
+      calledBody = JSON.parse(String(init?.body));
+      return jsonResponse([{
+        settlement_id: "settlement-parent-only",
+        status: "pending_cpu",
+        immediate_light: 0.00003,
+        operation_light: 0,
+        worker_request_light: 0.00003,
+        dynamic_worker_light: 0,
+        cpu_light: 0,
+        total_light: 0.00003,
+        dynamic_worker_charged: false,
+        billing_config_version: 7,
+      }]);
+    },
+  });
+  assertEquals(calledBody.p_dynamic_worker_invoked, false);
+  assertEquals(calledBody.p_worker_load_mode, "none");
+  assertEquals(calledBody.p_worker_load_light, 0);
+  assertEquals(calledBody.p_expected_cpu_sources, [
+    "cloudflare_tail_parent",
+  ]);
+});
+
+Deno.test("account capacity: Loader identity without fetch charges identity but expects parent CPU only", async () => {
+  let calledBody: Record<string, unknown> = {};
+  await settleAccountCapacityResources({
+    reservationId: "reservation-identity-only",
+    userId: "user-1",
+    receiptId: "receipt-identity-only",
+    executedAt: "2026-07-17T20:02:00.000Z",
+    dynamicWorkerIdentityCreated: true,
+    dynamicWorkerInvoked: false,
+    reuseKeyHash: "identity-only-hash",
+    workerRequestCount: 1,
+    billingConfig: {
+      version: 7,
+      workerMsPerCloudUnit: 250,
+      cloudUnitLightPer1k: 1,
+      workerRequestLightPerInvocation: 0.00003,
+      workerLoadLightPerInvocation: 0.5,
+    },
+  }, {
+    supabaseUrl: "https://db.example",
+    serviceRoleKey: "service-role",
+    fetchFn: async (_input, init) => {
+      calledBody = JSON.parse(String(init?.body));
+      return jsonResponse([{
+        settlement_id: "settlement-identity-only",
+        status: "pending_cpu",
+        immediate_light: 0.50003,
+        operation_light: 0,
+        worker_request_light: 0.00003,
+        dynamic_worker_light: 0.5,
+        cpu_light: 0,
+        total_light: 0.50003,
+        dynamic_worker_charged: true,
+        billing_config_version: 7,
+      }]);
+    },
+  });
+  assertEquals(calledBody.p_dynamic_worker_invoked, false);
+  assertEquals(calledBody.p_worker_load_mode, "reuse");
+  assertEquals(calledBody.p_worker_identity_hash, "identity-only-hash");
+  assertEquals(calledBody.p_expected_cpu_sources, [
+    "cloudflare_tail_parent",
+  ]);
+});
+
+Deno.test("account capacity: Tail CPU observation sends raw CPU and diagnostic wall time only", async () => {
+  let calledBody: Record<string, unknown> = {};
+  const observation = await recordObservedCapacityCpu({
+    receiptId: "receipt-1",
+    cpuTimeMs: 2.5,
+    wallTimeMs: 45_000,
+    observedAt: "2026-07-17T20:00:00.000Z",
+    source: "cloudflare_tail_parent",
+    final: true,
+  }, {
+    supabaseUrl: "https://db.example",
+    serviceRoleKey: "service-role",
+    fetchFn: async (_input, init) => {
+      calledBody = JSON.parse(String(init?.body));
+      return jsonResponse([{
+        observation_id: "capacity_cpu:1:cloudflare_tail_parent:receipt-1",
+        application_status: "applied",
+        settlement_id: "settlement-1",
+        event_id: "event-1",
+        inserted: true,
+        settlement_status: "final",
+        cpu_time_ms: 2.5,
+        wall_time_ms: 45_000,
+        cpu_light: 0.00001,
+        total_light: 0.50104,
+        attempts: 1,
+        next_attempt_at: null,
+        last_error: null,
+      }]);
+    },
+  });
+  assertEquals(calledBody.p_cpu_time_ms, 2.5);
+  assertEquals(calledBody.p_wall_time_ms, 45_000);
+  assertEquals(calledBody.p_final, true);
+  assertEquals(
+    calledBody.p_observation_id,
+    "capacity_cpu:1:cloudflare_tail_parent:receipt-1",
+  );
+  assertEquals("p_amount_light" in calledBody, false);
+  assertEquals(observation.applicationStatus, "applied");
+  assertEquals(observation.settlementStatus, "final");
+  assertEquals(observation.cpuLight, 0.00001);
+});
+
+Deno.test("account capacity: early Tail observation is durably pending, not an error", async () => {
+  const observation = await recordObservedCapacityCpu({
+    receiptId: "receipt-early",
+    cpuTimeMs: 1,
+    wallTimeMs: 20_000,
+    observedAt: "2026-07-17T20:00:00.000Z",
+    source: "cloudflare_dynamic_tail",
+    final: true,
+  }, {
+    supabaseUrl: "https://db.example",
+    serviceRoleKey: "service-role",
+    fetchFn: async () =>
+      jsonResponse([{
+        observation_id: "capacity_cpu:1:cloudflare_dynamic_tail:receipt-early",
+        application_status: "pending",
+        settlement_id: null,
+        event_id: null,
+        inserted: true,
+        settlement_status: null,
+        cpu_time_ms: 1,
+        wall_time_ms: 20_000,
+        cpu_light: 0,
+        total_light: 0,
+        attempts: 1,
+        next_attempt_at: "2026-07-17T20:00:05.000Z",
+        last_error: "settlement_not_ready",
+      }]),
+  });
+  assertEquals(observation.applicationStatus, "pending");
+  assertEquals(observation.settlementId, null);
+  assertEquals(observation.lastError, "settlement_not_ready");
+});
+
+Deno.test("account capacity: partial CPU observations fail closed before ingestion", async () => {
+  let called = false;
+  await assertRejects(
+    () =>
+      recordObservedCapacityCpu(
+        {
+          receiptId: "receipt-partial",
+          cpuTimeMs: 1,
+          wallTimeMs: 2,
+          observedAt: "2026-07-17T20:00:00.000Z",
+          source: "cloudflare_tail_parent",
+          final: false,
+        } as unknown as Parameters<typeof recordObservedCapacityCpu>[0],
+        {
+          supabaseUrl: "https://db.example",
+          serviceRoleKey: "service-role",
+          fetchFn: async () => {
+            called = true;
+            return jsonResponse([]);
+          },
+        },
+      ),
+    Error,
+    "Capacity CPU observation must be final",
+  );
+  assertEquals(called, false);
 });
 
 Deno.test("account capacity: Agent enforcement fails closed without attribution", async () => {

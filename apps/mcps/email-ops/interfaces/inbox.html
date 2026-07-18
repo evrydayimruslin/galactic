@@ -43,6 +43,17 @@
       else {
         var err = new Error((m.error && m.error.message) || "Call failed");
         err.code = m.error && m.error.type;
+        err.type = err.code;
+        err.status = m.error && m.error.status;
+        err.details = m.error && m.error.details;
+        err.retryAt = m.error && m.error.retryAt;
+        err.retryable = !!(m.error && m.error.retryable);
+        err.scope = m.error && m.error.scope;
+        err.autoResumes = !!(m.error && m.error.autoResumes);
+        err.ownerActionRequired = !!(m.error && m.error.ownerActionRequired);
+        err.executionMode = m.error && m.error.executionMode;
+        err.jobId = m.error && m.error.jobId;
+        err.completionUnknown = !!(m.error && m.error.completionUnknown);
         item.reject(err);
       }
     };
@@ -216,10 +227,42 @@ function humanErr(e){
   var code = e && e.code, msg = (e && e.message) || "";
   if (code === "SIGN_IN_REQUIRED") return "Sign in to use this.";
   if (code === "RATE_LIMITED" || code === "BUSY") return "Give it a few seconds — too many requests at once.";
+  if (e && (e.ownerActionRequired || String(code || "").toLowerCase() === "agent_cap_too_low_for_request")) {
+    return "This Agent's capacity cap is too low for this action. Raise the cap in Agent Settings.";
+  }
+  if (isCapacityErr(e)) {
+    var at = retryTime(e);
+    if (e && e.autoResumes) return "Agent work is waiting for capacity" + (at ? " and resumes automatically " + at : " and will resume automatically") + ".";
+    return "This action was not queued. Try again when capacity is available" + (at ? " " + at : "") + ".";
+  }
+  if (e && e.completionUnknown) return "This action was queued, but its result can't be checked right now. Verify the result before trying it again.";
   if (/MISSING_SECRETS|IMAP_HOST|SMTP_HOST|not configured|mailbox isn/i.test(msg)) return "Your mailbox isn't connected yet. Add your email settings in the agent's Settings, then try again.";
   if (/SMTP auth/i.test(msg)) return "Couldn't sign in to your mailbox to send — check the email password in Settings.";
   if (/recipient address|Already sent|Only discarded|required/i.test(msg)) return msg;
   return "Something went wrong — try again.";
+}
+function isCapacityErr(e){
+  var c = String((e && (e.code || e.type)) || "").toLowerCase();
+  return c === "capacity_waiting" || c === "agent_cap_waiting" || c === "agent_cap_too_low_for_request" || c === "concurrency_waiting" || c === "concurrencywaitingerror";
+}
+function retryTime(e){
+  var d = e && e.details;
+  var raw = (e && e.retryAt) || (d && (d.retry_at || d.retryAt));
+  if (!raw) return "";
+  var date = new Date(raw);
+  return isNaN(date) ? "" : "at " + date.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
+}
+var capacityRetryTimer = null;
+function scheduleCapacityResume(e){
+  if (!e || !e.autoResumes || e.ownerActionRequired) return;
+  if (capacityRetryTimer) clearTimeout(capacityRetryTimer);
+  capacityRetryTimer = null;
+  var d = e && e.details;
+  var raw = (e && e.retryAt) || (d && (d.retry_at || d.retryAt));
+  var at = raw ? new Date(raw).getTime() : NaN;
+  if (!isFinite(at)) return;
+  var delay = Math.max(1000, at - Date.now() + 1000);
+  capacityRetryTimer = setTimeout(function(){ capacityRetryTimer=null; boot(); }, Math.min(delay, 2147483647));
 }
 /* ---------- call queue: max 4 in flight ---------- */
 var inFlight = 0, waiters = [];
@@ -252,7 +295,7 @@ var S = {
   searchTimer: null, searchMode: false,
   opLang: "English", checkDisabledUntil: 0, pendingNew: 0,
   toastTimer: null, undoDiscard: null, teachState: {}, // gap -> {saved, key, value, busy}
-  loadErr: null, loadErrRaw: null, recipientPick: null, lastRefresh: 0,
+  loadErr: null, loadErrRaw: null, loadErrObject: null, recipientPick: null, lastRefresh: 0,
   listEpoch: 0, listedActive: null
 };
 var PILLS = [
@@ -264,14 +307,21 @@ var PILLS = [
 /* ---------- data ---------- */
 function loadOverview(){
   return call("inbox_overview", {}).then(function(o){
-    S.overview = o;
-    if (o.operator_language) S.opLang = o.operator_language;
+    acceptOverview(o);
   });
+}
+function acceptOverview(o){
+  S.overview = o;
+  if (o && o.operator_language) S.opLang = o.operator_language;
 }
 function loadList(status){
   var my = ++S.listEpoch;
   return call("conversations_list", {status: status, limit: 50}).then(function(r){
     if (my !== S.listEpoch) return; // superseded by a newer list request
+    acceptList(r, status);
+  });
+}
+function acceptList(r, status){
     var rows = r.conversations || [];
     if (status === "active"){
       var rank = function(p){ return p==="high"?0 : p==="low"?2 : 1; };
@@ -280,7 +330,6 @@ function loadList(status){
       S.pendingNew = 0;
     }
     S.rows = rows; S.total = r.total || rows.length; S.searchMode = false;
-  });
 }
 function loadHistory(id, force){
   if (!force && S.history[id]) return Promise.resolve(S.history[id]);
@@ -325,9 +374,21 @@ function render(){
   if (!ul.context) return;
   if (!ul.context.signedIn){ renderSignedOut(); return; }
   if (S.loadErr){
-    app.innerHTML = '<div class="banner err">'+esc(S.loadErr)+' <button class="small" id="retryBtn">Try again</button></div>'
-      + (S.loadErrRaw ? '<details style="margin-top:6px"><summary>Technical details</summary><div class="whisper">'+esc(S.loadErrRaw)+'</div></details>' : '');
-    document.getElementById("retryBtn").onclick = function(){ S.loadErr=null; S.loadErrRaw=null; boot(); };
+    var waiting = isCapacityErr(S.loadErrObject) && S.loadErrObject && S.loadErrObject.autoResumes;
+    var banner = '<div class="banner'+(waiting?'':' err')+'">'+esc(S.loadErr)
+      + (waiting ? '' : ' <button class="small" id="retryBtn">Try again</button>') + '</div>'
+      + (S.loadErrRaw && !waiting ? '<details style="margin-top:6px"><summary>Technical details</summary><div class="whisper">'+esc(S.loadErrRaw)+'</div></details>' : '');
+    if (!S.overview){
+      app.innerHTML = banner + '<div class="center">The Interface is ready. Live inbox data will appear when Agent work can run.</div>';
+      var retryOnly = document.getElementById("retryBtn");
+      if (retryOnly) retryOnly.onclick = function(){ S.loadErr=null; S.loadErrRaw=null; S.loadErrObject=null; boot(); };
+      fit(); return;
+    }
+    var partialHtml = banner + renderStrip() + renderPills() + renderBody();
+    app.innerHTML = partialHtml;
+    wire();
+    var retryPartial = document.getElementById("retryBtn");
+    if (retryPartial) retryPartial.onclick = function(){ S.loadErr=null; S.loadErrRaw=null; S.loadErrObject=null; boot(); };
     fit(); return;
   }
   if (!S.overview){ app.innerHTML = '<div class="skel"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:85%"></div>'; fit(); return; }
@@ -771,8 +832,13 @@ function wireDetail(q){
       .then(function(){ render(); toast("Draft ready for your review."); }, function(e){ toast(esc(humanErr(e))); render(); });
   };
 }
-function showErr(e){ S.loadErr = humanErr(e); S.loadErrRaw = (e && e.message) || String(e); render(); }
+function showErr(e){
+  S.loadErrObject=e; S.loadErr = humanErr(e); S.loadErrRaw = (e && e.message) || String(e);
+  if (isCapacityErr(e)) scheduleCapacityResume(e);
+  render();
+}
 /* ---------- background freshness (90s, visibility-gated, edit-paused) ---------- */
+var backgroundRefreshPending = false;
 function interactionActive(){
   if (S.editing) return true;
   var ae = document.activeElement;
@@ -786,7 +852,13 @@ setInterval(function(){
   if (!ul.context || !ul.context.signedIn) return;
   if (document.visibilityState !== "visible") return;
   if (interactionActive()) return; // a re-render would wipe what they're doing
+  // A durable Interface call can remain queued across a capacity window. Do
+  // not enqueue another overview read every 90 seconds while that exact job is
+  // pending, or while a structured legacy/sync wait timer is active.
+  if (backgroundRefreshPending || capacityRetryTimer) return;
+  backgroundRefreshPending = true;
   call("inbox_overview", {}).then(function(o){
+    backgroundRefreshPending = false;
     S.overview = o;
     if (o.operator_language) S.opLang = o.operator_language;
     if (S.status === "active" && !S.searchMode && S.listedActive !== null){
@@ -795,13 +867,36 @@ setInterval(function(){
     }
     /* refresh strip + pills without touching the list order */
     render();
-  }, function(){ /* silent — next tick will retry */ });
+  }, function(e){
+    backgroundRefreshPending = false;
+    // Only structured capacity failures alter scheduling. Ordinary transient
+    // refresh failures stay silent and can try again on the next 90s tick.
+    if (isCapacityErr(e)) showErr(e);
+  });
 }, 90000);
 /* ---------- boot ---------- */
 function boot(){
   if (!ul.context.signedIn){ renderSignedOut(); return; }
+  if (capacityRetryTimer) { clearTimeout(capacityRetryTimer); capacityRetryTimer=null; }
+  S.loadErr = null; S.loadErrRaw = null; S.loadErrObject = null;
   render(); /* skeleton */
-  Promise.all([loadOverview(), loadList("active")]).then(render, showErr);
+  call("inbox_snapshot", {status:"active", limit:50}).then(function(snapshot){
+    var errors = (snapshot && snapshot.errors) || [];
+    if (snapshot && snapshot.overview) acceptOverview(snapshot.overview);
+    if (snapshot && snapshot.conversations) acceptList(snapshot.conversations, "active");
+    if (!S.overview && snapshot && snapshot.conversations){
+      S.overview = {
+        operator_language:S.opLang,
+        counts:{active:S.rows.length,no_action:0,resolved:0,discarded:0},
+        complaints_active:0,handled_today:0,checks_today:0,last_checked_at:null,now:new Date().toISOString()
+      };
+    }
+    if (errors.length){
+      showErr({code:"PARTIAL_READ", message:"Some inbox data could not be refreshed."});
+      return;
+    }
+    render();
+  }, showErr);
 }
 document.addEventListener("keydown", function(ev){
   if (ev.key !== "Escape") return;

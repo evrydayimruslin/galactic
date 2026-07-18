@@ -57,7 +57,24 @@ const HANDLER_INVOKE_TIMEOUT_MS = 130_000;
 // Invokes the /mcp/{appId} pipeline for the composer app. Defaults to an
 // IN-PROCESS handleMcp call (see invokeRoutineHandler for why); overridable in
 // tests to intercept the request without a real handler.
-type InvokeMcp = (request: Request, appId: string) => Promise<Response>;
+interface InternalMcpCapacityAttribution {
+  capacityQueueOperations?: unknown;
+  capacityRootWorkerRequest?: boolean;
+}
+
+type InvokeMcp = (
+  request: Request,
+  appId: string,
+  internalCapacityAttribution?: InternalMcpCapacityAttribution,
+) => Promise<Response>;
+
+interface ResolvedRoutineInvocationOptions {
+  baseUrl: string;
+  invokeMcp: InvokeMcp;
+  handlerTimeoutMs: number;
+  capacityQueueOperations?: unknown;
+  capacityRootWorkerRequest?: boolean;
+}
 
 export interface RoutineExecutorOptions {
   now?: Date;
@@ -76,6 +93,12 @@ export interface RoutineExecutorOptions {
   // context and hangs there, whereas the queue consumer runs in a normal
   // request context (exactly how events + async jobs already work).
   execQueue?: QueueLike | null;
+  /**
+   * Internal-only facts for a run claimed from EXEC_QUEUE. They travel through
+   * the in-process MCP call, never through a user-controlled header or body.
+   */
+  capacityQueueOperations?: unknown;
+  capacityRootWorkerRequest?: boolean;
 }
 
 function withTimeout<T>(
@@ -98,9 +121,27 @@ function withTimeout<T>(
   });
 }
 
+type CapacityWaitingCode =
+  | "capacity_waiting"
+  | "agent_cap_waiting"
+  | "concurrency_waiting";
+
 class AccountCapacityWaitingError extends Error {
-  constructor(readonly retryAt: string) {
-    super(`Account capacity is waiting until ${retryAt}`);
+  constructor(
+    readonly retryAt: string,
+    readonly code: CapacityWaitingCode = "capacity_waiting",
+    readonly concurrencyScope:
+      | "account"
+      | "agent"
+      | "ai"
+      | "routine"
+      | null = null,
+  ) {
+    super(
+      code === "concurrency_waiting"
+        ? `Execution concurrency is full until ${retryAt}`
+        : `Account capacity is waiting until ${retryAt}`,
+    );
     this.name = "AccountCapacityWaitingError";
   }
 }
@@ -111,6 +152,20 @@ class AgentCapacityCapTooLowError extends Error {
       "The Agent capacity cap is too low to admit one execution. Increase the cap before resuming.",
     );
     this.name = "AgentCapacityCapTooLowError";
+  }
+}
+
+class NestedAdmissionWaitingError extends Error {
+  constructor(
+    readonly errorType: "AgentCapacityWaitingError" | "ConcurrencyWaitingError",
+    readonly details: Record<string, unknown>,
+  ) {
+    super(
+      errorType === "ConcurrencyWaitingError"
+        ? "A nested Agent call is still concurrency-limited after its bounded retry."
+        : "A nested Agent call is waiting for capacity.",
+    );
+    this.name = "NestedAdmissionWaitingError";
   }
 }
 
@@ -817,6 +872,8 @@ async function prepareDueScheduledRuns(
           // runtime hold. MCP performs the authoritative predicted hold.
           reserveLight: getEnv("AGENT_CAPACITY_ENABLED") === "1" ? 0 : 1,
           expiresAt: new Date(now.getTime() + leaseMs + 120_000).toISOString(),
+          routineId: claimedRoutine.id,
+          routineRunId: runId,
           now: iso(now),
           metadata: {
             routine_id: claimedRoutine.id,
@@ -1061,9 +1118,7 @@ function buildRoutineArgs(
 async function invokeRoutineHandler(
   routine: StoredRoutine,
   run: ExecutorRunRow,
-  options: Required<
-    Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">
-  >,
+  options: ResolvedRoutineInvocationOptions,
 ): Promise<unknown> {
   const composerAppId = routine.composer_app_id || routine.composer_app_slug;
   if (!composerAppId) {
@@ -1119,7 +1174,10 @@ async function invokeRoutineHandler(
     },
   );
   const response = await withTimeout(
-    options.invokeMcp(mcpRequest, composerAppId),
+    options.invokeMcp(mcpRequest, composerAppId, {
+      capacityQueueOperations: options.capacityQueueOperations,
+      capacityRootWorkerRequest: options.capacityRootWorkerRequest === true,
+    }),
     options.handlerTimeoutMs,
     "Routine handler invocation timed out",
   );
@@ -1139,6 +1197,7 @@ async function invokeRoutineHandler(
         retry_at?: string;
         capacity_agent_id?: string | null;
         agent_cap_basis_points?: number | null;
+        concurrency_scope?: "account" | "agent" | "ai" | "routine" | null;
       };
     };
   };
@@ -1152,10 +1211,15 @@ async function invokeRoutineHandler(
     if (
       rpc.error.code === -32010 &&
       (rpc.error.data?.type === "capacity_waiting" ||
-        rpc.error.data?.type === "agent_cap_waiting") &&
+        rpc.error.data?.type === "agent_cap_waiting" ||
+        rpc.error.data?.type === "concurrency_waiting") &&
       typeof rpc.error.data.retry_at === "string"
     ) {
-      throw new AccountCapacityWaitingError(rpc.error.data.retry_at);
+      throw new AccountCapacityWaitingError(
+        rpc.error.data.retry_at,
+        rpc.error.data.type,
+        rpc.error.data.concurrency_scope ?? null,
+      );
     }
     throw new Error(
       rpc.error.message || `Routine MCP error ${rpc.error.code ?? ""}`.trim(),
@@ -1178,10 +1242,13 @@ async function invokeRoutineHandler(
       throw new AgentCapacityCapTooLowError(propagatedDetails);
     }
     if (
-      propagatedType === "AgentCapacityWaitingError" &&
-      typeof propagatedDetails.retry_at === "string"
+      (propagatedType === "AgentCapacityWaitingError" ||
+        propagatedType === "ConcurrencyWaitingError")
     ) {
-      throw new AccountCapacityWaitingError(propagatedDetails.retry_at);
+      throw new NestedAdmissionWaitingError(
+        propagatedType,
+        propagatedDetails,
+      );
     }
     const content = rpc.result.content;
     const textBlock = Array.isArray(content)
@@ -1385,9 +1452,7 @@ async function recordRootStep(
 
 async function executeClaimedRun(
   claimed: ClaimedRun,
-  options: Required<
-    Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">
-  >,
+  options: ResolvedRoutineInvocationOptions,
   now: Date,
   clock: () => Date,
 ): Promise<RunOutcome> {
@@ -1537,6 +1602,33 @@ async function executeClaimedRun(
     result = await invokeRoutineHandler(routine, run, options);
   } catch (err) {
     const completedAt = clock();
+    if (err instanceof NestedAdmissionWaitingError) {
+      // The outer routine's tenant code already started and may have committed
+      // side effects before its nested call was denied. Never replay the whole
+      // wake automatically. galactic.call already made one safe in-place retry;
+      // persistent loops can journal/checkpoint and continue next cadence.
+      await recordRootStep(
+        routine,
+        run,
+        "failed",
+        startedAt,
+        completedAt,
+        args,
+        null,
+        err,
+      );
+      await finishRun(run, "skipped", completedAt, {
+        summary: err.message,
+        error: {
+          code: err.errorType === "ConcurrencyWaitingError"
+            ? "nested_concurrency_waiting"
+            : "nested_capacity_waiting",
+          ...err.details,
+          replay_safe: false,
+        },
+      });
+      return { status: "skipped" };
+    }
     if (err instanceof AgentCapacityCapTooLowError) {
       const at = iso(completedAt);
       await finishRun(run, "failed", completedAt, {
@@ -1593,14 +1685,34 @@ async function executeClaimedRun(
         manualRequested: run.trigger === "manual",
       });
       await finishRun(run, "skipped", completedAt, {
-        summary:
-          `Capacity wait: ${deferred.deferredWakeCount} wake(s) coalesced; resumes at ${err.retryAt}.`,
+        summary: `${
+          err.code === "concurrency_waiting" ? "Concurrency" : "Capacity"
+        } wait: ${deferred.deferredWakeCount} wake(s) coalesced; resumes at ${err.retryAt}.`,
         error: {
-          code: "capacity_waiting",
+          code: err.code,
           retry_at: err.retryAt,
+          ...(err.concurrencyScope
+            ? { concurrency_scope: err.concurrencyScope }
+            : {}),
           deferred_wake_count: deferred.deferredWakeCount,
         },
       });
+      // The scheduler advanced next_run_at before this queue-owned execution.
+      // Pull sparse cadences forward to the admission retry so a daily/weekly
+      // routine is not stranded after a transient concurrency race. Frequent
+      // cadences keep their earlier tick and continue coalescing missed wakes.
+      const currentNextRunAt = routine.next_run_at
+        ? Date.parse(routine.next_run_at)
+        : Number.POSITIVE_INFINITY;
+      const retryAtMs = Date.parse(err.retryAt);
+      if (Number.isFinite(retryAtMs) && retryAtMs < currentNextRunAt) {
+        await patchRows<ExecutorRoutineRow>(
+          "user_routines",
+          { id: `eq.${routine.id}`, select: ROUTINE_SELECT },
+          { next_run_at: err.retryAt, updated_at: iso(completedAt) },
+          "Failed to schedule deferred routine admission retry",
+        ).catch(() => {});
+      }
       return { status: "skipped", budgetSkipped: true };
     }
     const policy = retryPolicyFrom(routine, run);
@@ -1692,24 +1804,24 @@ async function executeClaimedRun(
 // the queue consumer.
 function resolveInvocationOptions(
   options: RoutineExecutorOptions,
-): Required<
-  Pick<RoutineExecutorOptions, "baseUrl" | "invokeMcp" | "handlerTimeoutMs">
-> {
+): ResolvedRoutineInvocationOptions {
   return {
     baseUrl: options.baseUrl || getEnv("BASE_URL") ||
       "https://api.connectgalactic.com",
     // Call handleMcp IN-PROCESS (lazy import keeps the handler graph off this
     // module's load path). Overridable in tests.
     invokeMcp: options.invokeMcp ||
-      (async (request, appId) => {
+      (async (request, appId, internalCapacityAttribution) => {
         const { handleMcp } = await import("../handlers/mcp.ts");
-        return handleMcp(request, appId);
+        return handleMcp(request, appId, internalCapacityAttribution);
       }),
     handlerTimeoutMs: positiveInteger(
       options.handlerTimeoutMs,
       HANDLER_INVOKE_TIMEOUT_MS,
       15 * 60 * 1000,
     ),
+    capacityQueueOperations: options.capacityQueueOperations,
+    capacityRootWorkerRequest: options.capacityRootWorkerRequest === true,
   };
 }
 
@@ -1765,7 +1877,14 @@ export async function processQueuedRoutineRun(
   body: RoutineRunQueueMessage,
   options: RoutineExecutorOptions = {},
 ): Promise<"ack"> {
-  await claimAndExecuteRun(body.routineRunId, options).catch((err) => {
+  await claimAndExecuteRun(body.routineRunId, {
+    ...options,
+    // One accepted producer write + one consumer read + this invocation's
+    // normal ack/delete. A later explicit routine retry is a fresh Queue
+    // cycle and therefore receives its own envelope when it is claimed.
+    capacityQueueOperations: { write: 1, read: 1, delete: 1, total: 3 },
+    capacityRootWorkerRequest: true,
+  }).catch((err) => {
     console.error("[ROUTINE-QUEUE] Run execution failed:", err);
   });
   return "ack";

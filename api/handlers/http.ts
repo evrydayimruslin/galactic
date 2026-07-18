@@ -34,7 +34,6 @@ import {
   type RouteCorsPolicyInput,
 } from "../services/cors.ts";
 import {
-  calculateExpectedRuntimeHoldAmount,
   createRuntimeOperationMeteringContext,
   preflightRuntimeCloudHold,
   settleAndLogAppExecution,
@@ -42,12 +41,18 @@ import {
   settleRuntimeCloudPreflight,
 } from "../services/execution-settlement.ts";
 import {
+  ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
   accountCapacityErrorDetails,
   accountCapacityErrorMessage,
   releaseAccountCapacity,
   reserveAccountCapacity,
-  settleAccountCapacity,
 } from "../services/account-capacity.ts";
+import {
+  countCapacityWorkerRequests,
+  settleOrDeferCapacityAfterExecution,
+  shouldReleaseUnstartedCapacityReservation,
+} from "../services/capacity-settlement-recovery.ts";
+import { createCapacityResourceMeter } from "../services/cloud-usage.ts";
 import { createExecutionReceiptId } from "../services/call-logger.ts";
 import {
   buildMissingAppSecretsErrorDetails,
@@ -97,6 +102,7 @@ import {
 } from "../services/memory.ts";
 import { getEnv } from "../lib/env.ts";
 import { mintCallerContextToken } from "../services/agent-caller-context.ts";
+import { classifyRuntimeExecution } from "../services/execution-classification.ts";
 
 let memoryService: MemoryServiceImpl | null | undefined;
 
@@ -162,7 +168,8 @@ export async function handleHttpEndpoint(
   let auditReceiptId: string | null = null;
   let activeRouteCorsPolicy: RouteCorsPolicyInput = {};
   let capacityReservation: { id: string; userId: string } | null = null;
-  let capacityOperationLight = 0;
+  let tenantExecutionAttempted = false;
+  const capacityResourceMeter = createCapacityResourceMeter();
 
   function finalize(response: Response): Response {
     applyRouteCorsHeaders(response.headers, request, activeRouteCorsPolicy);
@@ -620,11 +627,17 @@ export async function handleHttpEndpoint(
       );
     }
 
-    // Execute the function in sandbox — AI-capable apps get 120s timeout
+    // App permissions authorize AI bindings. Upload-derived function metadata
+    // independently controls whether this particular HTTP function needs the
+    // longer inference execution window.
     const httpPermissions = resolveStrictManifestPermissions(app).permissions;
-    const usesModel = httpPermissions.includes("ai:call") ||
+    const canUseModel = httpPermissions.includes("ai:call") ||
       httpPermissions.includes("ai:embed");
-    const billingRuntimeUser = usesModel
+    const executionClassification = classifyRuntimeExecution({
+      manifest: app.manifest,
+      functionName,
+    });
+    const billingRuntimeUser = canUseModel
       ? await resolveHttpBillingRuntimeUser(app.owner_id, caller, httpRuntime)
       : (httpRuntime.payerUserId === user?.id ? user : null);
     // Per-function override keyed on the INSTALLER/payer (not the billing user,
@@ -641,7 +654,7 @@ export async function handleHttpEndpoint(
       getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
       app.visibility === "private" &&
       app.owner_id === httpRuntime.payerUserId;
-    const runtimeAI = usesModel
+    const runtimeAI = canUseModel
       ? await createRuntimeAIContext(billingRuntimeUser, {
         freeMode: caller.freeMode,
         byokOnly: subscriptionCapacityMode,
@@ -664,7 +677,7 @@ export async function handleHttpEndpoint(
     );
     const receiptId = createExecutionReceiptId();
     auditReceiptId = receiptId;
-    const timeoutMs = usesModel ? 120_000 : 30_000;
+    const timeoutMs = executionClassification.timeoutMs;
     const inputArgs = loggedInputArgs;
     const cloudPreflight = await preflightRuntimeCloudHold({
       app,
@@ -708,17 +721,21 @@ export async function handleHttpEndpoint(
         // their server-signed caller context.
         capacityAgentId: app.id,
         idempotencyKey: `http:${receiptId}`,
-        reserveLight: calculateExpectedRuntimeHoldAmount(
-          timeoutMs,
-          cloudPreflight.billingConfig,
-        ),
+        reserveLight: ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
         expiresAt: new Date(Date.now() + timeoutMs + 120_000).toISOString(),
+        usesInference: executionClassification.usesInference,
+        routineId: routineContext?.routineId ?? null,
+        routineRunId: routineContext?.routineRunId ?? null,
         metadata: {
           surface: "http",
           app_id: app.id,
           capacity_agent_id: app.id,
           function_name: functionName,
           receipt_id: receiptId,
+          uses_inference: executionClassification.usesInference,
+          execution_class: "interactive",
+          routine_id: routineContext?.routineId ?? null,
+          routine_run_id: routineContext?.routineRunId ?? null,
         },
       });
       if (!admission.allowed || !admission.reservationId) {
@@ -768,11 +785,7 @@ export async function handleHttpEndpoint(
       routineContext,
       ...(subscriptionCapacityMode
         ? {
-          capacityMeter: {
-            addLight: (amountLight: number) => {
-              capacityOperationLight += Math.max(0, amountLight);
-            },
-          },
+          capacityMeter: capacityResourceMeter,
         }
         : {}),
     });
@@ -821,13 +834,17 @@ export async function handleHttpEndpoint(
           httpPermissions.includes("memory:write"))
       ? createRuntimeMemoryAdapter(caller.userId, app.id)
       : null;
+    const executionId = crypto.randomUUID();
+    const capacityExecutedAt = new Date().toISOString();
+    tenantExecutionAttempted = true;
     const result = await executeInDynamicSandbox(
       {
         appId: app.id,
         userId: httpRuntime.sandboxUserId,
         ownerId: app.owner_id,
         expectedVersion: app.current_version || undefined,
-        executionId: crypto.randomUUID(),
+        executionId,
+        capacityReceiptId: capacityReservation ? receiptId : undefined,
         code,
         permissions: httpPermissions,
         // Read-back only on the HTTP surface: runs.recent works for the
@@ -865,6 +882,29 @@ export async function handleHttpEndpoint(
     );
 
     const durationMs = Date.now() - startTime;
+    let subscriptionCapacityLight: number | undefined;
+    if (capacityReservation) {
+      const capacityResult = await settleOrDeferCapacityAfterExecution({
+        reservationId: capacityReservation.id,
+        userId: capacityReservation.userId,
+        receiptId,
+        executionId,
+        executedAt: capacityExecutedAt,
+        resourceFacts: capacityResourceMeter.snapshot(),
+        workerRequestCount: countCapacityWorkerRequests({
+          dynamicWorkerInvoked: result.dynamicWorkerInvoked === true,
+        }),
+        dynamicWorkerIdentityCreated:
+          result.dynamicWorkerIdentityCreated === true,
+        dynamicWorkerInvoked: result.dynamicWorkerInvoked === true,
+        reuseKeyHash: result.reuseKeyHash,
+        billingConfig: cloudPreflight.billingConfig,
+        surface: "http",
+      });
+      // Preserve subscription-capacity routing while the exact resource
+      // intent is durably retried; never fall through to the legacy wallet.
+      subscriptionCapacityLight = capacityResult.settlement?.totalLight ?? 0;
+    }
     const cloudSettlement = await settleRuntimeCloudPreflight(
       cloudPreflight,
       result.durationMs,
@@ -882,18 +922,6 @@ export async function handleHttpEndpoint(
       undefined,
       result.reuseKeyHash,
     );
-    let subscriptionCapacityLight: number | undefined;
-    if (capacityReservation) {
-      subscriptionCapacityLight = calculateExpectedRuntimeHoldAmount(
-        result.durationMs,
-        cloudPreflight.billingConfig,
-      ) + capacityOperationLight;
-      await settleAccountCapacity({
-        reservationId: capacityReservation.id,
-        userId: capacityReservation.userId,
-        actualLight: subscriptionCapacityLight,
-      });
-    }
 
     const { settlement } = await settleAndLogAppExecution({
       receiptId,
@@ -1010,7 +1038,10 @@ export async function handleHttpEndpoint(
       ),
     );
   } catch (err) {
-    if (capacityReservation) {
+    if (
+      capacityReservation &&
+      shouldReleaseUnstartedCapacityReservation(tenantExecutionAttempted)
+    ) {
       await releaseAccountCapacity({
         reservationId: capacityReservation.id,
         userId: capacityReservation.userId,

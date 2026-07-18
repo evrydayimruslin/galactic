@@ -1,6 +1,6 @@
 {
   "name": "Email Admin",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "type": "mcp",
   "entry": {
     "functions": "index.ts"
@@ -555,6 +555,7 @@
     },
     "conversation_history": {
       "description": "Get full version history for a conversation.",
+      "uses_inference": false,
       "generation_hints": {
         "tags": [
           "email history",
@@ -579,6 +580,7 @@
     },
     "conversations_list": {
       "description": "List conversations filtered by status (active | no_action | resolved | discarded), label key, and/or a guest-email/subject search. Every inbound email is accounted for: no_action holds mail the agent decided needs no reply (still summarized and labeled). Rows are body-free and enriched with priority, recipient proposal, labels, latest version type, and has_unsaved_edit; total is the real filtered count.",
+      "uses_inference": false,
       "generation_hints": {
         "tags": [
           "email",
@@ -627,6 +629,7 @@
     },
     "conventions_get": {
       "description": "Get business conventions/guidelines by key or category",
+      "uses_inference": false,
       "generation_hints": {
         "tags": [
           "faq",
@@ -690,6 +693,7 @@
     },
     "get_language": {
       "description": "Get the configured operator language (default English).",
+      "uses_inference": false,
       "parameters": [],
       "returns": {
         "type": "object"
@@ -835,13 +839,24 @@
       "parameters": []
     },
     "inbox_overview": {
-      "description": "One-call first glance for the Inbox interface: per-status conversation counts, active complaints, quietly-handled-today, mailbox checks today, and the last successful check time."
+      "description": "One-call first glance for the Inbox interface: per-status conversation counts, active complaints, quietly-handled-today, mailbox checks today, and the last successful check time.",
+      "uses_inference": false
+    },
+    "inbox_snapshot": {
+      "description": "Read-only cold-load model for the Inbox interface: overview plus the selected conversation list, with explicit partial results.",
+      "uses_inference": false
     },
     "activity_digest": {
-      "description": "Read-only activity rollup for a window (today | shift = 8h | 7d): mailbox checks, emails arrived, drafts written, replies sent, no-reply decisions grouped by reason, complaint counts, plus capped lists of waiting / sent / no-reply items. Powers the Report interface."
+      "description": "Read-only activity rollup for a window (today | shift = 8h | 7d): mailbox checks, emails arrived, drafts written, replies sent, no-reply decisions grouped by reason, complaint counts, plus capped lists of waiting / sent / no-reply items. Powers the Report interface.",
+      "uses_inference": false
     },
     "knowledge_gaps": {
-      "description": "Open questions the agent could not answer, mined from recent drafts' knowledge gaps and ranked by frequency — minus gaps already answered (via conventions_set answers_gap) or dismissed (gap_dismiss). Returns up to `limit` (default 20) with linked conversation ids."
+      "description": "Open questions the agent could not answer, mined from recent drafts' knowledge gaps and ranked by frequency — minus gaps already answered (via conventions_set answers_gap) or dismissed (gap_dismiss). Returns up to `limit` (default 20) with linked conversation ids.",
+      "uses_inference": false
+    },
+    "teach_snapshot": {
+      "description": "Read-only cold-load model for the Teach interface: knowledge gaps plus conventions, with explicit partial results.",
+      "uses_inference": false
     },
     "gap_dismiss": {
       "description": "Stop surfacing a knowledge gap the operator deliberately won't answer (pass gap_key from knowledge_gaps). undo:true reverses a dismissal."
@@ -854,13 +869,13 @@
       "description": "Review and send the agent's ready-made replies. See what needs you in three seconds, audit what it quietly filed, and teach it mid-reply.",
       "entry": "interfaces/inbox.html",
       "functions": [
+        "inbox_snapshot",
         "conversations_list",
         "conversation_history",
         "conversation_act",
         "check_inbox",
         "inbox_overview",
         "conventions_set",
-        "get_language",
         "set_language"
       ],
       "min_height": 560
@@ -872,10 +887,7 @@
       "entry": "interfaces/report.html",
       "functions": [
         "activity_digest",
-        "conversations_list",
-        "conversation_history",
-        "inbox_overview",
-        "get_language"
+        "conversation_history"
       ],
       "min_height": 480
     },
@@ -885,13 +897,12 @@
       "description": "Answer the agent's open questions and manage what it knows. Every fact you teach permanently improves future drafts.",
       "entry": "interfaces/teach.html",
       "functions": [
-        "knowledge_gaps",
+        "teach_snapshot",
         "gap_dismiss",
         "conventions_get",
         "conventions_set",
         "conversation_history",
         "conversation_act",
-        "get_language",
         "conversations_list"
       ],
       "min_height": 440

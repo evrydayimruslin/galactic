@@ -18,6 +18,42 @@ Deno.test("billing config: defaults encode current credits economics", () => {
   assertEquals(DEFAULT_BILLING_CONFIG.wireMinimumCents, 2500);
   assertEquals(DEFAULT_BILLING_CONFIG.cloudUnitLightPer1k, 1);
   assertEquals(DEFAULT_BILLING_CONFIG.workerMsPerCloudUnit, 250);
+  assertEquals(DEFAULT_BILLING_CONFIG.workerRequestLightPerInvocation, 0.00003);
+  assertEquals(DEFAULT_BILLING_CONFIG.capacityRateCardVersion, 1);
+  assertEquals(DEFAULT_BILLING_CONFIG.capacityD1ReadLightPerMillionRows, 0.1);
+  assertEquals(DEFAULT_BILLING_CONFIG.capacityD1WriteLightPerMillionRows, 100);
+  assertEquals(
+    DEFAULT_BILLING_CONFIG.capacityKvReadLightPerMillionOperations,
+    50,
+  );
+  assertEquals(
+    DEFAULT_BILLING_CONFIG.capacityKvWriteLightPerMillionOperations,
+    500,
+  );
+  assertEquals(
+    DEFAULT_BILLING_CONFIG.capacityKvDeleteLightPerMillionOperations,
+    500,
+  );
+  assertEquals(
+    DEFAULT_BILLING_CONFIG.capacityKvListLightPerMillionOperations,
+    500,
+  );
+  assertEquals(
+    DEFAULT_BILLING_CONFIG.capacityR2ClassALightPerMillionOperations,
+    450,
+  );
+  assertEquals(
+    DEFAULT_BILLING_CONFIG.capacityR2ClassBLightPerMillionOperations,
+    36,
+  );
+  assertEquals(
+    DEFAULT_BILLING_CONFIG.capacityR2DeleteLightPerMillionOperations,
+    0,
+  );
+  assertEquals(
+    DEFAULT_BILLING_CONFIG.capacityQueueLightPerMillionOperations,
+    40,
+  );
   assertEquals(DEFAULT_BILLING_CONFIG.d1ReadRowsPerCloudUnit, 100);
   assertEquals(DEFAULT_BILLING_CONFIG.d1WriteRowsPerCloudUnit, 1);
   assertEquals(DEFAULT_BILLING_CONFIG.r2OpsPerCloudUnit, 1);
@@ -44,6 +80,18 @@ Deno.test("billing config: row normalization falls back only for invalid values"
     wire_minimum_cents: 2500,
     cloud_unit_light_per_1k: 2,
     worker_ms_per_cloud_unit: 500,
+    worker_request_light_per_invocation: 0.00006,
+    capacity_rate_card_version: 2,
+    capacity_d1_read_light_per_million_rows: 0.2,
+    capacity_d1_write_light_per_million_rows: 200,
+    capacity_kv_read_light_per_million_operations: 60,
+    capacity_kv_write_light_per_million_operations: 600,
+    capacity_kv_delete_light_per_million_operations: 610,
+    capacity_kv_list_light_per_million_operations: 620,
+    capacity_r2_class_a_light_per_million_operations: 460,
+    capacity_r2_class_b_light_per_million_operations: 46,
+    capacity_r2_delete_light_per_million_operations: 0,
+    capacity_queue_light_per_million_operations: 45,
     d1_read_rows_per_cloud_unit: 200,
     d1_write_rows_per_cloud_unit: 1,
     r2_ops_per_cloud_unit: 2,
@@ -67,6 +115,18 @@ Deno.test("billing config: row normalization falls back only for invalid values"
   assertEquals(config.wireMinimumCents, 2500);
   assertEquals(config.cloudUnitLightPer1k, 2);
   assertEquals(config.workerMsPerCloudUnit, 500);
+  assertEquals(config.workerRequestLightPerInvocation, 0.00006);
+  assertEquals(config.capacityRateCardVersion, 2);
+  assertEquals(config.capacityD1ReadLightPerMillionRows, 0.2);
+  assertEquals(config.capacityD1WriteLightPerMillionRows, 200);
+  assertEquals(config.capacityKvReadLightPerMillionOperations, 60);
+  assertEquals(config.capacityKvWriteLightPerMillionOperations, 600);
+  assertEquals(config.capacityKvDeleteLightPerMillionOperations, 610);
+  assertEquals(config.capacityKvListLightPerMillionOperations, 620);
+  assertEquals(config.capacityR2ClassALightPerMillionOperations, 460);
+  assertEquals(config.capacityR2ClassBLightPerMillionOperations, 46);
+  assertEquals(config.capacityR2DeleteLightPerMillionOperations, 0);
+  assertEquals(config.capacityQueueLightPerMillionOperations, 45);
   assertEquals(config.d1ReadRowsPerCloudUnit, 200);
   assertEquals(config.r2OpsPerCloudUnit, 2);
   assertEquals(config.storageFreeBytes, 209715200);
@@ -95,6 +155,7 @@ Deno.test("billing config: public shape includes human-readable labels", () => {
   assertEquals(publicConfig.ach_minimum_cents, 2500);
   assertEquals(publicConfig.cloud_unit_light_per_1k, 1);
   assertEquals(publicConfig.worker_ms_per_cloud_unit, 250);
+  assertEquals(publicConfig.worker_request_light_per_invocation, 0.00003);
   assertEquals(publicConfig.storage_free_bytes, 104857600);
   assertEquals(publicConfig.storage_light_per_gb_month, 100);
   assertEquals(publicConfig.publish_deposit_enabled, true);

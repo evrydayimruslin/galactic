@@ -53,7 +53,6 @@ import {
 } from "../services/request-caller-context.ts";
 import { routineTraceContextFromCaller } from "../services/routine-trace.ts";
 import {
-  calculateExpectedRuntimeHoldAmount,
   createRuntimeOperationMeteringContext,
   preflightRuntimeCloudHold,
   settleAndLogAppExecution,
@@ -61,12 +60,18 @@ import {
   settleRuntimeCloudPreflight,
 } from "../services/execution-settlement.ts";
 import {
+  ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
   accountCapacityErrorDetails,
   accountCapacityErrorMessage,
   releaseAccountCapacity,
   reserveAccountCapacity,
-  settleAccountCapacity,
 } from "../services/account-capacity.ts";
+import {
+  countCapacityWorkerRequests,
+  settleOrDeferCapacityAfterExecution,
+  shouldReleaseUnstartedCapacityReservation,
+} from "../services/capacity-settlement-recovery.ts";
+import { createCapacityResourceMeter } from "../services/cloud-usage.ts";
 import { createExecutionReceiptId } from "../services/call-logger.ts";
 import {
   createMemoryService,
@@ -78,6 +83,7 @@ import {
   enforceCallerFunctionPermission,
 } from "../services/caller-function-permissions.ts";
 import { mintCallerContextToken } from "../services/agent-caller-context.ts";
+import { classifyRuntimeExecution } from "../services/execution-classification.ts";
 
 function toLogEntries(lines: string[]): LogEntry[] {
   return lines.map((message) => ({
@@ -127,7 +133,8 @@ export async function handleRun(
   appId: string,
 ): Promise<Response> {
   let capacityReservation: { id: string; userId: string } | null = null;
-  let capacityOperationLight = 0;
+  let tenantExecutionAttempted = false;
+  const capacityResourceMeter = createCapacityResourceMeter();
   try {
     const body: RunRequest = await request.json();
     const { function: functionName, args = [] } = body;
@@ -491,10 +498,14 @@ export async function handleRun(
 
     // ── Deno Sandbox Path ──
     const permissions = resolveStrictManifestPermissions(app).permissions;
-    const usesAi = permissions.includes("ai:call") ||
+    const canUseAi = permissions.includes("ai:call") ||
       permissions.includes("ai:embed");
+    const executionClassification = classifyRuntimeExecution({
+      manifest: app.manifest,
+      functionName,
+    });
     // Per-function provider/model override for this installer's galactic.ai().
-    const inferenceSelection = usesAi
+    const inferenceSelection = permissions.includes("ai:call")
       ? await resolveFunctionInferenceOverride({
         userId,
         appId: app.id,
@@ -504,7 +515,10 @@ export async function handleRun(
     const subscriptionCapacityMode =
       getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
       app.visibility === "private" && app.owner_id === userId;
-    const runtimeAI = usesAi
+    // App permissions authorize the capability. The upload-derived function
+    // classification below controls scheduling/timeout only; it never grants
+    // an undeclared capability.
+    const runtimeAI = canUseAi
       ? await createRuntimeAIContext(user, {
         freeMode: caller.freeMode,
         byokOnly: subscriptionCapacityMode,
@@ -522,14 +536,16 @@ export async function handleRun(
         unavailableReason: "ai:call permission not granted.",
       };
 
-    // Execute in sandbox — AI-capable apps get 120s timeout
+    // Execute in sandbox — only functions whose upload-derived call graph uses
+    // inference receive the longer interactive window. An AI-capable Agent's
+    // unrelated read functions remain ordinary 30-second calls.
     // Dynamic Worker sandbox — avoids `new Function()` restriction on CF Workers
     const { executeInDynamicSandbox } = await import(
       "../runtime/dynamic-sandbox.ts"
     );
     const argsArray = Array.isArray(args) ? args : [args];
     const receiptId = createExecutionReceiptId();
-    const timeoutMs = usesAi ? 120_000 : 30_000;
+    const timeoutMs = executionClassification.timeoutMs;
     const inputArgs =
       typeof args === "object" && args !== null && !Array.isArray(args)
         ? args as Record<string, unknown>
@@ -573,17 +589,21 @@ export async function handleRun(
         // the target Agent starts the capacity-attribution chain.
         capacityAgentId: app.id,
         idempotencyKey: `run:${receiptId}`,
-        reserveLight: calculateExpectedRuntimeHoldAmount(
-          timeoutMs,
-          cloudPreflight.billingConfig,
-        ),
+        reserveLight: ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
         expiresAt: new Date(Date.now() + timeoutMs + 120_000).toISOString(),
+        usesInference: executionClassification.usesInference,
+        routineId: routineContext?.routineId ?? null,
+        routineRunId: routineContext?.routineRunId ?? null,
         metadata: {
           surface: "run",
           app_id: app.id,
           capacity_agent_id: app.id,
           function_name: functionName,
           receipt_id: receiptId,
+          uses_inference: executionClassification.usesInference,
+          execution_class: "interactive",
+          routine_id: routineContext?.routineId ?? null,
+          routine_run_id: routineContext?.routineRunId ?? null,
         },
       });
       if (!admission.allowed || !admission.reservationId) {
@@ -616,11 +636,7 @@ export async function handleRun(
       routineContext,
       ...(subscriptionCapacityMode
         ? {
-          capacityMeter: {
-            addLight: (amountLight: number) => {
-              capacityOperationLight += Math.max(0, amountLight);
-            },
-          },
+          capacityMeter: capacityResourceMeter,
         }
         : {}),
     });
@@ -667,13 +683,17 @@ export async function handleRun(
       ? createRuntimeMemoryAdapter(userId, app.id)
       : null;
 
+    const executionId = crypto.randomUUID();
+    const capacityExecutedAt = new Date().toISOString();
+    tenantExecutionAttempted = true;
     const result = await executeInDynamicSandbox(
       {
         appId: app.id,
         userId,
         ownerId: app.owner_id,
         expectedVersion: app.current_version || undefined,
-        executionId: crypto.randomUUID(),
+        executionId,
+        capacityReceiptId: capacityReservation ? receiptId : undefined,
         code,
         permissions,
         allowedDestinations: getManifestAllowedDestinations(app.manifest),
@@ -703,6 +723,30 @@ export async function handleRun(
       argsArray,
     );
 
+    let subscriptionCapacityLight: number | undefined;
+    if (capacityReservation) {
+      const capacityResult = await settleOrDeferCapacityAfterExecution({
+        reservationId: capacityReservation.id,
+        userId: capacityReservation.userId,
+        receiptId,
+        executionId,
+        executedAt: capacityExecutedAt,
+        resourceFacts: capacityResourceMeter.snapshot(),
+        workerRequestCount: countCapacityWorkerRequests({
+          dynamicWorkerInvoked: result.dynamicWorkerInvoked === true,
+        }),
+        dynamicWorkerIdentityCreated:
+          result.dynamicWorkerIdentityCreated === true,
+        dynamicWorkerInvoked: result.dynamicWorkerInvoked === true,
+        reuseKeyHash: result.reuseKeyHash,
+        billingConfig: cloudPreflight.billingConfig,
+        surface: "run",
+      });
+      // A safely queued settlement still remains subscription-capacity work;
+      // zero is the temporary call-log value and prevents legacy wallet
+      // settlement while the exact resource intent is retried.
+      subscriptionCapacityLight = capacityResult.settlement?.totalLight ?? 0;
+    }
     const cloudSettlement = await settleRuntimeCloudPreflight(
       cloudPreflight,
       result.durationMs,
@@ -720,18 +764,6 @@ export async function handleRun(
       undefined,
       result.reuseKeyHash,
     );
-    let subscriptionCapacityLight: number | undefined;
-    if (capacityReservation) {
-      subscriptionCapacityLight = calculateExpectedRuntimeHoldAmount(
-        result.durationMs,
-        cloudPreflight.billingConfig,
-      ) + capacityOperationLight;
-      await settleAccountCapacity({
-        reservationId: capacityReservation.id,
-        userId: capacityReservation.userId,
-        actualLight: subscriptionCapacityLight,
-      });
-    }
     const { settlement } = await settleAndLogAppExecution({
       receiptId,
       userId,
@@ -787,7 +819,10 @@ export async function handleRun(
 
     return json(response);
   } catch (err) {
-    if (capacityReservation) {
+    if (
+      capacityReservation &&
+      shouldReleaseUnstartedCapacityReservation(tenantExecutionAttempted)
+    ) {
       await releaseAccountCapacity({
         reservationId: capacityReservation.id,
         userId: capacityReservation.userId,

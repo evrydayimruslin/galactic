@@ -34,6 +34,7 @@ import { resolveRequestedModel, shouldRetryWithFallbackModel } from './ai-model-
 // execution to its sandbox abort — bound each provider call independently.
 const AI_FETCH_TIMEOUT_MS = 90_000;
 const AI_MAX_PROVIDER_ATTEMPTS = 2;
+const AI_DEADLINE_SETTLEMENT_HEADROOM_MS = 1_000;
 const AI_BUDGET_SETTLEMENT_MARGIN_MS = 2 * 60_000;
 // Platform ceiling on a single completion. Tenant code passes max_tokens
 // straight through otherwise, maximizing both latency and per-call spend.
@@ -181,6 +182,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     let attributedFunctionName: string | null = null;
     let routineContext: RoutineTraceContext | null =
       this.ctx.props.routineContext ?? null;
+    let executionDeadlineAtMs: number | null = null;
     if (execCtxHandle !== undefined || this.ctx.props.requireExecCtx) {
       const resolvedCtx = resolveExecutionContext(execCtxHandle);
       if (!resolvedCtx) {
@@ -196,6 +198,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       attributedAppId = resolvedCtx.appId ?? attributedAppId;
       attributedFunctionName = resolvedCtx.functionName;
       routineContext = resolvedCtx.routineContext ?? null;
+      executionDeadlineAtMs = resolvedCtx.executionDeadlineAtMs ?? null;
     } else {
       executionId = propExecutionId;
     }
@@ -389,8 +392,19 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     const attempt = async (
       modelToUse: string,
     ): Promise<{ data: CompletionData } | { error: string }> => {
+      const remainingMs = executionDeadlineAtMs === null
+        ? AI_FETCH_TIMEOUT_MS
+        : Math.max(
+          0,
+          executionDeadlineAtMs - Date.now() -
+            AI_DEADLINE_SETTLEMENT_HEADROOM_MS,
+        );
+      const attemptTimeoutMs = Math.min(AI_FETCH_TIMEOUT_MS, remainingMs);
+      if (attemptTimeoutMs <= 0) {
+        return { error: 'AI execution deadline reached before provider call' };
+      }
       const abort = new AbortController();
-      const timeoutId = setTimeout(() => abort.abort(), AI_FETCH_TIMEOUT_MS);
+      const timeoutId = setTimeout(() => abort.abort(), attemptTimeoutMs);
       try {
         const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
           method: 'POST',
@@ -411,7 +425,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       } catch (err) {
         return {
           error: abort.signal.aborted
-            ? `AI call timed out after ${Math.round(AI_FETCH_TIMEOUT_MS / 1000)}s`
+            ? `AI call timed out after ${Math.round(attemptTimeoutMs / 1000)}s`
             : `AI call failed: ${err instanceof Error ? err.message : String(err)}`,
         };
       } finally {

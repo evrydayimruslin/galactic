@@ -146,6 +146,17 @@ export interface UpdateBillingConfigPayload {
   wire_minimum_cents?: number;
   cloud_unit_light_per_1k?: number;
   worker_ms_per_cloud_unit?: number;
+  capacity_rate_card_version?: number;
+  capacity_d1_read_light_per_million_rows?: number;
+  capacity_d1_write_light_per_million_rows?: number;
+  capacity_kv_read_light_per_million_operations?: number;
+  capacity_kv_write_light_per_million_operations?: number;
+  capacity_kv_delete_light_per_million_operations?: number;
+  capacity_kv_list_light_per_million_operations?: number;
+  capacity_r2_class_a_light_per_million_operations?: number;
+  capacity_r2_class_b_light_per_million_operations?: number;
+  capacity_r2_delete_light_per_million_operations?: number;
+  capacity_queue_light_per_million_operations?: number;
   d1_read_rows_per_cloud_unit?: number;
   d1_write_rows_per_cloud_unit?: number;
   r2_ops_per_cloud_unit?: number;
@@ -394,6 +405,23 @@ function normalizePositiveNumber(
     throw new RequestValidationError(
       `${field} must be greater than ${minExclusive}`,
     );
+  }
+  if (value > max) {
+    throw new RequestValidationError(`${field} must be ${max} or less`);
+  }
+  return value;
+}
+
+function normalizeNonNegativeNumber(
+  value: unknown,
+  field: string,
+  max = MAX_POINTS_VALUE,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new RequestValidationError(`${field} must be a number`);
+  }
+  if (value < 0) {
+    throw new RequestValidationError(`${field} must be at least 0`);
   }
   if (value > max) {
     throw new RequestValidationError(`${field} must be ${max} or less`);
@@ -846,6 +874,17 @@ export async function validateUpdateBillingConfigRequest(
       "wire_minimum_cents",
       "cloud_unit_light_per_1k",
       "worker_ms_per_cloud_unit",
+      "capacity_rate_card_version",
+      "capacity_d1_read_light_per_million_rows",
+      "capacity_d1_write_light_per_million_rows",
+      "capacity_kv_read_light_per_million_operations",
+      "capacity_kv_write_light_per_million_operations",
+      "capacity_kv_delete_light_per_million_operations",
+      "capacity_kv_list_light_per_million_operations",
+      "capacity_r2_class_a_light_per_million_operations",
+      "capacity_r2_class_b_light_per_million_operations",
+      "capacity_r2_delete_light_per_million_operations",
+      "capacity_queue_light_per_million_operations",
       "d1_read_rows_per_cloud_unit",
       "d1_write_rows_per_cloud_unit",
       "r2_ops_per_cloud_unit",
@@ -925,6 +964,34 @@ export async function validateUpdateBillingConfigRequest(
       "worker_ms_per_cloud_unit",
       { max: 60_000 },
     );
+  }
+  if (body.capacity_rate_card_version !== undefined) {
+    payload.capacity_rate_card_version = normalizePositiveInteger(
+      body.capacity_rate_card_version,
+      "capacity_rate_card_version",
+      { max: 10_000 },
+    );
+  }
+  const capacityRateFields = [
+    "capacity_d1_read_light_per_million_rows",
+    "capacity_d1_write_light_per_million_rows",
+    "capacity_kv_read_light_per_million_operations",
+    "capacity_kv_write_light_per_million_operations",
+    "capacity_kv_delete_light_per_million_operations",
+    "capacity_kv_list_light_per_million_operations",
+    "capacity_r2_class_a_light_per_million_operations",
+    "capacity_r2_class_b_light_per_million_operations",
+    "capacity_r2_delete_light_per_million_operations",
+    "capacity_queue_light_per_million_operations",
+  ] as const;
+  for (const field of capacityRateFields) {
+    if (body[field] !== undefined) {
+      payload[field] = normalizeNonNegativeNumber(
+        body[field],
+        field,
+        MAX_TOP_UP_LIGHT,
+      );
+    }
   }
   if (body.d1_read_rows_per_cloud_unit !== undefined) {
     payload.d1_read_rows_per_cloud_unit = normalizePositiveInteger(

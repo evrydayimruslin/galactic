@@ -91,6 +91,7 @@ interface WorkerCode {
   modules: Record<string, string>;
   env: Record<string, unknown>;
   globalOutbound?: unknown;
+  tails?: unknown[];
   // Per-isolate resource ceilings (workerd resource limits) — without them a
   // loaded tenant isolate inherits the parent's full CPU/subrequest budget.
   limits?: { cpuMs?: number; subRequests?: number };
@@ -144,10 +145,12 @@ export function getEnv(key?: string): Env | string {
  * 1042), and binding hops are free of per-request fees. Use synthetic URLs
  * like https://internal/mcp/{appId} — routing is by pathname.
  */
-export function getSelfFetcher(): ((
-  input: RequestInfo | URL,
-  init?: RequestInit,
-) => Promise<Response>) | null {
+export function getSelfFetcher():
+  | ((
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response>)
+  | null {
   const self = globalThis.__env?.SELF;
   if (
     self && typeof self === "object" &&
@@ -191,4 +194,13 @@ export function getExecQueue(): QueueProducer | null {
  */
 export function getEventQueue(): QueueProducer | null {
   return getQueueProducer("EVENT_QUEUE");
+}
+
+/**
+ * Capacity telemetry/recovery queue producer. Cloudflare Tail observations and
+ * compact post-execution settlement intents share this durable queue; its
+ * consumer discriminates their versioned message shapes.
+ */
+export function getCapacityTelemetryQueue(): QueueProducer | null {
+  return getQueueProducer("CAPACITY_TELEMETRY_QUEUE");
 }

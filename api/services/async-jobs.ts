@@ -5,14 +5,14 @@
 // pipeline, and finishes it 'completed'/'failed'. State lives in Supabase;
 // the queue message carries only { jobId }.
 
-import { getEnv } from '../lib/env.ts';
+import { getEnv } from "../lib/env.ts";
 
 function supabaseHeaders() {
   return {
-    'apikey': getEnv('SUPABASE_SERVICE_ROLE_KEY'),
-    'Authorization': `Bearer ${getEnv('SUPABASE_SERVICE_ROLE_KEY')}`,
-    'Content-Type': 'application/json',
-    'Prefer': 'return=representation',
+    "apikey": getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+    "Authorization": `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+    "Content-Type": "application/json",
+    "Prefer": "return=representation",
   };
 }
 
@@ -39,7 +39,7 @@ export interface AsyncJob {
   user_id: string;
   owner_id: string;
   function_name: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: "queued" | "running" | "completed" | "failed";
   args: Record<string, unknown>;
   caller_app_id: string | null;
   caller_grant_id: string | null;
@@ -57,6 +57,130 @@ export interface AsyncJob {
   expires_at: string;
   meta: Record<string, unknown>;
   created_at: string;
+}
+
+interface AsyncJobQueueOperationCounts {
+  /** Prior capacity deferrals that completed a normal broker cycle. */
+  deferredCycles: number;
+  /** Prior cycles plus the currently claimed delivery. */
+  deliveryCycles: number;
+  write: number;
+  read: number;
+  delete: number;
+  total: number;
+}
+
+interface AsyncJobDeferredSchedule {
+  jobId: string;
+  nextDeliveryAt: string;
+  deferGeneration: number | null;
+}
+
+function nonNegativeInteger(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : 0;
+}
+
+export function nextAsyncJobDeferGeneration(
+  job: Pick<AsyncJob, "meta">,
+): number {
+  return nonNegativeInteger(job.meta?.capacity_defer_count) + 1;
+}
+
+/**
+ * Exact normal-path Queue operations attributable to a claimed async EXEC.
+ * A cycle is one producer write, one consumer read, and one ack/delete. Each
+ * structured capacity deferral completes that cycle and schedules the next;
+ * the current claim contributes the final cycle that will settle with the
+ * execution. Broker redeliveries after crashes/ambiguous sends are excluded
+ * because they cannot be proven from the durable job row.
+ */
+export function asyncJobQueueOperationCounts(
+  job: Pick<AsyncJob, "meta">,
+): AsyncJobQueueOperationCounts {
+  const deferredCycles = nonNegativeInteger(job.meta?.capacity_defer_count);
+  const deliveryCycles = deferredCycles + 1;
+  return {
+    deferredCycles,
+    deliveryCycles,
+    write: deliveryCycles,
+    read: deliveryCycles,
+    delete: deliveryCycles,
+    total: deliveryCycles * 3,
+  };
+}
+
+/** Attach the trusted Queue fact envelope consumed by capacity settlement. */
+export function withAsyncJobQueueOperationCounts(job: AsyncJob): AsyncJob {
+  const counts = asyncJobQueueOperationCounts(job);
+  return {
+    ...job,
+    meta: {
+      ...(job.meta || {}),
+      capacity_queue_deferred_cycles: counts.deferredCycles,
+      capacity_queue_delivery_cycles: counts.deliveryCycles,
+      capacity_queue_operations: {
+        write: counts.write,
+        read: counts.read,
+        delete: counts.delete,
+        total: counts.total,
+      },
+    },
+  };
+}
+
+interface AsyncJobAdmissionWait {
+  code:
+    | "capacity_waiting"
+    | "agent_cap_waiting"
+    | "concurrency_waiting";
+  retryAt: string;
+  message: string;
+  details?: Record<string, unknown> | null;
+}
+
+interface AsyncJobAdmissionStatus {
+  code: AsyncJobAdmissionWait["code"];
+  retryAt: string;
+  nextAttemptAt: string | null;
+  scope: "account" | "agent" | "ai" | "routine" | null;
+  message: string | null;
+}
+
+export function asyncJobAdmissionStatus(
+  job: Pick<AsyncJob, "status" | "meta">,
+): AsyncJobAdmissionStatus | null {
+  if (job.status !== "queued") return null;
+  const code = job.meta?.capacity_wait_code;
+  const retryAt = job.meta?.capacity_retry_at;
+  if (
+    (code !== "capacity_waiting" && code !== "agent_cap_waiting" &&
+      code !== "concurrency_waiting") ||
+    typeof retryAt !== "string" || !Number.isFinite(Date.parse(retryAt))
+  ) return null;
+  const details = job.meta?.capacity_wait_details;
+  const scopeValue = details && typeof details === "object"
+    ? (details as Record<string, unknown>).concurrency_scope ??
+      (details as Record<string, unknown>).binding_constraint
+    : null;
+  const scope = scopeValue === "account" || scopeValue === "agent" ||
+      scopeValue === "ai" || scopeValue === "routine"
+    ? scopeValue
+    : null;
+  const nextAttempt = job.meta?.capacity_next_delivery_at;
+  return {
+    code,
+    retryAt,
+    nextAttemptAt: typeof nextAttempt === "string" &&
+        Number.isFinite(Date.parse(nextAttempt))
+      ? nextAttempt
+      : null,
+    scope,
+    message: typeof job.meta?.capacity_wait_message === "string"
+      ? job.meta.capacity_wait_message
+      : null,
+  };
 }
 
 // Lazily initialized: Workers reject scripts that generate random values in
@@ -91,8 +215,8 @@ export async function createQueuedJob(params: {
 }): Promise<string> {
   const jobId = crypto.randomUUID();
 
-  const res = await fetch(`${getEnv('SUPABASE_URL')}/rest/v1/async_jobs`, {
-    method: 'POST',
+  const res = await fetch(`${getEnv("SUPABASE_URL")}/rest/v1/async_jobs`, {
+    method: "POST",
     headers: supabaseHeaders(),
     body: JSON.stringify({
       id: jobId,
@@ -100,7 +224,7 @@ export async function createQueuedJob(params: {
       user_id: params.userId,
       owner_id: params.ownerId,
       function_name: params.functionName,
-      status: 'queued',
+      status: "queued",
       args: params.args ?? {},
       caller_app_id: params.callerAppId ?? null,
       caller_grant_id: params.callerGrantId ?? null,
@@ -108,7 +232,15 @@ export async function createQueuedJob(params: {
       // Reused as the sandbox executionId on claim, linking job <-> receipt
       // <-> AI-spend ledger.
       execution_id: crypto.randomUUID(),
-      meta: params.meta || {},
+      meta: {
+        ...(params.meta || {}),
+        // A durable queued row starts with one accepted producer write. The
+        // consumer replaces this projection with the complete normal delivery
+        // cycles before invoking the execution pipeline.
+        capacity_queue_deferred_cycles: 0,
+        capacity_queue_delivery_cycles: 0,
+        capacity_queue_operations: { write: 1, read: 0, delete: 0, total: 1 },
+      },
     }),
   });
 
@@ -125,14 +257,28 @@ export async function createQueuedJob(params: {
  * claimed row, or null when the job was already claimed/terminal — the
  * consumer's at-least-once duplicate-delivery guard.
  */
-export async function claimQueuedJob(jobId: string): Promise<AsyncJob | null> {
+export async function claimQueuedJob(
+  jobId: string,
+  options: { deferGeneration?: number | null; now?: Date } = {},
+): Promise<AsyncJob | null> {
+  const deferGeneration = Number.isSafeInteger(options.deferGeneration) &&
+      Number(options.deferGeneration) > 0
+    ? Math.floor(Number(options.deferGeneration))
+    : null;
+  const nowIso = (options.now ?? new Date()).toISOString();
+  const generationFilter = deferGeneration === null
+    ? "meta->>capacity_defer_generation=is.null"
+    : `meta->>capacity_defer_generation=eq.${deferGeneration}`;
   const res = await fetch(
-    `${getEnv('SUPABASE_URL')}/rest/v1/async_jobs?id=eq.${jobId}&status=eq.queued`,
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?id=eq.${jobId}&status=eq.queued&${generationFilter}` +
+      `&or=(started_at.is.null,started_at.lte.${nowIso})`,
     {
-      method: 'PATCH',
+      method: "PATCH",
       headers: supabaseHeaders(),
       body: JSON.stringify({
-        status: 'running',
+        status: "running",
         started_at: new Date().toISOString(),
         server_instance: getServerInstance(),
       }),
@@ -146,22 +292,64 @@ export async function claimQueuedJob(jobId: string): Promise<AsyncJob | null> {
   return Array.isArray(rows) && rows[0] ? rows[0] : null;
 }
 
+/**
+ * Read a queued admission deferral that the current broker message was not
+ * authorized to claim. A predecessor retry can use this to (re)schedule the
+ * generation-specific delayed message instead of hot-running before reset.
+ */
+export async function getQueuedJobDeferredSchedule(
+  jobId: string,
+): Promise<AsyncJobDeferredSchedule | null> {
+  const res = await fetch(
+    `${getEnv("SUPABASE_URL")}/rest/v1/async_jobs?id=eq.${jobId}` +
+      "&status=eq.queued&select=id,started_at,meta&limit=1",
+    { headers: supabaseHeaders() },
+  );
+  if (!res.ok) {
+    const err = await res.text().catch(() => res.statusText);
+    throw new Error(`Failed to read deferred job ${jobId}: ${err}`);
+  }
+  const rows = await res.json().catch(() => []) as Array<{
+    id?: unknown;
+    started_at?: unknown;
+    meta?: Record<string, unknown> | null;
+  }>;
+  const row = Array.isArray(rows) ? rows[0] : null;
+  if (!row || typeof row.id !== "string") return null;
+  const meta = row.meta && typeof row.meta === "object" ? row.meta : {};
+  const nextDeliveryAt = typeof meta.capacity_next_delivery_at === "string"
+    ? meta.capacity_next_delivery_at
+    : typeof row.started_at === "string"
+    ? row.started_at
+    : null;
+  if (
+    typeof meta.capacity_wait_code !== "string" || !nextDeliveryAt ||
+    !Number.isFinite(Date.parse(nextDeliveryAt))
+  ) return null;
+  const rawGeneration = meta.capacity_defer_generation;
+  const generation = Number.isSafeInteger(rawGeneration) &&
+      Number(rawGeneration) > 0
+    ? Math.floor(Number(rawGeneration))
+    : null;
+  return { jobId: row.id, nextDeliveryAt, deferGeneration: generation };
+}
+
 // Normalize a failed execution's error payload to failJob's {type, message}
 // shape (the `error` column is jsonb; ul.job surfaces it verbatim).
 function serializeJobError(value: unknown): { type: string; message: string } {
-  if (value && typeof value === 'object') {
+  if (value && typeof value === "object") {
     const v = value as { type?: unknown; message?: unknown };
     return {
-      type: typeof v.type === 'string' && v.type ? v.type : 'ExecutionError',
-      message: typeof v.message === 'string' && v.message
+      type: typeof v.type === "string" && v.type ? v.type : "ExecutionError",
+      message: typeof v.message === "string" && v.message
         ? v.message
         : JSON.stringify(value),
     };
   }
   return {
-    type: 'ExecutionError',
+    type: "ExecutionError",
     message: value === null || value === undefined
-      ? 'Execution failed'
+      ? "Execution failed"
       : String(value),
   };
 }
@@ -187,13 +375,13 @@ export async function completeJob(jobId: string, result: {
       storedResult = { _r2: true, key: resultR2Key, size: serialized.length };
     }
   } catch {
-    storedResult = { _error: 'Result could not be serialized' };
+    storedResult = { _error: "Result could not be serialized" };
   }
 
   const updatePayload: Record<string, unknown> = {
     // A failed execution is a FAILED job — writing 'completed' here made
     // ul.job report success with a null result and a hidden error.
-    status: result.success ? 'completed' : 'failed',
+    status: result.success ? "completed" : "failed",
     result: storedResult,
     result_r2_key: resultR2Key,
     error: result.success ? null : serializeJobError(result.result),
@@ -204,37 +392,44 @@ export async function completeJob(jobId: string, result: {
   };
 
   const res = await fetch(
-    `${getEnv('SUPABASE_URL')}/rest/v1/async_jobs?id=eq.${jobId}`,
+    `${getEnv("SUPABASE_URL")}/rest/v1/async_jobs?id=eq.${jobId}`,
     {
-      method: 'PATCH',
+      method: "PATCH",
       headers: supabaseHeaders(),
       body: JSON.stringify(updatePayload),
-    }
+    },
   );
 
   if (!res.ok) {
-    console.error(`[ASYNC-JOBS] Failed to complete job ${jobId}:`, await res.text().catch(() => ''));
+    console.error(
+      `[ASYNC-JOBS] Failed to complete job ${jobId}:`,
+      await res.text().catch(() => ""),
+    );
   }
 }
 
 /** Fail a job */
-export async function failJob(jobId: string, error: {
-  type: string;
-  message: string;
-}, durationMs: number, extras?: {
-  // AI calls that completed before the failure were still billed — keep the
-  // spend (and logs) on the row so ul.job reports the truth.
-  aiCostLight?: number;
-  logs?: unknown[];
-}): Promise<void> {
-
+export async function failJob(
+  jobId: string,
+  error: {
+    type: string;
+    message: string;
+  },
+  durationMs: number,
+  extras?: {
+    // AI calls that completed before the failure were still billed — keep the
+    // spend (and logs) on the row so ul.job reports the truth.
+    aiCostLight?: number;
+    logs?: unknown[];
+  },
+): Promise<void> {
   const res = await fetch(
-    `${getEnv('SUPABASE_URL')}/rest/v1/async_jobs?id=eq.${jobId}`,
+    `${getEnv("SUPABASE_URL")}/rest/v1/async_jobs?id=eq.${jobId}`,
     {
-      method: 'PATCH',
+      method: "PATCH",
       headers: supabaseHeaders(),
       body: JSON.stringify({
-        status: 'failed',
+        status: "failed",
         error,
         duration_ms: durationMs,
         completed_at: new Date().toISOString(),
@@ -243,11 +438,14 @@ export async function failJob(jobId: string, error: {
           : {}),
         ...(extras?.logs ? { logs: extras.logs.slice(0, 100) } : {}),
       }),
-    }
+    },
   );
 
   if (!res.ok) {
-    console.error(`[ASYNC-JOBS] Failed to fail job ${jobId}:`, await res.text().catch(() => ''));
+    console.error(
+      `[ASYNC-JOBS] Failed to fail job ${jobId}:`,
+      await res.text().catch(() => ""),
+    );
   }
 }
 
@@ -265,12 +463,14 @@ export async function reclaimJobForSyncFallback(
   error: { type: string; message: string },
 ): Promise<boolean> {
   const res = await fetch(
-    `${getEnv('SUPABASE_URL')}/rest/v1/async_jobs?id=eq.${jobId}&status=eq.queued`,
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?id=eq.${jobId}&status=eq.queued`,
     {
-      method: 'PATCH',
+      method: "PATCH",
       headers: supabaseHeaders(),
       body: JSON.stringify({
-        status: 'failed',
+        status: "failed",
         error,
         duration_ms: 0,
         completed_at: new Date().toISOString(),
@@ -282,7 +482,7 @@ export async function reclaimJobForSyncFallback(
     // only safe answer is "don't run it here".
     console.error(
       `[ASYNC-JOBS] Reclaim failed for job ${jobId}:`,
-      await res.text().catch(() => ''),
+      await res.text().catch(() => ""),
     );
     return false;
   }
@@ -301,12 +501,14 @@ export async function failJobIfActive(jobId: string, error: {
   message: string;
 }, durationMs: number): Promise<void> {
   const res = await fetch(
-    `${getEnv('SUPABASE_URL')}/rest/v1/async_jobs?id=eq.${jobId}&status=in.(queued,running)`,
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?id=eq.${jobId}&status=in.(queued,running)`,
     {
-      method: 'PATCH',
+      method: "PATCH",
       headers: supabaseHeaders(),
       body: JSON.stringify({
-        status: 'failed',
+        status: "failed",
         error,
         duration_ms: durationMs,
         completed_at: new Date().toISOString(),
@@ -316,16 +518,88 @@ export async function failJobIfActive(jobId: string, error: {
   if (!res.ok) {
     console.error(
       `[ASYNC-JOBS] Failed to fail job ${jobId}:`,
-      await res.text().catch(() => ''),
+      await res.text().catch(() => ""),
     );
   }
 }
 
-/** Get a job by ID (user-scoped for security) */
-export async function getJob(jobId: string, userId: string): Promise<AsyncJob | null> {
+/**
+ * Return a claimed job to the durable queue after a structured admission
+ * denial proves tenant code never started. This is the sole safe post-claim
+ * retry lane: ordinary failures may already have side effects and remain
+ * terminal. `started_at` temporarily carries the next broker delivery time
+ * while status=queued, so the stale-job sweep does not kill a legitimate
+ * multi-hour capacity wait before its delayed message arrives.
+ */
+export async function deferJobAfterAdmission(
+  job: AsyncJob,
+  wait: AsyncJobAdmissionWait,
+  nextDeliveryAt: string,
+): Promise<boolean> {
+  const previousCount = nonNegativeInteger(job.meta?.capacity_defer_count);
+  const deferGeneration = previousCount + 1;
+  const retryAtMs = Date.parse(wait.retryAt);
+  const currentExpiryMs = Date.parse(job.expires_at || "");
+  const extendedExpiry = Number.isFinite(retryAtMs)
+    ? new Date(Math.max(
+      Number.isFinite(currentExpiryMs) ? currentExpiryMs : 0,
+      retryAtMs + 60 * 60_000,
+    )).toISOString()
+    : job.expires_at;
   const res = await fetch(
-    `${getEnv('SUPABASE_URL')}/rest/v1/async_jobs?id=eq.${jobId}&user_id=eq.${userId}&select=*`,
-    { headers: supabaseHeaders() }
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?id=eq.${job.id}&status=eq.running`,
+    {
+      method: "PATCH",
+      headers: supabaseHeaders(),
+      body: JSON.stringify({
+        status: "queued",
+        // On a queued admission wait this is the next expected broker attempt,
+        // not an execution start. claimQueuedJob overwrites it before running.
+        started_at: nextDeliveryAt,
+        server_instance: null,
+        completed_at: null,
+        error: null,
+        ...(extendedExpiry ? { expires_at: extendedExpiry } : {}),
+        meta: {
+          ...(job.meta || {}),
+          capacity_defer_count: previousCount + 1,
+          capacity_queue_deferred_cycles: previousCount + 1,
+          // Delayed messages carry this generation. A retry of the predecessor
+          // message has no matching generation and therefore cannot claim the
+          // row early; it can only repair/reschedule this delayed delivery.
+          capacity_defer_generation: deferGeneration,
+          capacity_wait_code: wait.code,
+          capacity_retry_at: wait.retryAt,
+          capacity_next_delivery_at: nextDeliveryAt,
+          capacity_wait_message: wait.message,
+          ...(wait.details ? { capacity_wait_details: wait.details } : {}),
+        },
+      }),
+    },
+  );
+  if (!res.ok) {
+    console.error(
+      `[ASYNC-JOBS] Failed to defer job ${job.id}:`,
+      await res.text().catch(() => ""),
+    );
+    return false;
+  }
+  const rows = await res.json().catch(() => []) as unknown[];
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+/** Get a job by ID (user-scoped for security) */
+export async function getJob(
+  jobId: string,
+  userId: string,
+): Promise<AsyncJob | null> {
+  const res = await fetch(
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?id=eq.${jobId}&user_id=eq.${userId}&select=*`,
+    { headers: supabaseHeaders() },
   );
 
   if (!res.ok) return null;
@@ -334,11 +608,11 @@ export async function getJob(jobId: string, userId: string): Promise<AsyncJob | 
   if (!job) return null;
 
   // If result was offloaded to R2, fetch it
-  if (job.status === 'completed' && job.result_r2_key) {
+  if (job.status === "completed" && job.result_r2_key) {
     try {
       job.result = await loadResultFromR2(job.result_r2_key);
     } catch {
-      job.result = { _error: 'Failed to load result from storage' };
+      job.result = { _error: "Failed to load result from storage" };
     }
   }
 
@@ -358,11 +632,17 @@ export async function cleanupStaleJobs(): Promise<number> {
   const staleFilter = `or=(` +
     `and(status.eq.running,started_at.lt.${runningCutoff}),` +
     `and(status.eq.running,started_at.is.null,created_at.lt.${runningCutoff}),` +
-    `and(status.eq.queued,created_at.lt.${queuedCutoff}))`;
+    // Ordinary queued rows have started_at=null. Admission-deferred rows use
+    // started_at as their next expected delivery and get the same one-hour
+    // grace after that time before the lost-message backstop can fail them.
+    `and(status.eq.queued,created_at.lt.${queuedCutoff},` +
+    `or(started_at.is.null,started_at.lt.${queuedCutoff})))`;
 
   // Cheap probe first — the minute cron must not issue a blind write per tick.
   const probe = await fetch(
-    `${getEnv('SUPABASE_URL')}/rest/v1/async_jobs?${staleFilter}&select=id&limit=200`,
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?${staleFilter}&select=id&limit=200`,
     { headers: supabaseHeaders() },
   );
   if (!probe.ok) return 0;
@@ -372,18 +652,20 @@ export async function cleanupStaleJobs(): Promise<number> {
   // The write re-applies the FULL staleness filter, not just a status check:
   // a queued job claimed between probe and PATCH gets a fresh started_at and
   // must not be failed by a sweep that probed it under its old status.
-  const ids = stale.map((row) => row.id).join(',');
+  const ids = stale.map((row) => row.id).join(",");
   const res = await fetch(
-    `${getEnv('SUPABASE_URL')}/rest/v1/async_jobs?id=in.(${ids})&${staleFilter}`,
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?id=in.(${ids})&${staleFilter}`,
     {
-      method: 'PATCH',
-      headers: { ...supabaseHeaders(), 'Prefer': 'return=headers-only' },
+      method: "PATCH",
+      headers: { ...supabaseHeaders(), "Prefer": "return=headers-only" },
       body: JSON.stringify({
-        status: 'failed',
+        status: "failed",
         error: {
-          type: 'ServerTimeout',
+          type: "ServerTimeout",
           message:
-            'Execution exceeded its window or was never picked up (worker restart or lost queue message)',
+            "Execution exceeded its window or was never picked up (worker restart or lost queue message)",
         },
         completed_at: new Date().toISOString(),
       }),
@@ -396,25 +678,26 @@ export async function cleanupStaleJobs(): Promise<number> {
 
 /** R2 storage helpers for large results */
 async function storeResultInR2(key: string, value: unknown): Promise<void> {
-  const WORKER_URL = getEnv('WORKER_URL');
+  const WORKER_URL = getEnv("WORKER_URL");
   if (!WORKER_URL) {
-    console.error('[ASYNC-JOBS] No WORKER_URL configured for R2 storage');
+    console.error("[ASYNC-JOBS] No WORKER_URL configured for R2 storage");
     return;
   }
 
   await fetch(`${WORKER_URL}/r2/store`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ key, value }),
   });
 }
 
 async function loadResultFromR2(key: string): Promise<unknown> {
-  const WORKER_URL = getEnv('WORKER_URL');
+  const WORKER_URL = getEnv("WORKER_URL");
   if (!WORKER_URL) return null;
 
-  const res = await fetch(`${WORKER_URL}/r2/load?key=${encodeURIComponent(key)}`);
+  const res = await fetch(
+    `${WORKER_URL}/r2/load?key=${encodeURIComponent(key)}`,
+  );
   if (!res.ok) return null;
   return res.json();
 }
-

@@ -53,7 +53,6 @@ import {
   isGpuSupportEnabled,
 } from "../services/gpu/feature-flag.ts";
 import {
-  calculateExpectedRuntimeHoldAmount,
   createRuntimeOperationMeteringContext,
   debitWidgetPullUsage,
   preflightRuntimeCloudHold,
@@ -62,12 +61,21 @@ import {
   settleRuntimeCloudPreflight,
 } from "../services/execution-settlement.ts";
 import {
+  ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
   accountCapacityErrorDetails,
   accountCapacityErrorMessage,
   releaseAccountCapacity,
   reserveAccountCapacity,
-  settleAccountCapacity,
 } from "../services/account-capacity.ts";
+import {
+  countCapacityWorkerRequests,
+  settleOrDeferCapacityAfterExecution,
+  shouldReleaseUnstartedCapacityReservation,
+} from "../services/capacity-settlement-recovery.ts";
+import {
+  addCapacityQueueOperationEnvelope,
+  createCapacityResourceMeter,
+} from "../services/cloud-usage.ts";
 import {
   type AgenticSurfaceActionCallMetadata,
   createExecutionReceiptId,
@@ -125,6 +133,7 @@ import {
   AGENT_CALLER_CONTEXT_HEADER,
   MAX_AGENT_CALL_HOP_DEPTH,
 } from "../../shared/contracts/agent-grants.ts";
+import { classifyRuntimeExecution } from "../services/execution-classification.ts";
 import type {
   MCPContent,
   MCPJsonSchema,
@@ -754,6 +763,15 @@ const SDK_TOOLS: MCPTool[] = [
 export async function handleMcp(
   request: Request,
   appId: string,
+  internalCapacityAttribution?: {
+    /**
+     * Trusted Queue facts supplied only by an in-process platform consumer.
+     * This is deliberately not parsed from HTTP headers or JSON-RPC params.
+     */
+    capacityQueueOperations?: unknown;
+    /** Owns the surrounding Queue consumer's one Standard Worker request. */
+    capacityRootWorkerRequest?: boolean;
+  },
 ): Promise<Response> {
   const method = request.method;
 
@@ -1186,6 +1204,7 @@ export async function handleMcp(
           user,
           request,
           callerContext,
+          internalCapacityAttribution,
         );
 
       case "resources/list":
@@ -1648,6 +1667,10 @@ async function handleToolsCall(
   user: UserContext | null,
   request: Request,
   callerContext: RequestCallerContext,
+  internalCapacityAttribution?: {
+    capacityQueueOperations?: unknown;
+    capacityRootWorkerRequest?: boolean;
+  },
 ): Promise<Response> {
   // Validate params
   const callParams = params as MCPToolCallRequest | undefined;
@@ -2039,6 +2062,10 @@ async function handleToolsCall(
       incomingHop: callerContext.callerApp?.hop ?? 0,
       capacityAgentId: callerContext.callerApp?.capacityAgentId ||
         callerContext.routineActor?.composerAppId || app.id,
+      capacityQueueOperations: internalCapacityAttribution
+        ?.capacityQueueOperations,
+      capacityRootWorkerRequest:
+        internalCapacityAttribution?.capacityRootWorkerRequest === true,
     },
   );
 }
@@ -2304,17 +2331,25 @@ async function executeSDKTool(
           result = { error: "Missing required: job_id" };
           break;
         }
-        const { getJob } = await import("../services/async-jobs.ts");
+        const { asyncJobAdmissionStatus, getJob } = await import(
+          "../services/async-jobs.ts"
+        );
         const job = await getJob(jobId, userId);
         if (!job) {
           result = { error: `Job ${jobId} not found` };
           break;
         }
         if (job.status === "queued") {
+          const admissionWait = asyncJobAdmissionStatus(job);
           result = {
             job_id: jobId,
             status: "queued",
-            message: "Waiting to be picked up. Poll again in a few seconds.",
+            ...(admissionWait ? { admission_wait: admissionWait } : {}),
+            message: admissionWait
+              ? `${
+                admissionWait.message || "Execution is waiting for capacity"
+              } It will resume automatically.`
+              : "Waiting to be picked up. Poll again in a few seconds.",
           };
         } else if (job.status === "running") {
           const elapsed = Date.now() - new Date(job.created_at).getTime();
@@ -2530,11 +2565,19 @@ async function executeAppFunction(
     executionId?: string;
     // Queue-consumer executions run with an extended sandbox budget.
     executionTimeoutMs?: number;
+    // Trusted normal-path EXEC Queue write/read/delete totals reconstructed by
+    // the consumer from the durable job's deferral count.
+    capacityQueueOperations?: unknown;
+    // True when this in-process delivery owns the one billed Standard Worker
+    // request for its surrounding queue invocation. Service-bound nested Agent
+    // calls remain request-free; every Dynamic Worker fetch is still counted.
+    capacityRootWorkerRequest?: boolean;
   },
 ): Promise<Response> {
   let accountCapacityReservationId: string | null = null;
-  let accountCapacityActualLight = 0;
-  let accountCapacityOperationLight = 0;
+  let accountCapacityActualLight: number | undefined;
+  let tenantExecutionAttempted = false;
+  const capacityResourceMeter = createCapacityResourceMeter();
   try {
     // The reserved _async argument is platform routing, never function input —
     // strip it before ANY execution branch (GPU included) sees the args.
@@ -2709,7 +2752,6 @@ async function executeAppFunction(
       }
       : null;
 
-    // AI-capable apps get a longer timeout (120s) since AI calls are inherently slow
     const permissions = resolveStrictManifestPermissions(app).permissions;
     const manifestDependencies = resolveRuntimeAppCallDependencies(
       app,
@@ -2717,11 +2759,13 @@ async function executeAppFunction(
     );
     // The token must remain valid for an outbound call made at the very end
     // of the sandbox lifetime (queued executions may run for five minutes).
-    const timeoutMs = meta?.executionTimeoutMs
-      ? Math.min(meta.executionTimeoutMs, MAX_ASYNC_EXECUTION_MS)
-      : permissions.includes("ai:call") || permissions.includes("ai:embed")
-      ? 120_000
-      : 30_000;
+    const executionClassification = classifyRuntimeExecution({
+      manifest: app.manifest,
+      functionName,
+      executionTimeoutMs: meta?.executionTimeoutMs,
+      maxExecutionTimeoutMs: MAX_ASYNC_EXECUTION_MS,
+    });
+    const timeoutMs = executionClassification.timeoutMs;
     // P5: a user's active cross-Agent grants (and slot bindings) let granted
     // calls be EXPRESSED in-sandbox even when the developer never declared
     // them; the target still authorizes each call via the grant check. One
@@ -2758,9 +2802,9 @@ async function executeAppFunction(
       }
     }
     const appCallDependencies = [...manifestDependencies, ...grantDependencies];
-    // Queue-consumer executions (meta.executionTimeoutMs) get an extended
-    // budget, hard-capped at the platform ceiling; sync requests keep the
-    // 120s (AI) / 30s windows. The same value sizes the cloud-usage hold.
+    // Queue consumers keep their authorized extended budget. Interactive calls
+    // are classified per function, so an AI-capable Agent's read functions do
+    // not inherit the 120-second inference window.
     const inferenceSelection = permissions.includes("ai:call")
       ? await resolveFunctionInferenceOverride({
         userId,
@@ -2849,6 +2893,13 @@ async function executeAppFunction(
           slotBindings,
         }).eligible,
     });
+    if (subscriptionCapacityMode && meta?.capacityQueueOperations) {
+      addCapacityQueueOperationEnvelope(
+        capacityResourceMeter,
+        meta.capacityQueueOperations,
+        cloudPreflight.billingConfig,
+      );
+    }
     if (cloudPreflight.insufficientBalance) {
       const widgetBalanceMessage = widgetPull
         ? cloudPreflight.insufficientBalanceCode ===
@@ -2880,10 +2931,6 @@ async function executeAppFunction(
     }
 
     if (subscriptionCapacityMode) {
-      const reserveLight = calculateExpectedRuntimeHoldAmount(
-        timeoutMs,
-        cloudPreflight.billingConfig,
-      );
       const admission = await reserveAccountCapacity({
         userId,
         capacityAgentId: meta?.capacityAgentId ||
@@ -2893,8 +2940,11 @@ async function executeAppFunction(
         // key made all downstream calls alias the root call's reservation and
         // silently under-admit multi-call routine chains.
         idempotencyKey: `execution:${executionId}`,
-        reserveLight,
+        reserveLight: ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
         expiresAt: new Date(Date.now() + timeoutMs + 120_000).toISOString(),
+        usesInference: executionClassification.usesInference,
+        routineId: meta?.routineContext?.routineId ?? null,
+        routineRunId: meta?.routineContext?.routineRunId ?? null,
         metadata: {
           app_id: app.id,
           function_name: functionName,
@@ -2904,6 +2954,8 @@ async function executeAppFunction(
             callerContext.routineActor?.composerAppId || app.id,
           routine_id: meta?.routineContext?.routineId ?? null,
           routine_run_id: meta?.routineContext?.routineRunId ?? null,
+          uses_inference: executionClassification.usesInference,
+          execution_class: meta?.executionTimeoutMs ? "async" : "interactive",
         },
       });
       if (!admission.allowed || !admission.reservationId) {
@@ -2981,11 +3033,7 @@ async function executeAppFunction(
       routineContext: meta?.routineContext,
       ...(subscriptionCapacityMode
         ? {
-          capacityMeter: {
-            addLight: (amountLight: number) => {
-              accountCapacityOperationLight += Math.max(0, amountLight);
-            },
-          },
+          capacityMeter: capacityResourceMeter,
         }
         : {}),
     });
@@ -3020,6 +3068,7 @@ async function executeAppFunction(
       ownerId: app.owner_id,
       expectedVersion: app.current_version || undefined,
       executionId,
+      capacityReceiptId: accountCapacityReservationId ? receiptId : undefined,
       // Unused by the dynamic sandbox (it executes the KV ESM bundle); kept
       // only to satisfy RuntimeConfig until the legacy Deno path is removed.
       code: "",
@@ -3061,6 +3110,8 @@ async function executeAppFunction(
         logs: Array<{ time: string; level: string; message: string }>;
         durationMs: number;
         aiCostLight: number;
+        dynamicWorkerIdentityCreated?: boolean;
+        dynamicWorkerInvoked?: boolean;
         reuseKeyHash?: string;
         flightAi?: Array<Record<string, unknown>>;
         flightDb?: DbDiffTally;
@@ -3071,6 +3122,30 @@ async function executeAppFunction(
         : user?.provisional
         ? "onboarding_template"
         : undefined;
+      if (accountCapacityReservationId) {
+        const capacityResult = await settleOrDeferCapacityAfterExecution({
+          reservationId: accountCapacityReservationId,
+          userId,
+          receiptId,
+          executionId,
+          executedAt: capacityExecutedAt,
+          resourceFacts: capacityResourceMeter.snapshot(),
+          workerRequestCount: countCapacityWorkerRequests({
+            dynamicWorkerInvoked: result.dynamicWorkerInvoked === true,
+            nestedServiceBinding: callerContext.callerApp != null &&
+              !meta?.queuedJobId && meta?.capacityRootWorkerRequest !== true,
+          }),
+          dynamicWorkerIdentityCreated:
+            result.dynamicWorkerIdentityCreated === true,
+          dynamicWorkerInvoked: result.dynamicWorkerInvoked === true,
+          reuseKeyHash: result.reuseKeyHash,
+          billingConfig: cloudPreflight.billingConfig,
+          surface: "mcp",
+        });
+        // Preserve subscription-capacity routing while the exact resource
+        // intent is durably retried; never fall through to the legacy wallet.
+        accountCapacityActualLight = capacityResult.settlement?.totalLight ?? 0;
+      }
       const cloudSettlement = await settleRuntimeCloudPreflight(
         cloudPreflight,
         result.durationMs,
@@ -3094,17 +3169,6 @@ async function executeAppFunction(
         undefined,
         result.reuseKeyHash,
       );
-      if (accountCapacityReservationId) {
-        accountCapacityActualLight = calculateExpectedRuntimeHoldAmount(
-          result.durationMs,
-          cloudPreflight.billingConfig,
-        ) + accountCapacityOperationLight;
-        await settleAccountCapacity({
-          reservationId: accountCapacityReservationId,
-          userId,
-          actualLight: accountCapacityActualLight,
-        });
-      }
       const { settlement } = await settleAndLogAppExecution({
         receiptId,
         userId,
@@ -3128,7 +3192,7 @@ async function executeAppFunction(
         callChainDepth: callerContext.callerApp?.hop ?? null,
         runtimePricingPreflight: cloudPreflight.pricing,
         runtimeCloudSettlement: cloudSettlement,
-        ...(subscriptionCapacityMode
+        ...(accountCapacityActualLight !== undefined
           ? { subscriptionCapacityLight: accountCapacityActualLight }
           : {}),
         routineContext: meta?.routineContext,
@@ -3155,6 +3219,8 @@ async function executeAppFunction(
     const { executeInDynamicSandbox } = await import(
       "../runtime/dynamic-sandbox.ts"
     );
+    const capacityExecutedAt = new Date().toISOString();
+    tenantExecutionAttempted = true;
     const executionPromise = executeInDynamicSandbox(
       sandboxConfig,
       functionName,
@@ -3236,7 +3302,10 @@ async function executeAppFunction(
       return jsonRpcResponse(id, formatToolError(result.error, receiptId));
     }
   } catch (err) {
-    if (accountCapacityReservationId) {
+    if (
+      accountCapacityReservationId &&
+      shouldReleaseUnstartedCapacityReservation(tenantExecutionAttempted)
+    ) {
       await releaseAccountCapacity({
         reservationId: accountCapacityReservationId,
         userId,
@@ -3268,6 +3337,9 @@ export async function executeEventDelivery(input: {
   capacityAgentId: string;
   grantId: string;
   hop: number;
+  /** Trusted EVENT_QUEUE lifecycle owned by this delivery receipt. */
+  capacityQueueOperations?: unknown;
+  capacityRootWorkerRequest?: boolean;
 }): Promise<EventDeliveryOutcome> {
   const appsService = createAppsService();
   const app = await appsService.findById(input.subscriberAppId);
@@ -3333,6 +3405,8 @@ export async function executeEventDelivery(input: {
       capacityAgentId: input.capacityAgentId,
       sessionId: undefined,
       disableAsyncPromotion: true,
+      capacityQueueOperations: input.capacityQueueOperations,
+      capacityRootWorkerRequest: input.capacityRootWorkerRequest === true,
     },
   );
 
@@ -3415,13 +3489,15 @@ export function parseDeliveryOutcome(
 export type EventDeliveryAdmissionCode =
   | "capacity_waiting"
   | "agent_cap_waiting"
-  | "agent_cap_too_low_for_request";
+  | "agent_cap_too_low_for_request"
+  | "concurrency_waiting";
 
 export interface EventDeliveryAdmission {
   code: EventDeliveryAdmissionCode;
   nextEligibleAt: string | null;
   capacityAgentId: string | null;
   bindingConstraint: "account" | "agent" | null;
+  concurrencyScope: "account" | "agent" | "ai" | "routine" | null;
 }
 
 export interface EventDeliveryOutcome {
@@ -3443,7 +3519,8 @@ function parseEventDeliveryAdmission(
   const code = data.type;
   if (
     code !== "capacity_waiting" && code !== "agent_cap_waiting" &&
-    code !== "agent_cap_too_low_for_request"
+    code !== "agent_cap_too_low_for_request" &&
+    code !== "concurrency_waiting"
   ) return null;
   const bindingConstraint = data.binding_constraint === "account" ||
       data.binding_constraint === "agent"
@@ -3459,6 +3536,12 @@ function parseEventDeliveryAdmission(
         ? data.capacity_agent_id
         : null,
     bindingConstraint,
+    concurrencyScope: data.concurrency_scope === "account" ||
+        data.concurrency_scope === "agent" ||
+        data.concurrency_scope === "ai" ||
+        data.concurrency_scope === "routine"
+      ? data.concurrency_scope
+      : null,
   };
 }
 
@@ -3475,8 +3558,20 @@ function parseEventDeliveryAdmission(
 // this wrapper only handles can't-even-start failures.
 export async function executeQueuedJob(
   job: import("../services/async-jobs.ts").AsyncJob,
-): Promise<void> {
-  const { failJobIfActive } = await import("../services/async-jobs.ts");
+): Promise<
+  | { kind: "complete" }
+  | {
+    kind: "deferred";
+    retryAt: string;
+    nextDeliveryAt: string;
+    deferGeneration: number;
+  }
+> {
+  const {
+    deferJobAfterAdmission,
+    failJobIfActive,
+    nextAsyncJobDeferGeneration,
+  } = await import("../services/async-jobs.ts");
   const startedAt = Date.now();
 
   const appsService = createAppsService();
@@ -3486,7 +3581,7 @@ export async function executeQueuedJob(
       type: "AppNotFound",
       message: "The Agent for this job no longer exists",
     }, Date.now() - startedAt);
-    return;
+    return { kind: "complete" };
   }
 
   // GPU apps cannot be queued at dispatch (the GPU branch precedes the queue
@@ -3499,7 +3594,7 @@ export async function executeQueuedJob(
       message:
         "The Agent switched to the GPU runtime after this job was queued — re-run the function directly",
     }, Date.now() - startedAt);
-    return;
+    return { kind: "complete" };
   }
 
   let user: UserContext | null = null;
@@ -3558,7 +3653,7 @@ export async function executeQueuedJob(
           message:
             "The cross-Agent grant for this job was revoked before it executed",
         }, Date.now() - startedAt);
-        return;
+        return { kind: "complete" };
       }
     } catch (err) {
       console.warn("[QUEUE-EXEC] Grant re-check failed, refusing to run:", err);
@@ -3566,7 +3661,7 @@ export async function executeQueuedJob(
         type: "GrantCheckFailed",
         message: "Could not verify the cross-Agent grant for this job",
       }, Date.now() - startedAt);
-      return;
+      return { kind: "complete" };
     }
   }
 
@@ -3599,6 +3694,7 @@ export async function executeQueuedJob(
       queuedJobId: job.id,
       executionId: job.execution_id || undefined,
       executionTimeoutMs: metaTimeout ?? undefined,
+      capacityQueueOperations: job.meta?.capacity_queue_operations,
       capacityAgentId: typeof job.meta?.capacityAgentId === "string"
         ? job.meta.capacityAgentId
         : job.app_id,
@@ -3616,7 +3712,43 @@ export async function executeQueuedJob(
     const body = await response.json() as JsonRpcResponse;
     const outcome = parseDeliveryOutcome(body);
     if (!outcome.success) {
-      const errorData = body.error?.data as { type?: unknown } | undefined;
+      const errorData = body.error?.data as
+        | Record<string, unknown>
+        | undefined;
+      if (
+        outcome.admission &&
+        outcome.admission.code !== "agent_cap_too_low_for_request" &&
+        outcome.admission.nextEligibleAt
+      ) {
+        const retryAt = outcome.admission.nextEligibleAt;
+        // Cloudflare Queue producer delays are bounded to 12 hours. Longer
+        // weekly waits chain fresh delayed messages; each admission check is
+        // side-effect free and the queued→running CAS still owns execution.
+        const delaySeconds = Math.max(
+          1,
+          Math.min(
+            12 * 60 * 60,
+            Math.ceil((Date.parse(retryAt) - Date.now()) / 1000),
+          ),
+        );
+        const nextDeliveryAt = new Date(
+          Date.now() + delaySeconds * 1000,
+        ).toISOString();
+        const deferred = await deferJobAfterAdmission(job, {
+          code: outcome.admission.code,
+          retryAt,
+          message: outcome.error || outcome.admission.code,
+          details: errorData ?? null,
+        }, nextDeliveryAt);
+        if (deferred) {
+          return {
+            kind: "deferred",
+            retryAt,
+            nextDeliveryAt,
+            deferGeneration: nextAsyncJobDeferGeneration(job),
+          };
+        }
+      }
       await failJobIfActive(job.id, {
         type: typeof errorData?.type === "string" && errorData.type
           ? errorData.type
@@ -3630,6 +3762,7 @@ export async function executeQueuedJob(
       message: "Unreadable queued execution response",
     }, Date.now() - startedAt);
   }
+  return { kind: "complete" };
 }
 
 const UUID_RE =

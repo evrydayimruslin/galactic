@@ -3,6 +3,7 @@ import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals
 import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejects.ts";
 
 import {
+  asyncJobQueueOperationCounts,
   claimQueuedJob,
   cleanupStaleJobs,
   completeJob,
@@ -127,6 +128,36 @@ Deno.test("createQueuedJob: persists the full execution request, never a bearer 
   const serialized = JSON.stringify(body).toLowerCase();
   assert(!serialized.includes("token"));
   assert(!serialized.includes("bearer"));
+  assertEquals(body.meta, {
+    executionTimeoutMs: 300_000,
+    capacity_queue_deferred_cycles: 0,
+    capacity_queue_delivery_cycles: 0,
+    capacity_queue_operations: { write: 1, read: 0, delete: 0, total: 1 },
+  });
+});
+
+Deno.test("async queue facts count one normal write/read/delete cycle per delivery", () => {
+  assertEquals(asyncJobQueueOperationCounts({ meta: {} }), {
+    deferredCycles: 0,
+    deliveryCycles: 1,
+    write: 1,
+    read: 1,
+    delete: 1,
+    total: 3,
+  });
+  assertEquals(
+    asyncJobQueueOperationCounts({
+      meta: { capacity_defer_count: 2 },
+    }),
+    {
+      deferredCycles: 2,
+      deliveryCycles: 3,
+      write: 3,
+      read: 3,
+      delete: 3,
+      total: 9,
+    },
+  );
 });
 
 Deno.test("claimQueuedJob: claims only queued rows and returns the claimed row", async () => {
@@ -145,9 +176,41 @@ Deno.test("claimQueuedJob: claims only queued rows and returns the claimed row",
   // PATCH matches zero rows.
   assertEquals(requests[0].url.searchParams.get("status"), "eq.queued");
   assertEquals(requests[0].url.searchParams.get("id"), "eq.job-9");
+  assertEquals(
+    requests[0].url.searchParams.get(
+      "meta->>capacity_defer_generation",
+    ),
+    "is.null",
+  );
+  assert(
+    requests[0].url.searchParams.get("or")?.includes("started_at.lte."),
+  );
   assertEquals(requests[0].body.status, "running");
   assert(typeof requests[0].body.started_at === "string");
   assertEquals(claimed?.id, "job-9");
+});
+
+Deno.test("claimQueuedJob: a delayed message can claim only its matching generation when due", async () => {
+  const requests: URL[] = [];
+  await withMockedDb(
+    (url) => {
+      requests.push(url);
+      return new Response("[]", { status: 200 });
+    },
+    () =>
+      claimQueuedJob("job-generation", {
+        deferGeneration: 3,
+        now: new Date("2026-07-18T12:00:00.000Z"),
+      }),
+  );
+  assertEquals(
+    requests[0].searchParams.get("meta->>capacity_defer_generation"),
+    "eq.3",
+  );
+  assertEquals(
+    requests[0].searchParams.get("or"),
+    "(started_at.is.null,started_at.lte.2026-07-18T12:00:00.000Z)",
+  );
 });
 
 Deno.test("claimQueuedJob: duplicate delivery (already claimed) returns null", async () => {

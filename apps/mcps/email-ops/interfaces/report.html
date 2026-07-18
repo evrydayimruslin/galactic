@@ -41,6 +41,17 @@
       else {
         var err = new Error((m.error && m.error.message) || "Call failed");
         err.code = m.error && m.error.type;
+        err.type = err.code;
+        err.status = m.error && m.error.status;
+        err.details = m.error && m.error.details;
+        err.retryAt = m.error && m.error.retryAt;
+        err.retryable = !!(m.error && m.error.retryable);
+        err.scope = m.error && m.error.scope;
+        err.autoResumes = !!(m.error && m.error.autoResumes);
+        err.ownerActionRequired = !!(m.error && m.error.ownerActionRequired);
+        err.executionMode = m.error && m.error.executionMode;
+        err.jobId = m.error && m.error.jobId;
+        err.completionUnknown = !!(m.error && m.error.completionUnknown);
         item.reject(err);
       }
     };
@@ -200,6 +211,17 @@ function humanErr(err){
   var code = err && err.code, msg = (err && err.message) || "";
   if (code === "SIGN_IN_REQUIRED") return {text:"Sign in to use this."};
   if (code === "RATE_LIMITED" || code === "BUSY") return {text:"Give it a few seconds — too many requests at once.", retryable:true};
+  if (err && (err.ownerActionRequired || String(code || "").toLowerCase() === "agent_cap_too_low_for_request")) {
+    return {text:"This Agent's capacity cap is too low for this report. Raise the cap in Agent Settings.", ownerAction:true};
+  }
+  if (isCapacityErr(err)) {
+    var raw = (err && err.retryAt) || (err && err.details && (err.details.retry_at || err.details.retryAt));
+    var date = raw ? new Date(raw) : null;
+    var when = date && !isNaN(date) ? " at " + date.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}) : "";
+    if (err && err.autoResumes) return {text:"Agent work is waiting for capacity and resumes automatically" + when + ".", capacity:true, autoResumes:true, retryAt:raw || null};
+    return {text:"This refresh was not queued. Try again when capacity is available" + when + ".", capacity:false, retryAt:null};
+  }
+  if (err && err.completionUnknown) return {text:"This refresh was queued, but its result can't be checked right now. Verify before trying it again."};
   if (code === "RUN_FAILED"){
     if (/SMTP auth/i.test(msg)) return {text:"Couldn't sign in to your mailbox to send — check the email password in Settings."};
     if (/MISSING_SECRETS|IMAP|SMTP/i.test(msg)) return {text:"Your mailbox isn't connected yet. Add your email settings in the agent's Settings, then try again."};
@@ -207,6 +229,10 @@ function humanErr(err){
     if (msg && msg.length < 200 && /^[A-Z]/.test(msg) && !/[_{}\\]/.test(msg)) return {text: msg};
   }
   return {text:"Something went wrong — try again.", raw: msg};
+}
+function isCapacityErr(err){
+  var code = String((err && (err.code || err.type)) || "").toLowerCase();
+  return code === "capacity_waiting" || code === "agent_cap_waiting" || code === "agent_cap_too_low_for_request" || code === "concurrency_waiting" || code === "concurrencywaitingerror";
 }
 
 /* ---------- state ---------- */
@@ -219,12 +245,14 @@ var state = {
   expanded: {},                 // conversation_id -> {open, loading, body, provenance, error}
   histCache: {}                 // conversation_id -> conversation_history result
 };
+var capacityRetryTimer = null;
 var WIN_LABEL = {today:"Today", shift:"This shift (8h)", "7d":"Last 7 days"};
 var WIN_NOUN  = {today:"day", shift:"shift", "7d":"week"};
 
 /* ---------- data loading ---------- */
 var loadSeq = 0;
 function loadDigest(){
+  if (capacityRetryTimer){ clearTimeout(capacityRetryTimer); capacityRetryTimer = null; }
   var seq = ++loadSeq;
   state.loading = true; state.error = null;
   render();
@@ -232,6 +260,7 @@ function loadDigest(){
   function attempt(){
     call("activity_digest", {window: state.win}).then(function(d){
       if (seq !== loadSeq) return;
+      if (capacityRetryTimer){ clearTimeout(capacityRetryTimer); capacityRetryTimer = null; }
       state.loading = false; state.digest = d; state.degraded = null; state.error = null;
       render();
     }, function(err){
@@ -243,15 +272,18 @@ function loadDigest(){
         return;
       }
       state.loading = false; state.error = h;
+      if (h.capacity && h.autoResumes && h.retryAt){
+        if (capacityRetryTimer) clearTimeout(capacityRetryTimer);
+        var resumeMs = new Date(h.retryAt).getTime();
+        if (isFinite(resumeMs)) {
+          capacityRetryTimer = setTimeout(function(){ capacityRetryTimer=null; loadDigest(); }, Math.min(Math.max(1000, resumeMs-Date.now()+1000), 2147483647));
+        }
+      }
       if (state.digest){ render(); return; }        // keep the previous report on screen
-      // degraded mode: fall back to inbox_overview counts
-      call("inbox_overview", {}).then(function(ov){
-        if (seq !== loadSeq) return;
-        state.degraded = ov; render();
-      }, function(){
-        if (seq !== loadSeq) return;
-        state.degraded = null; render();
-      });
+      // A failed primary read must not fan out into another call. The shell
+      // stays rendered and the next deliberate refresh is the only retry.
+      state.degraded = null;
+      render();
     });
   }
   attempt();
@@ -456,8 +488,8 @@ function render(focusConvId){
 
   if (state.error){
     html += '<div class="banner err"><span>Couldn’t refresh the report — ' + esc(state.error.text) +
-      '</span><button type="button" id="retry-btn">Try again</button>' +
-      (state.error.raw ? "<details><summary>Technical details</summary><pre>" + esc(state.error.raw) + "</pre></details>" : "") +
+      '</span>' + (state.error.capacity ? '' : '<button type="button" id="retry-btn">Try again</button>') +
+      (state.error.raw && !state.error.capacity ? "<details><summary>Technical details</summary><pre>" + esc(state.error.raw) + "</pre></details>" : "") +
       "</div>";
   }
 
@@ -498,7 +530,9 @@ function render(focusConvId){
       '<div class="note">Full activity report unavailable — tap to try again.</div></div>';
     html += footerHTML(ov.last_checked_at, ov.now);
   } else {
-    html += '<div class="empty">The report couldn’t load. Use “Try again” above.</div>';
+    html += '<div class="empty">' + (state.error && state.error.capacity
+      ? 'The Interface is ready. Live report data will appear when Agent work can run.'
+      : 'The report couldn’t load. Use “Try again” above.') + '</div>';
   }
 
   app.innerHTML = html;

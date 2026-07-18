@@ -216,12 +216,6 @@
       ]
     },
     {
-      "file": "services/async-jobs.ts",
-      "types": [
-        "AsyncJob"
-      ]
-    },
-    {
       "file": "services/auth-cookies.ts",
       "types": [
         "CookieOptions"
@@ -397,7 +391,7 @@
     },
     {
       "duplicates": [
-        "{\"0\":{\"col\":17,\"line\":247,\"name\":\"calculateCloudUsageLight\",\"pos\":6739},\"1\":{\"col\":14,\"line\":261,\"name\":\"calcCloudUsageLight\",\"pos\":7228}}"
+        "{\"0\":{\"col\":17,\"line\":307,\"name\":\"calculateCloudUsageLight\",\"pos\":8568},\"1\":{\"col\":14,\"line\":321,\"name\":\"calcCloudUsageLight\",\"pos\":9057}}"
       ],
       "file": "services/cloud-usage.ts",
       "types": [
@@ -1663,6 +1657,12 @@
       "file": "src/bindings/ai-model-precedence.test.ts",
       "files": [
         "src/bindings/ai-model-precedence.test.ts"
+      ]
+    },
+    {
+      "file": "src/bindings/capacity-dynamic-tail.test.ts",
+      "files": [
+        "src/bindings/capacity-dynamic-tail.test.ts"
       ]
     },
     {

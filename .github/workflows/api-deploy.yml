@@ -7,21 +7,22 @@ on:
       - 'v*'
     paths:
       - 'api/**'
+      - 'capacity-tail-worker/**'
       - 'shared/**'
       - '.github/workflows/api-deploy.yml'
   workflow_dispatch:
     inputs:
       deploy_target:
-        description: 'Deploy staging or production.'
+        description: 'Deploy staging. Production API releases require an immutable v* tag.'
         required: true
         default: staging
         type: choice
         options:
           - staging
-          - production
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   verify:
@@ -33,6 +34,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - uses: actions/setup-node@v4
         with:
@@ -64,6 +67,14 @@ jobs:
       - name: Wrangler Dry Run (staging)
         run: npx wrangler deploy --config wrangler.toml --env staging --dry-run
 
+      - name: Verify capacity Tail Worker
+        working-directory: capacity-tail-worker
+        run: |
+          npm ci
+          deno test --no-check --no-lock src/index.test.ts
+          npm run deploy:dry-run
+          npm run deploy:staging:dry-run
+
   deploy_staging:
     name: Deploy API to staging
     runs-on: ubuntu-latest
@@ -82,6 +93,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The schema-order check compares the complete push range, which can
+          # span more than one commit after a rebase merge/direct push.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -92,11 +107,57 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Wait for matching staging schema when migrations changed
+        working-directory: .
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BASE_SHA="${{ github.event.before }}"
+          ZERO_SHA="0000000000000000000000000000000000000000"
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" == "$ZERO_SHA" ]] || \
+             ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            BASE_SHA="$(git rev-parse "${GITHUB_SHA}^")"
+            echo "Push base unavailable; falling back to parent commit $BASE_SHA."
+          fi
+
+          echo "Checking schema changes across $BASE_SHA..$GITHUB_SHA."
+          if git diff --quiet "$BASE_SHA" "$GITHUB_SHA" -- \
+            supabase scripts/supabase .github/workflows/supabase-db.yml; then
+            echo "No staging schema change in this candidate."
+            exit 0
+          fi
+          for attempt in $(seq 1 90); do
+            read -r status conclusion < <(
+              gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/supabase-db.yml/runs?head_sha=${GITHUB_SHA}&event=push&per_page=10" \
+                --jq '.workflow_runs | sort_by(.created_at) | last // {} | [(.status // "missing"), (.conclusion // "")] | @tsv'
+            )
+            if [[ "$status" == "completed" && "$conclusion" == "success" ]]; then
+              echo "Matching staging schema deployment succeeded."
+              exit 0
+            fi
+            if [[ "$status" == "completed" ]]; then
+              echo "Matching staging schema workflow concluded: $conclusion" >&2
+              exit 1
+            fi
+            echo "Waiting for staging schema workflow ($status; attempt $attempt/90)."
+            sleep 20
+          done
+          echo "Timed out waiting for matching staging schema workflow." >&2
+          exit 1
+
       - name: Provision queues (idempotent)
         run: |
-          for q in ultralight-exec-staging ultralight-exec-staging-dlq ultralight-events-staging ultralight-events-staging-dlq; do
+          for q in ultralight-exec-staging ultralight-exec-staging-dlq ultralight-events-staging ultralight-events-staging-dlq ultralight-capacity-telemetry-staging ultralight-capacity-telemetry-staging-dlq; do
             npx wrangler queues list | grep -qE "(^|[^-])$q([^-]|$)" || npx wrangler queues create "$q"
           done
+
+      - name: Deploy staging capacity Tail Worker
+        working-directory: capacity-tail-worker
+        run: |
+          npm ci
+          npm run deploy:staging
 
       - name: Deploy staging worker
         run: npm run deploy:staging
@@ -105,7 +166,7 @@ jobs:
     name: Deploy API to production
     runs-on: ubuntu-latest
     needs: verify
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event.inputs.deploy_target == 'production'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     environment: production
     concurrency:
       group: api-production-deploy
@@ -119,6 +180,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - uses: actions/setup-node@v4
         with:
@@ -129,11 +192,43 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Wait for matching production schema
+        working-directory: .
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 120); do
+            read -r status conclusion < <(
+              gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/supabase-production-db.yml/runs?head_sha=${GITHUB_SHA}&event=push&per_page=10" \
+                --jq '.workflow_runs | sort_by(.created_at) | last // {} | [(.status // "missing"), (.conclusion // "")] | @tsv'
+            )
+            if [[ "$status" == "completed" && "$conclusion" == "success" ]]; then
+              echo "Matching production schema deployment succeeded."
+              exit 0
+            fi
+            if [[ "$status" == "completed" ]]; then
+              echo "Matching production schema workflow concluded: $conclusion" >&2
+              exit 1
+            fi
+            echo "Waiting for production schema workflow ($status; attempt $attempt/120)."
+            sleep 20
+          done
+          echo "Timed out waiting for matching production schema workflow." >&2
+          exit 1
+
       - name: Provision queues (idempotent)
         run: |
-          for q in ultralight-exec ultralight-exec-dlq ultralight-events ultralight-events-dlq; do
+          for q in ultralight-exec ultralight-exec-dlq ultralight-events ultralight-events-dlq ultralight-capacity-telemetry ultralight-capacity-telemetry-dlq; do
             npx wrangler queues list | grep -qE "(^|[^-])$q([^-]|$)" || npx wrangler queues create "$q"
           done
+
+      - name: Deploy production capacity Tail Worker
+        working-directory: capacity-tail-worker
+        run: |
+          npm ci
+          npm run deploy
 
       - name: Deploy production worker
         run: npm run deploy

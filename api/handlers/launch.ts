@@ -757,7 +757,9 @@ export async function handleLaunch(request: Request): Promise<Response> {
       if (!isUuid(jobId)) {
         return error("Invalid job id", 400);
       }
-      const { getJob } = await import("../services/async-jobs.ts");
+      const { asyncJobAdmissionStatus, getJob } = await import(
+        "../services/async-jobs.ts"
+      );
       const job = await getJob(jobId, user.id);
       if (!job) return error("Job not found", 404);
       return json({
@@ -767,6 +769,7 @@ export async function handleLaunch(request: Request): Promise<Response> {
         error: job.status === "failed" ? job.error : null,
         durationMs: job.duration_ms,
         aiCostCredits: job.ai_cost_light,
+        admissionWait: asyncJobAdmissionStatus(job),
         executionId: job.execution_id || null,
         createdAt: job.created_at,
         completedAt: job.completed_at,

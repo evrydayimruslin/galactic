@@ -14,6 +14,36 @@
 name: G1 Launch Smoke
 
 on:
+  workflow_call:
+    inputs:
+      target:
+        description: 'Environment to verify'
+        required: true
+        type: string
+      durable_app:
+        description: 'Optional override for the fixed durable-smoke Agent id'
+        required: false
+        default: ''
+        type: string
+      durable_function:
+        description: 'Optional override for the durable function'
+        required: false
+        default: ''
+        type: string
+      require_release_tag:
+        description: 'Fail unless the reusable smoke is running at a v* tag'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      ULTRALIGHT_TOKEN_STAGING:
+        required: false
+      GALACTIC_SMOKE_APP_ID_STAGING:
+        required: false
+      ULTRALIGHT_TOKEN:
+        required: false
+      GALACTIC_SMOKE_APP_ID:
+        required: false
   workflow_dispatch:
     inputs:
       target:
@@ -72,6 +102,20 @@ jobs:
           echo "cid=$CID" >> "$GITHUB_OUTPUT"
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
           echo "candidate: $CID → $DIR"
+
+      - name: Verify reusable production smoke is pinned to the release tag
+        if: inputs.require_release_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "::error::Reusable production smoke must be called from a v* tag workflow, got $GITHUB_REF."
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "::error::Smoke checkout does not match the tagged candidate SHA."
+            exit 1
+          fi
 
       - name: Secrets preflight (verify-secrets)
         shell: bash

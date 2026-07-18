@@ -176,6 +176,22 @@ Deno.test("free mode: AI apps record uses_inference explicitly per function", as
   assertEquals(manifest.functions?.echo?.uses_inference, false);
 });
 
+Deno.test("free mode: embedding apps record uses_inference explicitly per function", async () => {
+  const result = await parseTypeScript(`
+    export async function vectorize(text: string) {
+      return await galactic.embed({ input: text });
+    }
+    export async function echo(text: string) { return text; }
+  `);
+  const manifest = generateManifestFromParseResult(
+    { name: "Embed App", slug: "embed-app" },
+    result,
+    "1.0.0",
+  );
+  assertEquals(manifest.functions?.vectorize?.uses_inference, true);
+  assertEquals(manifest.functions?.echo?.uses_inference, false);
+});
+
 Deno.test("free mode: non-AI apps omit the uses_inference flag", async () => {
   const result = await parseTypeScript(`
     export async function add(a: number, b: number) { return a + b; }

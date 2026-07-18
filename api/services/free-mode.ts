@@ -2,16 +2,16 @@
 // env + manifest helpers, so both the execution path and the inference route can
 // import it without a cycle.
 
-import type { AppManifest } from '../../shared/contracts/manifest.ts';
-import type { App, AppPricingConfig } from '../../shared/types/index.ts';
+import type { AppManifest } from "../../shared/contracts/manifest.ts";
+import type { App, AppPricingConfig } from "../../shared/types/index.ts";
 import {
   getCallPriceLight,
   getFreeCalls,
   getFreeCallsScope,
-} from '../../shared/types/index.ts';
-import { getEnv } from '../lib/env.ts';
-import { getManifestPermissions } from './trust.ts';
-import { parseAppManifest } from './app-settings.ts';
+} from "../../shared/types/index.ts";
+import { getEnv } from "../lib/env.ts";
+import { getManifestPermissions } from "./trust.ts";
+import { parseAppManifest } from "./app-settings.ts";
 
 /**
  * A caller's free-allowance counters for one app: counter_key -> call_count.
@@ -27,29 +27,32 @@ export type CallerUsage = ReadonlyMap<string, number>;
  * whether the paid-call and AI gates actually block.
  */
 export function isFreeModeEnabled(): boolean {
-  const raw = (getEnv('FREE_MODE') || '').trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'on';
+  const raw = (getEnv("FREE_MODE") || "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "on";
 }
 
 /**
- * Whether a function uses inference (galactic.ai()), for the Free Mode AI gate.
+ * Whether a function uses inference (galactic.ai()/galactic.embed()), for the
+ * Free Mode AI gate and execution classification.
  * Reads the upload-derived per-function `uses_inference` flag. Conservative
- * backfill: if the app declares `ai:call` but a function carries no explicit
- * flag (manifest predates Phase 0), treat it as inference. Apps that don't
- * declare `ai:call` cannot run inference at all — the runtime AI binding is
- * gated on that permission — so they are always false.
+ * backfill: if the app declares an inference capability but a function carries
+ * no explicit flag (manifest predates Phase 0), treat it as inference. Apps
+ * without either capability cannot run inference at all, so they are false.
  */
 export function functionUsesInference(
   manifest: AppManifest | string | null | undefined,
   functionName: string,
 ): boolean {
-  if (!getManifestPermissions(manifest).includes('ai:call')) return false;
+  const permissions = getManifestPermissions(manifest);
+  if (
+    !permissions.includes("ai:call") && !permissions.includes("ai:embed")
+  ) return false;
   const fn = parseAppManifest(manifest)?.functions?.[functionName];
-  if (typeof fn?.uses_inference === 'boolean') return fn.uses_inference;
+  if (typeof fn?.uses_inference === "boolean") return fn.uses_inference;
   return true;
 }
 
-type FreeModeApp = Pick<App, 'pricing_config' | 'manifest' | 'owner_id'>;
+type FreeModeApp = Pick<App, "pricing_config" | "manifest" | "owner_id">;
 
 /**
  * Whether the app prices calls through a `module` access policy — dev code that
@@ -59,8 +62,10 @@ type FreeModeApp = Pick<App, 'pricing_config' | 'manifest' | 'owner_id'>;
  * module precisely if an agent calls one anyway, so this only affects what's
  * *suggested*, and it fails safe toward blocking.
  */
-function hasModuleAccessPolicy(manifest: AppManifest | string | null | undefined): boolean {
-  return parseAppManifest(manifest)?.access_policy?.mode === 'module';
+function hasModuleAccessPolicy(
+  manifest: AppManifest | string | null | undefined,
+): boolean {
+  return parseAppManifest(manifest)?.access_policy?.mode === "module";
 }
 
 /**
@@ -78,7 +83,9 @@ function hasFreeAllowanceRemaining(
 ): boolean {
   const limit = getFreeCalls(pricing, functionName);
   if (limit <= 0 || !usage) return false;
-  const counterKey = getFreeCallsScope(pricing) === 'app' ? '__app__' : functionName;
+  const counterKey = getFreeCallsScope(pricing) === "app"
+    ? "__app__"
+    : functionName;
   return (usage.get(counterKey) ?? 0) < limit;
 }
 
@@ -108,7 +115,9 @@ export function isFunctionBlockedInFreeMode(
   ) {
     return true;
   }
-  if (!caller.byokPresent && functionUsesInference(app.manifest, functionName)) {
+  if (
+    !caller.byokPresent && functionUsesInference(app.manifest, functionName)
+  ) {
     return true;
   }
   return false;
@@ -121,10 +130,10 @@ export function isFunctionBlockedInFreeMode(
  */
 export function freeModeNotice(topUpUrl: string): string {
   return [
-    '> ⚠️ **Free mode is active** — the wallet balance is under $0.25.',
-    '> Paid functions are hidden from your tool list, and AI functions are',
-    '> unavailable without a BYOK key; calling a blocked function is refused.',
-    '> Only free functions run. To restore full access, tell the user to add',
+    "> ⚠️ **Free mode is active** — the wallet balance is under $0.25.",
+    "> Paid functions are hidden from your tool list, and AI functions are",
+    "> unavailable without a BYOK key; calling a blocked function is refused.",
+    "> Only free functions run. To restore full access, tell the user to add",
     `> credits at ${topUpUrl} (or add a BYOK provider key in Settings).`,
-  ].join('\n');
+  ].join("\n");
 }

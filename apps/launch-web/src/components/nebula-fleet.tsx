@@ -31,6 +31,7 @@ import { hasLaunchAuthToken, normalizeLocalPath, signOutLaunch } from "../lib/au
 import {
   attachInterfaceBridge,
   clampInterfaceHeight,
+  runInterfaceFunctionDurably,
 } from "../lib/interface-bridge";
 import {
   launchApi,
@@ -1514,7 +1515,8 @@ function InterfaceViewer({
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
-    return attachInterfaceBridge({
+    const controller = new AbortController();
+    const detach = attachInterfaceBridge({
       iframe,
       context: {
         agent: { id: agent.id, slug: agent.slug, name: agent.name },
@@ -1523,17 +1525,21 @@ function InterfaceViewer({
         minHeight: iface.minHeight ?? null,
       },
       allowlist: iface.functions,
-      runFunction: async (functionName, args) => {
-        try {
-          const result = await launchApi.runAgentFunction(agent.id, functionName, { args });
-          return { success: result.success, result: result.result, receiptId: result.receiptId, error: result.error };
-        } catch (error) {
-          return { success: false, error: { type: "RUN_FAILED", message: error instanceof Error ? error.message : String(error) } };
-        }
-      },
+      runFunction: (functionName, args) =>
+        runInterfaceFunctionDurably({
+          client: launchApi,
+          agentId: agent.id,
+          functionName,
+          args,
+          signal: controller.signal,
+        }),
       onConnected: () => setConnected(true),
       onResize: setHeight,
     });
+    return () => {
+      controller.abort();
+      detach();
+    };
   }, [agent.id, agent.name, agent.slug, iface.functions, iface.id, iface.minHeight]);
   return (
     <Modal className="neb-interface-modal" label={`${agent.name} — ${iface.label}`} onClose={onClose}>
@@ -1550,7 +1556,6 @@ function InterfaceViewer({
           title={`${agent.name} — ${iface.label}`}
         />
         <p className="neb-ov-note">{connected ? "Connected to this Agent's allowed functions." : "Waiting for the Galactic interface bridge…"}</p>
-        <a className="neb-btn-sm open-tab" href={iface.url} rel="noreferrer" target="_blank">Open in new tab ↗</a>
       </div>
     </Modal>
   );

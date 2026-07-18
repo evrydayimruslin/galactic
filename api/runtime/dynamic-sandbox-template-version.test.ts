@@ -16,7 +16,7 @@ import type { RuntimeConfig } from "./sandbox.ts";
 
 // Bump this in lockstep with SANDBOX_TEMPLATE_VERSION whenever the generated
 // setup.js / wrapper.js template changes.
-const PINNED_TEMPLATE_VERSION = "2026-07-17.agent-capacity-errors.v3";
+const PINNED_TEMPLATE_VERSION = "2026-07-18.trusted-tail-attribution.v10";
 
 // Stable separator between the two captured modules for the snapshot hash.
 const SEP = "\n----MODULE-BOUNDARY----\n";
@@ -149,6 +149,27 @@ Deno.test("sandbox template: generation is deterministic for a fixed config", as
   }
 });
 
+Deno.test("sandbox template: warm-isolate requests serialize compatibility globals", async () => {
+  const h = installHarness();
+  try {
+    await executeInDynamicSandbox(fixedConfig(), "noop", []);
+    assert(
+      h.captured.wrapper.includes("globalThis.__galacticExecutionTail"),
+      "wrapper must maintain a per-isolate request gate",
+    );
+    assert(
+      h.captured.wrapper.includes("await __previousExecution"),
+      "wrapper must acquire the gate before assigning request globals",
+    );
+    assert(
+      h.captured.wrapper.includes("__releaseExecution();"),
+      "wrapper must release the gate in a finally block",
+    );
+  } finally {
+    h.restore();
+  }
+});
+
 Deno.test("sandbox template: snapshot pinned -- a template change must bump SANDBOX_TEMPLATE_VERSION", async () => {
   const h = installHarness();
   try {
@@ -161,10 +182,10 @@ Deno.test("sandbox template: snapshot pinned -- a template change must bump SAND
     // TEMPLATE_HASH below to the new value. This forces the reuse key to rotate
     // so a cached old isolate cannot serve new template content.
     const TEMPLATE_HASH =
-      "f70c2a1272b035c8cd616e345ed9eb3d43729aaf73252c706633ab7257af5255";
+      "f6939f0d8c7f9d6800a0ff49dde9da9c833937f3d2bdf0cc2cf4946fe0ab066c";
     assertEquals(
       PINNED_TEMPLATE_VERSION,
-      "2026-07-17.agent-capacity-errors.v3",
+      "2026-07-18.trusted-tail-attribution.v10",
       "PINNED_TEMPLATE_VERSION drifted from the pinned literal",
     );
     assertEquals(

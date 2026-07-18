@@ -1,0 +1,45 @@
+name = "ultralight-capacity-tail"
+main = "src/index.ts"
+compatibility_date = "2026-04-09"
+workers_dev = false
+
+# Keep the metering transport observable at 100% during launch. This Worker
+# holds no customer or database credentials, but a failed invocation is still
+# a signal that exact CPU observations may need reconciliation.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+invocation_logs = true
+
+[vars]
+# Trust host markers only when Cloudflare identifies the configured producer
+# script. Tenant Dynamic Workers have different script names and cannot forge
+# parent CPU attribution through console output.
+PRODUCER_SCRIPT_NAMES = "ultralight-api"
+
+# Tail telemetry contains no credentials. Exact CPU observations are delivered
+# to the API through a queue; only the API's existing service-role context may
+# settle the authoritative capacity ledger.
+[[queues.producers]]
+binding = "CAPACITY_TELEMETRY_QUEUE"
+queue = "ultralight-capacity-telemetry"
+
+[env.staging]
+name = "ultralight-capacity-tail-staging"
+workers_dev = false
+
+[env.staging.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.staging.observability.logs]
+invocation_logs = true
+
+[env.staging.vars]
+PRODUCER_SCRIPT_NAMES = "ultralight-api-staging"
+
+[[env.staging.queues.producers]]
+binding = "CAPACITY_TELEMETRY_QUEUE"
+queue = "ultralight-capacity-telemetry-staging"

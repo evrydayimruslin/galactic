@@ -43,6 +43,13 @@ export interface RuntimeConfig {
   // version. Optional: paths that don't supply it skip the version check.
   expectedVersion?: string;
   executionId: string;
+  /**
+   * Public execution receipt used only to correlate Cloudflare Tail telemetry
+   * with the authoritative capacity ledger. Unlike executionId this value is
+   * safe to place on the internal Dynamic Worker request; it contains no user,
+   * payer, credential, or capability data.
+   */
+  capacityReceiptId?: string;
   code: string;
   permissions: string[];
   // Host-only gx.test switch. Dynamic Workers replace production inference and
@@ -241,6 +248,10 @@ export interface ExecutionResult {
   logs: LogEntry[];
   durationMs: number;
   aiCostLight: number;
+  /** True once a billable Dynamic Worker fetch was attempted. */
+  dynamicWorkerInvoked?: boolean;
+  /** True once Loader returned an identity that may incur the daily fee. */
+  dynamicWorkerIdentityCreated?: boolean;
   error?: {
     type: string;
     message: string;

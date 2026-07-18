@@ -86,3 +86,16 @@ jobs:
             /tmp/production-launch-gate-summary.json
             /tmp/production-launch-gate-summary.md
           if-no-files-found: error
+
+  production_smoke:
+    name: Run exact-tag production smoke
+    needs: gate
+    # A manual gate evaluates an existing release, but reusable workflows keep
+    # the caller's branch ref. Only the immutable tag-push path can therefore
+    # prove that the smoke checkout is the exact production candidate.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/g1-launch-smoke.yml
+    with:
+      target: production
+      require_release_tag: true
+    secrets: inherit
