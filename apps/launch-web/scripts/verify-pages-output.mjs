@@ -70,14 +70,17 @@ if (index !== null) {
 
   if (js) {
     const source = readFileSync(resolve(dist, js.slice(1)), "utf8");
-    if (!source.includes("launchClient") || !source.includes("booted")) {
+    if (
+      !source.includes("launchClient") || !source.includes("booted") ||
+      !/launchRoutingRevision\s*=\s*[`"']2[`"']/u.test(source)
+    ) {
       fail("the entry module is missing the launch-client boot sentinel.");
     }
   }
 
   if (css) {
     const source = readFileSync(resolve(dist, css.slice(1)), "utf8");
-    if (!source.includes("--launch-asset-routing-revision:1")) {
+    if (!source.includes("--launch-asset-routing-revision:2")) {
       fail("the emitted stylesheet is missing the asset-routing revision marker.");
     }
   }
