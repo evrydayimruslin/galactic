@@ -39,6 +39,21 @@ import {
   type LaunchAgentSettingsResponse,
   type LaunchSettingsResponse,
 } from "../lib/api";
+import {
+  createReleaseCandidateReviewToken,
+  createReleasePromotionRequest,
+  createSafeReleasePromotionStorage,
+  currentReleaseSnapshotFromError,
+  executeReleasePromotionWithRecovery,
+  getOrCreateReleasePromotionIdempotencyKey,
+  releaseCandidateMatchesReview,
+  releaseReviewLabel,
+  releasePromotionStorageKey,
+  shouldRetainAgentHomeOverride,
+  shouldRetainReleasePromotionAttempt,
+  shortReleaseFingerprint,
+  type ReleaseCandidateReviewToken,
+} from "../lib/nebula-release";
 import "./nebula-fleet.css";
 
 type AgentPane = "alerts" | "interfaces" | "routines" | "functions" | "settings";
@@ -142,6 +157,11 @@ function formatRelative(iso: string | null | undefined, now = Date.now()): strin
   const days = Math.round(hours / 24);
   if (days < 7) return `${days}d`;
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function formatRelativePast(iso: string): string {
+  const relative = formatRelative(iso);
+  return relative === "now" ? "just now" : `${relative} ago`;
 }
 
 function formatCountdown(iso: string | null | undefined, now: number): string {
@@ -807,6 +827,7 @@ export function NebulaFleetApp({
             <AgentModal
               agent={activeAgent}
               initialUnread={agents.find((item) => item.agent.id === activeAgent.id)?.unreadAlertCount ?? 0}
+              key={activeAgent.id}
               live={live}
               onClose={() => {
                 sounds.close();
@@ -1990,6 +2011,12 @@ function Collapsible({
   initiallyOpen?: boolean;
 }): ReactElement {
   const [open, setOpen] = useState(initiallyOpen);
+  const autoOpened = useRef(initiallyOpen);
+  useEffect(() => {
+    if (!initiallyOpen || autoOpened.current) return;
+    autoOpened.current = true;
+    setOpen(true);
+  }, [initiallyOpen]);
   return (
     <section className={`neb-ov-section${open ? "" : " collapsed"}`}>
       <button className="neb-ov-section-header" onClick={() => setOpen((value) => !value)} type="button">
@@ -2007,7 +2034,14 @@ function AgentSettingsPane({
   agent: LaunchAgentSummary;
   live: LaunchPageProps["live"];
 }): ReactElement {
-  const home = live.data.agentHome;
+  const upstreamHome = live.data.agentHome;
+  const [homeOverride, setHomeOverride] = useState<{
+    agentId: string;
+    snapshot: NonNullable<typeof upstreamHome>;
+  } | null>(null);
+  const home = homeOverride?.agentId === agent.id
+    ? homeOverride.snapshot
+    : upstreamHome;
   const [name, setName] = useState(home?.agent.name ?? agent.name);
   const [description, setDescription] = useState(home?.agent.description ?? agent.description ?? "");
   const [capacity, setCapacity] = useState<LaunchAgentCapacityResponse | undefined>(live.data.agentCapacity);
@@ -2015,6 +2049,37 @@ function AgentSettingsPane({
   const [settings, setSettings] = useState<LaunchAgentSettingsResponse | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [promotionNotice, setPromotionNotice] = useState("");
+  const [releaseReview, setReleaseReview] = useState<ReleaseCandidateReviewToken | null>(null);
+  const promotionInFlight = useRef(false);
+  const promotionStorage = useMemo(() => {
+    let primary: Storage | null = null;
+    try {
+      primary = window.sessionStorage;
+    } catch {
+      // Hardened browsers can deny access to the storage object itself.
+    }
+    return createSafeReleasePromotionStorage(primary);
+  }, []);
+  useEffect(() => {
+    if (!upstreamHome) return;
+    setHomeOverride((current) => {
+      if (!current || current.agentId !== agent.id) return null;
+      return shouldRetainAgentHomeOverride(
+          agent.id,
+          current.snapshot,
+          upstreamHome,
+        )
+        ? current
+        : null;
+    });
+  }, [agent.id, upstreamHome?.generatedAt, upstreamHome?.revision]);
+  useEffect(() => {
+    setReleaseReview((current) =>
+      current && home && releaseCandidateMatchesReview(agent.id, home, current)
+        ? current
+        : null);
+  }, [agent.id, home?.release.candidate?.sourceFingerprint, home?.release.candidate?.version, home?.revision]);
   useEffect(() => {
     setName(home?.agent.name ?? agent.name);
     setDescription(home?.agent.description ?? agent.description ?? "");
@@ -2034,11 +2099,12 @@ function AgentSettingsPane({
     setBusy("identity");
     setError("");
     try {
-      await launchApi.updateAgentHomeIdentity(agentLocator(agent), {
+      const next = await launchApi.updateAgentHomeIdentity(agentLocator(agent), {
         expectedRevision: home.revision,
         name: name.trim(),
         description: description.trim() || null,
       });
+      setHomeOverride({ agentId: agent.id, snapshot: next });
       live.reload();
       sounds.confirm();
     } catch (reason) {
@@ -2046,6 +2112,74 @@ function AgentSettingsPane({
     } finally {
       setBusy(null);
     }
+  };
+  const promoteCandidate = async () => {
+    if (!home || !releaseReview || busy || promotionInFlight.current) return;
+    const reviewedVersion = releaseReview.version;
+    const attemptStorageKey = releasePromotionStorageKey(
+      agent.id,
+      reviewedVersion,
+    );
+    const idempotencyKey = getOrCreateReleasePromotionIdempotencyKey(
+      promotionStorage,
+      attemptStorageKey,
+      randomId,
+    );
+    const request = createReleasePromotionRequest(
+      agent.id,
+      home,
+      releaseReview,
+      idempotencyKey,
+    );
+    if (!request) {
+      promotionStorage.removeItem(attemptStorageKey);
+      setReleaseReview(null);
+      setError("That candidate changed or is no longer ready. Review the latest release before promoting.");
+      live.reload();
+      return;
+    }
+    promotionInFlight.current = true;
+    setBusy("release");
+    setError("");
+    setPromotionNotice("");
+    try {
+      const next = await executeReleasePromotionWithRecovery({
+        agentId: agent.id,
+        call: (action) => launchApi.actOnAgentHome(agentLocator(agent), action),
+        idempotencyKey,
+        review: releaseReview,
+        snapshot: home,
+        storage: promotionStorage,
+      });
+      setHomeOverride({ agentId: agent.id, snapshot: next });
+      setReleaseReview(null);
+      setPromotionNotice(`Version ${reviewedVersion} is live.`);
+      promotionStorage.removeItem(attemptStorageKey);
+      live.reload();
+      sounds.confirm();
+    } catch (reason) {
+      const current = currentReleaseSnapshotFromError(reason);
+      if (current) {
+        setHomeOverride({ agentId: agent.id, snapshot: current });
+        setReleaseReview(null);
+      }
+      if (!shouldRetainReleasePromotionAttempt(reason)) {
+        promotionStorage.removeItem(attemptStorageKey);
+      }
+      setError(reason instanceof Error ? reason.message : String(reason));
+      live.reload();
+    } finally {
+      promotionInFlight.current = false;
+      setBusy(null);
+    }
+  };
+  const cancelPromotionReview = () => {
+    if (releaseReview) {
+      promotionStorage.removeItem(
+        releasePromotionStorageKey(agent.id, releaseReview.version),
+      );
+    }
+    setReleaseReview(null);
   };
   const saveCap = async () => {
     const value = Number(cap);
@@ -2093,6 +2227,15 @@ function AgentSettingsPane({
   const active = (live.data.agentRoutines?.aggregate.active ?? 0) > 0;
   const install = live.data.install?.agentInstall;
   const endpoint = install?.agentMcpUrl ?? `${launchApiOrigin()}/mcp/${agent.id}`;
+  const liveRelease = home?.release.live;
+  const candidate = home?.release.candidate;
+  const releaseReviewActive = Boolean(
+    home && releaseReview &&
+      releaseCandidateMatchesReview(agent.id, home, releaseReview),
+  );
+  const promotionAllowed = Boolean(
+    candidate?.canPromote && home?.actions.canPromoteCandidate,
+  );
   return (
     <section className="neb-modal-pane active">
       <h2 className="neb-modal-h">Settings</h2>
@@ -2128,6 +2271,78 @@ function AgentSettingsPane({
       <Collapsible label="Connect">
         <div className="neb-ov-connect"><code>{endpoint}</code><CopyButton text={endpoint} /></div>
         <p className="neb-ov-note">Point any MCP client at this endpoint with an Agent-scoped Galactic key.</p>
+      </Collapsible>
+
+      <Collapsible
+        label={`Release${(home?.release.candidateCount ?? 0) > 1 ? ` · ${home?.release.candidateCount} staged` : ""}`}
+        initiallyOpen={Boolean(candidate)}
+      >
+        <div className="neb-release-block">
+          <div className="neb-release-heading">Live</div>
+          {liveRelease
+            ? (
+              <>
+                <div className="neb-ov-row"><span className="neb-ov-row-key">Declared version</span><span className="neb-ov-row-val">{liveRelease.version}</span></div>
+                {liveRelease.executedVersion && liveRelease.executedVersion !== liveRelease.version
+                  ? <div className="neb-ov-row"><span className="neb-ov-row-key">Executing version</span><span className="neb-ov-row-val">{liveRelease.executedVersion}</span></div>
+                  : null}
+                <div className="neb-ov-row"><span className="neb-ov-row-key">Integrity</span><span className={`neb-ov-row-val${liveRelease.integrity === "verified" ? " on" : ""}`}>{liveRelease.integrity}</span></div>
+                <p className="neb-ov-note">{liveRelease.promotedAt ? `Promoted ${formatRelativePast(liveRelease.promotedAt)}.` : "Promotion time unavailable."}</p>
+              </>
+            )
+            : (
+              <p className="neb-ov-note">
+                {!home
+                  ? live.data.agentHomeError
+                    ? "Release state is unavailable. Refresh the Agent to try again."
+                    : "Loading release state…"
+                  : "No live version."}
+              </p>
+            )}
+        </div>
+        <div className="neb-release-block candidate">
+          <div className="neb-release-heading">Latest candidate</div>
+          {candidate
+            ? (
+              <>
+                <div className="neb-ov-row"><span className="neb-ov-row-key">Exact-tested version</span><span className="neb-ov-row-val">{candidate.version}</span></div>
+                {shortReleaseFingerprint(candidate.sourceFingerprint)
+                  ? <div className="neb-ov-row"><span className="neb-ov-row-key">Source fingerprint</span><span className="neb-ov-row-val" title={candidate.sourceFingerprint ?? undefined}>{shortReleaseFingerprint(candidate.sourceFingerprint)}</span></div>
+                  : null}
+                <div className="neb-ov-row"><span className="neb-ov-row-key">Review</span><span className={`neb-release-status ${candidate.reviewStatus}`}>{releaseReviewLabel(candidate.reviewStatus)}</span></div>
+                <p className="neb-ov-note">{candidate.testedAt ? `Tested ${formatRelativePast(candidate.testedAt)}.` : candidate.uploadedAt ? `Uploaded ${formatRelativePast(candidate.uploadedAt)}.` : "Upload time unavailable."}</p>
+                {candidate.authorityChanges.length > 0
+                  ? (
+                    <div className="neb-release-changes" aria-label="Authority changes">
+                      {candidate.authorityChanges.map((change) => (
+                        <div className="neb-release-change" key={`${change.change}:${change.path}`}>
+                          <span className={`neb-release-change-kind ${change.change}`}>{change.change}</span>
+                          <span>{change.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                  : <p className="neb-ov-note">No authority change from live.</p>}
+                {releaseReviewActive
+                  ? (
+                    <div className="neb-release-confirm" role="group" aria-label="Confirm promotion">
+                      <p>Make exact-tested version {candidate.version} live?</p>
+                      <div className="neb-release-actions">
+                        <button className="neb-btn-sm" disabled={!promotionAllowed || busy === "release"} onClick={() => void promoteCandidate()} type="button">{busy === "release" ? "Promoting…" : "Confirm promotion"}</button>
+                        <button className="neb-btn-sm" disabled={busy === "release"} onClick={cancelPromotionReview} type="button">Cancel</button>
+                      </div>
+                    </div>
+                  )
+                  : <button className="neb-btn-sm neb-release-promote" disabled={!promotionAllowed || Boolean(busy)} onClick={() => {
+                    if (!home) return;
+                    setPromotionNotice("");
+                    setReleaseReview(createReleaseCandidateReviewToken(agent.id, home));
+                  }} type="button">Review &amp; promote</button>}
+              </>
+            )
+            : home ? <p className="neb-ov-note">No staged candidate.</p> : null}
+          {promotionNotice ? <p className="neb-release-success" role="status">{promotionNotice}</p> : null}
+        </div>
       </Collapsible>
 
       <Collapsible label="Variables" initiallyOpen={false}>
