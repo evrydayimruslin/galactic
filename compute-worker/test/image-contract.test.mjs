@@ -46,6 +46,9 @@ describe("developer-v1 image contract", () => {
     expect(cliPackage.version).toBe("2.4.0");
     expect(toolchainPackage.dependencies).not.toHaveProperty("galacticconnection");
     expect(dockerfile).toContain("ARG DENO_VERSION=2.6.10");
+    expect(dockerfile).toContain(
+      "deno --version | awk 'NR == 1 { print $2 }'",
+    );
     expect(dockerfile).toContain("COPY cli/package.json cli/package-lock.json");
     expect(dockerfile).toContain("deno cache --no-config --lock=/opt/galactic/cli/deno.lock --frozen");
     expect(cliEntry).toContain("--cached-only");

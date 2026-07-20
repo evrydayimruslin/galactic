@@ -85,7 +85,7 @@ RUN set -eux; \
     echo "${deno_sha}  /tmp/${deno_archive}" | sha256sum -c -; \
     unzip -q "/tmp/${deno_archive}" -d /usr/local/bin; \
     rm "/tmp/${deno_archive}"; \
-    test "$(deno --version | sed -n '1s/^deno //p')" = "${DENO_VERSION}"
+    test "$(deno --version | awk 'NR == 1 { print $2 }')" = "${DENO_VERSION}"
 
 # Browser automation and coding-agent CLIs are lockfile-pinned. They receive no
 # ambient credentials; a developer must explicitly bind the provider secret a
