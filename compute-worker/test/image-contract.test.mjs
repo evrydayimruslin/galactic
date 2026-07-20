@@ -33,6 +33,9 @@ describe("developer-v1 image contract", () => {
       "utf8",
     );
     expect(smoke).toContain('import { chromium } from "playwright"');
+    expect(smoke).toContain(
+      "accessSync(chromium.executablePath(), constants.X_OK)",
+    );
     expect(smoke).toContain("await chromium.launch({ headless: true })");
     expect(smoke).toContain("/node_modules/playwright-core");
   });

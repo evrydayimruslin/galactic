@@ -18,10 +18,11 @@ docker run --rm --entrypoint /bin/bash "$image" -lc '
   test -L /node_modules/playwright
   test -L /node_modules/playwright-core
   playwright --version
-  test -x /ms-playwright/chromium-*/chrome-linux*/chrome
   cd /workspace
   node --input-type=module -e '\''
     import { chromium } from "playwright";
+    import { accessSync, constants } from "node:fs";
+    accessSync(chromium.executablePath(), constants.X_OK);
     const browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
     await page.setContent("<title>compute-smoke</title>");
