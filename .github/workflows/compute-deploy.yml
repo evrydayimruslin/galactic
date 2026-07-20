@@ -475,12 +475,15 @@ jobs:
           printf '%s  %s\n' "$syft_sha256" "$RUNNER_TEMP/$syft_archive" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$syft_archive" -C "$syft_dir" syft
           "$syft_dir/syft" "docker:$LOCAL_IMAGE_TAG" \
-            -o "spdx-json=$EVIDENCE_DIR/image.spdx.json"
+            -o "spdx-json=$EVIDENCE_DIR/image.raw.spdx.json"
+          node compute-worker/scripts/normalize-syft-spdx.mjs \
+            "$EVIDENCE_DIR/image.raw.spdx.json" \
+            "$EVIDENCE_DIR/image.spdx.json" \
+            "$EVIDENCE_DIR/sbom-corrections.json"
 
       - name: Gate all critical and fixable high image vulnerabilities
         shell: bash
-        run: bash compute-worker/scripts/scan-sbom.sh \
-          "$EVIDENCE_DIR/image.spdx.json" "$EVIDENCE_DIR"
+        run: bash compute-worker/scripts/scan-sbom.sh "$EVIDENCE_DIR/image.spdx.json" "$EVIDENCE_DIR"
 
       - name: Push image and resolve registry digest
         shell: bash

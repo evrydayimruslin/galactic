@@ -258,7 +258,10 @@ describe("developer-v1 image contract", () => {
 describe("Compute release supply-chain contract", () => {
   it("fails every critical and every fixable high vulnerability", () => {
     const scanner = repositoryFile("compute-worker/scripts/scan-sbom.sh");
-    const workflow = repositoryFile(".github/workflows/compute-ci.yml");
+    const workflows = [
+      repositoryFile(".github/workflows/compute-ci.yml"),
+      repositoryFile(".github/workflows/compute-deploy.yml"),
+    ];
     expect(scanner).toContain('.vulnerability.severity == "Critical"');
     expect(scanner).toContain("grype-critical-findings.json");
     expect(scanner).toContain("--only-fixed --fail-on high");
@@ -266,10 +269,15 @@ describe("Compute release supply-chain contract", () => {
     expect(scanner).toContain(".ignoredMatches[]?");
     expect(scanner).toContain("grype-vex-ignored-findings.json");
     expect(scanner).toContain('artifact.purl == "pkg:generic/python@3.13.14"');
-    expect(workflow).toContain("image.raw.spdx.json");
-    expect(workflow).toContain("scripts/normalize-syft-spdx.mjs");
-    expect(workflow).toContain('"$EVIDENCE_DIR/image.spdx.json"');
-    expect(workflow).toContain('"$EVIDENCE_DIR/sbom-corrections.json"');
+    for (const workflow of workflows) {
+      expect(workflow).toContain("image.raw.spdx.json");
+      expect(workflow).toContain("scripts/normalize-syft-spdx.mjs");
+      expect(workflow).toContain('"$EVIDENCE_DIR/image.spdx.json"');
+      expect(workflow).toContain('"$EVIDENCE_DIR/sbom-corrections.json"');
+    }
+    expect(workflows[1]).toContain(
+      'run: bash compute-worker/scripts/scan-sbom.sh "$EVIDENCE_DIR/image.spdx.json" "$EVIDENCE_DIR"',
+    );
   });
 
   it("hashes every repository file copied into the image", () => {
