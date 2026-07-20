@@ -46,6 +46,22 @@ describe("Compute release workflow static guards", () => {
     expect(deploy).toContain("verify-container-readiness.mjs");
   });
 
+  it("checks the exact Worker and Durable Object-derived Container application", async () => {
+    const workflows = await Promise.all([
+      text(".github/workflows/compute-deploy.yml"),
+      text(".github/workflows/compute-admission.yml"),
+    ]);
+    for (const workflow of workflows) {
+      expect(workflow).toContain(
+        'container_application="${compute_worker}-computestandard"',
+      );
+      expect(workflow).toContain('"$CONTAINER_APPLICATION"');
+      expect(workflow).not.toContain(
+        '"$container_list" "$COMPUTE_WORKER"',
+      );
+    }
+  });
+
   it("keeps checkout/schema/live-infrastructure checks out of emergency disable", async () => {
     const admission = await text(".github/workflows/compute-admission.yml");
     const resolveStart = admission.indexOf("Resolve certified OFF version from Compute release evidence");

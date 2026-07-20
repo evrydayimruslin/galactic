@@ -159,9 +159,11 @@ jobs:
             schema_workflow_path=.github/workflows/supabase-production-db.yml
             schema_deploy_job='Deploy production schema'
           fi
+          container_application="${compute_worker}-computestandard"
           {
             echo "API_WORKER=$api_worker"
             echo "COMPUTE_WORKER=$compute_worker"
+            echo "CONTAINER_APPLICATION=$container_application"
             echo "QUEUE_NAME=$queue_name"
             echo "COMPUTE_DLQ=$compute_dlq"
             echo "RECONCILIATION_DLQ=$reconciliation_dlq"
@@ -463,7 +465,7 @@ jobs:
           # Wrangler 4.112.0 JSON mode is one page; absence fails closed.
           "$wrangler" containers list --json > "$container_list"
           node compute-worker/scripts/verify-container-readiness.mjs \
-            "$container_list" "$COMPUTE_WORKER" "$RELEASE_DEPLOYED_IMAGE" \
+            "$container_list" "$CONTAINER_APPLICATION" "$RELEASE_DEPLOYED_IMAGE" \
             > "$EVIDENCE_DIR/container-readiness.json"
           api_env=(); if [ "$REQUESTED_TARGET" = "staging" ]; then api_env=(--env staging); fi
           secret_names="$RUNNER_TEMP/compute-admission-secret-names.json"

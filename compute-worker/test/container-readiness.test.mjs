@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { verifyContainerReadiness } from "../scripts/verify-container-readiness.mjs";
 
-const name = "galactic-compute-staging";
-const image = `registry.cloudflare.com/${"a".repeat(32)}/${name}@sha256:${"b".repeat(64)}`;
+const workerName = "galactic-compute-staging";
+const name = `${workerName}-computestandard`;
+const image = `registry.cloudflare.com/${"a".repeat(32)}/${workerName}@sha256:${"b".repeat(64)}`;
 const ready = {
   id: "app-id",
   name,
