@@ -35,7 +35,7 @@ docker run --rm --entrypoint /bin/bash "$image" -lc '
   GALACTIC_LEASE_ID=lease_smoke \
     GALACTIC_JOB_TOKEN_FILE=/tmp/galactic-job-token \
     GALACTIC_GATEWAY_URL=https://galactic.internal/v1 \
-    galactic budget --help | grep "active Galactic Compute lease budget"
+    galactic budget --help | grep "conserved budget for the active Galactic Compute lease"
   rm /tmp/galactic-job-token
   printf "compute image smoke passed\n"
 '

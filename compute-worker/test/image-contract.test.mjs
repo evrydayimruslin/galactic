@@ -57,7 +57,9 @@ describe("developer-v1 image contract", () => {
     expect(cliEntry).toContain("--cached-only");
     expect(cliEntry).toContain("--no-config");
     expect(smoke).toContain("deno galactic galacticconnection");
-    expect(smoke).toContain("galactic budget --help");
+    expect(smoke).toContain(
+      'galactic budget --help | grep "conserved budget for the active Galactic Compute lease"',
+    );
   });
 
   it("pins official DuckDB v1.5.1 release hashes for both supported architectures", () => {
