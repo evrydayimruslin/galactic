@@ -1,0 +1,8 @@
+# Preserve Cloudflare Sandbox's supported Python data/code-interpreter stack
+# while replacing its inherited interpreter. The generated hash lock is used
+# for image installation; update both files together.
+ipython==9.15.0
+matplotlib==3.11.0
+numpy==2.4.6
+pandas==3.0.3
+psutil==7.2.2

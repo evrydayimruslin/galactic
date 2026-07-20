@@ -98,9 +98,9 @@ jobs:
         run: |
           set -euo pipefail
           node --test ../cli/tests/compute-job-mode.node.test.mjs
-          deno_version=2.6.10
+          deno_version=2.9.3
           deno_archive=deno-x86_64-unknown-linux-gnu.zip
-          deno_sha256=a7c9d5c1f93bfaabe03c3c0583a8c88caf695db3cec4dea2938440038609f225
+          deno_sha256=8101865641cbede56f08ad19c0a67a87df84bce127fee0d3e3e1f7467717ffa6
           deno_dir="$RUNNER_TEMP/deno"
           mkdir -p "$deno_dir"
           curl -fsSL \

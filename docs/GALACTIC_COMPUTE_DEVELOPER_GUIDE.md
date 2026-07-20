@@ -593,7 +593,8 @@ does not extend its authority or lifetime.
 The pinned broad image is intended to avoid spending short leases on package
 installation. It currently includes:
 
-- Node.js, Python, compilers/build tools, Git/Git LFS, `gh`, SSH and `rsync`;
+- Node.js, patched Python 3.13 with NumPy, Pandas, Matplotlib, IPython and
+  psutil, compilers/build tools, Git/Git LFS, `gh`, SSH and `rsync`;
 - `curl`, `wget`, DNS/netcat, `jq`, `ripgrep`, SQLite, DuckDB, PostgreSQL,
   MySQL and Redis clients;
 - `ffmpeg`, ImageMagick, Pandoc, headless LibreOffice, Poppler and Tesseract;
@@ -605,7 +606,8 @@ installation. It currently includes:
 Installed network clients do not expand the egress boundary. HTTPS modes work;
 SSH and native remote database protocols are present for local files/services,
 diagnostics, and a future scoped network capability, but cannot reach remote
-ports in v1.
+ports in v1. The Cloudflare quick-tunnel helper is intentionally absent, so a
+job cannot create an inbound preview URL or public Sandbox tunnel.
 
 This is one immutable versioned profile, not a user-supplied Docker build. Tool
 selection is currently dependency/audit metadata rather than command

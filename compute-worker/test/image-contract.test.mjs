@@ -20,10 +20,14 @@ describe("developer-v1 image contract", () => {
   it("pins the Sandbox image and lease MCP dependency", () => {
     const dockerfile = fixture("Dockerfile");
     const bridgePackage = JSON.parse(fixture("bridge/package.json"));
+    const toolchainPackage = JSON.parse(fixture("toolchain/package.json"));
     expect(dockerfile).toContain("cloudflare/sandbox:0.12.3-python");
     expect(dockerfile).toContain('"playwright@${PLAYWRIGHT_VERSION}"');
     expect(dockerfile).toContain("/node_modules/playwright");
     expect(dockerfile).toContain("/node_modules/playwright-core");
+    expect(toolchainPackage.dependencies.playwright).toBe(
+      "1.62.0-alpha-2026-07-20",
+    );
     expect(bridgePackage.dependencies["@modelcontextprotocol/sdk"]).toBe("1.29.0");
   });
 
@@ -37,6 +41,8 @@ describe("developer-v1 image contract", () => {
       "accessSync(chromium.executablePath(), constants.X_OK)",
     );
     expect(smoke).toContain("await chromium.launch({ headless: true })");
+    expect(smoke).toContain('browser.version() !== "151.0.7922.34"');
+    expect(smoke).toContain('page.goto("data:text/html,<title>compute-smoke</title>")');
     expect(smoke).toContain("/node_modules/playwright-core");
   });
 
@@ -48,7 +54,13 @@ describe("developer-v1 image contract", () => {
     const toolchainPackage = JSON.parse(fixture("toolchain/package.json"));
     expect(cliPackage.version).toBe("2.4.0");
     expect(toolchainPackage.dependencies).not.toHaveProperty("galacticconnection");
-    expect(dockerfile).toContain("ARG DENO_VERSION=2.6.10");
+    expect(dockerfile).toContain("ARG DENO_VERSION=2.9.3");
+    expect(dockerfile).toContain(
+      "8101865641cbede56f08ad19c0a67a87df84bce127fee0d3e3e1f7467717ffa6",
+    );
+    expect(dockerfile).toContain(
+      "753937db98a4b56cbbbd26e8f00eb4b789191a229afec93f74bcfa4e79bc2c8b",
+    );
     expect(dockerfile).toContain(
       "deno --version | awk 'NR == 1 { print $2 }'",
     );
@@ -60,6 +72,61 @@ describe("developer-v1 image contract", () => {
     expect(smoke).toContain(
       'galactic budget --help | grep "conserved budget for the active Galactic Compute lease"',
     );
+  });
+
+  it("replaces inherited vulnerable runtimes without losing the Python data stack", () => {
+    const dockerfile = fixture("Dockerfile");
+    const smoke = repositoryFile("compute-worker/scripts/smoke-image.sh");
+    const requirements = fixture("python/requirements.lock");
+    for (const value of [
+      "ARG PYTHON_VERSION=3.13.14",
+      "3f031d431f80668e14f3bc066bbf4369cd9281b9",
+      "771d12dda5140313db0ac550292987975651bbde",
+      "7933f4bf7131aa4140750f9404f5de0aa2969ced",
+      "LD_LIBRARY_PATH=/tmp/python-source",
+      "./python -m test -u cpu test_tarfile test_htmlparser",
+      "rm -rf /usr/local/python",
+      "update-alternatives --remove python3 /usr/local/bin/python3.11",
+      "ldconfig",
+      "--only-binary=:all: --require-hashes",
+    ]) {
+      expect(dockerfile).toContain(value);
+    }
+    for (const direct of [
+      "ipython==9.15.0",
+      "matplotlib==3.11.0",
+      "numpy==2.4.6",
+      "pandas==3.0.3",
+      "psutil==7.2.2",
+    ]) {
+      expect(requirements).toContain(direct);
+    }
+    const requirementLines = requirements
+      .split("\n")
+      .filter((line) => /^[a-z0-9][a-z0-9-]*==/u.test(line));
+    expect(requirementLines).toHaveLength(29);
+    expect(requirementLines.every((line) => line.endsWith(" \\"))).toBe(true);
+    expect(smoke).toContain('test "$(/usr/bin/python3 --version)" = "Python 3.13.14"');
+    expect(smoke).toContain("import IPython, matplotlib, numpy, pandas, psutil");
+  });
+
+  it("rebuilds static Go CLIs with patched modules and removes quick tunnels", () => {
+    const dockerfile = fixture("Dockerfile");
+    const overlay = fixture("overlays/git-lfs-v3.7.1-go-modules.patch");
+    const smoke = repositoryFile("compute-worker/scripts/smoke-image.sh");
+    expect(dockerfile).toContain(
+      "golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651",
+    );
+    expect(dockerfile).toContain("ARG GH_VERSION=2.96.0");
+    expect(dockerfile).toContain("ARG GIT_LFS_VERSION=3.7.1");
+    expect(dockerfile).toContain("ARG RCLONE_VERSION=1.74.4");
+    for (const version of ["v0.53.0", "v0.56.0", "v0.21.0", "v0.46.0", "v0.38.0"]) {
+      expect(overlay).toContain(version);
+    }
+    expect(dockerfile).not.toMatch(/\bgit git-lfs gh openssh-client\b/u);
+    expect(dockerfile).not.toMatch(/^\s+rclone \\\s*$/mu);
+    expect(dockerfile).toContain("rm -f /usr/local/bin/cloudflared");
+    expect(smoke).toContain("test ! -e /usr/local/bin/cloudflared");
   });
 
   it("pins official DuckDB v1.5.1 release hashes for both supported architectures", () => {
@@ -191,6 +258,56 @@ describe("Compute release supply-chain contract", () => {
     expect(scanner).toContain('.vulnerability.severity == "Critical"');
     expect(scanner).toContain("grype-critical-findings.json");
     expect(scanner).toContain("--only-fixed --fail-on high");
+    expect(scanner.match(/--vex "\$vex_document"/gu)).toHaveLength(2);
+    expect(scanner).toContain(".ignoredMatches[]?");
+    expect(scanner).toContain("grype-vex-ignored-findings.json");
+    expect(scanner).toContain('artifact.purl == "pkg:generic/python@3.13.14"');
+  });
+
+  it("limits VEX to the three exact tested CPython backports", () => {
+    const vex = JSON.parse(
+      repositoryFile(
+        "compute-worker/security/cpython-3.13.14-security-backports.openvex.json",
+      ),
+    );
+    expect(vex["@context"]).toBe("https://openvex.dev/ns/v0.2.0");
+    expect(vex.statements).toHaveLength(3);
+    const expected = new Map([
+      [
+        "CVE-2026-11972",
+        [
+          "3f031d431f80668e14f3bc066bbf4369cd9281b9",
+          "240177f6a8e0e328773cb775add1f2cfe9128e67d461a9ba728fbb3cbbe89086",
+        ],
+      ],
+      [
+        "CVE-2026-11940",
+        [
+          "771d12dda5140313db0ac550292987975651bbde",
+          "f74e92f1eb84a91b3efc144660d9e59162d81a922bb9ecccb2e64b832c91d387",
+        ],
+      ],
+      [
+        "CVE-2026-15308",
+        [
+          "7933f4bf7131aa4140750f9404f5de0aa2969ced",
+          "d8913b46e769704d0e810994909ee81c8af6aaa7230b79ff4c0d849fe1f305a4",
+        ],
+      ],
+    ]);
+    for (const statement of vex.statements) {
+      const [commit, patchSha] = expected.get(statement.vulnerability.name) ?? [];
+      expect(commit).toBeTruthy();
+      expect(statement.products).toEqual([
+        { "@id": "pkg:generic/python@3.13.14" },
+      ]);
+      expect(statement.status).toBe("fixed");
+      expect(statement.status_notes).toContain(commit);
+      expect(statement.status_notes).toContain(patchSha);
+    }
+    expect(new Set(vex.statements.map((statement) => statement.vulnerability.name))).toEqual(
+      new Set(expected.keys()),
+    );
   });
 
   it("keeps Cloudflare deploy credentials off untrusted build/install steps", () => {
