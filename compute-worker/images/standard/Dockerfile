@@ -209,7 +209,7 @@ RUN set -eux; \
     install -m 0755 "/tmp/rclone/rclone-v${GALACTIC_RCLONE_VERSION}-linux-${rclone_arch}/rclone" /usr/local/bin/rclone; \
     rm -rf /tmp/rclone "/tmp/${rclone_archive}"; \
     rclone version | grep -F "rclone v${GALACTIC_RCLONE_VERSION}"; \
-    rclone version | grep -F 'go version: go1.26.5'
+    rclone version | grep -F 'go/version: go1.26.5'
 
 # npm is part of the base Node runtime. Replace its old bundled dependency tree
 # from an integrity-pinned registry tarball before installing any body tools.

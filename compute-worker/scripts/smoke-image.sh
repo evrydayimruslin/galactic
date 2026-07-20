@@ -9,7 +9,7 @@ docker run --rm --entrypoint /bin/bash "$image" -lc '
   gh --version | grep "gh version 2.96.0"
   git-lfs version | grep "git-lfs/3.7.1 (Galactic;"
   rclone version | grep "rclone v1.74.4"
-  rclone version | grep "go version: go1.26.5"
+  rclone version | grep "go/version: go1.26.5"
   duckdb --version
   test "$(python3 --version)" = "Python 3.13.14"
   test "$(/usr/bin/python3 --version)" = "Python 3.13.14"
