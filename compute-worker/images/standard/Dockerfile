@@ -123,7 +123,7 @@ ARG DENO_VERSION=2.9.3
 ARG GALACTIC_CLI_VERSION=2.4.0
 ARG GH_VERSION=2.96.0
 ARG GIT_LFS_VERSION=3.7.1
-ARG RCLONE_VERSION=1.74.4
+ARG GALACTIC_RCLONE_VERSION=1.74.4
 ARG PYTHON_VERSION=3.13.14
 ARG NPM_VERSION=12.0.1
 
@@ -138,7 +138,7 @@ LABEL org.opencontainers.image.base.name="${SANDBOX_BASE_IMAGE}" \
       ai.galactic.tool.galactic-cli="galacticconnection@${GALACTIC_CLI_VERSION}" \
       ai.galactic.tool.gh="gh@${GH_VERSION}" \
       ai.galactic.tool.git-lfs="git-lfs@${GIT_LFS_VERSION}-galactic.1" \
-      ai.galactic.tool.rclone="rclone@${RCLONE_VERSION}" \
+      ai.galactic.tool.rclone="rclone@${GALACTIC_RCLONE_VERSION}" \
       ai.galactic.tool.python="python@${PYTHON_VERSION}+cve-2026-11940-11972-15308-backports" \
       ai.galactic.tool.npm="npm@${NPM_VERSION}" \
       ai.galactic.security.cloudflared="absent-private-egress-v1"
@@ -201,14 +201,14 @@ RUN set -eux; \
       arm64) rclone_arch=arm64; rclone_sha=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c358de419 ;; \
       *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    rclone_archive="rclone-v${RCLONE_VERSION}-linux-${rclone_arch}.zip"; \
+    rclone_archive="rclone-v${GALACTIC_RCLONE_VERSION}-linux-${rclone_arch}.zip"; \
     curl -fsSL -o "/tmp/${rclone_archive}" \
-      "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/${rclone_archive}"; \
+      "https://github.com/rclone/rclone/releases/download/v${GALACTIC_RCLONE_VERSION}/${rclone_archive}"; \
     echo "${rclone_sha}  /tmp/${rclone_archive}" | sha256sum -c -; \
     unzip -q "/tmp/${rclone_archive}" -d /tmp/rclone; \
-    install -m 0755 "/tmp/rclone/rclone-v${RCLONE_VERSION}-linux-${rclone_arch}/rclone" /usr/local/bin/rclone; \
+    install -m 0755 "/tmp/rclone/rclone-v${GALACTIC_RCLONE_VERSION}-linux-${rclone_arch}/rclone" /usr/local/bin/rclone; \
     rm -rf /tmp/rclone "/tmp/${rclone_archive}"; \
-    rclone version | grep -F "rclone v${RCLONE_VERSION}"; \
+    rclone version | grep -F "rclone v${GALACTIC_RCLONE_VERSION}"; \
     rclone version | grep -F 'go version: go1.26.5'
 
 # npm is part of the base Node runtime. Replace its old bundled dependency tree

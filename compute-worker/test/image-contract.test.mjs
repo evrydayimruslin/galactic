@@ -119,7 +119,8 @@ describe("developer-v1 image contract", () => {
     );
     expect(dockerfile).toContain("ARG GH_VERSION=2.96.0");
     expect(dockerfile).toContain("ARG GIT_LFS_VERSION=3.7.1");
-    expect(dockerfile).toContain("ARG RCLONE_VERSION=1.74.4");
+    expect(dockerfile).toContain("ARG GALACTIC_RCLONE_VERSION=1.74.4");
+    expect(dockerfile).not.toContain("ARG RCLONE_VERSION=");
     for (const version of ["v0.53.0", "v0.56.0", "v0.21.0", "v0.46.0", "v0.38.0"]) {
       expect(overlay).toContain(version);
     }
