@@ -14,6 +14,7 @@ const outputPath = path.join(packageDir, 'index.d.ts');
 const contractFiles = [
   'agentic-interface.ts',
   'ai.ts',
+  'compute.ts',
   'env.ts',
   'jsonrpc.ts',
   'manifest.ts',

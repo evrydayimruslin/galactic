@@ -1,0 +1,30 @@
+{
+  "name": "galactic-compute-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.staging.toml",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "verify": "npm run typecheck && npm test",
+    "image:build": "./scripts/build-image.sh galactic-compute:developer-v1",
+    "image:smoke": "./scripts/smoke-image.sh galactic-compute:developer-v1",
+    "deploy": "wrangler deploy --config wrangler.toml",
+    "deploy:staging": "wrangler deploy --config wrangler.staging.toml",
+    "deploy:dry-run": "wrangler deploy --config wrangler.toml --dry-run",
+    "deploy:staging:dry-run": "wrangler deploy --config wrangler.staging.toml --dry-run"
+  },
+  "dependencies": {
+    "@cloudflare/sandbox": "0.12.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260717.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.5",
+    "wrangler": "4.112.0"
+  }
+}

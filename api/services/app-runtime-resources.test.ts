@@ -527,7 +527,14 @@ Deno.test("app runtime resources: manifest permissions only admit allowlisted ru
 Deno.test("app runtime resources: strict manifest permissions only grant declared runtime capabilities", () => {
   const resolution = resolveStrictManifestPermissions({
     manifest: JSON.stringify({
-      permissions: ["ai:call", "storage:read", "net:connect", "unknown:scope"],
+      permissions: [
+        "ai:call",
+        "storage:read",
+        "net:connect",
+        "compute:exec",
+        "compute:*",
+        "unknown:scope",
+      ],
     }),
   });
 
@@ -536,8 +543,9 @@ Deno.test("app runtime resources: strict manifest permissions only grant declare
     "ai:call",
     "storage:read",
     "net:connect",
+    "compute:exec",
   ]);
-  assertEquals(resolution.ignoredPermissions, ["unknown:scope"]);
+  assertEquals(resolution.ignoredPermissions, ["compute:*", "unknown:scope"]);
 });
 
 Deno.test("app runtime resources: widget dependencies become read-only app call grants", () => {

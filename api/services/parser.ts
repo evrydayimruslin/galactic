@@ -4,6 +4,7 @@
 
 import type * as tsTypes from 'typescript';
 import type { ParsedSkills } from '../../shared/types/index.ts';
+import { COMPUTE_EXEC_PERMISSION } from '../../shared/contracts/compute.ts';
 
 // TypeScript compiler — dynamically imported to avoid __filename crash at module init.
 // The TS compiler uses Node.js APIs (fs, path, __filename) not available in Workers global scope.
@@ -65,6 +66,8 @@ export interface ParsedFunction {
   /** True when this exported function (transitively) reaches galactic.ai() /
    *  ultralight.ai(). Conservative: true when uncertain. See FREE_MODE_DESIGN. */
   usesInference?: boolean;
+  /** True when this exported function (transitively) starts galactic.compute(). */
+  usesCompute?: boolean;
 }
 
 export interface JsonSchema {
@@ -211,6 +214,27 @@ export async function parseTypeScript(code: string, filename = 'index.ts'): Prom
       );
       const hasAi = new RegExp(`${SDK}\\.ai\\s*\\(`).test(code);
       for (const fn of functions) fn.usesInference = hasAi;
+    }
+
+    // Per-function compute detection. This is an upload-derived admission and
+    // accounting signal, not a developer-authored permission assertion.
+    try {
+      const compute = analyzeComputeUsage(ts, sourceFile, code);
+      for (const fn of functions) {
+        fn.usesCompute = !compute.hasCompute
+          ? false
+          : compute.allCompute
+          ? true
+          : compute.byFunction.get(fn.name) ?? true;
+      }
+    } catch (computeErr) {
+      parseWarnings.push(
+        `Compute analysis failed: ${
+          computeErr instanceof Error ? computeErr.message : String(computeErr)
+        }`,
+      );
+      const hasCompute = new RegExp(`${SDK}\\.compute\\s*\\(`).test(code);
+      for (const fn of functions) fn.usesCompute = hasCompute;
     }
   } catch (err) {
     parseErrors.push(`Parse error: ${err instanceof Error ? err.message : String(err)}`);
@@ -779,6 +803,17 @@ function inferPermissions(code: string): string[] {
     permissions.push('ai:embed');
   }
 
+  // Galactic Compute is one strict capability. Starting, polling, and
+  // cancelling all require the same server-enforced permission.
+  if (
+    new RegExp(`${SDK}\\.compute\\b`).test(code) ||
+    new RegExp(
+      `(?:const|let|var)\\s*\\{[^}]*\\bcompute\\b[^}]*\\}\\s*=\\s*${SDK}\\b`,
+    ).test(code)
+  ) {
+    permissions.push(COMPUTE_EXEC_PERMISSION);
+  }
+
   // Network operations
   if (/\bfetch\s*\(/.test(code)) {
     permissions.push('net:fetch');
@@ -885,6 +920,109 @@ function analyzeInferenceUsage(
   const allInference = multiFile || destructuredAi || !anyAttributed;
 
   return { hasAi: true, allInference, byFunction: reaches };
+}
+
+/**
+ * Per-function compute-start detection. Mirrors inference's conservative call
+ * graph without changing its established behavior. Status/cancel calls require
+ * compute:exec but do not mark uses_compute because they do not start a body.
+ */
+function analyzeComputeUsage(
+  ts: TSModule,
+  sourceFile: tsTypes.SourceFile,
+  code: string,
+): {
+  hasCompute: boolean;
+  allCompute: boolean;
+  byFunction: Map<string, boolean>;
+} {
+  const directCompute = new RegExp(`${SDK}\\.compute\\s*\\(`).test(code);
+  const destructuredCompute = new RegExp(
+    `(?:const|let|var)\\s*\\{[^}]*\\bcompute\\b[^}]*\\}\\s*=\\s*${SDK}\\b`,
+  ).test(code);
+  const aliasedCompute = new RegExp(
+    `(?:const|let|var)\\s+[A-Za-z_$][\\w$]*\\s*=\\s*${SDK}\\.compute\\b`,
+  ).test(code);
+  if (!directCompute && !destructuredCompute && !aliasedCompute) {
+    return { hasCompute: false, allCompute: false, byFunction: new Map() };
+  }
+
+  const bodies = new Map<string, tsTypes.Node>();
+  const addBody = (name: string | undefined, body: tsTypes.Node | undefined) => {
+    if (name && body) bodies.set(name, body);
+  };
+  for (const stmt of sourceFile.statements) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body) {
+      addBody(stmt.name.text, stmt.body);
+    } else if (ts.isVariableStatement(stmt)) {
+      for (const decl of stmt.declarationList.declarations) {
+        if (
+          ts.isIdentifier(decl.name) && decl.initializer &&
+          (ts.isArrowFunction(decl.initializer) ||
+            ts.isFunctionExpression(decl.initializer))
+        ) {
+          addBody(decl.name.text, decl.initializer.body);
+        }
+      }
+    }
+  }
+  const known = new Set(bodies.keys());
+
+  const isComputeStart = (node: tsTypes.Node): boolean =>
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === 'compute' &&
+    ts.isIdentifier(node.expression.expression) &&
+    (node.expression.expression.text === 'ultralight' ||
+      node.expression.expression.text === 'galactic');
+
+  const directStarts = new Set<string>();
+  const edges = new Map<string, Set<string>>();
+  for (const [name, body] of bodies) {
+    const callees = new Set<string>();
+    const walk = (node: tsTypes.Node) => {
+      if (isComputeStart(node)) directStarts.add(name);
+      if (
+        ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
+        known.has(node.expression.text)
+      ) {
+        callees.add(node.expression.text);
+      }
+      ts.forEachChild(node, walk);
+    };
+    walk(body);
+    edges.set(name, callees);
+  }
+
+  const reaches = new Map<string, boolean>();
+  const resolve = (name: string, stack: Set<string>): boolean => {
+    const cached = reaches.get(name);
+    if (cached !== undefined) return cached;
+    if (stack.has(name)) return false;
+    stack.add(name);
+    let result = directStarts.has(name);
+    if (!result) {
+      for (const callee of edges.get(name) ?? []) {
+        if (resolve(callee, stack)) {
+          result = true;
+          break;
+        }
+      }
+    }
+    stack.delete(name);
+    reaches.set(name, result);
+    return result;
+  };
+  for (const name of bodies.keys()) resolve(name, new Set());
+
+  const multiFile = /\bfrom\s+['"]\.\.?\//.test(code);
+  const anyAttributed = [...reaches.values()].some(Boolean);
+  return {
+    hasCompute: true,
+    allCompute: multiFile || destructuredCompute || aliasedCompute ||
+      !anyAttributed,
+    byFunction: reaches,
+  };
 }
 
 // ============================================

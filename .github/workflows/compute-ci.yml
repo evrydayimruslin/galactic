@@ -1,0 +1,184 @@
+name: Compute CI
+
+on:
+  pull_request:
+    paths:
+      - 'compute-worker/**'
+      - 'cli/**'
+      - '.dockerignore'
+      - 'shared/contracts/compute.ts'
+      - 'api/services/compute/**'
+      - 'api/services/compute-*.ts'
+      - 'api/src/bindings/compute-*.ts'
+      - 'api/src/compute-control-plane-entrypoint.ts'
+      - 'api/wrangler.toml'
+      - 'supabase/migrations/**'
+      - 'scripts/supabase/**'
+      - 'docs/GALACTIC_COMPUTE_*.md'
+      - '.github/workflows/supabase-db.yml'
+      - '.github/workflows/supabase-production-db.yml'
+      - '.github/workflows/compute-ci.yml'
+      - '.github/workflows/compute-deploy.yml'
+      - '.github/workflows/compute-admission.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'compute-worker/**'
+      - 'cli/**'
+      - '.dockerignore'
+      - 'shared/contracts/compute.ts'
+      - 'api/services/compute/**'
+      - 'api/services/compute-*.ts'
+      - 'api/src/bindings/compute-*.ts'
+      - 'api/src/compute-control-plane-entrypoint.ts'
+      - 'api/wrangler.toml'
+      - 'supabase/migrations/**'
+      - 'scripts/supabase/**'
+      - 'docs/GALACTIC_COMPUTE_*.md'
+      - '.github/workflows/supabase-db.yml'
+      - '.github/workflows/supabase-production-db.yml'
+      - '.github/workflows/compute-ci.yml'
+      - '.github/workflows/compute-deploy.yml'
+      - '.github/workflows/compute-admission.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify Worker and developer-v1 image
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: compute-worker
+    env:
+      # Repository variable, not a secret. It must be a complete immutable ref:
+      # docker.io/cloudflare/sandbox:0.12.3-python@sha256:<64 lowercase hex>
+      SANDBOX_BASE_IMAGE: ${{ vars.COMPUTE_SANDBOX_BASE_IMAGE }}
+      IMAGE_TAG: galactic-compute-ci:${{ github.sha }}
+      EVIDENCE_DIR: ${{ github.workspace }}/compute-worker/evidence
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: compute-worker/package-lock.json
+
+      - name: Initialize evidence packet
+        shell: bash
+        run: mkdir -p "$EVIDENCE_DIR"
+
+      - name: Require immutable Sandbox base
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='^docker\.io/cloudflare/sandbox:0\.12\.3-python@sha256:[0-9a-f]{64}$'
+          if [[ ! "$SANDBOX_BASE_IMAGE" =~ $expected ]]; then
+            echo "Set repository variable COMPUTE_SANDBOX_BASE_IMAGE to the reviewed 0.12.3-python image with an @sha256 digest." >&2
+            exit 1
+          fi
+          printf '%s\n' "$SANDBOX_BASE_IMAGE" | tee "$EVIDENCE_DIR/base-image.txt"
+          docker pull "$SANDBOX_BASE_IMAGE"
+
+      - name: Install Worker dependencies
+        run: npm ci
+
+      - name: Typecheck and test Worker
+        run: npm run verify
+
+      - name: Verify local CLI compute-job mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test ../cli/tests/compute-job-mode.node.test.mjs
+          deno_version=2.6.10
+          deno_archive=deno-x86_64-unknown-linux-gnu.zip
+          deno_sha256=a7c9d5c1f93bfaabe03c3c0583a8c88caf695db3cec4dea2938440038609f225
+          deno_dir="$RUNNER_TEMP/deno"
+          mkdir -p "$deno_dir"
+          curl -fsSL \
+            "https://github.com/denoland/deno/releases/download/v${deno_version}/${deno_archive}" \
+            -o "$RUNNER_TEMP/$deno_archive"
+          printf '%s  %s\n' "$deno_sha256" "$RUNNER_TEMP/$deno_archive" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/$deno_archive" -d "$deno_dir"
+          pushd ../cli >/dev/null
+          "$deno_dir/deno" test \
+            --no-config \
+            --allow-env --allow-read --allow-write --allow-net \
+            --lock=deno.lock --frozen \
+            tests/compute-job-mode.test.ts
+          popd >/dev/null
+
+      - name: Build immutable-input image
+        shell: bash
+        run: |
+          set -euo pipefail
+          DOCKER_BUILDKIT=1 docker build \
+            --platform linux/amd64 \
+            --build-arg SANDBOX_BASE_IMAGE="$SANDBOX_BASE_IMAGE" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label org.opencontainers.image.source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --tag "$IMAGE_TAG" \
+            --file images/standard/Dockerfile \
+            ..
+
+      - name: Smoke actual image
+        run: ./scripts/smoke-image.sh "$IMAGE_TAG"
+
+      - name: Generate SBOM and provenance evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          syft_version=1.44.0
+          syft_archive="syft_${syft_version}_linux_amd64.tar.gz"
+          syft_sha256=0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a
+          syft_dir="$RUNNER_TEMP/syft"
+          mkdir -p "$syft_dir"
+          curl -fsSL \
+            "https://github.com/anchore/syft/releases/download/v${syft_version}/${syft_archive}" \
+            -o "$RUNNER_TEMP/$syft_archive"
+          printf '%s  %s\n' "$syft_sha256" "$RUNNER_TEMP/$syft_archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$syft_archive" -C "$syft_dir" syft
+          "$syft_dir/syft" "docker:$IMAGE_TAG" \
+            -o "spdx-json=$EVIDENCE_DIR/image.spdx.json"
+
+          docker image inspect "$IMAGE_TAG" > "$EVIDENCE_DIR/image-inspect.json"
+          docker image inspect --format '{{.Id}}' "$IMAGE_TAG" > "$EVIDENCE_DIR/local-image-id.txt"
+          ./scripts/hash-image-inputs.sh "$EVIDENCE_DIR/build-inputs.sha256"
+          node scripts/hash-migrations.mjs .. "$EVIDENCE_DIR/compute-migrations.sha256"
+          migration_manifest_sha256="$(sha256sum "$EVIDENCE_DIR/compute-migrations.sha256" | cut -d ' ' -f 1)"
+          printf '%s  compute-migrations.sha256\n' "$migration_manifest_sha256" \
+            > "$EVIDENCE_DIR/compute-migrations-manifest.sha256"
+          jq -n \
+            --arg git_sha "$GITHUB_SHA" \
+            --arg image_tag "$IMAGE_TAG" \
+            --arg base_image "$SANDBOX_BASE_IMAGE" \
+            --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{schema_version: 1, git_sha: $git_sha, image_tag: $image_tag, base_image: $base_image, generated_at: $generated_at}' \
+            > "$EVIDENCE_DIR/provenance.json"
+
+      - name: Gate all critical and fixable high image vulnerabilities
+        shell: bash
+        run: bash scripts/scan-sbom.sh "$EVIDENCE_DIR/image.spdx.json" "$EVIDENCE_DIR"
+
+      - name: Wrangler dry run (production)
+        run: npx wrangler deploy --config wrangler.toml --dry-run --containers-rollout=none --outdir "$EVIDENCE_DIR/dry-run-production"
+
+      - name: Wrangler dry run (staging)
+        run: npx wrangler deploy --config wrangler.staging.toml --dry-run --containers-rollout=none --outdir "$EVIDENCE_DIR/dry-run-staging"
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compute-ci-evidence-${{ github.sha }}
+          path: compute-worker/evidence
+          if-no-files-found: error
+          retention-days: 30

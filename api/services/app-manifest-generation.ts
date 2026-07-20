@@ -6,6 +6,7 @@ import type {
   ManifestSkill,
 } from '../../shared/contracts/manifest.ts';
 import { validateManifest } from '../../shared/contracts/manifest.ts';
+import { COMPUTE_EXEC_PERMISSION } from '../../shared/contracts/compute.ts';
 import type { ParseResult } from './parser.ts';
 import { parseTypeScript } from './parser.ts';
 import { parseAppManifest } from './app-settings.ts';
@@ -109,6 +110,9 @@ export function generateManifestFromParseResult(
   // inference, so either capability must preserve the per-function signal.
   const appHasInference = parseResult.permissions.includes('ai:call') ||
     parseResult.permissions.includes('ai:embed');
+  const appHasCompute = parseResult.permissions.includes(
+    COMPUTE_EXEC_PERMISSION,
+  );
 
   for (const fn of parseResult.functions) {
     const parameters: Record<string, ManifestParameter> = {};
@@ -142,6 +146,7 @@ export function generateManifestFromParseResult(
         : undefined,
       examples: fn.examples.length > 0 ? fn.examples : undefined,
       ...(appHasInference ? { uses_inference: Boolean(fn.usesInference) } : {}),
+      ...(appHasCompute ? { uses_compute: Boolean(fn.usesCompute) } : {}),
     };
   }
 
@@ -165,10 +170,10 @@ export function generateManifestFromParseResult(
 // Regenerated manifests must not silently drop publisher declarations that
 // describe RUNTIME BEHAVIOR the source parser cannot derive. external_functions
 // is authorization-bearing; interfaces point at uploaded artifacts; routines /
-// emits / imports / network / flight_recorder each drive runtime wiring, so a
-// terse manifest (one without rich descriptions, which takes the carry-forward
-// path) must keep them — otherwise a full-time agent silently loses its routine
-// template and flight recorder on the next regenerate.
+// emits / imports / network / flight_recorder / compute each drive runtime
+// wiring, so a terse manifest (one without rich descriptions, which takes the
+// carry-forward path) must keep them — otherwise a full-time agent silently
+// loses its routine template and flight recorder on the next regenerate.
 const CARRIED_MANIFEST_FIELDS = [
   'external_functions',
   'interfaces',
@@ -177,6 +182,7 @@ const CARRIED_MANIFEST_FIELDS = [
   'imports',
   'network',
   'flight_recorder',
+  'compute',
 ] as const;
 
 function carryForwardDeclaredFields(
@@ -189,6 +195,49 @@ function carryForwardDeclaredFields(
     if (existing[field] !== undefined) {
       result = { ...result, [field]: existing[field] };
     }
+  }
+  if (
+    existing.compute !== undefined &&
+    existing.permissions?.includes(COMPUTE_EXEC_PERMISSION)
+  ) {
+    const functions = Object.fromEntries(
+      Object.entries(result.functions || {}).map(([name, fn]) => [
+        name,
+        {
+          ...fn,
+          uses_compute:
+            existing.functions?.[name]?.uses_compute === true ||
+            fn.uses_compute === true,
+        },
+      ]),
+    );
+    const declaredEnvVars = {
+      ...(existing.env || {}),
+      ...(existing.env_vars || {}),
+    };
+    const computeSecretDeclarations = Object.fromEntries(
+      (existing.compute.secrets || []).flatMap((secret) =>
+        declaredEnvVars[secret]
+          ? [[secret, declaredEnvVars[secret]]]
+          : []
+      ),
+    );
+    result = {
+      ...result,
+      permissions: [...new Set([
+        ...(result.permissions || []),
+        COMPUTE_EXEC_PERMISSION,
+      ])],
+      functions,
+      ...(Object.keys(computeSecretDeclarations).length > 0
+        ? {
+          env_vars: {
+            ...(result.env_vars || {}),
+            ...computeSecretDeclarations,
+          },
+        }
+        : {}),
+    };
   }
   return result;
 }
@@ -211,6 +260,17 @@ export function mergeManifestWithParseResult(
       };
     }
 
+    const mergedPermissions = existingManifest.permissions ??
+      autoManifest.permissions;
+    const effectivePermissions = autoManifest.permissions?.includes(
+        COMPUTE_EXEC_PERMISSION,
+      )
+      ? [...new Set([
+        ...(mergedPermissions || []),
+        COMPUTE_EXEC_PERMISSION,
+      ])]
+      : mergedPermissions;
+
     const mergedManifest: AppManifest = {
       ...existingManifest,
       version,
@@ -218,7 +278,7 @@ export function mergeManifestWithParseResult(
         ...existingManifest.entry,
         functions: existingManifest.entry?.functions || options.entryFileName || 'index.ts',
       },
-      permissions: existingManifest.permissions ?? autoManifest.permissions,
+      permissions: effectivePermissions,
       functions: { ...(existingManifest.functions || {}) },
       skills: {
         ...(autoManifest.skills || {}),
@@ -247,6 +307,19 @@ export function mergeManifestWithParseResult(
         if (target) {
           target.uses_inference = Boolean(fn.usesInference) ||
             target.uses_inference === true;
+        }
+      }
+    }
+
+    // uses_compute is likewise upload-derived. The parser adds the strict
+    // permission when source starts compute, and true remains sticky so an
+    // uploaded manifest cannot suppress detected body creation.
+    if (mergedManifest.permissions?.includes(COMPUTE_EXEC_PERMISSION)) {
+      for (const fn of parseResult.functions) {
+        const target = mergedManifest.functions?.[fn.name];
+        if (target) {
+          target.uses_compute = Boolean(fn.usesCompute) ||
+            target.uses_compute === true;
         }
       }
     }

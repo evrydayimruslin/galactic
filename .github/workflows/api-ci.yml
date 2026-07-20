@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'api/**'
+      # Compute crosses the API control plane; run the full API contract suite
+      # for execution-plane changes as well as Compute's own focused CI.
+      - 'compute-worker/**'
       - 'capacity-tail-worker/**'
       - 'apps/**'
       - 'cli/**'
@@ -16,10 +19,14 @@ on:
       - 'scripts/supabase/**'
       - 'migration-*.sql'
       - '.github/workflows/api-ci.yml'
+      - '.github/workflows/compute-ci.yml'
+      - '.github/workflows/compute-deploy.yml'
+      - '.github/workflows/compute-admission.yml'
   push:
     branches: [main]
     paths:
       - 'api/**'
+      - 'compute-worker/**'
       - 'capacity-tail-worker/**'
       - 'apps/**'
       - 'cli/**'
@@ -32,6 +39,9 @@ on:
       - 'scripts/supabase/**'
       - 'migration-*.sql'
       - '.github/workflows/api-ci.yml'
+      - '.github/workflows/compute-ci.yml'
+      - '.github/workflows/compute-deploy.yml'
+      - '.github/workflows/compute-admission.yml'
   workflow_dispatch:
 
 permissions:
@@ -46,9 +56,11 @@ jobs:
         working-directory: api
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: api/.nvmrc
           cache: npm
@@ -56,7 +68,9 @@ jobs:
 
       - name: Install Deno
         run: |
+          set -euo pipefail
           curl -fsSL -o /tmp/deno.zip https://github.com/denoland/deno/releases/download/v2.6.10/deno-x86_64-unknown-linux-gnu.zip
+          printf '%s  %s\n' a7c9d5c1f93bfaabe03c3c0583a8c88caf695db3cec4dea2938440038609f225 /tmp/deno.zip | sha256sum -c -
           mkdir -p "$HOME/.deno/bin"
           unzip -q -o /tmp/deno.zip -d "$HOME/.deno/bin"
           chmod +x "$HOME/.deno/bin/deno"

@@ -12,6 +12,7 @@ import type {
   ParsedParameter,
   ParseResult,
 } from "./parser.ts";
+import { COMPUTE_EXEC_PERMISSION } from "../../shared/contracts/compute.ts";
 
 export interface GenerationResult {
   success: boolean;
@@ -739,6 +740,8 @@ function permissionToCapability(permission: string): string | null {
     "ai:call": "can call AI models",
     "ai:embed": "can generate semantic embeddings",
     "net:fetch": "can make HTTP requests",
+    [COMPUTE_EXEC_PERMISSION]:
+      "can start disposable developer compute jobs with explicitly declared tools and secrets",
   };
   return map[permission] || null;
 }

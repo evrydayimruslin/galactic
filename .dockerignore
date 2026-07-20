@@ -1,0 +1,27 @@
+# Galactic Compute builds from the repository root so the image can bake the
+# exact local CLI release. Deny everything else to keep source, local config,
+# credentials, and unrelated dependency trees out of the Docker context.
+**
+
+!compute-worker/
+!compute-worker/images/
+!compute-worker/images/standard/
+!compute-worker/images/standard/**
+
+!cli/
+!cli/package.json
+!cli/package-lock.json
+!cli/bin/
+!cli/bin/**
+!cli/lib/
+!cli/lib/**
+!cli/scripts/
+!cli/scripts/**
+!cli/mod.ts
+!cli/api.ts
+!cli/colors.ts
+!cli/config.ts
+!cli/logging.ts
+!cli/job-context.ts
+!cli/deno.lock
+!cli/skills.md

@@ -1,5 +1,10 @@
 import type { App, HealthWindows, VersionMetadata, VersionTrustMetadata } from "../../shared/types/index.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
+import {
+  COMPUTE_EXEC_PERMISSION,
+  normalizeManifestComputeConfig,
+  type ComputeProfile,
+} from "../../shared/contracts/compute.ts";
 
 // Runtime-integrity tri-state surfaced on trust cards. Defined here (the trust
 // module) so executed-bundle.ts — which already imports signing helpers from
@@ -67,6 +72,13 @@ export interface TrustCard {
     storage: boolean;
     memory: boolean;
     gpu: boolean;
+    compute: boolean;
+  };
+  compute: {
+    enabled: boolean;
+    profile: ComputeProfile | null;
+    tools: string[];
+    explicit_secrets: string[];
   };
   required_secrets: string[];
   per_user_secrets: string[];
@@ -562,6 +574,8 @@ export function buildAppTrustCard(
 ): TrustCard {
   const trust = getLatestVersionTrust(app as Pick<App, "current_version" | "version_metadata">);
   const permissions = resolveAppPermissions(app);
+  const parsedManifest = parseAppManifest(app.manifest);
+  const compute = normalizeManifestComputeConfig(parsedManifest?.compute);
   const envSchema = resolveAppEnvSchema(app);
   const requiredSecrets = Object.entries(envSchema)
     .filter(([, entry]) => entry.required)
@@ -592,6 +606,13 @@ export function buildAppTrustCard(
       storage: permissions.some((permission) => permission.startsWith("storage:")),
       memory: permissions.some((permission) => permission.startsWith("memory:")),
       gpu: permissions.includes("gpu:execute") || app.runtime === "gpu",
+      compute: permissions.includes(COMPUTE_EXEC_PERMISSION),
+    },
+    compute: {
+      enabled: permissions.includes(COMPUTE_EXEC_PERMISSION),
+      profile: compute?.profile ?? null,
+      tools: compute?.tools ?? [],
+      explicit_secrets: compute?.secrets ?? [],
     },
     required_secrets: trust?.required_secrets.length ? trust.required_secrets : requiredSecrets,
     per_user_secrets: trust?.per_user_secrets.length ? trust.per_user_secrets : perUserSecrets,

@@ -54,9 +54,10 @@ import {
   shortReleaseFingerprint,
   type ReleaseCandidateReviewToken,
 } from "../lib/nebula-release";
+import { AgentComputePane } from "./agent-compute-pane";
 import "./nebula-fleet.css";
 
-type AgentPane = "alerts" | "interfaces" | "routines" | "functions" | "settings";
+type AgentPane = "alerts" | "interfaces" | "routines" | "functions" | "compute" | "settings";
 type SettingsPane = "general" | "billing" | "usage" | "byok" | "keys" | "connect";
 type GlyphName =
   | "alert"
@@ -1428,6 +1429,7 @@ function AgentModal({
         <button className={`neb-rail-btn${pane === "interfaces" ? " active" : ""}`} onClick={() => choose("interfaces")} style={{ order: 1 }} type="button">Interfaces</button>
         <button className={`neb-rail-btn${pane === "routines" ? " active" : ""}`} onClick={() => choose("routines")} style={{ order: 2 }} type="button">Routines</button>
         <button className={`neb-rail-btn${pane === "functions" ? " active" : ""}`} onClick={() => choose("functions")} style={{ order: 3 }} type="button">Functions</button>
+        <button className={`neb-rail-btn${pane === "compute" ? " active" : ""}`} onClick={() => choose("compute")} style={{ order: 4 }} type="button">Compute</button>
         <button className={`neb-rail-btn${pane === "settings" ? " active" : ""}`} onClick={() => choose("settings")} style={{ order: 6 }} type="button">Settings</button>
       </nav>
       <div className="neb-modal-content">
@@ -1437,6 +1439,7 @@ function AgentModal({
         {pane === "interfaces" ? <InterfacesPane agent={agent} interfaces={interfaces} /> : null}
         {pane === "routines" ? <RoutinesPane agent={agent} live={live} /> : null}
         {pane === "functions" ? <FunctionsPane agent={agent} functions={functions} live={live} /> : null}
+        {pane === "compute" ? <AgentComputePane agent={agent} /> : null}
         {pane === "settings" ? <AgentSettingsPane agent={agent} live={live} /> : null}
       </div>
     </Modal>

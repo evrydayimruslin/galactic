@@ -1,5 +1,14 @@
 import type { EnvCredential, EnvSchemaEntry } from './env.ts';
 import { validateEnvVarKey } from './env.ts';
+import type { ManifestComputeConfig } from './compute.ts';
+import {
+  COMPUTE_EXEC_PERMISSION,
+  COMPUTE_MAX_SECRETS,
+  COMPUTE_MAX_TOOLS,
+  isDeveloperV1ComputeTool,
+  isComputeProfile,
+  normalizeManifestComputeConfig,
+} from './compute.ts';
 import type { MCPJsonSchema, MCPTool, MCPToolAnnotations } from './mcp.ts';
 import type {
   RoutineBudgetDefaults,
@@ -68,6 +77,10 @@ export interface AppManifest {
   // the user before install, and the only destinations a vaulted per-user
   // credential may be sent to.
   network?: ManifestNetworkConfig;
+  // Optional owner-reviewed ceiling for disposable compute bodies. When it is
+  // present, runtime requests may only narrow this profile/tool/secret
+  // declaration; absence never makes any Agent secret eligible for delivery.
+  compute?: ManifestComputeConfig;
 }
 
 export interface ManifestCallRateLimit {
@@ -212,6 +225,10 @@ export interface ManifestFunction {
   // ultralight.ai(). Drives Free Mode (AI functions need a BYOK key when the
   // caller is in free mode). Conservative — see docs/FREE_MODE_DESIGN.md.
   uses_inference?: boolean;
+  // Upload-derived: this function (transitively) starts a one-shot run through
+  // galactic.compute()/ultralight.compute(). Explicit false is retained for
+  // compute-capable Agents so admission can distinguish analyzed from unknown.
+  uses_compute?: boolean;
   // Durable execution: class 'async' dispatches calls to the execution queue
   // — the caller gets a { _async, job_id } envelope in milliseconds and polls
   // ul.job. Queue executions run with an extended budget (timeout_ms can only
@@ -2806,6 +2823,117 @@ function validateEnvCredential(
   }
 }
 
+function validateManifestCompute(
+  manifest: Record<string, unknown>,
+  declaredEnvVars: Record<string, unknown>,
+  errors: ManifestValidationError[],
+): void {
+  const rawPermissions = Array.isArray(manifest.permissions)
+    ? manifest.permissions
+    : [];
+  const permissionSet = new Set(
+    rawPermissions.filter((permission): permission is string =>
+      typeof permission === 'string'
+    ),
+  );
+
+  for (const [index, permission] of rawPermissions.entries()) {
+    if (
+      typeof permission === 'string' && permission.startsWith('compute:') &&
+      permission !== COMPUTE_EXEC_PERMISSION
+    ) {
+      errors.push({
+        path: `permissions.${index}`,
+        message: `compute permission must be exactly "${COMPUTE_EXEC_PERMISSION}"`,
+      });
+    }
+  }
+
+  if (manifest.compute === undefined) return;
+  if (!manifest.compute || typeof manifest.compute !== 'object' ||
+    Array.isArray(manifest.compute)) {
+    errors.push({ path: 'compute', message: 'compute must be an object' });
+    return;
+  }
+
+  if (!permissionSet.has(COMPUTE_EXEC_PERMISSION)) {
+    errors.push({
+      path: 'compute',
+      message: `compute requires the "${COMPUTE_EXEC_PERMISSION}" permission`,
+    });
+  }
+
+  const compute = manifest.compute as Record<string, unknown>;
+  if (!isComputeProfile(compute.profile)) {
+    errors.push({
+      path: 'compute.profile',
+      message: 'profile must be "developer-v1"',
+    });
+  }
+
+  if (!Array.isArray(compute.tools)) {
+    errors.push({ path: 'compute.tools', message: 'tools must be an array' });
+  } else {
+    if (compute.tools.length > COMPUTE_MAX_TOOLS) {
+      errors.push({
+        path: 'compute.tools',
+        message: `tools may contain at most ${COMPUTE_MAX_TOOLS} entries`,
+      });
+    }
+    const seen = new Set<string>();
+    for (const [index, tool] of compute.tools.entries()) {
+      if (!isDeveloperV1ComputeTool(tool)) {
+        errors.push({
+          path: `compute.tools.${index}`,
+          message: 'tool is not in the developer-v1 semantic catalog',
+        });
+      } else if (seen.has(tool)) {
+        errors.push({
+          path: `compute.tools.${index}`,
+          message: `duplicate tool "${tool}"`,
+        });
+      } else {
+        seen.add(tool);
+      }
+    }
+  }
+
+  if (compute.secrets !== undefined) {
+    if (!Array.isArray(compute.secrets)) {
+      errors.push({
+        path: 'compute.secrets',
+        message: 'secrets must be an array of Agent secret names',
+      });
+    } else {
+      if (compute.secrets.length > COMPUTE_MAX_SECRETS) {
+        errors.push({
+          path: 'compute.secrets',
+          message: `secrets may contain at most ${COMPUTE_MAX_SECRETS} entries`,
+        });
+      }
+      const seen = new Set<string>();
+      for (const [index, secret] of compute.secrets.entries()) {
+        const path = `compute.secrets.${index}`;
+        if (typeof secret !== 'string' || !validateEnvVarKey(secret).valid) {
+          errors.push({ path, message: 'secret must be a valid Agent env var key' });
+        } else if (seen.has(secret)) {
+          errors.push({ path, message: `duplicate secret "${secret}"` });
+        } else if (!(secret in declaredEnvVars)) {
+          errors.push({
+            path,
+            message: `secret "${secret}" must be declared in env_vars`,
+          });
+        } else {
+          seen.add(secret);
+        }
+      }
+    }
+  }
+
+  const normalized = normalizeManifestComputeConfig(compute);
+  if (normalized) manifest.compute = normalized;
+}
+
 // Versions are used as R2 path segments and KV key suffixes. Keep the accepted
 // form narrower than general SemVer so reserved aliases such as `latest`, path
 // fragments, whitespace-normalized variants, and unbounded numeric segments
@@ -2916,6 +3044,15 @@ export function validateManifest(input: unknown): ManifestValidationResult {
           `functions.${fnName}.generation_hints`,
           errors,
         );
+        if (
+          fn.uses_compute !== undefined &&
+          typeof fn.uses_compute !== 'boolean'
+        ) {
+          errors.push({
+            path: `functions.${fnName}.uses_compute`,
+            message: 'uses_compute must be a boolean',
+          });
+        }
 
         if (fn.execution !== undefined) {
           if (!fn.execution || typeof fn.execution !== 'object') {
@@ -3225,6 +3362,8 @@ export function validateManifest(input: unknown): ManifestValidationResult {
       errors,
     );
   }
+
+  validateManifestCompute(manifest, rawEnvVars, errors);
 
   if (errors.length > 0) {
     return { valid: false, errors, warnings };

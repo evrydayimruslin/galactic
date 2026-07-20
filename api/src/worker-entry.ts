@@ -2,6 +2,7 @@
 
 import type { Env } from '../lib/env.ts';
 import { createApp } from '../handlers/app.ts';
+import { installComputeLaunchService } from '../handlers/launch-compute.ts';
 
 import { processHostingBilling } from '../services/hosting-billing.ts';
 import { runAutoHealing } from '../services/auto-healing.ts';
@@ -30,18 +31,31 @@ import { getEnv } from '../lib/env.ts';
 import { applyCorsHeaders, buildCorsPreflightResponse } from '../services/cors.ts';
 import { createServerLogger } from '../services/logging.ts';
 import { runCapacityTelemetryReconciliationCycle } from '../services/capacity-telemetry-reconciliation.ts';
+import { installComputeControlPlaneAdapter } from './bindings/compute-control-plane-adapter.ts';
+import { createComputeControlPlaneAdapter } from '../services/compute-orchestrator.ts';
+import { recoverAdmittedComputeDispatches } from '../services/compute-dispatch-recovery.ts';
+import { runComputeReconciliationCycle } from '../services/compute-reconciler.ts';
+import { runComputeArtifactReconciliationCycle } from '../services/compute-artifact-reconciler.ts';
+import { isComputeDlqQueueName } from '../services/compute-queue-routing.ts';
+import {
+  createComputeLaunchCancellationOrchestrator,
+  createComputeLaunchService,
+  createComputePlaneBodyDestroyer,
+} from '../services/compute-launch-service.ts';
 
 // RPC entrypoints exposed through ctx.exports for dynamic worker bindings.
 export { DatabaseBinding } from './bindings/database-binding.ts';
 export { FixtureDatabaseBinding } from './bindings/fixture-database-binding.ts';
 export { AppDataBinding } from './bindings/appdata-binding.ts';
 export { AIBinding } from './bindings/ai-binding.ts';
+export { ComputeBinding } from './bindings/compute-binding.ts';
 export { EmbedBinding } from './bindings/embed-binding.ts';
 export { MemoryBinding } from './bindings/memory-binding.ts';
 export { RunsBinding } from './bindings/runs-binding.ts';
 export { NotifyBinding } from './bindings/notify-binding.ts';
 export {
   TestAIBinding,
+  TestComputeBinding,
   TestEmbedBinding,
   TestNotifyBinding,
 } from './bindings/test-runtime-bindings.ts';
@@ -50,6 +64,7 @@ export { EventsBinding } from './bindings/events-binding.ts';
 export { OutboundBinding } from './bindings/outbound-binding.ts';
 export { CredentialBinding } from './bindings/credential-binding.ts';
 export { CapacityDynamicTail } from './bindings/capacity-dynamic-tail.ts';
+export { ComputeControlPlane } from './compute-control-plane-entrypoint.ts';
 
 // ============================================
 // SECURITY & CORS HEADERS
@@ -66,6 +81,21 @@ const securityHeaders: Record<string, string> = {
 
 const requestLogger = createServerLogger('REQ');
 const cronLogger = createServerLogger('CRON');
+let computeServicesInstalled = false;
+
+function ensureComputeServicesInstalled(env: Env): void {
+  if (computeServicesInstalled) return;
+  installComputeControlPlaneAdapter(createComputeControlPlaneAdapter({ env }));
+  installComputeLaunchService(createComputeLaunchService({
+    artifacts: env.COMPUTE_ARTIFACTS ?? null,
+    cancellation: env.COMPUTE_PLANE
+      ? createComputeLaunchCancellationOrchestrator({
+        bodyDestroyer: createComputePlaneBodyDestroyer(env.COMPUTE_PLANE),
+      })
+      : null,
+  }));
+  computeServicesInstalled = true;
+}
 
 // ============================================
 // WORKER EXPORT
@@ -79,6 +109,7 @@ export default {
     // Make env available globally for all downstream code
     globalThis.__env = env;
     globalThis.__ctx = ctx;
+    ensureComputeServicesInstalled(env);
 
     const url = new URL(request.url);
     const standardHeaders = securityHeaders;
@@ -170,8 +201,10 @@ export default {
   async queue(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext) {
     globalThis.__env = env;
     globalThis.__ctx = ctx;
+    ensureComputeServicesInstalled(env);
 
     let process: (body: unknown) => Promise<'ack' | 'retry'>;
+    let retryConsumerCrash = false;
     if (batch.queue.includes('ultralight-exec')) {
       ({ processExecMessage: process } = await import(
         '../services/async-exec-consumer.ts'
@@ -183,6 +216,14 @@ export default {
     } else if (batch.queue.includes('ultralight-capacity-telemetry')) {
       ({ processCapacityTelemetryMessage: process } = await import(
         '../services/capacity-telemetry-consumer.ts'
+      ));
+    } else if (isComputeDlqQueueName(batch.queue)) {
+      // Unlike post-claim execution/event consumers, this path owns the final
+      // destroy-and-settle recovery. A crash must consume retry budget and
+      // eventually land in the separate reconciliation DLQ, never be ACKed.
+      retryConsumerCrash = true;
+      ({ processComputeDlqMessage: process } = await import(
+        '../services/compute-dlq-consumer.ts'
       ));
     } else {
       cronLogger.error('Message from unknown queue dropped', {
@@ -205,7 +246,13 @@ export default {
       } catch (err) {
         // Consumers handle their own failures; this is a backstop.
         cronLogger.error('Queue message processing crashed', { error: err });
-        message.ack();
+        if (retryConsumerCrash) {
+          message.retry({
+            delaySeconds: Math.min(30 * message.attempts, 300),
+          });
+        } else {
+          message.ack();
+        }
       }
     }
   },
@@ -218,6 +265,7 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     globalThis.__env = env;
     globalThis.__ctx = ctx;
+    ensureComputeServicesInstalled(env);
 
     cronLogger.info('Cron trigger received', {
       schedule: event.cron,
@@ -299,6 +347,9 @@ async function runMinuteJobs(): Promise<void> {
     // querying absent tables every minute.
     isRoutinesEnabled() ? runRoutineExecutorCycle({ baseUrl }) : Promise.resolve(null),
     dispatchPendingEvents(), // cross-Agent pub/sub event fan-out
+    recoverAdmittedComputeDispatches(),
+    runComputeReconciliationCycle(),
+    runComputeArtifactReconciliationCycle(),
   ]);
 
   for (const [i, result] of results.entries()) {
@@ -311,6 +362,9 @@ async function runMinuteJobs(): Promise<void> {
         'gpuBuildProcessor',
         'routineExecutor',
         'agentEventDispatch',
+        'computeDispatchRecovery',
+        'computeReconciliation',
+        'computeArtifactReconciliation',
       ];
       cronLogger.error('Minute cron job failed', {
         job: names[i],

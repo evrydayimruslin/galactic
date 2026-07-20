@@ -365,6 +365,20 @@ Deno.test("get reuse: fixture-backed execution (gx.test) stays on load() even wi
   }
 });
 
+Deno.test("get reuse: Compute-capable Agent stays on a fresh isolate even with the flag ON", async () => {
+  const harness = installHarness();
+  try {
+    const config = baseConfig();
+    config.permissions = [...config.permissions, "compute:exec"];
+    const result = await executeInDynamicSandbox(config, "computeCaller", []);
+    assertEquals(result.success, true);
+    assertEquals(harness.captured.loadCalls, 1);
+    assertEquals(harness.captured.getCalls, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
 Deno.test("get reuse: per-call data rides the fetch body, NOT the baked module content", async () => {
   const harness = installHarness();
   try {

@@ -1,4 +1,5 @@
 import type { AIRequest, AIResponse } from './ai.ts';
+import type { ComputeBinding } from './compute.ts';
 export type Tier = 'free' | 'fun' | 'pro' | 'scale' | 'enterprise';
 export interface UserContext {
     id: string;
@@ -42,4 +43,5 @@ export interface UltralightSDK {
     remember(key: string, value: unknown): Promise<void>;
     recall<T = unknown>(key: string): Promise<T | null>;
     ai(request: AIRequest): Promise<AIResponse>;
+    compute: ComputeBinding;
 }

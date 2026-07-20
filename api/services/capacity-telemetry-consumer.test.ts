@@ -3,6 +3,7 @@ import {
   processCapacityTelemetryMessage,
 } from "./capacity-telemetry-consumer.ts";
 import { buildCapacitySettlementIntent } from "./capacity-settlement-recovery.ts";
+import { buildComputeCapacitySettlementIntent } from "./compute/capacity-settlement.ts";
 
 function assertEquals(actual: unknown, expected: unknown): void {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -206,4 +207,39 @@ Deno.test("capacity telemetry consumer drops a malformed recognized settlement i
     f: [["d1_read", -1, 0, 0]],
   });
   assertEquals(outcome, "ack");
+});
+
+const COMPUTE_SETTLEMENT_INTENT = buildComputeCapacitySettlementIntent({
+  runId: "00000000-0000-4000-8000-000000000301",
+  userId: "00000000-0000-4000-8000-000000000302",
+  receiptId: "00000000-0000-4000-8000-000000000303",
+  reservationId: "00000000-0000-4000-8000-000000000304",
+  actualLight: 0.25,
+});
+
+Deno.test("capacity telemetry consumer settles a Compute recovery intent without MCP attribution", async () => {
+  let settled = false;
+  const outcome = await processCapacityTelemetryMessage(
+    COMPUTE_SETTLEMENT_INTENT,
+    {
+      settleCompute: (input) => {
+        settled = true;
+        assertEquals(input.actualLight, 0.25);
+        return Promise.resolve();
+      },
+      reconcileAttribution: () => {
+        throw new Error("Compute settlement must not use MCP attribution");
+      },
+    },
+  );
+  assertEquals(settled, true);
+  assertEquals(outcome, "ack");
+});
+
+Deno.test("capacity telemetry consumer retries a transient Compute settlement failure", async () => {
+  const outcome = await processCapacityTelemetryMessage(
+    COMPUTE_SETTLEMENT_INTENT,
+    { settleCompute: () => Promise.reject(new Error("database unavailable")) },
+  );
+  assertEquals(outcome, "retry");
 });

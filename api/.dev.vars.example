@@ -8,6 +8,14 @@ SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_ANON_KEY=
 
+# Dedicated >=32-byte pepper for hashing opaque, lease-scoped Compute tokens.
+# Never reuse any human/Agent/platform/provider credential or inject it into a body.
+COMPUTE_JOB_TOKEN_PEPPER=
+
+# Dedicated >=32-byte bearer for the public global Compute stop/release lane.
+# Never reuse SUPABASE_SERVICE_ROLE_KEY or any human/Agent/provider credential.
+COMPUTE_EMERGENCY_STOP_TOKEN=
+
 # Cloudflare (for D1 HTTP API — still needed until native D1 bindings)
 CF_ACCOUNT_ID=8d2df08dac65694aa1c6bf56233a2090
 CF_API_TOKEN=

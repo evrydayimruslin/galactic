@@ -31,6 +31,196 @@ Deno.test("manifest generation: uses entry filename when building contracts from
   assertEquals(manifest.version, "1.2.3");
 });
 
+Deno.test("manifest generation: records upload-derived compute usage per function", async () => {
+  const parseResult = await parseTypeScript(`
+    export async function compile() {
+      return galactic.compute({ argv: ["npm", "run", "build"], tools: ["shell"] });
+    }
+    export function metadata() { return { ready: true }; }
+  `);
+  const manifest = generateManifestFromParseResult(
+    { name: "Builder", slug: "builder" },
+    parseResult,
+    "1.0.0",
+  );
+
+  assertEquals(manifest.permissions?.includes("compute:exec"), true);
+  assertEquals(manifest.functions?.compile?.uses_compute, true);
+  assertEquals(manifest.functions?.metadata?.uses_compute, false);
+});
+
+Deno.test("manifest generation: non-compute apps omit uses_compute", async () => {
+  const parseResult = await parseTypeScript(
+    `export function add(a: number, b: number) { return a + b; }`,
+  );
+  const manifest = generateManifestFromParseResult(
+    { name: "Math", slug: "math" },
+    parseResult,
+    "1.0.0",
+  );
+
+  assertEquals(manifest.permissions?.includes("compute:exec") ?? false, false);
+  assertEquals(manifest.functions?.add?.uses_compute, undefined);
+});
+
+Deno.test("manifest generation: detected compute is sticky and restores strict permission", async () => {
+  const hydrated = await hydrateManifestForSource({
+    app: { name: "Builder", slug: "builder" },
+    existingManifest: {
+      name: "Builder",
+      version: "1.0.0",
+      type: "mcp",
+      entry: { functions: "index.ts" },
+      permissions: ["storage:read"],
+      functions: {
+        compile: {
+          description: "Compile a project in an isolated developer body",
+          uses_compute: false,
+        },
+      },
+    },
+    sourceCode: `
+      export async function compile() {
+        return galactic.compute({ argv: ["make"], tools: ["shell"] });
+      }
+    `,
+    filename: "index.ts",
+    version: "2.0.0",
+  });
+
+  assertEquals(hydrated.source, "merged");
+  assertEquals(hydrated.manifest.permissions, ["storage:read", "compute:exec"]);
+  assertEquals(hydrated.manifest.functions?.compile?.uses_compute, true);
+});
+
+Deno.test("manifest generation: compute declaration survives weak-description regeneration", async () => {
+  const compute = {
+    profile: "developer-v1" as const,
+    tools: ["shell"],
+    secrets: ["GH_TOKEN"],
+  };
+  const hydrated = await hydrateManifestForSource({
+    app: { name: "Builder", slug: "builder" },
+    existingManifest: {
+      name: "Builder",
+      version: "1.0.0",
+      type: "mcp",
+      entry: { functions: "index.ts" },
+      permissions: ["compute:exec"],
+      compute,
+      env_vars: { GH_TOKEN: { input: "password" } },
+      functions: { run: { description: "Function run" } },
+    },
+    sourceCode: `export function run() { return "ready"; }`,
+    version: "2.0.0",
+  });
+
+  assertEquals(hydrated.source, "generated");
+  assertEquals(hydrated.manifest.compute, compute);
+  assertEquals(hydrated.manifest.permissions, ["compute:exec"]);
+});
+
+Deno.test("manifest validation: accepts and canonicalizes a strict compute declaration", () => {
+  const result = validateManifest({
+    name: "Compute Agent",
+    version: "1.0.0",
+    permissions: ["compute:exec"],
+    compute: {
+      profile: "developer-v1",
+      tools: ["shell", "browser"],
+      secrets: ["NPM_TOKEN", "GH_TOKEN"],
+    },
+    env_vars: {
+      GH_TOKEN: { input: "password" },
+      NPM_TOKEN: { input: "password" },
+    },
+    functions: {
+      run: { description: "Run a build", uses_compute: true },
+    },
+  });
+
+  assertEquals(result.valid, true);
+  assertEquals(result.manifest?.compute, {
+    profile: "developer-v1",
+    tools: ["browser", "shell"],
+    secrets: ["GH_TOKEN", "NPM_TOKEN"],
+  });
+});
+
+Deno.test("manifest validation: compute permission/profile/tools/secrets fail closed", () => {
+  const cases: Array<{ manifest: Record<string, unknown>; path: string }> = [
+    {
+      manifest: {
+        permissions: ["compute:*"],
+      },
+      path: "permissions.0",
+    },
+    {
+      manifest: {
+        compute: { profile: "developer-v1", tools: [] },
+      },
+      path: "compute",
+    },
+    {
+      manifest: {
+        permissions: ["compute:exec"],
+        compute: { profile: "developer", tools: [] },
+      },
+      path: "compute.profile",
+    },
+    {
+      manifest: {
+        permissions: ["compute:exec"],
+        compute: { profile: "developer-v1", tools: ["Runtime.Node"] },
+      },
+      path: "compute.tools.0",
+    },
+    {
+      manifest: {
+        permissions: ["compute:exec"],
+        compute: {
+          profile: "developer-v1",
+          tools: ["shell", "shell"],
+        },
+      },
+      path: "compute.tools.1",
+    },
+    {
+      manifest: {
+        permissions: ["compute:exec"],
+        compute: {
+          profile: "developer-v1",
+          tools: [],
+          secrets: ["MISSING_TOKEN"],
+        },
+      },
+      path: "compute.secrets.0",
+    },
+    {
+      manifest: {
+        functions: {
+          run: { description: "Run", uses_compute: "yes" },
+        },
+      },
+      path: "functions.run.uses_compute",
+    },
+  ];
+
+  for (const testCase of cases) {
+    const result = validateManifest({
+      name: "Compute Agent",
+      version: "1.0.0",
+      functions: { run: { description: "Run" } },
+      ...testCase.manifest,
+    });
+    assertEquals(
+      result.errors.some((error) => error.path === testCase.path),
+      true,
+      `expected validation error at ${testCase.path}`,
+    );
+  }
+});
+
 Deno.test("manifest generation: preserves rich uploaded manifests and merges missing source functions", async () => {
   const hydrated = await hydrateManifestForSource({
     app: { name: "Planner", slug: "planner" },

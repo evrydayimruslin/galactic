@@ -1,6 +1,8 @@
 // Admin Handler
 // Protected endpoints for platform administration.
-// Auth: Bearer token must match SUPABASE_SERVICE_ROLE_KEY (service-to-service).
+// Auth: legacy endpoints use SUPABASE_SERVICE_ROLE_KEY. Global Compute
+// stop/release uses only its dedicated edge credential and never accepts the
+// database-wide service role from an operator request.
 //
 // Endpoints:
 //   POST  /api/admin/gaps               — Create a gap
@@ -24,6 +26,8 @@
 //   GET   /api/admin/capture/conversation/:id — Inspect one captured conversation
 //   GET   /api/admin/capture/export     — Export captured threads/messages/events/artifacts
 //   GET   /api/admin/flash-training/export — Export Flash fine-tuning dataset rows
+//   POST  /api/admin/compute/emergency-stop — Fence/destroy/settle all Compute runs
+//   POST  /api/admin/compute/emergency-stop/:id/release — Release completed stop latch
 
 import { error, json } from "./response.ts";
 import { unsuspendContent } from "../services/hosting-billing.ts";
@@ -58,9 +62,9 @@ import {
 } from "../services/flash-training-dataset.ts";
 import {
   getBillingConfig,
+  invalidateBillingConfigCache,
   normalizeBillingConfigRow,
   toPublicBillingConfig,
-  invalidateBillingConfigCache,
 } from "../services/billing-config.ts";
 import {
   getPublisherFeeWaiverCredit,
@@ -70,6 +74,13 @@ import { getPlatformBalance } from "../services/stripe-connect.ts";
 import { processHeldPayouts } from "../services/payout-processor.ts";
 import { getCloudUsageReconciliationReport } from "../services/cloud-usage-reconciliation.ts";
 import { getCapacityTelemetryReconciliationSummary } from "../services/capacity-telemetry-reconciliation.ts";
+import {
+  handleAdminComputeEmergencyStop,
+  handleAdminComputeEmergencyStopRelease,
+} from "./admin-compute-emergency-stop.ts";
+import {
+  authenticateComputeEmergencyStopOperator,
+} from "../services/compute-emergency-auth.ts";
 
 interface UserIdRow {
   id: string;
@@ -258,7 +269,8 @@ function withAdminSensitiveRouteRateLimit(
     | "admin:cleanup_provisionals"
     | "admin:app_category"
     | "admin:app_featured"
-    | "admin:payout_process",
+    | "admin:payout_process"
+    | "admin:compute_emergency_stop",
   handler: () => Promise<Response> | Response,
 ): Promise<Response> {
   return withSensitiveRouteRateLimit(
@@ -269,13 +281,77 @@ function withAdminSensitiveRouteRateLimit(
 }
 
 export async function handleAdmin(request: Request): Promise<Response> {
-  if (!authenticateAdmin(request)) {
-    return error("Unauthorized: invalid service secret", 401);
-  }
-
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
+
+  // POST /api/admin/compute/emergency-stop — audited, resumable global stop.
+  // Admission must already be disabled; this route fences accepted work,
+  // destroys claimed bodies, then settles through the normal receipt path.
+  if (path === "/api/admin/compute/emergency-stop" && method === "POST") {
+    const authorization = await authenticateComputeEmergencyStopOperator(
+      request,
+    );
+    if (authorization.status === "unavailable") {
+      return error(
+        "Compute emergency-stop operator authentication unavailable",
+        503,
+      );
+    }
+    if (authorization.status !== "authorized") {
+      return error(
+        "Unauthorized: invalid Compute emergency-stop credential",
+        401,
+      );
+    }
+    return withAdminSensitiveRouteRateLimit(
+      request,
+      "admin:compute_emergency_stop",
+      () =>
+        handleAdminComputeEmergencyStop(
+          request,
+          authorization.operatorReference,
+        ),
+    );
+  }
+
+  const computeEmergencyReleaseMatch = path.match(
+    /^\/api\/admin\/compute\/emergency-stop\/([0-9a-f-]+)\/release$/i,
+  );
+  if (computeEmergencyReleaseMatch && method === "POST") {
+    const authorization = await authenticateComputeEmergencyStopOperator(
+      request,
+    );
+    if (authorization.status === "unavailable") {
+      return error(
+        "Compute emergency-stop operator authentication unavailable",
+        503,
+      );
+    }
+    if (authorization.status !== "authorized") {
+      return error(
+        "Unauthorized: invalid Compute emergency-stop credential",
+        401,
+      );
+    }
+    return withAdminSensitiveRouteRateLimit(
+      request,
+      "admin:compute_emergency_stop",
+      () =>
+        handleAdminComputeEmergencyStopRelease(
+          request,
+          computeEmergencyReleaseMatch[1],
+          authorization.operatorReference,
+        ),
+    );
+  }
+
+  // Existing non-Compute admin endpoints retain their legacy service-to-service
+  // credential. It is deliberately not accepted by the public global Compute
+  // stop/release lane above.
+  if (!authenticateAdmin(request)) {
+    return error("Unauthorized: invalid service secret", 401);
+  }
 
   // POST /api/admin/gaps — Create a gap
   if (path === "/api/admin/gaps" && method === "POST") {

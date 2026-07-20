@@ -269,7 +269,10 @@ export async function releaseExpiredCloudUsageHolds(
     DEFAULT_REPORT_SCAN_LIMIT,
   );
   const supabase = createSupabaseRestClient({ fetchFn: options.fetchFn });
-  const holds = await queryExpiredHeldHolds(supabase, nowIso, limit);
+  // Compute owns destroy-before-settle semantics. Releasing those holds in the
+  // generic expiry sweeper can race its fenced body teardown and make the
+  // terminal receipt impossible. The Compute reconciler is the sole owner.
+  const holds = await queryExpiredHeldHolds(supabase, nowIso, limit, true);
   const result: CloudUsageHoldReleaseJobResult = {
     generated_at: nowIso,
     candidate_count: holds.length,
@@ -528,12 +531,14 @@ async function queryExpiredHeldHolds(
   supabase: SupabaseRequestClient,
   nowIso: string,
   limit: number,
+  excludeComputeManaged = false,
 ): Promise<CloudUsageHoldRow[]> {
   return await queryRows<CloudUsageHoldRow>(
     supabase,
     `/rest/v1/cloud_usage_holds?status=eq.held&expires_at=not.is.null&expires_at=lte.${
       encodeFilter(nowIso)
-    }&select=${HOLD_SELECT}&order=expires_at.asc&limit=${limit}`,
+    }${excludeComputeManaged ? "&source=neq.galactic_compute" : ""}` +
+      `&select=${HOLD_SELECT}&order=expires_at.asc&limit=${limit}`,
     "expired cloud usage holds",
   );
 }

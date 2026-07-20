@@ -24,11 +24,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: supabase/setup-cli@v1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          version: latest
+          persist-credentials: false
+
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520 # v3.0.0
+        with:
+          version: 2.109.1
 
       - name: Validate local migration set
         run: bash ./scripts/supabase/validate-local.sh
@@ -59,11 +61,13 @@ jobs:
       DRIFT_REPORT_ONLY: "1"
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: supabase/setup-cli@v1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          version: latest
+          persist-credentials: false
+
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520 # v3.0.0
+        with:
+          version: 2.109.1
 
       - name: Push production migrations
         run: bash ./scripts/supabase/deploy-linked.sh

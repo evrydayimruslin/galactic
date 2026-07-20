@@ -138,6 +138,11 @@ export const LAUNCH_API_ROUTES = [
   "POST /api/launch/agents/:id/routines/:routineId/actions",
   "GET /api/launch/agents/:id/capacity",
   "PATCH /api/launch/agents/:id/capacity",
+  "GET /api/launch/agents/:id/compute/settings",
+  "PUT /api/launch/agents/:id/compute/settings",
+  "GET /api/launch/agents/:id/compute/runs",
+  "POST /api/launch/agents/:id/compute/runs/:runId/cancel",
+  "GET /api/launch/agents/:id/compute/runs/:runId/artifacts/:artifactId",
   "GET /api/launch/agents/:id/routine",
   "GET /api/launch/agents/:id/functions",
   "POST /api/launch/agents/:id/functions/:functionName/run",
@@ -895,7 +900,13 @@ export interface LaunchAgentRoutineBlocker {
 
 export interface LaunchAgentRoutineRun {
   id: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
+  status:
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "skipped";
   trigger: string;
   traceId: string | null;
   startedAt: string | null;
@@ -1140,20 +1151,24 @@ export interface LaunchAgentHomeReleaseVersion {
 }
 
 export interface LaunchAgentHomeRelease {
-  live: (LaunchAgentHomeReleaseVersion & {
-    promotedAt: string | null;
-    executedVersion: string | null;
-    integrity: "verified" | "unverified" | "unknown";
-  }) | null;
-  candidate: (LaunchAgentHomeReleaseVersion & {
-    authorityChanges: Array<{
-      change: "added" | "removed" | "changed";
-      path: string;
-      label: string;
-    }>;
-    reviewStatus: "ready" | "owner_review_required" | "unavailable";
-    canPromote: boolean;
-  }) | null;
+  live:
+    | (LaunchAgentHomeReleaseVersion & {
+      promotedAt: string | null;
+      executedVersion: string | null;
+      integrity: "verified" | "unverified" | "unknown";
+    })
+    | null;
+  candidate:
+    | (LaunchAgentHomeReleaseVersion & {
+      authorityChanges: Array<{
+        change: "added" | "removed" | "changed";
+        path: string;
+        label: string;
+      }>;
+      reviewStatus: "ready" | "owner_review_required" | "unavailable";
+      canPromote: boolean;
+    })
+    | null;
   candidateCount: number;
 }
 
@@ -1240,9 +1255,12 @@ export interface LaunchAgentHomeSettingsUpdateRequest
   values: Record<string, string | null>;
 }
 
-export type LaunchAgentHomeAction = LaunchAgentRoutineAction | "promote_candidate";
+export type LaunchAgentHomeAction =
+  | LaunchAgentRoutineAction
+  | "promote_candidate";
 
-export interface LaunchAgentHomeActionRequest extends LaunchAgentHomeMutationBase {
+export interface LaunchAgentHomeActionRequest
+  extends LaunchAgentHomeMutationBase {
   action: LaunchAgentHomeAction;
   /** Client-generated UUID; retries with the same key return the first action. */
   idempotencyKey: string;
@@ -1741,15 +1759,20 @@ export const LAUNCH_AGENT_FUNCTION_POLICIES = LAUNCH_CALLER_FUNCTION_POLICIES;
 /** @deprecated Use LaunchCallerFunctionPolicy. */
 export type LaunchAgentFunctionPolicy = LaunchCallerFunctionPolicy;
 /** @deprecated Use LaunchCallerFunctionPermissionSource. */
-export type LaunchAgentFunctionPermissionSource = LaunchCallerFunctionPermissionSource;
+export type LaunchAgentFunctionPermissionSource =
+  LaunchCallerFunctionPermissionSource;
 /** @deprecated Use LaunchCallerFunctionPermissionSummary. */
-export type LaunchAgentFunctionPermissionSummary = LaunchCallerFunctionPermissionSummary;
+export type LaunchAgentFunctionPermissionSummary =
+  LaunchCallerFunctionPermissionSummary;
 /** @deprecated Use LaunchCallerFunctionPermissionUpdate. */
-export type LaunchAgentFunctionPermissionUpdate = LaunchCallerFunctionPermissionUpdate;
+export type LaunchAgentFunctionPermissionUpdate =
+  LaunchCallerFunctionPermissionUpdate;
 /** @deprecated Use LaunchCallerFunctionPermissionsResponse. */
-export type LaunchAgentFunctionPermissionsResponse = LaunchCallerFunctionPermissionsResponse;
+export type LaunchAgentFunctionPermissionsResponse =
+  LaunchCallerFunctionPermissionsResponse;
 /** @deprecated Use LaunchCallerFunctionPermissionsUpdateRequest. */
-export type LaunchAgentFunctionPermissionsUpdateRequest = LaunchCallerFunctionPermissionsUpdateRequest;
+export type LaunchAgentFunctionPermissionsUpdateRequest =
+  LaunchCallerFunctionPermissionsUpdateRequest;
 /** @deprecated Use LaunchCallerPermissionRequired. */
 export type LaunchAgentPermissionRequired = LaunchCallerPermissionRequired;
 /** @deprecated Use LaunchCallerPermissionDenied. */

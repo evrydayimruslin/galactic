@@ -35,7 +35,8 @@ export interface McpCallLogEntry {
     | "library"
     | "desk"
     | "onboarding_template"
-    | "widget_pull";
+    | "widget_pull"
+    | "compute";
   // Rich telemetry fields
   inputArgs?: Record<string, unknown>;
   outputResult?: unknown;

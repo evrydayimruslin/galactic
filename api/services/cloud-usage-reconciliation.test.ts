@@ -65,6 +65,7 @@ Deno.test("cloud usage reconciliation: releases expired held holds with idempote
         "not.is.null",
         "lte.2026-06-08T12:00:00.000Z",
       ]);
+      assertEquals(url.searchParams.get("source"), "neq.galactic_compute");
       return Response.json([
         holdRow({ id: HOLD_EXPIRED }),
         holdRow({ id: HOLD_RACED }),

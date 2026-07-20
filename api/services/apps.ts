@@ -34,6 +34,25 @@ export interface SupabaseConfig {
   serviceKey: string;
 }
 
+interface OwnedAppDeletionResult {
+  deleted: boolean;
+  reclaimedBytes: number;
+}
+
+export class AppDeletionConflictError extends Error {
+  constructor() {
+    super("A concurrent app or owner lifecycle change is in progress");
+    this.name = "AppDeletionConflictError";
+  }
+}
+
+const APP_DELETE_MAX_ATTEMPTS = 3;
+const APP_DELETE_RETRYABLE_CODE = /"code"\s*:\s*"(?:40001|55P03)"/u;
+
+function waitForAppDeleteRetry(attempt: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+}
+
 export class AppsService {
   private supabaseUrl: string;
   private supabaseKey: string;
@@ -349,6 +368,62 @@ export class AppsService {
       const error = await response.text();
       throw new Error(`App soft delete failed: ${error}`);
     }
+  }
+
+  /**
+   * Atomically verifies live ownership, soft-deletes the app, and reclaims its
+   * storage accounting. The database RPC is the deletion linearization point:
+   * a service-role PATCH filtered only by id would let an ownership transfer
+   * race a previously authorized request.
+   */
+  async softDeleteOwned(
+    appId: string,
+    ownerId: string,
+    deletedAt = new Date().toISOString(),
+  ): Promise<OwnedAppDeletionResult> {
+    const url = `${this.supabaseUrl}/rest/v1/rpc/soft_delete_owned_app`;
+    let response: Response | null = null;
+    for (let attempt = 0; attempt < APP_DELETE_MAX_ATTEMPTS; attempt += 1) {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${this.supabaseKey}`,
+          "apikey": this.supabaseKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          p_user_id: ownerId,
+          p_app_id: appId,
+          p_deleted_at: deletedAt,
+        }),
+      });
+      if (response.ok) break;
+      const error = await response.text();
+      if (!APP_DELETE_RETRYABLE_CODE.test(error)) {
+        throw new Error(`Owned app soft delete failed: ${error}`);
+      }
+      response = null;
+      if (attempt + 1 < APP_DELETE_MAX_ATTEMPTS) {
+        await waitForAppDeleteRetry(attempt);
+      }
+    }
+
+    if (!response) throw new AppDeletionConflictError();
+
+    const payload = await response.json() as unknown;
+    const row = Array.isArray(payload) ? payload[0] : payload;
+    if (!row || typeof row !== "object") {
+      throw new Error("Owned app soft delete returned no result");
+    }
+    const result = row as Record<string, unknown>;
+    const reclaimedBytes = Number(result.reclaimed_bytes ?? 0);
+    if (
+      typeof result.deleted !== "boolean" ||
+      !Number.isSafeInteger(reclaimedBytes) || reclaimedBytes < 0
+    ) {
+      throw new Error("Owned app soft delete returned an invalid result");
+    }
+    return { deleted: result.deleted, reclaimedBytes };
   }
 
   /**

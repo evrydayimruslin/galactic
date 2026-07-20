@@ -1,6 +1,8 @@
 // Galactic Shared Types
 // Used across API, Web, and Runtime
 
+import type { ManifestComputeConfig } from "../contracts/compute.ts";
+
 export {
   isAgenticInterfaceSpec,
   validateAgenticInterfaceSpec,
@@ -2174,6 +2176,9 @@ export interface AppManifest {
 
   // HTTP route exposure policy
   http?: ManifestHttpConfig;
+
+  // Owner-reviewed ceiling for the disposable galactic.compute() capability.
+  compute?: ManifestComputeConfig;
 }
 
 export type ManifestHttpAuthMode = "user" | "public";
@@ -2224,6 +2229,14 @@ export interface ManifestFunction {
   /** MCP tool annotations — behavioral hints for agents (readOnlyHint, destructiveHint, etc.) */
   annotations?: MCPToolAnnotations;
   generation_hints?: WidgetGenerationHints;
+  /** Upload-derived: this function may invoke provider-backed inference. */
+  uses_inference?: boolean;
+  /** Upload-derived: this function may start galactic.compute(). */
+  uses_compute?: boolean;
+  execution?: {
+    class?: "sync" | "async";
+    timeout_ms?: number;
+  };
 }
 
 export interface ManifestSkill {

@@ -694,6 +694,7 @@ export async function handleRun(
         expectedVersion: app.current_version || undefined,
         executionId,
         capacityReceiptId: capacityReservation ? receiptId : undefined,
+        capacityAgentId: app.id,
         code,
         permissions,
         allowedDestinations: getManifestAllowedDestinations(app.manifest),

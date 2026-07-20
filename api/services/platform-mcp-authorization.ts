@@ -77,7 +77,7 @@ export function shouldAutoLiveExistingUpload(input: {
   return Boolean(input.requestedAutoLive || input.uploadedByName);
 }
 
-function canonicalToolName(name: string): string {
+export function canonicalPlatformMcpToolName(name: string): string {
   if (name.startsWith("gx.")) return `ul.${name.slice(3)}`;
   if (name === "ultralight.job") return "ul.job";
   return name;
@@ -95,7 +95,7 @@ function toolMatches(name: string, root: string): boolean {
 export function requiredPlatformMcpScopes(
   requestedName: string,
 ): PlatformMcpScope[] | null {
-  const name = canonicalToolName(requestedName);
+  const name = canonicalPlatformMcpToolName(requestedName);
 
   if (
     toolMatches(name, "ul.discover") ||
@@ -177,7 +177,7 @@ function apiTokenAccountSessionRestriction(
   requestedName: string,
   args: Record<string, unknown>,
 ): string | null {
-  const name = canonicalToolName(requestedName);
+  const name = canonicalPlatformMcpToolName(requestedName);
 
   if (
     (name === "ul.discover" && args.scope === "appstore") ||

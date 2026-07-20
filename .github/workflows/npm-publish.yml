@@ -26,12 +26,40 @@ jobs:
       run:
         working-directory: cli
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          node-version: 20
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
           registry-url: 'https://registry.npmjs.org'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify compute-job auth and artifact contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:job-mode
+          deno_version=2.6.10
+          deno_archive=deno-x86_64-unknown-linux-gnu.zip
+          deno_sha256=a7c9d5c1f93bfaabe03c3c0583a8c88caf695db3cec4dea2938440038609f225
+          deno_dir="$RUNNER_TEMP/deno"
+          mkdir -p "$deno_dir"
+          curl -fsSL \
+            "https://github.com/denoland/deno/releases/download/v${deno_version}/${deno_archive}" \
+            -o "$RUNNER_TEMP/$deno_archive"
+          printf '%s  %s\n' "$deno_sha256" "$RUNNER_TEMP/$deno_archive" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/$deno_archive" -d "$deno_dir"
+          "$deno_dir/deno" test \
+            --no-config \
+            --allow-env --allow-read --allow-write --allow-net \
+            --lock=deno.lock --frozen \
+            tests/compute-job-mode.test.ts
 
       - name: Verify version sync (package.json vs mod.ts)
         id: version

@@ -7,6 +7,7 @@
 // per call but the per-day dedup under-charges.
 
 import type { RuntimeConfig } from "./sandbox.ts";
+import { COMPUTE_EXEC_PERMISSION } from "../../shared/contracts/compute.ts";
 
 // ANONYMOUS_USER_ID (request-caller-context.ts) inlined to avoid an import cycle.
 const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
@@ -31,6 +32,12 @@ const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
  *    keep these on load(). Call-capability includes GRANT-resolved dependencies
  *    and wired slots (appCallDependencies / slotBindings) — NOT just the
  *    manifest — because a user can wire a call grant onto a manifest-clean app.
+ *  - Compute-capable executions NEVER reuse: the compatibility SDK carries its
+ *    opaque parent execution handle on writable globalThis state. A warm
+ *    isolate could otherwise retain another function's handle and borrow that
+ *    function's server-derived Compute identity. Keeping this decision in the
+ *    shared predicate also prevents billing from applying the per-day Loader
+ *    floor while the runtime actually creates a fresh isolate per call.
  */
 export function isolateReuseEligibility(
   config: Pick<
@@ -43,6 +50,9 @@ export function isolateReuseEligibility(
   }
   if (config.d1Fixtures) {
     return { eligible: false, reason: "fixture_execution" };
+  }
+  if (config.permissions?.includes(COMPUTE_EXEC_PERMISSION)) {
+    return { eligible: false, reason: "compute_capable" };
   }
   if (
     config.permissions?.includes("app:call") ||

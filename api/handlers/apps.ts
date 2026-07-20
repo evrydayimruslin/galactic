@@ -3,7 +3,10 @@
 
 import { error, json, toResponseBody } from "./response.ts";
 import { authenticate } from "./auth.ts";
-import { createAppsService } from "../services/apps.ts";
+import {
+  AppDeletionConflictError,
+  createAppsService,
+} from "../services/apps.ts";
 import { createR2Service, type R2Service } from "../services/storage.ts";
 import {
   ICON_EXTENSIONS,
@@ -72,7 +75,6 @@ import {
 } from "../services/tier-enforcement.ts";
 import {
   getVersionStorageBytes,
-  reclaimAppStorage,
   recordUploadStorage,
 } from "../services/storage-quota.ts";
 import { validateGpuPricingConfig } from "../services/gpu/pricing-config.ts";
@@ -82,6 +84,7 @@ import {
   sanitizeGpuTrustCard,
 } from "../services/gpu/feature-flag.ts";
 import { getEnv } from "../lib/env.ts";
+import { revokeAgentComputeBeforeDeletion } from "../services/compute-agent-deletion.ts";
 import { withSensitiveRouteRateLimit } from "../services/sensitive-route-rate-limit.ts";
 import { RequestValidationError } from "../services/request-validation.ts";
 import {
@@ -2371,12 +2374,17 @@ async function handleDeleteApp(
       return error("Unauthorized", 403);
     }
 
-    await reclaimAppStorage(user.id, appId);
+    // A deleted Agent must not leave a body holding already-delivered secrets.
+    // This revokes/fences authority, waits for final Sandbox destruction, and
+    // settles claimed runs before the source row becomes soft-deleted.
+    await revokeAgentComputeBeforeDeletion({ userId: user.id, agentId: appId });
 
-    // Soft delete - set deleted_at timestamp
-    await appsService.update(appId, {
-      deleted_at: new Date().toISOString(),
-    });
+    // Linearize the authorization decision with deletion and storage reclaim.
+    // If ownership changed while bodies were being destroyed, fail closed.
+    const deletion = await appsService.softDeleteOwned(appId, user.id);
+    if (!deletion.deleted) {
+      return error("App ownership changed; delete was not applied", 409);
+    }
 
     // Rebuild user library to remove deleted app
     rebuildUserLibrary(user.id).catch((err) =>
@@ -2387,6 +2395,9 @@ async function handleDeleteApp(
   } catch (err) {
     if (err instanceof Error && err.message.includes("Authentication")) {
       return error("Authentication required", 401);
+    }
+    if (err instanceof AppDeletionConflictError) {
+      return error("App lifecycle changed concurrently; retry deletion", 409);
     }
     console.error("Failed to delete app:", err);
     return error("Failed to delete app", 500);

@@ -13,6 +13,7 @@ import { homedir, platform } from 'os';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { resolveComputeJobEnvironment } from '../lib/job-context.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -619,6 +620,16 @@ MCP is configured for future sessions. Tools activate natively on next agent res
 async function main() {
   const command = process.argv[2];
   const args = process.argv.slice(3);
+  const jobEnvironment = resolveComputeJobEnvironment(process.env);
+
+  // Lease-scoped bodies must never enter a flow that reads, writes, or clears
+  // a developer's persistent CLI credentials. This check happens before the
+  // pure-Node setup path and before delegation to Deno.
+  if (jobEnvironment && ['setup', 'login', 'logout', 'config'].includes(command)) {
+    throw new Error(
+      `Command "${command}" is unavailable inside a Galactic Compute job`,
+    );
+  }
 
   // Setup runs in pure Node.js — no Deno needed
   if (command === 'setup') {
@@ -657,6 +668,9 @@ ${c.dim('FULL CLI')}
   galacticconnection test         Test functions without deploying
   galacticconnection discover     Search the App Store
   galacticconnection apps         Manage your apps
+  galacticconnection budget       Show a compute lease budget (inside a job)
+  galacticconnection receipt      Show the current compute receipt (inside a job)
+  galacticconnection artifact     Push/pull lease artifacts (inside a job)
   galacticconnection --help       Show all commands (requires Deno)
 `);
     return;
@@ -693,8 +707,16 @@ To use the full CLI, clone the repo or install globally:
     process.exit(1);
   }
 
-  const proc = spawn(denoBin, [
+  const denoArgs = [
     'run',
+    ...(jobEnvironment
+      ? [
+        '--no-config',
+        '--cached-only',
+        `--lock=${join(__dirname, '..', 'deno.lock')}`,
+        '--frozen',
+      ]
+      : []),
     '--allow-net',
     '--allow-read',
     '--allow-write',
@@ -702,7 +724,8 @@ To use the full CLI, clone the repo or install globally:
     localPath,
     command,
     ...args,
-  ], {
+  ];
+  const proc = spawn(denoBin, denoArgs, {
     stdio: 'inherit',
     env: process.env,
   });
@@ -714,4 +737,7 @@ To use the full CLI, clone the repo or install globally:
   });
 }
 
-main();
+main().catch((err) => {
+  stderr(c.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+  process.exit(1);
+});

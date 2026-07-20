@@ -4,7 +4,7 @@ import {
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 
 import type { ParseResult } from "./parser.ts";
-import { generateSkillsMd } from "./docgen.ts";
+import { generateEmbeddingText, generateSkillsMd } from "./docgen.ts";
 
 Deno.test("docgen: generated markdown uses actionable copy for empty function lists", () => {
   const parseResult: ParseResult = {
@@ -65,4 +65,20 @@ Deno.test("docgen: generated markdown includes declared HTTP routes", () => {
   assertStringIncludes(markdown, "`POST /http/app-123/webhook`");
   assertStringIncludes(markdown, "public, owner-billed, app data scope");
   assertStringIncludes(markdown, "GET /http/{appId}/_ui");
+});
+
+Deno.test("docgen: compute permission has an explicit capability disclosure", () => {
+  const text = generateEmbeddingText(
+    "Builder",
+    "Builds projects",
+    {
+      functions: [],
+      permissions: [{ permission: "compute:exec", required: true }],
+    },
+  );
+
+  assertStringIncludes(
+    text,
+    "can start disposable developer compute jobs with explicitly declared tools and secrets",
+  );
 });

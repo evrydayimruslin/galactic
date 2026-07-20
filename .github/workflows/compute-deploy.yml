@@ -1,0 +1,750 @@
+name: Compute Deploy
+
+# Compute remains manual because a safe release crosses Supabase, the API
+# control plane, Cloudflare Queues/R2, a Container image, and two private
+# service bindings. This workflow verifies prerequisites; it never creates or
+# replaces secrets, migrations, queues, buckets, or approval policy.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Environment to deploy. Production requires an immutable v* tag.
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      confirmation:
+        description: Type deploy-staging or deploy-production.
+        required: true
+        type: string
+      migrations_applied:
+        description: Confirm every Galactic Compute migration in this release is applied to this environment.
+        required: true
+        default: false
+        type: boolean
+      schema_workflow_run_id:
+        description: Successful canonical Supabase schema-deploy run for this exact release SHA.
+        required: true
+        type: string
+      api_control_plane_ready:
+        description: Confirm the API already exports ComputeControlPlane with admission disabled (normal releases).
+        required: true
+        default: false
+        type: boolean
+      bootstrap_api_control_plane:
+        description: "First install only: deploy the API entrypoint without its outbound Compute binding. Requires zero active Compute runs."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  release:
+    name: Release Compute to ${{ inputs.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: ${{ inputs.target }}
+    concurrency:
+      # Serialize with the API deploy workflow because the last safe step
+      # redeploys the API with admission OFF and the exact image digest.
+      group: api-${{ inputs.target }}-deploy
+      cancel-in-progress: false
+    env:
+      SANDBOX_BASE_IMAGE: ${{ vars.COMPUTE_SANDBOX_BASE_IMAGE }}
+      EVIDENCE_DIR: ${{ github.workspace }}/compute-release-evidence
+      # Free-form dispatch input must enter the shell as data, never as source.
+      DEPLOY_CONFIRMATION: ${{ inputs.confirmation }}
+      SCHEMA_RUN_ID_INPUT: ${{ inputs.schema_workflow_run_id }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            compute-worker/package-lock.json
+
+      - name: Validate immutable release request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+
+          expected_confirmation="deploy-${{ inputs.target }}"
+          if [ "$DEPLOY_CONFIRMATION" != "$expected_confirmation" ]; then
+            echo "confirmation must be exactly $expected_confirmation" >&2
+            exit 1
+          fi
+          if [ "${{ inputs.migrations_applied }}" != "true" ]; then
+            echo "Refusing deployment without explicit Compute migration confirmation." >&2
+            exit 1
+          fi
+          if [[ ! "$SCHEMA_RUN_ID_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "schema_workflow_run_id must be a positive GitHub Actions run ID." >&2
+            exit 1
+          fi
+          api_ready="${{ inputs.api_control_plane_ready }}"
+          bootstrap_api="${{ inputs.bootstrap_api_control_plane }}"
+          if [ "$api_ready" = "$bootstrap_api" ]; then
+            echo "Select exactly one API state: existing ComputeControlPlane ready, or first-install bootstrap." >&2
+            exit 1
+          fi
+          if [ "${{ inputs.target }}" = "production" ]; then
+            case "$GITHUB_REF" in
+              refs/tags/v*) ;;
+              *) echo "Production Compute releases must run from an immutable v* tag." >&2; exit 1 ;;
+            esac
+          elif [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Staging Compute releases must run from main." >&2
+            exit 1
+          fi
+
+          expected_base='^docker\.io/cloudflare/sandbox:0\.12\.3-python@sha256:[0-9a-f]{64}$'
+          if [[ ! "$SANDBOX_BASE_IMAGE" =~ $expected_base ]]; then
+            echo "Set COMPUTE_SANDBOX_BASE_IMAGE in the selected GitHub environment/repository to the reviewed 0.12.3-python @sha256 reference." >&2
+            exit 1
+          fi
+
+          if [ "${{ inputs.target }}" = "staging" ]; then
+            api_worker=ultralight-api-staging
+            compute_worker=galactic-compute-staging
+            compute_config=wrangler.staging.toml
+            image_repository=galactic-compute-staging
+            queue_name=galactic-compute-staging
+            compute_dlq=galactic-compute-staging-dlq
+            reconciliation_dlq=galactic-compute-staging-reconciliation-dlq
+            artifact_bucket=galactic-compute-artifacts-staging
+            schema_workflow_path=.github/workflows/supabase-db.yml
+            schema_deploy_job='Deploy staging schema'
+          else
+            api_worker=ultralight-api
+            compute_worker=galactic-compute
+            compute_config=wrangler.toml
+            image_repository=galactic-compute
+            queue_name=galactic-compute
+            compute_dlq=galactic-compute-dlq
+            reconciliation_dlq=galactic-compute-reconciliation-dlq
+            artifact_bucket=galactic-compute-artifacts
+            schema_workflow_path=.github/workflows/supabase-production-db.yml
+            schema_deploy_job='Deploy production schema'
+          fi
+
+          {
+            echo "API_WORKER=$api_worker"
+            echo "COMPUTE_WORKER=$compute_worker"
+            echo "COMPUTE_CONFIG=$compute_config"
+            echo "IMAGE_REPOSITORY=$image_repository"
+            echo "LOCAL_IMAGE_TAG=$image_repository:$GITHUB_SHA"
+            echo "QUEUE_NAME=$queue_name"
+            echo "COMPUTE_DLQ=$compute_dlq"
+            echo "RECONCILIATION_DLQ=$reconciliation_dlq"
+            echo "ARTIFACT_BUCKET=$artifact_bucket"
+            echo "SCHEMA_WORKFLOW_PATH=$schema_workflow_path"
+            echo "SCHEMA_DEPLOY_JOB=$schema_deploy_job"
+          } >> "$GITHUB_ENV"
+          printf '%s\n' "$SANDBOX_BASE_IMAGE" > "$EVIDENCE_DIR/base-image.txt"
+          node compute-worker/scripts/hash-migrations.mjs \
+            . "$EVIDENCE_DIR/compute-migrations.sha256"
+          migration_manifest_sha256="$(sha256sum "$EVIDENCE_DIR/compute-migrations.sha256" | cut -d ' ' -f 1)"
+          printf '%s  compute-migrations.sha256\n' "$migration_manifest_sha256" \
+            > "$EVIDENCE_DIR/compute-migrations-manifest.sha256"
+          grep -F '  supabase/migrations/20260720124500_compute_capacity_conservation.sql' \
+            "$EVIDENCE_DIR/compute-migrations.sha256" >/dev/null
+          grep -F '  supabase/migrations/20260720125000_compute_execution_recovery.sql' \
+            "$EVIDENCE_DIR/compute-migrations.sha256" >/dev/null
+          sha256sum \
+            supabase/migrations/20260720124000_compute_artifact_retention.sql \
+            > "$EVIDENCE_DIR/compute-artifact-retention-migration.sha256"
+          jq -n \
+            --arg migration "20260720124000_compute_artifact_retention.sql" \
+            '{schema_version: 1, migration: $migration, ready_output_days: 30, owner_retained_output_bytes: 10737418240, owner_retained_output_objects: 10000, download_lease_seconds: 3600, deletion_authority: "database_reconciler", r2_age_deletion_allowed: false}' \
+            > "$EVIDENCE_DIR/compute-artifact-retention-policy.json"
+
+      - name: Bind release to the exact successful schema deployment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          schema_run="$RUNNER_TEMP/compute-schema-run.json"
+          schema_jobs="$RUNNER_TEMP/compute-schema-jobs.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SCHEMA_RUN_ID_INPUT" > "$schema_run"
+          jq -e \
+            --arg sha "$GITHUB_SHA" \
+            --arg path "$SCHEMA_WORKFLOW_PATH" '
+              (.event == "push" or .event == "workflow_dispatch") and
+              .conclusion == "success" and .head_sha == $sha and .path == $path
+            ' "$schema_run" >/dev/null || {
+              echo "Schema run must be the canonical successful workflow for this exact SHA." >&2
+              exit 1
+            }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SCHEMA_RUN_ID_INPUT/jobs?per_page=100" \
+            > "$schema_jobs"
+          jq -e \
+            --arg name "$SCHEMA_DEPLOY_JOB" \
+            --arg sha "$GITHUB_SHA" '
+              [.jobs[]? | select(.name == $name and .conclusion == "success" and .head_sha == $sha)]
+              | length == 1
+            ' "$schema_jobs" >/dev/null || {
+              echo "Schema run does not contain exactly one successful environment deploy job for this SHA." >&2
+              exit 1
+            }
+          jq '{id, event, conclusion, head_sha, head_branch, path, run_attempt, created_at, updated_at}' \
+            "$schema_run" > "$EVIDENCE_DIR/schema-workflow-run.json"
+          jq --arg name "$SCHEMA_DEPLOY_JOB" --arg sha "$GITHUB_SHA" '
+            [.jobs[] | select(.name == $name and .conclusion == "success" and .head_sha == $sha)][0]
+            | {id, run_id, name, status, conclusion, head_sha, started_at, completed_at}
+          ' "$schema_jobs" > "$EVIDENCE_DIR/schema-workflow-job.json"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix compute-worker ci
+          npm --prefix api ci
+
+      - name: Verify Compute and API integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix compute-worker run verify
+          npm --prefix api run typecheck:full
+          api_env=()
+          if [ "${{ inputs.target }}" = "staging" ]; then api_env=(--env staging); fi
+          pushd api >/dev/null
+          npx wrangler deploy \
+            --config wrangler.toml "${api_env[@]}" \
+            --dry-run \
+            --var COMPUTE_ENABLED:0 \
+            --var COMPUTE_ENVIRONMENT_DIGEST:sha256:0000000000000000000000000000000000000000000000000000000000000000
+          popd >/dev/null
+
+      - name: Verify pre-provisioned Cloudflare resources, privacy, and API secrets
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "The selected GitHub environment must provide CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID." >&2
+            exit 1
+          fi
+          pushd compute-worker >/dev/null
+          npx wrangler queues info "$QUEUE_NAME" | tee "$EVIDENCE_DIR/queue.txt"
+          npx wrangler queues info "$COMPUTE_DLQ" | tee "$EVIDENCE_DIR/compute-dlq.txt"
+          npx wrangler queues info "$RECONCILIATION_DLQ" | tee "$EVIDENCE_DIR/reconciliation-dlq.txt"
+          npx wrangler r2 bucket info "$ARTIFACT_BUCKET" | tee "$EVIDENCE_DIR/artifact-bucket.txt"
+          npx wrangler r2 bucket lifecycle list "$ARTIFACT_BUCKET" \
+            | tee "$EVIDENCE_DIR/artifact-lifecycle.txt"
+          popd >/dev/null
+
+          # Object age is not artifact authority. A ready output can be aliased
+          # as a later run's input, so any overlapping delete transition can
+          # erase a live object behind valid database metadata. Fetch the
+          # canonical lifecycle JSON and fail closed on bucket-wide, ancestor,
+          # exact, or descendant expiration rules. Incomplete multipart aborts
+          # are safe and required to bound abandoned upload storage.
+          lifecycle_json="$EVIDENCE_DIR/artifact-lifecycle.json"
+          curl -fsS --retry 3 \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$ARTIFACT_BUCKET/lifecycle" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            | tee "$lifecycle_json"
+          node compute-worker/scripts/verify-r2-lifecycle.mjs "$lifecycle_json"
+
+          managed_domain_json="$EVIDENCE_DIR/artifact-managed-domain.json"
+          custom_domains_json="$EVIDENCE_DIR/artifact-custom-domains.json"
+          curl -fsS --retry 3 \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$ARTIFACT_BUCKET/domains/managed" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            | tee "$managed_domain_json"
+          curl -fsS --retry 3 \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$ARTIFACT_BUCKET/domains/custom" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            | tee "$custom_domains_json"
+          node compute-worker/scripts/verify-r2-private.mjs \
+            "$managed_domain_json" "$custom_domains_json"
+
+          api_env=()
+          if [ "${{ inputs.target }}" = "staging" ]; then api_env=(--env staging); fi
+          secret_list="$RUNNER_TEMP/api-secret-names.json"
+          pushd api >/dev/null
+          npx wrangler secret list \
+            --config wrangler.toml "${api_env[@]}" \
+            > "$secret_list"
+          popd >/dev/null
+          for required_secret in \
+            COMPUTE_JOB_TOKEN_PEPPER \
+            COMPUTE_EMERGENCY_STOP_TOKEN; do
+            if ! jq -e --arg name "$required_secret" \
+              'any(.[]; .name == $name)' "$secret_list" >/dev/null; then
+              echo "API secret $required_secret is not configured; this workflow will not create it." >&2
+              exit 1
+            fi
+          done
+          jq -n \
+            '{required_secrets: [
+              {name: "COMPUTE_JOB_TOKEN_PEPPER", configured: true, value_read: false},
+              {name: "COMPUTE_EMERGENCY_STOP_TOKEN", configured: true, value_read: false}
+            ]}' \
+            > "$EVIDENCE_DIR/api-secret-attestation.json"
+          rm -f "$secret_list"
+
+      - name: Prove the existing API is stably admission OFF before Compute rollout
+        if: inputs.api_control_plane_ready
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/pre-rollout-api-status.json"
+          api_version="$RUNNER_TEMP/pre-rollout-api-version.json"
+          pushd api >/dev/null
+          npx wrangler deployments status --name "$API_WORKER" --json > "$api_status"
+          api_version_id="$(jq -er '
+            if (.versions | length) == 1 and ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id else error("API is not one stable 100% version") end
+          ' "$api_status")"
+          [[ "$api_version_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+            echo "Cloudflare returned a malformed API version ID." >&2
+            exit 1
+          }
+          npx wrangler versions view "$api_version_id" --name "$API_WORKER" --json > "$api_version"
+          popd >/dev/null
+          jq -e \
+            --arg id "$api_version_id" \
+            --arg compute "$COMPUTE_WORKER" \
+            --arg queue "$QUEUE_NAME" \
+            --arg bucket "$ARTIFACT_BUCKET" '
+              def value($name):
+                [.resources.bindings[]? | select(.type == "plain_text" and .name == $name) | .text] as $values
+                | if ($values | length) == 1 then $values[0] else null end;
+              .id == $id and
+              value("COMPUTE_ENABLED") == "0" and
+              value("COMPUTE_ROLLOUT_MODE") == "canary" and
+              value("COMPUTE_CANARY_ALLOWLIST") == "" and
+              (value("COMPUTE_ENVIRONMENT_DIGEST") | test("^sha256:[0-9a-f]{64}$")) and
+              any(.resources.bindings[]?; .type == "service" and .name == "COMPUTE_PLANE" and .service == $compute and .entrypoint == "ComputePlane") and
+              any(.resources.bindings[]?; .type == "queue" and .name == "COMPUTE_QUEUE" and .queue_name == $queue) and
+              any(.resources.bindings[]?; .type == "r2_bucket" and .name == "COMPUTE_ARTIFACTS" and .bucket_name == $bucket)
+            ' "$api_version" >/dev/null || {
+              echo "Refusing Compute rollout: the active API is not a certified admission-OFF control plane." >&2
+              exit 1
+            }
+          jq --arg worker "$API_WORKER" '
+            {schema_version: 1, worker: $worker, id, tag: .annotations["workers/tag"],
+             admission_enabled: false,
+             selected_bindings: [.resources.bindings[]? | select(
+               .name == "COMPUTE_ENABLED" or .name == "COMPUTE_ENVIRONMENT_DIGEST" or
+               .name == "COMPUTE_ROLLOUT_MODE" or .name == "COMPUTE_CANARY_ALLOWLIST" or
+               .name == "COMPUTE_PLANE" or .name == "COMPUTE_QUEUE" or .name == "COMPUTE_ARTIFACTS"
+             )]}
+          ' "$api_version" > "$EVIDENCE_DIR/pre-rollout-api-version.json"
+
+      - name: Bootstrap API named entrypoint for the first mutual binding
+        if: inputs.bootstrap_api_control_plane
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          bootstrap_config="api/.wrangler.compute-bootstrap.toml"
+          node - "$bootstrap_config" <<'NODE'
+          const fs = require('node:fs');
+          const destination = process.argv[2];
+          const lines = fs.readFileSync('api/wrangler.toml', 'utf8').split(/(?<=\n)/);
+          const blocks = [];
+          let current = [];
+          for (const line of lines) {
+            if (/^\s*\[/.test(line) && current.length > 0) {
+              blocks.push(current.join(''));
+              current = [];
+            }
+            current.push(line);
+          }
+          if (current.length > 0) blocks.push(current.join(''));
+          let removed = 0;
+          const output = blocks.filter((block) => {
+            const isService = /^\s*\[\[(?:env\.staging\.)?services\]\]/.test(block);
+            const isComputePlane = /^\s*binding\s*=\s*["']COMPUTE_PLANE["']\s*$/m.test(block);
+            if (isService && isComputePlane) {
+              removed += 1;
+              return false;
+            }
+            return true;
+          }).join('');
+          if (removed !== 2 || output.includes('binding = "COMPUTE_PLANE"')) {
+            throw new Error(`expected to remove exactly two Compute Plane service bindings; removed ${removed}`);
+          }
+          fs.writeFileSync(destination, output);
+          NODE
+
+          api_env=()
+          if [ "${{ inputs.target }}" = "staging" ]; then api_env=(--env staging); fi
+          pushd api >/dev/null
+          npx wrangler deploy \
+            --config .wrangler.compute-bootstrap.toml "${api_env[@]}" \
+            --dry-run \
+            --var COMPUTE_ENABLED:0 \
+            --var COMPUTE_ENVIRONMENT_DIGEST:sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+            --outdir "$EVIDENCE_DIR/api-bootstrap-dry-run"
+          npx wrangler deploy \
+            --config .wrangler.compute-bootstrap.toml "${api_env[@]}" \
+            --tag "api-$GITHUB_SHA" \
+            --var COMPUTE_ENABLED:0 \
+            --var COMPUTE_ENVIRONMENT_DIGEST:sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+            --keep-vars \
+            | tee "$EVIDENCE_DIR/api-bootstrap-deploy.txt"
+          bootstrap_status="$RUNNER_TEMP/pre-rollout-api-status.json"
+          bootstrap_version="$RUNNER_TEMP/pre-rollout-api-version.json"
+          npx wrangler deployments status --name "$API_WORKER" --json > "$bootstrap_status"
+          bootstrap_version_id="$(jq -er '
+            if (.versions | length) == 1 and ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id else error("bootstrap API is not one stable 100% version") end
+          ' "$bootstrap_status")"
+          [[ "$bootstrap_version_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || exit 1
+          npx wrangler versions view "$bootstrap_version_id" --name "$API_WORKER" --json \
+            > "$bootstrap_version"
+          popd >/dev/null
+          jq -e --arg id "$bootstrap_version_id" --arg tag "api-$GITHUB_SHA" '
+            def value($name):
+              [.resources.bindings[]? | select(.type == "plain_text" and .name == $name) | .text] as $values
+              | if ($values | length) == 1 then $values[0] else null end;
+            .id == $id and .annotations["workers/tag"] == $tag and
+            value("COMPUTE_ENABLED") == "0" and
+            value("COMPUTE_ENVIRONMENT_DIGEST") == "sha256:0000000000000000000000000000000000000000000000000000000000000000" and
+            value("COMPUTE_ROLLOUT_MODE") == "canary" and
+            value("COMPUTE_CANARY_ALLOWLIST") == "" and
+            ([.resources.bindings[]? | select(.name == "COMPUTE_PLANE")] | length) == 0
+          ' "$bootstrap_version" >/dev/null || {
+            echo "First-install API bootstrap did not read back as the exact admission-OFF version." >&2
+            exit 1
+          }
+          jq --arg worker "$API_WORKER" '
+            {schema_version: 1, worker: $worker, id, tag: .annotations["workers/tag"],
+             admission_enabled: false, bootstrap_without_compute_binding: true,
+             selected_bindings: [.resources.bindings[]? | select(
+               .name == "COMPUTE_ENABLED" or .name == "COMPUTE_ENVIRONMENT_DIGEST" or
+               .name == "COMPUTE_ROLLOUT_MODE" or .name == "COMPUTE_CANARY_ALLOWLIST" or
+               .name == "COMPUTE_QUEUE" or .name == "COMPUTE_ARTIFACTS"
+             )]}
+          ' "$bootstrap_version" > "$EVIDENCE_DIR/pre-rollout-api-version.json"
+      - name: Build and smoke exact image
+        shell: bash
+        working-directory: compute-worker
+        run: |
+          set -euo pipefail
+          docker pull "$SANDBOX_BASE_IMAGE"
+          DOCKER_BUILDKIT=1 docker build \
+            --platform linux/amd64 \
+            --build-arg SANDBOX_BASE_IMAGE="$SANDBOX_BASE_IMAGE" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label org.opencontainers.image.source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --tag "$LOCAL_IMAGE_TAG" \
+            --file images/standard/Dockerfile \
+            ..
+          ./scripts/smoke-image.sh "$LOCAL_IMAGE_TAG"
+          docker image inspect "$LOCAL_IMAGE_TAG" > "$EVIDENCE_DIR/local-image-inspect.json"
+          ./scripts/hash-image-inputs.sh "$EVIDENCE_DIR/build-inputs.sha256"
+
+      - name: Generate image SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          syft_version=1.44.0
+          syft_archive="syft_${syft_version}_linux_amd64.tar.gz"
+          syft_sha256=0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a
+          syft_dir="$RUNNER_TEMP/syft"
+          mkdir -p "$syft_dir"
+          curl -fsSL \
+            "https://github.com/anchore/syft/releases/download/v${syft_version}/${syft_archive}" \
+            -o "$RUNNER_TEMP/$syft_archive"
+          printf '%s  %s\n' "$syft_sha256" "$RUNNER_TEMP/$syft_archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$syft_archive" -C "$syft_dir" syft
+          "$syft_dir/syft" "docker:$LOCAL_IMAGE_TAG" \
+            -o "spdx-json=$EVIDENCE_DIR/image.spdx.json"
+
+      - name: Gate all critical and fixable high image vulnerabilities
+        shell: bash
+        run: bash compute-worker/scripts/scan-sbom.sh \
+          "$EVIDENCE_DIR/image.spdx.json" "$EVIDENCE_DIR"
+
+      - name: Push image and resolve registry digest
+        shell: bash
+        working-directory: compute-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler containers push "$LOCAL_IMAGE_TAG"
+
+          remote_tag="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$LOCAL_IMAGE_TAG"
+          docker manifest inspect -v "$remote_tag" > "$EVIDENCE_DIR/remote-manifest.json"
+          remote_digest="$(jq -er '.Descriptor.digest | select(test("^sha256:[0-9a-f]{64}$"))' "$EVIDENCE_DIR/remote-manifest.json")"
+          remote_repository="${remote_tag%:*}"
+          remote_image="$remote_repository@$remote_digest"
+          printf '%s\n' "$remote_digest" > "$EVIDENCE_DIR/environment-digest.txt"
+          printf '%s\n' "$remote_image" > "$EVIDENCE_DIR/deployed-image.txt"
+          {
+            echo "REMOTE_DIGEST=$remote_digest"
+            echo "REMOTE_IMAGE=$remote_image"
+          } >> "$GITHUB_ENV"
+
+      - name: Build exact-digest Compute deployment config
+        shell: bash
+        working-directory: compute-worker
+        run: |
+          set -euo pipefail
+          release_config="$(mktemp -p . .wrangler.compute-release.XXXXXX.toml)"
+          node - "$COMPUTE_CONFIG" "$release_config" "$REMOTE_IMAGE" <<'NODE'
+          const fs = require('node:fs');
+          const [source, destination, image] = process.argv.slice(2);
+          if (!/^registry\.cloudflare\.com\/[0-9a-f]{32}\/[a-z0-9-]+@sha256:[0-9a-f]{64}$/.test(image)) {
+            throw new Error('refusing non-digest Compute image');
+          }
+          const marker = 'image = "./images/standard/Dockerfile"';
+          const input = fs.readFileSync(source, 'utf8');
+          if (input.split(marker).length !== 2) {
+            throw new Error('expected exactly one local Compute image declaration');
+          }
+          fs.writeFileSync(destination, input.replace(marker, `image = "${image}"`));
+          NODE
+          echo "RELEASE_CONFIG=$release_config" >> "$GITHUB_ENV"
+
+      - name: Dry-run and deploy Compute Worker
+        shell: bash
+        working-directory: compute-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler deploy \
+            --config "$RELEASE_CONFIG" \
+            --dry-run \
+            --containers-rollout=none \
+            --var "COMPUTE_ENVIRONMENT_DIGEST:$REMOTE_DIGEST" \
+            --outdir "$EVIDENCE_DIR/compute-dry-run"
+          : > "$EVIDENCE_DIR/compute-deploy.txt"
+          compute_deployed=false
+          for attempt in $(seq 1 12); do
+            if npx wrangler deploy \
+              --config "$RELEASE_CONFIG" \
+              --containers-rollout=gradual \
+              --tag "compute-$GITHUB_SHA" \
+              --var "COMPUTE_ENVIRONMENT_DIGEST:$REMOTE_DIGEST" \
+              2>&1 | tee -a "$EVIDENCE_DIR/compute-deploy.txt"; then
+              compute_deployed=true
+              break
+            fi
+            if [ "$attempt" -lt 12 ]; then sleep 15; fi
+          done
+          if [ "$compute_deployed" != "true" ]; then
+            echo "Compute deployment did not succeed within the bounded first-provisioning retry window." >&2
+            exit 1
+          fi
+
+          container_list="$RUNNER_TEMP/compute-containers-list.json"
+          container_error="$RUNNER_TEMP/compute-container-readiness.err"
+          container_ready=false
+          for attempt in $(seq 1 90); do
+            # Wrangler 4.112.0 JSON mode returns one API page and ignores
+            # --per-page. An absent target fails closed; see the runbook before
+            # the account grows beyond that page.
+            if npx wrangler containers list --json > "$container_list" && \
+              node scripts/verify-container-readiness.mjs \
+                "$container_list" "$COMPUTE_WORKER" "$REMOTE_IMAGE" \
+                > "$EVIDENCE_DIR/container-readiness.json" 2> "$container_error"; then
+              container_ready=true
+              break
+            fi
+            if [ "$attempt" -lt 90 ]; then sleep 10; fi
+          done
+          if [ "$container_ready" != "true" ]; then
+            cat "$container_error" >&2 || true
+            echo "Compute Container did not become active or ready on the exact released image." >&2
+            exit 1
+          fi
+          npx wrangler containers images list --json \
+            | tee "$EVIDENCE_DIR/registry-images.json"
+
+      - name: Redeploy API with admission off and exact digest
+        shell: bash
+        working-directory: api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api_env=()
+          if [ "${{ inputs.target }}" = "staging" ]; then api_env=(--env staging); fi
+
+          npx wrangler deploy \
+            --config wrangler.toml "${api_env[@]}" \
+            --dry-run \
+            --var COMPUTE_ENABLED:0 \
+            --var "COMPUTE_ENVIRONMENT_DIGEST:$REMOTE_DIGEST" \
+            --var COMPUTE_ROLLOUT_MODE:canary \
+            --var COMPUTE_CANARY_ALLOWLIST: \
+            --outdir "$EVIDENCE_DIR/api-dry-run"
+          npx wrangler deploy \
+            --config wrangler.toml "${api_env[@]}" \
+            --tag "api-$GITHUB_SHA" \
+            --var COMPUTE_ENABLED:0 \
+            --var "COMPUTE_ENVIRONMENT_DIGEST:$REMOTE_DIGEST" \
+            --var COMPUTE_ROLLOUT_MODE:canary \
+            --var COMPUTE_CANARY_ALLOWLIST: \
+            --keep-vars \
+            | tee "$EVIDENCE_DIR/api-deploy.txt"
+
+          api_status="$RUNNER_TEMP/compute-release-api-status.json"
+          compute_status="$RUNNER_TEMP/compute-release-compute-status.json"
+          api_version="$RUNNER_TEMP/compute-release-api-version.json"
+          compute_version="$RUNNER_TEMP/compute-release-compute-version.json"
+          npx wrangler deployments status --name "$API_WORKER" --json > "$api_status"
+          npx wrangler deployments status --name "$COMPUTE_WORKER" --json > "$compute_status"
+          api_version_id="$(jq -er '
+            if (.versions | length) == 1 and ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id else error("API is not one stable 100% version") end
+          ' "$api_status")"
+          compute_version_id="$(jq -er '
+            if (.versions | length) == 1 and ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id else error("Compute is not one stable 100% version") end
+          ' "$compute_status")"
+          version_id_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          if ! [[ "$api_version_id" =~ $version_id_pattern ]] || \
+             ! [[ "$compute_version_id" =~ $version_id_pattern ]]; then
+            echo "Cloudflare returned a malformed active Worker version ID." >&2
+            exit 1
+          fi
+          npx wrangler versions view "$api_version_id" --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$compute_version_id" --name "$COMPUTE_WORKER" --json > "$compute_version"
+          api_version_tag="$(jq -er '.annotations["workers/tag"]' "$api_version")"
+          compute_version_tag="$(jq -er '.annotations["workers/tag"]' "$compute_version")"
+          if [ "$api_version_tag" != "api-$GITHUB_SHA" ] || \
+             [ "$compute_version_tag" != "compute-$GITHUB_SHA" ]; then
+            echo "Active Worker versions do not carry the exact release provenance tags." >&2
+            exit 1
+          fi
+          jq -e --arg digest "$REMOTE_DIGEST" '
+            def value($name):
+              [.resources.bindings[]?
+                | select(.type == "plain_text" and .name == $name)
+                | .text] as $values
+              | if ($values | length) == 1 then $values[0] else null end;
+            value("COMPUTE_ENABLED") == "0" and
+            value("COMPUTE_ENVIRONMENT_DIGEST") == $digest and
+            value("COMPUTE_ROLLOUT_MODE") == "canary" and
+            value("COMPUTE_CANARY_ALLOWLIST") == ""
+          ' "$api_version" >/dev/null || {
+            echo "The candidate API version is not a certified admission-OFF canary baseline." >&2
+            exit 1
+          }
+          jq -e --arg digest "$REMOTE_DIGEST" '
+            any(.resources.bindings[]?;
+                .type == "plain_text" and
+                .name == "COMPUTE_ENVIRONMENT_DIGEST" and
+                .text == $digest)
+          ' "$compute_version" >/dev/null || {
+            echo "The active Compute version does not carry the released environment digest." >&2
+            exit 1
+          }
+          jq -n \
+            --arg api_worker "$API_WORKER" \
+            --arg api_version_id "$api_version_id" \
+            --arg api_version_tag "$api_version_tag" \
+            --arg compute_worker "$COMPUTE_WORKER" \
+            --arg compute_version_id "$compute_version_id" \
+            --arg compute_version_tag "$compute_version_tag" \
+            --arg digest "$REMOTE_DIGEST" \
+            '{schema_version: 1, environment_digest: $digest,
+              certified_admission_off_api: {worker: $api_worker, version_id: $api_version_id, version_tag: $api_version_tag, enabled: false, rollout_mode: "canary", canary_allowlist: []},
+              active_compute_worker: {worker: $compute_worker, version_id: $compute_version_id, version_tag: $compute_version_tag}}' \
+            > "$EVIDENCE_DIR/certified-worker-versions.json"
+
+          jq -n \
+            --arg environment "${{ inputs.target }}" \
+            --arg git_sha "$GITHUB_SHA" \
+            --arg git_ref "$GITHUB_REF" \
+            --arg base_image "$SANDBOX_BASE_IMAGE" \
+            --arg image "$REMOTE_IMAGE" \
+            --arg digest "$REMOTE_DIGEST" \
+            --arg api_worker "$API_WORKER" \
+            --arg api_version_id "$api_version_id" \
+            --arg api_version_tag "$api_version_tag" \
+            --arg compute_worker "$COMPUTE_WORKER" \
+            --arg compute_version_id "$compute_version_id" \
+            --arg compute_version_tag "$compute_version_tag" \
+            --arg retention_migration_sha256 "$(cut -d ' ' -f 1 "$EVIDENCE_DIR/compute-artifact-retention-migration.sha256")" \
+            --arg migration_manifest_sha256 "$(cut -d ' ' -f 1 "$EVIDENCE_DIR/compute-migrations-manifest.sha256")" \
+            --argjson migration_count "$(wc -l < "$EVIDENCE_DIR/compute-migrations.sha256" | tr -d ' ')" \
+            --arg schema_workflow_run_id "$SCHEMA_RUN_ID_INPUT" \
+            --arg schema_workflow_path "$SCHEMA_WORKFLOW_PATH" \
+            --arg schema_deploy_job "$SCHEMA_DEPLOY_JOB" \
+            --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{schema_version: 3, environment: $environment, git_sha: $git_sha, git_ref: $git_ref, base_image: $base_image, deployed_image: $image, environment_digest: $digest, admission_enabled: false,
+              certified_admission_off_api: {worker: $api_worker, version_id: $api_version_id, version_tag: $api_version_tag},
+              active_compute_worker: {worker: $compute_worker, version_id: $compute_version_id, version_tag: $compute_version_tag},
+              schema_migrations: {manifest_sha256: $migration_manifest_sha256, migration_count: $migration_count, schema_workflow_run_id: $schema_workflow_run_id, schema_workflow_path: $schema_workflow_path, schema_deploy_job: $schema_deploy_job},
+              artifact_storage: {public_access: false},
+              artifact_retention: {ready_output_days: 30, owner_retained_output_bytes: 10737418240, owner_retained_output_objects: 10000, migration_sha256: $retention_migration_sha256}, generated_at: $generated_at}' \
+            > "$EVIDENCE_DIR/release.json"
+
+          {
+            echo "## Galactic Compute ${{ inputs.target }} release"
+            echo
+            echo "- Image: \`$REMOTE_IMAGE\`"
+            echo "- API environment digest: \`$REMOTE_DIGEST\`"
+            echo "- Certified OFF API: \`$api_version_id\` (\`$api_version_tag\`)"
+            echo "- Active Compute Worker: \`$compute_version_id\` (\`$compute_version_tag\`)"
+            echo "- Schema: exact successful run \`$SCHEMA_RUN_ID_INPUT\`; full migration manifest captured."
+            echo "- Artifacts: private R2 access enforced; retention 30 days, 10 GiB and 10,000 physical outputs per owner."
+            echo "- Container: active/ready on the exact registry digest; version evidence captured."
+            echo "- New admission remains **OFF**. Existing jobs may drain."
+            echo "- Run the validation matrix before a separately reviewed admission enablement."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary release config
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${RELEASE_CONFIG:-}" ] && [ -f "compute-worker/$RELEASE_CONFIG" ]; then
+            rm "compute-worker/$RELEASE_CONFIG"
+          fi
+          if [ -f "api/.wrangler.compute-bootstrap.toml" ]; then
+            rm "api/.wrangler.compute-bootstrap.toml"
+          fi
+          rm -f \
+            "$RUNNER_TEMP/compute-schema-run.json" \
+            "$RUNNER_TEMP/compute-schema-jobs.json" \
+            "$RUNNER_TEMP/pre-rollout-api-status.json" \
+            "$RUNNER_TEMP/pre-rollout-api-version.json" \
+            "$RUNNER_TEMP/compute-containers-list.json" \
+            "$RUNNER_TEMP/compute-container-readiness.err" \
+            "$RUNNER_TEMP/compute-release-api-status.json" \
+            "$RUNNER_TEMP/compute-release-compute-status.json" \
+            "$RUNNER_TEMP/compute-release-api-version.json" \
+            "$RUNNER_TEMP/compute-release-compute-version.json"
+
+      - name: Upload immutable release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compute-${{ inputs.target }}-release-${{ github.sha }}
+          path: compute-release-evidence
+          if-no-files-found: error
+          retention-days: 90

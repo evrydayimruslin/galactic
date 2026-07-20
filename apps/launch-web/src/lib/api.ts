@@ -74,6 +74,12 @@ import {
   recordLaunchAuthDiagnostic,
   refreshLaunchSessionIfAvailable,
 } from "./auth";
+import type {
+  LaunchComputeRunSummary,
+  LaunchComputeRunsResponse,
+  LaunchComputeSettingsResponse,
+  LaunchComputeSettingsUpdateRequest,
+} from "./compute";
 
 export interface LaunchAgentResponse {
   agent?: LaunchAgentSummary;
@@ -617,6 +623,58 @@ export class LaunchApiClient {
   agentSettings(idOrSlug: string): Promise<LaunchAgentSettingsResponse> {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/settings`,
+    );
+  }
+
+  /**
+   * Owner-only Compute authority view. This response contains secret binding
+   * metadata and configured presence only; the API must never return values.
+   */
+  agentComputeSettings(
+    idOrSlug: string,
+  ): Promise<LaunchComputeSettingsResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/compute/settings`,
+    );
+  }
+
+  /** Narrow the release's manifest ceiling after explicit owner review. */
+  updateAgentComputeSettings(
+    idOrSlug: string,
+    request: LaunchComputeSettingsUpdateRequest,
+  ): Promise<LaunchComputeSettingsResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/compute/settings`,
+      { method: "PUT", body: JSON.stringify(request) },
+    );
+  }
+
+  /** Owner-only Compute run ledger for one Agent. */
+  agentComputeRuns(
+    idOrSlug: string,
+    options: { limit?: number; cursor?: string } = {},
+  ): Promise<LaunchComputeRunsResponse> {
+    const params = new URLSearchParams();
+    if (options.limit) params.set("limit", String(options.limit));
+    if (options.cursor) params.set("cursor", options.cursor);
+    const query = params.toString();
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/compute/runs${
+        query ? `?${query}` : ""
+      }`,
+    );
+  }
+
+  /** Idempotent owner cancellation request. Terminal runs remain unchanged. */
+  cancelAgentComputeRun(
+    idOrSlug: string,
+    runId: string,
+  ): Promise<LaunchComputeRunSummary> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/compute/runs/${
+        encodeURIComponent(runId)
+      }/cancel`,
+      { method: "POST", body: JSON.stringify({}) },
     );
   }
 
