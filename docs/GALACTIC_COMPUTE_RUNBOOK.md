@@ -75,6 +75,7 @@ API Worker so service bindings stay private.
 | API Worker | `ultralight-api` | `ultralight-api-staging` | API Wrangler config |
 | API private entrypoint | `ComputeControlPlane` | `ComputeControlPlane` | API Worker export |
 | Compute Worker | `galactic-compute` | `galactic-compute-staging` | `compute-worker/wrangler*.toml` |
+| Container application | `galactic-compute-computestandard` | `galactic-compute-staging-computestandard` | Worker name plus lowercase `ComputeStandard` class |
 | Compute private entrypoint | `ComputePlane` | `ComputePlane` | `compute-worker/src/index.ts` |
 | Dispatch queue | `galactic-compute` | `galactic-compute-staging` | Worker configs |
 | Dead-letter queue | `galactic-compute-dlq` | `galactic-compute-staging-dlq` | Worker configs |

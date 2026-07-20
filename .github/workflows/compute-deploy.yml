@@ -139,10 +139,12 @@ jobs:
             schema_workflow_path=.github/workflows/supabase-production-db.yml
             schema_deploy_job='Deploy production schema'
           fi
+          container_application="${compute_worker}-computestandard"
 
           {
             echo "API_WORKER=$api_worker"
             echo "COMPUTE_WORKER=$compute_worker"
+            echo "CONTAINER_APPLICATION=$container_application"
             echo "COMPUTE_CONFIG=$compute_config"
             echo "IMAGE_REPOSITORY=$image_repository"
             echo "LOCAL_IMAGE_TAG=$image_repository:$GITHUB_SHA"
@@ -570,7 +572,7 @@ jobs:
             # the account grows beyond that page.
             if npx wrangler containers list --json > "$container_list" && \
               node scripts/verify-container-readiness.mjs \
-                "$container_list" "$COMPUTE_WORKER" "$REMOTE_IMAGE" \
+                "$container_list" "$CONTAINER_APPLICATION" "$REMOTE_IMAGE" \
                 > "$EVIDENCE_DIR/container-readiness.json" 2> "$container_error"; then
               container_ready=true
               break
