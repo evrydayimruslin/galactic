@@ -32,6 +32,8 @@ hash_files \
   cli/deno.lock \
   cli/skills.md \
   compute-worker/images/standard/Dockerfile \
+  compute-worker/images/standard/overlays/git-lfs-v3.7.1-go-modules.patch \
+  compute-worker/images/standard/python/requirements.lock \
   compute-worker/images/standard/toolchain/package.json \
   compute-worker/images/standard/toolchain/package-lock.json \
   compute-worker/images/standard/bridge/package.json \

@@ -147,7 +147,11 @@ jobs:
           printf '%s  %s\n' "$syft_sha256" "$RUNNER_TEMP/$syft_archive" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$syft_archive" -C "$syft_dir" syft
           "$syft_dir/syft" "docker:$IMAGE_TAG" \
-            -o "spdx-json=$EVIDENCE_DIR/image.spdx.json"
+            -o "spdx-json=$EVIDENCE_DIR/image.raw.spdx.json"
+          node scripts/normalize-syft-spdx.mjs \
+            "$EVIDENCE_DIR/image.raw.spdx.json" \
+            "$EVIDENCE_DIR/image.spdx.json" \
+            "$EVIDENCE_DIR/sbom-corrections.json"
 
           docker image inspect "$IMAGE_TAG" > "$EVIDENCE_DIR/image-inspect.json"
           docker image inspect --format '{{.Id}}' "$IMAGE_TAG" > "$EVIDENCE_DIR/local-image-id.txt"
