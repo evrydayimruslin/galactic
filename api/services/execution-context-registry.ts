@@ -26,6 +26,8 @@ import type { RoutineTraceContext } from "./routine-trace.ts";
 export interface ExecutionContextEntry {
   /** Opaque settlement receipt used only to correlate this host RPC's CPU. */
   capacityReceiptId?: string | null;
+  /** Root Agent whose subscription-capacity pool owns this execution. */
+  capacityAgentId?: string | null;
   /** The execution id the AI-spend ledger (ai-spend-tracker.ts) is keyed by. */
   aiExecutionId: string | null;
   /**
@@ -102,6 +104,7 @@ export function resolveExecutionContext(
   }
   return {
     capacityReceiptId: entry.capacityReceiptId ?? null,
+    capacityAgentId: entry.capacityAgentId ?? null,
     aiExecutionId: entry.aiExecutionId,
     appId: entry.appId,
     functionName: entry.functionName,

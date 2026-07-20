@@ -6,6 +6,7 @@
 // decision. This comparison is deliberately conservative at those boundaries.
 
 import { resolveManifestEnvSchema } from "../../shared/contracts/manifest.ts";
+import { normalizeManifestComputeConfig } from "../../shared/contracts/compute.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -127,6 +128,17 @@ function widgetDependencyAuthorities(manifest: JsonRecord): Set<string> {
   return new Set(authorities);
 }
 
+function computeCallerAuthorities(manifest: JsonRecord): Set<string> {
+  const functions = asRecord(manifest.functions) ?? {};
+  return new Set(
+    Object.entries(functions)
+      .filter(([, declaration]) =>
+        asRecord(declaration)?.uses_compute === true
+      )
+      .map(([functionName]) => functionName),
+  );
+}
+
 function readablePerUserEnvKeys(manifest: JsonRecord): Set<string> {
   const schema = resolveManifestEnvSchema(manifest);
   return new Set(
@@ -199,6 +211,37 @@ export function findManifestAuthorityExpansions(
     "permissions",
     stringSet(current.permissions),
     stringSet(target.permissions),
+  );
+
+  const currentCompute = normalizeManifestComputeConfig(current.compute);
+  const targetCompute = normalizeManifestComputeConfig(target.compute);
+  if (
+    targetCompute &&
+    currentCompute?.profile !== targetCompute.profile
+  ) {
+    expansions.push(`compute.profile:${targetCompute.profile}`);
+  }
+  addSetExpansions(
+    expansions,
+    "compute.tools",
+    new Set(currentCompute?.tools || []),
+    new Set(targetCompute?.tools || []),
+  );
+  addSetExpansions(
+    expansions,
+    "compute.secrets",
+    new Set(currentCompute?.secrets || []),
+    new Set(targetCompute?.secrets || []),
+  );
+  // Per-function uses_compute is part of the execution principal. Once an
+  // owner has approved the Agent-level ceiling, adding a new caller would
+  // otherwise let a scoped builder activate that ceiling for new code without
+  // owner promotion.
+  addSetExpansions(
+    expansions,
+    "compute.callers",
+    computeCallerAuthorities(current),
+    computeCallerAuthorities(target),
   );
   addSetExpansions(
     expansions,

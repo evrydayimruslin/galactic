@@ -64,6 +64,93 @@ Deno.test("manifest authority: new runtime, network, and cross-Agent powers requ
   );
 });
 
+Deno.test("manifest authority: compute permission, profile, tools, and secrets require owner promotion", () => {
+  const expansions = findManifestAuthorityExpansions(
+    {
+      env_vars: {
+        GH_TOKEN: { input: "password" },
+      },
+    },
+    {
+      permissions: ["compute:exec"],
+      compute: {
+        profile: "developer-v1",
+        tools: ["browser", "shell"],
+        secrets: ["GH_TOKEN"],
+      },
+      env_vars: {
+        GH_TOKEN: { input: "password" },
+      },
+    },
+  );
+
+  for (const path of [
+    "permissions:compute:exec",
+    "compute.profile:developer-v1",
+    "compute.tools:browser",
+    "compute.tools:shell",
+    "compute.secrets:GH_TOKEN",
+  ]) {
+    assert(expansions.includes(path), `${path} should require owner promotion`);
+  }
+});
+
+Deno.test("manifest authority: narrowing compute tools and secrets is builder-safe", () => {
+  const current = {
+    permissions: ["compute:exec"],
+    compute: {
+      profile: "developer-v1",
+      tools: ["browser", "shell"],
+      secrets: ["GH_TOKEN", "NPM_TOKEN"],
+    },
+  };
+  const target = {
+    permissions: ["compute:exec"],
+    compute: {
+      profile: "developer-v1",
+      tools: ["shell"],
+      secrets: ["GH_TOKEN"],
+    },
+  };
+
+  assertEquals(findManifestAuthorityExpansions(current, target), []);
+});
+
+Deno.test("manifest authority: activating Compute for a new caller requires owner promotion", () => {
+  const shared = {
+    permissions: ["compute:exec"],
+    compute: {
+      profile: "developer-v1",
+      tools: ["shell"],
+    },
+  };
+  const expansions = findManifestAuthorityExpansions(
+    {
+      ...shared,
+      functions: {
+        build: { uses_compute: true },
+        status: { uses_compute: false },
+      },
+    },
+    {
+      ...shared,
+      functions: {
+        build: { uses_compute: true },
+        status: { uses_compute: true },
+      },
+    },
+  );
+
+  assert(expansions.includes("compute.callers:status"));
+  assertEquals(
+    findManifestAuthorityExpansions(
+      { ...shared, functions: { build: { uses_compute: true } } },
+      { ...shared, functions: { build: { uses_compute: false } } },
+    ),
+    [],
+  );
+});
+
 Deno.test("manifest authority: exposure, routines, credentials, and loosened limits require owner promotion", () => {
   const expansions = findManifestAuthorityExpansions(
     {

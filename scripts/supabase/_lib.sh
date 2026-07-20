@@ -13,7 +13,7 @@ supabase_cli() {
     return
   fi
 
-  npx --yes supabase@latest "$@"
+  npx --yes supabase@2.109.1 "$@"
 }
 
 require_env() {

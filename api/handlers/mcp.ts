@@ -3069,6 +3069,9 @@ async function executeAppFunction(
       expectedVersion: app.current_version || undefined,
       executionId,
       capacityReceiptId: accountCapacityReservationId ? receiptId : undefined,
+      capacityAgentId: meta?.capacityAgentId ||
+        callerContext.callerApp?.capacityAgentId ||
+        callerContext.routineActor?.composerAppId || app.id,
       // Unused by the dynamic sandbox (it executes the KV ESM bundle); kept
       // only to satisfy RuntimeConfig until the legacy Deno path is removed.
       code: "",

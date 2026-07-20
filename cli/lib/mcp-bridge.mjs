@@ -40,8 +40,8 @@ import {
   dirname,
   sep,
 } from 'path';
-import { homedir } from 'os';
 import { fileURLToPath } from 'url';
+import { loadAuth } from './job-context.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -52,39 +52,6 @@ function readVersion() {
   } catch {
     return '0.0.0';
   }
-}
-
-// ─── Auth / config resolution ────────────────────────────────────────────
-// Token is read from ~/.galactic/config.json (written by `setup`; legacy
-// ~/.ultralight/config.json is read as a fallback) so it is never duplicated
-// into client MCP config files. Env vars override.
-const DEFAULT_API_URL = 'https://api.connectgalactic.com';
-// Old hosts that older CLI configs may still pin — rewrite to the current one
-// (mirrors cli/config.ts LEGACY_API_URLS) so upgraders aren't left on a dead API.
-const LEGACY_API_URLS = new Set([
-  'https://api.ultralightagent.com',
-  'https://api.ultralight.dev',
-  'https://ultralight-api-iikqz.ondigitalocean.app',
-  'https://ultralight-api.rgn4jz429m.workers.dev',
-]);
-
-function loadAuth() {
-  let token = process.env.GALACTIC_TOKEN || process.env.ULTRALIGHT_TOKEN ||
-    process.env.GALACTIC_API_TOKEN || process.env.ULTRALIGHT_API_TOKEN || null;
-  let apiUrl = process.env.GALACTIC_API_URL || process.env.ULTRALIGHT_API_URL || null;
-  for (const dir of ['.galactic', '.ultralight']) {
-    try {
-      const cfg = JSON.parse(readFileSync(join(homedir(), dir, 'config.json'), 'utf-8'));
-      if (!token && cfg?.auth?.token) token = cfg.auth.token;
-      if (!apiUrl && cfg?.api_url) apiUrl = cfg.api_url;
-      if (token) break;
-    } catch {
-      // no config file at this location — try the next / fall back to defaults
-    }
-  }
-  apiUrl = (apiUrl || DEFAULT_API_URL).replace(/\/+$/, '');
-  if (LEGACY_API_URLS.has(apiUrl)) apiUrl = DEFAULT_API_URL;
-  return { token, apiUrl };
 }
 
 // ─── Filesystem confinement ──────────────────────────────────────────────
@@ -148,7 +115,11 @@ const RPC_TIMEOUT_MS = Number(process.env.GALACTIC_TIMEOUT_MS || process.env.ULT
 // as the MCP `initialize` instructions, so an Agent connecting through this
 // bridge reads the same up-to-date guide as a direct connection (the website
 // and direct MCP already render /api/skills). Best-effort — never block startup.
-async function fetchPlatformSkills(apiUrl) {
+async function fetchPlatformSkills(apiUrl, jobMode) {
+  // The v1 lease gateway intentionally exposes only scoped platform MCP and
+  // lease utility routes. Do not probe an unscoped/public documentation route
+  // from a body.
+  if (jobMode) return undefined;
   try {
     const url = new URL('/api/skills', apiUrl).toString();
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
@@ -159,7 +130,7 @@ async function fetchPlatformSkills(apiUrl) {
   } catch { /* offline / transient — fall through to no instructions */ }
   return undefined;
 }
-async function rpc(apiUrl, token, method, params) {
+async function rpc(apiUrl, token, method, params, jobMode = false) {
   let res;
   try {
     res = await fetch(`${apiUrl}/mcp/platform`, {
@@ -181,7 +152,9 @@ async function rpc(apiUrl, token, method, params) {
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     const hint = res.status === 401
-      ? ' — token invalid or expired; run `galacticconnection setup --token ul_...`'
+      ? jobMode
+        ? ' — compute lease token invalid or expired'
+        : ' — token invalid or expired; run `galacticconnection setup --token gx_...`'
       : '';
     throw new Error(`platform ${method} failed: HTTP ${res.status}${hint}${body ? ` — ${body.slice(0, 300)}` : ''}`);
   }
@@ -288,9 +261,12 @@ function handleLocal(name, args) {
 // ─── Bridge entry point ────────────────────────────────────────────────────
 export async function runMcpBridge() {
   const version = readVersion();
-  const { token, apiUrl } = loadAuth();
+  const { token, apiUrl, jobMode } = loadAuth();
 
   if (!token) {
+    if (jobMode) {
+      throw new Error('Galactic Compute job authentication is unavailable');
+    }
     process.stderr.write(
       '[galacticconnection] No API token found — serving local filesystem tools only. ' +
         'Run `galacticconnection setup --token gx_...` (or set GALACTIC_TOKEN) to enable platform tools.\n',
@@ -304,7 +280,7 @@ export async function runMcpBridge() {
     if (!token) return [];
     if (remoteToolsCache) return remoteToolsCache;
     try {
-      const result = await rpc(apiUrl, token, 'tools/list', {});
+      const result = await rpc(apiUrl, token, 'tools/list', {}, jobMode);
       // Cache ONLY on success, so a transient failure on the first call
       // (network blip, 5xx, token-rotation 401) doesn't permanently strip the
       // platform catalog for the session — the next tools/list will retry.
@@ -316,7 +292,7 @@ export async function runMcpBridge() {
     }
   }
 
-  const instructions = await fetchPlatformSkills(apiUrl);
+  const instructions = await fetchPlatformSkills(apiUrl, jobMode);
   const server = new Server(
     { name: 'galacticagent', version },
     {
@@ -343,7 +319,7 @@ export async function runMcpBridge() {
           isError: true,
         };
       }
-      const result = await rpc(apiUrl, token, 'tools/call', { name, arguments: args });
+      const result = await rpc(apiUrl, token, 'tools/call', { name, arguments: args }, jobMode);
       // The platform is itself an MCP server, so its tools/call result is
       // already a CallToolResult ({ content: [...] }). Pass it through; wrap
       // defensively if a tool ever returns a bare value.
@@ -357,7 +333,7 @@ export async function runMcpBridge() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   process.stderr.write(
-    `[galacticconnection] MCP bridge ready — ${token ? 'authenticated' : 'local-only'}; ` +
+    `[galacticconnection] MCP bridge ready — ${jobMode ? 'compute-job' : token ? 'authenticated' : 'local-only'}; ` +
       `api=${apiUrl}; fs-root=${FS_ROOT}\n`,
   );
 }

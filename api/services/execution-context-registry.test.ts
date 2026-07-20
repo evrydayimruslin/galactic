@@ -41,6 +41,19 @@ Deno.test("registry: register → resolve round-trips the context", () => {
   deregisterExecutionContext(h);
 });
 
+Deno.test("registry: trusted capacity Agent attribution round-trips host-side", () => {
+  const capacityAgentId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const h = registerExecutionContext({
+    ...entry("r-cap", "exec-cap"),
+    capacityAgentId,
+  });
+  try {
+    assertEquals(resolveExecutionContext(h)?.capacityAgentId, capacityAgentId);
+  } finally {
+    deregisterExecutionContext(h);
+  }
+});
+
 Deno.test("registry: handles are unforgeable — distinct + not the executionId", () => {
   const a = registerExecutionContext(entry("r1", "exec-1"));
   const b = registerExecutionContext(entry("r2", "exec-2"));

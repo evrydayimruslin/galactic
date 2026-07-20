@@ -4,6 +4,7 @@ import type {
   ResolvedCredential,
 } from "../../shared/contracts/env.ts";
 import type { WidgetDependencyDeclaration } from "../../shared/contracts/widget.ts";
+import { COMPUTE_EXEC_PERMISSION } from "../../shared/contracts/compute.ts";
 import { getEnv } from "../lib/env.ts";
 import { buildAppSecretDiagnostics } from "./app-diagnostics.ts";
 import {
@@ -643,6 +644,7 @@ const STRICT_RUNTIME_PERMISSIONS = new Set([
   "app:call",
   "gpu:execute",
   "notify:owner",
+  COMPUTE_EXEC_PERMISSION,
 ]);
 
 export interface StrictRuntimePermissionResolution {

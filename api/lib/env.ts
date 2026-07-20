@@ -6,6 +6,20 @@
 // ENV TYPES
 // ============================================
 
+export interface QueueProducer {
+  send(body: unknown, options?: { delaySeconds?: number }): Promise<void>;
+}
+
+/** Private named entrypoint exported by the dedicated Compute Worker. */
+export interface ComputePlaneBinding {
+  executeRun(message: unknown): Promise<unknown>;
+  cancelRun(message: unknown): Promise<{ destroyed: true }>;
+  runtimeIdentity(): Promise<{
+    profile: "developer-v1";
+    environmentDigest: string;
+  }>;
+}
+
 export interface Env {
   // KV namespaces
   CODE_CACHE: KVNamespace;
@@ -13,6 +27,13 @@ export interface Env {
 
   // R2 bucket
   R2_BUCKET: R2Bucket;
+
+  // Galactic Compute is deployed as a separate, non-public Worker. These
+  // bindings are optional at the type boundary so tests and an intentionally
+  // disabled rollout fail closed instead of needing fake infrastructure.
+  COMPUTE_ARTIFACTS?: R2Bucket;
+  COMPUTE_PLANE?: ComputePlaneBinding;
+  COMPUTE_QUEUE?: QueueProducer;
 
   // Dynamic Workers loader
   LOADER: {
@@ -80,6 +101,17 @@ export interface Env {
   // Not an authority — it just names which app feeds the starter list; the Agent
   // is owner-only because it is private.
   DEFAULTS_SOURCE_APP: string;
+
+  // Galactic Compute rollout and immutable environment identity. The job
+  // token pepper is a Worker secret; it must never be passed to a body.
+  COMPUTE_ENABLED: string;
+  COMPUTE_ENVIRONMENT_DIGEST: string;
+  COMPUTE_JOB_TOKEN_PEPPER: string;
+  /** Dedicated public-edge credential for global Compute stop/release only. */
+  COMPUTE_EMERGENCY_STOP_TOKEN: string;
+  COMPUTE_ROLLOUT_MODE: string;
+  /** Comma-separated exact `owner UUID/Agent UUID` pairs. */
+  COMPUTE_CANARY_ALLOWLIST: string;
 
   // Index signature for dynamic access
   [key: string]: unknown;
@@ -162,10 +194,6 @@ export function getSelfFetcher():
   return null;
 }
 
-interface QueueProducer {
-  send(body: unknown, options?: { delaySeconds?: number }): Promise<void>;
-}
-
 function getQueueProducer(binding: string): QueueProducer | null {
   const queue = globalThis.__env?.[binding];
   if (
@@ -203,4 +231,9 @@ export function getEventQueue(): QueueProducer | null {
  */
 export function getCapacityTelemetryQueue(): QueueProducer | null {
   return getQueueProducer("CAPACITY_TELEMETRY_QUEUE");
+}
+
+/** Durable async dispatch to the dedicated Compute Worker. */
+export function getComputeQueue(): QueueProducer | null {
+  return getQueueProducer("COMPUTE_QUEUE");
 }

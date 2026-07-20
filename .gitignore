@@ -37,6 +37,10 @@ node_modules/
 package-lock.json
 !api/package-lock.json
 !capacity-tail-worker/package-lock.json
+!compute-worker/package-lock.json
+!compute-worker/images/standard/toolchain/package-lock.json
+!compute-worker/images/standard/bridge/package-lock.json
+!cli/package-lock.json
 *.tgz
 
 # wrangler files

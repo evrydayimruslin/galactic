@@ -1,0 +1,620 @@
+name: Compute Admission
+
+# Compute Deploy certifies an immutable admission-OFF API version. This manual
+# workflow either uploads one strictly drift-checked canary-ON API version or
+# promotes that exact certified OFF version. Disable and compensation never
+# rebuild/re-upload source.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Environment to change. Production requires an immutable v* tag.
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+      action:
+        description: Disable is the fail-safe default; enable is canary-only.
+        required: true
+        default: disable
+        type: choice
+        options: [disable, enable]
+      confirmation:
+        description: Type the exact phrase documented in the Compute runbook.
+        required: true
+        type: string
+      reason:
+        description: Non-secret operational reason (8-240 characters).
+        required: true
+        type: string
+      canary_allowlist:
+        description: Enable only; canonical owner UUID/Agent UUID pairs, comma-separated (maximum 50).
+        required: false
+        default: ''
+        type: string
+      compute_release_run_id:
+        description: Successful Compute Deploy run containing the certified admission-OFF API version.
+        required: true
+        type: string
+      migrations_applied:
+        description: Enable only; attest that every Compute migration in the referenced release is applied.
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  change:
+    name: ${{ inputs.action }} Compute admission in ${{ inputs.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ inputs.target }}
+    concurrency:
+      group: api-${{ inputs.target }}-deploy
+      cancel-in-progress: false
+    env:
+      EVIDENCE_DIR: ${{ github.workspace }}/compute-admission-evidence
+      REQUESTED_TARGET: ${{ inputs.target }}
+      REQUESTED_ACTION: ${{ inputs.action }}
+      TYPED_CONFIRMATION: ${{ inputs.confirmation }}
+      OPERATOR_REASON: ${{ inputs.reason }}
+      CANARY_ALLOWLIST_INPUT: ${{ inputs.canary_allowlist }}
+      RELEASE_RUN_ID_INPUT: ${{ inputs.compute_release_run_id }}
+      MIGRATIONS_APPLIED_INPUT: ${{ inputs.migrations_applied }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Validate request and non-bypassable reviewer policy
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          case "$REQUESTED_TARGET" in staging|production) ;; *) exit 1 ;; esac
+          case "$REQUESTED_ACTION" in disable|enable) ;; *) exit 1 ;; esac
+
+          if [ "$REQUESTED_TARGET" = "production" ]; then
+            case "$GITHUB_REF" in refs/tags/v*) ;; *) echo "Production requires an immutable v* tag." >&2; exit 1 ;; esac
+          elif [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Staging changes must run from main." >&2
+            exit 1
+          fi
+          if [ "$REQUESTED_ACTION" = "enable" ]; then
+            expected="ENABLE GALACTIC COMPUTE CANARY $REQUESTED_TARGET"
+          else
+            expected="DISABLE GALACTIC COMPUTE $REQUESTED_TARGET"
+          fi
+          [ "$TYPED_CONFIRMATION" = "$expected" ] || { echo "confirmation must be exactly: $expected" >&2; exit 1; }
+
+          normalized_allowlist="$(node <<'NODE'
+          const action = process.env.REQUESTED_ACTION;
+          const allowlist = process.env.CANARY_ALLOWLIST_INPUT ?? "";
+          const reason = process.env.OPERATOR_REASON ?? "";
+          const runId = process.env.RELEASE_RUN_ID_INPUT ?? "";
+          const migrations = process.env.MIGRATIONS_APPLIED_INPUT;
+          const pair = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+          if (!/^[1-9][0-9]*$/u.test(runId)) throw new Error("positive Compute Deploy run ID required");
+          if (reason.length < 8 || reason.length > 240 || /[\r\n\x00-\x1f\x7f]/u.test(reason)) {
+            throw new Error("reason must be 8-240 printable characters on one line");
+          }
+          if (action === "enable") {
+            if (migrations !== "true") throw new Error("migration attestation required");
+            const entries = allowlist.split(",");
+            if (!allowlist || allowlist.length > 4096 || entries.length > 50 || entries.some((entry) => !pair.test(entry))) {
+              throw new Error("1-50 canonical lowercase owner UUID/Agent UUID pairs required");
+            }
+            if (new Set(entries).size !== entries.length) throw new Error("duplicate canaries prohibited");
+            process.stdout.write(entries.join(","));
+          } else {
+            if (allowlist !== "") throw new Error("disable requires an empty allowlist");
+          }
+          NODE
+          )"
+
+          environment_json="$RUNNER_TEMP/github-environment.json"
+          gh api "repos/$GITHUB_REPOSITORY/environments/$REQUESTED_TARGET" > "$environment_json"
+          jq -e '
+            .can_admins_bypass == false and
+            any(.protection_rules[]?;
+                .type == "required_reviewers" and
+                .prevent_self_review == true and
+                ((.reviewers // []) | length) > 0)
+          ' "$environment_json" >/dev/null || {
+            echo "Environment must require reviewers, prevent self-review, and prohibit admin bypass." >&2
+            exit 1
+          }
+          jq '{name, can_admins_bypass, required_reviewer_rules: [
+            .protection_rules[]? | select(.type == "required_reviewers") |
+            {prevent_self_review, reviewer_count: ((.reviewers // []) | length)}
+          ]}' "$environment_json" > "$EVIDENCE_DIR/github-environment-policy.json"
+
+          if [ "$REQUESTED_TARGET" = "staging" ]; then
+            api_worker=ultralight-api-staging
+            compute_worker=galactic-compute-staging
+            queue_name=galactic-compute-staging
+            compute_dlq=galactic-compute-staging-dlq
+            reconciliation_dlq=galactic-compute-staging-reconciliation-dlq
+            artifact_bucket=galactic-compute-artifacts-staging
+            schema_workflow_path=.github/workflows/supabase-db.yml
+            schema_deploy_job='Deploy staging schema'
+          else
+            api_worker=ultralight-api
+            compute_worker=galactic-compute
+            queue_name=galactic-compute
+            compute_dlq=galactic-compute-dlq
+            reconciliation_dlq=galactic-compute-reconciliation-dlq
+            artifact_bucket=galactic-compute-artifacts
+            schema_workflow_path=.github/workflows/supabase-production-db.yml
+            schema_deploy_job='Deploy production schema'
+          fi
+          {
+            echo "API_WORKER=$api_worker"
+            echo "COMPUTE_WORKER=$compute_worker"
+            echo "QUEUE_NAME=$queue_name"
+            echo "COMPUTE_DLQ=$compute_dlq"
+            echo "RECONCILIATION_DLQ=$reconciliation_dlq"
+            echo "ARTIFACT_BUCKET=$artifact_bucket"
+            echo "SCHEMA_WORKFLOW_PATH=$schema_workflow_path"
+            echo "SCHEMA_DEPLOY_JOB=$schema_deploy_job"
+            echo "ROLLOUT_ALLOWLIST=$normalized_allowlist"
+          } >> "$GITHUB_ENV"
+          jq -n --arg target "$REQUESTED_TARGET" --arg action "$REQUESTED_ACTION" \
+            --arg actor "$GITHUB_ACTOR" --arg reason "$OPERATOR_REASON" \
+            --arg ref "$GITHUB_REF" --arg sha "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" --arg source_run "$RELEASE_RUN_ID_INPUT" \
+            --arg allowlist "$normalized_allowlist" \
+            '{schema_version: 2, target: $target, action: $action, actor: $actor,
+              reason: $reason, git_ref: $ref, git_sha: $sha, workflow_run_id: $run_id,
+              source_release_run_id: $source_run,
+              canary_allowlist: (if $allowlist == "" then [] else ($allowlist | split(",")) end),
+              confirmation_matched: true}' > "$EVIDENCE_DIR/request.json"
+
+      - name: Resolve certified OFF version from Compute release evidence
+        id: resolve_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          release_run="$RUNNER_TEMP/compute-release-run.json"
+          release_dir="$RUNNER_TEMP/compute-release-evidence"
+          mkdir -p "$release_dir"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID_INPUT" > "$release_run"
+          release_sha="$(jq -er '.head_sha | select(test("^[0-9a-f]{40}$"))' "$release_run")"
+          jq -e --arg sha "$release_sha" '
+            .event == "workflow_dispatch" and .conclusion == "success" and
+            .head_sha == $sha and .path == ".github/workflows/compute-deploy.yml"
+          ' "$release_run" >/dev/null || { echo "Invalid Compute Deploy provenance." >&2; exit 1; }
+          gh run download "$RELEASE_RUN_ID_INPUT" --repo "$GITHUB_REPOSITORY" \
+            --name "compute-$REQUESTED_TARGET-release-$release_sha" --dir "$release_dir"
+
+          release_json="$release_dir/release.json"
+          migration_manifest="$release_dir/compute-migrations.sha256"
+          migration_manifest_hash_file="$release_dir/compute-migrations-manifest.sha256"
+          retention_hash_file="$release_dir/compute-artifact-retention-migration.sha256"
+          schema_run_evidence="$release_dir/schema-workflow-run.json"
+          schema_job_evidence="$release_dir/schema-workflow-job.json"
+          for required_file in \
+            "$release_json" "$migration_manifest" "$migration_manifest_hash_file" \
+            "$retention_hash_file" "$schema_run_evidence" "$schema_job_evidence"; do
+            [ -f "$required_file" ] || { echo "Incomplete release evidence: $(basename "$required_file")." >&2; exit 1; }
+          done
+
+          if [ ! -s "$migration_manifest" ] || \
+             grep -Eqv '^[0-9a-f]{64}  supabase/migrations/[0-9A-Za-z._-]+\.sql$' "$migration_manifest" || \
+             ! LC_ALL=C sort -c -k2,2 "$migration_manifest"; then
+            echo "Migration manifest is malformed or not deterministically ordered." >&2
+            exit 1
+          fi
+          duplicate_migration="$(awk '{print $2}' "$migration_manifest" | uniq -d)"
+          [ -z "$duplicate_migration" ] || { echo "Migration manifest contains duplicate paths." >&2; exit 1; }
+          migration_manifest_sha256="$(sha256sum "$migration_manifest" | cut -d ' ' -f 1)"
+          declared_manifest_sha256="$(awk 'NF == 2 && $2 == "compute-migrations.sha256" {print $1}' "$migration_manifest_hash_file")"
+          if [ "$(wc -l < "$migration_manifest_hash_file" | tr -d ' ')" -ne 1 ] || \
+             [[ ! "$declared_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || \
+             [ "$declared_manifest_sha256" != "$migration_manifest_sha256" ]; then
+            echo "Migration manifest checksum evidence is invalid." >&2
+            exit 1
+          fi
+          migration_count="$(wc -l < "$migration_manifest" | tr -d ' ')"
+          retention_hash="$(awk '
+            NF == 2 && $2 == "supabase/migrations/20260720124000_compute_artifact_retention.sql" {print $1}
+          ' "$retention_hash_file")"
+          [[ "$retention_hash" =~ ^[0-9a-f]{64}$ ]] || { echo "Retention checksum evidence is invalid." >&2; exit 1; }
+
+          common_filter='.
+            | . as $release
+            | .schema_version == 3 and .environment == $target and .git_sha == $release_sha and
+              .admission_enabled == false and (.environment_digest | test("^sha256:[0-9a-f]{64}$")) and
+              (.base_image | test("^docker\\.io/cloudflare/sandbox:0\\.12\\.3-python@sha256:[0-9a-f]{64}$")) and
+              (.deployed_image | test("^registry\\.cloudflare\\.com/[0-9a-f]{32}/[a-z0-9-]+@sha256:[0-9a-f]{64}$")) and
+              ($release.deployed_image | test("/" + $compute_worker + "@sha256:[0-9a-f]{64}$")) and
+              ($release.deployed_image | endswith("@" + $release.environment_digest)) and
+              .certified_admission_off_api.worker == $api_worker and
+              (.certified_admission_off_api.version_id | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) and
+              .certified_admission_off_api.version_tag == ("api-" + $release_sha) and
+              .active_compute_worker.worker == $compute_worker and
+              (.active_compute_worker.version_id | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) and
+              .active_compute_worker.version_tag == ("compute-" + $release_sha) and
+              .schema_migrations.manifest_sha256 == $migration_manifest_sha256 and
+              .schema_migrations.migration_count == $migration_count and
+              (.schema_migrations.schema_workflow_run_id | test("^[1-9][0-9]*$")) and
+              .schema_migrations.schema_workflow_path == $schema_workflow_path and
+              .schema_migrations.schema_deploy_job == $schema_deploy_job and
+              .artifact_storage.public_access == false and
+              .artifact_retention.migration_sha256 == $retention_hash'
+          jq -e \
+            --arg target "$REQUESTED_TARGET" \
+            --arg release_sha "$release_sha" \
+            --arg api_worker "$API_WORKER" \
+            --arg compute_worker "$COMPUTE_WORKER" \
+            --arg migration_manifest_sha256 "$migration_manifest_sha256" \
+            --argjson migration_count "$migration_count" \
+            --arg schema_workflow_path "$SCHEMA_WORKFLOW_PATH" \
+            --arg schema_deploy_job "$SCHEMA_DEPLOY_JOB" \
+            --arg retention_hash "$retention_hash" \
+            "$common_filter" "$release_json" >/dev/null || {
+              echo "Release does not identify one certified OFF API/Compute pair." >&2
+              exit 1
+            }
+
+          release_schema_run_id="$(jq -er '.schema_migrations.schema_workflow_run_id' "$release_json")"
+          jq -e \
+            --arg id "$release_schema_run_id" \
+            --arg sha "$release_sha" \
+            --arg path "$SCHEMA_WORKFLOW_PATH" '
+              (.id | tostring) == $id and
+              (.event == "push" or .event == "workflow_dispatch") and
+              .conclusion == "success" and .head_sha == $sha and .path == $path
+            ' "$schema_run_evidence" >/dev/null || { echo "Schema workflow evidence does not match release.json." >&2; exit 1; }
+          jq -e \
+            --arg id "$release_schema_run_id" \
+            --arg sha "$release_sha" \
+            --arg name "$SCHEMA_DEPLOY_JOB" '
+              (.run_id | tostring) == $id and .name == $name and
+              .conclusion == "success" and .head_sha == $sha
+            ' "$schema_job_evidence" >/dev/null || { echo "Schema deploy-job evidence does not match release.json." >&2; exit 1; }
+
+          if [ "$REQUESTED_ACTION" = "enable" ]; then
+            jq -e --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF" \
+              '.git_sha == $sha and .git_ref == $ref' "$release_json" >/dev/null || {
+                echo "Enable requires Compute release evidence for this exact ref and SHA." >&2
+                exit 1
+              }
+            local_manifest="$RUNNER_TEMP/local-compute-migrations.sha256"
+            rm -f "$local_manifest"
+            node compute-worker/scripts/hash-migrations.mjs . "$local_manifest"
+            cmp -s "$migration_manifest" "$local_manifest" || {
+              echo "Enable requires an exact match to the release's complete migration manifest." >&2
+              exit 1
+            }
+
+            schema_run_recheck="$RUNNER_TEMP/schema-workflow-run-recheck.json"
+            schema_jobs_recheck="$RUNNER_TEMP/schema-workflow-jobs-recheck.json"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$release_schema_run_id" > "$schema_run_recheck"
+            jq -e --arg sha "$release_sha" --arg path "$SCHEMA_WORKFLOW_PATH" '
+              (.event == "push" or .event == "workflow_dispatch") and
+              .conclusion == "success" and .head_sha == $sha and .path == $path
+            ' "$schema_run_recheck" >/dev/null || { echo "Canonical schema run no longer verifies." >&2; exit 1; }
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$release_schema_run_id/jobs?per_page=100" \
+              > "$schema_jobs_recheck"
+            jq -e --arg name "$SCHEMA_DEPLOY_JOB" --arg sha "$release_sha" '
+              [.jobs[]? | select(.name == $name and .conclusion == "success" and .head_sha == $sha)]
+              | length == 1
+            ' "$schema_jobs_recheck" >/dev/null || { echo "Canonical schema deploy job no longer verifies." >&2; exit 1; }
+            jq '{id, event, conclusion, head_sha, head_branch, path, run_attempt, created_at, updated_at}' \
+              "$schema_run_recheck" > "$EVIDENCE_DIR/schema-workflow-run-recheck.json"
+            jq --arg name "$SCHEMA_DEPLOY_JOB" --arg sha "$release_sha" '
+              [.jobs[] | select(.name == $name and .conclusion == "success" and .head_sha == $sha)][0]
+              | {id, run_id, name, status, conclusion, head_sha, started_at, completed_at}
+            ' "$schema_jobs_recheck" > "$EVIDENCE_DIR/schema-workflow-job-recheck.json"
+          fi
+
+          certified_api_id="$(jq -er '.certified_admission_off_api.version_id' "$release_json")"
+          certified_api_tag="$(jq -er '.certified_admission_off_api.version_tag' "$release_json")"
+          certified_compute_id="$(jq -er '.active_compute_worker.version_id' "$release_json")"
+          certified_compute_tag="$(jq -er '.active_compute_worker.version_tag' "$release_json")"
+          release_digest="$(jq -er '.environment_digest' "$release_json")"
+          release_image="$(jq -er '.deployed_image' "$release_json")"
+          {
+            echo "CERTIFIED_OFF_API_VERSION_ID=$certified_api_id"
+            echo "CERTIFIED_OFF_API_VERSION_TAG=$certified_api_tag"
+            echo "CERTIFIED_COMPUTE_VERSION_ID=$certified_compute_id"
+            echo "CERTIFIED_COMPUTE_VERSION_TAG=$certified_compute_tag"
+            echo "RELEASE_ENVIRONMENT_DIGEST=$release_digest"
+            echo "RELEASE_DEPLOYED_IMAGE=$release_image"
+            echo "RELEASE_SCHEMA_RUN_ID=$release_schema_run_id"
+            echo "RELEASE_GIT_SHA=$release_sha"
+          } >> "$GITHUB_ENV"
+          jq '{schema_version, environment, git_sha, git_ref, deployed_image, environment_digest,
+            certified_admission_off_api, active_compute_worker, schema_migrations,
+            artifact_storage, artifact_retention}' \
+            "$release_json" > "$EVIDENCE_DIR/source-release.json"
+          cp "$schema_run_evidence" "$EVIDENCE_DIR/source-schema-workflow-run.json"
+          cp "$schema_job_evidence" "$EVIDENCE_DIR/source-schema-workflow-job.json"
+          jq '{id, event, conclusion, head_sha, head_branch, path, run_attempt, created_at, updated_at}' \
+            "$release_run" > "$EVIDENCE_DIR/source-release-run.json"
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout certified release source for fail-safe disable
+        if: ${{ inputs.action == 'disable' }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ steps.resolve_release.outputs.release_sha }}
+          path: certified-release-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install the action-appropriate pinned API toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$REQUESTED_ACTION" = "disable" ]; then
+            api_source_root="$GITHUB_WORKSPACE/certified-release-source"
+            [ "$(git -C "$api_source_root" rev-parse HEAD)" = "$RELEASE_GIT_SHA" ] || {
+              echo "Certified release checkout does not match release evidence." >&2
+              exit 1
+            }
+          else
+            api_source_root="$GITHUB_WORKSPACE"
+          fi
+          echo "API_SOURCE_ROOT=$api_source_root" >> "$GITHUB_ENV"
+          npm --prefix "$api_source_root/api" ci
+
+      - name: Verify certified versions and enable preconditions
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api_version="$RUNNER_TEMP/certified-off-api-version.json"
+          compute_version="$RUNNER_TEMP/certified-compute-version.json"
+          pushd "$API_SOURCE_ROOT/api" >/dev/null
+          npx wrangler versions view "$CERTIFIED_OFF_API_VERSION_ID" --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$CERTIFIED_COMPUTE_VERSION_ID" --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+          jq -e --arg id "$CERTIFIED_OFF_API_VERSION_ID" --arg tag "$CERTIFIED_OFF_API_VERSION_TAG" \
+            --arg digest "$RELEASE_ENVIRONMENT_DIGEST" '
+            def value($name): [.resources.bindings[]? | select(.type == "plain_text" and .name == $name) | .text] as $v | if ($v|length)==1 then $v[0] else null end;
+            .id == $id and .annotations["workers/tag"] == $tag and
+            value("COMPUTE_ENABLED") == "0" and value("COMPUTE_ENVIRONMENT_DIGEST") == $digest and
+            value("COMPUTE_ROLLOUT_MODE") == "canary" and value("COMPUTE_CANARY_ALLOWLIST") == ""
+          ' "$api_version" >/dev/null || { echo "Certified OFF API version failed immutable readback." >&2; exit 1; }
+          jq -e --arg id "$CERTIFIED_COMPUTE_VERSION_ID" --arg tag "$CERTIFIED_COMPUTE_VERSION_TAG" \
+            --arg digest "$RELEASE_ENVIRONMENT_DIGEST" '
+            .id == $id and .annotations["workers/tag"] == $tag and
+            any(.resources.bindings[]?; .type == "plain_text" and .name == "COMPUTE_ENVIRONMENT_DIGEST" and .text == $digest)
+          ' "$compute_version" >/dev/null || { echo "Certified Compute version failed immutable readback." >&2; exit 1; }
+
+          jq --arg worker "$API_WORKER" '{worker: $worker, id, tag: .annotations["workers/tag"],
+            selected_bindings: [.resources.bindings[]? | select(.name == "COMPUTE_ENABLED" or .name == "COMPUTE_ENVIRONMENT_DIGEST" or .name == "COMPUTE_ROLLOUT_MODE" or .name == "COMPUTE_CANARY_ALLOWLIST" or .name == "COMPUTE_PLANE" or .name == "COMPUTE_QUEUE" or .name == "COMPUTE_ARTIFACTS")]}' \
+            "$api_version" > "$EVIDENCE_DIR/certified-off-api-version.json"
+          jq --arg worker "$COMPUTE_WORKER" '{worker: $worker, id, tag: .annotations["workers/tag"],
+            selected_bindings: [.resources.bindings[]? | select(.name == "COMPUTE_ENVIRONMENT_DIGEST" or .name == "CONTROL_PLANE" or .name == "COMPUTE_STANDARD" or .name == "COMPUTE_ARTIFACTS")]}' \
+            "$compute_version" > "$EVIDENCE_DIR/certified-compute-version.json"
+
+          if [ "$REQUESTED_ACTION" = "enable" ]; then
+            api_status="$RUNNER_TEMP/pre-enable-api-status.json"
+            compute_status="$RUNNER_TEMP/pre-enable-compute-status.json"
+            pushd "$API_SOURCE_ROOT/api" >/dev/null
+            npx wrangler deployments status --name "$API_WORKER" --json > "$api_status"
+            npx wrangler deployments status --name "$COMPUTE_WORKER" --json > "$compute_status"
+            popd >/dev/null
+            jq -e --arg id "$CERTIFIED_OFF_API_VERSION_ID" \
+              '(.versions|length)==1 and (.versions[0].percentage|tonumber)==100 and .versions[0].version_id==$id' \
+              "$api_status" >/dev/null || { echo "Pre-enable API is not the exact certified OFF version." >&2; exit 1; }
+            jq -e --arg id "$CERTIFIED_COMPUTE_VERSION_ID" \
+              '(.versions|length)==1 and (.versions[0].percentage|tonumber)==100 and .versions[0].version_id==$id' \
+              "$compute_status" >/dev/null || { echo "Pre-enable Compute is not the exact certified version." >&2; exit 1; }
+          fi
+
+      - name: Verify enable-only resources and secret names
+        if: ${{ inputs.action == 'enable' }}
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api_version="$RUNNER_TEMP/certified-off-api-version.json"
+          compute_version="$RUNNER_TEMP/certified-compute-version.json"
+          jq -e --arg compute "$COMPUTE_WORKER" --arg queue "$QUEUE_NAME" --arg bucket "$ARTIFACT_BUCKET" '
+            any(.resources.bindings[]?; .type=="service" and .name=="COMPUTE_PLANE" and .service==$compute and .entrypoint=="ComputePlane") and
+            any(.resources.bindings[]?; .type=="queue" and .name=="COMPUTE_QUEUE" and .queue_name==$queue) and
+            any(.resources.bindings[]?; .type=="r2_bucket" and .name=="COMPUTE_ARTIFACTS" and .bucket_name==$bucket)
+          ' "$api_version" >/dev/null
+          jq -e --arg api "$API_WORKER" --arg bucket "$ARTIFACT_BUCKET" '
+            any(.resources.bindings[]?; .type=="service" and .name=="CONTROL_PLANE" and .service==$api and .entrypoint=="ComputeControlPlane") and
+            any(.resources.bindings[]?; .type=="r2_bucket" and .name=="COMPUTE_ARTIFACTS" and .bucket_name==$bucket)
+          ' "$compute_version" >/dev/null
+          wrangler="$API_SOURCE_ROOT/api/node_modules/.bin/wrangler"
+          pushd compute-worker >/dev/null
+          "$wrangler" queues info "$QUEUE_NAME" > "$EVIDENCE_DIR/queue.txt"
+          "$wrangler" queues info "$COMPUTE_DLQ" > "$EVIDENCE_DIR/compute-dlq.txt"
+          "$wrangler" queues info "$RECONCILIATION_DLQ" > "$EVIDENCE_DIR/reconciliation-dlq.txt"
+          "$wrangler" r2 bucket info "$ARTIFACT_BUCKET" > "$EVIDENCE_DIR/artifact-bucket.txt"
+          popd >/dev/null
+          lifecycle="$EVIDENCE_DIR/artifact-lifecycle.json"
+          curl -fsS --retry 3 "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$ARTIFACT_BUCKET/lifecycle" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" > "$lifecycle"
+          node compute-worker/scripts/verify-r2-lifecycle.mjs "$lifecycle"
+          managed_domain="$EVIDENCE_DIR/artifact-managed-domain.json"
+          custom_domains="$EVIDENCE_DIR/artifact-custom-domains.json"
+          curl -fsS --retry 3 "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$ARTIFACT_BUCKET/domains/managed" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" > "$managed_domain"
+          curl -fsS --retry 3 "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$ARTIFACT_BUCKET/domains/custom" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" > "$custom_domains"
+          node compute-worker/scripts/verify-r2-private.mjs "$managed_domain" "$custom_domains"
+
+          container_list="$RUNNER_TEMP/admission-containers-list.json"
+          # Wrangler 4.112.0 JSON mode is one page; absence fails closed.
+          "$wrangler" containers list --json > "$container_list"
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$container_list" "$COMPUTE_WORKER" "$RELEASE_DEPLOYED_IMAGE" \
+            > "$EVIDENCE_DIR/container-readiness.json"
+          api_env=(); if [ "$REQUESTED_TARGET" = "staging" ]; then api_env=(--env staging); fi
+          secret_names="$RUNNER_TEMP/compute-admission-secret-names.json"
+          pushd "$API_SOURCE_ROOT/api" >/dev/null
+          npx wrangler secret list --config wrangler.toml "${api_env[@]}" > "$secret_names"
+          popd >/dev/null
+          for name in COMPUTE_JOB_TOKEN_PEPPER COMPUTE_EMERGENCY_STOP_TOKEN; do
+            jq -e --arg name "$name" 'any(.[]; .name==$name)' "$secret_names" >/dev/null || exit 1
+          done
+          jq -n '{required_secrets: [{name: "COMPUTE_JOB_TOKEN_PEPPER", configured: true, value_read: false}, {name: "COMPUTE_EMERGENCY_STOP_TOKEN", configured: true, value_read: false}]}' \
+            > "$EVIDENCE_DIR/api-secret-attestation.json"
+
+      - name: Typecheck and dry-run strict enable upload
+        if: ${{ inputs.action == 'enable' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix "$API_SOURCE_ROOT/api" run typecheck:full
+          api_env=(); if [ "$REQUESTED_TARGET" = "staging" ]; then api_env=(--env staging); fi
+          pushd "$API_SOURCE_ROOT/api" >/dev/null
+          npx wrangler deploy --config wrangler.toml "${api_env[@]}" --dry-run --strict \
+            --tag "api-$GITHUB_SHA" --var COMPUTE_ENABLED:1 \
+            --var "COMPUTE_ENVIRONMENT_DIGEST:$RELEASE_ENVIRONMENT_DIGEST" \
+            --var COMPUTE_ROLLOUT_MODE:canary --var "COMPUTE_CANARY_ALLOWLIST:$ROLLOUT_ALLOWLIST" \
+            --outdir "$EVIDENCE_DIR/api-enable-dry-run"
+          popd >/dev/null
+
+      - name: Apply reviewed admission change
+        id: apply_change
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api_env=(); if [ "$REQUESTED_TARGET" = "staging" ]; then api_env=(--env staging); fi
+          pushd "$API_SOURCE_ROOT/api" >/dev/null
+          if [ "$REQUESTED_ACTION" = "enable" ]; then
+            api_status="$RUNNER_TEMP/promotion-api-recheck.json"
+            compute_status="$RUNNER_TEMP/promotion-compute-recheck.json"
+            npx wrangler deployments status --name "$API_WORKER" --json > "$api_status"
+            npx wrangler deployments status --name "$COMPUTE_WORKER" --json > "$compute_status"
+            jq -e --arg id "$CERTIFIED_OFF_API_VERSION_ID" \
+              '(.versions|length)==1 and (.versions[0].percentage|tonumber)==100 and .versions[0].version_id==$id' "$api_status" >/dev/null || exit 1
+            jq -e --arg id "$CERTIFIED_COMPUTE_VERSION_ID" \
+              '(.versions|length)==1 and (.versions[0].percentage|tonumber)==100 and .versions[0].version_id==$id' "$compute_status" >/dev/null || exit 1
+            echo "attempted=true" >> "$GITHUB_OUTPUT"
+            npx wrangler deploy --config wrangler.toml "${api_env[@]}" --strict \
+              --tag "api-$GITHUB_SHA" --message "Compute canary enable run $GITHUB_RUN_ID" \
+              --var COMPUTE_ENABLED:1 --var "COMPUTE_ENVIRONMENT_DIGEST:$RELEASE_ENVIRONMENT_DIGEST" \
+              --var COMPUTE_ROLLOUT_MODE:canary --var "COMPUTE_CANARY_ALLOWLIST:$ROLLOUT_ALLOWLIST" \
+              --keep-vars | tee "$EVIDENCE_DIR/api-enable-deploy.txt"
+          else
+            npx wrangler versions deploy "$CERTIFIED_OFF_API_VERSION_ID@100%" \
+              --config wrangler.toml "${api_env[@]}" --name "$API_WORKER" --yes --dry-run
+            echo "attempted=true" >> "$GITHUB_OUTPUT"
+            npx wrangler versions deploy "$CERTIFIED_OFF_API_VERSION_ID@100%" \
+              --config wrangler.toml "${api_env[@]}" --name "$API_WORKER" --yes \
+              --message "Compute admission disable run $GITHUB_RUN_ID" | tee "$EVIDENCE_DIR/api-disable-promotion.txt"
+          fi
+          popd >/dev/null
+
+      - name: Verify exact postcondition
+        id: verify_state
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          status="$RUNNER_TEMP/post-admission-api-status.json"
+          version="$RUNNER_TEMP/post-admission-api-version.json"
+          pushd "$API_SOURCE_ROOT/api" >/dev/null
+          npx wrangler deployments status --name "$API_WORKER" --json > "$status"
+          version_id="$(jq -er 'if (.versions|length)==1 and (.versions[0].percentage|tonumber)==100 then .versions[0].version_id else error("unstable API deployment") end' "$status")"
+          [[ "$version_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || exit 1
+          npx wrangler versions view "$version_id" --name "$API_WORKER" --json > "$version"
+          if [ "$REQUESTED_ACTION" = "enable" ]; then
+            compute_status="$RUNNER_TEMP/post-admission-compute-status.json"
+            npx wrangler deployments status --name "$COMPUTE_WORKER" --json > "$compute_status"
+            jq -e --arg id "$CERTIFIED_COMPUTE_VERSION_ID" \
+              '(.versions|length)==1 and (.versions[0].percentage|tonumber)==100 and .versions[0].version_id==$id' "$compute_status" >/dev/null
+          else
+            [ "$version_id" = "$CERTIFIED_OFF_API_VERSION_ID" ] || exit 1
+          fi
+          popd >/dev/null
+          if [ "$REQUESTED_ACTION" = "enable" ]; then enabled=1; allowlist="$ROLLOUT_ALLOWLIST"; tag="api-$GITHUB_SHA"; else enabled=0; allowlist=""; tag="$CERTIFIED_OFF_API_VERSION_TAG"; fi
+          jq -e --arg enabled "$enabled" --arg digest "$RELEASE_ENVIRONMENT_DIGEST" --arg allowlist "$allowlist" --arg tag "$tag" '
+            def value($name): [.resources.bindings[]? | select(.type=="plain_text" and .name==$name) | .text] as $v | if ($v|length)==1 then $v[0] else null end;
+            .annotations["workers/tag"]==$tag and value("COMPUTE_ENABLED")==$enabled and
+            value("COMPUTE_ENVIRONMENT_DIGEST")==$digest and value("COMPUTE_ROLLOUT_MODE")=="canary" and
+            value("COMPUTE_CANARY_ALLOWLIST")==$allowlist
+          ' "$version" >/dev/null || exit 1
+          jq --arg action "$REQUESTED_ACTION" --arg version_id "$version_id" --arg tag "$tag" --arg digest "$RELEASE_ENVIRONMENT_DIGEST" \
+            '{schema_version:2, action:$action, api_version_id:$version_id, api_version_tag:$tag, environment_digest:$digest, verified:true}' \
+            > "$EVIDENCE_DIR/postcondition.json"
+
+      - name: Promote certified OFF version after any ambiguous attempted change
+        if: >-
+          ${{ always() && steps.apply_change.outputs.attempted == 'true' &&
+              (steps.apply_change.outcome != 'success' || steps.verify_state.outcome != 'success') }}
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api_env=(); if [ "$REQUESTED_TARGET" = "staging" ]; then api_env=(--env staging); fi
+          pushd "$API_SOURCE_ROOT/api" >/dev/null
+          npx wrangler versions deploy "$CERTIFIED_OFF_API_VERSION_ID@100%" \
+            --config wrangler.toml "${api_env[@]}" --name "$API_WORKER" --yes \
+            --message "Compensating Compute admission rollback run $GITHUB_RUN_ID" \
+            | tee "$EVIDENCE_DIR/api-compensating-promotion.txt"
+          status="$RUNNER_TEMP/compensating-api-status.json"
+          version="$RUNNER_TEMP/compensating-api-version.json"
+          npx wrangler deployments status --name "$API_WORKER" --json > "$status"
+          jq -e --arg id "$CERTIFIED_OFF_API_VERSION_ID" \
+            '(.versions|length)==1 and (.versions[0].percentage|tonumber)==100 and .versions[0].version_id==$id' "$status" >/dev/null
+          npx wrangler versions view "$CERTIFIED_OFF_API_VERSION_ID" --name "$API_WORKER" --json > "$version"
+          popd >/dev/null
+          jq -e --arg tag "$CERTIFIED_OFF_API_VERSION_TAG" '
+            def value($name): [.resources.bindings[]? | select(.type=="plain_text" and .name==$name) | .text] as $v | if ($v|length)==1 then $v[0] else null end;
+            .annotations["workers/tag"]==$tag and value("COMPUTE_ENABLED")=="0" and
+            value("COMPUTE_ROLLOUT_MODE")=="canary" and value("COMPUTE_CANARY_ALLOWLIST")==""
+          ' "$version" >/dev/null || { echo "CRITICAL: certified OFF promotion readback failed." >&2; exit 1; }
+          jq -n --arg id "$CERTIFIED_OFF_API_VERSION_ID" --arg tag "$CERTIFIED_OFF_API_VERSION_TAG" \
+            '{schema_version:2, compensated:true, admission_enabled:false, api_version_id:$id, api_version_tag:$tag}' \
+            > "$EVIDENCE_DIR/compensating-off-promotion.json"
+
+      - name: Remove temporary metadata
+        if: always()
+        shell: bash
+        run: |
+          rm -f \
+            "$RUNNER_TEMP/github-environment.json" "$RUNNER_TEMP/compute-release-run.json" \
+            "$RUNNER_TEMP/local-compute-migrations.sha256" \
+            "$RUNNER_TEMP/schema-workflow-run-recheck.json" \
+            "$RUNNER_TEMP/schema-workflow-jobs-recheck.json" \
+            "$RUNNER_TEMP/admission-containers-list.json" \
+            "$RUNNER_TEMP/certified-off-api-version.json" "$RUNNER_TEMP/certified-compute-version.json" \
+            "$RUNNER_TEMP/pre-enable-api-status.json" "$RUNNER_TEMP/pre-enable-compute-status.json" \
+            "$RUNNER_TEMP/promotion-api-recheck.json" "$RUNNER_TEMP/promotion-compute-recheck.json" \
+            "$RUNNER_TEMP/post-admission-api-status.json" "$RUNNER_TEMP/post-admission-api-version.json" \
+            "$RUNNER_TEMP/post-admission-compute-status.json" "$RUNNER_TEMP/compensating-api-status.json" \
+            "$RUNNER_TEMP/compensating-api-version.json" "$RUNNER_TEMP/compute-admission-secret-names.json"
+
+      - name: Upload admission audit evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compute-admission-${{ inputs.target }}-${{ inputs.action }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: compute-admission-evidence
+          if-no-files-found: error
+          retention-days: 90

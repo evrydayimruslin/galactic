@@ -23,6 +23,15 @@ import {
   violatesPrivateAgentCreationPolicy,
 } from "../services/platform-mcp-authorization.ts";
 import {
+  authorizeComputePlatformFunction,
+  COMPUTE_PLATFORM_AUTH_CONTEXT,
+  createBearerFreeComputePlatformRequest,
+  createComputePlatformFunctionAllowlist,
+  filterComputePlatformTools,
+  type ComputePlatformGatewayPrincipal,
+  type TrustedComputeAgentFunctionExecutor,
+} from "../services/compute-platform-gateway.ts";
+import {
   freeModeNotice,
   isFreeModeEnabled,
   isFunctionBlockedInFreeMode,
@@ -2708,6 +2717,7 @@ async function executeCall(
   widgetForwardArgs: Record<string, unknown>,
   econ: { freeMode: boolean; byokPresent: boolean },
   callerIsApiToken: boolean,
+  trustedExecutor?: TrustedComputeAgentFunctionExecutor,
 ): Promise<unknown> {
   let result: unknown;
   const targetAppId = args.app_id as string;
@@ -2726,31 +2736,25 @@ async function executeCall(
     );
   }
 
-  // Derive base URL from request (same pattern used for OAuth metadata)
-  const reqUrl = new URL(request.url);
-  const host = request.headers.get("host") || reqUrl.host;
-  const proto = request.headers.get("x-forwarded-proto") ||
-    (host.includes("localhost") ? "http" : "https");
-  const baseUrl = `${proto}://${host}`;
-  const authToken = request.headers.get("Authorization")?.slice(7);
-
-  if (!authToken) {
-    throw new ToolError(
-      INTERNAL_ERROR,
-      "Missing auth token for app call",
-    );
+  // Preserve the public gateway's historical validation order exactly: it
+  // requires its caller bearer before target resolution. Trusted Compute calls
+  // skip this branch entirely and therefore never read a bearer.
+  let publicBaseUrl: string | undefined;
+  let publicAuthToken: string | undefined;
+  if (!trustedExecutor) {
+    const reqUrl = new URL(request.url);
+    const host = request.headers.get("host") || reqUrl.host;
+    const proto = request.headers.get("x-forwarded-proto") ||
+      (host.includes("localhost") ? "http" : "https");
+    publicBaseUrl = `${proto}://${host}`;
+    publicAuthToken = request.headers.get("Authorization")?.slice(7);
+    if (!publicAuthToken) {
+      throw new ToolError(
+        INTERNAL_ERROR,
+        "Missing auth token for app call",
+      );
+    }
   }
-
-  // Make JSON-RPC call to target app's MCP endpoint
-  const rpcPayload = {
-    jsonrpc: "2.0",
-    id: crypto.randomUUID(),
-    method: "tools/call",
-    params: {
-      name: targetFn,
-      arguments: callArgs,
-    },
-  };
 
   // Route through the SELF service binding: same-worker fetch() over the
   // public hostname is blocked by the CDN (error 1042) and would bill a
@@ -2768,75 +2772,95 @@ async function executeCall(
   // actual call reference the SAME app identity, and (b) slug inputs route
   // correctly (the per-app handler resolves by UUID only).
   const targetUuid = await resolveAppIdForMarketplace(targetAppId);
-
-  // Bind gx.call to the user's connected-agent permission policy. The
-  // per-app handler only enforces for api/actor tokens, so a gateway call
-  // on a SESSION token would otherwise bypass the always/ask/never the
-  // user set. Enforce here for non-api-token callers; api-token gx.calls
-  // are already gated downstream (don't double-enforce). The "always"
-  // policy is health-gated: it auto-allows ONLY when the target is
-  // recently healthy, otherwise it degrades to "ask".
-  if (!callerIsApiToken) {
-    const callPermission = await enforceCallerFunctionPermission({
+  let unwrappedResult: unknown;
+  if (trustedExecutor) {
+    // Compute dispatch returns to a trusted host callback. That callback owns
+    // the exact resolved Agent+function authorization and executes without
+    // ever receiving or forwarding the Compute job bearer.
+    unwrappedResult = await trustedExecutor({
       userId,
-      appId: targetUuid,
+      requestedAgentId: targetAppId,
+      agentId: targetUuid,
       functionName: targetFn,
-      configureUrl: buildCallerPermissionConfigureUrl(
-        baseUrl,
-        targetUuid,
-        targetFn,
-      ),
-      resolveTargetHealthGreen: async () => {
-        const map = await getAppHealth([targetUuid]);
-        return isRecentlyHealthy(map.get(targetUuid) ?? emptyHealth());
-      },
+      args: callArgs,
       confirmed: callConfirmed,
     });
-    if (!callPermission.allowed) {
+  } else {
+    // Public /mcp/platform behavior remains bearer-backed and unchanged.
+    const baseUrl = publicBaseUrl!;
+    const authToken = publicAuthToken!;
+
+    // Bind gx.call to the user's connected-agent permission policy. The
+    // per-app handler only enforces for api/actor tokens, so a gateway call
+    // on a SESSION token would otherwise bypass the always/ask/never the
+    // user set. Enforce here for non-api-token callers; api-token gx.calls
+    // are already gated downstream (don't double-enforce).
+    if (!callerIsApiToken) {
+      const callPermission = await enforceCallerFunctionPermission({
+        userId,
+        appId: targetUuid,
+        functionName: targetFn,
+        configureUrl: buildCallerPermissionConfigureUrl(
+          baseUrl,
+          targetUuid,
+          targetFn,
+        ),
+        resolveTargetHealthGreen: async () => {
+          const map = await getAppHealth([targetUuid]);
+          return isRecentlyHealthy(map.get(targetUuid) ?? emptyHealth());
+        },
+        confirmed: callConfirmed,
+      });
+      if (!callPermission.allowed) {
+        throw new ToolError(
+          callPermission.rpcCode,
+          callPermission.message,
+          callPermission.details,
+        );
+      }
+    }
+
+    const rpcPayload = {
+      jsonrpc: "2.0",
+      id: crypto.randomUUID(),
+      method: "tools/call",
+      params: {
+        name: targetFn,
+        arguments: callArgs,
+      },
+    };
+    const internalCall = resolveInternalMcpCall(targetUuid, { baseUrl });
+    const callResponse = await internalCall.fetchFn(internalCall.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${authToken}`,
+        ...(callConfirmed ? { "X-Galactic-Confirm": "1" } : {}),
+      },
+      body: JSON.stringify(rpcPayload),
+    });
+
+    if (!callResponse.ok) {
+      const errText = await callResponse.text().catch(() =>
+        callResponse.statusText
+      );
       throw new ToolError(
-        callPermission.rpcCode,
-        callPermission.message,
-        callPermission.details,
+        INTERNAL_ERROR,
+        `Call failed (${callResponse.status}): ${errText}`,
       );
     }
+
+    const rpcResponse = await callResponse
+      .json() as RpcToolCallResultEnvelope;
+    if (rpcResponse.error) {
+      throw new ToolError(
+        rpcResponse.error.code || INTERNAL_ERROR,
+        rpcResponse.error.message || JSON.stringify(rpcResponse.error),
+        rpcResponse.error.data,
+      );
+    }
+    unwrappedResult = unwrapToolCallResult(rpcResponse.result);
   }
-
-  const internalCall = resolveInternalMcpCall(targetUuid, { baseUrl });
-  const callResponse = await internalCall.fetchFn(internalCall.url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${authToken}`,
-      // Forward one-shot consent to the per-agent handler, which runs the
-      // caller-permission gate for api-token callers (we skip it above for
-      // those to avoid double-enforcing).
-      ...(callConfirmed ? { "X-Galactic-Confirm": "1" } : {}),
-    },
-    body: JSON.stringify(rpcPayload),
-  });
-
-  if (!callResponse.ok) {
-    const errText = await callResponse.text().catch(() =>
-      callResponse.statusText
-    );
-    throw new ToolError(
-      INTERNAL_ERROR,
-      `Call failed (${callResponse.status}): ${errText}`,
-    );
-  }
-
-  const rpcResponse = await callResponse
-    .json() as RpcToolCallResultEnvelope;
-  if (rpcResponse.error) {
-    throw new ToolError(
-      rpcResponse.error.code || INTERNAL_ERROR,
-      rpcResponse.error.message || JSON.stringify(rpcResponse.error),
-      rpcResponse.error.data,
-    );
-  }
-
-  // Unwrap MCP tool result
-  const unwrappedResult = unwrapToolCallResult(rpcResponse.result);
 
   // Post-call flag nudge: every executed call carries a receipt_id; surface
   // it at the envelope level with a structured prompt so the agent reports
@@ -3239,7 +3263,8 @@ bindCapabilityHandler("codemode", (args, ctx) =>
 bindCapabilityHandler("routine", (args, ctx) =>
   executeRoutinePlatformAction(ctx.userId, args));
 
-bindCapabilityHandler("emit", (args, ctx) => executeEmit(ctx.userId, args));
+bindCapabilityHandler("emit", (args, ctx) =>
+  executeEmit(ctx.userId, args, ctx.computeAttribution));
 
 function stripGpuFromTool(tool: MCPTool): MCPTool {
   const cloned = JSON.parse(JSON.stringify(tool)) as MCPTool;
@@ -3288,12 +3313,15 @@ export function getPlatformTools(
     provisional?: boolean;
     freeMode?: boolean;
     auth?: PlatformMcpAuthContext;
+    /** Internal callers may exact-filter against the complete manifest. */
+    includeDemoted?: boolean;
   },
 ): MCPTool[] {
   const provisional = options?.provisional ?? false;
+  const lite = isPlatformMcpLiteEnabled() && !options?.includeDemoted;
 
   let tools: MCPTool[];
-  if (isPlatformMcpLiteEnabled()) {
+  if (lite) {
     // Core launch set, plus ul.auth.link for provisional sessions that need it.
     tools = PLATFORM_TOOLS.filter(
       (tool) =>
@@ -3322,7 +3350,7 @@ export function getPlatformTools(
   // in here (already gx.*-named). Same LITE (core-only) + Free Mode + GPU-strip
   // rules apply.
   let registry = registryMcpTools({
-    lite: isPlatformMcpLiteEnabled(),
+    lite,
     freeMode: options?.freeMode,
   });
   if (!isGpuSupportEnabled()) registry = registry.map(stripGpuFromTool);
@@ -3697,6 +3725,223 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
   }
 }
 
+/**
+ * Private Compute-to-platform MCP seam.
+ *
+ * The caller must introspect the Compute job token first and pass only the
+ * resulting principal + canonical function authority here. This handler never
+ * authenticates, stores, or forwards the job bearer. It deliberately exposes
+ * only the MCP lifecycle and exact-filtered tool surface; public resources and
+ * account-session capabilities remain on /mcp/platform.
+ */
+export async function handleTrustedComputePlatformMcp(
+  request: Request,
+  principal: ComputePlatformGatewayPrincipal,
+): Promise<Response> {
+  if (request.method === "DELETE") return new Response(null, { status: 200 });
+  if (request.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method not allowed." }), {
+      status: 405,
+      headers: {
+        "Allow": "POST, DELETE",
+        "Content-Type": "application/json",
+      },
+    });
+  }
+
+  let rpcRequest: JsonRpcRequest;
+  try {
+    rpcRequest = await request.json();
+  } catch {
+    return jsonRpcErrorResponse(null, PARSE_ERROR, "Parse error: Invalid JSON");
+  }
+  if (rpcRequest.jsonrpc !== "2.0" || !rpcRequest.method) {
+    return jsonRpcErrorResponse(
+      rpcRequest.id ?? null,
+      INVALID_REQUEST,
+      "Invalid Request: Missing jsonrpc version or method",
+    );
+  }
+
+  if (
+    !principal?.userId || !principal.user ||
+    principal.user.id !== principal.userId
+  ) {
+    return jsonRpcErrorResponse(
+      rpcRequest.id,
+      FORBIDDEN,
+      "Compute platform principal is invalid.",
+      { type: "COMPUTE_PRINCIPAL_INVALID" },
+    );
+  }
+
+  let allowedFunctions: ReadonlySet<string>;
+  try {
+    allowedFunctions = createComputePlatformFunctionAllowlist(
+      principal.allowedPlatformFunctions,
+    );
+  } catch (err) {
+    return jsonRpcErrorResponse(
+      rpcRequest.id,
+      FORBIDDEN,
+      err instanceof Error ? err.message : "Invalid Compute authority.",
+      { type: "COMPUTE_AUTHORITY_INVALID" },
+    );
+  }
+
+  // Exact authority and the existing API-token/account-session policy both run
+  // before either usage counter or dispatch.
+  if (rpcRequest.method === "tools/call") {
+    const call = rpcRequest.params as MCPToolCallRequest | undefined;
+    if (!call?.name) {
+      return jsonRpcErrorResponse(
+        rpcRequest.id,
+        INVALID_PARAMS,
+        "Missing tool name",
+      );
+    }
+    const decision = authorizeComputePlatformFunction({
+      requestedName: call.name,
+      args: call.arguments as Record<string, unknown> | undefined,
+      allowed: allowedFunctions,
+    });
+    if (!decision.allowed) {
+      const type = decision.exactScopeDenied
+        ? "COMPUTE_PLATFORM_FUNCTION_FORBIDDEN"
+        : decision.bearerDependentToolDenied
+        ? "COMPUTE_BEARER_DEPENDENT_TOOL_FORBIDDEN"
+        : decision.accountSessionRequired
+        ? "ACCOUNT_SESSION_REQUIRED"
+        : "API_KEY_SCOPE_REQUIRED";
+      return jsonRpcErrorResponse(
+        rpcRequest.id,
+        FORBIDDEN,
+        decision.reason ||
+          "Compute job is not authorized for this platform function.",
+        {
+          type,
+          required_scopes: decision.requiredScopes || [],
+        },
+      );
+    }
+    if (
+      (call.name === "gx.call" || call.name === "ul.call") &&
+      !principal.executeAgentFunction
+    ) {
+      return jsonRpcErrorResponse(
+        rpcRequest.id,
+        INTERNAL_ERROR,
+        "Compute Agent-call executor is unavailable.",
+        { type: "COMPUTE_AGENT_CALL_EXECUTOR_UNAVAILABLE" },
+      );
+    }
+  }
+
+  const rateResult = checkInMemoryLimit(
+    principal.userId,
+    `compute-platform:${rpcRequest.method}`,
+    200,
+    60_000,
+  );
+  if (!rateResult.allowed) {
+    return jsonRpcErrorResponse(
+      rpcRequest.id,
+      RATE_LIMITED,
+      `Rate limit exceeded. Try again after ${rateResult.resetAt.toISOString()}`,
+    );
+  }
+
+  if (rpcRequest.method === "tools/call") {
+    const weeklyResult = await checkAndIncrementWeeklyCalls(
+      principal.userId,
+      toTier(principal.user.tier),
+      {
+        mode: "fail_closed",
+        resource: "Compute platform MCP weekly call limit",
+      },
+    );
+    if (!weeklyResult.allowed) {
+      if (weeklyResult.reason === "service_unavailable") {
+        return jsonRpcErrorResponse(
+          rpcRequest.id,
+          INTERNAL_ERROR,
+          "Usage controls are temporarily unavailable. Please try again shortly.",
+        );
+      }
+      return jsonRpcErrorResponse(
+        rpcRequest.id,
+        RATE_LIMITED,
+        `Weekly call limit reached (${weeklyResult.limit.toLocaleString()} calls/week). Upgrade your plan.`,
+      );
+    }
+  }
+
+  let econ = deriveCallerEconomicState(null);
+  if (isFreeModeEnabled()) {
+    econ = deriveCallerEconomicState(
+      await createUserService().getUser(principal.userId).catch(() => null),
+    );
+  }
+
+  const { method, params, id } = rpcRequest;
+  switch (method) {
+    case "initialize": {
+      const result: MCPServerInfo = {
+        protocolVersion: "2025-03-26",
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: "Galactic Compute Gateway", version: "1.0.0" },
+        instructions:
+          "This private Compute connection exposes only the platform functions granted to the current job.",
+      };
+      const response = jsonRpcResponse(id, result);
+      const headers = new Headers(response.headers);
+      headers.set("Mcp-Session-Id", crypto.randomUUID());
+      return new Response(response.body, {
+        status: response.status,
+        headers,
+      });
+    }
+    case "notifications/initialized":
+      return new Response(null, { status: 202 });
+    case "tools/list": {
+      const tools = filterComputePlatformTools(
+        getPlatformTools({
+          provisional: false,
+          freeMode: econ.freeMode,
+          includeDemoted: true,
+        }),
+        allowedFunctions,
+      ).filter((tool) =>
+        authorizeComputePlatformFunction({
+          requestedName: tool.name,
+          allowed: allowedFunctions,
+        }).allowed
+      );
+      return jsonRpcResponse(id, { tools } as MCPToolsListResponse);
+    }
+    case "tools/call":
+      return await handleToolsCall(
+        id,
+        params,
+        principal.userId,
+        principal.user,
+        createBearerFreeComputePlatformRequest(request),
+        econ,
+        COMPUTE_PLATFORM_AUTH_CONTEXT,
+        {
+          executeAgentFunction: principal.executeAgentFunction,
+          attribution: principal.computeAttribution,
+        },
+      );
+    default:
+      return jsonRpcErrorResponse(
+        id,
+        METHOD_NOT_FOUND,
+        `Method not found: ${method}`,
+      );
+  }
+}
+
 // ============================================
 // METHOD HANDLERS
 // ============================================
@@ -3720,6 +3965,24 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
  */
 function buildPlatformDocs(): string {
   const docs = `**Naming:** platform tools use the \`gx.\` prefix (e.g. \`gx.discover\`) and the in-Agent SDK is \`galactic.*\` (e.g. \`galactic.ai()\`). These are the canonical names this guide uses throughout. The older \`ul.*\` / \`ultralight.*\` names remain permanent aliases — either prefix is accepted on input, so nothing built against the old names breaks.
+
+## Disposable Compute
+
+\`galactic.compute({ argv, tools, ... })\` starts one owner-authorized,
+disposable \`developer-v1\` Linux body outside the hosted Agent isolate. Use it
+for CLI programs, Playwright/Chromium, document and media tooling, data
+clients, and coding-agent CLIs. Use \`galactic.compute.get(runId)\` and
+\`galactic.compute.cancel(runId)\` for asynchronous jobs. The live release
+must declare \`compute:exec\`, an exact semantic-tool ceiling, eligible Agent
+Variable names, and the calling function is recorded as \`uses_compute\`.
+
+Compute is not a public platform tool or perpetual VM. The body receives no
+human/Agent bearer or ambient Galactic/provider key. An owner may explicitly
+map selected Agent Variables into one lease and grant exact \`gx.*\` or Agent
+function calls; the API re-authorizes every private \`gx\` request
+server-side. Use argv arrays and workspace-relative artifact paths, keep
+untrusted values out of shell programs, and return run and receipt IDs for
+operations.
 
 ## Calling Apps
 
@@ -4737,6 +5000,15 @@ async function handleToolsCall(
     byokPresent: false,
   },
   platformAuth: PlatformMcpAuthContext = {},
+  trustedCompute?: {
+    executeAgentFunction?: TrustedComputeAgentFunctionExecutor;
+    attribution?: {
+      runId: string;
+      sourceAgentId: string;
+      capacityAgentId: string;
+      callerFunction: string;
+    };
+  },
 ): Promise<Response> {
   const callParams = params as MCPToolCallRequest | undefined;
   if (!callParams?.name) {
@@ -4818,13 +5090,54 @@ async function handleToolsCall(
       );
     }
 
+    // Compute dispatch is bearer-free. Refuse branches that are implemented by
+    // reading/forwarding the public request Authorization header, even if an
+    // authority document accidentally includes them.
+    if (
+      trustedCompute && (name === "ul.codemode" || name === "ul.execute")
+    ) {
+      throw new ToolError(
+        FORBIDDEN,
+        "Codemode is unavailable through the Compute platform gateway.",
+        { type: "COMPUTE_BEARER_DEPENDENT_TOOL_FORBIDDEN" },
+      );
+    }
+    if (
+      trustedCompute && name === "ul.command" &&
+      (toolArgs.action === "interface_data" ||
+        toolArgs.action === "interface_action")
+    ) {
+      throw new ToolError(
+        FORBIDDEN,
+        "Bearer-dependent command interface calls are unavailable through the Compute platform gateway.",
+        { type: "COMPUTE_BEARER_DEPENDENT_TOOL_FORBIDDEN" },
+      );
+    }
+
     // Capability registry (strangler-fig): names migrated off the legacy switch
     // are dispatched here first; everything else falls through to the switch.
     const capability = getCapabilityByToolName(name);
     const capabilityHandler = capability
       ? getCapabilityHandler(capability)
       : undefined;
-    if (capabilityHandler) {
+    if (trustedCompute && name === "ul.call") {
+      if (!trustedCompute.executeAgentFunction) {
+        throw new ToolError(
+          INTERNAL_ERROR,
+          "Compute Agent-call executor is unavailable.",
+          { type: "COMPUTE_AGENT_CALL_EXECUTOR_UNAVAILABLE" },
+        );
+      }
+      result = await executeCall(
+        userId,
+        toolArgs,
+        request,
+        widgetForwardArgs,
+        econ,
+        true,
+        trustedCompute.executeAgentFunction,
+      );
+    } else if (capabilityHandler) {
       result = await runCapabilityForMcp(capabilityHandler, toolArgs, {
         userId,
         provisional: user.provisional ?? false,
@@ -4834,6 +5147,7 @@ async function handleToolsCall(
         authSource: platformAuth.authSource,
         request,
         widgetForwardArgs,
+        computeAttribution: trustedCompute?.attribution,
       });
     } else
     switch (name) {
@@ -6190,6 +6504,7 @@ async function handleToolsCall(
       logAppName = ti?.appName || ti?.appSlug;
     } catch {}
     const { logMcpCall } = await import("../services/call-logger.ts");
+    const computeTelemetry = trustedCompute?.attribution;
     logMcpCall({
       userId,
       appId: logAppId,
@@ -6198,8 +6513,15 @@ async function handleToolsCall(
       method: "tools/call",
       success: true,
       durationMs,
-      inputArgs: toolArgs,
-      outputResult: result,
+      inputArgs: computeTelemetry
+        ? { _redacted: true, _source: "compute", run_id: computeTelemetry.runId }
+        : toolArgs,
+      outputResult: computeTelemetry
+        ? { _redacted: true, _source: "compute" }
+        : result,
+      source: computeTelemetry ? "compute" : undefined,
+      callerAppId: computeTelemetry?.sourceAgentId,
+      traceId: computeTelemetry?.runId,
       userTier: user.tier,
       sessionId,
       userQuery,
@@ -6212,7 +6534,9 @@ async function handleToolsCall(
     platformLogger.error("Platform tool execution failed", {
       tool: name,
       user_id: userId,
-      error: err,
+      error: trustedCompute?.attribution
+        ? "redacted Compute tool failure"
+        : err,
     });
 
     const durationMs = Date.now() - execStart;
@@ -6225,6 +6549,7 @@ async function handleToolsCall(
       errLogAppName = ti?.appName || ti?.appSlug;
     } catch {}
     const { logMcpCall } = await import("../services/call-logger.ts");
+    const computeTelemetry = trustedCompute?.attribution;
     logMcpCall({
       userId,
       appId: errLogAppId,
@@ -6233,9 +6558,18 @@ async function handleToolsCall(
       method: "tools/call",
       success: false,
       durationMs,
-      errorMessage: err instanceof Error ? err.message : String(err),
-      inputArgs: toolArgs,
-      outputResult: { error: err instanceof Error ? err.message : String(err) },
+      errorMessage: computeTelemetry
+        ? "Compute platform call failed; details redacted."
+        : err instanceof Error ? err.message : String(err),
+      inputArgs: computeTelemetry
+        ? { _redacted: true, _source: "compute", run_id: computeTelemetry.runId }
+        : toolArgs,
+      outputResult: computeTelemetry
+        ? { _redacted: true, _source: "compute" }
+        : { error: err instanceof Error ? err.message : String(err) },
+      source: computeTelemetry ? "compute" : undefined,
+      callerAppId: computeTelemetry?.sourceAgentId,
+      traceId: computeTelemetry?.runId,
       userTier: user.tier,
       sessionId,
       userQuery,
@@ -11306,6 +11640,7 @@ async function executeGrants(
 async function executeEmit(
   userId: string,
   args: Record<string, unknown>,
+  computeAttribution?: CapabilityContext["computeAttribution"],
 ): Promise<unknown> {
   const appIdOrSlug = args.app_id as string | undefined;
   const topic = typeof args.topic === "string" ? args.topic.trim() : "";
@@ -11325,7 +11660,7 @@ async function executeEmit(
     const out = await emitEvent({
       userId,
       emitterAppId: app.id,
-      capacityAgentId: app.id,
+      capacityAgentId: computeAttribution?.capacityAgentId ?? app.id,
       topic,
       payload,
       emitHop: 1,

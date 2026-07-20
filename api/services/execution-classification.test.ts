@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   classifyRuntimeExecution,
+  INTERACTIVE_COMPUTE_TIMEOUT_MS,
   INTERACTIVE_FUNCTION_TIMEOUT_MS,
   INTERACTIVE_INFERENCE_TIMEOUT_MS,
 } from "./execution-classification.ts";
@@ -36,6 +37,35 @@ Deno.test("execution classification: upload-derived inference function receives 
       usesInference: true,
       timeoutMs: INTERACTIVE_INFERENCE_TIMEOUT_MS,
     },
+  );
+});
+
+Deno.test("execution classification: a Compute caller keeps the parent alive for the bounded sync lane", () => {
+  assertEquals(
+    classifyRuntimeExecution({
+      manifest: {
+        permissions: ["compute:exec"],
+        functions: {
+          build: { uses_compute: true },
+          status: { uses_compute: false },
+        },
+      },
+      functionName: "build",
+    }),
+    {
+      usesInference: false,
+      timeoutMs: INTERACTIVE_COMPUTE_TIMEOUT_MS,
+    },
+  );
+  assertEquals(
+    classifyRuntimeExecution({
+      manifest: {
+        permissions: ["compute:exec"],
+        functions: { build: { uses_compute: false } },
+      },
+      functionName: "build",
+    }).timeoutMs,
+    INTERACTIVE_FUNCTION_TIMEOUT_MS,
   );
 });
 

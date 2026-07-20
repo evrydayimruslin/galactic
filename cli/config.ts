@@ -15,12 +15,20 @@ export interface Config {
     expires_at?: string;  // Optional - API tokens may not have expiry
     refresh_token?: string;
     is_api_token?: boolean;  // True for gx_xxx (or legacy ul_xxx) tokens
+    is_job_token?: boolean;  // Ephemeral lease token; never persisted
+  };
+  runtime?: {
+    kind: 'compute-job';
+    lease_id: string;
+    token_file: string;
   };
   defaults?: {
     visibility?: 'private' | 'unlisted' | 'public';
     auto_docs?: boolean;
   };
 }
+
+import { loadRuntimeConfig } from './job-context.ts';
 
 const DEFAULT_API_URL = 'https://api.connectgalactic.com';
 const LEGACY_API_URLS = new Set([
@@ -86,6 +94,16 @@ export async function getConfig(): Promise<Config> {
     }
   }
   return DEFAULT_CONFIG;
+}
+
+/**
+ * Resolve CLI auth for this process. Compute-job mode bypasses getConfig(), so
+ * no persistent human token can be read or used as a fallback inside a body.
+ */
+export async function getRuntimeConfig(): Promise<Config> {
+  return await loadRuntimeConfig({
+    readPersistentConfig: getConfig,
+  });
 }
 
 export async function saveConfig(config: Config): Promise<void> {

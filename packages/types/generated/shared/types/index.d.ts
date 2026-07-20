@@ -1,3 +1,4 @@
+import type { ManifestComputeConfig } from "../contracts/compute.ts";
 export { isAgenticInterfaceSpec, validateAgenticInterfaceSpec, } from "../contracts/agentic-interface.ts";
 export type * from "../contracts/agentic-interface.ts";
 export type * from "../contracts/command-turn.ts";
@@ -1366,6 +1367,7 @@ export interface AppManifest {
     env?: Record<string, ManifestEnvVar>;
     env_vars?: Record<string, ManifestEnvVar>;
     http?: ManifestHttpConfig;
+    compute?: ManifestComputeConfig;
 }
 export type ManifestHttpAuthMode = "user" | "public";
 export type ManifestHttpBillingMode = "owner" | "caller";
@@ -1404,6 +1406,14 @@ export interface ManifestFunction {
     /** MCP tool annotations — behavioral hints for agents (readOnlyHint, destructiveHint, etc.) */
     annotations?: MCPToolAnnotations;
     generation_hints?: WidgetGenerationHints;
+    /** Upload-derived: this function may invoke provider-backed inference. */
+    uses_inference?: boolean;
+    /** Upload-derived: this function may start galactic.compute(). */
+    uses_compute?: boolean;
+    execution?: {
+        class?: "sync" | "async";
+        timeout_ms?: number;
+    };
 }
 export interface ManifestSkill {
     name?: string;

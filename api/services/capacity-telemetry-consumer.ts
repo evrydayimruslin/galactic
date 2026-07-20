@@ -8,6 +8,12 @@ import {
   isCapacitySettlementIntentEnvelope,
   parseCapacitySettlementIntent,
 } from "./capacity-settlement-recovery.ts";
+import {
+  computeCapacitySettlementInputFromIntent,
+  isComputeCapacitySettlementIntentEnvelope,
+  parseComputeCapacitySettlementIntent,
+  settleComputeCapacityReservation,
+} from "./compute/capacity-settlement.ts";
 
 type CapacityTelemetryOutcome = "ack" | "retry";
 
@@ -15,6 +21,7 @@ interface CapacityTelemetryConsumerDeps {
   ingestObservation?: typeof recordObservedCapacityCpu;
   settleResources?: typeof settleAccountCapacityResources;
   reconcileAttribution?: typeof reconcileCapacitySettlementAttribution;
+  settleCompute?: typeof settleComputeCapacityReservation;
 }
 
 interface CapacityCpuObservationV1 {
@@ -68,6 +75,34 @@ export async function processCapacityTelemetryMessage(
   body: unknown,
   deps: CapacityTelemetryConsumerDeps = {},
 ): Promise<CapacityTelemetryOutcome> {
+  if (isComputeCapacitySettlementIntentEnvelope(body)) {
+    const intent = parseComputeCapacitySettlementIntent(body);
+    if (!intent) {
+      console.warn(
+        "[COMPUTE-CAPACITY-SETTLEMENT] Dropping malformed settlement intent",
+      );
+      return "ack";
+    }
+    try {
+      await (deps.settleCompute ?? settleComputeCapacityReservation)(
+        computeCapacitySettlementInputFromIntent(intent),
+      );
+      return "ack";
+    } catch (error) {
+      console.error(
+        "[COMPUTE-CAPACITY-SETTLEMENT] Deferred settlement retry failed",
+        {
+          run_id: intent.n,
+          receipt_id: intent.p,
+          reservation_id: intent.r,
+          intent_version: intent.v,
+          error,
+        },
+      );
+      return "retry";
+    }
+  }
+
   if (isCapacitySettlementIntentEnvelope(body)) {
     const intent = parseCapacitySettlementIntent(body);
     if (!intent) {

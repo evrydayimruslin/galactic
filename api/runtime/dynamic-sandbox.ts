@@ -12,6 +12,7 @@
 // By the time app.js captures globalThis.ultralight, the SDK is ready.
 
 import type { ExecutionResult, RuntimeConfig } from "./sandbox.ts";
+import { COMPUTE_EXEC_PERMISSION } from "../../shared/contracts/compute.ts";
 import type { ResolvedCredential } from "../../shared/contracts/env.ts";
 import { getEnv } from "../lib/env.ts";
 import { isolateReuseEligibility } from "./isolate-reuse-eligibility.ts";
@@ -52,7 +53,7 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-18.capacity-rpc-meter.v12";
+const SANDBOX_TEMPLATE_VERSION = "2026-07-19.compute-binding.v13";
 
 const CAPACITY_TAIL_MARKER = "GALACTIC_CAPACITY_EXECUTION_V1 ";
 
@@ -257,6 +258,13 @@ interface DynamicWorkerEntrypointExports {
   TestAIBinding(input: { props: Record<string, never> }): unknown;
   TestEmbedBinding(input: { props: Record<string, never> }): unknown;
   TestNotifyBinding(input: { props: Record<string, never> }): unknown;
+  TestComputeBinding(input: { props: Record<string, never> }): unknown;
+  ComputeBinding(input: {
+    props: {
+      userId: string;
+      agentId: string;
+    };
+  }): unknown;
   AIBinding(input: {
     props: {
       userId: string;
@@ -494,6 +502,33 @@ function __ulAllowsAppCall(targetAppId, functionName) {
   });
 }
 
+// Callable function object: galactic.compute(request), with status and
+// cancellation methods namespaced on the same capability. All three calls go
+// through the parent-isolate RPC binding. The body receives only its opaque
+// execution-context handle — never a user bearer, platform key, or lease token.
+function __galacticCompute(request) {
+  var e = globalThis.__rpcEnv;
+  if (!e || !e.COMPUTE) {
+    return Promise.reject(new Error('galactic.compute unavailable: add "compute:exec" to manifest permissions and run with an authenticated user context.'));
+  }
+  globalThis.__computeCallIndex = (globalThis.__computeCallIndex || 0) + 1;
+  return e.COMPUTE.call(request || {}, globalThis.__execHandle, globalThis.__computeCallIndex);
+}
+__galacticCompute.get = function(runId) {
+  var e = globalThis.__rpcEnv;
+  if (!e || !e.COMPUTE) {
+    return Promise.reject(new Error('galactic.compute.get unavailable: compute:exec permission and an authenticated user context are required.'));
+  }
+  return e.COMPUTE.get(runId, globalThis.__execHandle);
+};
+__galacticCompute.cancel = function(runId) {
+  var e = globalThis.__rpcEnv;
+  if (!e || !e.COMPUTE) {
+    return Promise.reject(new Error('galactic.compute.cancel unavailable: compute:exec permission and an authenticated user context are required.'));
+  }
+  return e.COMPUTE.cancel(runId, globalThis.__execHandle);
+};
+
 globalThis.ultralight = {
   get db() {
     const e = globalThis.__rpcEnv;
@@ -566,6 +601,7 @@ globalThis.ultralight = {
   notify(o) { if (!${
       config.permissions.includes("notify:owner")
     }) return Promise.reject(new Error('galactic.notify unavailable: add "notify:owner" to manifest permissions.')); const e = globalThis.__rpcEnv; return e.NOTIFY ? e.NOTIFY.notifyOwner(o || {}, globalThis.__execHandle) : Promise.reject(new Error('Notifications not available')); },
+  compute: __galacticCompute,
   ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); var __t0 = Date.now(); var __clip = function(v){ try { var s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > 2000 ? s.slice(0, 2000) + '…[truncated]' : (s || ''); } catch (_e) { return ''; } }; var __rec = function(resp, errMsg){ try { var f = globalThis.__flight; if (f && f.ai && f.ai.length < 20) f.ai.push({ at: new Date().toISOString(), ms: Date.now() - __t0, model: (resp && resp.model) || (r && r.model) || null, cost_light: (resp && resp.usage && resp.usage.cost_light) || 0, prompt: __clip(r && r.messages), response: errMsg ? ('[error] ' + __clip(errMsg)) : __clip(resp && resp.content) }); } catch (_e) {} }; return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { __rec(null, resp.error); throw new Error('galactic.ai failed: ' + resp.error); } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} __rec(resp); return resp; }); },
   embed(r) { const e = globalThis.__rpcEnv; if (!e.EMBED) return Promise.reject(new Error('galactic.embed unavailable: ai:embed permission not granted or no authenticated user context.')); return e.EMBED.embed(r || {}, globalThis.__execHandle).then(function(resp){ try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
   async call(targetAppId, functionName, callArgs) {
@@ -758,9 +794,10 @@ export default {
     };
     // Reset the per-execution accumulators. Isolates may be warm-reused
     // (loader.get), so resetting per fetch keeps per-grant AI-cap accounting
-    // and the per-execution emit cap correct.
+    // plus compute admission idempotency and the per-execution emit cap correct.
     globalThis.__aiCostLight = 0;
     globalThis.__emitCount = 0;
+    globalThis.__computeCallIndex = 0;
     // Flight capture: bounded per-execution record of ai() exchanges (clipped
     // prompt/response), returned in the result envelope. Persistence is the
     // HOST's decision (manifest flight_recorder + routine context) — capture
@@ -817,6 +854,13 @@ export default {
     // a resolvable per-call context handle — closing the direct-binding bypass
     // where app code calls globalThis.__rpcEnv.DB.* itself, skipping the SDK's
     // handle threading, to get operations metered against a stale baked hold).
+    // Compute-capable Agents intentionally stay on one fresh isolate per
+    // invocation. The compatibility SDK currently carries its opaque
+    // execution handle and parent RPC bindings on globalThis; allowing a warm
+    // isolate to serve two different exported functions would let hostile
+    // top-level Agent code capture another request's handle and borrow that
+    // function's server-derived Compute grant. The control plane still checks
+    // every call, but the request-local identity must not be shareable first.
     const useGetReuse = getEnv("EXECUTED_LOADER_GET_REUSE") === "1" &&
       typeof loader.get === "function" &&
       isolateReuseEligibility(config).eligible;
@@ -927,6 +971,25 @@ export default {
             appId: config.appId,
             userId: config.userId,
             requireExecCtx: useGetReuse,
+          },
+        });
+      }
+    }
+
+    // Galactic Compute is always a parent-isolate RPC capability. The binding
+    // receives host-derived user/Agent identity only; the opaque execution
+    // handle resolves caller function + parent execution per call. No bearer,
+    // provider key, platform key, or secret value is cloned into the body.
+    if (config.permissions.includes(COMPUTE_EXEC_PERMISSION)) {
+      if (config.testMode === true) {
+        if (ctx?.exports?.TestComputeBinding) {
+          bindings.COMPUTE = ctx.exports.TestComputeBinding({ props: {} });
+        }
+      } else if (config.user && ctx?.exports?.ComputeBinding) {
+        bindings.COMPUTE = ctx.exports.ComputeBinding({
+          props: {
+            userId: config.userId,
+            agentId: config.appId,
           },
         });
       }
@@ -1110,6 +1173,7 @@ export default {
     // the CURRENT call's, not a stale baked one. (See execution-context-registry.)
     execCtxHandle = registerExecutionContext({
       capacityReceiptId: config.capacityReceiptId ?? null,
+      capacityAgentId: config.capacityAgentId ?? null,
       aiExecutionId: config.executionId,
       appId: config.appId ?? null,
       functionName: functionName ?? null,

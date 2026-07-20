@@ -84,6 +84,18 @@ export interface CapabilityContext {
    * gx.call. Populated only on the MCP surface.
    */
   widgetForwardArgs?: Record<string, unknown>;
+  /**
+   * Server-derived attribution for a capability invoked through a Compute job.
+   * The source Agent remains the provenance actor while capacityAgentId is the
+   * immutable account/root-Agent lineage used by immediate downstream work.
+   * Tenant arguments can never populate this field.
+   */
+  computeAttribution?: {
+    runId: string;
+    sourceAgentId: string;
+    capacityAgentId: string;
+    callerFunction: string;
+  };
 }
 
 export interface CapabilityAuth {

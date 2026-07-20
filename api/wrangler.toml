@@ -27,6 +27,12 @@ fallthrough = true
 binding = "R2_BUCKET"
 bucket_name = "ultralight-apps"
 
+# Private, run-scoped Galactic Compute artifacts. Bodies never receive an R2
+# credential or bucket binding; only the control-plane Workers can access it.
+[[r2_buckets]]
+binding = "COMPUTE_ARTIFACTS"
+bucket_name = "galactic-compute-artifacts"
+
 # KV namespace for compiled code cache
 [[kv_namespaces]]
 binding = "CODE_CACHE"
@@ -45,6 +51,11 @@ binding = "LOADER"
 [[services]]
 binding = "SELF"
 service = "ultralight-api"
+
+[[services]]
+binding = "COMPUTE_PLANE"
+service = "galactic-compute"
+entrypoint = "ComputePlane"
 
 # Exact CPU measurements arrive after each invocation through this Tail Worker.
 # It has no database credentials; observations go through a dedicated queue and
@@ -102,6 +113,21 @@ dead_letter_queue = "ultralight-capacity-telemetry-dlq"
 [[queues.producers]]
 binding = "CAPACITY_TELEMETRY_QUEUE"
 queue = "ultralight-capacity-telemetry"
+
+# Async messages contain only the schema version and run UUID. Authoritative
+# request data and authority remain in the control plane.
+[[queues.producers]]
+binding = "COMPUTE_QUEUE"
+queue = "galactic-compute"
+
+# Reconcile exhausted Compute deliveries in the credential-bearing API plane.
+# The handler fences the run, destroys any deterministic body, then settles.
+[[queues.consumers]]
+queue = "galactic-compute-dlq"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 10
+dead_letter_queue = "galactic-compute-reconciliation-dlq"
 
 [vars]
 BASE_URL = "https://api.connectgalactic.com"
@@ -182,6 +208,14 @@ CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 # no defaults are seeded. Not an authority — just the data source for the starter
 # list; the Agent's functions are owner-only because it is private.
 DEFAULTS_SOURCE_APP = "app-5vyb54"
+# Kill switch stays off until the immutable developer-v1 digest, migrations,
+# and staging smoke have all been certified.
+COMPUTE_ENABLED = "0"
+# Fail closed to exact owner UUID/Agent UUID pairs until staging proves the
+# release. Set COMPUTE_CANARY_ALLOWLIST in the Cloudflare environment, then
+# promote COMPUTE_ROLLOUT_MODE to "global" deliberately.
+COMPUTE_ROLLOUT_MODE = "canary"
+COMPUTE_CANARY_ALLOWLIST = ""
 
 [env.staging]
 # Staging gets its own worker script name (`ultralight-api-staging`) and its
@@ -202,6 +236,10 @@ invocation_logs = true
 binding = "R2_BUCKET"
 bucket_name = "ultralight-apps"
 
+[[env.staging.r2_buckets]]
+binding = "COMPUTE_ARTIFACTS"
+bucket_name = "galactic-compute-artifacts-staging"
+
 [[env.staging.kv_namespaces]]
 binding = "CODE_CACHE"
 id = "d348ee797036460faf4b3e014921f0b0"
@@ -216,6 +254,11 @@ binding = "LOADER"
 [[env.staging.services]]
 binding = "SELF"
 service = "ultralight-api-staging"
+
+[[env.staging.services]]
+binding = "COMPUTE_PLANE"
+service = "galactic-compute-staging"
+entrypoint = "ComputePlane"
 
 [[env.staging.tail_consumers]]
 service = "ultralight-capacity-tail-staging"
@@ -259,6 +302,17 @@ dead_letter_queue = "ultralight-capacity-telemetry-staging-dlq"
 binding = "CAPACITY_TELEMETRY_QUEUE"
 queue = "ultralight-capacity-telemetry-staging"
 
+[[env.staging.queues.producers]]
+binding = "COMPUTE_QUEUE"
+queue = "galactic-compute-staging"
+
+[[env.staging.queues.consumers]]
+queue = "galactic-compute-staging-dlq"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 10
+dead_letter_queue = "galactic-compute-staging-reconciliation-dlq"
+
 [env.staging.vars]
 BASE_URL = "https://ultralight-api-staging.rgn4jz429m.workers.dev"
 LAUNCH_WEB_BASE_URL = "https://staging.ultralight-launch-web.pages.dev"
@@ -288,6 +342,9 @@ FREE_MODE = "1"
 # Isolated staging Supabase project (previously pointed at the prod project).
 SUPABASE_URL = "https://mtekfhozmsboxizxxxyn.supabase.co"
 CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
+COMPUTE_ENABLED = "0"
+COMPUTE_ROLLOUT_MODE = "canary"
+COMPUTE_CANARY_ALLOWLIST = ""
 # Optional rollout knob for Wave 4 alias retirement:
 # PLATFORM_MCP_DISABLED_ALIASES = "removable"
 
@@ -342,6 +399,17 @@ crons = [
 #   TIER_CHANGE_SECRET
 #   GPU_SECRET
 #   ANALYTICS_PEPPER_V1
+#   COMPUTE_JOB_TOKEN_PEPPER — dedicated >=32-byte Compute token pepper; never
+#     reuse an Agent/human/API/provider secret and never inject it into a body.
+#   COMPUTE_EMERGENCY_STOP_TOKEN — dedicated >=32-byte random bearer accepted
+#     only by the global Compute stop/release routes. Never reuse the Supabase
+#     service role or any human/Agent/provider credential.
+#
+# Required immutable rollout var (set after image publication):
+#   COMPUTE_ENVIRONMENT_DIGEST=sha256:<developer-v1 image digest>
+# Required rollout vars:
+#   COMPUTE_ROLLOUT_MODE=canary|global
+#   COMPUTE_CANARY_ALLOWLIST=<owner UUID>/<Agent UUID>[,...]
 #
 # Optional vars/secrets for chat capture:
 #   CHAT_CAPTURE_ENABLED=true|false

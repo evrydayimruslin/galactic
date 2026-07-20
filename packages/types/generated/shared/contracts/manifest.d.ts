@@ -1,4 +1,5 @@
 import type { EnvCredential, EnvSchemaEntry } from './env.ts';
+import type { ManifestComputeConfig } from './compute.ts';
 import type { MCPTool, MCPToolAnnotations } from './mcp.ts';
 import type { RoutineDeclaration } from './routine.ts';
 import type { WidgetContextSourceDeclaration, WidgetDeclaration, WidgetGenerationHints } from './widget.ts';
@@ -29,6 +30,7 @@ export interface AppManifest {
     http?: ManifestHttpConfig;
     rate_limit?: ManifestCallRateLimit;
     network?: ManifestNetworkConfig;
+    compute?: ManifestComputeConfig;
 }
 export interface ManifestCallRateLimit {
     calls_per_minute?: number;
@@ -103,6 +105,7 @@ export interface ManifestFunction {
     annotations?: MCPToolAnnotations;
     generation_hints?: WidgetGenerationHints;
     uses_inference?: boolean;
+    uses_compute?: boolean;
     execution?: ManifestFunctionExecution;
 }
 export interface ManifestFunctionExecution {

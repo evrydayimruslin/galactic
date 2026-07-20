@@ -1,0 +1,59 @@
+name = "galactic-compute-staging"
+main = "src/index.ts"
+compatibility_date = "2026-07-17"
+compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
+workers_dev = false
+preview_urls = false
+
+[limits]
+cpu_ms = 300000
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+invocation_logs = true
+
+[vars]
+ENVIRONMENT = "staging"
+SANDBOX_TRANSPORT = "rpc"
+MAX_OUTPUT_BYTES = "1048576"
+HEARTBEAT_INTERVAL_MS = "20000"
+# Deployment automation must replace this with the exact published image
+# digest; the API/Compute runtime handshake fails closed on any mismatch.
+COMPUTE_ENVIRONMENT_DIGEST = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[[containers]]
+class_name = "ComputeStandard"
+image = "./images/standard/Dockerfile"
+image_build_context = ".."
+instance_type = "standard-1"
+max_instances = 5
+
+[[durable_objects.bindings]]
+name = "COMPUTE_STANDARD"
+class_name = "ComputeStandard"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ComputeStandard"]
+
+[[r2_buckets]]
+binding = "COMPUTE_ARTIFACTS"
+bucket_name = "galactic-compute-artifacts-staging"
+
+[[services]]
+binding = "CONTROL_PLANE"
+service = "ultralight-api-staging"
+entrypoint = "ComputeControlPlane"
+
+[[queues.consumers]]
+queue = "galactic-compute-staging"
+max_batch_size = 1
+max_batch_timeout = 1
+# Keep two Container slots available for direct synchronous jobs and
+# operational recovery while the async dispatch queue is saturated.
+max_concurrency = 3
+max_retries = 3
+dead_letter_queue = "galactic-compute-staging-dlq"

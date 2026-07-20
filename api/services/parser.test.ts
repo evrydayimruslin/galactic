@@ -402,6 +402,86 @@ Deno.test('parser: infers ai:embed from galactic.embed', async () => {
   assert(result.permissions.includes('ai:embed'));
 });
 
+Deno.test('parser: derives compute:exec and precise usesCompute for callable galactic.compute', async () => {
+  const result = await parseTypeScript(`
+    export async function build() {
+      return await galactic.compute({
+        argv: ["node", "build.js"],
+        tools: ["shell"],
+        mode: "sync",
+      });
+    }
+    export function describe() { return "no body"; }
+  `);
+
+  assert(result.permissions.includes('compute:exec'));
+  assertEquals(
+    result.functions.find((fn) => fn.name === 'build')?.usesCompute,
+    true,
+  );
+  assertEquals(
+    result.functions.find((fn) => fn.name === 'describe')?.usesCompute,
+    false,
+  );
+});
+
+Deno.test('parser: recognizes ultralight.compute and transitive local helpers', async () => {
+  const result = await parseTypeScript(`
+    async function runBody() {
+      return await ultralight.compute({ argv: ["rg", "TODO"], tools: ["shell"] });
+    }
+    export async function audit() { return await runBody(); }
+    export function ping() { return "pong"; }
+  `);
+
+  assert(result.permissions.includes('compute:exec'));
+  assertEquals(result.functions.find((fn) => fn.name === 'audit')?.usesCompute, true);
+  assertEquals(result.functions.find((fn) => fn.name === 'ping')?.usesCompute, false);
+});
+
+Deno.test('parser: compute with relative imports conservatively marks every function', async () => {
+  const result = await parseTypeScript(`
+    import { format } from "./format.ts";
+    export async function run() {
+      return format(await galactic.compute({ argv: ["pwd"], tools: [] }));
+    }
+    export function local() { return format("local"); }
+  `);
+
+  assertEquals(result.functions.map((fn) => fn.usesCompute), [true, true]);
+});
+
+Deno.test('parser: compute get/cancel require permission but do not claim a body start', async () => {
+  const result = await parseTypeScript(`
+    export async function inspect(id: string) { return galactic.compute.get(id); }
+    export async function stop(id: string) { return galactic.compute.cancel(id); }
+  `);
+
+  assert(result.permissions.includes('compute:exec'));
+  assertEquals(result.functions.map((fn) => fn.usesCompute), [false, false]);
+});
+
+Deno.test('parser: aliased callable compute binding fails safe to all functions', async () => {
+  const result = await parseTypeScript(`
+    const start = galactic.compute;
+    export async function run() { return start({ argv: ["pwd"], tools: [] }); }
+    export function local() { return "local"; }
+  `);
+
+  assert(result.permissions.includes('compute:exec'));
+  assertEquals(result.functions.map((fn) => fn.usesCompute), [true, true]);
+});
+
+Deno.test('parser: unrelated object compute method does not grant compute:exec', async () => {
+  const result = await parseTypeScript(`
+    const local = { compute: () => 1 };
+    export function run() { return local.compute(); }
+  `);
+
+  assert(!result.permissions.includes('compute:exec'));
+  assertEquals(result.functions[0].usesCompute, false);
+});
+
 Deno.test('parser: infers net:fetch from fetch()', async () => {
   const code = `export async function get() { return await fetch('https://api.example.com'); }`;
   const result = await parseTypeScript(code);

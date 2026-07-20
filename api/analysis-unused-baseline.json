@@ -8,6 +8,18 @@
     },
     {
       "exports": [
+        "COMPUTE_LAUNCH_TOOL_IDS"
+      ],
+      "file": "handlers/launch-compute.ts"
+    },
+    {
+      "file": "handlers/launch.ts",
+      "types": [
+        "LaunchHandlerDependencies"
+      ]
+    },
+    {
+      "exports": [
         "handleDraftUploadFiles"
       ],
       "file": "handlers/upload.ts"
@@ -22,6 +34,12 @@
       "types": [
         "PermissionsResult"
       ]
+    },
+    {
+      "exports": [
+        "getComputeQueue"
+      ],
+      "file": "lib/env.ts"
     },
     {
       "exports": [
@@ -176,7 +194,6 @@
     {
       "exports": [
         "APP_ENTRY_FILES",
-        "resolveAppEnvVars",
         "resolveRoutineActorAppCallDependencies"
       ],
       "file": "services/app-runtime-resources.ts",
@@ -200,9 +217,6 @@
       ]
     },
     {
-      "exports": [
-        "AppsService"
-      ],
       "file": "services/apps.ts",
       "types": [
         "SupabaseConfig"
@@ -477,6 +491,286 @@
       "types": [
         "CommandSuggestionSetResult",
         "RecordCommandSuggestionSetInput"
+      ]
+    },
+    {
+      "file": "services/compute-agent-deletion.ts",
+      "types": [
+        "ComputeAgentDeletionDeps",
+        "ComputeAgentPolicy",
+        "ComputeRun"
+      ]
+    },
+    {
+      "file": "services/compute-artifact-reconciler.ts",
+      "types": [
+        "ExpiredComputeArtifactCandidate",
+        "TombstoneExpiredComputeArtifactResult",
+        "UnpurgedComputeArtifactCandidate"
+      ]
+    },
+    {
+      "file": "services/compute-dispatch-recovery.ts",
+      "types": [
+        "ComputeDispatchRecoveryDeps",
+        "ComputeDispatchRecoveryResult"
+      ]
+    },
+    {
+      "file": "services/compute-emergency-auth.ts",
+      "types": [
+        "ComputeEmergencyStopAuthorization"
+      ]
+    },
+    {
+      "exports": [
+        "completeComputeEmergencyStopTarget",
+        "fenceComputeEmergencyStopBatch",
+        "recordComputeEmergencyStopTargetFailure"
+      ],
+      "file": "services/compute-emergency-stop.ts",
+      "types": [
+        "ComputeEmergencyStopInput",
+        "ComputeEmergencyStopReleaseInput",
+        "ComputeEmergencyStopResult"
+      ]
+    },
+    {
+      "file": "services/compute-launch-service.ts",
+      "types": [
+        "ComputeLaunchBodyDestroyer",
+        "ComputeLaunchCancellationOrchestrator",
+        "CreateComputeLaunchServiceOptions"
+      ]
+    },
+    {
+      "file": "services/compute-orchestrator.ts",
+      "types": [
+        "ComputeOrchestratorDeps"
+      ]
+    },
+    {
+      "exports": [
+        "isComputeBearerDependentPlatformTool",
+        "isComputePlatformFunctionAllowed"
+      ],
+      "file": "services/compute-platform-gateway.ts",
+      "types": [
+        "ComputePlatformAuthorizationDecision"
+      ]
+    },
+    {
+      "file": "services/compute-private-gateway.ts",
+      "types": [
+        "ComputeLifecycleGatewayDeps"
+      ]
+    },
+    {
+      "exports": [
+        "COMPUTE_QUEUE_ALLOWANCE_MS",
+        "COMPUTE_STARTUP_ALLOWANCE_MS",
+        "COMPUTE_SYNC_MAX_TIMEOUT_MS",
+        "COMPUTE_SYNC_PARENT_HEADROOM_MS",
+        "COMPUTE_TEARDOWN_ALLOWANCE_MS",
+        "DEFAULT_COMPUTE_TIMEOUT_MS",
+        "publicComputeRunStatus"
+      ],
+      "file": "services/compute-public.ts",
+      "types": [
+        "NormalizedPublicComputeRequest"
+      ]
+    },
+    {
+      "file": "services/compute-reconciler.ts",
+      "types": [
+        "ComputeReconcilerDeps",
+        "ComputeReconciliationResult"
+      ]
+    },
+    {
+      "file": "services/compute-secret-materializer.ts",
+      "types": [
+        "ComputeSecretMaterializerDeps",
+        "MaterializedComputeSecret"
+      ]
+    },
+    {
+      "file": "services/compute/agent-call-executor.test.ts",
+      "files": [
+        "services/compute/agent-call-executor.test.ts"
+      ]
+    },
+    {
+      "file": "services/compute/agent-call-executor.ts",
+      "types": [
+        "ComputeAgentCallExecutorDeps"
+      ]
+    },
+    {
+      "file": "services/compute/alerts.test.ts",
+      "files": [
+        "services/compute/alerts.test.ts"
+      ]
+    },
+    {
+      "file": "services/compute/alerts.ts",
+      "types": [
+        "ComputeAlertDeps",
+        "ComputeAlertRun"
+      ]
+    },
+    {
+      "file": "services/compute/artifacts.test.ts",
+      "files": [
+        "services/compute/artifacts.test.ts"
+      ]
+    },
+    {
+      "exports": [
+        "listComputeArtifacts"
+      ],
+      "file": "services/compute/artifacts.ts"
+    },
+    {
+      "file": "services/compute/authority.test.ts",
+      "files": [
+        "services/compute/authority.test.ts"
+      ]
+    },
+    {
+      "exports": [
+        "canonicalizeComputeConstraints"
+      ],
+      "file": "services/compute/authority.ts"
+    },
+    {
+      "file": "services/compute/capacity-settlement.test.ts",
+      "files": [
+        "services/compute/capacity-settlement.test.ts"
+      ]
+    },
+    {
+      "exports": [
+        "MAX_COMPUTE_CAPACITY_SETTLEMENT_INTENT_BYTES",
+        "settleOrDeferComputeCapacity"
+      ],
+      "file": "services/compute/capacity-settlement.ts",
+      "types": [
+        "ComputeCapacitySettlementDeps",
+        "ComputeCapacitySettlementIntentV1"
+      ]
+    },
+    {
+      "file": "services/compute/config.test.ts",
+      "files": [
+        "services/compute/config.test.ts"
+      ]
+    },
+    {
+      "exports": [
+        "resolveComputeRuntimeConfig"
+      ],
+      "file": "services/compute/config.ts",
+      "types": [
+        "ComputeRuntimeConfig"
+      ]
+    },
+    {
+      "file": "services/compute/database.test.ts",
+      "files": [
+        "services/compute/database.test.ts"
+      ]
+    },
+    {
+      "file": "services/compute/manifest.test.ts",
+      "files": [
+        "services/compute/manifest.test.ts"
+      ]
+    },
+    {
+      "file": "services/compute/manifest.ts",
+      "types": [
+        "ComputeManifestApp",
+        "LiveComputeManifestAuthority"
+      ]
+    },
+    {
+      "exports": [
+        "putComputeAgentPolicyRule",
+        "putComputeAgentPolicySettings"
+      ],
+      "file": "services/compute/policies.ts"
+    },
+    {
+      "file": "services/compute/reconciliation.ts",
+      "types": [
+        "ComputeTerminalFenceIdentity"
+      ]
+    },
+    {
+      "exports": [
+        "canonicalizeComputeManifestCeiling",
+        "COMPUTE_RATE_LIGHT_PER_MS",
+        "COMPUTE_RATE_VERSION",
+        "COMPUTE_STARTUP_ALLOWANCE_MS",
+        "COMPUTE_TEARDOWN_ALLOWANCE_MS",
+        "listComputeRuns",
+        "transitionComputeRun"
+      ],
+      "file": "services/compute/runs.ts",
+      "types": [
+        "ClaimedComputeInputArtifact",
+        "ClaimedComputeRun",
+        "ComputeRunClaim",
+        "ComputeRunSecretDescriptorSnapshot",
+        "PreparedComputeLease"
+      ]
+    },
+    {
+      "exports": [
+        "canonicalizeComputeSecretBindingInput",
+        "COMPUTE_RESERVED_ENV_NAMES",
+        "getActiveComputeSecretBindingByName",
+        "isComputeReservedEnvName",
+        "putComputeSecretBinding",
+        "revokeComputeSecretBinding"
+      ],
+      "file": "services/compute/secrets.ts",
+      "types": [
+        "PutComputeSecretBindingInput"
+      ]
+    },
+    {
+      "file": "services/compute/sql-fail-closed-migrations.test.ts",
+      "files": [
+        "services/compute/sql-fail-closed-migrations.test.ts"
+      ]
+    },
+    {
+      "file": "services/compute/tokens.test.ts",
+      "files": [
+        "services/compute/tokens.test.ts"
+      ]
+    },
+    {
+      "exports": [
+        "COMPUTE_JOB_TOKEN_PREFIX",
+        "computeJobTokenDigest",
+        "introspectComputeJobTokenPrincipal",
+        "parseComputeJobToken",
+        "verifyPreparedComputeJobToken"
+      ],
+      "file": "services/compute/tokens.ts"
+    },
+    {
+      "exports": [
+        "COMPUTE_TERMINAL_RUN_STATES"
+      ],
+      "file": "services/compute/types.ts",
+      "types": [
+        "ComputeRunAuthorityRecord",
+        "ComputeTerminalRunState",
+        "DeveloperV1ToolId"
       ]
     },
     {
@@ -1189,11 +1483,7 @@
       "exports": [
         "requiredPlatformMcpScopes"
       ],
-      "file": "services/platform-mcp-authorization.ts",
-      "types": [
-        "PlatformMcpAuthorizationDecision",
-        "PlatformMcpScope"
-      ]
+      "file": "services/platform-mcp-authorization.ts"
     },
     {
       "file": "services/platform-request-validation.ts",
@@ -1663,6 +1953,24 @@
       "file": "src/bindings/capacity-dynamic-tail.test.ts",
       "files": [
         "src/bindings/capacity-dynamic-tail.test.ts"
+      ]
+    },
+    {
+      "file": "src/bindings/compute-binding-core.test.ts",
+      "files": [
+        "src/bindings/compute-binding-core.test.ts"
+      ]
+    },
+    {
+      "exports": [
+        "deriveComputeIdempotencyKey",
+        "projectComputeRequest",
+        "resolveComputeActor",
+        "sanitizeComputeRun"
+      ],
+      "file": "src/bindings/compute-binding-core.ts",
+      "types": [
+        "ComputeBindingOperations"
       ]
     },
     {

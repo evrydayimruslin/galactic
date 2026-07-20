@@ -2,6 +2,11 @@
 // Thin MVP-facing endpoints for the external-agent-first website.
 
 import { authenticate } from "./auth.ts";
+import {
+  type ComputeLaunchHandlerDependencies,
+  handleLaunchComputeRoute,
+  isLaunchComputePath,
+} from "./launch-compute.ts";
 import { handleRun } from "./run.ts";
 import { error, json } from "./response.ts";
 import { getEnv } from "../lib/env.ts";
@@ -15,13 +20,23 @@ import { getOrCreatePublisherReferralLink } from "../services/referrals.ts";
 import { verifyAppIntegrity } from "../services/capabilities/verify.ts";
 import { CapabilityError } from "../../shared/contracts/capabilities.ts";
 import {
+  COMPUTE_V1_ASYNC_MAX_TIMEOUT_MS,
+  COMPUTE_V1_MAX_ARTIFACT_BYTES,
+} from "../../shared/contracts/compute.ts";
+import {
   isGpuSupportEnabled,
   sanitizeGpuTrustCard,
 } from "../services/gpu/feature-flag.ts";
-import { buildAppNetworkDisclosure, buildAppTrustCard } from "../services/trust.ts";
+import {
+  buildAppNetworkDisclosure,
+  buildAppTrustCard,
+} from "../services/trust.ts";
 import { resolveTrustSignals } from "../services/trust-signals.ts";
 import { encryptEnvVar } from "../services/envvars.ts";
-import { getScopedEnvSchemaEntries, resolveAppEnvSchema } from "../services/app-settings.ts";
+import {
+  getScopedEnvSchemaEntries,
+  resolveAppEnvSchema,
+} from "../services/app-settings.ts";
 import {
   buildPerUserSettingsStatus,
   type UserAppSecretStatusRow,
@@ -38,8 +53,8 @@ import {
 } from "../services/tokens.ts";
 import { withSensitiveRouteRateLimit } from "../services/sensitive-route-rate-limit.ts";
 import {
-  LAUNCH_CALLER_FUNCTION_POLICIES,
   LAUNCH_API_ROUTES,
+  LAUNCH_CALLER_FUNCTION_POLICIES,
   LAUNCH_DEFERRED_CAPABILITIES,
   LAUNCH_INCLUDED_CAPABILITIES,
   LAUNCH_INSTALL_TARGETS,
@@ -47,68 +62,67 @@ import {
   LAUNCH_PLATFORM_PRIMITIVES,
   LAUNCH_PUBLIC_ROUTES,
   LAUNCH_SCOPE_CONTRACT,
-  PERSISTENT_AGENT_LAUNCH_POLICY,
-  type LaunchCallerFunctionPermissionsResponse,
-  type LaunchCallerFunctionPermissionsUpdateRequest,
-  type LaunchFunctionInferenceResponse,
+  type LaunchAgentAdminSummary,
+  type LaunchAgentCapacityResponse,
+  type LaunchAgentCapacityUpdateRequest,
+  type LaunchAgentFunctionsResponse,
+  type LaunchAgentHomeActionRequest,
+  type LaunchAgentHomeResponse,
+  type LaunchAgentInstallContext,
+  type LaunchAgentKind,
+  type LaunchAgentManagedRoutineActionRequest,
+  type LaunchAgentManagedRoutineUpdateRequest,
+  type LaunchAgentOwnerSummary,
+  type LaunchAgentRelationship,
+  type LaunchAgentRoutineActionRequest,
+  type LaunchAgentRoutineBlocker,
+  type LaunchAgentRoutineOverview,
+  type LaunchAgentRoutineResponse,
+  type LaunchAgentRoutineRun,
+  type LaunchAgentRoutineSchedule,
+  type LaunchAgentRoutinesResponse,
+  type LaunchAgentRoutineUpdateRequest,
+  type LaunchAgentSummary,
+  type LaunchAgentVisibility,
   type LaunchApiKeyCreateRequest,
   type LaunchApiKeySummary,
   type LaunchApiRoute,
   type LaunchByokMutationResponse,
   type LaunchByokProviderOption,
   type LaunchByokSummaryResponse,
+  type LaunchCallerFunctionPermissionsResponse,
+  type LaunchCallerFunctionPermissionsUpdateRequest,
   type LaunchDiscoveryRetrievalSummary,
   type LaunchDiscoverySource,
+  type LaunchFleetActivity,
+  type LaunchFleetAgentHealth,
+  type LaunchFleetAgentState,
+  type LaunchFleetResponse,
+  type LaunchFolder,
+  type LaunchFullTimeDisclosure,
+  type LaunchFunctionInferenceResponse,
   type LaunchFunctionRunRequest,
   type LaunchFunctionRunResponse,
-  type LaunchJobStatusResponse,
   type LaunchFunctionSummary,
   type LaunchInferenceOptionsResponse,
-  type LaunchPlatformModelResponse,
   type LaunchInstallInstruction,
   type LaunchInstallResponse,
+  type LaunchInterfaceSummary,
+  type LaunchJobStatusResponse,
   type LaunchLeaderboardEntry,
   type LaunchLeaderboardKind,
   type LaunchLeaderboardResponse,
   type LaunchMoneyAmount,
   type LaunchPayoutStatus,
+  type LaunchPlatformModelResponse,
   type LaunchPlatformPrimitive,
   type LaunchPlatformPrimitiveSuggestion,
   type LaunchPricingSummary,
-  type LaunchSubscriptionCheckoutRequest,
-  type LaunchSubscriptionRedirectResponse,
   type LaunchPublicRoute,
   type LaunchRelevanceSummary,
   type LaunchSemanticSubjectType,
-  type LaunchAgentAdminSummary,
-  type LaunchAgentHomeActionRequest,
-  type LaunchAgentHomeResponse,
-  type LaunchAgentCapacityResponse,
-  type LaunchAgentCapacityUpdateRequest,
-  type LaunchAgentRoutineActionRequest,
-  type LaunchAgentManagedRoutineActionRequest,
-  type LaunchAgentManagedRoutineUpdateRequest,
-  type LaunchAgentRoutineBlocker,
-  type LaunchAgentRoutineOverview,
-  type LaunchAgentRoutineResponse,
-  type LaunchAgentRoutinesResponse,
-  type LaunchAgentRoutineSchedule,
-  type LaunchAgentRoutineRun,
-  type LaunchAgentRoutineUpdateRequest,
-  type LaunchAgentFunctionsResponse,
-  type LaunchAgentInstallContext,
-  type LaunchAgentKind,
-  type LaunchAgentOwnerSummary,
-  type LaunchAgentRelationship,
-  type LaunchAgentSummary,
-  type LaunchFolder,
-  type LaunchFleetActivity,
-  type LaunchFleetAgentHealth,
-  type LaunchFleetAgentState,
-  type LaunchFleetResponse,
-  type LaunchFullTimeDisclosure,
-  type LaunchInterfaceSummary,
-  type LaunchAgentVisibility,
+  type LaunchSubscriptionCheckoutRequest,
+  type LaunchSubscriptionRedirectResponse,
   type LaunchTrustCard,
   type LaunchWalletDetailKind,
   type LaunchWalletDetailResponse,
@@ -122,6 +136,7 @@ import {
   type LaunchWalletReceiptSummary,
   type LaunchWalletSummary,
   type LaunchWalletTransaction,
+  PERSISTENT_AGENT_LAUNCH_POLICY,
 } from "../../shared/contracts/launch.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
 import { validateEnvVarValue } from "../../shared/contracts/env.ts";
@@ -142,7 +157,10 @@ import {
   CHAT_MIN_BALANCE_LIGHT,
   FREE_MODE_BALANCE_LIGHT,
 } from "../../shared/contracts/ai.ts";
-import { functionUsesInference, isFreeModeEnabled } from "../services/free-mode.ts";
+import {
+  functionUsesInference,
+  isFreeModeEnabled,
+} from "../services/free-mode.ts";
 import { isValidModelId } from "../services/model-validation.ts";
 import {
   type BillingAddressInput,
@@ -224,9 +242,9 @@ import {
   type RoutineMonitorDetailResponse,
 } from "../services/routine-monitoring.ts";
 import {
-  RoutinePlatformError,
   ROUTINE_PLATFORM_FORBIDDEN,
   ROUTINE_PLATFORM_NOT_FOUND,
+  RoutinePlatformError,
   validateRoutineLaunchActivation,
 } from "../services/routine-platform.ts";
 import {
@@ -234,22 +252,22 @@ import {
   MIN_ROUTINE_INTERVAL_SECONDS,
 } from "../../shared/contracts/routine.ts";
 import {
+  type AgentHomeBudgetUsage,
   agentHomeCallTargetKey,
+  type AgentHomeSettingStatus,
   buildAgentHomeResponse,
   versionWasUploadedAfterLive,
-  type AgentHomeBudgetUsage,
-  type AgentHomeSettingStatus,
 } from "../services/agent-home.ts";
 import {
+  AgentHomeRevisionError,
   approveAgentHomeCapabilitiesCAS,
   assertAgentHomeRevision,
   claimAgentHomeAction,
   commitAgentHomePromotionAppRecord,
   completeAgentHomeAction,
   fenceAgentHomePromotionStep,
-  getAgentHomeRevision,
   getAgentHomeBudgetUsage,
-  AgentHomeRevisionError,
+  getAgentHomeRevision,
   parseAgentHomeRevision,
   pauseAgentHomeRoutineEmergency,
   queueAgentHomeRoutineRun,
@@ -281,12 +299,12 @@ import {
   toLaunchCapacityResponse,
 } from "../services/subscriptions.ts";
 import {
+  type AccountCapacityStatus,
+  type AgentCapacityStatus,
   getAccountCapacityStatus,
   getAgentCapacityStatus,
   releaseAgentActivationSlot,
   setAgentCapacityCap,
-  type AccountCapacityStatus,
-  type AgentCapacityStatus,
 } from "../services/account-capacity.ts";
 
 // Cross-Agent grant + settings mutations are sensitive. The SensitiveRoute enum
@@ -645,7 +663,14 @@ function normalizeLaunchApiPath(pathname: string): string {
   return normalized;
 }
 
-export async function handleLaunch(request: Request): Promise<Response> {
+export interface LaunchHandlerDependencies {
+  compute?: ComputeLaunchHandlerDependencies;
+}
+
+export async function handleLaunch(
+  request: Request,
+  dependencies: LaunchHandlerDependencies = {},
+): Promise<Response> {
   const url = new URL(request.url);
   const path = normalizeLaunchApiPath(url.pathname);
   const method = request.method;
@@ -670,14 +695,23 @@ export async function handleLaunch(request: Request): Promise<Response> {
       if (method !== "POST") return error("Method not allowed", 405);
       const user = await requireLaunchUser(request);
       if (!isAccountSessionAuthSource(user.authSource)) {
-        return error("Subscription management requires an account session", 403);
+        return error(
+          "Subscription management requires an account session",
+          403,
+        );
       }
-      const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+      const body = await request.json().catch(() => ({})) as Record<
+        string,
+        unknown
+      >;
       if (path.endsWith("/checkout") && body.plan !== "pro") {
         return error("plan must be pro", 400);
       }
-      const siteOrigin = getEnv("LAUNCH_WEB_BASE_URL") || new URL(request.url).origin;
-      const returnUrl = typeof body.returnUrl === "string" ? body.returnUrl : null;
+      const siteOrigin = getEnv("LAUNCH_WEB_BASE_URL") ||
+        new URL(request.url).origin;
+      const returnUrl = typeof body.returnUrl === "string"
+        ? body.returnUrl
+        : null;
       const redirectUrl = path.endsWith("/checkout")
         ? await createSubscriptionCheckout({
           userId: user.id,
@@ -690,13 +724,18 @@ export async function handleLaunch(request: Request): Promise<Response> {
           requestOrigin: siteOrigin,
           returnUrl,
         });
-      return privateLaunchJson({
-        url: redirectUrl,
-        generatedAt: new Date().toISOString(),
-      } satisfies LaunchSubscriptionRedirectResponse);
+      return privateLaunchJson(
+        {
+          url: redirectUrl,
+          generatedAt: new Date().toISOString(),
+        } satisfies LaunchSubscriptionRedirectResponse,
+      );
     }
 
-    if (path === "/api/launch/platform-model" || path.startsWith("/api/launch/wallet")) {
+    if (
+      path === "/api/launch/platform-model" ||
+      path.startsWith("/api/launch/wallet")
+    ) {
       return error(
         "This credits endpoint is not part of the persistent-Agent launch. Use BYOK and subscription capacity.",
         410,
@@ -762,23 +801,33 @@ export async function handleLaunch(request: Request): Promise<Response> {
       );
       const job = await getJob(jobId, user.id);
       if (!job) return error("Job not found", 404);
-      return json({
-        jobId: job.id,
-        status: job.status,
-        result: job.status === "completed" ? job.result : null,
-        error: job.status === "failed" ? job.error : null,
-        durationMs: job.duration_ms,
-        aiCostCredits: job.ai_cost_light,
-        admissionWait: asyncJobAdmissionStatus(job),
-        executionId: job.execution_id || null,
-        createdAt: job.created_at,
-        completedAt: job.completed_at,
-        generatedAt: new Date().toISOString(),
-      } satisfies LaunchJobStatusResponse);
+      return json(
+        {
+          jobId: job.id,
+          status: job.status,
+          result: job.status === "completed" ? job.result : null,
+          error: job.status === "failed" ? job.error : null,
+          durationMs: job.duration_ms,
+          aiCostCredits: job.ai_cost_light,
+          admissionWait: asyncJobAdmissionStatus(job),
+          executionId: job.execution_id || null,
+          createdAt: job.created_at,
+          completedAt: job.completed_at,
+          generatedAt: new Date().toISOString(),
+        } satisfies LaunchJobStatusResponse,
+      );
     }
 
     if (path === "/api/launch/settings") {
       return await handleLaunchSettings(request, method);
+    }
+
+    if (isLaunchComputePath(path)) {
+      return await handleLaunchComputeRoute(
+        request,
+        path,
+        dependencies.compute,
+      );
     }
 
     const agentHomeMatch = path.match(
@@ -864,14 +913,22 @@ export async function handleLaunch(request: Request): Promise<Response> {
       /^\/api\/launch\/agents\/([^/]+)\/wiring$/,
     );
     if (agentWiringMatch) {
-      return await handleLaunchAgentWiring(request, agentWiringMatch[1], method);
+      return await handleLaunchAgentWiring(
+        request,
+        agentWiringMatch[1],
+        method,
+      );
     }
 
     const callerTrustMatch = path.match(
       /^\/api\/launch\/agents\/([^/]+)\/caller-trust$/,
     );
     if (callerTrustMatch) {
-      return await handleLaunchCallerTrust(request, callerTrustMatch[1], method);
+      return await handleLaunchCallerTrust(
+        request,
+        callerTrustMatch[1],
+        method,
+      );
     }
 
     if (path === "/api/launch/wallet/topup/intent") {
@@ -1126,6 +1183,12 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       agentHomeActions: "/api/launch/agents/{id}/home/actions",
       agentHomePause: "/api/launch/agents/{id}/home/pause",
       agentRoutine: "/api/launch/agents/{id}/routine",
+      agentComputeSettings: "/api/launch/agents/{id}/compute/settings",
+      agentComputeRuns:
+        "/api/launch/agents/{id}/compute/runs?limit=50&cursor={cursor}",
+      agentComputeCancel: "/api/launch/agents/{id}/compute/runs/{runId}/cancel",
+      agentComputeArtifact:
+        "/api/launch/agents/{id}/compute/runs/{runId}/artifacts/{artifactId}",
       // Deprecated alias keys kept for one rename window.
       toolFunctions: "/api/launch/agents/{id}/functions",
       functionRun: "/api/launch/agents/{id}/functions/{functionName}/run",
@@ -1134,7 +1197,8 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       agentPermissions: "/api/launch/agents/{id}/caller-permissions",
       wiring: "/api/launch/agents/{id}/wiring",
       callerTrust: "/api/launch/agents/{id}/caller-trust",
-      grants: "/api/launch/grants?caller={callerId}&target={targetId}&status={status}",
+      grants:
+        "/api/launch/grants?caller={callerId}&target={targetId}&status={status}",
       wiringTargets: "/api/launch/wiring/targets?q={query}",
       settings: "/api/launch/settings",
       platformPrimitives: "/api/launch/platform-primitives?q={query}",
@@ -1982,7 +2046,8 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           }],
           responses: {
             "200": {
-              description: "Canonical Agent Home snapshot; secret values are never returned",
+              description:
+                "Canonical Agent Home snapshot; secret values are never returned",
               content: jsonContent({ $ref: "#/components/schemas/AgentHome" }),
             },
             "401": { description: "Authentication required" },
@@ -1996,7 +2061,8 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       "/api/launch/agents/{id}/home/identity": {
         patch: {
           operationId: "updateLaunchAgentHomeIdentity",
-          summary: "Atomically update Agent identity with optimistic concurrency",
+          summary:
+            "Atomically update Agent identity with optimistic concurrency",
           security: [{ bearerAuth: [] }],
           parameters: [{
             name: "id",
@@ -2025,7 +2091,8 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "400": { description: "Invalid mutation" },
             "403": { description: "Account session required" },
             "412": {
-              description: "Stale revision, with currentRevision and current snapshot",
+              description:
+                "Stale revision, with currentRevision and current snapshot",
             },
           },
         },
@@ -2033,7 +2100,8 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       "/api/launch/agents/{id}/home/routine": {
         patch: {
           operationId: "updateLaunchAgentHomeRoutine",
-          summary: "Atomically update mission, interval/cron cadence, or hard ceilings",
+          summary:
+            "Atomically update mission, interval/cron cadence, or hard ceilings",
           security: [{ bearerAuth: [] }],
           parameters: [{
             name: "id",
@@ -2239,7 +2307,8 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       "/api/launch/agents/{id}/routine": {
         get: {
           operationId: "getLaunchAgentRoutine",
-          summary: "Get the owner-safe state of a private Agent's primary routine",
+          summary:
+            "Get the owner-safe state of a private Agent's primary routine",
           description:
             "Account-session and owner-only. Returns mission, interval cadence, finite hard budgets, exact capability approvals, blockers, and sanitized recent-run summaries. Secret values and routine config are never returned.",
           security: [{ bearerAuth: [] }],
@@ -2251,7 +2320,10 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             description: "Private Agent id or slug",
           }],
           responses: {
-            "200": { description: "Primary routine overview, or an honest null proposal" },
+            "200": {
+              description:
+                "Primary routine overview, or an honest null proposal",
+            },
             "401": { description: "Authentication required" },
             "403": { description: "Account session required" },
             "404": { description: "Owned Agent not found" },
@@ -2373,7 +2445,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           operationId: "getLaunchJobStatus",
           summary: "Poll a durable async execution",
           description:
-            "Authenticated account-session endpoint. Functions declared async (or run with _async: true) return { _async: true, job_id, status: \"queued\" } from the run endpoint; poll this endpoint with that job_id until status is completed or failed. Jobs are user-scoped.",
+            'Authenticated account-session endpoint. Functions declared async (or run with _async: true) return { _async: true, job_id, status: "queued" } from the run endpoint; poll this endpoint with that job_id until status is completed or failed. Jobs are user-scoped.',
           security: [{ bearerAuth: [] }],
           parameters: [
             {
@@ -3252,7 +3324,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             functionName: { type: "string" },
             result: {
               description:
-                "Function return value. Async-declared functions (or _async: true runs) instead return { _async: true, job_id, status: \"queued\" } — poll /api/launch/jobs/{jobId}.",
+                'Function return value. Async-declared functions (or _async: true runs) instead return { _async: true, job_id, status: "queued" } — poll /api/launch/jobs/{jobId}.',
             },
             receiptId: { type: ["string", "null"] },
             warnings: { type: "array", items: { type: "object" } },
@@ -3369,7 +3441,13 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               properties: {
                 lifecycle: {
                   type: "string",
-                  enum: ["needs_setup", "ready", "active", "paused", "disabled"],
+                  enum: [
+                    "needs_setup",
+                    "ready",
+                    "active",
+                    "paused",
+                    "disabled",
+                  ],
                 },
                 execution: {
                   type: "string",
@@ -3423,7 +3501,11 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               description:
                 "Live executed version/integrity plus newest exactly-tested candidate and structured authority delta.",
             },
-            recentRuns: { type: "array", maxItems: 5, items: { type: "object" } },
+            recentRuns: {
+              type: "array",
+              maxItems: 5,
+              items: { type: "object" },
+            },
             actions: { type: "object" },
           },
         },
@@ -3768,7 +3850,9 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
     if (path.startsWith("/api/launch/wallet")) delete publicSpec.paths[path];
   }
   for (const schema of Object.keys(publicSpec.components.schemas)) {
-    if (schema.startsWith("Wallet")) delete publicSpec.components.schemas[schema];
+    if (schema.startsWith("Wallet")) {
+      delete publicSpec.components.schemas[schema];
+    }
   }
   publicSpec.paths["/api/launch/subscription"] = {
     get: {
@@ -3798,7 +3882,10 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       summary: "Get the signed-in owner's compact private Agent fleet",
       security: [{ bearerAuth: [] }],
       responses: {
-        "200": { description: "Batched Agent state, activity, Alerts, and shared capacity" },
+        "200": {
+          description:
+            "Batched Agent state, activity, Alerts, and shared capacity",
+        },
         "401": { description: "Authentication required" },
       },
     },
@@ -3806,7 +3893,8 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
   publicSpec.paths["/api/launch/agents/{id}/capacity"] = {
     get: {
       operationId: "getLaunchAgentCapacity",
-      summary: "Get one Agent's share and ceiling within shared account capacity",
+      summary:
+        "Get one Agent's share and ceiling within shared account capacity",
       security: [{ bearerAuth: [] }],
       responses: {
         "200": { description: "Agent and account-combined capacity state" },
@@ -3840,13 +3928,575 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       },
     },
   };
+  const computeAuthorityRuleBase = {
+    callerFunction: {
+      type: "string",
+      pattern: "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+    },
+    decision: {
+      type: "string",
+      enum: ["always", "ask", "never"],
+    },
+  };
+  const computePlatformAuthorityRule = (includeVersion: boolean) => ({
+    type: "object",
+    additionalProperties: false,
+    required: ["callerFunction", "decision", "action", "target"],
+    properties: {
+      ...computeAuthorityRuleBase,
+      action: { type: "string", const: "platform.call" },
+      target: {
+        type: "object",
+        additionalProperties: false,
+        required: ["functionName"],
+        properties: {
+          functionName: {
+            type: "string",
+            pattern: "^(?:gx|ul)\\.[A-Za-z][A-Za-z0-9_.:-]{0,126}$",
+            description:
+              "One exact Galactic platform function; wildcards are forbidden.",
+          },
+        },
+      },
+      ...(includeVersion ? { version: { type: "string" } } : {}),
+    },
+  });
+  const computeAgentAuthorityRule = (includeVersion: boolean) => ({
+    type: "object",
+    additionalProperties: false,
+    required: ["callerFunction", "decision", "action", "target"],
+    properties: {
+      ...computeAuthorityRuleBase,
+      action: { type: "string", const: "agents.call" },
+      target: {
+        type: "object",
+        additionalProperties: false,
+        required: ["agentId", "functionName"],
+        properties: {
+          agentId: { type: "string", format: "uuid" },
+          functionName: {
+            type: "string",
+            pattern: "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+            description:
+              "One exact target Agent function; wildcards are forbidden.",
+          },
+        },
+      },
+      ...(includeVersion ? { version: { type: "string" } } : {}),
+    },
+  });
+  publicSpec.components.schemas["ComputeLaunchAuthorityRule"] = {
+    oneOf: [
+      computePlatformAuthorityRule(true),
+      computeAgentAuthorityRule(true),
+    ],
+  };
+  publicSpec.components.schemas["ComputeLaunchAuthorityRuleMutation"] = {
+    oneOf: [
+      computePlatformAuthorityRule(false),
+      computeAgentAuthorityRule(false),
+    ],
+  };
+  publicSpec.components.schemas["ComputeLaunchSettings"] = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "enabled",
+      "profile",
+      "allowedTools",
+      "secretBindings",
+      "authorityRules",
+      "limits",
+      "manifestCeiling",
+      "ownerConfirmedAt",
+      "updatedAt",
+    ],
+    properties: {
+      enabled: { type: "boolean" },
+      profile: { type: "string", const: "developer-v1" },
+      allowedTools: {
+        type: "array",
+        maxItems: 64,
+        uniqueItems: true,
+        items: { type: "string", pattern: "^[a-z][a-z0-9._-]{0,127}$" },
+      },
+      secretBindings: {
+        type: "array",
+        maxItems: 50,
+        items: { $ref: "#/components/schemas/ComputeLaunchSecretBinding" },
+      },
+      authorityRules: {
+        type: "array",
+        maxItems: 200,
+        description:
+          "Per-caller exact platform.call or agents.call decisions. Wildcards are forbidden.",
+        items: { $ref: "#/components/schemas/ComputeLaunchAuthorityRule" },
+      },
+      limits: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "maxTimeoutMs",
+          "maxConcurrency",
+          "maxArtifactBytes",
+          "maxArtifacts",
+        ],
+        properties: {
+          maxTimeoutMs: {
+            type: "integer",
+            minimum: 1000,
+            maximum: COMPUTE_V1_ASYNC_MAX_TIMEOUT_MS,
+          },
+          maxConcurrency: { type: "integer", minimum: 1, maximum: 32 },
+          maxArtifactBytes: {
+            type: "integer",
+            minimum: 1,
+            maximum: COMPUTE_V1_MAX_ARTIFACT_BYTES,
+          },
+          maxArtifacts: { type: "integer", minimum: 1, maximum: 1000 },
+        },
+      },
+      manifestCeiling: {
+        type: "object",
+        additionalProperties: false,
+        required: ["enabled", "profile", "tools", "secrets"],
+        properties: {
+          enabled: { type: "boolean" },
+          profile: {
+            type: ["string", "null"],
+            enum: ["developer-v1", null],
+          },
+          tools: { type: "array", items: { type: "string" } },
+          secrets: { type: "array", items: { type: "string" } },
+        },
+      },
+      ownerConfirmedAt: {
+        type: ["string", "null"],
+        format: "date-time",
+      },
+      updatedAt: { type: ["string", "null"], format: "date-time" },
+    },
+  };
+  publicSpec.components.schemas["ComputeLaunchRun"] = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "runId",
+      "receiptId",
+      "receiptUrl",
+      "status",
+      "agentId",
+      "agentName",
+      "functionName",
+      "createdAt",
+      "startedAt",
+      "finishedAt",
+      "usage",
+      "exitCode",
+      "infraFailure",
+      "artifacts",
+      "cancellable",
+    ],
+    properties: {
+      runId: { type: "string", format: "uuid" },
+      receiptId: { type: ["string", "null"], format: "uuid" },
+      receiptUrl: { type: ["string", "null"] },
+      status: {
+        type: "string",
+        enum: [
+          "queued",
+          "reserving",
+          "starting",
+          "running",
+          "completed",
+          "failed",
+          "cancelled",
+          "settlement_pending",
+        ],
+      },
+      agentId: { type: "string", format: "uuid" },
+      agentName: { type: "string" },
+      functionName: { type: "string" },
+      createdAt: { type: "string", format: "date-time" },
+      startedAt: { type: ["string", "null"], format: "date-time" },
+      finishedAt: { type: ["string", "null"], format: "date-time" },
+      usage: {
+        type: "object",
+        additionalProperties: false,
+        required: ["reserved", "actual", "trueUp", "unit"],
+        properties: {
+          reserved: { type: "number", minimum: 0 },
+          actual: { type: ["number", "null"], minimum: 0 },
+          trueUp: { type: ["number", "null"] },
+          unit: { type: "string" },
+        },
+      },
+      exitCode: { type: ["integer", "null"] },
+      infraFailure: {
+        oneOf: [
+          { type: "null" },
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["code", "message", "retryable"],
+            properties: {
+              code: { type: "string" },
+              message: { type: "string" },
+              retryable: { type: "boolean" },
+            },
+          },
+        ],
+      },
+      artifacts: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "name", "sizeBytes", "expiresAt", "url"],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            name: { type: "string" },
+            sizeBytes: { type: "integer", minimum: 0 },
+            expiresAt: {
+              type: "string",
+              format: "date-time",
+              description:
+                "Exact database-owned expiry; admission and downloads fail after this time.",
+            },
+            url: {
+              type: ["string", "null"],
+              description:
+                "Same-origin owner download route; never an R2 object URL.",
+              pattern:
+                "^/api/launch/agents/[^/]+/compute/runs/[0-9a-fA-F-]+/artifacts/[0-9a-fA-F-]+$",
+            },
+          },
+        },
+      },
+      cancellable: { type: "boolean" },
+    },
+  };
+  const computeSecretPresenceSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "name",
+      "delivery",
+      "configured",
+      "version",
+      "updatedAt",
+    ],
+    properties: {
+      name: { type: "string" },
+      delivery: {
+        oneOf: [
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["kind", "envName"],
+            properties: {
+              kind: { type: "string", const: "env" },
+              envName: { type: "string" },
+            },
+          },
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["kind", "path"],
+            properties: {
+              kind: { type: "string", const: "file" },
+              path: { type: "string" },
+            },
+          },
+        ],
+      },
+      configured: { type: "boolean" },
+      version: { type: "string" },
+      updatedAt: { type: ["string", "null"], format: "date-time" },
+    },
+  };
+  publicSpec.components.schemas["ComputeLaunchSecretBinding"] =
+    computeSecretPresenceSchema;
+  const computeSettingsResponse = {
+    description:
+      "Owner-safe Compute settings and secret-presence metadata; secret values never appear",
+    content: jsonContent({
+      type: "object",
+      additionalProperties: false,
+      required: ["settings", "revision", "generatedAt"],
+      properties: {
+        settings: { $ref: "#/components/schemas/ComputeLaunchSettings" },
+        revision: { type: "string", pattern: "^(?:0|[1-9][0-9]*)$" },
+        generatedAt: { type: "string", format: "date-time" },
+      },
+    }),
+  };
+  publicSpec.paths["/api/launch/agents/{id}/compute/settings"] = {
+    get: {
+      operationId: "getLaunchAgentComputeSettings",
+      summary: "Get one owned Agent's Compute settings and secret presence",
+      description:
+        "Account-session and exact Agent ownership required. Values for Agent secrets are never returned.",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        "200": computeSettingsResponse,
+        "401": { description: "Authentication required" },
+        "403": { description: "Account session required" },
+        "404": { description: "Agent not found or not owned" },
+      },
+    },
+    put: {
+      operationId: "putLaunchAgentComputeSettings",
+      summary: "CAS-replace one owned Agent's complete Compute settings",
+      description:
+        "Requires expectedRevision and ownerConfirmed=true. Secret delivery mappings contain names and destinations only; values are never accepted.",
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: ["expectedRevision", "ownerConfirmed", "settings"],
+          properties: {
+            expectedRevision: {
+              oneOf: [
+                { type: "string", pattern: "^(?:0|[1-9][0-9]*)$" },
+                { type: "integer", minimum: 0 },
+              ],
+            },
+            ownerConfirmed: { type: "boolean", const: true },
+            settings: {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "enabled",
+                "profile",
+                "allowedTools",
+                "secretBindings",
+                "authorityRules",
+                "limits",
+              ],
+              properties: {
+                enabled: { type: "boolean" },
+                profile: { type: "string", const: "developer-v1" },
+                allowedTools: {
+                  type: "array",
+                  maxItems: 64,
+                  uniqueItems: true,
+                  items: {
+                    type: "string",
+                    pattern: "^[a-z][a-z0-9._-]{0,127}$",
+                  },
+                },
+                secretBindings: {
+                  type: "array",
+                  maxItems: 50,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["name", "delivery"],
+                    properties: {
+                      name: { type: "string" },
+                      delivery: computeSecretPresenceSchema.properties.delivery,
+                    },
+                  },
+                },
+                authorityRules: {
+                  type: "array",
+                  maxItems: 200,
+                  description:
+                    "Whole replacement of exact per-caller grants and prompts; no wildcard target is accepted.",
+                  items: {
+                    $ref:
+                      "#/components/schemas/ComputeLaunchAuthorityRuleMutation",
+                  },
+                },
+                limits: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: [
+                    "maxTimeoutMs",
+                    "maxConcurrency",
+                    "maxArtifactBytes",
+                    "maxArtifacts",
+                  ],
+                  properties: {
+                    maxTimeoutMs: {
+                      type: "integer",
+                      minimum: 1000,
+                      maximum: COMPUTE_V1_ASYNC_MAX_TIMEOUT_MS,
+                    },
+                    maxConcurrency: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 32,
+                    },
+                    maxArtifactBytes: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: COMPUTE_V1_MAX_ARTIFACT_BYTES,
+                    },
+                    maxArtifacts: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 1000,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+      },
+      responses: {
+        "200": computeSettingsResponse,
+        "400": { description: "Invalid whole-settings document" },
+        "415": { description: "JSON request body required" },
+        "409": { description: "Compute settings revision conflict" },
+        "403": { description: "Account session required" },
+        "404": { description: "Agent not found or not owned" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/agents/{id}/compute/runs"] = {
+    get: {
+      operationId: "listLaunchAgentComputeRuns",
+      summary: "List secret-safe Compute runs for one owned Agent",
+      description:
+        "Run summaries omit argv, stdin, execution environment, token data, and secret values.",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "limit",
+          in: "query",
+          schema: {
+            type: "integer",
+            minimum: 1,
+            maximum: 100,
+            default: 50,
+          },
+        },
+        {
+          name: "cursor",
+          in: "query",
+          schema: {
+            type: "string",
+            minLength: 1,
+            maxLength: 2048,
+            pattern: "^[A-Za-z0-9_-]+$",
+          },
+        },
+      ],
+      responses: {
+        "200": {
+          description: "Newest-first Compute run page",
+          content: jsonContent({
+            type: "object",
+            required: ["runs", "next_cursor", "generatedAt"],
+            properties: {
+              runs: {
+                type: "array",
+                items: { $ref: "#/components/schemas/ComputeLaunchRun" },
+              },
+              next_cursor: { type: ["string", "null"] },
+              generatedAt: { type: "string", format: "date-time" },
+            },
+          }),
+        },
+        "400": { description: "Invalid pagination query" },
+        "403": { description: "Account session required" },
+        "404": { description: "Agent not found or not owned" },
+      },
+    },
+  };
+  publicSpec.paths[
+    "/api/launch/agents/{id}/compute/runs/{runId}/cancel"
+  ] = {
+    post: {
+      operationId: "cancelLaunchAgentComputeRun",
+      summary: "Idempotently cancel one Compute run for an owned Agent",
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        }),
+      },
+      responses: {
+        "200": { description: "Cancelled or already-terminal run summary" },
+        "400": { description: "Invalid run id or body" },
+        "415": { description: "JSON request body required" },
+        "409": { description: "Run state/version conflict" },
+        "403": { description: "Account session required" },
+        "404": { description: "Agent or run not found" },
+      },
+    },
+  };
+  publicSpec.paths[
+    "/api/launch/agents/{id}/compute/runs/{runId}/artifacts/{artifactId}"
+  ] = {
+    get: {
+      operationId: "downloadLaunchAgentComputeArtifact",
+      summary: "Download one private Compute artifact for an owned Agent",
+      description:
+        "Streams control-plane-authorized bytes. R2 bucket names, object keys, and public object URLs are never returned.",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string", minLength: 1, maxLength: 200 },
+        },
+        {
+          name: "runId",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+        {
+          name: "artifactId",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+      ],
+      responses: {
+        "200": {
+          description: "Private artifact bytes",
+          headers: {
+            "Content-Disposition": {
+              schema: { type: "string" },
+              description: "Sanitized attachment filename",
+            },
+            "Cache-Control": {
+              schema: { type: "string", const: "private, no-store" },
+            },
+          },
+          content: {
+            "application/octet-stream": {
+              schema: { type: "string", format: "binary" },
+            },
+          },
+        },
+        "400": { description: "Invalid run or artifact id" },
+        "401": { description: "Authentication required" },
+        "403": { description: "Account session required" },
+        "404": { description: "Agent, run, or artifact not found" },
+      },
+    },
+  };
   publicSpec.paths["/api/launch/agents/{id}/routines"] = {
     get: {
       operationId: "listLaunchAgentRoutines",
       summary: "List all launch-managed routines for an owned private Agent",
       security: [{ bearerAuth: [] }],
       responses: {
-        "200": { description: "Bounded routine collection with aggregate state" },
+        "200": {
+          description: "Bounded routine collection with aggregate state",
+        },
         "403": { description: "Owner account session required" },
         "404": { description: "Owned private Agent not found" },
       },
@@ -3911,7 +4561,8 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
   publicSpec.paths["/api/launch/agents/{id}/routines/{routineId}/actions"] = {
     post: {
       operationId: "actOnLaunchAgentManagedRoutine",
-      summary: "Idempotently approve, activate, pause, or wake one managed routine",
+      summary:
+        "Idempotently approve, activate, pause, or wake one managed routine",
       security: [{ bearerAuth: [] }],
       requestBody: {
         required: true,
@@ -3950,11 +4601,21 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       security: [{ bearerAuth: [] }],
       parameters: [
         { name: "agent", in: "query", schema: { type: "string" } },
-        { name: "unread", in: "query", schema: { type: "string", enum: ["1"] } },
-        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200 } },
+        {
+          name: "unread",
+          in: "query",
+          schema: { type: "string", enum: ["1"] },
+        },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", minimum: 1, maximum: 200 },
+        },
       ],
       responses: {
-        "200": { description: "Newest-first owner Alerts and filtered unread count" },
+        "200": {
+          description: "Newest-first owner Alerts and filtered unread count",
+        },
         "401": { description: "Authentication required" },
       },
     },
@@ -4005,7 +4666,9 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       operationId: "createLaunchSubscriptionPortal",
       summary: "Create a Stripe Billing Portal Session",
       security: [{ bearerAuth: [] }],
-      responses: { "200": { description: "Stripe-hosted billing portal redirect" } },
+      responses: {
+        "200": { description: "Stripe-hosted billing portal redirect" },
+      },
     },
   };
   return spec;
@@ -4324,7 +4987,9 @@ async function handleLaunchNotifications(
       ? Number(limitParam)
       : NaN;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
-      throw new RequestValidationError("limit must be an integer from 1 to 200");
+      throw new RequestValidationError(
+        "limit must be an integer from 1 to 200",
+      );
     }
     const agentLocator = url.searchParams.get("agent")?.trim() || null;
     let agentId: string | undefined;
@@ -4364,9 +5029,7 @@ async function handleLaunchNotifications(
     if (markAll && body.ids !== undefined) {
       throw new RequestValidationError("Provide all or ids, not both");
     }
-    const ids = Array.isArray(body.ids)
-      ? [...new Set(body.ids)]
-      : null;
+    const ids = Array.isArray(body.ids) ? [...new Set(body.ids)] : null;
     if (
       !markAll &&
       (!ids || ids.length < 1 || ids.length > 200 ||
@@ -4656,7 +5319,10 @@ async function handleLaunchSettings(
             return error("displayName must be 80 characters or fewer", 400);
           }
           // Empty string clears the override back to the default label.
-          await setUserDisplayName(user.id, trimmed.length > 0 ? trimmed : null);
+          await setUserDisplayName(
+            user.id,
+            trimmed.length > 0 ? trimmed : null,
+          );
         }
         return json({
           agentGrantAutoApprove: await getUserGrantAutoApprove(user.id),
@@ -5012,7 +5678,11 @@ async function handleLaunchLibrary(request: Request): Promise<Response> {
       viewerId: user.id,
       installedIds,
     });
-    summary.folderId = folderIdFor(row.id, installedMembers, installedFolderIds);
+    summary.folderId = folderIdFor(
+      row.id,
+      installedMembers,
+      installedFolderIds,
+    );
     return summary;
   });
 
@@ -5074,7 +5744,9 @@ export function toLaunchFleetAgentCapacity(
   const weeklyState = launchFleetCapacityState(row.capacity_weekly_state);
   const burstResetsAt = fleetTimestamp(row.capacity_burst_resets_at);
   const weeklyResetsAt = fleetTimestamp(row.capacity_weekly_resets_at);
-  if (!state || !burstState || !weeklyState || !burstResetsAt || !weeklyResetsAt) {
+  if (
+    !state || !burstState || !weeklyState || !burstResetsAt || !weeklyResetsAt
+  ) {
     return null;
   }
   const basisPoints = finiteFleetNumber(row.capacity_cap_basis_points);
@@ -5126,10 +5798,16 @@ function launchFleetActivities(value: unknown): LaunchFleetActivity[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry): LaunchFleetActivity[] => {
     const item = asRecord(entry);
-    if (!item || typeof item.id !== "string" || typeof item.createdAt !== "string") {
+    if (
+      !item || typeof item.id !== "string" || typeof item.createdAt !== "string"
+    ) {
       return [];
     }
-    const kind = item.kind === "alert" ? "alert" : item.kind === "run" ? "run" : null;
+    const kind = item.kind === "alert"
+      ? "alert"
+      : item.kind === "run"
+      ? "run"
+      : null;
     if (!kind) return [];
     return [{
       id: item.id,
@@ -5166,7 +5844,9 @@ async function handleLaunchFleet(request: Request): Promise<Response> {
     snapshotResponse,
     "Failed to fetch Fleet snapshot",
   );
-  const snapshotByAgent = new Map(snapshotRows.map((row) => [row.agent_id, row]));
+  const snapshotByAgent = new Map(
+    snapshotRows.map((row) => [row.agent_id, row]),
+  );
   const privateRows = ownedRows.filter((row) => row.visibility === "private");
   const owners = await fetchOwnerMap(privateRows.map((row) => row.owner_id));
   const installedIds = new Set(privateRows.map((row) => row.id));
@@ -5217,11 +5897,12 @@ function toLaunchAgentCapacityResponse(
   const combinedState = (
     left: AgentCapacityStatus["state"],
     right: AccountCapacityStatus["state"],
-  ) => left === "waiting" || right === "waiting"
-    ? "waiting" as const
-    : left === "low" || right === "low"
-    ? "low" as const
-    : "available" as const;
+  ) =>
+    left === "waiting" || right === "waiting"
+      ? "waiting" as const
+      : left === "low" || right === "low"
+      ? "low" as const
+      : "available" as const;
   const window = (
     agentWindow: AgentCapacityStatus["burst"],
     accountWindow: AccountCapacityStatus["burst"],
@@ -5287,7 +5968,8 @@ async function handleLaunchAgentCapacity(
       : NaN;
     if (
       !Number.isFinite(requestBody.capPercent) ||
-      !Number.isInteger(basisPoints) || basisPoints < 1 || basisPoints > 10_000 ||
+      !Number.isInteger(basisPoints) || basisPoints < 1 ||
+      basisPoints > 10_000 ||
       Math.abs(basisPoints / 100 - requestBody.capPercent) > 1e-9
     ) {
       throw new RequestValidationError(
@@ -5319,11 +6001,11 @@ async function handleLaunchAgentCapacity(
   }
   const [agent, resolvedAccount] = await Promise.all([
     getAgentCapacityStatus(user.id, resolved.id),
-    account
-      ? Promise.resolve(account)
-      : getAccountCapacityStatus(user.id),
+    account ? Promise.resolve(account) : getAccountCapacityStatus(user.id),
   ]);
-  return privateLaunchJson(toLaunchAgentCapacityResponse(agent, resolvedAccount));
+  return privateLaunchJson(
+    toLaunchAgentCapacityResponse(agent, resolvedAccount),
+  );
 }
 
 // ── Library folders (launch-web "Agents" page) ──────────────────────────────
@@ -5437,7 +6119,9 @@ async function handleLaunchFolders(
   if (itemMatch) {
     const folderId = decodeURIComponent(itemMatch[1]);
     if (!isUuid(folderId)) return error("Folder not found", 404);
-    if (method === "PATCH") return await renameFolder(request, user.id, folderId);
+    if (method === "PATCH") {
+      return await renameFolder(request, user.id, folderId);
+    }
     if (method === "DELETE") return await deleteFolder(user.id, folderId);
     return error("Method not allowed for launch folder", 405);
   }
@@ -5516,7 +6200,10 @@ async function deleteFolder(
   const db = getDbConfig();
   const res = await fetch(
     `${db.baseUrl}/rest/v1/library_folders?id=eq.${folderId}&owner_user_id=eq.${userId}`,
-    { method: "DELETE", headers: { ...db.headers, Prefer: "return=representation" } },
+    {
+      method: "DELETE",
+      headers: { ...db.headers, Prefer: "return=representation" },
+    },
   );
   if (!res.ok) return error("Couldn't delete the folder", 502);
   const rows = await res.json() as Array<{ id: string }>;
@@ -5612,7 +6299,11 @@ function agentHomeJson(data: unknown, status = 200): Response {
   return withAgentHomePrivacy(json(data, status));
 }
 
-function agentHomeError(message: string, status: number, code?: string): Response {
+function agentHomeError(
+  message: string,
+  status: number,
+  code?: string,
+): Response {
   return agentHomeJson({
     error: message,
     ...(code ? { code } : {}),
@@ -5633,7 +6324,9 @@ function launchAgentHomeMethodAllowed(
   method: string,
 ): boolean {
   if (section === null) return method === "GET";
-  if (section === "identity" || section === "routine") return method === "PATCH";
+  if (section === "identity" || section === "routine") {
+    return method === "PATCH";
+  }
   if (section === "settings") return method === "PUT";
   if (section === "actions" || section === "pause") return method === "POST";
   return false;
@@ -5771,7 +6464,9 @@ async function loadAgentHomeSettingStatuses(
       configured,
       secret: entry.input === "password" || credentialBound,
       destination: entry.credential?.destination || null,
-      updatedAt: perUser ? perUserUpdatedAt.get(key) || null : row.updated_at || null,
+      updatedAt: perUser
+        ? perUserUpdatedAt.get(key) || null
+        : row.updated_at || null,
     } satisfies AgentHomeSettingStatus;
   });
 }
@@ -5829,7 +6524,10 @@ async function loadAgentHomeCallTargets(
     );
   }
 
-  const result = new Map<string, { valid: boolean; targetAppId: string | null }>();
+  const result = new Map<
+    string,
+    { valid: boolean; targetAppId: string | null }
+  >();
   await Promise.all([...requested.entries()].map(async ([key, request]) => {
     let target: LaunchAppRow | null = null;
     try {
@@ -5848,7 +6546,9 @@ async function loadAgentHomeCallTargets(
         ),
     );
     result.set(key, {
-      valid: Boolean(target && target.visibility === "private" && exposesFunction),
+      valid: Boolean(
+        target && target.visibility === "private" && exposesFunction,
+      ),
       targetAppId: target?.id || null,
     });
   }));
@@ -5946,7 +6646,9 @@ async function buildLaunchAgentHomeSnapshotAttempt(
   const connectedKeys = new Set(
     settings.filter((setting) =>
       setting.scope === "per_user" && setting.configured
-    ).map((setting) => setting.key),
+    ).map((
+      setting,
+    ) => setting.key),
   );
   const versions = Array.isArray(row.versions)
     ? row.versions
@@ -6090,7 +6792,9 @@ function requireExpectedAgentHomeRevision(
   body: Record<string, unknown>,
   appId: string,
 ): string {
-  if (typeof body.expectedRevision !== "string" || !body.expectedRevision.trim()) {
+  if (
+    typeof body.expectedRevision !== "string" || !body.expectedRevision.trim()
+  ) {
     throw new RequestValidationError("expectedRevision is required");
   }
   const revision = body.expectedRevision.trim();
@@ -6127,14 +6831,19 @@ async function updateLaunchAgentHomeIdentity(
   row: LaunchAppRow,
   body: Record<string, unknown>,
 ): Promise<void> {
-  rejectUnknownAgentHomeFields(body, ["expectedRevision", "name", "description"]);
+  rejectUnknownAgentHomeFields(body, [
+    "expectedRevision",
+    "name",
+    "description",
+  ]);
   const expectedRevision = requireExpectedAgentHomeRevision(body, row.id);
   if (!("name" in body) && !("description" in body)) {
     throw new RequestValidationError("Provide name or description");
   }
   if (
     "name" in body &&
-    (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 200)
+    (typeof body.name !== "string" || !body.name.trim() ||
+      body.name.trim().length > 200)
   ) {
     throw new RequestValidationError("name must be 1 to 200 characters");
   }
@@ -6172,8 +6881,8 @@ async function updateLaunchAgentHomeRoutine(
     "budgets",
   ]);
   const expectedRevision = requireExpectedAgentHomeRevision(body, row.id);
-  const { expectedRevision: _expected, ...update } = body as unknown as
-    LaunchAgentManagedRoutineUpdateRequest;
+  const { expectedRevision: _expected, ...update } =
+    body as unknown as LaunchAgentManagedRoutineUpdateRequest;
   const prepared = prepareLaunchRoutineMutation(routine, update);
   await updateAgentHomeManagedRoutineCAS({
     appId: row.id,
@@ -6204,7 +6913,9 @@ async function updateLaunchAgentHomeSettings(
     throw new RequestValidationError("values must be a non-empty object");
   }
   if (Object.keys(values).length > 50) {
-    throw new RequestValidationError("At most 50 settings may be updated at once");
+    throw new RequestValidationError(
+      "At most 50 settings may be updated at once",
+    );
   }
   const schema = resolveAppEnvSchema(row as never);
   const agentValues: Record<string, string | null> = {};
@@ -6217,7 +6928,9 @@ async function updateLaunchAgentHomeSettings(
       );
     }
     if (value !== null && typeof value !== "string") {
-      throw new RequestValidationError(`${key}: value must be a string or null`);
+      throw new RequestValidationError(
+        `${key}: value must be a string or null`,
+      );
     }
     if (typeof value === "string") {
       if (!value) {
@@ -6265,7 +6978,9 @@ interface LaunchAgentHomeActionOutcome {
 
 class LaunchAgentHomeActionStatusUnknownError extends Error {
   constructor(readonly requestId: string) {
-    super("The Agent Home action ran, but its durable result could not be confirmed");
+    super(
+      "The Agent Home action ran, but its durable result could not be confirmed",
+    );
     this.name = "LaunchAgentHomeActionStatusUnknownError";
   }
 }
@@ -6275,17 +6990,27 @@ function launchAgentHomeActionFailure(err: unknown): Record<string, unknown> {
     return { error: err.message, code: err.code, status: err.status };
   }
   if (err instanceof RequestValidationError) {
-    return { error: err.message, code: "AGENT_HOME_ACTION_BLOCKED", status: err.status };
+    return {
+      error: err.message,
+      code: "AGENT_HOME_ACTION_BLOCKED",
+      status: err.status,
+    };
   }
   if (err instanceof RoutinePlatformError) {
-    return { error: err.message, code: "AGENT_HOME_ACTION_BLOCKED", status: 409 };
+    return {
+      error: err.message,
+      code: "AGENT_HOME_ACTION_BLOCKED",
+      status: 409,
+    };
   }
   if (err instanceof Error && err.name === "ToolError") {
     const code = (err as Error & { code?: number }).code;
     return {
       error: err.message,
       code: "AGENT_HOME_PROMOTION_FAILED",
-      status: code === -32003 ? 403 : code === -32602
+      status: code === -32003
+        ? 403
+        : code === -32602
         ? 400
         : code === -32006
         ? 409
@@ -6301,7 +7026,9 @@ function launchAgentHomeActionFailure(err: unknown): Record<string, unknown> {
 
 function isDeterministicLaunchAgentHomeActionFailure(err: unknown): boolean {
   if (err instanceof AgentHomeStaleMutationError) return true;
-  if (err instanceof RequestValidationError || err instanceof RoutinePlatformError) {
+  if (
+    err instanceof RequestValidationError || err instanceof RoutinePlatformError
+  ) {
     return true;
   }
   if (err instanceof Error && err.name === "ToolError") {
@@ -6424,13 +7151,15 @@ async function performLaunchAgentHomeAction(
     throw new RequestValidationError("action is required");
   }
   const action = body.action as LaunchAgentHomeActionRequest["action"];
-  if (![
-    "approve_capabilities",
-    "activate",
-    "pause",
-    "run_now",
-    "promote_candidate",
-  ].includes(action)) {
+  if (
+    ![
+      "approve_capabilities",
+      "activate",
+      "pause",
+      "run_now",
+      "promote_candidate",
+    ].includes(action)
+  ) {
     throw new RequestValidationError(
       "action must be approve_capabilities, activate, pause, run_now, or promote_candidate",
     );
@@ -6586,10 +7315,12 @@ async function performLaunchAgentHomeAction(
     if (sideEffectFinished) {
       // Reconciliation proved the original side effect already committed.
     } else if (action === "promote_candidate") {
-      if (!repairRequired && (
-        home!.release.candidate?.version !== version ||
-        !home!.actions.canPromoteCandidate
-      )) {
+      if (
+        !repairRequired && (
+          home!.release.candidate?.version !== version ||
+          !home!.actions.canPromoteCandidate
+        )
+      ) {
         throw new RequestValidationError(
           "That tested candidate is unavailable for safe promotion",
           409,
@@ -6645,7 +7376,9 @@ async function performLaunchAgentHomeAction(
             (capability) => capability.id,
           ),
         );
-        const notPending = (capabilityIds || []).filter((id) => !pendingIds.has(id));
+        const notPending = (capabilityIds || []).filter((id) =>
+          !pendingIds.has(id)
+        );
         if (notPending.length > 0) {
           throw new RequestValidationError(
             `Capabilities are no longer pending: ${notPending.join(", ")}`,
@@ -6672,12 +7405,16 @@ async function performLaunchAgentHomeAction(
             ? await collectLaunchRoutineBlockers(user.id, routine)
             : home!.state.blockers;
           if (
-            managedRoutineId ? managedBlockers.length > 0 : !home!.actions.canActivate
+            managedRoutineId
+              ? managedBlockers.length > 0
+              : !home!.actions.canActivate
           ) {
             const err = new RequestValidationError(
               "Agent cannot activate until every setup and integrity blocker is resolved",
               409,
-            ) as RequestValidationError & { blockers?: LaunchAgentRoutineBlocker[] };
+            ) as RequestValidationError & {
+              blockers?: LaunchAgentRoutineBlocker[];
+            };
             err.blockers = managedBlockers;
             throw err;
           }
@@ -6728,7 +7465,9 @@ async function performLaunchAgentHomeAction(
           ? await collectLaunchRoutineBlockers(user.id, routine)
           : home!.state.blockers;
         if (
-          managedRoutineId ? managedBlockers.length > 0 : !home!.actions.canRunNow
+          managedRoutineId
+            ? managedBlockers.length > 0
+            : !home!.actions.canRunNow
         ) {
           throw new RequestValidationError(
             "Agent cannot run until every setup and integrity blocker is resolved",
@@ -6781,9 +7520,9 @@ async function performLaunchAgentHomeAction(
         row,
         action,
         requestId: claim.requestId,
-      capabilityIds,
-      routineId: managedRoutineId,
-      version,
+        capabilityIds,
+        routineId: managedRoutineId,
+        version,
       });
     } catch {
       throw new LaunchAgentHomeActionStatusUnknownError(claim.requestId);
@@ -6876,7 +7615,10 @@ async function handleLaunchAgentHomeRoute(
     }
     user = await requireLaunchUser(request);
     requireAccountSessionForAgentHome(user);
-    const resolved = await resolveOwnerPrivateRoutineAgent(user, encodedLocator);
+    const resolved = await resolveOwnerPrivateRoutineAgent(
+      user,
+      encodedLocator,
+    );
     if (resolved instanceof Response) return withAgentHomePrivacy(resolved);
     const row = resolved;
 
@@ -6898,7 +7640,9 @@ async function handleLaunchAgentHomeRoute(
     }
     const rawBody = await readJsonBody<unknown>(request);
     const body = asRecord(rawBody);
-    if (!body) throw new RequestValidationError("Request body must be an object");
+    if (!body) {
+      throw new RequestValidationError("Request body must be an object");
+    }
 
     if (section === "identity") {
       await updateLaunchAgentHomeIdentity(user, row, body);
@@ -6911,16 +7655,18 @@ async function handleLaunchAgentHomeRoute(
       if (!routine) return agentHomeError("Agent has no routine proposal", 404);
       await updateLaunchAgentHomeRoutine(user, row, routine, body);
     } else if (section === "settings") {
-      return withAgentHomePrivacy(await withSensitiveRouteRateLimit(
-        user.id,
-        "apps:user_settings_update",
-        async () => {
-          await updateLaunchAgentHomeSettings(user!, row, body);
-          return agentHomeJson(
-            await refreshLaunchAgentHome(user!, encodedLocator),
-          );
-        },
-      ));
+      return withAgentHomePrivacy(
+        await withSensitiveRouteRateLimit(
+          user.id,
+          "apps:user_settings_update",
+          async () => {
+            await updateLaunchAgentHomeSettings(user!, row, body);
+            return agentHomeJson(
+              await refreshLaunchAgentHome(user!, encodedLocator),
+            );
+          },
+        ),
+      );
     } else if (section === "actions") {
       const outcome = await performLaunchAgentHomeAction(user, row, body);
       if (outcome.kind === "pending") {
@@ -6975,8 +7721,14 @@ async function handleLaunchAgentHomeRoute(
       try {
         return await launchAgentHomeConflictResponse(user, encodedLocator);
       } catch (refreshErr) {
-        console.error("[LAUNCH] Failed to refresh stale Agent Home:", refreshErr);
-        return agentHomeError("Agent Home state is temporarily unavailable", 503);
+        console.error(
+          "[LAUNCH] Failed to refresh stale Agent Home:",
+          refreshErr,
+        );
+        return agentHomeError(
+          "Agent Home state is temporarily unavailable",
+          503,
+        );
       }
     }
     if (err instanceof AgentHomeRevisionError) {
@@ -7070,7 +7822,8 @@ async function fetchPrimaryRoutineId(
   appId: string,
 ): Promise<string | null> {
   const rows = await fetchManagedRoutineIds(userId, appId);
-  return rows.find((row) => launchRoutineRole(row.metadata) === "primary")?.id ||
+  return rows.find((row) => launchRoutineRole(row.metadata) === "primary")
+    ?.id ||
     rows[0]?.id || null;
 }
 
@@ -7123,9 +7876,7 @@ function launchRoutineSchedule(
 function safeRoutineReason(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
-  return /^[a-z0-9][a-z0-9_.-]{0,79}$/u.test(normalized)
-    ? normalized
-    : null;
+  return /^[a-z0-9][a-z0-9_.-]{0,79}$/u.test(normalized) ? normalized : null;
 }
 
 function routineAutoPauseReason(routine: StoredRoutine): string | null {
@@ -7135,7 +7886,9 @@ function routineAutoPauseReason(routine: StoredRoutine): string | null {
 }
 
 function routineRunErrorCode(
-  run: RoutineMonitorDetailResponse["routine"]["recent_runs"][number] | undefined,
+  run:
+    | RoutineMonitorDetailResponse["routine"]["recent_runs"][number]
+    | undefined,
 ): string | null {
   if (!run) return null;
   return safeRoutineReason(asRecord(run.error)?.code);
@@ -7152,14 +7905,18 @@ function toLaunchRoutineRun(
     startedAt: run.started_at,
     completedAt: run.completed_at,
     durationMs: run.duration_ms,
-    totalLight: Number.isFinite(run.total_light) ? Math.max(0, run.total_light) : 0,
+    totalLight: Number.isFinite(run.total_light)
+      ? Math.max(0, run.total_light)
+      : 0,
     summary: typeof run.summary === "string" ? run.summary.slice(0, 500) : null,
     errorCode: routineRunErrorCode(run),
     createdAt: run.created_at,
   };
 }
 
-function activationErrorBlocker(err: unknown): LaunchAgentRoutineBlocker | null {
+function activationErrorBlocker(
+  err: unknown,
+): LaunchAgentRoutineBlocker | null {
   if (!(err instanceof RoutinePlatformError)) return null;
   return {
     code: err.code === ROUTINE_PLATFORM_FORBIDDEN
@@ -7175,7 +7932,9 @@ async function collectLaunchRoutineBlockers(
   userId: string,
   routine: StoredRoutine,
 ): Promise<LaunchAgentRoutineBlocker[]> {
-  const blockers: LaunchAgentRoutineBlocker[] = validateRoutineActivation(routine)
+  const blockers: LaunchAgentRoutineBlocker[] = validateRoutineActivation(
+    routine,
+  )
     .blockers.map((blocker) => ({
       code: blocker.code,
       message: blocker.message,
@@ -7310,20 +8069,24 @@ async function assembleLaunchAgentRoutinesResponse(
   revision: string,
 ): Promise<LaunchAgentRoutinesResponse> {
   const managed = await fetchManagedRoutineIds(userId, row.id);
-  const responses = await Promise.all(managed.map((item) =>
-    buildLaunchAgentRoutineResponse(userId, row, item.id)
-  ));
+  const responses = await Promise.all(
+    managed.map((item) =>
+      buildLaunchAgentRoutineResponse(userId, row, item.id)
+    ),
+  );
   const routines = responses.flatMap((response) =>
     response.routine ? [response.routine] : []
   );
-  const primaryRoutineId = routines.find((routine) => routine.role === "primary")
-    ?.id || routines[0]?.id || null;
+  const primaryRoutineId =
+    routines.find((routine) => routine.role === "primary")
+      ?.id || routines[0]?.id || null;
   const times = routines.flatMap((routine) =>
     routine.nextRunAt ? [routine.nextRunAt] : []
   ).sort();
   const lastRuns = routines.flatMap((routine) =>
     routine.lastRunAt ? [routine.lastRunAt] : []
-  ).sort().reverse();
+  )
+    .sort().reverse();
   return {
     revision,
     agent: {
@@ -7337,10 +8100,13 @@ async function assembleLaunchAgentRoutinesResponse(
       total: routines.length,
       active: routines.filter((routine) => routine.status === "active").length,
       paused: routines.filter((routine) => routine.status === "paused").length,
-      failing: routines.filter((routine) =>
-        routine.status === "error" || routine.health === "error"
-      ).length,
-      running: routines.filter((routine) => routine.health === "running").length,
+      failing:
+        routines.filter((routine) =>
+          routine.status === "error" || routine.health === "error"
+        )
+          .length,
+      running:
+        routines.filter((routine) => routine.health === "running").length,
       nextRunAt: times[0] || null,
       lastRunAt: lastRuns[0] || null,
     },
@@ -7423,11 +8189,15 @@ function parseLaunchRoutineBudgets(
     )
   );
   if (unknown.length > 0) {
-    throw new RequestValidationError(`Unknown budget fields: ${unknown.join(", ")}`);
+    throw new RequestValidationError(
+      `Unknown budget fields: ${unknown.join(", ")}`,
+    );
   }
   for (const key of LAUNCH_ROUTINE_BUDGET_KEYS) {
     if (typeof record[key] !== "number" || !Number.isFinite(record[key])) {
-      throw new RequestValidationError(`budgets.${key} must be a finite number`);
+      throw new RequestValidationError(
+        `budgets.${key} must be a finite number`,
+      );
     }
   }
   const budgets = record as unknown as NonNullable<
@@ -7520,7 +8290,9 @@ function prepareLaunchRoutineMutation(
     key !== "intervalSeconds" && key !== "schedule" && key !== "budgets"
   );
   if (unknown.length > 0) {
-    throw new RequestValidationError(`Unknown routine fields: ${unknown.join(", ")}`);
+    throw new RequestValidationError(
+      `Unknown routine fields: ${unknown.join(", ")}`,
+    );
   }
   if (suppliedKeys.length === 0) {
     throw new RequestValidationError(
@@ -7529,7 +8301,8 @@ function prepareLaunchRoutineMutation(
   }
   if (
     body.name !== undefined &&
-    (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 120)
+    (typeof body.name !== "string" || !body.name.trim() ||
+      body.name.trim().length > 120)
   ) {
     throw new RequestValidationError("name must be 1 to 120 characters");
   }
@@ -7575,11 +8348,13 @@ function prepareLaunchRoutineMutation(
     schedule,
     budget_policy: budgetPolicy,
   };
-  const safetyBlockers = validateRoutineActivation(proposed).blockers.filter((blocker) =>
-    blocker.code !== "pending_required_capabilities"
-  );
+  const safetyBlockers = validateRoutineActivation(proposed).blockers.filter((
+    blocker,
+  ) => blocker.code !== "pending_required_capabilities");
   if (safetyBlockers.length > 0) {
-    throw new RequestValidationError(safetyBlockers.map((item) => item.message).join(" "));
+    throw new RequestValidationError(
+      safetyBlockers.map((item) => item.message).join(" "),
+    );
   }
   // Edits must remain available while setup is incomplete so the owner can
   // repair a blocked Agent. Structural schedule/budget invariants are enforced
@@ -7588,13 +8363,16 @@ function prepareLaunchRoutineMutation(
 
   return {
     ...(body.name !== undefined ? { name: body.name.trim() } : {}),
-    ...(body.description !== undefined ? { description: body.description } : {}),
+    ...(body.description !== undefined
+      ? { description: body.description }
+      : {}),
     ...(body.mission !== undefined ? { mission: body.mission } : {}),
     ...(scheduleChanged
       ? {
         schedule,
         activeNextRunAt: routine.status === "active"
-          ? previewRoutineRunTimes(schedule, new Date(), 1)[0]?.toISOString() || null
+          ? previewRoutineRunTimes(schedule, new Date(), 1)[0]?.toISOString() ||
+            null
           : null,
       }
       : {}),
@@ -7647,7 +8425,9 @@ function launchRoutineFailure(err: unknown): Response | null {
   if (err instanceof Error) {
     const withCode = err as Error & {
       code?: string;
-      blockers?: Array<{ code: string; message: string; capability_ids?: string[] }>;
+      blockers?: Array<
+        { code: string; message: string; capability_ids?: string[] }
+      >;
     };
     if (withCode.code === "ROUTINE_ACTIVATION_BLOCKED") {
       return json({
@@ -7678,7 +8458,9 @@ async function handleLaunchAgentManagedRoutines(
   encodedRoutineId: string | null,
   actionsRoute: boolean,
 ): Promise<Response> {
-  const allowed = actionsRoute ? method === "POST" : encodedRoutineId
+  const allowed = actionsRoute
+    ? method === "POST"
+    : encodedRoutineId
     ? method === "GET" || method === "PATCH"
     : method === "GET";
   if (!allowed) return error("Method not allowed for Agent routines", 405);
@@ -7694,7 +8476,10 @@ async function handleLaunchAgentManagedRoutines(
     );
   }
   const routineId = decodeURIComponent(encodedRoutineId).trim();
-  if (!isUuid(routineId) || !managed.some((candidate) => candidate.id === routineId)) {
+  if (
+    !isUuid(routineId) ||
+    !managed.some((candidate) => candidate.id === routineId)
+  ) {
     return error("Managed routine not found for this Agent", 404);
   }
   if (method === "GET") {
@@ -7712,10 +8497,12 @@ async function handleLaunchAgentManagedRoutines(
   if (!actionsRoute && method === "PATCH") {
     try {
       const raw = asRecord(await readJsonBody<unknown>(request));
-      if (!raw) throw new RequestValidationError("Request body must be an object");
+      if (!raw) {
+        throw new RequestValidationError("Request body must be an object");
+      }
       const expectedRevision = requireExpectedAgentHomeRevision(raw, row.id);
-      const { expectedRevision: _expected, ...update } = raw as unknown as
-        LaunchAgentManagedRoutineUpdateRequest;
+      const { expectedRevision: _expected, ...update } =
+        raw as unknown as LaunchAgentManagedRoutineUpdateRequest;
       const prepared = prepareLaunchRoutineMutation(routine, update);
       await updateAgentHomeManagedRoutineCAS({
         appId: row.id,
@@ -7727,14 +8514,18 @@ async function handleLaunchAgentManagedRoutines(
         ...(prepared.description !== undefined
           ? { description: prepared.description }
           : {}),
-        ...(prepared.mission !== undefined ? { mission: prepared.mission } : {}),
+        ...(prepared.mission !== undefined
+          ? { mission: prepared.mission }
+          : {}),
         ...(prepared.schedule
           ? {
             schedule: prepared.schedule,
             activeNextRunAt: prepared.activeNextRunAt ?? null,
           }
           : {}),
-        ...(prepared.budgets !== undefined ? { budgets: prepared.budgets } : {}),
+        ...(prepared.budgets !== undefined
+          ? { budgets: prepared.budgets }
+          : {}),
       });
       const response = await buildStableLaunchAgentRoutineResponse(
         user.id,
@@ -7759,14 +8550,19 @@ async function handleLaunchAgentManagedRoutines(
   if (actionsRoute) {
     try {
       const body = asRecord(await readJsonBody<unknown>(request));
-      if (!body) throw new RequestValidationError("Request body must be an object");
-      const actionBody = body as unknown as LaunchAgentManagedRoutineActionRequest;
-      if (![
-        "approve_capabilities",
-        "activate",
-        "pause",
-        "run_now",
-      ].includes(actionBody.action)) {
+      if (!body) {
+        throw new RequestValidationError("Request body must be an object");
+      }
+      const actionBody =
+        body as unknown as LaunchAgentManagedRoutineActionRequest;
+      if (
+        ![
+          "approve_capabilities",
+          "activate",
+          "pause",
+          "run_now",
+        ].includes(actionBody.action)
+      ) {
         throw new RequestValidationError(
           "action must be approve_capabilities, activate, pause, or run_now",
         );
@@ -7818,7 +8614,8 @@ async function handleLaunchAgentManagedRoutines(
     } catch (err) {
       if (err instanceof LaunchAgentHomeActionStatusUnknownError) {
         return privateLaunchJson({
-          error: "The action result is still being reconciled. Retry with the same request key.",
+          error:
+            "The action result is still being reconciled. Retry with the same request key.",
           code: "AGENT_HOME_ACTION_STATUS_UNKNOWN",
           status: "unknown",
           terminal: false,
@@ -7833,7 +8630,10 @@ async function handleLaunchAgentManagedRoutines(
         return await launchAgentHomeConflictResponse(user, encodedLocator);
       }
       if (err instanceof AgentHomeRevisionError) {
-        return privateLaunchJson({ error: err.message, code: err.code }, err.status);
+        return privateLaunchJson(
+          { error: err.message, code: err.code },
+          err.status,
+        );
       }
       const failure = launchRoutineFailure(err);
       if (failure) return failure;
@@ -7849,7 +8649,9 @@ async function handleLaunchAgentRoutine(
   method: string,
   actionsRoute: boolean,
 ): Promise<Response> {
-  if (actionsRoute ? method !== "POST" : method !== "GET" && method !== "PATCH") {
+  if (
+    actionsRoute ? method !== "POST" : method !== "GET" && method !== "PATCH"
+  ) {
     return error("Method not allowed for persistent Agent routine", 405);
   }
   const user = await requireLaunchUser(request);
@@ -7875,7 +8677,9 @@ async function handleLaunchAgentRoutine(
       if (!routine) return error("Agent has no routine proposal", 404);
       const rawBody = await readJsonBody<unknown>(request);
       const body = asRecord(rawBody);
-      if (!body) throw new RequestValidationError("Request body must be an object");
+      if (!body) {
+        throw new RequestValidationError("Request body must be an object");
+      }
       await updateLaunchAgentRoutine(user.id, routine, body);
     } else if (actionsRoute) {
       const rawBody = await readJsonBody<unknown>(request);
@@ -7896,7 +8700,8 @@ async function handleLaunchAgentRoutine(
       if (!routine) return error("Agent has no routine proposal", 404);
       if (body.action === "approve_capabilities") {
         if (
-          !Array.isArray(body.capabilityIds) || body.capabilityIds.length === 0 ||
+          !Array.isArray(body.capabilityIds) ||
+          body.capabilityIds.length === 0 ||
           body.capabilityIds.length > 200
         ) {
           throw new RequestValidationError(
@@ -7905,11 +8710,13 @@ async function handleLaunchAgentRoutine(
         }
         const capabilityIds = Array.from(new Set(body.capabilityIds));
         if (capabilityIds.some((id) => typeof id !== "string" || !id.trim())) {
-          throw new RequestValidationError("capabilityIds must contain non-empty strings");
+          throw new RequestValidationError(
+            "capabilityIds must contain non-empty strings",
+          );
         }
         const pendingIds = new Set(
-          routine.capabilities.filter((capability) => !capability.approved).map((capability) =>
-            capability.id
+          routine.capabilities.filter((capability) => !capability.approved).map(
+            (capability) => capability.id,
           ),
         );
         const notPending = capabilityIds.filter((id) => !pendingIds.has(id));
@@ -7965,7 +8772,8 @@ async function handleLaunchAgentRoutine(
         const blockers = await collectLaunchRoutineBlockers(user.id, routine);
         if (blockers.length > 0) {
           return json({
-            error: "Routine cannot run until its launch-safety blockers are resolved",
+            error:
+              "Routine cannot run until its launch-safety blockers are resolved",
             blockers,
           }, 409);
         }
@@ -8297,7 +9105,9 @@ async function handleLaunchAgentSettings(
     for (const [key, value] of validation.entries) {
       if (value === null) {
         const del = await fetch(
-          `${supabaseUrl}/rest/v1/user_app_secrets?user_id=eq.${user.id}&app_id=eq.${appId}&key=eq.${encodeURIComponent(key)}`,
+          `${supabaseUrl}/rest/v1/user_app_secrets?user_id=eq.${user.id}&app_id=eq.${appId}&key=eq.${
+            encodeURIComponent(key)
+          }`,
           { method: "DELETE", headers },
         );
         if (!del.ok) return error(`Failed to clear setting "${key}"`, 500);
@@ -8362,7 +9172,10 @@ async function handleLaunchFunctionInferenceOverride(
       ? body.provider.trim()
       : "";
     const providerKind = providerRaw.toLowerCase();
-    if (providerRaw === "" || providerKind === "galactic" || providerKind === "light") {
+    if (
+      providerRaw === "" || providerKind === "galactic" ||
+      providerKind === "light"
+    ) {
       return error(
         "Galactic AI is not available in the launch plan. Choose a configured BYOK provider.",
         400,
@@ -8410,7 +9223,11 @@ async function handleLaunchFunctionInferenceOverride(
     if (!functionName) {
       return error("functionName query parameter is required", 400);
     }
-    await clearFunctionInferenceOverride({ userId: user.id, appId, functionName });
+    await clearFunctionInferenceOverride({
+      userId: user.id,
+      appId,
+      functionName,
+    });
     return json(
       await buildLaunchFunctionInferenceResponse(
         user,
@@ -9523,7 +10340,9 @@ async function buildToolInstallContext(
   const publicToolUrl = `${baseUrl}${
     tool.publicUrl || `/agents/${encodeURIComponent(tool.slug)}`
   }`;
-  const installUrl = `${baseUrl}/install?agent=${encodeURIComponent(tool.slug)}`;
+  const installUrl = `${baseUrl}/install?agent=${
+    encodeURIComponent(tool.slug)
+  }`;
   // The dedicated endpoint is uuid-addressed: /mcp/:appId resolves ids only,
   // and uuids stay unambiguous (slugs are only unique per owner).
   const agentMcpUrl = `${baseUrl}/mcp/${tool.id}`;
@@ -10367,7 +11186,9 @@ function interfaceSummaries(
       description: typeof declaration.description === "string"
         ? declaration.description
         : null,
-      url: `${sandboxBaseUrl}/i/${encodeURIComponent(row.id)}/${declaration.hash}`,
+      url: `${sandboxBaseUrl}/i/${
+        encodeURIComponent(row.id)
+      }/${declaration.hash}`,
       functions,
       minHeight: typeof declaration.min_height === "number" &&
           Number.isFinite(declaration.min_height)
@@ -10428,7 +11249,9 @@ function normalizeVisibility(
   return "private";
 }
 
-async function buildLaunchTrustCard(row: LaunchAppRow): Promise<LaunchTrustCard> {
+async function buildLaunchTrustCard(
+  row: LaunchAppRow,
+): Promise<LaunchTrustCard> {
   // Real runtime integrity + binary call health + publisher Connect verification,
   // gathered in parallel by the shared resolveTrustSignals (same signals the MCP
   // gx.discover inspect path now uses) — never the base builder's optimistic
@@ -10470,7 +11293,10 @@ function shouldHideGpu(row: LaunchAppRow): boolean {
   return row.runtime === "gpu" && !isGpuSupportEnabled();
 }
 
-function matchesKind(row: LaunchAppRow, kind: LaunchAgentKind | "all"): boolean {
+function matchesKind(
+  row: LaunchAppRow,
+  kind: LaunchAgentKind | "all",
+): boolean {
   return kind === "all" || inferToolKind(row) === kind;
 }
 

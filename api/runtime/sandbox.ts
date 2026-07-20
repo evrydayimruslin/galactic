@@ -50,6 +50,11 @@ export interface RuntimeConfig {
    * payer, credential, or capability data.
    */
   capacityReceiptId?: string;
+  /**
+   * Server-derived root Agent charged by subscription-capacity work. Nested
+   * Agent calls preserve this id; tenant code never supplies it.
+   */
+  capacityAgentId?: string;
   code: string;
   permissions: string[];
   // Host-only gx.test switch. Dynamic Workers replace production inference and

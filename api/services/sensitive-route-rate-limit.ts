@@ -56,7 +56,8 @@ export type SensitiveRoute =
   | "admin:cleanup_provisionals"
   | "admin:app_category"
   | "admin:app_featured"
-  | "admin:payout_process";
+  | "admin:payout_process"
+  | "admin:compute_emergency_stop";
 
 interface SensitiveRoutePolicy {
   endpoint: string;
@@ -616,6 +617,16 @@ export const SENSITIVE_ROUTE_RATE_LIMITS: Record<
       "Too many payout processing attempts. Please wait and try again.",
     unavailableMessage:
       "Payout processing is temporarily unavailable while protection controls recover. Please try again shortly.",
+  },
+  "admin:compute_emergency_stop": {
+    endpoint: "admin:compute_emergency_stop",
+    limit: 30,
+    windowMinutes: 10,
+    resource: "POST /api/admin/compute/emergency-stop",
+    limitMessage:
+      "Too many Compute emergency-stop attempts. Reuse the existing operation id after the rate-limit window.",
+    unavailableMessage:
+      "Compute emergency-stop protection is unavailable; no unaudited stop was attempted.",
   },
 };
 

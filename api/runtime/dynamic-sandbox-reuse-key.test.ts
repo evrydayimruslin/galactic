@@ -256,6 +256,14 @@ Deno.test("eligibility: fixture-backed execution (gx.test) → ineligible (per-c
   assertEquals(v.reason, "fixture_execution");
 });
 
+Deno.test("eligibility: Compute-capable execution → ineligible (request handle isolation)", () => {
+  const v = isolateReuseEligibility(
+    eligBase({ permissions: ["storage:read", "compute:exec"] }),
+  );
+  assertEquals(v.eligible, false);
+  assertEquals(v.reason, "compute_capable");
+});
+
 Deno.test("eligibility: cross-Agent-call-capable → ineligible (hop ceiling / grants under shared globalThis)", () => {
   // app:call permission
   const broad = isolateReuseEligibility(

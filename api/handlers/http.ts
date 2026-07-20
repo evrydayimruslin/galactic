@@ -845,6 +845,7 @@ export async function handleHttpEndpoint(
         expectedVersion: app.current_version || undefined,
         executionId,
         capacityReceiptId: capacityReservation ? receiptId : undefined,
+        capacityAgentId: app.id,
         code,
         permissions: httpPermissions,
         // Read-back only on the HTTP surface: runs.recent works for the

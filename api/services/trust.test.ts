@@ -98,6 +98,57 @@ Deno.test("trust: builds a public trust card from current version metadata", asy
 
 });
 
+Deno.test("trust: discloses compute permission, profile, tools, and explicit secret names", () => {
+  const card = buildAppTrustCard({
+    current_version: "1.0.0",
+    runtime: "deno",
+    manifest: JSON.stringify({
+      permissions: ["compute:exec"],
+      compute: {
+        profile: "developer-v1",
+        tools: ["shell", "browser"],
+        secrets: ["GH_TOKEN"],
+      },
+    }),
+    version_metadata: [],
+    visibility: "private",
+    download_access: "owner",
+    env_schema: {
+      GH_TOKEN: { scope: "universal", input: "password" },
+    },
+    // deno-lint-ignore no-explicit-any
+  } as any);
+
+  assertEquals(card.capability_summary.compute, true);
+  assertEquals(card.compute, {
+    enabled: true,
+    profile: "developer-v1",
+    tools: ["browser", "shell"],
+    explicit_secrets: ["GH_TOKEN"],
+  });
+});
+
+Deno.test("trust: non-compute Agents retain a disabled empty disclosure", () => {
+  const card = buildAppTrustCard({
+    current_version: "1.0.0",
+    runtime: "deno",
+    manifest: JSON.stringify({ permissions: ["storage:read"] }),
+    version_metadata: [],
+    visibility: "private",
+    download_access: "owner",
+    env_schema: {},
+    // deno-lint-ignore no-explicit-any
+  } as any);
+
+  assertEquals(card.capability_summary.compute, false);
+  assertEquals(card.compute, {
+    enabled: false,
+    profile: null,
+    tools: [],
+    explicit_secrets: [],
+  });
+});
+
 Deno.test("trust: developer_can_read_user_data reflects data:support_read", () => {
   // deno-lint-ignore no-explicit-any
   const build = (perms: string[]) =>

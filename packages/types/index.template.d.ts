@@ -7,6 +7,7 @@ import type {
   AITool,
   AIResponse,
 } from './generated/shared/contracts/ai';
+import type { ComputeBinding } from './generated/shared/contracts/compute';
 import type {
   QueryOptions,
   QueryResult,
@@ -14,6 +15,7 @@ import type {
 } from './generated/shared/contracts/runtime';
 
 export type * from './generated/shared/contracts/env';
+export type * from './generated/shared/contracts/compute';
 export type * from './generated/shared/contracts/agentic-interface';
 export type * from './generated/shared/contracts/jsonrpc';
 export type * from './generated/shared/contracts/manifest';
@@ -67,6 +69,7 @@ interface UltralightSDK {
   remember(key: string, value: unknown): Promise<void>;
   recall<T = unknown>(key: string): Promise<T | null>;
   ai(request: AIRequest): Promise<AIResponse>;
+  compute: ComputeBinding;
 }
 
 interface LodashLike {
