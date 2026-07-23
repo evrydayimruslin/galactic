@@ -21,6 +21,11 @@ import {
 } from "../../shared/contracts/agent-grants.ts";
 import { resolveSubscribeGrant, resolveSubscribers } from "./agent-grants.ts";
 import { createNotification } from "./notifications.ts";
+import {
+  type NotificationIncidentResolver,
+  resolveEventDeliveryIncidents,
+  resolveEventDispatchIncident,
+} from "./notification-recovery.ts";
 
 interface DbConfig {
   baseUrl: string;
@@ -331,6 +336,7 @@ interface EventDispatchDeps {
   /** Internal-only Queue facts supplied by processEventMessage. */
   capacityQueueOperations?: unknown;
   capacityRootWorkerRequest?: boolean;
+  resolveIncidentFn?: NotificationIncidentResolver;
 }
 
 /**
@@ -618,6 +624,11 @@ async function runFanOut(
       next_eligible_at: waiting.nextEligibleAt,
       last_error: `capacity_waiting_until:${waiting.nextEligibleAt}`,
     });
+    if (event.attempts > 1) {
+      await resolveEventDispatchIncident(event.userId, event.id, {
+        resolveIncidentFn: deps.resolveIncidentFn,
+      });
+    }
     return { delivered, failed, denied };
   }
 
@@ -674,6 +685,11 @@ async function runFanOut(
       : null,
     dispatched_at: new Date(nowMs).toISOString(),
   });
+  if (event.attempts > 1) {
+    await resolveEventDispatchIncident(event.userId, event.id, {
+      resolveIncidentFn: deps.resolveIncidentFn,
+    });
+  }
   return { delivered, failed, denied };
 }
 
@@ -802,6 +818,13 @@ async function deliverToSubscriber(
         receipt_id: outcome.receiptId,
         delivered_at: new Date(nowMs).toISOString(),
       });
+      if (deliveryClaim.recoveredFromWaiting) {
+        await resolveEventDeliveryIncidents(
+          event.userId,
+          deliveryId,
+          { resolveIncidentFn: deps.resolveIncidentFn },
+        );
+      }
       return { kind: "delivered", capacityQueueAllocated };
     }
 
@@ -1083,7 +1106,11 @@ export async function dispatchPendingEvents(
 }
 
 type DeliveryClaim =
-  | { kind: "claimed"; deliveryId: string }
+  | {
+    kind: "claimed";
+    deliveryId: string;
+    recoveredFromWaiting: boolean;
+  }
   | { kind: "waiting"; nextEligibleAt: string }
   | { kind: "already" };
 
@@ -1131,7 +1158,11 @@ async function claimDelivery(
   const rows = await response.json().catch(() => []);
   // ignore-duplicates returns the inserted row only when it was new.
   if (Array.isArray(rows) && rows[0]?.id) {
-    return { kind: "claimed", deliveryId: String(rows[0].id) };
+    return {
+      kind: "claimed",
+      deliveryId: String(rows[0].id),
+      recoveredFromWaiting: false,
+    };
   }
 
   const read = await fetch(
@@ -1183,7 +1214,11 @@ async function claimDelivery(
   }
   const resumed = await resume.json().catch(() => []);
   return Array.isArray(resumed) && resumed[0]?.id
-    ? { kind: "claimed", deliveryId: String(resumed[0].id) }
+    ? {
+      kind: "claimed",
+      deliveryId: String(resumed[0].id),
+      recoveredFromWaiting: true,
+    }
     : { kind: "already" };
 }
 

@@ -435,6 +435,7 @@ Deno.test("routines: managed resume claims the Free slot and activates atomicall
   const originalFetch = globalThis.fetch;
   const originalEnv = globalThis.__env;
   let atomicCalls = 0;
+  const incidentResolutions: Array<Record<string, unknown>> = [];
   globalThis.__env = {
     ...(originalEnv || {}),
     SUPABASE_URL: "https://supabase.example",
@@ -451,7 +452,15 @@ Deno.test("routines: managed resume claims the Free slot and activates atomicall
     budget_policy: {},
     approval_policy: {},
     status: "paused",
-    metadata: { launch_managed: true, launch_role: "routine" },
+    metadata: {
+      launch_managed: true,
+      launch_role: "routine",
+      capacity_blocked: { cap_basis_points: 2500 },
+      auto_pause: {
+        reason: "activation_validation_failed",
+        at: "2026-07-23T12:00:00.000Z",
+      },
+    },
   });
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString();
@@ -480,6 +489,10 @@ Deno.test("routines: managed resume claims the Free slot and activates atomicall
         routine_record: { ...paused, status: "active" },
       }]);
     }
+    if (url.includes("/rpc/resolve_notification_incident_by_dedupe")) {
+      incidentResolutions.push(JSON.parse(String(init?.body)));
+      return jsonResponse(1);
+    }
     if (
       url.includes("/rpc/claim_agent_activation_slot") || method === "PATCH"
     ) {
@@ -492,6 +505,20 @@ Deno.test("routines: managed resume claims the Free slot and activates atomicall
     const active = await resumeRoutine("user-1", "routine-1");
     assertEquals(active.status, "active");
     assertEquals(atomicCalls, 1);
+    assertEquals(
+      incidentResolutions.map((body) => body.p_dedupe_key),
+      [
+        "routine_activation_blocked:routine-1",
+        "routine_capacity_too_low:routine-1:2500",
+        "routine_paused:routine-1:2026-07-23T12:00:00.000Z",
+      ],
+    );
+    assertEquals(
+      incidentResolutions.every((body) =>
+        body.p_user_id === "user-1" && !("read_at" in body)
+      ),
+      true,
+    );
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.__env = originalEnv;

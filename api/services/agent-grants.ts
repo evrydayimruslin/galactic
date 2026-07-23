@@ -18,6 +18,10 @@ import {
   type AgentSlotBinding,
   DEFAULT_GRANT_MONTHLY_CAP_CREDITS,
 } from "../../shared/contracts/agent-grants.ts";
+import {
+  recordGrantApprovalIncident,
+  resolveGrantApprovalIncident,
+} from "./notification-recovery.ts";
 
 export interface AppHandle {
   id: string;
@@ -397,7 +401,10 @@ export async function resolveCallerGrantBindings(
       })),
     };
   } catch (err) {
-    console.warn("[AGENT-GRANTS] Failed to resolve caller grant bindings:", err);
+    console.warn(
+      "[AGENT-GRANTS] Failed to resolve caller grant bindings:",
+      err,
+    );
     return { dependencies: [], slots: [] };
   }
 }
@@ -507,8 +514,12 @@ export async function createGrant(
     loadApp(db, callerAppId),
     loadApp(db, targetAppId),
   ]);
-  if (!callerApp) throw new RequestValidationError("Caller Agent not found", 404);
-  if (!targetApp) throw new RequestValidationError("Target Agent not found", 404);
+  if (!callerApp) {
+    throw new RequestValidationError("Caller Agent not found", 404);
+  }
+  if (!targetApp) {
+    throw new RequestValidationError("Target Agent not found", 404);
+  }
 
   // Store the raw function name (matches runtime resolution).
   const targetFunction = toRawFunctionName(rawTargetFunction, targetApp.slug);
@@ -576,6 +587,7 @@ export async function createGrant(
     if (patched) return patched;
     return mapRow(existing[0]);
   }
+  const activatesPendingProposal = existing[0]?.status === "pending";
 
   const payload = {
     user_id: userId,
@@ -618,7 +630,11 @@ export async function createGrant(
   if (!Array.isArray(rows) || !rows[0]) {
     throw new RequestValidationError("Grant creation returned no row", 500);
   }
-  return mapRow(rows[0] as AgentGrantRow);
+  const created = mapRow(rows[0] as AgentGrantRow);
+  if (activatesPendingProposal && created.status === "active") {
+    await resolveGrantApprovalIncident(userId, created.id, "approved");
+  }
+  return created;
 }
 
 /**
@@ -718,8 +734,14 @@ export async function createPendingGrantProposal(
     `limit=1`,
   ].join("&");
   const existing = await dbGet(db, selector);
-  if (existing[0]?.status === "active" || existing[0]?.status === "pending") {
+  if (existing[0]?.status === "active") {
     return mapRow(existing[0] as AgentGrantRow);
+  }
+  if (existing[0]?.status === "pending") {
+    return await surfacePendingGrantApproval(
+      userId,
+      mapRow(existing[0] as AgentGrantRow),
+    );
   }
   if (existing[0]?.status === "revoked") {
     const reproposed = await patchGrant(db, userId, existing[0].id, {
@@ -729,7 +751,9 @@ export async function createPendingGrantProposal(
       spent_credits_period: 0,
       period_start: new Date().toISOString(),
     });
-    if (reproposed) return reproposed;
+    if (reproposed) {
+      return await surfacePendingGrantApproval(userId, reproposed);
+    }
     throw new RequestValidationError("Failed to re-propose revoked grant", 500);
   }
 
@@ -763,22 +787,44 @@ export async function createPendingGrantProposal(
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new RequestValidationError(
-      detail
-        ? `Failed to propose grant: ${detail}`
-        : "Failed to propose grant",
+      detail ? `Failed to propose grant: ${detail}` : "Failed to propose grant",
       500,
     );
   }
   const rows = await response.json().catch(() => []);
   if (Array.isArray(rows) && rows[0]) {
-    return mapRow(rows[0] as AgentGrantRow);
+    return await surfacePendingGrantApproval(
+      userId,
+      mapRow(rows[0] as AgentGrantRow),
+    );
   }
 
   // A concurrent identical proposal may win the unique-key race. Return that
   // row rather than reporting a false failure.
   const raced = await dbGet(db, selector);
-  if (raced[0]) return mapRow(raced[0] as AgentGrantRow);
+  if (raced[0]) {
+    return await surfacePendingGrantApproval(
+      userId,
+      mapRow(raced[0] as AgentGrantRow),
+    );
+  }
   throw new RequestValidationError("Grant proposal returned no row", 500);
+}
+
+async function surfacePendingGrantApproval(
+  userId: string,
+  grant: AgentFunctionGrant,
+): Promise<AgentFunctionGrant> {
+  if (grant.status !== "pending") return grant;
+  await recordGrantApprovalIncident({
+    userId,
+    grantId: grant.id,
+    callerAgentId: grant.callerAppId,
+    targetAgentId: grant.targetAppId,
+    targetFunction: grant.targetFunction,
+    mode: grant.mode,
+  });
+  return grant;
 }
 
 // Revoke only. Activation must go through approvePendingGrant, which re-runs
@@ -794,7 +840,11 @@ export async function setGrantStatus(
   if (!db) {
     throw new RequestValidationError("Grant storage is not configured", 503);
   }
-  return await patchGrant(db, userId, grantId, { status });
+  const updated = await patchGrant(db, userId, grantId, { status });
+  if (updated) {
+    await resolveGrantApprovalIncident(userId, grantId, "revoked");
+  }
+  return updated;
 }
 
 export async function listGrants(input: {
@@ -813,7 +863,9 @@ export async function listGrants(input: {
 
 // Whether the user has opted the connected agent into APPROVING grants via
 // ul.grants (default false — the secure floor requires a website action).
-export async function getUserGrantAutoApprove(userId: string): Promise<boolean> {
+export async function getUserGrantAutoApprove(
+  userId: string,
+): Promise<boolean> {
   const db = getDbConfig();
   if (!db) return false;
   try {
@@ -918,7 +970,9 @@ export async function fetchAppHandles(
   if (!db) return map;
   try {
     const response = await fetch(
-      `${db.baseUrl}/rest/v1/apps?id=in.(${unique.join(",")})&select=id,slug,name`,
+      `${db.baseUrl}/rest/v1/apps?id=in.(${
+        unique.join(",")
+      })&select=id,slug,name`,
       { headers: db.headers },
     );
     if (!response.ok) return map;
@@ -989,7 +1043,10 @@ export async function approvePendingGrant(
   }
   const grant = await getGrant(userId, grantId);
   if (!grant) return null;
-  if (grant.status === "active") return grant;
+  if (grant.status === "active") {
+    await resolveGrantApprovalIncident(userId, grantId, "approved");
+    return grant;
+  }
 
   const [callerApp, targetApp] = await Promise.all([
     loadApp(db, grant.callerAppId),
@@ -1015,13 +1072,17 @@ export async function approvePendingGrant(
     ? (grant.monthlyCapCredits ?? DEFAULT_GRANT_MONTHLY_CAP_CREDITS)
     : options.monthlyCapCredits;
 
-  return await patchGrant(db, userId, grantId, {
+  const approved = await patchGrant(db, userId, grantId, {
     status: "active",
     monthly_cap_credits: cap,
     // Reset the spend window so an approval starts a fresh month.
     spent_credits_period: 0,
     period_start: new Date().toISOString(),
   });
+  if (approved) {
+    await resolveGrantApprovalIncident(userId, grantId, "approved");
+  }
+  return approved;
 }
 
 export async function setGrantCap(
@@ -1064,5 +1125,7 @@ async function patchGrant(
     throw new RequestValidationError("Failed to update grant", 500);
   }
   const rows = await response.json().catch(() => []);
-  return Array.isArray(rows) && rows[0] ? mapRow(rows[0] as AgentGrantRow) : null;
+  return Array.isArray(rows) && rows[0]
+    ? mapRow(rows[0] as AgentGrantRow)
+    : null;
 }

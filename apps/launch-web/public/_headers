@@ -2,7 +2,16 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; frame-src 'self' https://interfaces.connectgalactic.com https://interfaces.ultralightagent.com https://ultralight-interfaces-staging.rgn4jz429m.workers.dev https://js.stripe.com https://hooks.stripe.com; img-src 'self' data: blob: https://*.stripe.com; script-src 'self' https://js.stripe.com https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com https://js.stripe.com; connect-src 'self' https://api.connectgalactic.com https://api.ultralightagent.com https://ultralight-api-staging.rgn4jz429m.workers.dev https://api.stripe.com https://m.stripe.network https://merchant-ui-api.stripe.com https://cloudflareinsights.com
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; frame-src 'self' https://interfaces.connectgalactic.com https://interfaces.ultralightagent.com https://ultralight-interfaces-staging.rgn4jz429m.workers.dev https://js.stripe.com https://hooks.stripe.com; img-src 'self' data: blob: https://*.stripe.com; script-src 'self' https://js.stripe.com https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com https://js.stripe.com; connect-src 'self' https://api.connectgalactic.com https://api.ultralightagent.com https://ultralight-api-staging.rgn4jz429m.workers.dev https://interfaces.connectgalactic.com https://interfaces.ultralightagent.com https://ultralight-interfaces-staging.rgn4jz429m.workers.dev https://api.stripe.com https://m.stripe.network https://merchant-ui-api.stripe.com https://cloudflareinsights.com
 
 /index.html
+  Cache-Control: no-store
+
+/
+  Cache-Control: no-store
+
+/account
+  Cache-Control: no-store
+
+/account/*
   Cache-Control: no-store

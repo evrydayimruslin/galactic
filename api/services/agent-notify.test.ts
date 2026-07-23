@@ -57,12 +57,16 @@ Deno.test("agent notify: missing title / dedupe_key / bad severity throw", async
   try {
     const { fetchFn } = mockFetch({ countTotal: 0 });
     await assertRejects(
-      () => notifyOwnerFromAgent("app-1", "user-1", { dedupe_key: "k" }, { fetchFn }),
+      () =>
+        notifyOwnerFromAgent("app-1", "user-1", { dedupe_key: "k" }, {
+          fetchFn,
+        }),
       Error,
       "title",
     );
     await assertRejects(
-      () => notifyOwnerFromAgent("app-1", "user-1", { title: "Hi" }, { fetchFn }),
+      () =>
+        notifyOwnerFromAgent("app-1", "user-1", { title: "Hi" }, { fetchFn }),
       Error,
       "dedupe_key",
     );
@@ -95,15 +99,18 @@ Deno.test("agent notify: writes a namespaced, app-attributed agent_report", asyn
     assertEquals(result, { created: true });
     const insert = calls.find((c) => c.method === "POST")!;
     const body = insert.body as Record<string, unknown>;
-    assertEquals(body.user_id, "user-1");
-    assertEquals(body.kind, "agent_report");
-    assertEquals(body.severity, "warning");
-    assertEquals(body.title, "Digest ready");
-    assertEquals(body.entity_type, "app");
-    assertEquals(body.entity_id, "app-1");
+    assertEquals(body.p_user_id, "user-1");
+    assertEquals(body.p_kind, "agent_report");
+    assertEquals(body.p_severity, "warning");
+    assertEquals(body.p_title, "Digest ready");
+    assertEquals(body.p_entity_type, "app");
+    assertEquals(body.p_entity_id, "app-1");
     // Host-namespaced: an app can never collide with another app's (or a
     // platform kind's) dedupe keys.
-    assertEquals(body.dedupe_key, "agent_report:app-1:digest:2026-07-09");
+    assertEquals(
+      body.p_dedupe_key,
+      "agent_report:app-1:digest:2026-07-09",
+    );
   } finally {
     restore();
   }
@@ -112,7 +119,9 @@ Deno.test("agent notify: writes a namespaced, app-attributed agent_report", asyn
 Deno.test("agent notify: daily cap returns rate_limited without inserting", async () => {
   const restore = withEnv();
   try {
-    const { fetchFn, calls } = mockFetch({ countTotal: AGENT_NOTIFY_DAILY_CAP });
+    const { fetchFn, calls } = mockFetch({
+      countTotal: AGENT_NOTIFY_DAILY_CAP,
+    });
     const result = await notifyOwnerFromAgent("app-1", "user-1", {
       title: "Spam",
       dedupe_key: "k",

@@ -10,14 +10,14 @@ import {
 import { createR2Service, type R2Service } from "../services/storage.ts";
 import {
   ICON_EXTENSIONS,
-  iconContentVersion,
   iconContentType,
+  iconContentVersion,
+  type IconExtension,
   isIconContentVersion,
   isIconExtension,
   legacyIconObjectKey,
   parseIconReference,
   selectVersionedIconKeysForDeletion,
-  type IconExtension,
   validateIconImage,
   versionedIconObjectKey,
 } from "../services/icon-image.ts";
@@ -70,8 +70,8 @@ import {
   checkPublisherPublishReadiness,
   checkVisibilityAllowed,
   getUserTier,
-  type PublishReadinessOptions,
   publishReadinessErrorPayload,
+  type PublishReadinessOptions,
 } from "../services/tier-enforcement.ts";
 import {
   getVersionStorageBytes,
@@ -119,6 +119,7 @@ import {
   validatePerUserSettingsValues,
 } from "../services/user-app-settings.ts";
 import { buildAppSecretDiagnostics } from "../services/app-diagnostics.ts";
+import { resolveConfiguredSettingIncidents } from "../services/notification-recovery.ts";
 import { isAccountSessionAuthSource } from "../services/control-plane-auth.ts";
 import { extractRequestAccessToken } from "../services/request-auth.ts";
 import { isRoutineActorToken } from "../services/routine-auth.ts";
@@ -1360,6 +1361,11 @@ async function handleUpdateUserSettings(
           connectedKeys: perUserStatus.connectedKeys,
           missingRequired: perUserStatus.missingRequired,
         });
+        await resolveConfiguredSettingIncidents({
+          userId: user.id,
+          agentId: app.id,
+          configuredSettingKeys: perUserStatus.connectedKeys,
+        });
 
         return json({
           success: true,
@@ -2491,7 +2497,9 @@ function canonicalIconUrl(
   extension: IconExtension,
   version: string,
 ): string {
-  return `/api/apps/${encodeURIComponent(appId)}/icon?format=${extension}&v=${version}`;
+  return `/api/apps/${
+    encodeURIComponent(appId)
+  }/icon?format=${extension}&v=${version}`;
 }
 
 async function fetchOrPromoteVersionedIcon(
@@ -2513,7 +2521,9 @@ async function fetchOrPromoteVersionedIcon(
   // those bytes actually hash to the requested version. A stale mutable object
   // can therefore never impersonate an immutable URL.
   try {
-    const legacyBytes = await r2.fetchFile(legacyIconObjectKey(appId, extension));
+    const legacyBytes = await r2.fetchFile(
+      legacyIconObjectKey(appId, extension),
+    );
     const computedVersion = await iconContentVersion(legacyBytes);
     if (
       computedVersion !== version &&
@@ -2577,7 +2587,9 @@ async function handleUploadIcon(
       return error("No icon file provided", 400);
     }
 
-    const maxBytes = iconFile.type === "image/gif" ? 2 * 1024 * 1024 : 1024 * 1024;
+    const maxBytes = iconFile.type === "image/gif"
+      ? 2 * 1024 * 1024
+      : 1024 * 1024;
     if (iconFile.size > maxBytes) {
       return error(
         iconFile.type === "image/gif"
@@ -2595,7 +2607,9 @@ async function handleUploadIcon(
       validated = validateIconImage(iconFile.type, content);
     } catch (validationError) {
       return error(
-        validationError instanceof Error ? validationError.message : "Invalid icon image",
+        validationError instanceof Error
+          ? validationError.message
+          : "Invalid icon image",
         400,
       );
     }
@@ -2649,7 +2663,9 @@ async function handleUploadIcon(
       );
       await Promise.all(
         ICON_EXTENSIONS.map((candidate) =>
-          r2Service.deleteFile(legacyIconObjectKey(appId, candidate)).catch(() => {})
+          r2Service.deleteFile(legacyIconObjectKey(appId, candidate)).catch(
+            () => {},
+          )
         ),
       );
     } catch (cleanupError) {
@@ -2701,7 +2717,8 @@ async function handleGetIcon(
       ) {
         return error("Icon not found", 404);
       }
-      const isCurrentReference = currentReference?.extension === requestedFormat &&
+      const isCurrentReference =
+        currentReference?.extension === requestedFormat &&
         currentReference.version === requestedVersion;
       const bytes = await fetchOrPromoteVersionedIcon(
         r2Service,
@@ -2721,7 +2738,9 @@ async function handleGetIcon(
           currentReference.extension,
           currentReference.version,
         ),
-        "Cache-Control": isPrivate ? "private, no-store" : "public, max-age=300",
+        "Cache-Control": isPrivate
+          ? "private, no-store"
+          : "public, max-age=300",
       });
       if (isPrivate) headers.set("Vary", "Authorization, Cookie");
       return new Response(null, { status: 302, headers });
@@ -2729,18 +2748,24 @@ async function handleGetIcon(
 
     // Mutable-key probing exists only for a persisted legacy, unversioned
     // reference. New and malformed references never fall through to it.
-    if (!app.icon_url || !currentReference || currentReference.version !== null) {
+    if (
+      !app.icon_url || !currentReference || currentReference.version !== null
+    ) {
       return error("Icon not found", 404);
     }
     const extensions: IconExtension[] = currentReference.extension
       ? [
         currentReference.extension,
-        ...ICON_EXTENSIONS.filter((candidate) => candidate !== currentReference.extension),
+        ...ICON_EXTENSIONS.filter((candidate) =>
+          candidate !== currentReference.extension
+        ),
       ]
       : [...ICON_EXTENSIONS];
     for (const extension of extensions) {
       try {
-        const bytes = await r2Service.fetchFile(legacyIconObjectKey(appId, extension));
+        const bytes = await r2Service.fetchFile(
+          legacyIconObjectKey(appId, extension),
+        );
         return iconResponse(bytes, extension, isPrivate, false);
       } catch {
         // Try the next legacy format.
@@ -2803,7 +2828,11 @@ export async function handleOgCard(
     if (iconReference?.extension && iconReference.version) {
       try {
         const bytes = await r2.fetchFile(
-          versionedIconObjectKey(appId, iconReference.extension, iconReference.version),
+          versionedIconObjectKey(
+            appId,
+            iconReference.extension,
+            iconReference.version,
+          ),
         );
         return new Response(toResponseBody(bytes), {
           headers: {
@@ -2816,12 +2845,16 @@ export async function handleOgCard(
       const extensions: IconExtension[] = iconReference.extension
         ? [
           iconReference.extension,
-          ...ICON_EXTENSIONS.filter((candidate) => candidate !== iconReference.extension),
+          ...ICON_EXTENSIONS.filter((candidate) =>
+            candidate !== iconReference.extension
+          ),
         ]
         : [...ICON_EXTENSIONS];
       for (const extension of extensions) {
         try {
-          const bytes = await r2.fetchFile(legacyIconObjectKey(appId, extension));
+          const bytes = await r2.fetchFile(
+            legacyIconObjectKey(appId, extension),
+          );
           return new Response(toResponseBody(bytes), {
             headers: {
               "Content-Type": iconContentType(extension),
@@ -4443,6 +4476,11 @@ async function handleSetEnvVars(
 
       // Update app
       await appsService.update(appId, { env_vars: encryptedEnvVars });
+      await resolveConfiguredSettingIncidents({
+        userId: user.id,
+        agentId: app.id,
+        configuredSettingKeys: entries.map(([key]) => key),
+      });
 
       return json({
         success: true,
@@ -4533,6 +4571,11 @@ async function handleUpdateEnvVars(
 
       // Update app
       await appsService.update(appId, { env_vars: mergedEnvVars });
+      await resolveConfiguredSettingIncidents({
+        userId: user.id,
+        agentId: app.id,
+        configuredSettingKeys: newEntries.map(([key]) => key),
+      });
 
       return json({
         success: true,

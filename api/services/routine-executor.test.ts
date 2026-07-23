@@ -754,7 +754,10 @@ Deno.test("routine executor: auto-pauses the routine after consecutive failed at
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
 
-    if (table === "user_notifications" && method === "POST") {
+    if (
+      table === "create_user_notification_episode" &&
+      method === "POST"
+    ) {
       notifications.push(body as Record<string, unknown>);
       return jsonResponse([{
         id: "notif-1",
@@ -822,13 +825,15 @@ Deno.test("routine executor: auto-pauses the routine after consecutive failed at
     assertEquals(autoPause?.threshold, 10);
 
     // The owner is notified their agent stopped (idempotent per pause event).
-    const pauseNotif = notifications.find((n) => n.kind === "routine_paused");
+    const pauseNotif = notifications.find((n) => n.p_kind === "routine_paused");
     assert(pauseNotif, "expected an owner notification on auto-pause");
-    assertEquals(pauseNotif?.agent_id, "composer-app-1");
-    assertEquals(pauseNotif?.severity, "critical");
-    assertEquals(pauseNotif?.entity_type, "routine");
+    assertEquals(pauseNotif?.p_agent_id, "composer-app-1");
+    assertEquals(pauseNotif?.p_severity, "critical");
+    assertEquals(pauseNotif?.p_entity_type, "routine");
     assert(
-      String(pauseNotif?.dedupe_key).startsWith("routine_paused:routine-1:"),
+      String(pauseNotif?.p_dedupe_key).startsWith(
+        "routine_paused:routine-1:",
+      ),
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -1490,7 +1495,10 @@ Deno.test("processQueuedRoutineRun: an unmarked legacy launch routine is quarant
       table === "routine_capabilities" ||
       table === "routine_dashboard_bindings"
     ) return jsonResponse([]);
-    if (table === "user_notifications" && method === "POST") {
+    if (
+      table === "create_user_notification_episode" &&
+      method === "POST"
+    ) {
       return jsonResponse([{ id: "notification-1" }]);
     }
     return jsonResponse([]);

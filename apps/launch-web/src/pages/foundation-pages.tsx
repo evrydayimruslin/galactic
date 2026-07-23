@@ -1205,7 +1205,7 @@ export function HomeFoundationPage(
       <section className="home-hero">
         <div className="home-hero-copy">
           <h1>
-            Agents work here.
+            Agents work here
           </h1>
           <p>
             Conjure a private, persistent agent with Codex, Claude Code,

@@ -9,8 +9,8 @@ import type {
   LaunchFunctionSummary,
 } from "../../shared/contracts/launch.ts";
 import {
-  agentHomeCallTargetKey,
   type AgentHomeBuildInput,
+  agentHomeCallTargetKey,
   buildAgentHomeResponse,
 } from "./agent-home.ts";
 
@@ -20,7 +20,9 @@ const TARGET_ID = "22222222-2222-4222-8222-222222222222";
 const ROUTINE_ID = "33333333-3333-4333-8333-333333333333";
 const CAPABILITY_ID = "44444444-4444-4444-8444-444444444444";
 
-function grant(status: "active" | "pending" | "revoked" = "active"): AgentGrantSummary {
+function grant(
+  status: "active" | "pending" | "revoked" = "active",
+): AgentGrantSummary {
   return {
     id: "55555555-5555-4555-8555-555555555555",
     callerApp: { id: APP_ID, slug: "watcher", name: "Watcher" },
@@ -201,7 +203,7 @@ function input(
 
 Deno.test("agent home: derives an initial ready Agent without conflating health", () => {
   const home = buildAgentHomeResponse(input());
-  assertEquals(home.contractVersion, "2026-07-17.p2.3");
+  assertEquals(home.contractVersion, "2026-07-23.operator.1");
   assertEquals(home.state.lifecycle, "ready");
   assertEquals(home.state.execution, "idle");
   assertEquals(home.state.health, "unknown");
@@ -211,7 +213,11 @@ Deno.test("agent home: derives an initial ready Agent without conflating health"
   const credential = home.setup.requirements.find((item) =>
     item.settingKey === "ARCHIVE_TOKEN"
   );
-  assertEquals(credential?.secret, true, "destination-bound credentials are secret");
+  assertEquals(
+    credential?.secret,
+    true,
+    "destination-bound credentials are secret",
+  );
   assertEquals(credential?.settingScope, "per_user");
 });
 
@@ -219,13 +225,20 @@ Deno.test("agent home: an active Agent remains active when new setup blockers ap
   const base = input();
   const home = buildAgentHomeResponse(input({
     routine: routine({ status: "active", health: "active" }),
-    settings: base.settings.map((setting) => ({ ...setting, configured: false })),
+    settings: base.settings.map((setting) => ({
+      ...setting,
+      configured: false,
+    })),
     effectivePermissions: ["ai:call", "app:call"],
   }));
   assertEquals(home.state.lifecycle, "active");
   assertEquals(home.setup.ready, false);
   assertEquals(home.responsibility.reporting.configured, false);
-  assert(home.state.blockers.some((item) => item.code === "missing_required_setting"));
+  assert(
+    home.state.blockers.some((item) =>
+      item.code === "missing_required_setting"
+    ),
+  );
   assertEquals(home.actions.canRunNow, false);
 });
 
@@ -388,7 +401,10 @@ Deno.test("agent home: stale grants never make a missing target function effecti
   assertEquals(authority?.effective, false);
   assertEquals(grantRequirement?.configured, false);
   assertEquals(grantRequirement?.blocking, true);
-  assertStringIncludes(grantRequirement?.description || "", "expose this function");
+  assertStringIncludes(
+    grantRequirement?.description || "",
+    "expose this function",
+  );
 });
 
 Deno.test("agent home: an ignored network permission never makes destinations effective", () => {
@@ -462,7 +478,11 @@ Deno.test("agent home: chooses the newest tested staged release and surfaces int
   assertEquals(home.release.live?.executedVersion, "0.9.0");
   assertEquals(home.release.live?.integrity, "unverified");
   assertEquals(home.state.health, "degraded");
-  assert(home.state.blockers.some((item) => item.code === "executed_release_unverified"));
+  assert(
+    home.state.blockers.some((item) =>
+      item.code === "executed_release_unverified"
+    ),
+  );
 });
 
 Deno.test("agent home: does not present an older tested release as a staged candidate", () => {

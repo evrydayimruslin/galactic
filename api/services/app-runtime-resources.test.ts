@@ -7,8 +7,8 @@ import {
   classifyAppSupabaseConfigState,
   createAppD1Resources,
   fetchAppEntryCode,
-  resolveAppRuntimeEnvVars,
   resolveAppD1StorageDisclosure,
+  resolveAppRuntimeEnvVars,
   resolveAppSupabaseConfig,
   resolveManifestPermissions,
   resolveRuntimeAppCallDependencies,
@@ -141,6 +141,11 @@ Deno.test("app runtime resources: secret/config split — secrets vaulted, per-u
 });
 
 Deno.test("app runtime resources: runtime env reports missing required per-user secrets", async () => {
+  const incidents: Array<{
+    userId: string;
+    agentId: string;
+    missingSettingKeys: readonly string[];
+  }> = [];
   const result = await resolveAppRuntimeEnvVars(
     {
       id: "app-123",
@@ -157,11 +162,20 @@ Deno.test("app runtime resources: runtime env reports missing required per-user 
       fetchFn: async () => new Response(JSON.stringify([]), { status: 200 }),
       supabaseUrl: "https://supabase.example",
       supabaseServiceRoleKey: "service-role",
+      recordMissingSettingIncidentsFn: (input) => {
+        incidents.push(input);
+        return Promise.resolve(input.missingSettingKeys.length);
+      },
     },
   );
 
   assertEquals(result.envVars, {});
   assertEquals(result.missingRequiredSecrets, ["USER_TOKEN"]);
+  assertEquals(incidents, [{
+    userId: "user-123",
+    agentId: "app-123",
+    missingSettingKeys: ["USER_TOKEN"],
+  }]);
   assertEquals(
     buildMissingAppSecretsMessage(result.missingRequiredSecrets),
     "Missing required secrets: USER_TOKEN. Use gx.secrets to provide them.",
@@ -728,9 +742,12 @@ Deno.test("app runtime resources: D1 disclosure is accurate and never exposes th
     JSON.stringify(disclosure).includes("cloudflare-database-secret-id"),
     false,
   );
-  assertEquals(resolveAppD1StorageDisclosure({
-    d1_database_id: null,
-    d1_status: null,
-    d1_last_migration_version: 0,
-  }), null);
+  assertEquals(
+    resolveAppD1StorageDisclosure({
+      d1_database_id: null,
+      d1_status: null,
+      d1_last_migration_version: 0,
+    }),
+    null,
+  );
 });

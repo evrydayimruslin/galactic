@@ -8,6 +8,10 @@ import type {
 } from "../../../../shared/contracts/agent-grants.ts";
 import type {
   LaunchAgentAdminSummary,
+  LaunchAgentActivityResponse,
+  LaunchAgentAttentionActionRequest,
+  LaunchAgentAttentionActionResponse,
+  LaunchAgentAttentionProjection,
   LaunchAgentFunctionsResponse,
   LaunchAgentCapacityResponse,
   LaunchAgentCapacityUpdateRequest,
@@ -19,6 +23,8 @@ import type {
   LaunchAgentRoutineActionRequest,
   LaunchAgentManagedRoutineActionRequest,
   LaunchAgentManagedRoutineUpdateRequest,
+  LaunchAgentPreferencesResponse,
+  LaunchAgentPreferencesUpdateRequest,
   LaunchAgentRoutineResponse,
   LaunchAgentRoutinesResponse,
   LaunchAgentRoutineUpdateRequest,
@@ -41,6 +47,7 @@ import type {
   LaunchDiscoveryResponse,
   LaunchFunctionRunRequest,
   LaunchFunctionRunResponse,
+  LaunchGlobalAttentionResponse,
   LaunchInferenceOptionsResponse,
   LaunchPlatformModelRequest,
   LaunchPlatformModelResponse,
@@ -51,11 +58,17 @@ import type {
   LaunchLeaderboardResponse,
   LaunchFolderMemberMutationResponse,
   LaunchFolderMutationResponse,
+  LaunchFleetOrderResponse,
+  LaunchFleetOrderUpdateRequest,
+  LaunchFleetPreferencesResponse,
+  LaunchFleetPreferencesUpdateRequest,
   LaunchFleetResponse,
   LaunchLibraryResponse,
   LaunchPlatformPrimitiveSuggestion,
   LaunchStoreRequest,
   LaunchStoreResponse,
+  LaunchAgentSearchRequest,
+  LaunchAgentSearchResponse,
   LaunchSubscriptionResponse,
   LaunchSubscriptionRedirectResponse,
   LaunchTrustCard,
@@ -283,6 +296,28 @@ export class LaunchApiClient {
     return this.fetchJson("/api/launch/fleet");
   }
 
+  updateFleetOrder(
+    request: LaunchFleetOrderUpdateRequest,
+  ): Promise<LaunchFleetOrderResponse> {
+    return this.fetchJson("/api/launch/fleet/order", {
+      method: "PUT",
+      body: JSON.stringify(request),
+    });
+  }
+
+  fleetPreferences(): Promise<LaunchFleetPreferencesResponse> {
+    return this.fetchJson("/api/launch/fleet/preferences");
+  }
+
+  updateFleetPreferences(
+    request: LaunchFleetPreferencesUpdateRequest,
+  ): Promise<LaunchFleetPreferencesResponse> {
+    return this.fetchJson("/api/launch/fleet/preferences", {
+      method: "PATCH",
+      body: JSON.stringify(request),
+    });
+  }
+
   createFolder(
     scope: "owned" | "installed",
     name: string,
@@ -374,6 +409,67 @@ export class LaunchApiClient {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home`,
     );
+  }
+
+  agentPreferences(
+    idOrSlug: string,
+  ): Promise<LaunchAgentPreferencesResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/preferences`,
+    );
+  }
+
+  updateAgentPreferences(
+    idOrSlug: string,
+    request: LaunchAgentPreferencesUpdateRequest,
+  ): Promise<LaunchAgentPreferencesResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/preferences`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  agentActivity(
+    idOrSlug: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<LaunchAgentActivityResponse> {
+    const params = new URLSearchParams();
+    if (options.cursor) params.set("cursor", options.cursor);
+    if (options.limit) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/activity${
+        query ? `?${query}` : ""
+      }`,
+    );
+  }
+
+  agentAttention(
+    idOrSlug: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<LaunchAgentAttentionProjection> {
+    const params = new URLSearchParams();
+    if (options.cursor) params.set("cursor", options.cursor);
+    if (options.limit) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/attention${
+        query ? `?${query}` : ""
+      }`,
+    );
+  }
+
+  searchAgents(
+    request: LaunchAgentSearchRequest,
+  ): Promise<LaunchAgentSearchResponse> {
+    const params = new URLSearchParams({ q: request.query });
+    if (request.agentId) params.set("agent", request.agentId);
+    if (request.kinds?.length) params.set("kinds", request.kinds.join(","));
+    if (request.limit) params.set("limit", String(request.limit));
+    return this.fetchJson(`/api/launch/search?${params.toString()}`);
   }
 
   updateAgentHomeIdentity(
@@ -1073,6 +1169,18 @@ export class LaunchApiClient {
     );
   }
 
+  globalAttention(
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<LaunchGlobalAttentionResponse> {
+    const params = new URLSearchParams();
+    if (options.cursor) params.set("cursor", options.cursor);
+    if (options.limit) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return this.fetchJson(
+      `/api/launch/attention${query ? `?${query}` : ""}`,
+    );
+  }
+
   markNotificationsRead(
     body: { ids?: string[]; all?: boolean; agent?: string },
   ): Promise<LaunchNotificationsMarkReadResponse> {
@@ -1080,6 +1188,21 @@ export class LaunchApiClient {
       method: "PATCH",
       body: JSON.stringify(body),
     });
+  }
+
+  actOnAttention(
+    notificationId: string,
+    request: LaunchAgentAttentionActionRequest,
+  ): Promise<LaunchAgentAttentionActionResponse> {
+    return this.fetchJson(
+      `/api/launch/notifications/${
+        encodeURIComponent(notificationId)
+      }/actions`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    );
   }
 
   private async sendRequest(

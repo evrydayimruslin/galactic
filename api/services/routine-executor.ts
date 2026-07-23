@@ -16,6 +16,7 @@ import {
   validateRoutineActivation,
 } from "./routines.ts";
 import { createNotification } from "./notifications.ts";
+import { resolveRoutineRecoveryIncidents } from "./notification-recovery.ts";
 import { validateRoutineLaunchActivation } from "./routine-platform.ts";
 import {
   attachDeferredWakeToRun,
@@ -1397,6 +1398,14 @@ async function updateRoutineAfterRun(
     payload,
     "Failed to update routine after run",
   );
+  if (success) {
+    await resolveRoutineRecoveryIncidents({
+      userId: routine.user_id,
+      routineId: routine.id,
+      metadata: routine.metadata,
+      reason: "successful_wake",
+    });
+  }
   // Tell the owner their agent stopped — the point of an always-on agent is
   // that you don't have to watch it. Best-effort + idempotent (one row per pause
   // event via the `at` timestamp in the dedupe key), never blocks the executor.

@@ -34,6 +34,7 @@ shared/contracts/*.d.ts.map
 
 # Node
 node_modules/
+.pnpm-store/
 package-lock.json
 !api/package-lock.json
 !capacity-tail-worker/package-lock.json

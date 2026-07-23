@@ -65,8 +65,14 @@ export interface ManifestInterfaceDeclaration {
     description?: string;
     entry: string;
     functions: string[];
+    read_models?: Record<string, ManifestInterfaceReadModel>;
     min_height?: number;
     hash?: string;
+}
+export interface ManifestInterfaceReadModel {
+    fresh_for_ms: number;
+    stale_for_ms: number;
+    prefetch_args?: Record<string, unknown>;
 }
 export type ManifestHttpAuthMode = 'user' | 'public';
 export type ManifestHttpBillingMode = 'owner' | 'caller';

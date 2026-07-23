@@ -7,18 +7,26 @@
 // monitor. v1 delivery is the in-product inbox (this table); email is a v2
 // fast-follow (stamped into delivered_channels).
 
-import {
-  createSupabaseRestClient,
-} from "./platform-clients/supabase-rest.ts";
+import { createSupabaseRestClient } from "./platform-clients/supabase-rest.ts";
 
 type NotificationSeverity = "info" | "warning" | "critical";
+export type NotificationItemClass = "report" | "incident";
+export type NotificationLifecycleState =
+  | "open"
+  | "snoozed"
+  | "resolved"
+  | "archived";
 
-interface NotificationInput {
+export interface NotificationInput {
   userId: string;
   // Stable Agent attribution for Fleet/Agent inbox filters. This is separate
   // from entityType/entityId, which may point at a specific routine or action.
   agentId?: string | null;
   kind: string;
+  // Classification is deterministic, never inferred from title/body text.
+  // The database owns the canonical kind allowlist. This legacy field remains
+  // source-compatible but cannot override server classification.
+  itemClass?: NotificationItemClass;
   severity?: NotificationSeverity;
   title: string;
   body?: string | null;
@@ -30,7 +38,7 @@ interface NotificationInput {
   dedupeKey: string;
 }
 
-interface NotificationRow {
+export interface NotificationRow {
   id: string;
   user_id: string;
   agent_id: string | null;
@@ -44,46 +52,78 @@ interface NotificationRow {
   delivered_channels: string[];
   created_at: string;
   read_at: string | null;
+  item_class: NotificationItemClass;
+  requires_action: boolean;
+  lifecycle_state: NotificationLifecycleState;
+  state_changed_at: string;
+  snoozed_until: string | null;
+  resolved_at: string | null;
+  resolution_reason: string | null;
+  archived_at: string | null;
 }
 
 interface NotificationDeps {
   fetchFn?: typeof fetch;
+  now?: Date;
 }
 
 const NOTIFICATION_COLUMNS =
   "id,user_id,agent_id,kind,severity,title,body,entity_type,entity_id,action_url," +
-  "delivered_channels,created_at,read_at";
+  "delivered_channels,created_at,read_at,item_class,requires_action," +
+  "lifecycle_state,state_changed_at,snoozed_until,resolved_at," +
+  "resolution_reason,archived_at";
+
+// Informational output is opt-in. Unknown kinds remain incidents so a typo or
+// new operational failure cannot silently disappear after being read.
+const INFORMATIONAL_REPORT_KINDS = new Set([
+  "agent_report",
+  "routine_report",
+  "routine_summary",
+]);
+
+function attentionFilter(now: Date): string {
+  // Canonical Attention is:
+  //   - every open incident, even after it has been read;
+  //   - a snoozed incident once its snooze expires; and
+  //   - an unread open informational report.
+  // Keep this predicate aligned with Fleet SQL and agent-attention.ts.
+  return "or=(and(item_class.eq.incident,lifecycle_state.eq.open)," +
+    "and(item_class.eq.incident,lifecycle_state.eq.snoozed,snoozed_until.lte." +
+    `${encodeURIComponent(now.toISOString())}),` +
+    "and(item_class.eq.report,lifecycle_state.eq.open,read_at.is.null))";
+}
 
 // 90-day retention (hourly sweep). Matches the call-log sweep horizon.
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
-// Create a notification, idempotent on (user_id, dedupe_key). PostgREST
-// `resolution=ignore-duplicates` makes the unique-constraint collision a no-op
-// (returns the existing/none), so a re-claimed run that re-detects the same
-// pause never stacks a second row. Returns the inserted row, or null when it
-// was a duplicate (or on any error — this is best-effort, never blocks a wake).
+export function classifyNotificationKind(kind: string): NotificationItemClass {
+  return INFORMATIONAL_REPORT_KINDS.has(kind) ? "report" : "incident";
+}
+
+// Create one immutable notification episode. The database serializes writers
+// by (owner, dedupe key): an active episode makes a delivery retry a no-op,
+// while recurrence after resolution creates a fresh row without rewriting
+// prior evidence. Snoozed incidents remain active and idempotent. Returns the
+// newly inserted row, or null for an active duplicate/error (best-effort;
+// never blocks a wake).
 export async function createNotification(
   input: NotificationInput,
   deps?: NotificationDeps,
 ): Promise<NotificationRow | null> {
   try {
     const supabase = createSupabaseRestClient({ fetchFn: deps?.fetchFn });
-    const res = await supabase.insert(
-      `/rest/v1/user_notifications?select=${NOTIFICATION_COLUMNS}`,
-      {
-        user_id: input.userId,
-        agent_id: input.agentId ?? null,
-        kind: input.kind,
-        severity: input.severity ?? "info",
-        title: input.title,
-        body: input.body ?? null,
-        entity_type: input.entityType ?? null,
-        entity_id: input.entityId ?? null,
-        action_url: input.actionUrl ?? null,
-        dedupe_key: input.dedupeKey,
-      },
-      "resolution=ignore-duplicates,return=representation",
-    );
+    const res = await supabase.rpc("create_user_notification_episode", {
+      p_user_id: input.userId,
+      p_agent_id: input.agentId ?? null,
+      p_kind: input.kind,
+      p_severity: input.severity ?? "info",
+      p_title: input.title,
+      p_body: input.body ?? null,
+      p_entity_type: input.entityType ?? null,
+      p_entity_id: input.entityId ?? null,
+      p_action_url: input.actionUrl ?? null,
+      p_dedupe_key: input.dedupeKey,
+    });
     if (!res.ok) {
       console.error(
         "[NOTIFY] createNotification failed:",
@@ -110,22 +150,28 @@ export async function listNotifications(
   let path = `/rest/v1/user_notifications?user_id=eq.${
     encodeURIComponent(userId)
   }&select=${NOTIFICATION_COLUMNS}&order=created_at.desc&limit=${limit}`;
-  if (options.unreadOnly) path += `&read_at=is.null`;
+  // Keep the historical `unreadOnly` option name for API compatibility. Its
+  // operator meaning is now canonical Attention: every open incident remains
+  // visible after it is read, while informational reports leave Attention
+  // once read.
+  if (options.unreadOnly) {
+    path += `&${attentionFilter(deps?.now ?? new Date())}`;
+  }
   if (options.agentId) {
     path += `&agent_id=eq.${encodeURIComponent(options.agentId)}`;
   }
   const res = await supabase.request(path);
   if (!res.ok) {
     throw new Error(
-      `Failed to list notifications (${res.status}): ${
-        await res.text().catch(() => "")
-      }`,
+      `Failed to list notifications (${res.status}): ${await res.text().catch(
+        () => "",
+      )}`,
     );
   }
   return await res.json().catch(() => []) as NotificationRow[];
 }
 
-export async function countUnread(
+export async function countAttention(
   userId: string,
   optionsOrDeps: { agentId?: string } | NotificationDeps = {},
   deps?: NotificationDeps,
@@ -139,14 +185,20 @@ export async function countUnread(
   const resolvedDeps = legacyDeps ? optionsOrDeps as NotificationDeps : deps;
   const supabase = createSupabaseRestClient({ fetchFn: resolvedDeps?.fetchFn });
   const res = await supabase.request(
-    `/rest/v1/user_notifications?user_id=eq.${
-      encodeURIComponent(userId)
-    }&read_at=is.null${
+    `/rest/v1/user_notifications?user_id=eq.${encodeURIComponent(userId)}&${
+      attentionFilter(resolvedDeps?.now ?? new Date())
+    }${
       options.agentId
         ? `&agent_id=eq.${encodeURIComponent(options.agentId)}`
         : ""
     }&select=id`,
-    { headers: { "Prefer": "count=exact", "Range-Unit": "items", "Range": "0-0" } },
+    {
+      headers: {
+        "Prefer": "count=exact",
+        "Range-Unit": "items",
+        "Range": "0-0",
+      },
+    },
   );
   if (!res.ok) return 0;
   // PostgREST returns the total in Content-Range: "0-0/<total>".
@@ -154,6 +206,11 @@ export async function countUnread(
   const total = Number(range.split("/")[1]);
   return Number.isFinite(total) ? total : 0;
 }
+
+// Backward-compatible name used by the existing launch and gx.notifications
+// response shape (`unread_count`). The value is the canonical Attention count:
+// open incidents plus unread open reports.
+export const countUnread = countAttention;
 
 // Mark specific notifications read (scoped to the owner so one user can never
 // touch another's rows). Returns how many rows flipped to read.
@@ -175,9 +232,7 @@ export async function markNotificationsRead(
   if (clean.length === 0) return 0;
   const supabase = createSupabaseRestClient({ fetchFn: resolvedDeps?.fetchFn });
   const res = await supabase.patch(
-    `/rest/v1/user_notifications?user_id=eq.${
-      encodeURIComponent(userId)
-    }${
+    `/rest/v1/user_notifications?user_id=eq.${encodeURIComponent(userId)}${
       options.agentId
         ? `&agent_id=eq.${encodeURIComponent(options.agentId)}`
         : ""
@@ -188,9 +243,8 @@ export async function markNotificationsRead(
   );
   if (!res.ok) {
     throw new Error(
-      `Failed to mark notifications read (${res.status}): ${
-        await res.text().catch(() => "")
-      }`,
+      `Failed to mark notifications read (${res.status}): ${await res.text()
+        .catch(() => "")}`,
     );
   }
   const rows = await res.json().catch(() => []) as Array<{ id: string }>;
@@ -223,13 +277,45 @@ export async function markAllNotificationsRead(
   );
   if (!res.ok) {
     throw new Error(
-      `Failed to mark all notifications read (${res.status}): ${
-        await res.text().catch(() => "")
-      }`,
+      `Failed to mark all notifications read (${res.status}): ${await res.text()
+        .catch(() => "")}`,
     );
   }
   const rows = await res.json().catch(() => []) as Array<{ id: string }>;
   return Array.isArray(rows) ? rows.length : 0;
+}
+
+// Recovery paths call this with the exact dedupe key that opened an incident.
+// The database owns the lifecycle transition and scopes it to the supplied
+// owner; read_at is intentionally untouched.
+export async function resolveNotificationIncidentByDedupe(
+  userId: string,
+  dedupeKey: string,
+  resolutionReason: string,
+  deps: NotificationDeps = {},
+): Promise<number> {
+  const normalizedDedupeKey = dedupeKey.trim();
+  const normalizedReason = resolutionReason.trim();
+  if (!userId || !normalizedDedupeKey || !normalizedReason) {
+    throw new Error(
+      "Resolving a notification incident requires owner, dedupe key, and reason.",
+    );
+  }
+
+  const supabase = createSupabaseRestClient({ fetchFn: deps.fetchFn });
+  const res = await supabase.rpc("resolve_notification_incident_by_dedupe", {
+    p_user_id: userId,
+    p_dedupe_key: normalizedDedupeKey,
+    p_resolution_reason: normalizedReason.slice(0, 500),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Failed to resolve notification incident (${res.status}).`,
+    );
+  }
+  const value = await res.json().catch(() => 0);
+  const count = typeof value === "number" ? value : Number(value);
+  return Number.isSafeInteger(count) && count >= 0 ? count : 0;
 }
 
 // Delete notifications older than the retention horizon. Called from the hourly
@@ -243,14 +329,16 @@ export async function sweepExpiredNotifications(
   try {
     const supabase = createSupabaseRestClient({ fetchFn: deps?.fetchFn });
     const cutoff = new Date(now.getTime() - RETENTION_MS).toISOString();
-    // Delete rows past the horizon that are EITHER read OR non-critical — i.e.
-    // never delete a still-UNREAD critical alert (an auto-pause the owner has
-    // not seen). A malformed filter would 400 -> !res.ok -> no-op, never a
-    // wrong delete.
+    // An unresolved incident is durable evidence even after the owner reads it.
+    // Past the horizon we may delete terminal incidents, or informational
+    // reports that are archived/read/non-critical. A malformed filter 400s and
+    // becomes a no-op rather than risking an over-broad delete.
     const res = await supabase.request(
       `/rest/v1/user_notifications?created_at=lt.${
         encodeURIComponent(cutoff)
-      }&or=(read_at.not.is.null,severity.neq.critical)&select=id`,
+      }&or=(and(item_class.eq.incident,lifecycle_state.eq.resolved),` +
+        `and(item_class.eq.report,or(lifecycle_state.eq.archived,` +
+        `read_at.not.is.null,severity.neq.critical)))&select=id`,
       { method: "DELETE", headers: { "Prefer": "return=representation" } },
     );
     if (!res.ok) return 0;

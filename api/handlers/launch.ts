@@ -62,7 +62,11 @@ import {
   LAUNCH_PLATFORM_PRIMITIVES,
   LAUNCH_PUBLIC_ROUTES,
   LAUNCH_SCOPE_CONTRACT,
+  type LaunchAgentActivityResponse,
   type LaunchAgentAdminSummary,
+  type LaunchAgentAttentionActionRequest,
+  type LaunchAgentAttentionActionResponse,
+  type LaunchAgentAttentionProjection,
   type LaunchAgentCapacityResponse,
   type LaunchAgentCapacityUpdateRequest,
   type LaunchAgentFunctionsResponse,
@@ -73,6 +77,8 @@ import {
   type LaunchAgentManagedRoutineActionRequest,
   type LaunchAgentManagedRoutineUpdateRequest,
   type LaunchAgentOwnerSummary,
+  type LaunchAgentPreferencesResponse,
+  type LaunchAgentPreferencesUpdateRequest,
   type LaunchAgentRelationship,
   type LaunchAgentRoutineActionRequest,
   type LaunchAgentRoutineBlocker,
@@ -82,6 +88,8 @@ import {
   type LaunchAgentRoutineSchedule,
   type LaunchAgentRoutinesResponse,
   type LaunchAgentRoutineUpdateRequest,
+  type LaunchAgentSearchRequest,
+  type LaunchAgentSearchSubjectKind,
   type LaunchAgentSummary,
   type LaunchAgentVisibility,
   type LaunchApiKeyCreateRequest,
@@ -94,16 +102,18 @@ import {
   type LaunchCallerFunctionPermissionsUpdateRequest,
   type LaunchDiscoveryRetrievalSummary,
   type LaunchDiscoverySource,
-  type LaunchFleetActivity,
-  type LaunchFleetAgentHealth,
-  type LaunchFleetAgentState,
+  type LaunchFleetOrderUpdateRequest,
+  type LaunchFleetPreferencesResponse,
+  type LaunchFleetPreferencesUpdateRequest,
   type LaunchFleetResponse,
+  type LaunchFleetShortcutMap,
   type LaunchFolder,
   type LaunchFullTimeDisclosure,
   type LaunchFunctionInferenceResponse,
   type LaunchFunctionRunRequest,
   type LaunchFunctionRunResponse,
   type LaunchFunctionSummary,
+  type LaunchGlobalAttentionResponse,
   type LaunchInferenceOptionsResponse,
   type LaunchInstallInstruction,
   type LaunchInstallResponse,
@@ -306,6 +316,41 @@ import {
   releaseAgentActivationSlot,
   setAgentCapacityCap,
 } from "../services/account-capacity.ts";
+import {
+  AgentOperatorStoreError,
+  getAgentActivityPage,
+  getAgentInterfaceFavorites,
+  getAgentOperatorFleetSnapshot,
+  getFleetPreferences,
+  initializeAgentInterfaceFavorites,
+  replaceAgentInterfaceFavorites,
+  replaceFleetOrder,
+  replaceFleetShortcuts,
+} from "../services/agent-operator-store.ts";
+import {
+  AgentSearchServiceError,
+  searchOwnerAgentNavigation,
+} from "../services/agent-search.ts";
+import { resolveConfiguredSettingIncidents } from "../services/notification-recovery.ts";
+import {
+  buildAgentDirective,
+  buildAgentOperatingSummary,
+} from "../services/agent-operating-state.ts";
+import {
+  buildAgentActivityPreview,
+  excludeAgentActivitySources,
+} from "../services/agent-activity.ts";
+import {
+  type AgentAccessConsumerBinding,
+  buildAgentAccessProjection,
+} from "../services/agent-access.ts";
+import {
+  AgentAttentionStoreError,
+  readAgentAttention,
+  readAgentAttentionPage,
+  readOwnerAttentionPage,
+  transitionAgentAttention,
+} from "../services/agent-attention.ts";
 
 // Cross-Agent grant + settings mutations are sensitive. The SensitiveRoute enum
 // lives in sensitive-route-rate-limit.ts (outside this file's edit scope), so we
@@ -333,6 +378,15 @@ async function privateLaunchRoute(
   try {
     return withPrivateLaunchPrivacy(await operation());
   } catch (err) {
+    if (err instanceof AgentOperatorStoreError) {
+      return operatorStoreErrorResponse(err);
+    }
+    if (err instanceof AgentAttentionStoreError) {
+      return privateLaunchJson({
+        error: err.message,
+        code: err.code,
+      }, err.status);
+    }
     if (err instanceof RequestValidationError) {
       return privateLaunchJson({ error: err.message }, err.status);
     }
@@ -766,6 +820,25 @@ export async function handleLaunch(
       );
     }
 
+    if (path === "/api/launch/attention") {
+      return await privateLaunchRoute(() =>
+        handleLaunchGlobalAttention(request, method)
+      );
+    }
+
+    const notificationActionMatch = path.match(
+      /^\/api\/launch\/notifications\/([^/]+)\/actions$/,
+    );
+    if (notificationActionMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchNotificationAction(
+          request,
+          notificationActionMatch[1],
+          method,
+        )
+      );
+    }
+
     if (
       path === "/api/launch/grants" ||
       path.startsWith("/api/launch/grants/")
@@ -827,6 +900,41 @@ export async function handleLaunch(
         request,
         path,
         dependencies.compute,
+      );
+    }
+
+    const agentPreferencesMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/preferences$/,
+    );
+    if (agentPreferencesMatch) {
+      return await handleLaunchAgentPreferences(
+        request,
+        agentPreferencesMatch[1],
+        method,
+      );
+    }
+
+    const agentActivityMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/home\/activity$/,
+    );
+    if (agentActivityMatch) {
+      return await handleLaunchAgentActivity(
+        request,
+        agentActivityMatch[1],
+        method,
+      );
+    }
+
+    const agentAttentionMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/attention$/,
+    );
+    if (agentAttentionMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchAgentAttention(
+          request,
+          agentAttentionMatch[1],
+          method,
+        )
       );
     }
 
@@ -1009,6 +1117,18 @@ export async function handleLaunch(
       );
     }
 
+    if (path === "/api/launch/fleet/order") {
+      return await handleLaunchFleetOrder(request, method);
+    }
+
+    if (path === "/api/launch/fleet/preferences") {
+      return await handleLaunchFleetPreferences(request, method);
+    }
+
+    if (path === "/api/launch/search") {
+      return await handleLaunchSearch(request, method);
+    }
+
     if (method !== "GET") {
       return error("Launch API is read-only in this MVP facade", 405);
     }
@@ -1180,6 +1300,8 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       discoverAlias: "/api/launch/discover?query={query}",
       agentFunctions: "/api/launch/agents/{id}/functions",
       agentHome: "/api/launch/agents/{id}/home",
+      agentAttention:
+        "/api/launch/agents/{id}/attention?limit=200&cursor={cursor}",
       agentHomeActions: "/api/launch/agents/{id}/home/actions",
       agentHomePause: "/api/launch/agents/{id}/home/pause",
       agentRoutine: "/api/launch/agents/{id}/routine",
@@ -3552,6 +3674,37 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               description:
                 "Bridge allowlist, intersected with the agent's manifest functions",
             },
+            releaseVersion: {
+              type: ["string", "null"],
+              description:
+                "Live release that supplied this Interface declaration",
+            },
+            artifactHash: {
+              type: ["string", "null"],
+              description: "Immutable Interface artifact hash",
+            },
+            readModels: {
+              type: "array",
+              description:
+                "Live-manifest read authority and optional Interface-specific cache/prefetch policy",
+              items: {
+                type: "object",
+                required: [
+                  "functionName",
+                  "freshForMs",
+                  "staleForMs",
+                ],
+                properties: {
+                  functionName: { type: "string" },
+                  freshForMs: { type: "integer" },
+                  staleForMs: { type: "integer" },
+                  prefetchArgs: {
+                    type: "object",
+                    additionalProperties: true,
+                  },
+                },
+              },
+            },
             minHeight: { type: ["number", "null"] },
           },
         },
@@ -3887,6 +4040,230 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "Batched Agent state, activity, Alerts, and shared capacity",
         },
         "401": { description: "Authentication required" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/fleet/order"] = {
+    put: {
+      operationId: "replaceLaunchFleetOrder",
+      summary: "Atomically replace the owner's complete zero-based Fleet order",
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: ["agentIds", "expectedRevision"],
+          properties: {
+            agentIds: {
+              type: "array",
+              maxItems: 1000,
+              uniqueItems: true,
+              items: { type: "string", format: "uuid" },
+            },
+            expectedRevision: { type: "string" },
+          },
+        }),
+      },
+      responses: {
+        "200": {
+          description: "Opaque Fleet revision and zero-based positions",
+        },
+        "403": { description: "Owner account session required" },
+        "412": { description: "Fleet revision changed; refresh and retry" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/fleet/preferences"] = {
+    get: {
+      operationId: "getLaunchFleetPreferences",
+      summary:
+        "Get owner-only keyboard shortcuts and the shared opaque Fleet revision",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        "200": { description: "Fleet keyboard shortcut preferences" },
+        "403": { description: "Owner account session required" },
+      },
+    },
+    patch: {
+      operationId: "updateLaunchFleetPreferences",
+      summary:
+        "Atomically replace Fleet keyboard shortcuts using the shared Fleet revision",
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "expectedRevision",
+            "shortcutsEnabled",
+            "shortcutMap",
+          ],
+          properties: {
+            expectedRevision: { type: "string" },
+            shortcutsEnabled: { type: "boolean" },
+            shortcutMap: {
+              type: "object",
+              maxProperties: 15,
+              additionalProperties: {
+                oneOf: [
+                  { type: "string", maxLength: 6 },
+                  { type: "null" },
+                ],
+              },
+            },
+          },
+        }),
+      },
+      responses: {
+        "200": { description: "Updated Fleet keyboard shortcut preferences" },
+        "400": { description: "Invalid or conflicting shortcut binding" },
+        "403": { description: "Owner account session required" },
+        "412": { description: "Fleet revision changed; refresh and retry" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/search"] = {
+    get: {
+      operationId: "searchLaunchAgentNavigation",
+      summary:
+        "Search owner-private Agent objects and return safe in-app destinations",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "q",
+          in: "query",
+          required: true,
+          schema: { type: "string", minLength: 1, maxLength: 300 },
+        },
+        {
+          name: "agent",
+          in: "query",
+          schema: { type: "string", format: "uuid" },
+        },
+        {
+          name: "kinds",
+          in: "query",
+          description: "Comma-delimited unique search subject kinds",
+          schema: { type: "string" },
+        },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", minimum: 1, maximum: 100 },
+        },
+      ],
+      responses: {
+        "200": {
+          description:
+            "Lexical results, optionally reranked with owner BYOK semantic search",
+        },
+        "400": { description: "Invalid search query" },
+        "403": { description: "Owner account session required" },
+        "503": { description: "Private search persistence unavailable" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/agents/{id}/preferences"] = {
+    get: {
+      operationId: "getLaunchAgentPreferences",
+      summary: "Get owner-only Interface favorites",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        "200": { description: "Agent presentation preferences" },
+        "403": { description: "Owner account session required" },
+        "404": { description: "Owned private Agent not found" },
+      },
+    },
+    patch: {
+      operationId: "updateLaunchAgentPreferences",
+      summary: "Atomically replace an Agent's Interface favorites",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        "200": { description: "Updated Agent presentation preferences" },
+        "403": { description: "Owner account session required" },
+        "404": { description: "Owned private Agent not found" },
+        "412": {
+          description: "Preference revision changed; refresh and retry",
+        },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/agents/{id}/home/activity"] = {
+    get: {
+      operationId: "getLaunchAgentActivity",
+      summary: "Get one bounded owner-safe Agent activity stream",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", minimum: 1, maximum: 99 },
+        },
+        {
+          name: "cursor",
+          in: "query",
+          schema: { type: "string" },
+        },
+      ],
+      responses: {
+        "200": { description: "Upcoming, active, and recent Agent activity" },
+        "403": { description: "Owner account session required" },
+        "404": { description: "Owned private Agent not found" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/notifications/{id}/actions"] = {
+    post: {
+      operationId: "transitionLaunchAttention",
+      summary:
+        "Apply an owner-scoped lifecycle transition to one Attention item",
+      security: [{ bearerAuth: [] }],
+      parameters: [{
+        name: "id",
+        in: "path",
+        required: true,
+        schema: { type: "string", format: "uuid" },
+      }],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: ["action", "idempotencyKey"],
+          properties: {
+            action: {
+              type: "string",
+              enum: [
+                "read",
+                "archive",
+                "snooze",
+                "resolve",
+                "reopen",
+                "execute_brief",
+              ],
+            },
+            actionId: { type: "string", maxLength: 500 },
+            snoozedUntil: { type: "string", format: "date-time" },
+            resolutionReason: { type: "string", maxLength: 500 },
+            idempotencyKey: {
+              type: "string",
+              minLength: 8,
+              maxLength: 200,
+            },
+          },
+        }),
+      },
+      responses: {
+        "200": { description: "Updated report or incident lifecycle" },
+        "400": { description: "Invalid lifecycle transition" },
+        "403": { description: "Owner account session required" },
+        "404": { description: "Owned Attention item not found" },
+        "409": {
+          description:
+            "Invalid state transition or unsupported enriched action",
+        },
       },
     },
   };
@@ -4594,6 +4971,58 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       },
     },
   };
+  publicSpec.paths["/api/launch/attention"] = {
+    get: {
+      operationId: "listLaunchGlobalAttention",
+      summary:
+        "List canonical enriched Attention across the owner's private Agents",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: "cursor", in: "query", schema: { type: "string" } },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", minimum: 1, maximum: 200 },
+        },
+      ],
+      responses: {
+        "200": {
+          description:
+            "One Attention page with exact global and per-Agent counts",
+        },
+        "401": { description: "Authentication required" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/agents/{id}/attention"] = {
+    get: {
+      operationId: "listLaunchAgentAttention",
+      summary: "List canonical enriched Attention for one private Agent",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string" },
+        },
+        { name: "cursor", in: "query", schema: { type: "string" } },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", minimum: 1, maximum: 200 },
+        },
+      ],
+      responses: {
+        "200": {
+          description:
+            "One Agent Attention page with exact open and decision counts",
+        },
+        "401": { description: "Authentication required" },
+        "404": { description: "Private Agent not found" },
+      },
+    },
+  };
   publicSpec.paths["/api/launch/notifications"] = {
     get: {
       operationId: "listLaunchNotifications",
@@ -4949,11 +5378,110 @@ async function handleLaunchByokPrimary(
   );
 }
 
-// Set (or clear) the user's platform (credits) OpenRouter model. Unlike BYOK,
-// this requires NO key — it's the slug the credit-billed Light path routes for
-// the user, honored by both interactive chat and autonomous/agent runs.
-// Owner notification inbox (launch-web bell). GET lists (newest-first, optional
-// ?unread=1) with an unread count; PATCH marks read ({ ids } or { all: true }).
+function launchAttentionPageOptions(request: Request): {
+  cursor?: string;
+  limit?: number;
+} {
+  const url = new URL(request.url);
+  const allowed = new Set(["cursor", "limit"]);
+  for (const key of new Set(url.searchParams.keys())) {
+    if (!allowed.has(key)) {
+      throw new RequestValidationError(
+        `Unknown Attention query parameter: ${key}`,
+      );
+    }
+    if (url.searchParams.getAll(key).length !== 1) {
+      throw new RequestValidationError(
+        `Attention query parameter must be unique: ${key}`,
+      );
+    }
+  }
+  const rawCursor = url.searchParams.get("cursor");
+  if (
+    rawCursor !== null &&
+    (!rawCursor.trim() || rawCursor.length > 2_048)
+  ) {
+    throw new RequestValidationError("Attention cursor is invalid");
+  }
+  const rawLimit = url.searchParams.get("limit");
+  if (
+    rawLimit !== null &&
+    (!/^[1-9][0-9]{0,2}$/u.test(rawLimit) || Number(rawLimit) > 200)
+  ) {
+    throw new RequestValidationError(
+      "limit must be an integer between 1 and 200",
+    );
+  }
+  return {
+    ...(rawCursor === null ? {} : { cursor: rawCursor }),
+    ...(rawLimit === null ? {} : { limit: Number(rawLimit) }),
+  };
+}
+
+// Owner Attention inbox. Both global and per-Agent reads are cursor paged and
+// get their page plus exact counts from one database snapshot.
+async function handleLaunchGlobalAttention(
+  request: Request,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  if (!isAccountSessionAuthSource(user.authSource)) {
+    return error("Attention requires an account session", 403);
+  }
+  if (method !== "GET") {
+    return error("Method not allowed for account Attention", 405);
+  }
+  const agents = await dbGet<{
+    id: string;
+    slug: string | null;
+    name: string | null;
+  }>(getDbConfig(), "apps", {
+    owner_id: `eq.${user.id}`,
+    visibility: "eq.private",
+    deleted_at: "is.null",
+    select: "id,slug,name",
+  });
+  const projection = await readOwnerAttentionPage(
+    user.id,
+    agents.map((agent) => ({
+      id: agent.id,
+      slug: agent.slug || agent.id,
+      name: agent.name || agent.slug || agent.id,
+    })),
+    launchAttentionPageOptions(request),
+  );
+  return privateLaunchJson(projection satisfies LaunchGlobalAttentionResponse);
+}
+
+async function handleLaunchAgentAttention(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+): Promise<Response> {
+  if (method !== "GET") {
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(
+    user,
+    encodedLocator,
+  );
+  if (resolved instanceof Response) {
+    return withPrivateLaunchPrivacy(resolved);
+  }
+  const projection = await readAgentAttentionPage(
+    user.id,
+    {
+      id: resolved.id,
+      slug: resolved.slug || resolved.id,
+      name: resolved.name || resolved.slug || resolved.id,
+    },
+    launchAttentionPageOptions(request),
+  );
+  return privateLaunchJson(projection satisfies LaunchAgentAttentionProjection);
+}
+
 async function handleLaunchNotifications(
   request: Request,
   method: string,
@@ -5065,6 +5593,51 @@ async function handleLaunchNotifications(
   }
 
   return error("Method not allowed for launch notifications", 405);
+}
+
+async function handleLaunchNotificationAction(
+  request: Request,
+  encodedNotificationId: string,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  if (!isAccountSessionAuthSource(user.authSource)) {
+    return error("Attention actions require an account session", 403);
+  }
+  if (method !== "POST") {
+    return error("Method not allowed for Attention actions", 405);
+  }
+
+  const notificationId = decodeURIComponent(encodedNotificationId).trim();
+  if (!isUuid(notificationId)) {
+    throw new RequestValidationError("Invalid notification id");
+  }
+  const raw = asRecord(await readJsonBody<unknown>(request));
+  if (!raw) {
+    throw new RequestValidationError("Request body must be an object");
+  }
+  strictObjectKeys(raw, [
+    "action",
+    "actionId",
+    "snoozedUntil",
+    "resolutionReason",
+    "idempotencyKey",
+  ]);
+  const actionRequest = raw as unknown as LaunchAgentAttentionActionRequest;
+  const lifecycle = await transitionAgentAttention(
+    user.id,
+    notificationId,
+    actionRequest,
+  );
+  return privateLaunchJson(
+    {
+      ok: true,
+      notificationId,
+      actionId: actionRequest.actionId || null,
+      lifecycle,
+      destination: null,
+    } satisfies LaunchAgentAttentionActionResponse,
+  );
 }
 
 async function handleLaunchPlatformModel(
@@ -5697,20 +6270,6 @@ async function handleLaunchLibrary(request: Request): Promise<Response> {
   });
 }
 
-function launchFleetState(value: unknown): LaunchFleetAgentState {
-  return value === "active" || value === "paused" || value === "error" ||
-      value === "idle" || value === "unconfigured"
-    ? value
-    : "unconfigured";
-}
-
-function launchFleetHealth(value: unknown): LaunchFleetAgentHealth {
-  return value === "healthy" || value === "waiting" || value === "paused" ||
-      value === "error" || value === "idle"
-    ? value
-    : "idle";
-}
-
 function launchFleetCapacityState(
   value: unknown,
 ): LaunchAgentCapacityResponse["state"] | null {
@@ -5794,35 +6353,457 @@ export function toLaunchFleetAgentCapacity(
   };
 }
 
-function launchFleetActivities(value: unknown): LaunchFleetActivity[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry): LaunchFleetActivity[] => {
-    const item = asRecord(entry);
+function operatorStoreErrorResponse(err: AgentOperatorStoreError): Response {
+  const code = err.code === "REVISION_CONFLICT"
+    ? "AGENT_OPERATOR_REVISION_CONFLICT"
+    : err.code === "NOT_FOUND"
+    ? "AGENT_OPERATOR_NOT_FOUND"
+    : err.code === "INVALID_REQUEST" || err.code === "INVALID_REVISION"
+    ? "AGENT_OPERATOR_INVALID_REQUEST"
+    : "AGENT_OPERATOR_SERVICE_UNAVAILABLE";
+  return privateLaunchJson({
+    error: err.message,
+    code,
+    ...(err.currentRevision ? { currentRevision: err.currentRevision } : {}),
+  }, err.status);
+}
+
+function strictObjectKeys(
+  body: Record<string, unknown>,
+  allowed: readonly string[],
+): void {
+  const allowedKeys = new Set(allowed);
+  const unknown = Object.keys(body).filter((key) => !allowedKeys.has(key));
+  if (unknown.length > 0) {
+    throw new RequestValidationError(
+      `Unknown request field${unknown.length === 1 ? "" : "s"}: ${
+        unknown.join(", ")
+      }`,
+    );
+  }
+}
+
+function stableInterfaceIds(row: LaunchAppRow): string[] {
+  const declarations = parseManifest(row.manifest)?.interfaces;
+  if (!Array.isArray(declarations)) return [];
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const declaration of declarations) {
+    if (!declaration || typeof declaration !== "object") continue;
     if (
-      !item || typeof item.id !== "string" || typeof item.createdAt !== "string"
+      typeof declaration.id !== "string" ||
+      declaration.id.length < 1 || declaration.id.length > 160 ||
+      /[\u0000-\u001f\u007f]/.test(declaration.id) ||
+      typeof declaration.label !== "string" || !declaration.label ||
+      typeof declaration.hash !== "string" ||
+      !INTERFACE_ARTIFACT_HASH_RE.test(declaration.hash) ||
+      seen.has(declaration.id)
     ) {
-      return [];
+      continue;
     }
-    const kind = item.kind === "alert"
-      ? "alert"
-      : item.kind === "run"
-      ? "run"
-      : null;
-    if (!kind) return [];
-    return [{
-      id: item.id,
-      kind,
-      title: typeof item.title === "string" && item.title.trim()
-        ? item.title
-        : kind === "run"
-        ? "Agent wake"
-        : "Agent Alert",
-      summary: typeof item.summary === "string" ? item.summary : null,
-      status: typeof item.status === "string" ? item.status : "unknown",
-      routineId: typeof item.routineId === "string" ? item.routineId : null,
-      createdAt: item.createdAt,
-    }];
-  }).slice(0, 3);
+    seen.add(declaration.id);
+    ids.push(declaration.id);
+  }
+  return ids.slice(0, 100);
+}
+
+function parseAgentPreferencesUpdate(
+  body: Record<string, unknown>,
+  availableInterfaceIds: readonly string[],
+): LaunchAgentPreferencesUpdateRequest {
+  strictObjectKeys(body, [
+    "expectedRevision",
+    "favoriteInterfaceIds",
+    "favoritesInitialized",
+  ]);
+  if (
+    typeof body.expectedRevision !== "string" ||
+    !body.expectedRevision.trim()
+  ) {
+    throw new RequestValidationError("expectedRevision is required");
+  }
+  if (body.favoritesInitialized !== true) {
+    throw new RequestValidationError("favoritesInitialized must be true");
+  }
+  if (
+    !Array.isArray(body.favoriteInterfaceIds) ||
+    body.favoriteInterfaceIds.length > 100 ||
+    body.favoriteInterfaceIds.some((value) =>
+      typeof value !== "string" || value.length < 1 || value.length > 160 ||
+      /[\u0000-\u001f\u007f]/.test(value)
+    )
+  ) {
+    throw new RequestValidationError(
+      "favoriteInterfaceIds must be an array of stable Interface ids",
+    );
+  }
+  const favoriteInterfaceIds = body.favoriteInterfaceIds as string[];
+  if (new Set(favoriteInterfaceIds).size !== favoriteInterfaceIds.length) {
+    throw new RequestValidationError(
+      "favoriteInterfaceIds must not contain duplicates",
+    );
+  }
+  const available = new Set(availableInterfaceIds);
+  const unavailable = favoriteInterfaceIds.filter((id) => !available.has(id));
+  if (unavailable.length > 0) {
+    throw new RequestValidationError(
+      "favoriteInterfaceIds contains an unavailable Interface",
+    );
+  }
+  return {
+    expectedRevision: body.expectedRevision,
+    favoriteInterfaceIds,
+    favoritesInitialized: true,
+  };
+}
+
+function parseFleetOrderUpdate(
+  body: Record<string, unknown>,
+): LaunchFleetOrderUpdateRequest {
+  strictObjectKeys(body, ["agentIds", "expectedRevision"]);
+  if (
+    typeof body.expectedRevision !== "string" ||
+    !body.expectedRevision.trim()
+  ) {
+    throw new RequestValidationError("expectedRevision is required");
+  }
+  if (
+    !Array.isArray(body.agentIds) || body.agentIds.length > 1000 ||
+    body.agentIds.some((value) => typeof value !== "string" || !isUuid(value))
+  ) {
+    throw new RequestValidationError(
+      "agentIds must be a complete array of Agent ids",
+    );
+  }
+  const agentIds = body.agentIds as string[];
+  if (
+    new Set(agentIds.map((id) => id.toLowerCase())).size !== agentIds.length
+  ) {
+    throw new RequestValidationError("agentIds must not contain duplicates");
+  }
+  return { agentIds, expectedRevision: body.expectedRevision };
+}
+
+function parseFleetPreferencesUpdate(
+  body: Record<string, unknown>,
+): LaunchFleetPreferencesUpdateRequest {
+  strictObjectKeys(body, [
+    "expectedRevision",
+    "shortcutsEnabled",
+    "shortcutMap",
+  ]);
+  if (
+    typeof body.expectedRevision !== "string" ||
+    !body.expectedRevision.trim()
+  ) {
+    throw new RequestValidationError("expectedRevision is required");
+  }
+  if (typeof body.shortcutsEnabled !== "boolean") {
+    throw new RequestValidationError("shortcutsEnabled must be a boolean");
+  }
+  const shortcutMap = asRecord(body.shortcutMap);
+  if (!shortcutMap) {
+    throw new RequestValidationError("shortcutMap must be an object");
+  }
+  return {
+    expectedRevision: body.expectedRevision,
+    shortcutsEnabled: body.shortcutsEnabled,
+    shortcutMap: shortcutMap as LaunchFleetShortcutMap,
+  };
+}
+
+function strictLaunchSearchRequest(url: URL): LaunchAgentSearchRequest {
+  const allowed = new Set(["q", "agent", "kinds", "limit"]);
+  for (const key of new Set(url.searchParams.keys())) {
+    if (!allowed.has(key)) {
+      throw new RequestValidationError(
+        `Unknown search query parameter: ${key}`,
+      );
+    }
+    if (url.searchParams.getAll(key).length !== 1) {
+      throw new RequestValidationError(
+        `Search query parameter must be unique: ${key}`,
+      );
+    }
+  }
+
+  const query = url.searchParams.get("q");
+  if (query === null) {
+    throw new RequestValidationError("q is required");
+  }
+  const agentId = url.searchParams.get("agent");
+  const rawKinds = url.searchParams.get("kinds");
+  const rawLimit = url.searchParams.get("limit");
+  if (rawLimit !== null && !/^[1-9][0-9]{0,2}$/.test(rawLimit)) {
+    throw new RequestValidationError(
+      "limit must be an integer between 1 and 100",
+    );
+  }
+  return {
+    query,
+    ...(agentId === null ? {} : { agentId }),
+    ...(rawKinds === null ? {} : {
+      kinds: rawKinds.split(",") as LaunchAgentSearchSubjectKind[],
+    }),
+    ...(rawLimit === null ? {} : { limit: Number(rawLimit) }),
+  };
+}
+
+async function handleLaunchAgentPreferences(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+): Promise<Response> {
+  try {
+    if (method !== "GET" && method !== "PATCH") {
+      return privateLaunchJson({ error: "Method not allowed" }, 405);
+    }
+    const user = await requireLaunchUser(request);
+    requireAccountSessionForAgentHome(user);
+    const resolved = await resolveOwnerPrivateRoutineAgent(
+      user,
+      encodedLocator,
+    );
+    if (resolved instanceof Response) {
+      return withPrivateLaunchPrivacy(resolved);
+    }
+    const interfaceIds = stableInterfaceIds(resolved);
+    if (method === "GET") {
+      const current = await getAgentInterfaceFavorites(user.id, resolved.id);
+      const preferences = current.favoritesInitialized ||
+          interfaceIds.length === 0
+        ? current
+        : (await initializeAgentInterfaceFavorites(
+          user.id,
+          resolved.id,
+          interfaceIds,
+        )).preferences;
+      return privateLaunchJson(
+        {
+          preferences,
+        } satisfies LaunchAgentPreferencesResponse,
+      );
+    }
+
+    const raw = asRecord(await readJsonBody<unknown>(request));
+    if (!raw) {
+      throw new RequestValidationError("Request body must be an object");
+    }
+    const update = parseAgentPreferencesUpdate(raw, interfaceIds);
+    const preferences = await replaceAgentInterfaceFavorites(
+      user.id,
+      resolved.id,
+      update.favoriteInterfaceIds,
+      update.expectedRevision,
+    );
+    return privateLaunchJson(
+      {
+        preferences,
+      } satisfies LaunchAgentPreferencesResponse,
+    );
+  } catch (err) {
+    if (err instanceof AgentOperatorStoreError) {
+      return operatorStoreErrorResponse(err);
+    }
+    if (err instanceof RequestValidationError) {
+      return privateLaunchJson({ error: err.message }, err.status);
+    }
+    console.error("[LAUNCH] Agent preference request failed:", err);
+    return privateLaunchJson({
+      error: "Agent preferences are temporarily unavailable",
+      code: "AGENT_OPERATOR_SERVICE_UNAVAILABLE",
+    }, 503);
+  }
+}
+
+async function handleLaunchAgentActivity(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+): Promise<Response> {
+  try {
+    if (method !== "GET") {
+      return privateLaunchJson({ error: "Method not allowed" }, 405);
+    }
+    const user = await requireLaunchUser(request);
+    requireAccountSessionForAgentHome(user);
+    const resolved = await resolveOwnerPrivateRoutineAgent(
+      user,
+      encodedLocator,
+    );
+    if (resolved instanceof Response) {
+      return withPrivateLaunchPrivacy(resolved);
+    }
+    const url = new URL(request.url);
+    const rawLimit = url.searchParams.get("limit");
+    const recentLimit = rawLimit === null ? 20 : Number(rawLimit);
+    if (
+      !Number.isInteger(recentLimit) || recentLimit < 1 || recentLimit > 99
+    ) {
+      throw new RequestValidationError(
+        "limit must be an integer between 1 and 99",
+      );
+    }
+    const cursor = url.searchParams.get("cursor");
+    const page = await getAgentActivityPage({
+      userId: user.id,
+      agentId: resolved.id,
+      recentLimit,
+      cursor,
+    });
+    const generatedAt = page.activity.generatedAt;
+    return privateLaunchJson(
+      {
+        agent: {
+          id: resolved.id,
+          slug: resolved.slug || resolved.id,
+          name: resolved.name || resolved.slug || resolved.id,
+        },
+        activity: page.activity,
+        generatedAt,
+        nextCursor: page.nextCursor,
+      } satisfies LaunchAgentActivityResponse & { nextCursor: string | null },
+    );
+  } catch (err) {
+    if (err instanceof AgentOperatorStoreError) {
+      return operatorStoreErrorResponse(err);
+    }
+    if (err instanceof RequestValidationError) {
+      return privateLaunchJson({ error: err.message }, err.status);
+    }
+    console.error("[LAUNCH] Agent activity request failed:", err);
+    return privateLaunchJson({
+      error: "Agent activity is temporarily unavailable",
+      code: "AGENT_OPERATOR_SERVICE_UNAVAILABLE",
+    }, 503);
+  }
+}
+
+async function handleLaunchFleetOrder(
+  request: Request,
+  method: string,
+): Promise<Response> {
+  try {
+    if (method !== "PUT") {
+      return privateLaunchJson({ error: "Method not allowed" }, 405);
+    }
+    const user = await requireLaunchUser(request);
+    requireAccountSessionForAgentHome(user);
+    const raw = asRecord(await readJsonBody<unknown>(request));
+    if (!raw) {
+      throw new RequestValidationError("Request body must be an object");
+    }
+    const update = parseFleetOrderUpdate(raw);
+    return privateLaunchJson(
+      await replaceFleetOrder(
+        user.id,
+        update.agentIds,
+        update.expectedRevision,
+      ),
+    );
+  } catch (err) {
+    if (err instanceof AgentOperatorStoreError) {
+      return operatorStoreErrorResponse(err);
+    }
+    if (err instanceof RequestValidationError) {
+      return privateLaunchJson({ error: err.message }, err.status);
+    }
+    console.error("[LAUNCH] Fleet order request failed:", err);
+    return privateLaunchJson({
+      error: "Fleet order is temporarily unavailable",
+      code: "AGENT_OPERATOR_SERVICE_UNAVAILABLE",
+    }, 503);
+  }
+}
+
+async function handleLaunchFleetPreferences(
+  request: Request,
+  method: string,
+): Promise<Response> {
+  try {
+    if (method !== "GET" && method !== "PATCH") {
+      return privateLaunchJson({ error: "Method not allowed" }, 405);
+    }
+    const user = await requireLaunchUser(request);
+    requireAccountSessionForAgentHome(user);
+    if (method === "GET") {
+      const current = await getFleetPreferences(user.id);
+      return privateLaunchJson(
+        {
+          preferences: {
+            revision: current.revision,
+            shortcutsEnabled: current.shortcutsEnabled,
+            shortcutMap: current.shortcutMap,
+            updatedAt: current.updatedAt,
+          },
+        } satisfies LaunchFleetPreferencesResponse,
+      );
+    }
+
+    const raw = asRecord(await readJsonBody<unknown>(request));
+    if (!raw) {
+      throw new RequestValidationError("Request body must be an object");
+    }
+    const update = parseFleetPreferencesUpdate(raw);
+    const preferences = await replaceFleetShortcuts(
+      user.id,
+      update.shortcutsEnabled,
+      update.shortcutMap,
+      update.expectedRevision,
+    );
+    return privateLaunchJson(
+      {
+        preferences,
+      } satisfies LaunchFleetPreferencesResponse,
+    );
+  } catch (err) {
+    if (err instanceof AgentOperatorStoreError) {
+      return operatorStoreErrorResponse(err);
+    }
+    if (err instanceof RequestValidationError) {
+      return privateLaunchJson({ error: err.message }, err.status);
+    }
+    console.error("[LAUNCH] Fleet preference request failed:", err);
+    return privateLaunchJson({
+      error: "Fleet preferences are temporarily unavailable",
+      code: "AGENT_OPERATOR_SERVICE_UNAVAILABLE",
+    }, 503);
+  }
+}
+
+async function handleLaunchSearch(
+  request: Request,
+  method: string,
+): Promise<Response> {
+  try {
+    if (method !== "GET") {
+      return privateLaunchJson({ error: "Method not allowed" }, 405);
+    }
+    const user = await requireLaunchUser(request);
+    requireAccountSessionForAgentHome(user);
+    const response = await searchOwnerAgentNavigation(
+      user.id,
+      strictLaunchSearchRequest(new URL(request.url)),
+    );
+    return privateLaunchJson(response);
+  } catch (err) {
+    if (err instanceof AgentSearchServiceError) {
+      return privateLaunchJson({
+        error: err.message,
+        code: err.code === "INVALID_REQUEST"
+          ? "AGENT_SEARCH_INVALID_REQUEST"
+          : "AGENT_SEARCH_SERVICE_UNAVAILABLE",
+      }, err.status);
+    }
+    if (err instanceof RequestValidationError) {
+      return privateLaunchJson({ error: err.message }, err.status);
+    }
+    console.error("[LAUNCH] Agent search request failed:", err);
+    return privateLaunchJson({
+      error: "Agent search is temporarily unavailable",
+      code: "AGENT_SEARCH_SERVICE_UNAVAILABLE",
+    }, 503);
+  }
 }
 
 async function handleLaunchFleet(request: Request): Promise<Response> {
@@ -5830,61 +6811,82 @@ async function handleLaunchFleet(request: Request): Promise<Response> {
   if (!isAccountSessionAuthSource(user.authSource)) {
     return error("Fleet access requires an account session", 403);
   }
-  const db = getDbConfig();
-  const [ownedRows, accountCapacity, snapshotResponse] = await Promise.all([
-    fetchOwnedApps(user.id),
-    getAccountCapacityStatus(user.id),
-    fetch(`${db.baseUrl}/rest/v1/rpc/get_launch_fleet_snapshot`, {
-      method: "POST",
-      headers: db.headers,
-      body: JSON.stringify({ p_user_id: user.id }),
-    }),
-  ]);
-  const snapshotRows = await readRows<LaunchFleetSnapshotRow>(
-    snapshotResponse,
-    "Failed to fetch Fleet snapshot",
-  );
-  const snapshotByAgent = new Map(
-    snapshotRows.map((row) => [row.agent_id, row]),
-  );
+  const [ownedRows, accountCapacity, snapshot, fleetPreferences] = await Promise
+    .all([
+      fetchOwnedApps(user.id),
+      getAccountCapacityStatus(user.id),
+      getAgentOperatorFleetSnapshot(user.id),
+      getFleetPreferences(user.id),
+    ]);
   const privateRows = ownedRows.filter((row) => row.visibility === "private");
+  const rowsById = new Map(privateRows.map((row) => [row.id, row]));
+  const fleetPositionByAgent = new Map(
+    fleetPreferences.positions.map((position) => [
+      position.agentId,
+      position.fleetPosition,
+    ]),
+  );
+  if (
+    snapshot.agents.length !== privateRows.length ||
+    fleetPreferences.positions.length !== privateRows.length ||
+    snapshot.agents.some((projection) =>
+      !rowsById.has(projection.agentId) ||
+      !fleetPositionByAgent.has(projection.agentId)
+    )
+  ) {
+    throw new LaunchServiceUnavailableError(
+      "Fleet projection is temporarily unavailable",
+    );
+  }
   const owners = await fetchOwnerMap(privateRows.map((row) => row.owner_id));
   const installedIds = new Set(privateRows.map((row) => row.id));
 
-  const generatedAt = new Date().toISOString();
+  const generatedAt = snapshot.generatedAt;
+  const reasons = snapshot.agents.map((agent) =>
+    agent.workingReadiness.exclusionReason
+  );
+  const orderedProjections = [...snapshot.agents].sort((left, right) =>
+    fleetPositionByAgent.get(left.agentId)! -
+    fleetPositionByAgent.get(right.agentId)!
+  );
   const response: LaunchFleetResponse = {
-    agents: privateRows.map((row) => {
-      const snapshot = snapshotByAgent.get(row.id);
+    agents: orderedProjections.map((projection) => {
+      const row = rowsById.get(projection.agentId)!;
       return {
         agent: toLaunchAgentSummary(row, {
           owners,
           viewerId: user.id,
           installedIds,
         }),
-        state: launchFleetState(snapshot?.state),
-        health: launchFleetHealth(snapshot?.health),
-        routineCount: Math.max(0, Math.floor(numeric(snapshot?.routine_count))),
-        activeRoutineCount: Math.max(
-          0,
-          Math.floor(numeric(snapshot?.active_routine_count)),
-        ),
-        nextWakeAt: snapshot?.next_wake_at ?? null,
-        lastRunAt: snapshot?.last_run_at ?? null,
-        deferredWakeCount: Math.max(
-          0,
-          Math.floor(numeric(snapshot?.deferred_wake_count)),
-        ),
-        unreadAlertCount: Math.max(
-          0,
-          Math.floor(numeric(snapshot?.unread_alert_count)),
-        ),
-        recentActivity: launchFleetActivities(snapshot?.recent_activity),
-        capacity: snapshot
-          ? toLaunchFleetAgentCapacity(snapshot, generatedAt)
-          : null,
+        state: projection.state,
+        health: projection.health,
+        routineCount: projection.routineCount,
+        activeRoutineCount: projection.activeRoutineCount,
+        nextWakeAt: projection.nextWakeAt,
+        lastRunAt: projection.lastRunAt,
+        deferredWakeCount: projection.deferredWakeCount,
+        attentionCount: projection.attentionCount,
+        unreadAlertCount: projection.unreadAlertCount,
+        recentActivity: projection.recentActivity,
+        capacity: projection.capacity,
+        workingReadiness: projection.workingReadiness,
+        operatingSummary: projection.operatingSummary,
+        fleetPosition: fleetPositionByAgent.get(projection.agentId)!,
       };
     }),
     accountCapacity: toLaunchCapacityResponse(accountCapacity),
+    workingSummary: {
+      working: snapshot.workingAgentCount,
+      total: snapshot.agents.length,
+      paused: reasons.filter((reason) => reason === "paused").length,
+      blocked:
+        reasons.filter((reason) =>
+          reason === "no_live_release" || reason === "no_enabled_routine" ||
+          reason === "setup_required" || reason === "disabled"
+        ).length,
+      failing: reasons.filter((reason) => reason === "error").length,
+    },
+    fleetRevision: fleetPreferences.revision,
     generatedAt,
   };
   return privateLaunchJson(response);
@@ -6599,6 +7601,7 @@ async function buildLaunchAgentHomeSnapshotAttempt(
     agentCapacityStatus,
     routines,
     profile,
+    activityPage,
   ] = await Promise.all([
     loadAgentHomeSettingStatuses(user.id, row),
     buildLaunchFunctionSummaries(row, user.id),
@@ -6622,6 +7625,14 @@ async function buildLaunchAgentHomeSnapshotAttempt(
     // token (which would make one concurrent commit trigger nested retries).
     buildLaunchAgentRoutinesResponse(user.id, row, revision),
     userService.getUser(user.id),
+    getAgentActivityPage({
+      userId: user.id,
+      agentId: row.id,
+      recentLimit: 3,
+    }).catch((err) => {
+      console.error("[ACTIVITY] Agent Home projection unavailable:", err);
+      return null;
+    }),
   ]);
   // One atomic KV read supplies both executed bytes and their attestation.
   // Bind the verdict to the DB live version so a validly signed old bundle is
@@ -6661,6 +7672,7 @@ async function buildLaunchAgentHomeSnapshotAttempt(
   // its staged build is version-addressable.
   const candidatePreflightReady = Boolean(candidateManifest) &&
     row.runtime !== "gpu";
+  const networkDisclosure = buildAppNetworkDisclosure(manifest, connectedKeys);
 
   const home = buildAgentHomeResponse({
     now,
@@ -6680,7 +7692,7 @@ async function buildLaunchAgentHomeSnapshotAttempt(
     grants,
     routine,
     settings,
-    disclosure: buildAppNetworkDisclosure(manifest, connectedKeys),
+    disclosure: networkDisclosure,
     budgetUsage: budget.usage,
     callsByRun: budget.callsByRun,
     capacity: capacityStatus ? toLaunchCapacityResponse(capacityStatus) : null,
@@ -6712,6 +7724,90 @@ async function buildLaunchAgentHomeSnapshotAttempt(
   home.agentCapacity = agentCapacityStatus && capacityStatus
     ? toLaunchAgentCapacityResponse(agentCapacityStatus, capacityStatus)
     : null;
+  const interfaceIds = stableInterfaceIds(row);
+  const agentIdentity = {
+    id: home.agent.id,
+    slug: home.agent.slug,
+    name: home.agent.name,
+  };
+  const routineItems = routines.routines;
+  const [preferences, attention] = await Promise.all([
+    (async () => {
+      try {
+        const current = await getAgentInterfaceFavorites(user.id, row.id);
+        return current.favoritesInitialized || interfaceIds.length === 0
+          ? current
+          : (await initializeAgentInterfaceFavorites(
+            user.id,
+            row.id,
+            interfaceIds,
+          )).preferences;
+      } catch (err) {
+        const code = err instanceof AgentOperatorStoreError
+          ? err.code
+          : "AGENT_OPERATOR_SERVICE_UNAVAILABLE";
+        console.error(`[PREFERENCES] Agent Home ${code}:`, err);
+        return null;
+      }
+    })(),
+    readAgentAttention(user.id, agentIdentity).catch((err) => {
+      const code = err instanceof AgentAttentionStoreError
+        ? err.code
+        : "ATTENTION_READ_FAILED";
+      console.error(`[ATTENTION] Agent Home ${code}:`, err);
+      return {
+        items: [],
+        openCount: 0,
+        requiresDecisionCount: 0,
+        available: false as const,
+        unavailableReason: "temporarily_unavailable" as const,
+      };
+    }),
+  ]);
+  const accessConsumers: AgentAccessConsumerBinding[] = routineItems.flatMap(
+    (routineItem) =>
+      routineItem.capabilities.map((capability) => ({
+        authorityId: `routine:${capability.id}`,
+        consumer: {
+          kind: "routine" as const,
+          id: routineItem.id,
+          label: routineItem.name,
+        },
+      })),
+  );
+  home.directive = buildAgentDirective({
+    routines: routineItems,
+    reportingConfigured: home.responsibility.reporting.configured,
+  });
+  home.operatingSummary = buildAgentOperatingSummary({
+    now,
+    hasLiveRelease: Boolean(home.release.live),
+    setupReady: home.setup.ready,
+    routines: routineItems,
+    capacityWaiting: home.capacity?.state === "waiting" ||
+      home.agentCapacity?.state === "waiting",
+    eventSubscriptionActive: grants.some((grant) =>
+      grant.mode === "subscribe" && grant.status === "active"
+    ),
+  });
+  home.attention = attention;
+  home.activity = activityPage
+    ? excludeAgentActivitySources(
+      activityPage.activity,
+      new Set(attention.items.map((item) => item.notificationId)),
+    )
+    : buildAgentActivityPreview({
+      agentSlug: home.agent.slug,
+      now,
+      routines: routineItems,
+    });
+  home.access = buildAgentAccessProjection({
+    disclosure: networkDisclosure,
+    authority: home.authority.items,
+    grants,
+    consumers: accessConsumers,
+  });
+  if (preferences) home.preferences = preferences;
   const confirmedTargets = await loadAgentHomeCallTargets(
     user.id,
     routine,
@@ -9131,6 +10227,11 @@ async function handleLaunchAgentSettings(
     }
 
     const status = await loadStatus();
+    await resolveConfiguredSettingIncidents({
+      userId: user.id,
+      agentId: appId,
+      configuredSettingKeys: status.connectedKeys,
+    });
     return json({
       success: true,
       keys_saved: keysSaved,
@@ -10608,7 +11709,10 @@ async function fetchOwnedApps(userId: string): Promise<LaunchAppRow[]> {
       deleted_at: "is.null",
       select: APP_SELECT,
       order: "updated_at.desc",
-      limit: "100",
+      // Fleet preferences support up to 1,000 owned Agents. Reading fewer
+      // here makes an otherwise valid atomic preference snapshot look torn
+      // and forces the Fleet endpoint into a deterministic 503.
+      limit: "1000",
     },
   );
 }
@@ -11180,6 +12284,79 @@ function interfaceSummaries(
         typeof fn === "string" && manifestFunctions.has(fn)
       )
       : [];
+    const readModels: NonNullable<LaunchInterfaceSummary["readModels"]> = [];
+    const declaredReadModels = declaration.read_models &&
+        typeof declaration.read_models === "object" &&
+        !Array.isArray(declaration.read_models)
+      ? declaration.read_models
+      : {};
+    // `apps.manifest` is advanced by the guarded promotion transaction. Never
+    // expose cache authority for a draft/no-live Agent, and defensively repeat
+    // validator checks in case a legacy row predates the current contract.
+    if (row.current_version) {
+      for (const functionName of functions.slice(0, 100)) {
+        const functionDefinition = manifest?.functions?.[functionName];
+        if (
+          functionDefinition?.annotations?.readOnlyHint !== true ||
+          functionDefinition.annotations.destructiveHint === true
+        ) {
+          continue;
+        }
+        // A reviewed live `readOnlyHint` is sufficient for a conservative,
+        // user-triggered SWR policy. Custom freshness and all automatic
+        // invocation still require the Interface's explicit read_models entry.
+        const defaultPolicy = {
+          functionName,
+          freshForMs: 5_000,
+          staleForMs: 30_000,
+        };
+        const rawPolicy = declaredReadModels[functionName];
+        if (
+          !rawPolicy || typeof rawPolicy !== "object" ||
+          Array.isArray(rawPolicy)
+        ) {
+          readModels.push(defaultPolicy);
+          continue;
+        }
+        const policy = rawPolicy as unknown as Record<string, unknown>;
+        const freshForMs = policy.fresh_for_ms;
+        const staleForMs = policy.stale_for_ms;
+        if (
+          !Number.isInteger(freshForMs) ||
+          (freshForMs as number) < 1_000 ||
+          (freshForMs as number) > 5 * 60_000 ||
+          !Number.isInteger(staleForMs) ||
+          (staleForMs as number) < (freshForMs as number) ||
+          (staleForMs as number) > 30 * 60_000
+        ) {
+          readModels.push(defaultPolicy);
+          continue;
+        }
+        const hasPrefetchArgs = Object.prototype.hasOwnProperty.call(
+          policy,
+          "prefetch_args",
+        );
+        const prefetchArgs = policy.prefetch_args;
+        if (
+          hasPrefetchArgs &&
+          (
+            !prefetchArgs || typeof prefetchArgs !== "object" ||
+            Array.isArray(prefetchArgs)
+          )
+        ) {
+          readModels.push(defaultPolicy);
+          continue;
+        }
+        readModels.push({
+          functionName,
+          freshForMs: freshForMs as number,
+          staleForMs: staleForMs as number,
+          ...(hasPrefetchArgs
+            ? { prefetchArgs: prefetchArgs as Record<string, unknown> }
+            : {}),
+        });
+      }
+    }
     summaries.push({
       id: declaration.id,
       label: declaration.label,
@@ -11190,6 +12367,9 @@ function interfaceSummaries(
         encodeURIComponent(row.id)
       }/${declaration.hash}`,
       functions,
+      releaseVersion: row.current_version || null,
+      artifactHash: declaration.hash,
+      ...(readModels.length > 0 ? { readModels } : {}),
       minHeight: typeof declaration.min_height === "number" &&
           Number.isFinite(declaration.min_height)
         ? declaration.min_height

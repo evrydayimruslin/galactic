@@ -209,6 +209,11 @@ Deno.test("reactive delivery: capacity wait persists, preserves root attribution
   const eventPatches: Record<string, unknown>[] = [];
   const deliveryPatches: Record<string, unknown>[] = [];
   const notifications: Record<string, unknown>[] = [];
+  const incidentResolutions: Array<{
+    userId: string;
+    dedupeKey: string;
+    reason: string;
+  }> = [];
   const executionInputs: Array<Record<string, unknown>> = [];
   const queueOperations = { write: 1, read: 1, delete: 1, total: 3 };
   let inserted = false;
@@ -267,7 +272,10 @@ Deno.test("reactive delivery: capacity wait persists, preserves root attribution
       eventPatches.push(body as Record<string, unknown>);
       return new Response("[]", { status: 200 });
     }
-    if (url.pathname.endsWith("/user_notifications") && method === "POST") {
+    if (
+      url.pathname.endsWith("/rpc/create_user_notification_episode") &&
+      method === "POST"
+    ) {
       notifications.push(body as Record<string, unknown>);
       return new Response("[]", { status: 201 });
     }
@@ -324,8 +332,8 @@ Deno.test("reactive delivery: capacity wait persists, preserves root attribution
   assertEquals(executionInputs[0].capacityAgentId, "app-root");
   assertEquals(executionInputs[0].capacityQueueOperations, queueOperations);
   assertEquals(executionInputs[0].capacityRootWorkerRequest, true);
-  assertEquals(notifications[0]?.agent_id, "app-subscriber-1");
-  assertEquals(notifications[0]?.kind, "event_delivery_waiting");
+  assertEquals(notifications[0]?.p_agent_id, "app-subscriber-1");
+  assertEquals(notifications[0]?.p_kind, "event_delivery_waiting");
 
   await withMockedDb(
     handler,
@@ -337,6 +345,10 @@ Deno.test("reactive delivery: capacity wait persists, preserves root attribution
           executeDelivery,
           capacityQueueOperations: queueOperations,
           capacityRootWorkerRequest: true,
+          resolveIncidentFn: (userId, dedupeKey, reason) => {
+            incidentResolutions.push({ userId, dedupeKey, reason });
+            return Promise.resolve(1);
+          },
         },
       ),
   );
@@ -353,6 +365,30 @@ Deno.test("reactive delivery: capacity wait persists, preserves root attribution
     deliveryPatches.filter((patch) => patch.status === "pending").length,
     1,
     "only the due waiting row may re-enter the executable state",
+  );
+  assertEquals(
+    incidentResolutions.map(({ userId, dedupeKey }) => ({
+      userId,
+      dedupeKey,
+    })),
+    [
+      {
+        userId: "user-1",
+        dedupeKey: "event_delivery_failed:d-wait",
+      },
+      {
+        userId: "user-1",
+        dedupeKey: "event_delivery_blocked:d-wait",
+      },
+      {
+        userId: "user-1",
+        dedupeKey: "event_delivery_waiting:d-wait",
+      },
+      {
+        userId: "user-1",
+        dedupeKey: "event_dispatch_failed:evt-wait",
+      },
+    ],
   );
 });
 
@@ -468,7 +504,10 @@ Deno.test("reactive delivery: a subscriber that leaves owner-private scope is de
       }
       return new Response("[]", { status: 200 });
     }
-    if (url.pathname.endsWith("/user_notifications") && method === "POST") {
+    if (
+      url.pathname.endsWith("/rpc/create_user_notification_episode") &&
+      method === "POST"
+    ) {
       notifications.push(body as Record<string, unknown>);
       return new Response("[]", { status: 201 });
     }
@@ -504,8 +543,8 @@ Deno.test("reactive delivery: a subscriber that leaves owner-private scope is de
     "owner-private isolation is checked pre-execution",
   );
   assertEquals(deliveryPatches[0]?.status, "denied");
-  assertEquals(notifications[0]?.agent_id, "app-subscriber-1");
-  assertEquals(notifications[0]?.kind, "event_delivery_blocked");
+  assertEquals(notifications[0]?.p_agent_id, "app-subscriber-1");
+  assertEquals(notifications[0]?.p_kind, "event_delivery_blocked");
 });
 
 Deno.test("event consumer: a fan-out beyond the pass budget re-enqueues, and the continuation pass actually progresses", async () => {

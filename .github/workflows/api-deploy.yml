@@ -1,9 +1,9 @@
 name: API Deploy
 
-# A normal release uses this workflow once the Compute service-binding target
-# exists. On the first install the deploy job detects the missing target and
-# defers safely to the manually approved Compute Deploy bootstrap, avoiding a
-# broken half of the API <-> Compute mutual binding.
+# This workflow is only valid once the Compute service-binding target exists.
+# First-install bootstrap is an explicit, manually approved Compute Deploy
+# operation. Normal staging and production releases fail closed when the
+# binding target cannot be verified.
 on:
   push:
     branches: [main]
@@ -113,22 +113,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Detect staging Compute binding target
-        id: compute_target
+      - name: Verify staging Compute binding target
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if npx wrangler deployments list --name galactic-compute-staging --json >/dev/null 2>&1; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "First-install API deployment deferred. Run Compute Deploy with bootstrap_api_control_plane selected." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          set -euo pipefail
+          npx wrangler deployments list --name galactic-compute-staging --json >/dev/null
+          echo "Verified staging Compute binding target."
 
       - name: Wait for matching staging schema when migrations changed
-        if: steps.compute_target.outputs.ready == 'true'
         working-directory: .
         shell: bash
         env:
@@ -169,7 +164,6 @@ jobs:
           exit 1
 
       - name: Provision queues (idempotent)
-        if: steps.compute_target.outputs.ready == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -179,12 +173,10 @@ jobs:
           done
 
       - name: Install staging capacity Tail dependencies
-        if: steps.compute_target.outputs.ready == 'true'
         working-directory: capacity-tail-worker
         run: npm ci
 
       - name: Deploy staging capacity Tail Worker
-        if: steps.compute_target.outputs.ready == 'true'
         working-directory: capacity-tail-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -192,7 +184,6 @@ jobs:
         run: npm run deploy:staging
 
       - name: Deploy staging worker
-        if: steps.compute_target.outputs.ready == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -225,22 +216,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Detect production Compute binding target
-        id: compute_target
+      - name: Verify production Compute binding target
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if npx wrangler deployments list --name galactic-compute --json >/dev/null 2>&1; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "First-install API deployment deferred. Run Compute Deploy with bootstrap_api_control_plane selected." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          set -euo pipefail
+          npx wrangler deployments list --name galactic-compute --json >/dev/null
+          echo "Verified production Compute binding target."
 
       - name: Wait for matching production schema
-        if: steps.compute_target.outputs.ready == 'true'
         working-directory: .
         shell: bash
         env:
@@ -267,7 +253,6 @@ jobs:
           exit 1
 
       - name: Provision queues (idempotent)
-        if: steps.compute_target.outputs.ready == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -277,12 +262,10 @@ jobs:
           done
 
       - name: Install production capacity Tail dependencies
-        if: steps.compute_target.outputs.ready == 'true'
         working-directory: capacity-tail-worker
         run: npm ci
 
       - name: Deploy production capacity Tail Worker
-        if: steps.compute_target.outputs.ready == 'true'
         working-directory: capacity-tail-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -290,7 +273,6 @@ jobs:
         run: npm run deploy
 
       - name: Deploy production worker
-        if: steps.compute_target.outputs.ready == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

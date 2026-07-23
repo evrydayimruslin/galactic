@@ -9,6 +9,7 @@ import {
 import type { LaunchNotification } from "../../../../shared/contracts/launch.ts";
 import { launchApi } from "../lib/api";
 import { hasLaunchAuthToken } from "../lib/auth";
+import type { LaunchNavigate } from "../lib/navigation";
 import type { LaunchRouteDefinition, LaunchRouteKey } from "../lib/routes";
 import { AddToAgentButton } from "../pages/foundation-pages";
 import { useSignInModal } from "./sign-in-modal";
@@ -33,7 +34,7 @@ interface LaunchShellProps {
   accountRoutes: LaunchRouteDefinition[];
   activeRoute: LaunchRouteKey;
   children: ReactNode;
-  navigate: (to: string) => void;
+  navigate: LaunchNavigate;
   primaryRoutes: LaunchRouteDefinition[];
   title: string;
 }
@@ -77,7 +78,7 @@ interface MetricProps {
 interface RouteLinkProps {
   children: ReactNode;
   className?: string;
-  navigate: (to: string) => void;
+  navigate: LaunchNavigate;
   to: string;
 }
 
@@ -278,7 +279,7 @@ export function RouteButton({
   to,
   ...props
 }: Omit<ButtonProps, "onClick"> & {
-  navigate: (to: string) => void;
+  navigate: LaunchNavigate;
   to: string;
 }): ReactElement {
   return (
@@ -320,7 +321,7 @@ function notifRelativeTime(iso: string): string {
 // Owner notification bell (Tier 2A). Reads the same rows as gx.notifications;
 // surfaces auto-pause / budget events for signed-in owners without a reload.
 function NotificationBell(
-  { navigate }: { navigate: (to: string) => void },
+  { navigate }: { navigate: LaunchNavigate },
 ): ReactElement {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<LaunchNotification[]>([]);

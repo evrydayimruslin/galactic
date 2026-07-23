@@ -27,6 +27,7 @@ import {
 } from "./app-runtime-telemetry.ts";
 import { createServerLogger, type LoggerLike } from "./logging.ts";
 import { getManifestPermissions } from "./trust.ts";
+import { recordMissingSettingIncidents } from "./notification-recovery.ts";
 
 export const APP_ENTRY_FILES = [
   "index.tsx",
@@ -83,6 +84,7 @@ interface ResolveAppRuntimeEnvVarsDeps extends RuntimeResourceDeps {
   fetchFn?: typeof fetch;
   supabaseUrl?: string;
   supabaseServiceRoleKey?: string;
+  recordMissingSettingIncidentsFn?: typeof recordMissingSettingIncidents;
 }
 
 interface UserAppSecretRow {
@@ -368,6 +370,22 @@ export async function resolveAppRuntimeEnvVars(
     ...missingRequiredPerUser,
   ];
 
+  if (
+    userId && missingRequiredSecrets.length > 0 &&
+    (
+      deps?.recordMissingSettingIncidentsFn ||
+      (getEnv("SUPABASE_URL") && getEnv("SUPABASE_SERVICE_ROLE_KEY"))
+    )
+  ) {
+    const recordIncidents = deps?.recordMissingSettingIncidentsFn ??
+      recordMissingSettingIncidents;
+    await recordIncidents({
+      userId,
+      agentId: app.id,
+      missingSettingKeys: missingRequiredSecrets,
+    }).catch(() => 0);
+  }
+
   return { envVars, credentials, envSchema, missingRequiredSecrets };
 }
 
@@ -620,11 +638,10 @@ export function resolveFunctionExecutionPolicy(
     };
     return {
       async: executionClass === "async",
-      timeoutMs:
-        typeof timeoutMs === "number" && Number.isFinite(timeoutMs) &&
+      timeoutMs: typeof timeoutMs === "number" && Number.isFinite(timeoutMs) &&
           timeoutMs > 0
-          ? Math.min(Math.floor(timeoutMs), MAX_ASYNC_EXECUTION_MS)
-          : MAX_ASYNC_EXECUTION_MS,
+        ? Math.min(Math.floor(timeoutMs), MAX_ASYNC_EXECUTION_MS)
+        : MAX_ASYNC_EXECUTION_MS,
     };
   } catch {
     return fallback;
@@ -827,7 +844,6 @@ function collectManifestExternalFunctionDependencies(
     }
   }
 }
-
 
 function collectRoutineActorAppCallDependencies(
   caller: RuntimeCallerLike | undefined,

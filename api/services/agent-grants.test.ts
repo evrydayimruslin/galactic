@@ -3,6 +3,7 @@ import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals
 import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejects.ts";
 
 import {
+  approvePendingGrant,
   createGrant,
   createPendingGrantProposal,
   recordGrantSpend,
@@ -350,12 +351,17 @@ Deno.test("createGrant: re-proposing an active grant never resets the spend wind
         monthly_cap_credits: 5000,
       })]);
     }
-    if (url.pathname.endsWith("/agent_function_grants") && init?.method === "POST") {
+    if (
+      url.pathname.endsWith("/agent_function_grants") && init?.method === "POST"
+    ) {
       const body = JSON.parse(String(init.body))[0];
       if (body.spent_credits_period === 0) sawSpendResetInsert = true;
       return jsonResponse([grantRow(body)]);
     }
-    if (url.pathname.endsWith("/agent_function_grants") && init?.method === "PATCH") {
+    if (
+      url.pathname.endsWith("/agent_function_grants") &&
+      init?.method === "PATCH"
+    ) {
       patchedFields = JSON.parse(String(init.body));
       return jsonResponse([grantRow({
         id: "grant-1",
@@ -400,6 +406,7 @@ Deno.test("createGrant: rejects a self-referential grant", async () => {
 
 Deno.test("createPendingGrantProposal: API-key wiring stays pending until owner approval", async () => {
   let inserted: Record<string, unknown> | null = null;
+  let notification: Record<string, unknown> | null = null;
   let prefer = "";
   const handler: Handler = (url, init) => {
     if (url.pathname.endsWith("/apps")) {
@@ -415,10 +422,16 @@ Deno.test("createPendingGrantProposal: API-key wiring stays pending until owner 
     if (url.pathname.endsWith("/agent_function_grants") && !init?.method) {
       return jsonResponse([]);
     }
-    if (url.pathname.endsWith("/agent_function_grants") && init?.method === "POST") {
+    if (
+      url.pathname.endsWith("/agent_function_grants") && init?.method === "POST"
+    ) {
       inserted = JSON.parse(String(init.body))[0];
       prefer = new Headers(init.headers).get("Prefer") || "";
       return jsonResponse([grantRow(inserted)]);
+    }
+    if (url.pathname.endsWith("/rpc/create_user_notification_episode")) {
+      notification = JSON.parse(String(init?.body));
+      return jsonResponse([{ id: "notification-1" }]);
     }
     return jsonResponse([]);
   };
@@ -434,14 +447,78 @@ Deno.test("createPendingGrantProposal: API-key wiring stays pending until owner 
     assertEquals(inserted?.status, "pending");
     assertEquals(inserted?.monthly_cap_credits, 25);
     assert(prefer.includes("ignore-duplicates"));
+    assertEquals(notification?.p_user_id, "user-1");
+    assertEquals(notification?.p_agent_id, "app-caller");
+    assertEquals(notification?.p_entity_type, "grant");
+    assertEquals(notification?.p_entity_id, "grant-1");
+    assertEquals(notification?.p_dedupe_key, "agent_grant_approval:grant-1");
   });
+});
+
+Deno.test("approvePendingGrant: effectiveness resolves the exact owner-scoped approval incident", async () => {
+  let resolution: Record<string, unknown> | null = null;
+  const pending = grantRow({
+    status: "pending",
+    caller_app_id: "app-caller",
+    target_app_id: "app-target",
+  });
+  const handler: Handler = (url, init) => {
+    if (
+      url.pathname.endsWith("/agent_function_grants") &&
+      (!init?.method || init.method === "GET")
+    ) {
+      return jsonResponse([pending]);
+    }
+    if (url.pathname.endsWith("/apps")) {
+      const id = url.searchParams.get("id")?.replace("eq.", "");
+      return jsonResponse([{
+        id,
+        owner_id: "user-1",
+        visibility: "private",
+        slug: null,
+      }]);
+    }
+    if (
+      url.pathname.endsWith("/agent_function_grants") &&
+      init?.method === "PATCH"
+    ) {
+      return jsonResponse([grantRow({
+        ...pending,
+        status: "active",
+      })]);
+    }
+    if (
+      url.pathname.endsWith(
+        "/rpc/resolve_notification_incident_by_dedupe",
+      )
+    ) {
+      resolution = JSON.parse(String(init?.body));
+      return jsonResponse(1);
+    }
+    return jsonResponse([]);
+  };
+
+  await withMockedDb(handler, async () => {
+    const approved = await approvePendingGrant("user-1", "grant-1");
+    assertEquals(approved?.status, "active");
+  });
+  assertEquals(resolution, {
+    p_user_id: "user-1",
+    p_dedupe_key: "agent_grant_approval:grant-1",
+    p_resolution_reason: "The Agent access request was approved.",
+  });
+  assertEquals(
+    "read_at" in (resolution ?? {}),
+    false,
+  );
 });
 
 Deno.test("createPendingGrantProposal: connected keys cannot wire public or cross-owner Agents", async () => {
   for (const forbidden of ["public", "cross-owner"] as const) {
     const handler: Handler = (url) => {
       if (url.pathname.endsWith("/apps")) {
-        const isCaller = url.searchParams.get("id")?.includes("caller") === true;
+        const isCaller =
+          url.searchParams.get("id")?.includes("caller") === true;
         return jsonResponse([{
           id: isCaller ? "app-caller" : "app-target",
           owner_id: forbidden === "cross-owner" && !isCaller

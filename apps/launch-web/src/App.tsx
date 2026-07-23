@@ -17,6 +17,11 @@ import {
   type LaunchRouteLiveState,
   useLaunchRouteLiveData,
 } from "./lib/live-data";
+import {
+  dismissLaunchWorkspace,
+  type LaunchNavigate,
+  resolveLaunchNavigationTarget,
+} from "./lib/navigation";
 import { shouldUseNebulaRoute } from "./lib/nebula-route";
 import {
   AccountFoundationPage,
@@ -38,11 +43,15 @@ import {
   exchangeLaunchBridgeToken,
   getLaunchAuthToken,
   isLaunchRefreshAvailable,
+  isLaunchAuthSessionStorageChange,
+  LAUNCH_AUTH_SESSION_CHANGED_EVENT,
+  launchAuthSessionIdentity,
   normalizeLocalPath,
   recordLaunchAuthDiagnostic,
   refreshLaunchSession,
   setLaunchAuthToken,
 } from "./lib/auth";
+import { consumeExternalReturnRevalidation } from "./lib/external-navigation";
 
 export interface LocationState {
   pathname: string;
@@ -53,7 +62,7 @@ export interface LaunchPageProps {
   live: LaunchRouteLiveState;
   location: LocationState;
   route: ResolvedLaunchRoute;
-  navigate: (to: string) => void;
+  navigate: LaunchNavigate;
 }
 
 const routeTitles: Record<LaunchRouteKey, string> = {
@@ -73,7 +82,15 @@ export function App(): ReactElement {
     currentLocation()
   );
   const [sessionRestoreFailed, setSessionRestoreFailed] = useState(false);
-  const authToken = getLaunchAuthToken();
+  const [authSession, setAuthSession] = useState(() => ({
+    revision: 0,
+    token: getLaunchAuthToken(),
+  }));
+  const authToken = authSession.token;
+  const authSessionIdentity = useMemo(
+    () => launchAuthSessionIdentity(authToken),
+    [authToken],
+  );
   const sessionRestoring = !authToken && isLaunchRefreshAvailable() &&
     !sessionRestoreFailed;
 
@@ -81,6 +98,50 @@ export function App(): ReactElement {
     const onPopState = () => setLocation(currentLocation());
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    const synchronizeAuthSession = () => {
+      const token = getLaunchAuthToken();
+      setAuthSession((current) =>
+        current.token === token
+          ? current
+          : { revision: current.revision + 1, token }
+      );
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (isLaunchAuthSessionStorageChange(event.key)) {
+        synchronizeAuthSession();
+      }
+    };
+
+    window.addEventListener(
+      LAUNCH_AUTH_SESSION_CHANGED_EVENT,
+      synchronizeAuthSession,
+    );
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(
+        LAUNCH_AUTH_SESSION_CHANGED_EVENT,
+        synchronizeAuthSession,
+      );
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
+  // External flows such as Stripe can restore this page from the browser's
+  // back-forward cache, including the exact DOM and JavaScript bundle that was
+  // active before leaving. Reload that frozen snapshot so Back always resumes
+  // the current launch UI and revalidates its data.
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      const externalReturn = consumeExternalReturnRevalidation();
+      if (event.persisted || externalReturn) {
+        window.location.reload();
+      }
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
   }, []);
 
   // The access token only lives ~1h, while the API may retain an HttpOnly
@@ -109,15 +170,18 @@ export function App(): ReactElement {
     };
   }, [authToken, sessionRestoreFailed, sessionRestoring]);
 
-  const navigate = useCallback((to: string) => {
-    const next = new URL(to, window.location.origin);
+  const navigate = useCallback<LaunchNavigate>((to, options = {}) => {
+    const next = resolveLaunchNavigationTarget(to, window.location.href);
     if (next.origin !== window.location.origin) {
       window.location.href = next.href;
       return;
     }
-    window.history.pushState(null, "", `${next.pathname}${next.search}`);
+    const method = options.replace ? "replaceState" : "pushState";
+    window.history[method](null, "", `${next.pathname}${next.search}`);
     setLocation(currentLocation());
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (options.scroll !== "preserve") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
   }, []);
 
   const route = useMemo(
@@ -125,7 +189,8 @@ export function App(): ReactElement {
     [location.pathname],
   );
   const live = useLaunchRouteLiveData(location, route, {
-    authenticated: Boolean(authToken),
+    sessionIdentity: authSessionIdentity,
+    sessionRevision: authSession.revision,
     suspend: sessionRestoring,
   });
 
@@ -178,13 +243,15 @@ export function App(): ReactElement {
     sessionRestoring,
   });
   return (
-    <SignInModalProvider>
+    // Remount the application surface when the authenticated owner changes so
+    // component-local alert/search/settings state cannot outlive its account.
+    <SignInModalProvider key={authSessionIdentity}>
       {nebulaRoute && !providerCodeMisrouted
         ? sessionRestoring
           ? (
             <NebulaSessionRestoringShell
               agentOpen={route.definition.key === "agent"}
-              onAgentClose={() => navigate("/")}
+              onAgentClose={() => dismissLaunchWorkspace(navigate)}
             />
           )
           : (

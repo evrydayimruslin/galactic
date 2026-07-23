@@ -9,6 +9,8 @@ export const LAUNCH_AUTH_DIAGNOSTIC_KEY = "ultralight.launch.authDiagnostic";
 // visitor would burn a refresh round-trip per API call.
 export const LAUNCH_AUTH_REFRESH_AVAILABLE_KEY =
   "ultralight.launch.refreshAvailable";
+export const LAUNCH_AUTH_SESSION_CHANGED_EVENT =
+  "galactic:launch-auth-session-changed";
 const AUTH_EXPIRY_SKEW_MS = 30_000;
 
 export type LaunchAuthDiagnosticStatus =
@@ -45,6 +47,60 @@ export interface LaunchAuthExchangeResponse {
   };
 }
 
+export function launchAuthSubject(token: string | null): string | null {
+  const encodedPayload = token?.split(".")[1];
+  if (!encodedPayload) return null;
+
+  try {
+    const normalized = encodedPayload.replace(/-/gu, "+").replace(/_/gu, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const payload = JSON.parse(globalThis.atob(padded)) as { sub?: unknown };
+    return typeof payload.sub === "string" && payload.sub.length > 0
+      ? payload.sub
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Stable, non-secret browser cache scope for the current account.
+ *
+ * Valid launch access tokens always carry a Supabase subject. The opaque
+ * fallback keeps malformed/non-standard tokens separated without ever putting
+ * the bearer token itself into a cache key or diagnostic surface.
+ */
+export function launchAuthSessionIdentity(token: string | null): string {
+  if (!token) return "public";
+  const subject = launchAuthSubject(token);
+  return subject
+    ? `user:${subject}`
+    : `opaque:${token.length}:${fingerprintLaunchAuthToken(token)}`;
+}
+
+export function isLaunchAuthSessionStorageChange(
+  key: string | null,
+): boolean {
+  return key === null || key === LAUNCH_AUTH_TOKEN_KEY;
+}
+
+function fingerprintLaunchAuthToken(token: string): string {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < token.length; index += 1) {
+    hash ^= token.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function announceLaunchAuthSessionChange(
+  previousToken: string | null,
+  nextToken: string | null,
+): void {
+  if (previousToken === nextToken || typeof window === "undefined") return;
+  window.dispatchEvent(new Event(LAUNCH_AUTH_SESSION_CHANGED_EVENT));
+}
+
 export function getLaunchAuthToken(): string | null {
   const token = window.localStorage.getItem(LAUNCH_AUTH_TOKEN_KEY);
   if (!token) return null;
@@ -68,6 +124,7 @@ export function setLaunchAuthToken(
   token: string,
   expiresInSeconds?: number | null,
 ): void {
+  const previousToken = window.localStorage.getItem(LAUNCH_AUTH_TOKEN_KEY);
   window.localStorage.setItem(LAUNCH_AUTH_TOKEN_KEY, token);
   if (typeof expiresInSeconds === "number" && expiresInSeconds > 0) {
     window.localStorage.setItem(
@@ -77,11 +134,14 @@ export function setLaunchAuthToken(
   } else {
     window.localStorage.removeItem(LAUNCH_AUTH_EXPIRES_AT_KEY);
   }
+  announceLaunchAuthSessionChange(previousToken, token);
 }
 
 export function clearLaunchAuthToken(): void {
+  const previousToken = window.localStorage.getItem(LAUNCH_AUTH_TOKEN_KEY);
   window.localStorage.removeItem(LAUNCH_AUTH_TOKEN_KEY);
   window.localStorage.removeItem(LAUNCH_AUTH_EXPIRES_AT_KEY);
+  announceLaunchAuthSessionChange(previousToken, null);
 }
 
 export function isLaunchRefreshAvailable(): boolean {

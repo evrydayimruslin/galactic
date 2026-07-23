@@ -15,6 +15,7 @@ import {
   normalizeRoutineSchedule as normalizeProductionRoutineSchedule,
   RoutineScheduleValidationError,
 } from "./routine-schedule.ts";
+import { resolveRoutineRecoveryIncidents } from "./notification-recovery.ts";
 
 export type RoutineStatus =
   | "active"
@@ -1044,11 +1045,18 @@ export async function resumeRoutine(
     getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
     routine.composer_app_id && isLaunchManagedRoutine(routine)
   ) {
-    return await activateManagedRoutineWithSlot(
+    const activated = await activateManagedRoutineWithSlot(
       userId,
       routineId,
       validation.budgetPolicy,
     );
+    await resolveRoutineRecoveryIncidents({
+      userId,
+      routineId,
+      metadata: routine.metadata,
+      reason: "resumed",
+    });
+    return activated;
   }
   let updated: RoutineSummary | undefined;
   [updated] = await patchRows<RoutineSummary>(
@@ -1062,10 +1070,26 @@ export async function resumeRoutine(
     },
     ROUTINE_SELECT,
   );
-  if (updated) return updated;
+  if (updated) {
+    await resolveRoutineRecoveryIncidents({
+      userId,
+      routineId,
+      metadata: routine.metadata,
+      reason: "resumed",
+    });
+    return updated;
+  }
   // Idempotent resume for an already-active routine, while still validating
   // approvals above. Never silently activates disabled/deleted rows.
-  if (routine.status === "active") return routine;
+  if (routine.status === "active") {
+    await resolveRoutineRecoveryIncidents({
+      userId,
+      routineId,
+      metadata: routine.metadata,
+      reason: "resumed",
+    });
+    return routine;
+  }
   throw new Error(
     `Routine ${routineId} is ${routine.status} and cannot be activated`,
   );

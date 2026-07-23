@@ -5,8 +5,8 @@ import {
   COMPUTE_EXEC_PERMISSION,
   COMPUTE_MAX_SECRETS,
   COMPUTE_MAX_TOOLS,
-  isDeveloperV1ComputeTool,
   isComputeProfile,
+  isDeveloperV1ComputeTool,
   normalizeManifestComputeConfig,
 } from './compute.ts';
 import type { MCPJsonSchema, MCPTool, MCPToolAnnotations } from './mcp.ts';
@@ -98,21 +98,21 @@ export function parseManifestCallRateLimit(
   if (!manifest) return null;
   let parsed: unknown;
   try {
-    parsed = typeof manifest === "string" ? JSON.parse(manifest) : manifest;
+    parsed = typeof manifest === 'string' ? JSON.parse(manifest) : manifest;
   } catch {
     return null;
   }
-  if (!parsed || typeof parsed !== "object") return null;
+  if (!parsed || typeof parsed !== 'object') return null;
   const rl = (parsed as { rate_limit?: unknown }).rate_limit;
-  if (!rl || typeof rl !== "object") return null;
+  if (!rl || typeof rl !== 'object') return null;
   const rec = rl as Record<string, unknown>;
   const out: ManifestCallRateLimit = {};
   const rpm = rec.calls_per_minute;
   const day = rec.calls_per_day;
-  if (typeof rpm === "number" && Number.isFinite(rpm) && rpm > 0) {
+  if (typeof rpm === 'number' && Number.isFinite(rpm) && rpm > 0) {
     out.calls_per_minute = Math.floor(rpm);
   }
-  if (typeof day === "number" && Number.isFinite(day) && day > 0) {
+  if (typeof day === 'number' && Number.isFinite(day) && day > 0) {
     out.calls_per_day = Math.floor(day);
   }
   return out.calls_per_minute || out.calls_per_day ? out : null;
@@ -168,10 +168,22 @@ export interface ManifestInterfaceDeclaration {
   // Bridge allowlist: the only functions the host page will call on this
   // interface's behalf. The sandbox has no other I/O path.
   functions: string[];
+  // Explicit, release-reviewed read models that the owner UI may cache. A
+  // function name alone is never evidence that a call is side-effect free.
+  // Each key must be allowlisted above and its manifest function must declare
+  // annotations.readOnlyHint=true. `prefetch_args` is opt-in: omitting it
+  // permits SWR after a user call but never authorizes an automatic call.
+  read_models?: Record<string, ManifestInterfaceReadModel>;
   min_height?: number;
   // sha256 (hex) of the uploaded entry file. Stamped by the upload
   // pipeline; developer-supplied values are overwritten, never trusted.
   hash?: string;
+}
+
+export interface ManifestInterfaceReadModel {
+  fresh_for_ms: number;
+  stale_for_ms: number;
+  prefetch_args?: Record<string, unknown>;
 }
 
 export type ManifestHttpAuthMode = 'user' | 'public';
@@ -449,9 +461,7 @@ function normalizeEnvCredential(value: unknown): EnvCredential | undefined {
       destination,
       inject: {
         as: 'basic',
-        username_env: typeof i.username_env === 'string'
-          ? i.username_env
-          : undefined,
+        username_env: typeof i.username_env === 'string' ? i.username_env : undefined,
       },
     };
   }
@@ -536,9 +546,7 @@ function normalizeManifestEnvVarEntry(
     input: normalizeEnvInput(raw.input, key, description),
     placeholder: typeof raw.placeholder === 'string' ? raw.placeholder : undefined,
     help: typeof raw.help === 'string' ? raw.help : undefined,
-    group: typeof raw.group === 'string' && raw.group.trim()
-      ? raw.group.trim()
-      : undefined,
+    group: typeof raw.group === 'string' && raw.group.trim() ? raw.group.trim() : undefined,
     credential: normalizeEnvCredential(raw.credential),
   };
 }
@@ -621,9 +629,7 @@ export function normalizeEnvSchema(
       input: normalizeEnvInput(entry.input, key, description),
       placeholder: typeof entry.placeholder === 'string' ? entry.placeholder : undefined,
       help: typeof entry.help === 'string' ? entry.help : undefined,
-      group: typeof entry.group === 'string' && entry.group.trim()
-        ? entry.group.trim()
-        : undefined,
+      group: typeof entry.group === 'string' && entry.group.trim() ? entry.group.trim() : undefined,
       credential: normalizeEnvCredential(entry.credential),
     };
   }
@@ -1215,6 +1221,10 @@ function validateManifestExternalFunctions(
 }
 
 const INTERFACE_ID_RE = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+const MAX_INTERFACE_READ_MODELS = 20;
+const MIN_INTERFACE_READ_FRESH_MS = 1_000;
+const MAX_INTERFACE_READ_FRESH_MS = 5 * 60_000;
+const MAX_INTERFACE_READ_STALE_MS = 30 * 60_000;
 
 // Entry paths address files inside the developer's uploaded bundle; reject
 // anything that could escape it or smuggle a non-HTML artifact into the
@@ -1306,6 +1316,114 @@ function validateManifestInterfaces(
           warnings.push(
             `Interface "${interfaceId}" allowlists missing function "${fn}".`,
           );
+        }
+      }
+    }
+
+    if (iface.read_models !== undefined) {
+      if (
+        !iface.read_models || typeof iface.read_models !== 'object' ||
+        Array.isArray(iface.read_models)
+      ) {
+        errors.push({
+          path: `${ifacePath}.read_models`,
+          message: 'read_models must be an object keyed by function name',
+        });
+      } else {
+        const readModels = Object.entries(
+          iface.read_models as Record<string, unknown>,
+        );
+        if (readModels.length > MAX_INTERFACE_READ_MODELS) {
+          errors.push({
+            path: `${ifacePath}.read_models`,
+            message: `read_models must contain at most ${MAX_INTERFACE_READ_MODELS} entries`,
+          });
+        }
+        for (const [functionName, rawPolicy] of readModels) {
+          const policyPath = `${ifacePath}.read_models.${functionName}`;
+          if (
+            !Array.isArray(iface.functions) ||
+            !iface.functions.includes(functionName)
+          ) {
+            errors.push({
+              path: policyPath,
+              message: 'read model function must be present in the interface functions allowlist',
+            });
+          }
+          const functionDefinition = functions[functionName] as
+            | ManifestFunction
+            | undefined;
+          if (
+            functionDefinition?.annotations?.readOnlyHint !== true ||
+            functionDefinition.annotations.destructiveHint === true
+          ) {
+            errors.push({
+              path: policyPath,
+              message:
+                'read model function must explicitly declare annotations.readOnlyHint=true and must not be destructive',
+            });
+          }
+          if (
+            !rawPolicy || typeof rawPolicy !== 'object' ||
+            Array.isArray(rawPolicy)
+          ) {
+            errors.push({
+              path: policyPath,
+              message: 'read model policy must be an object',
+            });
+            continue;
+          }
+          const policy = rawPolicy as Record<string, unknown>;
+          const freshForMs = policy.fresh_for_ms;
+          const staleForMs = policy.stale_for_ms;
+          if (
+            !Number.isInteger(freshForMs) ||
+            (freshForMs as number) < MIN_INTERFACE_READ_FRESH_MS ||
+            (freshForMs as number) > MAX_INTERFACE_READ_FRESH_MS
+          ) {
+            errors.push({
+              path: `${policyPath}.fresh_for_ms`,
+              message:
+                `fresh_for_ms must be an integer between ${MIN_INTERFACE_READ_FRESH_MS} and ${MAX_INTERFACE_READ_FRESH_MS}`,
+            });
+          }
+          if (
+            !Number.isInteger(staleForMs) ||
+            (staleForMs as number) <
+              (Number.isInteger(freshForMs) ? freshForMs as number : MIN_INTERFACE_READ_FRESH_MS) ||
+            (staleForMs as number) > MAX_INTERFACE_READ_STALE_MS
+          ) {
+            errors.push({
+              path: `${policyPath}.stale_for_ms`,
+              message:
+                `stale_for_ms must be an integer at least fresh_for_ms and no greater than ${MAX_INTERFACE_READ_STALE_MS}`,
+            });
+          }
+          if (
+            policy.prefetch_args !== undefined &&
+            (
+              !policy.prefetch_args ||
+              typeof policy.prefetch_args !== 'object' ||
+              Array.isArray(policy.prefetch_args)
+            )
+          ) {
+            errors.push({
+              path: `${policyPath}.prefetch_args`,
+              message: 'prefetch_args must be an object when provided',
+            });
+          }
+          const unknownKeys = Object.keys(policy).filter((key) =>
+            key !== 'fresh_for_ms' && key !== 'stale_for_ms' &&
+            key !== 'prefetch_args'
+          );
+          if (unknownKeys.length > 0) {
+            errors.push({
+              path: policyPath,
+              message: `unknown read model field${unknownKeys.length === 1 ? '' : 's'}: ${
+                unknownKeys.join(', ')
+              }`,
+            });
+          }
         }
       }
     }
@@ -2763,8 +2881,7 @@ function validateEnvCredential(
   } else if (!allowedHosts.has(destination)) {
     errors.push({
       path: `${path}.destination`,
-      message:
-        `destination "${destination}" must be declared in network.allowed_destinations`,
+      message: `destination "${destination}" must be declared in network.allowed_destinations`,
     });
   }
 
@@ -2828,13 +2945,9 @@ function validateManifestCompute(
   declaredEnvVars: Record<string, unknown>,
   errors: ManifestValidationError[],
 ): void {
-  const rawPermissions = Array.isArray(manifest.permissions)
-    ? manifest.permissions
-    : [];
+  const rawPermissions = Array.isArray(manifest.permissions) ? manifest.permissions : [];
   const permissionSet = new Set(
-    rawPermissions.filter((permission): permission is string =>
-      typeof permission === 'string'
-    ),
+    rawPermissions.filter((permission): permission is string => typeof permission === 'string'),
   );
 
   for (const [index, permission] of rawPermissions.entries()) {
@@ -2850,8 +2963,10 @@ function validateManifestCompute(
   }
 
   if (manifest.compute === undefined) return;
-  if (!manifest.compute || typeof manifest.compute !== 'object' ||
-    Array.isArray(manifest.compute)) {
+  if (
+    !manifest.compute || typeof manifest.compute !== 'object' ||
+    Array.isArray(manifest.compute)
+  ) {
     errors.push({ path: 'compute', message: 'compute must be an object' });
     return;
   }
@@ -2991,8 +3106,7 @@ export function validateManifest(input: unknown): ManifestValidationResult {
   } else if (!isCanonicalAppVersion(manifest.version)) {
     errors.push({
       path: 'version',
-      message:
-        'version must be canonical x.y.z numeric semver (for example 1.2.3)',
+      message: 'version must be canonical x.y.z numeric semver (for example 1.2.3)',
     });
   }
 

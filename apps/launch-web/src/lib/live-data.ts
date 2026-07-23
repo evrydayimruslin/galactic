@@ -26,7 +26,13 @@ import {
   type LaunchPlatformPrimitivesResponse,
   type LaunchWalletResponse,
 } from "./api";
-import { hasLaunchAuthToken } from "./auth";
+import {
+  getLaunchAuthToken,
+  hasLaunchAuthToken,
+  isLaunchAuthSessionStorageChange,
+  LAUNCH_AUTH_SESSION_CHANGED_EVENT,
+  launchAuthSessionIdentity,
+} from "./auth";
 import type { ResolvedLaunchRoute } from "./routes";
 
 export type LaunchLoadStatus = "idle" | "loading" | "ready" | "error";
@@ -70,23 +76,63 @@ interface LocationLike {
 }
 
 interface LaunchLiveDataContext {
-  authenticated: boolean;
+  sessionIdentity: string;
+  sessionRevision: number;
   suspend?: boolean;
 }
 
 type LoadResult = LaunchRouteLiveData;
 
-// Session-lived cache of the last payload fetched per route identity. Lets a
-// revisited page paint instantly (stale-while-revalidate) instead of blanking
-// to a loading state and shifting when the fresh fetch lands. Module-level so it
-// survives route changes / component remounts; a full page reload (incl. sign
-// out, which hard-navigates) clears it, so no cross-session data lingers.
-const routeCache = new Map<string, LaunchRouteLiveData>();
+/**
+ * Session-lived cache of the last payload fetched per route identity. Cache
+ * keys include the non-secret account identity and App-managed session
+ * revision; every token transition also clears the map and advances the epoch
+ * used to reject prior-session async completions.
+ */
+export class LaunchRouteDataCache {
+  private readonly entries = new Map<string, LaunchRouteLiveData>();
+  private sessionEpoch = 0;
+
+  get epoch(): number {
+    return this.sessionEpoch;
+  }
+
+  clearForSessionChange(): void {
+    this.sessionEpoch += 1;
+    this.entries.clear();
+  }
+
+  get(identity: string): LaunchRouteLiveData | undefined {
+    return this.entries.get(identity);
+  }
+
+  set(identity: string, data: LaunchRouteLiveData): void {
+    this.entries.set(identity, data);
+  }
+}
+
+const routeCache = new LaunchRouteDataCache();
+
+if (typeof window !== "undefined") {
+  window.addEventListener(
+    LAUNCH_AUTH_SESSION_CHANGED_EVENT,
+    () => routeCache.clearForSessionChange(),
+  );
+  window.addEventListener("storage", (event) => {
+    if (isLaunchAuthSessionStorageChange(event.key)) {
+      routeCache.clearForSessionChange();
+    }
+  });
+}
 
 export function useLaunchRouteLiveData(
   location: LocationLike,
   route: ResolvedLaunchRoute,
-  { authenticated, suspend = false }: LaunchLiveDataContext,
+  {
+    sessionIdentity,
+    sessionRevision,
+    suspend = false,
+  }: LaunchLiveDataContext,
 ): LaunchRouteLiveState {
   const [version, setVersion] = useState(0);
   const [state, setState] = useState<Omit<LaunchRouteLiveState, "reload">>({
@@ -99,25 +145,32 @@ export function useLaunchRouteLiveData(
     () => JSON.stringify(route.params),
     [route.params],
   );
+  const dataSearch = useMemo(
+    () => launchRouteDataSearchKey(routeKey, location.search),
+    [location.search, routeKey],
+  );
   const reload = useCallback(() => setVersion((value) => value + 1), []);
   const identityRef = useRef("");
   const identity = launchRouteDataIdentity({
-    authenticated,
     paramsKey,
     pathname: location.pathname,
     routeKey,
+    searchKey: dataSearch,
+    sessionIdentity,
+    sessionRevision,
   });
 
   useEffect(() => {
     let cancelled = false;
+    const capturedAuthScope: LaunchAuthScopeSnapshot = {
+      cacheEpoch: routeCache.epoch,
+      sessionIdentity,
+    };
     const authScopeChanged = (): boolean => {
-      if (sameLaunchAuthScope(authenticated, hasLaunchAuthToken())) return false;
-      // API requests can silently refresh an expired session. Never commit a
-      // response under the public cache key when it was authorized midway
-      // through the request (or vice versa); the empty update makes App render
-      // again and this effect restarts under the new session scope.
-      setState({ data: {}, status: "loading" });
-      return true;
+      return !sameLaunchAuthScope(capturedAuthScope, {
+        cacheEpoch: routeCache.epoch,
+        sessionIdentity: launchAuthSessionIdentity(getLaunchAuthToken()),
+      });
     };
     // Never fetch or surface cached route data while a refresh cookie is being
     // revalidated. In particular, this prevents an expired owner session from
@@ -161,7 +214,7 @@ export function useLaunchRouteLiveData(
       setState((current) => ({ ...current, data: accumulated }));
     });
 
-    loadRouteData(location, route)
+    loadRouteData({ ...location, search: dataSearch }, route)
       .then((data) => {
         if (cancelled || authScopeChanged()) return;
         accumulated = { ...accumulated, ...data };
@@ -171,7 +224,14 @@ export function useLaunchRouteLiveData(
       .catch((err) => {
         if (cancelled || authScopeChanged()) return;
         setState((current) => ({
-          data: current.data,
+          // A failed revalidation may retain stale-while-revalidate data only
+          // for the exact current route + account + session revision. Never
+          // preserve a payload that belongs to the previously rendered scope.
+          data: launchRouteDataAfterError({
+            currentData: current.data,
+            currentIdentity: identityRef.current,
+            requestIdentity: identity,
+          }),
           error: err instanceof Error ? err.message : String(err),
           status: "error",
         }));
@@ -181,13 +241,14 @@ export function useLaunchRouteLiveData(
       cancelled = true;
     };
   }, [
-    authenticated,
+    dataSearch,
     identity,
     location.pathname,
-    location.search,
     paramsKey,
     route,
     routeKey,
+    sessionIdentity,
+    sessionRevision,
     suspend,
     version,
   ]);
@@ -212,25 +273,62 @@ export function useLaunchRouteLiveData(
 }
 
 export function launchRouteDataIdentity({
-  authenticated,
   paramsKey,
   pathname,
   routeKey,
+  searchKey = "",
+  sessionIdentity,
+  sessionRevision,
 }: {
-  authenticated: boolean;
   paramsKey: string;
   pathname: string;
   routeKey: string;
+  searchKey?: string;
+  sessionIdentity: string;
+  sessionRevision: number;
 }): string {
-  const sessionScope = authenticated ? "authenticated" : "public";
-  return `${sessionScope}|${routeKey}|${paramsKey}|${pathname}`;
+  const sessionScope = `${sessionIdentity}@${sessionRevision}`;
+  const base = `${sessionScope}|${routeKey}|${paramsKey}|${pathname}`;
+  return searchKey ? `${base}|${searchKey}` : base;
+}
+
+export function launchRouteDataAfterError({
+  currentData,
+  currentIdentity,
+  requestIdentity,
+}: {
+  currentData: LaunchRouteLiveData;
+  currentIdentity: string;
+  requestIdentity: string;
+}): LaunchRouteLiveData {
+  return currentIdentity === requestIdentity ? currentData : {};
+}
+
+export function launchRouteDataSearchKey(
+  routeKey: string,
+  search: string,
+): string {
+  if (routeKey !== "store") return "";
+
+  const source = new URLSearchParams(search);
+  const relevant = new URLSearchParams();
+  relevant.set("kind", storeKind(source.get("kind")));
+  const query = source.get("q");
+  if (query) relevant.set("q", query);
+  return relevant.toString();
+}
+
+export interface LaunchAuthScopeSnapshot {
+  cacheEpoch: number;
+  sessionIdentity: string;
 }
 
 export function sameLaunchAuthScope(
-  capturedAuthenticated: boolean,
-  currentAuthenticated: boolean,
+  captured: LaunchAuthScopeSnapshot,
+  current: LaunchAuthScopeSnapshot,
 ): boolean {
-  return capturedAuthenticated === currentAuthenticated;
+  return captured.cacheEpoch === current.cacheEpoch &&
+    captured.sessionIdentity === current.sessionIdentity;
 }
 
 async function loadRouteData(
@@ -394,7 +492,9 @@ async function attempted<T>(
   }
 }
 
-function storeKind(value: string | null): LaunchStoreRequest["kind"] {
+function storeKind(
+  value: string | null,
+): NonNullable<LaunchStoreRequest["kind"]> {
   return value === "mcp" || value === "http" ? value : "all";
 }
 
