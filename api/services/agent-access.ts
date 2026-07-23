@@ -14,7 +14,7 @@ export interface AgentAccessConsumerBinding {
   consumer: LaunchAgentAccessConsumer;
 }
 
-export interface AgentAccessInput {
+interface AgentAccessInput {
   disclosure: LaunchNetworkDisclosure;
   authority: readonly LaunchAgentHomeAuthorityItem[];
   /** Owner-scoped grants used only to focus the matching read-only authority. */

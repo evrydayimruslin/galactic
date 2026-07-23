@@ -81,7 +81,7 @@ const EMBEDDING_PROVIDERS = {
   },
 } as const;
 
-export type AgentSearchServiceErrorCode =
+type AgentSearchServiceErrorCode =
   | "INVALID_REQUEST"
   | "SERVICE_UNAVAILABLE";
 
@@ -949,5 +949,3 @@ export async function searchOwnerAgentNavigation(
     generatedAt: (deps.clock ?? (() => new Date()))().toISOString(),
   };
 }
-
-export const searchAgentDocuments = searchOwnerAgentNavigation;

@@ -69,7 +69,7 @@ export interface AgentAttentionBriefRow {
   generated_at: string | null;
 }
 
-export interface AgentAttentionReadInput {
+interface AgentAttentionReadInput {
   agent: {
     id: string;
     slug: string;
@@ -80,17 +80,17 @@ export interface AgentAttentionReadInput {
   now?: Date;
 }
 
-export interface AgentAttentionStoreDependencies {
+interface AgentAttentionStoreDependencies {
   fetchFn?: typeof fetch;
   now?: Date;
 }
 
-export interface AgentAttentionPageOptions {
+interface AgentAttentionPageOptions {
   cursor?: string | null;
   limit?: number;
 }
 
-export interface AgentAttentionCursorValue {
+interface AgentAttentionCursorValue {
   occurredAt: string;
   notificationId: string;
 }
@@ -189,7 +189,7 @@ export function formatAgentAttentionCursor(
   }`;
 }
 
-export function parseAgentAttentionCursor(
+function parseAgentAttentionCursor(
   cursor: string,
 ): AgentAttentionCursorValue {
   if (

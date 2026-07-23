@@ -21,11 +21,11 @@ type NotificationCreator = (
   input: NotificationInput,
 ) => Promise<NotificationRow | null>;
 
-export interface IncidentRecoveryDeps {
+interface IncidentRecoveryDeps {
   resolveIncidentFn?: NotificationIncidentResolver;
 }
 
-export interface IncidentCreationDeps {
+interface IncidentCreationDeps {
   createNotificationFn?: NotificationCreator;
 }
 
@@ -87,7 +87,7 @@ export function routinePauseIncidentDedupeKey(
   }`;
 }
 
-export type EventIncidentKind =
+type EventIncidentKind =
   | "event_dispatch_failed"
   | "event_delivery_failed"
   | "event_delivery_blocked"

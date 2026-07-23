@@ -7,7 +7,7 @@ import type {
   LaunchNavigationTarget,
 } from "../../shared/contracts/launch.ts";
 
-export interface AgentActivityCandidate {
+interface AgentActivityCandidate {
   kind: Exclude<LaunchAgentActivityKind, "scheduled_run" | "routine_run">;
   sourceId: string;
   title: string;
@@ -20,7 +20,7 @@ export interface AgentActivityCandidate {
   evidence?: LaunchAgentEvidenceReference[];
 }
 
-export interface AgentActivityInput {
+interface AgentActivityInput {
   agentSlug: string;
   now: Date;
   routines: readonly LaunchAgentRoutineOverview[];

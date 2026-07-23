@@ -67,8 +67,8 @@ const MODEL_OUTPUT_KEYS = new Set([
   "confidence",
 ]);
 
-export type NotificationBriefActionKey = LaunchAgentAttentionActionKey;
-export type NotificationBriefAction = LaunchAgentAttentionCanonicalAction;
+type NotificationBriefActionKey = LaunchAgentAttentionActionKey;
+type NotificationBriefAction = LaunchAgentAttentionCanonicalAction;
 
 export interface OperatorProjectionJob {
   id: string;
@@ -109,7 +109,7 @@ export interface RawNotificationEvidence {
   lifecycle_state: "open" | "snoozed" | "resolved" | "archived";
 }
 
-export interface ValidatedNotificationBrief {
+interface ValidatedNotificationBrief {
   headline: string;
   impact: string | null;
   recommendedAction: string | null;
@@ -140,7 +140,7 @@ export interface OperatorProjectionDependencies {
   serviceRoleKey?: string;
 }
 
-export interface NotificationBriefJobResult {
+interface NotificationBriefJobResult {
   jobId: string;
   outcome:
     | "completed"
@@ -152,7 +152,7 @@ export interface NotificationBriefJobResult {
   retryAt: string | null;
 }
 
-export interface NotificationBriefBatchResult {
+interface NotificationBriefBatchResult {
   claimed: number;
   completed: number;
   retried: number;
@@ -162,7 +162,7 @@ export interface NotificationBriefBatchResult {
   results: NotificationBriefJobResult[];
 }
 
-export interface SearchDocumentJobResult {
+interface SearchDocumentJobResult {
   jobId: string;
   outcome:
     | "completed"
@@ -174,7 +174,7 @@ export interface SearchDocumentJobResult {
   retryAt: string | null;
 }
 
-export interface OperatorProjectionBatchResult {
+interface OperatorProjectionBatchResult {
   claimed: number;
   completed: number;
   retried: number;

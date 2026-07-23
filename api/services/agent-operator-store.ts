@@ -51,7 +51,7 @@ function containsControlCharacter(value: string): boolean {
   return false;
 }
 
-export type AgentOperatorStoreErrorCode =
+type AgentOperatorStoreErrorCode =
   | "INVALID_REQUEST"
   | "INVALID_REVISION"
   | "REVISION_CONFLICT"
@@ -87,18 +87,18 @@ export interface AgentOperatorStoreDependencies {
   clock?: () => Date;
 }
 
-export interface AgentFleetPreferencesSnapshot
+interface AgentFleetPreferencesSnapshot
   extends LaunchFleetOrderResponse {
   shortcutsEnabled: boolean;
   shortcutMap: LaunchFleetShortcutMap;
 }
 
-export interface AgentInterfaceFavoritesInitialization {
+interface AgentInterfaceFavoritesInitialization {
   preferences: LaunchAgentPreferences;
   initializedNow: boolean;
 }
 
-export interface AgentOperatorFleetProjection {
+interface AgentOperatorFleetProjection {
   agentId: string;
   state: LaunchFleetAgentState;
   health: LaunchFleetAgentHealth;
@@ -116,23 +116,23 @@ export interface AgentOperatorFleetProjection {
   operatingSummary: LaunchAgentOperatingSummary;
 }
 
-export interface AgentOperatorFleetSnapshot {
+interface AgentOperatorFleetSnapshot {
   agents: AgentOperatorFleetProjection[];
   workingAgentCount: number;
   generatedAt: string;
 }
 
-export interface AgentActivityCursorValue {
+interface AgentActivityCursorValue {
   eventAt: string;
   itemKey: string;
 }
 
-export interface AgentActivityPage {
+interface AgentActivityPage {
   activity: LaunchAgentActivityPreview;
   nextCursor: string | null;
 }
 
-export interface GetAgentActivityPageOptions {
+interface GetAgentActivityPageOptions {
   userId: string;
   agentId: string;
   recentLimit?: number;
@@ -1644,61 +1644,4 @@ export async function getAgentActivityPage(
     recentLimit,
     now: config.now(),
   });
-}
-
-export function createAgentOperatorStore(
-  dependencies: AgentOperatorStoreDependencies = {},
-) {
-  return {
-    getAgentInterfaceFavorites: (userId: string, agentId: string) =>
-      getAgentInterfaceFavorites(userId, agentId, dependencies),
-    initializeAgentInterfaceFavorites: (
-      userId: string,
-      agentId: string,
-      manifestInterfaceIds: readonly string[],
-    ) =>
-      initializeAgentInterfaceFavorites(
-        userId,
-        agentId,
-        manifestInterfaceIds,
-        dependencies,
-      ),
-    replaceAgentInterfaceFavorites: (
-      userId: string,
-      agentId: string,
-      interfaceIds: readonly string[],
-      expectedRevision: string,
-    ) =>
-      replaceAgentInterfaceFavorites(
-        userId,
-        agentId,
-        interfaceIds,
-        expectedRevision,
-        dependencies,
-      ),
-    getFleetPreferences: (userId: string) =>
-      getFleetPreferences(userId, dependencies),
-    replaceFleetOrder: (
-      userId: string,
-      agentIds: readonly string[],
-      expectedRevision: string,
-    ) => replaceFleetOrder(userId, agentIds, expectedRevision, dependencies),
-    replaceFleetShortcuts: (
-      userId: string,
-      shortcutsEnabled: boolean,
-      shortcuts: LaunchFleetShortcutMap,
-      expectedRevision: string,
-    ) =>
-      replaceFleetShortcuts(
-        userId,
-        shortcutsEnabled,
-        shortcuts,
-        expectedRevision,
-        dependencies,
-      ),
-    getAgentOperatorFleetSnapshot: (userId: string) =>
-      getAgentOperatorFleetSnapshot(userId, dependencies),
-    getAgentActivityPage: (options: GetAgentActivityPageOptions) =>
-      getAgentActivityPage(options, dependencies),
-  };
 }

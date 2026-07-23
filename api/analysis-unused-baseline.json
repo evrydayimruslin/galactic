@@ -1251,12 +1251,6 @@
       ]
     },
     {
-      "file": "services/inference-client.ts",
-      "types": [
-        "InferenceFetchOptions"
-      ]
-    },
-    {
       "file": "services/inference-options.ts",
       "types": [
         "BuildInferenceOptionsParams"
@@ -1269,8 +1263,7 @@
       ],
       "file": "services/inference-route.ts",
       "types": [
-        "InferenceRouteErrorCode",
-        "ResolveInferenceRouteParams"
+        "InferenceRouteErrorCode"
       ]
     },
     {
@@ -1363,6 +1356,12 @@
       "types": [
         "SupabaseConfig"
       ]
+    },
+    {
+      "duplicates": [
+        "{\"0\":{\"col\":23,\"line\":174,\"name\":\"countAttention\",\"pos\":6490},\"1\":{\"col\":14,\"line\":213,\"name\":\"countUnread\",\"pos\":7982}}"
+      ],
+      "file": "services/notifications.ts"
     },
     {
       "exports": [

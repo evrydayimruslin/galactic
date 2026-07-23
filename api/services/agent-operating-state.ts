@@ -6,7 +6,7 @@ import type {
   LaunchAgentWorkingReadiness,
 } from "../../shared/contracts/launch.ts";
 
-export interface AgentOperatingStateInput {
+interface AgentOperatingStateInput {
   now: Date;
   hasLiveRelease: boolean;
   setupReady: boolean;
@@ -15,7 +15,7 @@ export interface AgentOperatingStateInput {
   eventSubscriptionActive?: boolean;
 }
 
-export interface AgentDirectiveInput {
+interface AgentDirectiveInput {
   routines: readonly LaunchAgentRoutineOverview[];
   reportingConfigured: boolean;
 }
