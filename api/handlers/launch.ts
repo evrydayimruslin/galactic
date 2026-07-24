@@ -317,6 +317,12 @@ import {
   setAgentCapacityCap,
 } from "../services/account-capacity.ts";
 import {
+  OPERATOR_ITEM_SOURCE,
+  reconcileAccountByokOperatorItem,
+  reconcileAgentSetupOperatorItems,
+  scheduleOperatorItemProducer,
+} from "../services/operator-item-producers.ts";
+import {
   AgentOperatorStoreError,
   getAgentActivityPage,
   getAgentInterfaceFavorites,
@@ -5295,6 +5301,54 @@ async function handleLaunchApiKeys(
   return error("Launch API key endpoint not found", 404);
 }
 
+function launchAppUsesInference(row: LaunchAppRow): boolean {
+  const manifest = typeof row.manifest === "string"
+    ? row.manifest
+    : row.manifest
+    ? JSON.stringify(row.manifest)
+    : null;
+  const permissions =
+    resolveStrictManifestPermissions({ manifest }).permissions;
+  return permissions.includes("ai:call") || permissions.includes("ai:embed");
+}
+
+async function scheduleLaunchAccountByokReconciliation(
+  userId: string,
+): Promise<void> {
+  if (!isUuid(userId)) return;
+  await scheduleOperatorItemProducer(
+    OPERATOR_ITEM_SOURCE.accountByok,
+    async () => {
+      const observedAt = new Date().toISOString();
+      const [profile, apps] = await Promise.all([
+        userService.getUser(userId),
+        fetchOwnedApps(userId),
+      ]);
+      if (!profile) throw new Error("Account profile is unavailable");
+      const configured = Boolean(
+        profile.byok_enabled && profile.byok_provider &&
+          profile.byok_configs.some((config) =>
+            config.provider === profile.byok_provider && config.has_key
+          ),
+      );
+      const affectedAgents = apps
+        .filter((row) =>
+          row.visibility === "private" && launchAppUsesInference(row)
+        )
+        .map((row) => ({
+          id: row.id,
+          name: row.name || row.slug || row.id,
+        }));
+      await reconcileAccountByokOperatorItem({
+        userId,
+        configured,
+        affectedAgents,
+        observedAt,
+      });
+    },
+  );
+}
+
 async function handleLaunchByok(
   request: Request,
   path: string,
@@ -5342,6 +5396,7 @@ async function handleLaunchByok(
               user.id,
               providerEntry.provider,
             );
+            await scheduleLaunchAccountByokReconciliation(user.id);
             return json(
               {
                 ok: true,
@@ -5422,6 +5477,7 @@ async function handleLaunchByokUpsert(
           );
         }
 
+        await scheduleLaunchAccountByokReconciliation(user.id);
         return json(
           {
             ok: true,
@@ -5456,6 +5512,7 @@ async function handleLaunchByokPrimary(
     async () => {
       try {
         await userService.setPrimaryProvider(user.id, providerEntry.provider);
+        await scheduleLaunchAccountByokReconciliation(user.id);
         return json(
           {
             ok: true,
@@ -8049,7 +8106,32 @@ async function buildLaunchAgentHomeSnapshot(
       initialRow.id,
       user.id,
     );
-    if (completedAtRevision === startedAtRevision) return home;
+    if (completedAtRevision === startedAtRevision) {
+      const agent = {
+        id: home.agent.id,
+        name: home.agent.name,
+      };
+      if (isUuid(user.id) && isUuid(agent.id)) {
+        await scheduleOperatorItemProducer(
+          OPERATOR_ITEM_SOURCE.agentSetup(agent.id),
+          () =>
+            reconcileAgentSetupOperatorItems({
+              userId: user.id,
+              agent,
+              requirements: home.setup.requirements,
+              observedAt: home.generatedAt,
+            }),
+        );
+        if (
+          home.setup.requirements.some((requirement) =>
+            requirement.id === "inference:byok"
+          )
+        ) {
+          await scheduleLaunchAccountByokReconciliation(user.id);
+        }
+      }
+      return home;
+    }
   }
   throw new LaunchServiceUnavailableError(
     "Agent Home changed repeatedly while its snapshot was being assembled",

@@ -21,6 +21,7 @@ import { resolveRoutineRecoveryIncidents } from "./notification-recovery.ts";
 import { validateRoutineLaunchActivation } from "./routine-platform.ts";
 import {
   attachDeferredWakeToRun,
+  getAccountCapacityStatus,
   recordDeferredRoutineWake,
   releaseAccountCapacity,
   reserveAccountCapacity,
@@ -33,6 +34,13 @@ import {
   normalizeOperatorDiagnostic,
   readOperatorDiagnostic,
 } from "./operator-diagnostics.ts";
+import {
+  OPERATOR_ITEM_SOURCE,
+  reconcileAccountUsageOperatorItems,
+  reconcileRoutineUsageOperatorItem,
+  recordRoutinePausedOperatorItem,
+  scheduleOperatorItemProducer,
+} from "./operator-item-producers.ts";
 
 const ROUTINE_SELECT =
   "id,user_id,composer_app_id,composer_app_slug,template_id,template_version,name,description,intent,handler_function,status,schedule,config,budget_policy,approval_policy,max_concurrency,next_run_at,last_run_at,last_success_at,last_error_at,failure_count,created_by_trace_id,metadata,created_at,updated_at,deleted_at,lease_id,lease_expires_at";
@@ -296,6 +304,111 @@ async function fetchRows<T>(
   return await readRows<T>(
     await fetch(restUrl(table, params), { headers: serviceHeaders() }),
     label,
+  );
+}
+
+interface ActiveRoutineAgentRow {
+  composer_app_id: string | null;
+  composer_app_slug: string | null;
+}
+
+async function activeRoutineAgents(
+  userId: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const rows = await fetchRows<ActiveRoutineAgentRow>(
+    "user_routines",
+    {
+      user_id: `eq.${userId}`,
+      status: "eq.active",
+      deleted_at: "is.null",
+      composer_app_id: "not.is.null",
+      select: "composer_app_id,composer_app_slug",
+      limit: "1000",
+    },
+    "Failed to load account usage affected Agents",
+  );
+  const byId = new Map<string, { id: string; name: string }>();
+  for (const row of rows) {
+    if (!row.composer_app_id || byId.has(row.composer_app_id)) continue;
+    byId.set(row.composer_app_id, {
+      id: row.composer_app_id,
+      name: row.composer_app_slug || row.composer_app_id,
+    });
+  }
+  return [...byId.values()].sort((left, right) =>
+    left.id.localeCompare(right.id)
+  );
+}
+
+type RoutineProducerIdentity = Pick<
+  StoredRoutine,
+  "id" | "user_id" | "composer_app_id" | "composer_app_slug" | "name"
+>;
+
+const OPERATOR_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+function routineAgent(
+  routine: RoutineProducerIdentity,
+): { id: string; name: string } | null {
+  return routine.composer_app_id &&
+      OPERATOR_UUID.test(routine.composer_app_id) &&
+      OPERATOR_UUID.test(routine.id) &&
+      OPERATOR_UUID.test(routine.user_id)
+    ? {
+      id: routine.composer_app_id,
+      name: routine.composer_app_slug || routine.composer_app_id,
+    }
+    : null;
+}
+
+async function reconcileObservedAccountUsage(
+  routine: RoutineProducerIdentity,
+  status: Parameters<typeof reconcileAccountUsageOperatorItems>[0]["status"],
+  observedAt: string,
+): Promise<void> {
+  const agent = routineAgent(routine);
+  if (!agent) return;
+  await scheduleOperatorItemProducer(
+    OPERATOR_ITEM_SOURCE.accountUsage,
+    async () => {
+      const affectedAgents = await activeRoutineAgents(routine.user_id);
+      if (!affectedAgents.some((candidate) => candidate.id === agent.id)) {
+        affectedAgents.push(agent);
+      }
+      await reconcileAccountUsageOperatorItems({
+        userId: routine.user_id,
+        status,
+        affectedAgents,
+        observedAt,
+      });
+    },
+  );
+}
+
+async function refreshObservedAccountUsage(
+  routine: RoutineProducerIdentity,
+  observedAt: string,
+): Promise<void> {
+  const agent = routineAgent(routine);
+  if (!agent) return;
+  await scheduleOperatorItemProducer(
+    OPERATOR_ITEM_SOURCE.accountUsage,
+    async () => {
+      const [status, affectedAgents] = await Promise.all([
+        getAccountCapacityStatus(routine.user_id, { now: observedAt }),
+        activeRoutineAgents(routine.user_id),
+      ]);
+      if (!affectedAgents.some((candidate) => candidate.id === agent.id)) {
+        affectedAgents.push(agent);
+      }
+      await reconcileAccountUsageOperatorItems({
+        userId: routine.user_id,
+        status,
+        affectedAgents,
+        observedAt,
+      });
+    },
   );
 }
 
@@ -942,6 +1055,13 @@ async function prepareDueScheduledRuns(
             });
             continue;
           }
+          if (admission.code === "capacity_waiting") {
+            await reconcileObservedAccountUsage(
+              claimedRoutine,
+              admission,
+              iso(now),
+            );
+          }
           const nextEligibleAt = admission.nextEligibleAt ||
             admission.weekly.resetsAt;
           await recordDeferredRoutineWake({
@@ -1402,6 +1522,7 @@ async function updateRoutineAfterRun(
   accounting: RunBudgetAccounting = {},
   failure?: {
     diagnostic: LaunchOperatorRunDiagnostic;
+    runId: string;
   },
 ): Promise<boolean> {
   let autoPause = accounting.autoPause ?? null;
@@ -1467,6 +1588,27 @@ async function updateRoutineAfterRun(
       : autoPause.reason === "budget_calls_exceeded"
       ? `Paused because this run exceeded its call limit (${autoPause.calls}/${autoPause.cap} calls).`
       : "Paused by the circuit breaker.";
+    const agent = routineAgent(routine);
+    if (
+      autoPause.reason === "consecutive_failures" && agent && failure
+    ) {
+      await scheduleOperatorItemProducer(
+        OPERATOR_ITEM_SOURCE.routineHealth(routine.id),
+        () =>
+          recordRoutinePausedOperatorItem({
+            userId: routine.user_id,
+            agent,
+            routine: {
+              id: routine.id,
+              name: routine.name,
+            },
+            failedAttempts: autoPause.failure_count ?? nextFailureCount,
+            latestRunId: failure.runId,
+            diagnostic: failure.diagnostic,
+            observedAt: autoPause.at,
+          }),
+      );
+    }
     await createNotification({
       userId: routine.user_id,
       agentId: routine.composer_app_id,
@@ -1475,9 +1617,7 @@ async function updateRoutineAfterRun(
       title: `${routine.name} was paused`,
       body: failure
         ? `${reason} Latest failure: ${failure.diagnostic.summary}${
-          failure.diagnostic.detail
-            ? ` ${failure.diagnostic.detail}`
-            : ""
+          failure.diagnostic.detail ? ` ${failure.diagnostic.detail}` : ""
         } Review the failed run before resuming scheduled work.`
         : `${reason} Review the latest failed run before resuming scheduled work.`,
       entityType: "routine",
@@ -1615,6 +1755,30 @@ async function executeClaimedRun(
   // separately authorized one-shot operation.
   {
     const gate = budgetGate(routine, now);
+    const agent = routineAgent(routine);
+    if (agent) {
+      await scheduleOperatorItemProducer(
+        OPERATOR_ITEM_SOURCE.routineUsage(routine.id),
+        () =>
+          reconcileRoutineUsageOperatorItem({
+            userId: routine.user_id,
+            agent,
+            routine: {
+              id: routine.id,
+              name: routine.name,
+            },
+            gate: gate
+              ? {
+                period: gate.period,
+                spent: gate.spent,
+                limit: gate.cap,
+                resetsAt: iso(gate.resumeAt),
+              }
+              : null,
+            observedAt: iso(now),
+          }),
+      );
+    }
     if (gate) {
       const label = gate.period === "daily" ? "Daily" : "Monthly";
       await finishRun(run, "skipped", now, {
@@ -1742,6 +1906,9 @@ async function executeClaimedRun(
       return { status: "failed" };
     }
     if (err instanceof AccountCapacityWaitingError) {
+      if (err.code === "capacity_waiting") {
+        await refreshObservedAccountUsage(routine, iso(completedAt));
+      }
       const deferred = await recordDeferredRoutineWake({
         routineId: routine.id,
         userId: routine.user_id,
@@ -1806,6 +1973,7 @@ async function executeClaimedRun(
         {},
         {
           diagnostic: operatorDiagnosticFromError(err),
+          runId: run.id,
         },
       ).catch(() => false);
       return { status: "retried", autoPaused };
@@ -1822,6 +1990,7 @@ async function executeClaimedRun(
       accounting,
       {
         diagnostic: operatorDiagnosticFromError(err),
+        runId: run.id,
       },
     ).catch(() => false);
     return { status: "failed", autoPaused };

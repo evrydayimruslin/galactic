@@ -1,6 +1,6 @@
 # Operator issue and remediation architecture
 
-Status: M0–M3 implemented through additive canonical persistence
+Status: M0–M4 implemented through producer reconciliation and account fanout
 
 Last reviewed: `2026-07-24`
 
@@ -175,6 +175,32 @@ Canonical operator item persistence is additive and service-role only:
 M3 does not connect producers or replace Attention reads. Those cutovers remain
 M4 and M5 so the new store can be shadowed and compared before it becomes
 operator-visible.
+
+## M4 implementation boundary
+
+Trusted condition owners now write complete, deterministic source snapshots:
+
+- Agent Home owns Agent-local setup requirements;
+- account setup owns one BYOK blocker with exact AI-using Agent fanout;
+- the routine executor owns routine usage windows and repeated-failure pause
+  events; and
+- account-capacity admission owns shared five-hour and weekly usage reports
+  across Agents with active routines.
+
+Account BYOK is deliberately excluded from every Agent-local snapshot. This
+prevents one Agent recheck from recovering a shared blocker that still affects
+another Agent. Routine failure events are partial snapshots: only a successful
+M7 verification may recover the paused-routine condition, and recovery never
+resumes scheduled work.
+
+Producer writes are isolated from their domain operation and log only source
+and error codes. Notification delivery remains compatibility evidence and is
+not required for canonical persistence. A bounded minute sweep replays active
+account-usage conditions against current capacity truth, providing reset
+recovery even when no client page is opened.
+
+M4 still does not expose the canonical store to clients. M5 owns dual-read,
+shadow comparison, and the guarded API read cutover.
 
 ## Rollout order
 
