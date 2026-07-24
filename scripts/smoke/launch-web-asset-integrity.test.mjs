@@ -10,6 +10,10 @@ import {
 } from "./launch-web-asset-integrity.mjs";
 
 const ORIGIN = "https://connectgalactic.com";
+const CLOUDFLARE_BEACON_INTEGRITY =
+  `sha512-${Buffer.alloc(64, 1).toString("base64")}`;
+const CLOUDFLARE_BEACON_DATA =
+  JSON.stringify({ version: "2024.11.0", token: "a".repeat(32), r: 1 });
 const ROOT_HTML = `<!DOCTYPE html>
 <html><head><title>Galactic</title>
 <script crossorigin src="/assets/index-a1b2.js" type="module"></script>
@@ -40,6 +44,113 @@ test("discovers every root module/preload and stylesheet independent of attribut
     { kind: "module", route: "/assets/index-a1b2.js?build=1&mode=prod" },
     { kind: "module", route: "/assets/chunk-e5f6.js" },
     { kind: "stylesheet", route: "/assets/index-c3d4.css" },
+  ]);
+});
+
+test("ignores only Cloudflare's edge-injected Web Analytics module", () => {
+  const discovery = discoverLaunchAssets(`
+    <script type="module" src="/assets/index.js"></script>
+    <link rel="stylesheet" href="/assets/index.css">
+    <script
+      type="module"
+      src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
+      integrity="${CLOUDFLARE_BEACON_INTEGRITY}"
+      data-cf-beacon='${CLOUDFLARE_BEACON_DATA}'
+      crossorigin="anonymous"
+    ></script>
+  `, `${ORIGIN}/`);
+  assert.deepEqual(discovery.errors, []);
+  assert.deepEqual(discovery.assets.map(({ kind, route }) => ({ kind, route })), [
+    { kind: "module", route: "/assets/index.js" },
+    { kind: "stylesheet", route: "/assets/index.css" },
+  ]);
+});
+
+test("rejects lookalike or modified Cloudflare Web Analytics module URLs", () => {
+  for (const reference of [
+    "http://static.cloudflareinsights.com/beacon.min.js",
+    "https://static.cloudflareinsights.example/beacon.min.js",
+    "https://user@static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496",
+    "https://static.cloudflareinsights.com:444/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496",
+    "https://static.cloudflareinsights.com/other.js",
+    "https://static.cloudflareinsights.com/beacon.min.js",
+    "https://static.cloudflareinsights.com/beacon.min.js?token=unexpected",
+    "https://static.cloudflareinsights.com/beacon.min.js/vnot-a-version",
+    "https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496#modified",
+  ]) {
+    const discovery = discoverLaunchAssets(`
+      <script type="module" src="/assets/index.js"></script>
+      <link rel="stylesheet" href="/assets/index.css">
+      <script
+        type="module"
+        src="${reference}"
+        integrity="${CLOUDFLARE_BEACON_INTEGRITY}"
+        data-cf-beacon='${CLOUDFLARE_BEACON_DATA}'
+        crossorigin="anonymous"
+      ></script>
+    `, `${ORIGIN}/`);
+    assert(
+      discovery.errors.some((message) =>
+        message.includes("cross-origin module asset reference")
+      ),
+      `expected ${reference} to remain fail-closed`,
+    );
+  }
+});
+
+test("rejects malformed or duplicated Cloudflare Web Analytics modules", () => {
+  const versionedBeacon =
+    "https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496";
+  const malformedAttributes = [
+    `integrity="${CLOUDFLARE_BEACON_INTEGRITY}" data-cf-beacon='${CLOUDFLARE_BEACON_DATA}'`,
+    `crossorigin="use-credentials" integrity="${CLOUDFLARE_BEACON_INTEGRITY}" data-cf-beacon='${CLOUDFLARE_BEACON_DATA}'`,
+    `crossorigin="anonymous" data-cf-beacon='${CLOUDFLARE_BEACON_DATA}'`,
+    `crossorigin="anonymous" integrity="sha512-not-base64" data-cf-beacon='${CLOUDFLARE_BEACON_DATA}'`,
+    `crossorigin="anonymous" integrity="${CLOUDFLARE_BEACON_INTEGRITY}" data-cf-beacon='{}'`,
+    `crossorigin="anonymous" integrity="${CLOUDFLARE_BEACON_INTEGRITY}" data-cf-beacon='{"version":"2024.11.0","token":"${"a".repeat(32)}","r":1,"extra":true}'`,
+    `crossorigin="anonymous" integrity="${CLOUDFLARE_BEACON_INTEGRITY}" data-cf-beacon='${CLOUDFLARE_BEACON_DATA}' src="${versionedBeacon}"`,
+  ];
+  for (const attributes of malformedAttributes) {
+    const discovery = discoverLaunchAssets(`
+      <script type="module" src="/assets/index.js"></script>
+      <link rel="stylesheet" href="/assets/index.css">
+      <script type="module" src="${versionedBeacon}" ${attributes}></script>
+    `, `${ORIGIN}/`);
+    assert(
+      discovery.errors.some((message) =>
+        message.includes("cross-origin module asset reference")
+      ),
+      `expected malformed attributes to remain fail-closed: ${attributes}`,
+    );
+  }
+
+  const duplicate = discoverLaunchAssets(`
+    <script type="module" src="/assets/index.js"></script>
+    <link rel="stylesheet" href="/assets/index.css">
+    ${[1, 2].map(() => `
+      <script
+        type="module"
+        src="${versionedBeacon}"
+        crossorigin="anonymous"
+        integrity="${CLOUDFLARE_BEACON_INTEGRITY}"
+        data-cf-beacon='${CLOUDFLARE_BEACON_DATA}'
+      ></script>
+    `).join("")}
+  `, `${ORIGIN}/`);
+  assert(duplicate.errors.includes("duplicate Cloudflare Web Analytics module"));
+});
+
+test("continues discovering unexpected same-origin launch modules", () => {
+  const discovery = discoverLaunchAssets(`
+    <script type="module" src="/assets/index.js"></script>
+    <script type="module" src="/assets/extra.js"></script>
+    <link rel="stylesheet" href="/assets/index.css">
+  `, `${ORIGIN}/`);
+  assert.deepEqual(discovery.errors, []);
+  assert.deepEqual(discovery.assets.map((asset) => asset.route), [
+    "/assets/index.js",
+    "/assets/extra.js",
+    "/assets/index.css",
   ]);
 });
 
