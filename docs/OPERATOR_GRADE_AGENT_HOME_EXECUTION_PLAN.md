@@ -1,7 +1,8 @@
 # Operator-grade Agent Home: code-mapped execution plan
 
-Status: implementation and independent release-hardening review complete;
-immutable release and production smoke pending
+Status: complete — released to production as `v0.4.51` from commit
+`708b16c21e794f696cea07e62dfb8f2917352771`; production workflows and
+signed-in smoke passed
 
 Companion contract:
 [`OPERATOR_GRADE_AGENT_HOME_MILESTONE.md`](./OPERATOR_GRADE_AGENT_HOME_MILESTONE.md)
@@ -464,25 +465,30 @@ schema contract remains satisfied.
 
 ## 8. Completion rule
 
-Update both milestone documents to `complete` only after the production tag is
-green and the signed-in smoke matrix passes. Record the released commit, tag,
-workflow runs, migration result, and smoke evidence in the final handoff.
+Completion rule satisfied for `v0.4.51` on July 23, 2026. The immutable
+production tag is green and the signed-in smoke evidence passed. The released
+commit, tag, workflow runs, migration result, and smoke evidence are recorded
+below.
 
 ## 9. Release ledger
 
 | Evidence | Result |
 | --- | --- |
-| Release commit | Pending immutable commit |
-| Release tag | Pending next unused remote `v*` tag |
+| Release commit | `708b16c21e794f696cea07e62dfb8f2917352771` |
+| Release tag | Annotated `v0.4.51`, peeled to the release commit |
 | Clean migration replays | 2/2 passed from a clean local database |
 | pgTAP | 252/252 passed on each replay |
-| API tests | 2,115/2,115 passed |
+| API tests | 2,117/2,117 passed, including receiver-sensitive Worker `fetch` regressions for Fleet and Search |
 | Web tests | 254/254 passed across 29 files |
 | Typechecks | API, Deno, full TypeScript, targeted changed modules, and web passed |
 | Production web build | Passed; 72 modules and Pages routing verified; 518.95 kB main-chunk advisory only |
 | Auth/session isolation audit | Passed for owner changes, refresh/logout, cross-tab events, stale in-flight requests, and failed revalidation |
-| Secret scan | Passed across 123 release inputs; only synthetic fixtures matched; `examples/fresh-agents/` excluded |
+| Secret checks | Tracked release-source scan passed with only synthetic fixture matches; the exact-tag production secrets preflight passed all five critical probes; untracked `examples/fresh-agents/` remained excluded |
 | Diff hygiene | `git diff --check` passed; generated examples and local package store excluded |
-| Staging Launch Gate | Pending same-SHA main-push gate |
-| Production workflows | Pending tag |
-| Signed-in production smoke | Pending deployment |
+| Staging Launch Gate | [Run 30063338979](https://github.com/evrydayimruslin/galactic/actions/runs/30063338979) passed for the exact release SHA |
+| Supabase Production DB | [Run 30063599580](https://github.com/evrydayimruslin/galactic/actions/runs/30063599580) passed; migrations were idempotent, the drift check completed in its configured report-only mode, and the highest Operator Home migration remained `20260723106000` |
+| API Deploy | [Run 30063599548](https://github.com/evrydayimruslin/galactic/actions/runs/30063599548) passed and verified the production Worker revision |
+| Interfaces Worker Deploy | [Run 30063599555](https://github.com/evrydayimruslin/galactic/actions/runs/30063599555) passed |
+| Launch Web Deploy | [Run 30063599577](https://github.com/evrydayimruslin/galactic/actions/runs/30063599577) passed and propagated the exact production Pages assets |
+| Production Launch Gate | [Run 30063599698](https://github.com/evrydayimruslin/galactic/actions/runs/30063599698) passed; its exact-tag G1 suite recorded 5/5 release probes, 17/17 Pages checks, durable execution, and Interface deploy smoke |
+| Signed-in production smoke | Passed on July 23, 2026: the 12-card Fleet loaded; strict readiness yielded `0 Agents Working`; global Attention `3` matched per-Agent counts `2 + 1`; populated Overview sections rendered in canonical order and empty sections were omitted; Access remained redacted; pane/item URLs survived Back/Forward; granular Search reached Function, field, and Access destinations; K/A/S/numeric/Escape shortcuts and the Search field-focus guard worked; Favorites persisted after reload and in a second signed-in tab; the read-only Interface connected on direct load and warm reopen; browser diagnostics contained no warnings or errors. Stateful lifecycle actions, preference writes, embedded-Interface shortcut blocking, and Stripe portal creation were intentionally not mutated in production and remained covered by the retained automated release evidence. |

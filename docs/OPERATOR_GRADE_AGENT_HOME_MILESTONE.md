@@ -1,6 +1,7 @@
 # Operator-grade Agent Home milestone
 
-Status: in progress
+Status: complete — released as `v0.4.51`
+(`708b16c21e794f696cea07e62dfb8f2917352771`) on July 23, 2026
 
 This document is the implementation and completion contract for the
 Operator-grade Agent Home milestone. The milestone is complete only when every
@@ -154,9 +155,9 @@ session-bounded. Unknown consumers are omitted rather than inferred.
   lifecycle/retention writes to retained former-owner evidence cannot recreate
   it or block canonical cleanup.
 
-## Completion evidence
+## Completion evidence — satisfied
 
-The milestone may be marked complete only with:
+The milestone completed with:
 
 - database tests for ownership, lifecycle, CAS ordering, explicit-empty
   favorites, projection correctness, and search isolation;
@@ -180,6 +181,10 @@ The milestone may be marked complete only with:
   fallback; and
 - a production deployment whose asset/API/schema versions are mutually
   compatible.
+
+The immutable release, migration, workflow, exact-tag smoke, and signed-in
+runtime evidence is recorded in the
+[execution-plan release ledger](./OPERATOR_GRADE_AGENT_HOME_EXECUTION_PLAN.md#9-release-ledger).
 
 ## Explicitly outside this milestone
 
