@@ -350,6 +350,18 @@ function iso(date: Date): string {
   return date.toISOString();
 }
 
+function formatUsageResetAt(date: Date): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
+}
+
 function addMs(date: Date, ms: number): Date {
   return new Date(date.getTime() + ms);
 }
@@ -1413,9 +1425,9 @@ async function updateRoutineAfterRun(
     const reason = autoPause.reason === "consecutive_failures"
       ? `Paused after ${autoPause.failure_count} consecutive failed attempts.`
       : autoPause.reason === "budget_run_exceeded"
-      ? `Paused: a run exceeded its per-run budget (${autoPause.light}/${autoPause.cap} Light).`
+      ? "Paused because this run exceeded its usage limit."
       : autoPause.reason === "budget_calls_exceeded"
-      ? `Paused: a run exceeded its per-run call cap (${autoPause.calls}/${autoPause.cap} calls).`
+      ? `Paused because this run exceeded its call limit (${autoPause.calls}/${autoPause.cap} calls).`
       : "Paused by the circuit breaker.";
     await createNotification({
       userId: routine.user_id,
@@ -1562,9 +1574,9 @@ async function executeClaimedRun(
     if (gate) {
       const label = gate.period === "daily" ? "Daily" : "Monthly";
       await finishRun(run, "skipped", now, {
-        summary:
-          `${label} credits budget exhausted (${gate.spent}/${gate.cap} Light); ` +
-          `next run deferred to ${iso(gate.resumeAt)}.`,
+        summary: `${label} usage limit reached; next run deferred until ${
+          formatUsageResetAt(gate.resumeAt)
+        }.`,
         error: {
           code: gate.code,
           spent: gate.spent,
@@ -1586,10 +1598,10 @@ async function executeClaimedRun(
         agentId: routine.composer_app_id,
         kind: "routine_budget_exhausted",
         severity: "info",
-        title: `${routine.name} hit its ${periodLabel} budget`,
-        body:
-          `Spent ${gate.spent}/${gate.cap} Light this ${periodLabel} window. ` +
-          `Runs resume automatically at ${iso(gate.resumeAt)}.`,
+        title: `${routine.name} reached its ${periodLabel} usage limit`,
+        body: `Runs are paused until usage resets at ${
+          formatUsageResetAt(gate.resumeAt)
+        }.`,
         entityType: "routine",
         entityId: routine.id,
         dedupeKey: `routine_budget:${routine.id}:${gate.period}:${

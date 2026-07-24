@@ -12,6 +12,23 @@ export function fleetAgentAttentionCount(
   return item.attentionCount ?? item.unreadAlertCount;
 }
 
+/**
+ * Attention changes only the visual priority of cards. The persisted
+ * fleetPosition remains the Agent's stable number, shortcut, and manual rank.
+ */
+export function sortFleetAgentsForDisplay(
+  items: readonly LaunchFleetAgentSummary[],
+): LaunchFleetAgentSummary[] {
+  return [...items].sort((left, right) => {
+    const attentionDifference = fleetAgentAttentionCount(right) -
+      fleetAgentAttentionCount(left);
+    if (attentionDifference !== 0) return attentionDifference;
+    return (left.fleetPosition ?? Number.MAX_SAFE_INTEGER) -
+        (right.fleetPosition ?? Number.MAX_SAFE_INTEGER) ||
+      left.agent.name.localeCompare(right.agent.name);
+  });
+}
+
 export function isFleetAgentWorkingOrReady(
   item: LaunchFleetAgentSummary,
 ): boolean {

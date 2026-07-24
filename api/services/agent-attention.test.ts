@@ -118,6 +118,32 @@ Deno.test("agent attention: raw notification remains useful without enrichment",
   assertEquals(projection.items[0]?.actions, []);
 });
 
+Deno.test("agent attention: legacy budget alerts use usage-limit copy", () => {
+  const projection = buildAgentAttentionProjection({
+    agent: { id: AGENT_ID, slug: "email-ops", name: "email-ops" },
+    notifications: [notification({
+      kind: "routine_budget_exhausted",
+      title: "Inbox loop hit its daily budget",
+      body:
+        "Spent 0.038/0.02 Light this daily window. Runs resume automatically at 2026-07-10T00:00:00.000Z.",
+    })],
+    briefs: [brief({
+      headline: "Inbox loop ran out of Light",
+      impact: "Its Light budget has been exhausted.",
+    })],
+  });
+  const item = projection.items[0]!;
+  assertEquals(
+    item.brief.headline,
+    "Inbox loop reached its daily usage limit",
+  );
+  assertEquals(
+    item.brief.impact,
+    "Runs are paused until usage resets at Jul 10, 2026, 12:00 AM UTC.",
+  );
+  assertEquals(JSON.stringify(item).includes("Light"), false);
+});
+
 Deno.test("agent attention: raw and legacy enriched text cannot expose credential-shaped values", () => {
   const secret = ["gx_", "attentionSecret123456789"].join("");
   const projection = buildAgentAttentionProjection({

@@ -721,7 +721,8 @@ Deno.test("routine executor: manual runs cannot bypass an exhausted daily budget
     assertEquals(handlerInvocations, 0);
 
     const skipPatch = runPatches.find((body) => body.status === "skipped");
-    assert(String(skipPatch?.summary).includes("budget exhausted"));
+    assert(String(skipPatch?.summary).includes("Daily usage limit reached"));
+    assertEquals(String(skipPatch?.summary).includes("Light"), false);
     assertEquals(
       (skipPatch?.error as Record<string, unknown>)?.code,
       "budget_day_exhausted",

@@ -63,6 +63,47 @@
 @keyframes neb-drift { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(46px, -30px, 0); } }
 .neb-grain { position: fixed; inset: -50%; z-index: 0; pointer-events: none; opacity: .05; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E"); }
 
+.nebula-public-page {
+  min-height: 100%;
+  background: #0a0714;
+}
+body.nebula-public-page, body.nebula-public-page #root { min-height: 100dvh; background: #0a0714; }
+.nebula-public-home { min-height: 100dvh; overflow: hidden; }
+.nebula-public-home .public-cosmos-shell { position: relative; z-index: 2; min-height: 100dvh; background: transparent; color: var(--ink); }
+.neb-public-topbar-shell { position: sticky; z-index: 40; top: 0; background: linear-gradient(180deg, rgba(10,7,20,.92), rgba(10,7,20,.58) 70%, transparent); backdrop-filter: blur(12px); }
+.neb-public-topbar { display: flex; width: min(100%, 1160px); height: 72px; align-items: center; justify-content: space-between; margin: 0 auto; padding: 0 28px; }
+.neb-public-wordmark { border: 0; padding: 0; background: transparent; color: var(--ink); cursor: pointer; font-family: var(--display) !important; font-size: 18px; font-weight: 600; letter-spacing: .03em; }
+.neb-public-actions { display: flex; align-items: center; gap: 10px; }
+.neb-public-signin { border: 0; padding: 8px 10px; background: transparent; color: var(--ink-2); cursor: pointer; font-size: 13px; }
+.neb-public-signin:hover { color: var(--ink); }
+.nebula-public-home .neb-public-actions .launch-button { border-color: var(--line-2); border-radius: 0; background: var(--glass); color: var(--ink); font-family: var(--body); }
+.nebula-public-home .launch-main { width: min(100% - 44px, 960px); padding: 48px 0 110px; }
+.nebula-public-home .home-page { width: 100%; }
+.nebula-public-home .home-hero { min-height: min(660px, calc(100dvh - 120px)); gap: 48px; align-items: center; margin-bottom: 80px; }
+.nebula-public-home .home-hero-copy h1 { margin-bottom: 18px; background: linear-gradient(120deg, #c9beea 15%, var(--violet) 55%, var(--teal) 100%); background-size: 220% 220%; color: var(--ink); font-family: var(--serif); font-size: 58px; font-weight: 600; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: neb-shimmer 9s ease-in-out infinite alternate; }
+.nebula-public-home .home-hero-copy p,
+.nebula-public-home .value-item p,
+.nebula-public-home .shared-core-section p,
+.nebula-public-home .endpoint-section p { color: var(--ink-2); font-family: var(--body); }
+.nebula-public-home .hero-actions .launch-button { border-radius: 0; font-family: var(--body); }
+.nebula-public-home .hero-actions .button-primary { border-color: var(--violet); background: var(--violet-dim); box-shadow: 0 0 18px -8px var(--violet); color: var(--ink); }
+.nebula-public-home .hero-actions .button-primary:hover { border-color: #c4afff; background: rgba(167,139,255,.22); }
+.nebula-public-home .hero-actions .button-ghost { border-color: var(--line); color: var(--ink-2); }
+.nebula-public-home .hero-actions .button-ghost:hover { border-color: var(--line-2); color: var(--ink); }
+.nebula-public-home .orbit-lines ellipse { stroke: rgba(255,255,255,.16); }
+.nebula-public-home .node-center { border-color: var(--line-2); background: rgba(10,7,20,.74); box-shadow: 0 0 44px rgba(167,139,255,.18); color: var(--ink); backdrop-filter: blur(12px); }
+.nebula-public-home .value-item { border-color: var(--line-2); }
+.nebula-public-home .value-item span { color: var(--ink-3); font-family: var(--mono); }
+.nebula-public-home .value-item h2,
+.nebula-public-home .shared-core-section h2,
+.nebula-public-home .endpoint-section h2 { color: var(--ink); font-family: var(--display); }
+.nebula-public-home .shared-core span { color: var(--ink); font-family: var(--display); }
+.nebula-public-home .shared-core span:not(:last-child)::after { background: var(--ink-3); }
+.nebula-public-home .config-preview { border-color: var(--line-2); border-radius: 0; box-shadow: 0 20px 60px rgba(0,0,0,.26); }
+.nebula-public-home .closing-band { border: 1px solid var(--line-2); border-radius: 0; background: linear-gradient(135deg, rgba(167,139,255,.16), rgba(95,227,192,.07)); backdrop-filter: blur(18px); }
+.nebula-public-home .closing-band h2 { color: var(--ink); font-family: var(--display); }
+.nebula-public-home .closing-band p { color: var(--ink-2); font-family: var(--body); }
+
 .neb-app { position: relative; z-index: 2; max-width: 960px; min-height: 100vh; margin: 0 auto; padding: 96px 22px 110px; }
 .neb-topbar-shell { position: fixed; z-index: 40; top: 0; right: 0; left: 0; background: transparent; }
 .neb-topbar { display: flex; width: 100%; align-items: center; justify-content: space-between; padding: 26px 22px 18px; }
@@ -294,6 +335,16 @@ a.neb-operator-access-row:hover { border-color: var(--line-2); }
 .neb-operator-consumers a { color: var(--violet); text-decoration: none; }
 
 @media (max-width: 560px) {
+  .neb-public-topbar { height: 64px; padding: 0 16px; }
+  .neb-public-actions { gap: 4px; }
+  .neb-public-signin { padding-right: 7px; padding-left: 7px; font-size: 12px; }
+  .nebula-public-home .neb-public-actions .launch-button { min-height: 34px; padding-right: 10px; padding-left: 10px; font-size: 11.5px; }
+  .nebula-public-home .launch-main { width: calc(100% - 32px); padding-top: 36px; padding-bottom: 80px; }
+  .nebula-public-home .home-hero { min-height: calc(100dvh - 100px); margin-bottom: 64px; }
+  .nebula-public-home .home-hero-copy h1 { font-size: 42px; }
+  .nebula-public-home .home-hero-copy p { font-size: 16px; line-height: 1.55; }
+  .nebula-public-home .agent-orbit { width: min(340px, 100%); margin-top: 32px; }
+  .nebula-public-home .closing-band { padding: 30px 24px; }
   .neb-app { padding-top: 86px; padding-right: 16px; padding-left: 16px; }
   .neb-topbar { padding: 22px 16px 15px; }
   .neb-hero { padding-top: 0; }
