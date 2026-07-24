@@ -30,6 +30,11 @@ import {
   loadLiveExecutedBundle,
   verifyExecutedBundle,
 } from "../services/executed-bundle.ts";
+import {
+  collectRuntimeDiagnosticSecrets,
+  normalizeOperatorDiagnostic,
+  operatorCompatibilityError,
+} from "../services/operator-diagnostics.ts";
 
 // ============================================
 // WARM-ISOLATE REUSE (Worker Loader get())
@@ -340,6 +345,7 @@ export async function executeInDynamicSandbox(
   args: unknown[],
 ): Promise<ExecutionResult> {
   const startTime = Date.now();
+  const knownSecrets = collectRuntimeDiagnosticSecrets(config);
   const loader = globalThis.__env?.LOADER;
   // Per-execution context handle (registered before the loader fetch, resolved
   // by the bindings, deregistered in finally). Declared here so finally can
@@ -378,6 +384,19 @@ export async function executeInDynamicSandbox(
         type: "RuntimeError",
         message: "Dynamic Worker LOADER binding not available",
       },
+      diagnostic: normalizeOperatorDiagnostic({
+        error: {
+          type: "RuntimeError",
+          message: "Dynamic Worker LOADER binding not available",
+        },
+        provenance: "platform",
+        platform: {
+          code: "SANDBOX_UNAVAILABLE",
+          summary: "The execution sandbox is temporarily unavailable.",
+          retryable: true,
+        },
+        knownSecrets,
+      }),
     };
   }
 
@@ -415,6 +434,21 @@ export async function executeInDynamicSandbox(
           message:
             `No ESM bundle found for app ${config.appId}. Run rebuild first.`,
         },
+        diagnostic: normalizeOperatorDiagnostic({
+          error: {
+            type: "RuntimeError",
+            message:
+              `No ESM bundle found for app ${config.appId}. Run rebuild first.`,
+          },
+          provenance: "platform",
+          platform: {
+            code: "RELEASE_NOT_BUILT",
+            summary: "This Agent does not have an executable release.",
+            detail: "Build and promote a release before running it again.",
+            retryable: false,
+          },
+          knownSecrets,
+        }),
       };
     }
 
@@ -450,6 +484,20 @@ export async function executeInDynamicSandbox(
             message:
               `Executed bundle failed integrity verification (${verdict.status})`,
           },
+          diagnostic: normalizeOperatorDiagnostic({
+            error: {
+              type: "IntegrityError",
+              message:
+                `Executed bundle failed integrity verification (${verdict.status})`,
+            },
+            provenance: "platform",
+            platform: {
+              code: "RELEASE_INTEGRITY_FAILED",
+              summary: "The executable release failed integrity verification.",
+              retryable: false,
+            },
+            knownSecrets,
+          }),
         };
       }
     }
@@ -1285,7 +1333,7 @@ export default {
       // execution. Persisted host-side only when the app opted in via the
       // manifest flight_recorder flag and a routine context is present.
       flight?: { ai?: FlightAiExchange[] };
-      error?: { type: string; message: string };
+      error?: { type: string; message: string; details?: unknown };
     };
 
     // Credits actually debited for in-sandbox AI calls this execution, from
@@ -1310,6 +1358,13 @@ export default {
     // Host-authoritative tally of galactic.db mutations this execution (null =
     // read-only wake). Consumed here the same way as the AI spend ledger.
     const flightDb = consumeDbDiff(config.executionId);
+    const diagnostic = data.error
+      ? normalizeOperatorDiagnostic({
+        error: data.error,
+        provenance: "developer",
+        knownSecrets: [...knownSecrets, sandboxAuthToken],
+      })
+      : undefined;
 
     return {
       success: data.success,
@@ -1324,9 +1379,42 @@ export default {
         : {}),
       ...(flightDb ? { flightDb } : {}),
       ...(reuseKeyHash ? { reuseKeyHash } : {}),
-      ...(data.error ? { error: data.error } : {}),
+      ...(diagnostic
+        ? {
+          error: operatorCompatibilityError(
+            diagnostic,
+            data.error?.type,
+            knownSecrets,
+          ),
+          diagnostic,
+        }
+        : {}),
     };
   } catch (err) {
+    const entrypointResolutionFailed = dynamicWorkerIdentityCreated &&
+      !dynamicWorkerInvoked;
+    const timedOut = err instanceof DOMException && err.name === "AbortError";
+    const diagnostic = normalizeOperatorDiagnostic({
+      error: err,
+      provenance: "platform",
+      platform: {
+        code: timedOut
+          ? "SANDBOX_TIMEOUT"
+          : entrypointResolutionFailed
+          ? "SANDBOX_ENTRYPOINT_UNAVAILABLE"
+          : "SANDBOX_EXECUTION_FAILED",
+        summary: timedOut
+          ? "The Agent execution timed out."
+          : entrypointResolutionFailed
+          ? "The execution sandbox could not resolve the Agent entrypoint."
+          : "The execution sandbox could not complete the run.",
+        detail: entrypointResolutionFailed && err instanceof Error
+          ? err.message
+          : null,
+        retryable: true,
+      },
+      knownSecrets,
+    });
     return {
       success: false,
       result: null,
@@ -1347,10 +1435,12 @@ export default {
       // If the loader.get() ran before the failure, CF still billed the load —
       // carry the hash so the floor still dedups on the correct isolate identity.
       ...(reuseKeyHash ? { reuseKeyHash } : {}),
-      error: {
-        type: err instanceof Error ? err.constructor.name : "UnknownError",
-        message: err instanceof Error ? err.message : String(err),
-      },
+      error: operatorCompatibilityError(
+        diagnostic,
+        err instanceof Error ? err.name : null,
+        knownSecrets,
+      ),
+      diagnostic,
     };
   } finally {
     // Always release the handle (success, error, abort) so a later resolve

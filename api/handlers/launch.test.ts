@@ -2658,6 +2658,16 @@ Deno.test({
         > = [
           { path: '/api/launch/agents/private-helper/home', method: 'GET' },
           {
+            path:
+              '/api/launch/agents/private-helper/routine-runs/11111111-1111-4111-8111-111111111111',
+            method: 'GET',
+          },
+          {
+            path:
+              '/api/launch/agents/private-helper/routine-runs/11111111-1111-4111-8111-111111111111/logs/22222222-2222-4222-8222-222222222222',
+            method: 'GET',
+          },
+          {
             path: '/api/launch/agents/private-helper/home/identity',
             method: 'PATCH',
             body: { expectedRevision: 'opaque', name: 'Compromised' },
@@ -5974,6 +5984,18 @@ Deno.test('launch OpenAPI documents operator preference, search, order, and acti
     );
     assertEquals(
       Boolean(spec.paths?.['/api/launch/agents/{id}/home/activity']),
+      true,
+    );
+    assertEquals(
+      Boolean(spec.paths?.['/api/launch/agents/{id}/routine-runs/{runId}']),
+      true,
+    );
+    assertEquals(
+      Boolean(
+        spec.paths?.[
+          '/api/launch/agents/{id}/routine-runs/{runId}/logs/{receiptId}'
+        ],
+      ),
       true,
     );
     assertEquals(

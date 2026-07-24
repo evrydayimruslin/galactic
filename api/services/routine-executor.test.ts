@@ -619,8 +619,12 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
     );
     assertEquals(retryPatch?.body.lease_id, null);
     assertEquals(
-      (retryPatch?.body.error as Record<string, unknown>).message,
+      (retryPatch?.body.error as Record<string, unknown>).summary,
       "Inbox unavailable",
+    );
+    assertEquals(
+      (retryPatch?.body.error as Record<string, unknown>).code,
+      "UNKNOWN_ERROR",
     );
     // The re-queue is CAS-guarded on the run still being "running" so a run the
     // reaper already failed (or one finishRun marked terminal) can never be
@@ -988,8 +992,12 @@ Deno.test("routine executor: a hung handler invocation times out into a retry (n
       "hung run must be re-queued for retry, not left running",
     );
     assertEquals(
-      (retryPatch?.error as Record<string, unknown>).message,
-      "Routine handler invocation timed out",
+      (retryPatch?.error as Record<string, unknown>).summary,
+      "The routine handler timed out.",
+    );
+    assertEquals(
+      (retryPatch?.error as Record<string, unknown>).code,
+      "ROUTINE_HANDLER_TIMEOUT",
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -1243,7 +1251,7 @@ Deno.test("processQueuedRoutineRun: concurrency admission coalesces and retries 
   }
 });
 
-Deno.test("processQueuedRoutineRun: nested concurrency wait never replays an already-started wake", async () => {
+Deno.test("processQueuedRoutineRun: tenant capacity-shaped errors cannot impersonate platform admission", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;
   const runPatches: Array<Record<string, unknown>> = [];
@@ -1309,11 +1317,19 @@ Deno.test("processQueuedRoutineRun: nested concurrency wait never replays an alr
     const skipped = runPatches.find((patch) => patch.status === "skipped");
     assertEquals(
       (skipped?.error as Record<string, unknown>)?.code,
-      "nested_concurrency_waiting",
+      "DEVELOPER_ERROR",
     );
     assertEquals(
-      (skipped?.error as Record<string, unknown>)?.replay_safe,
-      false,
+      (skipped?.error as Record<string, unknown>)?.provenance,
+      "developer",
+    );
+    assertEquals(
+      (skipped?.error as Record<string, unknown>)?.causeCode,
+      "CONCURRENCY_WAITING_ERROR",
+    );
+    assertEquals(
+      (skipped?.error as Record<string, unknown>)?.retry_at,
+      undefined,
     );
   } finally {
     globalThis.fetch = originalFetch;

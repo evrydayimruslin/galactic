@@ -1,5 +1,6 @@
 import { getEnv, getExecQueue } from "../lib/env.ts";
 import type { RoutineBudgetDefaults } from "../../shared/contracts/routine.ts";
+import type { LaunchOperatorRunDiagnostic } from "../../shared/contracts/launch.ts";
 import {
   createRoutineActorTokenForRun,
   type RoutineActorUserInput,
@@ -28,6 +29,10 @@ import {
   computeNextRoutineRunAt as computeProductionRoutineRunAt,
   RoutineScheduleValidationError,
 } from "./routine-schedule.ts";
+import {
+  normalizeOperatorDiagnostic,
+  readOperatorDiagnostic,
+} from "./operator-diagnostics.ts";
 
 const ROUTINE_SELECT =
   "id,user_id,composer_app_id,composer_app_slug,template_id,template_version,name,description,intent,handler_function,status,schedule,config,budget_policy,approval_policy,max_concurrency,next_run_at,last_run_at,last_success_at,last_error_at,failure_count,created_by_trace_id,metadata,created_at,updated_at,deleted_at,lease_id,lease_expires_at";
@@ -156,17 +161,12 @@ class AgentCapacityCapTooLowError extends Error {
   }
 }
 
-class NestedAdmissionWaitingError extends Error {
-  constructor(
-    readonly errorType: "AgentCapacityWaitingError" | "ConcurrencyWaitingError",
-    readonly details: Record<string, unknown>,
-  ) {
+class RoutineOperatorDiagnosticError extends Error {
+  constructor(readonly diagnostic: LaunchOperatorRunDiagnostic) {
     super(
-      errorType === "ConcurrencyWaitingError"
-        ? "A nested Agent call is still concurrency-limited after its bounded retry."
-        : "A nested Agent call is waiting for capacity.",
+      [diagnostic.summary, diagnostic.detail].filter(Boolean).join(" "),
     );
-    this.name = "NestedAdmissionWaitingError";
+    this.name = "RoutineOperatorDiagnosticError";
   }
 }
 
@@ -408,11 +408,23 @@ function unwrapMcpToolResult(value: unknown): unknown {
   }
 }
 
+function operatorDiagnosticFromError(
+  error: unknown,
+): LaunchOperatorRunDiagnostic {
+  if (error instanceof RoutineOperatorDiagnosticError) {
+    return error.diagnostic;
+  }
+  return normalizeOperatorDiagnostic({
+    error,
+    provenance: "unknown",
+  });
+}
+
 function errorPayload(error: unknown): Record<string, unknown> {
-  return {
-    message: error instanceof Error ? error.message : String(error),
-    name: error instanceof Error ? error.name : "Error",
-  };
+  return operatorDiagnosticFromError(error) as unknown as Record<
+    string,
+    unknown
+  >;
 }
 
 function retryPolicyFrom(
@@ -1186,14 +1198,37 @@ async function invokeRoutineHandler(
       }),
     },
   );
-  const response = await withTimeout(
-    options.invokeMcp(mcpRequest, composerAppId, {
-      capacityQueueOperations: options.capacityQueueOperations,
-      capacityRootWorkerRequest: options.capacityRootWorkerRequest === true,
-    }),
-    options.handlerTimeoutMs,
-    "Routine handler invocation timed out",
-  );
+  let response: Response;
+  try {
+    response = await withTimeout(
+      options.invokeMcp(mcpRequest, composerAppId, {
+        capacityQueueOperations: options.capacityQueueOperations,
+        capacityRootWorkerRequest: options.capacityRootWorkerRequest === true,
+      }),
+      options.handlerTimeoutMs,
+      "Routine handler invocation timed out",
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "Routine handler invocation timed out"
+    ) {
+      throw new RoutineOperatorDiagnosticError(
+        normalizeOperatorDiagnostic({
+          error,
+          provenance: "platform",
+          platform: {
+            code: "ROUTINE_HANDLER_TIMEOUT",
+            summary: "The routine handler timed out.",
+            detail:
+              "Review the failed run and handler logs before running it again.",
+            retryable: true,
+          },
+        }),
+      );
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     const text = await response.text().catch(() => response.statusText);
@@ -1247,21 +1282,11 @@ async function invokeRoutineHandler(
     const structured = isRecord(rpc.result.structuredContent)
       ? rpc.result.structuredContent
       : null;
-    const propagatedType = structured?.error_type;
-    const propagatedDetails = isRecord(structured?.error_details)
-      ? structured.error_details
-      : {};
-    if (propagatedType === "AgentCapacityCapTooLowError") {
-      throw new AgentCapacityCapTooLowError(propagatedDetails);
-    }
-    if (
-      (propagatedType === "AgentCapacityWaitingError" ||
-        propagatedType === "ConcurrencyWaitingError")
-    ) {
-      throw new NestedAdmissionWaitingError(
-        propagatedType,
-        propagatedDetails,
-      );
+    const diagnostic = readOperatorDiagnostic(
+      structured?.operator_diagnostic,
+    );
+    if (diagnostic) {
+      throw new RoutineOperatorDiagnosticError(diagnostic);
     }
     const content = rpc.result.content;
     const textBlock = Array.isArray(content)
@@ -1270,7 +1295,17 @@ async function invokeRoutineHandler(
         typeof entry.text === "string"
       ) as { text?: string } | undefined
       : undefined;
-    throw new Error(textBlock?.text || "Routine handler failed");
+    throw new RoutineOperatorDiagnosticError(
+      normalizeOperatorDiagnostic({
+        error: {
+          type: typeof structured?.error_type === "string"
+            ? structured.error_type
+            : "Error",
+          message: textBlock?.text || "Routine handler failed",
+        },
+        provenance: "developer",
+      }),
+    );
   }
 
   const result = unwrapMcpToolResult(rpc.result);
@@ -1365,6 +1400,9 @@ async function updateRoutineAfterRun(
   now: Date,
   success: boolean,
   accounting: RunBudgetAccounting = {},
+  failure?: {
+    diagnostic: LaunchOperatorRunDiagnostic;
+  },
 ): Promise<boolean> {
   let autoPause = accounting.autoPause ?? null;
   const nextFailureCount = success ? 0 : (routine.failure_count || 0) + 1;
@@ -1435,7 +1473,13 @@ async function updateRoutineAfterRun(
       kind: "routine_paused",
       severity: "critical",
       title: `${routine.name} was paused`,
-      body: `${reason} Resume it once you've addressed the cause.`,
+      body: failure
+        ? `${reason} Latest failure: ${failure.diagnostic.summary}${
+          failure.diagnostic.detail
+            ? ` ${failure.diagnostic.detail}`
+            : ""
+        } Review the failed run before resuming scheduled work.`
+        : `${reason} Review the latest failed run before resuming scheduled work.`,
       entityType: "routine",
       entityId: routine.id,
       dedupeKey: `routine_paused:${routine.id}:${autoPause.at}`,
@@ -1623,11 +1667,17 @@ async function executeClaimedRun(
     result = await invokeRoutineHandler(routine, run, options);
   } catch (err) {
     const completedAt = clock();
-    if (err instanceof NestedAdmissionWaitingError) {
-      // The outer routine's tenant code already started and may have committed
-      // side effects before its nested call was denied. Never replay the whole
-      // wake automatically. galactic.call already made one safe in-place retry;
-      // persistent loops can journal/checkpoint and continue next cadence.
+    if (
+      err instanceof RoutineOperatorDiagnosticError &&
+      (
+        err.diagnostic.causeCode === "AGENT_CAPACITY_WAITING_ERROR" ||
+        err.diagnostic.causeCode === "CONCURRENCY_WAITING_ERROR"
+      )
+    ) {
+      // The outer tenant handler already started and may have committed side
+      // effects before a nested call failed. Do not replay it automatically.
+      // The tenant-supplied class name remains developer provenance and cannot
+      // select platform capacity remediation or inject trusted details.
       await recordRootStep(
         routine,
         run,
@@ -1639,14 +1689,8 @@ async function executeClaimedRun(
         err,
       );
       await finishRun(run, "skipped", completedAt, {
-        summary: err.message,
-        error: {
-          code: err.errorType === "ConcurrencyWaitingError"
-            ? "nested_concurrency_waiting"
-            : "nested_capacity_waiting",
-          ...err.details,
-          replay_safe: false,
-        },
+        summary: err.diagnostic.summary,
+        error: err.diagnostic as unknown as Record<string, unknown>,
       });
       return { status: "skipped" };
     }
@@ -1759,6 +1803,10 @@ async function executeClaimedRun(
         routine,
         completedAt,
         false,
+        {},
+        {
+          diagnostic: operatorDiagnosticFromError(err),
+        },
       ).catch(() => false);
       return { status: "retried", autoPaused };
     }
@@ -1772,6 +1820,9 @@ async function executeClaimedRun(
       completedAt,
       false,
       accounting,
+      {
+        diagnostic: operatorDiagnosticFromError(err),
+      },
     ).catch(() => false);
     return { status: "failed", autoPaused };
   }

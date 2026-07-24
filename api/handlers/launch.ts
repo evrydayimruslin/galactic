@@ -351,6 +351,12 @@ import {
   readOwnerAttentionPage,
   transitionAgentAttention,
 } from "../services/agent-attention.ts";
+import {
+  OperatorRunInspectionError,
+  readOperatorRoutineRunDetail,
+  readOperatorRoutineRunLogExcerpt,
+} from "../services/operator-run-inspection.ts";
+import { collectRuntimeDiagnosticSecrets } from "../services/operator-diagnostics.ts";
 
 // Cross-Agent grant + settings mutations are sensitive. The SensitiveRoute enum
 // lives in sensitive-route-rate-limit.ts (outside this file's edit scope), so we
@@ -382,6 +388,12 @@ async function privateLaunchRoute(
       return operatorStoreErrorResponse(err);
     }
     if (err instanceof AgentAttentionStoreError) {
+      return privateLaunchJson({
+        error: err.message,
+        code: err.code,
+      }, err.status);
+    }
+    if (err instanceof OperatorRunInspectionError) {
       return privateLaunchJson({
         error: err.message,
         code: err.code,
@@ -925,6 +937,21 @@ export async function handleLaunch(
       );
     }
 
+    const agentRoutineRunMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/routine-runs\/([^/]+)(?:\/logs\/([^/]+))?$/,
+    );
+    if (agentRoutineRunMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchOperatorRoutineRun(
+          request,
+          agentRoutineRunMatch[1],
+          agentRoutineRunMatch[2],
+          agentRoutineRunMatch[3] || null,
+          method,
+        )
+      );
+    }
+
     const agentAttentionMatch = path.match(
       /^\/api\/launch\/agents\/([^/]+)\/attention$/,
     );
@@ -1300,6 +1327,9 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       discoverAlias: "/api/launch/discover?query={query}",
       agentFunctions: "/api/launch/agents/{id}/functions",
       agentHome: "/api/launch/agents/{id}/home",
+      agentRoutineRun: "/api/launch/agents/{id}/routine-runs/{runId}",
+      agentRoutineRunLogs:
+        "/api/launch/agents/{id}/routine-runs/{runId}/logs/{receiptId}",
       agentAttention:
         "/api/launch/agents/{id}/attention?limit=200&cursor={cursor}",
       agentHomeActions: "/api/launch/agents/{id}/home/actions",
@@ -4214,6 +4244,72 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       },
     },
   };
+  publicSpec.paths["/api/launch/agents/{id}/routine-runs/{runId}"] = {
+    get: {
+      operationId: "getLaunchOperatorRoutineRun",
+      summary: "Read a secret-safe operator diagnosis for one routine run",
+      description:
+        "Owner account-session only. Returns bounded run and step diagnostics, trace/receipt references, and no raw arguments, outputs, or logs.",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string" },
+        },
+        {
+          name: "runId",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+      ],
+      responses: {
+        "200": { description: "Secret-safe routine run diagnosis" },
+        "403": { description: "Owner account session required" },
+        "404": { description: "Owned Agent or routine run not found" },
+        "503": { description: "Run diagnostics are temporarily unavailable" },
+      },
+    },
+  };
+  publicSpec.paths[
+    "/api/launch/agents/{id}/routine-runs/{runId}/logs/{receiptId}"
+  ] = {
+    get: {
+      operationId: "getLaunchOperatorRoutineRunLogs",
+      summary: "Read a redacted excerpt from one run receipt",
+      description:
+        "Owner account-session only. The receipt must belong to the requested Agent run. The underlying raw-log read remains owner-only and audit-logged.",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string" },
+        },
+        {
+          name: "runId",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+        {
+          name: "receiptId",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+      ],
+      responses: {
+        "200": { description: "Bounded and redacted runtime log excerpt" },
+        "403": { description: "Owner account session required" },
+        "404": { description: "Run receipt or retained logs not found" },
+        "503": { description: "Run diagnostics are temporarily unavailable" },
+      },
+    },
+  };
   publicSpec.paths["/api/launch/notifications/{id}/actions"] = {
     post: {
       operationId: "transitionLaunchAttention",
@@ -5480,6 +5576,88 @@ async function handleLaunchAgentAttention(
     launchAttentionPageOptions(request),
   );
   return privateLaunchJson(projection satisfies LaunchAgentAttentionProjection);
+}
+
+async function handleLaunchOperatorRoutineRun(
+  request: Request,
+  encodedLocator: string,
+  runId: string,
+  receiptId: string | null,
+  method: string,
+): Promise<Response> {
+  if (method !== "GET") {
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(
+    user,
+    encodedLocator,
+  );
+  if (resolved instanceof Response) {
+    return withPrivateLaunchPrivacy(resolved);
+  }
+  const knownSecrets = await loadLaunchOperatorDiagnosticSecrets(
+    user.id,
+    resolved.id,
+  );
+  if (receiptId) {
+    return privateLaunchJson(
+      await readOperatorRoutineRunLogExcerpt({
+        userId: user.id,
+        agentId: resolved.id,
+        runId,
+        receiptId,
+        knownSecrets,
+      }),
+    );
+  }
+  return privateLaunchJson(
+    await readOperatorRoutineRunDetail({
+      userId: user.id,
+      agent: {
+        id: resolved.id,
+        slug: resolved.slug || resolved.id,
+        name: resolved.name || resolved.slug || resolved.id,
+      },
+      runId,
+      knownSecrets,
+    }),
+  );
+}
+
+async function loadLaunchOperatorDiagnosticSecrets(
+  userId: string,
+  agentId: string,
+): Promise<string[]> {
+  const rows = await dbGet<AgentHomeSettingsAppRow>(
+    getDbConfig(),
+    "apps",
+    {
+      id: `eq.${agentId}`,
+      owner_id: `eq.${userId}`,
+      deleted_at: "is.null",
+      select: "id,env_vars,env_schema,manifest",
+      limit: "1",
+    },
+  );
+  const row = rows[0];
+  if (!row) {
+    throw new LaunchServiceUnavailableError(
+      "Agent diagnostic redaction state is unavailable",
+    );
+  }
+  const runtimeApp = {
+    id: row.id,
+    env_vars: row.env_vars || {},
+    env_schema: row.env_schema || {},
+    manifest: row.manifest,
+  } as unknown as Parameters<typeof resolveAppRuntimeEnvVars>[0];
+  const runtime = await resolveAppRuntimeEnvVars(runtimeApp, userId);
+  return collectRuntimeDiagnosticSecrets({
+    envVars: runtime.envVars,
+    credentials: runtime.credentials,
+  });
 }
 
 async function handleLaunchNotifications(

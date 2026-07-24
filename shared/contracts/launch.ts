@@ -4,6 +4,7 @@ import type { MCPToolAnnotations } from './mcp.ts';
 export const LAUNCH_MVP_VERSION = 'persistent-agent-mvp-v1' as const;
 export const AGENT_HOME_CONTRACT_VERSION = '2026-07-23.operator.1' as const;
 export const OPERATOR_ISSUE_CONTRACT_VERSION = '2026-07-24.operator-issues.1' as const;
+export const OPERATOR_DIAGNOSTIC_CONTRACT_VERSION = '2026-07-24.operator-diagnostics.1' as const;
 
 /**
  * Machine-readable invariants for operator issues and remediation.
@@ -157,6 +158,8 @@ export const LAUNCH_API_ROUTES = [
   'GET /api/launch/agents/:id/attention',
   'GET /api/launch/agents/:id/home',
   'GET /api/launch/agents/:id/home/activity',
+  'GET /api/launch/agents/:id/routine-runs/:runId',
+  'GET /api/launch/agents/:id/routine-runs/:runId/logs/:receiptId',
   'PATCH /api/launch/agents/:id/home/identity',
   'PATCH /api/launch/agents/:id/home/routine',
   'PUT /api/launch/agents/:id/home/settings',
@@ -1292,6 +1295,90 @@ export interface LaunchOperatorDiagnosis {
   detail: string | null;
   provenance: LaunchOperatorDiagnosisProvenance;
   evidence: LaunchAgentEvidenceReference[];
+}
+
+/**
+ * Bounded, secret-safe diagnosis stored at the execution trust boundary.
+ *
+ * `code` is platform-owned when provenance includes `platform`. A developer
+ * or provider identifier may only appear as `causeCode`; it cannot select a
+ * privileged remediation or impersonate a platform condition.
+ */
+export interface LaunchOperatorRunDiagnostic {
+  version: 1;
+  code: string;
+  causeCode: string | null;
+  summary: string;
+  detail: string | null;
+  provenance: LaunchOperatorDiagnosisProvenance;
+  retryable: boolean | null;
+  redacted: boolean;
+}
+
+export interface LaunchOperatorRoutineRunStep {
+  id: string;
+  stepIndex: number;
+  functionName: string;
+  status: string;
+  durationMs: number | null;
+  usage: number;
+  receiptId: string | null;
+  diagnostic: LaunchOperatorRunDiagnostic | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface LaunchOperatorRoutineRunLogReceipt {
+  receiptId: string;
+  functionName: string;
+  createdAt: string;
+  logsAvailable: boolean;
+}
+
+export interface LaunchOperatorRoutineRunDetail {
+  contractVersion: typeof OPERATOR_DIAGNOSTIC_CONTRACT_VERSION;
+  agent: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  routine: {
+    id: string;
+    name: string;
+    status: string;
+  };
+  run: {
+    id: string;
+    status: string;
+    trigger: string;
+    traceId: string | null;
+    startedAt: string | null;
+    completedAt: string | null;
+    durationMs: number | null;
+    usage: number;
+    summary: string | null;
+  };
+  diagnostic: LaunchOperatorRunDiagnostic | null;
+  steps: LaunchOperatorRoutineRunStep[];
+  logReceipts: LaunchOperatorRoutineRunLogReceipt[];
+  generatedAt: string;
+}
+
+export interface LaunchOperatorRoutineRunLogExcerpt {
+  contractVersion: typeof OPERATOR_DIAGNOSTIC_CONTRACT_VERSION;
+  runId: string;
+  receiptId: string;
+  functionName: string;
+  error: string | null;
+  truncated: boolean;
+  droppedEntries: number;
+  redactedEntries: number;
+  logs: Array<{
+    time: string;
+    level: string;
+    message: string;
+  }>;
+  generatedAt: string;
 }
 
 export type LaunchOperatorScope =

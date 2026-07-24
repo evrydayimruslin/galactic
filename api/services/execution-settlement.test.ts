@@ -693,6 +693,73 @@ Deno.test("settleAndLogAppExecution settles app pricing across run/http style ca
   });
 });
 
+Deno.test("settleAndLogAppExecution persists the normalized diagnostic for routine failures", async () => {
+  await withMockedEnv(async () => {
+    let contributionError: Record<string, unknown> | null = null;
+    let loggedError = "";
+    const diagnostic = {
+      version: 1 as const,
+      code: "DEVELOPER_ERROR",
+      causeCode: "CONNECTION_TIMEOUT",
+      summary: "The configured service did not respond.",
+      detail: null,
+      provenance: "developer" as const,
+      retryable: null,
+      redacted: true,
+    };
+
+    await settleAndLogAppExecution({
+      receiptId: "receipt-failed-run-1",
+      app: createTestApp(),
+      userId: "user_run",
+      user: null,
+      functionName: "checkInbox",
+      inputArgs: {},
+      method: "run",
+      success: false,
+      durationMs: 120,
+      outputResult: diagnostic,
+      errorMessage: diagnostic.summary,
+      operatorDiagnostic: diagnostic,
+      callerAuthState: "authenticated",
+      subscriptionCapacityLight: 0,
+      routineContext: {
+        routineId: "00000000-0000-4000-8000-000000000111",
+        routineRunId: "00000000-0000-4000-8000-000000000112",
+        traceId: "00000000-0000-4000-8000-000000000113",
+      },
+    }, {
+      fetchFn: async (input, init) => {
+        const url = String(input);
+        if (url.includes("/rpc/record_routine_call_contribution")) {
+          const body = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          contributionError = body.p_error as Record<string, unknown>;
+          return Response.json([{
+            step_id: "00000000-0000-4000-8000-000000000114",
+            step_index: 0,
+            total_light: 0,
+          }]);
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+      logMcpCallFn: (entry) => {
+        loggedError = entry.errorMessage ?? "";
+      },
+    });
+
+    assertEquals(contributionError?.code, "DEVELOPER_ERROR");
+    assertEquals(contributionError?.causeCode, "CONNECTION_TIMEOUT");
+    assertEquals(
+      contributionError?.summary,
+      "The configured service did not respond.",
+    );
+    assertEquals(loggedError, "The configured service did not respond.");
+  });
+});
+
 Deno.test("settleAndLogAppExecution applies charged spend when contribution telemetry fails", async () => {
   await withMockedEnv(async () => {
     const routineContext = {
