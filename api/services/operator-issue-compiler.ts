@@ -13,6 +13,7 @@ import type {
   LaunchOperatorReport,
   LaunchOperatorScope,
 } from "../../shared/contracts/launch.ts";
+import { assertRegisteredOperatorRemediation } from "./operator-remediation-registry.ts";
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const CAUSE_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
@@ -289,10 +290,12 @@ function remediation(
   conditionKey: string,
   value: OperatorRemediationDefinition,
 ): LaunchOperatorRemediation {
-  return {
+  const compiled = {
     id: `${conditionKey}:remediation:${value.key}`,
     ...value,
   } as LaunchOperatorRemediation;
+  assertRegisteredOperatorRemediation(compiled);
+  return compiled;
 }
 
 function revalidateRecovery(): LaunchOperatorRecoveryPolicy {

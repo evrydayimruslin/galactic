@@ -1,6 +1,6 @@
 # Operator issue and remediation architecture
 
-Status: M0 invariants locked; M1 contract/compiler foundation implemented
+Status: M0–M3 implemented through additive canonical persistence
 
 Last reviewed: `2026-07-24`
 
@@ -144,6 +144,37 @@ dual-read/write, reconciliation, and client cutover are later milestones.
 
 Legacy notification parsing remains compatibility-only until the typed
 pipeline has reached read parity.
+
+## M2 implementation boundary
+
+Execution failures are normalized at the sandbox boundary into bounded,
+secret-safe diagnostics with explicit provenance. Platform condition codes are
+derived only from trusted host facts; developer and provider error types can
+add a cause but cannot impersonate a platform failure. Owner-scoped run detail
+and redacted log APIs expose the evidence needed by `inspect_run` and
+`open_logs` without returning raw arguments, results, or another Agent's
+receipts.
+
+## M3 implementation boundary
+
+Canonical operator item persistence is additive and service-role only:
+
+- one active episode may own an owner/condition key while recovered episodes
+  remain as history;
+- affected-Agent fanout is stored separately from canonical item scope;
+- read, snooze, and dismiss state is stored separately and cannot recover an
+  item;
+- a monotonic source cursor rejects stale snapshots, and a snapshot hash
+  rejects conflicting payloads at the same timestamp, before either can
+  resurrect or recover newer conditions;
+- reconciliation atomically replaces exact affected-Agent membership and
+  recovers conditions absent from a complete source snapshot; and
+- the TypeScript and database trust boundaries both enforce the closed
+  remediation registry and reject arbitrary URLs or authority widening.
+
+M3 does not connect producers or replace Attention reads. Those cutovers remain
+M4 and M5 so the new store can be shadowed and compared before it becomes
+operator-visible.
 
 ## Rollout order
 
