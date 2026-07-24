@@ -36,6 +36,7 @@ import {
 import { LaunchShell } from "./components/launch-chrome";
 import {
   NebulaFleetApp,
+  NebulaPublicShell,
   NebulaSessionRestoringShell,
 } from "./components/nebula-fleet";
 import { SignInModalProvider } from "./components/sign-in-modal";
@@ -242,11 +243,33 @@ export function App(): ReactElement {
     routeKey: route.definition.key,
     sessionRestoring,
   });
+  const publicCosmosHome = !authToken && !sessionRestoring &&
+    route.definition.key === "home" && !providerCodeMisrouted;
   return (
     // Remount the application surface when the authenticated owner changes so
     // component-local alert/search/settings state cannot outlive its account.
     <SignInModalProvider key={authSessionIdentity}>
-      {nebulaRoute && !providerCodeMisrouted
+      {publicCosmosHome
+        ? (
+          <NebulaPublicShell>
+            <LaunchShell
+              accountRoutes={accountRoutes()}
+              activeRoute={activeSection}
+              cosmos
+              navigate={navigate}
+              primaryRoutes={primaryRoutes()}
+              title={routeTitles[route.definition.key]}
+            >
+              <HomeFoundationPage
+                live={live}
+                location={location}
+                route={route}
+                navigate={navigate}
+              />
+            </LaunchShell>
+          </NebulaPublicShell>
+        )
+        : nebulaRoute && !providerCodeMisrouted
         ? sessionRestoring
           ? (
             <NebulaSessionRestoringShell

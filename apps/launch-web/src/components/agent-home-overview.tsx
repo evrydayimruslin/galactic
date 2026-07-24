@@ -1210,30 +1210,30 @@ export function AgentHomeOverview({
         <div className="agent-home-card-head">
           <div>
             <p className="section-label">Cost &amp; rate limits</p>
-            <p className="muted-note">Hard work ceilings are reserved before execution. Manual runs count too.</p>
+            <p className="muted-note">Usage limits apply to scheduled and manual runs.</p>
           </div>
-          <Pill>Work units</Pill>
+          <Pill>Usage</Pill>
         </div>
         {snapshot.budget
           ? (
             <>
               <div className="agent-home-budget-table-wrap">
                 <table className="agent-home-budget-table">
-                  <caption className="sr-only">Agent budget ceilings and current usage</caption>
-                  <thead><tr><th scope="col">Window</th><th scope="col">Used</th><th scope="col">Ceiling</th></tr></thead>
+                  <caption className="sr-only">Agent usage limits and current usage</caption>
+                  <thead><tr><th scope="col">Window</th><th scope="col">Used</th><th scope="col">Limit</th></tr></thead>
                   <tbody>
-                    <tr><th scope="row">Last run</th><td>{formatNumber(snapshot.budget.usage.lastRun)} units</td><td>{formatNumber(snapshot.budget.ceilings.perRun)} units</td></tr>
-                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.dayStartedAt)}`}>Today (UTC)</th><td>{formatNumber(snapshot.budget.usage.daily)} units</td><td>{formatNumber(snapshot.budget.ceilings.daily)} units</td></tr>
-                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.monthStartedAt)}`}>This month (UTC)</th><td>{formatNumber(snapshot.budget.usage.monthly)} units</td><td>{formatNumber(snapshot.budget.ceilings.monthly)} units</td></tr>
+                    <tr><th scope="row">Last run</th><td>{formatNumber(snapshot.budget.usage.lastRun)}</td><td>{formatNumber(snapshot.budget.ceilings.perRun)}</td></tr>
+                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.dayStartedAt)}`}>Today (UTC)</th><td>{formatNumber(snapshot.budget.usage.daily)}</td><td>{formatNumber(snapshot.budget.ceilings.daily)}</td></tr>
+                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.monthStartedAt)}`}>This month (UTC)</th><td>{formatNumber(snapshot.budget.usage.monthly)}</td><td>{formatNumber(snapshot.budget.ceilings.monthly)}</td></tr>
                     <tr><th scope="row">Calls / last run</th><td>{formatNumber(snapshot.budget.usage.lastRunCalls)} calls</td><td>{formatNumber(snapshot.budget.ceilings.callsPerRun)} calls</td></tr>
                   </tbody>
                 </table>
               </div>
               <div className="agent-home-budget-inputs">
                 {([
-                  ["perRun", "Work units / run", false],
-                  ["daily", "Work units / day", false],
-                  ["monthly", "Work units / month", false],
+                  ["perRun", "Per-run usage limit", false],
+                  ["daily", "Daily usage limit", false],
+                  ["monthly", "Monthly usage limit", false],
                   ["callsPerRun", "Calls / run", true],
                 ] as const).map(([key, label, integer]) => (
                   <label className="agent-home-field" key={key}>
@@ -1256,7 +1256,7 @@ export function AgentHomeOverview({
                   onClick={saveBudget}
                   size="sm"
                 >
-                  {busy === "budget" ? "Saving…" : "Save ceilings"}
+                  {busy === "budget" ? "Saving…" : "Save usage limits"}
                 </Button>
               </div>
             </>
@@ -1398,7 +1398,7 @@ export function AgentHomeOverview({
                     <span>{statusLabel(run.trigger)} · {formatDuration(run.durationMs)}</span>
                   </div>
                   <div className="agent-home-run-usage">
-                    <Mono>{formatNumber(run.workUnits)} work units</Mono>
+                    <Mono>Usage {formatNumber(run.workUnits)}</Mono>
                     <Mono>{formatNumber(run.calls)} calls</Mono>
                   </div>
                 </article>

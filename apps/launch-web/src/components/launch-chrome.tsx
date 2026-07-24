@@ -34,6 +34,7 @@ interface LaunchShellProps {
   accountRoutes: LaunchRouteDefinition[];
   activeRoute: LaunchRouteKey;
   children: ReactNode;
+  cosmos?: boolean;
   navigate: LaunchNavigate;
   primaryRoutes: LaunchRouteDefinition[];
   title: string;
@@ -86,6 +87,7 @@ export function LaunchShell({
   accountRoutes,
   activeRoute,
   children,
+  cosmos = false,
   navigate,
   primaryRoutes,
   title,
@@ -104,72 +106,108 @@ export function LaunchShell({
   }, []);
 
   return (
-    <div className="launch-shell">
-      <header className={scrolled ? "top-nav scrolled" : "top-nav"}>
-        <button
-          className="wordmark-button"
-          onClick={() => navigate("/")}
-          type="button"
-        >
-          <Wordmark />
-        </button>
-        <nav className="desktop-nav" aria-label="Primary">
-          {signedIn
-            ? (
-              <>
-                {navRoutes.map((route) => (
-                  <button
-                    className={navClass(activeRoute, route.key)}
-                    data-label={route.label}
-                    key={route.key}
-                    onClick={() => navigate(route.path)}
-                    type="button"
-                  >
-                    <span>{route.label}</span>
-                  </button>
-                ))}
-                <button
-                  className={navClass(activeRoute, "settings")}
-                  data-label="Profile"
-                  onClick={() => navigate("/account")}
-                  type="button"
-                >
-                  <span>Profile</span>
-                </button>
-              </>
-            )
-            : null}
-        </nav>
-        <div className="top-actions">
-          <AddToAgentButton
-            label={signedIn ? "Add to agent" : "Connect Galactic"}
-            size="sm"
-            variant="ghost"
-          />
-          {signedIn
-            ? <NotificationBell navigate={navigate} />
-            : (
+    <div className={cosmos ? "launch-shell public-cosmos-shell" : "launch-shell"}>
+      {cosmos
+        ? (
+          <header className="neb-public-topbar-shell">
+            <div className="neb-public-topbar">
               <button
-                className="signin-link"
-                onClick={openSignInModal}
+                className="neb-public-wordmark"
+                onClick={() => navigate("/")}
                 type="button"
               >
-                Sign in
+                galactic
               </button>
-            )}
-        </div>
-      </header>
+              <div className="neb-public-actions">
+                <button
+                  className="neb-public-signin"
+                  onClick={openSignInModal}
+                  type="button"
+                >
+                  Sign in
+                </button>
+                <AddToAgentButton
+                  label="Connect Galactic"
+                  size="sm"
+                  variant="secondary"
+                />
+              </div>
+            </div>
+          </header>
+        )
+        : (
+          <>
+            <header className={scrolled ? "top-nav scrolled" : "top-nav"}>
+              <button
+                className="wordmark-button"
+                onClick={() => navigate("/")}
+                type="button"
+              >
+                <Wordmark />
+              </button>
+              <nav className="desktop-nav" aria-label="Primary">
+                {signedIn
+                  ? (
+                    <>
+                      {navRoutes.map((route) => (
+                        <button
+                          className={navClass(activeRoute, route.key)}
+                          data-label={route.label}
+                          key={route.key}
+                          onClick={() => navigate(route.path)}
+                          type="button"
+                        >
+                          <span>{route.label}</span>
+                        </button>
+                      ))}
+                      <button
+                        className={navClass(activeRoute, "settings")}
+                        data-label="Profile"
+                        onClick={() => navigate("/account")}
+                        type="button"
+                      >
+                        <span>Profile</span>
+                      </button>
+                    </>
+                  )
+                  : null}
+              </nav>
+              <div className="top-actions">
+                <AddToAgentButton
+                  label={signedIn ? "Add to agent" : "Connect Galactic"}
+                  size="sm"
+                  variant="ghost"
+                />
+                {signedIn
+                  ? <NotificationBell navigate={navigate} />
+                  : (
+                    <button
+                      className="signin-link"
+                      onClick={openSignInModal}
+                      type="button"
+                    >
+                      Sign in
+                    </button>
+                  )}
+              </div>
+            </header>
 
-      <header className="mobile-nav">
-        <button className="icon-button" aria-label="Open navigation" type="button">
-          <Icon name="menu" />
-        </button>
-        <span className="mobile-title">{title}</span>
-        <AddToAgentButton
-          label={signedIn ? "Add" : "Connect"}
-          size="sm"
-        />
-      </header>
+            <header className="mobile-nav">
+              <button
+                className="icon-button"
+                aria-label="Open navigation"
+                type="button"
+              >
+                <Icon name="menu" />
+              </button>
+              <span className="mobile-title">{title}</span>
+              <AddToAgentButton
+                label={signedIn ? "Add" : "Connect"}
+                size="sm"
+              />
+            </header>
+          </>
+        )}
 
       <main className="launch-main">{children}</main>
 

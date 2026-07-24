@@ -253,6 +253,48 @@ function boundedText(value: unknown, max: number): string | null {
   return normalized ? normalized.slice(0, max) : null;
 }
 
+function usageResetLabel(value: string): string | null {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
+}
+
+function routineUsageLimitCopy(
+  kind: string | null,
+  title: string,
+  body: string | null,
+): { title: string; body: string } | null {
+  if (kind !== "routine_budget_exhausted") return null;
+  const source = `${title} ${body ?? ""}`;
+  const period = /\bmonthly\b/iu.test(source) ? "monthly" : "daily";
+  const displayTitle = title
+    .replace(
+      /\bhit its (daily|monthly) budget\b/iu,
+      "reached its $1 usage limit",
+    )
+    .replace(/\bcredits? budget\b/giu, "usage limit")
+    .replace(/\bbudget\b/giu, "usage limit")
+    .replace(/\bLight\b/gu, "usage");
+  const resetAt = source.match(
+    /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/u,
+  )?.[0];
+  const resetLabel = resetAt ? usageResetLabel(resetAt) : null;
+  return {
+    title: displayTitle,
+    body: resetLabel
+      ? `Runs are paused until usage resets at ${resetLabel}.`
+      : `Runs are paused until the ${period} usage limit resets.`,
+  };
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -498,9 +540,17 @@ export function buildAgentAttentionProjection(
     const safeTitle = boundedText(row.title, 500) ?? "Agent notification";
     const safeBody = boundedText(row.body, 2_000);
     const safeKind = boundedText(row.kind, 120);
+    const usageLimitCopy = routineUsageLimitCopy(
+      safeKind,
+      safeTitle,
+      safeBody,
+    );
+    const displayTitle = usageLimitCopy?.title ?? safeTitle;
+    const displayBody = usageLimitCopy?.body ?? safeBody;
     const brief = currentBriefs.get(row.id);
     const ready = brief?.status === "ready" &&
-      Boolean(boundedText(brief.headline, 240));
+      Boolean(boundedText(brief.headline, 240)) &&
+      !usageLimitCopy;
     const action = brief ? briefAction(brief, input.agent) : null;
     const evidence = ready && brief
       ? briefEvidence(brief.evidence, input.agent.slug, row.id)
@@ -509,7 +559,7 @@ export function buildAgentAttentionProjection(
       evidence.push({
         kind: "notification",
         sourceId: row.id,
-        label: safeTitle,
+        label: displayTitle,
         observedAt: row.created_at,
         destination: attentionDestination(input.agent.slug, row.id),
       });
@@ -523,8 +573,8 @@ export function buildAgentAttentionProjection(
       brief: {
         headline: ready && brief
           ? boundedText(brief.headline, 240)!
-          : safeTitle,
-        impact: ready && brief ? boundedText(brief.impact, 2000) : safeBody,
+          : displayTitle,
+        impact: ready && brief ? boundedText(brief.impact, 2000) : displayBody,
         context: null,
         recommendedNextMove: ready && brief
           ? boundedText(brief.recommended_action, 1000)
@@ -544,8 +594,8 @@ export function buildAgentAttentionProjection(
       },
       raw: {
         kind: safeKind ?? "notification",
-        title: safeTitle,
-        body: safeBody,
+        title: displayTitle,
+        body: displayBody,
       },
     };
     if (row.item_class === "report") {

@@ -91,6 +91,7 @@ import {
   fleetAgentAttentionCount,
   fleetStatusPresentation,
   isFleetAgentWorkingOrReady,
+  sortFleetAgentsForDisplay,
 } from '../lib/fleet-status';
 import { moveFleetAgentBefore, moveFleetAgentByOffset } from '../lib/fleet-order';
 import {
@@ -383,6 +384,32 @@ function Starfield(): ReactElement {
   return <canvas className='neb-stars' ref={canvasRef} aria-hidden='true' />;
 }
 
+export function NebulaPublicShell({
+  children,
+}: {
+  children: ReactNode;
+}): ReactElement {
+  useEffect(() => {
+    document.documentElement.classList.add('nebula-public-page');
+    document.body.classList.add('nebula-public-page');
+    return () => {
+      document.documentElement.classList.remove('nebula-public-page');
+      document.body.classList.remove('nebula-public-page');
+    };
+  }, []);
+
+  return (
+    <div className='nebula-root nebula-public-home'>
+      <Starfield />
+      <div className='neb-nebula n1' aria-hidden='true' />
+      <div className='neb-nebula n2' aria-hidden='true' />
+      <div className='neb-nebula n3' aria-hidden='true' />
+      <div className='neb-grain' aria-hidden='true' />
+      {children}
+    </div>
+  );
+}
+
 function Modal({
   children,
   className = '',
@@ -510,7 +537,7 @@ function FleetCard({
   agentCount,
   canReorder,
   item,
-  index,
+  position,
   now,
   onDropAgent,
   onMoveAgent,
@@ -522,7 +549,7 @@ function FleetCard({
   agentCount: number;
   canReorder: boolean;
   item: LaunchFleetAgentSummary;
-  index: number;
+  position: number;
   now: number;
   onDropAgent: (sourceAgentId: string, targetAgentId: string) => void;
   onMoveAgent: (agentId: string, offset: -1 | 1) => void;
@@ -567,9 +594,9 @@ function FleetCard({
 
   return (
     <article
-      aria-keyshortcuts={launchAgentShortcutAction(index + 1)
+      aria-keyshortcuts={launchAgentShortcutAction(position + 1)
         ? launchShortcutAriaKeyShortcuts(
-          launchAgentShortcutAction(index + 1)!,
+          launchAgentShortcutAction(position + 1)!,
           shortcutConfig,
         )
         : undefined}
@@ -633,7 +660,7 @@ function FleetCard({
             </button>
             <button
               aria-label={`Move ${item.agent.name} earlier`}
-              disabled={reorderBusy || index === 0}
+              disabled={reorderBusy || position === 0}
               onClick={() => onMoveAgent(item.agent.id, -1)}
               type='button'
             >
@@ -641,7 +668,7 @@ function FleetCard({
             </button>
             <button
               aria-label={`Move ${item.agent.name} later`}
-              disabled={reorderBusy || index === agentCount - 1}
+              disabled={reorderBusy || position === agentCount - 1}
               onClick={() => onMoveAgent(item.agent.id, 1)}
               type='button'
             >
@@ -650,7 +677,9 @@ function FleetCard({
           </div>
         )
         : null}
-      <span className='neb-card-no'>{String(index + 1).padStart(3, '0')}</span>
+      <span className='neb-card-no'>
+        {String(position + 1).padStart(3, '0')}
+      </span>
       {attentionCount > 0
         ? (
           <span className='neb-card-alert-count'>
@@ -968,6 +997,10 @@ export function NebulaFleetApp({
           (right.fleetPosition ?? Number.MAX_SAFE_INTEGER) ||
         left.agent.name.localeCompare(right.agent.name)
       ),
+    [agents],
+  );
+  const displayedAgents = useMemo(
+    () => sortFleetAgentsForDisplay(agents),
     [agents],
   );
 
@@ -1428,11 +1461,10 @@ export function NebulaFleetApp({
             : fleetOrderError || undefined}
           loading={showFleetLoader}
         >
-          {agents.map((item, index) => (
+          {displayedAgents.map((item) => (
             <FleetCard
               agentCount={agents.length}
               canReorder={Boolean(fleet?.fleetRevision) && agents.length > 1}
-              index={index}
               item={item}
               key={item.agent.id}
               now={now}
@@ -1444,6 +1476,10 @@ export function NebulaFleetApp({
                   agentOpen && route.params.slug === item.agent.slug
                     ? '/'
                     : `/agents/${encodeURIComponent(item.agent.slug)}`,
+                )}
+              position={item.fleetPosition ??
+                orderedShortcutAgents.findIndex((candidate) =>
+                  candidate.agent.id === item.agent.id
                 )}
               reorderBusy={fleetOrderBusy}
               shortcutConfig={shortcutConfig}
@@ -5169,7 +5205,7 @@ function AgentSettingsPane({
           <div className='neb-history-item' key={run.id}>
             {run.summary ?? `${run.trigger} · ${run.status}`}
             <div className='neb-history-time'>
-              {formatRelative(run.createdAt)} · {run.workUnits} work units
+              {formatRelative(run.createdAt)} · Usage {run.workUnits}
             </div>
           </div>
         ))}

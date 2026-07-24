@@ -5,6 +5,7 @@ import {
   fleetAgentAttentionCount,
   fleetStatusPresentation,
   isFleetAgentWorkingOrReady,
+  sortFleetAgentsForDisplay,
 } from "./fleet-status";
 
 const NOW = Date.parse("2026-07-21T20:00:00.000Z");
@@ -35,6 +36,22 @@ function agent(
     recentActivity: [],
     capacity: null,
     ...overrides,
+  } as LaunchFleetAgentSummary;
+}
+
+function fleetAgent(
+  name: string,
+  fleetPosition: number,
+  attentionCount: number,
+): LaunchFleetAgentSummary {
+  return {
+    agent: {
+      id: `agent-${fleetPosition}`,
+      slug: name.toLowerCase(),
+      name,
+    },
+    attentionCount,
+    fleetPosition,
   } as LaunchFleetAgentSummary;
 }
 
@@ -142,5 +159,40 @@ describe("fleetAgentAttentionCount", () => {
       ),
     ).toBe(3);
     expect(fleetAgentAttentionCount(agent({ unreadAlertCount: 2 }))).toBe(2);
+  });
+});
+
+describe("fleet display priority", () => {
+  it("raises Agents with Attention without changing their stable positions", () => {
+    const agents = [
+      fleetAgent("One", 0, 0),
+      fleetAgent("Two", 1, 0),
+      fleetAgent("Three", 2, 2),
+      fleetAgent("Four", 3, 1),
+    ];
+
+    const displayed = sortFleetAgentsForDisplay(agents);
+
+    expect(displayed.map((item) => item.agent.name)).toEqual([
+      "Three",
+      "Four",
+      "One",
+      "Two",
+    ]);
+    expect(displayed.map((item) => item.fleetPosition)).toEqual([2, 3, 0, 1]);
+    expect(agents.map((item) => item.fleetPosition)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("uses the stable position to break equal Attention counts", () => {
+    const agents = [
+      fleetAgent("Four", 3, 2),
+      fleetAgent("Two", 1, 2),
+      fleetAgent("Three", 2, 0),
+      fleetAgent("One", 0, 0),
+    ];
+
+    expect(
+      sortFleetAgentsForDisplay(agents).map((item) => item.agent.name),
+    ).toEqual(["Two", "Four", "One", "Three"]);
   });
 });
