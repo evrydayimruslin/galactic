@@ -270,6 +270,32 @@ Deno.test("agent search always performs owner-scoped lexical retrieval and retur
   assert(!("cursor" in response));
 });
 
+Deno.test("agent search invokes a stored Worker fetch without a receiver", async () => {
+  const database = databaseHarness({ lexical: [] });
+  let receiver: unknown = "not-called";
+  const receiverSensitiveFetch = (function (
+    this: unknown,
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) {
+    receiver = this;
+    if (this !== undefined) {
+      throw new TypeError("Illegal invocation");
+    }
+    return database.fetchFn(input, init);
+  }) as typeof fetch;
+
+  const response = await searchOwnerAgentNavigation(
+    USER_ID,
+    { query: "mail" },
+    deps(receiverSensitiveFetch),
+  );
+
+  assertEquals(receiver, undefined);
+  assertEquals(response.results, []);
+  assertEquals(database.calls.length, 1);
+});
+
 Deno.test("agent search maps every supported subject to a stable internal destination", async () => {
   const cases: Array<{
     kind: LaunchAgentSearchSubjectKind;

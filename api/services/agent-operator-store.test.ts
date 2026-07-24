@@ -362,6 +362,40 @@ Deno.test("Fleet preferences read validates compact zero-based order", async () 
   assertEquals(database.calls.length, 1);
 });
 
+Deno.test("operator persistence invokes a stored Worker fetch without a receiver", async () => {
+  const database = harness(rpc(
+    "get_user_fleet_preferences_snapshot",
+    [{
+      revision: 1,
+      shortcuts_enabled: true,
+      shortcut_map: {},
+      updated_at: "2026-07-23T15:00:00.000Z",
+      ordered_agent_ids: [],
+      ordered_fleet_positions: [],
+    }],
+  ));
+  let receiver: unknown = "not-called";
+  const receiverSensitiveFetch = (function (
+    this: unknown,
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) {
+    receiver = this;
+    if (this !== undefined) {
+      throw new TypeError("Illegal invocation");
+    }
+    return database.fetchFn(input, init);
+  }) as typeof fetch;
+
+  await getFleetPreferences(
+    USER_ID,
+    dependencies(receiverSensitiveFetch),
+  );
+
+  assertEquals(receiver, undefined);
+  assertEquals(database.calls.length, 1);
+});
+
 Deno.test("Fleet preferences reject malformed atomic ordering snapshots", async () => {
   const database = harness(rpc(
     "get_user_fleet_preferences_snapshot",

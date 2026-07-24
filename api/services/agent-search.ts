@@ -343,7 +343,11 @@ async function databaseRequest(
 ): Promise<unknown> {
   let response: Response;
   try {
-    response = await config.fetchFn(
+    // Cloudflare's global fetch is receiver-sensitive. Keep the stored
+    // transport receiver-free so production navigation search reaches the
+    // database instead of failing with an Illegal invocation.
+    const fetchFn = config.fetchFn;
+    response = await fetchFn(
       `${config.baseUrl}/rest/v1/${path}`,
       {
         ...init,

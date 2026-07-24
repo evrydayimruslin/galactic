@@ -514,7 +514,11 @@ async function databaseRequest(
 ): Promise<unknown> {
   let response: Response;
   try {
-    response = await config.fetchFn(`${config.baseUrl}/rest/v1/${path}`, {
+    // Cloudflare's global fetch is receiver-sensitive. Calling a stored
+    // reference as config.fetchFn(...) binds `this` to config and throws an
+    // Illegal invocation before any network request is made.
+    const fetchFn = config.fetchFn;
+    response = await fetchFn(`${config.baseUrl}/rest/v1/${path}`, {
       ...init,
       headers: {
         apikey: config.serviceRoleKey,
