@@ -118,7 +118,7 @@ Deno.test("notification classification is explicit and fails closed", async () =
   assertEquals(classifyNotificationKind("routine_summary"), "report");
   assertEquals(
     classifyNotificationKind("routine_budget_exhausted"),
-    "incident",
+    "report",
   );
   assertEquals(classifyNotificationKind("routine_paused"), "incident");
   assertEquals(classifyNotificationKind("unknown_new_kind"), "incident");

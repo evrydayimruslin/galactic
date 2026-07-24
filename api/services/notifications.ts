@@ -77,6 +77,7 @@ const NOTIFICATION_COLUMNS =
 // new operational failure cannot silently disappear after being read.
 const INFORMATIONAL_REPORT_KINDS = new Set([
   "agent_report",
+  "routine_budget_exhausted",
   "routine_report",
   "routine_summary",
 ]);

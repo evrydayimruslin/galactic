@@ -3,6 +3,29 @@ import type { MCPToolAnnotations } from './mcp.ts';
 
 export const LAUNCH_MVP_VERSION = 'persistent-agent-mvp-v1' as const;
 export const AGENT_HOME_CONTRACT_VERSION = '2026-07-23.operator.1' as const;
+export const OPERATOR_ISSUE_CONTRACT_VERSION = '2026-07-24.operator-issues.1' as const;
+
+/**
+ * Machine-readable invariants for operator issues and remediation.
+ *
+ * Notifications remain immutable event/report evidence. A canonical issue
+ * owns the observed condition lifecycle, while read/snooze/dismiss state is a
+ * separate presentation concern. Clients render trusted server intent; they
+ * never infer remediation from prose or execute a server-supplied URL.
+ */
+export const OPERATOR_ISSUE_POLICY = {
+  diagnosisAuthority: 'trusted_server_condition',
+  remediationAuthority: 'server_registry',
+  navigationContract: 'semantic_target',
+  conditionLifecycleAuthority: 'operator_issue',
+  attentionStateAuthority: 'operator_issue_attention_state',
+  notificationRole: 'immutable_evidence_and_reports',
+  globalCountMeaning: 'unique_items',
+  agentCountMeaning: 'relevance_projections',
+  blockerOrdering: 'dependency_then_source_order',
+  scheduledResumeAfterRecovery: 'explicit_owner_action',
+  legacyProseAndUrlParsing: 'compatibility_only',
+} as const;
 
 // Machine-readable safety/product invariants for the private persistent-Agent
 // launch. Capability-basin code may support broader modes, but the Conjure and
@@ -1234,6 +1257,268 @@ export interface LaunchAgentEvidenceReference {
   observedAt: string | null;
   destination?: LaunchNavigationTarget | null;
 }
+
+export type LaunchOperatorItemClass = 'report' | 'issue';
+
+export type LaunchOperatorConditionCode =
+  | 'ACCOUNT_BYOK_MISSING'
+  | 'ACCOUNT_USAGE_EXHAUSTED'
+  | 'AGENT_CAPABILITY_APPROVAL_REQUIRED'
+  | 'AGENT_GRANT_REQUIRED'
+  | 'AGENT_PRIMARY_ROUTINE_MISSING'
+  | 'AGENT_RELEASE_REVIEW_REQUIRED'
+  | 'AGENT_REPORTING_NOT_CONFIGURED'
+  | 'AGENT_SECRET_MISSING'
+  | 'AGENT_SETTING_MISSING'
+  | 'ROUTINE_PAUSED_AFTER_FAILURES'
+  | 'ROUTINE_USAGE_EXHAUSTED';
+
+export type LaunchOperatorDiagnosisProvenance =
+  | 'platform'
+  | 'provider'
+  | 'developer'
+  | 'combined'
+  | 'unknown';
+
+export interface LaunchOperatorDiagnosis {
+  /** Stable platform-owned condition code. */
+  code: LaunchOperatorConditionCode;
+  /**
+   * Optional bounded cause code. Provider/developer codes add specificity but
+   * cannot select a remediation or impersonate the platform condition code.
+   */
+  causeCode: string | null;
+  summary: string;
+  detail: string | null;
+  provenance: LaunchOperatorDiagnosisProvenance;
+  evidence: LaunchAgentEvidenceReference[];
+}
+
+export type LaunchOperatorScope =
+  | { kind: 'account' }
+  | { kind: 'agent'; agentId: string }
+  | { kind: 'routine'; agentId: string; routineId: string }
+  | {
+    kind: 'run';
+    agentId: string;
+    routineId: string;
+    runId: string;
+  };
+
+/**
+ * Navigation intent without a web route. Web, CLI, MCP, and native clients
+ * translate the same target into their own presentation.
+ */
+export type LaunchOperatorSemanticTarget =
+  | {
+    kind: 'account_provider';
+    provider: string | null;
+  }
+  | {
+    kind: 'account_usage';
+  }
+  | {
+    kind: 'agent_setup_requirement';
+    agentId: string;
+    requirementId: string;
+  }
+  | {
+    kind: 'agent_setting';
+    agentId: string;
+    settingKey: string;
+    settingScope: 'agent' | 'per_user';
+  }
+  | {
+    kind: 'agent_access_item';
+    agentId: string;
+    itemId: string;
+  }
+  | {
+    kind: 'agent_release';
+    agentId: string;
+    releaseId: string | null;
+  }
+  | {
+    kind: 'routine';
+    agentId: string;
+    routineId: string;
+  }
+  | {
+    kind: 'routine_run';
+    agentId: string;
+    routineId: string;
+    runId: string;
+  }
+  | {
+    kind: 'routine_logs';
+    agentId: string;
+    routineId: string;
+    runId: string | null;
+  };
+
+export type LaunchOperatorRemediationKey =
+  | 'adjust_capacity'
+  | 'approve_capability'
+  | 'approve_grant'
+  | 'configure_provider'
+  | 'configure_routine'
+  | 'configure_secret'
+  | 'configure_setting'
+  | 'enable_routine'
+  | 'inspect_run'
+  | 'open_logs'
+  | 'open_routine'
+  | 'review_access'
+  | 'review_release'
+  | 'resume_routine'
+  | 'run_once'
+  | 'verify_connection';
+
+export type LaunchOperatorRemediationPresentation =
+  | 'inline'
+  | 'navigate'
+  | 'execute';
+
+export type LaunchOperatorRemediationAuthority =
+  | 'account_session'
+  | 'agent_operate';
+
+export type LaunchOperatorRemediationSideEffect =
+  | 'none'
+  | 'configuration_write'
+  | 'bounded_approval'
+  | 'routine_execution'
+  | 'schedule_change';
+
+export interface LaunchOperatorRemediationTargetMap {
+  adjust_capacity: Extract<LaunchOperatorSemanticTarget, { kind: 'routine' }>;
+  approve_capability: Extract<
+    LaunchOperatorSemanticTarget,
+    { kind: 'agent_access_item' }
+  >;
+  approve_grant: Extract<
+    LaunchOperatorSemanticTarget,
+    { kind: 'agent_access_item' }
+  >;
+  configure_provider: Extract<
+    LaunchOperatorSemanticTarget,
+    { kind: 'account_provider' }
+  >;
+  configure_routine: Extract<
+    LaunchOperatorSemanticTarget,
+    { kind: 'agent_setup_requirement' }
+  >;
+  configure_secret: Extract<
+    LaunchOperatorSemanticTarget,
+    { kind: 'agent_setting' }
+  >;
+  configure_setting: Extract<
+    LaunchOperatorSemanticTarget,
+    { kind: 'agent_setting' }
+  >;
+  enable_routine: Extract<LaunchOperatorSemanticTarget, { kind: 'routine' }>;
+  inspect_run: Extract<
+    LaunchOperatorSemanticTarget,
+    { kind: 'routine_run' }
+  >;
+  open_logs: Extract<
+    LaunchOperatorSemanticTarget,
+    { kind: 'routine_logs' }
+  >;
+  open_routine: Extract<LaunchOperatorSemanticTarget, { kind: 'routine' }>;
+  review_access: Extract<
+    LaunchOperatorSemanticTarget,
+    { kind: 'agent_access_item' }
+  >;
+  review_release: Extract<
+    LaunchOperatorSemanticTarget,
+    { kind: 'agent_release' }
+  >;
+  resume_routine: Extract<LaunchOperatorSemanticTarget, { kind: 'routine' }>;
+  run_once: Extract<LaunchOperatorSemanticTarget, { kind: 'routine' }>;
+  verify_connection: Extract<
+    LaunchOperatorSemanticTarget,
+    { kind: 'routine' }
+  >;
+}
+
+export interface LaunchOperatorRemediationBase<
+  TKey extends LaunchOperatorRemediationKey,
+> {
+  /** Stable only within the containing issue/report. */
+  id: string;
+  key: TKey;
+  label: string;
+  description: string | null;
+  presentation: LaunchOperatorRemediationPresentation;
+  requiredAuthority: LaunchOperatorRemediationAuthority;
+  sideEffect: LaunchOperatorRemediationSideEffect;
+  target: LaunchOperatorRemediationTargetMap[TKey];
+}
+
+export type LaunchOperatorRemediation = {
+  [TKey in LaunchOperatorRemediationKey]: LaunchOperatorRemediationBase<TKey>;
+}[LaunchOperatorRemediationKey];
+
+export interface LaunchOperatorAffectedAgent {
+  agentId: string;
+  /** Blocking is contextual to this Agent, not a property of the issue. */
+  blocking: boolean;
+}
+
+export interface LaunchOperatorOrdering {
+  /** Stable order from the trusted producer; it is not a type priority. */
+  sourceOrdinal: number;
+  /** Condition keys that should render before this item when present. */
+  dependsOnConditionKeys: string[];
+}
+
+export interface LaunchOperatorRecoveryPolicy {
+  mode:
+    | 'automatic_reset'
+    | 'revalidate_condition'
+    | 'successful_verification';
+  mayRecoverAutomatically: boolean;
+  /** Recovery never silently resumes a paused schedule. */
+  resumesScheduledWork: false;
+}
+
+interface LaunchOperatorItemBase<TId extends string | null> {
+  /** Null for a compiler candidate; persistent issue storage supplies an id. */
+  id: TId;
+  /** Stable active-condition/dedupe key derived only from trusted identifiers. */
+  conditionKey: string;
+  scope: LaunchOperatorScope;
+  severity: 'info' | 'warning' | 'critical';
+  diagnosis: LaunchOperatorDiagnosis;
+  affectedAgents: LaunchOperatorAffectedAgent[];
+  remediations: LaunchOperatorRemediation[];
+  requiresAction: boolean;
+  requiresDecision: boolean;
+  ordering: LaunchOperatorOrdering;
+  recovery: LaunchOperatorRecoveryPolicy;
+  detectedAt: string;
+}
+
+export interface LaunchOperatorIssue<TId extends string | null = string>
+  extends LaunchOperatorItemBase<TId> {
+  itemClass: 'issue';
+  requiresAction: true;
+}
+
+export interface LaunchOperatorReport<TId extends string | null = string>
+  extends LaunchOperatorItemBase<TId> {
+  itemClass: 'report';
+  requiresAction: false;
+  requiresDecision: false;
+  remediations: [];
+}
+
+export type LaunchOperatorItem<TId extends string | null = string> =
+  | LaunchOperatorIssue<TId>
+  | LaunchOperatorReport<TId>;
+
+export type LaunchOperatorItemCandidate = LaunchOperatorItem<null>;
 
 /**
  * The Agent's canonical responsibility. Identity (name/description) remains a

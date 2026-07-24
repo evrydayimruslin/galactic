@@ -629,8 +629,8 @@ SELECT is(
       '00000000-0000-0000-0000-000000001508'
     )
   ),
-  'routine_budget_exhausted:incident,routine_report:report,routine_summary:report',
-  'SQL classification exactly matches canonical report kinds and keeps a budget wall actionable'
+  'routine_budget_exhausted:report,routine_report:report,routine_summary:report',
+  'SQL classification keeps auto-recovering usage exhaustion informational'
 );
 
 SELECT is(
