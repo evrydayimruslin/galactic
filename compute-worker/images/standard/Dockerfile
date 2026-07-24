@@ -4,11 +4,15 @@
 # There is intentionally no mutable default.
 ARG SANDBOX_BASE_IMAGE
 
-# Build the two Go CLIs from immutable sources with a patched compiler. These
-# binaries are copied into the runtime image; no build toolchain is retained.
+# Build the Go CLIs from immutable, checksum-verified modules with a patched
+# compiler. gh and rclone stay on their product-pinned releases while forcing
+# the first gRPC-Go release that closes GHSA-hrxh-6v49-42gf. These binaries are
+# copied into the runtime image; no build toolchain is retained.
 FROM docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 AS go-tools
 ARG GH_VERSION=2.96.0
 ARG GIT_LFS_VERSION=3.7.1
+ARG GALACTIC_RCLONE_VERSION=1.74.4
+ARG GRPC_GO_VERSION=1.82.1
 ENV GOTOOLCHAIN=local \
     GOPROXY=https://proxy.golang.org,direct \
     GOSUMDB=sum.golang.org \
@@ -26,11 +30,43 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     set -eux; \
     mkdir -p /out; \
-    GOBIN=/out go install -trimpath \
+    go mod download "github.com/cli/cli/v2@v${GH_VERSION}"; \
+    cp -a "$(go env GOMODCACHE)/github.com/cli/cli/v2@v${GH_VERSION}" /tmp/gh; \
+    chmod -R u+w /tmp/gh; \
+    cd /tmp/gh; \
+    go mod edit "-require=google.golang.org/grpc@v${GRPC_GO_VERSION}"; \
+    go mod tidy; \
+    go mod verify; \
+    test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "v${GRPC_GO_VERSION}"; \
+    go build -trimpath \
       -ldflags="-s -w -X github.com/cli/cli/v2/internal/build.Version=${GH_VERSION} -X github.com/cli/cli/v2/internal/build.Date=2026-07-02" \
-      "github.com/cli/cli/v2/cmd/gh@v${GH_VERSION}"; \
+      -o /out/gh ./cmd/gh; \
     /out/gh --version | grep -F "gh version ${GH_VERSION}"; \
-    go version -m /out/gh | grep -F 'go1.26.5'
+    go version -m /out/gh | grep -F 'go1.26.5'; \
+    go version -m /out/gh | awk -v expected="v${GRPC_GO_VERSION}" \
+      '$1 == "dep" && $2 == "google.golang.org/grpc" && $3 == expected { found = 1 } END { exit !found }'; \
+    rm -rf /tmp/gh
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    set -eux; \
+    go mod download "github.com/rclone/rclone@v${GALACTIC_RCLONE_VERSION}"; \
+    cp -a "$(go env GOMODCACHE)/github.com/rclone/rclone@v${GALACTIC_RCLONE_VERSION}" /tmp/rclone; \
+    chmod -R u+w /tmp/rclone; \
+    cd /tmp/rclone; \
+    go mod edit "-require=google.golang.org/grpc@v${GRPC_GO_VERSION}"; \
+    go mod tidy; \
+    go mod verify; \
+    test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "v${GRPC_GO_VERSION}"; \
+    go build -trimpath \
+      -ldflags="-s -w -X github.com/rclone/rclone/fs.Version=v${GALACTIC_RCLONE_VERSION}" \
+      -o /out/rclone .; \
+    /out/rclone version | grep -F "rclone v${GALACTIC_RCLONE_VERSION}"; \
+    /out/rclone version | grep -F 'go/version: go1.26.5'; \
+    go version -m /out/rclone | grep -F 'go1.26.5'; \
+    go version -m /out/rclone | awk -v expected="v${GRPC_GO_VERSION}" \
+      '$1 == "dep" && $2 == "google.golang.org/grpc" && $3 == expected { found = 1 } END { exit !found }'; \
+    rm -rf /tmp/rclone
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -124,6 +160,7 @@ ARG GALACTIC_CLI_VERSION=2.4.0
 ARG GH_VERSION=2.96.0
 ARG GIT_LFS_VERSION=3.7.1
 ARG GALACTIC_RCLONE_VERSION=1.74.4
+ARG GRPC_GO_VERSION=1.82.1
 ARG PYTHON_VERSION=3.13.14
 ARG NPM_VERSION=12.0.1
 
@@ -139,6 +176,7 @@ LABEL org.opencontainers.image.base.name="${SANDBOX_BASE_IMAGE}" \
       ai.galactic.tool.gh="gh@${GH_VERSION}" \
       ai.galactic.tool.git-lfs="git-lfs@${GIT_LFS_VERSION}-galactic.1" \
       ai.galactic.tool.rclone="rclone@${GALACTIC_RCLONE_VERSION}" \
+      ai.galactic.security.grpc-go="${GRPC_GO_VERSION}" \
       ai.galactic.tool.python="python@${PYTHON_VERSION}+cve-2026-11940-11972-15308-backports" \
       ai.galactic.tool.npm="npm@${NPM_VERSION}" \
       ai.galactic.security.cloudflared="absent-private-egress-v1"
@@ -180,6 +218,7 @@ RUN rm -rf /usr/local/python && \
 COPY --from=python-runtime /usr/local/python /usr/local/python
 COPY --from=go-tools /out/gh /usr/local/bin/gh
 COPY --from=go-tools /out/git-lfs /usr/local/bin/git-lfs
+COPY --from=go-tools /out/rclone /usr/local/bin/rclone
 RUN set -eux; \
     update-alternatives --remove python3 /usr/local/bin/python3.11; \
     rm -f /usr/local/bin/python3.11; \
@@ -192,24 +231,6 @@ RUN set -eux; \
     ldconfig; \
     test "$(/usr/bin/python3 --version)" = "Python ${PYTHON_VERSION}"; \
     ldd /usr/local/python/bin/python3.13 | grep -F 'libpython3.13.so.1.0'
-
-# rclone's upstream binary is already built with Go 1.26.5. Pin and verify the
-# release archive instead of retaining Ubuntu's old statically linked build.
-RUN set -eux; \
-    case "${TARGETARCH}" in \
-      amd64) rclone_arch=amd64; rclone_sha=fe435e0c36228e7c2f116a8701f01127bb1f694005fc11d1f27186c8bca4115d ;; \
-      arm64) rclone_arch=arm64; rclone_sha=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c358de419 ;; \
-      *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    rclone_archive="rclone-v${GALACTIC_RCLONE_VERSION}-linux-${rclone_arch}.zip"; \
-    curl -fsSL -o "/tmp/${rclone_archive}" \
-      "https://github.com/rclone/rclone/releases/download/v${GALACTIC_RCLONE_VERSION}/${rclone_archive}"; \
-    echo "${rclone_sha}  /tmp/${rclone_archive}" | sha256sum -c -; \
-    unzip -q "/tmp/${rclone_archive}" -d /tmp/rclone; \
-    install -m 0755 "/tmp/rclone/rclone-v${GALACTIC_RCLONE_VERSION}-linux-${rclone_arch}/rclone" /usr/local/bin/rclone; \
-    rm -rf /tmp/rclone "/tmp/${rclone_archive}"; \
-    rclone version | grep -F "rclone v${GALACTIC_RCLONE_VERSION}"; \
-    rclone version | grep -F 'go/version: go1.26.5'
 
 # npm is part of the base Node runtime. Replace its old bundled dependency tree
 # from an integrity-pinned registry tarball before installing any body tools.
