@@ -20,11 +20,23 @@ function resultShape(result) {
   return typeof result;
 }
 
+function errorsShape(payload) {
+  if (!Object.prototype.hasOwnProperty.call(payload, "errors")) {
+    return "missing";
+  }
+  if (payload.errors === null) return "null";
+  if (Array.isArray(payload.errors)) {
+    return `array(${payload.errors.length})`;
+  }
+  return typeof payload.errors;
+}
+
 /**
  * Cloudflare currently documents the paginated `{ result: { items: [] } }`
  * envelope, while `deployable=true` is also returned by the production API as
  * the legacy non-paginated `{ success: true, result: [] }` envelope. The
- * legacy response may omit the otherwise standard empty `errors` field. Both
+ * legacy response may omit the otherwise standard empty `errors` field, and
+ * successful legacy responses may encode that empty field as `null`. Both
  * envelopes contain the same version records. Normalize only those two known
  * shapes and fail closed on every other response.
  */
@@ -36,18 +48,17 @@ export function parseCloudflareWorkerVersionInventory(payload) {
   if (payload.success !== true) {
     fail(
       `success=${String(payload.success)}, ` +
-        `errors=${Array.isArray(payload.errors) ? payload.errors.length : "invalid"}`,
+        `errors=${errorsShape(payload)}`,
     );
   }
 
   const isLegacyArrayEnvelope = Array.isArray(payload.result);
   const errorsAreAbsent =
     !Object.prototype.hasOwnProperty.call(payload, "errors");
-  const errorsDescription = errorsAreAbsent
-    ? "missing"
-    : Array.isArray(payload.errors)
-      ? String(payload.errors.length)
-      : "invalid";
+  const errorsDescription = errorsShape(payload);
+  const errorsAreSemanticallyEmpty =
+    payload.errors === null ||
+    (Array.isArray(payload.errors) && payload.errors.length === 0);
   if (
     (
       errorsAreAbsent &&
@@ -55,7 +66,7 @@ export function parseCloudflareWorkerVersionInventory(payload) {
     ) ||
     (
       !errorsAreAbsent &&
-      (!Array.isArray(payload.errors) || payload.errors.length !== 0)
+      !errorsAreSemanticallyEmpty
     )
   ) {
     fail(

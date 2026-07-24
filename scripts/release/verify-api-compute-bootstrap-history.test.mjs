@@ -87,6 +87,31 @@ test("accepts Cloudflare's deployable=true result array envelope", () => {
   );
 });
 
+test("accepts the legacy result array envelope with no errors field", () => {
+  assert.equal(
+    verify({
+      inventory: {
+        success: true,
+        result: [{ id: VERSION_ID }, { id: SECOND_VERSION_ID }],
+      },
+    }).deployableVersions,
+    2,
+  );
+});
+
+test("accepts the legacy result array envelope with null errors", () => {
+  assert.equal(
+    verify({
+      inventory: {
+        success: true,
+        errors: null,
+        result: [{ id: VERSION_ID }, { id: SECOND_VERSION_ID }],
+      },
+    }).deployableVersions,
+    2,
+  );
+});
+
 test("validates the exact staging target", () => {
   assert.deepEqual(
     verify({
