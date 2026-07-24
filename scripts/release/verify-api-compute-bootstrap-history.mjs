@@ -3,6 +3,9 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  parseCloudflareWorkerVersionInventory,
+} from "./parse-cloudflare-worker-version-inventory.mjs";
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
@@ -73,29 +76,15 @@ export function verifyApiComputeBootstrapHistory({
   ) {
     fail("active API version ID is malformed");
   }
-  if (
-    inventory?.success !== true ||
-    !Array.isArray(inventory?.errors) ||
-    inventory.errors.length !== 0 ||
-    !inventory.result ||
-    typeof inventory.result !== "object" ||
-    Array.isArray(inventory.result) ||
-    !Array.isArray(inventory.result.items) ||
-    inventory.result.items.length < 1 ||
-    inventory.result.items.length > 100
-  ) {
+  let inventoryItems;
+  try {
+    inventoryItems = parseCloudflareWorkerVersionInventory(inventory);
+  } catch {
     fail("deployable API version inventory is malformed");
   }
 
   const inventoryIds = new Set();
-  for (const item of inventory.result.items) {
-    if (
-      typeof item?.id !== "string" ||
-      !UUID.test(item.id) ||
-      inventoryIds.has(item.id.toLowerCase())
-    ) {
-      fail("deployable API version inventory IDs are malformed or duplicated");
-    }
+  for (const item of inventoryItems) {
     inventoryIds.add(item.id.toLowerCase());
   }
   if (!inventoryIds.has(activeVersionId.toLowerCase())) {

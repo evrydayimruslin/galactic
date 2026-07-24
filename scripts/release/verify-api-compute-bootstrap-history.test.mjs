@@ -74,6 +74,19 @@ test("accepts explicit unexpired policy and retained admission-off history", () 
   });
 });
 
+test("accepts Cloudflare's deployable=true result array envelope", () => {
+  assert.equal(
+    verify({
+      inventory: {
+        success: true,
+        errors: [],
+        result: [{ id: VERSION_ID }, { id: SECOND_VERSION_ID }],
+      },
+    }).deployableVersions,
+    2,
+  );
+});
+
 test("validates the exact staging target", () => {
   assert.deepEqual(
     verify({

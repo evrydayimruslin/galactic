@@ -53,6 +53,8 @@ const WORKFLOW_SPECS = [
       "shared/**",
       "scripts/release/classify-cloudflare-worker-lookup.mjs",
       "scripts/release/classify-cloudflare-worker-lookup.test.mjs",
+      "scripts/release/parse-cloudflare-worker-version-inventory.mjs",
+      "scripts/release/parse-cloudflare-worker-version-inventory.test.mjs",
       "scripts/release/verify-api-compute-bootstrap-history.mjs",
       "scripts/release/verify-api-compute-bootstrap-history.test.mjs",
       "scripts/release/verify-api-compute-deploy-state.mjs",
