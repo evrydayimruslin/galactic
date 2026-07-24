@@ -1,9 +1,9 @@
 name: API Deploy
 
-# This workflow is only valid once the Compute service-binding target exists.
-# First-install bootstrap is an explicit, manually approved Compute Deploy
-# operation. Normal staging and production releases fail closed when the
-# binding target cannot be verified.
+# A verified pre-Compute installation may deploy the API with admission OFF
+# and without its outbound Compute service binding. Only the exact Cloudflare
+# missing-Worker response, an explicit expiring repository policy, and an
+# all-deployable-version admission-off history can enter that path.
 on:
   push:
     branches: [main]
@@ -13,6 +13,14 @@ on:
       - 'api/**'
       - 'capacity-tail-worker/**'
       - 'shared/**'
+      - 'scripts/release/classify-cloudflare-worker-lookup.mjs'
+      - 'scripts/release/classify-cloudflare-worker-lookup.test.mjs'
+      - 'scripts/release/verify-api-compute-bootstrap-history.mjs'
+      - 'scripts/release/verify-api-compute-bootstrap-history.test.mjs'
+      - 'scripts/release/verify-api-compute-deploy-state.mjs'
+      - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
+      - 'scripts/release/write-api-compute-disabled-config.mjs'
+      - 'scripts/release/write-api-compute-disabled-config.test.mjs'
       - '.github/workflows/api-deploy.yml'
   workflow_dispatch:
     inputs:
@@ -76,6 +84,32 @@ jobs:
       - name: Wrangler Dry Run (staging)
         run: npx wrangler deploy --config wrangler.toml --env staging --dry-run
 
+      - name: Verify pre-Compute deployment helpers
+        working-directory: .
+        run: |
+          node --test \
+            scripts/release/classify-cloudflare-worker-lookup.test.mjs \
+            scripts/release/verify-api-compute-bootstrap-history.test.mjs \
+            scripts/release/verify-api-compute-deploy-state.test.mjs \
+            scripts/release/write-api-compute-disabled-config.test.mjs
+
+      - name: Wrangler Dry Run (Compute disabled)
+        run: |
+          set -euo pipefail
+          config=.wrangler.compute-disabled.verify.toml
+          node ../scripts/release/write-api-compute-disabled-config.mjs \
+            wrangler.toml "$config"
+          for target in production staging; do
+            env_args=()
+            if [ "$target" = "staging" ]; then env_args=(--env staging); fi
+            npx wrangler deploy \
+              --config "$config" "${env_args[@]}" --dry-run \
+              --var COMPUTE_ENABLED:0 \
+              --var COMPUTE_ENVIRONMENT_DIGEST:sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+              --var COMPUTE_ROLLOUT_MODE:canary \
+              --var COMPUTE_CANARY_ALLOWLIST:
+          done
+
       - name: Verify capacity Tail Worker
         working-directory: capacity-tail-worker
         run: |
@@ -113,15 +147,111 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify staging Compute binding target
+      - name: Classify staging Compute binding target
+        id: compute_target
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          npx wrangler deployments list --name galactic-compute-staging --json >/dev/null
-          echo "Verified staging Compute binding target."
+          lookup_body="$RUNNER_TEMP/staging-compute-worker.json"
+          if ! http_status="$(
+            curl --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --retry 3 \
+              --retry-connrefused \
+              --output "$lookup_body" \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/galactic-compute-staging/deployments"
+          )"; then
+            echo "Cloudflare Compute target lookup failed at the transport layer." >&2
+            exit 1
+          fi
+          mode="$(
+            node ../scripts/release/classify-cloudflare-worker-lookup.mjs \
+              "$http_status" "$lookup_body"
+          )"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          if [ "$mode" = "bootstrap" ]; then
+            status="$RUNNER_TEMP/staging-api-pre-bootstrap-status.json"
+            version="$RUNNER_TEMP/staging-api-pre-bootstrap-version.json"
+            npx wrangler deployments status \
+              --name ultralight-api-staging --json > "$status"
+            version_id="$(
+              jq -er '
+                if (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100)
+                then .versions[0].version_id
+                else error("staging API is not one stable 100% version")
+                end
+              ' "$status"
+            )"
+            npx wrangler versions view "$version_id" \
+              --name ultralight-api-staging --json > "$version"
+            node ../scripts/release/verify-api-compute-deploy-state.mjs \
+              pre-bootstrap staging "$status" "$version"
+            inventory="$RUNNER_TEMP/staging-api-deployable-versions.json"
+            inventory_ids="$RUNNER_TEMP/staging-api-deployable-version-ids.txt"
+            inventory_dir="$RUNNER_TEMP/staging-api-deployable-version-details"
+            inventory_details="$RUNNER_TEMP/staging-api-deployable-version-details.json"
+            curl --fail-with-body --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --retry 3 \
+              --retry-connrefused \
+              --output "$inventory" \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/ultralight-api-staging/versions?deployable=true"
+            jq -er '
+              if .success == true and
+                 (.errors | type) == "array" and
+                 (.errors | length) == 0 and
+                 (.result | type) == "object" and
+                 (.result.items | type) == "array" and
+                 (.result.items | length) > 0
+              then .result.items[].id
+              else error("malformed deployable API version inventory")
+              end
+            ' "$inventory" > "$inventory_ids"
+            mkdir "$inventory_dir"
+            while IFS= read -r retained_version_id; do
+              [[ "$retained_version_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
+                echo "Cloudflare returned a malformed deployable API version ID." >&2
+                exit 1
+              }
+              npx wrangler versions view "$retained_version_id" \
+                --name ultralight-api-staging --json \
+                > "$inventory_dir/$retained_version_id.json"
+            done < "$inventory_ids"
+            jq -s '.' "$inventory_dir"/*.json > "$inventory_details"
+            node ../scripts/release/verify-api-compute-bootstrap-history.mjs \
+              staging "$GITHUB_REPOSITORY" "$version_id" \
+              compute-bootstrap-policy.json "$inventory" "$inventory_details"
+            echo "Verified staging as a pre-Compute installation." \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Verified staging Compute binding target." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Prepare staging Compute-disabled configuration
+        if: steps.compute_target.outputs.mode == 'bootstrap'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler queues info galactic-compute-staging >/dev/null
+          npx wrangler queues info galactic-compute-staging-dlq >/dev/null
+          npx wrangler queues info \
+            galactic-compute-staging-reconciliation-dlq >/dev/null
+          npx wrangler r2 bucket info \
+            galactic-compute-artifacts-staging --json >/dev/null
+          node ../scripts/release/write-api-compute-disabled-config.mjs \
+            wrangler.toml .wrangler.compute-disabled.toml
 
       - name: Wait for matching staging schema when migrations changed
         working-directory: .
@@ -187,7 +317,47 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy --config wrangler.toml --env staging --keep-vars --tag "api-$GITHUB_SHA"
+        run: |
+          set -euo pipefail
+          config=wrangler.toml
+          compute_args=()
+          if [ "${{ steps.compute_target.outputs.mode }}" = "bootstrap" ]; then
+            config=.wrangler.compute-disabled.toml
+            compute_args=(
+              --var COMPUTE_ENABLED:0
+              --var COMPUTE_ENVIRONMENT_DIGEST:sha256:0000000000000000000000000000000000000000000000000000000000000000
+              --var COMPUTE_ROLLOUT_MODE:canary
+              --var COMPUTE_CANARY_ALLOWLIST:
+            )
+          fi
+          npx wrangler deploy \
+            --config "$config" --env staging --keep-vars \
+            --tag "api-$GITHUB_SHA" "${compute_args[@]}"
+
+      - name: Verify staging API deployment state
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          status="$RUNNER_TEMP/staging-api-post-deploy-status.json"
+          version="$RUNNER_TEMP/staging-api-post-deploy-version.json"
+          npx wrangler deployments status \
+            --name ultralight-api-staging --json > "$status"
+          version_id="$(
+            jq -er '
+              if (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100)
+              then .versions[0].version_id
+              else error("staging API is not one stable 100% version")
+              end
+            ' "$status"
+          )"
+          npx wrangler versions view "$version_id" \
+            --name ultralight-api-staging --json > "$version"
+          node ../scripts/release/verify-api-compute-deploy-state.mjs \
+            "${{ steps.compute_target.outputs.mode }}" staging \
+            "$status" "$version" "api-$GITHUB_SHA"
 
   deploy_production:
     name: Deploy API to production
@@ -216,15 +386,111 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify production Compute binding target
+      - name: Classify production Compute binding target
+        id: compute_target
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          npx wrangler deployments list --name galactic-compute --json >/dev/null
-          echo "Verified production Compute binding target."
+          lookup_body="$RUNNER_TEMP/production-compute-worker.json"
+          if ! http_status="$(
+            curl --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --retry 3 \
+              --retry-connrefused \
+              --output "$lookup_body" \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/galactic-compute/deployments"
+          )"; then
+            echo "Cloudflare Compute target lookup failed at the transport layer." >&2
+            exit 1
+          fi
+          mode="$(
+            node ../scripts/release/classify-cloudflare-worker-lookup.mjs \
+              "$http_status" "$lookup_body"
+          )"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          if [ "$mode" = "bootstrap" ]; then
+            status="$RUNNER_TEMP/production-api-pre-bootstrap-status.json"
+            version="$RUNNER_TEMP/production-api-pre-bootstrap-version.json"
+            npx wrangler deployments status \
+              --name ultralight-api --json > "$status"
+            version_id="$(
+              jq -er '
+                if (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100)
+                then .versions[0].version_id
+                else error("production API is not one stable 100% version")
+                end
+              ' "$status"
+            )"
+            npx wrangler versions view "$version_id" \
+              --name ultralight-api --json > "$version"
+            node ../scripts/release/verify-api-compute-deploy-state.mjs \
+              pre-bootstrap production "$status" "$version"
+            inventory="$RUNNER_TEMP/production-api-deployable-versions.json"
+            inventory_ids="$RUNNER_TEMP/production-api-deployable-version-ids.txt"
+            inventory_dir="$RUNNER_TEMP/production-api-deployable-version-details"
+            inventory_details="$RUNNER_TEMP/production-api-deployable-version-details.json"
+            curl --fail-with-body --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --retry 3 \
+              --retry-connrefused \
+              --output "$inventory" \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/ultralight-api/versions?deployable=true"
+            jq -er '
+              if .success == true and
+                 (.errors | type) == "array" and
+                 (.errors | length) == 0 and
+                 (.result | type) == "object" and
+                 (.result.items | type) == "array" and
+                 (.result.items | length) > 0
+              then .result.items[].id
+              else error("malformed deployable API version inventory")
+              end
+            ' "$inventory" > "$inventory_ids"
+            mkdir "$inventory_dir"
+            while IFS= read -r retained_version_id; do
+              [[ "$retained_version_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
+                echo "Cloudflare returned a malformed deployable API version ID." >&2
+                exit 1
+              }
+              npx wrangler versions view "$retained_version_id" \
+                --name ultralight-api --json \
+                > "$inventory_dir/$retained_version_id.json"
+            done < "$inventory_ids"
+            jq -s '.' "$inventory_dir"/*.json > "$inventory_details"
+            node ../scripts/release/verify-api-compute-bootstrap-history.mjs \
+              production "$GITHUB_REPOSITORY" "$version_id" \
+              compute-bootstrap-policy.json "$inventory" "$inventory_details"
+            echo "Verified production as a pre-Compute installation." \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Verified production Compute binding target." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Prepare production Compute-disabled configuration
+        if: steps.compute_target.outputs.mode == 'bootstrap'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler queues info galactic-compute >/dev/null
+          npx wrangler queues info galactic-compute-dlq >/dev/null
+          npx wrangler queues info \
+            galactic-compute-reconciliation-dlq >/dev/null
+          npx wrangler r2 bucket info \
+            galactic-compute-artifacts --json >/dev/null
+          node ../scripts/release/write-api-compute-disabled-config.mjs \
+            wrangler.toml .wrangler.compute-disabled.toml
 
       - name: Wait for matching production schema
         working-directory: .
@@ -276,4 +542,44 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy --config wrangler.toml --env="" --keep-vars --tag "api-$GITHUB_SHA"
+        run: |
+          set -euo pipefail
+          config=wrangler.toml
+          compute_args=()
+          if [ "${{ steps.compute_target.outputs.mode }}" = "bootstrap" ]; then
+            config=.wrangler.compute-disabled.toml
+            compute_args=(
+              --var COMPUTE_ENABLED:0
+              --var COMPUTE_ENVIRONMENT_DIGEST:sha256:0000000000000000000000000000000000000000000000000000000000000000
+              --var COMPUTE_ROLLOUT_MODE:canary
+              --var COMPUTE_CANARY_ALLOWLIST:
+            )
+          fi
+          npx wrangler deploy \
+            --config "$config" --env="" --keep-vars \
+            --tag "api-$GITHUB_SHA" "${compute_args[@]}"
+
+      - name: Verify production API deployment state
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          status="$RUNNER_TEMP/production-api-post-deploy-status.json"
+          version="$RUNNER_TEMP/production-api-post-deploy-version.json"
+          npx wrangler deployments status \
+            --name ultralight-api --json > "$status"
+          version_id="$(
+            jq -er '
+              if (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100)
+              then .versions[0].version_id
+              else error("production API is not one stable 100% version")
+              end
+            ' "$status"
+          )"
+          npx wrangler versions view "$version_id" \
+            --name ultralight-api --json > "$version"
+          node ../scripts/release/verify-api-compute-deploy-state.mjs \
+            "${{ steps.compute_target.outputs.mode }}" production \
+            "$status" "$version" "api-$GITHUB_SHA"

@@ -342,6 +342,21 @@ opening a public route:
    `COMPUTE_PLANE` binding until the Compute Worker name exists. Read back one
    stable 100% API version and prove OFF / `canary` / empty allowlist before
    starting any Container rollout.
+   The normal API release workflow may enter this pre-Compute branch only when
+   Cloudflare returns the exact missing-Worker response (HTTP `404`, error
+   `10007`), the checked-in bootstrap policy explicitly approves the target and
+   has not expired, and every version Cloudflare currently reports as
+   deployable is admission-off with no binding of any type named
+   `COMPUTE_PLANE`. The currently active API must be included in that complete
+   deployable inventory and must be one stable version. It still performs a
+   real API deployment; it never reports a skipped deploy as success.
+   Authentication, rate-limit, transport, malformed-response, inventory gaps,
+   or any deployable bound/admission-on version fail closed. The released
+   bootstrap version is read back and must have the exact release tag, zero
+   environment digest, OFF / `canary` / empty allowlist, preserved private
+   Compute Queue and artifact bindings, and no `COMPUTE_PLANE`. The queue,
+   both dead-letter queues, and private artifact bucket are preflighted before
+   deployment. Remove the temporary policy after Compute is provisioned.
 3. Deploy `galactic-compute-staging`; its `CONTROL_PLANE` binding now resolves
    to `ultralight-api-staging` / `ComputeControlPlane`.
 4. Add/enable the API's `COMPUTE_PLANE` binding to

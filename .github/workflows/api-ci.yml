@@ -12,6 +12,14 @@ on:
       - 'cli/**'
       - 'packages/types/**'
       - 'scripts/contracts/**'
+      - 'scripts/release/classify-cloudflare-worker-lookup.mjs'
+      - 'scripts/release/classify-cloudflare-worker-lookup.test.mjs'
+      - 'scripts/release/verify-api-compute-bootstrap-history.mjs'
+      - 'scripts/release/verify-api-compute-bootstrap-history.test.mjs'
+      - 'scripts/release/verify-api-compute-deploy-state.mjs'
+      - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
+      - 'scripts/release/write-api-compute-disabled-config.mjs'
+      - 'scripts/release/write-api-compute-disabled-config.test.mjs'
       - 'shared/**'
       - 'sdk/**'
       - 'scripts/checks/**'
@@ -32,6 +40,14 @@ on:
       - 'cli/**'
       - 'packages/types/**'
       - 'scripts/contracts/**'
+      - 'scripts/release/classify-cloudflare-worker-lookup.mjs'
+      - 'scripts/release/classify-cloudflare-worker-lookup.test.mjs'
+      - 'scripts/release/verify-api-compute-bootstrap-history.mjs'
+      - 'scripts/release/verify-api-compute-bootstrap-history.test.mjs'
+      - 'scripts/release/verify-api-compute-deploy-state.mjs'
+      - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
+      - 'scripts/release/write-api-compute-disabled-config.mjs'
+      - 'scripts/release/write-api-compute-disabled-config.test.mjs'
       - 'shared/**'
       - 'sdk/**'
       - 'scripts/checks/**'
@@ -91,6 +107,15 @@ jobs:
       - name: Contract guardrails
         working-directory: .
         run: node scripts/checks/check-contract-guardrails.mjs
+
+      - name: Pre-Compute deployment helpers
+        working-directory: .
+        run: |
+          node --test \
+            scripts/release/classify-cloudflare-worker-lookup.test.mjs \
+            scripts/release/verify-api-compute-bootstrap-history.test.mjs \
+            scripts/release/verify-api-compute-deploy-state.test.mjs \
+            scripts/release/write-api-compute-disabled-config.test.mjs
 
       - name: Unused-code baseline
         run: npm run analyze:unused

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "repository": "evrydayimruslin/galactic",
+  "expires_at": "2026-08-31T00:00:00.000Z",
+  "environments": {
+    "production": {
+      "api_worker": "ultralight-api",
+      "compute_worker": "galactic-compute",
+      "allow_bootstrap_without_compute_worker": true
+    },
+    "staging": {
+      "api_worker": "ultralight-api-staging",
+      "compute_worker": "galactic-compute-staging",
+      "allow_bootstrap_without_compute_worker": true
+    }
+  }
+}
