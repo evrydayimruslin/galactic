@@ -23,28 +23,49 @@ function resultShape(result) {
 /**
  * Cloudflare currently documents the paginated `{ result: { items: [] } }`
  * envelope, while `deployable=true` is also returned by the production API as
- * the legacy non-paginated `{ result: [] }` envelope. Both contain the same
- * version records. Normalize only those two known shapes and fail closed on
- * every other response.
+ * the legacy non-paginated `{ success: true, result: [] }` envelope. The
+ * legacy response may omit the otherwise standard empty `errors` field. Both
+ * envelopes contain the same version records. Normalize only those two known
+ * shapes and fail closed on every other response.
  */
 export function parseCloudflareWorkerVersionInventory(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     fail("response is not a JSON object");
   }
 
-  if (
-    payload.success !== true ||
-    !Array.isArray(payload.errors) ||
-    payload.errors.length !== 0
-  ) {
+  if (payload.success !== true) {
     fail(
       `success=${String(payload.success)}, ` +
         `errors=${Array.isArray(payload.errors) ? payload.errors.length : "invalid"}`,
     );
   }
 
+  const isLegacyArrayEnvelope = Array.isArray(payload.result);
+  const errorsAreAbsent =
+    !Object.prototype.hasOwnProperty.call(payload, "errors");
+  const errorsDescription = errorsAreAbsent
+    ? "missing"
+    : Array.isArray(payload.errors)
+      ? String(payload.errors.length)
+      : "invalid";
+  if (
+    (
+      errorsAreAbsent &&
+      !isLegacyArrayEnvelope
+    ) ||
+    (
+      !errorsAreAbsent &&
+      (!Array.isArray(payload.errors) || payload.errors.length !== 0)
+    )
+  ) {
+    fail(
+      `success=true, ` +
+        `errors=${errorsDescription}`,
+    );
+  }
+
   let items;
-  if (Array.isArray(payload.result)) {
+  if (isLegacyArrayEnvelope) {
     items = payload.result;
   } else if (
     payload.result &&

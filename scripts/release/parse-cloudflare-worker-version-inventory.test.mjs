@@ -38,6 +38,16 @@ test("accepts the deployable=true legacy result array envelope", () => {
   );
 });
 
+test("accepts the observed legacy result array envelope without errors", () => {
+  assert.deepEqual(
+    parseCloudflareWorkerVersionInventory({
+      success: true,
+      result: [item(), item(SECOND_VERSION_ID)],
+    }),
+    [item(), item(SECOND_VERSION_ID)],
+  );
+});
+
 for (
   const [name, payload, message] of [
     ["non-object response", null, /not a JSON object/u],
@@ -47,9 +57,19 @@ for (
       /success=false, errors=1/u,
     ],
     [
-      "missing errors",
-      { success: true, result: [item()] },
+      "documented envelope with missing errors",
+      { success: true, result: { items: [item()] } },
+      /errors=missing/u,
+    ],
+    [
+      "legacy envelope with malformed errors",
+      { success: true, errors: null, result: [item()] },
       /errors=invalid/u,
+    ],
+    [
+      "legacy envelope with returned errors",
+      { success: true, errors: [{ code: 10000 }], result: [item()] },
+      /errors=1/u,
     ],
     [
       "unsupported result",
