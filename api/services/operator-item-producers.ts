@@ -213,6 +213,7 @@ export async function recordRoutinePausedOperatorItem(
           summary: input.diagnostic.summary,
           detail: input.diagnostic.detail,
           provenance: input.diagnostic.provenance,
+          suggestedActions: input.diagnostic.suggestedActions,
           evidence,
         }
         : null,

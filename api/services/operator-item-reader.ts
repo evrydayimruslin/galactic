@@ -56,13 +56,13 @@ const AGENT_PANES = new Set<LaunchAgentPane>([
   "settings",
 ]);
 
-interface OperatorAttentionAgent {
+export interface OperatorAttentionAgent {
   id: string;
   slug: string;
   name: string;
 }
 
-interface OperatorAttentionPageOptions {
+export interface OperatorAttentionPageOptions {
   cursor?: string | null;
   limit?: number;
 }

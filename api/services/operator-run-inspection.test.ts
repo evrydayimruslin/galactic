@@ -55,6 +55,7 @@ function runRow() {
       detail: null,
       provenance: "developer",
       retryable: null,
+      suggestedActions: [],
       redacted: false,
     },
   };

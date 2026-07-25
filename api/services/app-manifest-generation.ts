@@ -183,6 +183,7 @@ const CARRIED_MANIFEST_FIELDS = [
   'network',
   'flight_recorder',
   'compute',
+  'operator_errors',
 ] as const;
 
 function carryForwardDeclaredFields(

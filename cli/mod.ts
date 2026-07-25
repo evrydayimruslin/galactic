@@ -29,6 +29,7 @@
  *   run             Execute a deployed app function
  *   discover        Search the App Store for MCP tools
  *   logs            View MCP call logs (gx.logs)
+ *   attention       View canonical blockers, incidents, and remediations
  *   health          App health monitoring (gx.health)
  *   budget          Show the active Galactic Compute lease budget
  *   receipt         Show the current compute run receipt
@@ -78,6 +79,7 @@ const commands: Record<
   verify: verifyCmd,
   discover,
   logs: logsCmd,
+  attention: attentionCmd,
   routine: routineCmd,
   health,
   config: configCmd,
@@ -224,6 +226,7 @@ ${colors.dim("USE")}
   } <app>       Verify integrity + open code before calling (gx.verify)
   ${colors.cyan("discover")} <query>   Search the App Store for MCP tools
   ${colors.cyan("logs")} <app>         View MCP call logs (gx.logs)
+  ${colors.cyan("attention")} [options] View canonical issues and next actions
   ${
     colors.cyan("routine")
   } <action>   Manage scheduled autonomous routines (gx.routine)
@@ -2596,6 +2599,114 @@ ${colors.dim("EXAMPLES")}
 // ============================================
 // LOGS COMMAND — uses gx.logs
 // ============================================
+
+// ============================================
+// ATTENTION COMMAND — canonical operator items (gx.attention)
+// ============================================
+
+async function attentionCmd(
+  args: string[],
+  client: ApiClient,
+  _config: Config,
+) {
+  const parsed = parseArgs(args, {
+    string: ["agent", "cursor"],
+    number: ["limit"],
+    boolean: ["help", "json"],
+    alias: { a: "agent", l: "limit", h: "help" },
+  });
+
+  if (parsed.help) {
+    console.log(`
+${colors.bold("galactic attention")} [options]
+
+Read canonical setup blockers, incidents, and usage reports. Galactic supplies
+the diagnosis and typed actions; the CLI never guesses from error prose.
+Connected CLI credentials are intentionally read-only for Attention.
+
+${colors.dim("OPTIONS")}
+  --agent, -a <uuid>       Filter to one owned private Agent
+  --limit, -l <n>          Return 1-100 items
+  --cursor <cursor>        Continue an earlier canonical page
+  --json                   Print the complete typed projection
+`);
+    return;
+  }
+
+  const toolArgs: Record<string, unknown> = { action: "list" };
+  if (parsed.agent) toolArgs.agent_id = parsed.agent;
+  if (parsed.limit !== undefined) toolArgs.limit = parsed.limit;
+  if (parsed.cursor) toolArgs.cursor = parsed.cursor;
+  const result = await client.callTool("gx.attention", toolArgs);
+
+  if (parsed.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  const items = Array.isArray(result.items)
+    ? result.items as Array<Record<string, unknown>>
+    : [];
+  const openCount = Number(result.openCount) || 0;
+  const decisionCount = Number(result.requiresDecisionCount) || 0;
+  const blockingCount = Number(result.blockingCount) || 0;
+  console.log(
+    colors.bold(
+      `Attention — ${openCount} open · ${blockingCount} blocking · ${decisionCount} decisions`,
+    ),
+  );
+  if (items.length === 0) {
+    console.log(colors.dim("\nNothing needs attention."));
+    return;
+  }
+
+  for (const entry of items) {
+    const item = entry.item && typeof entry.item === "object"
+      ? entry.item as Record<string, unknown>
+      : {};
+    const diagnosis = item.diagnosis && typeof item.diagnosis === "object"
+      ? item.diagnosis as Record<string, unknown>
+      : {};
+    console.log();
+    console.log(
+      `  ${colors.cyan(String(diagnosis.summary || "Needs attention"))}`,
+    );
+    if (diagnosis.detail) {
+      console.log(`    ${String(diagnosis.detail)}`);
+    }
+    console.log(
+      `    ${
+        colors.dim(
+          [
+            String(diagnosis.code || ""),
+            diagnosis.causeCode
+              ? `cause ${String(diagnosis.causeCode)}`
+              : "",
+            diagnosis.provenance
+              ? `source ${String(diagnosis.provenance)}`
+              : "",
+          ].filter(Boolean).join(" · "),
+        )
+      }`,
+    );
+    const remediations = Array.isArray(item.remediations)
+      ? item.remediations as Array<Record<string, unknown>>
+      : [];
+    for (const remediation of remediations) {
+      console.log(
+        `    → ${String(remediation.label || remediation.key || "Action")} ${
+          colors.dim(`[${String(remediation.key || "")}]`)
+        }`,
+      );
+    }
+  }
+  if (result.nextCursor) {
+    console.log();
+    console.log(
+      colors.dim(`More: galactic attention --cursor ${result.nextCursor}`),
+    );
+  }
+}
 
 // ROUTINE COMMAND — scheduled autonomous runs (gx.routine)
 async function routineCmd(args: string[], client: ApiClient, _config: Config) {

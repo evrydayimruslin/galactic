@@ -3,6 +3,7 @@ import type {
   LaunchAgentHomeRequirement,
   LaunchOperatorAffectedAgent,
   LaunchOperatorConditionCode,
+  LaunchOperatorDiagnosticNavigationAction,
   LaunchOperatorDiagnosis,
   LaunchOperatorDiagnosisProvenance,
   LaunchOperatorIssue,
@@ -57,6 +58,11 @@ export interface OperatorSafeDiagnostic {
   summary: string | null;
   detail: string | null;
   provenance: LaunchOperatorDiagnosisProvenance;
+  /**
+   * Already server-normalized, harmless navigation hints. The compiler still
+   * owns availability, labels, semantic targets, and all executable controls.
+   */
+  suggestedActions?: readonly LaunchOperatorDiagnosticNavigationAction[];
   /** Already normalized, redacted, owner-safe evidence references. */
   evidence: readonly LaunchAgentEvidenceReference[];
 }
@@ -671,9 +677,14 @@ function compilePausedRoutine(
     ? diagnostic.provenance === "platform" ? "platform" : "combined"
     : "platform";
   const remediations: LaunchOperatorRemediation[] = [];
+  const navigation = new Map<
+    LaunchOperatorDiagnosticNavigationAction,
+    LaunchOperatorRemediation
+  >();
 
   if (runId) {
-    remediations.push(
+    navigation.set(
+      "inspect_run",
       remediation(conditionKey, {
         key: "inspect_run",
         label: "View failed run",
@@ -688,6 +699,9 @@ function compilePausedRoutine(
           runId,
         },
       }),
+    );
+    navigation.set(
+      "open_logs",
       remediation(conditionKey, {
         key: "open_logs",
         label: "Open logs",
@@ -704,7 +718,8 @@ function compilePausedRoutine(
       }),
     );
   }
-  remediations.push(
+  navigation.set(
+    "open_routine",
     remediation(conditionKey, {
       key: "open_routine",
       label: "Open routine",
@@ -718,6 +733,21 @@ function compilePausedRoutine(
         routineId,
       },
     }),
+  );
+  const suggestedNavigation = diagnostic?.suggestedActions ?? [];
+  const navigationOrder = [
+    ...suggestedNavigation,
+    "inspect_run",
+    "open_logs",
+    "open_routine",
+  ].filter((action, index, actions) =>
+    actions.indexOf(action) === index
+  ) as LaunchOperatorDiagnosticNavigationAction[];
+  for (const action of navigationOrder) {
+    const available = navigation.get(action);
+    if (available) remediations.push(available);
+  }
+  remediations.push(
     remediation(conditionKey, {
       key: "run_once",
       label: "Run once",

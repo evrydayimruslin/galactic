@@ -89,6 +89,7 @@ import {
   resolveAppFunctionContracts,
 } from "../services/app-contracts.ts";
 import {
+  applyManifestOperatorError,
   collectRuntimeDiagnosticSecrets,
   normalizeOperatorDiagnostic,
 } from "../services/operator-diagnostics.ts";
@@ -3064,8 +3065,8 @@ async function executeAppFunction(
     // as routine_run_steps when a routine context is present.
     // app.manifest is stored as a JSON string — parse before reading the flag
     // (reading .flight_recorder off the raw string is always undefined).
-    const flightRecorderEnabled =
-      parseAppManifest(app.manifest)?.flight_recorder === true;
+    const runtimeManifest = parseAppManifest(app.manifest);
+    const flightRecorderEnabled = runtimeManifest?.flight_recorder === true;
 
     const sandboxConfig = {
       appId: app.id,
@@ -3126,13 +3127,23 @@ async function executeAppFunction(
         flightDb?: DbDiffTally;
       },
     ) => {
-      const executionDiagnostic = result.success
+      const runtimeDiagnosticSecrets = collectRuntimeDiagnosticSecrets(
+        sandboxConfig,
+      );
+      const normalizedDiagnostic = result.success
         ? undefined
         : result.diagnostic ?? normalizeOperatorDiagnostic({
           error: result.error,
           provenance: "unknown",
-          knownSecrets: collectRuntimeDiagnosticSecrets(sandboxConfig),
+          knownSecrets: runtimeDiagnosticSecrets,
         });
+      const executionDiagnostic = normalizedDiagnostic
+        ? applyManifestOperatorError(
+          normalizedDiagnostic,
+          runtimeManifest,
+          runtimeDiagnosticSecrets,
+        )
+        : undefined;
       if (executionDiagnostic) result.diagnostic = executionDiagnostic;
       const executionErrorMessage = executionDiagnostic
         ? [

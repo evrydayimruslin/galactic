@@ -314,6 +314,7 @@ body.nebula-public-page, body.nebula-public-page #root { min-height: 100dvh; bac
 .neb-operator-issue-kind svg { width: 13px; height: 13px; }
 .neb-operator-issue-copy h3 { margin: 0; color: var(--ink); font-size: 14px; font-weight: 600; }
 .neb-operator-issue-copy p { margin: 5px 0 0; color: var(--ink-2); font-size: 11.5px; line-height: 1.5; }
+.neb-operator-diagnostic-source { margin-top: 7px; color: var(--ink-3); font-family: var(--mono); font-size: 8.5px; letter-spacing: .04em; text-transform: uppercase; }
 .neb-operator-diagnostic-code { display: flex; align-items: center; gap: 8px; margin-top: 9px; color: var(--ink-3); font-family: var(--mono); font-size: 9px; text-transform: uppercase; }
 .neb-operator-diagnostic-code code { color: var(--violet); font-size: 10px; }
 .neb-operator-affected { display: grid; grid-template-columns: auto 1fr; gap: 9px; color: var(--ink-3); font-size: 10.5px; }

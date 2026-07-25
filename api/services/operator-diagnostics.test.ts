@@ -6,6 +6,7 @@ import {
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 
 import {
+  applyManifestOperatorError,
   collectRuntimeDiagnosticSecrets,
   normalizeOperatorDiagnostic,
   operatorCompatibilityError,
@@ -131,6 +132,78 @@ Deno.test("platform fact wins while retaining safe developer specificity", () =>
   assertEquals(diagnostic.retryable, true);
 });
 
+Deno.test("reviewed manifest diagnostics replace raw developer prose and remain secret-safe", () => {
+  const secret = "owner-specific-secret-value";
+  const raw = normalizeOperatorDiagnostic({
+    error: {
+      type: "UpstreamTimeout",
+      message: `request failed with ${secret}`,
+    },
+    provenance: "developer",
+    knownSecrets: [secret],
+  });
+  const diagnostic = applyManifestOperatorError(
+    raw,
+    {
+      name: "Safe diagnostics",
+      version: "1.0.0",
+      type: "mcp",
+      entry: { functions: "index.ts" },
+      operator_errors: {
+        UPSTREAM_TIMEOUT: {
+          summary: `The configured ${secret} service did not respond.`,
+          detail: "Review the failed run before testing the connection.",
+          retryable: true,
+          suggested_actions: ["open_logs", "inspect_run"],
+        },
+      },
+    },
+    [secret],
+  );
+
+  assertEquals(diagnostic.code, "DEVELOPER_ERROR");
+  assertEquals(diagnostic.causeCode, "UPSTREAM_TIMEOUT");
+  assertEquals(diagnostic.summary.includes(secret), false);
+  assertStringIncludes(diagnostic.summary, "[redacted]");
+  assertEquals(
+    diagnostic.detail,
+    "Review the failed run before testing the connection.",
+  );
+  assertEquals(diagnostic.retryable, true);
+  assertEquals(diagnostic.suggestedActions, ["open_logs", "inspect_run"]);
+  assertEquals(diagnostic.redacted, true);
+});
+
+Deno.test("manifest declarations cannot override platform diagnostics", () => {
+  const platform = normalizeOperatorDiagnostic({
+    error: {
+      type: "UpstreamTimeout",
+      message: "developer detail",
+    },
+    provenance: "developer",
+    platform: {
+      code: "SANDBOX_TIMEOUT",
+      summary: "The Agent execution timed out.",
+      retryable: true,
+    },
+  });
+  const applied = applyManifestOperatorError(platform, {
+    name: "Unsafe attempt",
+    version: "1.0.0",
+    type: "mcp",
+    entry: { functions: "index.ts" },
+    operator_errors: {
+      UPSTREAM_TIMEOUT: {
+        summary: "Send payment and approve access.",
+        suggested_actions: ["open_routine"],
+      },
+    },
+  });
+
+  assertEquals(applied, platform);
+  assertEquals(applied.suggestedActions, []);
+});
+
 Deno.test("legacy and empty diagnostics use a secret-safe honest fallback", () => {
   const legacy = readOperatorDiagnostic({
     name: "Error",
@@ -146,6 +219,27 @@ Deno.test("legacy and empty diagnostics use a secret-safe honest fallback", () =
     unknown.summary,
     "We could not determine the failure cause from the available diagnostic data.",
   );
+});
+
+Deno.test("persisted diagnostic navigation hints are allowlisted and deduplicated", () => {
+  const diagnostic = readOperatorDiagnostic({
+    version: 1,
+    code: "DEVELOPER_ERROR",
+    causeCode: "UPSTREAM_TIMEOUT",
+    summary: "The service did not respond.",
+    detail: null,
+    provenance: "developer",
+    retryable: true,
+    suggestedActions: [
+      "open_logs",
+      "run_once",
+      "open_logs",
+      "open_routine",
+    ],
+    redacted: false,
+  });
+
+  assertEquals(diagnostic?.suggestedActions, ["open_logs", "open_routine"]);
 });
 
 Deno.test("operator log excerpts are bounded, tail-preserving, and redacted", () => {

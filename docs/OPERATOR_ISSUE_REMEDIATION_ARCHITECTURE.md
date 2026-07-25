@@ -1,6 +1,6 @@
 # Operator issue and remediation architecture
 
-Status: M0–M6 implemented through guarded canonical web presentation
+Status: M0–M8 implemented through safe developer diagnostics and multi-client parity
 
 Last reviewed: `2026-07-24`
 
@@ -291,6 +291,32 @@ action. It never resumes automatically.
 `Verify connection` remains reserved for platform-controlled, side-effect-free
 checks. Provider setup already uses validated **Save and recheck**; developer
 routine code is never mislabeled as a connection test.
+
+## M8 implementation boundary
+
+Reviewed manifests may declare bounded `operator_errors` keyed by the stable
+developer error code. The runtime applies a declaration only to a
+developer-code failure, re-runs secret redaction, and persists the safe summary,
+detail, retryability, and harmless navigation hints with the run diagnostic.
+Malformed stored declarations fail closed.
+
+Developer hints are limited to `inspect_run`, `open_logs`, and `open_routine`.
+They may prioritize only platform-generated navigation that is actually
+available. The compiler owns every condition, semantic target, label,
+authority, executable `run_once`, approval, and resume control; developers
+cannot hide standard controls or manufacture new ones.
+
+`gx.attention` projects the canonical M5 read model to MCP and CLI clients,
+including explicit provenance, affected-Agent fanout, remediation authority,
+and side-effect classification. Connected `agents:operate` API tokens are
+read-only. Presentation mutations and `run_once` require an authenticated
+account session and reuse the same M6/M7 services as the web. The legacy
+notification capability remains compatibility evidence, not current issue
+truth.
+
+The full-time scaffold includes a safe declaration example, and developer
+documentation specifies redaction, retryability, standard Galactic actions,
+and prohibited privileged fields.
 
 ## Rollout order
 

@@ -1285,6 +1285,11 @@ export type LaunchOperatorDiagnosisProvenance =
   | 'combined'
   | 'unknown';
 
+export type LaunchOperatorDiagnosticNavigationAction =
+  | 'inspect_run'
+  | 'open_logs'
+  | 'open_routine';
+
 export interface LaunchOperatorDiagnosis {
   /** Stable platform-owned condition code. */
   code: LaunchOperatorConditionCode;
@@ -1314,6 +1319,11 @@ export interface LaunchOperatorRunDiagnostic {
   detail: string | null;
   provenance: LaunchOperatorDiagnosisProvenance;
   retryable: boolean | null;
+  /**
+   * Server-normalized harmless navigation hints from reviewed manifest
+   * metadata. They cannot create targets or executable/privileged actions.
+   */
+  suggestedActions?: LaunchOperatorDiagnosticNavigationAction[];
   redacted: boolean;
 }
 

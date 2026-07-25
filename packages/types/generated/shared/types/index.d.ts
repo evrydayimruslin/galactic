@@ -1359,6 +1359,7 @@ export interface AppManifest {
         functions?: string;
     };
     functions?: Record<string, ManifestFunction>;
+    operator_errors?: Record<string, ManifestOperatorError>;
     skills?: Record<string, ManifestSkill>;
     access_policy?: ManifestAccessPolicy;
     permissions?: string[];
@@ -1368,6 +1369,13 @@ export interface AppManifest {
     env_vars?: Record<string, ManifestEnvVar>;
     http?: ManifestHttpConfig;
     compute?: ManifestComputeConfig;
+}
+export type ManifestOperatorErrorSuggestedAction = "inspect_run" | "open_logs" | "open_routine";
+export interface ManifestOperatorError {
+    summary: string;
+    detail?: string;
+    retryable?: boolean;
+    suggested_actions?: ManifestOperatorErrorSuggestedAction[];
 }
 export type ManifestHttpAuthMode = "user" | "public";
 export type ManifestHttpBillingMode = "owner" | "caller";

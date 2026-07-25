@@ -705,6 +705,7 @@ Deno.test("settleAndLogAppExecution persists the normalized diagnostic for routi
       detail: null,
       provenance: "developer" as const,
       retryable: null,
+      suggestedActions: [],
       redacted: true,
     };
 

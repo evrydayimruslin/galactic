@@ -868,6 +868,15 @@ function OperatorIssueCard({
   targetRef: { current: HTMLElement | null };
 }): ReactElement {
   const item = entry.item;
+  const diagnosisSource = item.diagnosis.provenance === "developer"
+    ? "Developer-provided diagnosis"
+    : item.diagnosis.provenance === "provider"
+    ? "Provider diagnosis"
+    : item.diagnosis.provenance === "combined"
+    ? "Platform condition · External diagnosis"
+    : item.diagnosis.provenance === "unknown"
+    ? "Cause not verified"
+    : null;
   const detectedAt = readableTime(item.detectedAt);
   const affected = item.affectedAgents.flatMap(({ agentId, blocking }) => {
     const agent = agents.get(agentId);
@@ -923,6 +932,13 @@ function OperatorIssueCard({
       <div className="neb-operator-issue-copy">
         <h3>{item.diagnosis.summary}</h3>
         {item.diagnosis.detail ? <p>{item.diagnosis.detail}</p> : null}
+        {diagnosisSource
+          ? (
+            <div className="neb-operator-diagnostic-source">
+              {diagnosisSource}
+            </div>
+          )
+          : null}
         {item.diagnosis.causeCode
           ? (
             <div className="neb-operator-diagnostic-code">

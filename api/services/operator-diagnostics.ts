@@ -1,7 +1,12 @@
 import type {
+  LaunchOperatorDiagnosticNavigationAction,
   LaunchOperatorDiagnosisProvenance,
   LaunchOperatorRunDiagnostic,
 } from "../../shared/contracts/launch.ts";
+import {
+  getManifestOperatorError,
+  type AppManifest,
+} from "../../shared/contracts/manifest.ts";
 import type { LogEntry } from "../../shared/types/index.ts";
 import {
   OPERATOR_PROJECTION_REDACTION,
@@ -17,6 +22,12 @@ const UNKNOWN_SUMMARY =
   "We could not determine the failure cause from the available diagnostic data.";
 const SECRET_ENV_KEY =
   /(?:api[_-]?key|auth|credential|database[_-]?url|pass(?:word)?|private[_-]?key|secret|token)/iu;
+const DIAGNOSTIC_NAVIGATION_ACTIONS =
+  new Set<LaunchOperatorDiagnosticNavigationAction>([
+    "inspect_run",
+    "open_logs",
+    "open_routine",
+  ]);
 
 export interface OperatorDiagnosticPlatformFact {
   code: string;
@@ -242,7 +253,57 @@ export function normalizeOperatorDiagnostic(
     detail: detail?.text || null,
     provenance: effectiveProvenance,
     retryable: platform?.retryable ?? null,
+    suggestedActions: [],
     redacted: summary.redacted || (detail?.redacted ?? false),
+  };
+}
+
+/**
+ * Apply one reviewed manifest declaration to a developer-code failure.
+ *
+ * The platform condition and cause remain untouched. Declarations cannot
+ * affect provider/platform failures, construct semantic targets, or request an
+ * executable action. Text passes through the same runtime secret redactor as
+ * raw errors before it can be persisted or projected.
+ */
+export function applyManifestOperatorError(
+  diagnostic: LaunchOperatorRunDiagnostic,
+  manifest: string | AppManifest | null | undefined,
+  knownSecrets: readonly (string | null | undefined)[] = [],
+): LaunchOperatorRunDiagnostic {
+  if (
+    diagnostic.code !== "DEVELOPER_ERROR" ||
+    diagnostic.provenance !== "developer"
+  ) {
+    return diagnostic;
+  }
+  const declaration = getManifestOperatorError(
+    manifest,
+    diagnostic.causeCode,
+  );
+  if (!declaration) return diagnostic;
+
+  const summary = redactOperatorDiagnosticText(
+    declaration.summary,
+    knownSecrets,
+    MAX_SUMMARY_CHARS,
+  );
+  const detail = declaration.detail
+    ? redactOperatorDiagnosticText(
+      declaration.detail,
+      knownSecrets,
+      MAX_DETAIL_CHARS,
+    )
+    : null;
+
+  return {
+    ...diagnostic,
+    summary: summary.text || UNKNOWN_SUMMARY,
+    detail: detail?.text || null,
+    retryable: declaration.retryable ?? diagnostic.retryable,
+    suggestedActions: [...(declaration.suggested_actions ?? [])],
+    redacted: diagnostic.redacted || summary.redacted ||
+      (detail?.redacted ?? false),
   };
 }
 
@@ -273,6 +334,18 @@ export function readOperatorDiagnostic(
         MAX_DETAIL_CHARS,
       )
       : null;
+    const suggestedActions = Array.isArray(value.suggestedActions)
+      ? value.suggestedActions.filter((
+        action,
+      ): action is LaunchOperatorDiagnosticNavigationAction =>
+        typeof action === "string" &&
+        DIAGNOSTIC_NAVIGATION_ACTIONS.has(
+          action as LaunchOperatorDiagnosticNavigationAction,
+        )
+      ).filter((action, index, actions) =>
+        actions.indexOf(action) === index
+      )
+      : [];
     return {
       version: 1,
       code: normalizeCode(value.code, "UNKNOWN_ERROR"),
@@ -283,6 +356,7 @@ export function readOperatorDiagnostic(
       detail: detail?.text || null,
       provenance,
       retryable: typeof value.retryable === "boolean" ? value.retryable : null,
+      suggestedActions,
       redacted: value.redacted === true || summary.redacted ||
         (detail?.redacted ?? false),
     };

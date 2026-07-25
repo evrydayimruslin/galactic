@@ -285,6 +285,35 @@ Deno.test("manifest generation: external_functions survive regeneration when des
   assertEquals(hydrated.manifest.external_functions, externalFunctions);
 });
 
+Deno.test("manifest generation: reviewed operator errors survive regeneration", async () => {
+  const operatorErrors = {
+    UPSTREAM_TIMEOUT: {
+      summary: "The configured service did not respond.",
+      retryable: true,
+      suggested_actions: ["inspect_run" as const],
+    },
+  };
+  const hydrated = await hydrateManifestForSource({
+    app: { name: "Operator Agent", slug: "operator-agent" },
+    existingManifest: {
+      name: "Operator Agent",
+      version: "1.0.0",
+      type: "mcp",
+      entry: { functions: "index.ts" },
+      operator_errors: operatorErrors,
+      functions: {
+        run: { description: "Function run" },
+      },
+    },
+    sourceCode: "export async function run() { return { ok: true }; }",
+    filename: "index.ts",
+    version: "2.0.0",
+  });
+
+  assertEquals(hydrated.source, "generated");
+  assertEquals(hydrated.manifest.operator_errors, operatorErrors);
+});
+
 Deno.test("manifest generation: external_functions survive full regeneration of non-mcp manifests", async () => {
   const externalFunctions = [
     { app: "crm", functions: ["logLead"] },

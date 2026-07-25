@@ -32,6 +32,14 @@ export interface AppManifest {
     functions?: string;
   };
   functions?: Record<string, ManifestFunction>;
+  /**
+   * Reviewed, operator-safe explanations for errors thrown by Agent code.
+   *
+   * These declarations may improve diagnosis and prioritize harmless
+   * navigation. They never select a platform condition, target, executable
+   * action, authority level, route, or button label.
+   */
+  operator_errors?: Record<string, ManifestOperatorError>;
   skills?: Record<string, ManifestSkill>;
   access_policy?: ManifestAccessPolicy;
   permissions?: string[];
@@ -81,6 +89,25 @@ export interface AppManifest {
   // present, runtime requests may only narrow this profile/tool/secret
   // declaration; absence never makes any Agent secret eligible for delivery.
   compute?: ManifestComputeConfig;
+}
+
+export type ManifestOperatorErrorSuggestedAction =
+  | 'inspect_run'
+  | 'open_logs'
+  | 'open_routine';
+
+export interface ManifestOperatorError {
+  /** Bounded owner-facing explanation; never include secret values. */
+  summary: string;
+  /** Optional bounded context or safe recovery guidance. */
+  detail?: string;
+  /** Whether retrying the same operation may succeed after the cause is fixed. */
+  retryable?: boolean;
+  /**
+   * Harmless navigation hints only. Galactic validates availability, creates
+   * the semantic target, owns the label, and may ignore or supplement hints.
+   */
+  suggested_actions?: ManifestOperatorErrorSuggestedAction[];
 }
 
 export interface ManifestCallRateLimit {
@@ -3056,6 +3083,266 @@ function validateManifestCompute(
 export const CANONICAL_APP_VERSION_PATTERN =
   /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
 
+const OPERATOR_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,79}$/;
+const OPERATOR_ERROR_MAX_ENTRIES = 100;
+const OPERATOR_ERROR_MAX_SUMMARY_CHARS = 240;
+const OPERATOR_ERROR_MAX_DETAIL_CHARS = 2_000;
+const OPERATOR_ERROR_FIELDS = new Set([
+  'summary',
+  'detail',
+  'retryable',
+  'suggested_actions',
+]);
+const OPERATOR_ERROR_SUGGESTED_ACTIONS =
+  new Set<ManifestOperatorErrorSuggestedAction>([
+    'inspect_run',
+    'open_logs',
+    'open_routine',
+  ]);
+function containsUnsafeOperatorTextControl(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function parseManifestObject(
+  manifest: string | AppManifest | null | undefined,
+): Record<string, unknown> | null {
+  if (!manifest) return null;
+  try {
+    const parsed = typeof manifest === 'string' ? JSON.parse(manifest) : manifest;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as unknown as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseManifestOperatorError(
+  value: unknown,
+): ManifestOperatorError | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const declaration = value as Record<string, unknown>;
+  if (
+    Object.keys(declaration).some((field) => !OPERATOR_ERROR_FIELDS.has(field)) ||
+    typeof declaration.summary !== 'string'
+  ) {
+    return null;
+  }
+  const summary = declaration.summary.trim();
+  if (
+    !summary || summary.length > OPERATOR_ERROR_MAX_SUMMARY_CHARS ||
+    containsUnsafeOperatorTextControl(summary)
+  ) {
+    return null;
+  }
+  let detail: string | undefined;
+  if (declaration.detail !== undefined) {
+    if (typeof declaration.detail !== 'string') return null;
+    detail = declaration.detail.trim();
+    if (
+      !detail || detail.length > OPERATOR_ERROR_MAX_DETAIL_CHARS ||
+      containsUnsafeOperatorTextControl(detail)
+    ) {
+      return null;
+    }
+  }
+  if (
+    declaration.retryable !== undefined &&
+    typeof declaration.retryable !== 'boolean'
+  ) {
+    return null;
+  }
+  let suggestedActions: ManifestOperatorErrorSuggestedAction[] | undefined;
+  if (declaration.suggested_actions !== undefined) {
+    if (
+      !Array.isArray(declaration.suggested_actions) ||
+      declaration.suggested_actions.length >
+        OPERATOR_ERROR_SUGGESTED_ACTIONS.size
+    ) {
+      return null;
+    }
+    const seen = new Set<ManifestOperatorErrorSuggestedAction>();
+    for (const action of declaration.suggested_actions) {
+      if (
+        typeof action !== 'string' ||
+        !OPERATOR_ERROR_SUGGESTED_ACTIONS.has(
+          action as ManifestOperatorErrorSuggestedAction,
+        ) ||
+        seen.has(action as ManifestOperatorErrorSuggestedAction)
+      ) {
+        return null;
+      }
+      seen.add(action as ManifestOperatorErrorSuggestedAction);
+    }
+    suggestedActions = [...seen];
+  }
+  return {
+    summary,
+    ...(detail ? { detail } : {}),
+    ...(typeof declaration.retryable === 'boolean'
+      ? { retryable: declaration.retryable }
+      : {}),
+    ...(suggestedActions ? { suggested_actions: suggestedActions } : {}),
+  };
+}
+
+/**
+ * Resolve one reviewed developer diagnostic defensively at the execution
+ * boundary. Invalid or legacy stored manifests fail closed to raw-error
+ * normalization instead of widening the operator contract.
+ */
+export function getManifestOperatorError(
+  manifest: string | AppManifest | null | undefined,
+  causeCode: string | null | undefined,
+): ManifestOperatorError | null {
+  if (
+    typeof causeCode !== 'string' ||
+    !OPERATOR_ERROR_CODE_PATTERN.test(causeCode)
+  ) {
+    return null;
+  }
+  const parsed = parseManifestObject(manifest);
+  const declarations = parsed?.operator_errors;
+  if (
+    !declarations || typeof declarations !== 'object' ||
+    Array.isArray(declarations)
+  ) {
+    return null;
+  }
+  return parseManifestOperatorError(
+    (declarations as Record<string, unknown>)[causeCode],
+  );
+}
+
+function validateManifestOperatorErrors(
+  value: unknown,
+  errors: ManifestValidationError[],
+): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    errors.push({
+      path: 'operator_errors',
+      message: 'operator_errors must be an object keyed by error code',
+    });
+    return;
+  }
+  const declarations = value as Record<string, unknown>;
+  const entries = Object.entries(declarations);
+  if (entries.length > OPERATOR_ERROR_MAX_ENTRIES) {
+    errors.push({
+      path: 'operator_errors',
+      message: `operator_errors may contain at most ${OPERATOR_ERROR_MAX_ENTRIES} entries`,
+    });
+  }
+  for (const [code, declarationValue] of entries) {
+    const path = `operator_errors.${code}`;
+    if (!OPERATOR_ERROR_CODE_PATTERN.test(code)) {
+      errors.push({
+        path,
+        message:
+          'error code must be 1-80 uppercase letters, numbers, or underscores and start with a letter',
+      });
+      continue;
+    }
+    if (
+      !declarationValue || typeof declarationValue !== 'object' ||
+      Array.isArray(declarationValue)
+    ) {
+      errors.push({ path, message: 'error declaration must be an object' });
+      continue;
+    }
+    const declaration = declarationValue as Record<string, unknown>;
+    for (const field of Object.keys(declaration)) {
+      if (!OPERATOR_ERROR_FIELDS.has(field)) {
+        errors.push({
+          path: `${path}.${field}`,
+          message:
+            'unsupported field; operator errors cannot declare routes, targets, labels, authority, or executable actions',
+        });
+      }
+    }
+    if (
+      typeof declaration.summary !== 'string' ||
+      !declaration.summary.trim() ||
+      declaration.summary.trim().length > OPERATOR_ERROR_MAX_SUMMARY_CHARS ||
+      containsUnsafeOperatorTextControl(declaration.summary)
+    ) {
+      errors.push({
+        path: `${path}.summary`,
+        message:
+          `summary must be non-empty safe text of at most ${OPERATOR_ERROR_MAX_SUMMARY_CHARS} characters`,
+      });
+    }
+    if (
+      declaration.detail !== undefined &&
+      (typeof declaration.detail !== 'string' ||
+        !declaration.detail.trim() ||
+        declaration.detail.trim().length > OPERATOR_ERROR_MAX_DETAIL_CHARS ||
+        containsUnsafeOperatorTextControl(declaration.detail))
+    ) {
+      errors.push({
+        path: `${path}.detail`,
+        message:
+          `detail must be non-empty safe text of at most ${OPERATOR_ERROR_MAX_DETAIL_CHARS} characters`,
+      });
+    }
+    if (
+      declaration.retryable !== undefined &&
+      typeof declaration.retryable !== 'boolean'
+    ) {
+      errors.push({
+        path: `${path}.retryable`,
+        message: 'retryable must be a boolean',
+      });
+    }
+    if (declaration.suggested_actions !== undefined) {
+      if (!Array.isArray(declaration.suggested_actions)) {
+        errors.push({
+          path: `${path}.suggested_actions`,
+          message: 'suggested_actions must be an array',
+        });
+      } else {
+        if (
+          declaration.suggested_actions.length >
+            OPERATOR_ERROR_SUGGESTED_ACTIONS.size
+        ) {
+          errors.push({
+            path: `${path}.suggested_actions`,
+            message:
+              `suggested_actions may contain at most ${OPERATOR_ERROR_SUGGESTED_ACTIONS.size} entries`,
+          });
+        }
+        const seen = new Set<string>();
+        declaration.suggested_actions.forEach((action, index) => {
+          if (
+            typeof action !== 'string' ||
+            !OPERATOR_ERROR_SUGGESTED_ACTIONS.has(
+              action as ManifestOperatorErrorSuggestedAction,
+            )
+          ) {
+            errors.push({
+              path: `${path}.suggested_actions.${index}`,
+              message:
+                'suggested action must be inspect_run, open_logs, or open_routine',
+            });
+          } else if (seen.has(action)) {
+            errors.push({
+              path: `${path}.suggested_actions.${index}`,
+              message: `duplicate suggested action "${action}"`,
+            });
+          } else {
+            seen.add(action);
+          }
+        });
+      }
+    }
+  }
+}
+
 export function isCanonicalAppVersion(value: unknown): value is string {
   return typeof value === 'string' && CANONICAL_APP_VERSION_PATTERN.test(value);
 }
@@ -3284,6 +3571,7 @@ export function validateManifest(input: unknown): ManifestValidationResult {
     validateManifestAccessPolicy(manifest.access_policy, errors);
   }
 
+  validateManifestOperatorErrors(manifest.operator_errors, errors);
   validateManifestExternalFunctions(manifest.external_functions, errors);
   validateManifestImports(manifest.imports, errors);
   if (manifest.emits !== undefined) {

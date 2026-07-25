@@ -18,6 +18,7 @@ import { verifyAppIntegrity } from "./verify.ts";
 import { pollJob } from "./job.ts";
 import { recordFlag } from "./flag.ts";
 import { inspectAppDatabase } from "./db-inspect.ts";
+import { attentionCapability } from "./attention.ts";
 import { notificationsCapability } from "./notifications.ts";
 
 const CAPABILITIES: Capability[] = [
@@ -767,6 +768,85 @@ const CAPABILITIES: Capability[] = [
     handler: (args, ctx) => pollJob(ctx.userId, String(args.job_id ?? "")),
   },
   {
+    id: "attention",
+    branch: "agent_user",
+    tier: 1,
+    advertisedName: "gx.attention",
+    aliases: ["ul.attention"],
+    title: "Inspect and remediate owner Attention",
+    description:
+      "Read canonical setup blockers, incidents, and usage reports with the " +
+      "same typed diagnosis and semantic actions shown on the web. action=list " +
+      "supports optional agent_id, cursor, and limit. Account sessions may also " +
+      "mark_read, mark_unread, snooze, reopen, dismiss (shown as Mark resolved), " +
+      "or execute the exact platform-owned run_once remediation using item_id, " +
+      "remediation_id, idempotency_key, and expected_revision. Connected API " +
+      "tokens are read-only. Never infer a destination or action from prose.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: [
+            "list",
+            "mark_read",
+            "mark_unread",
+            "snooze",
+            "reopen",
+            "dismiss",
+            "run_once",
+          ],
+          description: 'Default "list".',
+        },
+        agent_id: {
+          type: "string",
+          description: "list: optional owned private Agent UUID.",
+        },
+        cursor: {
+          type: "string",
+          description: "list: opaque canonical pagination cursor.",
+        },
+        limit: {
+          type: "number",
+          description: "list: 1-100 items.",
+        },
+        item_id: {
+          type: "string",
+          description: "mutation: canonical operator item UUID.",
+        },
+        snoozed_until: {
+          type: "string",
+          description: "snooze: future ISO timestamp, no more than 30 days away.",
+        },
+        remediation_id: {
+          type: "string",
+          description: "run_once: opaque remediation ID returned by list.",
+        },
+        idempotency_key: {
+          type: "string",
+          description: "run_once: client-generated UUID; reuse it when retrying.",
+        },
+        expected_revision: {
+          type: "string",
+          description:
+            "run_once: Agent Home revision the operator reviewed before acting.",
+        },
+      },
+    },
+    auth: { ownerOnly: true },
+    surfaces: ["mcp", "cli", "web"],
+    coreTool: true,
+    cli: { command: "attention" },
+    web: { method: "GET", path: "/api/launch/attention" },
+    handler: (args, ctx) => attentionCapability(args, ctx),
+  },
+  {
     id: "notifications",
     branch: "agent_user",
     tier: 1,
@@ -774,7 +854,8 @@ const CAPABILITIES: Capability[] = [
     aliases: ["ul.notifications"],
     title: "Read the owner's notification inbox",
     description:
-      "Read your owner's notification inbox and mark items read. The platform " +
+      "Compatibility-only immutable notification inbox. Prefer gx.attention " +
+      "for current issue truth and typed remediation. The platform " +
       "writes here when a routine auto-pauses or hits a budget wall, so you can " +
       'surface "your agent was paused" to the owner in chat instead of them ' +
       'finding out by accident. action="list" (optional unread_only, limit) ' +

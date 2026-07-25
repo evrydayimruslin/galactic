@@ -92,6 +92,15 @@ Deno.test("full-time scaffold: manifest passes the real validator with routine t
 
   assertEquals(manifest.flight_recorder, true);
   assertEquals(manifest.permissions, ["ai:call", "notify:owner"]);
+  assertEquals(manifest.operator_errors, {
+    UPSTREAM_TIMEOUT: {
+      summary: "The configured upstream service did not respond.",
+      detail:
+        "Review the failed run and verify the service connection before running once.",
+      retryable: true,
+      suggested_actions: ["inspect_run", "open_logs", "open_routine"],
+    },
+  });
   // Functions match the exports.
   assert(manifest.functions.tick, "tick declared");
   assert(manifest.functions.status, "status declared");
@@ -177,6 +186,10 @@ Deno.test("full-time scaffold: next steps teach the activation path", () => {
   assert(steps.includes("intent"), "mission goes in the routine intent");
   assert(steps.includes("paused"), "routines are created paused");
   assert(steps.includes("owner"), "owner must approve and activate");
+  assert(
+    steps.includes("operator_errors"),
+    "teaches stable operator-safe developer diagnostics",
+  );
 });
 
 Deno.test("full-time scaffold: one gx.test-style wake executes DB + AI and can report safely", async () => {

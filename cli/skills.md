@@ -96,6 +96,13 @@ Persistent cloud routines for ongoing delegated work.
 - `action: "pause"` / `"resume"` / `"delete"` — Control ongoing work.
 - `action: "run_now"` — Queue a manual run. Durable execution is claimed by the backend routine executor.
 
+### gx.attention({ action?, agent_id?, cursor?, limit?, item_id?, snoozed_until?, remediation_id?, idempotency_key?, expected_revision? })
+Canonical setup blockers, incidents, usage reports, and platform-owned remediations.
+- `action: "list"` (default) returns the same typed diagnosis, affected Agents, semantic targets, authority, side-effect classification, and labels as the web. Connected API tokens are read-only.
+- Account sessions may use `mark_read`, `mark_unread`, `snooze`, `reopen`, or `dismiss`. Dismiss is presentation-only (`Mark resolved`); it does not claim the underlying condition recovered.
+- `run_once` accepts only IDs returned by the canonical item plus an idempotency key and reviewed Agent Home revision. It performs real work, can use usage/create side effects, and never resumes the paused schedule.
+- Never infer a destination or action from title/detail prose. Use the returned remediation object.
+
 ### gx.upload({ files, test_attestation?, name?, description?, visibility?, app_id?, type? })
 Deploy TypeScript app or publish markdown page.
 - `type: "page"`: publish markdown at a URL. Requires `content` + `slug`.
@@ -205,6 +212,8 @@ Manage your wallet: balance, earnings, conversions, withdrawals, payouts.
 **Workflow:** `gx.download` (scaffold) → implement functions (reach for `galactic.ai()`, `galactic.call()`, `galactic.db`) → add an Interface (`interfaces[]`) for a human-facing UI → `tested = gx.test(...)` → `gx.upload({ ..., test_attestation: tested.test_attestation })` → `gx.set`. Upload the exact tested file set.
 
 **Always include a manifest.json** alongside index.ts. The manifest enables per-function pricing in the dashboard, typed parameter schemas for better agent tool use, permission grants, Settings surfaces on public app pages, and a declared `access_policy` hook for custom-coded permission/monetization logic. Without it, functions are auto-detected from exports but lack parameter/return metadata. Structure: `{ "functions": { "fnName": { "description": "...", "parameters": { "paramName": { "type": "string", "required": true, "description": "What this param does" } } } }, "access_policy": { "mode": "module", "module": "policy.ts", "export": "planAccess" }, "env_vars": { "MY_KEY": { "scope": "per_user", "input": "password", "description": "..." } } }`. Parameters must be an object keyed by parameter name (NOT an array). `access_policy.module` records the source file, and `access_policy.export` must be exported from the bundled app entry surface, e.g. `export { planAccess } from "./policy.ts";`. Policy functions receive `{ app, caller, subject, input, metadata, static }` and return `{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }` or `{ effect: "deny", reason }`. `gx.download` scaffolds the base manifest automatically.
+
+For expected operator-actionable failures, declare `operator_errors` keyed by the stable uppercase `Error.name`/type your code throws: `{ "operator_errors": { "UPSTREAM_TIMEOUT": { "summary": "The configured service did not respond.", "detail": "Review the failed run and verify the connection.", "retryable": true, "suggested_actions": ["inspect_run", "open_logs", "open_routine"] } } }`. Summary/detail must be secret-free. Suggested actions only prioritize harmless platform-generated navigation; Galactic still decides availability and owns every condition, target, label, authority check, `Run once`, approval, and resume control. Unknown fields and executable/privileged action declarations are rejected.
 
 ### Programmable Permissions and Monetization
 

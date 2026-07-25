@@ -1601,6 +1601,7 @@ const FORBIDDEN = -32003;
 const QUOTA_EXCEEDED = -32004;
 const BUILD_FAILED = -32005;
 const VALIDATION_ERROR = -32006;
+const CONFLICT = -32007;
 
 // ============================================
 // PLATFORM SKILLS.MD — served via resources/read
@@ -4053,8 +4054,15 @@ Poll an async job's status. Async-declared functions (manifest execution.class, 
 - Returns \`{ status: "running" }\` while in progress, \`{ status: "completed", result: ... }\` when done, or \`{ status: "failed", error: ... }\`
 - Poll every 5-10 seconds until completed or failed
 
+### gx.attention({ action?, agent_id?, cursor?, limit?, item_id?, snoozed_until?, remediation_id?, idempotency_key?, expected_revision? })
+Canonical setup blockers, incidents, usage reports, and platform-owned remediations.
+- \`action: "list"\` (default) returns the same typed diagnosis, affected Agents, semantic targets, authority, side-effect classification, and labels as the web. Connected API tokens are read-only.
+- Account sessions may use \`mark_read\`, \`mark_unread\`, \`snooze\`, \`reopen\`, or \`dismiss\`. Dismiss is presentation-only (\`Mark resolved\`); it does not claim recovery.
+- \`run_once\` accepts only canonical item/remediation IDs, an idempotency key, and the Agent Home revision the operator reviewed. It performs real work, can use usage/create side effects, and never resumes the paused schedule.
+- Never infer a destination or action from diagnosis prose. Use the returned remediation object.
+
 ### gx.notifications({ action, unread_only?, limit?, ids?, all? })
-Read your owner's notification inbox and mark items read. The platform writes here when one of the owner's routines auto-pauses (circuit breaker / per-run budget or call cap) or hits a daily/monthly budget wall — so a full-time agent can tell its owner "I was paused, here's why" in chat instead of the owner discovering it by accident.
+Compatibility-only immutable event inbox. Prefer \`gx.attention\` for current condition truth and typed remediation. The platform writes here when one of the owner's routines auto-pauses (circuit breaker / per-run budget or call cap) or hits a daily/monthly budget wall.
 - \`action: "list"\` (default) — returns \`{ notifications: [{ id, kind, severity, title, body, entity_type, entity_id, created_at, read_at }], unread_count }\`. Pass \`unread_only: true\` and/or \`limit\` (default 20).
 - \`action: "mark_read"\` — pass \`ids: string[]\` (or \`all: true\`) to mark read; returns \`{ ok, marked }\`.
 - Scoped to the current user; \`kind\` is \`routine_paused\` | \`routine_budget_exhausted\` today. A good thing to check at the start of a wake or when the owner asks "how are my agents doing?".
@@ -4217,6 +4225,8 @@ Manage your wallet: balance, earnings, conversions, withdrawals, payouts.
 **Workflow:** \`gx.download\` (scaffold) → implement functions (reach for \`galactic.ai()\`, \`galactic.call()\`, \`galactic.db\`) → add an Interface (\`interfaces[]\`) for a human-facing UI → \`tested = gx.test(...)\` → \`gx.upload({ ..., test_attestation: tested.test_attestation })\` → \`gx.set\`. Upload the exact tested file set. The richest Agents combine functions + AI + an Interface — see "The SDK" and "Interfaces" below.
 
 **Always include a manifest.json** alongside index.ts. The manifest enables per-function pricing in the dashboard, typed parameter schemas for better agent tool use, permission grants, Settings surfaces on public app pages, and a declared \`access_policy\` hook for custom-coded permission/monetization logic. Without it, functions are auto-detected from exports but lack parameter/return metadata. Structure: \`{ "functions": { "fnName": { "description": "...", "parameters": { "paramName": { "type": "string", "required": true, "description": "What this param does" } } } }, "access_policy": { "mode": "module", "module": "policy.ts", "export": "planAccess" }, "env_vars": { "MY_KEY": { "scope": "per_user", "input": "password", "description": "..." } } }\`. Parameters must be an object keyed by parameter name (NOT an array). \`access_policy.module\` records the source file, and \`access_policy.export\` must be exported from the bundled app entry surface, e.g. \`export { planAccess } from "./policy.ts";\`. Policy functions receive \`{ app, caller, subject, input, metadata, static }\` and return \`{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }\` or \`{ effect: "deny", reason }\`. \`gx.download\` scaffolds the base manifest automatically. The \`type\` and \`entry\` fields are optional in a hand-written manifest — they default to \`"mcp"\` and \`{ "functions": "index.ts" }\`, so the structure above deploys as-is.
+
+For expected operator-actionable failures, declare \`operator_errors\` keyed by the stable uppercase \`Error.name\`/type your code throws: \`{ "operator_errors": { "UPSTREAM_TIMEOUT": { "summary": "The configured service did not respond.", "detail": "Review the failed run and verify the connection.", "retryable": true, "suggested_actions": ["inspect_run", "open_logs", "open_routine"] } } }\`. Summary/detail must be secret-free. Suggested actions only prioritize harmless platform-generated navigation; Galactic still decides availability and owns every condition, target, label, authority check, \`Run once\`, approval, and resume control. Unknown fields and executable/privileged action declarations are rejected.
 
 **Two steps live on the website, not MCP.** Adding credits (a non-private Agent needs a minimum balance to go live) and Stripe Connect payout setup (required to publish publicly) are Stripe-hosted and browser-only — there is no MCP action for either. When a publish call is blocked, the error carries a \`configure_url\`; hand the user that exact link. The pages: add credits at \`https://connectgalactic.com/account?tab=balance\`, set up payouts at \`https://connectgalactic.com/account?tab=earnings\`.
 
@@ -8379,6 +8389,10 @@ async function runCapabilityForMcp(
         ? NOT_FOUND
         : err.code === "forbidden"
         ? FORBIDDEN
+        : err.code === "conflict"
+        ? CONFLICT
+        : err.code === "rate_limited"
+        ? RATE_LIMITED
         : INTERNAL_ERROR;
       throw new ToolError(code, err.message);
     }
@@ -10065,6 +10079,18 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     author: "",
     entry: { functions: "index.ts" },
     permissions: ["ai:call", "notify:owner"],
+    // Reviewed developer diagnostics replace raw thrown prose in owner-facing
+    // incidents. Codes must match Error.name/type; Galactic still owns every
+    // condition, target, label, authority check, and executable action.
+    operator_errors: {
+      UPSTREAM_TIMEOUT: {
+        summary: "The configured upstream service did not respond.",
+        detail:
+          "Review the failed run and verify the service connection before running once.",
+        retryable: true,
+        suggested_actions: ["inspect_run", "open_logs", "open_routine"],
+      },
+    },
     // Flight recorder: persist each routine run's ai() exchanges as run steps
     // so tick() can review its own reasoning via galactic.runs.recent().
     flight_recorder: true,
@@ -10144,6 +10170,7 @@ function executeFullTimeScaffold(name: string, description: string): unknown {
     ],
     next_steps: [
       "Wire the two EXTENSION POINTs in index.ts tick(): a real observation source (allowlisted fetch / IMAP / galactic.call) and real actions.",
+      'For expected operator-actionable failures, set a stable Error.name such as "UPSTREAM_TIMEOUT" and declare the same code under manifest.json operator_errors. Keep messages secret-free; Galactic owns and validates the available actions.',
       'Test one wake without deploying and keep the successful response as `tested`: gx.test({ files: [...], function_name: "tick", test_args: { _routine: { trigger: "manual", attempt: 1, intent: "your mission here" } }, d1_fixtures: { responses: [{ method: "select", table: "journal", result: [] }, { method: "insert", table: "journal", result: { success: true, meta: { changes: 1 } } }] } }).',
       'Deploy the exact same files with gx.upload({ files: [...], test_attestation: tested.test_attestation, name: "' +
       name + '" }).',

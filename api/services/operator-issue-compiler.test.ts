@@ -242,6 +242,7 @@ Deno.test("paused failure combines safe diagnostics with platform-owned actions"
       summary: "The configured service did not respond",
       detail: "The latest attempt reached the connection timeout.",
       provenance: "developer",
+      suggestedActions: ["open_routine", "open_logs"],
       evidence: [],
     },
     detectedAt: DETECTED_AT,
@@ -256,11 +257,18 @@ Deno.test("paused failure combines safe diagnostics with platform-owned actions"
     evidence: [],
   });
   assertEquals(item?.remediations.map((action) => action.key), [
-    "inspect_run",
-    "open_logs",
     "open_routine",
+    "open_logs",
+    "inspect_run",
     "run_once",
   ]);
+  assertEquals(
+    item?.remediations.every((action) =>
+      (action.target as { kind: string }).kind !== "external_url"
+    ),
+    true,
+    "developer hints can only reorder compiler-owned semantic targets",
+  );
   assertEquals(
     item?.remediations.at(-1)?.description,
     "Runs real work and uses usage, but leaves scheduled execution paused.",

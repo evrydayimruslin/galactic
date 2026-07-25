@@ -184,6 +184,19 @@ describe("OperatorIssueDeck", () => {
     expect(proseLink).toContain("This item is no longer active.");
     expect(proseLink).not.toContain("Nothing needs your attention.");
   });
+
+  it("labels external diagnosis provenance instead of presenting it as platform fact", () => {
+    const combined = projection();
+    combined.items[0].item.diagnosis.provenance = "combined";
+    const markup = renderToStaticMarkup(
+      <OperatorIssueDeck
+        onNavigate={() => {}}
+        projection={combined}
+      />,
+    );
+
+    expect(markup).toContain("Platform condition · External diagnosis");
+  });
 });
 
 describe("Run once result messaging", () => {

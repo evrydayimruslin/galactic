@@ -6,6 +6,7 @@ import { getPlatformTools } from './platform-mcp.ts';
 // The launch-core set advertised by the lite manifest (must match
 // LAUNCH_CORE_TOOLS in platform-mcp.ts; advertised with the gx.* prefix).
 const CORE = [
+  'gx.attention',
   'gx.call',
   'gx.codemode',
   'gx.consent',

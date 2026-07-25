@@ -180,6 +180,7 @@ Deno.test("operator producers: paused routine is partial and run-specific", asyn
       detail: "The connection timed out after the bounded attempt.",
       provenance: "developer",
       retryable: true,
+      suggestedActions: [],
       redacted: false,
     },
     observedAt: OBSERVED_AT,
