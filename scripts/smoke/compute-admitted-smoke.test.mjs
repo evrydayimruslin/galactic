@@ -301,6 +301,8 @@ test("proves admission, execution, settlement, exact output, and disabled cleanu
     artifact_count: 0,
   });
   assert.equal(evidence.policy_cleanup.disabled, true);
+  assert.equal("failure_code" in evidence, false);
+  assert.equal("failure_diagnostic" in evidence, false);
   assert.equal(state().enabled, false);
   assert.equal(written.length, 1);
   assert.equal(
@@ -469,6 +471,248 @@ test("upstream secret bodies never enter errors or evidence", async () => {
   assert.equal(written.length, 1);
   assert.equal(JSON.stringify(written[0].value).includes(leaked), false);
   assert.equal(written[0].value.policy_cleanup.disabled, true);
+});
+
+test("persists only an allowlisted public Compute code from an HTTP failure", async () => {
+  const leaked = "developer-secret-must-not-appear";
+  const written = [];
+  const { fetchImpl: baseFetch } = happyFetch();
+  const fetchImpl = async (input, init) => {
+    if (String(input).includes("/functions/")) {
+      return jsonResponse({
+        success: false,
+        error: {
+          type: "GalacticComputeError",
+          message:
+            `galactic.compute failed (COMPUTE_INSUFFICIENT_BUDGET): ${leaked}`,
+          details: { leaked },
+        },
+      }, 500);
+    }
+    return await baseFetch(input, init);
+  };
+
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig(), {
+      fetchImpl,
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) => {
+      assert.equal(error.code, "HTTP_ERROR");
+      assert.equal(error.httpStatus, 500);
+      assert.equal(
+        error.publicComputeCode,
+        "COMPUTE_INSUFFICIENT_BUDGET",
+      );
+      assert.match(error.message, /COMPUTE_INSUFFICIENT_BUDGET/u);
+      assert.doesNotMatch(error.message, new RegExp(leaked, "u"));
+      return true;
+    },
+  );
+
+  assert.equal(written.length, 1);
+  assert.equal(written[0].value.failure_code, "HTTP_ERROR");
+  assert.deepEqual(written[0].value.failure_diagnostic, {
+    stage: "compute_start",
+    http_status: 500,
+    public_compute_code: "COMPUTE_INSUFFICIENT_BUDGET",
+  });
+  assert.equal(JSON.stringify(written[0].value).includes(leaked), false);
+});
+
+test("classifies generic control-plane failure without persisting its body", async () => {
+  const leaked = "untrusted-detail-must-not-appear";
+  const written = [];
+  const { fetchImpl: baseFetch } = happyFetch();
+  const fetchImpl = async (input, init) => {
+    if (String(input).includes("/functions/")) {
+      return jsonResponse({
+        error: {
+          type: "GalacticComputeError",
+          message: "galactic.compute failed: control plane unavailable.",
+          details: { leaked },
+        },
+      }, 500);
+    }
+    return await baseFetch(input, init);
+  };
+
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig(), {
+      fetchImpl,
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) => {
+      assert.equal(
+        error.publicComputeCode,
+        "COMPUTE_CONTROL_PLANE_UNAVAILABLE",
+      );
+      assert.doesNotMatch(error.message, new RegExp(leaked, "u"));
+      return true;
+    },
+  );
+
+  assert.deepEqual(written[0].value.failure_diagnostic, {
+    stage: "compute_start",
+    http_status: 500,
+    public_compute_code: "COMPUTE_CONTROL_PLANE_UNAVAILABLE",
+  });
+  assert.equal(JSON.stringify(written[0].value).includes(leaked), false);
+});
+
+test("rejects lookalike Compute codes from untrusted error types", async () => {
+  const leaked = "spoofed-developer-error";
+  const written = [];
+  const { fetchImpl: baseFetch } = happyFetch();
+  const fetchImpl = async (input, init) => {
+    if (String(input).includes("/functions/")) {
+      return jsonResponse({
+        error: {
+          type: "DeveloperError",
+          message:
+            `galactic.compute failed (COMPUTE_SPOOFED): ${leaked}`,
+        },
+      }, 500);
+    }
+    return await baseFetch(input, init);
+  };
+
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig(), {
+      fetchImpl,
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) => {
+      assert.equal(error.publicComputeCode, null);
+      assert.doesNotMatch(error.message, /COMPUTE_SPOOFED/u);
+      assert.doesNotMatch(error.message, new RegExp(leaked, "u"));
+      return true;
+    },
+  );
+
+  assert.deepEqual(written[0].value.failure_diagnostic, {
+    stage: "compute_start",
+    http_status: 500,
+  });
+  assert.equal(JSON.stringify(written[0].value).includes(leaked), false);
+});
+
+test("captures a structured settings error without retaining its text", async () => {
+  const leaked = "settings-secret-must-not-appear";
+  const written = [];
+  const { fetchImpl: baseFetch } = happyFetch();
+  const fetchImpl = async (input, init = {}) => {
+    const body = init.body === undefined ? null : JSON.parse(init.body);
+    if (
+      String(input).endsWith("/compute/settings") &&
+      init.method === "PUT" &&
+      body?.settings?.enabled === true
+    ) {
+      return jsonResponse({
+        code: "COMPUTE_POLICY_CONFLICT",
+        error: leaked,
+      }, 409);
+    }
+    return await baseFetch(input, init);
+  };
+
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig(), {
+      fetchImpl,
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) => {
+      assert.equal(error.publicComputeCode, "COMPUTE_POLICY_CONFLICT");
+      assert.doesNotMatch(error.message, new RegExp(leaked, "u"));
+      return true;
+    },
+  );
+
+  assert.deepEqual(written[0].value.failure_diagnostic, {
+    stage: "settings_enable",
+    http_status: 409,
+    public_compute_code: "COMPUTE_POLICY_CONFLICT",
+  });
+  assert.equal(JSON.stringify(written[0].value).includes(leaked), false);
+});
+
+test("omits diagnostics from oversized error bodies", async () => {
+  const leaked = "oversized-secret-must-not-appear";
+  const written = [];
+  const { fetchImpl: baseFetch } = happyFetch();
+  const fetchImpl = async (input, init) => {
+    if (String(input).includes("/functions/")) {
+      return jsonResponse({
+        code: "COMPUTE_POLICY_CONFLICT",
+        error: leaked.repeat(2_000),
+      }, 500);
+    }
+    return await baseFetch(input, init);
+  };
+
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig(), {
+      fetchImpl,
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) => {
+      assert.equal(error.publicComputeCode, null);
+      assert.doesNotMatch(error.message, new RegExp(leaked, "u"));
+      return true;
+    },
+  );
+
+  assert.deepEqual(written[0].value.failure_diagnostic, {
+    stage: "compute_start",
+    http_status: 500,
+  });
+  assert.equal(JSON.stringify(written[0].value).includes(leaked), false);
+});
+
+test("retains safe HTTP diagnostics when fixture cleanup fails", async () => {
+  const leaked = "cleanup-secret-must-not-appear";
+  const written = [];
+  const { fetchImpl: baseFetch } = happyFetch({
+    statuses: ["completed"],
+  });
+  const fetchImpl = async (input, init = {}) => {
+    const body = init.body === undefined ? null : JSON.parse(init.body);
+    if (
+      String(input).endsWith("/compute/settings") &&
+      init.method === "PUT" &&
+      body?.settings?.enabled === false
+    ) {
+      return jsonResponse({
+        code: "COMPUTE_CONTROL_PLANE_UNAVAILABLE",
+        error: leaked,
+      }, 503);
+    }
+    return await baseFetch(input, init);
+  };
+
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig(), {
+      fetchImpl,
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) => {
+      assert.equal(error.code, "CLEANUP_FAILED");
+      assert.equal(
+        error.publicComputeCode,
+        "COMPUTE_CONTROL_PLANE_UNAVAILABLE",
+      );
+      assert.doesNotMatch(error.message, new RegExp(leaked, "u"));
+      return true;
+    },
+  );
+
+  assert.equal(written[0].value.failure_code, "CLEANUP_FAILED");
+  assert.deepEqual(written[0].value.failure_diagnostic, {
+    stage: "settings_disable",
+    http_status: 503,
+    public_compute_code: "COMPUTE_CONTROL_PLANE_UNAVAILABLE",
+  });
+  assert.equal(JSON.stringify(written[0].value).includes(leaked), false);
 });
 
 test("cleanup-only disables an enabled fixture without starting a job", async () => {
