@@ -50,6 +50,33 @@ import {
 
 const COMPUTE_DISPATCH_VERSION = 1 as const;
 
+const COMPUTE_ADMISSION_DIAGNOSTIC_CODES = new Set([
+  "COMPUTE_ACCOUNT_NOT_ELIGIBLE",
+  "COMPUTE_AGENT_OWNER_INVARIANT",
+  "COMPUTE_CAPACITY_ATTRIBUTION_INVALID",
+  "COMPUTE_CONCURRENT_LIFECYCLE",
+  "COMPUTE_DATABASE_ERROR",
+  "COMPUTE_DATABASE_INVALID_RESPONSE",
+  "COMPUTE_DATABASE_UNAVAILABLE",
+  "COMPUTE_INVALID_ADMISSION",
+  "COMPUTE_INVALID_AUTHORITIES",
+  "COMPUTE_INVALID_AUTHORITY",
+  "COMPUTE_INVALID_MANIFEST_CEILING",
+  "COMPUTE_TARGET_NOT_OWNED",
+]);
+
+type ComputeAdmissionStage =
+  | "runtime_config"
+  | "runtime_identity"
+  | "rollout_gate"
+  | "agent_lookup"
+  | "manifest_authority"
+  | "policy_snapshot"
+  | "request_normalization"
+  | "request_digest"
+  | "authority_selection"
+  | "database_admit";
+
 type ComputeApp = Pick<
   App,
   "id" | "owner_id" | "current_version" | "manifest"
@@ -118,6 +145,37 @@ function expectedPublicError(error: unknown): PublicComputeControlPlaneError | n
     }
   }
   return null;
+}
+
+function logUnexpectedAdmissionFailure(
+  stage: ComputeAdmissionStage,
+  error: unknown,
+): void {
+  try {
+    const isControlPlaneError = error instanceof ComputeControlPlaneError;
+    const status = isControlPlaneError &&
+        Number.isInteger(error.status) &&
+        error.status >= 400 &&
+        error.status < 600
+      ? error.status
+      : null;
+    console.error(JSON.stringify({
+      event: "compute.admission_stage_failed",
+      stage,
+      error_classification: isControlPlaneError
+        ? "compute_control_plane"
+        : error instanceof Error
+        ? "error"
+        : "non_error",
+      error_code: isControlPlaneError &&
+          COMPUTE_ADMISSION_DIAGNOSTIC_CODES.has(error.code)
+        ? error.code
+        : "UNCLASSIFIED",
+      error_status: status,
+    }));
+  } catch {
+    // Diagnostic projection must never replace the original admission failure.
+  }
 }
 
 function activePolicy(policy: ComputeAgentPolicy | null): ComputeAgentPolicy {
@@ -224,8 +282,11 @@ export function createComputeControlPlaneAdapter(
 
   return {
     async admitComputeRun(admission: ComputeAdmissionInput): Promise<PublicComputeResult> {
+      let stage: ComputeAdmissionStage = "runtime_config";
+      let admissionCompleted = false;
       try {
         const config = requireComputeAdmissionConfig(deps.env);
+        stage = "runtime_identity";
         const runtime = await deps.env.COMPUTE_PLANE!.runtimeIdentity();
         if (
           runtime?.profile !== "developer-v1" ||
@@ -236,6 +297,7 @@ export function createComputeControlPlaneAdapter(
             "The deployed Compute plane does not match the configured immutable environment.",
           );
         }
+        stage = "rollout_gate";
         if (
           config.rolloutMode === "canary" &&
           !config.canaryAllowlist.includes(
@@ -247,10 +309,12 @@ export function createComputeControlPlaneAdapter(
             "Galactic Compute is not enabled for this Agent in the current rollout.",
           );
         }
+        stage = "agent_lookup";
         const app = await deps.findAgent(admission.agentId);
         if (!app) {
           throw publicError("COMPUTE_AGENT_NOT_FOUND", "Agent not found.");
         }
+        stage = "manifest_authority";
         const manifest = resolveLiveComputeManifestAuthority({
           app,
           ownerUserId: admission.userId,
@@ -261,12 +325,14 @@ export function createComputeControlPlaneAdapter(
           agentId: admission.agentId,
           callerFunction: admission.callerFunction,
         };
+        stage = "policy_snapshot";
         const [policyValue, rules, bindings] = await Promise.all([
           deps.getPolicy(scope),
           deps.listPolicyRules(scope),
           deps.listSecretBindings(scope),
         ]);
         const policy = activePolicy(policyValue);
+        stage = "request_normalization";
         const normalized = normalizePublicComputeRequest({
           request: admission.request,
           manifest: manifest.config,
@@ -277,36 +343,43 @@ export function createComputeControlPlaneAdapter(
           now: deps.now(),
         });
         const now = deps.now();
+        stage = "request_digest";
+        const directiveHash = await computeDirectiveHash({
+          callerFunction: admission.callerFunction,
+          request: normalized.executionRequest,
+        });
+        const expiresAt = normalized.mode === "sync"
+          ? computeSyncRunExpiresAt({
+            now,
+            timeoutMs: normalized.executionRequest.timeoutMs,
+            executionDeadlineAtMs: admission.executionDeadlineAtMs,
+          })
+          : computeRunExpiresAt(
+            now,
+            normalized.executionRequest.timeoutMs,
+          );
+        stage = "authority_selection";
+        const authorities = selectComputeRunAuthorities(
+          rules,
+          admission.callerFunction,
+        );
+        stage = "database_admit";
         const admitted = await deps.admitRun({
           idempotencyKey: admission.idempotencyKey,
           userId: admission.userId,
           agentId: admission.agentId,
           callerFunction: admission.callerFunction,
           executionId: admission.executionId,
-          directiveHash: await computeDirectiveHash({
-            callerFunction: admission.callerFunction,
-            request: normalized.executionRequest,
-          }),
+          directiveHash,
           environmentDigest: config.environmentDigest,
           billingMode: admission.billingMode,
           capacityAgentId: admission.capacityAgentId,
           request: normalized.executionRequest,
           manifestCeiling: normalized.manifestCeiling,
-          expiresAt: normalized.mode === "sync"
-            ? computeSyncRunExpiresAt({
-              now,
-              timeoutMs: normalized.executionRequest.timeoutMs,
-              executionDeadlineAtMs: admission.executionDeadlineAtMs,
-            })
-            : computeRunExpiresAt(
-              now,
-              normalized.executionRequest.timeoutMs,
-            ),
-          authorities: selectComputeRunAuthorities(
-            rules,
-            admission.callerFunction,
-          ),
+          expiresAt,
+          authorities,
         });
+        admissionCompleted = true;
 
         const ownerScope = {
           ...scope,
@@ -371,7 +444,11 @@ export function createComputeControlPlaneAdapter(
           now: deps.now(),
         });
       } catch (error) {
-        throw expectedPublicError(error) ?? error;
+        const projected = expectedPublicError(error);
+        if (!projected && !admissionCompleted) {
+          logUnexpectedAdmissionFailure(stage, error);
+        }
+        throw projected ?? error;
       }
     },
 

@@ -22,6 +22,12 @@ const lifecycle = await migration(
 const gateway = await migration(
   "20260719123000_compute_gateway_artifact_rpcs.sql",
 );
+const capacity = await migration(
+  "20260720124500_compute_capacity_conservation.sql",
+);
+const admissionCapacityCompatibility = await migration(
+  "20260725202000_compute_admission_capacity_insert_compatibility.sql",
+);
 
 function functionBody(sql: string, name: string): string {
   const start = sql.indexOf(`CREATE OR REPLACE FUNCTION public.${name}(`);
@@ -316,5 +322,45 @@ Deno.test("Compute history cannot cascade-delete and provisional owners cannot r
   assertStringIncludes(
     lifecycle,
     "owner.provisional IS NOT DISTINCT FROM false",
+  );
+});
+
+Deno.test("legacy Compute admission receives only a narrow transactional capacity default", () => {
+  const compatibility = functionBody(
+    admissionCapacityCompatibility,
+    "fill_compute_run_legacy_capacity_agent",
+  );
+  assertStringIncludes(
+    compatibility,
+    "IF NEW.billing_mode = 'wallet' AND NEW.capacity_agent_id IS NULL THEN",
+  );
+  assertStringIncludes(
+    compatibility,
+    "NEW.capacity_agent_id := NEW.agent_id;",
+  );
+  assertFalse(
+    compatibility.includes("NEW.billing_mode = 'subscription_capacity'"),
+  );
+  assertStringIncludes(
+    admissionCapacityCompatibility,
+    "CREATE TRIGGER fill_compute_run_legacy_capacity_agent\n" +
+      "BEFORE INSERT ON public.compute_runs",
+  );
+  assertStringIncludes(
+    admissionCapacityCompatibility,
+    "REVOKE ALL ON FUNCTION public.fill_compute_run_legacy_capacity_agent()",
+  );
+
+  const wrappedAdmission = functionBody(capacity, "admit_compute_run");
+  const legacyCall = wrappedAdmission.indexOf(
+    "public.admit_compute_run_capacity_impl(",
+  );
+  const trustedTupleUpdate = wrappedAdmission.indexOf(
+    "SET billing_mode = p_billing_mode,\n" +
+      "        capacity_agent_id = p_capacity_agent_id,",
+  );
+  assertEquals(
+    legacyCall >= 0 && trustedTupleUpdate > legacyCall,
+    true,
   );
 });
