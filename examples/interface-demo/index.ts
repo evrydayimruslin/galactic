@@ -68,11 +68,7 @@ export async function run_compute_smoke(args: {
     throw new Error("marker is not canonical release-smoke metadata");
   }
   return await galactic.compute({
-    argv: [
-      "node",
-      "-e",
-      "const fs=require('node:fs');process.stdout.write(fs.readFileSync(0,'utf8'))",
-    ],
+    argv: ["cat"],
     tools: ["shell"],
     profile: "developer-v1",
     mode: "async",
