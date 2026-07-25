@@ -405,6 +405,8 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          NODE_NO_WARNINGS=1 node --experimental-transform-types \
+            scripts/smoke/canonical-attention-db-probe.mjs
           mkdir -p attention-evidence
           owner_evidence="attention-evidence/owner-attention.json"
           shadow_evidence="attention-evidence/attention-shadow.json"
