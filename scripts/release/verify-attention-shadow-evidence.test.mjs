@@ -232,8 +232,12 @@ test("requires both account and Agent surface coverage", () => {
 });
 
 for (
-  const [name, overrides] of [
-    ["wrong Worker", { scriptName: "other-worker" }],
+  const [name, overrides, code] of [
+    [
+      "wrong Worker",
+      { scriptName: "other-worker" },
+      "DEPLOYMENT_WORKER_MISMATCH",
+    ],
     [
       "wrong version ID",
       {
@@ -242,6 +246,7 @@ for (
           tag: VERSION_TAG,
         },
       },
+      "DEPLOYMENT_VERSION_MISMATCH",
     ],
     [
       "wrong version tag",
@@ -251,6 +256,7 @@ for (
           tag: `api-${"b".repeat(40)}`,
         },
       },
+      "DEPLOYMENT_TAG_MISMATCH",
     ],
   ]
 ) {
@@ -260,7 +266,7 @@ for (
         envelope(comparison(), overrides),
         envelope(comparison({ surface: "agent" })),
       ),
-      "DEPLOYMENT_FENCE_MISMATCH",
+      code,
     );
   });
 }

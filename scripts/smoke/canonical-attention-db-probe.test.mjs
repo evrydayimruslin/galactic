@@ -28,6 +28,12 @@ function dependencies(readOperatorAttentionPage) {
       smokeAgentId: AGENT_ID,
     }),
     fetchProjectKeys: async () => keys,
+    fetchImpl: async () =>
+      Response.json([{
+        id: AGENT_ID,
+        slug: "smoke",
+        name: "Smoke",
+      }]),
     loadReader: async () => ({
       readOperatorAttentionPage,
       operatorItemReadFailureStage: () => "item_diagnosis_invalid",
@@ -49,6 +55,22 @@ test("accepts a valid projection without returning private data", async () => {
   );
   assert.equal(deps.keys.anonKey, "");
   assert.equal(deps.keys.serviceRoleKey, "");
+});
+
+test("exercises both Agent and account projections", async () => {
+  const scopes = [];
+  const deps = dependencies(async (_ownerId, _agents, agentId) => {
+    scopes.push(agentId === null ? "account" : "agent");
+    return {
+      contractVersion: "2026-07-24.operator-issues.1",
+      available: true,
+      unavailableReason: null,
+      items: [],
+      agentCounts: [],
+    };
+  });
+  await runCanonicalAttentionDbProbe({ env: env(), ...deps });
+  assert.deepEqual(scopes, ["agent", "account"]);
 });
 
 test("reports only an allowlisted reader stage and scrubs keys", async () => {

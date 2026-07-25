@@ -265,16 +265,31 @@ function validateDeploymentFence(
   expectedVersionId,
   expectedVersionTag,
 ) {
+  if (envelope.scriptName !== expectedWorker) {
+    fail(
+      "DEPLOYMENT_WORKER_MISMATCH",
+      "Comparison telemetry did not originate from the fenced Worker.",
+    );
+  }
   if (
-    envelope.scriptName !== expectedWorker ||
     !isRecord(envelope.scriptVersion) ||
-    typeof envelope.scriptVersion.id !== "string" ||
-    envelope.scriptVersion.id.toLowerCase() !== expectedVersionId ||
-    envelope.scriptVersion.tag !== expectedVersionTag
+    typeof envelope.scriptVersion.id !== "string"
   ) {
     fail(
-      "DEPLOYMENT_FENCE_MISMATCH",
-      "Comparison telemetry did not originate from the fenced deployment.",
+      "DEPLOYMENT_VERSION_MISSING",
+      "Comparison telemetry did not identify its Worker version.",
+    );
+  }
+  if (envelope.scriptVersion.id.toLowerCase() !== expectedVersionId) {
+    fail(
+      "DEPLOYMENT_VERSION_MISMATCH",
+      "Comparison telemetry did not originate from the fenced Worker version.",
+    );
+  }
+  if (envelope.scriptVersion.tag !== expectedVersionTag) {
+    fail(
+      "DEPLOYMENT_TAG_MISMATCH",
+      "Comparison telemetry did not carry the fenced release tag.",
     );
   }
   if (
