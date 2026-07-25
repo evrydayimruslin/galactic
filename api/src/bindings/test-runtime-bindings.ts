@@ -8,6 +8,7 @@ import type {
   ComputeResult,
   ComputeRun,
 } from "../../../shared/contracts/compute.ts";
+import type { ComputeBindingRpcResult } from "./compute-binding-core.ts";
 import {
   createUlTestAiResponse,
   createUlTestEmbedResponse,
@@ -73,23 +74,38 @@ export class TestComputeBinding extends WorkerEntrypoint<
   unknown,
   Record<string, never>
 > {
-  async call(request: ComputeRequest): Promise<ComputeResult> {
+  async call(
+    request: ComputeRequest,
+  ): Promise<ComputeBindingRpcResult<ComputeResult>> {
     const isAsync = request?.mode === "async";
     return {
-      ...testComputeRun(
-        "test-compute-run",
-        isAsync ? "queued" : "completed",
-        request,
-      ),
-      async: isAsync,
-    } as ComputeResult;
+      ok: true,
+      value: {
+        ...testComputeRun(
+          "test-compute-run",
+          isAsync ? "queued" : "completed",
+          request,
+        ),
+        async: isAsync,
+      } as ComputeResult,
+    };
   }
 
-  async get(runId: string): Promise<ComputeRun> {
-    return testComputeRun(runId || "test-compute-run", "completed");
+  async get(
+    runId: string,
+  ): Promise<ComputeBindingRpcResult<ComputeRun>> {
+    return {
+      ok: true,
+      value: testComputeRun(runId || "test-compute-run", "completed"),
+    };
   }
 
-  async cancel(runId: string): Promise<ComputeRun> {
-    return testComputeRun(runId || "test-compute-run", "cancelled");
+  async cancel(
+    runId: string,
+  ): Promise<ComputeBindingRpcResult<ComputeRun>> {
+    return {
+      ok: true,
+      value: testComputeRun(runId || "test-compute-run", "cancelled"),
+    };
   }
 }

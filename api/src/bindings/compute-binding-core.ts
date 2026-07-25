@@ -4,59 +4,71 @@ import type {
   ComputeResult,
   ComputeRun,
   ComputeRunStatus,
-} from '../../../shared/contracts/compute.ts';
-import { resolveExecutionContext } from '../../services/execution-context-registry.ts';
+} from "../../../shared/contracts/compute.ts";
 import {
   type ComputeControlPlaneActor,
   type ComputeControlPlaneAdapter,
   PublicComputeControlPlaneError,
-  requireComputeControlPlaneAdapter,
-} from './compute-control-plane-adapter.ts';
+} from "./compute-control-plane-adapter.ts";
 
 export interface ComputeBindingProps {
   /** Host-authenticated human owner; never taken from sandbox input. */
   userId: string;
   /** The currently executing Agent/app; never taken from sandbox input. */
   agentId: string;
-}
-
-interface ResolvedComputeExecution {
-  actor: ComputeControlPlaneActor;
+  /** Host-selected exported function; never taken from a Compute request. */
+  callerFunction: string;
+  /** Parent Agent execution used for admission idempotency and ownership. */
+  executionId: string;
+  /** Absolute parent execution deadline, fixed before the binding is created. */
   executionDeadlineAtMs: number;
-  billingMode: 'wallet' | 'subscription_capacity';
+  /** Trusted billing route inherited from the enclosing Agent execution. */
+  billingMode: "wallet" | "subscription_capacity";
+  /** Root Agent whose account/Agent capacity pool owns the Compute lease. */
   capacityAgentId: string;
+  /**
+   * Public receipt used only to attribute this distinct RPC TailItem to the
+   * enclosing subscription-capacity execution. Never returned to the body.
+   */
+  capacityReceiptId: string | null;
 }
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PUBLIC_COMPUTE_CODE_RE = /^COMPUTE_[A-Z0-9_]{1,56}$/;
+const PUBLIC_COMPUTE_MESSAGE_MAX_LENGTH = 1_024;
+const CONTROL_PLANE_UNAVAILABLE_CODE = "COMPUTE_CONTROL_PLANE_UNAVAILABLE";
+const CONTROL_PLANE_UNAVAILABLE_MESSAGE =
+  "Galactic Compute control plane is unavailable.";
+const CAPACITY_TAIL_MARKER = "GALACTIC_CAPACITY_EXECUTION_V1 ";
 
 const PUBLIC_RUN_STATUSES = new Set<ComputeRunStatus>([
-  'queued',
-  'reserving',
-  'starting',
-  'running',
-  'completed',
-  'failed',
-  'cancelled',
-  'settlement_pending',
+  "queued",
+  "reserving",
+  "starting",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "settlement_pending",
 ]);
 
 const PUBLIC_REQUEST_FIELDS = new Set([
-  'argv',
-  'tools',
-  'profile',
-  'mode',
-  'cwd',
-  'stdin',
-  'timeout_ms',
-  'secrets',
-  'capture_paths',
-  'input_artifacts',
+  "argv",
+  "tools",
+  "profile",
+  "mode",
+  "cwd",
+  "stdin",
+  "timeout_ms",
+  "secrets",
+  "capture_paths",
+  "input_artifacts",
 ]);
-const PUBLIC_INPUT_ARTIFACT_FIELDS = new Set(['artifact_id', 'mount_path']);
+const PUBLIC_INPUT_ARTIFACT_FIELDS = new Set(["artifact_id", "mount_path"]);
 
 function record(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
   }
   return value as Record<string, unknown>;
@@ -67,7 +79,7 @@ function requiredString(
   label: string,
   maxLength = 512,
 ): string {
-  if (typeof value !== 'string' || !value || value.length > maxLength) {
+  if (typeof value !== "string" || !value || value.length > maxLength) {
     throw new Error(`${label} is invalid`);
   }
   return value;
@@ -77,70 +89,102 @@ function optionalString(
   value: unknown,
   maxLength = 1_000_000,
 ): string | undefined {
-  return typeof value === 'string' && value.length <= maxLength ? value : undefined;
+  return typeof value === "string" && value.length <= maxLength
+    ? value
+    : undefined;
 }
 
 function optionalFiniteNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
-/**
- * Resolve the opaque per-execution handle entirely in the parent isolate.
- * Compute never falls back to frozen binding props: all operations require a
- * live handle, even on a cold/non-reused Dynamic Worker.
- */
+function validateComputeCapacityAttribution(
+  props: ComputeBindingProps,
+): void {
+  const subscription = props.billingMode === "subscription_capacity";
+  const wallet = props.billingMode === "wallet";
+  if (
+    !UUID_RE.test(props.agentId) ||
+    !UUID_RE.test(props.capacityAgentId) ||
+    (!wallet && !subscription) ||
+    (wallet &&
+      (props.capacityAgentId !== props.agentId ||
+        props.capacityReceiptId !== null)) ||
+    (subscription &&
+      (typeof props.capacityReceiptId !== "string" ||
+        !UUID_RE.test(props.capacityReceiptId)))
+  ) {
+    throw new Error("galactic.compute capacity attribution is invalid.");
+  }
+}
+
 function resolveComputeExecution(
   props: ComputeBindingProps,
-  execCtxHandle: string | null | undefined,
-): ResolvedComputeExecution {
-  const execution = resolveExecutionContext(execCtxHandle);
-  if (!execution) {
-    throw new Error(
-      'galactic.compute requires the current execution context; the handle is missing, expired, or unknown.',
-    );
+): {
+  actor: ComputeControlPlaneActor;
+  executionDeadlineAtMs: number;
+  billingMode: "wallet" | "subscription_capacity";
+  capacityAgentId: string;
+} {
+  if (!UUID_RE.test(props.userId) || !UUID_RE.test(props.agentId)) {
+    throw new Error("galactic.compute trusted identity is invalid.");
   }
-  if (execution.appId !== props.agentId) {
-    throw new Error(
-      'galactic.compute execution context does not belong to this Agent.',
-    );
+  if (!UUID_RE.test(props.executionId)) {
+    throw new Error("galactic.compute trusted execution identity is invalid.");
   }
-  if (!execution.functionName || !execution.aiExecutionId) {
-    throw new Error('galactic.compute execution context is incomplete.');
-  }
+  const callerFunction = requiredString(
+    props.callerFunction,
+    "galactic.compute caller function",
+    256,
+  );
   if (
-    typeof execution.executionDeadlineAtMs !== 'number' ||
-    !Number.isFinite(execution.executionDeadlineAtMs)
+    typeof props.executionDeadlineAtMs !== "number" ||
+    !Number.isFinite(props.executionDeadlineAtMs) ||
+    props.executionDeadlineAtMs <= Date.now()
   ) {
-    throw new Error('galactic.compute execution deadline is unavailable.');
+    throw new Error(
+      "galactic.compute execution deadline is invalid or expired.",
+    );
   }
-  const billingMode = execution.capacityReceiptId
-    ? 'subscription_capacity' as const
-    : 'wallet' as const;
-  const capacityAgentId = execution.capacityAgentId || props.agentId;
-  if (!UUID_RE.test(capacityAgentId)) {
-    throw new Error('galactic.compute capacity attribution is unavailable.');
-  }
-  if (billingMode === 'subscription_capacity' && !execution.capacityAgentId) {
-    throw new Error('galactic.compute capacity attribution is unavailable.');
-  }
+  validateComputeCapacityAttribution(props);
   return {
     actor: {
       userId: props.userId,
       agentId: props.agentId,
-      callerFunction: execution.functionName,
-      executionId: execution.aiExecutionId,
+      callerFunction,
+      executionId: props.executionId,
     },
-    executionDeadlineAtMs: Math.floor(execution.executionDeadlineAtMs),
-    billingMode,
-    capacityAgentId,
+    executionDeadlineAtMs: Math.floor(props.executionDeadlineAtMs),
+    billingMode: props.billingMode,
+    capacityAgentId: props.capacityAgentId,
   };
+}
+
+/**
+ * A ctx.exports RPC invocation is a distinct Cloudflare TailItem. Mark it at
+ * method entry so the enclosing subscription-capacity execution owns all of
+ * its CPU, including adapter construction and failed operations. The receipt
+ * is public correlation data and never enters the tenant body or RPC result.
+ */
+export function markComputeBindingCapacity(
+  props: ComputeBindingProps,
+): void {
+  validateComputeCapacityAttribution(props);
+  if (props.capacityReceiptId) {
+    console.log(
+      `${CAPACITY_TAIL_MARKER}${
+        JSON.stringify({ receipt_id: props.capacityReceiptId })
+      }`,
+    );
+  }
 }
 
 export function resolveComputeActor(
   props: ComputeBindingProps,
-  execCtxHandle: string | null | undefined,
 ): ComputeControlPlaneActor {
-  return resolveComputeExecution(props, execCtxHandle).actor;
+  return resolveComputeExecution(props).actor;
 }
 
 /**
@@ -149,7 +193,7 @@ export function resolveComputeActor(
  * would make Agent code believe an unenforced option took effect.
  */
 export function projectComputeRequest(value: unknown): ComputeRequest {
-  const input = record(value, 'galactic.compute request');
+  const input = record(value, "galactic.compute request");
   const unsupported = Object.keys(input).find((key) =>
     !PUBLIC_REQUEST_FIELDS.has(key)
   );
@@ -162,17 +206,19 @@ export function projectComputeRequest(value: unknown): ComputeRequest {
   };
   for (
     const key of [
-      'profile',
-      'mode',
-      'cwd',
-      'stdin',
-      'timeout_ms',
+      "profile",
+      "mode",
+      "cwd",
+      "stdin",
+      "timeout_ms",
     ] as const
   ) {
     if (input[key] !== undefined) projected[key] = input[key];
   }
   if (input.secrets !== undefined) {
-    projected.secrets = Array.isArray(input.secrets) ? [...input.secrets] : input.secrets;
+    projected.secrets = Array.isArray(input.secrets)
+      ? [...input.secrets]
+      : input.secrets;
   }
   if (input.capture_paths !== undefined) {
     projected.capture_paths = Array.isArray(input.capture_paths)
@@ -183,7 +229,7 @@ export function projectComputeRequest(value: unknown): ComputeRequest {
     projected.input_artifacts = Array.isArray(input.input_artifacts)
       ? input.input_artifacts.map((artifact) => {
         if (
-          artifact === null || typeof artifact !== 'object' ||
+          artifact === null || typeof artifact !== "object" ||
           Array.isArray(artifact)
         ) {
           return artifact;
@@ -218,14 +264,14 @@ export async function deriveComputeIdempotencyKey(
   callIndex: unknown,
 ): Promise<string> {
   if (
-    typeof callIndex !== 'number' || !Number.isSafeInteger(callIndex) ||
+    typeof callIndex !== "number" || !Number.isSafeInteger(callIndex) ||
     callIndex < 1 || callIndex > 1_000_000
   ) {
-    throw new Error('galactic.compute call index is missing or invalid.');
+    throw new Error("galactic.compute call index is missing or invalid.");
   }
   const digest = new Uint8Array(
     await crypto.subtle.digest(
-      'SHA-256',
+      "SHA-256",
       new TextEncoder().encode(
         `galactic-compute-admission-v1\0${executionId}\0${callIndex}`,
       ),
@@ -237,24 +283,24 @@ export async function deriveComputeIdempotencyKey(
   digest[8] = (digest[8] & 0x3f) | 0x80;
   const hex = Array.from(
     digest.slice(0, 16),
-    (byte) => byte.toString(16).padStart(2, '0'),
-  ).join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${
-    hex.slice(20, 32)
-  }`;
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${
+    hex.slice(16, 20)
+  }-${hex.slice(20, 32)}`;
 }
 
 function sanitizeArtifact(value: unknown): ComputeArtifact {
-  const artifact = record(value, 'compute artifact');
-  const expiresAt = requiredString(artifact.expires_at, 'artifact expires_at');
+  const artifact = record(value, "compute artifact");
+  const expiresAt = requiredString(artifact.expires_at, "artifact expires_at");
   if (!Number.isFinite(Date.parse(expiresAt))) {
-    throw new Error('compute artifact expires_at is invalid.');
+    throw new Error("compute artifact expires_at is invalid.");
   }
   return {
-    artifact_id: requiredString(artifact.artifact_id, 'artifact_id'),
-    path: requiredString(artifact.path, 'artifact path', 4_096),
+    artifact_id: requiredString(artifact.artifact_id, "artifact_id"),
+    path: requiredString(artifact.path, "artifact path", 4_096),
     size_bytes: optionalFiniteNumber(artifact.size_bytes) ?? 0,
-    sha256: requiredString(artifact.sha256, 'artifact sha256', 128),
+    sha256: requiredString(artifact.sha256, "artifact sha256", 128),
     expires_at: expiresAt,
   };
 }
@@ -265,30 +311,30 @@ function sanitizeArtifact(value: unknown): ComputeArtifact {
  * fields are removed even if an integration accidentally returns them.
  */
 export function sanitizeComputeRun(value: unknown): ComputeRun {
-  const run = record(value, 'Galactic Compute control-plane response');
+  const run = record(value, "Galactic Compute control-plane response");
   const status = run.status;
   if (
-    typeof status !== 'string' ||
+    typeof status !== "string" ||
     !PUBLIC_RUN_STATUSES.has(status as ComputeRunStatus)
   ) {
     throw new Error(
-      'Galactic Compute control-plane response has an invalid status',
+      "Galactic Compute control-plane response has an invalid status",
     );
   }
   const tools = Array.isArray(run.tools)
-    ? run.tools.filter((tool): tool is string => typeof tool === 'string')
+    ? run.tools.filter((tool): tool is string => typeof tool === "string")
     : [];
   const output: ComputeRun = {
-    run_id: requiredString(run.run_id, 'run_id'),
-    receipt_id: requiredString(run.receipt_id, 'receipt_id'),
+    run_id: requiredString(run.run_id, "run_id"),
+    receipt_id: requiredString(run.receipt_id, "receipt_id"),
     status: status as ComputeRunStatus,
     profile: requiredString(
       run.profile,
-      'profile',
+      "profile",
       64,
-    ) as ComputeRun['profile'],
+    ) as ComputeRun["profile"],
     tools,
-    created_at: requiredString(run.created_at, 'created_at', 128),
+    created_at: requiredString(run.created_at, "created_at", 128),
   };
 
   const startedAt = optionalString(run.started_at, 128);
@@ -309,44 +355,77 @@ export function sanitizeComputeRun(value: unknown): ComputeRun {
   return output;
 }
 
-function publicBindingError(error: unknown): Error {
-  if (error instanceof PublicComputeControlPlaneError) {
-    const out = new Error(
-      `galactic.compute failed (${error.code}): ${error.message}`,
-    );
-    out.name = 'GalacticComputeError';
-    return out;
+function publicBindingError(error: unknown): PublicComputeControlPlaneError {
+  if (
+    error instanceof PublicComputeControlPlaneError &&
+    PUBLIC_COMPUTE_CODE_RE.test(error.code) &&
+    typeof error.message === "string" &&
+    error.message.length > 0 &&
+    error.message.length <= PUBLIC_COMPUTE_MESSAGE_MAX_LENGTH
+  ) {
+    return new PublicComputeControlPlaneError(error.code, error.message);
   }
   // Do not stringify the original exception: control-plane/database errors may
   // contain private transport details. The host can correlate via its own logs.
-  const out = new Error('galactic.compute failed: control plane unavailable.');
-  out.name = 'GalacticComputeError';
-  return out;
+  return new PublicComputeControlPlaneError(
+    CONTROL_PLANE_UNAVAILABLE_CODE,
+    CONTROL_PLANE_UNAVAILABLE_MESSAGE,
+  );
+}
+
+export type ComputeBindingRpcResult<T> =
+  | { ok: true; value: T }
+  | {
+    ok: false;
+    error: {
+      code: string;
+      message: string;
+    };
+  };
+
+/**
+ * Workers RPC does not preserve custom Error subclasses or their fields.
+ * Transport the public result/error as plain data and reconstruct the SDK
+ * error inside the Dynamic Worker instead.
+ */
+export async function captureComputeBindingRpc<T>(
+  operation: () => Promise<T>,
+): Promise<ComputeBindingRpcResult<T>> {
+  try {
+    return { ok: true, value: await operation() };
+  } catch (error) {
+    const safe = publicBindingError(error);
+    return {
+      ok: false,
+      error: {
+        code: safe.code,
+        message: safe.message,
+      },
+    };
+  }
 }
 
 export interface ComputeBindingOperations {
   call(
     request: unknown,
-    execCtxHandle?: string,
     callIndex?: number,
   ): Promise<ComputeResult>;
-  get(runId: unknown, execCtxHandle?: string): Promise<ComputeRun>;
-  cancel(runId: unknown, execCtxHandle?: string): Promise<ComputeRun>;
+  get(runId: unknown): Promise<ComputeRun>;
+  cancel(runId: unknown): Promise<ComputeRun>;
 }
 
 export function createComputeBindingOperations(
   props: ComputeBindingProps,
-  adapter: ComputeControlPlaneAdapter = requireComputeControlPlaneAdapter(),
+  adapter: ComputeControlPlaneAdapter,
 ): ComputeBindingOperations {
   const lookup = async (
-    method: 'get' | 'cancel',
+    method: "get" | "cancel",
     runIdValue: unknown,
-    execCtxHandle?: string,
   ): Promise<ComputeRun> => {
-    const runId = requiredString(runIdValue, 'compute run id', 128);
-    const actor = resolveComputeActor(props, execCtxHandle);
     try {
-      const result = method === 'get'
+      const runId = requiredString(runIdValue, "compute run id", 128);
+      const actor = resolveComputeActor(props);
+      const result = method === "get"
         ? await adapter.getComputeRunForAgent({ ...actor, runId })
         : await adapter.cancelComputeRunForAgent({ ...actor, runId });
       return sanitizeComputeRun(result);
@@ -356,10 +435,10 @@ export function createComputeBindingOperations(
   };
 
   return {
-    async call(request, execCtxHandle, callIndex) {
-      const execution = resolveComputeExecution(props, execCtxHandle);
-      const actor = execution.actor;
+    async call(request, callIndex) {
       try {
+        const execution = resolveComputeExecution(props);
+        const actor = execution.actor;
         const result = await adapter.admitComputeRun({
           ...actor,
           executionDeadlineAtMs: execution.executionDeadlineAtMs,
@@ -374,18 +453,19 @@ export function createComputeBindingOperations(
         const run = sanitizeComputeRun(result);
         return {
           ...run,
-          async: record(result, 'Galactic Compute control-plane response').async ===
-            true,
+          async:
+            record(result, "Galactic Compute control-plane response").async ===
+              true,
         } as ComputeResult;
       } catch (error) {
         throw publicBindingError(error);
       }
     },
-    get(runId, execCtxHandle) {
-      return lookup('get', runId, execCtxHandle);
+    get(runId) {
+      return lookup("get", runId);
     },
-    cancel(runId, execCtxHandle) {
-      return lookup('cancel', runId, execCtxHandle);
+    cancel(runId) {
+      return lookup("cancel", runId);
     },
   };
 }

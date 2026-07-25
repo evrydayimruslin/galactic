@@ -764,6 +764,45 @@ jobs:
               --reviewed-compute-secrets none \
             | tee "$EVIDENCE_DIR/compute-smoke-agent-refresh.txt"
 
+      - name: Verify the Compute binding path while admission is off
+        id: binding_preflight
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ (inputs.target == 'staging' && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ (inputs.target == 'production' && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ (inputs.target == 'staging' && secrets.ULTRALIGHT_TOKEN_STAGING) || (inputs.target == 'production' && secrets.ULTRALIGHT_TOKEN) }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.target == 'staging' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || (inputs.target == 'production' && secrets.GALACTIC_SMOKE_APP_ID) }}
+          COMPUTE_RELEASE_SHA: ${{ github.sha }}
+          COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
+          COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-release-evidence
+        run: |
+          set -euo pipefail
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target "$REQUESTED_TARGET" \
+            -- node scripts/smoke/compute-admitted-smoke.mjs --preflight-only
+          preflight_evidence="$EVIDENCE_DIR/compute-preflight-$REQUESTED_TARGET.json"
+          test -s "$preflight_evidence" || {
+            echo "The admission-off Compute binding preflight did not emit its evidence record." >&2
+            exit 1
+          }
+          jq -e \
+            --arg target "$REQUESTED_TARGET" \
+            --arg sha "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" '
+              .schema_version == 1 and
+              .kind == "galactic_compute_binding_preflight" and
+              .verified == true and
+              .target == $target and
+              .candidate_sha == $sha and
+              .workflow_run_id == $run_id and
+              .fixture_policy.enabled == false and
+              .probe.action == "status" and
+              .probe.run_id == "00000000-0000-4000-8000-000000000000" and
+              .probe.observed_http_status == 500 and
+              .probe.observed_public_compute_code == "COMPUTE_RUN_NOT_FOUND"
+            ' "$preflight_evidence" >/dev/null
+
       - name: Typecheck and dry-run global admission
         shell: bash
         working-directory: api
@@ -1133,15 +1172,19 @@ jobs:
           set -euo pipefail
           active_api_version_id="${{ steps.verify_global.outputs.api_version_id }}"
           active_api_version_tag="${{ steps.verify_global.outputs.api_version_tag }}"
+          preflight_file="compute-preflight-$REQUESTED_TARGET.json"
+          preflight_sha256="$(sha256sum "$EVIDENCE_DIR/$preflight_file" | cut -d ' ' -f 1)"
           smoke_file="compute-admitted-$REQUESTED_TARGET.json"
           smoke_sha256="$(sha256sum "$EVIDENCE_DIR/$smoke_file" | cut -d ' ' -f 1)"
           jq \
             --arg active_api_version_id "$active_api_version_id" \
             --arg active_api_version_tag "$active_api_version_tag" \
+            --arg preflight_file "$preflight_file" \
+            --arg preflight_sha256 "$preflight_sha256" \
             --arg smoke_file "$smoke_file" \
             --arg smoke_sha256 "$smoke_sha256" \
             --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
-              .schema_version = 4 |
+              .schema_version = 5 |
               .admission_enabled = true |
               .rollout_mode = "global" |
               .canary_allowlist = [] |
@@ -1152,6 +1195,11 @@ jobs:
                 enabled: true,
                 rollout_mode: "global",
                 canary_allowlist: []
+              } |
+              .binding_preflight = {
+                evidence_file: $preflight_file,
+                sha256: $preflight_sha256,
+                verified: true
               } |
               .admitted_smoke = {
                 evidence_file: $smoke_file,
@@ -1192,6 +1240,7 @@ jobs:
             echo "- Artifacts: private R2 access enforced; retention 30 days, 10 GiB and 10,000 physical outputs per owner."
             echo "- Container: active/ready on the exact registry digest; version evidence captured."
             echo "- Admission is **globally enabled** with an empty canary allowlist."
+            echo "- Admission-off binding/DB preflight passed; evidence SHA-256: \`$preflight_sha256\`."
             echo "- One bounded admitted job reached a verified terminal result; evidence SHA-256: \`$smoke_sha256\`."
             echo "- Any ambiguous enable, readback, or smoke result promotes the certified OFF API version."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -58,7 +58,7 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-19.compute-binding.v13";
+const SANDBOX_TEMPLATE_VERSION = "2026-07-25.compute-rpc-envelope.v14";
 
 const CAPACITY_TAIL_MARKER = "GALACTIC_CAPACITY_EXECUTION_V1 ";
 
@@ -268,6 +268,12 @@ interface DynamicWorkerEntrypointExports {
     props: {
       userId: string;
       agentId: string;
+      callerFunction: string;
+      executionId: string;
+      executionDeadlineAtMs: number;
+      billingMode: "wallet" | "subscription_capacity";
+      capacityAgentId: string;
+      capacityReceiptId: string | null;
     };
   }): unknown;
   AIBinding(input: {
@@ -550,31 +556,67 @@ function __ulAllowsAppCall(targetAppId, functionName) {
   });
 }
 
+// Workers RPC normalizes custom Error subclasses. The parent therefore returns
+// a by-value result envelope and this untrusted isolate reconstructs the public
+// SDK error locally. Only a closed COMPUTE_* code and a bounded public message
+// may cross this boundary.
+function __unwrapComputeRpc(envelope) {
+  if (
+    envelope && envelope.ok === true &&
+    Object.prototype.hasOwnProperty.call(envelope, 'value')
+  ) {
+    return envelope.value;
+  }
+  if (
+    envelope && envelope.ok === false && envelope.error &&
+    typeof envelope.error.code === 'string' &&
+    /^COMPUTE_[A-Z0-9_]{1,56}$/.test(envelope.error.code) &&
+    typeof envelope.error.message === 'string' &&
+    envelope.error.message.length > 0 &&
+    envelope.error.message.length <= 1024
+  ) {
+    var expected = new Error(
+      'galactic.compute failed (' + envelope.error.code + '): ' +
+      envelope.error.message
+    );
+    expected.name = 'GalacticComputeError';
+    expected.galacticDetails = { code: envelope.error.code };
+    throw expected;
+  }
+  var unavailable = new Error(
+    'galactic.compute failed (COMPUTE_CONTROL_PLANE_UNAVAILABLE): ' +
+    'Galactic Compute control plane is unavailable.'
+  );
+  unavailable.name = 'GalacticComputeError';
+  unavailable.galacticDetails = { code: 'COMPUTE_CONTROL_PLANE_UNAVAILABLE' };
+  throw unavailable;
+}
+
 // Callable function object: galactic.compute(request), with status and
 // cancellation methods namespaced on the same capability. All three calls go
-// through the parent-isolate RPC binding. The body receives only its opaque
-// execution-context handle — never a user bearer, platform key, or lease token.
+// through the parent-isolate RPC binding. The body receives no user bearer,
+// platform key, control-plane credential, lease token, or billing receipt.
 function __galacticCompute(request) {
   var e = globalThis.__rpcEnv;
   if (!e || !e.COMPUTE) {
     return Promise.reject(new Error('galactic.compute unavailable: add "compute:exec" to manifest permissions and run with an authenticated user context.'));
   }
   globalThis.__computeCallIndex = (globalThis.__computeCallIndex || 0) + 1;
-  return e.COMPUTE.call(request || {}, globalThis.__execHandle, globalThis.__computeCallIndex);
+  return e.COMPUTE.call(request || {}, globalThis.__computeCallIndex).then(__unwrapComputeRpc);
 }
 __galacticCompute.get = function(runId) {
   var e = globalThis.__rpcEnv;
   if (!e || !e.COMPUTE) {
     return Promise.reject(new Error('galactic.compute.get unavailable: compute:exec permission and an authenticated user context are required.'));
   }
-  return e.COMPUTE.get(runId, globalThis.__execHandle);
+  return e.COMPUTE.get(runId).then(__unwrapComputeRpc);
 };
 __galacticCompute.cancel = function(runId) {
   var e = globalThis.__rpcEnv;
   if (!e || !e.COMPUTE) {
     return Promise.reject(new Error('galactic.compute.cancel unavailable: compute:exec permission and an authenticated user context are required.'));
   }
-  return e.COMPUTE.cancel(runId, globalThis.__execHandle);
+  return e.COMPUTE.cancel(runId).then(__unwrapComputeRpc);
 };
 
 globalThis.ultralight = {
@@ -903,12 +945,10 @@ export default {
     // where app code calls globalThis.__rpcEnv.DB.* itself, skipping the SDK's
     // handle threading, to get operations metered against a stale baked hold).
     // Compute-capable Agents intentionally stay on one fresh isolate per
-    // invocation. The compatibility SDK currently carries its opaque
-    // execution handle and parent RPC bindings on globalThis; allowing a warm
-    // isolate to serve two different exported functions would let hostile
-    // top-level Agent code capture another request's handle and borrow that
-    // function's server-derived Compute grant. The control plane still checks
-    // every call, but the request-local identity must not be shareable first.
+    // invocation. Compute authority is fixed in the binding's trusted ctx.props;
+    // reusing an isolate would retain the first invocation's function, execution,
+    // deadline, and billing route. The control plane still checks every call,
+    // but stale request-local identity must never reach it in the first place.
     const useGetReuse = getEnv("EXECUTED_LOADER_GET_REUSE") === "1" &&
       typeof loader.get === "function" &&
       isolateReuseEligibility(config).eligible;
@@ -1019,25 +1059,6 @@ export default {
             appId: config.appId,
             userId: config.userId,
             requireExecCtx: useGetReuse,
-          },
-        });
-      }
-    }
-
-    // Galactic Compute is always a parent-isolate RPC capability. The binding
-    // receives host-derived user/Agent identity only; the opaque execution
-    // handle resolves caller function + parent execution per call. No bearer,
-    // provider key, platform key, or secret value is cloned into the body.
-    if (config.permissions.includes(COMPUTE_EXEC_PERMISSION)) {
-      if (config.testMode === true) {
-        if (ctx?.exports?.TestComputeBinding) {
-          bindings.COMPUTE = ctx.exports.TestComputeBinding({ props: {} });
-        }
-      } else if (config.user && ctx?.exports?.ComputeBinding) {
-        bindings.COMPUTE = ctx.exports.ComputeBinding({
-          props: {
-            userId: config.userId,
-            agentId: config.appId,
           },
         });
       }
@@ -1215,6 +1236,39 @@ export default {
         },
       });
     }
+    const executionDeadlineAtMs = Date.now() +
+      (config.timeoutMs || 30_000);
+    // Galactic Compute is always a parent-isolate RPC capability. Its complete
+    // invocation authority is fixed in trusted ctx.props because WorkerEntrypoint
+    // calls are stateless and cannot depend on this HTTP isolate's module-global
+    // execution registry. The opaque public capacity receipt is retained only
+    // in parent-side props for exact Tail CPU attribution; no bearer,
+    // provider/platform key, hold, or secret value is cloned into the body or
+    // binding props.
+    if (config.permissions.includes(COMPUTE_EXEC_PERMISSION)) {
+      if (config.testMode === true) {
+        if (ctx?.exports?.TestComputeBinding) {
+          bindings.COMPUTE = ctx.exports.TestComputeBinding({ props: {} });
+        }
+      } else if (config.user && ctx?.exports?.ComputeBinding) {
+        bindings.COMPUTE = ctx.exports.ComputeBinding({
+          props: {
+            userId: config.userId,
+            agentId: config.appId,
+            callerFunction: functionName,
+            executionId: config.executionId,
+            executionDeadlineAtMs,
+            billingMode: config.capacityReceiptId
+              ? "subscription_capacity"
+              : "wallet",
+            capacityAgentId: config.capacityReceiptId
+              ? (config.capacityAgentId ?? "")
+              : config.appId,
+            capacityReceiptId: config.capacityReceiptId ?? null,
+          },
+        });
+      }
+    }
     // Register this execution's per-call billing context and hand the sandbox
     // only an opaque handle (never the payer/receipt identity). The bindings
     // resolve it per-RPC — so under future warm-isolate reuse the context is
@@ -1229,7 +1283,7 @@ export default {
       cloudOperationBillingConfig: config.cloudOperationBillingConfig,
       callerContextToken: config.callerContextToken ?? null,
       routineContext: config.routineContext ?? null,
-      executionDeadlineAtMs: Date.now() + (config.timeoutMs || 30_000),
+      executionDeadlineAtMs,
     });
 
     // 5b. Warm-isolate reuse (Cloudflare Worker Loader get()). Reusing a warm

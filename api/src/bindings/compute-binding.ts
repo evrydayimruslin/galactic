@@ -2,41 +2,59 @@
 // narrow capability but never receives a human/Agent bearer, platform key,
 // control-plane credential, or compute-worker job token.
 
-import { WorkerEntrypoint } from 'cloudflare:workers';
+import { WorkerEntrypoint } from "cloudflare:workers";
 import type {
   ComputeRequest,
   ComputeResult,
   ComputeRun,
-} from '../../../shared/contracts/compute.ts';
+} from "../../../shared/contracts/compute.ts";
+import type { Env } from "../../lib/env.ts";
+import { createComputeControlPlaneAdapter } from "../../services/compute-orchestrator.ts";
 import {
+  captureComputeBindingRpc,
   type ComputeBindingProps,
+  type ComputeBindingRpcResult,
   createComputeBindingOperations,
-} from './compute-binding-core.ts';
+  markComputeBindingCapacity,
+} from "./compute-binding-core.ts";
 
-export class ComputeBinding extends WorkerEntrypoint<unknown, ComputeBindingProps> {
+export class ComputeBinding extends WorkerEntrypoint<Env, ComputeBindingProps> {
   async call(
     request: ComputeRequest,
-    execCtxHandle?: string,
     callIndex?: number,
-  ): Promise<ComputeResult> {
-    return await createComputeBindingOperations(this.ctx.props).call(
-      request,
-      execCtxHandle,
-      callIndex,
-    );
+  ): Promise<ComputeBindingRpcResult<ComputeResult>> {
+    return await captureComputeBindingRpc(async () => {
+      markComputeBindingCapacity(this.ctx.props);
+      globalThis.__env = this.env;
+      globalThis.__ctx = this.ctx;
+      return await createComputeBindingOperations(
+        this.ctx.props,
+        createComputeControlPlaneAdapter({ env: this.env }),
+      ).call(request, callIndex);
+    });
   }
 
-  async get(runId: string, execCtxHandle?: string): Promise<ComputeRun> {
-    return await createComputeBindingOperations(this.ctx.props).get(
-      runId,
-      execCtxHandle,
-    );
+  async get(runId: string): Promise<ComputeBindingRpcResult<ComputeRun>> {
+    return await captureComputeBindingRpc(async () => {
+      markComputeBindingCapacity(this.ctx.props);
+      globalThis.__env = this.env;
+      globalThis.__ctx = this.ctx;
+      return await createComputeBindingOperations(
+        this.ctx.props,
+        createComputeControlPlaneAdapter({ env: this.env }),
+      ).get(runId);
+    });
   }
 
-  async cancel(runId: string, execCtxHandle?: string): Promise<ComputeRun> {
-    return await createComputeBindingOperations(this.ctx.props).cancel(
-      runId,
-      execCtxHandle,
-    );
+  async cancel(runId: string): Promise<ComputeBindingRpcResult<ComputeRun>> {
+    return await captureComputeBindingRpc(async () => {
+      markComputeBindingCapacity(this.ctx.props);
+      globalThis.__env = this.env;
+      globalThis.__ctx = this.ctx;
+      return await createComputeBindingOperations(
+        this.ctx.props,
+        createComputeControlPlaneAdapter({ env: this.env }),
+      ).cancel(runId);
+    });
   }
 }

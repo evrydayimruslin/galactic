@@ -2,7 +2,7 @@ import type {
   ComputeRequest,
   ComputeResult,
   ComputeRun,
-} from '../../../shared/contracts/compute.ts';
+} from "../../../shared/contracts/compute.ts";
 
 /**
  * Identity for an in-Agent compute call. Every field is derived in the parent
@@ -18,10 +18,10 @@ export interface ComputeControlPlaneActor {
 export interface ComputeAdmissionInput extends ComputeControlPlaneActor {
   /** Stable UUID derived from parent execution + SDK call index. */
   idempotencyKey: string;
-  /** Absolute parent-isolate deadline, resolved host-side from the opaque handle. */
+  /** Absolute parent-isolate deadline fixed in trusted binding props. */
   executionDeadlineAtMs: number;
   /** Trusted billing route inherited from the enclosing Agent execution. */
-  billingMode: 'wallet' | 'subscription_capacity';
+  billingMode: "wallet" | "subscription_capacity";
   /** Root Agent whose account/Agent capacity pool owns the Compute lease. */
   capacityAgentId: string;
   request: ComputeRequest;
@@ -53,32 +53,7 @@ export class PublicComputeControlPlaneError extends Error {
 
   constructor(code: string, message: string) {
     super(message);
-    this.name = 'PublicComputeControlPlaneError';
+    this.name = "PublicComputeControlPlaneError";
     this.code = code;
   }
-}
-
-let installedAdapter: ComputeControlPlaneAdapter | null = null;
-
-/**
- * Install the API control-plane implementation during Worker bootstrap.
- * Reinstalling a different implementation in one isolate is refused so one
- * request cannot swap the authority boundary for another.
- */
-export function installComputeControlPlaneAdapter(
-  adapter: ComputeControlPlaneAdapter,
-): void {
-  if (installedAdapter && installedAdapter !== adapter) {
-    throw new Error(
-      'Galactic Compute control-plane adapter is already installed',
-    );
-  }
-  installedAdapter = adapter;
-}
-
-export function requireComputeControlPlaneAdapter(): ComputeControlPlaneAdapter {
-  if (!installedAdapter) {
-    throw new Error('Galactic Compute control-plane adapter is not installed');
-  }
-  return installedAdapter;
 }

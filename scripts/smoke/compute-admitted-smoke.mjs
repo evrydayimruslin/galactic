@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 
 export const COMPUTE_SMOKE_FUNCTION = "run_compute_smoke";
 export const COMPUTE_SMOKE_KIND = "galactic_compute_admitted_smoke";
+export const COMPUTE_PREFLIGHT_KIND = "galactic_compute_binding_preflight";
 export const COMPUTE_SMOKE_SCHEMA_VERSION = 1;
 export const COMPUTE_SMOKE_TARGETS = Object.freeze({
   staging: Object.freeze({
@@ -33,11 +34,18 @@ const OWNER_ACCESS_TOKEN_ENV = "GALACTIC_OWNER_ACCESS_TOKEN";
 const PUBLIC_COMPUTE_CODE_RE = /^COMPUTE_[A-Z0-9_]{1,56}$/u;
 const PUBLIC_COMPUTE_ERROR_RE =
   /^galactic\.compute failed \((COMPUTE_[A-Z0-9_]{1,56})\):(?: |$)/u;
+const RPC_PUBLIC_COMPUTE_ERROR_RE =
+  /^GalacticComputeError: galactic\.compute failed \((COMPUTE_[A-Z0-9_]{1,56})\):(?: |$)/u;
+const PUBLIC_COMPUTE_UNAVAILABLE_MESSAGE =
+  "galactic.compute failed: control plane unavailable.";
+const RPC_PUBLIC_COMPUTE_UNAVAILABLE_MESSAGE =
+  `GalacticComputeError: ${PUBLIC_COMPUTE_UNAVAILABLE_MESSAGE}`;
 const JSON_MEDIA_TYPE_RE =
   /^application\/(?:json|[a-z0-9.+-]+\+json)(?:\s*;|$)/iu;
 const HTTP_DIAGNOSTIC_STAGES = new Set([
   "settings_lookup",
   "settings_enable",
+  "compute_preflight",
   "compute_start",
   "owner_run_lookup",
   "compute_status",
@@ -74,6 +82,9 @@ const SMOKE_LIMITS = Object.freeze({
   maxArtifactBytes: 1_048_576,
   maxArtifacts: 1,
 });
+const COMPUTE_PREFLIGHT_RUN_ID =
+  "00000000-0000-4000-8000-000000000000";
+const COMPUTE_PREFLIGHT_EXPECTED_CODE = "COMPUTE_RUN_NOT_FOUND";
 
 export class ComputeSmokeError extends Error {
   constructor(
@@ -235,6 +246,16 @@ async function safeHttpPublicComputeCode(response) {
   if (!payload) return null;
   const error = record(payload?.error);
   const details = record(error?.details);
+  const message = typeof error?.message === "string" ? error.message : "";
+  if (error?.type === "Error") {
+    const rpcComputeCode =
+      message.match(RPC_PUBLIC_COMPUTE_ERROR_RE)?.[1] || "";
+    if (PUBLIC_COMPUTE_CODE_RE.test(rpcComputeCode)) return rpcComputeCode;
+    if (message === RPC_PUBLIC_COMPUTE_UNAVAILABLE_MESSAGE) {
+      return "COMPUTE_CONTROL_PLANE_UNAVAILABLE";
+    }
+    return null;
+  }
   for (
     const candidate of [
       payload?.code,
@@ -251,10 +272,9 @@ async function safeHttpPublicComputeCode(response) {
     }
   }
   if (error?.type !== "GalacticComputeError") return null;
-  const message = typeof error?.message === "string" ? error.message : "";
   const computeCode = message.match(PUBLIC_COMPUTE_ERROR_RE)?.[1] || "";
   if (PUBLIC_COMPUTE_CODE_RE.test(computeCode)) return computeCode;
-  if (message === "galactic.compute failed: control plane unavailable.") {
+  if (message === PUBLIC_COMPUTE_UNAVAILABLE_MESSAGE) {
     return "COMPUTE_CONTROL_PLANE_UNAVAILABLE";
   }
   return null;
@@ -281,10 +301,14 @@ export function computeSmokeConfigFromEnv(
   argv = [],
 ) {
   const cleanupOnly = argv.length === 1 && argv[0] === "--cleanup-only";
-  if (argv.length > (cleanupOnly ? 1 : 0)) {
+  const preflightOnly = argv.length === 1 && argv[0] === "--preflight-only";
+  if (
+    argv.length > 1 ||
+    (argv.length === 1 && !cleanupOnly && !preflightOnly)
+  ) {
     fail(
       "INVALID_CONFIGURATION",
-      "Usage: compute-admitted-smoke.mjs [--cleanup-only]",
+      "Usage: compute-admitted-smoke.mjs [--cleanup-only|--preflight-only]",
     );
   }
   const target = smokeTarget(env.GALACTIC_SMOKE_TARGET);
@@ -326,9 +350,12 @@ export function computeSmokeConfigFromEnv(
     ),
     evidencePath: resolve(
       evidenceDir,
-      `compute-admitted-${target.name}.json`,
+      preflightOnly
+        ? `compute-preflight-${target.name}.json`
+        : `compute-admitted-${target.name}.json`,
     ),
     cleanupOnly,
+    preflightOnly,
   };
 }
 
@@ -771,8 +798,142 @@ export async function writeComputeSmokeEvidence(path, evidence) {
   });
 }
 
+function failureDiagnostic(failure) {
+  if (
+    !HTTP_DIAGNOSTIC_STAGES.has(failure?.requestStage) ||
+    !Number.isInteger(failure?.httpStatus) ||
+    failure.httpStatus < 400 ||
+    failure.httpStatus > 599
+  ) {
+    return null;
+  }
+  return {
+    stage: failure.requestStage,
+    http_status: failure.httpStatus,
+    ...(PUBLIC_COMPUTE_CODE_RE.test(failure?.publicComputeCode || "")
+      ? { public_compute_code: failure.publicComputeCode }
+      : {}),
+  };
+}
+
+function preflightEvidenceFor(
+  config,
+  { enabled, revision },
+  success,
+  failure,
+  now,
+) {
+  const diagnostic = failureDiagnostic(failure);
+  return {
+    schema_version: COMPUTE_SMOKE_SCHEMA_VERSION,
+    kind: COMPUTE_PREFLIGHT_KIND,
+    verified: success === true,
+    target: config.target,
+    candidate_sha: config.candidateSha,
+    workflow_run_id: config.workflowRunId,
+    agent_id: config.agentId,
+    function_name: COMPUTE_SMOKE_FUNCTION,
+    fixture_policy: {
+      enabled,
+      revision,
+    },
+    probe: {
+      action: "status",
+      run_id: COMPUTE_PREFLIGHT_RUN_ID,
+      expected_http_status: 500,
+      expected_public_compute_code: COMPUTE_PREFLIGHT_EXPECTED_CODE,
+      ...(success
+        ? {
+          observed_http_status: 500,
+          observed_public_compute_code: COMPUTE_PREFLIGHT_EXPECTED_CODE,
+        }
+        : {}),
+    },
+    generated_at: new Date(now()).toISOString(),
+    ...(failure?.code ? { failure_code: failure.code } : {}),
+    ...(diagnostic ? { failure_diagnostic: diagnostic } : {}),
+  };
+}
+
+async function runComputeBindingPreflight(
+  config,
+  context,
+  { now, writeEvidence },
+) {
+  let enabled = null;
+  let revision = null;
+  let primaryError = null;
+  let success = false;
+
+  try {
+    const baseline = validateSettingsView(await getSettings(context));
+    enabled = baseline.settings.enabled;
+    revision = baseline.revision;
+    if (enabled !== false) {
+      fail(
+        "FIXTURE_ALREADY_ENABLED",
+        "The dedicated release fixture must be disabled before the preflight.",
+      );
+    }
+    try {
+      await invokeSmokeFunction(
+        context,
+        { action: "status", run_id: COMPUTE_PREFLIGHT_RUN_ID },
+        "Compute binding preflight",
+        "compute_preflight",
+      );
+      fail(
+        "PREFLIGHT_UNEXPECTED_SUCCESS",
+        "Compute binding preflight unexpectedly found the nonexistent run.",
+      );
+    } catch (error) {
+      if (
+        error instanceof ComputeSmokeError &&
+        error.code === "HTTP_ERROR" &&
+        error.httpStatus === 500 &&
+        error.publicComputeCode === COMPUTE_PREFLIGHT_EXPECTED_CODE &&
+        error.requestStage === "compute_preflight"
+      ) {
+        success = true;
+      } else {
+        throw error;
+      }
+    }
+  } catch (error) {
+    primaryError = error instanceof ComputeSmokeError
+      ? error
+      : new ComputeSmokeError(
+        "COMPUTE_PREFLIGHT_FAILED",
+        "The Compute binding preflight failed.",
+      );
+  }
+
+  const evidence = preflightEvidenceFor(
+    config,
+    { enabled, revision },
+    success && !primaryError,
+    primaryError,
+    now,
+  );
+  try {
+    await writeEvidence(config.evidencePath, evidence);
+  } catch {
+    primaryError = new ComputeSmokeError(
+      "EVIDENCE_WRITE_FAILED",
+      "Compute preflight evidence could not be written.",
+    );
+  }
+  if (!primaryError && success) return evidence;
+  throw primaryError ??
+    new ComputeSmokeError(
+      "COMPUTE_PREFLIGHT_FAILED",
+      "The Compute binding preflight failed.",
+    );
+}
+
 function evidenceFor(config, state, success, failure, now) {
   const markerDigest = sha256(config.marker);
+  const diagnostic = failureDiagnostic(failure);
   return {
     schema_version: COMPUTE_SMOKE_SCHEMA_VERSION,
     kind: COMPUTE_SMOKE_KIND,
@@ -804,20 +965,7 @@ function evidenceFor(config, state, success, failure, now) {
     },
     generated_at: new Date(now()).toISOString(),
     ...(failure?.code ? { failure_code: failure.code } : {}),
-    ...(HTTP_DIAGNOSTIC_STAGES.has(failure?.requestStage) &&
-        Number.isInteger(failure?.httpStatus) &&
-        failure.httpStatus >= 400 &&
-        failure.httpStatus <= 599
-      ? {
-        failure_diagnostic: {
-          stage: failure.requestStage,
-          http_status: failure.httpStatus,
-          ...(PUBLIC_COMPUTE_CODE_RE.test(failure?.publicComputeCode || "")
-            ? { public_compute_code: failure.publicComputeCode }
-            : {}),
-        },
-      }
-      : {}),
+    ...(diagnostic ? { failure_diagnostic: diagnostic } : {}),
   };
 }
 
@@ -851,6 +999,12 @@ export async function runAdmittedComputeSmoke(
       `Compute smoke API does not match the pinned ${target.name} origin.`,
     );
   }
+  if (config?.cleanupOnly === true && config?.preflightOnly === true) {
+    fail(
+      "INVALID_CONFIGURATION",
+      "Compute smoke cannot run cleanup-only and preflight-only together.",
+    );
+  }
   const context = {
     fetchImpl,
     apiBase: target.apiBase,
@@ -861,6 +1015,12 @@ export async function runAdmittedComputeSmoke(
     agentId: assertUuid(config.agentId, "GALACTIC_SMOKE_APP_ID"),
     requestTimeoutMs,
   };
+  if (config?.preflightOnly === true) {
+    return await runComputeBindingPreflight(config, context, {
+      now,
+      writeEvidence,
+    });
+  }
   const state = {
     runId: null,
     computeReceiptId: null,
@@ -1003,7 +1163,11 @@ export async function runAdmittedComputeSmoke(
 async function main(argv, env = process.env) {
   const config = computeSmokeConfigFromEnv(env, argv);
   const evidence = await runAdmittedComputeSmoke(config);
-  if (config.cleanupOnly) {
+  if (config.preflightOnly) {
+    console.log(
+      `Galactic Compute ${config.target} binding preflight verified while admission is off.`,
+    );
+  } else if (config.cleanupOnly) {
     console.log(
       `Galactic Compute ${config.target} fixture is disabled; cleanup evidence written.`,
     );

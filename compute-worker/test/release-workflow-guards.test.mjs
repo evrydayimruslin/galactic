@@ -30,7 +30,9 @@ describe("Compute release workflow static guards", () => {
     expect(deploy).toContain("scripts/hash-migrations.mjs");
     expect(deploy).toContain("20260720124500_compute_capacity_conservation.sql");
     expect(deploy).toContain("20260720125000_compute_execution_recovery.sql");
-    expect(deploy).toContain(".schema_version = 4");
+    expect(deploy).toContain(".schema_version = 5");
+    expect(deploy).toContain("binding_preflight = {");
+    expect(deploy).toContain("preflight_sha256");
     expect(deploy).toContain("schema-workflow-job.json");
   });
 
@@ -70,6 +72,7 @@ describe("Compute release workflow static guards", () => {
     expect(admission).toContain("ref: ${{ steps.resolve_release.outputs.release_sha }}");
     expect(admission).toContain('pushd "$API_SOURCE_ROOT/api"');
     expect(resolveStep).toContain("admitted_smoke.sha256");
+    expect(resolveStep).toContain("binding_preflight.sha256");
     expect(admission).not.toContain("COMPUTE_ENABLED:1");
     expect(admission).not.toContain("inputs.action");
     expect(admission).not.toContain("required_reviewers");
@@ -84,6 +87,12 @@ describe("Compute release workflow static guards", () => {
     const refreshFixture = deploy.indexOf(
       "Review, promote, and verify exact fixed Compute smoke Agent while admission is off",
     );
+    const bindingPreflight = deploy.indexOf(
+      "Verify the Compute binding path while admission is off",
+    );
+    const globalDryRun = deploy.indexOf(
+      "Typecheck and dry-run global admission",
+    );
     const enableGlobal = deploy.indexOf("Enable global admission from the exact certified pair");
     const verifyGlobal = deploy.indexOf("Verify exact global admission postcondition");
     const admittedSmoke = deploy.indexOf("Run one bounded admitted Compute job");
@@ -92,7 +101,9 @@ describe("Compute release workflow static guards", () => {
     const finalize = deploy.indexOf("Finalize globally enabled release evidence");
     expect(certifyOff).toBeGreaterThan(0);
     expect(refreshFixture).toBeGreaterThan(certifyOff);
-    expect(enableGlobal).toBeGreaterThan(refreshFixture);
+    expect(bindingPreflight).toBeGreaterThan(refreshFixture);
+    expect(globalDryRun).toBeGreaterThan(bindingPreflight);
+    expect(enableGlobal).toBeGreaterThan(globalDryRun);
     expect(verifyGlobal).toBeGreaterThan(enableGlobal);
     expect(admittedSmoke).toBeGreaterThan(verifyGlobal);
     expect(postSmokeFence).toBeGreaterThan(admittedSmoke);
@@ -103,6 +114,24 @@ describe("Compute release workflow static guards", () => {
     expect(deploy).toContain("steps.post_smoke_fence.outcome != 'success'");
     expect(deploy).toContain('versions deploy "$off_api_version_id@100%"');
     expect(deploy).toContain("compute-admitted-$REQUESTED_TARGET.json");
+    expect(deploy).toContain("compute-preflight-$REQUESTED_TARGET.json");
+    const preflightStep = deploy.slice(bindingPreflight, globalDryRun);
+    expect(preflightStep).toContain(
+      "scripts/smoke/with-staging-owner-session.mjs",
+    );
+    expect(preflightStep).toContain(
+      "scripts/smoke/compute-admitted-smoke.mjs --preflight-only",
+    );
+    expect(preflightStep).toContain(
+      '"00000000-0000-4000-8000-000000000000"',
+    );
+    expect(preflightStep).toContain(
+      '"COMPUTE_RUN_NOT_FOUND"',
+    );
+    expect(preflightStep).not.toContain("COMPUTE_ENABLED:1");
+    expect(preflightStep).not.toContain("--token");
+    expect(preflightStep).not.toContain("--app-id");
+    expect(preflightStep).not.toContain("GALACTIC_OWNER_ACCESS_TOKEN:");
     const fixtureStep = deploy.slice(refreshFixture, enableGlobal);
     const fixtureScript = await text(
       "scripts/smoke/interface-deploy-smoke.mjs",
