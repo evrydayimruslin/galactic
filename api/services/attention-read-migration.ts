@@ -7,7 +7,11 @@ import type {
   LaunchOperatorAttentionProjection,
   LaunchOperatorConditionCode,
 } from '../../shared/contracts/launch.ts';
-import { isOperatorAttentionCursor } from './operator-item-reader.ts';
+import {
+  isOperatorAttentionCursor,
+  operatorItemReadFailureStage,
+  type OperatorItemReadFailureStage,
+} from './operator-item-reader.ts';
 
 const OPERATOR_ATTENTION_READ_MODE_ENV = 'OPERATOR_ATTENTION_READ_MODE';
 
@@ -232,6 +236,7 @@ function migrationLog(
   source: LaunchAttentionReadSource,
   comparison: AttentionSemanticComparison,
   fallbackReason: string | null,
+  canonicalFailureStage: OperatorItemReadFailureStage | null,
 ): void {
   (log ?? console.info)({
     event: 'operator_attention_read_comparison',
@@ -241,6 +246,7 @@ function migrationLog(
     status: comparison.status,
     reasons: comparison.reasons,
     fallbackReason,
+    canonicalFailureStage,
     legacy: comparison.legacy,
     canonical: comparison.canonical,
   });
@@ -277,6 +283,9 @@ export async function readAttentionWithMigration<
   ]);
   const legacy = legacyResult.status === 'fulfilled' ? legacyResult.value : null;
   const canonical = canonicalResult.status === 'fulfilled' ? canonicalResult.value : null;
+  const canonicalFailureStage = canonicalResult.status === 'rejected'
+    ? operatorItemReadFailureStage(canonicalResult.reason)
+    : null;
   const comparison = compareAttentionSemantics(
     legacy,
     canonical,
@@ -293,6 +302,7 @@ export async function readAttentionWithMigration<
       'legacy',
       comparison,
       canonical ? null : 'canonical_read_failed',
+      canonicalFailureStage,
     );
     return {
       ...requiredLegacy,
@@ -312,6 +322,7 @@ export async function readAttentionWithMigration<
       'legacy',
       comparison,
       'legacy_cursor_compatibility',
+      canonicalFailureStage,
     );
     return {
       ...legacy,
@@ -328,6 +339,7 @@ export async function readAttentionWithMigration<
       'canonical',
       comparison,
       null,
+      null,
     );
     return {
       ...legacy,
@@ -343,6 +355,7 @@ export async function readAttentionWithMigration<
       'canonical',
       comparison,
       'legacy_read_failed',
+      null,
     );
     return {
       ...dependencies.buildLegacyFallback(canonical),
@@ -358,6 +371,7 @@ export async function readAttentionWithMigration<
       'legacy',
       comparison,
       'canonical_read_failed',
+      canonicalFailureStage,
     );
     return { ...legacy, readSource: 'legacy' };
   }

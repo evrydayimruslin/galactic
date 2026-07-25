@@ -233,6 +233,7 @@ Deno.test('shadow mode isolates canonical failures and records bounded compariso
   assertEquals(result.operatorItems, undefined);
   assertEquals(events.length, 1);
   assertEquals(events[0]?.fallbackReason, 'canonical_read_failed');
+  assertEquals(events[0]?.canonicalFailureStage, 'unknown');
   assertEquals(JSON.stringify(events).includes('database unavailable'), false);
 });
 

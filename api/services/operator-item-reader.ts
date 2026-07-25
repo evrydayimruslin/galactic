@@ -99,6 +99,28 @@ type OperatorItemReadErrorCode =
   | "READ_FAILED"
   | "INVALID_RESPONSE";
 
+export type OperatorItemReadFailureStage =
+  | "reader_not_configured"
+  | "request_invalid"
+  | "rpc_read_failed"
+  | "rpc_response_invalid"
+  | "entry_shape_invalid"
+  | "item_identity_invalid"
+  | "item_class_invalid"
+  | "item_severity_invalid"
+  | "item_fanout_invalid"
+  | "item_scope_invalid"
+  | "item_diagnosis_invalid"
+  | "item_evidence_invalid"
+  | "item_remediation_invalid"
+  | "item_ordering_invalid"
+  | "item_recovery_invalid"
+  | "item_attention_state_invalid"
+  | "cursor_invalid"
+  | "agent_counts_invalid"
+  | "aggregate_counts_invalid"
+  | "unknown";
+
 export class OperatorItemReadError extends Error {
   constructor(
     readonly code: OperatorItemReadErrorCode,
@@ -108,6 +130,73 @@ export class OperatorItemReadError extends Error {
     super(message);
     this.name = "OperatorItemReadError";
   }
+}
+
+/**
+ * Convert a canonical-reader failure into a bounded, secret-safe stage for
+ * shadow-rollout telemetry. Reader messages contain only code-owned labels,
+ * but the rollout contract deliberately emits this smaller allowlist instead
+ * of copying exception text into logs.
+ */
+export function operatorItemReadFailureStage(
+  error: unknown,
+): OperatorItemReadFailureStage {
+  if (!(error instanceof OperatorItemReadError)) return "unknown";
+  if (error.code === "SERVICE_UNAVAILABLE") return "reader_not_configured";
+  if (error.code === "INVALID_REQUEST") return "request_invalid";
+  if (error.code === "READ_FAILED") return "rpc_read_failed";
+
+  const message = error.message;
+  if (message.includes("cursor")) return "cursor_invalid";
+  if (message.includes("Canonical Agent count")) return "agent_counts_invalid";
+  if (
+    message.includes("counts are inconsistent") ||
+    message === "openCount is invalid." ||
+    message === "requiresDecisionCount is invalid." ||
+    message === "blockingCount is invalid."
+  ) {
+    return "aggregate_counts_invalid";
+  }
+  if (message.startsWith("Operator Attention entry")) {
+    return "entry_shape_invalid";
+  }
+  if (
+    message.includes("conditionKey") ||
+    /operator item \d+ id is invalid\./u.test(message)
+  ) {
+    return "item_identity_invalid";
+  }
+  if (message.includes(" class")) return "item_class_invalid";
+  if (message.includes(" severity")) return "item_severity_invalid";
+  if (
+    message.includes(" fanout") ||
+    message.includes("affected Agent")
+  ) {
+    return "item_fanout_invalid";
+  }
+  if (
+    message.includes(" scope") ||
+    message.includes("crosses Agent scope")
+  ) {
+    return "item_scope_invalid";
+  }
+  if (message.startsWith("Evidence ")) return "item_evidence_invalid";
+  if (message.includes(" diagnosis")) return "item_diagnosis_invalid";
+  if (message.includes("emediation")) return "item_remediation_invalid";
+  if (
+    message.includes(" ordering") ||
+    message.includes(" dependencies")
+  ) {
+    return "item_ordering_invalid";
+  }
+  if (message.includes(" recovery")) return "item_recovery_invalid";
+  if (
+    message.includes("Attention state") ||
+    message.includes("active Attention item")
+  ) {
+    return "item_attention_state_invalid";
+  }
+  return "rpc_response_invalid";
 }
 
 function fail(

@@ -12,6 +12,7 @@ import { compileOperatorItems } from "./operator-issue-compiler.ts";
 import {
   isOperatorAttentionCursor,
   OperatorItemReadError,
+  operatorItemReadFailureStage,
   readOperatorAttentionPage,
 } from "./operator-item-reader.ts";
 
@@ -28,6 +29,33 @@ const AGENT_B = {
 };
 const ITEM_ID = "33333333-3333-4333-8333-333333333333";
 const DETECTED_AT = "2026-07-24T18:00:00.000Z";
+
+Deno.test("operator item reader exposes only allowlisted rollout failure stages", () => {
+  assertEquals(
+    operatorItemReadFailureStage(
+      new OperatorItemReadError(
+        "INVALID_RESPONSE",
+        "Operator item 0 diagnosis is invalid.",
+        503,
+      ),
+    ),
+    "item_diagnosis_invalid",
+  );
+  assertEquals(
+    operatorItemReadFailureStage(
+      new OperatorItemReadError(
+        "READ_FAILED",
+        "upstream body must never be copied",
+        503,
+      ),
+    ),
+    "rpc_read_failed",
+  );
+  assertEquals(
+    operatorItemReadFailureStage(new Error("secret-shaped arbitrary error")),
+    "unknown",
+  );
+});
 
 function entry(): LaunchOperatorAttentionEntry {
   const candidate = compileOperatorItems([

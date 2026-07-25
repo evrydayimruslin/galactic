@@ -17,6 +17,7 @@ function comparison({
   status = "match",
   reasons = [],
   fallbackReason = null,
+  canonicalFailureStage = null,
   mode = "shadow",
   source = "legacy",
   legacy = {},
@@ -31,6 +32,7 @@ function comparison({
     status,
     reasons,
     fallbackReason,
+    canonicalFailureStage,
     legacy: {
       openCount: 1,
       requiresDecisionCount: 0,
@@ -277,8 +279,19 @@ for (
     ],
     [
       "fallback",
-      comparison({ fallbackReason: "canonical_read_failed" }),
+      comparison({
+        fallbackReason: "canonical_read_failed",
+        canonicalFailureStage: "rpc_read_failed",
+      }),
       "READ_FALLBACK",
+    ],
+    [
+      "unknown canonical failure stage",
+      comparison({
+        fallbackReason: "canonical_read_failed",
+        canonicalFailureStage: "secret-shaped-arbitrary-stage",
+      }),
+      "UNKNOWN_CANONICAL_FAILURE_STAGE",
     ],
     [
       "drift",

@@ -251,7 +251,9 @@ async function probeOwnerSurface({
 }
 
 function expectedPrimaryRoutineConditionKey(agentId) {
-  return `agent:${agentId}:requirement:${PRIMARY_ROUTINE_REQUIREMENT_ID}`;
+  return `agent:${encodeURIComponent(agentId)}:requirement:${
+    encodeURIComponent(PRIMARY_ROUTINE_REQUIREMENT_ID)
+  }`;
 }
 
 function primaryRoutineBlocker(canonical, agentId, label) {

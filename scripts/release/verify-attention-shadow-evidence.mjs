@@ -16,6 +16,7 @@ const DEFAULT_MAX_TELEMETRY_SAMPLES = 200;
 
 const TELEMETRY_KEYS = [
   "canonical",
+  "canonicalFailureStage",
   "event",
   "fallbackReason",
   "legacy",
@@ -25,6 +26,28 @@ const TELEMETRY_KEYS = [
   "status",
   "surface",
 ];
+const CANONICAL_FAILURE_STAGES = new Set([
+  "reader_not_configured",
+  "request_invalid",
+  "rpc_read_failed",
+  "rpc_response_invalid",
+  "entry_shape_invalid",
+  "item_identity_invalid",
+  "item_class_invalid",
+  "item_severity_invalid",
+  "item_fanout_invalid",
+  "item_scope_invalid",
+  "item_diagnosis_invalid",
+  "item_evidence_invalid",
+  "item_remediation_invalid",
+  "item_ordering_invalid",
+  "item_recovery_invalid",
+  "item_attention_state_invalid",
+  "cursor_invalid",
+  "agent_counts_invalid",
+  "aggregate_counts_invalid",
+  "unknown",
+]);
 const LEGACY_KEYS = [
   "mappedConditions",
   "openCount",
@@ -288,10 +311,27 @@ function validateComparison(value) {
       "Comparison telemetry is not a shadow read served by legacy.",
     );
   }
+  if (
+    value.canonicalFailureStage !== null &&
+    !CANONICAL_FAILURE_STAGES.has(value.canonicalFailureStage)
+  ) {
+    fail(
+      "UNKNOWN_CANONICAL_FAILURE_STAGE",
+      "Comparison telemetry has an unknown canonical failure stage.",
+    );
+  }
   if (value.fallbackReason !== null) {
     fail(
       "READ_FALLBACK",
-      "Comparison telemetry reports a read fallback.",
+      value.canonicalFailureStage === null
+        ? "Comparison telemetry reports a read fallback."
+        : `Comparison telemetry reports a read fallback at the allowlisted ${value.canonicalFailureStage} stage.`,
+    );
+  }
+  if (value.canonicalFailureStage !== null) {
+    fail(
+      "UNEXPECTED_CANONICAL_FAILURE_STAGE",
+      "Healthy comparison telemetry cannot contain a canonical failure stage.",
     );
   }
   if (value.status !== "match" && value.status !== "expected_difference") {

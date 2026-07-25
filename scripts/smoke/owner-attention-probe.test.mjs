@@ -16,7 +16,7 @@ const ITEM_ID = "c139f785-4977-4eed-adc6-7d68d0e787bb";
 const OTHER_ITEM_ID = "29124d3d-a4df-4867-b956-c7f4f64db906";
 const UNRELATED_ITEM_ID = "da092fe1-b667-4703-b639-75207e09f937";
 const CONDITION_KEY =
-  `agent:${AGENT_ID}:requirement:routine:primary`;
+  `agent:${AGENT_ID}:requirement:routine%3Aprimary`;
 
 function privateJson(body, status = 200, cacheControl = "private, no-store") {
   return new Response(JSON.stringify(body), {
