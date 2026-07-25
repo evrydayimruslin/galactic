@@ -53,7 +53,20 @@ Deno.test("operator item reader exposes only allowlisted rollout failure stages"
   );
   assertEquals(
     operatorItemReadFailureStage(new Error("secret-shaped arbitrary error")),
-    "unknown",
+    "unexpected_error",
+  );
+  assertEquals(
+    operatorItemReadFailureStage({
+      name: "OperatorItemReadError",
+      code: "INVALID_RESPONSE",
+      status: 503,
+      message: "Operator item 0 recovery is invalid.",
+    }),
+    "item_recovery_invalid",
+  );
+  assertEquals(
+    operatorItemReadFailureStage(new TypeError("private value")),
+    "unexpected_type_error",
   );
 });
 

@@ -46,6 +46,9 @@ const CANONICAL_FAILURE_STAGES = new Set([
   "cursor_invalid",
   "agent_counts_invalid",
   "aggregate_counts_invalid",
+  "unexpected_type_error",
+  "unexpected_range_error",
+  "unexpected_error",
   "unknown",
 ]);
 const LEGACY_KEYS = [

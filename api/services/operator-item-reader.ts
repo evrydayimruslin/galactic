@@ -119,6 +119,9 @@ export type OperatorItemReadFailureStage =
   | "cursor_invalid"
   | "agent_counts_invalid"
   | "aggregate_counts_invalid"
+  | "unexpected_type_error"
+  | "unexpected_range_error"
+  | "unexpected_error"
   | "unknown";
 
 export class OperatorItemReadError extends Error {
@@ -141,12 +144,39 @@ export class OperatorItemReadError extends Error {
 export function operatorItemReadFailureStage(
   error: unknown,
 ): OperatorItemReadFailureStage {
-  if (!(error instanceof OperatorItemReadError)) return "unknown";
-  if (error.code === "SERVICE_UNAVAILABLE") return "reader_not_configured";
-  if (error.code === "INVALID_REQUEST") return "request_invalid";
-  if (error.code === "READ_FAILED") return "rpc_read_failed";
+  const structural = typeof error === "object" && error !== null
+    ? error as {
+      name?: unknown;
+      code?: unknown;
+      message?: unknown;
+      status?: unknown;
+    }
+    : null;
+  const isReaderError = error instanceof OperatorItemReadError ||
+    (
+      structural?.name === "OperatorItemReadError" &&
+      typeof structural.code === "string" &&
+      [
+        "INVALID_REQUEST",
+        "SERVICE_UNAVAILABLE",
+        "READ_FAILED",
+        "INVALID_RESPONSE",
+      ].includes(structural.code) &&
+      typeof structural.message === "string" &&
+      (structural.status === 400 || structural.status === 503)
+    );
+  if (!isReaderError) {
+    if (error instanceof TypeError) return "unexpected_type_error";
+    if (error instanceof RangeError) return "unexpected_range_error";
+    if (error instanceof Error) return "unexpected_error";
+    return "unknown";
+  }
+  const code = structural?.code;
+  if (code === "SERVICE_UNAVAILABLE") return "reader_not_configured";
+  if (code === "INVALID_REQUEST") return "request_invalid";
+  if (code === "READ_FAILED") return "rpc_read_failed";
 
-  const message = error.message;
+  const message = String(structural?.message || "");
   if (message.includes("cursor")) return "cursor_invalid";
   if (message.includes("Canonical Agent count")) return "agent_counts_invalid";
   if (
