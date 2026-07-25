@@ -24,6 +24,14 @@ function readJson(path, label) {
   }
 }
 
+function readBytes(path, label) {
+  try {
+    return readFileSync(path);
+  } catch {
+    fail(`${label} is missing or unreadable`);
+  }
+}
+
 function exactObject(value, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     fail(`${label} must be an object`);
@@ -56,10 +64,11 @@ export function verifyProductionComputeReleaseEvidence({
   const expectedApiTag = `api-${candidateSha}`;
   const expectedOffApiTag = `${expectedApiTag}-admission-off`;
   const expectedComputeTag = `compute-${candidateSha}`;
+  const expectedPreflightFile = "compute-preflight-production.json";
   const expectedSmokeFile = "compute-admitted-production.json";
 
   if (
-    release.schema_version !== 4 ||
+    release.schema_version !== 5 ||
     release.environment !== "production" ||
     release.git_sha !== candidateSha ||
     release.git_ref !== `refs/tags/${releaseTag}`
@@ -116,6 +125,62 @@ export function verifyProductionComputeReleaseEvidence({
     fail("certified API/Compute versions do not match the release");
   }
 
+  const bindingPreflight = exactObject(
+    release.binding_preflight,
+    "binding_preflight",
+  );
+  if (
+    bindingPreflight.evidence_file !== expectedPreflightFile ||
+    bindingPreflight.verified !== true ||
+    typeof bindingPreflight.sha256 !== "string" ||
+    !HEX_SHA256.test(bindingPreflight.sha256)
+  ) {
+    fail("release does not bind the required admission-off binding preflight");
+  }
+  const preflightPath = resolve(evidenceDirectory, expectedPreflightFile);
+  const preflightBytes = readBytes(preflightPath, expectedPreflightFile);
+  const preflightSha256 = createHash("sha256")
+    .update(preflightBytes)
+    .digest("hex");
+  if (preflightSha256 !== bindingPreflight.sha256) {
+    fail("binding preflight bytes do not match the release binding");
+  }
+  const preflight = exactObject(
+    readJson(preflightPath, expectedPreflightFile),
+    expectedPreflightFile,
+  );
+  const preflightFixturePolicy = exactObject(
+    preflight.fixture_policy,
+    "binding preflight fixture policy",
+  );
+  const preflightProbe = exactObject(
+    preflight.probe,
+    "binding preflight probe",
+  );
+  exactUuid(preflight.agent_id, "binding preflight Agent ID");
+  if (
+    preflight.schema_version !== 1 ||
+    preflight.kind !== "galactic_compute_binding_preflight" ||
+    preflight.verified !== true ||
+    preflight.target !== "production" ||
+    preflight.candidate_sha !== candidateSha ||
+    String(preflight.workflow_run_id) !== workflowRunId ||
+    preflight.function_name !== "run_compute_smoke" ||
+    preflightFixturePolicy.enabled !== false ||
+    !/^(0|[1-9][0-9]*)$/u.test(String(preflightFixturePolicy.revision)) ||
+    preflightProbe.action !== "status" ||
+    preflightProbe.run_id !==
+      "00000000-0000-4000-8000-000000000000" ||
+    preflightProbe.expected_http_status !== 500 ||
+    preflightProbe.expected_public_compute_code !==
+      "COMPUTE_RUN_NOT_FOUND" ||
+    preflightProbe.observed_http_status !== 500 ||
+    preflightProbe.observed_public_compute_code !==
+      "COMPUTE_RUN_NOT_FOUND"
+  ) {
+    fail("binding preflight did not prove the admission-off RPC/DB path");
+  }
+
   const admittedSmoke = exactObject(
     release.admitted_smoke,
     "admitted_smoke",
@@ -129,7 +194,7 @@ export function verifyProductionComputeReleaseEvidence({
     fail("release does not bind the required admitted-job smoke");
   }
   const smokePath = resolve(evidenceDirectory, expectedSmokeFile);
-  const smokeBytes = readFileSync(smokePath);
+  const smokeBytes = readBytes(smokePath, expectedSmokeFile);
   const smokeSha256 = createHash("sha256").update(smokeBytes).digest("hex");
   if (smokeSha256 !== admittedSmoke.sha256) {
     fail("admitted-job smoke bytes do not match the release binding");

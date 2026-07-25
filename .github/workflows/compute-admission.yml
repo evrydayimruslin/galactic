@@ -184,12 +184,13 @@ jobs:
 
           common_filter='.
             | . as $release
-            | (.schema_version == 3 or .schema_version == 4) and
+            | (.schema_version == 3 or .schema_version == 4 or .schema_version == 5) and
               .environment == $target and .git_sha == $release_sha and
               (
                 (.schema_version == 3 and .admission_enabled == false and
                  .certified_admission_off_api.version_tag == ("api-" + $release_sha)) or
-                (.schema_version == 4 and .admission_enabled == true and
+                ((.schema_version == 4 or .schema_version == 5) and
+                 .admission_enabled == true and
                  .rollout_mode == "global" and .canary_allowlist == [] and
                  .certified_admission_off_api.version_tag == ("api-" + $release_sha + "-admission-off") and
                  .active_api.worker == $api_worker and
@@ -200,7 +201,13 @@ jobs:
                  .active_api.canary_allowlist == [] and
                  .admitted_smoke.verified == true and
                  .admitted_smoke.evidence_file == ("compute-admitted-" + $target + ".json") and
-                 (.admitted_smoke.sha256 | test("^[0-9a-f]{64}$")))
+                 (.admitted_smoke.sha256 | test("^[0-9a-f]{64}$")) and
+                 (
+                   .schema_version == 4 or
+                   (.binding_preflight.verified == true and
+                    .binding_preflight.evidence_file == ("compute-preflight-" + $target + ".json") and
+                    (.binding_preflight.sha256 | test("^[0-9a-f]{64}$")))
+                 ))
               ) and
               (.environment_digest | test("^sha256:[0-9a-f]{64}$")) and
               (.base_image | test("^docker\\.io/cloudflare/sandbox:0\\.12\\.3-python@sha256:[0-9a-f]{64}$")) and
@@ -233,7 +240,8 @@ jobs:
               echo "Release does not identify one certified OFF API/Compute pair." >&2
               exit 1
             }
-          if [ "$(jq -er '.schema_version' "$release_json")" = "4" ]; then
+          release_schema_version="$(jq -er '.schema_version' "$release_json")"
+          if [ "$release_schema_version" = "4" ] || [ "$release_schema_version" = "5" ]; then
             smoke_file="$(jq -er '.admitted_smoke.evidence_file' "$release_json")"
             smoke_path="$release_dir/$smoke_file"
             [ -f "$smoke_path" ] || {
@@ -244,6 +252,20 @@ jobs:
             actual_smoke_sha256="$(sha256sum "$smoke_path" | cut -d ' ' -f 1)"
             [ "$actual_smoke_sha256" = "$declared_smoke_sha256" ] || {
               echo "Admitted-smoke evidence does not match release.json." >&2
+              exit 1
+            }
+          fi
+          if [ "$release_schema_version" = "5" ]; then
+            preflight_file="$(jq -er '.binding_preflight.evidence_file' "$release_json")"
+            preflight_path="$release_dir/$preflight_file"
+            [ -f "$preflight_path" ] || {
+              echo "The globally enabled release is missing binding-preflight evidence." >&2
+              exit 1
+            }
+            declared_preflight_sha256="$(jq -er '.binding_preflight.sha256' "$release_json")"
+            actual_preflight_sha256="$(sha256sum "$preflight_path" | cut -d ' ' -f 1)"
+            [ "$actual_preflight_sha256" = "$declared_preflight_sha256" ] || {
+              echo "Binding-preflight evidence does not match release.json." >&2
               exit 1
             }
           fi
@@ -284,7 +306,7 @@ jobs:
           jq '{schema_version, environment, git_sha, git_ref, deployed_image,
             environment_digest, admission_enabled, rollout_mode,
             canary_allowlist, certified_admission_off_api, active_api,
-            active_compute_worker, admitted_smoke, schema_migrations,
+            active_compute_worker, binding_preflight, admitted_smoke, schema_migrations,
             artifact_storage, artifact_retention}' \
             "$release_json" > "$EVIDENCE_DIR/source-release.json"
           cp "$schema_run_evidence" "$EVIDENCE_DIR/source-schema-workflow-run.json"

@@ -19,8 +19,13 @@ const COMPUTE_ID = "33333333-3333-4333-8333-333333333333";
 const AGENT_ID = "44444444-4444-4444-8444-444444444444";
 const COMPUTE_RUN_ID = "55555555-5555-4555-8555-555555555555";
 const RECEIPT_ID = "66666666-6666-4666-8666-666666666666";
+const PREFLIGHT_RUN_ID = "00000000-0000-4000-8000-000000000000";
 
-function writeSmokeAndBind(directory, release, smoke) {
+function writeEvidenceAndBind(directory, release, preflight, smoke) {
+  const preflightBytes = `${JSON.stringify(preflight)}\n`;
+  release.binding_preflight.sha256 = createHash("sha256")
+    .update(preflightBytes)
+    .digest("hex");
   const smokeBytes = `${JSON.stringify(smoke)}\n`;
   release.admitted_smoke.sha256 = createHash("sha256")
     .update(smokeBytes)
@@ -28,6 +33,10 @@ function writeSmokeAndBind(directory, release, smoke) {
   writeFileSync(
     join(directory, "release.json"),
     `${JSON.stringify(release)}\n`,
+  );
+  writeFileSync(
+    join(directory, "compute-preflight-production.json"),
+    preflightBytes,
   );
   writeFileSync(join(directory, "compute-admitted-production.json"), smokeBytes);
 }
@@ -38,7 +47,7 @@ function fixture() {
     `galactic-compute-release-smoke-v1:${SHA}:${RUN_ID}\n`;
   const markerSha256 = createHash("sha256").update(marker).digest("hex");
   const release = {
-    schema_version: 4,
+    schema_version: 5,
     environment: "production",
     git_sha: SHA,
     git_ref: `refs/tags/${TAG}`,
@@ -66,10 +75,34 @@ function fixture() {
       version_id: COMPUTE_ID,
       version_tag: `compute-${SHA}`,
     },
+    binding_preflight: {
+      evidence_file: "compute-preflight-production.json",
+      verified: true,
+      sha256: "",
+    },
     admitted_smoke: {
       evidence_file: "compute-admitted-production.json",
       verified: true,
       sha256: "",
+    },
+  };
+  const preflight = {
+    schema_version: 1,
+    kind: "galactic_compute_binding_preflight",
+    verified: true,
+    target: "production",
+    candidate_sha: SHA,
+    workflow_run_id: RUN_ID,
+    agent_id: AGENT_ID,
+    function_name: "run_compute_smoke",
+    fixture_policy: { enabled: false, revision: "7" },
+    probe: {
+      action: "status",
+      run_id: PREFLIGHT_RUN_ID,
+      expected_http_status: 500,
+      expected_public_compute_code: "COMPUTE_RUN_NOT_FOUND",
+      observed_http_status: 500,
+      observed_public_compute_code: "COMPUTE_RUN_NOT_FOUND",
     },
   };
   const smoke = {
@@ -95,8 +128,8 @@ function fixture() {
     },
     policy_cleanup: { disabled: true },
   };
-  writeSmokeAndBind(directory, release, smoke);
-  return { directory, release, smoke };
+  writeEvidenceAndBind(directory, release, preflight, smoke);
+  return { directory, release, preflight, smoke };
 }
 
 test("accepts an exact-tag globally admitted Compute release and smoke", () => {
@@ -141,10 +174,10 @@ test("rejects admission-off release evidence", () => {
 });
 
 test("rejects a smoke from any other workflow run", () => {
-  const { directory, release, smoke } = fixture();
+  const { directory, release, preflight, smoke } = fixture();
   try {
     smoke.workflow_run_id = "30170000001";
-    writeSmokeAndBind(directory, release, smoke);
+    writeEvidenceAndBind(directory, release, preflight, smoke);
     assert.throws(
       () =>
         verifyProductionComputeReleaseEvidence({
@@ -154,6 +187,44 @@ test("rejects a smoke from any other workflow run", () => {
           workflowRunId: RUN_ID,
         }),
       /did not prove a clean completed execution/u,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects a missing, altered, or non-verifying binding preflight", () => {
+  const { directory, release, preflight, smoke } = fixture();
+  try {
+    preflight.probe.observed_public_compute_code =
+      "COMPUTE_CONTROL_PLANE_UNAVAILABLE";
+    writeEvidenceAndBind(directory, release, preflight, smoke);
+    assert.throws(
+      () =>
+        verifyProductionComputeReleaseEvidence({
+          evidenceDirectory: directory,
+          candidateSha: SHA,
+          releaseTag: TAG,
+          workflowRunId: RUN_ID,
+        }),
+      /did not prove the admission-off RPC\/DB path/u,
+    );
+
+    preflight.probe.observed_public_compute_code = "COMPUTE_RUN_NOT_FOUND";
+    writeEvidenceAndBind(directory, release, preflight, smoke);
+    writeFileSync(
+      join(directory, "compute-preflight-production.json"),
+      `${JSON.stringify({ ...preflight, verified: false })}\n`,
+    );
+    assert.throws(
+      () =>
+        verifyProductionComputeReleaseEvidence({
+          evidenceDirectory: directory,
+          candidateSha: SHA,
+          releaseTag: TAG,
+          workflowRunId: RUN_ID,
+        }),
+      /bytes do not match the release binding/u,
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });

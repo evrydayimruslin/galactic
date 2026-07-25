@@ -36,8 +36,6 @@ import { createServerLogger } from "../services/logging.ts";
 import { runCapacityTelemetryReconciliationCycle } from "../services/capacity-telemetry-reconciliation.ts";
 import { processOperatorProjectionBatch } from "../services/operator-projections.ts";
 import { runOperatorItemProducerReconciliationCycle } from "../services/operator-item-producer-reconciliation.ts";
-import { installComputeControlPlaneAdapter } from "./bindings/compute-control-plane-adapter.ts";
-import { createComputeControlPlaneAdapter } from "../services/compute-orchestrator.ts";
 import { recoverAdmittedComputeDispatches } from "../services/compute-dispatch-recovery.ts";
 import { runComputeReconciliationCycle } from "../services/compute-reconciler.ts";
 import { runComputeArtifactReconciliationCycle } from "../services/compute-artifact-reconciler.ts";
@@ -90,7 +88,6 @@ let computeServicesInstalled = false;
 
 function ensureComputeServicesInstalled(env: Env): void {
   if (computeServicesInstalled) return;
-  installComputeControlPlaneAdapter(createComputeControlPlaneAdapter({ env }));
   installComputeLaunchService(createComputeLaunchService({
     artifacts: env.COMPUTE_ARTIFACTS ?? null,
     cancellation: env.COMPUTE_PLANE

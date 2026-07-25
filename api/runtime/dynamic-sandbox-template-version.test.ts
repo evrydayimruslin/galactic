@@ -17,7 +17,7 @@ import type { RuntimeConfig } from "./sandbox.ts";
 
 // Bump this in lockstep with SANDBOX_TEMPLATE_VERSION whenever the generated
 // setup.js / wrapper.js template changes.
-const PINNED_TEMPLATE_VERSION = "2026-07-19.compute-binding.v13";
+const PINNED_TEMPLATE_VERSION = "2026-07-25.compute-rpc-envelope.v14";
 
 // Stable separator between the two captured modules for the snapshot hash.
 const SEP = "\n----MODULE-BOUNDARY----\n";
@@ -218,10 +218,10 @@ Deno.test("sandbox template: snapshot pinned -- a template change must bump SAND
     // TEMPLATE_HASH below to the new value. This forces the reuse key to rotate
     // so a cached old isolate cannot serve new template content.
     const TEMPLATE_HASH =
-      "dd6ed354cd29f4ffd3243aaf09a42df777303345b78d20692214050910b2f7e4";
+      "2253c6df83390d866a832d276f9b34f59894b299f019287a46bc0c0063a3f418";
     assertEquals(
       PINNED_TEMPLATE_VERSION,
-      "2026-07-19.compute-binding.v13",
+      "2026-07-25.compute-rpc-envelope.v14",
       "PINNED_TEMPLATE_VERSION drifted from the pinned literal",
     );
     assertEquals(

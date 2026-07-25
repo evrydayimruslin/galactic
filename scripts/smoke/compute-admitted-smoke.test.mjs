@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   buildComputeSmokeMarker,
+  COMPUTE_PREFLIGHT_KIND,
   COMPUTE_SMOKE_FUNCTION,
   COMPUTE_SMOKE_KIND,
   computeSmokeConfigFromEnv,
@@ -18,6 +19,7 @@ const WORKFLOW_RUN_ID = "123456789";
 const OWNER_TOKEN = "owner-access-token-must-never-be-serialized";
 const API_BASE = "https://api.connectgalactic.com";
 const MARKER = buildComputeSmokeMarker(CANDIDATE_SHA, WORKFLOW_RUN_ID);
+const PREFLIGHT_RUN_ID = "00000000-0000-4000-8000-000000000000";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -211,19 +213,31 @@ function happyFetch({ statuses = ["queued", "settlement_pending", "completed"] }
 }
 
 test("parses only pinned target/release inputs and derives the evidence path", () => {
-  const config = computeSmokeConfigFromEnv({
+  const env = {
     GALACTIC_SMOKE_TARGET: "production",
     COMPUTE_RELEASE_SHA: CANDIDATE_SHA,
     COMPUTE_RELEASE_RUN_ID: WORKFLOW_RUN_ID,
     COMPUTE_RELEASE_EVIDENCE_DIR: "/tmp/release-evidence",
     GALACTIC_SMOKE_APP_ID: AGENT_ID,
     GALACTIC_OWNER_ACCESS_TOKEN: OWNER_TOKEN,
-  });
+  };
+  const config = computeSmokeConfigFromEnv(env);
   assert.equal(config.apiBase, API_BASE);
   assert.equal(config.marker, MARKER);
   assert.equal(
     config.evidencePath,
     "/tmp/release-evidence/compute-admitted-production.json",
+  );
+  const preflight = computeSmokeConfigFromEnv(env, ["--preflight-only"]);
+  assert.equal(preflight.preflightOnly, true);
+  assert.equal(preflight.cleanupOnly, false);
+  assert.equal(
+    preflight.evidencePath,
+    "/tmp/release-evidence/compute-preflight-production.json",
+  );
+  assert.throws(
+    () => computeSmokeConfigFromEnv(env, ["--preflight-only", "extra"]),
+    /Usage:/u,
   );
   assert.throws(
     () =>
@@ -520,6 +534,88 @@ test("persists only an allowlisted public Compute code from an HTTP failure", as
   assert.equal(JSON.stringify(written[0].value).includes(leaked), false);
 });
 
+test("accepts the exact RPC-normalized Compute error without retaining secrets", async () => {
+  const leaked = "rpc-developer-secret-must-not-appear";
+  const written = [];
+  const { fetchImpl: baseFetch } = happyFetch();
+  const fetchImpl = async (input, init) => {
+    if (String(input).includes("/functions/")) {
+      return jsonResponse({
+        success: false,
+        error: {
+          type: "Error",
+          code: "COMPUTE_SPOOFED_FIELD",
+          message:
+            `GalacticComputeError: galactic.compute failed (COMPUTE_INSUFFICIENT_BUDGET): ${leaked}`,
+          details: {
+            code: "COMPUTE_SPOOFED_DETAIL",
+            leaked,
+          },
+        },
+      }, 500);
+    }
+    return await baseFetch(input, init);
+  };
+
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig(), {
+      fetchImpl,
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) => {
+      assert.equal(error.code, "HTTP_ERROR");
+      assert.equal(error.publicComputeCode, "COMPUTE_INSUFFICIENT_BUDGET");
+      assert.doesNotMatch(error.message, new RegExp(leaked, "u"));
+      assert.doesNotMatch(error.message, /COMPUTE_SPOOFED/u);
+      return true;
+    },
+  );
+
+  assert.deepEqual(written[0].value.failure_diagnostic, {
+    stage: "compute_start",
+    http_status: 500,
+    public_compute_code: "COMPUTE_INSUFFICIENT_BUDGET",
+  });
+  const serialized = JSON.stringify(written[0].value);
+  assert.equal(serialized.includes(leaked), false);
+  assert.equal(serialized.includes("COMPUTE_SPOOFED"), false);
+});
+
+test("requires the exact RPC-normalized prefix for native Error envelopes", async () => {
+  const written = [];
+  const { fetchImpl: baseFetch } = happyFetch();
+  const fetchImpl = async (input, init) => {
+    if (String(input).includes("/functions/")) {
+      return jsonResponse({
+        code: "COMPUTE_SPOOFED_PAYLOAD",
+        error: {
+          type: "Error",
+          code: "COMPUTE_SPOOFED_FIELD",
+          message:
+            "galactic.compute failed (COMPUTE_SPOOFED_MESSAGE): not prefixed",
+        },
+      }, 500);
+    }
+    return await baseFetch(input, init);
+  };
+
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig(), {
+      fetchImpl,
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) => {
+      assert.equal(error.publicComputeCode, null);
+      assert.doesNotMatch(error.message, /COMPUTE_SPOOFED/u);
+      return true;
+    },
+  );
+  assert.deepEqual(written[0].value.failure_diagnostic, {
+    stage: "compute_start",
+    http_status: 500,
+  });
+});
+
 test("classifies generic control-plane failure without persisting its body", async () => {
   const leaked = "untrusted-detail-must-not-appear";
   const written = [];
@@ -530,6 +626,47 @@ test("classifies generic control-plane failure without persisting its body", asy
         error: {
           type: "GalacticComputeError",
           message: "galactic.compute failed: control plane unavailable.",
+          details: { leaked },
+        },
+      }, 500);
+    }
+    return await baseFetch(input, init);
+  };
+
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig(), {
+      fetchImpl,
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) => {
+      assert.equal(
+        error.publicComputeCode,
+        "COMPUTE_CONTROL_PLANE_UNAVAILABLE",
+      );
+      assert.doesNotMatch(error.message, new RegExp(leaked, "u"));
+      return true;
+    },
+  );
+
+  assert.deepEqual(written[0].value.failure_diagnostic, {
+    stage: "compute_start",
+    http_status: 500,
+    public_compute_code: "COMPUTE_CONTROL_PLANE_UNAVAILABLE",
+  });
+  assert.equal(JSON.stringify(written[0].value).includes(leaked), false);
+});
+
+test("classifies the exact RPC-normalized generic control-plane failure", async () => {
+  const leaked = "rpc-generic-detail-must-not-appear";
+  const written = [];
+  const { fetchImpl: baseFetch } = happyFetch();
+  const fetchImpl = async (input, init) => {
+    if (String(input).includes("/functions/")) {
+      return jsonResponse({
+        error: {
+          type: "Error",
+          message:
+            "GalacticComputeError: galactic.compute failed: control plane unavailable.",
           details: { leaked },
         },
       }, 500);
@@ -759,4 +896,119 @@ test("cleanup-only disables an enabled fixture without starting a job", async ()
   assert.equal(evidence.policy_cleanup.disabled, true);
   assert.equal(calls.some((call) => call.url.includes("/functions/")), false);
   assert.equal(written.length, 1);
+});
+
+test("preflight proves the admission-off binding path with no mutation or job", async () => {
+  const leaked = "preflight-secret-must-not-appear";
+  const calls = [];
+  const written = [];
+  const fetchImpl = async (input, init = {}) => {
+    const url = String(input);
+    const method = init.method || "GET";
+    const body = init.body === undefined ? null : JSON.parse(init.body);
+    calls.push({ url, method, body });
+    if (url.endsWith("/compute/settings") && method === "GET") {
+      return jsonResponse(settingsView({ enabled: false, revision: "7" }));
+    }
+    if (url.includes("/functions/") && method === "POST") {
+      assert.deepEqual(body, {
+        args: { action: "status", run_id: PREFLIGHT_RUN_ID },
+      });
+      return jsonResponse({
+        error: {
+          type: "Error",
+          message:
+            `GalacticComputeError: galactic.compute failed (COMPUTE_RUN_NOT_FOUND): ${leaked}`,
+          details: { leaked },
+        },
+      }, 500);
+    }
+    throw new Error(`unexpected test request: ${method} ${url}`);
+  };
+
+  const evidence = await runAdmittedComputeSmoke(smokeConfig({
+    preflightOnly: true,
+    evidencePath: "/tmp/compute-preflight-production.json",
+  }), {
+    fetchImpl,
+    writeEvidence: async (path, value) => written.push({ path, value }),
+  });
+
+  assert.equal(evidence.kind, COMPUTE_PREFLIGHT_KIND);
+  assert.equal(evidence.verified, true);
+  assert.deepEqual(evidence.fixture_policy, {
+    enabled: false,
+    revision: "7",
+  });
+  assert.deepEqual(evidence.probe, {
+    action: "status",
+    run_id: PREFLIGHT_RUN_ID,
+    expected_http_status: 500,
+    expected_public_compute_code: "COMPUTE_RUN_NOT_FOUND",
+    observed_http_status: 500,
+    observed_public_compute_code: "COMPUTE_RUN_NOT_FOUND",
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls.some((call) => call.method === "PUT"), false);
+  assert.equal(
+    calls.some((call) => call.body?.args?.action === "start"),
+    false,
+  );
+  assert.equal(calls.some((call) => call.url.includes("/compute/runs")), false);
+  assert.equal(written.length, 1);
+  assert.equal(written[0].path, "/tmp/compute-preflight-production.json");
+  const serialized = JSON.stringify(written[0].value);
+  assert.equal(serialized.includes(leaked), false);
+  assert.equal(serialized.includes(OWNER_TOKEN), false);
+});
+
+test("preflight fails closed on an unexpected safe code and writes bounded evidence", async () => {
+  const leaked = "unexpected-preflight-secret-must-not-appear";
+  const calls = [];
+  const written = [];
+  const fetchImpl = async (input, init = {}) => {
+    const url = String(input);
+    const method = init.method || "GET";
+    calls.push({ url, method });
+    if (url.endsWith("/compute/settings") && method === "GET") {
+      return jsonResponse(settingsView({ enabled: false, revision: "8" }));
+    }
+    if (url.includes("/functions/") && method === "POST") {
+      return jsonResponse({
+        error: {
+          type: "Error",
+          message:
+            `GalacticComputeError: galactic.compute failed (COMPUTE_POLICY_CONFLICT): ${leaked}`,
+        },
+      }, 500);
+    }
+    throw new Error(`unexpected test request: ${method} ${url}`);
+  };
+
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig({
+      preflightOnly: true,
+      evidencePath: "/tmp/compute-preflight-production.json",
+    }), {
+      fetchImpl,
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) => {
+      assert.equal(error.code, "HTTP_ERROR");
+      assert.equal(error.publicComputeCode, "COMPUTE_POLICY_CONFLICT");
+      assert.doesNotMatch(error.message, new RegExp(leaked, "u"));
+      return true;
+    },
+  );
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls.some((call) => call.method === "PUT"), false);
+  assert.equal(written.length, 1);
+  assert.equal(written[0].value.verified, false);
+  assert.deepEqual(written[0].value.failure_diagnostic, {
+    stage: "compute_preflight",
+    http_status: 500,
+    public_compute_code: "COMPUTE_POLICY_CONFLICT",
+  });
+  assert.equal(JSON.stringify(written[0].value).includes(leaked), false);
 });
