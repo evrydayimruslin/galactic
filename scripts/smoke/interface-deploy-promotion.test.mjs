@@ -1,0 +1,297 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import {
+  computeRawSourceHash,
+  fixtureRefreshPlan,
+  nextFixtureVersion,
+  promotionAction,
+  reviewedPromotionConfig,
+  validatePromotedComputeFixture,
+  validateReviewedComputeManifest,
+  validateStagedPromotion,
+} from "./interface-deploy-promotion.mjs";
+
+const APP_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const ACTION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const VERSION = "1.4.3";
+const SOURCE_HASH = "c".repeat(64);
+const MANIFEST = {
+  permissions: ["compute:exec"],
+  compute: {
+    profile: "developer-v1",
+    tools: ["shell"],
+    secrets: [],
+  },
+  functions: {
+    run_compute_smoke: { uses_compute: true },
+  },
+};
+
+function reviewedArgs(overrides = {}) {
+  return new Map(Object.entries({
+    "--promote-reviewed": true,
+    "--reviewed-permission": "compute:exec",
+    "--reviewed-function": "run_compute_smoke",
+    "--reviewed-compute-profile": "developer-v1",
+    "--reviewed-compute-tools": "shell",
+    "--reviewed-compute-secrets": "none",
+    ...overrides,
+  }));
+}
+
+function home({
+  candidate = VERSION,
+  live = VERSION,
+  integrity = "verified",
+  candidateSourceHash = SOURCE_HASH,
+  liveSourceHash = SOURCE_HASH,
+  candidateCount = candidate ? 1 : 0,
+} = {}) {
+  return {
+    agent: { id: APP_ID },
+    revision: "agent-home-v1:fixture",
+    release: {
+      candidate: candidate
+        ? {
+          version: candidate,
+          canPromote: true,
+          sourceFingerprint: candidateSourceHash,
+        }
+        : null,
+      candidateCount,
+      live: live
+        ? {
+          version: live,
+          sourceFingerprint: liveSourceHash,
+          executedVersion: live,
+          integrity,
+        }
+        : null,
+    },
+  };
+}
+
+test("reviewed promotion requires every exact authority acknowledgement", () => {
+  const config = reviewedPromotionConfig({
+    args: reviewedArgs(),
+    ownerAccessToken: "short-lived-owner-token",
+    appId: APP_ID,
+    allowCreate: false,
+  });
+  assert.equal(config.enabled, true);
+  for (const [flag, value] of reviewedArgs()) {
+    if (flag === "--promote-reviewed") continue;
+    assert.throws(
+      () =>
+        reviewedPromotionConfig({
+          args: reviewedArgs({ [flag]: `${value}-changed` }),
+          ownerAccessToken: "short-lived-owner-token",
+          appId: APP_ID,
+          allowCreate: false,
+        }),
+      new RegExp(flag, "u"),
+    );
+  }
+  assert.throws(
+    () =>
+      reviewedPromotionConfig({
+        args: reviewedArgs(),
+        ownerAccessToken: "",
+        appId: APP_ID,
+        allowCreate: false,
+      }),
+    /GALACTIC_OWNER_ACCESS_TOKEN/u,
+  );
+});
+
+test("reviewed builder upload chooses above every retained version", () => {
+  assert.equal(
+    nextFixtureVersion({
+      current_version: "1.0.0",
+      versions: ["1.0.0", "1.4.2", "1.0.1", "not-semver"],
+    }),
+    VERSION,
+  );
+  assert.equal(nextFixtureVersion({ versions: [] }), "1.0.1");
+});
+
+test("raw source fingerprint matches the canonical path/content algorithm", () => {
+  const files = [
+    { path: "z.ts", content: "export const z = 1;" },
+    { path: "manifest.json", content: "{}" },
+  ];
+  assert.equal(
+    computeRawSourceHash(files),
+    computeRawSourceHash([...files].reverse()),
+  );
+  assert.equal(
+    computeRawSourceHash(files),
+    "e519aaba0de640ad8768b7c6a95dcd0605dea18ad0983a0e959a11cb978f6b3d",
+  );
+  assert.notEqual(
+    computeRawSourceHash(files),
+    computeRawSourceHash([
+      files[0],
+      { path: "manifest.json", content: '{"changed":true}' },
+    ]),
+  );
+});
+
+test("refresh reuses exact live, promotes exact candidate, and never deletes full unrelated drafts", () => {
+  const app = {
+    id: APP_ID,
+    current_version: "1.0.0",
+    versions: ["1.0.0", "1.4.2"],
+  };
+  assert.deepEqual(
+    fixtureRefreshPlan({
+      app,
+      home: home({ candidate: null, live: "1.0.0" }),
+      appId: APP_ID,
+      sourceHash: SOURCE_HASH,
+    }),
+    { action: "reuse_live", version: "1.0.0" },
+  );
+  assert.deepEqual(
+    fixtureRefreshPlan({
+      app,
+      home: home({
+        live: "1.0.0",
+        liveSourceHash: "d".repeat(64),
+      }),
+      appId: APP_ID,
+      sourceHash: SOURCE_HASH,
+    }),
+    { action: "promote_candidate", version: VERSION },
+  );
+  const unrelatedHome = home({
+    live: "1.0.0",
+    liveSourceHash: "d".repeat(64),
+    candidateSourceHash: "e".repeat(64),
+    candidateCount: 2,
+  });
+  assert.deepEqual(
+    fixtureRefreshPlan({
+      app,
+      home: unrelatedHome,
+      appId: APP_ID,
+      sourceHash: SOURCE_HASH,
+    }),
+    { action: "upload", version: VERSION },
+  );
+  assert.throws(
+    () =>
+      fixtureRefreshPlan({
+        app,
+        home: { ...unrelatedHome, release: {
+          ...unrelatedHome.release,
+          candidateCount: 3,
+        } },
+        appId: APP_ID,
+        sourceHash: SOURCE_HASH,
+      }),
+    /Refusing to delete or bypass owner drafts/u,
+  );
+});
+
+test("reviewed manifest fails closed on extra authority, tools, or secrets", () => {
+  assert.equal(validateReviewedComputeManifest(MANIFEST), MANIFEST);
+  for (const manifest of [
+    { ...MANIFEST, permissions: ["compute:exec", "net"] },
+    { ...MANIFEST, compute: { ...MANIFEST.compute, tools: ["shell", "git"] } },
+    { ...MANIFEST, compute: { ...MANIFEST.compute, secrets: ["API_KEY"] } },
+    {
+      ...MANIFEST,
+      functions: { run_compute_smoke: { uses_compute: false } },
+    },
+  ]) {
+    assert.throws(() => validateReviewedComputeManifest(manifest));
+  }
+});
+
+test("promotion is bound to the exact staged tested candidate", () => {
+  const snapshot = home({ live: "1.0.0" });
+  assert.equal(
+    validateStagedPromotion({
+      upload: {
+        app_id: APP_ID,
+        version: VERSION,
+        live_version: "1.0.0",
+        is_live: false,
+      },
+      home: snapshot,
+      appId: APP_ID,
+      version: VERSION,
+      sourceHash: SOURCE_HASH,
+    }),
+    snapshot,
+  );
+  assert.deepEqual(promotionAction(snapshot, VERSION, ACTION_ID), {
+    action: "promote_candidate",
+    expectedRevision: snapshot.revision,
+    idempotencyKey: ACTION_ID,
+    version: VERSION,
+  });
+  assert.throws(() =>
+    validateStagedPromotion({
+      upload: {
+        app_id: APP_ID,
+        version: VERSION,
+        live_version: VERSION,
+        is_live: true,
+      },
+      home: snapshot,
+      appId: APP_ID,
+      version: VERSION,
+    })
+  );
+});
+
+test("postcondition proves live executable, function, and disabled ceiling", () => {
+  const base = {
+    app: {
+      id: APP_ID,
+      visibility: "private",
+      current_version: VERSION,
+      manifest: JSON.stringify(MANIFEST),
+      exports: ["get_greeting", "run_compute_smoke"],
+    },
+    home: home({ candidate: null }),
+    functions: {
+      agent: { id: APP_ID },
+      functions: [{ name: "run_compute_smoke" }],
+    },
+    settings: {
+      settings: {
+        enabled: false,
+        manifestCeiling: {
+          enabled: true,
+          profile: "developer-v1",
+          tools: ["shell"],
+          secrets: [],
+        },
+      },
+    },
+    appId: APP_ID,
+    version: VERSION,
+    sourceHash: SOURCE_HASH,
+  };
+  assert.doesNotThrow(() => validatePromotedComputeFixture(base));
+  assert.throws(() =>
+    validatePromotedComputeFixture({
+      ...base,
+      settings: {
+        settings: {
+          ...base.settings.settings,
+          enabled: true,
+        },
+      },
+    })
+  );
+  assert.throws(() =>
+    validatePromotedComputeFixture({
+      ...base,
+      home: home({ candidate: null, integrity: "unverified" }),
+    })
+  );
+});

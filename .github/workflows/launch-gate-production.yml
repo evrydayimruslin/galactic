@@ -20,15 +20,15 @@ jobs:
   gate:
     name: Evaluate production candidate
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 130
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.release_tag || github.ref }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
 
@@ -64,10 +64,39 @@ jobs:
             --tag "${{ steps.release.outputs.release_tag }}" \
             --sha "${{ steps.release.outputs.candidate_sha }}" \
             --poll-until-complete \
-            --timeout-seconds 2700 \
+            --timeout-seconds 7200 \
             --poll-interval-seconds 20 \
             --write-json /tmp/production-launch-gate-summary.json \
             --write-md /tmp/production-launch-gate-summary.md
+
+      - name: Verify exact-tag global Compute release evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          compute_run_id="$(
+            jq -er '
+              [.workflows[] |
+                select(.workflow == "Compute Deploy" and .status == "passed") |
+                .run_id] as $ids
+              | if ($ids | length) == 1 then $ids[0]
+                else error("expected exactly one passed Compute Deploy run")
+                end
+            ' /tmp/production-launch-gate-summary.json
+          )"
+          evidence_dir="$RUNNER_TEMP/production-compute-release-evidence"
+          mkdir -p "$evidence_dir"
+          gh run download "$compute_run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "compute-production-release-${{ steps.release.outputs.candidate_sha }}" \
+            --dir "$evidence_dir"
+          node scripts/release/verify-production-compute-release-evidence.mjs \
+            "$evidence_dir" \
+            "${{ steps.release.outputs.candidate_sha }}" \
+            "${{ steps.release.outputs.release_tag }}" \
+            "$compute_run_id" \
+            | tee /tmp/production-compute-release-verification.json
 
       - name: Publish job summary
         if: always()
@@ -79,12 +108,13 @@ jobs:
 
       - name: Upload production launch gate summary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: production-launch-gate-${{ steps.release.outputs.release_tag }}
           path: |
             /tmp/production-launch-gate-summary.json
             /tmp/production-launch-gate-summary.md
+            /tmp/production-compute-release-verification.json
           if-no-files-found: error
 
   production_smoke:

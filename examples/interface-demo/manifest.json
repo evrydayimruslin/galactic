@@ -4,6 +4,12 @@
   "description": "Reference Agent showing a sandboxed Interface calling functions through the bridge.",
   "type": "mcp",
   "entry": { "functions": "index.ts" },
+  "permissions": ["compute:exec"],
+  "compute": {
+    "profile": "developer-v1",
+    "tools": ["shell"],
+    "secrets": []
+  },
   "functions": {
     "get_greeting": {
       "description": "Returns a greeting for a name.",
@@ -19,6 +25,16 @@
         "sides": { "type": "number", "description": "Sides per die (2-100)", "required": false }
       },
       "returns": { "type": "object", "description": "Roll results" }
+    },
+    "run_compute_smoke": {
+      "description": "Runs or reads the bounded Galactic Compute release smoke.",
+      "uses_compute": true,
+      "parameters": {
+        "action": { "type": "string", "description": "start or status", "required": false },
+        "marker": { "type": "string", "description": "Canonical public release-smoke marker", "required": false },
+        "run_id": { "type": "string", "description": "Compute run id for status", "required": false }
+      },
+      "returns": { "type": "object", "description": "Bounded Compute run projection" }
     }
   },
   "interfaces": [

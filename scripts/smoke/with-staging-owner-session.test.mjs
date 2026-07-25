@@ -2,10 +2,19 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
 import {
+  fetchProjectAuthKeys,
   fetchStagingProjectAuthKeys,
+  mintOwnerSession,
   mintStagingOwnerSession,
+  obtainOwnerSession,
   obtainStagingOwnerSession,
   OWNER_ACCESS_TOKEN_ENV,
+  OWNER_SESSION_TARGET_ENV,
+  PRODUCTION_API_BASE,
+  PRODUCTION_SUPABASE_PROJECT_REF,
+  PRODUCTION_SUPABASE_URL,
+  resolveSmokeOwner,
+  runWithOwnerSession,
   runWithStagingOwnerSession,
   STAGING_API_BASE,
   STAGING_SUPABASE_PROJECT_REF,
@@ -19,6 +28,8 @@ const SESSION_ID = "8725bcf0-2189-4701-98f2-ee652ed3cfb5";
 const OWNER_EMAIL = "owner@example.test";
 const NOW_MS = 1_800_000_000_000;
 const SUPABASE_URL = STAGING_SUPABASE_URL;
+const PRODUCTION_PROJECT_REF = PRODUCTION_SUPABASE_PROJECT_REF;
+const PRODUCTION_SUPABASE = PRODUCTION_SUPABASE_URL;
 
 function jwt(payload) {
   const encode = (value) =>
@@ -31,6 +42,14 @@ const SERVICE_ROLE_KEY = jwt({
   ref: PROJECT_REF,
   role: "service_role",
 });
+const PRODUCTION_ANON_KEY = jwt({
+  ref: PRODUCTION_PROJECT_REF,
+  role: "anon",
+});
+const PRODUCTION_SERVICE_ROLE_KEY = jwt({
+  ref: PRODUCTION_PROJECT_REF,
+  role: "service_role",
+});
 
 function ownerAccessToken(overrides = {}) {
   return jwt({
@@ -39,6 +58,18 @@ function ownerAccessToken(overrides = {}) {
     aud: "authenticated",
     session_id: SESSION_ID,
     iss: `${SUPABASE_URL}/auth/v1`,
+    exp: Math.floor(NOW_MS / 1000) + 3600,
+    ...overrides,
+  });
+}
+
+function productionOwnerAccessToken(overrides = {}) {
+  return jwt({
+    sub: OWNER_ID,
+    role: "authenticated",
+    aud: "authenticated",
+    session_id: SESSION_ID,
+    iss: `${PRODUCTION_SUPABASE}/auth/v1`,
     exp: Math.floor(NOW_MS / 1000) + 3600,
     ...overrides,
   });
@@ -142,6 +173,101 @@ function successFetch({
   return { fetchImpl, calls };
 }
 
+function productionSuccessFetch() {
+  const accessToken = productionOwnerAccessToken();
+  const calls = [];
+  const fetchImpl = async (input, init = {}) => {
+    const url = String(input);
+    const headers = new Headers(init.headers);
+    calls.push({
+      url,
+      method: init.method || "GET",
+      headers,
+      body: init.body ? JSON.parse(init.body) : null,
+    });
+    const authorization = headers.get("authorization");
+    if (
+      url === `${PRODUCTION_API_BASE}/auth/user` &&
+      authorization === "Bearer gx_production-smoke-secret"
+    ) {
+      return jsonResponse({
+        id: OWNER_ID,
+        email: OWNER_EMAIL,
+        authSource: "api_token",
+        provisional: false,
+      });
+    }
+    if (
+      url ===
+        `${PRODUCTION_API_BASE}/api/launch/agents/${AGENT_ID}` &&
+      authorization === "Bearer gx_production-smoke-secret"
+    ) {
+      return jsonResponse({
+        agent: {
+          id: AGENT_ID,
+          relationship: "owner",
+          visibility: "private",
+          owner: { userId: OWNER_ID },
+        },
+      });
+    }
+    if (
+      url ===
+        `https://api.supabase.com/v1/projects/${PRODUCTION_PROJECT_REF}/api-keys?reveal=true`
+    ) {
+      return jsonResponse([
+        { name: "anon", type: "legacy", api_key: PRODUCTION_ANON_KEY },
+        {
+          name: "service_role",
+          type: "legacy",
+          api_key: PRODUCTION_SERVICE_ROLE_KEY,
+        },
+      ]);
+    }
+    if (
+      url ===
+        `${PRODUCTION_SUPABASE}/auth/v1/admin/users/${
+          encodeURIComponent(OWNER_ID)
+        }`
+    ) {
+      return jsonResponse({ id: OWNER_ID, email: OWNER_EMAIL });
+    }
+    if (url === `${PRODUCTION_SUPABASE}/auth/v1/admin/generate_link`) {
+      return jsonResponse({
+        id: OWNER_ID,
+        email: OWNER_EMAIL,
+        hashed_token: "production-single-use-token-hash",
+        verification_type: "recovery",
+      });
+    }
+    if (url === `${PRODUCTION_SUPABASE}/auth/v1/verify`) {
+      return jsonResponse({
+        access_token: accessToken,
+        refresh_token: "discarded-production-refresh-token",
+        user: { id: OWNER_ID, email: OWNER_EMAIL },
+      });
+    }
+    if (url === `${PRODUCTION_SUPABASE}/auth/v1/user`) {
+      return jsonResponse({ id: OWNER_ID, email: OWNER_EMAIL });
+    }
+    if (
+      url === `${PRODUCTION_API_BASE}/auth/user` &&
+      authorization === `Bearer ${accessToken}`
+    ) {
+      return jsonResponse({
+        id: OWNER_ID,
+        email: OWNER_EMAIL,
+        authSource: "supabase",
+      });
+    }
+    if (url === `${PRODUCTION_SUPABASE}/auth/v1/logout?scope=local`) {
+      return new Response(null, { status: 204 });
+    }
+    throw new Error(`unexpected production test URL: ${url}`);
+  };
+  return { fetchImpl, calls, accessToken };
+}
+
 test("mints one owner session through the exact single-use exchange", async () => {
   const { fetchImpl, calls } = successFetch();
   const session = await obtainStagingOwnerSession({
@@ -234,6 +360,86 @@ test("mints one owner session through the exact single-use exchange", async () =
     ).length,
     1,
   );
+});
+
+test("mints the production owner session only through pinned production origins", async () => {
+  const { fetchImpl, calls, accessToken } = productionSuccessFetch();
+  const session = await obtainOwnerSession({
+    target: "production",
+    managementAccessToken: "production-management-secret",
+    projectRef: PRODUCTION_PROJECT_REF,
+    apiToken: "gx_production-smoke-secret",
+    smokeAgentId: AGENT_ID,
+    fetchImpl,
+    now: () => NOW_MS,
+  });
+
+  assert.equal(session.accessToken, accessToken);
+  assert.equal(
+    calls.some((call) => call.url.startsWith(STAGING_API_BASE)),
+    false,
+  );
+  assert.equal(
+    calls.some((call) => call.url.startsWith(STAGING_SUPABASE_URL)),
+    false,
+  );
+  assert.equal(
+    calls.some((call) => call.url.includes(STAGING_SUPABASE_PROJECT_REF)),
+    false,
+  );
+  assert.equal(
+    calls.filter((call) =>
+      call.url === `${PRODUCTION_API_BASE}/auth/user`
+    ).length,
+    2,
+  );
+  await session.revoke();
+  assert.equal(
+    calls.filter((call) =>
+      call.url === `${PRODUCTION_SUPABASE}/auth/v1/logout?scope=local`
+    ).length,
+    1,
+  );
+});
+
+test("generic owner bootstrap rejects cross-target origins and projects before fetching", async () => {
+  const cases = [
+    () =>
+      resolveSmokeOwner({
+        target: "production",
+        apiBase: STAGING_API_BASE,
+        apiToken: "gx_production-smoke-secret",
+        smokeAgentId: AGENT_ID,
+        fetchImpl: forbiddenFetch,
+      }),
+    () =>
+      fetchProjectAuthKeys({
+        target: "production",
+        managementAccessToken: "production-management-secret",
+        projectRef: STAGING_SUPABASE_PROJECT_REF,
+        fetchImpl: forbiddenFetch,
+      }),
+    () =>
+      mintOwnerSession({
+        target: "production",
+        owner: { id: OWNER_ID, email: OWNER_EMAIL },
+        apiBase: PRODUCTION_API_BASE,
+        supabaseUrl: STAGING_SUPABASE_URL,
+        anonKey: PRODUCTION_ANON_KEY,
+        serviceRoleKey: PRODUCTION_SERVICE_ROLE_KEY,
+        fetchImpl: forbiddenFetch,
+        now: () => NOW_MS,
+      }),
+  ];
+  let fetchCalls = 0;
+  async function forbiddenFetch() {
+    fetchCalls += 1;
+    return jsonResponse({});
+  }
+  for (const runCase of cases) {
+    await assert.rejects(runCase(), /pinned production|production project/u);
+  }
+  assert.equal(fetchCalls, 0);
 });
 
 test("zero-create gate stops when the exact auth user does not exist", async () => {
@@ -589,6 +795,7 @@ test("passes the bearer only in the child environment, never argv", async () => 
     "gx_required-smoke-token",
   );
   assert.equal(passedEnv.GALACTIC_SMOKE_APP_ID, AGENT_ID);
+  assert.equal(passedEnv[OWNER_SESSION_TARGET_ENV], "staging");
   for (
     const name of [
       "SUPABASE_ACCESS_TOKEN",
@@ -608,9 +815,62 @@ test("passes the bearer only in the child environment, never argv", async () => 
   // The helper scrubs its retained env object after spawn. A real child has
   // already received its OS-level copy at that point.
   assert.equal(invocation.options.env[OWNER_ACCESS_TOKEN_ENV], "");
+  assert.equal(invocation.options.env[OWNER_SESSION_TARGET_ENV], "");
   assert.equal(invocation.options.env.ULTRALIGHT_TOKEN, "");
   assert.equal(invocation.options.env.GALACTIC_SMOKE_APP_ID, "");
   assert.equal(process.env[OWNER_ACCESS_TOKEN_ENV], undefined);
+  assert.equal(revokeCalls, 1);
+});
+
+test("generic child runner injects production target and preserves nonsecret release metadata", async () => {
+  let passedEnv;
+  let revokeCalls = 0;
+  const spawnImpl = (_command, _args, options) => {
+    passedEnv = { ...options.env };
+    const child = new EventEmitter();
+    queueMicrotask(() => child.emit("exit", 0, null));
+    return child;
+  };
+  const result = await runWithOwnerSession(
+    {
+      accessToken: productionOwnerAccessToken(),
+      revoke: async () => {
+        revokeCalls += 1;
+      },
+    },
+    "node",
+    ["scripts/smoke/compute-admitted-smoke.mjs"],
+    {
+      target: "production",
+      spawnImpl,
+      baseEnv: {
+        PATH: "/safe/bin",
+        ULTRALIGHT_TOKEN: "gx_production-smoke-secret",
+        GALACTIC_SMOKE_APP_ID: AGENT_ID,
+        SUPABASE_ACCESS_TOKEN: "management-secret",
+        SUPABASE_PRODUCTION_PROJECT_ID: PRODUCTION_PROJECT_REF,
+        COMPUTE_RELEASE_SHA: "a".repeat(40),
+        COMPUTE_RELEASE_RUN_ID: "123456",
+        COMPUTE_RELEASE_EVIDENCE_DIR: "/tmp/release-evidence",
+      },
+    },
+  );
+  assert.equal(result, 0);
+  assert.equal(passedEnv[OWNER_SESSION_TARGET_ENV], "production");
+  assert.equal(
+    passedEnv[OWNER_ACCESS_TOKEN_ENV],
+    productionOwnerAccessToken(),
+  );
+  assert.equal(passedEnv.COMPUTE_RELEASE_SHA, "a".repeat(40));
+  assert.equal(passedEnv.COMPUTE_RELEASE_RUN_ID, "123456");
+  assert.equal(
+    passedEnv.COMPUTE_RELEASE_EVIDENCE_DIR,
+    "/tmp/release-evidence",
+  );
+  assert.equal(
+    Object.hasOwn(passedEnv, "SUPABASE_PRODUCTION_PROJECT_ID"),
+    false,
+  );
   assert.equal(revokeCalls, 1);
 });
 

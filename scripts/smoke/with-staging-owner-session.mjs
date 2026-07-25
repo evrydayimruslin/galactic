@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 // Mint a genuine, short-lived Supabase account session for the owner of the
-// fixed staging G1 smoke Agent, then run one child command with that bearer in
-// memory. This closes the gap between connected API-token smokes and
+// fixed G1 smoke Agent, then run one child command with that bearer in memory.
+// Staging remains the default for backward compatibility; production must be
+// selected explicitly. This closes the gap between connected API-token smokes and
 // account-session-only launch surfaces without storing a human password,
 // refresh token, recovery link, token hash, service-role key, or access token.
 //
 // Safe workflow contract:
 //   SUPABASE_ACCESS_TOKEN=... \
-//   SUPABASE_STAGING_PROJECT_ID=... \
+//   SUPABASE_STAGING_PROJECT_ID=... \ # or SUPABASE_PRODUCTION_PROJECT_ID
 //   ULTRALIGHT_TOKEN=... \
 //   GALACTIC_SMOKE_APP_ID=... \
-//   node scripts/smoke/with-staging-owner-session.mjs -- \
+//   node scripts/smoke/with-staging-owner-session.mjs [--target staging|production] -- \
 //     node scripts/smoke/<owner-session-smoke>.mjs
 //
 // The child receives:
@@ -35,8 +36,30 @@ export const STAGING_API_BASE =
 export const STAGING_SUPABASE_PROJECT_REF = "mtekfhozmsboxizxxxyn";
 export const STAGING_SUPABASE_URL =
   `https://${STAGING_SUPABASE_PROJECT_REF}.supabase.co`;
+export const PRODUCTION_API_BASE = "https://api.connectgalactic.com";
+export const PRODUCTION_SUPABASE_PROJECT_REF = "uavjzycsltdnwblwutmb";
+export const PRODUCTION_SUPABASE_URL =
+  `https://${PRODUCTION_SUPABASE_PROJECT_REF}.supabase.co`;
 export const SUPABASE_MANAGEMENT_API_BASE = "https://api.supabase.com";
 export const OWNER_ACCESS_TOKEN_ENV = "GALACTIC_OWNER_ACCESS_TOKEN";
+export const OWNER_SESSION_TARGET_ENV = "GALACTIC_SMOKE_TARGET";
+
+export const OWNER_SESSION_TARGETS = Object.freeze({
+  staging: Object.freeze({
+    name: "staging",
+    apiBase: STAGING_API_BASE,
+    projectRef: STAGING_SUPABASE_PROJECT_REF,
+    supabaseUrl: STAGING_SUPABASE_URL,
+    projectIdEnv: "SUPABASE_STAGING_PROJECT_ID",
+  }),
+  production: Object.freeze({
+    name: "production",
+    apiBase: PRODUCTION_API_BASE,
+    projectRef: PRODUCTION_SUPABASE_PROJECT_REF,
+    supabaseUrl: PRODUCTION_SUPABASE_URL,
+    projectIdEnv: "SUPABASE_PRODUCTION_PROJECT_ID",
+  }),
+});
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -58,6 +81,15 @@ function requiredString(value, label) {
   const normalized = String(value || "").trim();
   if (!normalized) throw new Error(`${label} is required.`);
   return normalized;
+}
+
+export function ownerSessionTarget(value = "staging") {
+  const target = String(value || "").trim().toLowerCase();
+  const config = OWNER_SESSION_TARGETS[target];
+  if (!config) {
+    throw new Error("Owner-session target must be staging or production.");
+  }
+  return config;
 }
 
 function assertUuid(value, label) {
@@ -120,31 +152,40 @@ async function requestJson(
   }
 }
 
-export async function resolveStagingSmokeOwner({
+export async function resolveSmokeOwner({
+  target = "staging",
   apiToken,
   smokeAgentId,
-  apiBase = STAGING_API_BASE,
+  apiBase,
   fetchImpl = fetch,
   timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
 }) {
+  const environment = ownerSessionTarget(target);
+  const expectedApiBase = environment.apiBase;
+  const resolvedApiBase = apiBase ?? expectedApiBase;
   const token = requiredString(apiToken, "ULTRALIGHT_TOKEN");
   const agentId = requiredString(smokeAgentId, "GALACTIC_SMOKE_APP_ID");
   assertUuid(agentId, "GALACTIC_SMOKE_APP_ID");
-  if (apiBase !== STAGING_API_BASE) {
-    throw new Error("Owner-session bootstrap is restricted to staging.");
+  if (resolvedApiBase !== expectedApiBase) {
+    throw new Error(
+      `Owner-session bootstrap API does not match the pinned ${environment.name} origin.`,
+    );
   }
 
   const authorization = { Authorization: `Bearer ${token}` };
   const owner = await requestJson(
     fetchImpl,
-    `${apiBase}/auth/user`,
+    `${resolvedApiBase}/auth/user`,
     { headers: authorization },
-    "Staging smoke owner lookup",
+    `${environment.name} smoke owner lookup`,
     timeoutMs,
   );
-  const ownerId = requiredString(owner?.id, "Staging smoke owner id");
-  const email = normalizedEmail(owner?.email, "Staging smoke owner email");
-  assertUuid(ownerId, "Staging smoke owner id");
+  const ownerId = requiredString(owner?.id, `${environment.name} smoke owner id`);
+  const email = normalizedEmail(
+    owner?.email,
+    `${environment.name} smoke owner email`,
+  );
+  assertUuid(ownerId, `${environment.name} smoke owner id`);
   if (owner?.authSource !== "api_token") {
     throw new Error(
       "ULTRALIGHT_TOKEN did not resolve through API-token authentication.",
@@ -152,15 +193,15 @@ export async function resolveStagingSmokeOwner({
   }
   if (owner?.provisional !== false) {
     throw new Error(
-      "The staging smoke token must belong to a registered account.",
+      `The ${environment.name} smoke token must belong to a registered account.`,
     );
   }
 
   const projection = await requestJson(
     fetchImpl,
-    `${apiBase}/api/launch/agents/${encodeURIComponent(agentId)}`,
+    `${resolvedApiBase}/api/launch/agents/${encodeURIComponent(agentId)}`,
     { headers: authorization },
-    "Staging smoke Agent ownership lookup",
+    `${environment.name} smoke Agent ownership lookup`,
     timeoutMs,
   );
   const agent = projection?.agent;
@@ -171,14 +212,18 @@ export async function resolveStagingSmokeOwner({
     agent?.owner?.userId !== ownerId
   ) {
     throw new Error(
-      "The fixed staging smoke Agent is not owned by the smoke-token identity.",
+      `The fixed ${environment.name} smoke Agent is not owned by the smoke-token identity.`,
     );
   }
 
   return { id: ownerId, email, smokeAgentId: agentId };
 }
 
-function selectLegacyProjectKey(keys, name, projectRef) {
+export async function resolveStagingSmokeOwner(options) {
+  return await resolveSmokeOwner({ ...options, target: "staging" });
+}
+
+function selectLegacyProjectKey(keys, name, projectRef, target) {
   const matches = Array.isArray(keys)
     ? keys.filter((key) =>
       key?.name === name &&
@@ -196,27 +241,29 @@ function selectLegacyProjectKey(keys, name, projectRef) {
   const claims = decodeJwtPayload(key, `Supabase ${name} API key`);
   if (claims.ref !== projectRef || claims.role !== name) {
     throw new Error(
-      `Supabase ${name} API key does not belong to the staging project.`,
+      `Supabase ${name} API key does not belong to the ${target} project.`,
     );
   }
   return key;
 }
 
-export async function fetchStagingProjectAuthKeys({
+export async function fetchProjectAuthKeys({
+  target = "staging",
   managementAccessToken,
   projectRef,
   fetchImpl = fetch,
   managementApiBase = SUPABASE_MANAGEMENT_API_BASE,
   timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
 }) {
+  const environment = ownerSessionTarget(target);
   const accessToken = requiredString(
     managementAccessToken,
     "SUPABASE_ACCESS_TOKEN",
   );
-  const ref = requiredString(projectRef, "SUPABASE_STAGING_PROJECT_ID");
-  if (ref !== STAGING_SUPABASE_PROJECT_REF) {
+  const ref = requiredString(projectRef, environment.projectIdEnv);
+  if (ref !== environment.projectRef) {
     throw new Error(
-      "SUPABASE_STAGING_PROJECT_ID does not match the pinned staging project.",
+      `${environment.projectIdEnv} does not match the pinned ${environment.name} project.`,
     );
   }
   if (managementApiBase !== SUPABASE_MANAGEMENT_API_BASE) {
@@ -237,10 +284,19 @@ export async function fetchStagingProjectAuthKeys({
   );
 
   return {
-    supabaseUrl: STAGING_SUPABASE_URL,
-    anonKey: selectLegacyProjectKey(keys, "anon", ref),
-    serviceRoleKey: selectLegacyProjectKey(keys, "service_role", ref),
+    supabaseUrl: environment.supabaseUrl,
+    anonKey: selectLegacyProjectKey(keys, "anon", ref, environment.name),
+    serviceRoleKey: selectLegacyProjectKey(
+      keys,
+      "service_role",
+      ref,
+      environment.name,
+    ),
   };
+}
+
+export async function fetchStagingProjectAuthKeys(options) {
+  return await fetchProjectAuthKeys({ ...options, target: "staging" });
 }
 
 function assertOwnerAccessClaims({
@@ -315,9 +371,10 @@ function localSessionCleanup({
   };
 }
 
-export async function mintStagingOwnerSession({
+export async function mintOwnerSession({
+  target = "staging",
   owner,
-  apiBase = STAGING_API_BASE,
+  apiBase,
   supabaseUrl,
   anonKey,
   serviceRoleKey,
@@ -325,23 +382,38 @@ export async function mintStagingOwnerSession({
   now = Date.now,
   timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
 }) {
-  if (apiBase !== STAGING_API_BASE) {
-    throw new Error("Owner-session bootstrap is restricted to staging.");
+  const environment = ownerSessionTarget(target);
+  const resolvedApiBase = apiBase ?? environment.apiBase;
+  if (resolvedApiBase !== environment.apiBase) {
+    throw new Error(
+      `Owner-session bootstrap API does not match the pinned ${environment.name} origin.`,
+    );
   }
-  const ownerId = requiredString(owner?.id, "Staging smoke owner id");
+  const ownerId = requiredString(
+    owner?.id,
+    `${environment.name} smoke owner id`,
+  );
   const ownerEmail = normalizedEmail(
     owner?.email,
-    "Staging smoke owner email",
+    `${environment.name} smoke owner email`,
   );
-  assertUuid(ownerId, "Staging smoke owner id");
-  const authBase = requiredString(supabaseUrl, "Staging Supabase URL");
-  if (authBase !== STAGING_SUPABASE_URL) {
-    throw new Error("Owner-session bootstrap is restricted to staging.");
+  assertUuid(ownerId, `${environment.name} smoke owner id`);
+  const authBase = requiredString(
+    supabaseUrl,
+    `${environment.name} Supabase URL`,
+  );
+  if (authBase !== environment.supabaseUrl) {
+    throw new Error(
+      `Owner-session bootstrap Supabase URL does not match the pinned ${environment.name} project.`,
+    );
   }
-  const anon = requiredString(anonKey, "Staging Supabase anon key");
+  const anon = requiredString(
+    anonKey,
+    `${environment.name} Supabase anon key`,
+  );
   const serviceRole = requiredString(
     serviceRoleKey,
-    "Staging Supabase service-role key",
+    `${environment.name} Supabase service-role key`,
   );
 
   // Prove the auth user already exists by immutable id and exact email before
@@ -471,7 +543,7 @@ export async function mintStagingOwnerSession({
     // account session, rather than trusting local JWT decoding alone.
     const galacticUser = await requestJson(
       fetchImpl,
-      `${apiBase}/auth/user`,
+      `${resolvedApiBase}/auth/user`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
       "Galactic owner-session verification",
       timeoutMs,
@@ -503,7 +575,12 @@ export async function mintStagingOwnerSession({
   }
 }
 
-export async function obtainStagingOwnerSession({
+export async function mintStagingOwnerSession(options) {
+  return await mintOwnerSession({ ...options, target: "staging" });
+}
+
+export async function obtainOwnerSession({
+  target = "staging",
   managementAccessToken,
   projectRef,
   apiToken,
@@ -512,20 +589,26 @@ export async function obtainStagingOwnerSession({
   now = Date.now,
   timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
 }) {
-  const owner = await resolveStagingSmokeOwner({
+  const environment = ownerSessionTarget(target);
+  const owner = await resolveSmokeOwner({
+    target: environment.name,
+    apiBase: environment.apiBase,
     apiToken,
     smokeAgentId,
     fetchImpl,
     timeoutMs,
   });
-  const keys = await fetchStagingProjectAuthKeys({
+  const keys = await fetchProjectAuthKeys({
+    target: environment.name,
     managementAccessToken,
     projectRef,
     fetchImpl,
     timeoutMs,
   });
-  return await mintStagingOwnerSession({
+  return await mintOwnerSession({
+    target: environment.name,
     owner,
+    apiBase: environment.apiBase,
     ...keys,
     fetchImpl,
     now,
@@ -533,13 +616,18 @@ export async function obtainStagingOwnerSession({
   });
 }
 
-export async function runWithStagingOwnerSession(
+export async function obtainStagingOwnerSession(options) {
+  return await obtainOwnerSession({ ...options, target: "staging" });
+}
+
+export async function runWithOwnerSession(
   session,
   command,
   commandArgs = [],
   {
     spawnImpl = spawn,
     baseEnv = process.env,
+    target = "staging",
   } = {},
 ) {
   if (typeof session?.revoke !== "function") {
@@ -548,6 +636,7 @@ export async function runWithStagingOwnerSession(
 
   let primaryError = null;
   try {
+    const environment = ownerSessionTarget(target);
     const executable = requiredString(command, "Owner-session child command");
     const accessToken = requiredString(
       session?.accessToken,
@@ -573,6 +662,7 @@ export async function runWithStagingOwnerSession(
     }
     Object.assign(childEnv, explicitSmokeEnv, {
       [OWNER_ACCESS_TOKEN_ENV]: accessToken,
+      [OWNER_SESSION_TARGET_ENV]: environment.name,
     });
 
     return await new Promise((resolvePromise, rejectPromise) => {
@@ -590,7 +680,11 @@ export async function runWithStagingOwnerSession(
         // spawn() copies the environment synchronously. Remove our extra
         // references immediately; never mutate process.env.
         for (
-          const name of [OWNER_ACCESS_TOKEN_ENV, ...CHILD_SMOKE_ENV_NAMES]
+          const name of [
+            OWNER_ACCESS_TOKEN_ENV,
+            OWNER_SESSION_TARGET_ENV,
+            ...CHILD_SMOKE_ENV_NAMES,
+          ]
         ) {
           childEnv[name] = "";
           if (Object.hasOwn(explicitSmokeEnv, name)) {
@@ -625,25 +719,50 @@ export async function runWithStagingOwnerSession(
   }
 }
 
+export async function runWithStagingOwnerSession(
+  session,
+  command,
+  commandArgs = [],
+  options = {},
+) {
+  return await runWithOwnerSession(session, command, commandArgs, {
+    ...options,
+    target: "staging",
+  });
+}
+
 function cliUsage() {
   return (
-    "Usage: with-staging-owner-session.mjs --check | -- <command> [args...]\n" +
-    "Required env: SUPABASE_ACCESS_TOKEN, SUPABASE_STAGING_PROJECT_ID, " +
+    "Usage: with-staging-owner-session.mjs [--target staging|production] " +
+    "(--check | -- <command> [args...])\n" +
+    "Required env: SUPABASE_ACCESS_TOKEN, target-specific SUPABASE_*_PROJECT_ID, " +
     "ULTRALIGHT_TOKEN, GALACTIC_SMOKE_APP_ID"
   );
 }
 
 async function main(argv, env = process.env) {
-  const checkOnly = argv.length === 1 && argv[0] === "--check";
-  const separator = argv.indexOf("--");
-  const commandArgs = separator === 0 ? argv.slice(1) : [];
+  let targetName = "staging";
+  const remainingArgs = [...argv];
+  if (remainingArgs[0] === "--target") {
+    targetName = requiredString(
+      remainingArgs[1],
+      "Owner-session target",
+    );
+    remainingArgs.splice(0, 2);
+  }
+  const environment = ownerSessionTarget(targetName);
+  const checkOnly =
+    remainingArgs.length === 1 && remainingArgs[0] === "--check";
+  const separator = remainingArgs.indexOf("--");
+  const commandArgs = separator === 0 ? remainingArgs.slice(1) : [];
   if (!checkOnly && commandArgs.length === 0) {
     throw new Error(cliUsage());
   }
 
-  const session = await obtainStagingOwnerSession({
+  const session = await obtainOwnerSession({
+    target: environment.name,
     managementAccessToken: env.SUPABASE_ACCESS_TOKEN,
-    projectRef: env.SUPABASE_STAGING_PROJECT_ID,
+    projectRef: env[environment.projectIdEnv],
     apiToken: env.ULTRALIGHT_TOKEN,
     smokeAgentId: env.GALACTIC_SMOKE_APP_ID,
   });
@@ -651,16 +770,23 @@ async function main(argv, env = process.env) {
   if (checkOnly) {
     await session.revoke();
     console.log(
-      "Staging owner session verified and locally revoked; no token was retained.",
+      `${
+        environment.name === "production" ? "Production" : "Staging"
+      } owner session verified and locally revoked; no token was retained.`,
     );
     return 0;
   }
 
-  console.log("Staging owner session verified; running the owner-session smoke.");
-  return await runWithStagingOwnerSession(
+  console.log(
+    `${
+      environment.name === "production" ? "Production" : "Staging"
+    } owner session verified; running the owner-session smoke.`,
+  );
+  return await runWithOwnerSession(
     session,
     commandArgs[0],
     commandArgs.slice(1),
+    { target: environment.name },
   );
 }
 
