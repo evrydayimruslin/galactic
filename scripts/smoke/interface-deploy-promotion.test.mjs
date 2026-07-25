@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import {
   computeRawSourceHash,
@@ -15,6 +16,10 @@ const APP_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ACTION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const VERSION = "1.4.3";
 const SOURCE_HASH = "c".repeat(64);
+const COMPUTE_FIXTURE_SOURCE = await readFile(
+  new URL("../../examples/interface-demo/index.ts", import.meta.url),
+  "utf8",
+);
 const MANIFEST = {
   permissions: ["compute:exec"],
   compute: {
@@ -135,6 +140,11 @@ test("raw source fingerprint matches the canonical path/content algorithm", () =
       { path: "manifest.json", content: '{"changed":true}' },
     ]),
   );
+});
+
+test("Compute smoke fixture uses the scanner-safe direct echo command", () => {
+  assert.match(COMPUTE_FIXTURE_SOURCE, /argv:\s*\[\s*"cat"\s*\]/u);
+  assert.doesNotMatch(COMPUTE_FIXTURE_SOURCE, /node:fs|fs\.readFileSync/u);
 });
 
 test("refresh reuses exact live, promotes exact candidate, and never deletes full unrelated drafts", () => {
