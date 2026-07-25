@@ -268,6 +268,20 @@ function common(overrides: Record<string, unknown> = {}) {
   };
 }
 
+async function captureConsoleErrors(runTest: () => Promise<void>): Promise<string[]> {
+  const original = console.error;
+  const messages: string[] = [];
+  console.error = (...values: unknown[]) => {
+    messages.push(values.map(String).join(" "));
+  };
+  try {
+    await runTest();
+  } finally {
+    console.error = original;
+  }
+  return messages;
+}
+
 Deno.test("Compute orchestrator snapshots exact manifest, policy, secret, and authority", async () => {
   const fixture = common();
   const result = await createComputeControlPlaneAdapter(
@@ -423,6 +437,115 @@ Deno.test("Compute admission rejects a deployed image identity mismatch before r
   );
   assertEquals(error.code, "COMPUTE_RUNTIME_IDENTITY_MISMATCH");
   assertEquals(fixture.state.admitted.length, 0);
+});
+
+Deno.test("unexpected admission failures log only a secret-safe stage diagnostic", async () => {
+  const fixture = common();
+  const runtimeError = Object.assign(
+    new Error("runtime-secret-value"),
+    {
+      code: "SECRET_RUNTIME_CODE",
+      details: { token: "details-secret-value" },
+      requestId: "request-secret-value",
+    },
+  );
+  fixture.deps.env = {
+    ...fixture.deps.env,
+    COMPUTE_PLANE: {
+      executeRun: () => Promise.resolve(null),
+      cancelRun: () => Promise.resolve({ destroyed: true as const }),
+      runtimeIdentity: () => Promise.reject(runtimeError),
+    },
+  };
+
+  const messages = await captureConsoleErrors(async () => {
+    const error = await assertRejects(
+      () => createComputeControlPlaneAdapter(fixture.deps).admitComputeRun(
+        admission("async"),
+      ),
+      Error,
+    );
+    assert(error === runtimeError);
+  });
+
+  assertEquals(messages.length, 1);
+  assertEquals(JSON.parse(messages[0]), {
+    event: "compute.admission_stage_failed",
+    stage: "runtime_identity",
+    error_classification: "error",
+    error_code: "UNCLASSIFIED",
+    error_status: null,
+  });
+  assert(!messages[0].includes("runtime-secret-value"));
+  assert(!messages[0].includes("details-secret-value"));
+  assert(!messages[0].includes("request-secret-value"));
+});
+
+Deno.test("database admission diagnostics retain only allowlisted code and status", async () => {
+  const databaseError = new ComputeControlPlaneError({
+    code: "COMPUTE_DATABASE_UNAVAILABLE",
+    status: 503,
+    message: "database-secret-value",
+    details: { token: "details-secret-value" },
+  });
+  const fixture = common({
+    admitRun: () => Promise.reject(databaseError),
+  });
+
+  const messages = await captureConsoleErrors(async () => {
+    const error = await assertRejects(
+      () => createComputeControlPlaneAdapter(fixture.deps).admitComputeRun(
+        admission("async"),
+      ),
+      ComputeControlPlaneError,
+    );
+    assert(error === databaseError);
+  });
+
+  assertEquals(messages.length, 1);
+  assertEquals(JSON.parse(messages[0]), {
+    event: "compute.admission_stage_failed",
+    stage: "database_admit",
+    error_classification: "compute_control_plane",
+    error_code: "COMPUTE_DATABASE_UNAVAILABLE",
+    error_status: 503,
+  });
+  assert(!messages[0].includes("database-secret-value"));
+  assert(!messages[0].includes("details-secret-value"));
+});
+
+Deno.test("unknown admission diagnostic codes are redacted", async () => {
+  const databaseError = new ComputeControlPlaneError({
+    code: "SECRET_DATABASE_CODE",
+    status: 599,
+    message: "database-secret-value",
+    details: { token: "details-secret-value" },
+  });
+  const fixture = common({
+    admitRun: () => Promise.reject(databaseError),
+  });
+
+  const messages = await captureConsoleErrors(async () => {
+    const error = await assertRejects(
+      () => createComputeControlPlaneAdapter(fixture.deps).admitComputeRun(
+        admission("async"),
+      ),
+      ComputeControlPlaneError,
+    );
+    assert(error === databaseError);
+  });
+
+  assertEquals(messages.length, 1);
+  assertEquals(JSON.parse(messages[0]), {
+    event: "compute.admission_stage_failed",
+    stage: "database_admit",
+    error_classification: "compute_control_plane",
+    error_code: "UNCLASSIFIED",
+    error_status: 599,
+  });
+  assert(!messages[0].includes("SECRET_DATABASE_CODE"));
+  assert(!messages[0].includes("database-secret-value"));
+  assert(!messages[0].includes("details-secret-value"));
 });
 
 Deno.test("Compute admission preserves deterministic retention rejections", async () => {
