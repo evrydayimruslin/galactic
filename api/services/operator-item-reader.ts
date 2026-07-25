@@ -99,6 +99,31 @@ type OperatorItemReadErrorCode =
   | "READ_FAILED"
   | "INVALID_RESPONSE";
 
+export type OperatorItemReadFailureStage =
+  | "reader_not_configured"
+  | "request_invalid"
+  | "rpc_read_failed"
+  | "rpc_response_invalid"
+  | "entry_shape_invalid"
+  | "item_identity_invalid"
+  | "item_class_invalid"
+  | "item_severity_invalid"
+  | "item_fanout_invalid"
+  | "item_scope_invalid"
+  | "item_diagnosis_invalid"
+  | "item_evidence_invalid"
+  | "item_remediation_invalid"
+  | "item_ordering_invalid"
+  | "item_recovery_invalid"
+  | "item_attention_state_invalid"
+  | "cursor_invalid"
+  | "agent_counts_invalid"
+  | "aggregate_counts_invalid"
+  | "unexpected_type_error"
+  | "unexpected_range_error"
+  | "unexpected_error"
+  | "unknown";
+
 export class OperatorItemReadError extends Error {
   constructor(
     readonly code: OperatorItemReadErrorCode,
@@ -108,6 +133,100 @@ export class OperatorItemReadError extends Error {
     super(message);
     this.name = "OperatorItemReadError";
   }
+}
+
+/**
+ * Convert a canonical-reader failure into a bounded, secret-safe stage for
+ * shadow-rollout telemetry. Reader messages contain only code-owned labels,
+ * but the rollout contract deliberately emits this smaller allowlist instead
+ * of copying exception text into logs.
+ */
+export function operatorItemReadFailureStage(
+  error: unknown,
+): OperatorItemReadFailureStage {
+  const structural = typeof error === "object" && error !== null
+    ? error as {
+      name?: unknown;
+      code?: unknown;
+      message?: unknown;
+      status?: unknown;
+    }
+    : null;
+  const isReaderError = error instanceof OperatorItemReadError ||
+    (
+      structural?.name === "OperatorItemReadError" &&
+      typeof structural.code === "string" &&
+      [
+        "INVALID_REQUEST",
+        "SERVICE_UNAVAILABLE",
+        "READ_FAILED",
+        "INVALID_RESPONSE",
+      ].includes(structural.code) &&
+      typeof structural.message === "string" &&
+      (structural.status === 400 || structural.status === 503)
+    );
+  if (!isReaderError) {
+    if (error instanceof TypeError) return "unexpected_type_error";
+    if (error instanceof RangeError) return "unexpected_range_error";
+    if (error instanceof Error) return "unexpected_error";
+    return "unknown";
+  }
+  const code = structural?.code;
+  if (code === "SERVICE_UNAVAILABLE") return "reader_not_configured";
+  if (code === "INVALID_REQUEST") return "request_invalid";
+  if (code === "READ_FAILED") return "rpc_read_failed";
+
+  const message = String(structural?.message || "");
+  if (message.includes("cursor")) return "cursor_invalid";
+  if (message.includes("Canonical Agent count")) return "agent_counts_invalid";
+  if (
+    message.includes("counts are inconsistent") ||
+    message === "openCount is invalid." ||
+    message === "requiresDecisionCount is invalid." ||
+    message === "blockingCount is invalid."
+  ) {
+    return "aggregate_counts_invalid";
+  }
+  if (message.startsWith("Operator Attention entry")) {
+    return "entry_shape_invalid";
+  }
+  if (
+    message.includes("conditionKey") ||
+    /operator item \d+ id is invalid\./u.test(message)
+  ) {
+    return "item_identity_invalid";
+  }
+  if (message.includes(" class")) return "item_class_invalid";
+  if (message.includes(" severity")) return "item_severity_invalid";
+  if (
+    message.includes(" fanout") ||
+    message.includes("affected Agent")
+  ) {
+    return "item_fanout_invalid";
+  }
+  if (
+    message.includes(" scope") ||
+    message.includes("crosses Agent scope")
+  ) {
+    return "item_scope_invalid";
+  }
+  if (message.startsWith("Evidence ")) return "item_evidence_invalid";
+  if (message.includes(" diagnosis")) return "item_diagnosis_invalid";
+  if (message.includes("emediation")) return "item_remediation_invalid";
+  if (
+    message.includes(" ordering") ||
+    message.includes(" dependencies")
+  ) {
+    return "item_ordering_invalid";
+  }
+  if (message.includes(" recovery")) return "item_recovery_invalid";
+  if (
+    message.includes("Attention state") ||
+    message.includes("active Attention item")
+  ) {
+    return "item_attention_state_invalid";
+  }
+  return "rpc_response_invalid";
 }
 
 function fail(
@@ -859,30 +978,37 @@ export async function readOperatorAttentionPage(
     fail("INVALID_REQUEST", "now is invalid.");
   }
   const config = readerConfig(dependencies);
-  const response = await config.fetchFn(
-    `${config.baseUrl}/rest/v1/rpc/get_operator_attention_page`,
-    {
-      method: "POST",
-      headers: {
-        apikey: config.serviceRoleKey,
-        Authorization: `Bearer ${config.serviceRoleKey}`,
-        "Content-Type": "application/json",
-        "Cache-Control": "no-store",
+  // Cloudflare's global fetch is receiver-sensitive. Calling the stored
+  // transport as config.fetchFn(...) binds `this` to config and throws an
+  // Illegal invocation before the canonical RPC reaches PostgREST.
+  const fetchFn = config.fetchFn;
+  let response: Response;
+  try {
+    response = await fetchFn(
+      `${config.baseUrl}/rest/v1/rpc/get_operator_attention_page`,
+      {
+        method: "POST",
+        headers: {
+          apikey: config.serviceRoleKey,
+          Authorization: `Bearer ${config.serviceRoleKey}`,
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        },
+        body: JSON.stringify({
+          p_user_id: userId,
+          p_agent_id: agentId,
+          p_now: now.toISOString(),
+          p_limit: limit,
+          p_after_source_key: cursor?.sourceKey ?? null,
+          p_after_source_ordinal: cursor?.sourceOrdinal ?? null,
+          p_after_detected_at: cursor?.detectedAt ?? null,
+          p_after_id: cursor?.itemId ?? null,
+        }),
       },
-      body: JSON.stringify({
-        p_user_id: userId,
-        p_agent_id: agentId,
-        p_now: now.toISOString(),
-        p_limit: limit,
-        p_after_source_key: cursor?.sourceKey ?? null,
-        p_after_source_ordinal: cursor?.sourceOrdinal ?? null,
-        p_after_detected_at: cursor?.detectedAt ?? null,
-        p_after_id: cursor?.itemId ?? null,
-      }),
-    },
-  ).catch(() =>
-    fail("READ_FAILED", "Canonical Operator Attention is unavailable.")
-  );
+    );
+  } catch {
+    fail("READ_FAILED", "Canonical Operator Attention is unavailable.");
+  }
   const rows = await responseRows(response);
   const snapshot = record(rows[0]) as OperatorAttentionSnapshotRow | null;
   if (!snapshot || rows.length !== 1 || !Array.isArray(snapshot.items)) {

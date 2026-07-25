@@ -12,6 +12,7 @@ import { compileOperatorItems } from "./operator-issue-compiler.ts";
 import {
   isOperatorAttentionCursor,
   OperatorItemReadError,
+  operatorItemReadFailureStage,
   readOperatorAttentionPage,
 } from "./operator-item-reader.ts";
 
@@ -28,6 +29,46 @@ const AGENT_B = {
 };
 const ITEM_ID = "33333333-3333-4333-8333-333333333333";
 const DETECTED_AT = "2026-07-24T18:00:00.000Z";
+
+Deno.test("operator item reader exposes only allowlisted rollout failure stages", () => {
+  assertEquals(
+    operatorItemReadFailureStage(
+      new OperatorItemReadError(
+        "INVALID_RESPONSE",
+        "Operator item 0 diagnosis is invalid.",
+        503,
+      ),
+    ),
+    "item_diagnosis_invalid",
+  );
+  assertEquals(
+    operatorItemReadFailureStage(
+      new OperatorItemReadError(
+        "READ_FAILED",
+        "upstream body must never be copied",
+        503,
+      ),
+    ),
+    "rpc_read_failed",
+  );
+  assertEquals(
+    operatorItemReadFailureStage(new Error("secret-shaped arbitrary error")),
+    "unexpected_error",
+  );
+  assertEquals(
+    operatorItemReadFailureStage({
+      name: "OperatorItemReadError",
+      code: "INVALID_RESPONSE",
+      status: 503,
+      message: "Operator item 0 recovery is invalid.",
+    }),
+    "item_recovery_invalid",
+  );
+  assertEquals(
+    operatorItemReadFailureStage(new TypeError("private value")),
+    "unexpected_type_error",
+  );
+});
 
 function entry(): LaunchOperatorAttentionEntry {
   const candidate = compileOperatorItems([
@@ -129,6 +170,63 @@ Deno.test("operator item reader returns one shared condition with exact unique a
     p_after_detected_at: null,
     p_after_id: null,
   });
+});
+
+Deno.test("operator item reader invokes a stored Worker fetch without a receiver", async () => {
+  let receiver: unknown = "not-called";
+  const receiverSensitiveFetch = (function (
+    this: unknown,
+  ) {
+    receiver = this;
+    if (this !== undefined) {
+      throw new TypeError("Illegal invocation");
+    }
+    return Promise.resolve(Response.json([snapshot()]));
+  }) as typeof fetch;
+
+  await readOperatorAttentionPage(
+    USER_ID,
+    [AGENT_A, AGENT_B],
+    null,
+    {},
+    {
+      ...dependencies,
+      fetchFn: receiverSensitiveFetch,
+    },
+  );
+
+  assertEquals(receiver, undefined);
+});
+
+Deno.test("operator item reader maps synchronous transport failures safely", async () => {
+  const error = await assertRejects(
+    () =>
+      readOperatorAttentionPage(
+        USER_ID,
+        [AGENT_A],
+        AGENT_A.id,
+        {},
+        {
+          ...dependencies,
+          fetchFn: (() => {
+            throw new TypeError("private transport detail");
+          }) as typeof fetch,
+        },
+      ),
+    OperatorItemReadError,
+  );
+
+  assertEquals(error.code, "READ_FAILED");
+  assertEquals(error.status, 503);
+  assertEquals(
+    error.message,
+    "Canonical Operator Attention is unavailable.",
+  );
+  assertEquals(
+    JSON.stringify(error).includes("private transport detail"),
+    false,
+  );
+  assertEquals(operatorItemReadFailureStage(error), "rpc_read_failed");
 });
 
 Deno.test("operator item reader round-trips an opaque producer-order cursor", async () => {

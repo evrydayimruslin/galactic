@@ -1012,7 +1012,7 @@ function OperatorIssueCard({
               {!read
                 ? (
                   <button
-                    aria-label="Mark resolved; hide this card without claiming the underlying condition is fixed"
+                    aria-label="Mark read; keep this card open while clearing its unread state"
                     className="neb-btn-sm secondary"
                     disabled={busy !== null}
                     onClick={() => void act("mark_read")}

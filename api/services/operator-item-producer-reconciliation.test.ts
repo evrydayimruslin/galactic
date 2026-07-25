@@ -109,6 +109,30 @@ Deno.test("operator producer sweep replays account fanout and reset recovery", a
   });
 });
 
+Deno.test("operator producer sweep invokes stored Worker fetch without a receiver", async () => {
+  let receiver: unknown = "not-called";
+  const receiverSensitiveFetch = (function (
+    this: unknown,
+  ) {
+    receiver = this;
+    if (this !== undefined) {
+      throw new TypeError("Illegal invocation");
+    }
+    return Promise.resolve(Response.json([]));
+  }) as typeof fetch;
+
+  const summary = await runOperatorItemProducerReconciliationCycle({
+    now: NOW,
+  }, {
+    fetchFn: receiverSensitiveFetch,
+    supabaseUrl: "https://supabase.test",
+    serviceRoleKey: "service-role",
+  });
+
+  assertEquals(receiver, undefined);
+  assertEquals(summary.ownersDiscovered, 0);
+});
+
 Deno.test("operator producer sweep isolates owners and logs codes only", async () => {
   const logs: Array<Record<string, unknown>> = [];
   const summary = await runOperatorItemProducerReconciliationCycle({

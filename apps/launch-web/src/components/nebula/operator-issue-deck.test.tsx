@@ -157,6 +157,12 @@ describe("OperatorIssueDeck", () => {
     expect(markup).toContain(
       "pane=routines&amp;item=run%3A44444444-4444-4444-8444-444444444444",
     );
+    expect(markup).toContain(
+      'aria-label="Mark read; keep this card open while clearing its unread state"',
+    );
+    expect(markup).not.toContain(
+      'aria-label="Mark resolved; hide this card without claiming the underlying condition is fixed"',
+    );
     expect(markup).toContain("Mark resolved");
     expect(markup).toContain("Run once");
     expect(markup).not.toContain("real side effects");
