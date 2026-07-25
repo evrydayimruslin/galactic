@@ -263,7 +263,6 @@ function validateDeploymentFence(
   envelope,
   expectedWorker,
   expectedVersionId,
-  expectedVersionTag,
 ) {
   if (envelope.scriptName !== expectedWorker) {
     fail(
@@ -286,12 +285,10 @@ function validateDeploymentFence(
       "Comparison telemetry did not originate from the fenced Worker version.",
     );
   }
-  if (envelope.scriptVersion.tag !== expectedVersionTag) {
-    fail(
-      "DEPLOYMENT_TAG_MISMATCH",
-      "Comparison telemetry did not carry the fenced release tag.",
-    );
-  }
+  // Cloudflare Tail's `scriptVersion.tag` is not the Workers version
+  // annotation checked by the workflow. The pre/post deployment fence binds
+  // that annotation to expectedVersionTag; every trace is bound here by the
+  // exact immutable version ID.
   if (
     envelope.outcome !== "ok" ||
     envelope.truncated !== false ||
@@ -588,7 +585,6 @@ export function verifyAttentionShadowEvidence(input, options) {
         envelope,
         expectedWorker,
         expectedVersionId,
-        expectedVersionTag,
       );
       const comparison = validateComparison(candidate);
       addComparison(surfaces[comparison.surface], comparison);

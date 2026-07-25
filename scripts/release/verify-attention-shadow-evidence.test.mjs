@@ -248,16 +248,6 @@ for (
       },
       "DEPLOYMENT_VERSION_MISMATCH",
     ],
-    [
-      "wrong version tag",
-      {
-        scriptVersion: {
-          id: VERSION_ID,
-          tag: `api-${"b".repeat(40)}`,
-        },
-      },
-      "DEPLOYMENT_TAG_MISMATCH",
-    ],
   ]
 ) {
   test(`rejects a ${name} deployment fence`, () => {
@@ -270,6 +260,21 @@ for (
     );
   });
 }
+
+test("uses the exact version ID rather than Cloudflare Tail's runtime tag", () => {
+  const evidence = verifyAttentionShadowEvidence(
+    capture(
+      envelope(comparison(), {
+        scriptVersion: { id: VERSION_ID, tag: "runtime-tag" },
+      }),
+      envelope(comparison({ surface: "agent" }), {
+        scriptVersion: { id: VERSION_ID, tag: null },
+      }),
+    ),
+    options(),
+  );
+  assert.equal(evidence.deployment.version_tag, VERSION_TAG);
+});
 
 for (
   const [name, telemetry, code] of [
