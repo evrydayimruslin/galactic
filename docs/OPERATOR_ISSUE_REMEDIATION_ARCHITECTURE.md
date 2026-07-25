@@ -265,6 +265,33 @@ Execution remediations are intentionally suppressed in M6. M7 owns
 side-effect-free verification, real `Run once`, successful-recovery handling,
 and the separate explicit decision to resume a paused schedule.
 
+## M7 implementation boundary
+
+M7 exposes one narrow execution endpoint for the compiler-owned `run_once`
+remediation. The client submits only the canonical item/remediation IDs, an
+idempotency key, and the Agent Home revision it reviewed. The database resolves
+the target and atomically revalidates owner scope, active issue state, closed
+registry fields, paused canonical routine, action lease, revision, and
+concurrency before queuing.
+
+The queued run:
+
+- executes real routine code and therefore can consume usage or create external
+  side effects;
+- has exactly one attempt;
+- is linked to the durable operator action request;
+- is authorized again immediately before handler execution; and
+- leaves routine status paused on both success and failure.
+
+Successful execution clears the runtime auto-pause marker and writes a complete,
+empty health-source observation, which recovers only that canonical issue
+episode. The card then offers **Resume scheduled runs** as a separate Agent Home
+action. It never resumes automatically.
+
+`Verify connection` remains reserved for platform-controlled, side-effect-free
+checks. Provider setup already uses validated **Save and recheck**; developer
+routine code is never mislabeled as a connection test.
+
 ## Rollout order
 
 1. Contracts and deterministic compiler.

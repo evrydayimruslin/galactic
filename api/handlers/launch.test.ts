@@ -856,6 +856,10 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
       true,
     );
     assertEquals(
+      body.apiRoutes.includes('POST /api/launch/operator-items/:id/actions'),
+      true,
+    );
+    assertEquals(
       body.apiRoutes.includes('GET /api/launch/wallet/topup/quote'),
       false,
     );
@@ -6085,6 +6089,97 @@ Deno.test('launch canonical Attention updates only owner presentation state', as
   );
 });
 
+Deno.test('launch canonical Run once queues the exact server-owned remediation and leaves scheduling paused', async () => {
+  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+  const requestId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const runId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const leaseToken = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const idempotencyKey = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        operatorRequest(
+          `/api/launch/operator-items/${OPERATOR_ITEM_ID}/actions`,
+          'POST',
+          {
+            remediationId: 'run_once:canonical',
+            idempotencyKey,
+            expectedRevision: `ah1:${HOME_APP_ID}:7`,
+          },
+        ),
+      );
+      const body = await response.json() as Record<string, unknown>;
+
+      assertEquals(response.status, 202);
+      assertEquals(body.itemId, OPERATOR_ITEM_ID);
+      assertEquals(body.remediationId, 'run_once:canonical');
+      assertEquals(body.action, 'run_once');
+      assertEquals(body.runId, runId);
+      assertEquals(body.scheduleState, 'paused');
+      assertEquals(body.replayed, false);
+      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+
+      const queue = calls.find((call) =>
+        call.url.endsWith(
+          '/rest/v1/rpc/queue_operator_item_routine_run_once',
+        )
+      );
+      assertEquals(queue?.body, {
+        p_request_id: requestId,
+        p_app_id: HOME_APP_ID,
+        p_user_id: OPERATOR_USER_ID,
+        p_routine_id: HOME_ROUTINE_ID,
+        p_item_id: OPERATOR_ITEM_ID,
+        p_remediation_id: 'run_once:canonical',
+        p_lease_token: leaseToken,
+        p_expected_revision: '7',
+      });
+    },
+    operatorFetchMock({
+      calls,
+      rpc: (name, body) => {
+        if (name === 'resolve_operator_item_routine_run_once') {
+          return jsonResponse([{
+            app_id: HOME_APP_ID,
+            routine_id: HOME_ROUTINE_ID,
+          }]);
+        }
+        if (name === 'claim_agent_home_action') {
+          assertEquals(body.p_action, 'operator_run_once');
+          assertEquals(body.p_request_payload, {
+            action: 'operator_run_once',
+            capabilityIds: [],
+            version: null,
+            routineId: HOME_ROUTINE_ID,
+            operatorItemId: OPERATOR_ITEM_ID,
+            remediationId: 'run_once:canonical',
+          });
+          return jsonResponse([{
+            request_id: requestId,
+            request_lease_token: leaseToken,
+            is_new: true,
+            request_status: 'in_progress',
+            request_response: {},
+            request_fingerprint: 'a'.repeat(64),
+            current_revision: '7',
+          }]);
+        }
+        if (name === 'queue_operator_item_routine_run_once') {
+          return jsonResponse([{ run_id: runId, is_new: true }]);
+        }
+        if (name === 'complete_agent_home_action') {
+          return jsonResponse([{
+            request_id: requestId,
+            request_status: 'completed',
+            request_response: body.p_response,
+          }]);
+        }
+        return undefined;
+      },
+    }),
+  );
+});
+
 Deno.test('launch operator routes reject connected-Agent keys with private errors', async () => {
   await withLaunchEnv(
     async () => {
@@ -6097,6 +6192,15 @@ Deno.test('launch operator routes reject connected-Agent keys with private error
           `/api/launch/operator-items/${OPERATOR_ITEM_ID}/attention`,
           'PATCH',
           { action: 'mark_read' },
+        ),
+        operatorRequest(
+          `/api/launch/operator-items/${OPERATOR_ITEM_ID}/actions`,
+          'POST',
+          {
+            remediationId: 'run_once:canonical',
+            idempotencyKey: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+            expectedRevision: `ah1:${HOME_APP_ID}:7`,
+          },
         ),
         operatorRequest('/api/launch/fleet/preferences'),
         operatorRequest('/api/launch/search?q=mail'),
@@ -6144,6 +6248,10 @@ Deno.test('launch OpenAPI documents operator preference, search, order, and acti
       Boolean(
         spec.paths?.['/api/launch/operator-items/{id}/attention'],
       ),
+      true,
+    );
+    assertEquals(
+      Boolean(spec.paths?.['/api/launch/operator-items/{id}/actions']),
       true,
     );
     assertEquals(

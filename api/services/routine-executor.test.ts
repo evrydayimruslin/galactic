@@ -1154,6 +1154,214 @@ Deno.test("processQueuedRoutineRun: claims the queued run and executes the handl
   }
 });
 
+Deno.test("processQueuedRoutineRun: authorized Run once executes while paused, recovers the issue, and leaves scheduling paused", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  const userId = "11111111-1111-4111-8111-111111111111";
+  const appId = "22222222-2222-4222-8222-222222222222";
+  const routineId = "33333333-3333-4333-8333-333333333333";
+  const runId = "44444444-4444-4444-8444-444444444444";
+  const actionRequestId = "99999999-9999-4999-8999-999999999999";
+  const specialRun = {
+    id: runId,
+    routine_id: routineId,
+    user_id: userId,
+    metadata: { source: "operator_item.run_once" },
+    agent_home_action_request_id: actionRequestId,
+    max_attempts: 1,
+    trigger: "manual",
+  };
+  let handlerInvoked = false;
+  const recoveryBodies: Array<Record<string, unknown>> = [];
+  const routinePatches: Array<Record<string, unknown>> = [];
+  const runPatches: Array<Record<string, unknown>> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body
+      ? JSON.parse(String(init.body)) as Record<string, unknown>
+      : {};
+    if (table === "routine_runs" && method === "GET") {
+      return jsonResponse([queuedRunRow(specialRun)]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      runPatches.push(body);
+      return jsonResponse([runRow({ ...specialRun, ...body })]);
+    }
+    if (
+      table === "authorize_operator_item_routine_run_once" &&
+      method === "POST"
+    ) {
+      return jsonResponse([{
+        is_operator_run_once: true,
+        authorized: true,
+        item_id: "88888888-8888-4888-8888-888888888888",
+      }]);
+    }
+    if (table === "user_routines" && method === "GET") {
+      return jsonResponse([routineRow({
+        id: routineId,
+        user_id: userId,
+        composer_app_id: appId,
+        status: "paused",
+        metadata: {
+          auto_pause: {
+            reason: "consecutive_failures",
+            at: "2026-05-17T11:55:00.000Z",
+          },
+        },
+      })]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      routinePatches.push(body);
+      return jsonResponse([routineRow({
+        id: routineId,
+        user_id: userId,
+        composer_app_id: appId,
+        status: "paused",
+        metadata: {
+          auto_pause: {
+            reason: "consecutive_failures",
+            at: "2026-05-17T11:55:00.000Z",
+          },
+        },
+        ...body,
+      })]);
+    }
+    if (table === "routine_capabilities") return jsonResponse([]);
+    if (table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "users") {
+      return jsonResponse([{ ...userRow(), id: userId }]);
+    }
+    if (table === "routine_run_steps" && method === "POST") {
+      return jsonResponse([{ id: "step-1" }]);
+    }
+    if (table === "reconcile_operator_items" && method === "POST") {
+      recoveryBodies.push(body);
+      return jsonResponse({
+        observedCount: 0,
+        insertedCount: 0,
+        updatedCount: 0,
+        recoveredCount: 1,
+        items: [],
+      });
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    await processQueuedRoutineRun(
+      { routineRunId: runId },
+      {
+        now: NOW,
+        clock: () => NOW,
+        invokeMcp: async () => {
+          handlerInvoked = true;
+          return jsonResponse({
+            result: {
+              content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+            },
+          });
+        },
+      },
+    );
+
+    assertEquals(handlerInvoked, true);
+    assert(runPatches.some((patch) => patch.status === "succeeded"));
+    assert(
+      routinePatches.every((patch) => patch.status !== "active"),
+      "successful verification must not resume scheduled work",
+    );
+    const successBookkeeping = routinePatches.find((patch) =>
+      patch.last_success_at === NOW.toISOString()
+    );
+    assert(successBookkeeping);
+    assertEquals(
+      Object.hasOwn(
+        successBookkeeping.metadata as Record<string, unknown>,
+        "auto_pause",
+      ),
+      false,
+    );
+    const healthRecovery = recoveryBodies.find((body) =>
+      body.p_source_key === `routine.health:${routineId}`
+    );
+    assert(healthRecovery);
+    assertEquals(healthRecovery.p_items, []);
+    assertEquals(healthRecovery.p_complete_snapshot, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
+Deno.test("processQueuedRoutineRun: stale or tampered operator remediation fails closed", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  let handlerInvoked = false;
+  const runPatches: Array<Record<string, unknown>> = [];
+  const specialRun = {
+    metadata: { source: "operator_item.run_once" },
+    agent_home_action_request_id: "99999999-9999-4999-8999-999999999999",
+    max_attempts: 1,
+    trigger: "manual",
+  };
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body
+      ? JSON.parse(String(init.body)) as Record<string, unknown>
+      : {};
+    if (table === "routine_runs" && method === "GET") {
+      return jsonResponse([queuedRunRow(specialRun)]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      runPatches.push(body);
+      return jsonResponse([runRow({ ...specialRun, ...body })]);
+    }
+    if (table === "authorize_operator_item_routine_run_once") {
+      return jsonResponse([{
+        is_operator_run_once: true,
+        authorized: false,
+        item_id: null,
+      }]);
+    }
+    if (table === "user_routines") {
+      return jsonResponse([routineRow({ status: "paused" })]);
+    }
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    await processQueuedRoutineRun(
+      { routineRunId: "run-1" },
+      {
+        now: NOW,
+        clock: () => NOW,
+        invokeMcp: async () => {
+          handlerInvoked = true;
+          return jsonResponse({ result: { content: [] } });
+        },
+      },
+    );
+    assertEquals(handlerInvoked, false);
+    assert(
+      runPatches.some((patch) =>
+        patch.status === "skipped" &&
+        (patch.error as Record<string, unknown>)?.code ===
+          "operator_run_once_not_authorized"
+      ),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
 Deno.test("processQueuedRoutineRun: concurrency admission coalesces and retries a sparse routine at lease release", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;

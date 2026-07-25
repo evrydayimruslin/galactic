@@ -222,6 +222,28 @@ export async function recordRoutinePausedOperatorItem(
   }, dependencies);
 }
 
+/**
+ * A successful M7 verification is a complete observation that the routine
+ * health condition is absent. Persistence recovers only the active episode for
+ * this exact source; it never changes the routine's paused schedule state.
+ */
+export async function recoverRoutineHealthOperatorItem(
+  input: {
+    userId: string;
+    routineId: string;
+    observedAt: string;
+  },
+  dependencies: OperatorItemProducerDependencies = {},
+): Promise<OperatorItemProducerResult> {
+  return await persistCompiled({
+    userId: input.userId,
+    sourceKey: OPERATOR_ITEM_SOURCE.routineHealth(input.routineId),
+    observedAt: input.observedAt,
+    conditions: [],
+    completeSnapshot: true,
+  }, dependencies);
+}
+
 export function accountUsageConditions(
   status: Pick<AccountCapacityStatus, "burst" | "weekly">,
   affectedAgentsInput: readonly OperatorIssueAgentReference[],

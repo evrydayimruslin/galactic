@@ -14,6 +14,7 @@ import {
   reconcileAgentSetupOperatorItems,
   reconcileRoutineUsageOperatorItem,
   recordRoutinePausedOperatorItem,
+  recoverRoutineHealthOperatorItem,
   runOperatorItemProducerBestEffort,
   scheduleOperatorItemProducer,
 } from "./operator-item-producers.ts";
@@ -203,6 +204,23 @@ Deno.test("operator producers: paused routine is partial and run-specific", asyn
       observedAt: OBSERVED_AT,
     }],
   });
+});
+
+Deno.test("operator producers: successful verification recovers only the routine health source", async () => {
+  const captured = captureReconciliations();
+  await recoverRoutineHealthOperatorItem({
+    userId: USER_ID,
+    routineId: ROUTINE_ID,
+    observedAt: "2026-07-24T18:05:00.000Z",
+  }, captured);
+
+  assertEquals(captured.calls, [{
+    userId: USER_ID,
+    sourceKey: OPERATOR_ITEM_SOURCE.routineHealth(ROUTINE_ID),
+    items: [],
+    observedAt: "2026-07-24T18:05:00.000Z",
+    completeSnapshot: true,
+  }]);
 });
 
 Deno.test("operator producers: routine usage complete snapshots recover at recheck", async () => {

@@ -20,7 +20,9 @@ import {
   parseAgentHomeRevision,
   pauseAgentHomeRoutineEmergency,
   queueAgentHomeRoutineRun,
+  queueOperatorItemRoutineRunOnce,
   renewAgentHomeActionLease,
+  resolveOperatorItemRoutineRunOnce,
   updateAgentHomeIdentityCAS,
   updateAgentHomeRoutineCAS,
   updateAgentHomeRoutineStatusCAS,
@@ -35,6 +37,7 @@ const RUN_ID = "55555555-5555-4555-8555-555555555555";
 const CAPABILITY_ID = "66666666-6666-4666-8666-666666666666";
 const REQUEST_ID = "77777777-7777-4777-8777-777777777777";
 const LEASE_TOKEN = "88888888-8888-4888-8888-888888888888";
+const ITEM_ID = "99999999-9999-4999-8999-999999999999";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -545,6 +548,53 @@ Deno.test("run-now queue atomically carries revision, routine, request, and leas
     })),
   );
   assertEquals(queued, { runId: RUN_ID, isNew: true });
+});
+
+Deno.test("operator Run once resolves and queues only the canonical item remediation", async () => {
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const options = deps(mockFetch((url, init) => {
+    calls.push({ url, body: bodyOf(init) });
+    if (url.endsWith("/rpc/resolve_operator_item_routine_run_once")) {
+      return jsonResponse([{ app_id: APP_ID, routine_id: ROUTINE_ID }]);
+    }
+    assert(url.endsWith("/rpc/queue_operator_item_routine_run_once"));
+    return jsonResponse([{ run_id: RUN_ID, is_new: true }]);
+  }));
+  const target = await resolveOperatorItemRoutineRunOnce({
+    userId: USER_ID,
+    itemId: ITEM_ID,
+    remediationId: "run_once:primary",
+    authSource: "supabase",
+  }, options);
+  const queued = await queueOperatorItemRoutineRunOnce({
+    appId: target.appId,
+    userId: USER_ID,
+    routineId: target.routineId,
+    itemId: ITEM_ID,
+    remediationId: "run_once:primary",
+    requestId: REQUEST_ID,
+    leaseToken: LEASE_TOKEN,
+    expectedRevision: formatAgentHomeRevision(APP_ID, 12),
+    authSource: "supabase",
+  }, options);
+
+  assertEquals(target, { appId: APP_ID, routineId: ROUTINE_ID });
+  assertEquals(queued, { runId: RUN_ID, isNew: true });
+  assertEquals(calls[0]?.body, {
+    p_user_id: USER_ID,
+    p_item_id: ITEM_ID,
+    p_remediation_id: "run_once:primary",
+  });
+  assertEquals(calls[1]?.body, {
+    p_request_id: REQUEST_ID,
+    p_app_id: APP_ID,
+    p_user_id: USER_ID,
+    p_routine_id: ROUTINE_ID,
+    p_item_id: ITEM_ID,
+    p_remediation_id: "run_once:primary",
+    p_lease_token: LEASE_TOKEN,
+    p_expected_revision: "12",
+  });
 });
 
 Deno.test("run-now queue maps the durable concurrency gate to an explicit 409", async () => {

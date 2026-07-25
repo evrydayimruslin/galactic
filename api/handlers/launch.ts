@@ -124,6 +124,7 @@ import {
   type LaunchLeaderboardResponse,
   type LaunchMoneyAmount,
   type LaunchOperatorAttentionActionResponse,
+  type LaunchOperatorItemActionResponse,
   type LaunchPayoutStatus,
   type LaunchPlatformModelResponse,
   type LaunchPlatformPrimitive,
@@ -370,6 +371,10 @@ import {
   applyOperatorItemAttentionAction,
   OperatorItemAttentionStateError,
 } from "../services/operator-item-attention-state.ts";
+import {
+  executeOperatorItemRemediation,
+  OperatorItemExecutionError,
+} from "../services/operator-item-execution.ts";
 
 // Cross-Agent grant + settings mutations are sensitive. The SensitiveRoute enum
 // lives in sensitive-route-rate-limit.ts (outside this file's edit scope), so we
@@ -413,6 +418,18 @@ async function privateLaunchRoute(
       }, err.status);
     }
     if (err instanceof OperatorItemAttentionStateError) {
+      return privateLaunchJson({
+        error: err.message,
+        code: err.code,
+      }, err.status);
+    }
+    if (err instanceof OperatorItemExecutionError) {
+      return privateLaunchJson({
+        error: err.message,
+        code: err.code,
+      }, err.status);
+    }
+    if (err instanceof AgentHomeRevisionError) {
       return privateLaunchJson({
         error: err.message,
         code: err.code,
@@ -865,6 +882,19 @@ export async function handleLaunch(
         handleLaunchOperatorItemAttention(
           request,
           operatorItemAttentionMatch[1],
+          method,
+        )
+      );
+    }
+
+    const operatorItemActionMatch = path.match(
+      /^\/api\/launch\/operator-items\/([^/]+)\/actions$/,
+    );
+    if (operatorItemActionMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchOperatorItemAction(
+          request,
+          operatorItemActionMatch[1],
           method,
         )
       );
@@ -5174,6 +5204,52 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       },
     },
   };
+  publicSpec.paths["/api/launch/operator-items/{id}/actions"] = {
+    post: {
+      operationId: "executeLaunchOperatorItemRemediation",
+      summary:
+        "Idempotently execute one server-owned canonical issue remediation",
+      description:
+        "M7 supports real Run once verification for a paused routine. It can use usage and create side effects, and it never resumes scheduled work.",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+      ],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "remediationId",
+            "idempotencyKey",
+            "expectedRevision",
+          ],
+          properties: {
+            remediationId: { type: "string" },
+            idempotencyKey: { type: "string", format: "uuid" },
+            expectedRevision: { type: "string" },
+          },
+        }),
+      },
+      responses: {
+        "202": { description: "Verification run queued; schedule is paused" },
+        "400": { description: "Invalid request" },
+        "403": { description: "Account session required" },
+        "409": {
+          description:
+            "Issue or remediation is stale, routine is not paused, or a run is active",
+        },
+        "412": { description: "Agent Home revision conflict" },
+        "503": { description: "Durable action status could not be confirmed" },
+      },
+    },
+  };
   publicSpec.paths["/api/launch/agents/{id}/attention"] = {
     get: {
       operationId: "listLaunchAgentAttention",
@@ -5678,6 +5754,50 @@ async function handleLaunchOperatorItemAttention(
   });
   return privateLaunchJson(
     response satisfies LaunchOperatorAttentionActionResponse,
+  );
+}
+
+async function handleLaunchOperatorItemAction(
+  request: Request,
+  itemId: string,
+  method: string,
+): Promise<Response> {
+  if (method !== "POST") {
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const body = asRecord(await readJsonBody<unknown>(request));
+  if (!body) {
+    throw new RequestValidationError(
+      "Operator remediation request must be an object",
+    );
+  }
+  rejectUnknownAgentHomeFields(body, [
+    "remediationId",
+    "idempotencyKey",
+    "expectedRevision",
+  ]);
+  if (typeof body.remediationId !== "string") {
+    throw new RequestValidationError("remediationId is required");
+  }
+  if (typeof body.idempotencyKey !== "string") {
+    throw new RequestValidationError("idempotencyKey is required");
+  }
+  if (typeof body.expectedRevision !== "string") {
+    throw new RequestValidationError("expectedRevision is required");
+  }
+  const response = await executeOperatorItemRemediation({
+    userId: user.id,
+    itemId,
+    remediationId: body.remediationId,
+    idempotencyKey: body.idempotencyKey,
+    expectedRevision: body.expectedRevision,
+    authSource: user.authSource,
+  });
+  return privateLaunchJson(
+    response satisfies LaunchOperatorItemActionResponse,
+    202,
   );
 }
 

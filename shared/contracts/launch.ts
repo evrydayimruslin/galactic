@@ -143,6 +143,7 @@ export const LAUNCH_API_ROUTES = [
   'GET /api/launch/notifications',
   'GET /api/launch/attention',
   'PATCH /api/launch/operator-items/:id/attention',
+  'POST /api/launch/operator-items/:id/actions',
   'PATCH /api/launch/notifications',
   'POST /api/launch/notifications/:id/actions',
   'GET /api/launch/search',
@@ -1640,6 +1641,32 @@ export interface LaunchOperatorAttentionActionRequest {
 export interface LaunchOperatorAttentionActionResponse {
   itemId: string;
   attention: LaunchOperatorAttentionState;
+}
+
+/**
+ * Executes one server-owned remediation from the current canonical issue.
+ *
+ * The client supplies only opaque IDs plus the Agent Home revision it
+ * reviewed. It cannot choose an Agent, routine, authority, or side effect.
+ */
+export interface LaunchOperatorItemActionRequest {
+  remediationId: string;
+  /** Client-generated UUID; retries with the same key return the first run. */
+  idempotencyKey: string;
+  expectedRevision: string;
+}
+
+export interface LaunchOperatorItemActionResponse {
+  itemId: string;
+  remediationId: string;
+  action: 'run_once';
+  requestId: string;
+  runId: string;
+  state: 'queued';
+  /** A successful verification still requires a separate owner decision. */
+  scheduleState: 'paused';
+  replayed: boolean;
+  generatedAt: string;
 }
 
 export interface LaunchOperatorAttentionAgentCount {

@@ -39,13 +39,14 @@ import {
   reconcileAccountUsageOperatorItems,
   reconcileRoutineUsageOperatorItem,
   recordRoutinePausedOperatorItem,
+  recoverRoutineHealthOperatorItem,
   scheduleOperatorItemProducer,
 } from "./operator-item-producers.ts";
 
 const ROUTINE_SELECT =
   "id,user_id,composer_app_id,composer_app_slug,template_id,template_version,name,description,intent,handler_function,status,schedule,config,budget_policy,approval_policy,max_concurrency,next_run_at,last_run_at,last_success_at,last_error_at,failure_count,created_by_trace_id,metadata,created_at,updated_at,deleted_at,lease_id,lease_expires_at";
 const RUN_SELECT =
-  "id,routine_id,user_id,status,trigger,trace_id,started_at,completed_at,duration_ms,total_light,summary,error,run_config,metadata,created_at,lease_id,lease_expires_at,attempt_count,max_attempts,next_attempt_at";
+  "id,routine_id,user_id,status,trigger,trace_id,started_at,completed_at,duration_ms,total_light,summary,error,run_config,metadata,agent_home_action_request_id,created_at,lease_id,lease_expires_at,attempt_count,max_attempts,next_attempt_at";
 const USER_SELECT = "id,email,tier,provisional";
 
 const DEFAULT_LIMIT = 10;
@@ -267,6 +268,12 @@ interface ClaimedRun {
   source: "scheduled" | "queued";
 }
 
+interface OperatorRunOnceAuthorization {
+  isOperatorRunOnce: boolean;
+  authorized: boolean;
+  itemId: string | null;
+}
+
 function serviceHeaders(
   prefer = "return=representation",
 ): Record<string, string> {
@@ -305,6 +312,55 @@ async function fetchRows<T>(
     await fetch(restUrl(table, params), { headers: serviceHeaders() }),
     label,
   );
+}
+
+async function authorizeOperatorRunOnce(
+  run: ExecutorRunRow,
+): Promise<OperatorRunOnceAuthorization> {
+  if (
+    run.metadata?.source !== "operator_item.run_once" ||
+    !run.agent_home_action_request_id
+  ) {
+    return {
+      isOperatorRunOnce: false,
+      authorized: false,
+      itemId: null,
+    };
+  }
+  const response = await fetch(
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/rpc/authorize_operator_item_routine_run_once`,
+    {
+      method: "POST",
+      headers: serviceHeaders(),
+      body: JSON.stringify({
+        p_user_id: run.user_id,
+        p_run_id: run.id,
+        p_routine_id: run.routine_id,
+        p_action_request_id: run.agent_home_action_request_id,
+      }),
+    },
+  );
+  const rows = await readRows<{
+    is_operator_run_once: unknown;
+    authorized: unknown;
+    item_id: unknown;
+  }>(response, "Failed to authorize operator Run once");
+  const row = rows[0];
+  if (
+    !row ||
+    typeof row.is_operator_run_once !== "boolean" ||
+    typeof row.authorized !== "boolean" ||
+    (row.item_id !== null && typeof row.item_id !== "string")
+  ) {
+    throw new Error("Operator Run once authorization returned an invalid row");
+  }
+  return {
+    isOperatorRunOnce: row.is_operator_run_once,
+    authorized: row.authorized,
+    itemId: typeof row.item_id === "string" ? row.item_id : null,
+  };
 }
 
 interface ActiveRoutineAgentRow {
@@ -1524,6 +1580,7 @@ async function updateRoutineAfterRun(
     diagnostic: LaunchOperatorRunDiagnostic;
     runId: string;
   },
+  successfulVerification = false,
 ): Promise<boolean> {
   let autoPause = accounting.autoPause ?? null;
   const nextFailureCount = success ? 0 : (routine.failure_count || 0) + 1;
@@ -1558,8 +1615,15 @@ async function updateRoutineAfterRun(
       failure_count: nextFailureCount,
       updated_at: iso(now),
     };
-  if (Object.keys(metadataUpdates).length > 0) {
-    payload.metadata = { ...(routine.metadata || {}), ...metadataUpdates };
+  if (
+    Object.keys(metadataUpdates).length > 0 ||
+    (success && successfulVerification)
+  ) {
+    const baseMetadata = { ...(routine.metadata || {}) };
+    if (success && successfulVerification) {
+      delete baseMetadata.auto_pause;
+    }
+    payload.metadata = { ...baseMetadata, ...metadataUpdates };
   }
   if (autoPause) payload.status = "paused";
 
@@ -1671,9 +1735,33 @@ async function executeClaimedRun(
     return { status: "failed" };
   }
 
-  // Only active routines may execute. This also stops queued retries claimed
-  // before any pause, disable, delete, or terminal error transition landed.
-  if (routine.status !== "active") {
+  // Ordinary queue work remains active-only. M7's sole exception is a
+  // server-authored, durable Run once remediation for the still-active
+  // paused-routine issue. Metadata is only a routing hint; the database
+  // revalidates the action request, item, remediation, run link, and owner.
+  let operatorRunOnce = false;
+  if (run.metadata?.source === "operator_item.run_once") {
+    let authorization: OperatorRunOnceAuthorization;
+    try {
+      authorization = await authorizeOperatorRunOnce(run);
+    } catch {
+      await finishRun(run, "skipped", now, {
+        summary: "Run once authorization could not be verified.",
+        error: { code: "operator_run_once_authorization_unavailable" },
+      });
+      return { status: "skipped" };
+    }
+    operatorRunOnce = authorization.isOperatorRunOnce &&
+      authorization.authorized;
+    if (!operatorRunOnce || routine.status !== "paused") {
+      await finishRun(run, "skipped", now, {
+        summary:
+          "The paused-routine remediation is no longer authorized for this issue.",
+        error: { code: "operator_run_once_not_authorized" },
+      });
+      return { status: "skipped" };
+    }
+  } else if (routine.status !== "active") {
     await finishRun(run, "skipped", now, {
       summary: `Routine is ${routine.status}`,
     });
@@ -2023,7 +2111,20 @@ async function executeClaimedRun(
       completedAt,
       true,
       accounting,
+      undefined,
+      operatorRunOnce,
     );
+    if (operatorRunOnce) {
+      await scheduleOperatorItemProducer(
+        OPERATOR_ITEM_SOURCE.routineHealth(routine.id),
+        () =>
+          recoverRoutineHealthOperatorItem({
+            userId: routine.user_id,
+            routineId: routine.id,
+            observedAt: iso(completedAt),
+          }),
+      );
+    }
     return { status: "succeeded", autoPaused };
   } catch (bookkeepingErr) {
     console.error(
@@ -2036,6 +2137,17 @@ async function executeClaimedRun(
       summary:
         "Routine handler completed successfully (bookkeeping incomplete).",
     }).catch(() => {});
+    if (operatorRunOnce) {
+      await scheduleOperatorItemProducer(
+        OPERATOR_ITEM_SOURCE.routineHealth(routine.id),
+        () =>
+          recoverRoutineHealthOperatorItem({
+            userId: routine.user_id,
+            routineId: routine.id,
+            observedAt: iso(completedAt),
+          }),
+      ).catch(() => {});
+    }
     return { status: "succeeded", autoPaused: false };
   }
 }

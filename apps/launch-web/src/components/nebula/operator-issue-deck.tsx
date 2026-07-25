@@ -14,6 +14,7 @@ import type {
   LaunchOperatorAttentionEntry,
   LaunchOperatorAttentionProjection,
   LaunchOperatorRemediation,
+  LaunchOperatorRoutineRunDetail,
 } from "../../../../../shared/contracts/launch.ts";
 import {
   operatorAttentionAgentMap,
@@ -22,7 +23,7 @@ import {
   type OperatorAttentionAgent,
   resolveOperatorAttentionEntry,
 } from "../../lib/operator-attention";
-import { launchApi } from "../../lib/api";
+import { launchApi, LaunchApiRequestError } from "../../lib/api";
 import type { LaunchNavigate } from "../../lib/navigation";
 import { Glyph } from "./glyph";
 
@@ -42,6 +43,7 @@ export interface OperatorIssueDeckProps {
 
 interface RemediationProps {
   agents: ReadonlyMap<string, OperatorAttentionAgent>;
+  itemId: string;
   onChanged?: () => Promise<void> | void;
   onNavigate: LaunchNavigate;
   remediation: LaunchOperatorRemediation;
@@ -494,6 +496,313 @@ function InlineApprovalRemediation({
   );
 }
 
+const TERMINAL_RUN_STATUSES = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "skipped",
+]);
+
+export function runOnceFailureMessage(
+  detail: LaunchOperatorRoutineRunDetail,
+): string {
+  const safeDetail = detail.diagnostic?.summary?.trim() ||
+    detail.run.summary?.trim();
+  if (safeDetail) return safeDetail;
+  if (detail.run.status === "cancelled") {
+    return "The verification run was cancelled.";
+  }
+  if (detail.run.status === "skipped") {
+    return "The verification run did not start because its conditions changed.";
+  }
+  return "The verification run failed. Review the failed run for diagnostics.";
+}
+
+function waitForRunPoll(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 1_500));
+}
+
+function RunOnceRemediation({
+  agents,
+  itemId,
+  onChanged,
+  onNavigate,
+  remediation,
+}: RemediationProps): ReactElement {
+  const agent = agentForTarget(remediation, agents);
+  const [confirming, setConfirming] = useState(false);
+  const [phase, setPhase] = useState<
+    "idle" | "queueing" | "running" | "succeeded" | "failed" | "resuming"
+  >("idle");
+  const [runId, setRunId] = useState<string | null>(null);
+  const [runStatus, setRunStatus] = useState<string | null>(null);
+  const [routineStatus, setRoutineStatus] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const idempotencyKey = useRef<string | null>(null);
+  const disposed = useRef(false);
+  useEffect(() => {
+    disposed.current = false;
+    return () => {
+      disposed.current = true;
+    };
+  }, []);
+
+  const inspectHref = agent && runId
+    ? `/agents/${encodeURIComponent(agent.slug)}?pane=routines&item=${
+      encodeURIComponent(`run:${runId}`)
+    }`
+    : null;
+
+  const monitor = async (nextRunId: string) => {
+    if (!agent) return;
+    setPhase("running");
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const detail = await launchApi.operatorRoutineRun(
+        agent.slug,
+        nextRunId,
+      );
+      if (disposed.current) return;
+      if (
+        detail.agent.id !== agent.id ||
+        remediation.target.kind !== "routine" ||
+        detail.routine.id !== remediation.target.routineId ||
+        detail.run.id !== nextRunId
+      ) {
+        throw new Error("The run status did not match this remediation.");
+      }
+      setRunStatus(detail.run.status);
+      setRoutineStatus(detail.routine.status);
+      if (TERMINAL_RUN_STATUSES.has(detail.run.status)) {
+        if (detail.run.status === "succeeded") {
+          setError("");
+          setPhase("succeeded");
+        } else {
+          setError(runOnceFailureMessage(detail));
+          setPhase("failed");
+        }
+        return;
+      }
+      await waitForRunPoll();
+      if (disposed.current) return;
+    }
+    setPhase("failed");
+    setError("The run is still in progress. Open it to continue monitoring.");
+  };
+
+  const runOnce = async () => {
+    if (
+      !agent ||
+      remediation.key !== "run_once" ||
+      remediation.target.kind !== "routine" ||
+      phase === "queueing" ||
+      phase === "running"
+    ) return;
+    setPhase("queueing");
+    setError("");
+    let actionMayHaveQueued = false;
+    try {
+      if (runId) {
+        await monitor(runId);
+        return;
+      }
+      const home = await launchApi.agentHome(agent.slug);
+      idempotencyKey.current ??= crypto.randomUUID();
+      const queued = await launchApi.executeOperatorItemRemediation(itemId, {
+        remediationId: remediation.id,
+        expectedRevision: home.revision,
+        idempotencyKey: idempotencyKey.current,
+      });
+      actionMayHaveQueued = true;
+      if (
+        queued.itemId !== itemId ||
+        queued.remediationId !== remediation.id ||
+        queued.action !== "run_once" ||
+        queued.scheduleState !== "paused"
+      ) {
+        throw new Error("The remediation returned an unexpected run.");
+      }
+      setConfirming(false);
+      setRunId(queued.runId);
+      setRunStatus("queued");
+      await monitor(queued.runId);
+    } catch (reason) {
+      if (
+        !runId && !actionMayHaveQueued &&
+        !(reason instanceof LaunchApiRequestError &&
+          reason.code === "STATUS_UNKNOWN")
+      ) {
+        idempotencyKey.current = null;
+      }
+      setPhase("failed");
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "The verification run could not be completed.",
+      );
+    }
+  };
+
+  const resume = async () => {
+    if (!agent || phase !== "succeeded" || routineStatus !== "paused") return;
+    setPhase("resuming");
+    setError("");
+    try {
+      const home = await launchApi.agentHome(agent.slug);
+      await launchApi.actOnAgentHome(agent.slug, {
+        action: "activate",
+        expectedRevision: home.revision,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      await finishRemediation(onChanged);
+    } catch (reason) {
+      setPhase("succeeded");
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Scheduled runs could not be resumed.",
+      );
+    }
+  };
+
+  const prepareAnotherRun = () => {
+    idempotencyKey.current = null;
+    setRunId(null);
+    setRunStatus(null);
+    setRoutineStatus(null);
+    setError("");
+    setPhase("idle");
+    setConfirming(true);
+  };
+
+  return (
+    <div className="neb-operator-remediation-inline">
+      {phase === "idle" && !confirming
+        ? (
+          <button
+            className="neb-btn-sm primary"
+            disabled={!agent}
+            onClick={() => setConfirming(true)}
+            type="button"
+          >
+            {remediation.label}
+          </button>
+        )
+        : null}
+      {confirming && phase === "idle"
+        ? (
+          <div className="neb-operator-inline-confirm" role="group">
+            <span>
+              This performs a real routine run. It can use usage and create
+              external side effects. Scheduled runs stay paused.
+            </span>
+            <button
+              className="neb-btn-sm primary"
+              onClick={() => void runOnce()}
+              type="button"
+            >
+              Run once
+            </button>
+            <button
+              className="neb-btn-sm secondary"
+              onClick={() => setConfirming(false)}
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
+        )
+        : null}
+      {phase === "queueing" || phase === "running"
+        ? (
+          <span className="neb-ov-note" role="status">
+            {phase === "queueing" ? "Queueing run…" : "Running once…"}{" "}
+            Scheduled runs remain paused.
+          </span>
+        )
+        : null}
+      {phase === "succeeded" || phase === "resuming"
+        ? (
+          <div className="neb-operator-inline-confirm" role="group">
+            <span className="neb-success-note">
+              {routineStatus === "paused"
+                ? "Run succeeded. Scheduled runs are still paused."
+                : routineStatus === "active"
+                ? "Run succeeded. Scheduled runs are already active."
+                : `Run succeeded. The routine is ${routineStatus ?? "not active"}.`}
+            </span>
+            {routineStatus === "paused"
+              ? (
+                <button
+                  className="neb-btn-sm primary"
+                  disabled={phase === "resuming"}
+                  onClick={() => void resume()}
+                  type="button"
+                >
+                  {phase === "resuming"
+                    ? "Resuming…"
+                    : "Resume scheduled runs"}
+                </button>
+              )
+              : null}
+            {inspectHref
+              ? (
+                <a
+                  className="neb-btn-sm secondary"
+                  href={inspectHref}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onNavigate(inspectHref, { scroll: "preserve" });
+                  }}
+                >
+                  View run
+                </a>
+              )
+              : null}
+          </div>
+        )
+        : null}
+      {phase === "failed" && inspectHref
+        ? (
+          <a
+            className="neb-btn-sm secondary"
+            href={inspectHref}
+            onClick={(event) => {
+              event.preventDefault();
+              onNavigate(inspectHref, { scroll: "preserve" });
+            }}
+          >
+            View this failed run
+          </a>
+        )
+        : null}
+      {phase === "failed"
+        ? (
+          <button
+            className="neb-btn-sm secondary"
+            onClick={() => {
+              if (runStatus && TERMINAL_RUN_STATUSES.has(runStatus)) {
+                prepareAnotherRun();
+              } else {
+                void runOnce();
+              }
+            }}
+            type="button"
+          >
+            {runStatus && TERMINAL_RUN_STATUSES.has(runStatus)
+              ? "Run again"
+              : runId
+              ? "Check run status"
+              : "Try again"}
+          </button>
+        )
+        : null}
+      {error
+        ? <span className="neb-error-note" role="alert">{error}</span>
+        : null}
+    </div>
+  );
+}
+
 function RemediationControl(props: RemediationProps): ReactElement | null {
   const { agents, onNavigate, remediation } = props;
   if (remediation.key === "configure_provider") {
@@ -510,6 +819,9 @@ function RemediationControl(props: RemediationProps): ReactElement | null {
     remediation.key === "approve_grant"
   ) {
     return <InlineApprovalRemediation {...props} />;
+  }
+  if (remediation.key === "run_once") {
+    return <RunOnceRemediation {...props} />;
   }
   const href = operatorRemediationHref(remediation, agents);
   if (!href || remediation.presentation === "execute") return null;
@@ -670,6 +982,7 @@ function OperatorIssueCard({
           {item.remediations.map((remediation) => (
             <RemediationControl
               agents={agents}
+              itemId={item.id}
               key={remediation.id}
               onChanged={onChanged}
               onNavigate={onNavigate}

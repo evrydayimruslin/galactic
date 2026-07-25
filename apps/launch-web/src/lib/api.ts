@@ -39,6 +39,8 @@ import type {
   LaunchNotificationsResponse,
   LaunchOperatorAttentionActionRequest,
   LaunchOperatorAttentionActionResponse,
+  LaunchOperatorItemActionRequest,
+  LaunchOperatorItemActionResponse,
   LaunchOperatorRoutineRunDetail,
   LaunchOperatorRoutineRunLogExcerpt,
   LaunchCallerFunctionPermissionsUpdateRequest,
@@ -1220,6 +1222,19 @@ export class LaunchApiClient {
       }/attention`,
       {
         method: "PATCH",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  executeOperatorItemRemediation(
+    itemId: string,
+    request: LaunchOperatorItemActionRequest,
+  ): Promise<LaunchOperatorItemActionResponse> {
+    return this.fetchJson(
+      `/api/launch/operator-items/${encodeURIComponent(itemId)}/actions`,
+      {
+        method: "POST",
         body: JSON.stringify(request),
       },
     );
