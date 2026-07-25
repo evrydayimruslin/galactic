@@ -11,6 +11,12 @@ const migration = await Deno.readTextFile(
     import.meta.url,
   ),
 );
+const reservationInvariant = await Deno.readTextFile(
+  new URL(
+    "../../supabase/migrations/20260725214500_compute_subscription_budget_reservation_invariant.sql",
+    import.meta.url,
+  ),
+);
 
 function functionBody(name: string): string {
   const start = migration.indexOf(`CREATE OR REPLACE FUNCTION public.${name}(`);
@@ -60,6 +66,25 @@ Deno.test("Compute budgets have exactly one wallet or capacity backing", () => {
   assertStringIncludes(
     budgetTrigger,
     "Wallet Compute budget requires a cloud usage hold",
+  );
+});
+
+Deno.test("subscription Compute budgets retain capacity until terminal settlement", () => {
+  assertStringIncludes(
+    reservationInvariant,
+    "DROP CONSTRAINT compute_budget_amount_check",
+  );
+  assertStringIncludes(
+    reservationInvariant,
+    "billing_mode = 'subscription_capacity'",
+  );
+  assertStringIncludes(reservationInvariant, "status = 'reserved'");
+  assertStringIncludes(reservationInvariant, "actual_light = 0");
+  assertStringIncludes(reservationInvariant, "released_light = 0");
+  assertStringIncludes(reservationInvariant, "status <> 'reserved'");
+  assertStringIncludes(
+    reservationInvariant,
+    "released_light = GREATEST(reserved_light - actual_light, 0)",
   );
 });
 

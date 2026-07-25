@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(17);
+SELECT plan(23);
 
 INSERT INTO public.users (
   id,
@@ -90,6 +90,10 @@ CREATE TEMP TABLE compute_admission_capacity_test_state (
   wallet_result jsonb,
   subscription_self_result jsonb,
   subscription_cross_result jsonb,
+  subscription_claim_result jsonb,
+  subscription_prepare_result jsonb,
+  subscription_terminal_result jsonb,
+  subscription_settlement_result jsonb,
   replay_result jsonb,
   invalid_root_detail text,
   mismatch_detail text
@@ -271,6 +275,167 @@ SELECT is(
   ),
   'subscription_capacity:00000000-0000-4000-8000-00000000cb02',
   'cross-Agent subscription admission returns the requested capacity root'
+);
+
+UPDATE compute_admission_capacity_test_state
+SET subscription_claim_result = public.claim_compute_run(
+  (
+    SELECT (subscription_self_result->>'id')::uuid
+    FROM compute_admission_capacity_test_state
+  )
+);
+
+SELECT is(
+  (
+    SELECT (subscription_claim_result->>'claimed') || ':' ||
+      (subscription_claim_result->>'state')
+    FROM compute_admission_capacity_test_state
+  ),
+  'true:provisioning',
+  'a subscription Compute run acquires its provisioning claim'
+);
+
+UPDATE compute_admission_capacity_test_state
+SET subscription_prepare_result = public.prepare_compute_run_lease(
+  (
+    SELECT (subscription_self_result->>'id')::uuid
+    FROM compute_admission_capacity_test_state
+  ),
+  'compute-capacity-regression-container',
+  '30000000-0000-4000-8000-00000000ce01'::uuid,
+  '30000000-0000-4000-8000-00000000ce02'::uuid,
+  repeat('c', 64),
+  'gx-private-v1',
+  '[]'::jsonb,
+  false
+);
+
+SELECT is(
+  (
+    SELECT subscription_prepare_result->>'state'
+    FROM compute_admission_capacity_test_state
+  ),
+  'running',
+  'subscription lease preparation advances the claimed run to running'
+);
+
+SELECT ok(
+  (
+    SELECT budget.billing_mode = 'subscription_capacity'
+      AND budget.status = 'reserved'
+      AND budget.hold_id IS NULL
+      AND budget.capacity_reservation_id IS NOT NULL
+      AND budget.actual_light = 0
+      AND budget.released_light = 0
+    FROM public.compute_run_budget_reservations AS budget
+    WHERE budget.run_id = (
+      SELECT (subscription_self_result->>'id')::uuid
+      FROM compute_admission_capacity_test_state
+    )
+  ),
+  'a newly prepared subscription budget retains its full capacity reservation'
+);
+
+SELECT ok(
+  (
+    SELECT reservation.status = 'reserved'
+      AND reservation.capacity_agent_id = run.capacity_agent_id
+      AND reservation.reserved_light = budget.reserved_light::double precision
+      AND reservation.id = budget.capacity_reservation_id
+      AND reservation.id = run.capacity_reservation_id
+    FROM public.compute_runs AS run
+    JOIN public.compute_run_budget_reservations AS budget
+      ON budget.run_id = run.id
+    JOIN public.account_capacity_reservations AS reservation
+      ON reservation.id = run.capacity_reservation_id
+    WHERE run.id = (
+      SELECT (subscription_self_result->>'id')::uuid
+      FROM compute_admission_capacity_test_state
+    )
+  ),
+  'the run, budget, and account capacity reservation share one economic identity'
+);
+
+UPDATE compute_admission_capacity_test_state AS state
+SET subscription_terminal_result = public.transition_compute_run(
+  p_run_id => (state.subscription_self_result->>'id')::uuid,
+  p_user_id => '00000000-0000-4000-8000-00000000ca01'::uuid,
+  p_agent_id => '00000000-0000-4000-8000-00000000cb01'::uuid,
+  p_caller_function => 'capacity_regression',
+  p_claim_id => (state.subscription_prepare_result->>'claim_id')::uuid,
+  p_expected_state => 'running',
+  p_expected_state_version =>
+    (state.subscription_prepare_result->>'state_version')::bigint,
+  p_to_state => 'succeeded',
+  p_worker_wall_ms => 1000,
+  p_terminal_reason => 'capacity_regression_completed',
+  p_result => '{
+    "exitCode":0,
+    "stdout":"",
+    "stderr":"",
+    "stdoutBytes":0,
+    "stderrBytes":0,
+    "stdoutTruncated":false,
+    "stderrTruncated":false,
+    "metrics":{},
+    "outputs":[]
+  }'::jsonb
+);
+
+SELECT ok(
+  (
+    SELECT budget.status = 'settlement_pending'
+      AND budget.actual_light =
+        (1000 * budget.rate_light_per_ms)::numeric(28,12)
+      AND budget.released_light =
+        GREATEST(budget.reserved_light - budget.actual_light, 0)
+      AND receipt.capacity_settlement_status = 'pending'
+      AND receipt.actual_light = budget.actual_light
+      AND receipt.released_light = budget.released_light
+    FROM public.compute_run_budget_reservations AS budget
+    JOIN public.compute_run_receipts AS receipt ON receipt.run_id = budget.run_id
+    WHERE budget.run_id = (
+      SELECT (subscription_self_result->>'id')::uuid
+      FROM compute_admission_capacity_test_state
+    )
+  ),
+  'terminal subscription usage satisfies the pending settlement amount invariant'
+);
+
+UPDATE compute_admission_capacity_test_state AS state
+SET subscription_settlement_result =
+  public.settle_compute_capacity_reservation(
+    p_run_id => (state.subscription_self_result->>'id')::uuid,
+    p_user_id => '00000000-0000-4000-8000-00000000ca01'::uuid,
+    p_receipt_id =>
+      (state.subscription_terminal_result->'receipt'->>'id')::uuid,
+    p_capacity_reservation_id =>
+      (state.subscription_terminal_result->'receipt'
+        ->>'capacity_reservation_id')::uuid,
+    p_actual_light =>
+      (state.subscription_terminal_result->'receipt'
+        ->>'actual_light')::numeric
+  );
+
+SELECT ok(
+  (
+    SELECT budget.status = 'settled'
+      AND budget.settled_at IS NOT NULL
+      AND reservation.status = 'settled'
+      AND receipt.capacity_settlement_status = 'settled'
+      AND state.subscription_settlement_result
+        ->>'capacity_settlement_status' = 'settled'
+    FROM compute_admission_capacity_test_state AS state
+    JOIN public.compute_runs AS run
+      ON run.id = (state.subscription_self_result->>'id')::uuid
+    JOIN public.compute_run_budget_reservations AS budget
+      ON budget.run_id = run.id
+    JOIN public.compute_run_receipts AS receipt
+      ON receipt.run_id = run.id
+    JOIN public.account_capacity_reservations AS reservation
+      ON reservation.id = run.capacity_reservation_id
+  ),
+  'subscription settlement closes the budget, receipt, and account reservation'
 );
 
 DO $capture_invalid_root$
