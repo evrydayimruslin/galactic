@@ -110,6 +110,28 @@ describe("developer-v1 image contract", () => {
     expect(smoke).toContain("import IPython, matplotlib, numpy, pandas, psutil");
   });
 
+  it("overlays npm's vulnerable bundled brace-expansion with the pinned fix", () => {
+    const dockerfile = fixture("Dockerfile");
+    const smoke = repositoryFile("compute-worker/scripts/smoke-image.sh");
+    for (const value of [
+      "ARG NPM_VERSION=12.0.1",
+      "ARG BRACE_EXPANSION_VERSION=5.0.8",
+      "brace-expansion-${BRACE_EXPANSION_VERSION}.tgz",
+      "259c83caadc3e005227ca4cf381ec310b7fa5ec07759d3ee3710ada1bd6f1573ec49785d0221c1589fed27c1c073d687f3804afb924564b36424ac771bd93342",
+      'ai.galactic.security.npm-brace-expansion="${BRACE_EXPANSION_VERSION}"',
+      "rm -rf /usr/local/lib/node_modules/npm/node_modules/brace-expansion",
+      "EXPANSION_MAX_LENGTH",
+    ]) {
+      expect(dockerfile).toContain(value);
+    }
+    expect(smoke).toContain('brace-expansion/package.json").version');
+    expect(smoke).toContain("EXPANSION_MAX_LENGTH");
+    expect(smoke).toContain('expand("a{b,c}d").join(",")');
+    expect(smoke).toContain('minimatch("release-v0.4.52"');
+    expect(smoke).toContain('"5.0.8"');
+    expect(smoke).toContain('"4000000"');
+  });
+
   it("rebuilds static Go CLIs with patched modules and removes quick tunnels", () => {
     const dockerfile = fixture("Dockerfile");
     const overlay = fixture("overlays/git-lfs-v3.7.1-go-modules.patch");

@@ -187,6 +187,7 @@ ARG GALACTIC_RCLONE_VERSION=1.74.4
 ARG GRPC_GO_VERSION=1.82.1
 ARG PYTHON_VERSION=3.13.14
 ARG NPM_VERSION=12.0.1
+ARG BRACE_EXPANSION_VERSION=5.0.8
 
 # Keep the exact release inputs visible in OCI metadata. The Node package graph
 # itself is installed from toolchain/package-lock.json below; these labels also
@@ -203,6 +204,7 @@ LABEL org.opencontainers.image.base.name="${SANDBOX_BASE_IMAGE}" \
       ai.galactic.security.grpc-go="${GRPC_GO_VERSION}" \
       ai.galactic.tool.python="python@${PYTHON_VERSION}+cve-2026-11940-11972-15308-backports" \
       ai.galactic.tool.npm="npm@${NPM_VERSION}" \
+      ai.galactic.security.npm-brace-expansion="${BRACE_EXPANSION_VERSION}" \
       ai.galactic.security.cloudflared="absent-private-egress-v1"
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -258,13 +260,26 @@ RUN set -eux; \
 
 # npm is part of the base Node runtime. Replace its old bundled dependency tree
 # from an integrity-pinned registry tarball before installing any body tools.
+# npm 12.0.1 predates the brace-expansion 5.0.8 security release, so overlay
+# that exact checksum-pinned package until npm publishes it in a bundled tree.
 RUN set -eux; \
     curl -fsSL -o /tmp/npm.tgz \
       "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"; \
+    curl -fsSL -o /tmp/brace-expansion.tgz \
+      "https://registry.npmjs.org/brace-expansion/-/brace-expansion-${BRACE_EXPANSION_VERSION}.tgz"; \
     echo '2f94fd8bf600416416a934bfc59c4991e8bff7372ef7d842784e2a8b8d48c81555ee645069ddea73625fb8e92dc261feab0188fd5dab6c22fefd46316f5f9140  /tmp/npm.tgz' | sha512sum -c -; \
+    echo '259c83caadc3e005227ca4cf381ec310b7fa5ec07759d3ee3710ada1bd6f1573ec49785d0221c1589fed27c1c073d687f3804afb924564b36424ac771bd93342  /tmp/brace-expansion.tgz' | sha512sum -c -; \
     npm install --global /tmp/npm.tgz; \
-    rm /tmp/npm.tgz; \
+    rm -rf /usr/local/lib/node_modules/npm/node_modules/brace-expansion; \
+    mkdir -p /usr/local/lib/node_modules/npm/node_modules/brace-expansion; \
+    tar -xzf /tmp/brace-expansion.tgz --strip-components=1 \
+      -C /usr/local/lib/node_modules/npm/node_modules/brace-expansion; \
+    rm /tmp/npm.tgz /tmp/brace-expansion.tgz; \
     test "$(npm --version)" = "${NPM_VERSION}"; \
+    test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json").version')" = "${BRACE_EXPANSION_VERSION}"; \
+    test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion").EXPANSION_MAX_LENGTH')" = 4000000; \
+    test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion").expand("a{b,c}d").join(",")')" = "abd,acd"; \
+    test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/minimatch").minimatch("release-v0.4.52", "release-v{0.4.52,0.4.53}")')" = true; \
     test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/tinyglobby/node_modules/picomatch/package.json").version')" = 4.0.5; \
     test "$(node -p 'require("/usr/local/lib/node_modules/npm/node_modules/sigstore/package.json").version')" = 5.0.0
 
