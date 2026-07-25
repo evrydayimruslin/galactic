@@ -416,6 +416,9 @@ jobs:
             set -o pipefail
             (
               cd api
+              # Wrangler text search excludes structured console objects.
+              # Stream the fenced version and let the bounded sanitizer
+              # select the allowlisted Attention telemetry instead.
               env \
                 -u SUPABASE_ACCESS_TOKEN \
                 -u SUPABASE_STAGING_PROJECT_ID \
@@ -427,7 +430,6 @@ jobs:
                 "${{ steps.request.outputs.observation_seconds }}s" \
                 npx wrangler tail "$API_WORKER" \
                   --format json \
-                  --search operator_attention_read_comparison \
                   --version-id "${{ steps.preflight.outputs.version_id }}"
             ) 2>"$tail_stderr" |
               node scripts/release/verify-attention-shadow-evidence.mjs \
