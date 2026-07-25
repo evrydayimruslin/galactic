@@ -141,6 +141,7 @@ export function requiredPlatformMcpScopes(
   if (
     name === "ul.routine" ||
     name === "ul.grants" ||
+    name === "ul.attention" ||
     name === "ul.notifications" ||
     toolMatches(name, "ul.memory") ||
     name === "ul.consent" ||
@@ -240,6 +241,14 @@ function apiTokenAccountSessionRestriction(
 
   if (name === "ul.notifications" && args.action === "mark_read") {
     return "Only an authenticated Galactic account session may mark owner notifications read.";
+  }
+
+  if (
+    name === "ul.attention" &&
+    typeof args.action === "string" &&
+    args.action !== "list"
+  ) {
+    return "Only an authenticated Galactic account session may change Attention or execute a remediation.";
   }
 
   if (name === "ul.logs" && args.resolve_event_id !== undefined) {

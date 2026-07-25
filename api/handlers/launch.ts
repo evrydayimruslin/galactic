@@ -123,6 +123,8 @@ import {
   type LaunchLeaderboardKind,
   type LaunchLeaderboardResponse,
   type LaunchMoneyAmount,
+  type LaunchOperatorAttentionActionResponse,
+  type LaunchOperatorItemActionResponse,
   type LaunchPayoutStatus,
   type LaunchPlatformModelResponse,
   type LaunchPlatformPrimitive,
@@ -317,6 +319,12 @@ import {
   setAgentCapacityCap,
 } from "../services/account-capacity.ts";
 import {
+  OPERATOR_ITEM_SOURCE,
+  reconcileAccountByokOperatorItem,
+  reconcileAgentSetupOperatorItems,
+  scheduleOperatorItemProducer,
+} from "../services/operator-item-producers.ts";
+import {
   AgentOperatorStoreError,
   getAgentActivityPage,
   getAgentInterfaceFavorites,
@@ -351,6 +359,22 @@ import {
   readOwnerAttentionPage,
   transitionAgentAttention,
 } from "../services/agent-attention.ts";
+import { readAttentionWithMigration } from "../services/attention-read-migration.ts";
+import { readOperatorAttentionPage } from "../services/operator-item-reader.ts";
+import {
+  OperatorRunInspectionError,
+  readOperatorRoutineRunDetail,
+  readOperatorRoutineRunLogExcerpt,
+} from "../services/operator-run-inspection.ts";
+import { collectRuntimeDiagnosticSecrets } from "../services/operator-diagnostics.ts";
+import {
+  applyOperatorItemAttentionAction,
+  OperatorItemAttentionStateError,
+} from "../services/operator-item-attention-state.ts";
+import {
+  executeOperatorItemRemediation,
+  OperatorItemExecutionError,
+} from "../services/operator-item-execution.ts";
 
 // Cross-Agent grant + settings mutations are sensitive. The SensitiveRoute enum
 // lives in sensitive-route-rate-limit.ts (outside this file's edit scope), so we
@@ -382,6 +406,30 @@ async function privateLaunchRoute(
       return operatorStoreErrorResponse(err);
     }
     if (err instanceof AgentAttentionStoreError) {
+      return privateLaunchJson({
+        error: err.message,
+        code: err.code,
+      }, err.status);
+    }
+    if (err instanceof OperatorRunInspectionError) {
+      return privateLaunchJson({
+        error: err.message,
+        code: err.code,
+      }, err.status);
+    }
+    if (err instanceof OperatorItemAttentionStateError) {
+      return privateLaunchJson({
+        error: err.message,
+        code: err.code,
+      }, err.status);
+    }
+    if (err instanceof OperatorItemExecutionError) {
+      return privateLaunchJson({
+        error: err.message,
+        code: err.code,
+      }, err.status);
+    }
+    if (err instanceof AgentHomeRevisionError) {
       return privateLaunchJson({
         error: err.message,
         code: err.code,
@@ -826,6 +874,32 @@ export async function handleLaunch(
       );
     }
 
+    const operatorItemAttentionMatch = path.match(
+      /^\/api\/launch\/operator-items\/([^/]+)\/attention$/,
+    );
+    if (operatorItemAttentionMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchOperatorItemAttention(
+          request,
+          operatorItemAttentionMatch[1],
+          method,
+        )
+      );
+    }
+
+    const operatorItemActionMatch = path.match(
+      /^\/api\/launch\/operator-items\/([^/]+)\/actions$/,
+    );
+    if (operatorItemActionMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchOperatorItemAction(
+          request,
+          operatorItemActionMatch[1],
+          method,
+        )
+      );
+    }
+
     const notificationActionMatch = path.match(
       /^\/api\/launch\/notifications\/([^/]+)\/actions$/,
     );
@@ -922,6 +996,21 @@ export async function handleLaunch(
         request,
         agentActivityMatch[1],
         method,
+      );
+    }
+
+    const agentRoutineRunMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/routine-runs\/([^/]+)(?:\/logs\/([^/]+))?$/,
+    );
+    if (agentRoutineRunMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchOperatorRoutineRun(
+          request,
+          agentRoutineRunMatch[1],
+          agentRoutineRunMatch[2],
+          agentRoutineRunMatch[3] || null,
+          method,
+        )
       );
     }
 
@@ -1300,6 +1389,9 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       discoverAlias: "/api/launch/discover?query={query}",
       agentFunctions: "/api/launch/agents/{id}/functions",
       agentHome: "/api/launch/agents/{id}/home",
+      agentRoutineRun: "/api/launch/agents/{id}/routine-runs/{runId}",
+      agentRoutineRunLogs:
+        "/api/launch/agents/{id}/routine-runs/{runId}/logs/{receiptId}",
       agentAttention:
         "/api/launch/agents/{id}/attention?limit=200&cursor={cursor}",
       agentHomeActions: "/api/launch/agents/{id}/home/actions",
@@ -4214,6 +4306,72 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       },
     },
   };
+  publicSpec.paths["/api/launch/agents/{id}/routine-runs/{runId}"] = {
+    get: {
+      operationId: "getLaunchOperatorRoutineRun",
+      summary: "Read a secret-safe operator diagnosis for one routine run",
+      description:
+        "Owner account-session only. Returns bounded run and step diagnostics, trace/receipt references, and no raw arguments, outputs, or logs.",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string" },
+        },
+        {
+          name: "runId",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+      ],
+      responses: {
+        "200": { description: "Secret-safe routine run diagnosis" },
+        "403": { description: "Owner account session required" },
+        "404": { description: "Owned Agent or routine run not found" },
+        "503": { description: "Run diagnostics are temporarily unavailable" },
+      },
+    },
+  };
+  publicSpec.paths[
+    "/api/launch/agents/{id}/routine-runs/{runId}/logs/{receiptId}"
+  ] = {
+    get: {
+      operationId: "getLaunchOperatorRoutineRunLogs",
+      summary: "Read a redacted excerpt from one run receipt",
+      description:
+        "Owner account-session only. The receipt must belong to the requested Agent run. The underlying raw-log read remains owner-only and audit-logged.",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string" },
+        },
+        {
+          name: "runId",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+        {
+          name: "receiptId",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+      ],
+      responses: {
+        "200": { description: "Bounded and redacted runtime log excerpt" },
+        "403": { description: "Owner account session required" },
+        "404": { description: "Run receipt or retained logs not found" },
+        "503": { description: "Run diagnostics are temporarily unavailable" },
+      },
+    },
+  };
   publicSpec.paths["/api/launch/notifications/{id}/actions"] = {
     post: {
       operationId: "transitionLaunchAttention",
@@ -4994,6 +5152,104 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       },
     },
   };
+  publicSpec.paths["/api/launch/operator-items/{id}/attention"] = {
+    patch: {
+      operationId: "updateLaunchOperatorItemAttention",
+      summary:
+        "Update private presentation state for one canonical operator item",
+      description:
+        "Marks an item read, snoozed, reopened, or dismissed without changing whether the underlying condition is active or recovered.",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+      ],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: ["action"],
+          properties: {
+            action: {
+              type: "string",
+              enum: [
+                "mark_read",
+                "mark_unread",
+                "snooze",
+                "reopen",
+                "dismiss",
+              ],
+            },
+            snoozedUntil: {
+              type: "string",
+              format: "date-time",
+              description:
+                "Required only for snooze and bounded to the next 30 days.",
+            },
+          },
+        }),
+      },
+      responses: {
+        "200": { description: "Updated private presentation state" },
+        "400": { description: "Invalid item id, action, or snooze time" },
+        "401": { description: "Authentication required" },
+        "403": { description: "Account session required" },
+        "404": { description: "Owned canonical operator item not found" },
+        "503": { description: "Attention state could not be updated safely" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/operator-items/{id}/actions"] = {
+    post: {
+      operationId: "executeLaunchOperatorItemRemediation",
+      summary:
+        "Idempotently execute one server-owned canonical issue remediation",
+      description:
+        "M7 supports real Run once verification for a paused routine. It can use usage and create side effects, and it never resumes scheduled work.",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+      ],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "remediationId",
+            "idempotencyKey",
+            "expectedRevision",
+          ],
+          properties: {
+            remediationId: { type: "string" },
+            idempotencyKey: { type: "string", format: "uuid" },
+            expectedRevision: { type: "string" },
+          },
+        }),
+      },
+      responses: {
+        "202": { description: "Verification run queued; schedule is paused" },
+        "400": { description: "Invalid request" },
+        "403": { description: "Account session required" },
+        "409": {
+          description:
+            "Issue or remediation is stale, routine is not paused, or a run is active",
+        },
+        "412": { description: "Agent Home revision conflict" },
+        "503": { description: "Durable action status could not be confirmed" },
+      },
+    },
+  };
   publicSpec.paths["/api/launch/agents/{id}/attention"] = {
     get: {
       operationId: "listLaunchAgentAttention",
@@ -5199,6 +5455,54 @@ async function handleLaunchApiKeys(
   return error("Launch API key endpoint not found", 404);
 }
 
+function launchAppUsesInference(row: LaunchAppRow): boolean {
+  const manifest = typeof row.manifest === "string"
+    ? row.manifest
+    : row.manifest
+    ? JSON.stringify(row.manifest)
+    : null;
+  const permissions =
+    resolveStrictManifestPermissions({ manifest }).permissions;
+  return permissions.includes("ai:call") || permissions.includes("ai:embed");
+}
+
+async function scheduleLaunchAccountByokReconciliation(
+  userId: string,
+): Promise<void> {
+  if (!isUuid(userId)) return;
+  await scheduleOperatorItemProducer(
+    OPERATOR_ITEM_SOURCE.accountByok,
+    async () => {
+      const observedAt = new Date().toISOString();
+      const [profile, apps] = await Promise.all([
+        userService.getUser(userId),
+        fetchOwnedApps(userId),
+      ]);
+      if (!profile) throw new Error("Account profile is unavailable");
+      const configured = Boolean(
+        profile.byok_enabled && profile.byok_provider &&
+          profile.byok_configs.some((config) =>
+            config.provider === profile.byok_provider && config.has_key
+          ),
+      );
+      const affectedAgents = apps
+        .filter((row) =>
+          row.visibility === "private" && launchAppUsesInference(row)
+        )
+        .map((row) => ({
+          id: row.id,
+          name: row.name || row.slug || row.id,
+        }));
+      await reconcileAccountByokOperatorItem({
+        userId,
+        configured,
+        affectedAgents,
+        observedAt,
+      });
+    },
+  );
+}
+
 async function handleLaunchByok(
   request: Request,
   path: string,
@@ -5246,6 +5550,7 @@ async function handleLaunchByok(
               user.id,
               providerEntry.provider,
             );
+            await scheduleLaunchAccountByokReconciliation(user.id);
             return json(
               {
                 ok: true,
@@ -5326,6 +5631,7 @@ async function handleLaunchByokUpsert(
           );
         }
 
+        await scheduleLaunchAccountByokReconciliation(user.id);
         return json(
           {
             ok: true,
@@ -5360,6 +5666,7 @@ async function handleLaunchByokPrimary(
     async () => {
       try {
         await userService.setPrimaryProvider(user.id, providerEntry.provider);
+        await scheduleLaunchAccountByokReconciliation(user.id);
         return json(
           {
             ok: true,
@@ -5420,6 +5727,80 @@ function launchAttentionPageOptions(request: Request): {
 
 // Owner Attention inbox. Both global and per-Agent reads are cursor paged and
 // get their page plus exact counts from one database snapshot.
+async function handleLaunchOperatorItemAttention(
+  request: Request,
+  itemId: string,
+  method: string,
+): Promise<Response> {
+  if (method !== "PATCH") {
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const body = asRecord(await readJsonBody<unknown>(request));
+  if (!body) {
+    throw new RequestValidationError(
+      "Operator Attention request must be an object",
+    );
+  }
+  rejectUnknownAgentHomeFields(body, ["action", "snoozedUntil"]);
+  const response = await applyOperatorItemAttentionAction({
+    userId: user.id,
+    itemId,
+    action: body.action,
+    ...(Object.hasOwn(body, "snoozedUntil")
+      ? { snoozedUntil: body.snoozedUntil }
+      : {}),
+  });
+  return privateLaunchJson(
+    response satisfies LaunchOperatorAttentionActionResponse,
+  );
+}
+
+async function handleLaunchOperatorItemAction(
+  request: Request,
+  itemId: string,
+  method: string,
+): Promise<Response> {
+  if (method !== "POST") {
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const body = asRecord(await readJsonBody<unknown>(request));
+  if (!body) {
+    throw new RequestValidationError(
+      "Operator remediation request must be an object",
+    );
+  }
+  rejectUnknownAgentHomeFields(body, [
+    "remediationId",
+    "idempotencyKey",
+    "expectedRevision",
+  ]);
+  if (typeof body.remediationId !== "string") {
+    throw new RequestValidationError("remediationId is required");
+  }
+  if (typeof body.idempotencyKey !== "string") {
+    throw new RequestValidationError("idempotencyKey is required");
+  }
+  if (typeof body.expectedRevision !== "string") {
+    throw new RequestValidationError("expectedRevision is required");
+  }
+  const response = await executeOperatorItemRemediation({
+    userId: user.id,
+    itemId,
+    remediationId: body.remediationId,
+    idempotencyKey: body.idempotencyKey,
+    expectedRevision: body.expectedRevision,
+    authSource: user.authSource,
+  });
+  return privateLaunchJson(
+    response satisfies LaunchOperatorItemActionResponse,
+    202,
+  );
+}
+
 async function handleLaunchGlobalAttention(
   request: Request,
   method: string,
@@ -5441,15 +5822,37 @@ async function handleLaunchGlobalAttention(
     deleted_at: "is.null",
     select: "id,slug,name",
   });
-  const projection = await readOwnerAttentionPage(
-    user.id,
-    agents.map((agent) => ({
-      id: agent.id,
-      slug: agent.slug || agent.id,
-      name: agent.name || agent.slug || agent.id,
-    })),
-    launchAttentionPageOptions(request),
-  );
+  const attentionAgents = agents.map((agent) => ({
+    id: agent.id,
+    slug: agent.slug || agent.id,
+    name: agent.name || agent.slug || agent.id,
+  }));
+  const page = launchAttentionPageOptions(request);
+  const projection = await readAttentionWithMigration<
+    LaunchGlobalAttentionResponse
+  >("account", {
+    cursor: page.cursor ?? null,
+    readLegacy: (cursor) =>
+      readOwnerAttentionPage(user.id, attentionAgents, {
+        ...page,
+        cursor,
+      }),
+    readCanonical: (cursor) =>
+      readOperatorAttentionPage(user.id, attentionAgents, null, {
+        ...page,
+        cursor,
+      }),
+    buildLegacyFallback: (canonical) => ({
+      entries: [],
+      agentCounts: [],
+      openCount: 0,
+      requiresDecisionCount: 0,
+      nextCursor: null,
+      available: false,
+      unavailableReason: "temporarily_unavailable",
+      generatedAt: canonical.generatedAt,
+    }),
+  });
   return privateLaunchJson(projection satisfies LaunchGlobalAttentionResponse);
 }
 
@@ -5470,16 +5873,123 @@ async function handleLaunchAgentAttention(
   if (resolved instanceof Response) {
     return withPrivateLaunchPrivacy(resolved);
   }
-  const projection = await readAgentAttentionPage(
-    user.id,
-    {
-      id: resolved.id,
-      slug: resolved.slug || resolved.id,
-      name: resolved.name || resolved.slug || resolved.id,
-    },
-    launchAttentionPageOptions(request),
-  );
+  const attentionAgent = {
+    id: resolved.id,
+    slug: resolved.slug || resolved.id,
+    name: resolved.name || resolved.slug || resolved.id,
+  };
+  const page = launchAttentionPageOptions(request);
+  const projection = await readAttentionWithMigration<
+    LaunchAgentAttentionProjection
+  >("agent", {
+    cursor: page.cursor ?? null,
+    readLegacy: (cursor) =>
+      readAgentAttentionPage(user.id, attentionAgent, {
+        ...page,
+        cursor,
+      }),
+    readCanonical: (cursor) =>
+      readOperatorAttentionPage(
+        user.id,
+        [attentionAgent],
+        attentionAgent.id,
+        {
+          ...page,
+          cursor,
+        },
+      ),
+    buildLegacyFallback: () => ({
+      items: [],
+      openCount: 0,
+      requiresDecisionCount: 0,
+      nextCursor: null,
+      available: false,
+      unavailableReason: "temporarily_unavailable",
+    }),
+  });
   return privateLaunchJson(projection satisfies LaunchAgentAttentionProjection);
+}
+
+async function handleLaunchOperatorRoutineRun(
+  request: Request,
+  encodedLocator: string,
+  runId: string,
+  receiptId: string | null,
+  method: string,
+): Promise<Response> {
+  if (method !== "GET") {
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(
+    user,
+    encodedLocator,
+  );
+  if (resolved instanceof Response) {
+    return withPrivateLaunchPrivacy(resolved);
+  }
+  const knownSecrets = await loadLaunchOperatorDiagnosticSecrets(
+    user.id,
+    resolved.id,
+  );
+  if (receiptId) {
+    return privateLaunchJson(
+      await readOperatorRoutineRunLogExcerpt({
+        userId: user.id,
+        agentId: resolved.id,
+        runId,
+        receiptId,
+        knownSecrets,
+      }),
+    );
+  }
+  return privateLaunchJson(
+    await readOperatorRoutineRunDetail({
+      userId: user.id,
+      agent: {
+        id: resolved.id,
+        slug: resolved.slug || resolved.id,
+        name: resolved.name || resolved.slug || resolved.id,
+      },
+      runId,
+      knownSecrets,
+    }),
+  );
+}
+
+async function loadLaunchOperatorDiagnosticSecrets(
+  userId: string,
+  agentId: string,
+): Promise<string[]> {
+  const rows = await dbGet<AgentHomeSettingsAppRow>(
+    getDbConfig(),
+    "apps",
+    {
+      id: `eq.${agentId}`,
+      owner_id: `eq.${userId}`,
+      deleted_at: "is.null",
+      select: "id,env_vars,env_schema,manifest",
+      limit: "1",
+    },
+  );
+  const row = rows[0];
+  if (!row) {
+    throw new LaunchServiceUnavailableError(
+      "Agent diagnostic redaction state is unavailable",
+    );
+  }
+  const runtimeApp = {
+    id: row.id,
+    env_vars: row.env_vars || {},
+    env_schema: row.env_schema || {},
+    manifest: row.manifest,
+  } as unknown as Parameters<typeof resolveAppRuntimeEnvVars>[0];
+  const runtime = await resolveAppRuntimeEnvVars(runtimeApp, userId);
+  return collectRuntimeDiagnosticSecrets({
+    envVars: runtime.envVars,
+    credentials: runtime.credentials,
+  });
 }
 
 async function handleLaunchNotifications(
@@ -7750,7 +8260,23 @@ async function buildLaunchAgentHomeSnapshotAttempt(
         return null;
       }
     })(),
-    readAgentAttention(user.id, agentIdentity).catch((err) => {
+    readAttentionWithMigration<LaunchAgentAttentionProjection>("agent", {
+      readLegacy: () => readAgentAttention(user.id, agentIdentity),
+      readCanonical: (cursor) =>
+        readOperatorAttentionPage(
+          user.id,
+          [agentIdentity],
+          agentIdentity.id,
+          { cursor },
+        ),
+      buildLegacyFallback: () => ({
+        items: [],
+        openCount: 0,
+        requiresDecisionCount: 0,
+        available: false,
+        unavailableReason: "temporarily_unavailable",
+      }),
+    }).catch((err) => {
       const code = err instanceof AgentAttentionStoreError
         ? err.code
         : "ATTENTION_READ_FAILED";
@@ -7871,7 +8397,32 @@ async function buildLaunchAgentHomeSnapshot(
       initialRow.id,
       user.id,
     );
-    if (completedAtRevision === startedAtRevision) return home;
+    if (completedAtRevision === startedAtRevision) {
+      const agent = {
+        id: home.agent.id,
+        name: home.agent.name,
+      };
+      if (isUuid(user.id) && isUuid(agent.id)) {
+        await scheduleOperatorItemProducer(
+          OPERATOR_ITEM_SOURCE.agentSetup(agent.id),
+          () =>
+            reconcileAgentSetupOperatorItems({
+              userId: user.id,
+              agent,
+              requirements: home.setup.requirements,
+              observedAt: home.generatedAt,
+            }),
+        );
+        if (
+          home.setup.requirements.some((requirement) =>
+            requirement.id === "inference:byok"
+          )
+        ) {
+          await scheduleLaunchAccountByokReconciliation(user.id);
+        }
+      }
+      return home;
+    }
   }
   throw new LaunchServiceUnavailableError(
     "Agent Home changed repeatedly while its snapshot was being assembled",

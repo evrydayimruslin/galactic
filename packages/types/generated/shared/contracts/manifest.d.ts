@@ -14,6 +14,14 @@ export interface AppManifest {
         functions?: string;
     };
     functions?: Record<string, ManifestFunction>;
+    /**
+     * Reviewed, operator-safe explanations for errors thrown by Agent code.
+     *
+     * These declarations may improve diagnosis and prioritize harmless
+     * navigation. They never select a platform condition, target, executable
+     * action, authority level, route, or button label.
+     */
+    operator_errors?: Record<string, ManifestOperatorError>;
     skills?: Record<string, ManifestSkill>;
     access_policy?: ManifestAccessPolicy;
     permissions?: string[];
@@ -31,6 +39,20 @@ export interface AppManifest {
     rate_limit?: ManifestCallRateLimit;
     network?: ManifestNetworkConfig;
     compute?: ManifestComputeConfig;
+}
+export type ManifestOperatorErrorSuggestedAction = 'inspect_run' | 'open_logs' | 'open_routine';
+export interface ManifestOperatorError {
+    /** Bounded owner-facing explanation; never include secret values. */
+    summary: string;
+    /** Optional bounded context or safe recovery guidance. */
+    detail?: string;
+    /** Whether retrying the same operation may succeed after the cause is fixed. */
+    retryable?: boolean;
+    /**
+     * Harmless navigation hints only. Galactic validates availability, creates
+     * the semantic target, owns the label, and may ignore or supplement hints.
+     */
+    suggested_actions?: ManifestOperatorErrorSuggestedAction[];
 }
 export interface ManifestCallRateLimit {
     calls_per_minute?: number;
@@ -246,6 +268,12 @@ export declare function resolveManifestEnvSchema(manifest: {
 export declare function normalizeEnvSchema(input: unknown): Record<string, EnvSchemaEntry>;
 export declare function normalizeManifestParameters(params: unknown): Record<string, ManifestParameter> | undefined;
 export declare const CANONICAL_APP_VERSION_PATTERN: RegExp;
+/**
+ * Resolve one reviewed developer diagnostic defensively at the execution
+ * boundary. Invalid or legacy stored manifests fail closed to raw-error
+ * normalization instead of widening the operator contract.
+ */
+export declare function getManifestOperatorError(manifest: string | AppManifest | null | undefined, causeCode: string | null | undefined): ManifestOperatorError | null;
 export declare function isCanonicalAppVersion(value: unknown): value is string;
 export declare function nextCanonicalAppPatchVersion(current: string | null | undefined): string | null;
 export declare function validateManifest(input: unknown): ManifestValidationResult;

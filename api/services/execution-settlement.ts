@@ -34,6 +34,7 @@ import {
   settleRuntimeCloudHold,
 } from "./cloud-usage.ts";
 import { FREE_MODE_BALANCE_LIGHT } from "../../shared/contracts/ai.ts";
+import type { LaunchOperatorRunDiagnostic } from "../../shared/contracts/launch.ts";
 import { functionUsesInference, isFreeModeEnabled } from "./free-mode.ts";
 import { recordRoutineCallContribution } from "./routine-rollups.ts";
 import {
@@ -363,6 +364,7 @@ export interface SettleAndLogAppExecutionParams {
   durationMs: number;
   outputResult: unknown;
   errorMessage?: string;
+  operatorDiagnostic?: LaunchOperatorRunDiagnostic;
   source?: McpCallLogEntry["source"];
   aiCostLight?: number;
   sessionId?: string;
@@ -1652,11 +1654,11 @@ export async function settleAndLogAppExecution(
           ? settlement.metadata
           : params.outputResult,
       ),
-      error: errorPayload(
-        settlement.insufficientBalance
-          ? settlement.insufficientBalanceMessage
-          : params.errorMessage,
-      ),
+      error: settlement.insufficientBalance
+        ? errorPayload(settlement.insufficientBalanceMessage)
+        : params.operatorDiagnostic
+        ? params.operatorDiagnostic as unknown as Record<string, unknown>
+        : errorPayload(params.errorMessage),
       metadata: {
         method: params.method,
         app_slug: params.app.slug,

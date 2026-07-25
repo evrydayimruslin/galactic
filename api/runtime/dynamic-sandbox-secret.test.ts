@@ -20,7 +20,14 @@ interface CapturedLoad {
   envKeys: string[];
 }
 
-function installSandboxHarness(): {
+function installSandboxHarness(
+  executionResponse: Record<string, unknown> = {
+    success: true,
+    result: "ok",
+    logs: [],
+    aiCostLight: 0,
+  },
+): {
   captured: CapturedLoad;
   constructed: { events: boolean; net: boolean };
   restore: () => void;
@@ -47,12 +54,7 @@ function installSandboxHarness(): {
             fetch: () =>
               Promise.resolve(
                 new Response(
-                  JSON.stringify({
-                    success: true,
-                    result: "ok",
-                    logs: [],
-                    aiCostLight: 0,
-                  }),
+                  JSON.stringify(executionResponse),
                   { headers: { "Content-Type": "application/json" } },
                 ),
               ),
@@ -87,13 +89,17 @@ function installSandboxHarness(): {
       // deno-lint-ignore no-explicit-any
       EventsBinding: (_input: any) => {
         constructed.events = true;
-        return { emit: () => Promise.resolve({ ok: true, event_id: "e", rejected: null }) };
+        return {
+          emit: () =>
+            Promise.resolve({ ok: true, event_id: "e", rejected: null }),
+        };
       },
       // deno-lint-ignore no-explicit-any
       NetworkBinding: (_input: any) => {
         constructed.net = true;
         return {
-          imapFetchUnseen: () => Promise.resolve({ emails: [], maxUid: 0, hasMore: false }),
+          imapFetchUnseen: () =>
+            Promise.resolve({ emails: [], maxUid: 0, hasMore: false }),
           smtpSend: () => Promise.resolve({ success: true }),
         };
       },
@@ -107,7 +113,9 @@ function installSandboxHarness(): {
       // deno-lint-ignore no-explicit-any
       CredentialBinding: (_input: any) => {
         constructed.cred = true;
-        return { authenticatedFetch: () => Promise.resolve(new Response("ok")) };
+        return {
+          authenticatedFetch: () => Promise.resolve(new Response("ok")),
+        };
       },
     },
     waitUntil: (p: Promise<unknown>) => {
@@ -137,7 +145,12 @@ function baseConfig(): RuntimeConfig {
     code: "",
     permissions: ["net:connect", "storage:read"],
     userApiKey: null,
-    user: { id: "user_a", email: "a@test.dev", displayName: null, tier: "free" },
+    user: {
+      id: "user_a",
+      email: "a@test.dev",
+      displayName: null,
+      tier: "free",
+    },
     d1DataService: null,
     memoryService: null,
     envVars: {},
@@ -187,6 +200,39 @@ Deno.test("dynamic sandbox: per-call tokens ride the fetch body, never the baked
       !modules.includes("gxc1.dummy-host-set-token.sig"),
       "caller-context token is baked into sandbox module source",
     );
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("dynamic sandbox: host result contains only the redacted developer diagnostic", async () => {
+  const exactSecret = "opaqueConfiguredValue";
+  const patternedSecret = ["ghp_", "fakeCredential123456789012345"].join("");
+  const harness = installSandboxHarness({
+    success: false,
+    result: null,
+    logs: [],
+    aiCostLight: 0,
+    error: {
+      type: "ConnectionTimeout",
+      message: `Failed with ${exactSecret} and ${patternedSecret}`,
+    },
+  });
+  try {
+    const config = {
+      ...baseConfig(),
+      envVars: { API_TOKEN: exactSecret },
+    };
+    const result = await executeInDynamicSandbox(config, "noop", []);
+
+    assertEquals(result.success, false);
+    assertEquals(result.diagnostic?.code, "DEVELOPER_ERROR");
+    assertEquals(result.diagnostic?.causeCode, "CONNECTION_TIMEOUT");
+    assertEquals(result.diagnostic?.provenance, "developer");
+    assertEquals(result.error?.message.includes(exactSecret), false);
+    assertEquals(result.error?.message.includes(patternedSecret), false);
+    assertEquals(result.diagnostic?.summary.includes(exactSecret), false);
+    assertEquals(result.diagnostic?.summary.includes(patternedSecret), false);
   } finally {
     harness.restore();
   }

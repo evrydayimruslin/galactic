@@ -126,6 +126,8 @@ Deno.test("agent attention: legacy budget alerts use usage-limit copy", () => {
       title: "Inbox loop hit its daily budget",
       body:
         "Spent 0.038/0.02 Light this daily window. Runs resume automatically at 2026-07-10T00:00:00.000Z.",
+      item_class: "report",
+      requires_action: false,
     })],
     briefs: [brief({
       headline: "Inbox loop ran out of Light",
@@ -141,6 +143,9 @@ Deno.test("agent attention: legacy budget alerts use usage-limit copy", () => {
     item.brief.impact,
     "Runs are paused until usage resets at Jul 10, 2026, 12:00 AM UTC.",
   );
+  assertEquals(item.type, "report");
+  assertEquals(item.requiresAction, false);
+  assertEquals(item.actions, []);
   assertEquals(JSON.stringify(item).includes("Light"), false);
 });
 

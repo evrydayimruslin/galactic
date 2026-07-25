@@ -551,7 +551,9 @@ export function buildAgentAttentionProjection(
     const ready = brief?.status === "ready" &&
       Boolean(boundedText(brief.headline, 240)) &&
       !usageLimitCopy;
-    const action = brief ? briefAction(brief, input.agent) : null;
+    const action = row.item_class === "incident" && brief
+      ? briefAction(brief, input.agent)
+      : null;
     const evidence = ready && brief
       ? briefEvidence(brief.evidence, input.agent.slug, row.id)
       : [];

@@ -1,8 +1,10 @@
 import type {
   LaunchAgentHomeResponse,
   LaunchAgentAttentionItem,
+  LaunchOperatorAttentionProjection,
   LaunchInterfaceSummary,
 } from "../../../../shared/contracts/launch.ts";
+import { canonicalOperatorAttention } from "./operator-attention";
 
 export type OperatorOverviewSectionKind =
   | "attention"
@@ -14,6 +16,7 @@ export type OperatorOverviewSectionKind =
 export interface OperatorOverviewModel {
   attention: LaunchAgentAttentionItem[];
   attentionCount: number;
+  operatorAttention: LaunchOperatorAttentionProjection | null;
   favoriteInterfaces: LaunchInterfaceSummary[];
   sectionOrder: OperatorOverviewSectionKind[];
   showActivity: boolean;
@@ -47,8 +50,11 @@ export function buildOperatorOverviewModel(
   home: LaunchAgentHomeResponse,
   interfaces: readonly LaunchInterfaceSummary[],
 ): OperatorOverviewModel {
-  const attention = home.attention?.items ?? [];
-  const attentionCount = home.attention?.openCount ?? attention.length;
+  const operatorAttention = canonicalOperatorAttention(home.attention);
+  const attention = operatorAttention ? [] : home.attention?.items ?? [];
+  const attentionCount = operatorAttention?.openCount ??
+    home.attention?.openCount ??
+    attention.length;
   const byId = new Map(interfaces.map((item) => [item.id, item]));
   const favoriteInterfaces = (home.preferences?.favoriteInterfaceIds ?? [])
     .flatMap((id) => {
@@ -70,6 +76,7 @@ export function buildOperatorOverviewModel(
   return {
     attention,
     attentionCount,
+    operatorAttention,
     favoriteInterfaces,
     sectionOrder,
     showActivity,

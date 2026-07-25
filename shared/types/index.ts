@@ -2155,6 +2155,10 @@ export interface AppManifest {
   // Key is function name, value is function metadata
   functions?: Record<string, ManifestFunction>;
 
+  // Reviewed, operator-safe error explanations. Galactic owns every condition,
+  // semantic target, action label, authority check, and executable control.
+  operator_errors?: Record<string, ManifestOperatorError>;
+
   // Skill/context declarations agents can pull independently of execution
   skills?: Record<string, ManifestSkill>;
 
@@ -2179,6 +2183,18 @@ export interface AppManifest {
 
   // Owner-reviewed ceiling for the disposable galactic.compute() capability.
   compute?: ManifestComputeConfig;
+}
+
+export type ManifestOperatorErrorSuggestedAction =
+  | "inspect_run"
+  | "open_logs"
+  | "open_routine";
+
+export interface ManifestOperatorError {
+  summary: string;
+  detail?: string;
+  retryable?: boolean;
+  suggested_actions?: ManifestOperatorErrorSuggestedAction[];
 }
 
 export type ManifestHttpAuthMode = "user" | "public";

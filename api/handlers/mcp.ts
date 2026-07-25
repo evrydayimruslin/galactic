@@ -17,6 +17,7 @@ import {
 } from "../services/provisional.ts";
 import { getPermissionsForUser } from "./user.ts";
 import type { Tier } from "../../shared/contracts/runtime.ts";
+import type { LaunchOperatorRunDiagnostic } from "../../shared/contracts/launch.ts";
 import { type UserContext } from "../runtime/sandbox.ts";
 import type { DbDiffTally } from "../services/db-diff-tracker.ts";
 import { isolateReuseEligibility } from "../runtime/isolate-reuse-eligibility.ts";
@@ -87,6 +88,11 @@ import {
   requireManifestFunctionContracts,
   resolveAppFunctionContracts,
 } from "../services/app-contracts.ts";
+import {
+  applyManifestOperatorError,
+  collectRuntimeDiagnosticSecrets,
+  normalizeOperatorDiagnostic,
+} from "../services/operator-diagnostics.ts";
 import {
   buildMissingAppSecretsErrorDetails,
   buildMissingAppSecretsMessage,
@@ -3059,8 +3065,8 @@ async function executeAppFunction(
     // as routine_run_steps when a routine context is present.
     // app.manifest is stored as a JSON string — parse before reading the flag
     // (reading .flight_recorder off the raw string is always undefined).
-    const flightRecorderEnabled =
-      parseAppManifest(app.manifest)?.flight_recorder === true;
+    const runtimeManifest = parseAppManifest(app.manifest);
+    const flightRecorderEnabled = runtimeManifest?.flight_recorder === true;
 
     const sandboxConfig = {
       appId: app.id,
@@ -3110,6 +3116,7 @@ async function executeAppFunction(
         success: boolean;
         result: unknown;
         error?: unknown;
+        diagnostic?: LaunchOperatorRunDiagnostic;
         logs: Array<{ time: string; level: string; message: string }>;
         durationMs: number;
         aiCostLight: number;
@@ -3120,6 +3127,30 @@ async function executeAppFunction(
         flightDb?: DbDiffTally;
       },
     ) => {
+      const runtimeDiagnosticSecrets = collectRuntimeDiagnosticSecrets(
+        sandboxConfig,
+      );
+      const normalizedDiagnostic = result.success
+        ? undefined
+        : result.diagnostic ?? normalizeOperatorDiagnostic({
+          error: result.error,
+          provenance: "unknown",
+          knownSecrets: runtimeDiagnosticSecrets,
+        });
+      const executionDiagnostic = normalizedDiagnostic
+        ? applyManifestOperatorError(
+          normalizedDiagnostic,
+          runtimeManifest,
+          runtimeDiagnosticSecrets,
+        )
+        : undefined;
+      if (executionDiagnostic) result.diagnostic = executionDiagnostic;
+      const executionErrorMessage = executionDiagnostic
+        ? [
+          executionDiagnostic.summary,
+          executionDiagnostic.detail,
+        ].filter(Boolean).join(" ")
+        : undefined;
       const callSource = widgetPull
         ? "widget_pull"
         : user?.provisional
@@ -3154,7 +3185,7 @@ async function executeAppFunction(
         result.durationMs,
         {
           success: result.success,
-          error_message: result.success ? null : String(result.error),
+          error_message: result.success ? null : executionErrorMessage,
           ...widgetPullMetadata,
           ...widgetActionMetadata,
           ...agenticSurfaceActionMetadata,
@@ -3181,10 +3212,11 @@ async function executeAppFunction(
         method: callMethod,
         success: result.success,
         durationMs: result.durationMs,
-        errorMessage: result.success ? undefined : String(result.error),
+        errorMessage: result.success ? undefined : executionErrorMessage,
+        operatorDiagnostic: executionDiagnostic,
         source: callSource,
         inputArgs: args,
-        outputResult: result.success ? result.result : result.error,
+        outputResult: result.success ? result.result : executionDiagnostic,
         runtimeLogs: result.logs,
         aiCostLight: result.aiCostLight || 0,
         sessionId: meta?.sessionId,
@@ -3261,7 +3293,7 @@ async function executeAppFunction(
       } else {
         await completeJob(meta.queuedJobId, {
           success: result.success,
-          result: result.success ? result.result : result.error,
+          result: result.success ? result.result : result.diagnostic,
           logs: result.logs,
           durationMs: result.durationMs,
           aiCostLight: result.aiCostLight,
@@ -3302,7 +3334,10 @@ async function executeAppFunction(
         formatToolResult(result.result, result.logs, receiptId),
       );
     } else {
-      return jsonRpcResponse(id, formatToolError(result.error, receiptId));
+      return jsonRpcResponse(
+        id,
+        formatToolError(result.error, receiptId, result.diagnostic),
+      );
     }
   } catch (err) {
     if (
@@ -3865,14 +3900,20 @@ function attachExecutionReceipt(result: unknown, receiptId: string): unknown {
 function formatToolError(
   err: unknown,
   receiptId?: string,
+  diagnostic?: LaunchOperatorRunDiagnostic,
 ): MCPToolCallResponse {
-  const message = err instanceof Error
+  const rawMessage = err instanceof Error
     ? err.message
     : (err as { message?: string })?.message || String(err);
-  const errorType = err instanceof Error
+  const message = diagnostic
+    ? [diagnostic.summary, diagnostic.detail].filter(Boolean).join(" ")
+    : rawMessage;
+  const errorType = diagnostic?.causeCode || (err instanceof Error
     ? err.name
-    : (err as { type?: string })?.type;
-  const errorDetails = (err as { details?: Record<string, unknown> })?.details;
+    : (err as { type?: string })?.type);
+  const errorDetails = diagnostic
+    ? undefined
+    : (err as { details?: Record<string, unknown> })?.details;
 
   return {
     content: [
@@ -3891,6 +3932,7 @@ function formatToolError(
       error: message,
       ...(errorType ? { error_type: errorType } : {}),
       ...(errorDetails ? { error_details: errorDetails } : {}),
+      ...(diagnostic ? { operator_diagnostic: diagnostic } : {}),
       ...(receiptId ? { receipt_id: receiptId } : {}),
     },
     isError: true,

@@ -86,6 +86,8 @@ export interface Env {
   LAUNCH_WEB_BASE_URL: string;
   SUBSCRIPTION_CAPACITY_ENABLED: string;
   AGENT_CAPACITY_ENABLED: string;
+  /** legacy | shadow | canonical; invalid/unset values fail back to legacy. */
+  OPERATOR_ATTENTION_READ_MODE: string;
   ENVIRONMENT: string;
   CORS_ALLOWED_ORIGINS: string;
   PLATFORM_MCP_DISABLED_ALIASES: string;

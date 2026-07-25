@@ -37,6 +37,12 @@ import type {
   LaunchCallerFunctionPermissionsResponse,
   LaunchNotificationsMarkReadResponse,
   LaunchNotificationsResponse,
+  LaunchOperatorAttentionActionRequest,
+  LaunchOperatorAttentionActionResponse,
+  LaunchOperatorItemActionRequest,
+  LaunchOperatorItemActionResponse,
+  LaunchOperatorRoutineRunDetail,
+  LaunchOperatorRoutineRunLogExcerpt,
   LaunchCallerFunctionPermissionsUpdateRequest,
   LaunchFunctionInferenceOverrideRequest,
   LaunchFunctionInferenceResponse,
@@ -443,6 +449,31 @@ export class LaunchApiClient {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/activity${
         query ? `?${query}` : ""
+      }`,
+    );
+  }
+
+  operatorRoutineRun(
+    idOrSlug: string,
+    runId: string,
+  ): Promise<LaunchOperatorRoutineRunDetail> {
+    return this.fetchJson(
+      `/api/launch/agents/${
+        encodeURIComponent(idOrSlug)
+      }/routine-runs/${encodeURIComponent(runId)}`,
+    );
+  }
+
+  operatorRoutineRunLogs(
+    idOrSlug: string,
+    runId: string,
+    receiptId: string,
+  ): Promise<LaunchOperatorRoutineRunLogExcerpt> {
+    return this.fetchJson(
+      `/api/launch/agents/${
+        encodeURIComponent(idOrSlug)
+      }/routine-runs/${encodeURIComponent(runId)}/logs/${
+        encodeURIComponent(receiptId)
       }`,
     );
   }
@@ -1178,6 +1209,34 @@ export class LaunchApiClient {
     const query = params.toString();
     return this.fetchJson(
       `/api/launch/attention${query ? `?${query}` : ""}`,
+    );
+  }
+
+  actOnOperatorItemAttention(
+    itemId: string,
+    request: LaunchOperatorAttentionActionRequest,
+  ): Promise<LaunchOperatorAttentionActionResponse> {
+    return this.fetchJson(
+      `/api/launch/operator-items/${
+        encodeURIComponent(itemId)
+      }/attention`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  executeOperatorItemRemediation(
+    itemId: string,
+    request: LaunchOperatorItemActionRequest,
+  ): Promise<LaunchOperatorItemActionResponse> {
+    return this.fetchJson(
+      `/api/launch/operator-items/${encodeURIComponent(itemId)}/actions`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
     );
   }
 

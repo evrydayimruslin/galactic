@@ -10,6 +10,7 @@ import type {
 import { buildOperatorOverviewModel } from "../../lib/operator-overview-model";
 import type { LaunchNavigate } from "../../lib/navigation";
 import { Glyph } from "./glyph";
+import { OperatorIssueDeck } from "./operator-issue-deck";
 
 export interface OperatorAgentOverviewProps {
   home: LaunchAgentHomeResponse;
@@ -24,6 +25,7 @@ export interface OperatorAgentOverviewProps {
   onLoadMoreActivity?: () => void;
   onOpenInterface: (item: LaunchInterfaceSummary) => void;
   onNavigate: LaunchNavigate;
+  onRefresh?: () => Promise<void> | void;
 }
 
 function readableTime(value: string | null): string | null {
@@ -154,6 +156,7 @@ export function OperatorAgentOverview({
   onLoadMoreActivity,
   onOpenInterface,
   onNavigate,
+  onRefresh,
 }: OperatorAgentOverviewProps): ReactElement {
   const model = buildOperatorOverviewModel(home, interfaces);
   const directive = home.directive ?? {
@@ -165,6 +168,38 @@ export function OperatorAgentOverview({
   };
   const activity = activityOverride ?? home.activity;
   const operating = home.operatingSummary;
+  const blockingItems = model.operatorAttention?.items.filter(({ item }) =>
+    item.affectedAgents.some(({ agentId, blocking }) =>
+      agentId === home.agent.id && blocking
+    )
+  ) ?? [];
+  const firstBlockingItem = blockingItems[0]?.item ?? null;
+  const setupAttentionHref = firstBlockingItem
+    ? `/agents/${encodeURIComponent(home.agent.slug)}?pane=alerts&item=${
+      encodeURIComponent(firstBlockingItem.id)
+    }`
+    : `/agents/${encodeURIComponent(home.agent.slug)}?pane=alerts`;
+  const operatingStatus = operating
+    ? (
+      <>
+        <span
+          className={`neb-status-dot${
+            operating.readiness.working ? "" : " paused"
+          }`}
+        />
+        <span>
+          {operating.label}
+          {blockingItems.length === 1
+            ? <small>{firstBlockingItem?.diagnosis.summary}</small>
+            : blockingItems.length > 1
+            ? <small>{blockingItems.length} blocking steps remain.</small>
+            : operating.detail
+            ? <small>{operating.detail}</small>
+            : null}
+        </span>
+      </>
+    )
+    : null;
 
   const sections = {
     attention: (
@@ -179,9 +214,18 @@ export function OperatorAgentOverview({
           <span className="neb-rail-count">{model.attentionCount}</span>
         </div>
         <div className="neb-operator-attention-list">
-          {model.attention.map((item) => (
-            <AttentionCard item={item} key={item.id} onNavigate={onNavigate} />
-          ))}
+          {model.operatorAttention
+            ? (
+              <OperatorIssueDeck
+                compact
+                onChanged={onRefresh}
+                onNavigate={onNavigate}
+                projection={model.operatorAttention}
+              />
+            )
+            : model.attention.map((item) => (
+              <AttentionCard item={item} key={item.id} onNavigate={onNavigate} />
+            ))}
         </div>
       </section>
     ),
@@ -239,20 +283,20 @@ export function OperatorAgentOverview({
             Edit
           </button>
         </div>
-        {operating
+        {operating?.mode === "setup_required"
           ? (
-            <div className="neb-overview-status-line">
-              <span
-                className={`neb-status-dot${
-                  operating.readiness.working ? "" : " paused"
-                }`}
-              />
-              <span>
-                {operating.label}
-                {operating.detail ? <small>{operating.detail}</small> : null}
-              </span>
-            </div>
+            <button
+              className="neb-overview-status-line actionable"
+              onClick={() =>
+                onNavigate(setupAttentionHref, { scroll: "preserve" })}
+              type="button"
+            >
+              {operatingStatus}
+              <span className="neb-overview-status-action">Finish setup →</span>
+            </button>
           )
+          : operating
+          ? <div className="neb-overview-status-line">{operatingStatus}</div>
           : null}
       </section>
     ),

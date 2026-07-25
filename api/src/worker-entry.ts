@@ -35,6 +35,7 @@ import {
 import { createServerLogger } from "../services/logging.ts";
 import { runCapacityTelemetryReconciliationCycle } from "../services/capacity-telemetry-reconciliation.ts";
 import { processOperatorProjectionBatch } from "../services/operator-projections.ts";
+import { runOperatorItemProducerReconciliationCycle } from "../services/operator-item-producer-reconciliation.ts";
 import { installComputeControlPlaneAdapter } from "./bindings/compute-control-plane-adapter.ts";
 import { createComputeControlPlaneAdapter } from "../services/compute-orchestrator.ts";
 import { recoverAdmittedComputeDispatches } from "../services/compute-dispatch-recovery.ts";
@@ -370,6 +371,10 @@ async function runMinuteJobs(): Promise<void> {
       limit: 25,
       leaseSeconds: 120,
     }),
+    // Event producers open typed conditions immediately. This bounded replay
+    // rechecks account usage truth after reset even if no page or routine wake
+    // happens to trigger the recovery path.
+    runOperatorItemProducerReconciliationCycle(),
   ]);
 
   for (const [i, result] of results.entries()) {
@@ -386,6 +391,7 @@ async function runMinuteJobs(): Promise<void> {
         "computeReconciliation",
         "computeArtifactReconciliation",
         "operatorProjection",
+        "operatorItemProducerReconciliation",
       ];
       cronLogger.error("Minute cron job failed", {
         job: names[i],

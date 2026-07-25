@@ -30,6 +30,10 @@ type AgentHomeRevisionErrorCode =
   | "AGENT_HOME_RUN_CONCURRENCY_LIMIT"
   | "AGENT_HOME_IDEMPOTENCY_MISMATCH"
   | "AGENT_HOME_INVALID_MUTATION"
+  | "OPERATOR_ITEM_ACTION_INVALID"
+  | "OPERATOR_ITEM_ACTION_NOT_AVAILABLE"
+  | "OPERATOR_ITEM_NOT_ACTIVE"
+  | "OPERATOR_ITEM_ROUTINE_NOT_PAUSED"
   | "AGENT_HOME_SERVICE_UNAVAILABLE";
 
 export class AgentHomeRevisionError extends Error {
@@ -216,6 +220,10 @@ function databaseErrorCode(value: unknown): AgentHomeRevisionErrorCode | null {
     case "AGENT_HOME_RUN_CONCURRENCY_LIMIT":
     case "AGENT_HOME_IDEMPOTENCY_MISMATCH":
     case "AGENT_HOME_INVALID_MUTATION":
+    case "OPERATOR_ITEM_ACTION_INVALID":
+    case "OPERATOR_ITEM_ACTION_NOT_AVAILABLE":
+    case "OPERATOR_ITEM_NOT_ACTIVE":
+    case "OPERATOR_ITEM_ROUTINE_NOT_PAUSED":
       return code;
     default:
       return null;
@@ -249,6 +257,9 @@ function mappedStatus(code: AgentHomeRevisionErrorCode): number {
     case "AGENT_HOME_RUN_CONCURRENCY_LIMIT":
     case "AGENT_HOME_ROUTINE_DISABLED":
     case "AGENT_HOME_ACTIVE_AGENT_LIMIT":
+    case "OPERATOR_ITEM_ACTION_NOT_AVAILABLE":
+    case "OPERATOR_ITEM_NOT_ACTIVE":
+    case "OPERATOR_ITEM_ROUTINE_NOT_PAUSED":
       return 409;
     case "AGENT_HOME_NOT_FOUND":
     case "AGENT_HOME_ROUTINE_NOT_FOUND":
@@ -257,6 +268,7 @@ function mappedStatus(code: AgentHomeRevisionErrorCode): number {
       return 404;
     case "AGENT_HOME_INVALID_REVISION":
     case "AGENT_HOME_INVALID_MUTATION":
+    case "OPERATOR_ITEM_ACTION_INVALID":
       return 400;
     case "ACCOUNT_SESSION_REQUIRED":
       return 403;
@@ -316,8 +328,15 @@ async function responseError(
       ? "Agent Home is available only for private Agents in this launch."
       : code === "AGENT_HOME_IDEMPOTENCY_MISMATCH"
       ? "The idempotency key was already used for a different action."
+      : code === "OPERATOR_ITEM_NOT_ACTIVE"
+      ? "This issue is no longer active."
+      : code === "OPERATOR_ITEM_ACTION_NOT_AVAILABLE"
+      ? "This remediation is no longer available."
+      : code === "OPERATOR_ITEM_ROUTINE_NOT_PAUSED"
+      ? "The routine is no longer paused for this issue."
       : code === "AGENT_HOME_INVALID_MUTATION" ||
-          code === "AGENT_HOME_INVALID_REVISION"
+          code === "AGENT_HOME_INVALID_REVISION" ||
+          code === "OPERATOR_ITEM_ACTION_INVALID"
       ? "The Agent Home mutation is invalid."
       : `Agent Home persistence is unavailable (${response.status}).`,
     currentRevision: actual ? formatAgentHomeRevision(appId, actual) : null,
@@ -882,6 +901,8 @@ interface AgentHomeActionClaim {
 
 interface AgentHomeActionRequestPayload {
   capabilityIds?: string[];
+  operatorItemId?: string;
+  remediationId?: string;
   routineId?: string;
   version?: string;
 }
@@ -912,11 +933,19 @@ function canonicalActionPayload(
   const routineId = payload.routineId === undefined
     ? undefined
     : requireUuid(payload.routineId, "routineId");
+  const operatorItemId = payload.operatorItemId === undefined
+    ? undefined
+    : requireUuid(payload.operatorItemId, "operatorItemId");
+  const remediationId = payload.remediationId === undefined
+    ? undefined
+    : requireIdentifier(payload.remediationId, "remediationId");
   return {
     action: requireIdentifier(action, "action"),
     capabilityIds,
     version: payload.version ?? null,
     ...(routineId ? { routineId } : {}),
+    ...(operatorItemId ? { operatorItemId } : {}),
+    ...(remediationId ? { remediationId } : {}),
   };
 }
 
@@ -1183,6 +1212,90 @@ export async function queueAgentHomeRoutineRun(input: {
     });
   }
   return { runId, isNew: row.is_new };
+}
+
+export async function queueOperatorItemRoutineRunOnce(input: {
+  appId: string;
+  userId: string;
+  routineId: string;
+  itemId: string;
+  remediationId: string;
+  requestId: string;
+  leaseToken: string;
+  expectedRevision: string;
+  authSource: RequestAuthSource | string | null | undefined;
+}, deps: AgentHomeDatabaseDeps = {}): Promise<{
+  runId: string;
+  isNew: boolean;
+}> {
+  const base = mutationBase(input);
+  const payload = await callRpc(
+    "queue_operator_item_routine_run_once",
+    {
+      p_request_id: requireUuid(input.requestId, "requestId"),
+      p_app_id: base.appId,
+      p_user_id: base.userId,
+      p_routine_id: requireUuid(input.routineId, "routineId"),
+      p_item_id: requireUuid(input.itemId, "itemId"),
+      p_remediation_id: requireIdentifier(
+        input.remediationId,
+        "remediationId",
+      ),
+      p_lease_token: requireUuid(input.leaseToken, "leaseToken"),
+      p_expected_revision: base.expectedRevision,
+    },
+    base.appId,
+    deps,
+  );
+  const row = firstRow(payload);
+  const runId = stringValue(row?.run_id);
+  if (!runId || !UUID.test(runId) || typeof row?.is_new !== "boolean") {
+    throw new AgentHomeRevisionError({
+      code: "AGENT_HOME_SERVICE_UNAVAILABLE",
+      status: 503,
+      message: "Operator remediation run queue returned an invalid result.",
+    });
+  }
+  return { runId, isNew: row.is_new };
+}
+
+export async function resolveOperatorItemRoutineRunOnce(input: {
+  userId: string;
+  itemId: string;
+  remediationId: string;
+  authSource: RequestAuthSource | string | null | undefined;
+}, deps: AgentHomeDatabaseDeps = {}): Promise<{
+  appId: string;
+  routineId: string;
+}> {
+  requireAccountSession(input.authSource);
+  const itemId = requireUuid(input.itemId, "itemId");
+  const payload = await callRpc(
+    "resolve_operator_item_routine_run_once",
+    {
+      p_user_id: requireIdentifier(input.userId, "userId"),
+      p_item_id: itemId,
+      p_remediation_id: requireIdentifier(
+        input.remediationId,
+        "remediationId",
+      ),
+    },
+    itemId,
+    deps,
+  );
+  const row = firstRow(payload);
+  const appId = stringValue(row?.app_id);
+  const routineId = stringValue(row?.routine_id);
+  if (
+    !appId || !UUID.test(appId) || !routineId || !UUID.test(routineId)
+  ) {
+    throw new AgentHomeRevisionError({
+      code: "AGENT_HOME_SERVICE_UNAVAILABLE",
+      status: 503,
+      message: "Operator remediation resolution returned an invalid result.",
+    });
+  }
+  return { appId, routineId };
 }
 
 interface AgentHomeBudgetUsageRow {

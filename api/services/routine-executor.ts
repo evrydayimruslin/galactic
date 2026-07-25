@@ -1,5 +1,6 @@
 import { getEnv, getExecQueue } from "../lib/env.ts";
 import type { RoutineBudgetDefaults } from "../../shared/contracts/routine.ts";
+import type { LaunchOperatorRunDiagnostic } from "../../shared/contracts/launch.ts";
 import {
   createRoutineActorTokenForRun,
   type RoutineActorUserInput,
@@ -20,6 +21,7 @@ import { resolveRoutineRecoveryIncidents } from "./notification-recovery.ts";
 import { validateRoutineLaunchActivation } from "./routine-platform.ts";
 import {
   attachDeferredWakeToRun,
+  getAccountCapacityStatus,
   recordDeferredRoutineWake,
   releaseAccountCapacity,
   reserveAccountCapacity,
@@ -28,11 +30,23 @@ import {
   computeNextRoutineRunAt as computeProductionRoutineRunAt,
   RoutineScheduleValidationError,
 } from "./routine-schedule.ts";
+import {
+  normalizeOperatorDiagnostic,
+  readOperatorDiagnostic,
+} from "./operator-diagnostics.ts";
+import {
+  OPERATOR_ITEM_SOURCE,
+  reconcileAccountUsageOperatorItems,
+  reconcileRoutineUsageOperatorItem,
+  recordRoutinePausedOperatorItem,
+  recoverRoutineHealthOperatorItem,
+  scheduleOperatorItemProducer,
+} from "./operator-item-producers.ts";
 
 const ROUTINE_SELECT =
   "id,user_id,composer_app_id,composer_app_slug,template_id,template_version,name,description,intent,handler_function,status,schedule,config,budget_policy,approval_policy,max_concurrency,next_run_at,last_run_at,last_success_at,last_error_at,failure_count,created_by_trace_id,metadata,created_at,updated_at,deleted_at,lease_id,lease_expires_at";
 const RUN_SELECT =
-  "id,routine_id,user_id,status,trigger,trace_id,started_at,completed_at,duration_ms,total_light,summary,error,run_config,metadata,created_at,lease_id,lease_expires_at,attempt_count,max_attempts,next_attempt_at";
+  "id,routine_id,user_id,status,trigger,trace_id,started_at,completed_at,duration_ms,total_light,summary,error,run_config,metadata,agent_home_action_request_id,created_at,lease_id,lease_expires_at,attempt_count,max_attempts,next_attempt_at";
 const USER_SELECT = "id,email,tier,provisional";
 
 const DEFAULT_LIMIT = 10;
@@ -156,17 +170,12 @@ class AgentCapacityCapTooLowError extends Error {
   }
 }
 
-class NestedAdmissionWaitingError extends Error {
-  constructor(
-    readonly errorType: "AgentCapacityWaitingError" | "ConcurrencyWaitingError",
-    readonly details: Record<string, unknown>,
-  ) {
+class RoutineOperatorDiagnosticError extends Error {
+  constructor(readonly diagnostic: LaunchOperatorRunDiagnostic) {
     super(
-      errorType === "ConcurrencyWaitingError"
-        ? "A nested Agent call is still concurrency-limited after its bounded retry."
-        : "A nested Agent call is waiting for capacity.",
+      [diagnostic.summary, diagnostic.detail].filter(Boolean).join(" "),
     );
-    this.name = "NestedAdmissionWaitingError";
+    this.name = "RoutineOperatorDiagnosticError";
   }
 }
 
@@ -259,6 +268,12 @@ interface ClaimedRun {
   source: "scheduled" | "queued";
 }
 
+interface OperatorRunOnceAuthorization {
+  isOperatorRunOnce: boolean;
+  authorized: boolean;
+  itemId: string | null;
+}
+
 function serviceHeaders(
   prefer = "return=representation",
 ): Record<string, string> {
@@ -296,6 +311,160 @@ async function fetchRows<T>(
   return await readRows<T>(
     await fetch(restUrl(table, params), { headers: serviceHeaders() }),
     label,
+  );
+}
+
+async function authorizeOperatorRunOnce(
+  run: ExecutorRunRow,
+): Promise<OperatorRunOnceAuthorization> {
+  if (
+    run.metadata?.source !== "operator_item.run_once" ||
+    !run.agent_home_action_request_id
+  ) {
+    return {
+      isOperatorRunOnce: false,
+      authorized: false,
+      itemId: null,
+    };
+  }
+  const response = await fetch(
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/rpc/authorize_operator_item_routine_run_once`,
+    {
+      method: "POST",
+      headers: serviceHeaders(),
+      body: JSON.stringify({
+        p_user_id: run.user_id,
+        p_run_id: run.id,
+        p_routine_id: run.routine_id,
+        p_action_request_id: run.agent_home_action_request_id,
+      }),
+    },
+  );
+  const rows = await readRows<{
+    is_operator_run_once: unknown;
+    authorized: unknown;
+    item_id: unknown;
+  }>(response, "Failed to authorize operator Run once");
+  const row = rows[0];
+  if (
+    !row ||
+    typeof row.is_operator_run_once !== "boolean" ||
+    typeof row.authorized !== "boolean" ||
+    (row.item_id !== null && typeof row.item_id !== "string")
+  ) {
+    throw new Error("Operator Run once authorization returned an invalid row");
+  }
+  return {
+    isOperatorRunOnce: row.is_operator_run_once,
+    authorized: row.authorized,
+    itemId: typeof row.item_id === "string" ? row.item_id : null,
+  };
+}
+
+interface ActiveRoutineAgentRow {
+  composer_app_id: string | null;
+  composer_app_slug: string | null;
+}
+
+async function activeRoutineAgents(
+  userId: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const rows = await fetchRows<ActiveRoutineAgentRow>(
+    "user_routines",
+    {
+      user_id: `eq.${userId}`,
+      status: "eq.active",
+      deleted_at: "is.null",
+      composer_app_id: "not.is.null",
+      select: "composer_app_id,composer_app_slug",
+      limit: "1000",
+    },
+    "Failed to load account usage affected Agents",
+  );
+  const byId = new Map<string, { id: string; name: string }>();
+  for (const row of rows) {
+    if (!row.composer_app_id || byId.has(row.composer_app_id)) continue;
+    byId.set(row.composer_app_id, {
+      id: row.composer_app_id,
+      name: row.composer_app_slug || row.composer_app_id,
+    });
+  }
+  return [...byId.values()].sort((left, right) =>
+    left.id.localeCompare(right.id)
+  );
+}
+
+type RoutineProducerIdentity = Pick<
+  StoredRoutine,
+  "id" | "user_id" | "composer_app_id" | "composer_app_slug" | "name"
+>;
+
+const OPERATOR_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+function routineAgent(
+  routine: RoutineProducerIdentity,
+): { id: string; name: string } | null {
+  return routine.composer_app_id &&
+      OPERATOR_UUID.test(routine.composer_app_id) &&
+      OPERATOR_UUID.test(routine.id) &&
+      OPERATOR_UUID.test(routine.user_id)
+    ? {
+      id: routine.composer_app_id,
+      name: routine.composer_app_slug || routine.composer_app_id,
+    }
+    : null;
+}
+
+async function reconcileObservedAccountUsage(
+  routine: RoutineProducerIdentity,
+  status: Parameters<typeof reconcileAccountUsageOperatorItems>[0]["status"],
+  observedAt: string,
+): Promise<void> {
+  const agent = routineAgent(routine);
+  if (!agent) return;
+  await scheduleOperatorItemProducer(
+    OPERATOR_ITEM_SOURCE.accountUsage,
+    async () => {
+      const affectedAgents = await activeRoutineAgents(routine.user_id);
+      if (!affectedAgents.some((candidate) => candidate.id === agent.id)) {
+        affectedAgents.push(agent);
+      }
+      await reconcileAccountUsageOperatorItems({
+        userId: routine.user_id,
+        status,
+        affectedAgents,
+        observedAt,
+      });
+    },
+  );
+}
+
+async function refreshObservedAccountUsage(
+  routine: RoutineProducerIdentity,
+  observedAt: string,
+): Promise<void> {
+  const agent = routineAgent(routine);
+  if (!agent) return;
+  await scheduleOperatorItemProducer(
+    OPERATOR_ITEM_SOURCE.accountUsage,
+    async () => {
+      const [status, affectedAgents] = await Promise.all([
+        getAccountCapacityStatus(routine.user_id, { now: observedAt }),
+        activeRoutineAgents(routine.user_id),
+      ]);
+      if (!affectedAgents.some((candidate) => candidate.id === agent.id)) {
+        affectedAgents.push(agent);
+      }
+      await reconcileAccountUsageOperatorItems({
+        userId: routine.user_id,
+        status,
+        affectedAgents,
+        observedAt,
+      });
+    },
   );
 }
 
@@ -408,11 +577,23 @@ function unwrapMcpToolResult(value: unknown): unknown {
   }
 }
 
+function operatorDiagnosticFromError(
+  error: unknown,
+): LaunchOperatorRunDiagnostic {
+  if (error instanceof RoutineOperatorDiagnosticError) {
+    return error.diagnostic;
+  }
+  return normalizeOperatorDiagnostic({
+    error,
+    provenance: "unknown",
+  });
+}
+
 function errorPayload(error: unknown): Record<string, unknown> {
-  return {
-    message: error instanceof Error ? error.message : String(error),
-    name: error instanceof Error ? error.name : "Error",
-  };
+  return operatorDiagnosticFromError(error) as unknown as Record<
+    string,
+    unknown
+  >;
 }
 
 function retryPolicyFrom(
@@ -930,6 +1111,13 @@ async function prepareDueScheduledRuns(
             });
             continue;
           }
+          if (admission.code === "capacity_waiting") {
+            await reconcileObservedAccountUsage(
+              claimedRoutine,
+              admission,
+              iso(now),
+            );
+          }
           const nextEligibleAt = admission.nextEligibleAt ||
             admission.weekly.resetsAt;
           await recordDeferredRoutineWake({
@@ -1186,14 +1374,37 @@ async function invokeRoutineHandler(
       }),
     },
   );
-  const response = await withTimeout(
-    options.invokeMcp(mcpRequest, composerAppId, {
-      capacityQueueOperations: options.capacityQueueOperations,
-      capacityRootWorkerRequest: options.capacityRootWorkerRequest === true,
-    }),
-    options.handlerTimeoutMs,
-    "Routine handler invocation timed out",
-  );
+  let response: Response;
+  try {
+    response = await withTimeout(
+      options.invokeMcp(mcpRequest, composerAppId, {
+        capacityQueueOperations: options.capacityQueueOperations,
+        capacityRootWorkerRequest: options.capacityRootWorkerRequest === true,
+      }),
+      options.handlerTimeoutMs,
+      "Routine handler invocation timed out",
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "Routine handler invocation timed out"
+    ) {
+      throw new RoutineOperatorDiagnosticError(
+        normalizeOperatorDiagnostic({
+          error,
+          provenance: "platform",
+          platform: {
+            code: "ROUTINE_HANDLER_TIMEOUT",
+            summary: "The routine handler timed out.",
+            detail:
+              "Review the failed run and handler logs before running it again.",
+            retryable: true,
+          },
+        }),
+      );
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     const text = await response.text().catch(() => response.statusText);
@@ -1247,21 +1458,11 @@ async function invokeRoutineHandler(
     const structured = isRecord(rpc.result.structuredContent)
       ? rpc.result.structuredContent
       : null;
-    const propagatedType = structured?.error_type;
-    const propagatedDetails = isRecord(structured?.error_details)
-      ? structured.error_details
-      : {};
-    if (propagatedType === "AgentCapacityCapTooLowError") {
-      throw new AgentCapacityCapTooLowError(propagatedDetails);
-    }
-    if (
-      (propagatedType === "AgentCapacityWaitingError" ||
-        propagatedType === "ConcurrencyWaitingError")
-    ) {
-      throw new NestedAdmissionWaitingError(
-        propagatedType,
-        propagatedDetails,
-      );
+    const diagnostic = readOperatorDiagnostic(
+      structured?.operator_diagnostic,
+    );
+    if (diagnostic) {
+      throw new RoutineOperatorDiagnosticError(diagnostic);
     }
     const content = rpc.result.content;
     const textBlock = Array.isArray(content)
@@ -1270,7 +1471,17 @@ async function invokeRoutineHandler(
         typeof entry.text === "string"
       ) as { text?: string } | undefined
       : undefined;
-    throw new Error(textBlock?.text || "Routine handler failed");
+    throw new RoutineOperatorDiagnosticError(
+      normalizeOperatorDiagnostic({
+        error: {
+          type: typeof structured?.error_type === "string"
+            ? structured.error_type
+            : "Error",
+          message: textBlock?.text || "Routine handler failed",
+        },
+        provenance: "developer",
+      }),
+    );
   }
 
   const result = unwrapMcpToolResult(rpc.result);
@@ -1365,6 +1576,11 @@ async function updateRoutineAfterRun(
   now: Date,
   success: boolean,
   accounting: RunBudgetAccounting = {},
+  failure?: {
+    diagnostic: LaunchOperatorRunDiagnostic;
+    runId: string;
+  },
+  successfulVerification = false,
 ): Promise<boolean> {
   let autoPause = accounting.autoPause ?? null;
   const nextFailureCount = success ? 0 : (routine.failure_count || 0) + 1;
@@ -1399,8 +1615,15 @@ async function updateRoutineAfterRun(
       failure_count: nextFailureCount,
       updated_at: iso(now),
     };
-  if (Object.keys(metadataUpdates).length > 0) {
-    payload.metadata = { ...(routine.metadata || {}), ...metadataUpdates };
+  if (
+    Object.keys(metadataUpdates).length > 0 ||
+    (success && successfulVerification)
+  ) {
+    const baseMetadata = { ...(routine.metadata || {}) };
+    if (success && successfulVerification) {
+      delete baseMetadata.auto_pause;
+    }
+    payload.metadata = { ...baseMetadata, ...metadataUpdates };
   }
   if (autoPause) payload.status = "paused";
 
@@ -1429,13 +1652,38 @@ async function updateRoutineAfterRun(
       : autoPause.reason === "budget_calls_exceeded"
       ? `Paused because this run exceeded its call limit (${autoPause.calls}/${autoPause.cap} calls).`
       : "Paused by the circuit breaker.";
+    const agent = routineAgent(routine);
+    if (
+      autoPause.reason === "consecutive_failures" && agent && failure
+    ) {
+      await scheduleOperatorItemProducer(
+        OPERATOR_ITEM_SOURCE.routineHealth(routine.id),
+        () =>
+          recordRoutinePausedOperatorItem({
+            userId: routine.user_id,
+            agent,
+            routine: {
+              id: routine.id,
+              name: routine.name,
+            },
+            failedAttempts: autoPause.failure_count ?? nextFailureCount,
+            latestRunId: failure.runId,
+            diagnostic: failure.diagnostic,
+            observedAt: autoPause.at,
+          }),
+      );
+    }
     await createNotification({
       userId: routine.user_id,
       agentId: routine.composer_app_id,
       kind: "routine_paused",
       severity: "critical",
       title: `${routine.name} was paused`,
-      body: `${reason} Resume it once you've addressed the cause.`,
+      body: failure
+        ? `${reason} Latest failure: ${failure.diagnostic.summary}${
+          failure.diagnostic.detail ? ` ${failure.diagnostic.detail}` : ""
+        } Review the failed run before resuming scheduled work.`
+        : `${reason} Review the latest failed run before resuming scheduled work.`,
       entityType: "routine",
       entityId: routine.id,
       dedupeKey: `routine_paused:${routine.id}:${autoPause.at}`,
@@ -1487,9 +1735,33 @@ async function executeClaimedRun(
     return { status: "failed" };
   }
 
-  // Only active routines may execute. This also stops queued retries claimed
-  // before any pause, disable, delete, or terminal error transition landed.
-  if (routine.status !== "active") {
+  // Ordinary queue work remains active-only. M7's sole exception is a
+  // server-authored, durable Run once remediation for the still-active
+  // paused-routine issue. Metadata is only a routing hint; the database
+  // revalidates the action request, item, remediation, run link, and owner.
+  let operatorRunOnce = false;
+  if (run.metadata?.source === "operator_item.run_once") {
+    let authorization: OperatorRunOnceAuthorization;
+    try {
+      authorization = await authorizeOperatorRunOnce(run);
+    } catch {
+      await finishRun(run, "skipped", now, {
+        summary: "Run once authorization could not be verified.",
+        error: { code: "operator_run_once_authorization_unavailable" },
+      });
+      return { status: "skipped" };
+    }
+    operatorRunOnce = authorization.isOperatorRunOnce &&
+      authorization.authorized;
+    if (!operatorRunOnce || routine.status !== "paused") {
+      await finishRun(run, "skipped", now, {
+        summary:
+          "The paused-routine remediation is no longer authorized for this issue.",
+        error: { code: "operator_run_once_not_authorized" },
+      });
+      return { status: "skipped" };
+    }
+  } else if (routine.status !== "active") {
     await finishRun(run, "skipped", now, {
       summary: `Routine is ${routine.status}`,
     });
@@ -1571,6 +1843,30 @@ async function executeClaimedRun(
   // separately authorized one-shot operation.
   {
     const gate = budgetGate(routine, now);
+    const agent = routineAgent(routine);
+    if (agent) {
+      await scheduleOperatorItemProducer(
+        OPERATOR_ITEM_SOURCE.routineUsage(routine.id),
+        () =>
+          reconcileRoutineUsageOperatorItem({
+            userId: routine.user_id,
+            agent,
+            routine: {
+              id: routine.id,
+              name: routine.name,
+            },
+            gate: gate
+              ? {
+                period: gate.period,
+                spent: gate.spent,
+                limit: gate.cap,
+                resetsAt: iso(gate.resumeAt),
+              }
+              : null,
+            observedAt: iso(now),
+          }),
+      );
+    }
     if (gate) {
       const label = gate.period === "daily" ? "Daily" : "Monthly";
       await finishRun(run, "skipped", now, {
@@ -1623,11 +1919,17 @@ async function executeClaimedRun(
     result = await invokeRoutineHandler(routine, run, options);
   } catch (err) {
     const completedAt = clock();
-    if (err instanceof NestedAdmissionWaitingError) {
-      // The outer routine's tenant code already started and may have committed
-      // side effects before its nested call was denied. Never replay the whole
-      // wake automatically. galactic.call already made one safe in-place retry;
-      // persistent loops can journal/checkpoint and continue next cadence.
+    if (
+      err instanceof RoutineOperatorDiagnosticError &&
+      (
+        err.diagnostic.causeCode === "AGENT_CAPACITY_WAITING_ERROR" ||
+        err.diagnostic.causeCode === "CONCURRENCY_WAITING_ERROR"
+      )
+    ) {
+      // The outer tenant handler already started and may have committed side
+      // effects before a nested call failed. Do not replay it automatically.
+      // The tenant-supplied class name remains developer provenance and cannot
+      // select platform capacity remediation or inject trusted details.
       await recordRootStep(
         routine,
         run,
@@ -1639,14 +1941,8 @@ async function executeClaimedRun(
         err,
       );
       await finishRun(run, "skipped", completedAt, {
-        summary: err.message,
-        error: {
-          code: err.errorType === "ConcurrencyWaitingError"
-            ? "nested_concurrency_waiting"
-            : "nested_capacity_waiting",
-          ...err.details,
-          replay_safe: false,
-        },
+        summary: err.diagnostic.summary,
+        error: err.diagnostic as unknown as Record<string, unknown>,
       });
       return { status: "skipped" };
     }
@@ -1698,6 +1994,9 @@ async function executeClaimedRun(
       return { status: "failed" };
     }
     if (err instanceof AccountCapacityWaitingError) {
+      if (err.code === "capacity_waiting") {
+        await refreshObservedAccountUsage(routine, iso(completedAt));
+      }
       const deferred = await recordDeferredRoutineWake({
         routineId: routine.id,
         userId: routine.user_id,
@@ -1759,6 +2058,11 @@ async function executeClaimedRun(
         routine,
         completedAt,
         false,
+        {},
+        {
+          diagnostic: operatorDiagnosticFromError(err),
+          runId: run.id,
+        },
       ).catch(() => false);
       return { status: "retried", autoPaused };
     }
@@ -1772,6 +2076,10 @@ async function executeClaimedRun(
       completedAt,
       false,
       accounting,
+      {
+        diagnostic: operatorDiagnosticFromError(err),
+        runId: run.id,
+      },
     ).catch(() => false);
     return { status: "failed", autoPaused };
   }
@@ -1803,7 +2111,20 @@ async function executeClaimedRun(
       completedAt,
       true,
       accounting,
+      undefined,
+      operatorRunOnce,
     );
+    if (operatorRunOnce) {
+      await scheduleOperatorItemProducer(
+        OPERATOR_ITEM_SOURCE.routineHealth(routine.id),
+        () =>
+          recoverRoutineHealthOperatorItem({
+            userId: routine.user_id,
+            routineId: routine.id,
+            observedAt: iso(completedAt),
+          }),
+      );
+    }
     return { status: "succeeded", autoPaused };
   } catch (bookkeepingErr) {
     console.error(
@@ -1816,6 +2137,17 @@ async function executeClaimedRun(
       summary:
         "Routine handler completed successfully (bookkeeping incomplete).",
     }).catch(() => {});
+    if (operatorRunOnce) {
+      await scheduleOperatorItemProducer(
+        OPERATOR_ITEM_SOURCE.routineHealth(routine.id),
+        () =>
+          recoverRoutineHealthOperatorItem({
+            userId: routine.user_id,
+            routineId: routine.id,
+            observedAt: iso(completedAt),
+          }),
+      ).catch(() => {});
+    }
     return { status: "succeeded", autoPaused: false };
   }
 }

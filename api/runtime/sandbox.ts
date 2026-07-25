@@ -9,6 +9,7 @@ import type {
 import { formatLight } from "../../shared/types/index.ts";
 import type { AIRequest, AIResponse } from "../../shared/contracts/ai.ts";
 import type { ResolvedCredential } from "../../shared/contracts/env.ts";
+import type { LaunchOperatorRunDiagnostic } from "../../shared/contracts/launch.ts";
 import type { BillingConfig } from "../services/billing-config.ts";
 import type { DbDiffTally } from "../services/db-diff-tracker.ts";
 import type { D1DataService } from "../services/d1-data.ts";
@@ -16,6 +17,11 @@ import type { D1TestFixtureConfig } from "../services/d1-test-fixtures.ts";
 import type { CloudOperationMeteringContext } from "../services/cloud-usage.ts";
 import { buildEconomicIdempotencyKey } from "../services/economic-idempotency.ts";
 import { mintSandboxAuthToken } from "../services/sandbox-actor.ts";
+import {
+  collectRuntimeDiagnosticSecrets,
+  normalizeOperatorDiagnostic,
+  operatorCompatibilityError,
+} from "../services/operator-diagnostics.ts";
 import type { RoutineActorCapabilityScope } from "../services/routine-auth.ts";
 import type { RoutineTraceContext } from "../services/routine-trace.ts";
 
@@ -262,6 +268,11 @@ export interface ExecutionResult {
     message: string;
     stack?: string;
   };
+  /**
+   * Host-normalized, secret-safe operator diagnosis. Tenant error names and
+   * details never acquire platform provenance through this field.
+   */
+  diagnostic?: LaunchOperatorRunDiagnostic;
   // sha256 of the Worker Loader reuse key — set ONLY when the execution ran on
   // the warm-reuse (loader.get) path. Cloudflare bills ~one Dynamic Worker load
   // per unique worker (= reuse key + code) per UTC day, resetting daily, so the
@@ -1745,6 +1756,7 @@ export async function executeInSandbox(
   const startTime = Date.now();
   const logs: LogEntry[] = [];
   let aiCostLight = 0;
+  const knownSecrets = collectRuntimeDiagnosticSecrets(config);
 
   // SECURITY: the SDK's inter-app call uses this bearer, not the caller's raw
   // token. Mint a short-lived token scoped to this app's allowed call targets
@@ -2778,6 +2790,19 @@ export async function executeInSandbox(
             (serialized.length / 1024 / 1024).toFixed(1)
           } MB) exceeds limit (${MAX_RESULT_BYTES / 1024 / 1024} MB)`,
         },
+        diagnostic: normalizeOperatorDiagnostic({
+          error: {
+            type: "ResultTooLarge",
+            message: "The Agent returned more data than the runtime allows.",
+          },
+          provenance: "developer",
+          platform: {
+            code: "RESULT_TOO_LARGE",
+            summary: "The Agent returned more data than the runtime allows.",
+            retryable: false,
+          },
+          knownSecrets: [...knownSecrets, sandboxAuthToken],
+        }),
       };
     }
 
@@ -2791,6 +2816,11 @@ export async function executeInSandbox(
   } catch (error) {
     // Clean up any lingering timers on error path too
     const durationMs = Date.now() - startTime;
+    const diagnostic = normalizeOperatorDiagnostic({
+      error,
+      provenance: "developer",
+      knownSecrets: [...knownSecrets, sandboxAuthToken],
+    });
 
     return {
       success: false,
@@ -2798,11 +2828,12 @@ export async function executeInSandbox(
       logs,
       durationMs,
       aiCostLight,
-      error: {
-        type: error instanceof Error ? error.constructor.name : "UnknownError",
-        message: error instanceof Error ? error.message : String(error),
-        // Stack traces intentionally omitted — never expose internal paths to callers
-      },
+      error: operatorCompatibilityError(
+        diagnostic,
+        error instanceof Error ? error.name : null,
+        [...knownSecrets, sandboxAuthToken],
+      ),
+      diagnostic,
     };
   }
 }

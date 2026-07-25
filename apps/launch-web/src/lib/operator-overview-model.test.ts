@@ -103,6 +103,51 @@ describe("operator Overview model", () => {
     expect(model.sectionOrder).toEqual(["attention", "directive"]);
   });
 
+  it("uses canonical Attention only after an authoritative cutover", () => {
+    const canonical = {
+      contractVersion: "2026-07-24.operator-issues.1" as const,
+      items: [],
+      agentCounts: [],
+      openCount: 4,
+      requiresDecisionCount: 2,
+      blockingCount: 3,
+      nextCursor: null,
+      available: true as const,
+      unavailableReason: null,
+      generatedAt: "2026-07-24T18:00:00.000Z",
+    };
+    const model = buildOperatorOverviewModel(
+      home({
+        attention: {
+          items: [],
+          openCount: 99,
+          requiresDecisionCount: 80,
+          readSource: "canonical",
+          operatorItems: canonical,
+        },
+      }),
+      interfaces,
+    );
+    expect(model.operatorAttention).toBe(canonical);
+    expect(model.attention).toEqual([]);
+    expect(model.attentionCount).toBe(4);
+
+    const rollback = buildOperatorOverviewModel(
+      home({
+        attention: {
+          items: [],
+          openCount: 99,
+          requiresDecisionCount: 80,
+          readSource: "legacy",
+          operatorItems: canonical,
+        },
+      }),
+      interfaces,
+    );
+    expect(rollback.operatorAttention).toBeNull();
+    expect(rollback.attentionCount).toBe(99);
+  });
+
   it("uses the canonical populated-only order", () => {
     const model = buildOperatorOverviewModel(
       home({

@@ -21,7 +21,7 @@ const ALL_SURFACES: CapabilitySurface[] = ["mcp", "cli", "web"];
 // Capabilities we intend to reach full MCP + CLI + website parity. Agent-native
 // signals (flag, codemode) are intentionally MCP-only and excluded. As each read
 // migrates it is added here so the parity invariant grows with the registry.
-const PARITY_TARGETS = ["verify", "job", "discover", "call"];
+const PARITY_TARGETS = ["verify", "job", "discover", "call", "attention"];
 
 Deno.test("registry: full-parity capabilities declare all three surfaces", () => {
   for (const id of PARITY_TARGETS) {
@@ -70,6 +70,8 @@ Deno.test("registry: tool-name resolution covers gx.*, ul.*, and aliases", () =>
   assertEquals(getCapabilityByToolName("gx.job")?.id, "job");
   assertEquals(getCapabilityByToolName("ul.job")?.id, "job");
   assertEquals(getCapabilityByToolName("ultralight.job")?.id, "job");
+  assertEquals(getCapabilityByToolName("gx.attention")?.id, "attention");
+  assertEquals(getCapabilityByToolName("ul.attention")?.id, "attention");
   assertEquals(getCapabilityByToolName("gx.flag")?.id, "flag");
   assertEquals(getCapabilityByToolName("ul.flag")?.id, "flag");
   assertEquals(getCapabilityByToolName("gx.download")?.id, "download");
@@ -125,6 +127,7 @@ Deno.test("registry: MCP projection honors LITE (core-only) and Free Mode", () =
       "gx.consent",
       "gx.secrets",
       "gx.routine",
+      "gx.attention",
     ]
   ) {
     assert(lite.includes(name), `${name} should be in the LITE manifest`);

@@ -6,13 +6,15 @@ ARG SANDBOX_BASE_IMAGE
 
 # Build the Go CLIs from immutable, checksum-verified modules with a patched
 # compiler. gh and rclone stay on their product-pinned releases while forcing
-# the first gRPC-Go release that closes GHSA-hrxh-6v49-42gf. These binaries are
-# copied into the runtime image; no build toolchain is retained.
+# fixed gRPC-Go, x/net, and x/text releases. These binaries are copied into the
+# runtime image; no build toolchain is retained.
 FROM docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 AS go-tools
 ARG GH_VERSION=2.96.0
 ARG GIT_LFS_VERSION=3.7.1
 ARG GALACTIC_RCLONE_VERSION=1.74.4
 ARG GRPC_GO_VERSION=1.82.1
+ARG GOLANG_X_NET_VERSION=0.56.0
+ARG GOLANG_X_TEXT_VERSION=0.39.0
 ENV GOTOOLCHAIN=local \
     GOPROXY=https://proxy.golang.org,direct \
     GOSUMDB=sum.golang.org \
@@ -35,9 +37,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     chmod -R u+w /tmp/gh; \
     cd /tmp/gh; \
     go mod edit "-require=google.golang.org/grpc@v${GRPC_GO_VERSION}"; \
+    go mod edit "-require=golang.org/x/net@v${GOLANG_X_NET_VERSION}"; \
+    go mod edit "-require=golang.org/x/text@v${GOLANG_X_TEXT_VERSION}"; \
     go mod tidy; \
     go mod verify; \
     test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "v${GRPC_GO_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' golang.org/x/net)" = "v${GOLANG_X_NET_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "v${GOLANG_X_TEXT_VERSION}"; \
     go build -trimpath \
       -ldflags="-s -w -X github.com/cli/cli/v2/internal/build.Version=${GH_VERSION} -X github.com/cli/cli/v2/internal/build.Date=2026-07-02" \
       -o /out/gh ./cmd/gh; \
@@ -45,6 +51,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go version -m /out/gh | grep -F 'go1.26.5'; \
     go version -m /out/gh | awk -v expected="v${GRPC_GO_VERSION}" \
       '$1 == "dep" && $2 == "google.golang.org/grpc" && $3 == expected { found = 1 } END { exit !found }'; \
+    go version -m /out/gh | awk -v expected="v${GOLANG_X_NET_VERSION}" \
+      '$1 == "dep" && $2 == "golang.org/x/net" && $3 == expected { found = 1 } END { exit !found }'; \
+    go version -m /out/gh | awk -v expected="v${GOLANG_X_TEXT_VERSION}" \
+      '$1 == "dep" && $2 == "golang.org/x/text" && $3 == expected { found = 1 } END { exit !found }'; \
     rm -rf /tmp/gh
 
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -55,9 +65,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     chmod -R u+w /tmp/rclone; \
     cd /tmp/rclone; \
     go mod edit "-require=google.golang.org/grpc@v${GRPC_GO_VERSION}"; \
+    go mod edit "-require=golang.org/x/net@v${GOLANG_X_NET_VERSION}"; \
+    go mod edit "-require=golang.org/x/text@v${GOLANG_X_TEXT_VERSION}"; \
     go mod tidy; \
     go mod verify; \
     test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "v${GRPC_GO_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' golang.org/x/net)" = "v${GOLANG_X_NET_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "v${GOLANG_X_TEXT_VERSION}"; \
     go build -trimpath \
       -ldflags="-s -w -X github.com/rclone/rclone/fs.Version=v${GALACTIC_RCLONE_VERSION}" \
       -o /out/rclone .; \
@@ -66,6 +80,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go version -m /out/rclone | grep -F 'go1.26.5'; \
     go version -m /out/rclone | awk -v expected="v${GRPC_GO_VERSION}" \
       '$1 == "dep" && $2 == "google.golang.org/grpc" && $3 == expected { found = 1 } END { exit !found }'; \
+    go version -m /out/rclone | awk -v expected="v${GOLANG_X_NET_VERSION}" \
+      '$1 == "dep" && $2 == "golang.org/x/net" && $3 == expected { found = 1 } END { exit !found }'; \
+    go version -m /out/rclone | awk -v expected="v${GOLANG_X_TEXT_VERSION}" \
+      '$1 == "dep" && $2 == "golang.org/x/text" && $3 == expected { found = 1 } END { exit !found }'; \
     rm -rf /tmp/rclone
 
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -79,12 +97,18 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     patch -d /tmp/git-lfs -p1 < /tmp/git-lfs-go-modules.patch; \
     cd /tmp/git-lfs; \
     go mod verify; \
+    test "$(go list -m -f '{{.Version}}' golang.org/x/net)" = "v${GOLANG_X_NET_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "v${GOLANG_X_TEXT_VERSION}"; \
     go test ./...; \
     go build -trimpath \
       -ldflags="-s -w -X github.com/git-lfs/git-lfs/v3/config.GitCommit=v${GIT_LFS_VERSION}-galactic.1 -X github.com/git-lfs/git-lfs/v3/config.Vendor=Galactic" \
       -o /out/git-lfs ./git-lfs.go; \
     /out/git-lfs version | grep -F "git-lfs/${GIT_LFS_VERSION} (Galactic;"; \
     go version -m /out/git-lfs | grep -F 'go1.26.5'; \
+    go version -m /out/git-lfs | awk -v expected="v${GOLANG_X_NET_VERSION}" \
+      '$1 == "dep" && $2 == "golang.org/x/net" && $3 == expected { found = 1 } END { exit !found }'; \
+    go version -m /out/git-lfs | awk -v expected="v${GOLANG_X_TEXT_VERSION}" \
+      '$1 == "dep" && $2 == "golang.org/x/text" && $3 == expected { found = 1 } END { exit !found }'; \
     rm -rf /tmp/git-lfs /tmp/git-lfs.tar.gz
 
 # The Sandbox Python flavor currently carries an older /usr/local/python tree.

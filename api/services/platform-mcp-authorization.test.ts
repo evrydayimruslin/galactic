@@ -87,6 +87,7 @@ Deno.test("platform MCP scopes: builder/operator capabilities remain bounded by 
       },
       { requestedName: "gx.routine", args: { action: "pause" } },
       { requestedName: "gx.notifications", args: { action: "list" } },
+      { requestedName: "gx.attention", args: { action: "list" } },
     ]
   ) {
     assert(
@@ -133,6 +134,8 @@ Deno.test("platform MCP scopes: builder/operator capabilities remain bounded by 
         args: { action: "update", metadata: { budget_spend: {} } },
       },
       { requestedName: "gx.notifications", args: { action: "mark_read" } },
+      { requestedName: "gx.attention", args: { action: "dismiss" } },
+      { requestedName: "gx.attention", args: { action: "run_once" } },
       { requestedName: "gx.logs", args: { resolve_event_id: "event-1" } },
       { requestedName: "gx.db", args: { action: "support_read" } },
       { requestedName: "gx.discover", args: { scope: "appstore" } },

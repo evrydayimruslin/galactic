@@ -18,7 +18,12 @@ import type {
 import { isAgentPane } from "../../lib/agent-pane-registry";
 import { launchApi } from "../../lib/api";
 import type { LaunchNavigate } from "../../lib/navigation";
+import {
+  appendOperatorAttentionPage,
+  canonicalOperatorAttention,
+} from "../../lib/operator-attention";
 import { Glyph } from "./glyph";
+import { OperatorIssueDeck } from "./operator-issue-deck";
 
 type AttentionLifecycleAction = Exclude<
   LaunchAgentAttentionActionRequest["action"],
@@ -507,7 +512,108 @@ function AttentionCard({
   );
 }
 
-export function OperatorAgentAlerts({
+function CanonicalOperatorAgentAlerts({
+  agent,
+  attention,
+  embedded = false,
+  itemId,
+  loadPage,
+  onAttentionCountChange,
+  onClearItem,
+  onNavigate,
+  query = "",
+}: OperatorAgentAlertsProps): ReactElement {
+  const canonical = canonicalOperatorAttention(attention)!;
+  const [projection, setProjection] = useState(canonical);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => setProjection(canonical), [canonical]);
+  const refresh = async () => {
+    const response = await launchApi.agentAttention(agent.slug, { limit: 200 });
+    const next = canonicalOperatorAttention(response);
+    if (!next) {
+      throw new Error("Canonical Agent Attention is temporarily unavailable.");
+    }
+    setProjection(next);
+  };
+  const loadOlder = async () => {
+    if (!projection.nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    setError("");
+    try {
+      const response = await (
+        loadPage ??
+          ((cursor: string) =>
+            launchApi.agentAttention(agent.slug, { cursor, limit: 200 }))
+      )(projection.nextCursor);
+      const page = canonicalOperatorAttention(response);
+      if (!page) {
+        throw new Error("Canonical Agent Attention is temporarily unavailable.");
+      }
+      setProjection((current) => appendOperatorAttentionPage(current, page));
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Older Attention could not be loaded.",
+      );
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+  return (
+    <section
+      className={`neb-modal-pane active neb-agent-attention${
+        embedded ? " embedded" : ""
+      }`}
+    >
+      <div className="neb-agent-attention-head">
+        <div>
+          <h2 className="neb-modal-h">
+            {embedded ? agent.name : "Attention"}
+          </h2>
+          <p>
+            {embedded
+              ? "Current blockers, reports, and direct next steps."
+              : `Current blockers, reports, and direct next steps for ${agent.name}.`}
+          </p>
+        </div>
+        {projection.requiresDecisionCount > 0
+          ? (
+            <span className="neb-agent-attention-count">
+              {projection.requiresDecisionCount} decision
+              {projection.requiresDecisionCount === 1 ? "" : "s"} needed
+            </span>
+          )
+          : null}
+      </div>
+      <OperatorIssueDeck
+        itemId={itemId}
+        onChanged={refresh}
+        onClearItem={onClearItem}
+        onCountChange={onAttentionCountChange}
+        onNavigate={onNavigate}
+        projection={projection}
+        query={query}
+      />
+      {projection.nextCursor
+        ? (
+          <button
+            className="neb-add-row"
+            disabled={loadingMore}
+            onClick={() => void loadOlder()}
+            type="button"
+          >
+            {loadingMore ? "Loading older items…" : "Load older items"}
+          </button>
+        )
+        : null}
+      {error ? <p className="neb-error-note" role="alert">{error}</p> : null}
+    </section>
+  );
+}
+
+function LegacyOperatorAgentAlerts({
   agent,
   attention,
   embedded = false,
@@ -795,4 +901,12 @@ export function OperatorAgentAlerts({
         : null}
     </section>
   );
+}
+
+export function OperatorAgentAlerts(
+  props: OperatorAgentAlertsProps,
+): ReactElement {
+  return canonicalOperatorAttention(props.attention)
+    ? <CanonicalOperatorAgentAlerts {...props} />
+    : <LegacyOperatorAgentAlerts {...props} />;
 }
