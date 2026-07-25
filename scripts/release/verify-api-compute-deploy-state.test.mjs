@@ -19,6 +19,8 @@ function version({
   plane = false,
   enabled = "0",
   digest = ZERO_DIGEST,
+  rolloutMode = "canary",
+  canaryAllowlist = "",
   tag = `api-${SHA}`,
   target = "production",
 } = {}) {
@@ -33,12 +35,12 @@ function version({
     {
       type: "plain_text",
       name: "COMPUTE_ROLLOUT_MODE",
-      text: "canary",
+      text: rolloutMode,
     },
     {
       type: "plain_text",
       name: "COMPUTE_CANARY_ALLOWLIST",
-      text: "",
+      text: canaryAllowlist,
     },
     {
       type: "queue",
@@ -97,6 +99,12 @@ test("accepts an exact admission-off bootstrap deployment", () => {
 });
 
 test("accepts a bound admission-off deployment", () => {
+  const computeState = {
+    enabled: "0",
+    environmentDigest: `sha256:${"b".repeat(64)}`,
+    rolloutMode: "canary",
+    canaryAllowlist: "",
+  };
   assert.deepEqual(
     verifyApiComputeDeployState({
       mode: "bound",
@@ -108,11 +116,17 @@ test("accepts a bound admission-off deployment", () => {
       }),
       expectedTag: `api-${SHA}`,
     }),
-    { versionId: VERSION_ID },
+    { versionId: VERSION_ID, computeState },
   );
 });
 
 test("validates exact staging Compute resource targets", () => {
+  const computeState = {
+    enabled: "0",
+    environmentDigest: `sha256:${"c".repeat(64)}`,
+    rolloutMode: "canary",
+    canaryAllowlist: "",
+  };
   assert.deepEqual(
     verifyApiComputeDeployState({
       mode: "bound",
@@ -125,9 +139,130 @@ test("validates exact staging Compute resource targets", () => {
       }),
       expectedTag: `api-${SHA}`,
     }),
-    { versionId: VERSION_ID },
+    { versionId: VERSION_ID, computeState },
   );
 });
+
+test("accepts and exactly preserves a global Compute policy", () => {
+  const computeState = {
+    enabled: "1",
+    environmentDigest: `sha256:${"d".repeat(64)}`,
+    rolloutMode: "global",
+    canaryAllowlist: "",
+  };
+  assert.deepEqual(
+    verifyApiComputeDeployState({
+      mode: "bound",
+      target: "production",
+      status: status(),
+      version: version({
+        plane: true,
+        enabled: "1",
+        digest: computeState.environmentDigest,
+        rolloutMode: "global",
+      }),
+      expectedTag: `api-${SHA}`,
+      expectedState: computeState,
+    }),
+    { versionId: VERSION_ID, computeState },
+  );
+});
+
+test("accepts and exactly preserves a canonical canary Compute policy", () => {
+  const owner = "11111111-1111-4111-8111-111111111111";
+  const agent = "22222222-2222-4222-8222-222222222222";
+  const computeState = {
+    enabled: "1",
+    environmentDigest: `sha256:${"e".repeat(64)}`,
+    rolloutMode: "canary",
+    canaryAllowlist: `${owner}/${agent}`,
+  };
+  assert.deepEqual(
+    verifyApiComputeDeployState({
+      mode: "bound",
+      target: "production",
+      status: status(),
+      version: version({
+        plane: true,
+        enabled: "1",
+        digest: computeState.environmentDigest,
+        rolloutMode: "canary",
+        canaryAllowlist: computeState.canaryAllowlist,
+      }),
+      expectedState: computeState,
+    }),
+    { versionId: VERSION_ID, computeState },
+  );
+});
+
+test("rejects any deployed Compute policy drift from the captured state", () => {
+  assert.throws(
+    () =>
+      verifyApiComputeDeployState({
+        mode: "bound",
+        target: "production",
+        status: status(),
+        version: version({
+          plane: true,
+          enabled: "1",
+          digest: `sha256:${"f".repeat(64)}`,
+          rolloutMode: "global",
+        }),
+        expectedTag: `api-${SHA}`,
+        expectedState: {
+          enabled: "0",
+          environmentDigest: `sha256:${"f".repeat(64)}`,
+          rolloutMode: "canary",
+          canaryAllowlist: "",
+        },
+      }),
+    /does not exactly preserve the live state/u,
+  );
+});
+
+for (
+  const [name, overrides] of [
+    [
+      "noncanonical admission flag",
+      { enabled: "true", digest: `sha256:${"1".repeat(64)}` },
+    ],
+    [
+      "zero bound digest",
+      { digest: ZERO_DIGEST },
+    ],
+    [
+      "global allowlist",
+      {
+        enabled: "1",
+        digest: `sha256:${"2".repeat(64)}`,
+        rolloutMode: "global",
+        canaryAllowlist:
+          "11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222",
+      },
+    ],
+    [
+      "empty enabled canary",
+      {
+        enabled: "1",
+        digest: `sha256:${"3".repeat(64)}`,
+        rolloutMode: "canary",
+      },
+    ],
+  ]
+) {
+  test(`rejects ${name} in a bound Compute policy`, () => {
+    assert.throws(
+      () =>
+        verifyApiComputeDeployState({
+          mode: "bound",
+          target: "production",
+          status: status(),
+          version: version({ plane: true, ...overrides }),
+        }),
+      /deployment state is invalid/u,
+    );
+  });
+}
 
 for (
   const [name, mode, state, detail] of [
@@ -145,12 +280,7 @@ for (
       }),
       version(),
     ],
-    [
-      "enabled admission",
-      "bootstrap",
-      status(),
-      version({ enabled: "1" }),
-    ],
+    ["enabled admission", "bootstrap", status(), version({ enabled: "1" })],
     [
       "wrong release tag",
       "bootstrap",

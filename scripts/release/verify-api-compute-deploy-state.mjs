@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -8,6 +8,8 @@ const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const ZERO_DIGEST = `sha256:${"0".repeat(64)}`;
+const CANARY_ENTRY =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 const TARGETS = {
   production: {
@@ -67,12 +69,82 @@ function plainValue(version, name) {
   return values[0].text;
 }
 
+function computePolicy(version) {
+  const enabled = plainValue(version, "COMPUTE_ENABLED");
+  const environmentDigest = plainValue(
+    version,
+    "COMPUTE_ENVIRONMENT_DIGEST",
+  );
+  const rolloutMode = plainValue(version, "COMPUTE_ROLLOUT_MODE");
+  const canaryAllowlist = plainValue(version, "COMPUTE_CANARY_ALLOWLIST");
+
+  if (!["0", "1"].includes(enabled)) {
+    fail("Compute admission flag is not canonical");
+  }
+  if (!DIGEST.test(environmentDigest) || environmentDigest === ZERO_DIGEST) {
+    fail("bound Compute environment digest is malformed or zero");
+  }
+
+  if (enabled === "0") {
+    if (rolloutMode !== "canary" || canaryAllowlist !== "") {
+      fail("disabled Compute policy must be canary with an empty allowlist");
+    }
+  } else if (rolloutMode === "global") {
+    if (canaryAllowlist !== "") {
+      fail("global Compute policy must use an empty allowlist");
+    }
+  } else if (rolloutMode === "canary") {
+    const entries = canaryAllowlist.split(",");
+    if (
+      entries.length < 1 ||
+      entries.length > 50 ||
+      entries.some((entry) => !CANARY_ENTRY.test(entry)) ||
+      new Set(entries).size !== entries.length
+    ) {
+      fail("enabled canary Compute policy has a malformed allowlist");
+    }
+  } else {
+    fail("enabled Compute rollout mode is not canonical");
+  }
+
+  return {
+    enabled,
+    environmentDigest,
+    rolloutMode,
+    canaryAllowlist,
+  };
+}
+
+function verifyPreservedPolicy(actual, expected) {
+  if (
+    expected === null ||
+    typeof expected !== "object" ||
+    Array.isArray(expected)
+  ) {
+    fail("expected preserved Compute policy is malformed");
+  }
+  const keys = [
+    "enabled",
+    "environmentDigest",
+    "rolloutMode",
+    "canaryAllowlist",
+  ];
+  if (
+    Object.keys(expected).length !== keys.length ||
+    keys.some((key) => typeof expected[key] !== "string") ||
+    keys.some((key) => expected[key] !== actual[key])
+  ) {
+    fail("deployed Compute policy does not exactly preserve the live state");
+  }
+}
+
 export function verifyApiComputeDeployState({
   mode,
   target,
   status,
   version,
   expectedTag = null,
+  expectedState = null,
 }) {
   if (!["pre-bootstrap", "bootstrap", "bound"].includes(mode)) {
     fail(`unsupported mode ${String(mode)}`);
@@ -106,23 +178,16 @@ export function verifyApiComputeDeployState({
     return { versionId };
   }
 
-  if (
-    typeof expectedTag !== "string" ||
-    !/^api-[0-9a-f]{40}$/u.test(expectedTag)
-  ) {
-    fail("expected release tag is invalid");
-  }
-  if (version?.annotations?.["workers/tag"] !== expectedTag) {
-    fail("deployed version tag does not match the release SHA");
-  }
-  if (plainValue(version, "COMPUTE_ENABLED") !== "0") {
-    fail("Compute admission is not disabled");
-  }
-  if (plainValue(version, "COMPUTE_ROLLOUT_MODE") !== "canary") {
-    fail("Compute rollout mode is not canary");
-  }
-  if (plainValue(version, "COMPUTE_CANARY_ALLOWLIST") !== "") {
-    fail("Compute canary allowlist is not empty");
+  if (mode === "bootstrap" || expectedTag !== null) {
+    if (
+      typeof expectedTag !== "string" ||
+      !/^api-[0-9a-f]{40}$/u.test(expectedTag)
+    ) {
+      fail("expected release tag is invalid");
+    }
+    if (version?.annotations?.["workers/tag"] !== expectedTag) {
+      fail("deployed version tag does not match the release SHA");
+    }
   }
 
   const digest = plainValue(version, "COMPUTE_ENVIRONMENT_DIGEST");
@@ -144,27 +209,41 @@ export function verifyApiComputeDeployState({
   }
 
   if (mode === "bootstrap") {
+    if (plainValue(version, "COMPUTE_ENABLED") !== "0") {
+      fail("Compute admission is not disabled");
+    }
+    if (plainValue(version, "COMPUTE_ROLLOUT_MODE") !== "canary") {
+      fail("Compute rollout mode is not canary");
+    }
+    if (plainValue(version, "COMPUTE_CANARY_ALLOWLIST") !== "") {
+      fail("Compute canary allowlist is not empty");
+    }
     if (planes.length !== 0) {
       fail("bootstrap API unexpectedly has a Compute Plane binding");
     }
     if (digest !== ZERO_DIGEST) {
       fail("bootstrap API does not use the zero environment digest");
     }
-  } else {
-    const servicePlanes = exactBindings(
-      version,
-      "COMPUTE_PLANE",
-      "service",
-    );
-    if (
-      servicePlanes[0].service !== targetState.computeWorker ||
-      servicePlanes[0].entrypoint !== "ComputePlane"
-    ) {
-      fail("Compute Plane binding does not match the reviewed target");
-    }
+    return { versionId };
   }
 
-  return { versionId };
+  const servicePlanes = exactBindings(
+    version,
+    "COMPUTE_PLANE",
+    "service",
+  );
+  if (
+    servicePlanes[0].service !== targetState.computeWorker ||
+    servicePlanes[0].entrypoint !== "ComputePlane"
+  ) {
+    fail("Compute Plane binding does not match the reviewed target");
+  }
+
+  const computeState = computePolicy(version);
+  if (expectedState !== null) {
+    verifyPreservedPolicy(computeState, expectedState);
+  }
+  return { versionId, computeState };
 }
 
 function readJson(path, label) {
@@ -176,20 +255,35 @@ function readJson(path, label) {
 }
 
 function main(argv) {
-  if (argv.length < 4 || argv.length > 5) {
+  if (argv.length < 4 || argv.length > 7) {
     throw new Error(
       "Usage: verify-api-compute-deploy-state.mjs " +
         "<pre-bootstrap|bootstrap|bound> <production|staging> " +
-        "<status-json> <version-json> [expected-tag]",
+        "<status-json> <version-json> [expected-tag|-] " +
+        "[expected-state-json|-] [write-state-json]",
     );
   }
+  const expectedState = argv[5] && argv[5] !== "-"
+    ? readJson(argv[5], "Expected preserved Compute policy")
+    : null;
   const result = verifyApiComputeDeployState({
     mode: argv[0],
     target: argv[1],
     status: readJson(argv[2], "Deployment status"),
     version: readJson(argv[3], "Version detail"),
-    expectedTag: argv[4] ?? null,
+    expectedTag: argv[4] && argv[4] !== "-" ? argv[4] : null,
+    expectedState,
   });
+  if (argv[6]) {
+    if (!result.computeState) {
+      throw new Error("Only a bound API has a preservable Compute policy.");
+    }
+    writeFileSync(
+      resolve(argv[6]),
+      `${JSON.stringify(result.computeState, null, 2)}\n`,
+      "utf8",
+    );
+  }
   console.log(result.versionId);
 }
 

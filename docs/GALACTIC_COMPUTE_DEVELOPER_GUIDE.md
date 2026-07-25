@@ -194,8 +194,10 @@ capacity: production admits at most 15 concurrent queue consumers against 20
 instances, and staging admits 3 against 5. The remaining five/two slots are
 reserved as operational headroom for direct synchronous jobs and recovery
 traffic. The margin is not an availability SLA—sync work can still queue or be
-denied under broader saturation—and production admission remains canary-only
-until mixed direct/queue load testing validates it.
+denied under broader saturation. Production admission is global only after the
+release workflow certifies the exact OFF rollback version, image digest,
+Container readiness, one bounded admitted async job, terminal settlement, and
+the post-smoke live-version fence.
 
 ```ts
 const result = await galactic.compute({

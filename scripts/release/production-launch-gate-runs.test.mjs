@@ -40,6 +40,33 @@ test("production evidence must come from the release tag push", () => {
   assert.equal(picked.id, 22);
 });
 
+test("accepts an exact-tag manual production Compute release", () => {
+  const spec = {
+    name: "Compute Deploy",
+    category: "production",
+    allowedEvents: ["workflow_dispatch"],
+  };
+  const picked = pickLatestWorkflowRun({
+    spec,
+    releaseTag,
+    runs: [
+      {
+        id: 23,
+        name: spec.name,
+        event: "workflow_dispatch",
+        head_branch: "main",
+      },
+      {
+        id: 24,
+        name: spec.name,
+        event: "workflow_dispatch",
+        head_branch: releaseTag,
+      },
+    ],
+  });
+  assert.equal(picked.id, 24);
+});
+
 test("returns null when only manual or wrong-ref production runs exist", () => {
   const spec = {
     name: "Launch Web Deploy",

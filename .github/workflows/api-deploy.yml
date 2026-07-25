@@ -3,7 +3,9 @@ name: API Deploy
 # A verified pre-Compute installation may deploy the API with admission OFF
 # and without its outbound Compute service binding. Only the exact Cloudflare
 # missing-Worker response, an explicit expiring repository policy, and an
-# all-deployable-version admission-off history can enter that path.
+# all-deployable-version admission-off history can enter that path. Once bound,
+# every ordinary API deploy captures and exactly preserves the live Compute
+# policy/digest; only Compute Deploy or the emergency disable path may change it.
 on:
   push:
     branches: [main]
@@ -231,6 +233,42 @@ jobs:
               >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Capture exact live staging Compute policy
+        if: steps.compute_target.outputs.mode == 'bound'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          status="$RUNNER_TEMP/staging-api-pre-deploy-status.json"
+          version="$RUNNER_TEMP/staging-api-pre-deploy-version.json"
+          state="$RUNNER_TEMP/staging-api-live-compute-state.json"
+          npx wrangler deployments status \
+            --name ultralight-api-staging --json > "$status"
+          version_id="$(
+            jq -er '
+              if (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100)
+              then .versions[0].version_id
+              else error("staging API is not one stable 100% version")
+              end
+            ' "$status"
+          )"
+          npx wrangler versions view "$version_id" \
+            --name ultralight-api-staging --json > "$version"
+          node ../scripts/release/verify-api-compute-deploy-state.mjs \
+            bound staging "$status" "$version" - - "$state"
+          {
+            echo "PREVIOUS_API_VERSION_ID=$version_id"
+            echo "PRESERVED_COMPUTE_ENABLED=$(jq -er '.enabled' "$state")"
+            echo "PRESERVED_COMPUTE_ENVIRONMENT_DIGEST=$(jq -er '.environmentDigest' "$state")"
+            echo "PRESERVED_COMPUTE_ROLLOUT_MODE=$(jq -er '.rolloutMode' "$state")"
+            echo "PRESERVED_COMPUTE_CANARY_ALLOWLIST=$(jq -er '.canaryAllowlist' "$state")"
+          } >> "$GITHUB_ENV"
+          echo "Captured the exact live staging Compute policy for preservation." \
+            >> "$GITHUB_STEP_SUMMARY"
+
       - name: Prepare staging Compute-disabled configuration
         if: steps.compute_target.outputs.mode == 'bootstrap'
         env:
@@ -308,6 +346,7 @@ jobs:
         run: npm run deploy:staging
 
       - name: Deploy staging worker
+        id: deploy_worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -323,12 +362,21 @@ jobs:
               --var COMPUTE_ROLLOUT_MODE:canary
               --var COMPUTE_CANARY_ALLOWLIST:
             )
+          else
+            compute_args=(
+              --var "COMPUTE_ENABLED:$PRESERVED_COMPUTE_ENABLED"
+              --var "COMPUTE_ENVIRONMENT_DIGEST:$PRESERVED_COMPUTE_ENVIRONMENT_DIGEST"
+              --var "COMPUTE_ROLLOUT_MODE:$PRESERVED_COMPUTE_ROLLOUT_MODE"
+              --var "COMPUTE_CANARY_ALLOWLIST:$PRESERVED_COMPUTE_CANARY_ALLOWLIST"
+            )
           fi
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
           npx wrangler deploy \
             --config "$config" --env staging --keep-vars \
             --tag "api-$GITHUB_SHA" "${compute_args[@]}"
 
       - name: Verify staging API deployment state
+        id: verify_deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -349,9 +397,41 @@ jobs:
           )"
           npx wrangler versions view "$version_id" \
             --name ultralight-api-staging --json > "$version"
+          if [ "${{ steps.compute_target.outputs.mode }}" = "bound" ]; then
+            node ../scripts/release/verify-api-compute-deploy-state.mjs \
+              bound staging "$status" "$version" "api-$GITHUB_SHA" \
+              "$RUNNER_TEMP/staging-api-live-compute-state.json"
+          else
+            node ../scripts/release/verify-api-compute-deploy-state.mjs \
+              bootstrap staging "$status" "$version" "api-$GITHUB_SHA"
+          fi
+
+      - name: Restore prior staging API after an ambiguous deployment
+        if: >-
+          ${{ always() && steps.compute_target.outputs.mode == 'bound' &&
+              steps.deploy_worker.outputs.attempted == 'true' &&
+              (steps.deploy_worker.outcome != 'success' ||
+               steps.verify_deploy.outcome != 'success') }}
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler versions deploy "$PREVIOUS_API_VERSION_ID@100%" \
+            --config wrangler.toml --env staging \
+            --name ultralight-api-staging --yes \
+            --message "Compensating API rollback run $GITHUB_RUN_ID" \
+            | tee "$RUNNER_TEMP/staging-api-compensating-promotion.txt"
+          status="$RUNNER_TEMP/staging-api-compensating-status.json"
+          version="$RUNNER_TEMP/staging-api-compensating-version.json"
+          npx wrangler deployments status \
+            --name ultralight-api-staging --json > "$status"
+          npx wrangler versions view "$PREVIOUS_API_VERSION_ID" \
+            --name ultralight-api-staging --json > "$version"
           node ../scripts/release/verify-api-compute-deploy-state.mjs \
-            "${{ steps.compute_target.outputs.mode }}" staging \
-            "$status" "$version" "api-$GITHUB_SHA"
+            bound staging "$status" "$version" - \
+            "$RUNNER_TEMP/staging-api-live-compute-state.json"
 
   deploy_production:
     name: Deploy API to production
@@ -461,6 +541,42 @@ jobs:
               >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Capture exact live production Compute policy
+        if: steps.compute_target.outputs.mode == 'bound'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          status="$RUNNER_TEMP/production-api-pre-deploy-status.json"
+          version="$RUNNER_TEMP/production-api-pre-deploy-version.json"
+          state="$RUNNER_TEMP/production-api-live-compute-state.json"
+          npx wrangler deployments status \
+            --name ultralight-api --json > "$status"
+          version_id="$(
+            jq -er '
+              if (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100)
+              then .versions[0].version_id
+              else error("production API is not one stable 100% version")
+              end
+            ' "$status"
+          )"
+          npx wrangler versions view "$version_id" \
+            --name ultralight-api --json > "$version"
+          node ../scripts/release/verify-api-compute-deploy-state.mjs \
+            bound production "$status" "$version" - - "$state"
+          {
+            echo "PREVIOUS_API_VERSION_ID=$version_id"
+            echo "PRESERVED_COMPUTE_ENABLED=$(jq -er '.enabled' "$state")"
+            echo "PRESERVED_COMPUTE_ENVIRONMENT_DIGEST=$(jq -er '.environmentDigest' "$state")"
+            echo "PRESERVED_COMPUTE_ROLLOUT_MODE=$(jq -er '.rolloutMode' "$state")"
+            echo "PRESERVED_COMPUTE_CANARY_ALLOWLIST=$(jq -er '.canaryAllowlist' "$state")"
+          } >> "$GITHUB_ENV"
+          echo "Captured the exact live production Compute policy for preservation." \
+            >> "$GITHUB_STEP_SUMMARY"
+
       - name: Prepare production Compute-disabled configuration
         if: steps.compute_target.outputs.mode == 'bootstrap'
         env:
@@ -524,6 +640,7 @@ jobs:
         run: npm run deploy
 
       - name: Deploy production worker
+        id: deploy_worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -539,12 +656,21 @@ jobs:
               --var COMPUTE_ROLLOUT_MODE:canary
               --var COMPUTE_CANARY_ALLOWLIST:
             )
+          else
+            compute_args=(
+              --var "COMPUTE_ENABLED:$PRESERVED_COMPUTE_ENABLED"
+              --var "COMPUTE_ENVIRONMENT_DIGEST:$PRESERVED_COMPUTE_ENVIRONMENT_DIGEST"
+              --var "COMPUTE_ROLLOUT_MODE:$PRESERVED_COMPUTE_ROLLOUT_MODE"
+              --var "COMPUTE_CANARY_ALLOWLIST:$PRESERVED_COMPUTE_CANARY_ALLOWLIST"
+            )
           fi
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
           npx wrangler deploy \
             --config "$config" --env="" --keep-vars \
             --tag "api-$GITHUB_SHA" "${compute_args[@]}"
 
       - name: Verify production API deployment state
+        id: verify_deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -565,6 +691,38 @@ jobs:
           )"
           npx wrangler versions view "$version_id" \
             --name ultralight-api --json > "$version"
+          if [ "${{ steps.compute_target.outputs.mode }}" = "bound" ]; then
+            node ../scripts/release/verify-api-compute-deploy-state.mjs \
+              bound production "$status" "$version" "api-$GITHUB_SHA" \
+              "$RUNNER_TEMP/production-api-live-compute-state.json"
+          else
+            node ../scripts/release/verify-api-compute-deploy-state.mjs \
+              bootstrap production "$status" "$version" "api-$GITHUB_SHA"
+          fi
+
+      - name: Restore prior production API after an ambiguous deployment
+        if: >-
+          ${{ always() && steps.compute_target.outputs.mode == 'bound' &&
+              steps.deploy_worker.outputs.attempted == 'true' &&
+              (steps.deploy_worker.outcome != 'success' ||
+               steps.verify_deploy.outcome != 'success') }}
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler versions deploy "$PREVIOUS_API_VERSION_ID@100%" \
+            --config wrangler.toml --env="" \
+            --name ultralight-api --yes \
+            --message "Compensating API rollback run $GITHUB_RUN_ID" \
+            | tee "$RUNNER_TEMP/production-api-compensating-promotion.txt"
+          status="$RUNNER_TEMP/production-api-compensating-status.json"
+          version="$RUNNER_TEMP/production-api-compensating-version.json"
+          npx wrangler deployments status \
+            --name ultralight-api --json > "$status"
+          npx wrangler versions view "$PREVIOUS_API_VERSION_ID" \
+            --name ultralight-api --json > "$version"
           node ../scripts/release/verify-api-compute-deploy-state.mjs \
-            "${{ steps.compute_target.outputs.mode }}" production \
-            "$status" "$version" "api-$GITHUB_SHA"
+            bound production "$status" "$version" - \
+            "$RUNNER_TEMP/production-api-live-compute-state.json"

@@ -428,7 +428,7 @@ describe("Compute release supply-chain contract", () => {
     }
   });
 
-  it("keeps admission manual, canary-only, digest-bound, and independently reviewed", () => {
+  it("keeps emergency admission disable manual, digest-bound, and source-immutable", () => {
     const workflow = repositoryFile(
       ".github/workflows/compute-admission.yml",
     );
@@ -439,24 +439,16 @@ describe("Compute release supply-chain contract", () => {
     expect(triggers).toContain("workflow_dispatch:");
     expect(triggers).not.toContain("push:");
     expect(triggers).not.toContain("pull_request:");
-    expect(workflow).toContain("default: disable");
     expect(workflow).toContain("DISABLE GALACTIC COMPUTE");
-    expect(workflow).toContain("ENABLE GALACTIC COMPUTE CANARY");
     expect(workflow).toContain("environment: ${{ inputs.target }}");
-    expect(workflow).toContain('.type == "required_reviewers"');
-    expect(workflow).toContain(".prevent_self_review == true");
-    expect(workflow).toContain(".can_admins_bypass == false");
-    expect(workflow).toContain("COMPUTE_ROLLOUT_MODE:canary");
-    expect(workflow).not.toContain("COMPUTE_ROLLOUT_MODE:global");
+    expect(workflow).not.toContain("required_reviewers");
+    expect(workflow).not.toContain("COMPUTE_ENABLED:1");
+    expect(workflow).not.toContain("inputs.action");
     expect(workflow).toContain("RELEASE_ENVIRONMENT_DIGEST");
     expect(workflow).toContain("CERTIFIED_OFF_API_VERSION_ID");
     expect(workflow).toContain("CERTIFIED_COMPUTE_VERSION_ID");
     expect(workflow).toContain("compute_release_run_id:");
     expect(workflow).toContain("gh run download");
-    expect(workflow).toContain('migrations !== "true"');
-    expect(workflow).toContain("value_read: false");
-    expect(workflow).toContain("--strict");
-    expect(workflow).toContain('--tag "api-$GITHUB_SHA"');
     expect(workflow).toContain(
       'versions deploy "$CERTIFIED_OFF_API_VERSION_ID@100%"',
     );
@@ -466,18 +458,23 @@ describe("Compute release supply-chain contract", () => {
     expect(workflow).not.toContain("api-compute-admission-disable.toml");
     expect(workflow).toContain("persist-credentials: false");
     expect(workflow).toContain("Upload admission audit evidence");
+    expect(workflow).toContain("source_rebuild_allowed: false");
+    expect(workflow).toContain("actual_smoke_sha256");
   });
 
   it("certifies tagged API and Compute versions before admission", () => {
     const release = repositoryFile(".github/workflows/compute-deploy.yml");
     const apiDeploy = repositoryFile(".github/workflows/api-deploy.yml");
     expect(release).toContain('--tag "compute-$GITHUB_SHA"');
+    expect(release).toContain('--tag "api-$GITHUB_SHA-admission-off"');
     expect(release).toContain('--tag "api-$GITHUB_SHA"');
     expect(release).toContain("certified_admission_off_api");
+    expect(release).toContain("active_api");
     expect(release).toContain("active_compute_worker");
     expect(release).toContain("API is not one stable 100% version");
     expect(release).toContain("Compute is not one stable 100% version");
     expect(release).toContain('value("COMPUTE_ENABLED") == "0"');
+    expect(release).toContain('value("COMPUTE_ENABLED") == "1"');
     expect(release).toContain('value("COMPUTE_CANARY_ALLOWLIST") == ""');
     expect(apiDeploy.match(/--tag "api-\$GITHUB_SHA"/g)?.length).toBe(2);
     expect(apiDeploy.match(/persist-credentials: false/g)?.length).toBe(3);
