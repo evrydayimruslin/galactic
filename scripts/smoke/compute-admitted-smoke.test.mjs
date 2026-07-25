@@ -103,7 +103,10 @@ function smokeConfig(overrides = {}) {
   };
 }
 
-function happyFetch({ statuses = ["queued", "settlement_pending", "completed"] } = {}) {
+function happyFetch({
+  statuses = ["queued", "settlement_pending", "completed"],
+  statusArtifacts,
+} = {}) {
   const calls = [];
   let enabled = false;
   let revision = 0;
@@ -192,7 +195,9 @@ function happyFetch({ statuses = ["queued", "settlement_pending", "completed"] }
           exit_code: 0,
           stdout: MARKER,
           stderr: "",
-          artifacts: [],
+          ...(statusArtifacts === undefined
+            ? {}
+            : { artifacts: statusArtifacts }),
         },
         receiptId: STATUS_RECEIPT_ID,
         error: null,
@@ -357,6 +362,36 @@ test("proves admission, execution, settlement, exact output, and disabled cleanu
       maxArtifacts: 5,
     },
   });
+});
+
+test("rejects a completed status response with output artifacts", async () => {
+  const { fetchImpl } = happyFetch({
+    statusArtifacts: [{
+      artifact_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      path: "unexpected.txt",
+      size_bytes: 1,
+      sha256: "f".repeat(64),
+      expires_at: "2026-07-26T12:00:00.000Z",
+    }],
+  });
+  const written = [];
+
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig(), {
+      fetchImpl,
+      sleep: async () => {},
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) => {
+      assert.equal(error.code, "INVALID_COMPUTE_OUTPUT");
+      return true;
+    },
+  );
+
+  assert.equal(written.length, 1);
+  assert.equal(written[0].value.verified, false);
+  assert.equal(written[0].value.failure_code, "INVALID_COMPUTE_OUTPUT");
+  assert.equal(written[0].value.policy_cleanup.disabled, true);
 });
 
 test("times out, cancels the exact admitted run, waits for settlement, and disables policy", async () => {
