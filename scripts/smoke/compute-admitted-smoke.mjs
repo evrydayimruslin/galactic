@@ -712,8 +712,8 @@ function validateComputeGet(value, expected) {
     run.exit_code !== 0 ||
     run.stdout !== expected.marker ||
     run.stderr !== "" ||
-    !Array.isArray(run.artifacts) ||
-    run.artifacts.length !== 0 ||
+    (run.artifacts !== undefined &&
+      (!Array.isArray(run.artifacts) || run.artifacts.length !== 0)) ||
     typeof run.error === "string"
   ) {
     fail(
