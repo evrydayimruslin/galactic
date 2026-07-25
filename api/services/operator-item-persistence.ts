@@ -735,7 +735,10 @@ export async function reconcileOperatorItems(
   let response: Response;
   let text: string;
   try {
-    response = await config.fetchFn(
+    // Preserve Cloudflare's receiver-free global fetch invocation. Calling the
+    // stored transport as config.fetchFn(...) throws an Illegal invocation.
+    const fetchFn = config.fetchFn;
+    response = await fetchFn(
       `${config.baseUrl}/rest/v1/rpc/reconcile_operator_items`,
       {
         method: "POST",

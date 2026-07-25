@@ -978,30 +978,37 @@ export async function readOperatorAttentionPage(
     fail("INVALID_REQUEST", "now is invalid.");
   }
   const config = readerConfig(dependencies);
-  const response = await config.fetchFn(
-    `${config.baseUrl}/rest/v1/rpc/get_operator_attention_page`,
-    {
-      method: "POST",
-      headers: {
-        apikey: config.serviceRoleKey,
-        Authorization: `Bearer ${config.serviceRoleKey}`,
-        "Content-Type": "application/json",
-        "Cache-Control": "no-store",
+  // Cloudflare's global fetch is receiver-sensitive. Calling the stored
+  // transport as config.fetchFn(...) binds `this` to config and throws an
+  // Illegal invocation before the canonical RPC reaches PostgREST.
+  const fetchFn = config.fetchFn;
+  let response: Response;
+  try {
+    response = await fetchFn(
+      `${config.baseUrl}/rest/v1/rpc/get_operator_attention_page`,
+      {
+        method: "POST",
+        headers: {
+          apikey: config.serviceRoleKey,
+          Authorization: `Bearer ${config.serviceRoleKey}`,
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        },
+        body: JSON.stringify({
+          p_user_id: userId,
+          p_agent_id: agentId,
+          p_now: now.toISOString(),
+          p_limit: limit,
+          p_after_source_key: cursor?.sourceKey ?? null,
+          p_after_source_ordinal: cursor?.sourceOrdinal ?? null,
+          p_after_detected_at: cursor?.detectedAt ?? null,
+          p_after_id: cursor?.itemId ?? null,
+        }),
       },
-      body: JSON.stringify({
-        p_user_id: userId,
-        p_agent_id: agentId,
-        p_now: now.toISOString(),
-        p_limit: limit,
-        p_after_source_key: cursor?.sourceKey ?? null,
-        p_after_source_ordinal: cursor?.sourceOrdinal ?? null,
-        p_after_detected_at: cursor?.detectedAt ?? null,
-        p_after_id: cursor?.itemId ?? null,
-      }),
-    },
-  ).catch(() =>
-    fail("READ_FAILED", "Canonical Operator Attention is unavailable.")
-  );
+    );
+  } catch {
+    fail("READ_FAILED", "Canonical Operator Attention is unavailable.");
+  }
   const rows = await responseRows(response);
   const snapshot = record(rows[0]) as OperatorAttentionSnapshotRow | null;
   if (!snapshot || rows.length !== 1 || !Array.isArray(snapshot.items)) {

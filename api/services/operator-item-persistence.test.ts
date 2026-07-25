@@ -164,6 +164,37 @@ Deno.test("operator persistence writes one coalesced account blocker with exact 
   assertEquals(JSON.stringify(body.p_items[0]).includes("url"), false);
 });
 
+Deno.test("operator persistence invokes a stored Worker fetch without a receiver", async () => {
+  const item = byokItem();
+  let receiver: unknown = "not-called";
+  const receiverSensitiveFetch = (function (
+    this: unknown,
+  ) {
+    receiver = this;
+    if (this !== undefined) {
+      throw new TypeError("Illegal invocation");
+    }
+    return Promise.resolve(responseFor([item]));
+  }) as typeof fetch;
+
+  await reconcileOperatorItems(
+    {
+      userId: USER_ID,
+      sourceKey: "agent_setup_reconciler",
+      items: [item],
+      observedAt: OBSERVED_AT,
+      completeSnapshot: true,
+    },
+    {
+      supabaseUrl: "https://supabase.test",
+      serviceRoleKey: "service-role-test",
+      fetchFn: receiverSensitiveFetch,
+    },
+  );
+
+  assertEquals(receiver, undefined);
+});
+
 Deno.test("operator persistence allows an empty complete snapshot to recover a source", async () => {
   let body: Record<string, unknown> | null = null;
   const result = await reconcileOperatorItems(

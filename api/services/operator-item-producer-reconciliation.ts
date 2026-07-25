@@ -88,7 +88,10 @@ async function readRows<T>(
   label: string,
 ): Promise<T[]> {
   const resolved = config(dependencies);
-  const response = await resolved.fetchFn(url.toString(), {
+  // Cloudflare's global fetch must not be invoked as a property of our config
+  // object because the resulting receiver causes an Illegal invocation.
+  const fetchFn = resolved.fetchFn;
+  const response = await fetchFn(url.toString(), {
     headers: serviceHeaders(resolved.serviceRoleKey),
   });
   if (!response.ok) {
