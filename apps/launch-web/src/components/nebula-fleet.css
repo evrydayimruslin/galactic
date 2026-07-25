@@ -295,6 +295,68 @@ body.nebula-public-page, body.nebula-public-page #root { min-height: 100dvh; bac
 .neb-agent-attention-empty svg { width: 20px; height: 20px; color: var(--teal); }
 .neb-agent-attention-empty strong { color: var(--ink); font-size: 13px; font-weight: 500; }
 .neb-agent-attention-empty span { font-size: 11px; }
+.neb-overview-status-line[type="button"] { width: 100%; padding: 0; border: 0; background: transparent; text-align: left; }
+.neb-overview-status-line.actionable { padding: 8px; border: 1px solid var(--line); cursor: pointer; }
+.neb-overview-status-line.actionable:hover { border-color: var(--violet); background: var(--violet-dim); }
+.neb-overview-status-line.actionable .neb-overview-status-action { margin-left: auto; color: var(--violet); white-space: nowrap; }
+.neb-operator-issue-deck { display: grid; gap: 10px; }
+.neb-operator-issue-deck.compact { gap: 7px; }
+.neb-operator-issue-card { display: grid; gap: 11px; padding: 14px; border: 1px solid var(--line); background: rgba(255,255,255,.022); outline: none; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+.neb-operator-issue-card.issue { border-color: rgba(167,139,255,.4); background: var(--violet-dim); }
+.neb-operator-issue-card.critical { border-color: rgba(255,123,214,.56); }
+.neb-operator-issue-card.unread { box-shadow: inset 2px 0 0 var(--violet); }
+.neb-operator-issue-card.neb-deep-link-target { border-color: var(--violet); box-shadow: 0 0 0 1px rgba(167,139,255,.36), 0 0 24px rgba(126,91,211,.16); }
+.neb-operator-issue-card.compact { padding: 12px; }
+.neb-operator-issue-head, .neb-operator-issue-kind, .neb-operator-issue-actions, .neb-operator-remediations, .neb-operator-presentation-actions { display: flex; align-items: center; }
+.neb-operator-issue-head { justify-content: space-between; gap: 12px; }
+.neb-operator-issue-kind { gap: 6px; color: var(--violet); font-family: var(--mono); font-size: 9.5px; letter-spacing: .07em; text-transform: uppercase; }
+.neb-operator-issue-kind.report { color: var(--ink-2); }
+.neb-operator-issue-kind svg { width: 13px; height: 13px; }
+.neb-operator-issue-copy h3 { margin: 0; color: var(--ink); font-size: 14px; font-weight: 600; }
+.neb-operator-issue-copy p { margin: 5px 0 0; color: var(--ink-2); font-size: 11.5px; line-height: 1.5; }
+.neb-operator-diagnostic-code { display: flex; align-items: center; gap: 8px; margin-top: 9px; color: var(--ink-3); font-family: var(--mono); font-size: 9px; text-transform: uppercase; }
+.neb-operator-diagnostic-code code { color: var(--violet); font-size: 10px; }
+.neb-operator-affected { display: grid; grid-template-columns: auto 1fr; gap: 9px; color: var(--ink-3); font-size: 10.5px; }
+.neb-operator-affected > span { color: var(--violet); font-family: var(--mono); font-size: 8.5px; letter-spacing: .07em; text-transform: uppercase; }
+.neb-operator-affected > div { display: flex; flex-wrap: wrap; gap: 5px 10px; }
+.neb-operator-affected a { color: var(--ink-2); text-decoration: none; }
+.neb-operator-affected a:hover { color: var(--violet); }
+.neb-operator-issue-actions { align-items: flex-start; justify-content: space-between; gap: 12px; }
+.neb-operator-remediations, .neb-operator-presentation-actions { flex-wrap: wrap; gap: 6px; }
+.neb-operator-remediations a { text-decoration: none; }
+.neb-operator-remediations .primary { border-color: var(--violet); background: var(--violet-dim); color: var(--ink); }
+.neb-operator-remediation-inline { display: grid; gap: 7px; }
+.neb-operator-inline-form { display: grid; min-width: min(520px, 70vw); grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 11px; border: 1px solid var(--line-2); background: rgba(0,0,0,.22); }
+.neb-operator-inline-form label { display: grid; gap: 4px; color: var(--ink-3); font-family: var(--mono); font-size: 9px; letter-spacing: .04em; text-transform: uppercase; }
+.neb-operator-inline-form .neb-edit-input { min-width: 0; margin: 0; font-family: var(--mono); font-size: 11px; text-transform: none; }
+.neb-operator-inline-form > .neb-btn-sm { align-self: end; justify-self: start; }
+.neb-operator-write-only, .neb-operator-inline-form > .neb-ov-note, .neb-operator-inline-form > .neb-error-note, .neb-operator-inline-form > .neb-success-note { grid-column: 1 / -1; margin: 0; font-size: 10.5px; line-height: 1.45; }
+.neb-operator-write-only { color: var(--ink-3); }
+.neb-success-note { color: var(--teal); }
+.neb-operator-inline-confirm { display: flex; max-width: 560px; align-items: center; flex-wrap: wrap; gap: 7px; padding: 9px; border: 1px solid var(--line-2); background: rgba(0,0,0,.2); }
+.neb-operator-inline-confirm > span { width: 100%; color: var(--ink-2); font-size: 10.5px; line-height: 1.45; }
+.neb-operator-run-inspector { display: grid; gap: 12px; margin-top: 12px; padding: 14px; border: 1px solid var(--line-2); background: rgba(255,255,255,.02); }
+.neb-operator-run-inspector h3 { margin: 5px 0 0; color: var(--ink); font-size: 15px; }
+.neb-operator-run-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.neb-operator-run-summary > span { padding: 9px; border: 1px solid var(--line); }
+.neb-operator-run-summary strong, .neb-operator-run-summary small { display: block; }
+.neb-operator-run-summary strong { color: var(--ink); font-family: var(--mono); font-size: 12px; }
+.neb-operator-run-summary small { margin-top: 3px; color: var(--ink-3); font-size: 9px; text-transform: uppercase; }
+.neb-operator-run-diagnostic { padding: 11px; border-left: 2px solid var(--magenta); background: rgba(255,123,214,.05); }
+.neb-operator-run-diagnostic > span, .neb-operator-run-steps > .neb-ov-label, .neb-operator-log-receipts > .neb-ov-label { display: block; margin-bottom: 6px; color: var(--violet); font-family: var(--mono); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
+.neb-operator-run-diagnostic strong { display: block; color: var(--ink); font-size: 13px; }
+.neb-operator-run-diagnostic p { margin: 5px 0; color: var(--ink-2); font-size: 11px; line-height: 1.5; }
+.neb-operator-run-diagnostic code { color: var(--magenta); font-size: 10px; }
+.neb-operator-run-steps { display: grid; gap: 7px; }
+.neb-operator-run-steps > div { padding: 9px; border: 1px solid var(--line); }
+.neb-operator-run-steps > div > span { display: flex; justify-content: space-between; gap: 10px; }
+.neb-operator-run-steps strong { color: var(--ink); font-size: 11.5px; }
+.neb-operator-run-steps small { color: var(--ink-3); font-family: var(--mono); font-size: 9px; }
+.neb-operator-run-steps p { margin: 5px 0 0; color: var(--ink-2); font-size: 10.5px; }
+.neb-operator-log-receipts > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.neb-operator-log-excerpt { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line-2); background: rgba(0,0,0,.28); }
+.neb-operator-log-excerpt pre { overflow: auto; max-height: 320px; margin: 0; color: var(--ink-2); font-family: var(--mono); font-size: 10px; line-height: 1.55; white-space: pre-wrap; }
+.neb-operator-log-excerpt > small { color: var(--ink-3); font-size: 9.5px; }
 .neb-operator-activity-group { margin-top: 10px; }
 .neb-operator-activity-phase { color: var(--ink-3); font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; }
 .neb-operator-activity-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 9px 10px; border: 1px solid var(--line); background: rgba(255,255,255,.02); color: inherit; text-decoration: none; }
@@ -354,8 +416,11 @@ a.neb-operator-access-row:hover { border-color: var(--line-2); }
   .neb-overview-interface-grid { grid-template-columns: 1fr; }
   .neb-overview-section-head { gap: 10px; }
   .neb-operator-attention-card, .neb-operator-activity-row { flex-direction: column; }
-  .neb-agent-attention-head, .neb-agent-attention-card-head, .neb-agent-attention-actions { align-items: flex-start; flex-direction: column; }
+  .neb-agent-attention-head, .neb-agent-attention-card-head, .neb-agent-attention-actions, .neb-operator-issue-head, .neb-operator-issue-actions { align-items: flex-start; flex-direction: column; }
   .neb-agent-attention-meta { flex-wrap: wrap; }
+  .neb-operator-inline-form, .neb-operator-run-summary { min-width: 0; grid-template-columns: 1fr; }
+  .neb-operator-inline-form { width: 100%; }
+  .neb-operator-remediation-inline { width: 100%; }
   .neb-operator-activity-meta { align-items: flex-start; }
   .neb-cmdk-chip { display: none; }
   .neb-roster { grid-template-columns: 1fr; }

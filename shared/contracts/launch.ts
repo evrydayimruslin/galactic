@@ -142,6 +142,7 @@ export const LAUNCH_API_ROUTES = [
   'PUT /api/launch/fleet/order',
   'GET /api/launch/notifications',
   'GET /api/launch/attention',
+  'PATCH /api/launch/operator-items/:id/attention',
   'PATCH /api/launch/notifications',
   'POST /api/launch/notifications/:id/actions',
   'GET /api/launch/search',
@@ -1620,6 +1621,24 @@ export interface LaunchOperatorAttentionState {
 
 export interface LaunchOperatorAttentionEntry {
   item: LaunchOperatorItem;
+  attention: LaunchOperatorAttentionState;
+}
+
+export type LaunchOperatorAttentionAction =
+  | 'mark_read'
+  | 'mark_unread'
+  | 'snooze'
+  | 'reopen'
+  | 'dismiss';
+
+export interface LaunchOperatorAttentionActionRequest {
+  action: LaunchOperatorAttentionAction;
+  /** Required only for `snooze`; must be a future ISO timestamp. */
+  snoozedUntil?: string;
+}
+
+export interface LaunchOperatorAttentionActionResponse {
+  itemId: string;
   attention: LaunchOperatorAttentionState;
 }
 

@@ -1359,7 +1359,7 @@
     },
     {
       "duplicates": [
-        "{\"0\":{\"col\":23,\"line\":174,\"name\":\"countAttention\",\"pos\":6490},\"1\":{\"col\":14,\"line\":213,\"name\":\"countUnread\",\"pos\":7982}}"
+        "{\"0\":{\"col\":23,\"line\":175,\"name\":\"countAttention\",\"pos\":6520},\"1\":{\"col\":14,\"line\":214,\"name\":\"countUnread\",\"pos\":8012}}"
       ],
       "file": "services/notifications.ts"
     },
@@ -1368,6 +1368,49 @@
         "createOpenRouterKey"
       ],
       "file": "services/openrouter-keys.ts"
+    },
+    {
+      "file": "services/operator-diagnostics.ts",
+      "types": [
+        "NormalizeOperatorDiagnosticInput",
+        "OperatorDiagnosticPlatformFact",
+        "RedactedOperatorText",
+        "RuntimeDiagnosticSecretSource"
+      ]
+    },
+    {
+      "exports": [
+        "orderOperatorItems"
+      ],
+      "file": "services/operator-issue-compiler.ts",
+      "types": [
+        "OperatorIssueCompilerErrorCode"
+      ]
+    },
+    {
+      "file": "services/operator-item-persistence.ts",
+      "types": [
+        "OperatorItemPersistenceDependencies",
+        "OperatorItemPersistenceErrorCode"
+      ]
+    },
+    {
+      "file": "services/operator-item-producer-reconciliation.ts",
+      "types": [
+        "OperatorProducerReconciliationDependencies",
+        "OperatorProducerReconciliationSummary"
+      ]
+    },
+    {
+      "exports": [
+        "accountUsageConditions",
+        "operatorItemCandidates"
+      ],
+      "file": "services/operator-item-producers.ts",
+      "types": [
+        "OperatorItemProducerDependencies",
+        "OperatorItemProducerResult"
+      ]
     },
     {
       "file": "services/orchestrator.ts",

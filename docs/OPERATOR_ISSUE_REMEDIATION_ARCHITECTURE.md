@@ -1,6 +1,6 @@
 # Operator issue and remediation architecture
 
-Status: M0–M5 implemented through guarded canonical Attention reads
+Status: M0–M6 implemented through guarded canonical web presentation
 
 Last reviewed: `2026-07-24`
 
@@ -233,6 +233,37 @@ and counts—no user, Agent, condition, diagnosis, or error text.
 
 M5 does not render the new projection or execute remediation. M6 owns the
 shared card/deck UI; M7 owns verification and paused `Run once`.
+
+## M6 implementation boundary
+
+The web renders canonical items only when the response explicitly declares
+`readSource: canonical` and the canonical projection is available. Every
+account Alerts, Agent Alerts, and Agent Overview surface uses the same issue
+deck; changing the read flag back to legacy restores the unchanged legacy
+presentation immediately.
+
+The shared deck:
+
+- renders a shared account condition once with exact affected-Agent fanout;
+- deep-links only by canonical item ID or condition key;
+- translates closed semantic targets into client routes without trusting
+  diagnosis prose, developer payloads, or server-authored URLs;
+- provides write-only inline provider and Agent setting forms through existing
+  domain endpoints;
+- allows only exact, revalidated capability or grant approvals with an
+  explicit confirmation;
+- exposes M2 owner-safe run detail and bounded redacted logs; and
+- labels `dismiss` as **Mark resolved**, while explaining that it hides the
+  card and does not claim recovery.
+
+Read, snooze, and dismiss use a narrow owner-scoped presentation-state endpoint
+backed by the M3 RPC. The response is fail-closed: ownership, item identity,
+state invariants, and exact database shape are revalidated before anything is
+returned.
+
+Execution remediations are intentionally suppressed in M6. M7 owns
+side-effect-free verification, real `Run once`, successful-recovery handling,
+and the separate explicit decision to resume a paused schedule.
 
 ## Rollout order
 

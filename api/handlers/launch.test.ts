@@ -6022,6 +6022,69 @@ Deno.test('launch Fleet opts into operator v2 and preserves legacy fields', asyn
   );
 });
 
+Deno.test('launch canonical Attention updates only owner presentation state', async () => {
+  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        operatorRequest(
+          `/api/launch/operator-items/${OPERATOR_ITEM_ID}/attention`,
+          'PATCH',
+          {
+            action: 'mark_read',
+          },
+        ),
+      );
+      const body = await response.json() as {
+        itemId?: string;
+        attention?: {
+          state?: string;
+          snoozedUntil?: string | null;
+        };
+      };
+
+      assertEquals(response.status, 200);
+      assertEquals(body, {
+        itemId: OPERATOR_ITEM_ID,
+        attention: {
+          state: 'open',
+          readAt: '2026-07-24T18:00:00.000Z',
+          snoozedUntil: null,
+          dismissedAt: null,
+        },
+      });
+      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      const mutation = calls.find((call) =>
+        call.url.endsWith(
+          '/rest/v1/rpc/apply_operator_item_attention_action',
+        )
+      );
+      assertEquals(mutation?.body, {
+        p_user_id: OPERATOR_USER_ID,
+        p_item_id: OPERATOR_ITEM_ID,
+        p_action: 'mark_read',
+        p_snoozed_until: null,
+      });
+    },
+    operatorFetchMock({
+      calls,
+      rpc: (name) =>
+        name === 'apply_operator_item_attention_action'
+          ? jsonResponse([{
+            item_id: OPERATOR_ITEM_ID,
+            user_id: OPERATOR_USER_ID,
+            state: 'open',
+            read_at: '2026-07-24T18:00:00.000Z',
+            snoozed_until: null,
+            dismissed_at: null,
+            created_at: '2026-07-24T17:00:00.000Z',
+            updated_at: '2026-07-24T18:00:00.000Z',
+          }])
+          : null,
+    }),
+  );
+});
+
 Deno.test('launch operator routes reject connected-Agent keys with private errors', async () => {
   await withLaunchEnv(
     async () => {
@@ -6030,6 +6093,11 @@ Deno.test('launch operator routes reject connected-Agent keys with private error
         operatorRequest('/api/launch/agents/home-agent/home/activity'),
         operatorRequest('/api/launch/agents/home-agent/attention'),
         operatorRequest('/api/launch/attention'),
+        operatorRequest(
+          `/api/launch/operator-items/${OPERATOR_ITEM_ID}/attention`,
+          'PATCH',
+          { action: 'mark_read' },
+        ),
         operatorRequest('/api/launch/fleet/preferences'),
         operatorRequest('/api/launch/search?q=mail'),
         operatorRequest(
@@ -6072,6 +6140,12 @@ Deno.test('launch OpenAPI documents operator preference, search, order, and acti
     assertEquals(Boolean(spec.paths?.['/api/launch/fleet/preferences']), true);
     assertEquals(Boolean(spec.paths?.['/api/launch/search']), true);
     assertEquals(Boolean(spec.paths?.['/api/launch/attention']), true);
+    assertEquals(
+      Boolean(
+        spec.paths?.['/api/launch/operator-items/{id}/attention'],
+      ),
+      true,
+    );
     assertEquals(
       Boolean(spec.paths?.['/api/launch/agents/{id}/attention']),
       true,

@@ -107,6 +107,10 @@ import {
 } from '../lib/overview-section-order';
 import { mergeAgentActivityPages } from '../lib/operator-activity-state';
 import {
+  appendOperatorAttentionPage,
+  canonicalOperatorAttention,
+} from '../lib/operator-attention';
+import {
   resolveOperatorAccessItem,
   resolveOperatorFunctionItem,
   resolveOperatorSettingsItem,
@@ -140,6 +144,8 @@ import { Glyph } from './nebula/glyph';
 import { OperatorAgentAlerts } from './nebula/operator-agent-alerts';
 import { OperatorAgentAccess } from './nebula/operator-agent-access';
 import { OperatorAgentOverview } from './nebula/operator-agent-overview';
+import { OperatorIssueDeck } from './nebula/operator-issue-deck';
+import { OperatorRunInspector } from './nebula/operator-run-inspector';
 import { SearchPanel } from './nebula/search-panel';
 import './nebula-fleet.css';
 
@@ -1585,18 +1591,19 @@ function GlobalAlerts({
     try {
       const response = await launchApi.globalAttention();
       setAttention(response);
+      const operatorItems = canonicalOperatorAttention(response);
       const counts: Record<
         string,
         { openCount: number; requiresDecisionCount: number }
       > = {};
-      for (const count of response.agentCounts) {
+      for (const count of operatorItems?.agentCounts ?? response.agentCounts) {
         counts[count.agent.id] = {
           openCount: count.openCount,
           requiresDecisionCount: count.requiresDecisionCount,
         };
       }
       setAgentCounts(counts);
-      setExactOpenCount(response.openCount);
+      setExactOpenCount(operatorItems?.openCount ?? response.openCount);
     } catch (reason) {
       setError(
         reason instanceof Error ? reason.message : 'Account Alerts are temporarily unavailable.',
@@ -1612,24 +1619,54 @@ function GlobalAlerts({
     if (!attention) return;
     onUnreadChange(exactOpenCount);
   }, [attention, exactOpenCount, onUnreadChange]);
+  const canonicalAttention = canonicalOperatorAttention(attention);
+  const nextCursor = canonicalAttention?.nextCursor ??
+    attention?.nextCursor ??
+    null;
   const loadOlder = useCallback(async () => {
-    if (!attention?.nextCursor || loadingMore) return;
+    if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     setError('');
     try {
       const page = await launchApi.globalAttention({
-        cursor: attention.nextCursor,
+        cursor: nextCursor,
         limit: 200,
       });
-      setAttention((current) =>
-        current ? appendGlobalAttentionPage(current, page) : page
-      );
-      setAgentCounts(
-        Object.fromEntries(
-          globalAttentionAgentCountMap(page.agentCounts).entries(),
-        ),
-      );
-      setExactOpenCount(page.openCount);
+      const canonicalPage = canonicalOperatorAttention(page);
+      setAttention((current) => {
+        const currentCanonical = canonicalOperatorAttention(current);
+        if (canonicalPage && currentCanonical) {
+          return {
+            ...page,
+            operatorItems: appendOperatorAttentionPage(
+              currentCanonical,
+              canonicalPage,
+            ),
+          };
+        }
+        return current ? appendGlobalAttentionPage(current, page) : page;
+      });
+      if (canonicalPage) {
+        setAgentCounts(
+          Object.fromEntries(
+            canonicalPage.agentCounts.map((count) => [
+              count.agent.id,
+              {
+                openCount: count.openCount,
+                requiresDecisionCount: count.requiresDecisionCount,
+              },
+            ]),
+          ),
+        );
+        setExactOpenCount(canonicalPage.openCount);
+      } else {
+        setAgentCounts(
+          Object.fromEntries(
+            globalAttentionAgentCountMap(page.agentCounts).entries(),
+          ),
+        );
+        setExactOpenCount(page.openCount);
+      }
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -1639,7 +1676,7 @@ function GlobalAlerts({
     } finally {
       setLoadingMore(false);
     }
-  }, [attention?.nextCursor, loadingMore]);
+  }, [loadingMore, nextCursor]);
   const groups = useMemo(
     () => groupGlobalAttentionEntries(attention?.entries || []),
     [attention?.entries],
@@ -1650,6 +1687,7 @@ function GlobalAlerts({
       globalAttentionEntryMatches(entry, query)
     )
   );
+  const canonical = canonicalAttention;
   return (
     <section className='neb-inline-panel neb-alerts-panel' aria-label='Alerts'>
       <div className='neb-alerts-toolbar'>
@@ -1663,7 +1701,18 @@ function GlobalAlerts({
         </label>
       </div>
       <div className='neb-alerts-content'>
-        {visibleGroups.map((group) => (
+        {canonical
+          ? (
+            <OperatorIssueDeck
+              onChanged={refresh}
+              onCountChange={setExactOpenCount}
+              onNavigate={onNavigate}
+              projection={canonical}
+              query={query}
+              showAffectedAgents
+            />
+          )
+          : visibleGroups.map((group) => (
           <OperatorAgentAlerts
             agent={group.agent}
             attention={{
@@ -1701,15 +1750,15 @@ function GlobalAlerts({
             onNavigate={onNavigate}
             query={query}
           />
-        ))}
-        {!loading && !error && visibleGroups.length === 0
+          ))}
+        {!canonical && !loading && !error && visibleGroups.length === 0
           ? (
             <div className='neb-alerts-empty'>
               {query ? 'No alerts match.' : 'Nothing needs your attention.'}
             </div>
           )
           : null}
-        {attention?.nextCursor
+        {nextCursor
           ? (
             <button
               className='neb-add-row'
@@ -2742,6 +2791,7 @@ function AgentPanel({
                         'overview',
                         `interface:${item.id}`,
                       )}
+                    onRefresh={live.reload}
                   />
                   {activityError ? <p className='neb-error-note'>{activityError}</p> : null}
                 </>
@@ -3989,12 +4039,26 @@ function RoutinesPane({
     );
     if (next) onNavigate(next, { scroll: 'preserve' });
   };
+  const runTarget = itemId?.startsWith('run:')
+    ? { id: itemId.slice('run:'.length), logs: false }
+    : itemId?.startsWith('run-logs:')
+    ? { id: itemId.slice('run-logs:'.length), logs: true }
+    : null;
   return (
     <section className='neb-modal-pane active'>
       <h2 className='neb-modal-h'>Routines</h2>
-      <PromptButton agent={agent} kind='routine' />
+      {runTarget
+        ? (
+          <OperatorRunInspector
+            agentSlug={agent.slug}
+            autoOpenLogs={runTarget.logs}
+            onClose={() => navigateToRoutine(null)}
+            runId={runTarget.id}
+          />
+        )
+        : <PromptButton agent={agent} kind='routine' />}
       {error ? <p className='neb-error-note' role='alert'>{error}</p> : null}
-      {(response?.routines ?? []).map((routine) => (
+      {!runTarget && (response?.routines ?? []).map((routine) => (
         <RoutineRow
           busy={busy === routine.id}
           initiallyEditing={routine.id === itemId}
@@ -4005,11 +4069,11 @@ function RoutinesPane({
           routine={routine}
         />
       ))}
-      {response && response.routines.length === 0
+      {!runTarget && response && response.routines.length === 0
         ? <p className='neb-ov-note'>No managed routines yet.</p>
         : null}
-      {!response ? <p className='neb-ov-note'>Loading routines…</p> : null}
-      {response && itemId &&
+      {!runTarget && !response ? <p className='neb-ov-note'>Loading routines…</p> : null}
+      {!runTarget && response && itemId &&
           !response.routines.some((routine) => routine.id === itemId)
         ? (
           <StaleAgentItem

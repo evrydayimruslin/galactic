@@ -123,6 +123,7 @@ import {
   type LaunchLeaderboardKind,
   type LaunchLeaderboardResponse,
   type LaunchMoneyAmount,
+  type LaunchOperatorAttentionActionResponse,
   type LaunchPayoutStatus,
   type LaunchPlatformModelResponse,
   type LaunchPlatformPrimitive,
@@ -365,6 +366,10 @@ import {
   readOperatorRoutineRunLogExcerpt,
 } from "../services/operator-run-inspection.ts";
 import { collectRuntimeDiagnosticSecrets } from "../services/operator-diagnostics.ts";
+import {
+  applyOperatorItemAttentionAction,
+  OperatorItemAttentionStateError,
+} from "../services/operator-item-attention-state.ts";
 
 // Cross-Agent grant + settings mutations are sensitive. The SensitiveRoute enum
 // lives in sensitive-route-rate-limit.ts (outside this file's edit scope), so we
@@ -402,6 +407,12 @@ async function privateLaunchRoute(
       }, err.status);
     }
     if (err instanceof OperatorRunInspectionError) {
+      return privateLaunchJson({
+        error: err.message,
+        code: err.code,
+      }, err.status);
+    }
+    if (err instanceof OperatorItemAttentionStateError) {
       return privateLaunchJson({
         error: err.message,
         code: err.code,
@@ -843,6 +854,19 @@ export async function handleLaunch(
     if (path === "/api/launch/attention") {
       return await privateLaunchRoute(() =>
         handleLaunchGlobalAttention(request, method)
+      );
+    }
+
+    const operatorItemAttentionMatch = path.match(
+      /^\/api\/launch\/operator-items\/([^/]+)\/attention$/,
+    );
+    if (operatorItemAttentionMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchOperatorItemAttention(
+          request,
+          operatorItemAttentionMatch[1],
+          method,
+        )
       );
     }
 
@@ -5098,6 +5122,58 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       },
     },
   };
+  publicSpec.paths["/api/launch/operator-items/{id}/attention"] = {
+    patch: {
+      operationId: "updateLaunchOperatorItemAttention",
+      summary:
+        "Update private presentation state for one canonical operator item",
+      description:
+        "Marks an item read, snoozed, reopened, or dismissed without changing whether the underlying condition is active or recovered.",
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        {
+          name: "id",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+      ],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: ["action"],
+          properties: {
+            action: {
+              type: "string",
+              enum: [
+                "mark_read",
+                "mark_unread",
+                "snooze",
+                "reopen",
+                "dismiss",
+              ],
+            },
+            snoozedUntil: {
+              type: "string",
+              format: "date-time",
+              description:
+                "Required only for snooze and bounded to the next 30 days.",
+            },
+          },
+        }),
+      },
+      responses: {
+        "200": { description: "Updated private presentation state" },
+        "400": { description: "Invalid item id, action, or snooze time" },
+        "401": { description: "Authentication required" },
+        "403": { description: "Account session required" },
+        "404": { description: "Owned canonical operator item not found" },
+        "503": { description: "Attention state could not be updated safely" },
+      },
+    },
+  };
   publicSpec.paths["/api/launch/agents/{id}/attention"] = {
     get: {
       operationId: "listLaunchAgentAttention",
@@ -5575,6 +5651,36 @@ function launchAttentionPageOptions(request: Request): {
 
 // Owner Attention inbox. Both global and per-Agent reads are cursor paged and
 // get their page plus exact counts from one database snapshot.
+async function handleLaunchOperatorItemAttention(
+  request: Request,
+  itemId: string,
+  method: string,
+): Promise<Response> {
+  if (method !== "PATCH") {
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const body = asRecord(await readJsonBody<unknown>(request));
+  if (!body) {
+    throw new RequestValidationError(
+      "Operator Attention request must be an object",
+    );
+  }
+  rejectUnknownAgentHomeFields(body, ["action", "snoozedUntil"]);
+  const response = await applyOperatorItemAttentionAction({
+    userId: user.id,
+    itemId,
+    action: body.action,
+    ...(Object.hasOwn(body, "snoozedUntil")
+      ? { snoozedUntil: body.snoozedUntil }
+      : {}),
+  });
+  return privateLaunchJson(
+    response satisfies LaunchOperatorAttentionActionResponse,
+  );
+}
+
 async function handleLaunchGlobalAttention(
   request: Request,
   method: string,
