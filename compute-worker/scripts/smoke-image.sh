@@ -18,6 +18,10 @@ docker run --rm --entrypoint /bin/bash "$image" -lc '
   MPLBACKEND=Agg python3 -c '\''import IPython, matplotlib, numpy, pandas, psutil; frame = pandas.DataFrame({"x": numpy.array([1, 2]), "y": [3, 4]}); axes = frame.plot(x="x", y="y"); axes.figure.canvas.draw()'\''
   node --version
   test "$(npm --version)" = "12.0.1"
+  test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json").version'\'')" = "5.0.8"
+  test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion").EXPANSION_MAX_LENGTH'\'')" = "4000000"
+  test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion").expand("a{b,c}d").join(",")'\'')" = "abd,acd"
+  test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/minimatch").minimatch("release-v0.4.52", "release-v{0.4.52,0.4.53}")'\'')" = "true"
   deno --version | grep "^deno 2.9.3 "
   test "$(galactic --version)" = 2.4.0
   test "$(galacticconnection --version)" = 2.4.0
