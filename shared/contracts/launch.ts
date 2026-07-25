@@ -1608,6 +1608,56 @@ export type LaunchOperatorItem<TId extends string | null = string> =
 export type LaunchOperatorItemCandidate = LaunchOperatorItem<null>;
 
 /**
+ * Per-user presentation state for a canonical operator item. This state never
+ * changes whether the underlying condition is active or recovered.
+ */
+export interface LaunchOperatorAttentionState {
+  state: 'open' | 'snoozed' | 'dismissed';
+  readAt: string | null;
+  snoozedUntil: string | null;
+  dismissedAt: string | null;
+}
+
+export interface LaunchOperatorAttentionEntry {
+  item: LaunchOperatorItem;
+  attention: LaunchOperatorAttentionState;
+}
+
+export interface LaunchOperatorAttentionAgentCount {
+  agent: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  /** Number of unique active items relevant to this Agent. */
+  openCount: number;
+  requiresDecisionCount: number;
+  blockingCount: number;
+}
+
+/**
+ * Canonical condition projection used during the Attention read migration.
+ *
+ * Global pages contain each condition once even when it affects many Agents.
+ * Agent counts are relevance projections, so they may sum above `openCount`.
+ */
+export interface LaunchOperatorAttentionProjection {
+  contractVersion: typeof OPERATOR_ISSUE_CONTRACT_VERSION;
+  items: LaunchOperatorAttentionEntry[];
+  agentCounts: LaunchOperatorAttentionAgentCount[];
+  openCount: number;
+  requiresDecisionCount: number;
+  blockingCount: number;
+  /** Opaque cursor for the next page in trusted producer order. */
+  nextCursor: string | null;
+  available: boolean;
+  unavailableReason: 'temporarily_unavailable' | null;
+  generatedAt: string;
+}
+
+export type LaunchAttentionReadSource = 'legacy' | 'canonical';
+
+/**
  * The Agent's canonical responsibility. Identity (name/description) remains a
  * separate Settings concern; this projection is derived from actual managed
  * routine configuration.
@@ -1887,6 +1937,13 @@ export interface LaunchAgentAttentionProjection {
    */
   available?: boolean;
   unavailableReason?: 'temporarily_unavailable' | null;
+  /**
+   * Additive M5 read migration. Existing fields remain the legacy notification
+   * projection until clients cut over; when `readSource` is canonical, clients
+   * should render and count `operatorItems`.
+   */
+  readSource?: LaunchAttentionReadSource;
+  operatorItems?: LaunchOperatorAttentionProjection;
 }
 
 export interface LaunchGlobalAttentionEntry {
@@ -1915,6 +1972,12 @@ export interface LaunchGlobalAttentionResponse {
   available: boolean;
   unavailableReason: 'temporarily_unavailable' | null;
   generatedAt: string;
+  /**
+   * Additive M5 read migration. Global canonical items are unique conditions;
+   * affected-Agent fanout and exact per-Agent counts live in this projection.
+   */
+  readSource?: LaunchAttentionReadSource;
+  operatorItems?: LaunchOperatorAttentionProjection;
 }
 
 export interface LaunchAgentAttentionActionRequest {

@@ -357,6 +357,8 @@ import {
   readOwnerAttentionPage,
   transitionAgentAttention,
 } from "../services/agent-attention.ts";
+import { readAttentionWithMigration } from "../services/attention-read-migration.ts";
+import { readOperatorAttentionPage } from "../services/operator-item-reader.ts";
 import {
   OperatorRunInspectionError,
   readOperatorRoutineRunDetail,
@@ -5594,15 +5596,37 @@ async function handleLaunchGlobalAttention(
     deleted_at: "is.null",
     select: "id,slug,name",
   });
-  const projection = await readOwnerAttentionPage(
-    user.id,
-    agents.map((agent) => ({
-      id: agent.id,
-      slug: agent.slug || agent.id,
-      name: agent.name || agent.slug || agent.id,
-    })),
-    launchAttentionPageOptions(request),
-  );
+  const attentionAgents = agents.map((agent) => ({
+    id: agent.id,
+    slug: agent.slug || agent.id,
+    name: agent.name || agent.slug || agent.id,
+  }));
+  const page = launchAttentionPageOptions(request);
+  const projection = await readAttentionWithMigration<
+    LaunchGlobalAttentionResponse
+  >("account", {
+    cursor: page.cursor ?? null,
+    readLegacy: (cursor) =>
+      readOwnerAttentionPage(user.id, attentionAgents, {
+        ...page,
+        cursor,
+      }),
+    readCanonical: (cursor) =>
+      readOperatorAttentionPage(user.id, attentionAgents, null, {
+        ...page,
+        cursor,
+      }),
+    buildLegacyFallback: (canonical) => ({
+      entries: [],
+      agentCounts: [],
+      openCount: 0,
+      requiresDecisionCount: 0,
+      nextCursor: null,
+      available: false,
+      unavailableReason: "temporarily_unavailable",
+      generatedAt: canonical.generatedAt,
+    }),
+  });
   return privateLaunchJson(projection satisfies LaunchGlobalAttentionResponse);
 }
 
@@ -5623,15 +5647,40 @@ async function handleLaunchAgentAttention(
   if (resolved instanceof Response) {
     return withPrivateLaunchPrivacy(resolved);
   }
-  const projection = await readAgentAttentionPage(
-    user.id,
-    {
-      id: resolved.id,
-      slug: resolved.slug || resolved.id,
-      name: resolved.name || resolved.slug || resolved.id,
-    },
-    launchAttentionPageOptions(request),
-  );
+  const attentionAgent = {
+    id: resolved.id,
+    slug: resolved.slug || resolved.id,
+    name: resolved.name || resolved.slug || resolved.id,
+  };
+  const page = launchAttentionPageOptions(request);
+  const projection = await readAttentionWithMigration<
+    LaunchAgentAttentionProjection
+  >("agent", {
+    cursor: page.cursor ?? null,
+    readLegacy: (cursor) =>
+      readAgentAttentionPage(user.id, attentionAgent, {
+        ...page,
+        cursor,
+      }),
+    readCanonical: (cursor) =>
+      readOperatorAttentionPage(
+        user.id,
+        [attentionAgent],
+        attentionAgent.id,
+        {
+          ...page,
+          cursor,
+        },
+      ),
+    buildLegacyFallback: () => ({
+      items: [],
+      openCount: 0,
+      requiresDecisionCount: 0,
+      nextCursor: null,
+      available: false,
+      unavailableReason: "temporarily_unavailable",
+    }),
+  });
   return privateLaunchJson(projection satisfies LaunchAgentAttentionProjection);
 }
 
@@ -7985,7 +8034,23 @@ async function buildLaunchAgentHomeSnapshotAttempt(
         return null;
       }
     })(),
-    readAgentAttention(user.id, agentIdentity).catch((err) => {
+    readAttentionWithMigration<LaunchAgentAttentionProjection>("agent", {
+      readLegacy: () => readAgentAttention(user.id, agentIdentity),
+      readCanonical: (cursor) =>
+        readOperatorAttentionPage(
+          user.id,
+          [agentIdentity],
+          agentIdentity.id,
+          { cursor },
+        ),
+      buildLegacyFallback: () => ({
+        items: [],
+        openCount: 0,
+        requiresDecisionCount: 0,
+        available: false,
+        unavailableReason: "temporarily_unavailable",
+      }),
+    }).catch((err) => {
       const code = err instanceof AgentAttentionStoreError
         ? err.code
         : "ATTENTION_READ_FAILED";

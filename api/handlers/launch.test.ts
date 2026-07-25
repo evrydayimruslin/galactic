@@ -7,6 +7,7 @@ import {
 } from './launch.ts';
 import { putLiveExecutedBundle } from '../services/executed-bundle.ts';
 import { encryptEnvVar } from '../services/envvars.ts';
+import { compileOperatorItems } from '../services/operator-issue-compiler.ts';
 
 const TEST_ENV = {
   BASE_URL: 'https://ultralight.test',
@@ -4738,6 +4739,7 @@ Deno.test('launch Alerts reject ambiguous writes and malformed pagination', asyn
 
 const OPERATOR_USER_ID = '77777777-7777-4777-8777-777777777777';
 const OPERATOR_ALERT_ID = '88888888-8888-4888-8888-888888888888';
+const OPERATOR_ITEM_ID = '99999999-9999-4999-8999-999999999999';
 
 interface OperatorFetchOptions {
   favoriteInitialized?: boolean;
@@ -4750,6 +4752,38 @@ interface OperatorFetchOptions {
     method: string;
     body: Record<string, unknown> | null;
   }>;
+}
+
+function operatorCanonicalAttentionSnapshot(): Record<string, unknown> {
+  const candidate = compileOperatorItems([{
+    condition: 'account_byok_missing',
+    affectedAgents: [{ id: HOME_APP_ID, name: 'Home Agent' }],
+    detectedAt: '2026-07-23T17:58:00.000Z',
+  }])[0]!;
+  return {
+    items: [{
+      item: { ...candidate, id: OPERATOR_ITEM_ID },
+      attention: {
+        state: 'open',
+        readAt: null,
+        snoozedUntil: null,
+        dismissedAt: null,
+      },
+    }],
+    per_agent_counts: [{
+      agent_id: HOME_APP_ID,
+      open_count: 1,
+      requires_decision_count: 0,
+      blocking_count: 1,
+    }],
+    open_count: 1,
+    requires_decision_count: 0,
+    blocking_count: 1,
+    next_source_key: null,
+    next_source_ordinal: null,
+    next_detected_at: null,
+    next_id: null,
+  };
 }
 
 function operatorTestApp(): Record<string, unknown> {
@@ -5655,6 +5689,70 @@ Deno.test('launch global Attention is enriched, owner-private, and keeps read in
       assertEquals(response.headers.get('cache-control'), 'private, no-store');
     },
     operatorFetchMock(),
+  );
+});
+
+Deno.test('launch global Attention shadow-reads canonical conditions without displacing legacy', async () => {
+  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        operatorRequest('/api/launch/attention?limit=41'),
+      );
+      const body = await response.json() as {
+        readSource?: string;
+        entries?: unknown[];
+        operatorItems?: {
+          openCount?: number;
+          requiresDecisionCount?: number;
+          blockingCount?: number;
+          items?: Array<{ item?: { id?: string; conditionKey?: string } }>;
+          agentCounts?: Array<{ agent?: { id?: string }; openCount?: number }>;
+        };
+      };
+
+      assertEquals(response.status, 200);
+      assertEquals(body.readSource, 'legacy');
+      assertEquals(body.entries?.length, 1);
+      assertEquals(body.operatorItems?.openCount, 1);
+      assertEquals(body.operatorItems?.requiresDecisionCount, 0);
+      assertEquals(body.operatorItems?.blockingCount, 1);
+      assertEquals(body.operatorItems?.items?.[0]?.item?.id, OPERATOR_ITEM_ID);
+      assertEquals(
+        body.operatorItems?.items?.[0]?.item?.conditionKey,
+        'account:byok',
+      );
+      assertEquals(body.operatorItems?.agentCounts?.[0], {
+        agent: {
+          id: HOME_APP_ID,
+          slug: 'home-agent',
+          name: 'Home Agent',
+        },
+        openCount: 1,
+        requiresDecisionCount: 0,
+        blockingCount: 1,
+      });
+      assertEquals(
+        calls.some((call) =>
+          call.url.endsWith('/rest/v1/rpc/get_owner_attention_page')
+        ),
+        true,
+      );
+      const canonicalCall = calls.find((call) =>
+        call.url.endsWith('/rest/v1/rpc/get_operator_attention_page')
+      );
+      assertEquals(canonicalCall?.body?.p_user_id, OPERATOR_USER_ID);
+      assertEquals(canonicalCall?.body?.p_agent_id, null);
+      assertEquals(canonicalCall?.body?.p_limit, 41);
+    },
+    operatorFetchMock({
+      calls,
+      rpc: (name) =>
+        name === 'get_operator_attention_page'
+          ? jsonResponse([operatorCanonicalAttentionSnapshot()])
+          : undefined,
+    }),
+    { OPERATOR_ATTENTION_READ_MODE: 'shadow' },
   );
 });
 

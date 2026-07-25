@@ -1,6 +1,6 @@
 # Operator issue and remediation architecture
 
-Status: M0–M4 implemented through producer reconciliation and account fanout
+Status: M0–M5 implemented through guarded canonical Attention reads
 
 Last reviewed: `2026-07-24`
 
@@ -201,6 +201,38 @@ recovery even when no client page is opened.
 
 M4 still does not expose the canonical store to clients. M5 owns dual-read,
 shadow comparison, and the guarded API read cutover.
+
+## M5 implementation boundary
+
+Account and Agent Attention now have one canonical, service-role read RPC. One
+database snapshot supplies the ordered page, unique item totals, affected-Agent
+fanout, and exact per-Agent relevance/blocking counts. Dismissed and
+future-snoozed presentation states are excluded; an expired snooze projects as
+open without mutating presentation state or recovering the condition.
+
+The API rollout is controlled by `OPERATOR_ATTENTION_READ_MODE`:
+
+- `legacy` reads only notification Attention and is the instant rollback;
+- `shadow` requires the legacy read, performs a best-effort canonical read, and
+  returns legacy as the source; and
+- `canonical` prefers canonical items, preserves the legacy compatibility
+  shell, and falls back to a healthy legacy read if canonical storage is
+  unavailable.
+
+Legacy and canonical cursors are versioned separately. An already-issued
+legacy cursor remains on the legacy source after a rollout change, preventing
+mixed-source pagination. Canonical data is additive under `operatorItems`;
+`readSource` tells M6 clients which projection is authoritative.
+
+Shadow comparison is semantic and bounded. It maps only explicit legacy
+notification kinds to canonical condition codes, compares affected-Agent
+projections, and classifies new setup/account items and corrected decision
+semantics as expected differences. It never parses titles, bodies, model
+output, or routes. Telemetry contains only surface, mode, source, reason codes,
+and counts—no user, Agent, condition, diagnosis, or error text.
+
+M5 does not render the new projection or execute remediation. M6 owns the
+shared card/deck UI; M7 owns verification and paused `Run once`.
 
 ## Rollout order
 
