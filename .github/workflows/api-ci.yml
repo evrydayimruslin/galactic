@@ -20,8 +20,14 @@ on:
       - 'scripts/release/verify-api-compute-bootstrap-history.test.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
+      - 'scripts/release/verify-attention-shadow-evidence.mjs'
+      - 'scripts/release/verify-attention-shadow-evidence.test.mjs'
       - 'scripts/release/write-api-compute-disabled-config.mjs'
       - 'scripts/release/write-api-compute-disabled-config.test.mjs'
+      - 'scripts/smoke/owner-attention-probe.mjs'
+      - 'scripts/smoke/owner-attention-probe.test.mjs'
+      - 'scripts/smoke/with-staging-owner-session.mjs'
+      - 'scripts/smoke/with-staging-owner-session.test.mjs'
       - 'shared/**'
       - 'sdk/**'
       - 'scripts/checks/**'
@@ -32,6 +38,7 @@ on:
       - '.github/workflows/compute-ci.yml'
       - '.github/workflows/compute-deploy.yml'
       - '.github/workflows/compute-admission.yml'
+      - '.github/workflows/g1-launch-smoke.yml'
   push:
     branches: [main]
     paths:
@@ -50,8 +57,14 @@ on:
       - 'scripts/release/verify-api-compute-bootstrap-history.test.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
+      - 'scripts/release/verify-attention-shadow-evidence.mjs'
+      - 'scripts/release/verify-attention-shadow-evidence.test.mjs'
       - 'scripts/release/write-api-compute-disabled-config.mjs'
       - 'scripts/release/write-api-compute-disabled-config.test.mjs'
+      - 'scripts/smoke/owner-attention-probe.mjs'
+      - 'scripts/smoke/owner-attention-probe.test.mjs'
+      - 'scripts/smoke/with-staging-owner-session.mjs'
+      - 'scripts/smoke/with-staging-owner-session.test.mjs'
       - 'shared/**'
       - 'sdk/**'
       - 'scripts/checks/**'
@@ -62,6 +75,7 @@ on:
       - '.github/workflows/compute-ci.yml'
       - '.github/workflows/compute-deploy.yml'
       - '.github/workflows/compute-admission.yml'
+      - '.github/workflows/g1-launch-smoke.yml'
   workflow_dispatch:
 
 permissions:
@@ -112,7 +126,7 @@ jobs:
         working-directory: .
         run: node scripts/checks/check-contract-guardrails.mjs
 
-      - name: Pre-Compute deployment helpers
+      - name: Release and smoke helpers
         working-directory: .
         run: |
           node --test \
@@ -120,7 +134,10 @@ jobs:
             scripts/release/parse-cloudflare-worker-version-inventory.test.mjs \
             scripts/release/verify-api-compute-bootstrap-history.test.mjs \
             scripts/release/verify-api-compute-deploy-state.test.mjs \
-            scripts/release/write-api-compute-disabled-config.test.mjs
+            scripts/release/verify-attention-shadow-evidence.test.mjs \
+            scripts/release/write-api-compute-disabled-config.test.mjs \
+            scripts/smoke/owner-attention-probe.test.mjs \
+            scripts/smoke/with-staging-owner-session.test.mjs
 
       - name: Unused-code baseline
         run: npm run analyze:unused

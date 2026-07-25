@@ -38,6 +38,24 @@ Run the `G1 Launch Smoke` workflow with `target=staging`. It performs:
 Any smoke failure is stop-ship. A missing fixed-Agent credential is a failure,
 not a pass, and the release workflow must not skip durable execution.
 
+For an Operator Attention read cutover, manually enable the workflow's
+owner-session evidence gate:
+
+- In `shadow`, set `expected_api_sha` to the exact deployed API SHA and observe
+  for 60–300 seconds. The deployed SHA must be an ancestor of the workflow
+  candidate.
+- In `canonical`, set `expected_api_sha` to the exact workflow SHA.
+
+The gate resolves the fixed staging Agent's existing owner, creates a
+short-lived zero-create Supabase session, proves connected-token rejection,
+reconciles Agent Home, and verifies the exact primary-routine blocker and
+server-owned `configure_routine` remediation on both Attention surfaces.
+Shadow mode also fences a version-specific Cloudflare tail and accepts only
+sanitized parity aggregates. Raw tail output, credentials, recovery material,
+response bodies, and private identifiers are never artifacts. The deployment
+version, provenance tag, and read mode must remain unchanged across the
+observation window.
+
 If the final candidate SHA contains only documentation or release-evidence
 changes and therefore had no push-triggered `Staging Launch Gate`, dispatch
 that gate with the exact `candidate_sha` before tagging. The production gate

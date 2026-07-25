@@ -8,6 +8,9 @@
 #   GALACTIC_SMOKE_APP_ID_STAGING — fixed private staging smoke Agent
 #   ULTRALIGHT_TOKEN              — production builder/operator token
 #   GALACTIC_SMOKE_APP_ID         — fixed private production smoke Agent
+# The optional staging Attention gate additionally uses the standard
+# CLOUDFLARE_* deployment credentials plus SUPABASE_ACCESS_TOKEN and the pinned
+# SUPABASE_STAGING_PROJECT_ID to mint one short-lived, zero-create owner session.
 # Missing required inputs fail closed; certification cannot silently skip the
 # canonical deploy surface.
 
@@ -35,6 +38,21 @@ on:
         required: false
         default: false
         type: boolean
+      operator_attention_gate:
+        description: 'Optional staging owner-session Attention evidence gate'
+        required: false
+        default: none
+        type: string
+      expected_api_sha:
+        description: 'Exact staging API commit to fence for Attention evidence'
+        required: false
+        default: ''
+        type: string
+      attention_observation_seconds:
+        description: 'Shadow observation window (60-300 seconds)'
+        required: false
+        default: 180
+        type: number
     secrets:
       ULTRALIGHT_TOKEN_STAGING:
         required: false
@@ -43,6 +61,14 @@ on:
       ULTRALIGHT_TOKEN:
         required: false
       GALACTIC_SMOKE_APP_ID:
+        required: false
+      CLOUDFLARE_API_TOKEN:
+        required: false
+      CLOUDFLARE_ACCOUNT_ID:
+        required: false
+      SUPABASE_ACCESS_TOKEN:
+        required: false
+      SUPABASE_STAGING_PROJECT_ID:
         required: false
   workflow_dispatch:
     inputs:
@@ -62,6 +88,24 @@ on:
         description: 'Optional override for the durable function (default: get_greeting)'
         required: false
         default: ''
+      operator_attention_gate:
+        description: 'Optional owner-session Attention evidence gate'
+        required: true
+        default: none
+        type: choice
+        options:
+          - none
+          - shadow
+          - canonical
+      expected_api_sha:
+        description: 'Exact staging API commit to fence when the gate is enabled'
+        required: false
+        default: ''
+      attention_observation_seconds:
+        description: 'Shadow observation window (60-300 seconds)'
+        required: true
+        default: 180
+        type: number
 
 permissions:
   contents: read
@@ -76,6 +120,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      SMOKE_TARGET: ${{ inputs.target }}
+      DURABLE_APP_INPUT: ${{ inputs.durable_app }}
+      DURABLE_FUNCTION_INPUT: ${{ inputs.durable_function }}
       # Never send a production credential to staging (or vice versa). The
       # environments use isolated Supabase users/token hashes and Agent rows.
       ULTRALIGHT_TOKEN: ${{ (inputs.target == 'staging' && secrets.ULTRALIGHT_TOKEN_STAGING) || (inputs.target == 'production' && secrets.ULTRALIGHT_TOKEN) }}
@@ -95,9 +142,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          case "$SMOKE_TARGET" in
+            staging|production) ;;
+            *)
+              echo "::error::The smoke target is invalid."
+              exit 1
+              ;;
+          esac
           SAFE_REF="$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9._-' '-')"
           CID="$(date -u +%F)-${SAFE_REF}-$(git rev-parse --short=7 HEAD)"
-          DIR="docs/_generated/launch/${{ inputs.target }}/$CID"
+          DIR="docs/_generated/launch/$SMOKE_TARGET/$CID"
           mkdir -p "$DIR"
           echo "cid=$CID" >> "$GITHUB_OUTPUT"
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
@@ -122,7 +176,7 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/ops/verify-secrets.mjs \
-            --target "${{ inputs.target }}" \
+            --target "$SMOKE_TARGET" \
             --token "$ULTRALIGHT_TOKEN" \
             | tee "${{ steps.cid.outputs.dir }}/verify-secrets.txt"
 
@@ -131,7 +185,7 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/ops/init-release-packet.mjs \
-            --target "${{ inputs.target }}" \
+            --target "$SMOKE_TARGET" \
             --commit-sha "$(git rev-parse HEAD)" \
             --git-ref "$GITHUB_REF_NAME" \
             --operator "github-actions/g1-launch-smoke" \
@@ -144,11 +198,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/smoke/run-staging-smoke-suite.mjs \
-            --target "${{ inputs.target }}" \
-            ${{ inputs.durable_app && format('--durable-app {0}', inputs.durable_app) || '' }} \
-            ${{ inputs.durable_function && format('--durable-function {0}', inputs.durable_function) || '' }} \
+          smoke_args=(
+            --target "$SMOKE_TARGET"
             --output-dir "${{ steps.cid.outputs.dir }}"
+          )
+          if [[ -n "$DURABLE_APP_INPUT" ]]; then
+            smoke_args+=(--durable-app "$DURABLE_APP_INPUT")
+          fi
+          if [[ -n "$DURABLE_FUNCTION_INPUT" ]]; then
+            smoke_args+=(--durable-function "$DURABLE_FUNCTION_INPUT")
+          fi
+          node scripts/smoke/run-staging-smoke-suite.mjs "${smoke_args[@]}"
 
       - name: Publish summary
         if: always()
@@ -165,4 +225,419 @@ jobs:
         with:
           name: g1-evidence-${{ inputs.target }}-${{ steps.cid.outputs.cid }}
           path: ${{ steps.cid.outputs.dir }}
+          if-no-files-found: error
+
+  operator_attention:
+    name: Owner Attention evidence (${{ inputs.operator_attention_gate }})
+    needs: smoke
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        inputs.target == 'staging' &&
+        inputs.operator_attention_gate != 'none' &&
+        github.actor == github.repository_owner &&
+        needs.smoke.result == 'success'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    env:
+      API_WORKER: ultralight-api-staging
+      EXPECTED_API_SHA_INPUT: ${{ inputs.expected_api_sha }}
+      ATTENTION_GATE: ${{ inputs.operator_attention_gate }}
+      ATTENTION_OBSERVATION_SECONDS: ${{ inputs.attention_observation_seconds }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: api/.nvmrc
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Install pinned Wrangler
+        working-directory: api
+        run: npm ci
+
+      - name: Validate owner Attention evidence request
+        id: request
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
+          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN_STAGING }}
+          GALACTIC_SMOKE_APP_ID: ${{ secrets.GALACTIC_SMOKE_APP_ID_STAGING }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CLOUDFLARE_API_TOKEN" ||
+                -z "$CLOUDFLARE_ACCOUNT_ID" ||
+                -z "$SUPABASE_ACCESS_TOKEN" ||
+                -z "$SUPABASE_STAGING_PROJECT_ID" ||
+                -z "$ULTRALIGHT_TOKEN" ||
+                -z "$GALACTIC_SMOKE_APP_ID" ]]; then
+            echo "::error::The staging Attention evidence credentials are incomplete."
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_API_SHA_INPUT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::The expected API commit is invalid."
+            exit 1
+          fi
+          expected_sha="${EXPECTED_API_SHA_INPUT,,}"
+          if [[ ! "$ATTENTION_OBSERVATION_SECONDS" =~ ^[0-9]+$ ]] ||
+             (( ATTENTION_OBSERVATION_SECONDS < 60 ||
+                ATTENTION_OBSERVATION_SECONDS > 300 )); then
+            echo "::error::The Attention observation window is invalid."
+            exit 1
+          fi
+          if [[ "$ATTENTION_GATE" != shadow &&
+                "$ATTENTION_GATE" != canonical ]]; then
+            echo "::error::The Attention evidence mode is invalid."
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "::error::The checked-out candidate does not match the workflow commit."
+            exit 1
+          fi
+          if [[ "$ATTENTION_GATE" == shadow ]]; then
+            if ! git merge-base --is-ancestor "$expected_sha" "$GITHUB_SHA"; then
+              echo "::error::The shadow deployment is not an ancestor of this candidate."
+              exit 1
+            fi
+            expected_read_source=legacy
+            repeats=3
+          else
+            if [[ "$expected_sha" != "$GITHUB_SHA" ]]; then
+              echo "::error::The canonical deployment is not the exact workflow commit."
+              exit 1
+            fi
+            expected_read_source=canonical
+            repeats=2
+          fi
+          echo "expected_sha=$expected_sha" >> "$GITHUB_OUTPUT"
+          echo "expected_tag=api-$expected_sha" >> "$GITHUB_OUTPUT"
+          echo "expected_mode=$ATTENTION_GATE" >> "$GITHUB_OUTPUT"
+          echo "expected_read_source=$expected_read_source" >> "$GITHUB_OUTPUT"
+          echo "repeats=$repeats" >> "$GITHUB_OUTPUT"
+          echo "observation_seconds=$ATTENTION_OBSERVATION_SECONDS" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Fence the active staging API deployment
+        id: preflight
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          status="$RUNNER_TEMP/g1-attention-preflight-status.json"
+          version="$RUNNER_TEMP/g1-attention-preflight-version.json"
+          wrangler_stderr="$RUNNER_TEMP/g1-attention-preflight-stderr.txt"
+          pushd api >/dev/null
+          if ! npx wrangler deployments status \
+            --name "$API_WORKER" --json \
+            > "$status" 2> "$wrangler_stderr"; then
+            echo "::error::Could not inspect the staging API deployment."
+            exit 1
+          fi
+          version_id="$(
+            jq -er '
+              if (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100)
+              then .versions[0].version_id
+              else error("unstable deployment")
+              end
+            ' "$status"
+          )" || {
+            echo "::error::The staging API deployment is not stable."
+            exit 1
+          }
+          if [[ ! "$version_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+            echo "::error::The staging API version identifier is invalid."
+            exit 1
+          fi
+          version_id="${version_id,,}"
+          if ! npx wrangler versions view "$version_id" \
+            --name "$API_WORKER" --json \
+            > "$version" 2>> "$wrangler_stderr"; then
+            echo "::error::Could not inspect the active staging API version."
+            exit 1
+          fi
+          popd >/dev/null
+          if ! jq -e \
+            --arg id "$version_id" \
+            --arg tag "${{ steps.request.outputs.expected_tag }}" \
+            --arg mode "${{ steps.request.outputs.expected_mode }}" '
+              .id == $id and
+              .annotations["workers/tag"] == $tag and
+              (
+                [.resources.bindings[]? |
+                  select(
+                    .type == "plain_text" and
+                    .name == "OPERATOR_ATTENTION_READ_MODE"
+                  ) |
+                  .text
+                ] == [$mode]
+              )
+            ' "$version" >/dev/null; then
+            echo "::error::The active staging API does not match the requested fence."
+            exit 1
+          fi
+          echo "version_id=$version_id" >> "$GITHUB_OUTPUT"
+          echo "checked_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Capture secret-safe shadow parity evidence
+        if: inputs.operator_attention_gate == 'shadow'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
+          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN_STAGING }}
+          GALACTIC_SMOKE_APP_ID: ${{ secrets.GALACTIC_SMOKE_APP_ID_STAGING }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p attention-evidence
+          owner_evidence="attention-evidence/owner-attention.json"
+          shadow_evidence="attention-evidence/attention-shadow.json"
+          tail_status="$RUNNER_TEMP/g1-attention-tail-status.txt"
+          tail_stderr="$RUNNER_TEMP/g1-attention-tail-stderr.txt"
+
+          (
+            set +e
+            set -o pipefail
+            (
+              cd api
+              env \
+                -u SUPABASE_ACCESS_TOKEN \
+                -u SUPABASE_STAGING_PROJECT_ID \
+                -u ULTRALIGHT_TOKEN \
+                -u GALACTIC_SMOKE_APP_ID \
+                timeout \
+                --signal=INT \
+                --kill-after=15s \
+                "${{ steps.request.outputs.observation_seconds }}s" \
+                npx wrangler tail "$API_WORKER" \
+                  --format json \
+                  --search operator_attention_read_comparison \
+                  --version-id "${{ steps.preflight.outputs.version_id }}"
+            ) 2>"$tail_stderr" |
+              node scripts/release/verify-attention-shadow-evidence.mjs \
+                --expected-worker "$API_WORKER" \
+                --expected-version-id \
+                  "${{ steps.preflight.outputs.version_id }}" \
+                --expected-version-tag \
+                  "${{ steps.request.outputs.expected_tag }}" \
+                --min-samples-per-surface 3 \
+                > "$shadow_evidence"
+            pipeline_status=("${PIPESTATUS[@]}")
+            printf '%s %s\n' \
+              "${pipeline_status[0]:-1}" \
+              "${pipeline_status[1]:-1}" \
+              > "$tail_status"
+            exit 0
+          ) &
+          tail_guard_pid=$!
+
+          # Give the version-pinned tail time to establish its stream. Never
+          # inspect or print its stderr: it exists only in runner temp.
+          for unused in {1..10}; do
+            if ! kill -0 "$tail_guard_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          if ! kill -0 "$tail_guard_pid" 2>/dev/null; then
+            wait "$tail_guard_pid" || true
+            echo "::error::The staging Attention tail did not remain active."
+            exit 1
+          fi
+
+          set +e
+          env \
+            -u CLOUDFLARE_API_TOKEN \
+            -u CLOUDFLARE_ACCOUNT_ID \
+            node scripts/smoke/with-staging-owner-session.mjs -- \
+              node scripts/smoke/owner-attention-probe.mjs \
+                --expected-read-source legacy \
+                --repeats "${{ steps.request.outputs.repeats }}" \
+                --output "$owner_evidence"
+          owner_status=$?
+          set -e
+
+          wait "$tail_guard_pid"
+          if [[ ! -f "$tail_status" ]]; then
+            echo "::error::The staging Attention tail did not report a result."
+            exit 1
+          fi
+          read -r tail_exit sanitizer_exit < "$tail_status"
+          if [[ "$owner_status" -ne 0 ||
+                "$tail_exit" != 124 ||
+                "$sanitizer_exit" != 0 ]]; then
+            echo "::error::The shadow Attention evidence gate failed."
+            exit 1
+          fi
+          rm -f "$tail_status" "$tail_stderr"
+
+      - name: Capture canonical owner Attention evidence
+        if: inputs.operator_attention_gate == 'canonical'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
+          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN_STAGING }}
+          GALACTIC_SMOKE_APP_ID: ${{ secrets.GALACTIC_SMOKE_APP_ID_STAGING }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p attention-evidence
+          node scripts/smoke/with-staging-owner-session.mjs -- \
+            node scripts/smoke/owner-attention-probe.mjs \
+              --expected-read-source canonical \
+              --repeats "${{ steps.request.outputs.repeats }}" \
+              --output attention-evidence/owner-attention.json
+
+      - name: Verify postflight fence and seal safe evidence
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          status="$RUNNER_TEMP/g1-attention-postflight-status.json"
+          version="$RUNNER_TEMP/g1-attention-postflight-version.json"
+          wrangler_stderr="$RUNNER_TEMP/g1-attention-postflight-stderr.txt"
+          pushd api >/dev/null
+          if ! npx wrangler deployments status \
+            --name "$API_WORKER" --json \
+            > "$status" 2> "$wrangler_stderr"; then
+            echo "::error::Could not recheck the staging API deployment."
+            exit 1
+          fi
+          version_id="$(
+            jq -er \
+              --arg expected "${{ steps.preflight.outputs.version_id }}" '
+                if (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100) and
+                   (.versions[0].version_id | ascii_downcase) == $expected
+                then (.versions[0].version_id | ascii_downcase)
+                else error("deployment fence moved")
+                end
+              ' "$status"
+          )" || {
+            echo "::error::The staging API deployment changed during the evidence window."
+            exit 1
+          }
+          if ! npx wrangler versions view "$version_id" \
+            --name "$API_WORKER" --json \
+            > "$version" 2>> "$wrangler_stderr"; then
+            echo "::error::Could not recheck the staging API version."
+            exit 1
+          fi
+          popd >/dev/null
+          if ! jq -e \
+            --arg id "$version_id" \
+            --arg tag "${{ steps.request.outputs.expected_tag }}" \
+            --arg mode "${{ steps.request.outputs.expected_mode }}" '
+              .id == $id and
+              .annotations["workers/tag"] == $tag and
+              (
+                [.resources.bindings[]? |
+                  select(
+                    .type == "plain_text" and
+                    .name == "OPERATOR_ATTENTION_READ_MODE"
+                  ) |
+                  .text
+                ] == [$mode]
+              )
+            ' "$version" >/dev/null; then
+            echo "::error::The staging API fence changed during the evidence window."
+            exit 1
+          fi
+
+          jq -e \
+            --arg source "${{ steps.request.outputs.expected_read_source }}" \
+            --argjson repeats "${{ steps.request.outputs.repeats }}" '
+              .verified == true and
+              .expected_read_source == $source and
+              .repeats == $repeats and
+              (.owner_account.samples | length) == $repeats and
+              (.owner_agent.samples | length) == $repeats
+            ' attention-evidence/owner-attention.json >/dev/null || {
+              echo "::error::The owner Attention evidence is incomplete."
+              exit 1
+            }
+          if [[ "${{ steps.request.outputs.expected_mode }}" == shadow ]]; then
+            jq -e \
+              --arg worker "$API_WORKER" \
+              --arg id "$version_id" \
+              --arg tag "${{ steps.request.outputs.expected_tag }}" '
+                .verified == true and
+                .deployment.worker == $worker and
+                .deployment.version_id == $id and
+                .deployment.version_tag == $tag and
+                .surfaces.account.sample_count >= 3 and
+                .surfaces.agent.sample_count >= 3
+              ' attention-evidence/attention-shadow.json >/dev/null || {
+                echo "::error::The shadow parity evidence is incomplete."
+                exit 1
+              }
+          fi
+
+          postflight_checked_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -n \
+            --arg worker "$API_WORKER" \
+            --arg sha "${{ steps.request.outputs.expected_sha }}" \
+            --arg id "$version_id" \
+            --arg tag "${{ steps.request.outputs.expected_tag }}" \
+            --arg mode "${{ steps.request.outputs.expected_mode }}" \
+            --arg before "${{ steps.preflight.outputs.checked_at }}" \
+            --arg after "$postflight_checked_at" '
+              {
+                schema_version: 1,
+                evidence_type: "operator_attention_deployment_fence",
+                verified: true,
+                target: "staging",
+                worker: $worker,
+                git_sha: $sha,
+                version_id: $id,
+                version_tag: $tag,
+                read_mode: $mode,
+                active_percentage: 100,
+                checked_before: $before,
+                checked_after: $after
+              }
+            ' > attention-evidence/deployment-fence.json
+
+      - name: Remove ephemeral Cloudflare evidence
+        if: always()
+        shell: bash
+        run: |
+          rm -f \
+            "$RUNNER_TEMP/g1-attention-preflight-status.json" \
+            "$RUNNER_TEMP/g1-attention-preflight-version.json" \
+            "$RUNNER_TEMP/g1-attention-preflight-stderr.txt" \
+            "$RUNNER_TEMP/g1-attention-postflight-status.json" \
+            "$RUNNER_TEMP/g1-attention-postflight-version.json" \
+            "$RUNNER_TEMP/g1-attention-postflight-stderr.txt" \
+            "$RUNNER_TEMP/g1-attention-tail-status.txt" \
+            "$RUNNER_TEMP/g1-attention-tail-stderr.txt"
+
+      - name: Upload safe owner Attention evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: g1-owner-attention-${{ inputs.operator_attention_gate }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            attention-evidence/owner-attention.json
+            attention-evidence/deployment-fence.json
+            attention-evidence/attention-shadow.json
           if-no-files-found: error
