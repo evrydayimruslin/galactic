@@ -344,6 +344,12 @@
       ]
     },
     {
+      "file": "services/capabilities/attention.test.ts",
+      "files": [
+        "services/capabilities/attention.test.ts"
+      ]
+    },
+    {
       "file": "services/capabilities/db-inspect.test.ts",
       "files": [
         "services/capabilities/db-inspect.test.ts"

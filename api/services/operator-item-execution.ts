@@ -16,7 +16,7 @@ type Claim = typeof claimAgentHomeAction;
 type Queue = typeof queueOperatorItemRoutineRunOnce;
 type Complete = typeof completeAgentHomeAction;
 
-export interface OperatorItemExecutionDependencies {
+interface OperatorItemExecutionDependencies {
   resolve?: Resolve;
   claim?: Claim;
   queue?: Queue;

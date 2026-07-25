@@ -21,6 +21,11 @@ Deno.test("M7 queue binds the durable action to one active canonical remediation
       "v_existing.action <> 'operator_run_once'",
       "v_existing.request_payload IS DISTINCT FROM v_expected_payload",
       "AND lifecycle_state = 'active'",
+      "v_existing_run.routine_id IS DISTINCT FROM p_routine_id",
+      "v_existing_run.trigger IS DISTINCT FROM 'manual'",
+      "v_existing_run.run_config IS DISTINCT FROM '{}'::jsonb",
+      "v_existing_run.max_attempts <> 1",
+      "v_existing_run.metadata IS DISTINCT FROM jsonb_build_object(",
       "v_item.diagnosis->>'code' <> 'ROUTINE_PAUSED_AFTER_FAILURES'",
       "v_item.recovery_mode <> 'successful_verification'",
       "v_item.source_key <> 'routine.health:' || p_routine_id::text",
@@ -57,7 +62,13 @@ Deno.test("M7 executor authorization fails closed on stale issue state", () => {
     "CREATE OR REPLACE FUNCTION public.authorize_operator_item_routine_run_once",
   );
   assertStringIncludes(migration, "AND lifecycle_state = 'active'");
+  assertStringIncludes(migration, "AND runs.trigger = 'manual'");
+  assertStringIncludes(migration, "AND runs.run_config = '{}'::jsonb");
   assertStringIncludes(migration, "AND runs.max_attempts = 1");
+  assertStringIncludes(
+    migration,
+    "AND runs.metadata = jsonb_build_object(",
+  );
   assertStringIncludes(
     migration,
     "v_request.status IN ('in_progress', 'completed')",

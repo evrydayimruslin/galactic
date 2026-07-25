@@ -33,7 +33,8 @@ BEGIN
   SELECT * INTO v_item
   FROM public.operator_items
   WHERE id = p_item_id
-    AND user_id = p_user_id;
+    AND user_id = p_user_id
+    AND lifecycle_state = 'active';
   IF NOT FOUND THEN
     RAISE EXCEPTION USING
       ERRCODE = 'P0001', MESSAGE = 'operator_item_not_active',
@@ -103,6 +104,7 @@ AS $$
 DECLARE
   v_revision bigint;
   v_existing public.agent_home_action_requests%ROWTYPE;
+  v_existing_run public.routine_runs%ROWTYPE;
   v_item public.operator_items%ROWTYPE;
   v_remediation jsonb;
   v_run_id uuid;
@@ -164,13 +166,26 @@ BEGIN
       DETAIL = '{"code":"AGENT_HOME_ACTION_IN_PROGRESS"}';
   END IF;
 
-  SELECT runs.id INTO v_run_id
+  SELECT runs.* INTO v_existing_run
   FROM public.routine_runs AS runs
   WHERE runs.agent_home_action_request_id = p_request_id
     AND runs.user_id = p_user_id
   LIMIT 1;
   IF FOUND THEN
-    RETURN QUERY SELECT v_run_id, false;
+    IF v_existing_run.routine_id IS DISTINCT FROM p_routine_id OR
+       v_existing_run.trigger IS DISTINCT FROM 'manual' OR
+       v_existing_run.run_config IS DISTINCT FROM '{}'::jsonb OR
+       v_existing_run.max_attempts <> 1 OR
+       v_existing_run.metadata IS DISTINCT FROM jsonb_build_object(
+         'source', 'operator_item.run_once',
+         'operator_item_id', p_item_id::text,
+         'operator_remediation_id', btrim(p_remediation_id)
+       ) THEN
+      RAISE EXCEPTION USING
+        ERRCODE = 'P0001', MESSAGE = 'agent_home_idempotency_mismatch',
+        DETAIL = '{"code":"AGENT_HOME_IDEMPOTENCY_MISMATCH"}';
+    END IF;
+    RETURN QUERY SELECT v_existing_run.id, false;
     RETURN;
   END IF;
 
@@ -384,7 +399,14 @@ BEGIN
           AND runs.user_id = p_user_id
           AND runs.routine_id = p_routine_id
           AND runs.agent_home_action_request_id = p_action_request_id
+          AND runs.trigger = 'manual'
+          AND runs.run_config = '{}'::jsonb
           AND runs.max_attempts = 1
+          AND runs.metadata = jsonb_build_object(
+            'source', 'operator_item.run_once',
+            'operator_item_id', v_item.id::text,
+            'operator_remediation_id', v_remediation_id
+          )
       )
       AND EXISTS (
         SELECT 1

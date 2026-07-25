@@ -121,7 +121,13 @@ describe("developer-v1 image contract", () => {
     expect(dockerfile).toContain("ARG GIT_LFS_VERSION=3.7.1");
     expect(dockerfile).toContain("ARG GALACTIC_RCLONE_VERSION=1.74.4");
     expect(dockerfile).toContain("ARG GRPC_GO_VERSION=1.82.1");
+    expect(dockerfile).toContain("ARG GOLANG_X_NET_VERSION=0.56.0");
+    expect(dockerfile).toContain("ARG GOLANG_X_TEXT_VERSION=0.39.0");
     expect(dockerfile.match(/google\.golang\.org\/grpc/g)).toHaveLength(6);
+    expect(dockerfile.match(/go list -m -f '\{\{\.Version\}\}' golang\.org\/x\/net/g)).toHaveLength(3);
+    expect(dockerfile.match(/go list -m -f '\{\{\.Version\}\}' golang\.org\/x\/text/g)).toHaveLength(3);
+    expect(dockerfile.match(/\$2 == "golang\.org\/x\/net"/g)).toHaveLength(3);
+    expect(dockerfile.match(/\$2 == "golang\.org\/x\/text"/g)).toHaveLength(3);
     expect(dockerfile.match(/go mod verify/g)).toHaveLength(3);
     expect(dockerfile).toContain("COPY --from=go-tools /out/rclone /usr/local/bin/rclone");
     expect(dockerfile).toContain('ai.galactic.security.grpc-go="${GRPC_GO_VERSION}"');
@@ -130,7 +136,7 @@ describe("developer-v1 image contract", () => {
     expect(dockerfile).not.toContain("ARG RCLONE_VERSION=");
     expect(dockerfile).toContain("go/version: go1.26.5");
     expect(smoke).toContain("go/version: go1.26.5");
-    for (const version of ["v0.53.0", "v0.56.0", "v0.21.0", "v0.46.0", "v0.38.0"]) {
+    for (const version of ["v0.53.0", "v0.56.0", "v0.21.0", "v0.46.0", "v0.39.0"]) {
       expect(overlay).toContain(version);
     }
     expect(dockerfile).not.toMatch(/\bgit git-lfs gh openssh-client\b/u);

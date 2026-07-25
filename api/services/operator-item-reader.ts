@@ -62,7 +62,7 @@ export interface OperatorAttentionAgent {
   name: string;
 }
 
-export interface OperatorAttentionPageOptions {
+interface OperatorAttentionPageOptions {
   cursor?: string | null;
   limit?: number;
 }
