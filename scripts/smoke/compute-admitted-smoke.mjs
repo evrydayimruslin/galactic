@@ -30,6 +30,21 @@ export const COMPUTE_SMOKE_TARGETS = Object.freeze({
 });
 
 const OWNER_ACCESS_TOKEN_ENV = "GALACTIC_OWNER_ACCESS_TOKEN";
+const PUBLIC_COMPUTE_CODE_RE = /^COMPUTE_[A-Z0-9_]{1,56}$/u;
+const PUBLIC_COMPUTE_ERROR_RE =
+  /^galactic\.compute failed \((COMPUTE_[A-Z0-9_]{1,56})\):(?: |$)/u;
+const JSON_MEDIA_TYPE_RE =
+  /^application\/(?:json|[a-z0-9.+-]+\+json)(?:\s*;|$)/iu;
+const HTTP_DIAGNOSTIC_STAGES = new Set([
+  "settings_lookup",
+  "settings_enable",
+  "compute_start",
+  "owner_run_lookup",
+  "compute_status",
+  "compute_cancel",
+  "settings_disable",
+]);
+const MAX_HTTP_DIAGNOSTIC_BODY_BYTES = 16 * 1024;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const SHA_RE = /^[0-9a-f]{40}$/u;
@@ -61,11 +76,21 @@ const SMOKE_LIMITS = Object.freeze({
 });
 
 export class ComputeSmokeError extends Error {
-  constructor(code, message, { httpStatus = null } = {}) {
+  constructor(
+    code,
+    message,
+    {
+      httpStatus = null,
+      publicComputeCode = null,
+      requestStage = null,
+    } = {},
+  ) {
     super(message);
     this.name = "ComputeSmokeError";
     this.code = code;
     this.httpStatus = httpStatus;
+    this.publicComputeCode = publicComputeCode;
+    this.requestStage = requestStage;
   }
 }
 
@@ -142,6 +167,97 @@ function sleepMs(milliseconds) {
   return new Promise((resolvePromise) =>
     setTimeout(resolvePromise, milliseconds)
   );
+}
+
+function record(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : null;
+}
+
+async function boundedJsonRecord(response) {
+  const contentLength = Number(
+    response?.headers?.get?.("content-length") ?? NaN,
+  );
+  if (
+    Number.isFinite(contentLength) &&
+    contentLength > MAX_HTTP_DIAGNOSTIC_BODY_BYTES
+  ) {
+    await response?.body?.cancel?.().catch(() => undefined);
+    return null;
+  }
+  const reader = response?.body?.getReader?.();
+  if (!reader) return null;
+  const chunks = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!(value instanceof Uint8Array)) return null;
+      byteLength += value.byteLength;
+      if (byteLength > MAX_HTTP_DIAGNOSTIC_BODY_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return record(
+      JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse the trusted Launch error envelope in memory, but retain only a bounded
+ * public Compute code. Raw bodies and messages may contain developer output,
+ * upstream diagnostics, or secrets, so they are never returned, logged, or
+ * persisted.
+ */
+async function safeHttpPublicComputeCode(response) {
+  const contentType = response?.headers?.get?.("content-type") || "";
+  if (!JSON_MEDIA_TYPE_RE.test(contentType)) return null;
+  const payload = await boundedJsonRecord(response);
+  if (!payload) return null;
+  const error = record(payload?.error);
+  const details = record(error?.details);
+  for (
+    const candidate of [
+      payload?.code,
+      error?.code,
+      error?.type,
+      ...(error?.type === "GalacticComputeError" ? [details?.code] : []),
+    ]
+  ) {
+    if (
+      typeof candidate === "string" &&
+      PUBLIC_COMPUTE_CODE_RE.test(candidate)
+    ) {
+      return candidate;
+    }
+  }
+  if (error?.type !== "GalacticComputeError") return null;
+  const message = typeof error?.message === "string" ? error.message : "";
+  const computeCode = message.match(PUBLIC_COMPUTE_ERROR_RE)?.[1] || "";
+  if (PUBLIC_COMPUTE_CODE_RE.test(computeCode)) return computeCode;
+  if (message === "galactic.compute failed: control plane unavailable.") {
+    return "COMPUTE_CONTROL_PLANE_UNAVAILABLE";
+  }
+  return null;
 }
 
 export function buildComputeSmokeMarker(candidateSha, workflowRunId) {
@@ -224,6 +340,7 @@ async function requestJson({
   method = "GET",
   body,
   label,
+  stage,
   requestTimeoutMs,
 }) {
   let response;
@@ -244,10 +361,18 @@ async function requestJson({
     fail("REQUEST_FAILED", `${label} request failed.`);
   }
   if (!response?.ok) {
+    const httpStatus = Number(response?.status) || 0;
+    const publicComputeCode = await safeHttpPublicComputeCode(response);
     fail(
       "HTTP_ERROR",
-      `${label} failed (HTTP ${Number(response?.status) || 0}).`,
-      { httpStatus: Number(response?.status) || 0 },
+      `${label} failed (HTTP ${httpStatus}${
+        publicComputeCode ? `; ${publicComputeCode}` : ""
+      }).`,
+      {
+        httpStatus,
+        publicComputeCode,
+        requestStage: HTTP_DIAGNOSTIC_STAGES.has(stage) ? stage : null,
+      },
     );
   }
   try {
@@ -346,6 +471,7 @@ async function getSettings(context) {
     path:
       `/api/launch/agents/${encodeURIComponent(context.agentId)}/compute/settings`,
     label: "Compute settings lookup",
+    stage: "settings_lookup",
   });
 }
 
@@ -359,6 +485,7 @@ async function putSettings(context, revision, enabled, limits = SMOKE_LIMITS) {
     label: enabled
       ? "Compute fixture enablement"
       : "Compute fixture disablement",
+    stage: enabled ? "settings_enable" : "settings_disable",
   });
   const validated = validateSettingsView(response);
   if (validated.settings.enabled !== enabled) {
@@ -370,7 +497,7 @@ async function putSettings(context, revision, enabled, limits = SMOKE_LIMITS) {
   return validated;
 }
 
-async function invokeSmokeFunction(context, args, label) {
+async function invokeSmokeFunction(context, args, label, stage) {
   const payload = await requestJson({
     ...context,
     path:
@@ -380,6 +507,7 @@ async function invokeSmokeFunction(context, args, label) {
     method: "POST",
     body: { args },
     label,
+    stage,
   });
   const response = object(payload, `${label} response`);
   if (
@@ -426,6 +554,7 @@ async function ownerRunPage(context) {
     path:
       `/api/launch/agents/${encodeURIComponent(context.agentId)}/compute/runs?limit=100`,
     label: "Compute owner run lookup",
+    stage: "owner_run_lookup",
   });
   const page = object(payload, "Compute owner run response");
   if (!Array.isArray(page.runs)) {
@@ -582,6 +711,7 @@ async function cancelRun(context, state) {
       method: "POST",
       body: {},
       label: "Compute smoke cancellation",
+      stage: "compute_cancel",
     });
     if (run?.runId !== state.runId || !OWNER_STATUSES.has(run?.status)) {
       fail(
@@ -641,7 +771,7 @@ export async function writeComputeSmokeEvidence(path, evidence) {
   });
 }
 
-function evidenceFor(config, state, success, failureCode, now) {
+function evidenceFor(config, state, success, failure, now) {
   const markerDigest = sha256(config.marker);
   return {
     schema_version: COMPUTE_SMOKE_SCHEMA_VERSION,
@@ -673,7 +803,21 @@ function evidenceFor(config, state, success, failureCode, now) {
       revision: state.cleanupRevision,
     },
     generated_at: new Date(now()).toISOString(),
-    ...(failureCode ? { failure_code: failureCode } : {}),
+    ...(failure?.code ? { failure_code: failure.code } : {}),
+    ...(HTTP_DIAGNOSTIC_STAGES.has(failure?.requestStage) &&
+        Number.isInteger(failure?.httpStatus) &&
+        failure.httpStatus >= 400 &&
+        failure.httpStatus <= 599
+      ? {
+        failure_diagnostic: {
+          stage: failure.requestStage,
+          http_status: failure.httpStatus,
+          ...(PUBLIC_COMPUTE_CODE_RE.test(failure?.publicComputeCode || "")
+            ? { public_compute_code: failure.publicComputeCode }
+            : {}),
+        },
+      }
+      : {}),
   };
 }
 
@@ -747,6 +891,7 @@ export async function runAdmittedComputeSmoke(
         context,
         { action: "start", marker: config.marker },
         "Compute smoke start",
+        "compute_start",
       );
       state.startReceiptId = started.receiptId;
       const admitted = validateAcceptedRun(started.result);
@@ -774,6 +919,7 @@ export async function runAdmittedComputeSmoke(
         context,
         { action: "status", run_id: state.runId },
         "Compute smoke status",
+        "compute_status",
       );
       state.statusReceiptId = checked.receiptId;
       validateComputeGet(checked.result, {
@@ -792,6 +938,7 @@ export async function runAdmittedComputeSmoke(
       );
   } finally {
     const cleanupErrors = [];
+    let cleanupDiagnostic = null;
     try {
       await settleRunDuringCleanup(context, state, {
         cleanupTimeoutMs,
@@ -799,18 +946,27 @@ export async function runAdmittedComputeSmoke(
         sleep,
         now,
       });
-    } catch {
+    } catch (error) {
       cleanupErrors.push("run");
+      if (error instanceof ComputeSmokeError) cleanupDiagnostic = error;
     }
     try {
       await disableFixture(context, state);
-    } catch {
+    } catch (error) {
       cleanupErrors.push("policy");
+      if (!cleanupDiagnostic && error instanceof ComputeSmokeError) {
+        cleanupDiagnostic = error;
+      }
     }
     if (cleanupErrors.length > 0) {
       primaryError = new ComputeSmokeError(
         "CLEANUP_FAILED",
         "Compute smoke cleanup did not complete.",
+        {
+          httpStatus: cleanupDiagnostic?.httpStatus,
+          publicComputeCode: cleanupDiagnostic?.publicComputeCode,
+          requestStage: cleanupDiagnostic?.requestStage,
+        },
       );
       success = false;
     }
@@ -819,7 +975,7 @@ export async function runAdmittedComputeSmoke(
       config,
       state,
       success && !primaryError,
-      primaryError?.code ?? null,
+      primaryError,
       now,
     );
     try {
