@@ -5,6 +5,14 @@ const css = readFileSync(
   new URL("../src/components/nebula-fleet.css", import.meta.url),
   "utf8",
 );
+const indexHtml = readFileSync(
+  new URL("../index.html", import.meta.url),
+  "utf8",
+);
+const faviconThemeScript = readFileSync(
+  new URL("../public/favicon-theme.js", import.meta.url),
+  "utf8",
+);
 
 describe("warm theme design contracts", () => {
   it("preserves the exact light handoff tokens", () => {
@@ -91,7 +99,20 @@ describe("warm theme design contracts", () => {
       /@media \(max-width: 560px\) \{[\s\S]*?\.neb-topbar-shell::before \{[\s\S]*?height: 1px;[\s\S]*?background: var\(--line-hairline\);[\s\S]*?opacity: \.55;/,
     );
     expect(css).toMatch(
-      /@media \(max-width: 560px\) \{[\s\S]*?html\[data-theme="light"\] \.neb-theme-trefoil \{ top: -345px; \}/,
+      /@media \(max-width: 560px\) \{[\s\S]*?html\[data-theme="light"\] \.neb-theme-trefoil \{ top: -355px; \}/,
+    );
+  });
+
+  it("paints mobile browser chrome with the resolved opaque theme ground", () => {
+    expect(indexHtml).toContain(
+      '<meta id="theme-color" name="theme-color" content="#0a0806" />',
+    );
+    expect(faviconThemeScript).toContain(
+      'var color = theme === "dark" ? "#0a0806" : "#efe9e1";',
+    );
+    expect(faviconThemeScript).toContain('meta.setAttribute("content", color);');
+    expect(faviconThemeScript).toMatch(
+      /applyFavicon\(theme\);\s+applyThemeColor\(theme\);/,
     );
   });
 });

@@ -7,6 +7,7 @@
   var storageKey = "galactic.theme";
   var mediaQuery = null;
   var appliedFaviconTheme = null;
+  var appliedThemeColor = null;
 
   function getMediaQuery() {
     if (mediaQuery) return mediaQuery;
@@ -51,6 +52,20 @@
     appliedFaviconTheme = theme;
   }
 
+  function applyThemeColor(theme) {
+    var color = theme === "dark" ? "#0a0806" : "#efe9e1";
+    if (color === appliedThemeColor) return;
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.id = "theme-color";
+      meta.name = "theme-color";
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute("content", color);
+    appliedThemeColor = color;
+  }
+
   function applyTheme(theme) {
     var root = document.documentElement;
     if (root.getAttribute("data-theme") !== theme) {
@@ -60,6 +75,7 @@
       root.style.colorScheme = theme;
     }
     applyFavicon(theme);
+    applyThemeColor(theme);
   }
 
   function synchronize() {
@@ -83,11 +99,14 @@
 
   // Same-document localStorage writes do not emit a storage event. React
   // applies data-theme synchronously, so observe that single attribute to keep
-  // Chromium's favicon aligned with the newly selected preference.
+  // browser chrome and Chromium's favicon aligned with the selected preference.
   if (window.MutationObserver) {
     var observer = new window.MutationObserver(function () {
       var theme = document.documentElement.getAttribute("data-theme");
-      if (theme === "light" || theme === "dark") applyFavicon(theme);
+      if (theme === "light" || theme === "dark") {
+        applyFavicon(theme);
+        applyThemeColor(theme);
+      }
     });
     observer.observe(document.documentElement, {
       attributes: true,
