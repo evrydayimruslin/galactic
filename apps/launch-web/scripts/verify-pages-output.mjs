@@ -44,6 +44,12 @@ if (headers !== null) {
   if (!/\/index\.html\s+[\s\S]*?cache-control:\s*no-store/iu.test(headers)) {
     fail("dist/_headers must keep index.html non-cacheable.");
   }
+  if (
+    !/\/favicon-theme\.js\s+[\s\S]*?cache-control:\s*no-cache,\s*max-age=0,\s*must-revalidate/iu
+      .test(headers)
+  ) {
+    fail("dist/_headers must revalidate the pre-paint theme script.");
+  }
 }
 
 const index = requireFile(resolve(dist, "index.html"), "dist/index.html");

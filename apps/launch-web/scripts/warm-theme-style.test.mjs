@@ -107,6 +107,9 @@ describe("warm theme design contracts", () => {
     expect(indexHtml).toContain(
       '<meta id="theme-color" name="theme-color" content="#0a0806" />',
     );
+    expect(indexHtml).toContain(
+      '<script src="/favicon-theme.js?v=2"></script>',
+    );
     expect(faviconThemeScript).toContain(
       'var color = theme === "dark" ? "#0a0806" : "#efe9e1";',
     );
