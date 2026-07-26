@@ -82,4 +82,16 @@ describe("warm theme design contracts", () => {
       ".neb-agent-card.can-reorder .neb-last-actions { padding-right: 72px; }",
     );
   });
+
+  it("preserves the responsive hero and mobile chrome refinements", () => {
+    expect(css).toMatch(
+      /@media \(min-width: 561px\) \{[\s\S]*?\.neb-app \{ padding-top: 88px; \}[\s\S]*?\.neb-hero h1 \{ font-size: 52px; \}/,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 560px\) \{[\s\S]*?\.neb-topbar-shell::before \{[\s\S]*?height: 1px;[\s\S]*?background: var\(--line-hairline\);[\s\S]*?opacity: \.55;/,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 560px\) \{[\s\S]*?html\[data-theme="light"\] \.neb-theme-trefoil \{ top: -345px; \}/,
+    );
+  });
 });
