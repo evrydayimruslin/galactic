@@ -830,7 +830,7 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
     opacity: .55;
     pointer-events: none;
   }
-  html[data-theme="light"] .neb-theme-trefoil { top: -345px; }
+  html[data-theme="light"] .neb-theme-trefoil { top: -355px; }
   .neb-public-topbar { height: 64px; padding: 0 16px; }
   .neb-public-actions { gap: 4px; }
   .neb-public-signin { padding-right: 7px; padding-left: 7px; font-size: 12px; }
