@@ -281,7 +281,7 @@ html[data-theme="dark"] .nebula-root .neb-hero-cta.secondary:hover {
 .neb-roster > :nth-child(1) { animation-delay: .05s; }.neb-roster > :nth-child(2) { animation-delay: .12s; }.neb-roster > :nth-child(3) { animation-delay: .19s; }.neb-roster > :nth-child(4) { animation-delay: .26s; }
 @keyframes neb-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
 .neb-card-no { position: absolute; top: 16px; right: 18px; color: var(--ink-3); font-family: var(--mono); font-size: 10px; letter-spacing: .14em; }
-.neb-card-order-controls { position: absolute; z-index: 3; top: 10px; right: 48px; display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .14s ease; }
+.neb-card-order-controls { position: absolute; z-index: 3; right: 14px; bottom: 12px; display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .14s ease; }
 .neb-agent-card:hover .neb-card-order-controls, .neb-card-order-controls:focus-within { opacity: 1; }
 .neb-card-order-controls button { display: inline-flex; width: 21px; height: 21px; align-items: center; justify-content: center; padding: 0; border: 0; background: var(--recessed); color: var(--ink-3); cursor: pointer; font-family: var(--mono); font-size: 10px; }
 .neb-card-order-controls button:hover:not(:disabled) { background: var(--violet-dim); color: var(--violet); }
@@ -301,6 +301,7 @@ html[data-theme="dark"] .nebula-root .neb-hero-cta.secondary:hover {
 .neb-agent-card.waking .neb-agent-avatar { animation: neb-wakepulse 1s ease-in-out 2; }
 @keyframes neb-wakepulse { 0%, 100% { box-shadow: 0 0 22px -4px var(--teal); } 50% { box-shadow: 0 0 34px 0 var(--teal); } }
 .neb-last-actions { position: relative; min-height: 61px; margin-top: 12px; }
+.neb-agent-card.can-reorder .neb-last-actions { padding-right: 72px; }
 .neb-last-action-item { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 3px 0; color: var(--ink-2); font-size: 12px; }
 .neb-last-action-item span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .neb-last-action-time { flex-shrink: 0; color: var(--ink-3); font-family: var(--mono); font-size: 11px; }
@@ -804,7 +805,7 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card {
   color: var(--ink-faint);
 }
 html[data-theme="light"] .nebula-root .neb-add-agent-card:hover {
-  border-color: var(--accent);
+  border-color: transparent;
   color: var(--accent-text);
 }
 html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {

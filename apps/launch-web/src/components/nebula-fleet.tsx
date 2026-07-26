@@ -574,7 +574,9 @@ function FleetCard({
           shortcutConfig,
         )
         : undefined}
-      className={`neb-agent-card${waking ? ' waking' : ''}${
+      className={`neb-agent-card${canReorder ? ' can-reorder' : ''}${
+        waking ? ' waking' : ''
+      }${
         attentionCount > 0 ? ' has-alerts' : ''
       }`}
       onDragOver={(event) => {
