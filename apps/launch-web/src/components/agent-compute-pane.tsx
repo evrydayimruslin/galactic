@@ -1056,7 +1056,6 @@ function ComputeRunRow({
   targetRef: RefObject<HTMLElement | null>;
 }): ReactElement {
   const duration = computeRunDuration(run);
-  const receiptUrl = computeLinkHref(run.receiptUrl);
   return (
     <article
       className={[
@@ -1085,28 +1084,8 @@ function ComputeRunRow({
           {formatDuration(duration)}
         </span>
         <span>
-          <small>Reserved</small>
-          {run.usage.reserved} {run.usage.unit}
-        </span>
-        <span>
-          <small>Actual</small>
-          {run.usage.actual === null
-            ? "pending"
-            : `${run.usage.actual} ${run.usage.unit}`}
-        </span>
-        <span>
-          <small>True-up</small>
-          {run.usage.trueUp === null
-            ? "pending"
-            : `${
-              run.usage.trueUp >= 0 ? "+" : ""
-            }${run.usage.trueUp} ${run.usage.unit}`}
-        </span>
-        <span>
-          <small>Backed by</small>
-          {run.billingMode === "subscription_capacity"
-            ? "Subscription capacity"
-            : "Wallet hold"}
+          <small>Accounting</small>
+          {run.status === "settlement_pending" ? "Finalizing" : "Recorded"}
         </span>
         <span>
           <small>Exit</small>
@@ -1121,45 +1100,40 @@ function ComputeRunRow({
           </div>
         )
         : null}
-      <div className="neb-compute-run-links">
-        {run.receiptId
-          ? receiptUrl
-            ? (
-              <a href={receiptUrl} rel="noreferrer" target="_blank">
-                Receipt {run.receiptId}
-              </a>
-            )
-            : <span>Receipt {run.receiptId}</span>
-          : <span>Receipt pending</span>}
-        {run.artifacts.map((artifact) => {
-          const url = computeLinkHref(artifact.url);
-          return url
-            ? (
-              <a href={url} key={artifact.id} rel="noreferrer" target="_blank">
-                {artifact.name} · {formatBytes(artifact.sizeBytes)}{" "}
-                · available until {formatTimestamp(artifact.expiresAt)}
-              </a>
-            )
-            : (
-              <span key={artifact.id}>
-                {artifact.name} · {formatBytes(artifact.sizeBytes)}{" "}
-                · available until {formatTimestamp(artifact.expiresAt)}
-              </span>
-            );
-        })}
-        {run.cancellable
-          ? (
-            <button
-              className="neb-btn-sm danger"
-              disabled={cancelling}
-              onClick={onCancel}
-              type="button"
-            >
-              {cancelling ? "Cancelling…" : "Cancel"}
-            </button>
-          )
-          : null}
-      </div>
+      {run.artifacts.length > 0 || run.cancellable
+        ? (
+          <div className="neb-compute-run-links">
+            {run.artifacts.map((artifact) => {
+              const url = computeLinkHref(artifact.url);
+              return url
+                ? (
+                  <a href={url} key={artifact.id} rel="noreferrer" target="_blank">
+                    {artifact.name} · {formatBytes(artifact.sizeBytes)}{" "}
+                    · available until {formatTimestamp(artifact.expiresAt)}
+                  </a>
+                )
+                : (
+                  <span key={artifact.id}>
+                    {artifact.name} · {formatBytes(artifact.sizeBytes)}{" "}
+                    · available until {formatTimestamp(artifact.expiresAt)}
+                  </span>
+                );
+            })}
+            {run.cancellable
+              ? (
+                <button
+                  className="neb-btn-sm danger"
+                  disabled={cancelling}
+                  onClick={onCancel}
+                  type="button"
+                >
+                  {cancelling ? "Cancelling…" : "Cancel"}
+                </button>
+              )
+              : null}
+          </div>
+        )
+        : null}
     </article>
   );
 }

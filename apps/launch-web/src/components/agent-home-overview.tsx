@@ -1209,8 +1209,8 @@ export function AgentHomeOverview({
       <Card className="agent-home-budget-card">
         <div className="agent-home-card-head">
           <div>
-            <p className="section-label">Cost &amp; rate limits</p>
-            <p className="muted-note">Usage limits apply to scheduled and manual runs.</p>
+            <p className="section-label">Run limits</p>
+            <p className="muted-note">Capacity limits apply to scheduled and manual runs.</p>
           </div>
           <Pill>Usage</Pill>
         </div>
@@ -1219,12 +1219,12 @@ export function AgentHomeOverview({
             <>
               <div className="agent-home-budget-table-wrap">
                 <table className="agent-home-budget-table">
-                  <caption className="sr-only">Agent usage limits and current usage</caption>
-                  <thead><tr><th scope="col">Window</th><th scope="col">Used</th><th scope="col">Limit</th></tr></thead>
+                  <caption className="sr-only">Agent run limits</caption>
+                  <thead><tr><th scope="col">Window</th><th scope="col">State</th><th scope="col">Limit</th></tr></thead>
                   <tbody>
-                    <tr><th scope="row">Last run</th><td>{formatNumber(snapshot.budget.usage.lastRun)}</td><td>{formatNumber(snapshot.budget.ceilings.perRun)}</td></tr>
-                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.dayStartedAt)}`}>Today (UTC)</th><td>{formatNumber(snapshot.budget.usage.daily)}</td><td>{formatNumber(snapshot.budget.ceilings.daily)}</td></tr>
-                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.monthStartedAt)}`}>This month (UTC)</th><td>{formatNumber(snapshot.budget.usage.monthly)}</td><td>{formatNumber(snapshot.budget.ceilings.monthly)}</td></tr>
+                    <tr><th scope="row">Last run</th><td>Recorded</td><td>{formatNumber(snapshot.budget.ceilings.perRun)}</td></tr>
+                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.dayStartedAt)}`}>Today (UTC)</th><td>Within limit</td><td>{formatNumber(snapshot.budget.ceilings.daily)}</td></tr>
+                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.monthStartedAt)}`}>This month (UTC)</th><td>Within limit</td><td>{formatNumber(snapshot.budget.ceilings.monthly)}</td></tr>
                     <tr><th scope="row">Calls / last run</th><td>{formatNumber(snapshot.budget.usage.lastRunCalls)} calls</td><td>{formatNumber(snapshot.budget.ceilings.callsPerRun)} calls</td></tr>
                   </tbody>
                 </table>
@@ -1398,7 +1398,6 @@ export function AgentHomeOverview({
                     <span>{statusLabel(run.trigger)} · {formatDuration(run.durationMs)}</span>
                   </div>
                   <div className="agent-home-run-usage">
-                    <Mono>Usage {formatNumber(run.workUnits)}</Mono>
                     <Mono>{formatNumber(run.calls)} calls</Mono>
                   </div>
                 </article>

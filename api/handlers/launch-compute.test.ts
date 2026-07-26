@@ -91,7 +91,7 @@ function runSummary(): ComputeLaunchRunSummary {
       reserved: 10,
       actual: null,
       trueUp: null,
-      unit: 'work units',
+      unit: 'Light',
     },
     exitCode: null,
     infraFailure: null,
@@ -443,6 +443,20 @@ Deno.test('launch Compute run pagination and cancellation are strict and project
   assertEquals(listBody.next_cursor, 'next_page');
   assertEquals(listBody.generatedAt, NOW);
   const projectedRun = (listBody.runs as Array<Record<string, unknown>>)[0];
+  for (
+    const privateAccountingField of [
+      'receiptId',
+      'receiptUrl',
+      'billingMode',
+      'usage',
+    ]
+  ) {
+    assert(
+      !(privateAccountingField in projectedRun),
+      `${privateAccountingField} must remain private accounting data`,
+    );
+  }
+  assert(!listText.includes('Light'));
   const projectedArtifact = (projectedRun.artifacts as Array<
     Record<string, unknown>
   >)[0];

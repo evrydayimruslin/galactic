@@ -4617,8 +4617,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
     additionalProperties: false,
     required: [
       "runId",
-      "receiptId",
-      "receiptUrl",
       "status",
       "agentId",
       "agentName",
@@ -4626,7 +4624,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       "createdAt",
       "startedAt",
       "finishedAt",
-      "usage",
       "exitCode",
       "infraFailure",
       "artifacts",
@@ -4634,8 +4631,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
     ],
     properties: {
       runId: { type: "string", format: "uuid" },
-      receiptId: { type: ["string", "null"], format: "uuid" },
-      receiptUrl: { type: ["string", "null"] },
       status: {
         type: "string",
         enum: [
@@ -4655,17 +4650,6 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       createdAt: { type: "string", format: "date-time" },
       startedAt: { type: ["string", "null"], format: "date-time" },
       finishedAt: { type: ["string", "null"], format: "date-time" },
-      usage: {
-        type: "object",
-        additionalProperties: false,
-        required: ["reserved", "actual", "trueUp", "unit"],
-        properties: {
-          reserved: { type: "number", minimum: 0 },
-          actual: { type: ["number", "null"], minimum: 0 },
-          trueUp: { type: ["number", "null"] },
-          unit: { type: "string" },
-        },
-      },
       exitCode: { type: ["integer", "null"] },
       infraFailure: {
         oneOf: [
@@ -4898,7 +4882,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       operationId: "listLaunchAgentComputeRuns",
       summary: "List secret-safe Compute runs for one owned Agent",
       description:
-        "Run summaries omit argv, stdin, execution environment, token data, and secret values.",
+        "Run summaries omit argv, stdin, execution environment, token data, secret values, receipts, billing modes, and exact monetary usage.",
       security: [{ bearerAuth: [] }],
       parameters: [
         {

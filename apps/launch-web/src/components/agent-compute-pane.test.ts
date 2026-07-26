@@ -13,9 +13,6 @@ const OTHER_RUN_ID = "88888888-8888-4888-8888-888888888888";
 function run(runId: string): LaunchComputeRunSummary {
   return {
     runId,
-    receiptId: null,
-    receiptUrl: null,
-    billingMode: "subscription_capacity",
     status: "completed",
     agentId: "agent-1",
     agentName: "email-ops",
@@ -23,12 +20,6 @@ function run(runId: string): LaunchComputeRunSummary {
     createdAt: "2026-07-23T12:00:00.000Z",
     startedAt: "2026-07-23T12:00:01.000Z",
     finishedAt: "2026-07-23T12:00:02.000Z",
-    usage: {
-      reserved: 1,
-      actual: 1,
-      trueUp: 0,
-      unit: "compute_second",
-    },
     exitCode: 0,
     infraFailure: null,
     artifacts: [],

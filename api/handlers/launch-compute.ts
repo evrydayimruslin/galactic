@@ -805,9 +805,6 @@ function artifactDownloadPath(
 function projectRun(run: ComputeLaunchRunSummary, ownedAgentId: string) {
   return {
     runId: run.runId,
-    receiptId: run.receiptId,
-    receiptUrl: run.receiptUrl,
-    billingMode: run.billingMode,
     status: run.status,
     agentId: ownedAgentId,
     agentName: run.agentName,
@@ -815,12 +812,6 @@ function projectRun(run: ComputeLaunchRunSummary, ownedAgentId: string) {
     createdAt: run.createdAt,
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
-    usage: {
-      reserved: run.usage.reserved,
-      actual: run.usage.actual,
-      trueUp: run.usage.trueUp,
-      unit: run.usage.unit,
-    },
     exitCode: run.exitCode,
     infraFailure: run.infraFailure
       ? {

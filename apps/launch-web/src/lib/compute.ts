@@ -112,13 +112,6 @@ export interface LaunchComputeSettingsUpdateRequest {
   };
 }
 
-export interface LaunchComputeUsage {
-  reserved: number;
-  actual: number | null;
-  trueUp: number | null;
-  unit: string;
-}
-
 export interface LaunchComputeRunArtifact {
   id: string;
   name: string;
@@ -129,9 +122,6 @@ export interface LaunchComputeRunArtifact {
 
 export interface LaunchComputeRunSummary {
   runId: string;
-  receiptId: string | null;
-  receiptUrl: string | null;
-  billingMode: 'wallet' | 'subscription_capacity';
   status: LaunchComputeRunStatus;
   agentId: string;
   agentName: string;
@@ -139,7 +129,6 @@ export interface LaunchComputeRunSummary {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
-  usage: LaunchComputeUsage;
   exitCode: number | null;
   infraFailure: {
     code: string;
