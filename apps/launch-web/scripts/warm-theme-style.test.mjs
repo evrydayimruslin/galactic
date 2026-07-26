@@ -50,4 +50,24 @@ describe("warm theme design contracts", () => {
       /@media \(min-width: 1281px\) \{[\s\S]*?\.neb-theme-eclipse \{[\s\S]*?width: 68\.75vw;[\s\S]*?height: 68\.75vw;[\s\S]*?\.neb-theme-trefoil \{[\s\S]*?width: 76\.5625vw;[\s\S]*?height: 76\.5625vw;/,
     );
   });
+
+  it("keeps non-selected Search and Settings text on the exact soft swatches", () => {
+    expect(css).toContain(
+      ".nebula-root .neb-rail-btn { color: var(--ink-soft); }",
+    );
+    expect(css).toContain(
+      ".nebula-root .neb-cmdk-item { color: var(--ink-soft); }",
+    );
+    expect(css).toContain("--ink-soft: #c0ae93;");
+    expect(css).toContain("--ink-soft: #71624f;");
+  });
+
+  it("keeps alert cards neutral while retaining the short accent stub", () => {
+    expect(css).toMatch(
+      /\.neb-operator-attention-card\.incident,[\s\S]*?\.neb-agent-attention-card\.incident,[\s\S]*?\.neb-operator-issue-card\.issue \{[\s\S]*?border-color: var\(--line-hairline\);[\s\S]*?background: var\(--surface-subtle\);/,
+    );
+    expect(css).toMatch(
+      /\.neb-operator-issue-card\.unread::before,[\s\S]*?\.neb-agent-attention-card\.unread::before,[\s\S]*?\.neb-operator-attention-card\.unread::before \{[\s\S]*?width: 2px;[\s\S]*?height: 22px;[\s\S]*?background: var\(--accent\);/,
+    );
+  });
 });
