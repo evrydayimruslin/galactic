@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  LaunchGlobalAttentionResponse,
   LaunchOperatorAttentionEntry,
   LaunchOperatorAttentionProjection,
   LaunchOperatorRemediation,
@@ -8,6 +9,7 @@ import type {
 import {
   appendOperatorAttentionPage,
   canonicalOperatorAttention,
+  globalAttentionOpenCount,
   operatorAttentionAgentMap,
   operatorAttentionEntryMatches,
   operatorRemediationHref,
@@ -90,6 +92,36 @@ describe("canonical operator Attention web model", () => {
       readSource: "canonical",
       operatorItems: canonical,
     })).toBe(canonical);
+  });
+
+  it("uses the same authoritative open count as the global Alerts screen", () => {
+    const canonical = projection();
+    canonical.openCount = 13;
+    const response = {
+      entries: [],
+      agentCounts: [],
+      openCount: 0,
+      requiresDecisionCount: 0,
+      nextCursor: null,
+      available: true,
+      unavailableReason: null,
+      generatedAt: "2026-07-24T18:00:00.000Z",
+      readSource: "canonical",
+      operatorItems: canonical,
+    } satisfies LaunchGlobalAttentionResponse;
+
+    expect(globalAttentionOpenCount(response)).toBe(13);
+    expect(globalAttentionOpenCount({
+      ...response,
+      readSource: "legacy",
+      openCount: 7,
+    })).toBe(7);
+    expect(globalAttentionOpenCount({
+      ...response,
+      readSource: "legacy",
+      available: false,
+      openCount: 0,
+    })).toBeNull();
   });
 
   it("merges canonical cursor pages by item id and keeps newest aggregates", () => {
