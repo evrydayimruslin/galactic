@@ -28,6 +28,9 @@ describe("warm theme design contracts", () => {
     expect(css).toMatch(
       /html\[data-theme="light"\] \.nebula-root \.neb-add-agent-card \{[\s\S]*?border-color: transparent;[\s\S]*?border-style: solid;[\s\S]*?color: var\(--ink-faint\);/,
     );
+    expect(css).toMatch(
+      /html\[data-theme="light"\] \.nebula-root \.neb-add-agent-card:hover \{[\s\S]*?border-color: transparent;[\s\S]*?color: var\(--accent-text\);/,
+    );
     expect(css).toContain(
       'html[data-theme="dark"] .neb-theme-eclipse { display: block; }',
     );
@@ -68,6 +71,15 @@ describe("warm theme design contracts", () => {
     );
     expect(css).toMatch(
       /\.neb-operator-issue-card\.unread::before,[\s\S]*?\.neb-agent-attention-card\.unread::before,[\s\S]*?\.neb-operator-attention-card\.unread::before \{[\s\S]*?width: 2px;[\s\S]*?height: 22px;[\s\S]*?background: var\(--accent\);/,
+    );
+  });
+
+  it("anchors reorder controls at the card's bottom-right without overlap", () => {
+    expect(css).toMatch(
+      /\.neb-card-order-controls \{[\s\S]*?right: 14px;[\s\S]*?bottom: 12px;/,
+    );
+    expect(css).toContain(
+      ".neb-agent-card.can-reorder .neb-last-actions { padding-right: 72px; }",
     );
   });
 });
