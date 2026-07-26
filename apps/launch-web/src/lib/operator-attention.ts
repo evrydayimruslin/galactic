@@ -1,5 +1,6 @@
 import type {
   LaunchAttentionReadSource,
+  LaunchGlobalAttentionResponse,
   LaunchOperatorAttentionAgentCount,
   LaunchOperatorAttentionEntry,
   LaunchOperatorAttentionProjection,
@@ -21,6 +22,14 @@ export function canonicalOperatorAttention(
       value.operatorItems?.available === true
     ? value.operatorItems
     : null;
+}
+
+export function globalAttentionOpenCount(
+  value: LaunchGlobalAttentionResponse,
+): number | null {
+  const canonical = canonicalOperatorAttention(value);
+  if (canonical) return canonical.openCount;
+  return value.available ? value.openCount : null;
 }
 
 export function appendOperatorAttentionPage(

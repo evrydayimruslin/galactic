@@ -64,6 +64,10 @@ import {
   type LaunchSettingsResponse,
 } from '../lib/api';
 import {
+  readCachedAlertCount,
+  writeCachedAlertCount,
+} from '../lib/alert-count-cache';
+import {
   createReleaseCandidateReviewToken,
   createReleasePromotionRequest,
   createSafeReleasePromotionStorage,
@@ -109,6 +113,7 @@ import { mergeAgentActivityPages } from '../lib/operator-activity-state';
 import {
   appendOperatorAttentionPage,
   canonicalOperatorAttention,
+  globalAttentionOpenCount,
 } from '../lib/operator-attention';
 import {
   resolveOperatorAccessItem,
@@ -759,10 +764,10 @@ function AddAgentCard({ number }: { number: number }): ReactElement {
 
 function HomeHeroActions({
   onAlerts,
-  unread,
+  alertCount,
 }: {
   onAlerts: () => void;
-  unread: number;
+  alertCount: number;
 }): ReactElement {
   const [copyState, setCopyState] = useState<
     'idle' | 'creating' | 'copied' | 'error'
@@ -785,7 +790,7 @@ function HomeHeroActions({
     <div className='neb-hero-actions'>
       <button className='neb-hero-alerts-btn' onClick={onAlerts} type='button'>
         <span className='neb-hero-alerts-dot' />
-        {unread} Alert{unread === 1 ? '' : 's'}
+        {alertCount} Alert{alertCount === 1 ? '' : 's'}
       </button>
       <button
         className={`neb-hero-cta secondary${copyState === 'copied' ? ' copied' : ''}`}
@@ -948,13 +953,28 @@ export function NebulaFleetApp({
       ),
     [agents],
   );
-  const [unread, setUnread] = useState(fleetUnread);
+  const [initialAlertCount] = useState(
+    () => readCachedAlertCount(window.localStorage, getLaunchAuthToken()),
+  );
+  const [alertCount, setAlertCount] = useState(
+    () => initialAlertCount ?? fleetUnread,
+  );
+  const hasTrustedAlertCount = useRef(initialAlertCount !== undefined);
+  const acceptAlertCount = useCallback((count: number) => {
+    hasTrustedAlertCount.current = true;
+    setAlertCount(count);
+    writeCachedAlertCount(
+      window.localStorage,
+      getLaunchAuthToken(),
+      count,
+    );
+  }, []);
   const displayedFleetCount = fleet ? workingAgentCount : cachedFleetCount;
   const homeHeading = displayedFleetCount === undefined
     ? 'Agents Working'
     : `${displayedFleetCount} ${displayedFleetCount === 1 ? 'Agent' : 'Agents'} Working`;
   const contextHeading = globalAlertsOpen
-    ? unread === 1 ? '1 alert' : `${unread} alerts`
+    ? alertCount === 1 ? '1 alert' : `${alertCount} alerts`
     : searchOpen
     ? 'Search'
     : agentOpen
@@ -1097,7 +1117,7 @@ export function NebulaFleetApp({
   }, [agents, commitFleetOrder]);
 
   useEffect(() => {
-    setUnread((current) => Math.max(current, fleetUnread));
+    if (!hasTrustedAlertCount.current) setAlertCount(fleetUnread);
   }, [fleetUnread]);
 
   useEffect(() => {
@@ -1169,20 +1189,21 @@ export function NebulaFleetApp({
 
   useEffect(() => {
     let mounted = true;
-    const refreshUnread = () => {
-      void launchApi.listNotifications({ unreadOnly: true, limit: 1 })
+    const refreshAlertCount = () => {
+      void launchApi.globalAttention({ limit: 1 })
         .then((response) => {
-          if (mounted) setUnread(response.unread_count);
+          const count = globalAttentionOpenCount(response);
+          if (mounted && count !== null) acceptAlertCount(count);
         })
         .catch(() => undefined);
     };
-    refreshUnread();
-    const id = window.setInterval(refreshUnread, 60_000);
+    refreshAlertCount();
+    const id = window.setInterval(refreshAlertCount, 60_000);
     return () => {
       mounted = false;
       window.clearInterval(id);
     };
-  }, []);
+  }, [acceptAlertCount]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -1325,7 +1346,7 @@ export function NebulaFleetApp({
               type='button'
             >
               <Glyph name='bell' />
-              {unread > 0 ? <span className='neb-notif-dot' /> : null}
+              {alertCount > 0 ? <span className='neb-notif-dot' /> : null}
             </button>
             <button
               aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
@@ -1353,8 +1374,8 @@ export function NebulaFleetApp({
           {!workspaceOpen
             ? (
               <HomeHeroActions
+                alertCount={alertCount}
                 onAlerts={() => navigate('/?panel=alerts')}
-                unread={unread}
               />
             )
             : null}
@@ -1367,7 +1388,7 @@ export function NebulaFleetApp({
                 next.searchParams.set('from', 'alerts');
                 navigate(`${next.pathname}${next.search}`);
               }}
-              onUnreadChange={setUnread}
+              onAlertCountChange={acceptAlertCount}
             />
           )
           : searchOpen
@@ -1532,10 +1553,10 @@ function NotificationRow({
 
 function GlobalAlerts({
   onNavigate,
-  onUnreadChange,
+  onAlertCountChange,
 }: {
   onNavigate: LaunchNavigate;
-  onUnreadChange: (count: number) => void;
+  onAlertCountChange: (count: number) => void;
 }): ReactElement {
   const [attention, setAttention] = useState<
     LaunchGlobalAttentionResponse | null
@@ -1565,7 +1586,8 @@ function GlobalAlerts({
         };
       }
       setAgentCounts(counts);
-      setExactOpenCount(operatorItems?.openCount ?? response.openCount);
+      const openCount = globalAttentionOpenCount(response);
+      if (openCount !== null) setExactOpenCount(openCount);
     } catch (reason) {
       setError(
         reason instanceof Error ? reason.message : 'Account Alerts are temporarily unavailable.',
@@ -1573,14 +1595,14 @@ function GlobalAlerts({
     } finally {
       setLoading(false);
     }
-  }, [onUnreadChange]);
+  }, []);
   useEffect(() => {
     void refresh();
   }, [refresh]);
   useEffect(() => {
-    if (!attention) return;
-    onUnreadChange(exactOpenCount);
-  }, [attention, exactOpenCount, onUnreadChange]);
+    if (!attention || globalAttentionOpenCount(attention) === null) return;
+    onAlertCountChange(exactOpenCount);
+  }, [attention, exactOpenCount, onAlertCountChange]);
   const canonicalAttention = canonicalOperatorAttention(attention);
   const nextCursor = canonicalAttention?.nextCursor ??
     attention?.nextCursor ??
