@@ -291,9 +291,6 @@ describe('Compute UI fail-closed helpers', () => {
   it('computes duration only from valid non-negative timestamps', () => {
     const run = {
       runId: 'run-1',
-      receiptId: 'receipt-1',
-      receiptUrl: null,
-      billingMode: 'wallet',
       status: 'completed',
       agentId: 'agent-1',
       agentName: 'Researcher',
@@ -301,7 +298,6 @@ describe('Compute UI fail-closed helpers', () => {
       createdAt: '2026-07-19T12:00:00.000Z',
       startedAt: '2026-07-19T12:00:01.000Z',
       finishedAt: '2026-07-19T12:00:04.500Z',
-      usage: { reserved: 10, actual: 7, trueUp: -3, unit: 'work units' },
       exitCode: 0,
       infraFailure: null,
       artifacts: [],
@@ -319,9 +315,6 @@ describe('Compute UI fail-closed helpers', () => {
   it('merges polling updates without dropping owner-loaded history', () => {
     const run = {
       runId: 'run-2',
-      receiptId: 'receipt-2',
-      receiptUrl: null,
-      billingMode: 'wallet',
       status: 'running',
       agentId: 'agent-1',
       agentName: 'Researcher',
@@ -329,7 +322,6 @@ describe('Compute UI fail-closed helpers', () => {
       createdAt: '2026-07-19T12:00:02.000Z',
       startedAt: '2026-07-19T12:00:03.000Z',
       finishedAt: null,
-      usage: { reserved: 10, actual: null, trueUp: null, unit: 'work units' },
       exitCode: null,
       infraFailure: null,
       artifacts: [],
@@ -338,25 +330,21 @@ describe('Compute UI fail-closed helpers', () => {
     const older = {
       ...run,
       runId: 'run-1',
-      receiptId: 'receipt-1',
       status: 'completed',
       createdAt: '2026-07-19T12:00:01.000Z',
       finishedAt: '2026-07-19T12:00:04.000Z',
-      usage: { reserved: 10, actual: 8, trueUp: -2, unit: 'work units' },
       exitCode: 0,
       cancellable: false,
     } satisfies LaunchComputeRunSummary;
     const newest = {
       ...run,
       runId: 'run-3',
-      receiptId: 'receipt-3',
       createdAt: '2026-07-19T12:00:03.000Z',
     } satisfies LaunchComputeRunSummary;
     const completed = {
       ...run,
       status: 'completed',
       finishedAt: '2026-07-19T12:00:05.000Z',
-      usage: { reserved: 10, actual: 9, trueUp: -1, unit: 'work units' },
       exitCode: 0,
       cancellable: false,
     } satisfies LaunchComputeRunSummary;
