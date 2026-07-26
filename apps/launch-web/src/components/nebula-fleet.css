@@ -556,6 +556,12 @@ a.neb-operator-access-row:hover { border-color: var(--line-2); }
 .neb-cmdk-chip kbd { background: var(--recessed); }
 .neb-notif-dot { background: var(--accent); box-shadow: none; }
 
+/* Native button inheritance is more specific than the handoff's class-level
+   text assignments. Scope the resting values through the root so Search and
+   Settings render their exact soft swatches in both themes. */
+.nebula-root .neb-rail-btn { color: var(--ink-soft); }
+.nebula-root .neb-cmdk-item { color: var(--ink-soft); }
+
 .neb-rail-btn:hover:not(.active),
 .neb-btn-sm:hover,
 .neb-btn:hover,
@@ -699,8 +705,8 @@ a.neb-operator-activity-row:hover,
 .neb-operator-attention-card.incident,
 .neb-agent-attention-card.incident,
 .neb-operator-issue-card.issue {
-  border-color: var(--accent-line-soft);
-  background: var(--accent-fill);
+  border-color: var(--line-hairline);
+  background: var(--surface-subtle);
 }
 .neb-operator-attention-card.critical,
 .neb-agent-attention-card.critical,
