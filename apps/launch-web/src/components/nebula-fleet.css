@@ -252,6 +252,24 @@ html[data-theme="light"] body.nebula-public-page #app { background: #efe9e1; }
 .neb-hero-cta svg { width: 14px; height: 14px; }
 .neb-section-label, .neb-ov-label { color: var(--ink-3); font-family: var(--mono); font-size: 11.5px; letter-spacing: .2em; text-transform: uppercase; }
 
+/* Keep the dark Fleet controls on the handoff swatches in every interactive
+   state. The generic CTA hover treatment otherwise promotes Connect AI to
+   bone/gilt, which makes a hovered production capture diverge from the HTML. */
+html[data-theme="dark"] .nebula-root .neb-hero-alerts-btn,
+html[data-theme="dark"] .nebula-root .neb-hero-alerts-btn:hover {
+  border-color: #d4a94f;
+  background: rgba(212, 169, 79, 0.09);
+  color: #e9c97c;
+}
+html[data-theme="dark"] .nebula-root .neb-hero-alerts-dot { background: #d4a94f; }
+html[data-theme="dark"] .nebula-root .neb-hero-cta.secondary,
+html[data-theme="dark"] .nebula-root .neb-hero-cta.secondary:hover {
+  border-color: rgba(243, 233, 216, 0.22);
+  background: #17140f;
+  box-shadow: none;
+  color: #c0ae93;
+}
+
 .neb-roster { display: grid; grid-template-columns: repeat(auto-fit, minmax(265px, 1fr)); gap: var(--roster-gap); transition: filter .18s ease, opacity .18s ease; }
 .neb-fleet-behind-open .neb-roster { filter: blur(2px); opacity: .78; }
 .neb-fleet-loading { position: fixed; z-index: 3; top: 30vh; left: 50%; width: min(calc(100vw - 44px), 916px); height: 2px; overflow: hidden; background: var(--surface-strong); transform: translate(-50%, -50%); }

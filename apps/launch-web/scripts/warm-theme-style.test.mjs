@@ -33,6 +33,18 @@ describe("warm theme design contracts", () => {
     );
   });
 
+  it("keeps dark Fleet CTAs on the exact handoff swatches at rest and hover", () => {
+    expect(css).toMatch(
+      /html\[data-theme="dark"\] \.nebula-root \.neb-hero-alerts-btn,[\s\S]*?\.neb-hero-alerts-btn:hover \{[\s\S]*?border-color: #d4a94f;[\s\S]*?background: rgba\(212, 169, 79, 0\.09\);[\s\S]*?color: #e9c97c;/,
+    );
+    expect(css).toContain(
+      'html[data-theme="dark"] .nebula-root .neb-hero-alerts-dot { background: #d4a94f; }',
+    );
+    expect(css).toMatch(
+      /html\[data-theme="dark"\] \.nebula-root \.neb-hero-cta\.secondary,[\s\S]*?\.neb-hero-cta\.secondary:hover \{[\s\S]*?border-color: rgba\(243, 233, 216, 0\.22\);[\s\S]*?background: #17140f;[\s\S]*?box-shadow: none;[\s\S]*?color: #c0ae93;/,
+    );
+  });
+
   it("scales the eclipse and trefoil from the same 1280px reference width", () => {
     expect(css).toMatch(
       /@media \(min-width: 1281px\) \{[\s\S]*?\.neb-theme-eclipse \{[\s\S]*?width: 68\.75vw;[\s\S]*?height: 68\.75vw;[\s\S]*?\.neb-theme-trefoil \{[\s\S]*?width: 76\.5625vw;[\s\S]*?height: 76\.5625vw;/,
