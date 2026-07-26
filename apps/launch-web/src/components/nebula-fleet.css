@@ -160,6 +160,24 @@ html[data-theme="light"] .neb-theme-motif::before { opacity: 1; background: radi
 html[data-theme="light"] .neb-theme-eclipse { display: none; }
 html[data-theme="light"] .neb-theme-trefoil { display: block; }
 
+/* The handoff is composed on a 1280px canvas. Preserve those exact dimensions
+   through the reference width, then scale both motifs by the same viewport
+   ratio so their geometry keeps reaching west on larger displays. */
+@media (min-width: 1281px) {
+  .neb-theme-eclipse {
+    top: -23.4375vw;
+    right: -10.9375vw;
+    width: 68.75vw;
+    height: 68.75vw;
+  }
+  .neb-theme-trefoil {
+    top: -25.78125vw;
+    right: -14.84375vw;
+    width: 76.5625vw;
+    height: 76.5625vw;
+  }
+}
+
 .nebula-public-page {
   min-height: 100%;
   background: #0a0806;
@@ -730,9 +748,44 @@ html[data-theme="light"] .neb-inline-panel,
 html[data-theme="light"] .neb-modal {
   border-color: transparent;
 }
-html[data-theme="light"] .neb-add-agent-card {
-  border-color: var(--line-2);
+html[data-theme="light"] .nebula-root .neb-icon-btn,
+html[data-theme="light"] .nebula-root .neb-cmdk-chip {
+  border-color: var(--line-hairline);
+  color: var(--ink-soft);
+}
+html[data-theme="light"] .nebula-root .neb-cmdk-chip kbd {
+  border-color: var(--line-hairline);
+  color: var(--ink-faint);
+}
+html[data-theme="light"] .nebula-root .neb-hero-alerts-btn,
+html[data-theme="light"] .nebula-root .neb-hero-alerts-btn:hover {
+  background: transparent;
+  color: var(--accent-text);
+}
+html[data-theme="light"] .nebula-root .neb-hero-cta.secondary,
+html[data-theme="light"] .nebula-root .neb-hero-cta.secondary:hover {
+  border-color: var(--line-hairline);
+  background: var(--chip);
+  box-shadow: var(--shadow-control);
+  color: var(--ink-soft);
+}
+html[data-theme="light"] .nebula-root .neb-hero-cta.secondary.copied {
+  border-color: var(--accent);
+  color: var(--ink-primary);
+}
+html[data-theme="light"] .nebula-root .neb-add-agent-card {
+  border-color: transparent;
+  border-style: solid;
   box-shadow: var(--shadow-pressed);
+  color: var(--ink-faint);
+}
+html[data-theme="light"] .nebula-root .neb-add-agent-card:hover {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
+  border-color: var(--success);
+  color: var(--success-text);
 }
 
 @media (max-width: 560px) {
