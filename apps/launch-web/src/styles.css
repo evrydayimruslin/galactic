@@ -14,7 +14,12 @@
   --ul-border-strong: rgba(0, 0, 0, 0.15);
   --ul-hover: rgba(0, 0, 0, 0.04);
   --ul-active: rgba(0, 0, 0, 0.06);
+  --ul-surface: #ffffff;
+  --ul-surface-translucent: rgba(255, 255, 255, 0.9);
+  --ul-nav-bg: rgba(255, 255, 255, 0.9);
+  --ul-on-text: #ffffff;
   --ul-green: #22c55e;
+  --ul-green-text: var(--ul-green-deep);
   --ul-green-deep: #15803d;
   --ul-amber: #f59e0b;
   --ul-amber-deep: #a16207;
@@ -35,6 +40,60 @@
      edges line up exactly when navigating between them. Single source of truth —
      don't set per-page widths; they drift out of alignment. */
   --ul-content: 960px;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --ul-text: #33291d;
+  --ul-secondary: #71624f;
+  --ul-muted: #75664f;
+  --ul-faint: #75664f;
+  --ul-bg: #efe9e1;
+  --ul-raised: #f4eee7;
+  --ul-sidebar: #eae3da;
+  --ul-border: rgba(51, 41, 29, 0.1);
+  --ul-border-strong: rgba(51, 41, 29, 0.22);
+  --ul-hover: rgba(51, 41, 29, 0.04);
+  --ul-active: rgba(51, 41, 29, 0.07);
+  --ul-surface: #f8f3ed;
+  --ul-surface-translucent: rgba(248, 243, 237, 0.9);
+  --ul-nav-bg: rgba(239, 233, 225, 0.9);
+  --ul-on-text: #efe9e1;
+  --ul-green: #4c7a66;
+  --ul-green-text: #466f5d;
+  --ul-green-deep: #365e4e;
+  --ul-amber: #b98037;
+  --ul-amber-deep: #8e5c22;
+  --ul-red: #a2472f;
+  --ul-blue: #55778c;
+  --ul-shadow: 0 12px 40px rgba(93, 78, 60, 0.14);
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --ul-text: #f3e9d8;
+  --ul-secondary: #c0ae93;
+  --ul-muted: #9d8b70;
+  --ul-faint: #8b7a61;
+  --ul-bg: #0a0806;
+  --ul-raised: #12100c;
+  --ul-sidebar: #17140f;
+  --ul-border: #2b241a;
+  --ul-border-strong: rgba(243, 233, 216, 0.22);
+  --ul-hover: rgba(243, 233, 216, 0.05);
+  --ul-active: rgba(212, 169, 79, 0.09);
+  --ul-surface: #12100c;
+  --ul-surface-translucent: rgba(18, 16, 12, 0.92);
+  --ul-nav-bg: rgba(10, 8, 6, 0.9);
+  --ul-on-text: #0a0806;
+  --ul-green: #6e8f62;
+  --ul-green-text: var(--ul-green);
+  --ul-green-deep: #8baa7d;
+  --ul-amber: #d4a94f;
+  --ul-amber-deep: #e9c97c;
+  --ul-red: #c4614a;
+  --ul-blue: #7f9eae;
+  --ul-shadow: 0 16px 48px rgba(0, 0, 0, 0.34);
 }
 
 * {
@@ -99,7 +158,7 @@ button {
 }
 
 .top-nav.scrolled {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--ul-nav-bg);
   backdrop-filter: blur(8px);
   box-shadow: 0 1px 16px rgba(10, 10, 10, 0.06);
 }
@@ -110,7 +169,7 @@ button {
    colour, highlighting by colour on hover. Direct child only — the button's
    own modal renders inside .top-actions and must keep its real button styles. */
 .top-actions > .launch-button {
-  color: #333;
+  color: var(--ul-secondary);
   font-size: 15.5px;
   font-weight: 500;
   transition: color 160ms ease;
@@ -180,7 +239,7 @@ button {
   display: inline-grid;
   justify-items: center;
   padding: 8px 10px;
-  color: #333;
+  color: var(--ul-secondary);
   font-size: 15.5px;
   font-weight: 500;
   text-decoration: none;
@@ -443,7 +502,7 @@ button {
   border: 0;
   border-radius: 11px;
   background: var(--ul-text);
-  color: #fff;
+  color: var(--ul-on-text);
   font-family: var(--ul-sans);
   font-size: 14.5px;
   font-weight: 600;
@@ -665,7 +724,7 @@ button {
 
 .button-primary {
   background: var(--ul-text);
-  color: #fff;
+  color: var(--ul-on-text);
 }
 
 /* Colour-only hover highlight, no movement. */
@@ -675,7 +734,7 @@ button {
 
 .button-secondary {
   border-color: var(--ul-border-strong);
-  background: #fff;
+  background: var(--ul-surface);
   color: var(--ul-text);
 }
 
@@ -772,7 +831,7 @@ button {
   place-items: center;
   border-radius: 999px;
   background: var(--ul-text);
-  color: #fff;
+  color: var(--ul-on-text);
   box-shadow: var(--ul-shadow);
 }
 
@@ -783,7 +842,7 @@ button {
   padding: 8px 12px;
   border: 1px solid var(--ul-border-strong);
   border-radius: 8px;
-  background: #fff;
+  background: var(--ul-surface);
   text-align: center;
   font-size: 14px;
   font-weight: 600;
@@ -829,7 +888,7 @@ button {
 .card {
   border: 1px solid var(--ul-border);
   border-radius: 12px;
-  background: #fff;
+  background: var(--ul-surface);
   padding: 18px;
 }
 
@@ -840,7 +899,7 @@ button {
 .card-ink {
   border-color: var(--ul-text);
   background: var(--ul-text);
-  color: #fff;
+  color: var(--ul-on-text);
 }
 
 .card h3 {
@@ -986,7 +1045,7 @@ button {
   padding: 5px 8px 3px;
   border: 1px solid var(--ul-border);
   border-radius: 999px;
-  background: #fff;
+  background: var(--ul-surface);
   color: var(--ul-secondary);
   font-size: 11px;
   font-weight: 600;
@@ -1200,7 +1259,7 @@ button {
 }
 
 .segmented .active {
-  background: #fff;
+  background: var(--ul-surface);
   color: var(--ul-text);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
@@ -1316,7 +1375,7 @@ button {
   place-items: center;
   border: 1px solid var(--ul-border-strong);
   border-radius: 999px;
-  background: #fff;
+  background: var(--ul-surface);
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.09);
   transform: translate(-50%, -50%);
 }
@@ -1607,7 +1666,7 @@ button {
   padding: 46px 44px;
   border-radius: 18px;
   background: var(--ul-text);
-  color: #fff;
+  color: var(--ul-on-text);
 }
 
 .closing-band h2 {
@@ -1627,7 +1686,7 @@ button {
 
 .closing-band .button-secondary {
   border-color: transparent;
-  background: #fff;
+  background: var(--ul-surface);
   color: var(--ul-text);
 }
 
@@ -1712,7 +1771,7 @@ button {
 .target-panel {
   border: 1px solid var(--ul-border);
   border-radius: 12px;
-  background: #fff;
+  background: var(--ul-surface);
 }
 
 .target-sidebar {
@@ -1811,7 +1870,7 @@ button {
   place-items: center;
   border-radius: 999px;
   background: var(--ul-text);
-  color: #fff;
+  color: var(--ul-on-text);
   content: counter(install-step);
   counter-increment: install-step;
   font-family: var(--ul-mono);
@@ -1844,7 +1903,7 @@ button {
   padding: 0 18px;
   border: 1px solid var(--ul-border-strong);
   border-radius: 999px;
-  background: #fff;
+  background: var(--ul-surface);
 }
 
 .search-control input {
@@ -1911,7 +1970,7 @@ button {
 
 .kind-tabs .active,
 .mini-segments .active {
-  background: #fff;
+  background: var(--ul-surface);
   color: var(--ul-text);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
@@ -2120,7 +2179,7 @@ button {
   padding: 11px;
   border: 1px solid var(--ul-border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--ul-surface);
   cursor: pointer;
   text-align: left;
 }
@@ -2390,7 +2449,7 @@ button {
   width: 100%;
   border: 1px solid var(--ul-border-strong);
   border-radius: 12px;
-  background: #fff;
+  background: var(--ul-surface);
   display: block;
 }
 
@@ -2409,7 +2468,7 @@ button {
   padding: 0;
   border: 1px solid var(--ul-border-strong);
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.88);
+  background: var(--ul-surface-translucent);
   color: var(--ul-secondary);
   cursor: pointer;
   opacity: 0.65;
@@ -2471,7 +2530,7 @@ button {
   padding: 4px 12px;
   border: 1px solid var(--ul-border-strong);
   border-radius: 8px;
-  background: #fff;
+  background: var(--ul-surface);
   color: var(--ul-text);
   cursor: pointer;
   font-family: var(--ul-font);
@@ -2493,7 +2552,7 @@ button {
   padding: 11px 14px;
   border: 1px solid var(--ul-border-strong);
   border-radius: 10px;
-  background: #fff;
+  background: var(--ul-surface);
   cursor: pointer;
   text-align: left;
 }
@@ -2544,7 +2603,7 @@ button {
   overflow-y: auto;
   border: 1px solid var(--ul-border);
   border-radius: 11px;
-  background: #fff;
+  background: var(--ul-surface);
   box-shadow: var(--ul-shadow);
 }
 
@@ -2698,7 +2757,7 @@ button {
   padding: 11px;
   border: 1px solid var(--ul-border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--ul-surface);
   cursor: pointer;
   text-align: left;
 }
@@ -2852,7 +2911,7 @@ button {
   border: 1px solid var(--ul-border-strong);
   border-radius: 8px;
   padding: 0 10px;
-  background: #fff;
+  background: var(--ul-surface);
   color: var(--ul-ink);
   font: 13px var(--ul-mono);
 }
@@ -3175,7 +3234,7 @@ button {
   padding: 7px 30px 7px 11px;
   border: 1px solid var(--ul-border-strong);
   border-radius: 9px;
-  background-color: #fff;
+  background-color: var(--ul-surface);
   background-image:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23999999' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-position: right 11px center;
@@ -3360,7 +3419,7 @@ button {
   padding: 6px;
   border: 1px solid var(--ul-border-strong);
   border-radius: 10px;
-  background: #fff;
+  background: var(--ul-surface);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14);
 }
 
@@ -4223,7 +4282,7 @@ button {
   width: 100%;
   border: 1px solid var(--ul-border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--ul-surface);
   color: var(--ul-text);
   font-size: 13px;
 }
@@ -4278,7 +4337,7 @@ button {
   padding: 12px 13px;
   border: 1px solid var(--ul-border);
   border-radius: 10px;
-  background: #fff;
+  background: var(--ul-surface);
   cursor: pointer;
   text-align: left;
 }
@@ -4377,7 +4436,7 @@ button {
   padding: 5px 8px;
   border: 1px solid var(--ul-border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--ul-surface);
   color: var(--ul-text);
   font-family: var(--ul-mono);
   font-size: 12px;
@@ -4426,7 +4485,7 @@ button {
 .admin-receipt-metrics .metric-tile {
   border: 1px solid var(--ul-border);
   border-radius: 11px;
-  background: #fff;
+  background: var(--ul-surface);
 }
 
 .admin-receipts-table .admin-table-head,
@@ -4637,7 +4696,7 @@ button {
 .wallet-table-card {
   border: 1px solid var(--ul-border);
   border-radius: 12px;
-  background: #fff;
+  background: var(--ul-surface);
 }
 
 .wallet-section-head {
@@ -4725,7 +4784,7 @@ button {
 }
 
 .ledger-glyph-topup {
-  color: var(--ul-green);
+  color: var(--ul-green-text);
 }
 
 .ledger-glyph-earning {
@@ -4842,7 +4901,7 @@ button {
   padding: 7.5px 13px 4.5px;
   border: 1px solid var(--ul-border);
   border-radius: 999px;
-  background: #fff;
+  background: var(--ul-surface);
   color: var(--ul-secondary);
   cursor: pointer;
   font-size: 13px;
@@ -4868,7 +4927,7 @@ button {
   padding: 13px 14px;
   border: 1px solid var(--ul-border);
   border-radius: 10px;
-  background: #fff;
+  background: var(--ul-surface);
   cursor: pointer;
   text-align: left;
 }
@@ -5642,7 +5701,7 @@ button {
 }
 
 .permission-select .active {
-  background: #fff;
+  background: var(--ul-surface);
   color: var(--ul-text);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
@@ -6067,7 +6126,7 @@ button {
     gap: 12px;
     padding: 0 16px;
     border-bottom: 1px solid var(--ul-border);
-    background: #fff;
+    background: var(--ul-surface);
   }
 
   .icon-button {
@@ -6095,7 +6154,7 @@ button {
     padding: 6px;
     border: 1px solid var(--ul-border);
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.94);
+    background: var(--ul-surface-translucent);
     box-shadow: var(--ul-shadow);
     backdrop-filter: blur(12px);
   }

@@ -132,6 +132,7 @@ import {
   dismissLaunchWorkspace,
   type LaunchNavigate,
 } from '../lib/navigation';
+import { type ThemePreference, useTheme } from '../lib/theme';
 import { AgentComputePane } from './agent-compute-pane';
 import { AgentOverviewLayout } from './nebula/agent-overview-layout';
 import {
@@ -324,70 +325,41 @@ function useClock(interval = 1000): number {
   return now;
 }
 
-function Starfield(): ReactElement {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext('2d');
-    if (!canvas || !context) return;
-    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const stars = Array.from({ length: 180 }, () => ({
-      x: Math.random(),
-      y: Math.random(),
-      radius: Math.random() * 1.2 + 0.3,
-      depth: Math.random() * 0.7 + 0.3,
-      phase: Math.random() * Math.PI * 2,
-      speed: 0.0006 + Math.random() * 0.0012,
-    }));
-    let pointerX = 0;
-    let pointerY = 0;
-    let parallaxX = 0;
-    let parallaxY = 0;
-    let frame = 0;
-    const resize = () => {
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.round(innerWidth * ratio);
-      canvas.height = Math.round(innerHeight * ratio);
-      canvas.style.width = `${innerWidth}px`;
-      canvas.style.height = `${innerHeight}px`;
-      context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    };
-    const move = (event: MouseEvent) => {
-      pointerX = event.clientX / innerWidth - 0.5;
-      pointerY = event.clientY / innerHeight - 0.5;
-    };
-    const draw = (time: number) => {
-      parallaxX += (pointerX - parallaxX) * 0.03;
-      parallaxY += (pointerY - parallaxY) * 0.03;
-      context.clearRect(0, 0, innerWidth, innerHeight);
-      for (const star of stars) {
-        const alpha = reduced
-          ? 0.5
-          : 0.25 + 0.55 * Math.abs(Math.sin(time * star.speed + star.phase));
-        context.beginPath();
-        context.arc(
-          star.x * innerWidth + parallaxX * 18 * star.depth,
-          star.y * innerHeight + parallaxY * 18 * star.depth,
-          star.radius,
-          0,
-          Math.PI * 2,
-        );
-        context.fillStyle = `rgba(255,255,255,${alpha})`;
-        context.fill();
-      }
-      if (!reduced) frame = requestAnimationFrame(draw);
-    };
-    resize();
-    window.addEventListener('resize', resize);
-    document.addEventListener('mousemove', move);
-    frame = requestAnimationFrame(draw);
-    return () => {
-      cancelAnimationFrame(frame);
-      window.removeEventListener('resize', resize);
-      document.removeEventListener('mousemove', move);
-    };
-  }, []);
-  return <canvas className='neb-stars' ref={canvasRef} aria-hidden='true' />;
+function ThemeMotif(): ReactElement {
+  return (
+    <div className='neb-theme-motif' aria-hidden='true'>
+      <div className='neb-theme-eclipse'>
+        <svg viewBox='0 0 880 880'>
+          <circle cx='440' cy='440' r='352' />
+          <circle cx='440' cy='440' r='368' />
+        </svg>
+      </div>
+      <div className='neb-theme-trefoil'>
+        <svg viewBox='0 0 980 980'>
+          {([
+            [576, 404],
+            [352, 490],
+            [500, 674],
+          ] as const).flatMap(([cx, cy]) => [
+            <circle
+              className='neb-theme-trefoil-shadow'
+              cx={cx}
+              cy={cy}
+              key={`${cx}-${cy}-shadow`}
+              r='258.6'
+            />,
+            <circle
+              className='neb-theme-trefoil-light'
+              cx={cx}
+              cy={cy}
+              key={`${cx}-${cy}-light`}
+              r='260'
+            />,
+          ])}
+        </svg>
+      </div>
+    </div>
+  );
 }
 
 export function NebulaPublicShell({
@@ -406,11 +378,7 @@ export function NebulaPublicShell({
 
   return (
     <div className='nebula-root nebula-public-home'>
-      <Starfield />
-      <div className='neb-nebula n1' aria-hidden='true' />
-      <div className='neb-nebula n2' aria-hidden='true' />
-      <div className='neb-nebula n3' aria-hidden='true' />
-      <div className='neb-grain' aria-hidden='true' />
+      <ThemeMotif />
       {children}
     </div>
   );
@@ -862,11 +830,7 @@ export function NebulaSessionRestoringShell({
 }): ReactElement {
   return (
     <div className='nebula-root' aria-busy='true'>
-      <Starfield />
-      <div className='neb-nebula n1' aria-hidden='true' />
-      <div className='neb-nebula n2' aria-hidden='true' />
-      <div className='neb-nebula n3' aria-hidden='true' />
-      <div className='neb-grain' aria-hidden='true' />
+      <ThemeMotif />
 
       <header className='neb-topbar-shell'>
         <div className='neb-topbar'>
@@ -1320,11 +1284,7 @@ export function NebulaFleetApp({
   );
   return (
     <div className='nebula-root'>
-      <Starfield />
-      <div className='neb-nebula n1' aria-hidden='true' />
-      <div className='neb-nebula n2' aria-hidden='true' />
-      <div className='neb-nebula n3' aria-hidden='true' />
-      <div className='neb-grain' aria-hidden='true' />
+      <ThemeMotif />
 
       <header className='neb-topbar-shell'>
         <div className='neb-topbar'>
@@ -1925,6 +1885,7 @@ function GeneralSettings({
   onChange: (value: LaunchSettingsResponse) => void;
   setError: (value: string) => void;
 }): ReactElement {
+  const { preference, resolvedTheme, setPreference } = useTheme();
   const [name, setName] = useState(settings?.displayName ?? '');
   const [saved, setSaved] = useState(false);
   useEffect(() => setName(settings?.displayName ?? ''), [
@@ -1962,6 +1923,26 @@ function GeneralSettings({
           {saved ? 'Saved' : 'Save'}
         </button>
       </div>
+      <label className='neb-field-label' htmlFor='galactic-theme'>
+        Theme
+      </label>
+      <select
+        aria-describedby='galactic-theme-note'
+        className='neb-edit-input neb-theme-select'
+        id='galactic-theme'
+        onChange={(event) =>
+          setPreference(event.currentTarget.value as ThemePreference)}
+        value={preference}
+      >
+        <option value='system'>System</option>
+        <option value='light'>Light</option>
+        <option value='dark'>Dark</option>
+      </select>
+      <p className='neb-ov-note neb-theme-note' id='galactic-theme-note'>
+        {preference === 'system'
+          ? `Following this device — currently ${resolvedTheme}.`
+          : `Using ${resolvedTheme} mode on this device.`}
+      </p>
       <div className='neb-ov-row'>
         <span className='neb-ov-row-key'>Account mode</span>
         <span className='neb-ov-row-val'>Private fleet</span>
