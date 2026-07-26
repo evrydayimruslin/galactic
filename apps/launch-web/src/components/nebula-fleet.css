@@ -813,7 +813,24 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
   color: var(--success-text);
 }
 
+@media (min-width: 561px) {
+  .neb-app { padding-top: 88px; }
+  .neb-hero h1 { font-size: 52px; }
+}
+
 @media (max-width: 560px) {
+  .neb-topbar-shell::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 1px;
+    background: var(--line-hairline);
+    opacity: .55;
+    pointer-events: none;
+  }
+  html[data-theme="light"] .neb-theme-trefoil { top: -345px; }
   .neb-public-topbar { height: 64px; padding: 0 16px; }
   .neb-public-actions { gap: 4px; }
   .neb-public-signin { padding-right: 7px; padding-left: 7px; font-size: 12px; }
