@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 import { App } from "./App";
 import { consumeExternalReturnRevalidation } from "./lib/external-navigation";
+import { ThemeProvider } from "./lib/theme";
 
 const root = document.getElementById("app");
 
@@ -29,7 +30,9 @@ if (consumeExternalReturnRevalidation()) {
 
   createRoot(root).render(
     <React.StrictMode>
-      <App />
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
     </React.StrictMode>,
   );
 }

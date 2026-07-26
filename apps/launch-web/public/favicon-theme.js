@@ -1,18 +1,43 @@
-// Theme-aware favicon. Chromium ignores prefers-color-scheme inside an SVG
-// favicon, and CSP forbids inline scripts — so swap it from this self-hosted
-// file: white mark on dark UI, black on light. Chromium also tends to ignore an
-// href change on an existing favicon <link>, so we replace the element entirely
-// (remove + re-append) to force the browser to re-read it.
+// Resolve the persisted theme before the application and its styles load. This
+// self-hosted file stays compatible with the site's no-inline-script CSP.
+// Chromium ignores prefers-color-scheme inside an SVG favicon and tends to
+// ignore href changes on an existing favicon link, so the icon is replaced when
+// the resolved theme changes.
 (function () {
-  function isDark() {
+  var storageKey = "galactic.theme";
+  var mediaQuery = null;
+  var appliedFaviconTheme = null;
+
+  function getMediaQuery() {
+    if (mediaQuery) return mediaQuery;
     try {
-      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+      mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      return mediaQuery;
     } catch (e) {
-      return false;
+      return null;
     }
   }
 
-  function apply(dark) {
+  function getPreference() {
+    try {
+      var value = window.localStorage.getItem(storageKey);
+      return value === "light" || value === "dark" || value === "system"
+        ? value
+        : "system";
+    } catch (e) {
+      return "system";
+    }
+  }
+
+  function resolveTheme() {
+    var preference = getPreference();
+    if (preference !== "system") return preference;
+    var query = getMediaQuery();
+    return query && query.matches ? "dark" : "light";
+  }
+
+  function applyFavicon(theme) {
+    if (theme === appliedFaviconTheme) return;
     var existing = document.querySelectorAll('link[rel~="icon"]');
     for (var i = 0; i < existing.length; i++) {
       if (existing[i].parentNode) existing[i].parentNode.removeChild(existing[i]);
@@ -21,20 +46,52 @@
     link.id = "favicon";
     link.rel = "icon";
     link.type = "image/svg+xml";
-    link.href = dark ? "/favicon-white.svg" : "/favicon-black.svg";
+    link.href = theme === "dark" ? "/favicon-white.svg" : "/favicon-black.svg";
     document.head.appendChild(link);
+    appliedFaviconTheme = theme;
   }
 
-  apply(isDark());
+  function applyTheme(theme) {
+    var root = document.documentElement;
+    if (root.getAttribute("data-theme") !== theme) {
+      root.setAttribute("data-theme", theme);
+    }
+    if (root.style.colorScheme !== theme) {
+      root.style.colorScheme = theme;
+    }
+    applyFavicon(theme);
+  }
 
-  try {
-    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+  function synchronize() {
+    applyTheme(resolveTheme());
+  }
+
+  synchronize();
+
+  var query = getMediaQuery();
+  if (query) {
     var onChange = function (e) {
-      apply(e.matches);
+      if (getPreference() === "system") applyTheme(e.matches ? "dark" : "light");
     };
-    if (mq.addEventListener) mq.addEventListener("change", onChange);
-    else if (mq.addListener) mq.addListener(onChange);
-  } catch (e) {
-    /* no live updates — the initial apply() still set the right icon */
+    if (query.addEventListener) query.addEventListener("change", onChange);
+    else if (query.addListener) query.addListener(onChange);
+  }
+
+  window.addEventListener("storage", function (event) {
+    if (event.key === storageKey || event.key === null) synchronize();
+  });
+
+  // Same-document localStorage writes do not emit a storage event. React
+  // applies data-theme synchronously, so observe that single attribute to keep
+  // Chromium's favicon aligned with the newly selected preference.
+  if (window.MutationObserver) {
+    var observer = new window.MutationObserver(function () {
+      var theme = document.documentElement.getAttribute("data-theme");
+      if (theme === "light" || theme === "dark") applyFavicon(theme);
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
   }
 })();
