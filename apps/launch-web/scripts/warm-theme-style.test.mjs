@@ -91,6 +91,15 @@ describe("warm theme design contracts", () => {
     );
   });
 
+  it("keeps breathing room between Agent Attention headings and the first alert", () => {
+    expect(css).toContain(
+      ".neb-operator-attention > .neb-overview-section-head { margin-bottom: 10px; }",
+    );
+    expect(css).toMatch(
+      /\.neb-agent-attention-head \{[\s\S]*?margin-bottom: 24px;/,
+    );
+  });
+
   it("preserves the responsive hero and mobile chrome refinements", () => {
     expect(css).toMatch(
       /@media \(min-width: 561px\) \{[\s\S]*?\.neb-app \{ padding-top: 88px; \}[\s\S]*?\.neb-hero h1 \{ font-size: 52px; \}/,
