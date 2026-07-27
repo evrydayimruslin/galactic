@@ -13,11 +13,11 @@ export interface IntegrityIssue {
   message: string;
   line?: number;
   file?: string;
-  match?: string;  // Redacted: first 8 chars + ***
+  match?: string; // Redacted: first 8 chars + ***
 }
 
 export interface SafetyScanResult {
-  passed: boolean;  // false if any error-severity issue found
+  passed: boolean; // false if any error-severity issue found
   issues: IntegrityIssue[];
   summary: {
     errors: number;
@@ -71,7 +71,8 @@ const SECRET_RULES: ScanRule[] = [
     id: 'secret-api-key',
     severity: 'error',
     description: 'Hardcoded secret environment variable detected',
-    pattern: /(?:OPENAI_API_KEY|OPENROUTER_API_KEY|ANTHROPIC_API_KEY|SUPABASE_SERVICE_ROLE_KEY|AWS_SECRET_ACCESS_KEY|STRIPE_SECRET_KEY|DATABASE_URL)\s*=\s*['"][^'"]{10,}['"]/g,
+    pattern:
+      /(?:OPENAI_API_KEY|OPENROUTER_API_KEY|ANTHROPIC_API_KEY|SUPABASE_SERVICE_ROLE_KEY|AWS_SECRET_ACCESS_KEY|STRIPE_SECRET_KEY|DATABASE_URL)\s*=\s*['"][^'"]{10,}['"]/g,
     redact: true,
   },
   // PEM private keys
@@ -130,7 +131,8 @@ const DANGEROUS_RULES: ScanRule[] = [
     id: 'dangerous-file-system',
     severity: 'error',
     description: 'Direct filesystem access detected — use ultralight.store/load instead',
-    pattern: /(?:Deno\.(?:readFile|writeFile|readTextFile|writeTextFile|open|remove|mkdir|stat|lstat|readDir))\s*\(/g,
+    pattern:
+      /(?:Deno\.(?:readFile|writeFile|readTextFile|writeTextFile|open|remove|mkdir|stat|lstat|readDir))\s*\(/g,
     fileTypes: ['.ts', '.tsx', '.js', '.jsx'],
   },
   // Node.js fs module
@@ -146,7 +148,8 @@ const DANGEROUS_RULES: ScanRule[] = [
     id: 'dangerous-subprocess',
     severity: 'error',
     description: 'Subprocess execution detected — not allowed in sandboxed apps',
-    pattern: /(?:Deno\.(?:Command|run)\s*\(|child_process\.(?:exec|spawn|execSync|spawnSync)\s*\()/g,
+    pattern:
+      /(?:Deno\.(?:Command|run)\s*\(|child_process\.(?:exec|spawn|execSync|spawnSync)\s*\()/g,
     fileTypes: ['.ts', '.tsx', '.js', '.jsx'],
   },
   // SSRF — fetch to localhost/internal
@@ -154,7 +157,8 @@ const DANGEROUS_RULES: ScanRule[] = [
     id: 'dangerous-fetch-localhost',
     severity: 'error',
     description: 'Fetch to localhost/internal address detected — potential SSRF',
-    pattern: /fetch\s*\(\s*['"`]https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+)/g,
+    pattern:
+      /fetch\s*\(\s*['"`]https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+)/g,
     fileTypes: ['.ts', '.tsx', '.js', '.jsx'],
   },
 ];
@@ -172,7 +176,8 @@ const WARNING_RULES: ScanRule[] = [
   {
     id: 'warn-network-backdoor',
     severity: 'warning',
-    description: 'Outbound WebSocket connection detected — persistent connections are flagged for review',
+    description:
+      'Outbound WebSocket connection detected — persistent connections are flagged for review',
     pattern: /new\s+WebSocket\s*\(/g,
     fileTypes: ['.ts', '.tsx', '.js', '.jsx'],
   },
@@ -217,7 +222,7 @@ function isBinary(content: string): boolean {
 function matchesFileType(fileName: string, fileTypes?: string[]): boolean {
   if (!fileTypes || fileTypes.length === 0) return true;
   const lower = fileName.toLowerCase();
-  return fileTypes.some(ext => lower.endsWith(ext));
+  return fileTypes.some((ext) => lower.endsWith(ext));
 }
 
 /**
@@ -250,13 +255,13 @@ function isInsideComment(content: string, matchIndex: number): boolean {
  * Issues with severity 'error' cause passed=false.
  */
 export function runSafetyScan(
-  files: Array<{ name: string; content: string }>
+  files: Array<{ name: string; content: string; bytes?: Uint8Array }>,
 ): SafetyScanResult {
   const issues: IntegrityIssue[] = [];
 
   for (const file of files) {
     // Skip binary files
-    if (isBinary(file.content)) continue;
+    if (file.bytes || isBinary(file.content)) continue;
 
     // Skip manifest.json and other config files from dangerous pattern checks
     // but still check them for secrets
@@ -299,9 +304,9 @@ export function runSafetyScan(
     }
   }
 
-  const errors = issues.filter(i => i.severity === 'error').length;
-  const warnings = issues.filter(i => i.severity === 'warning').length;
-  const info = issues.filter(i => i.severity === 'info').length;
+  const errors = issues.filter((i) => i.severity === 'error').length;
+  const warnings = issues.filter((i) => i.severity === 'warning').length;
+  const info = issues.filter((i) => i.severity === 'info').length;
 
   return {
     passed: errors === 0,

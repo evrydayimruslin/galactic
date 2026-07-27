@@ -136,12 +136,12 @@ export interface RuntimeConfig {
   cloudOperationBillingConfig?:
     | Pick<
       BillingConfig,
-      | "version"
-      | "cloudUnitLightPer1k"
-      | "r2OpsPerCloudUnit"
-      | "kvOpsPerCloudUnit"
-      | "d1ReadRowsPerCloudUnit"
-      | "d1WriteRowsPerCloudUnit"
+      | 'version'
+      | 'cloudUnitLightPer1k'
+      | 'r2OpsPerCloudUnit'
+      | 'kvOpsPerCloudUnit'
+      | 'd1ReadRowsPerCloudUnit'
+      | 'd1WriteRowsPerCloudUnit'
     >
     | null;
 }
@@ -149,7 +149,7 @@ export interface RuntimeConfig {
 export interface RuntimeAppCallDependency {
   app: string;
   functions: string[];
-  access?: "read" | "write";
+  access?: 'read' | 'write';
 }
 
 export interface RuntimeAIRoute {
@@ -196,14 +196,23 @@ function appCallAllowedByDependency(
   return (dependencies || []).some((dependency) => {
     if (
       dependency.access !== undefined &&
-      dependency.access !== "read" &&
-      dependency.access !== "write"
+      dependency.access !== 'read' &&
+      dependency.access !== 'write'
     ) {
       return false;
     }
     if (dependency.app.trim() !== normalizedTarget) return false;
     return dependency.functions.some((fn) => fn.trim() === normalizedFunction);
   });
+}
+
+function structuredOutputErrorCode(value: unknown): string | undefined {
+  return value === 'invalid_output_schema' ||
+      value === 'structured_output_unsupported' ||
+      value === 'structured_output_invalid_json' ||
+      value === 'structured_output_schema_mismatch'
+    ? value
+    : undefined;
 }
 
 export interface AppDataService {
@@ -220,7 +229,7 @@ export interface AppDataService {
 
 export interface QueryOptions {
   filter?: (value: unknown) => boolean;
-  sort?: { field: string; order: "asc" | "desc" };
+  sort?: { field: string; order: 'asc' | 'desc' };
   limit?: number;
   offset?: number;
 }
@@ -266,6 +275,7 @@ export interface ExecutionResult {
   error?: {
     type: string;
     message: string;
+    code?: string;
     stack?: string;
   };
   /**
@@ -310,9 +320,9 @@ export interface ExecutionResult {
  */
 const uuid = {
   v4: (): string => {
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
       const r = Math.random() * 16 | 0;
-      const v = c === "x" ? r : (r & 0x3 | 0x8);
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
       return v.toString(16);
     });
   },
@@ -329,7 +339,7 @@ const base64 = {
     return decodeURIComponent(escape(atob(str)));
   },
   encodeBytes: (bytes: Uint8Array): string => {
-    let binary = "";
+    let binary = '';
     for (let i = 0; i < bytes.length; i++) {
       binary += String.fromCharCode(bytes[i]);
     }
@@ -352,16 +362,16 @@ const hash = {
   sha256: async (data: string): Promise<string> => {
     const encoder = new TextEncoder();
     const dataBuffer = encoder.encode(data);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", dataBuffer);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
   },
   sha512: async (data: string): Promise<string> => {
     const encoder = new TextEncoder();
     const dataBuffer = encoder.encode(data);
-    const hashBuffer = await crypto.subtle.digest("SHA-512", dataBuffer);
+    const hashBuffer = await crypto.subtle.digest('SHA-512', dataBuffer);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
   },
   md5: (data: string): string => {
     // Simple MD5 for non-cryptographic use (checksums, etc)
@@ -378,7 +388,7 @@ function simpleHash(str: string): string {
     hash = ((hash << 5) - hash) + char;
     hash = hash & hash;
   }
-  return Math.abs(hash).toString(16).padStart(8, "0");
+  return Math.abs(hash).toString(16).padStart(8, '0');
 }
 
 /**
@@ -393,7 +403,7 @@ const _ = {
     }
     return result;
   },
-  compact: <T>(arr: (T | null | undefined | false | 0 | "")[]): T[] => {
+  compact: <T>(arr: (T | null | undefined | false | 0 | '')[]): T[] => {
     return arr.filter(Boolean) as T[];
   },
   uniq: <T>(arr: T[]): T[] => [...new Set(arr)],
@@ -411,13 +421,12 @@ const _ = {
     }
     return result;
   },
-  sample: <T>(arr: T[]): T | undefined =>
-    arr[Math.floor(Math.random() * arr.length)],
+  sample: <T>(arr: T[]): T | undefined => arr[Math.floor(Math.random() * arr.length)],
   sampleSize: <T>(arr: T[], n: number): T[] => _.shuffle(arr).slice(0, n),
   sortBy: <T>(arr: T[], key: keyof T | ((item: T) => unknown)): T[] => {
     return [...arr].sort((a, b) => {
-      const aVal = typeof key === "function" ? key(a) : a[key];
-      const bVal = typeof key === "function" ? key(b) : b[key];
+      const aVal = typeof key === 'function' ? key(a) : a[key];
+      const bVal = typeof key === 'function' ? key(b) : b[key];
       if ((aVal as number | string) < (bVal as number | string)) return -1;
       if ((aVal as number | string) > (bVal as number | string)) return 1;
       return 0;
@@ -428,9 +437,7 @@ const _ = {
     key: keyof T | ((item: T) => string),
   ): Record<string, T[]> => {
     return arr.reduce((acc, item) => {
-      const groupKey = typeof key === "function"
-        ? key(item)
-        : String(item[key]);
+      const groupKey = typeof key === 'function' ? key(item) : String(item[key]);
       (acc[groupKey] = acc[groupKey] || []).push(item);
       return acc;
     }, {} as Record<string, T[]>);
@@ -440,7 +447,7 @@ const _ = {
     key: keyof T | ((item: T) => string),
   ): Record<string, T> => {
     return arr.reduce((acc, item) => {
-      const k = typeof key === "function" ? key(item) : String(item[key]);
+      const k = typeof key === 'function' ? key(item) : String(item[key]);
       acc[k] = item;
       return acc;
     }, {} as Record<string, T>);
@@ -472,7 +479,7 @@ const _ = {
     return result as Omit<T, K>;
   },
   get: (obj: unknown, path: string, defaultValue?: unknown): unknown => {
-    const keys = path.split(".");
+    const keys = path.split('.');
     let result = obj;
     for (const key of keys) {
       if (result == null) return defaultValue;
@@ -481,7 +488,7 @@ const _ = {
     return result ?? defaultValue;
   },
   set: <T extends object>(obj: T, path: string, value: unknown): T => {
-    const keys = path.split(".");
+    const keys = path.split('.');
     let current = obj as Record<string, unknown>;
     for (let i = 0; i < keys.length - 1; i++) {
       if (!(keys[i] in current)) current[keys[i]] = {};
@@ -496,28 +503,27 @@ const _ = {
   cloneDeep: <T>(obj: T): T => JSON.parse(JSON.stringify(obj)),
   isEmpty: (value: unknown): boolean => {
     if (value == null) return true;
-    if (Array.isArray(value) || typeof value === "string") {
+    if (Array.isArray(value) || typeof value === 'string') {
       return value.length === 0;
     }
-    if (typeof value === "object") return Object.keys(value).length === 0;
+    if (typeof value === 'object') return Object.keys(value).length === 0;
     return false;
   },
 
   // Strings
   camelCase: (str: string): string => {
-    return str.replace(/[-_\s]+(.)?/g, (_, c) => c ? c.toUpperCase() : "");
+    return str.replace(/[-_\s]+(.)?/g, (_, c) => c ? c.toUpperCase() : '');
   },
   snakeCase: (str: string): string => {
     return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
-      .replace(/^_/, "");
+      .replace(/^_/, '');
   },
   kebabCase: (str: string): string => {
     return str.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)
-      .replace(/^-/, "");
+      .replace(/^-/, '');
   },
-  capitalize: (str: string): string =>
-    str.charAt(0).toUpperCase() + str.slice(1),
-  truncate: (str: string, length: number, end = "..."): string => {
+  capitalize: (str: string): string => str.charAt(0).toUpperCase() + str.slice(1),
+  truncate: (str: string, length: number, end = '...'): string => {
     return str.length <= length ? str : str.slice(0, length - end.length) + end;
   },
 
@@ -547,25 +553,21 @@ const _ = {
   },
 
   // Numbers
-  random: (min: number, max: number): number =>
-    Math.floor(Math.random() * (max - min + 1)) + min,
-  clamp: (num: number, min: number, max: number): number =>
-    Math.min(Math.max(num, min), max),
+  random: (min: number, max: number): number => Math.floor(Math.random() * (max - min + 1)) + min,
+  clamp: (num: number, min: number, max: number): number => Math.min(Math.max(num, min), max),
   sum: (arr: number[]): number => arr.reduce((a, b) => a + b, 0),
   mean: (arr: number[]): number => arr.length ? _.sum(arr) / arr.length : 0,
   min: (arr: number[]): number => Math.min(...arr),
   max: (arr: number[]): number => Math.max(...arr),
 
   // Predicates
-  isString: (value: unknown): value is string => typeof value === "string",
-  isNumber: (value: unknown): value is number =>
-    typeof value === "number" && !isNaN(value),
-  isBoolean: (value: unknown): value is boolean => typeof value === "boolean",
+  isString: (value: unknown): value is string => typeof value === 'string',
+  isNumber: (value: unknown): value is number => typeof value === 'number' && !isNaN(value),
+  isBoolean: (value: unknown): value is boolean => typeof value === 'boolean',
   isArray: Array.isArray,
   isObject: (value: unknown): value is object =>
-    value !== null && typeof value === "object" && !Array.isArray(value),
-  isFunction: (value: unknown): value is Function =>
-    typeof value === "function",
+    value !== null && typeof value === 'object' && !Array.isArray(value),
+  isFunction: (value: unknown): value is Function => typeof value === 'function',
   isNil: (value: unknown): value is null | undefined => value == null,
 };
 
@@ -575,69 +577,69 @@ const _ = {
 const dateFns = {
   format: (date: Date | string | number, formatStr: string): string => {
     const d = new Date(date);
-    const pad = (n: number) => n.toString().padStart(2, "0");
+    const pad = (n: number) => n.toString().padStart(2, '0');
 
     const tokens: Record<string, string> = {
-      "yyyy": d.getFullYear().toString(),
-      "yy": d.getFullYear().toString().slice(-2),
-      "MM": pad(d.getMonth() + 1),
-      "M": (d.getMonth() + 1).toString(),
-      "dd": pad(d.getDate()),
-      "d": d.getDate().toString(),
-      "HH": pad(d.getHours()),
-      "H": d.getHours().toString(),
-      "hh": pad(d.getHours() % 12 || 12),
-      "h": (d.getHours() % 12 || 12).toString(),
-      "mm": pad(d.getMinutes()),
-      "m": d.getMinutes().toString(),
-      "ss": pad(d.getSeconds()),
-      "s": d.getSeconds().toString(),
-      "a": d.getHours() < 12 ? "am" : "pm",
-      "A": d.getHours() < 12 ? "AM" : "PM",
-      "EEEE": [
-        "Sunday",
-        "Monday",
-        "Tuesday",
-        "Wednesday",
-        "Thursday",
-        "Friday",
-        "Saturday",
+      'yyyy': d.getFullYear().toString(),
+      'yy': d.getFullYear().toString().slice(-2),
+      'MM': pad(d.getMonth() + 1),
+      'M': (d.getMonth() + 1).toString(),
+      'dd': pad(d.getDate()),
+      'd': d.getDate().toString(),
+      'HH': pad(d.getHours()),
+      'H': d.getHours().toString(),
+      'hh': pad(d.getHours() % 12 || 12),
+      'h': (d.getHours() % 12 || 12).toString(),
+      'mm': pad(d.getMinutes()),
+      'm': d.getMinutes().toString(),
+      'ss': pad(d.getSeconds()),
+      's': d.getSeconds().toString(),
+      'a': d.getHours() < 12 ? 'am' : 'pm',
+      'A': d.getHours() < 12 ? 'AM' : 'PM',
+      'EEEE': [
+        'Sunday',
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
       ][d.getDay()],
-      "EEE": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()],
-      "MMMM": [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
+      'EEE': ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()],
+      'MMMM': [
+        'January',
+        'February',
+        'March',
+        'April',
+        'May',
+        'June',
+        'July',
+        'August',
+        'September',
+        'October',
+        'November',
+        'December',
       ][d.getMonth()],
-      "MMM": [
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec",
+      'MMM': [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
       ][d.getMonth()],
     };
 
     let result = formatStr;
     // Sort by length descending to match longer tokens first
     Object.keys(tokens).sort((a, b) => b.length - a.length).forEach((token) => {
-      result = result.replace(new RegExp(token, "g"), tokens[token]);
+      result = result.replace(new RegExp(token, 'g'), tokens[token]);
     });
     return result;
   },
@@ -657,12 +659,12 @@ const dateFns = {
     const months = Math.floor(days / 30);
     const years = Math.floor(days / 365);
 
-    if (years > 0) return `${years} year${years > 1 ? "s" : ""} ago`;
-    if (months > 0) return `${months} month${months > 1 ? "s" : ""} ago`;
-    if (days > 0) return `${days} day${days > 1 ? "s" : ""} ago`;
-    if (hours > 0) return `${hours} hour${hours > 1 ? "s" : ""} ago`;
-    if (minutes > 0) return `${minutes} minute${minutes > 1 ? "s" : ""} ago`;
-    return "just now";
+    if (years > 0) return `${years} year${years > 1 ? 's' : ''} ago`;
+    if (months > 0) return `${months} month${months > 1 ? 's' : ''} ago`;
+    if (days > 0) return `${days} day${days > 1 ? 's' : ''} ago`;
+    if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+    if (minutes > 0) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+    return 'just now';
   },
 
   addDays: (date: Date | string | number, days: number): Date => {
@@ -727,13 +729,10 @@ const schema = {
   number: () => new NumberSchema(),
   boolean: () => new BooleanSchema(),
   array: <T>(itemSchema: BaseSchema<T>) => new ArraySchema(itemSchema),
-  object: <T extends Record<string, BaseSchema<unknown>>>(shape: T) =>
-    new ObjectSchema(shape),
+  object: <T extends Record<string, BaseSchema<unknown>>>(shape: T) => new ObjectSchema(shape),
   optional: <T>(innerSchema: BaseSchema<T>) => new OptionalSchema(innerSchema),
-  union: <T extends BaseSchema<unknown>[]>(...schemas: T) =>
-    new UnionSchema(schemas),
-  literal: <T extends string | number | boolean>(value: T) =>
-    new LiteralSchema(value),
+  union: <T extends BaseSchema<unknown>[]>(...schemas: T) => new UnionSchema(schemas),
+  literal: <T extends string | number | boolean>(value: T) => new LiteralSchema(value),
   enum: <T extends string[]>(...values: T) => new EnumSchema(values),
   any: () => new AnySchema(),
 };
@@ -779,8 +778,8 @@ class StringSchema extends BaseSchema<string> {
     if (value === undefined && this._default !== undefined) {
       return { success: true, data: this._default };
     }
-    if (typeof value !== "string") {
-      return { success: false, error: "Expected string" };
+    if (typeof value !== 'string') {
+      return { success: false, error: 'Expected string' };
     }
     if (this._minLength !== undefined && value.length < this._minLength) {
       return {
@@ -795,13 +794,13 @@ class StringSchema extends BaseSchema<string> {
       };
     }
     if (this._pattern && !this._pattern.test(value)) {
-      return { success: false, error: "String does not match pattern" };
+      return { success: false, error: 'String does not match pattern' };
     }
     if (this._email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-      return { success: false, error: "Invalid email format" };
+      return { success: false, error: 'Invalid email format' };
     }
     if (this._url && !/^https?:\/\/.+/.test(value)) {
-      return { success: false, error: "Invalid URL format" };
+      return { success: false, error: 'Invalid URL format' };
     }
     return { success: true, data: value };
   }
@@ -844,11 +843,11 @@ class NumberSchema extends BaseSchema<number> {
     if (value === undefined && this._default !== undefined) {
       return { success: true, data: this._default };
     }
-    if (typeof value !== "number" || isNaN(value)) {
-      return { success: false, error: "Expected number" };
+    if (typeof value !== 'number' || isNaN(value)) {
+      return { success: false, error: 'Expected number' };
     }
     if (this._int && !Number.isInteger(value)) {
-      return { success: false, error: "Expected integer" };
+      return { success: false, error: 'Expected integer' };
     }
     if (this._min !== undefined && value < this._min) {
       return { success: false, error: `Number must be >= ${this._min}` };
@@ -888,8 +887,8 @@ class BooleanSchema extends BaseSchema<boolean> {
     if (value === undefined && this._default !== undefined) {
       return { success: true, data: this._default };
     }
-    if (typeof value !== "boolean") {
-      return { success: false, error: "Expected boolean" };
+    if (typeof value !== 'boolean') {
+      return { success: false, error: 'Expected boolean' };
     }
     return { success: true, data: value };
   }
@@ -907,7 +906,7 @@ class ArraySchema<T> extends BaseSchema<T[]> {
     value: unknown,
   ): { success: true; data: T[] } | { success: false; error: string } {
     if (!Array.isArray(value)) {
-      return { success: false, error: "Expected array" };
+      return { success: false, error: 'Expected array' };
     }
     if (this._minLength !== undefined && value.length < this._minLength) {
       return {
@@ -946,10 +945,9 @@ class ArraySchema<T> extends BaseSchema<T[]> {
   }
 }
 
-class ObjectSchema<T extends Record<string, BaseSchema<unknown>>>
-  extends BaseSchema<
-    { [K in keyof T]: T[K] extends BaseSchema<infer U> ? U : never }
-  > {
+class ObjectSchema<T extends Record<string, BaseSchema<unknown>>> extends BaseSchema<
+  { [K in keyof T]: T[K] extends BaseSchema<infer U> ? U : never }
+> {
   constructor(private shape: T) {
     super();
   }
@@ -960,8 +958,8 @@ class ObjectSchema<T extends Record<string, BaseSchema<unknown>>>
     success: true;
     data: { [K in keyof T]: T[K] extends BaseSchema<infer U> ? U : never };
   } | { success: false; error: string } {
-    if (typeof value !== "object" || value === null) {
-      return { success: false, error: "Expected object" };
+    if (typeof value !== 'object' || value === null) {
+      return { success: false, error: 'Expected object' };
     }
     const result: Record<string, unknown> = {};
     for (const [key, schema] of Object.entries(this.shape)) {
@@ -1022,7 +1020,7 @@ class UnionSchema<T extends BaseSchema<unknown>[]>
     }
     return {
       success: false,
-      error: "Value does not match any schema in union",
+      error: 'Value does not match any schema in union',
     };
   }
 }
@@ -1056,7 +1054,7 @@ class EnumSchema<T extends string[]> extends BaseSchema<T[number]> {
     if (!this.values.includes(value as string)) {
       return {
         success: false,
-        error: `Expected one of: ${this.values.join(", ")}`,
+        error: `Expected one of: ${this.values.join(', ')}`,
       };
     }
     return { success: true, data: value as T[number] };
@@ -1080,59 +1078,59 @@ const markdown = {
     let html = md;
 
     // Escape HTML
-    html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(
+    html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
       />/g,
-      "&gt;",
+      '&gt;',
     );
 
     // Headers
-    html = html.replace(/^######\s+(.+)$/gm, "<h6>$1</h6>");
-    html = html.replace(/^#####\s+(.+)$/gm, "<h5>$1</h5>");
-    html = html.replace(/^####\s+(.+)$/gm, "<h4>$1</h4>");
-    html = html.replace(/^###\s+(.+)$/gm, "<h3>$1</h3>");
-    html = html.replace(/^##\s+(.+)$/gm, "<h2>$1</h2>");
-    html = html.replace(/^#\s+(.+)$/gm, "<h1>$1</h1>");
+    html = html.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>');
+    html = html.replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>');
+    html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
+    html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
 
     // Bold and italic
-    html = html.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
-    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-    html = html.replace(/___(.+?)___/g, "<strong><em>$1</em></strong>");
-    html = html.replace(/__(.+?)__/g, "<strong>$1</strong>");
-    html = html.replace(/_(.+?)_/g, "<em>$1</em>");
+    html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    html = html.replace(/___(.+?)___/g, '<strong><em>$1</em></strong>');
+    html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+    html = html.replace(/_(.+?)_/g, '<em>$1</em>');
 
     // Code blocks
     html = html.replace(
       /```(\w*)\n([\s\S]*?)```/g,
       '<pre><code class="language-$1">$2</code></pre>',
     );
-    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
 
     // Links and images
     html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">');
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
 
     // Lists
-    html = html.replace(/^\s*[-*]\s+(.+)$/gm, "<li>$1</li>");
-    html = html.replace(/(<li>.*<\/li>\n?)+/g, "<ul>$&</ul>");
-    html = html.replace(/^\s*(\d+)\.\s+(.+)$/gm, "<li>$2</li>");
+    html = html.replace(/^\s*[-*]\s+(.+)$/gm, '<li>$1</li>');
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+    html = html.replace(/^\s*(\d+)\.\s+(.+)$/gm, '<li>$2</li>');
 
     // Blockquotes
-    html = html.replace(/^>\s+(.+)$/gm, "<blockquote>$1</blockquote>");
+    html = html.replace(/^>\s+(.+)$/gm, '<blockquote>$1</blockquote>');
 
     // Horizontal rules
-    html = html.replace(/^---+$/gm, "<hr>");
-    html = html.replace(/^\*\*\*+$/gm, "<hr>");
+    html = html.replace(/^---+$/gm, '<hr>');
+    html = html.replace(/^\*\*\*+$/gm, '<hr>');
 
     // Paragraphs (lines not already wrapped)
-    html = html.replace(/^(?!<[a-z]|$)(.+)$/gm, "<p>$1</p>");
+    html = html.replace(/^(?!<[a-z]|$)(.+)$/gm, '<p>$1</p>');
 
     // Clean up extra paragraph tags around block elements
     html = html.replace(
       /<p>(<(?:h[1-6]|ul|ol|li|blockquote|pre|hr)[^>]*>)/g,
-      "$1",
+      '$1',
     );
-    html = html.replace(/(<\/(?:h[1-6]|ul|ol|li|blockquote|pre)>)<\/p>/g, "$1");
+    html = html.replace(/(<\/(?:h[1-6]|ul|ol|li|blockquote|pre)>)<\/p>/g, '$1');
 
     return html;
   },
@@ -1143,28 +1141,28 @@ const markdown = {
   toText: (md: string): string => {
     let text = md;
     // Remove headers markers
-    text = text.replace(/^#+\s+/gm, "");
+    text = text.replace(/^#+\s+/gm, '');
     // Remove emphasis
-    text = text.replace(/\*\*\*(.+?)\*\*\*/g, "$1");
-    text = text.replace(/\*\*(.+?)\*\*/g, "$1");
-    text = text.replace(/\*(.+?)\*/g, "$1");
-    text = text.replace(/___(.+?)___/g, "$1");
-    text = text.replace(/__(.+?)__/g, "$1");
-    text = text.replace(/_(.+?)_/g, "$1");
+    text = text.replace(/\*\*\*(.+?)\*\*\*/g, '$1');
+    text = text.replace(/\*\*(.+?)\*\*/g, '$1');
+    text = text.replace(/\*(.+?)\*/g, '$1');
+    text = text.replace(/___(.+?)___/g, '$1');
+    text = text.replace(/__(.+?)__/g, '$1');
+    text = text.replace(/_(.+?)_/g, '$1');
     // Remove code blocks
-    text = text.replace(/```[\s\S]*?```/g, "");
-    text = text.replace(/`([^`]+)`/g, "$1");
+    text = text.replace(/```[\s\S]*?```/g, '');
+    text = text.replace(/`([^`]+)`/g, '$1');
     // Remove links but keep text
-    text = text.replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1");
-    text = text.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+    text = text.replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1');
+    text = text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
     // Remove blockquotes
-    text = text.replace(/^>\s+/gm, "");
+    text = text.replace(/^>\s+/gm, '');
     // Remove list markers
-    text = text.replace(/^\s*[-*]\s+/gm, "");
-    text = text.replace(/^\s*\d+\.\s+/gm, "");
+    text = text.replace(/^\s*[-*]\s+/gm, '');
+    text = text.replace(/^\s*\d+\.\s+/gm, '');
     // Remove horizontal rules
-    text = text.replace(/^---+$/gm, "");
-    text = text.replace(/^\*\*\*+$/gm, "");
+    text = text.replace(/^---+$/gm, '');
+    text = text.replace(/^\*\*\*+$/gm, '');
     return text.trim();
   },
 };
@@ -1181,11 +1179,11 @@ const str = {
       .toString()
       .toLowerCase()
       .trim()
-      .replace(/\s+/g, "-") // Replace spaces with -
-      .replace(/[^\w\-]+/g, "") // Remove non-word chars
-      .replace(/\-\-+/g, "-") // Replace multiple - with single -
-      .replace(/^-+/, "") // Trim - from start
-      .replace(/-+$/, ""); // Trim - from end
+      .replace(/\s+/g, '-') // Replace spaces with -
+      .replace(/[^\w\-]+/g, '') // Remove non-word chars
+      .replace(/\-\-+/g, '-') // Replace multiple - with single -
+      .replace(/^-+/, '') // Trim - from start
+      .replace(/-+$/, ''); // Trim - from end
   },
 
   /**
@@ -1193,7 +1191,7 @@ const str = {
    */
   pluralize: (word: string, count: number, plural?: string): string => {
     if (count === 1) return word;
-    return plural || (word + "s");
+    return plural || (word + 's');
   },
 
   /**
@@ -1211,11 +1209,11 @@ const str = {
    */
   escapeHtml: (text: string): string => {
     const escapes: Record<string, string> = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
     };
     return text.replace(/[&<>"']/g, (c) => escapes[c]);
   },
@@ -1225,11 +1223,11 @@ const str = {
    */
   unescapeHtml: (text: string): string => {
     const unescapes: Record<string, string> = {
-      "&amp;": "&",
-      "&lt;": "<",
-      "&gt;": ">",
-      "&quot;": '"',
-      "&#39;": "'",
+      '&amp;': '&',
+      '&lt;': '<',
+      '&gt;': '>',
+      '&quot;': '"',
+      '&#39;': "'",
     };
     return text.replace(/&(?:amp|lt|gt|quot|#39);/g, (m) => unescapes[m]);
   },
@@ -1244,25 +1242,24 @@ const str = {
   /**
    * Truncate to word boundary
    */
-  truncateWords: (text: string, count: number, suffix = "..."): string => {
+  truncateWords: (text: string, count: number, suffix = '...'): string => {
     const words = text.trim().split(/\s+/);
     if (words.length <= count) return text;
-    return words.slice(0, count).join(" ") + suffix;
+    return words.slice(0, count).join(' ') + suffix;
   },
 
   /**
    * Generate a random string
    */
-  random: (length: number, charset = "alphanumeric"): string => {
+  random: (length: number, charset = 'alphanumeric'): string => {
     const charsets: Record<string, string> = {
-      alphanumeric:
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
-      alpha: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-      numeric: "0123456789",
-      hex: "0123456789abcdef",
+      alphanumeric: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
+      alpha: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
+      numeric: '0123456789',
+      hex: '0123456789abcdef',
     };
     const chars = charsets[charset] || charset;
-    let result = "";
+    let result = '';
     for (let i = 0; i < length; i++) {
       result += chars.charAt(Math.floor(Math.random() * chars.length));
     }
@@ -1285,14 +1282,14 @@ const jwt = {
     | { header: Record<string, unknown>; payload: Record<string, unknown> }
     | null => {
     try {
-      const parts = token.split(".");
+      const parts = token.split('.');
       if (parts.length !== 3) return null;
 
       const header = JSON.parse(
-        atob(parts[0].replace(/-/g, "+").replace(/_/g, "/")),
+        atob(parts[0].replace(/-/g, '+').replace(/_/g, '/')),
       );
       const payload = JSON.parse(
-        atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")),
+        atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')),
       );
 
       return { header, payload };
@@ -1339,7 +1336,7 @@ const http = {
     return new Response(JSON.stringify(data), {
       status,
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
         ...headers,
       },
     });
@@ -1356,7 +1353,7 @@ const http = {
     return new Response(data, {
       status,
       headers: {
-        "Content-Type": "text/plain",
+        'Content-Type': 'text/plain',
         ...headers,
       },
     });
@@ -1373,7 +1370,7 @@ const http = {
     return new Response(data, {
       status,
       headers: {
-        "Content-Type": "text/html",
+        'Content-Type': 'text/html',
         ...headers,
       },
     });
@@ -1395,7 +1392,7 @@ const http = {
   error: (message: string, status = 400, details?: unknown): Response => {
     return new Response(JSON.stringify({ error: message, details }), {
       status,
-      headers: { "Content-Type": "application/json" },
+      headers: { 'Content-Type': 'application/json' },
     });
   },
 };
@@ -1422,29 +1419,29 @@ function createSupabaseClient(
   const apiKey = serviceKey || anonKey;
 
   const headers = {
-    "apikey": anonKey, // Always use anon key for apikey header
-    "Authorization": `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-    "Prefer": "return=representation",
+    'apikey': anonKey, // Always use anon key for apikey header
+    'Authorization': `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=representation',
   };
 
   // Query builder for .from() calls
   function createQueryBuilder(table: string) {
     let queryParts: string[] = [];
-    let selectColumns = "*";
+    let selectColumns = '*';
     let bodyData: unknown = null;
-    let method = "GET";
+    let method = 'GET';
     let singleResult = false;
     let countOption: string | null = null;
-    let preferHeaders: string[] = ["return=representation"];
+    let preferHeaders: string[] = ['return=representation'];
 
     const builder = {
       select: (
-        columns = "*",
-        options?: { count?: "exact" | "planned" | "estimated" },
+        columns = '*',
+        options?: { count?: 'exact' | 'planned' | 'estimated' },
       ) => {
         selectColumns = columns;
-        method = "GET";
+        method = 'GET';
         if (options?.count) {
           countOption = options.count;
           preferHeaders.push(`count=${options.count}`);
@@ -1453,15 +1450,15 @@ function createSupabaseClient(
       },
       insert: (data: unknown, options?: { defaultToNull?: boolean }) => {
         bodyData = data;
-        method = "POST";
+        method = 'POST';
         if (options?.defaultToNull === false) {
-          preferHeaders.push("missing=default");
+          preferHeaders.push('missing=default');
         }
         return builder;
       },
       update: (data: unknown) => {
         bodyData = data;
-        method = "PATCH";
+        method = 'PATCH';
         return builder;
       },
       upsert: (
@@ -1469,18 +1466,18 @@ function createSupabaseClient(
         options?: { onConflict?: string; ignoreDuplicates?: boolean },
       ) => {
         bodyData = data;
-        method = "POST";
-        preferHeaders.push("resolution=merge-duplicates");
+        method = 'POST';
+        preferHeaders.push('resolution=merge-duplicates');
         if (options?.onConflict) {
           preferHeaders.push(`on_conflict=${options.onConflict}`);
         }
         if (options?.ignoreDuplicates) {
-          preferHeaders.push("resolution=ignore-duplicates");
+          preferHeaders.push('resolution=ignore-duplicates');
         }
         return builder;
       },
       delete: () => {
-        method = "DELETE";
+        method = 'DELETE';
         return builder;
       },
       eq: (column: string, value: unknown) => {
@@ -1521,9 +1518,7 @@ function createSupabaseClient(
       },
       in: (column: string, values: unknown[]) => {
         queryParts.push(
-          `${column}=in.(${
-            values.map((v) => encodeURIComponent(String(v))).join(",")
-          })`,
+          `${column}=in.(${values.map((v) => encodeURIComponent(String(v))).join(',')})`,
         );
         return builder;
       },
@@ -1543,8 +1538,8 @@ function createSupabaseClient(
         column: string,
         options?: { ascending?: boolean; nullsFirst?: boolean },
       ) => {
-        const direction = options?.ascending === false ? "desc" : "asc";
-        const nulls = options?.nullsFirst ? "nullsfirst" : "nullslast";
+        const direction = options?.ascending === false ? 'desc' : 'asc';
+        const nulls = options?.nullsFirst ? 'nullsfirst' : 'nullslast';
         queryParts.push(`order=${column}.${direction}.${nulls}`);
         return builder;
       },
@@ -1559,7 +1554,7 @@ function createSupabaseClient(
       },
       single: () => {
         singleResult = true;
-        preferHeaders.push("return=representation");
+        preferHeaders.push('return=representation');
         return builder;
       },
       maybeSingle: () => {
@@ -1574,20 +1569,20 @@ function createSupabaseClient(
       ) => {
         try {
           let url = `${apiUrl}/${table}`;
-          if (method === "GET" && selectColumns !== "*") {
+          if (method === 'GET' && selectColumns !== '*') {
             queryParts.unshift(`select=${encodeURIComponent(selectColumns)}`);
           }
           if (queryParts.length > 0) {
-            url += "?" + queryParts.join("&");
+            url += '?' + queryParts.join('&');
           }
 
           const reqHeaders: Record<string, string> = {
             ...headers,
-            "Prefer": preferHeaders.join(", "),
+            'Prefer': preferHeaders.join(', '),
           };
 
-          if (singleResult && method === "GET") {
-            reqHeaders["Accept"] = "application/vnd.pgrst.object+json";
+          if (singleResult && method === 'GET') {
+            reqHeaders['Accept'] = 'application/vnd.pgrst.object+json';
           }
 
           const response = await fetchFn(url, {
@@ -1608,10 +1603,10 @@ function createSupabaseClient(
 
           // Handle count header
           let count: number | undefined;
-          const contentRange = response.headers.get("content-range");
+          const contentRange = response.headers.get('content-range');
           if (contentRange && countOption) {
             const match = contentRange.match(/\/(\d+|\*)/);
-            if (match && match[1] !== "*") {
+            if (match && match[1] !== '*') {
               count = parseInt(match[1], 10);
             }
           }
@@ -1640,9 +1635,9 @@ function createSupabaseClient(
         try {
           const url = `${apiUrl}/rpc/${fnName}`;
           const response = await fetchFn(url, {
-            method: "POST",
+            method: 'POST',
             headers,
-            body: params ? JSON.stringify(params) : "{}",
+            body: params ? JSON.stringify(params) : '{}',
           });
 
           if (!response.ok) {
@@ -1664,8 +1659,7 @@ function createSupabaseClient(
 
   return {
     from: (table: string) => createQueryBuilder(table),
-    rpc: (fnName: string, params?: Record<string, unknown>) =>
-      createRpcBuilder(fnName, params),
+    rpc: (fnName: string, params?: Record<string, unknown>) => createRpcBuilder(fnName, params),
 
     // Auth helpers (limited - mainly for reading user from JWT)
     auth: {
@@ -1680,17 +1674,14 @@ function createSupabaseClient(
     storage: {
       from: (bucket: string) => ({
         upload: async (path: string, file: Blob | ArrayBuffer) => {
-          const storageUrl =
-            `${supabaseUrl}/storage/v1/object/${bucket}/${path}`;
+          const storageUrl = `${supabaseUrl}/storage/v1/object/${bucket}/${path}`;
           try {
             const response = await fetchFn(storageUrl, {
-              method: "POST",
+              method: 'POST',
               headers: {
-                "apikey": anonKey,
-                "Authorization": `Bearer ${apiKey}`,
-                "Content-Type": file instanceof Blob
-                  ? file.type
-                  : "application/octet-stream",
+                'apikey': anonKey,
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': file instanceof Blob ? file.type : 'application/octet-stream',
               },
               body: file,
             });
@@ -1707,13 +1698,12 @@ function createSupabaseClient(
           }
         },
         download: async (path: string) => {
-          const storageUrl =
-            `${supabaseUrl}/storage/v1/object/${bucket}/${path}`;
+          const storageUrl = `${supabaseUrl}/storage/v1/object/${bucket}/${path}`;
           try {
             const response = await fetchFn(storageUrl, {
               headers: {
-                "apikey": anonKey,
-                "Authorization": `Bearer ${apiKey}`,
+                'apikey': anonKey,
+                'Authorization': `Bearer ${apiKey}`,
               },
             });
             if (!response.ok) {
@@ -1731,8 +1721,7 @@ function createSupabaseClient(
         getPublicUrl: (path: string) => {
           return {
             data: {
-              publicUrl:
-                `${supabaseUrl}/storage/v1/object/public/${bucket}/${path}`,
+              publicUrl: `${supabaseUrl}/storage/v1/object/public/${bucket}/${path}`,
             },
           };
         },
@@ -1766,7 +1755,7 @@ export async function executeInSandbox(
     user: config.user,
     appId: config.appId,
     executionId: config.executionId,
-    hasBroadCallPermission: config.permissions.includes("app:call"),
+    hasBroadCallPermission: config.permissions.includes('app:call'),
     dependencyAppIds: (config.appCallDependencies || [])
       .map((dependency) => dependency.app)
       .filter(Boolean),
@@ -1776,20 +1765,20 @@ export async function executeInSandbox(
 
   const capturedConsole = {
     log: (...items: unknown[]) => {
-      const message = items.map(formatLogItem).join(" ");
-      logs.push({ time: new Date().toISOString(), level: "log", message });
+      const message = items.map(formatLogItem).join(' ');
+      logs.push({ time: new Date().toISOString(), level: 'log', message });
     },
     error: (...items: unknown[]) => {
-      const message = items.map(formatLogItem).join(" ");
-      logs.push({ time: new Date().toISOString(), level: "error", message });
+      const message = items.map(formatLogItem).join(' ');
+      logs.push({ time: new Date().toISOString(), level: 'error', message });
     },
     warn: (...items: unknown[]) => {
-      const message = items.map(formatLogItem).join(" ");
-      logs.push({ time: new Date().toISOString(), level: "warn", message });
+      const message = items.map(formatLogItem).join(' ');
+      logs.push({ time: new Date().toISOString(), level: 'warn', message });
     },
     info: (...items: unknown[]) => {
-      const message = items.map(formatLogItem).join(" ");
-      logs.push({ time: new Date().toISOString(), level: "info", message });
+      const message = items.map(formatLogItem).join(' ');
+      logs.push({ time: new Date().toISOString(), level: 'info', message });
     },
   };
 
@@ -1805,7 +1794,7 @@ export async function executeInSandbox(
     let activeFetchCount = 0;
 
     const openFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === "string"
+      const url = typeof input === 'string'
         ? input
         : input instanceof URL
         ? input.toString()
@@ -1814,7 +1803,7 @@ export async function executeInSandbox(
 
       // Only allow HTTPS (and localhost for development)
       if (
-        parsedUrl.protocol !== "https:" && parsedUrl.hostname !== "localhost"
+        parsedUrl.protocol !== 'https:' && parsedUrl.hostname !== 'localhost'
       ) {
         throw new Error(
           `Only HTTPS URLs are allowed. Got: ${parsedUrl.protocol}`,
@@ -1843,7 +1832,7 @@ export async function executeInSandbox(
         clearTimeout(fetchTimeout);
 
         // Wrap response to enforce size limit on body reads
-        const contentLength = response.headers.get("content-length");
+        const contentLength = response.headers.get('content-length');
         if (
           contentLength &&
           parseInt(contentLength, 10) > MAX_FETCH_RESPONSE_BYTES
@@ -1866,7 +1855,7 @@ export async function executeInSandbox(
     let activeConnectionCount = 0;
     const CONNECTION_TIMEOUT_MS = 30_000;
 
-    const hasNetConnect = config.permissions.includes("net:connect");
+    const hasNetConnect = config.permissions.includes('net:connect');
 
     // @ts-ignore — Deno global
     const _Deno = globalThis.Deno;
@@ -1885,17 +1874,17 @@ export async function executeInSandbox(
         );
       }
       if (!options?.hostname || !options?.port) {
-        throw new Error("hostname and port are required");
+        throw new Error('hostname and port are required');
       }
       // Block connections to localhost/internal networks
       const host = options.hostname.toLowerCase();
       if (
-        host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" ||
-        host.startsWith("10.") || host.startsWith("192.168.") ||
-        host.startsWith("172.")
+        host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
+        host.startsWith('10.') || host.startsWith('192.168.') ||
+        host.startsWith('172.')
       ) {
         throw new Error(
-          "Connections to internal/private networks are not allowed",
+          'Connections to internal/private networks are not allowed',
         );
       }
 
@@ -1935,16 +1924,16 @@ export async function executeInSandbox(
         );
       }
       if (!options?.hostname || !options?.port) {
-        throw new Error("hostname and port are required");
+        throw new Error('hostname and port are required');
       }
       const host = options.hostname.toLowerCase();
       if (
-        host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" ||
-        host.startsWith("10.") || host.startsWith("192.168.") ||
-        host.startsWith("172.")
+        host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
+        host.startsWith('10.') || host.startsWith('192.168.') ||
+        host.startsWith('172.')
       ) {
         throw new Error(
-          "Connections to internal/private networks are not allowed",
+          'Connections to internal/private networks are not allowed',
         );
       }
 
@@ -1973,16 +1962,16 @@ export async function executeInSandbox(
     // Every SELECT/UPDATE/DELETE must reference user_id in a WHERE clause.
     // Every INSERT must include user_id in the column list.
     function _validateUserIdInQuery(sql: string, context: string): void {
-      const normalized = sql.toLowerCase().replace(/\s+/g, " ").trim();
+      const normalized = sql.toLowerCase().replace(/\s+/g, ' ').trim();
 
       // Skip system table queries (internal use)
-      if (normalized.includes("_migrations") || normalized.includes("_usage")) {
+      if (normalized.includes('_migrations') || normalized.includes('_usage')) {
         return;
       }
 
       // For INSERT/REPLACE: must reference user_id column
       if (/^(insert|replace)\s/i.test(normalized)) {
-        if (!normalized.includes("user_id")) {
+        if (!normalized.includes('user_id')) {
           throw new Error(
             `[Galactic] db.${context}(): INSERT statements must include user_id. ` +
               `Add user_id to your column list and pass ultralight.user.id as the value.`,
@@ -1993,7 +1982,7 @@ export async function executeInSandbox(
 
       // For SELECT/UPDATE/DELETE: must have user_id in WHERE
       if (/^(select|update|delete)\s/i.test(normalized)) {
-        if (!normalized.includes("user_id")) {
+        if (!normalized.includes('user_id')) {
           throw new Error(
             `[Galactic] db.${context}(): Queries must filter by user_id. ` +
               `Add WHERE user_id = ? to your query and pass ultralight.user.id.`,
@@ -2017,7 +2006,7 @@ export async function executeInSandbox(
       requireAuth: (): UserContext => {
         if (!config.user) {
           throw new Error(
-            "Authentication required. Please sign in to use this feature.",
+            'Authentication required. Please sign in to use this feature.',
           );
         }
         return config.user;
@@ -2037,7 +2026,7 @@ export async function executeInSandbox(
       list: async (prefix?: string): Promise<string[]> => {
         const keys = await config.appDataService.list(prefix);
         capturedConsole.log(
-          `[SDK] list("${prefix || ""}") → ${keys.length} keys`,
+          `[SDK] list("${prefix || ''}") → ${keys.length} keys`,
         );
         return keys;
       },
@@ -2067,13 +2056,13 @@ export async function executeInSandbox(
         run: async (sql: string, params?: unknown[]): Promise<D1RunResult> => {
           if (!config.d1DataService) {
             throw new Error(
-              "D1 database not available. Ensure your app has a migrations/ folder.",
+              'D1 database not available. Ensure your app has a migrations/ folder.',
             );
           }
-          _validateUserIdInQuery(sql, "run");
+          _validateUserIdInQuery(sql, 'run');
           const result = await config.d1DataService.run(sql, params);
           capturedConsole.log(
-            `[SDK] db.run(${sql.slice(0, 80)}${sql.length > 80 ? "..." : ""})`,
+            `[SDK] db.run(${sql.slice(0, 80)}${sql.length > 80 ? '...' : ''})`,
           );
           return result;
         },
@@ -2088,14 +2077,14 @@ export async function executeInSandbox(
         ): Promise<T[]> => {
           if (!config.d1DataService) {
             throw new Error(
-              "D1 database not available. Ensure your app has a migrations/ folder.",
+              'D1 database not available. Ensure your app has a migrations/ folder.',
             );
           }
-          _validateUserIdInQuery(sql, "all");
+          _validateUserIdInQuery(sql, 'all');
           const result = await config.d1DataService.all<T>(sql, params);
           capturedConsole.log(
             `[SDK] db.all(${sql.slice(0, 80)}${
-              sql.length > 80 ? "..." : ""
+              sql.length > 80 ? '...' : ''
             }) → ${result.length} rows`,
           );
           return result;
@@ -2110,15 +2099,13 @@ export async function executeInSandbox(
         ): Promise<T | null> => {
           if (!config.d1DataService) {
             throw new Error(
-              "D1 database not available. Ensure your app has a migrations/ folder.",
+              'D1 database not available. Ensure your app has a migrations/ folder.',
             );
           }
-          _validateUserIdInQuery(sql, "first");
+          _validateUserIdInQuery(sql, 'first');
           const result = await config.d1DataService.first<T>(sql, params);
           capturedConsole.log(
-            `[SDK] db.first(${sql.slice(0, 80)}${
-              sql.length > 80 ? "..." : ""
-            })`,
+            `[SDK] db.first(${sql.slice(0, 80)}${sql.length > 80 ? '...' : ''})`,
           );
           return result;
         },
@@ -2128,7 +2115,7 @@ export async function executeInSandbox(
          */
         exec: async (_sql: string): Promise<D1ExecResult> => {
           throw new Error(
-            "ultralight.db.exec() is not available at runtime. Use migrations/ for schema changes.",
+            'ultralight.db.exec() is not available at runtime. Use migrations/ for schema changes.',
           );
         },
 
@@ -2140,11 +2127,11 @@ export async function executeInSandbox(
         ): Promise<D1RunResult[]> => {
           if (!config.d1DataService) {
             throw new Error(
-              "D1 database not available. Ensure your app has a migrations/ folder.",
+              'D1 database not available. Ensure your app has a migrations/ folder.',
             );
           }
           for (const stmt of statements) {
-            _validateUserIdInQuery(stmt.sql, "batch");
+            _validateUserIdInQuery(stmt.sql, 'batch');
           }
           const result = await config.d1DataService.batch(statements);
           capturedConsole.log(
@@ -2156,24 +2143,24 @@ export async function executeInSandbox(
 
       // USER MEMORY - For unified Memory.md
       remember: async (key: string, value: unknown) => {
-        if (!config.permissions.includes("memory:write")) {
-          throw new Error("memory:write permission required");
+        if (!config.permissions.includes('memory:write')) {
+          throw new Error('memory:write permission required');
         }
         if (!config.memoryService) {
           throw new Error(
-            "User memory not available - use store() for app data",
+            'User memory not available - use store() for app data',
           );
         }
         await config.memoryService.remember(key, value);
         capturedConsole.log(`[SDK] remember("${key}")`);
       },
       recall: async (key: string) => {
-        if (!config.permissions.includes("memory:read")) {
-          throw new Error("memory:read permission required");
+        if (!config.permissions.includes('memory:read')) {
+          throw new Error('memory:read permission required');
         }
         if (!config.memoryService) {
           throw new Error(
-            "User memory not available - use load() for app data",
+            'User memory not available - use load() for app data',
           );
         }
         const value = await config.memoryService.recall(key);
@@ -2183,39 +2170,39 @@ export async function executeInSandbox(
 
       // AI - Routes through BYOK when configured, otherwise platform credits.
       ai: async (request: AIRequest): Promise<AIResponse> => {
-        if (!config.permissions.includes("ai:call")) {
-          throw new Error("ai:call permission required");
+        if (!config.permissions.includes('ai:call')) {
+          throw new Error('ai:call permission required');
         }
         capturedConsole.log(`[SDK] ai()`);
         // The AI service now has the provider route bound to it, so we just pass the request.
         const response = await config.aiService.call(
           request,
-          config.userApiKey || "",
+          config.userApiKey || '',
         );
         // Check for route/provider errors returned by the service.
-        const aiError = (response as AIResponse & { error?: string }).error;
+        const aiError = response.error;
         if (aiError) {
-          throw new Error(aiError);
+          const error = new Error(aiError) as Error & { code?: string };
+          if (response.error_code) error.code = response.error_code;
+          throw error;
         }
         return response;
       },
 
       embed: async (request: { input?: unknown; model?: unknown }) => {
-        if (!config.permissions.includes("ai:embed")) {
-          throw new Error("ai:embed permission required");
+        if (!config.permissions.includes('ai:embed')) {
+          throw new Error('ai:embed permission required');
         }
-        const input = typeof request?.input === "string"
-          ? request.input.trim()
-          : "";
+        const input = typeof request?.input === 'string' ? request.input.trim() : '';
         if (!input) {
-          throw new Error("galactic.embed requires a non-empty string `input`.");
+          throw new Error('galactic.embed requires a non-empty string `input`.');
         }
         if (!config.embeddingService) {
-          throw new Error("Embedding service not available");
+          throw new Error('Embedding service not available');
         }
         if (config.routineContext) {
           throw new Error(
-            "Routine embeddings require the dynamic runtime budget binding.",
+            'Routine embeddings require the dynamic runtime budget binding.',
           );
         }
         const response = await config.embeddingService.embed(input);
@@ -2236,12 +2223,12 @@ export async function executeInSandbox(
         callArgs?: Record<string, unknown>,
       ): Promise<unknown> => {
         if (
-          typeof targetAppId !== "string" || !targetAppId.trim() ||
-          typeof functionName !== "string" || !functionName.trim()
+          typeof targetAppId !== 'string' || !targetAppId.trim() ||
+          typeof functionName !== 'string' || !functionName.trim()
         ) {
-          throw new Error("target app id and function name are required");
+          throw new Error('target app id and function name are required');
         }
-        const hasBroadCallPermission = config.permissions.includes("app:call");
+        const hasBroadCallPermission = config.permissions.includes('app:call');
         const hasDeclaredDependency = appCallAllowedByDependency(
           config.appCallDependencies,
           targetAppId,
@@ -2249,12 +2236,12 @@ export async function executeInSandbox(
         );
         if (!hasBroadCallPermission && !hasDeclaredDependency) {
           throw new Error(
-            "app:call permission or a matching dependency is required",
+            'app:call permission or a matching dependency is required',
           );
         }
         if (!config.baseUrl || !sandboxAuthToken) {
           throw new Error(
-            "Inter-app calls not available (missing baseUrl or authToken)",
+            'Inter-app calls not available (missing baseUrl or authToken)',
           );
         }
         if (targetAppId === config.appId && !callArgs?._allowSelfCall) {
@@ -2268,9 +2255,9 @@ export async function executeInSandbox(
         }
 
         const rpcRequest = {
-          jsonrpc: "2.0",
+          jsonrpc: '2.0',
           id: crypto.randomUUID(),
-          method: "tools/call",
+          method: 'tools/call',
           params: {
             name: functionName,
             arguments: callArgs || {},
@@ -2280,10 +2267,10 @@ export async function executeInSandbox(
         const response = await openFetch(
           `${config.baseUrl}/mcp/${targetAppId}`,
           {
-            method: "POST",
+            method: 'POST',
             headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${sandboxAuthToken}`,
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${sandboxAuthToken}`,
             },
             body: JSON.stringify(rpcRequest),
           },
@@ -2309,9 +2296,7 @@ export async function executeInSandbox(
         // Unwrap MCP tool result — result.content[0].text is the JSON-encoded return value
         const result = rpcResponse.result;
         if (result?.content && Array.isArray(result.content)) {
-          const textBlock = result.content.find((c: { type: string }) =>
-            c.type === "text"
-          );
+          const textBlock = result.content.find((c: { type: string }) => c.type === 'text');
           if (textBlock?.text) {
             try {
               return JSON.parse(textBlock.text);
@@ -2342,30 +2327,30 @@ export async function executeInSandbox(
       }> => {
         if (!config.user) {
           throw new Error(
-            "Authentication required. User must be signed in to make purchases.",
+            'Authentication required. User must be signed in to make purchases.',
           );
         }
         if (
-          typeof amountLight !== "number" || amountLight < 1 ||
+          typeof amountLight !== 'number' || amountLight < 1 ||
           amountLight > 100000
         ) {
-          throw new Error("amountLight must be between 1 and 100000");
+          throw new Error('amountLight must be between 1 and 100000');
         }
         if (config.userId === config.ownerId) {
-          throw new Error("Cannot charge yourself");
+          throw new Error('Cannot charge yourself');
         }
 
         capturedConsole.log(
-          `[SDK] charge(${amountLight}, "${reason || "in_app_purchase"}")`,
+          `[SDK] charge(${amountLight}, "${reason || 'in_app_purchase'}")`,
         );
 
         // @ts-ignore
         const _Deno = globalThis.Deno;
-        const SUPABASE_URL = _Deno?.env?.get("SUPABASE_URL") || "";
-        const SUPABASE_KEY = _Deno?.env?.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+        const SUPABASE_URL = _Deno?.env?.get('SUPABASE_URL') || '';
+        const SUPABASE_KEY = _Deno?.env?.get('SUPABASE_SERVICE_ROLE_KEY') || '';
 
         if (!SUPABASE_URL || !SUPABASE_KEY) {
-          throw new Error("Payment system unavailable");
+          throw new Error('Payment system unavailable');
         }
 
         // Atomic transfer: caller → owner. The app-provided reason is stored as
@@ -2373,26 +2358,26 @@ export async function executeInSandbox(
         const transferRes = await openFetch(
           `${SUPABASE_URL}/rest/v1/rpc/transfer_light`,
           {
-            method: "POST",
+            method: 'POST',
             headers: {
-              "apikey": SUPABASE_KEY,
-              "Authorization": `Bearer ${SUPABASE_KEY}`,
-              "Content-Type": "application/json",
+              'apikey': SUPABASE_KEY,
+              'Authorization': `Bearer ${SUPABASE_KEY}`,
+              'Content-Type': 'application/json',
             },
             body: JSON.stringify({
               p_from_user: config.userId,
               p_to_user: config.ownerId,
               p_amount_light: Math.round(amountLight),
-              p_reason: "in_app_purchase",
+              p_reason: 'in_app_purchase',
               p_app_id: config.appId,
               p_idempotency_key: buildEconomicIdempotencyKey(
-                "sandbox_purchase_transfer",
+                'sandbox_purchase_transfer',
                 [
                   config.executionId,
                   config.userId,
                   config.appId,
                   amountLight,
-                  reason || "in_app_purchase",
+                  reason || 'in_app_purchase',
                 ],
               ),
               p_metadata: {
@@ -2403,7 +2388,7 @@ export async function executeInSandbox(
         );
 
         if (!transferRes.ok) {
-          throw new Error("Payment transfer failed");
+          throw new Error('Payment transfer failed');
         }
 
         const rows = await transferRes.json() as Array<{
@@ -2445,13 +2430,13 @@ export async function executeInSandbox(
         }
         : {
           connectTls: () => {
-            throw new Error("net:connect permission required.");
+            throw new Error('net:connect permission required.');
           },
           connectPlain: () => {
-            throw new Error("net:connect permission required.");
+            throw new Error('net:connect permission required.');
           },
           connectStartTls: () => {
-            throw new Error("net:connect permission required.");
+            throw new Error('net:connect permission required.');
           },
         },
     };
@@ -2465,7 +2450,7 @@ export async function executeInSandbox(
         config.supabase.serviceKey,
         openFetch,
       );
-      capturedConsole.log("[SDK] Supabase client initialized");
+      capturedConsole.log('[SDK] Supabase client initialized');
     }
 
     // Mock React/ReactDOM for MCP function execution
@@ -2480,8 +2465,8 @@ export async function executeInSandbox(
       useRef: () => ({ current: null }),
       useContext: () => null,
       createContext: () => ({ Provider: () => null, Consumer: () => null }),
-      Fragment: Symbol("Fragment"),
-      StrictMode: Symbol("StrictMode"),
+      Fragment: Symbol('Fragment'),
+      StrictMode: Symbol('StrictMode'),
       // JSX runtime
       jsx: () => null,
       jsxs: () => null,
@@ -2501,19 +2486,19 @@ export async function executeInSandbox(
     const sandboxRequire = (moduleName: string) => {
       // React ecosystem - provide mocks since MCP functions don't need actual React
       if (
-        moduleName === "react" || moduleName.startsWith("https://esm.sh/react")
+        moduleName === 'react' || moduleName.startsWith('https://esm.sh/react')
       ) {
         return mockReact;
       }
       if (
-        moduleName === "react/jsx-runtime" ||
-        moduleName.includes("react") && moduleName.includes("jsx-runtime")
+        moduleName === 'react/jsx-runtime' ||
+        moduleName.includes('react') && moduleName.includes('jsx-runtime')
       ) {
         return mockReact;
       }
       if (
-        moduleName === "react-dom" || moduleName === "react-dom/client" ||
-        moduleName.startsWith("https://esm.sh/react-dom")
+        moduleName === 'react-dom' || moduleName === 'react-dom/client' ||
+        moduleName.startsWith('https://esm.sh/react-dom')
       ) {
         return mockReactDOM;
       }
@@ -2627,9 +2612,7 @@ export async function executeInSandbox(
       _,
       console: capturedConsole,
       fetch: openFetch,
-      Deno: hasNetConnect
-        ? { connect: sandboxConnect, connectTls: sandboxConnectTls }
-        : undefined,
+      Deno: hasNetConnect ? { connect: sandboxConnect, connectTls: sandboxConnectTls } : undefined,
       setTimeout: context.setTimeout as typeof globalThis.setTimeout,
       clearTimeout: context.clearTimeout as typeof globalThis.clearTimeout,
       setInterval: context.setInterval as typeof globalThis.setInterval,
@@ -2729,9 +2712,8 @@ export async function executeInSandbox(
         return __targetFn(...args);
       `;
 
-      const AsyncFunction =
-        Object.getPrototypeOf(async function () {}).constructor;
-      const fn = new AsyncFunction("args", ...contextKeys, wrapperCode);
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      const fn = new AsyncFunction('args', ...contextKeys, wrapperCode);
       // Pass args directly, not as rest parameter (which would wrap in another array)
       userFunc = (callArgs: unknown[]) => fn(callArgs, ...contextValues);
     } catch (compileErr) {
@@ -2785,7 +2767,7 @@ export async function executeInSandbox(
         durationMs,
         aiCostLight,
         error: {
-          type: "ResultTooLarge",
+          type: 'ResultTooLarge',
           message: `Result size (${
             (serialized.length / 1024 / 1024).toFixed(1)
           } MB) exceeds limit (${MAX_RESULT_BYTES / 1024 / 1024} MB)`,
@@ -2821,6 +2803,11 @@ export async function executeInSandbox(
       provenance: "developer",
       knownSecrets: [...knownSecrets, sandboxAuthToken],
     });
+    const errorCode = structuredOutputErrorCode(
+      error && typeof error === 'object'
+        ? (error as { code?: unknown }).code
+        : undefined,
+    );
 
     return {
       success: false,
@@ -2828,25 +2815,28 @@ export async function executeInSandbox(
       logs,
       durationMs,
       aiCostLight,
-      error: operatorCompatibilityError(
-        diagnostic,
-        error instanceof Error ? error.name : null,
-        [...knownSecrets, sandboxAuthToken],
-      ),
+      error: {
+        ...operatorCompatibilityError(
+          diagnostic,
+          error instanceof Error ? error.name : null,
+          [...knownSecrets, sandboxAuthToken],
+        ),
+        ...(errorCode ? { code: errorCode } : {}),
+      },
       diagnostic,
     };
   }
 }
 
 function formatLogItem(item: unknown): string {
-  if (typeof item === "string") return item;
-  if (item === null) return "null";
-  if (item === undefined) return "undefined";
-  if (typeof item === "object") {
+  if (typeof item === 'string') return item;
+  if (item === null) return 'null';
+  if (item === undefined) return 'undefined';
+  if (typeof item === 'object') {
     try {
       return JSON.stringify(item);
     } catch {
-      return "[Object]";
+      return '[Object]';
     }
   }
   return String(item);

@@ -24,15 +24,16 @@
  */
 
 import {
+  assert,
   assertEquals,
   assertExists,
-  assert,
   assertStringIncludes,
 } from 'https://deno.land/std@0.224.0/assert/mod.ts';
 
 const API = Deno.env.get('UL_API_URL') || 'https://api.connectgalactic.com';
 const TOKEN = Deno.env.get('UL_TOKEN');
-const TEST_APP = Deno.env.get('UL_TEST_APP') || 'cd118f84-fbca-4cb3-a680-3974585bc319';
+const TEST_APP = Deno.env.get('UL_TEST_APP') ||
+  'cd118f84-fbca-4cb3-a680-3974585bc319';
 const LIVE_API_TESTS = Deno.env.get('UL_LIVE_API_TESTS') === '1';
 
 // ============================================
@@ -48,26 +49,30 @@ Deno.test('CLI: all callTool() calls use gx.* prefix, not platform.*', async () 
     platformCalls,
     null,
     `Found ${platformCalls?.length || 0} callTool('platform.*') calls — should be 0. ` +
-    `Matches: ${platformCalls?.join(', ')}`
+      `Matches: ${platformCalls?.join(', ')}`,
   );
 
   const gxCalls = cliSource.match(/callTool\(\s*['"]gx\./g);
   assert(
     gxCalls !== null && gxCalls.length >= 10,
-    `Expected 10+ callTool('gx.*') calls, found ${gxCalls?.length || 0}`
+    `Expected 10+ callTool('gx.*') calls, found ${gxCalls?.length || 0}`,
   );
 });
 
 Deno.test('CLI: test command uses test_args parameter, not args', async () => {
   const cliSource = await Deno.readTextFile('./cli/mod.ts');
 
-  assertStringIncludes(cliSource, 'test_args', 'Missing test_args in CLI source');
+  assertStringIncludes(
+    cliSource,
+    'test_args',
+    'Missing test_args in CLI source',
+  );
 
   const brokenPattern = cliSource.match(/toolArgs\.args\s*=/g);
   assertEquals(
     brokenPattern,
     null,
-    `Found old toolArgs.args = pattern — should use test_args instead`
+    `Found old toolArgs.args = pattern — should use test_args instead`,
   );
 });
 
@@ -77,14 +82,14 @@ Deno.test('CLI: init template uses single-args-object pattern', async () => {
   assertStringIncludes(
     cliSource,
     'args: { name?: string }',
-    'Init basic template missing single-args-object pattern: (args: { name?: string })'
+    'Init basic template missing single-args-object pattern: (args: { name?: string })',
   );
 
   const oldPattern = cliSource.match(/export function hello\(name:\s*string/);
   assertEquals(
     oldPattern,
     null,
-    'Init template still has old positional parameter pattern: hello(name: string ...)'
+    'Init template still has old positional parameter pattern: hello(name: string ...)',
   );
 });
 
@@ -93,10 +98,14 @@ Deno.test('CLI: upload calls gx.upload, not platform.apps.create', async () => {
 
   assert(
     !cliSource.includes('platform.apps.create'),
-    'Found old platform.apps.create reference — should use gx.upload'
+    'Found old platform.apps.create reference — should use gx.upload',
   );
 
-  assertStringIncludes(cliSource, "'gx.upload'", 'Missing gx.upload call in upload command');
+  assertStringIncludes(
+    cliSource,
+    "'gx.upload'",
+    'Missing gx.upload call in upload command',
+  );
 });
 
 Deno.test('CLI: run command uses per-app MCP endpoint via callAppTool', async () => {
@@ -104,10 +113,14 @@ Deno.test('CLI: run command uses per-app MCP endpoint via callAppTool', async ()
 
   assert(
     !cliSource.includes('platform.run'),
-    'Found old platform.run reference — should use callAppTool for per-app MCP'
+    'Found old platform.run reference — should use callAppTool for per-app MCP',
   );
 
-  assertStringIncludes(cliSource, 'callAppTool', 'Missing callAppTool for run command');
+  assertStringIncludes(
+    cliSource,
+    'callAppTool',
+    'Missing callAppTool for run command',
+  );
 });
 
 Deno.test('CLI: whoami uses REST GET /api/user, not MCP tool', async () => {
@@ -115,10 +128,14 @@ Deno.test('CLI: whoami uses REST GET /api/user, not MCP tool', async () => {
 
   assert(
     !cliSource.includes('platform.user.profile'),
-    'Found old platform.user.profile reference — should use restGet(/api/user)'
+    'Found old platform.user.profile reference — should use restGet(/api/user)',
   );
 
-  assertStringIncludes(cliSource, "restGet('/api/user')", 'Missing restGet /api/user call in whoami');
+  assertStringIncludes(
+    cliSource,
+    "restGet('/api/user')",
+    'Missing restGet /api/user call in whoami',
+  );
 });
 
 Deno.test('CLI: mod.ts VERSION is in sync with package.json', async () => {
@@ -135,39 +152,121 @@ Deno.test('CLI: all expected commands are registered', async () => {
   const cliSource = await Deno.readTextFile('./cli/mod.ts');
 
   const expectedCommands = [
-    'init', 'login', 'logout', 'whoami', 'upload',
-    'apps', 'draft', 'docs', 'set', 'permissions',
-    'test', 'lint', 'scaffold', 'run', 'discover',
-    'logs', 'health', 'config', 'help', 'version',
+    'init',
+    'login',
+    'logout',
+    'whoami',
+    'project',
+    'stage',
+    'upload',
+    'apps',
+    'draft',
+    'docs',
+    'set',
+    'permissions',
+    'test',
+    'lint',
+    'scaffold',
+    'run',
+    'discover',
+    'logs',
+    'health',
+    'config',
+    'help',
+    'version',
   ];
 
-  assertStringIncludes(cliSource, 'download: downloadCmd', 'Missing download command registration');
+  assertStringIncludes(
+    cliSource,
+    'download: downloadCmd',
+    'Missing download command registration',
+  );
 
   for (const cmd of expectedCommands) {
     assert(
       cliSource.includes(`  ${cmd}`) || cliSource.includes(`${cmd}:`),
-      `Missing command registration: ${cmd}`
+      `Missing command registration: ${cmd}`,
     );
   }
+});
+
+Deno.test('CLI: Milestone 1 builder commands expose revision and bundle workflows', async () => {
+  const cliSource = await Deno.readTextFile('./cli/mod.ts');
+
+  for (
+    const expected of [
+      'gx.project',
+      'since_revision',
+      'gx.stage',
+      'base_bundle_id',
+      'delete_paths',
+      'bundle_id',
+      'test_attestation',
+    ]
+  ) {
+    assertStringIncludes(
+      cliSource,
+      expected,
+      `CLI source is missing Milestone 1 contract field: ${expected}`,
+    );
+  }
+});
+
+Deno.test('CLI: packaged skills are byte-identical to the canonical platform guide', async () => {
+  const canonical = await Deno.readTextFile('./skills.md');
+  const packaged = await Deno.readTextFile('./cli/skills.md');
+  assertEquals(
+    packaged,
+    canonical,
+    'cli/skills.md drifted; synchronize it from the root skills.md before publishing',
+  );
 });
 
 Deno.test('CLI: api.ts has restGet, callAppTool, listAppTools methods', async () => {
   const apiSource = await Deno.readTextFile('./cli/api.ts');
 
-  assertStringIncludes(apiSource, 'async restGet(', 'Missing restGet method in api.ts');
-  assertStringIncludes(apiSource, 'async callAppTool(', 'Missing callAppTool method in api.ts');
-  assertStringIncludes(apiSource, 'async listAppTools(', 'Missing listAppTools method in api.ts');
-  assertStringIncludes(apiSource, 'getApiUrl()', 'Missing getApiUrl method in api.ts');
-  assertStringIncludes(apiSource, 'isAuthenticated()', 'Missing isAuthenticated method in api.ts');
+  assertStringIncludes(
+    apiSource,
+    'async restGet(',
+    'Missing restGet method in api.ts',
+  );
+  assertStringIncludes(
+    apiSource,
+    'async callAppTool(',
+    'Missing callAppTool method in api.ts',
+  );
+  assertStringIncludes(
+    apiSource,
+    'async listAppTools(',
+    'Missing listAppTools method in api.ts',
+  );
+  assertStringIncludes(
+    apiSource,
+    'getApiUrl()',
+    'Missing getApiUrl method in api.ts',
+  );
+  assertStringIncludes(
+    apiSource,
+    'isAuthenticated()',
+    'Missing isAuthenticated method in api.ts',
+  );
 });
 
 Deno.test('CLI: upload includes SQL migrations for D1 apps', async () => {
-  const cliSource = await Deno.readTextFile('./cli/mod.ts');
+  const [cliSource, collectorSource] = await Promise.all([
+    Deno.readTextFile('./cli/mod.ts'),
+    Deno.readTextFile('./cli/source-files.ts'),
+  ]);
 
   assertStringIncludes(
     cliSource,
-    "'.sql'",
-    'collectFiles must upload .sql migration files'
+    'collectSourceFiles',
+    'CLI upload paths must use the shared source-file collector',
+  );
+  assertStringIncludes(
+    collectorSource,
+    'ALLOWED_EXTENSIONS',
+    'source collection must use the platform extension allowlist, including .sql',
   );
 });
 
@@ -177,7 +276,7 @@ Deno.test('CLI: callAppTool calls per-app endpoint /mcp/{appId}', async () => {
   assertStringIncludes(
     apiSource,
     '`${this.apiUrl}/mcp/${appId}`',
-    'callAppTool must call per-app endpoint /mcp/{appId}'
+    'callAppTool must call per-app endpoint /mcp/{appId}',
   );
 });
 
@@ -198,7 +297,9 @@ Deno.test('CLI: no remaining platform.* tool references anywhere', async () => {
   assertEquals(
     badLines.length,
     0,
-    `Found ${badLines.length} remaining platform.* references in non-comment code:\n${badLines.join('\n')}`
+    `Found ${badLines.length} remaining platform.* references in non-comment code:\n${
+      badLines.join('\n')
+    }`,
   );
 });
 
@@ -216,14 +317,24 @@ Deno.test({
   fn: async () => {
     const res = await fetch(`${API}/api/discover?q=hello`);
     // Accept 200 or 429 (rate limited)
-    assert(res.status === 200 || res.status === 429, `Expected 200 or 429, got ${res.status}`);
-    if (res.status !== 200) { await res.body?.cancel(); return; }
+    assert(
+      res.status === 200 || res.status === 429,
+      `Expected 200 or 429, got ${res.status}`,
+    );
+    if (res.status !== 200) {
+      await res.body?.cancel();
+      return;
+    }
 
     const data = await res.json();
     assertEquals(data.mode, 'search', 'mode should be "search"');
     assertEquals(data.query, 'hello', 'query should echo back');
     assertExists(data.query_id, 'query_id must exist (UUID)');
-    assertEquals(data.authenticated, false, 'authenticated should be false without auth header');
+    assertEquals(
+      data.authenticated,
+      false,
+      'authenticated should be false without auth header',
+    );
     assert(Array.isArray(data.results), 'results must be an array');
     assertExists(data.total, 'total count must exist');
   },
@@ -236,7 +347,10 @@ Deno.test({
   sanitizeOps: false,
   fn: async () => {
     const res = await fetch(`${API}/api/discover?q=hello`);
-    if (res.status !== 200) { await res.body?.cancel(); return; }
+    if (res.status !== 200) {
+      await res.body?.cancel();
+      return;
+    }
     const data = await res.json();
     if (data.results.length === 0) return; // No results to check
 
@@ -245,20 +359,27 @@ Deno.test({
     assertExists(first.id, 'result must have id');
     assertExists(first.name, 'result must have name');
     assertExists(first.slug, 'result must have slug');
-    assertEquals(typeof first.fully_native, 'boolean', 'fully_native must be boolean');
+    assertEquals(
+      typeof first.fully_native,
+      'boolean',
+      'fully_native must be boolean',
+    );
 
     // MCP endpoint — the primary way agents connect
     assertExists(first.mcp_endpoint, 'result must have mcp_endpoint');
     assert(
       String(first.mcp_endpoint).startsWith('/mcp/'),
-      `mcp_endpoint should start with /mcp/, got: ${first.mcp_endpoint}`
+      `mcp_endpoint should start with /mcp/, got: ${first.mcp_endpoint}`,
     );
 
     // HTTP endpoint — for agents/scripts that can't do MCP
-    assertExists(first.http_endpoint, 'result must have http_endpoint — agents need both MCP and HTTP paths');
+    assertExists(
+      first.http_endpoint,
+      'result must have http_endpoint — agents need both MCP and HTTP paths',
+    );
     assert(
       String(first.http_endpoint).startsWith('/http/'),
-      `http_endpoint should start with /http/, got: ${first.http_endpoint}`
+      `http_endpoint should start with /http/, got: ${first.http_endpoint}`,
     );
   },
 });
@@ -270,10 +391,16 @@ Deno.test({
   sanitizeOps: false,
   fn: async () => {
     const res = await fetch(`${API}/api/discover?q=hello`);
-    if (res.status !== 200) { await res.body?.cancel(); return; }
+    if (res.status !== 200) {
+      await res.body?.cancel();
+      return;
+    }
     const data = await res.json();
 
-    assertExists(data._links, 'response must include _links for HATEOAS navigation');
+    assertExists(
+      data._links,
+      'response must include _links for HATEOAS navigation',
+    );
     assertExists(data._links.openapi, '_links must include openapi');
     assertExists(data._links.mcp_platform, '_links must include mcp_platform');
 
@@ -281,7 +408,7 @@ Deno.test({
     assertEquals(
       data._links.auth,
       '/.well-known/oauth-authorization-server',
-      '_links.auth must point to OAuth metadata so agents can self-onboard'
+      '_links.auth must point to OAuth metadata so agents can self-onboard',
     );
   },
 });
@@ -295,17 +422,24 @@ Deno.test({
     const res = await fetch(`${API}/api/discover?q=hello`, {
       headers: { 'Authorization': `Bearer ${TOKEN}` },
     });
-    if (res.status !== 200) { await res.body?.cancel(); return; }
+    if (res.status !== 200) {
+      await res.body?.cancel();
+      return;
+    }
     const data = await res.json();
 
-    assertEquals(data.authenticated, true, 'authenticated should be true with valid token');
+    assertEquals(
+      data.authenticated,
+      true,
+      'authenticated should be true with valid token',
+    );
 
     if (data.results.length > 0) {
       const first = data.results[0];
       assertEquals(
         typeof first.is_owner,
         'boolean',
-        'Authenticated results must include is_owner boolean so agents know which apps they manage'
+        'Authenticated results must include is_owner boolean so agents know which apps they manage',
       );
     }
   },
@@ -323,8 +457,14 @@ Deno.test({
   sanitizeOps: false,
   fn: async () => {
     const res = await fetch(`${API}/api/discover/featured`);
-    assert(res.status === 200 || res.status === 429, `Expected 200 or 429, got ${res.status}`);
-    if (res.status !== 200) { await res.text(); return; }
+    assert(
+      res.status === 200 || res.status === 429,
+      `Expected 200 or 429, got ${res.status}`,
+    );
+    if (res.status !== 200) {
+      await res.text();
+      return;
+    }
 
     const data = await res.json();
     assertEquals(data.mode, 'featured', 'mode should be "featured"');
@@ -349,16 +489,16 @@ Deno.test({
     assertEquals(
       typeof data.app_count,
       'number',
-      'status must include app_count — agents need to know if the platform has content'
+      'status must include app_count — agents need to know if the platform has content',
     );
     assertEquals(
       typeof data.version,
       'string',
-      'status must include version — agents need to know API version for compatibility'
+      'status must include version — agents need to know API version for compatibility',
     );
     assertExists(
       data.timestamp,
-      'status must include timestamp — agents need to know response freshness'
+      'status must include timestamp — agents need to know response freshness',
     );
   },
 });
@@ -375,7 +515,10 @@ Deno.test({
     const spec = await res.json();
     assertEquals(spec.openapi, '3.1.0', 'OpenAPI version should be 3.1.0');
     assertExists(spec.paths, 'OpenAPI spec must have paths');
-    assertExists(spec.paths['/api/discover'], 'OpenAPI spec must document /api/discover');
+    assertExists(
+      spec.paths['/api/discover'],
+      'OpenAPI spec must document /api/discover',
+    );
   },
 });
 
@@ -399,13 +542,13 @@ Deno.test({
     assertEquals(
       data.code,
       'MISSING_QUERY',
-      'Error must include code: "MISSING_QUERY" — agents need structured codes to handle errors programmatically'
+      'Error must include code: "MISSING_QUERY" — agents need structured codes to handle errors programmatically',
     );
     assertExists(data.error, 'Error must include human-readable error message');
     assertEquals(
       data.docs_url,
       '/api/discover/openapi.json',
-      'Error must include docs_url so agents can self-recover'
+      'Error must include docs_url so agents can self-recover',
     );
   },
 });
@@ -423,7 +566,7 @@ Deno.test({
     assertEquals(
       data.code,
       'QUERY_TOO_SHORT',
-      'Error must include code: "QUERY_TOO_SHORT"'
+      'Error must include code: "QUERY_TOO_SHORT"',
     );
     assertExists(data.error, 'Error must include human-readable error message');
     assertExists(data.docs_url, 'Error must include docs_url');
@@ -451,7 +594,7 @@ Deno.test({
     // Claude Desktop expects { mcpServers: { "name": { url, transport } } }
     assertExists(
       data.mcpServers,
-      'Config must have mcpServers key — this is the Claude Desktop format'
+      'Config must have mcpServers key — this is the Claude Desktop format',
     );
     const serverNames = Object.keys(data.mcpServers);
     assert(serverNames.length > 0, 'mcpServers must have at least one entry');
@@ -477,7 +620,7 @@ Deno.test({
     // Cursor expects { mcp: { servers: { "name": { url, type } } } }
     assertExists(
       data.mcp,
-      'Config must have mcp key — this is the Cursor format'
+      'Config must have mcp key — this is the Cursor format',
     );
     assertExists(data.mcp.servers, 'mcp must have servers object');
     const serverNames = Object.keys(data.mcp.servers);
@@ -503,13 +646,16 @@ Deno.test({
     assertEquals(res.status, 200, `Expected 200, got ${res.status}`);
 
     const meta = await res.json();
-    assertExists(meta.authorization_endpoint, 'Must have authorization_endpoint');
+    assertExists(
+      meta.authorization_endpoint,
+      'Must have authorization_endpoint',
+    );
     assertExists(meta.token_endpoint, 'Must have token_endpoint');
     assertExists(meta.registration_endpoint, 'Must have registration_endpoint');
     assert(
       Array.isArray(meta.code_challenge_methods_supported) &&
-      meta.code_challenge_methods_supported.includes('S256'),
-      'Must support S256 PKCE'
+        meta.code_challenge_methods_supported.includes('S256'),
+      'Must support S256 PKCE',
     );
   },
 });
@@ -523,7 +669,7 @@ Deno.test({
     const res = await fetch(`${API}/.well-known/oauth-protected-resource`);
     assert(
       res.status === 200 || res.status === 404,
-      `Expected 200 or 404, got ${res.status}`
+      `Expected 200 or 404, got ${res.status}`,
     );
     await res.text();
   },
@@ -543,7 +689,10 @@ Deno.test({
         redirect_uris: ['http://localhost:9999/callback'],
       }),
     });
-    assert(res.status === 200 || res.status === 201, `Expected 200 or 201, got ${res.status}`);
+    assert(
+      res.status === 200 || res.status === 201,
+      `Expected 200 or 201, got ${res.status}`,
+    );
 
     const data = await res.json();
     assertExists(data.client_id, 'Registration must return client_id');
@@ -573,7 +722,10 @@ Deno.test({
 
     const data = await res.json();
     assertExists(data.result, 'initialize must return result');
-    assertExists(data.result.protocolVersion, 'result must have protocolVersion');
+    assertExists(
+      data.result.protocolVersion,
+      'result must have protocolVersion',
+    );
     assertExists(data.result.capabilities, 'result must have capabilities');
   },
 });
@@ -599,7 +751,7 @@ Deno.test({
     const ulTools = tools.filter((t: { name: string }) => t.name.startsWith('ul.'));
     assert(
       ulTools.length >= 20,
-      `Expected 20+ ul.* tools, got ${ulTools.length}`
+      `Expected 20+ ul.* tools, got ${ulTools.length}`,
     );
   },
 });
@@ -619,7 +771,11 @@ Deno.test({
       body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list' }),
     });
     await res.text();
-    assertEquals(res.status, 401, `Expected 401 for invalid token, got ${res.status}`);
+    assertEquals(
+      res.status,
+      401,
+      `Expected 401 for invalid token, got ${res.status}`,
+    );
   },
 });
 
@@ -645,7 +801,10 @@ Deno.test({
     assertEquals(res.status, 200);
 
     const data = await res.json();
-    assertExists(data.result?.protocolVersion, 'Per-app initialize must return protocolVersion');
+    assertExists(
+      data.result?.protocolVersion,
+      'Per-app initialize must return protocolVersion',
+    );
   },
 });
 

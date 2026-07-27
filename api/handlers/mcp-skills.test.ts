@@ -1,4 +1,5 @@
 import { assertEquals } from 'https://deno.land/std@0.210.0/assert/assert_equals.ts';
+import { assert } from 'https://deno.land/std@0.210.0/assert/assert.ts';
 import { assertStringIncludes } from 'https://deno.land/std@0.210.0/assert/assert_string_includes.ts';
 
 import { handleMcp } from './mcp.ts';
@@ -168,6 +169,30 @@ Deno.test('MCP tools/list no longer exposes skill SDK tools', async () => {
     // App functions and the rest of the SDK surface remain available.
     assertEquals(toolNames.includes('paid-skill_summarize_billing'), true);
     assertEquals(toolNames.includes('ultralight.store'), true);
+
+    const aiTool = tools.find((tool) => tool.name === 'ultralight.ai') as
+      | {
+        inputSchema?: {
+          properties?: Record<string, unknown>;
+        };
+        outputSchema?: {
+          properties?: Record<string, unknown>;
+        };
+      }
+      | undefined;
+    assert(aiTool, 'ultralight.ai must be discoverable');
+    assert(
+      aiTool.inputSchema?.properties?.output_schema,
+      'ultralight.ai must advertise output_schema',
+    );
+    assert(
+      aiTool.outputSchema?.properties?.output,
+      'ultralight.ai must advertise validated output',
+    );
+    assert(
+      aiTool.outputSchema?.properties?.error_code,
+      'ultralight.ai must advertise structured error codes',
+    );
   } finally {
     cleanup();
   }

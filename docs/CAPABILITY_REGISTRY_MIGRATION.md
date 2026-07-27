@@ -16,21 +16,23 @@ website) was a hope maintained by memory, not an invariant.
 
 `api/services/capabilities/registry.ts` inverts that: a capability is declared
 once (name, tier, branch, input schema, surfaces, handler binding) and each
-surface is *projected* from it. The parity invariant is now a test
-(`registry.test.ts`): a Tier-1 capability that fails to declare all three
-surfaces fails CI.
+declared surface is *projected* from it. The parity invariant is now a test
+(`registry.test.ts`): capabilities in the explicit `PARITY_TARGETS` set fail CI
+unless they declare MCP, CLI, and web surfaces.
 
 Migration used the strangler-fig pattern: a capability listed in the registry
 has **left** the legacy `PLATFORM_TOOLS` array / dispatch switch (and, where
 applicable, the hand-written CLI command / REST route). Everything not yet listed
 still flows through the legacy paths, which remain the fallback.
 
-## What is registry-owned today (13 capabilities)
+## What is registry-owned today (18 capabilities)
 
 | advertised   | id          | branch      | tier | surfaces          |
 |--------------|-------------|-------------|------|-------------------|
 | `gx.discover`| discover    | agent_user  | 1    | mcp, cli, web     |
+| `gx.project` | project     | ownership   | 1    | mcp, cli          |
 | `gx.download`| download    | ownership   | 1    | mcp, cli          |
+| `gx.stage`   | stage       | ownership   | 1    | mcp, cli          |
 | `gx.upload`  | upload      | ownership   | 1    | mcp, cli          |
 | `gx.test`    | test        | ownership   | 1    | mcp, cli          |
 | `gx.set`     | set         | ownership   | 1    | mcp, cli          |
@@ -41,7 +43,10 @@ still flows through the legacy paths, which remain the fallback.
 | `gx.db`      | db_inspect  | ownership   | 1    | mcp, cli          |
 | `gx.verify`  | verify      | agent_user  | 1    | mcp, cli, web     |
 | `gx.job`     | job         | agent_user  | 1    | mcp, cli, web     |
+| `gx.notifications` | notifications | agent_user | 1 | mcp, cli, web |
 | `gx.flag`    | flag        | agent_user  | 1    | mcp               |
+| `gx.routine` | routine     | agent_user  | 1    | mcp, cli          |
+| `gx.emit`    | emit        | agent_user  | 1    | mcp               |
 
 **Parity targets** (must declare all three surfaces, enforced by
 `registry.test.ts` → `PARITY_TARGETS`): `verify`, `job`, `discover`, `call`.
@@ -51,10 +56,9 @@ website admin panel, not the CLI).
 
 **Still on the legacy path** (unmigrated, working via `PLATFORM_TOOLS` +
 dispatch): `ul.wallet`, `ul.logs`, `ul.memory` (core), `ul.grants` (core),
-`ul.command`, `ul.rate`, `ul.marketplace`, `ul.routine`, `ul.auth.link`, and
-the emit/page-publishing surfaces. These are not blockers; migrating each is
-incremental cleanup that adds it to the single source of truth without changing
-behavior.
+`ul.command`, `ul.rate`, `ul.marketplace`, `ul.auth.link`, and the
+page-publishing surfaces. These are not blockers; migrating each is incremental
+cleanup that adds it to the single source of truth without changing behavior.
 
 ## PR history
 
@@ -74,6 +78,8 @@ behavior.
   `buildAppTrustCard`, so disclosure == enforcement), written to an append-only
   audit log **before** any row is returned (fail-closed).
 - **PR 6** — retire / rename / consolidate (this document).
+- **Builder Milestone 1** — add registry-owned `project` and `stage`;
+  `gx.test`/`gx.upload` accept their shared content-addressed `bundle_id`.
 
 ## PR 6 consolidation ledger
 

@@ -1,4 +1,4 @@
-import type { RequestAuthSource } from "./request-auth.ts";
+import type { RequestAuthSource } from './request-auth.ts';
 
 /**
  * API-key scopes understood by the platform MCP aggregator.
@@ -10,14 +10,13 @@ import type { RequestAuthSource } from "./request-auth.ts";
  * plane capabilities.
  */
 export const PLATFORM_MCP_SCOPES = {
-  read: "apps:read",
-  call: "apps:call",
-  build: "agents:build",
-  operate: "agents:operate",
+  read: 'apps:read',
+  call: 'apps:call',
+  build: 'agents:build',
+  operate: 'agents:operate',
 } as const;
 
-export type PlatformMcpScope =
-  (typeof PLATFORM_MCP_SCOPES)[keyof typeof PLATFORM_MCP_SCOPES];
+export type PlatformMcpScope = (typeof PLATFORM_MCP_SCOPES)[keyof typeof PLATFORM_MCP_SCOPES];
 
 export interface PlatformMcpAuthContext {
   authSource?: RequestAuthSource;
@@ -39,20 +38,20 @@ export interface PlatformMcpAuthorizationDecision {
 export function isApiTokenPlatformAuth(
   auth: PlatformMcpAuthContext | undefined,
 ): boolean {
-  return auth?.authSource === "api_token";
+  return auth?.authSource === 'api_token';
 }
 
 export function violatesPrivateAgentCreationPolicy(input: {
   appId?: string;
   visibility?: string;
 }): boolean {
-  return !input.appId && (input.visibility || "private") !== "private";
+  return !input.appId && (input.visibility || 'private') !== 'private';
 }
 
 export function canApiTokenManageAgentVisibility(
   visibility: string | null | undefined,
 ): boolean {
-  return visibility === "private";
+  return visibility === 'private';
 }
 
 /**
@@ -65,7 +64,7 @@ export function canApiTokenStageExistingRuntime(input: {
   currentRuntime?: string | null;
   uploadContainsGpuConfig?: boolean;
 }): boolean {
-  return input.currentRuntime !== "gpu" && !input.uploadContainsGpuConfig;
+  return input.currentRuntime !== 'gpu' && !input.uploadContainsGpuConfig;
 }
 
 export function shouldAutoLiveExistingUpload(input: {
@@ -78,8 +77,8 @@ export function shouldAutoLiveExistingUpload(input: {
 }
 
 export function canonicalPlatformMcpToolName(name: string): string {
-  if (name.startsWith("gx.")) return `ul.${name.slice(3)}`;
-  if (name === "ultralight.job") return "ul.job";
+  if (name.startsWith('gx.')) return `ul.${name.slice(3)}`;
+  if (name === 'ultralight.job') return 'ul.job';
   return name;
 }
 
@@ -98,8 +97,8 @@ export function requiredPlatformMcpScopes(
   const name = canonicalPlatformMcpToolName(requestedName);
 
   if (
-    toolMatches(name, "ul.discover") ||
-    name === "ul.verify"
+    toolMatches(name, 'ul.discover') ||
+    name === 'ul.verify'
   ) {
     return [
       PLATFORM_MCP_SCOPES.read,
@@ -110,30 +109,32 @@ export function requiredPlatformMcpScopes(
   }
 
   if (
-    name === "ul.call" ||
-    name === "ul.job" ||
-    name === "ul.codemode" ||
-    name === "ul.execute" ||
-    name === "ul.flag" ||
-    name === "ul.rate" ||
-    name === "ul.like" ||
-    name === "ul.dislike"
+    name === 'ul.call' ||
+    name === 'ul.job' ||
+    name === 'ul.codemode' ||
+    name === 'ul.execute' ||
+    name === 'ul.flag' ||
+    name === 'ul.rate' ||
+    name === 'ul.like' ||
+    name === 'ul.dislike'
   ) {
     return [PLATFORM_MCP_SCOPES.call];
   }
 
   if (
-    name === "ul.download" ||
-    name === "ul.test" ||
-    name === "ul.upload" ||
-    toolMatches(name, "ul.set") ||
-    name === "ul.db" ||
-    toolMatches(name, "ul.logs") ||
-    name === "ul.lint" ||
-    name === "ul.scaffold" ||
-    name === "ul.health" ||
-    name === "ul.gaps" ||
-    name === "ul.shortcomings"
+    name === 'ul.project' ||
+    name === 'ul.stage' ||
+    name === 'ul.download' ||
+    name === 'ul.test' ||
+    name === 'ul.upload' ||
+    toolMatches(name, 'ul.set') ||
+    name === 'ul.db' ||
+    toolMatches(name, 'ul.logs') ||
+    name === 'ul.lint' ||
+    name === 'ul.scaffold' ||
+    name === 'ul.health' ||
+    name === 'ul.gaps' ||
+    name === 'ul.shortcomings'
   ) {
     return [PLATFORM_MCP_SCOPES.build];
   }
@@ -165,7 +166,7 @@ function explicitScopeMatch(
   // Backward compatibility is deliberately narrow: historical wildcard keys
   // may keep reading/calling Agents, but do not inherit build/operate powers.
   if (
-    scopes.includes("*") &&
+    scopes.includes('*') &&
     (required.includes(PLATFORM_MCP_SCOPES.read) ||
       required.includes(PLATFORM_MCP_SCOPES.call))
   ) {
@@ -181,56 +182,54 @@ function apiTokenAccountSessionRestriction(
   const name = canonicalPlatformMcpToolName(requestedName);
 
   if (
-    (name === "ul.discover" && args.scope === "appstore") ||
-    name === "ul.discover.appstore"
+    (name === 'ul.discover' && args.scope === 'appstore') ||
+    name === 'ul.discover.appstore'
   ) {
-    return "Marketplace discovery is deferred for launch and requires an authenticated Galactic account session.";
+    return 'Marketplace discovery is deferred for launch and requires an authenticated Galactic account session.';
   }
 
-  if (name === "ul.upload" && args.type === "page") {
-    return "Publishing pages requires an authenticated Galactic account session.";
+  if (name === 'ul.upload' && args.type === 'page') {
+    return 'Publishing pages requires an authenticated Galactic account session.';
   }
 
   if (
-    (name === "ul.secrets" || name === "ul.connect") &&
+    (name === 'ul.secrets' || name === 'ul.connect') &&
     args.secrets !== undefined
   ) {
-    return "Secret values can only be added or changed from an authenticated Galactic account session.";
+    return 'Secret values can only be added or changed from an authenticated Galactic account session.';
   }
 
-  if (name === "ul.grants") {
-    const action = typeof args.action === "string" ? args.action : "";
-    if (action === "approve" || action === "set_cap") {
-      return "Grant approval and grant spending-cap changes require an authenticated Galactic account session.";
+  if (name === 'ul.grants') {
+    const action = typeof args.action === 'string' ? args.action : '';
+    if (action === 'approve' || action === 'set_cap') {
+      return 'Grant approval and grant spending-cap changes require an authenticated Galactic account session.';
     }
   }
 
-  if (name === "ul.routine") {
-    const action = typeof args.action === "string" ? args.action : "";
+  if (name === 'ul.routine') {
+    const action = typeof args.action === 'string' ? args.action : '';
     const requestedCapabilities = [
       ...(Array.isArray(args.capabilities) ? args.capabilities : []),
-      ...(Array.isArray(args.extra_capabilities)
-        ? args.extra_capabilities
-        : []),
+      ...(Array.isArray(args.extra_capabilities) ? args.extra_capabilities : []),
     ];
     const embedsCapabilityApproval = requestedCapabilities.some((capability) =>
-      capability !== null && typeof capability === "object" &&
+      capability !== null && typeof capability === 'object' &&
       (capability as Record<string, unknown>).approved === true
     );
     if (
-      action === "resume" ||
-      action === "run_now" ||
-      action === "delete" ||
-      (action === "create" &&
+      action === 'resume' ||
+      action === 'run_now' ||
+      action === 'delete' ||
+      (action === 'create' &&
         (args.activate === true || args.approve_capabilities === true ||
           embedsCapabilityApproval))
     ) {
-      return "Routine capability approval and activation require an authenticated Galactic account session.";
+      return 'Routine capability approval and activation require an authenticated Galactic account session.';
     }
     if (
-      action === "update" &&
+      action === 'update' &&
       Object.keys(args).some((key) =>
-        !["action", "routine_id", "name", "description"].includes(
+        !['action', 'routine_id', 'name', 'description'].includes(
           key,
         )
       )
@@ -239,8 +238,8 @@ function apiTokenAccountSessionRestriction(
     }
   }
 
-  if (name === "ul.notifications" && args.action === "mark_read") {
-    return "Only an authenticated Galactic account session may mark owner notifications read.";
+  if (name === 'ul.notifications' && args.action === 'mark_read') {
+    return 'Only an authenticated Galactic account session may mark owner notifications read.';
   }
 
   if (
@@ -255,26 +254,26 @@ function apiTokenAccountSessionRestriction(
     return "Only an authenticated Galactic account session may resolve health events.";
   }
 
-  if (name === "ul.db" && args.action === "support_read") {
+  if (name === 'ul.db' && args.action === 'support_read') {
     return "Reading another user's Agent data for support requires an authenticated Galactic account session.";
   }
 
-  if (toolMatches(name, "ul.set")) {
-    const isVersionOnlyAlias = name === "ul.set.version";
-    const settingKeys = Object.keys(args).filter((key) => !key.startsWith("_"));
-    const isAggregateVersionOnly = name === "ul.set" &&
-      settingKeys.every((key) => key === "app_id" || key === "version") &&
+  if (toolMatches(name, 'ul.set')) {
+    const isVersionOnlyAlias = name === 'ul.set.version';
+    const settingKeys = Object.keys(args).filter((key) => !key.startsWith('_'));
+    const isAggregateVersionOnly = name === 'ul.set' &&
+      settingKeys.every((key) => key === 'app_id' || key === 'version') &&
       args.version !== undefined;
     if (!isVersionOnlyAlias && !isAggregateVersionOnly) {
-      return "Builder keys may only promote a staged version. Visibility, publication, pricing, rate limits, storage bindings, download access, and other authority changes require an authenticated Galactic account session.";
+      return 'Builder keys may only promote a staged version. Visibility, publication, pricing, rate limits, storage bindings, download access, and other authority changes require an authenticated Galactic account session.';
     }
   }
 
   if (
-    (name === "ul.consent" || name === "ul.permit") &&
+    (name === 'ul.consent' || name === 'ul.permit') &&
     args.decision !== undefined
   ) {
-    return "Persistent caller-policy decisions require an authenticated Galactic account session.";
+    return 'Persistent caller-policy decisions require an authenticated Galactic account session.';
   }
 
   return null;
@@ -296,13 +295,13 @@ export function authorizePlatformMcpTool(input: {
     return {
       allowed: false,
       requiredScopes: [],
-      reason: "This platform tool is not available to API keys.",
+      reason: 'This platform tool is not available to API keys.',
     };
   }
 
   if (!explicitScopeMatch(input.auth.scopes, requiredScopes)) {
-    const scopeList = requiredScopes.join(" or ");
-    const hasLegacyWildcard = input.auth.scopes?.includes("*") === true;
+    const scopeList = requiredScopes.join(' or ');
+    const hasLegacyWildcard = input.auth.scopes?.includes('*') === true;
     return {
       allowed: false,
       requiredScopes,

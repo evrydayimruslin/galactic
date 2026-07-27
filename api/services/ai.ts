@@ -1,9 +1,10 @@
 // AI Service Implementation (BYOK)
 // OpenAI-compatible provider adapter for first-tier BYOK providers.
 
-import type { AIRequest, AIResponse, AIContentPart } from '../../shared/contracts/ai.ts';
+import type { AIContentPart, AIRequest, AIResponse } from '../../shared/contracts/ai.ts';
 import type { ActiveBYOKProvider, BYOKProvider } from '../../shared/types/index.ts';
 import { BYOK_PROVIDERS, isActiveBYOKProvider } from '../../shared/types/index.ts';
+import { applyStructuredOutput, structuredOutputResponseFormat } from './structured-output.ts';
 
 // ============================================
 // TYPES
@@ -25,12 +26,50 @@ interface ProviderConfig {
   endpoint: string;
 }
 
+export class AIProviderError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AIProviderError';
+  }
+}
+
 // ============================================
 // MULTIMODAL CONTENT TRANSLATION
 // ============================================
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
-const TEXT_EXTS = new Set(['txt', 'md', 'csv', 'json', 'xml', 'yaml', 'yml', 'html', 'htm', 'css', 'js', 'ts', 'py', 'rb', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'sh', 'sql', 'toml', 'ini', 'cfg', 'log', 'env']);
+const TEXT_EXTS = new Set([
+  'txt',
+  'md',
+  'csv',
+  'json',
+  'xml',
+  'yaml',
+  'yml',
+  'html',
+  'htm',
+  'css',
+  'js',
+  'ts',
+  'py',
+  'rb',
+  'go',
+  'rs',
+  'java',
+  'c',
+  'cpp',
+  'h',
+  'sh',
+  'sql',
+  'toml',
+  'ini',
+  'cfg',
+  'log',
+  'env',
+]);
 
 function getExtension(filename?: string): string {
   if (!filename) return '';
@@ -49,7 +88,9 @@ function getMimeFromDataUrl(data: string): string {
  * - type:'file' + text file → { type:'text', text: decoded content }
  * - type:'file' + PDF/other → { type:'image_url', image_url: { url: dataUrl } } (let model handle)
  */
-function translateContentParts(parts: AIContentPart[]): Array<Record<string, unknown>> {
+function translateContentParts(
+  parts: AIContentPart[],
+): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
 
   for (const part of parts) {
@@ -66,7 +107,9 @@ function translateContentParts(parts: AIContentPart[]): Array<Record<string, unk
 
       if (isImage) {
         // Images → image_url (native vision support)
-        const url = part.data.startsWith('data:') ? part.data : `data:image/${ext || 'png'};base64,${part.data}`;
+        const url = part.data.startsWith('data:')
+          ? part.data
+          : `data:image/${ext || 'png'};base64,${part.data}`;
         out.push({ type: 'image_url', image_url: { url } });
       } else if (isText) {
         // Text files → decode and inline as text block
@@ -75,7 +118,9 @@ function translateContentParts(parts: AIContentPart[]): Array<Record<string, unk
           try {
             const b64 = part.data.split(',')[1];
             if (b64) text = atob(b64);
-          } catch { text = part.data; }
+          } catch {
+            text = part.data;
+          }
         } else {
           text = part.data;
         }
@@ -84,7 +129,9 @@ function translateContentParts(parts: AIContentPart[]): Array<Record<string, unk
       } else {
         // PDF, DOCX, etc. → send as image_url and let the model/provider handle it.
         // OpenRouter passes data URLs through to models that support document vision.
-        const url = part.data.startsWith('data:') ? part.data : `data:application/octet-stream;base64,${part.data}`;
+        const url = part.data.startsWith('data:')
+          ? part.data
+          : `data:application/octet-stream;base64,${part.data}`;
         const label = part.filename ? `[Attached: ${part.filename}]` : '';
         if (label) out.push({ type: 'text', text: label });
         out.push({ type: 'image_url', image_url: { url } });
@@ -99,16 +146,21 @@ function translateContentParts(parts: AIContentPart[]): Array<Record<string, unk
 // PROVIDER CONFIGURATION
 // ============================================
 
-const formatOpenAICompatibleHeaders = (apiKey: string): Record<string, string> => ({
+const formatOpenAICompatibleHeaders = (
+  apiKey: string,
+): Record<string, string> => ({
   'Authorization': `Bearer ${apiKey}`,
   'Content-Type': 'application/json',
   'HTTP-Referer': 'https://api.ultralightagent.com',
   'X-Title': 'Galactic',
 });
 
-const formatOpenAICompatibleRequest = (request: AIRequest, model: string): unknown => ({
+const formatOpenAICompatibleRequest = (
+  request: AIRequest,
+  model: string,
+): unknown => ({
   model,
-  messages: request.messages.map(msg => {
+  messages: request.messages.map((msg) => {
     const m: Record<string, unknown> = { role: msg.role };
     if (msg.cache_control) m.cache_control = msg.cache_control;
 
@@ -130,6 +182,9 @@ const formatOpenAICompatibleRequest = (request: AIRequest, model: string): unkno
   temperature: request.temperature ?? 0.7,
   max_tokens: request.max_tokens,
   tools: request.tools,
+  ...(request.output_schema
+    ? { response_format: structuredOutputResponseFormat(request.output_schema) }
+    : {}),
 });
 
 /** Exact provider body used by the shared OpenAI-compatible runtime path. */
@@ -139,14 +194,28 @@ export function buildAIProviderRequestBody(
   requestDefaults: Record<string, unknown> = {},
 ): unknown {
   const formattedBody = formatOpenAICompatibleRequest(request, model);
-  return typeof formattedBody === 'object' && formattedBody !== null
-    ? { ...(formattedBody as Record<string, unknown>), ...requestDefaults }
-    : formattedBody;
+  if (typeof formattedBody !== 'object' || formattedBody === null) {
+    return formattedBody;
+  }
+  const body = {
+    ...(formattedBody as Record<string, unknown>),
+    ...requestDefaults,
+  };
+  // Route defaults may tune ordinary provider fields, but they may never
+  // weaken or replace the caller's native strict-output contract.
+  if (request.output_schema) {
+    body.response_format = structuredOutputResponseFormat(
+      request.output_schema,
+    );
+  }
+  return body;
 }
 
 const parseOpenAICompatibleResponse = (data: unknown): AIResponse => {
   const d = data as {
-    choices?: Array<{ message?: { content?: string } }>;
+    choices?: Array<{
+      message?: { content?: string; parsed?: unknown };
+    }>;
     model?: string;
     usage?: {
       prompt_tokens?: number;
@@ -165,10 +234,15 @@ const parseOpenAICompatibleResponse = (data: unknown): AIResponse => {
       prompt_cache_hit_tokens: d.usage?.prompt_cache_hit_tokens,
       prompt_cache_miss_tokens: d.usage?.prompt_cache_miss_tokens,
     },
+    ...(d.choices?.[0]?.message?.parsed !== undefined
+      ? { output: d.choices[0].message.parsed }
+      : {}),
   };
 };
 
-function createOpenAICompatibleConfig(provider: keyof typeof BYOK_PROVIDERS): ProviderConfig {
+function createOpenAICompatibleConfig(
+  provider: keyof typeof BYOK_PROVIDERS,
+): ProviderConfig {
   const info = BYOK_PROVIDERS[provider];
   return {
     baseUrl: info.baseUrl,
@@ -225,9 +299,22 @@ export class AIService {
   }
 
   /**
-   * Make an AI call using the configured OpenAI-compatible provider.
+   * Make an AI call and apply the caller's structured-output contract.
    */
   async call(request: AIRequest): Promise<AIResponse> {
+    return applyStructuredOutput(
+      await this.callRaw(request),
+      request.output_schema,
+    );
+  }
+
+  /**
+   * Internal billing path: return the parsed provider envelope without local
+   * structured-output validation. Runtime billing must settle provider-reported
+   * usage before potentially expensive local validation runs, then apply the
+   * contract exactly once.
+   */
+  async callRaw(request: AIRequest): Promise<AIResponse> {
     const providerConfig = PROVIDER_CONFIGS[this.provider] || OPENROUTER_CONFIG;
     const model = request.model || this.defaultModel;
 
@@ -238,7 +325,10 @@ export class AIService {
       : (() => {
         const formattedBody = providerConfig.formatRequest(request, model);
         return typeof formattedBody === 'object' && formattedBody !== null
-          ? { ...(formattedBody as Record<string, unknown>), ...this.requestDefaults }
+          ? {
+            ...(formattedBody as Record<string, unknown>),
+            ...this.requestDefaults,
+          }
           : formattedBody;
       })();
 
@@ -254,12 +344,16 @@ export class AIService {
 
       try {
         const errorJson = JSON.parse(errorText);
-        errorMessage = errorJson.error?.message || errorJson.message || errorText;
+        errorMessage = errorJson.error?.message || errorJson.message ||
+          errorText;
       } catch {
         errorMessage = errorText;
       }
 
-      throw new Error(`AI provider error (${response.status}): ${errorMessage}`);
+      throw new AIProviderError(
+        response.status,
+        `AI provider error (${response.status}): ${errorMessage}`,
+      );
     }
 
     const data = await response.json();
@@ -307,7 +401,10 @@ export function createAIService(
  * Validate an API key by making a minimal request
  * Returns true if the key is valid, throws an error otherwise
  */
-export async function validateAPIKey(provider: BYOKProvider, apiKey: string): Promise<boolean> {
+export async function validateAPIKey(
+  provider: BYOKProvider,
+  apiKey: string,
+): Promise<boolean> {
   const service = createAIService(provider, apiKey);
 
   try {
@@ -321,7 +418,10 @@ export async function validateAPIKey(provider: BYOKProvider, apiKey: string): Pr
     // Check if it's an auth error vs other error
     const message = error instanceof Error ? error.message : String(error);
     const normalized = message.toLowerCase();
-    if (normalized.includes('401') || normalized.includes('403') || normalized.includes('invalid') || normalized.includes('unauthorized')) {
+    if (
+      normalized.includes('401') || normalized.includes('403') ||
+      normalized.includes('invalid') || normalized.includes('unauthorized')
+    ) {
       throw new Error(`Invalid API key for ${provider}`);
     }
     // For other errors (rate limit, etc), assume key is valid

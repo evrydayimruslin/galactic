@@ -11,6 +11,41 @@ All major components have been implemented:
 | TypeScript SDK | ✅ Complete | `sdk/mod.ts` |
 | Well-known Discovery | ✅ Complete | `GET /.well-known/mcp.json` |
 
+> **Current-contract note (2026-07-27):** The detailed `platform.*` catalog
+> later in this document records the original design and is not the live tool
+> contract. The runtime registry in
+> `api/services/capabilities/registry.ts`, the generated `tools/list` response,
+> and `skills.md` are authoritative. Canonical public names use `gx.*`; legacy
+> `ul.*` names remain aliases.
+
+### Builder Milestone 1
+
+The platform and CLI now expose three token-efficient builder primitives:
+
+| Primitive | Contract | Purpose |
+|-----------|----------|---------|
+| Coding capsule | `gx.project({ app_id, view: "coding_capsule", since_revision? })` | Owner-only, source-free Agent snapshot with a 30-day revision lease; subsequent calls can return only a revision delta |
+| Staged bundle | `gx.stage({ files?, base_bundle_id?, delete_paths? })` | Upload source once; incremental stages reuse unchanged content behind fail-closed rate and active-object quotas |
+| Structured AI output | `galactic.ai({ messages, output_schema })` | Provider-native strict JSON Schema with parsed, locally verified `response.output` |
+
+The preferred build pipeline is:
+
+```typescript
+const context = await gx.project({ app_id, view: "coding_capsule" });
+const staged = await gx.stage({ files });
+const tested = await gx.test({ bundle_id: staged.bundle_id });
+await gx.upload({
+  bundle_id: staged.bundle_id,
+  test_attestation: tested.test_attestation,
+});
+```
+
+The `bundle_id` is immutable and content-addressed. Test and upload resolve and
+verify the same owner-scoped source identity. Direct `files` calls remain
+supported. For the complete API, security invariants, structured-output error
+codes, and R2 retention requirement, see
+[Builder Milestone 1](BUILDER_MILESTONE_1.md).
+
 ### Quick Start
 
 **Platform MCP Endpoint:**

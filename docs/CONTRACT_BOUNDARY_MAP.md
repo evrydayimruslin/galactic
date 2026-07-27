@@ -20,7 +20,9 @@ Current Wave 3 families:
   MCP tools, schemas, tool-call envelopes, and resource descriptors.
 - `shared/contracts/ai.ts`
   AI request/response payloads, multimodal content parts, chat payloads, and
-  chat billing contracts.
+  chat billing contracts. `AIOutputSchema`, structured-output error codes, and
+  generic `AIResponse<Output>` originate here; generated package declarations
+  must not redefine them.
 - `shared/contracts/widget.ts`
   Widget declarations, widget items, and widget app responses.
 - `shared/contracts/env.ts`
@@ -28,7 +30,7 @@ Current Wave 3 families:
   settings.
 - `shared/contracts/runtime.ts`
   runtime-facing user context, query contracts, and the app runtime SDK
-  surface.
+  surface, including generic `galactic.ai<Output>()` typing.
 - `shared/contracts/manifest.ts`
   app manifest schema, manifest env helpers, validation, and manifest-to-MCP
   conversion.

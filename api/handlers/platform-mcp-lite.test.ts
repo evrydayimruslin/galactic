@@ -14,9 +14,11 @@ const CORE = [
   'gx.grants',
   'gx.job',
   'gx.memory',
+  'gx.project',
   'gx.routine',
   'gx.secrets',
   'gx.set',
+  'gx.stage',
   'gx.test',
   'gx.upload',
   'gx.verify',
@@ -85,13 +87,15 @@ Deno.test('tools/list hides control-plane tools from apps:call API keys', () => 
     assert(scoped.includes('gx.discover'));
     assert(scoped.includes('gx.job'));
     assert(scoped.includes('gx.verify'));
-    for (const hidden of [
-      'gx.upload',
-      'gx.test',
-      'gx.set',
-      'gx.secrets',
-      'gx.grants',
-    ]) {
+    for (
+      const hidden of [
+        'gx.upload',
+        'gx.test',
+        'gx.set',
+        'gx.secrets',
+        'gx.grants',
+      ]
+    ) {
       assert(!scoped.includes(hidden), `${hidden} must not be advertised`);
     }
   });

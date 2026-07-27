@@ -1,4 +1,4 @@
-import type { AIRequest, AIResponse } from './ai.ts';
+import type { AIRequest, AIResponse, AIStructuredRequest, AIStructuredResponse } from './ai.ts';
 import type { ComputeBinding } from './compute.ts';
 
 export type Tier = 'free' | 'fun' | 'pro' | 'scale' | 'enterprise';
@@ -38,6 +38,9 @@ export interface UltralightSDK {
   batchRemove(keys: string[]): Promise<void>;
   remember(key: string, value: unknown): Promise<void>;
   recall<T = unknown>(key: string): Promise<T | null>;
-  ai(request: AIRequest): Promise<AIResponse>;
+  ai<Output = unknown>(
+    request: AIStructuredRequest,
+  ): Promise<AIStructuredResponse<Output>>;
+  ai<Output = unknown>(request: AIRequest): Promise<AIResponse<Output>>;
   compute: ComputeBinding;
 }

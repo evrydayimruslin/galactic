@@ -2,6 +2,14 @@
 
 TypeScript SDK for the Galactic platform.
 
+> **Builder Milestone 1 scope:** `gx.project` and `gx.stage` are currently
+> available through the platform MCP and Galactic CLI; this external management
+> SDK does not yet expose first-class wrappers for them. Inside deployed Agent
+> code, strict `galactic.ai({ output_schema })` is part of the runtime SDK and is
+> documented in [`packages/types/README.md`](../packages/types/README.md) and
+> [`skills.md`](../skills.md). Do not model structured output through this
+> external client.
+
 ## Installation
 
 ```bash

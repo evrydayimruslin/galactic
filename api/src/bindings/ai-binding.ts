@@ -20,11 +20,18 @@ import type { RoutineTraceContext } from '../../services/routine-trace.ts';
 import {
   buildRoutineAIAttemptBudget,
   routineAIAllAttemptsFailedSettlementLight,
-  routineAISuccessSettlementLight,
   type RoutineAIAttemptBudgetPlan,
+  routineAISuccessSettlementLight,
 } from '../../services/routine-ai-budget.ts';
 import { resolvePlatformInferenceModel } from '../../services/platform-inference-models.ts';
 import { resolveRequestedModel, shouldRetryWithFallbackModel } from './ai-model-precedence.ts';
+import type { AIOutputSchema, AIResponse } from '../../../shared/contracts/ai.ts';
+import {
+  applyStructuredOutput,
+  isStructuredOutputUnsupportedProviderError,
+  structuredOutputErrorResponse,
+  structuredOutputResponseFormat,
+} from '../../services/structured-output.ts';
 
 // ============================================
 // TYPES
@@ -85,7 +92,8 @@ interface AIBindingProps {
   routineContext?: RoutineTraceContext | null;
 }
 
-type ContentPart = { type: 'text'; text: string }
+type ContentPart =
+  | { type: 'text'; text: string }
   | { type: 'file'; data: string; filename?: string };
 
 interface AIRequest {
@@ -97,37 +105,87 @@ interface AIRequest {
   // NOTE: ai() returns text content only — tool_calls are not surfaced in the
   // response yet, so `tools` acts as a hint to the model, not a round-trip.
   tools?: unknown[];
+  output_schema?: AIOutputSchema;
 }
 
 // ============================================
 // MULTIMODAL TRANSLATION (mirrors ai.ts)
 // ============================================
 
-const IMG = new Set(['png','jpg','jpeg','gif','webp','bmp','svg']);
-const TXT = new Set(['txt','md','csv','json','xml','yaml','yml','html','htm','css','js','ts','py','rb','go','rs','java','c','cpp','h','sh','sql','toml','ini','cfg','log','env']);
+const IMG = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
+const TXT = new Set([
+  'txt',
+  'md',
+  'csv',
+  'json',
+  'xml',
+  'yaml',
+  'yml',
+  'html',
+  'htm',
+  'css',
+  'js',
+  'ts',
+  'py',
+  'rb',
+  'go',
+  'rs',
+  'java',
+  'c',
+  'cpp',
+  'h',
+  'sh',
+  'sql',
+  'toml',
+  'ini',
+  'cfg',
+  'log',
+  'env',
+]);
 
-function ext(f?: string): string { return f ? (f.split('.').pop() || '').toLowerCase() : ''; }
-function mime(d: string): string { const m = d.match(/^data:([^;,]+)/); return m ? m[1] : ''; }
+function ext(f?: string): string {
+  return f ? (f.split('.').pop() || '').toLowerCase() : '';
+}
+function mime(d: string): string {
+  const m = d.match(/^data:([^;,]+)/);
+  return m ? m[1] : '';
+}
 
 function translateParts(parts: ContentPart[]): unknown[] {
   const out: unknown[] = [];
   for (const p of parts) {
-    if (p.type === 'text') { out.push({ type: 'text', text: p.text }); continue; }
+    if (p.type === 'text') {
+      out.push({ type: 'text', text: p.text });
+      continue;
+    }
     if (p.type !== 'file') continue;
     const e = ext(p.filename), m = mime(p.data);
     const isImg = IMG.has(e) || m.startsWith('image/');
     const isTxt = TXT.has(e) || m.startsWith('text/');
     if (isImg) {
-      const url = p.data.startsWith('data:') ? p.data : `data:image/${e||'png'};base64,${p.data}`;
+      const url = p.data.startsWith('data:') ? p.data : `data:image/${e || 'png'};base64,${p.data}`;
       out.push({ type: 'image_url', image_url: { url } });
     } else if (isTxt) {
       let text = '';
-      if (p.data.startsWith('data:')) { try { const b = p.data.split(',')[1]; if (b) text = atob(b); } catch { text = p.data; } }
-      else text = p.data;
-      out.push({ type: 'text', text: (p.filename ? `[File: ${p.filename}]\n` : '') + text });
+      if (p.data.startsWith('data:')) {
+        try {
+          const b = p.data.split(',')[1];
+          if (b) text = atob(b);
+        } catch {
+          text = p.data;
+        }
+      } else text = p.data;
+      out.push({
+        type: 'text',
+        text: (p.filename ? `[File: ${p.filename}]\n` : '') + text,
+      });
     } else {
-      const url = p.data.startsWith('data:') ? p.data : `data:application/octet-stream;base64,${p.data}`;
-      if (p.filename) out.push({ type: 'text', text: `[Attached: ${p.filename}]` });
+      const url = p.data.startsWith('data:')
+        ? p.data
+        : `data:application/octet-stream;base64,${p.data}`;
+      if (p.filename) {
+        out.push({ type: 'text', text: `[Attached: ${p.filename}]` });
+      }
       out.push({ type: 'image_url', image_url: { url } });
     }
   }
@@ -139,7 +197,6 @@ function translateParts(parts: ContentPart[]): unknown[] {
 // ============================================
 
 export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
-
   async call(request: AIRequest, execCtxHandle?: string) {
     const {
       apiKey,
@@ -180,8 +237,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     // attribute call N's spend to call 1's function.
     let attributedAppId: string | null = this.ctx.props.appId ?? null;
     let attributedFunctionName: string | null = null;
-    let routineContext: RoutineTraceContext | null =
-      this.ctx.props.routineContext ?? null;
+    let routineContext: RoutineTraceContext | null = this.ctx.props.routineContext ?? null;
     let executionDeadlineAtMs: number | null = null;
     if (execCtxHandle !== undefined || this.ctx.props.requireExecCtx) {
       const resolvedCtx = resolveExecutionContext(execCtxHandle);
@@ -190,8 +246,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
           content: '',
           model: request.model || defaultModel || 'none',
           usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
-          error:
-            'AI execution context could not be resolved; inference refused.',
+          error: 'AI execution context could not be resolved; inference refused.',
         };
       }
       executionId = resolvedCtx.aiExecutionId;
@@ -212,6 +267,40 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       };
     }
 
+    // Validate the structured-output contract before touching wallet/budget
+    // services. This matches the in-process route and guarantees malformed or
+    // unsupported caller schemas fail before any billing-side work.
+    const requestedModel = resolveRequestedModel({
+      requestModel: request.model,
+      defaultModel,
+      modelPinned,
+      fallbackModel: PLATFORM_FALLBACK_MODEL,
+    });
+    const platformModel = provider === 'ultralight'
+      ? resolvePlatformInferenceModel(requestedModel)
+      : null;
+    let model = platformModel && platformModel.upstreamProvider === upstreamProvider
+      ? platformModel.upstreamModel
+      : provider === 'ultralight' && upstreamProvider === 'openrouter' &&
+          platformModel
+      ? platformModel.aliases.find((alias) => alias.includes('/')) ||
+        requestedModel
+      : provider === 'ultralight' && upstreamProvider !== 'openrouter'
+      ? defaultModel || requestedModel
+      : requestedModel;
+    const maxTokens = Math.min(
+      Math.max(1, Math.floor(request.max_tokens || 4096)),
+      MAX_AI_MAX_TOKENS,
+    );
+    let responseFormat: Record<string, unknown> | null = null;
+    if (request.output_schema) {
+      try {
+        responseFormat = structuredOutputResponseFormat(request.output_schema);
+      } catch (error) {
+        return structuredOutputErrorResponse(model, error);
+      }
+    }
+
     // Metered (credits) route: re-check the wallet before EVERY call. The
     // context-build gate only fires once, so without this a sandboxed app could
     // fan out many galactic.ai() calls in one execution and outspend its
@@ -226,15 +315,17 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       try {
         balance = await checkChatBalance(userId);
       } catch (balanceError) {
-        console.warn('[AI-BINDING] Per-call balance re-check unavailable; proceeding un-gated:', balanceError);
+        console.warn(
+          '[AI-BINDING] Per-call balance re-check unavailable; proceeding un-gated:',
+          balanceError,
+        );
       }
       if (balance !== null && balance < CHAT_MIN_BALANCE_LIGHT) {
         return {
           content: '',
           model: request.model || defaultModel || 'none',
           usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
-          error:
-            `Platform inference requires at least ${CHAT_MIN_BALANCE_LIGHT} credits ` +
+          error: `Platform inference requires at least ${CHAT_MIN_BALANCE_LIGHT} credits ` +
             `(current balance: ${balance}). Add credits in the wallet or configure ` +
             `a BYOK provider key in Settings.`,
         };
@@ -242,35 +333,18 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     }
 
     // Format messages — handle multimodal content arrays
-    const messages = request.messages.map(msg => {
-      if (typeof msg.content === 'string') return { role: msg.role, content: msg.content };
-      if (Array.isArray(msg.content)) return { role: msg.role, content: translateParts(msg.content) };
+    const messages = request.messages.map((msg) => {
+      if (typeof msg.content === 'string') {
+        return { role: msg.role, content: msg.content };
+      }
+      if (Array.isArray(msg.content)) {
+        return { role: msg.role, content: translateParts(msg.content) };
+      }
       return { role: msg.role, content: msg.content };
     });
 
-    // Model precedence: see resolveRequestedModel — a pinned per-function
-    // override beats the dev's per-call model; otherwise per-call model >
-    // user's selected model (defaultModel) > platform fallback (deepseek-v4).
-    const requestedModel = resolveRequestedModel({
-      requestModel: request.model,
-      defaultModel,
-      modelPinned,
-      fallbackModel: PLATFORM_FALLBACK_MODEL,
-    });
-    const platformModel = provider === 'ultralight'
-      ? resolvePlatformInferenceModel(requestedModel)
-      : null;
-    let model = platformModel && platformModel.upstreamProvider === upstreamProvider
-      ? platformModel.upstreamModel
-      : provider === 'ultralight' && upstreamProvider === 'openrouter' && platformModel
-      ? platformModel.aliases.find((alias) => alias.includes('/')) || requestedModel
-      : provider === 'ultralight' && upstreamProvider !== 'openrouter'
-      ? defaultModel || requestedModel
-      : requestedModel;
-    const maxTokens = Math.min(
-      Math.max(1, Math.floor(request.max_tokens || 4096)),
-      MAX_AI_MAX_TOKENS,
-    );
+    // Build the exact provider payload only after schema admission and the
+    // metered balance gate have both succeeded.
     const providerPayload = (modelToUse: string) => ({
       // Keep this byte-for-byte aligned with attempt(). Defaults are included
       // because they may carry provider-visible prompt/tool configuration.
@@ -279,9 +353,8 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       messages,
       max_tokens: maxTokens,
       temperature: request.temperature ?? 0.7,
-      ...(Array.isArray(request.tools) && request.tools.length > 0
-        ? { tools: request.tools }
-        : {}),
+      ...(Array.isArray(request.tools) && request.tools.length > 0 ? { tools: request.tools } : {}),
+      ...(responseFormat ? { response_format: responseFormat } : {}),
     });
 
     // Reserve the conservative maximum token cost BEFORE the provider sees the
@@ -291,8 +364,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     // calls reserve 0 Light but still consume one max_calls_per_run slot.
     let routineBudgetReservationId: string | null = null;
     let routineBudgetReservedLight = 0;
-    let routineBudgetPlan: RoutineAIAttemptBudgetPlan =
-      buildRoutineAIAttemptBudget(0);
+    let routineBudgetPlan: RoutineAIAttemptBudgetPlan = buildRoutineAIAttemptBudget(0);
     if (routineContext) {
       const billingModel = billingSource === 'platform_deepseek_direct'
         ? canonicalModelId || defaultModel || model
@@ -321,13 +393,12 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
           : 0;
       };
       const primaryReserveLight = estimateFor(model, billingModel);
-      const fallbackEligible =
-        shouldRetryWithFallbackModel({
-          upstreamProvider,
-          attemptedModel: model,
-          fallbackModel: PLATFORM_FALLBACK_MODEL,
-          modelPinned,
-        });
+      const fallbackEligible = shouldRetryWithFallbackModel({
+        upstreamProvider,
+        attemptedModel: model,
+        fallbackModel: PLATFORM_FALLBACK_MODEL,
+        modelPinned,
+      });
       const fallbackReserveLight = fallbackEligible
         ? estimateFor(PLATFORM_FALLBACK_MODEL, PLATFORM_FALLBACK_MODEL)
         : 0;
@@ -377,7 +448,9 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     }
 
     type CompletionData = {
-      choices: Array<{ message: { content: string } }>;
+      choices: Array<{
+        message: { content: string; parsed?: unknown };
+      }>;
       model: string;
       usage: {
         prompt_tokens: number;
@@ -391,35 +464,47 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     // endpoint fails fast instead of idling the execution to its sandbox abort.
     const attempt = async (
       modelToUse: string,
-    ): Promise<{ data: CompletionData } | { error: string }> => {
-      const remainingMs = executionDeadlineAtMs === null
-        ? AI_FETCH_TIMEOUT_MS
-        : Math.max(
-          0,
-          executionDeadlineAtMs - Date.now() -
-            AI_DEADLINE_SETTLEMENT_HEADROOM_MS,
-        );
+    ): Promise<
+      | { data: CompletionData }
+      | { error: string; status?: number; retryable: boolean }
+    > => {
+      const remainingMs = executionDeadlineAtMs === null ? AI_FETCH_TIMEOUT_MS : Math.max(
+        0,
+        executionDeadlineAtMs - Date.now() -
+          AI_DEADLINE_SETTLEMENT_HEADROOM_MS,
+      );
       const attemptTimeoutMs = Math.min(AI_FETCH_TIMEOUT_MS, remainingMs);
       if (attemptTimeoutMs <= 0) {
-        return { error: 'AI execution deadline reached before provider call' };
+        return {
+          error: 'AI execution deadline reached before provider call',
+          retryable: false,
+        };
       }
       const abort = new AbortController();
       const timeoutId = setTimeout(() => abort.abort(), attemptTimeoutMs);
       try {
-        const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://api.connectgalactic.com',
-            'X-Title': 'Galactic',
+        const response = await fetch(
+          `${baseUrl.replace(/\/$/, '')}/chat/completions`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+              'HTTP-Referer': 'https://api.connectgalactic.com',
+              'X-Title': 'Galactic',
+            },
+            body: JSON.stringify(providerPayload(modelToUse)),
+            signal: abort.signal,
           },
-          body: JSON.stringify(providerPayload(modelToUse)),
-          signal: abort.signal,
-        });
+        );
         if (!response.ok) {
           const errText = await response.text();
-          return { error: `AI call failed (${response.status}): ${errText}` };
+          return {
+            error: `AI call failed (${response.status}): ${errText}`,
+            status: response.status,
+            retryable: response.status === 408 || response.status === 429 ||
+              response.status >= 500,
+          };
         }
         return { data: await response.json() as CompletionData };
       } catch (err) {
@@ -427,6 +512,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
           error: abort.signal.aborted
             ? `AI call timed out after ${Math.round(attemptTimeoutMs / 1000)}s`
             : `AI call failed: ${err instanceof Error ? err.message : String(err)}`,
+          retryable: true,
         };
       } finally {
         clearTimeout(timeoutId);
@@ -440,6 +526,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
     let result = await attempt(model);
     if (
       'error' in result &&
+      result.retryable &&
       shouldRetryWithFallbackModel({
         upstreamProvider,
         attemptedModel: model,
@@ -478,6 +565,13 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
         model,
         usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
         error: result.error,
+        ...(request.output_schema &&
+            isStructuredOutputUnsupportedProviderError(
+              result.error,
+              result.status,
+            )
+          ? { error_code: 'structured_output_unsupported' as const }
+          : {}),
       };
     }
     const data = result.data;
@@ -583,9 +677,12 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
           return {
             content: '',
             model: responseModel,
-            usage: { input_tokens: promptTokens, output_tokens: completionTokens, cost_light: costLight },
-            error:
-              'Insufficient credits to complete this AI call. Add credits in the ' +
+            usage: {
+              input_tokens: promptTokens,
+              output_tokens: completionTokens,
+              cost_light: costLight,
+            },
+            error: 'Insufficient credits to complete this AI call. Add credits in the ' +
               'wallet or configure a BYOK provider key in Settings.',
           };
         }
@@ -614,7 +711,7 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
       });
     }
 
-    return {
+    const response: AIResponse = {
       content: data.choices?.[0]?.message?.content || '',
       model: responseModel,
       usage: {
@@ -624,6 +721,11 @@ export class AIBinding extends WorkerEntrypoint<unknown, AIBindingProps> {
         prompt_cache_hit_tokens: promptCacheHitTokens,
         prompt_cache_miss_tokens: promptCacheMissTokens,
       },
+      ...(request.output_schema &&
+          data.choices?.[0]?.message?.parsed !== undefined
+        ? { output: data.choices[0].message.parsed }
+        : {}),
     };
+    return applyStructuredOutput(response, request.output_schema);
   }
 }

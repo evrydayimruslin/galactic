@@ -1,24 +1,30 @@
-import type { App, HealthWindows, VersionMetadata, VersionTrustMetadata } from "../../shared/types/index.ts";
-import type { AppManifest } from "../../shared/contracts/manifest.ts";
+import type {
+  App,
+  HealthWindows,
+  VersionMetadata,
+  VersionTrustMetadata,
+} from '../../shared/types/index.ts';
+import type { AppManifest } from '../../shared/contracts/manifest.ts';
 import {
   COMPUTE_EXEC_PERMISSION,
-  normalizeManifestComputeConfig,
   type ComputeProfile,
-} from "../../shared/contracts/compute.ts";
+  normalizeManifestComputeConfig,
+} from '../../shared/contracts/compute.ts';
 
 // Runtime-integrity tri-state surfaced on trust cards. Defined here (the trust
 // module) so executed-bundle.ts — which already imports signing helpers from
 // this file — can import it in that same direction, avoiding an import cycle.
-export type ExecutedIntegrity = "verified" | "unverified" | "unknown";
-import { getManifestEnvVars, humanizeEnvVarKey } from "../../shared/contracts/manifest.ts";
+export type ExecutedIntegrity = 'verified' | 'unverified' | 'unknown';
+import { getManifestEnvVars, humanizeEnvVarKey } from '../../shared/contracts/manifest.ts';
 import type {
   LaunchGeneralSetting,
   LaunchNetworkDestination,
   LaunchNetworkDisclosure,
-} from "../../shared/contracts/launch.ts";
-import { getEnv } from "../lib/env.ts";
-import { parseAppManifest, resolveAppEnvSchema } from "./app-settings.ts";
-import { emptyHealth } from "./app-health.ts";
+} from '../../shared/contracts/launch.ts';
+import { getEnv } from '../lib/env.ts';
+import { parseAppManifest, resolveAppEnvSchema } from './app-settings.ts';
+import { emptyHealth } from './app-health.ts';
+import { type BytePreservingSourceContent, sourceFileBytes } from './source-file-content.ts';
 
 export interface TrustArtifactFile {
   name: string;
@@ -83,8 +89,8 @@ export interface TrustCard {
   required_secrets: string[];
   per_user_secrets: string[];
   access: {
-    visibility: App["visibility"];
-    download_access: App["download_access"];
+    visibility: App['visibility'];
+    download_access: App['download_access'];
   };
   // Open code: the source is downloadable (download_access === "public"), so an
   // Agent can read it AND verify each file against the signed artifact_hashes via
@@ -106,8 +112,8 @@ export interface TrustCard {
   developer_can_read_user_data: boolean;
   execution_receipts: {
     enabled: true;
-    field: "receipt_id";
-    backing_log: "mcp_call_logs.id";
+    field: 'receipt_id';
+    backing_log: 'mcp_call_logs.id';
   };
 }
 
@@ -117,12 +123,13 @@ function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(canonicalize);
   }
-  if (value && typeof value === "object") {
-    const result: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      result[key] = canonicalize((value as Record<string, unknown>)[key]);
-    }
-    return result;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>).sort().map((key) => [
+        key,
+        canonicalize((value as Record<string, unknown>)[key]),
+      ]),
+    );
   }
   return value;
 }
@@ -132,52 +139,57 @@ export function canonicalJson(value: unknown): string {
 }
 
 function bytesFromContent(content: Uint8Array | string): Uint8Array {
-  return typeof content === "string" ? encoder.encode(content) : content;
+  return typeof content === 'string' ? encoder.encode(content) : content;
 }
 
 function arrayBufferFromContent(content: Uint8Array | string): ArrayBuffer {
   const bytes = bytesFromContent(content);
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
 }
 
 function toHex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 export async function sha256Hex(content: Uint8Array | string): Promise<string> {
-  return toHex(await crypto.subtle.digest("SHA-256", arrayBufferFromContent(content)));
+  return toHex(
+    await crypto.subtle.digest('SHA-256', arrayBufferFromContent(content)),
+  );
 }
 
 function resolveTrustSigningSecret(): string {
-  const dedicated = getEnv("LIGHT_TRUST_SIGNING_SECRET") ||
-    getEnv("TRUST_SIGNING_SECRET");
+  const dedicated = getEnv('LIGHT_TRUST_SIGNING_SECRET') ||
+    getEnv('TRUST_SIGNING_SECRET');
   if (dedicated) return dedicated;
   // Fail closed in EVERY deployed environment (production, staging, …): never
   // sign trust artifacts with the DB service-role key (the old fallback —
   // key-reuse with the god key) or a public dev constant. A dedicated
   // TRUST_SIGNING_SECRET MUST be set before deploy; the dev default is only for
   // local/test (ENVIRONMENT unset, "development", or "test").
-  const environment = getEnv("ENVIRONMENT");
-  if (environment && environment !== "development" && environment !== "test") {
+  const environment = getEnv('ENVIRONMENT');
+  if (environment && environment !== 'development' && environment !== 'test') {
     throw new Error(
-      "TRUST_SIGNING_SECRET (or LIGHT_TRUST_SIGNING_SECRET) must be set in " +
+      'TRUST_SIGNING_SECRET (or LIGHT_TRUST_SIGNING_SECRET) must be set in ' +
         `non-development environments (ENVIRONMENT=${environment})`,
     );
   }
-  return "development-trust-signing-secret";
+  return 'development-trust-signing-secret';
 }
 
 async function hmacSha256Hex(content: string): Promise<string> {
   const key = await crypto.subtle.importKey(
-    "raw",
+    'raw',
     encoder.encode(resolveTrustSigningSecret()),
-    { name: "HMAC", hash: "SHA-256" },
+    { name: 'HMAC', hash: 'SHA-256' },
     false,
-    ["sign"],
+    ['sign'],
   );
-  return toHex(await crypto.subtle.sign("HMAC", key, encoder.encode(content)));
+  return toHex(await crypto.subtle.sign('HMAC', key, encoder.encode(content)));
 }
 
 // Sign a message with the platform trust secret (HMAC-SHA256). Exported so the
@@ -206,7 +218,7 @@ export async function verifyVersionTrustSignature(
   metadata: VersionTrustMetadata | null | undefined,
 ): Promise<boolean> {
   if (!metadata?.signature?.signature) return false;
-  if (metadata.signature.algorithm !== "HMAC-SHA256") return false;
+  if (metadata.signature.algorithm !== 'HMAC-SHA256') return false;
   const { signature, ...unsigned } = metadata;
   try {
     const expected = await hmacSha256Hex(canonicalJson(unsigned));
@@ -218,10 +230,16 @@ export async function verifyVersionTrustSignature(
   }
 }
 
-export function getManifestPermissions(manifest: AppManifest | string | null | undefined): string[] {
+export function getManifestPermissions(
+  manifest: AppManifest | string | null | undefined,
+): string[] {
   const parsed = parseAppManifest(manifest);
   if (!Array.isArray(parsed?.permissions)) return [];
-  return [...new Set(parsed.permissions.filter((permission) => typeof permission === "string"))];
+  return [
+    ...new Set(
+      parsed.permissions.filter((permission) => typeof permission === 'string'),
+    ),
+  ];
 }
 
 // Canonical outbound hosts an app has declared in network.allowed_destinations.
@@ -235,12 +253,10 @@ export function getManifestAllowedDestinations(
   if (!Array.isArray(dests)) return [];
   const hosts: string[] = [];
   for (const dest of dests) {
-    const host = typeof dest === "string"
+    const host = typeof dest === 'string'
       ? dest
-      : (dest && typeof dest === "object"
-        ? (dest as { host?: unknown }).host
-        : undefined);
-    if (typeof host === "string" && host.trim()) {
+      : (dest && typeof dest === 'object' ? (dest as { host?: unknown }).host : undefined);
+    if (typeof host === 'string' && host.trim()) {
       hosts.push(host.trim().toLowerCase());
     }
   }
@@ -270,21 +286,19 @@ export function buildAppNetworkDisclosure(
   const rawDests = parsed?.network?.allowed_destinations;
   if (Array.isArray(rawDests)) {
     for (const dest of rawDests) {
-      const host = typeof dest === "string"
+      const host = typeof dest === 'string'
         ? dest
-        : (dest && typeof dest === "object"
-          ? (dest as { host?: unknown }).host
-          : undefined);
-      if (typeof host !== "string" || !host.trim()) continue;
+        : (dest && typeof dest === 'object' ? (dest as { host?: unknown }).host : undefined);
+      if (typeof host !== 'string' || !host.trim()) continue;
       const hostKey = host.trim().toLowerCase();
       if (destinations.has(hostKey)) continue;
-      const meta = (dest && typeof dest === "object")
+      const meta = (dest && typeof dest === 'object')
         ? dest as { label?: unknown; description?: unknown }
         : {};
       destinations.set(hostKey, {
         host: hostKey,
-        label: typeof meta.label === "string" ? meta.label : null,
-        description: typeof meta.description === "string" ? meta.description : null,
+        label: typeof meta.label === 'string' ? meta.label : null,
+        description: typeof meta.description === 'string' ? meta.description : null,
         credentials: [],
       });
     }
@@ -295,11 +309,9 @@ export function buildAppNetworkDisclosure(
   if (envVars) {
     for (const [key, entry] of Object.entries(envVars)) {
       // Only per-user vars are user-configurable; universal vars are developer-set.
-      if ((entry.scope ?? entry.type) !== "per_user") continue;
+      if ((entry.scope ?? entry.type) !== 'per_user') continue;
 
-      const label = entry.label && entry.label.trim()
-        ? entry.label.trim()
-        : humanizeEnvVarKey(key);
+      const label = entry.label && entry.label.trim() ? entry.label.trim() : humanizeEnvVarKey(key);
       const required = entry.required ?? false;
       const connected = connectedKeys ? connectedKeys.has(key) : undefined;
       const destHost = entry.credential?.destination?.trim().toLowerCase();
@@ -309,7 +321,12 @@ export function buildAppNetworkDisclosure(
         if (!dest) {
           // Tolerate a credential whose destination isn't in the allowlist
           // (validateManifest normally prevents this) — still surface it.
-          dest = { host: destHost, label: null, description: null, credentials: [] };
+          dest = {
+            host: destHost,
+            label: null,
+            description: null,
+            credentials: [],
+          };
           destinations.set(destHost, dest);
         }
         dest.credentials.push({ key, label, required, connected });
@@ -320,9 +337,9 @@ export function buildAppNetworkDisclosure(
         key,
         label,
         description: entry.description ?? null,
-        input: entry.input ?? "text",
+        input: entry.input ?? 'text',
         required,
-        secret: (entry.input ?? "text") === "password",
+        secret: (entry.input ?? 'text') === 'password',
         group: entry.group ?? null,
         connected,
       });
@@ -335,7 +352,9 @@ export function buildAppNetworkDisclosure(
   };
 }
 
-export function getManifestEntrypoints(manifest: AppManifest | string | null | undefined): string[] {
+export function getManifestEntrypoints(
+  manifest: AppManifest | string | null | undefined,
+): string[] {
   const parsed = parseAppManifest(manifest);
   const entrypoints: string[] = [];
   if (parsed?.entry?.functions) entrypoints.push(parsed.entry.functions);
@@ -357,7 +376,7 @@ function getSecretKeys(manifest: AppManifest | string | null | undefined): {
   const perUserSecrets: string[] = [];
   for (const [key, entry] of Object.entries(envVars)) {
     if (entry.required) requiredSecrets.push(key);
-    if ((entry.scope || entry.type) === "per_user") perUserSecrets.push(key);
+    if ((entry.scope || entry.type) === 'per_user') perUserSecrets.push(key);
   }
   return {
     requiredSecrets: requiredSecrets.sort(),
@@ -371,20 +390,20 @@ export function generateGpuManifest(input: {
   description?: string | null;
   exports: string[];
 }): AppManifest {
-  const functions: NonNullable<AppManifest["functions"]> = {};
-  for (const fnName of input.exports.length > 0 ? input.exports : ["main"]) {
+  const functions: NonNullable<AppManifest['functions']> = {};
+  for (const fnName of input.exports.length > 0 ? input.exports : ['main']) {
     functions[fnName] = {
       description: `GPU function ${fnName}`,
       parameters: {
         input: {
-          type: "object",
-          description: "Function input payload",
+          type: 'object',
+          description: 'Function input payload',
           required: false,
         },
       },
       returns: {
-        type: "object",
-        description: "Function result",
+        type: 'object',
+        description: 'Function result',
       },
     };
   }
@@ -393,10 +412,10 @@ export function generateGpuManifest(input: {
     name: input.name,
     version: input.version,
     description: input.description || undefined,
-    type: "mcp",
-    entry: { functions: "main.py" },
+    type: 'mcp',
+    entry: { functions: 'main.py' },
     functions,
-    permissions: ["gpu:execute"],
+    permissions: ['gpu:execute'],
   };
 }
 
@@ -409,10 +428,10 @@ export function buildDescriptionHashInput(
 ): { app: string; functions: Record<string, string> } {
   const functions: Record<string, string> = {};
   for (const [name, fn] of Object.entries(manifest?.functions || {})) {
-    functions[name] = typeof fn?.description === "string" ? fn.description : "";
+    functions[name] = typeof fn?.description === 'string' ? fn.description : '';
   }
   return {
-    app: typeof manifest?.description === "string" ? manifest.description : "",
+    app: typeof manifest?.description === 'string' ? manifest.description : '',
     functions,
   };
 }
@@ -433,7 +452,9 @@ export async function buildVersionTrustMetadata(input: {
   );
 
   const artifactHashes: Record<string, string> = {};
-  for (const file of [...input.files].sort((a, b) => a.name.localeCompare(b.name))) {
+  for (
+    const file of [...input.files].sort((a, b) => a.name.localeCompare(b.name))
+  ) {
     artifactHashes[file.name] = await sha256Hex(file.content);
   }
   const artifactHash = await sha256Hex(canonicalJson(artifactHashes));
@@ -458,11 +479,11 @@ export async function buildVersionTrustMetadata(input: {
   return {
     ...unsigned,
     signature: {
-      algorithm: "HMAC-SHA256",
-      signer: "light-platform",
+      algorithm: 'HMAC-SHA256',
+      signer: 'light-platform',
       signed_at: new Date().toISOString(),
       signature: await hmacSha256Hex(canonicalJson(unsigned)),
-      key_hint: "platform",
+      key_hint: 'platform',
     },
   };
 }
@@ -472,7 +493,8 @@ export function buildVersionMetadataEntry(
   sizeBytes: number,
   trust: VersionTrustMetadata,
   sourceHash?: string,
-  testAttestation?: VersionMetadata["test_attestation"],
+  testAttestation?: VersionMetadata['test_attestation'],
+  bundleId?: string,
 ): VersionMetadata {
   return {
     version,
@@ -481,6 +503,7 @@ export function buildVersionMetadataEntry(
     trust,
     ...(sourceHash ? { source_hash: sourceHash } : {}),
     ...(testAttestation ? { test_attestation: testAttestation } : {}),
+    ...(bundleId ? { bundle_id: bundleId } : {}),
   };
 }
 
@@ -495,7 +518,7 @@ export function buildVersionMetadataEntry(
  * byte-identical files.
  */
 export async function computeUploadSourceHash(
-  files: Array<{ path: string; content: string }>,
+  files: Array<{ path: string } & BytePreservingSourceContent>,
 ): Promise<string> {
   const perFile: Array<[string, string]> = [];
   const seen = new Set<string>();
@@ -504,18 +527,16 @@ export async function computeUploadSourceHash(
       throw new Error(`Duplicate source file path: ${f.path}`);
     }
     seen.add(f.path);
-    perFile.push([f.path, await sha256Hex(f.content)]);
+    perFile.push([f.path, await sha256Hex(sourceFileBytes(f))]);
   }
   return await sha256Hex(canonicalJson(perFile));
 }
 
 /** The live version's stored raw-source hash, if any. */
 export function getLatestVersionSourceHash(
-  app: Pick<App, "current_version" | "version_metadata">,
+  app: Pick<App, 'current_version' | 'version_metadata'>,
 ): string | null {
-  const metadata = Array.isArray(app.version_metadata)
-    ? app.version_metadata
-    : [];
+  const metadata = Array.isArray(app.version_metadata) ? app.version_metadata : [];
   for (let i = metadata.length - 1; i >= 0; i--) {
     const entry = metadata[i];
     if (entry?.version === app.current_version && entry.source_hash) {
@@ -532,7 +553,9 @@ export function appendVersionTrustMetadata(
   return [...(Array.isArray(versionMetadata) ? versionMetadata : []), entry];
 }
 
-export function getLatestVersionTrust(app: Pick<App, "current_version" | "version_metadata">): VersionTrustMetadata | null {
+export function getLatestVersionTrust(
+  app: Pick<App, 'current_version' | 'version_metadata'>,
+): VersionTrustMetadata | null {
   const metadata = Array.isArray(app.version_metadata) ? app.version_metadata : [];
   for (let i = metadata.length - 1; i >= 0; i--) {
     const entry = metadata[i];
@@ -550,7 +573,7 @@ export function getLatestVersionTrust(app: Pick<App, "current_version" | "versio
  * and what is enforced can never drift.
  */
 export function resolveAppPermissions(
-  app: Pick<App, "current_version" | "version_metadata" | "manifest">,
+  app: Pick<App, 'current_version' | 'version_metadata' | 'manifest'>,
 ): string[] {
   const trust = getLatestVersionTrust(app);
   return trust?.permissions.length
@@ -559,10 +582,19 @@ export function resolveAppPermissions(
 }
 
 /** The permission a developer declares to unlock the disclosed support data-read. */
-export const SUPPORT_DATA_READ_PERMISSION = "data:support_read";
+export const SUPPORT_DATA_READ_PERMISSION = 'data:support_read';
 
 export function buildAppTrustCard(
-  app: Pick<App, "current_version" | "runtime" | "manifest" | "version_metadata" | "visibility" | "download_access" | "env_schema">,
+  app: Pick<
+    App,
+    | 'current_version'
+    | 'runtime'
+    | 'manifest'
+    | 'version_metadata'
+    | 'visibility'
+    | 'download_access'
+    | 'env_schema'
+  >,
   options: {
     reliability?: unknown;
     publisher_verified?: boolean;
@@ -572,7 +604,9 @@ export function buildAppTrustCard(
     executed_integrity?: ExecutedIntegrity;
   } = {},
 ): TrustCard {
-  const trust = getLatestVersionTrust(app as Pick<App, "current_version" | "version_metadata">);
+  const trust = getLatestVersionTrust(
+    app as Pick<App, 'current_version' | 'version_metadata'>,
+  );
   const permissions = resolveAppPermissions(app);
   const parsedManifest = parseAppManifest(app.manifest);
   const compute = normalizeManifestComputeConfig(parsedManifest?.compute);
@@ -582,18 +616,18 @@ export function buildAppTrustCard(
     .map(([key]) => key)
     .sort();
   const perUserSecrets = Object.entries(envSchema)
-    .filter(([, entry]) => entry.scope === "per_user")
+    .filter(([, entry]) => entry.scope === 'per_user')
     .map(([key]) => key)
     .sort();
 
   return {
     schema_version: 1,
     signed_manifest: !!trust?.signature && !!trust.manifest_hash,
-    executed_integrity: options.executed_integrity ?? "unknown",
+    executed_integrity: options.executed_integrity ?? 'unknown',
     signer: trust?.signature.signer || null,
     signed_at: trust?.signature.signed_at || null,
     version: app.current_version || trust?.version || null,
-    runtime: app.runtime || "deno",
+    runtime: app.runtime || 'deno',
     manifest_hash: trust?.manifest_hash || null,
     description_hash: trust?.description_hash || null,
     artifact_hash: trust?.artifact_hash || null,
@@ -601,11 +635,14 @@ export function buildAppTrustCard(
     artifact_count: trust ? Object.keys(trust.artifact_hashes).length : 0,
     permissions,
     capability_summary: {
-      ai: permissions.includes("ai:call"),
-      network: permissions.some((permission) => permission === "net:fetch" || permission === "net:connect" || permission.startsWith("net:")),
-      storage: permissions.some((permission) => permission.startsWith("storage:")),
-      memory: permissions.some((permission) => permission.startsWith("memory:")),
-      gpu: permissions.includes("gpu:execute") || app.runtime === "gpu",
+      ai: permissions.includes('ai:call'),
+      network: permissions.some((permission) =>
+        permission === 'net:fetch' || permission === 'net:connect' ||
+        permission.startsWith('net:')
+      ),
+      storage: permissions.some((permission) => permission.startsWith('storage:')),
+      memory: permissions.some((permission) => permission.startsWith('memory:')),
+      gpu: permissions.includes('gpu:execute') || app.runtime === 'gpu',
       compute: permissions.includes(COMPUTE_EXEC_PERMISSION),
     },
     compute: {
@@ -620,17 +657,19 @@ export function buildAppTrustCard(
       visibility: app.visibility,
       download_access: app.download_access,
     },
-    open_code: app.download_access === "public",
+    open_code: app.download_access === 'public',
     publisher_verified: options.publisher_verified ?? false,
     health: options.health ?? emptyHealth(),
     // Derived from the SAME permission set the runtime gate enforces (see
     // resolveAppPermissions), so what's disclosed here == what's actually allowed.
-    developer_can_read_user_data: permissions.includes(SUPPORT_DATA_READ_PERMISSION),
+    developer_can_read_user_data: permissions.includes(
+      SUPPORT_DATA_READ_PERMISSION,
+    ),
     ...(options.reliability !== undefined ? { reliability: options.reliability } : {}),
     execution_receipts: {
       enabled: true,
-      field: "receipt_id",
-      backing_log: "mcp_call_logs.id",
+      field: 'receipt_id',
+      backing_log: 'mcp_call_logs.id',
     },
   };
 }
@@ -639,20 +678,29 @@ function namesFromFunctions(manifest: AppManifest | null): string[] {
   return Object.keys(manifest?.functions || {}).sort();
 }
 
-function changedFunctionNames(previous: AppManifest | null, next: AppManifest | null): string[] {
+function changedFunctionNames(
+  previous: AppManifest | null,
+  next: AppManifest | null,
+): string[] {
   const changed: string[] = [];
   const previousFunctions = previous?.functions || {};
   const nextFunctions = next?.functions || {};
   for (const name of Object.keys(previousFunctions)) {
     if (!nextFunctions[name]) continue;
-    if (canonicalJson(previousFunctions[name]) !== canonicalJson(nextFunctions[name])) {
+    if (
+      canonicalJson(previousFunctions[name]) !==
+        canonicalJson(nextFunctions[name])
+    ) {
       changed.push(name);
     }
   }
   return changed.sort();
 }
 
-function diffKeys(previous: string[], next: string[]): { added: string[]; removed: string[] } {
+function diffKeys(
+  previous: string[],
+  next: string[],
+): { added: string[]; removed: string[] } {
   const previousSet = new Set(previous);
   const nextSet = new Set(next);
   return {
@@ -661,20 +709,33 @@ function diffKeys(previous: string[], next: string[]): { added: string[]; remove
   };
 }
 
-export function diffManifests(previousManifest: unknown, nextManifest: unknown): ManifestDiff {
+export function diffManifests(
+  previousManifest: unknown,
+  nextManifest: unknown,
+): ManifestDiff {
   const previous = parseAppManifest(previousManifest);
   const next = parseAppManifest(nextManifest);
-  const previousSecrets = getSecretKeys(previous).requiredSecrets.concat(getSecretKeys(previous).perUserSecrets);
-  const nextSecrets = getSecretKeys(next).requiredSecrets.concat(getSecretKeys(next).perUserSecrets);
+  const previousSecrets = getSecretKeys(previous).requiredSecrets.concat(
+    getSecretKeys(previous).perUserSecrets,
+  );
+  const nextSecrets = getSecretKeys(next).requiredSecrets.concat(
+    getSecretKeys(next).perUserSecrets,
+  );
 
   return {
     functions: {
       ...diffKeys(namesFromFunctions(previous), namesFromFunctions(next)),
       changed: changedFunctionNames(previous, next),
     },
-    permissions: diffKeys(getManifestPermissions(previous).sort(), getManifestPermissions(next).sort()),
+    permissions: diffKeys(
+      getManifestPermissions(previous).sort(),
+      getManifestPermissions(next).sort(),
+    ),
     secrets: {
-      ...diffKeys([...new Set(previousSecrets)].sort(), [...new Set(nextSecrets)].sort()),
+      ...diffKeys(
+        [...new Set(previousSecrets)].sort(),
+        [...new Set(nextSecrets)].sort(),
+      ),
       changed: [],
     },
   };

@@ -1,20 +1,19 @@
-import { getEnv } from "../lib/env.ts";
-import type {
-  VersionMetadata,
-  VersionTestAttestationMetadata,
-} from "../../shared/types/index.ts";
+import { getEnv } from '../lib/env.ts';
+import type { VersionMetadata, VersionTestAttestationMetadata } from '../../shared/types/index.ts';
+import { computeUploadSourceHash, signWithTrustSecret } from './trust.ts';
 import {
-  computeUploadSourceHash,
-  signWithTrustSecret,
-} from "./trust.ts";
+  bytesToBinaryString,
+  decodeBase64Bytes,
+  isBinarySourcePath,
+} from './source-file-content.ts';
 
-const TOKEN_PREFIX = "gxt1";
-const SIGNING_DOMAIN = "gx.test/v1";
+const TOKEN_PREFIX = 'gxt1';
+const SIGNING_DOMAIN = 'gx.test/v1';
 const DEFAULT_TTL_SECONDS = 15 * 60;
 const MIN_TTL_SECONDS = 60;
 const MAX_TTL_SECONDS = 60 * 60;
 
-export type TestAttestationMode = "deno_execution" | "gpu_validation";
+export type TestAttestationMode = 'deno_execution' | 'gpu_validation';
 
 export interface EncodedSourceFile {
   path: string;
@@ -25,11 +24,13 @@ export interface EncodedSourceFile {
 export interface DecodedSourceFile {
   path: string;
   content: string;
+  /** Present only for byte-oriented artifacts; authoritative over `content`. */
+  bytes?: Uint8Array;
 }
 
 export interface TestAttestationClaims {
   schema_version: 1;
-  purpose: "gx.test";
+  purpose: 'gx.test';
   attestation_id: string;
   user_id: string;
   source_hash: string;
@@ -40,13 +41,13 @@ export interface TestAttestationClaims {
 }
 
 export type TestAttestationVerificationReason =
-  | "missing"
-  | "malformed"
-  | "bad_signature"
-  | "expired"
-  | "wrong_user"
-  | "wrong_source"
-  | "wrong_mode";
+  | 'missing'
+  | 'malformed'
+  | 'bad_signature'
+  | 'expired'
+  | 'wrong_user'
+  | 'wrong_source'
+  | 'wrong_mode';
 
 export type TestAttestationVerification =
   | { valid: true; claims: TestAttestationClaims }
@@ -54,26 +55,30 @@ export type TestAttestationVerification =
 
 const MAX_SOURCE_PATH_LENGTH = 512;
 
-function validateSourceFilePath(path: unknown, index: number): string {
-  if (typeof path !== "string" || path.length === 0) {
+export function validateSourceFilePath(path: unknown, index: number): string {
+  if (typeof path !== 'string' || path.length === 0) {
     throw new Error(`files[${index}].path is required`);
   }
   if (path !== path.trim()) {
-    throw new Error(`Source file path must not contain surrounding whitespace: ${path}`);
+    throw new Error(
+      `Source file path must not contain surrounding whitespace: ${path}`,
+    );
   }
   if (path.length > MAX_SOURCE_PATH_LENGTH) {
     throw new Error(
       `Source file path exceeds ${MAX_SOURCE_PATH_LENGTH} characters: ${path}`,
     );
   }
-  if (path.startsWith("/") || path.includes("\\")) {
+  if (path.startsWith('/') || path.includes('\\')) {
     throw new Error(`Source file path must be a relative POSIX path: ${path}`);
   }
   if (/[\u0000-\u001f\u007f]/.test(path)) {
     throw new Error(`Source file path contains control characters: ${path}`);
   }
-  const segments = path.split("/");
-  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+  const segments = path.split('/');
+  if (
+    segments.some((segment) => !segment || segment === '.' || segment === '..')
+  ) {
     throw new Error(`Source file path is not canonical: ${path}`);
   }
   return path;
@@ -81,21 +86,21 @@ function validateSourceFilePath(path: unknown, index: number): string {
 
 function base64UrlEncode(value: string): string {
   const bytes = new TextEncoder().encode(value);
-  let binary = "";
+  let binary = '';
   for (let i = 0; i < bytes.length; i += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   }
   return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
 }
 
 function base64UrlDecode(value: string): string {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("invalid base64url");
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error('invalid base64url');
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
   const binary = atob(
-    normalized + "=".repeat((4 - normalized.length % 4) % 4),
+    normalized + '='.repeat((4 - normalized.length % 4) % 4),
   );
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
   return new TextDecoder().decode(bytes);
@@ -111,7 +116,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 function configuredTtlSeconds(): number {
-  const configured = Number(getEnv("GX_TEST_ATTESTATION_TTL_SECONDS"));
+  const configured = Number(getEnv('GX_TEST_ATTESTATION_TTL_SECONDS'));
   if (!Number.isFinite(configured)) return DEFAULT_TTL_SECONDS;
   return Math.max(
     MIN_TTL_SECONDS,
@@ -120,53 +125,74 @@ function configuredTtlSeconds(): number {
 }
 
 function isClaims(value: unknown): value is TestAttestationClaims {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const claims = value as Record<string, unknown>;
   return claims.schema_version === 1 &&
-    claims.purpose === "gx.test" &&
-    typeof claims.attestation_id === "string" &&
+    claims.purpose === 'gx.test' &&
+    typeof claims.attestation_id === 'string' &&
     claims.attestation_id.length > 0 &&
-    typeof claims.user_id === "string" &&
+    typeof claims.user_id === 'string' &&
     claims.user_id.length > 0 &&
-    typeof claims.source_hash === "string" &&
+    typeof claims.source_hash === 'string' &&
     /^[a-f0-9]{64}$/.test(claims.source_hash) &&
-    (claims.mode === "deno_execution" || claims.mode === "gpu_validation") &&
+    (claims.mode === 'deno_execution' || claims.mode === 'gpu_validation') &&
     claims.lint_error_count === 0 &&
-    typeof claims.tested_at === "string" &&
+    typeof claims.tested_at === 'string' &&
     Number.isFinite(Date.parse(claims.tested_at)) &&
-    typeof claims.expires_at === "string" &&
+    typeof claims.expires_at === 'string' &&
     Number.isFinite(Date.parse(claims.expires_at));
 }
 
-/** Decode exactly the file bytes-as-text that gx.upload will deploy. */
+/**
+ * Decode exactly the bytes that gx.upload will deploy.
+ *
+ * Text base64 is decoded as UTF-8 so it has the same source identity as the
+ * equivalent text input. WebAssembly is byte-oriented and must use base64;
+ * its exact decoded bytes are carried separately through the upload pipeline.
+ */
 export function decodeSourceFileSet(
   files: EncodedSourceFile[],
 ): DecodedSourceFile[] {
   if (!Array.isArray(files) || files.length === 0) {
-    throw new Error("files array is required and must not be empty");
+    throw new Error('files array is required and must not be empty');
   }
   const seen = new Set<string>();
   return files.map((file, index) => {
-    if (!file || typeof file !== "object") {
+    if (!file || typeof file !== 'object') {
       throw new Error(`files[${index}] must be an object`);
     }
     const path = validateSourceFilePath(file.path, index);
     if (seen.has(path)) throw new Error(`Duplicate source file path: ${path}`);
     seen.add(path);
-    if (typeof file.content !== "string") {
+    if (typeof file.content !== 'string') {
       throw new Error(`files[${index}].content must be a string`);
     }
-    const encoding = file.encoding || "text";
-    if (encoding !== "text" && encoding !== "base64") {
+    const encoding = file.encoding || 'text';
+    if (encoding !== 'text' && encoding !== 'base64') {
       throw new Error(`Unsupported encoding for ${path}: ${encoding}`);
     }
+    const binary = isBinarySourcePath(path);
+    if (binary && encoding !== 'base64') {
+      throw new Error(`Binary source file ${path} must use base64 encoding`);
+    }
     try {
+      if (encoding !== 'base64') {
+        return { path, content: file.content };
+      }
+      const bytes = decodeBase64Bytes(file.content);
+      if (binary) {
+        return {
+          path,
+          content: bytesToBinaryString(bytes),
+          bytes,
+        };
+      }
       return {
         path,
-        content: encoding === "base64" ? atob(file.content) : file.content,
+        content: new TextDecoder('utf-8', { fatal: true }).decode(bytes),
       };
     } catch {
-      throw new Error(`Invalid base64 content for ${path}`);
+      throw new Error(`Invalid base64 or UTF-8 content for ${path}`);
     }
   });
 }
@@ -188,7 +214,7 @@ export async function issueTestAttestation(input: {
   const ttlSeconds = input.ttlSeconds ?? configuredTtlSeconds();
   const claims: TestAttestationClaims = {
     schema_version: 1,
-    purpose: "gx.test",
+    purpose: 'gx.test',
     attestation_id: crypto.randomUUID(),
     user_id: input.userId,
     source_hash: input.sourceHash,
@@ -210,42 +236,42 @@ export async function verifyTestAttestation(input: {
   mode: TestAttestationMode;
   now?: Date;
 }): Promise<TestAttestationVerification> {
-  if (typeof input.token !== "string" || input.token.length === 0) {
-    return { valid: false, reason: "missing" };
+  if (typeof input.token !== 'string' || input.token.length === 0) {
+    return { valid: false, reason: 'missing' };
   }
-  if (input.token.length > 4096) return { valid: false, reason: "malformed" };
-  const parts = input.token.split(".");
+  if (input.token.length > 4096) return { valid: false, reason: 'malformed' };
+  const parts = input.token.split('.');
   if (parts.length !== 3 || parts[0] !== TOKEN_PREFIX) {
-    return { valid: false, reason: "malformed" };
+    return { valid: false, reason: 'malformed' };
   }
   const [, encoded, signature] = parts;
   if (!/^[a-f0-9]{64}$/.test(signature)) {
-    return { valid: false, reason: "malformed" };
+    return { valid: false, reason: 'malformed' };
   }
   let claims: unknown;
   try {
     claims = JSON.parse(base64UrlDecode(encoded));
   } catch {
-    return { valid: false, reason: "malformed" };
+    return { valid: false, reason: 'malformed' };
   }
-  if (!isClaims(claims)) return { valid: false, reason: "malformed" };
+  if (!isClaims(claims)) return { valid: false, reason: 'malformed' };
 
   const expected = await signWithTrustSecret(`${SIGNING_DOMAIN}.${encoded}`);
   if (!timingSafeEqual(expected, signature)) {
-    return { valid: false, reason: "bad_signature" };
+    return { valid: false, reason: 'bad_signature' };
   }
   const now = input.now ?? new Date();
   if (Date.parse(claims.expires_at) <= now.getTime()) {
-    return { valid: false, reason: "expired" };
+    return { valid: false, reason: 'expired' };
   }
   if (claims.user_id !== input.userId) {
-    return { valid: false, reason: "wrong_user" };
+    return { valid: false, reason: 'wrong_user' };
   }
   if (claims.source_hash !== input.sourceHash) {
-    return { valid: false, reason: "wrong_source" };
+    return { valid: false, reason: 'wrong_source' };
   }
   if (claims.mode !== input.mode) {
-    return { valid: false, reason: "wrong_mode" };
+    return { valid: false, reason: 'wrong_mode' };
   }
   return { valid: true, claims };
 }
@@ -268,7 +294,9 @@ export function persistedTestAttestation(
 export function findPersistedTestAttestation(
   metadata: VersionMetadata[] | null | undefined,
   version: string,
-): { entry: VersionMetadata; attestation: VersionTestAttestationMetadata } | null {
+):
+  | { entry: VersionMetadata; attestation: VersionTestAttestationMetadata }
+  | null {
   if (!Array.isArray(metadata)) return null;
   for (let i = metadata.length - 1; i >= 0; i--) {
     const entry = metadata[i];
@@ -285,9 +313,7 @@ export function findPersistedTestAttestation(
     ) {
       return null;
     }
-    const expectedMode = entry.trust?.runtime === "gpu"
-      ? "gpu_validation"
-      : "deno_execution";
+    const expectedMode = entry.trust?.runtime === 'gpu' ? 'gpu_validation' : 'deno_execution';
     if (attestation.mode !== expectedMode) return null;
     return { entry, attestation };
   }

@@ -111,6 +111,9 @@ List only the audits relevant to this candidate.
 | Manifest coverage audit | `audits/manifest-coverage-audit.json` | | |
 | Token compatibility audit | `audits/token-compat-audit.json` | | |
 | Secret crypto audit | `audits/secret-crypto-audit.json` | | |
+| Staged-bundle R2 lifecycle | `audits/staged-bundle-lifecycle.txt` | | `staged-bundles/`, exactly 7-day deletion |
+| Project-capsule R2 lifecycle | `audits/project-capsule-lifecycle.txt` | | `project-capsules/`, exactly 31-day deletion |
+| Staged-bundle quota reconciliation | `audits/staged-bundle-quota-cleanup.txt` | | hourly bounded cleanup succeeded |
 
 ## Manual Checks
 
@@ -163,6 +166,8 @@ List only what is still relevant to this candidate.
 - [ ] launch-web Pages smoke passed with exact Pages/API URLs recorded
 - [ ] canonical website + connected-agent journey completed
 - [ ] required audits reviewed
+- [ ] exact `staged-bundles/` (7-day) and `project-capsules/` (31-day) R2 lifecycle rules verified when Builder Milestone 1 is in scope
+- [ ] staged-bundle quota migration and service-role-only RPC verified when Builder Milestone 1 is in scope
 - [ ] restore / rollback evidence reviewed when in scope
 - [ ] unresolved exceptions explicitly accepted or cleared
 - [ ] scorecard reviewed per the launch signoff policy

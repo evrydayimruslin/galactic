@@ -3,33 +3,36 @@ import type {
   AIResponse,
   ChatUsage,
   InferenceRoutePreference,
-} from "../../shared/contracts/ai.ts";
-import { CHAT_MIN_BALANCE_LIGHT } from "../../shared/contracts/ai.ts";
-import type { RuntimeAIRoute } from "../runtime/sandbox.ts";
-import { buildAIProviderRequestBody, createAIService } from "./ai.ts";
-import { recordUnbilledAiUsage } from "./ai-usage-events.ts";
-import {
-  calculateCostLight,
-  checkChatBalance,
-  deductChatCost,
-} from "./chat-billing.ts";
-import { isFreeModeEnabled } from "./free-mode.ts";
-import { selectInferenceModel } from "./inference-client.ts";
+} from '../../shared/contracts/ai.ts';
+import { CHAT_MIN_BALANCE_LIGHT } from '../../shared/contracts/ai.ts';
+import type { RuntimeAIRoute } from '../runtime/sandbox.ts';
+import { AIProviderError, buildAIProviderRequestBody, createAIService } from './ai.ts';
+import { recordUnbilledAiUsage } from './ai-usage-events.ts';
+import { calculateCostLight, checkChatBalance, deductChatCost } from './chat-billing.ts';
+import { isFreeModeEnabled } from './free-mode.ts';
+import { selectInferenceModel } from './inference-client.ts';
 import {
   releaseRoutineRunBudgetReservation,
   reserveRoutineRunBudget,
   settleRoutineRunBudgetReservation,
-} from "./routine-budget.ts";
-import type { RoutineTraceContext } from "./routine-trace.ts";
+} from './routine-budget.ts';
+import type { RoutineTraceContext } from './routine-trace.ts';
 import {
   buildRoutineAIAttemptBudget,
   routineAIAllAttemptsFailedSettlementLight,
-} from "./routine-ai-budget.ts";
+} from './routine-ai-budget.ts';
 import {
   InferenceRouteError,
-  resolveInferenceRoute,
   type ResolvedInferenceRoute,
-} from "./inference-route.ts";
+  resolveInferenceRoute,
+} from './inference-route.ts';
+import {
+  applyStructuredOutput,
+  isStructuredOutputUnsupportedProviderError,
+  normalizeOutputSchema,
+  StructuredOutputError,
+  structuredOutputErrorResponse,
+} from './structured-output.ts';
 
 export interface RuntimeAIService {
   call(request: AIRequest, apiKey?: string): Promise<AIResponse>;
@@ -53,16 +56,18 @@ export interface RuntimeAIUser {
 
 function emptyAIResponse(model: string, errorMessage: string): AIResponse {
   return {
-    content: "",
+    content: '',
     model,
     usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
     error: errorMessage,
   };
 }
 
-export function createUnavailableAIService(errorMessage: string): RuntimeAIService {
+export function createUnavailableAIService(
+  errorMessage: string,
+): RuntimeAIService {
   return {
-    call: async (request: AIRequest) => emptyAIResponse(request.model || "none", errorMessage),
+    call: async (request: AIRequest) => emptyAIResponse(request.model || 'none', errorMessage),
   };
 }
 
@@ -110,14 +115,14 @@ export function createRoutedRuntimeAIService(
 ): RuntimeAIService {
   const requestDefaults = { ...(route.requestDefaults || {}) };
   if (
-    typeof requestDefaults.max_tokens === "number" &&
+    typeof requestDefaults.max_tokens === 'number' &&
     Number.isFinite(requestDefaults.max_tokens)
   ) {
     requestDefaults.max_tokens = Math.min(
       32_768,
       Math.max(1, Math.floor(requestDefaults.max_tokens)),
     );
-  } else if ("max_tokens" in requestDefaults) {
+  } else if ('max_tokens' in requestDefaults) {
     delete requestDefaults.max_tokens;
   }
   const service = createAIService(
@@ -144,6 +149,15 @@ export function createRoutedRuntimeAIService(
           Math.max(1, Math.floor(request.max_tokens || 4096)),
         ),
       };
+      if (boundedRequest.output_schema) {
+        try {
+          boundedRequest.output_schema = normalizeOutputSchema(
+            boundedRequest.output_schema,
+          );
+        } catch (error) {
+          return structuredOutputErrorResponse(model, error);
+        }
+      }
       let budgetReservationId: string | null = null;
       let budgetReservedLight = 0;
       if (attribution.routineContext) {
@@ -152,21 +166,29 @@ export function createRoutedRuntimeAIService(
           model,
           requestDefaults,
         ) as Record<string, unknown>;
-        const maxTokens = typeof providerPayload.max_tokens === "number"
-          ? Math.min(32_768, Math.max(1, Math.floor(providerPayload.max_tokens)))
+        const maxTokens = typeof providerPayload.max_tokens === 'number'
+          ? Math.min(
+            32_768,
+            Math.max(1, Math.floor(providerPayload.max_tokens)),
+          )
           : boundedRequest.max_tokens;
         const promptTokens = new TextEncoder().encode(
           JSON.stringify(providerPayload),
         ).byteLength;
-        const billingModel = route.billingSource === "platform_deepseek_direct"
+        const billingModel = route.billingSource === 'platform_deepseek_direct'
           ? route.canonicalModelId ?? model
           : route.billingModelId ?? model;
         let reserveLight = route.shouldDebitLight
-          ? calculateCostLight({
-            prompt_tokens: promptTokens,
-            completion_tokens: maxTokens,
-            total_tokens: promptTokens + maxTokens,
-          }, billingModel, undefined, { billingSource: route.billingSource })
+          ? calculateCostLight(
+            {
+              prompt_tokens: promptTokens,
+              completion_tokens: maxTokens,
+              total_tokens: promptTokens + maxTokens,
+            },
+            billingModel,
+            undefined,
+            { billingSource: route.billingSource },
+          )
           : 0;
         reserveLight = buildRoutineAIAttemptBudget(reserveLight)
           .totalReservedLight;
@@ -175,7 +197,7 @@ export function createRoutedRuntimeAIService(
             userId,
             routine: attribution.routineContext,
             reservationKey: `ai:in-process:${crypto.randomUUID()}`,
-            kind: "ai_call",
+            kind: 'ai_call',
             reserveLight,
           });
           if (!admission.allowed || !admission.reservation) {
@@ -203,7 +225,7 @@ export function createRoutedRuntimeAIService(
           balance = await checkBalance(userId);
         } catch (balanceError) {
           console.warn(
-            "[RUNTIME-AI] Per-call balance re-check unavailable; proceeding un-gated:",
+            '[RUNTIME-AI] Per-call balance re-check unavailable; proceeding un-gated:',
             balanceError,
           );
         }
@@ -225,7 +247,10 @@ export function createRoutedRuntimeAIService(
 
       let response: AIResponse;
       try {
-        response = await service.call(boundedRequest);
+        // Keep provider parsing separate from local schema validation. Provider
+        // usage must be settled and recorded before validation can fail or hit a
+        // work limit, and successful values should be validated exactly once.
+        response = await service.callRaw(boundedRequest);
       } catch (error) {
         if (budgetReservationId) {
           // The provider may have completed work before a transport failure.
@@ -240,11 +265,24 @@ export function createRoutedRuntimeAIService(
             applySpend: true,
           }).catch(() => {});
         }
+        if (
+          boundedRequest.output_schema &&
+          error instanceof AIProviderError &&
+          isStructuredOutputUnsupportedProviderError(error)
+        ) {
+          return structuredOutputErrorResponse(
+            model,
+            new StructuredOutputError(
+              'structured_output_unsupported',
+              `The selected provider/model rejected native structured output: ${error.message}`,
+            ),
+          );
+        }
         throw error;
       }
       const usage = toChatUsage(response);
 
-      if (response.error && budgetReservationId) {
+      if (response.error && usage.total_tokens === 0 && budgetReservationId) {
         await settleRoutineRunBudgetReservation({
           reservationId: budgetReservationId,
           userId,
@@ -254,7 +292,7 @@ export function createRoutedRuntimeAIService(
           applySpend: true,
         }).catch(() => {});
       } else if (budgetReservationId) {
-        const billingModel = route.billingSource === "platform_deepseek_direct"
+        const billingModel = route.billingSource === 'platform_deepseek_direct'
           ? response.model || model
           : route.billingModelId ?? response.model ?? model;
         const actualLight = route.shouldDebitLight
@@ -313,11 +351,9 @@ export function createRoutedRuntimeAIService(
           }
           response.usage.cost_light = billing.cost_light;
         } catch (err) {
-          console.error("[RUNTIME-AI] Failed to debit Light for AI call:", err);
+          console.error('[RUNTIME-AI] Failed to debit Light for AI call:', err);
         }
-      } else if (
-        !route.shouldDebitLight && usage.total_tokens > 0 && !response.error
-      ) {
+      } else if (!route.shouldDebitLight && usage.total_tokens > 0) {
         // Zero-debit route (BYOK or otherwise unbilled): record usage metadata
         // on a NON-economic path so model/function analytics aren't blind to
         // BYOK traffic. Fire-and-forget — never blocks or fails the call, and
@@ -326,7 +362,7 @@ export function createRoutedRuntimeAIService(
           userId,
           appId: attribution.appId ?? null,
           functionName: attribution.functionName ?? null,
-          billingMode: route.keySource === "user_byok" ? "byok" : "unbilled",
+          billingMode: route.keySource === 'user_byok' ? 'byok' : 'unbilled',
           provider: route.provider,
           upstreamProvider: route.upstreamProvider,
           keySource: route.keySource,
@@ -334,24 +370,24 @@ export function createRoutedRuntimeAIService(
           requestedModel: model,
           promptTokens: usage.prompt_tokens,
           completionTokens: usage.completion_tokens,
-          source: "runtime_ai",
+          source: 'runtime_ai',
         });
       }
 
-      return response;
+      return applyStructuredOutput(response, boundedRequest.output_schema);
     },
   };
 }
 
 function routeErrorMessage(error: unknown): string {
   if (error instanceof InferenceRouteError) {
-    if (error.code === "byok_key_missing") {
-      return "BYOK is enabled, but the API key could not be loaded. Please re-add your API key in Settings.";
+    if (error.code === 'byok_key_missing') {
+      return 'BYOK is enabled, but the API key could not be loaded. Please re-add your API key in Settings.';
     }
     return error.message;
   }
 
-  return error instanceof Error ? error.message : "AI service unavailable";
+  return error instanceof Error ? error.message : 'AI service unavailable';
 }
 
 export interface CreateRuntimeAIContextOptions {
@@ -379,7 +415,7 @@ export async function createRuntimeAIContext(
   const checkBalance = options.checkBalance ?? checkChatBalance;
 
   if (!user) {
-    const message = "AI requires an authenticated user.";
+    const message = 'AI requires an authenticated user.';
     return {
       route: null,
       resolvedRoute: null,
@@ -426,9 +462,8 @@ export async function createRuntimeAIContext(
         // threshold, so a balance-read failure must not let inference through —
         // deny instead of relying on post-hoc allow-partial debiting.
         if (isFreeModeEnabled() && options.freeMode) {
-          const message =
-            "Platform inference is unavailable in free mode. Add a BYOK " +
-            "provider key in Settings, or add credits to your wallet.";
+          const message = 'Platform inference is unavailable in free mode. Add a BYOK ' +
+            'provider key in Settings, or add credits to your wallet.';
           return {
             route: null,
             resolvedRoute: null,
@@ -442,7 +477,7 @@ export async function createRuntimeAIContext(
         // unavailable we proceed un-gated — post-hoc debiting in
         // createRoutedRuntimeAIService still applies.
         console.warn(
-          "[RUNTIME-AI] Balance check unavailable; proceeding un-gated:",
+          '[RUNTIME-AI] Balance check unavailable; proceeding un-gated:',
           balanceError,
         );
       }

@@ -1,93 +1,97 @@
 // Cloudflare Workers entrypoint for HTTP requests and scheduled jobs.
 
-import type { Env } from "../lib/env.ts";
-import { createApp } from "../handlers/app.ts";
-import { installComputeLaunchService } from "../handlers/launch-compute.ts";
+import type { Env } from '../lib/env.ts';
+import { createApp } from '../handlers/app.ts';
+import { installComputeLaunchService } from '../handlers/launch-compute.ts';
 
-import { processHostingBilling } from "../services/hosting-billing.ts";
-import { runAutoHealing } from "../services/auto-healing.ts";
-import { processHeldPayouts } from "../services/payout-processor.ts";
-import { expireMarketplaceBids } from "../services/marketplace-maintenance.ts";
-import { sweepExpiredCallLogs } from "../services/call-log-store.ts";
-import { sweepExpiredNotifications } from "../services/notifications.ts";
-import { processNullEmbeddings } from "../services/embedding-processor.ts";
-import { processGpuBuilds } from "../services/gpu/benchmark.ts";
-import { runD1BillingCycle } from "../services/d1-billing.ts";
-import { cleanupStaleJobs } from "../services/async-jobs.ts";
+import { processHostingBilling } from '../services/hosting-billing.ts';
+import { runAutoHealing } from '../services/auto-healing.ts';
+import { processHeldPayouts } from '../services/payout-processor.ts';
+import { expireMarketplaceBids } from '../services/marketplace-maintenance.ts';
+import { sweepExpiredCallLogs } from '../services/call-log-store.ts';
+import { sweepExpiredNotifications } from '../services/notifications.ts';
+import { processNullEmbeddings } from '../services/embedding-processor.ts';
+import { processGpuBuilds } from '../services/gpu/benchmark.ts';
+import { runD1BillingCycle } from '../services/d1-billing.ts';
+import { cleanupStaleJobs } from '../services/async-jobs.ts';
 import {
   type CloudUsageHoldReleaseJobResult,
   releaseExpiredCloudUsageHolds,
-} from "../services/cloud-usage-reconciliation.ts";
-import { runRoutineExecutorCycle } from "../services/routine-executor.ts";
-import { isRoutinesEnabled } from "../services/routines-feature-flag.ts";
-import { dispatchPendingEvents } from "../services/agent-events.ts";
-import { refreshAppHealthView } from "../services/app-health.ts";
-import { reconcileConnectVerification } from "../services/connect-verification.ts";
+} from '../services/cloud-usage-reconciliation.ts';
+import { runRoutineExecutorCycle } from '../services/routine-executor.ts';
+import { isRoutinesEnabled } from '../services/routines-feature-flag.ts';
+import { dispatchPendingEvents } from '../services/agent-events.ts';
+import { refreshAppHealthView } from '../services/app-health.ts';
+import { reconcileConnectVerification } from '../services/connect-verification.ts';
 import {
   assertTrustSecretResolvable,
   backfillExecutedBundleAttestations,
-} from "../services/executed-bundle.ts";
-import { getEnv } from "../lib/env.ts";
+} from '../services/executed-bundle.ts';
+import { getEnv } from '../lib/env.ts';
 import {
   applyCorsHeaders,
   buildCorsPreflightResponse,
-} from "../services/cors.ts";
-import { createServerLogger } from "../services/logging.ts";
-import { runCapacityTelemetryReconciliationCycle } from "../services/capacity-telemetry-reconciliation.ts";
-import { processOperatorProjectionBatch } from "../services/operator-projections.ts";
-import { runOperatorItemProducerReconciliationCycle } from "../services/operator-item-producer-reconciliation.ts";
-import { recoverAdmittedComputeDispatches } from "../services/compute-dispatch-recovery.ts";
-import { runComputeReconciliationCycle } from "../services/compute-reconciler.ts";
-import { runComputeArtifactReconciliationCycle } from "../services/compute-artifact-reconciler.ts";
-import { isComputeDlqQueueName } from "../services/compute-queue-routing.ts";
+} from '../services/cors.ts';
+import { createServerLogger } from '../services/logging.ts';
+import { runCapacityTelemetryReconciliationCycle } from '../services/capacity-telemetry-reconciliation.ts';
+import { processOperatorProjectionBatch } from '../services/operator-projections.ts';
+import { runOperatorItemProducerReconciliationCycle } from '../services/operator-item-producer-reconciliation.ts';
+import { installComputeControlPlaneAdapter } from './bindings/compute-control-plane-adapter.ts';
+import { createComputeControlPlaneAdapter } from '../services/compute-orchestrator.ts';
+import { recoverAdmittedComputeDispatches } from '../services/compute-dispatch-recovery.ts';
+import { runComputeReconciliationCycle } from '../services/compute-reconciler.ts';
+import { runComputeArtifactReconciliationCycle } from '../services/compute-artifact-reconciler.ts';
+import { isComputeDlqQueueName } from '../services/compute-queue-routing.ts';
 import {
   createComputeLaunchCancellationOrchestrator,
   createComputeLaunchService,
   createComputePlaneBodyDestroyer,
-} from "../services/compute-launch-service.ts";
+} from '../services/compute-launch-service.ts';
+import { cleanupExpiredStagedBundleStorage } from '../services/staged-bundle-quota.ts';
 
 // RPC entrypoints exposed through ctx.exports for dynamic worker bindings.
-export { DatabaseBinding } from "./bindings/database-binding.ts";
-export { FixtureDatabaseBinding } from "./bindings/fixture-database-binding.ts";
-export { AppDataBinding } from "./bindings/appdata-binding.ts";
-export { AIBinding } from "./bindings/ai-binding.ts";
-export { ComputeBinding } from "./bindings/compute-binding.ts";
-export { EmbedBinding } from "./bindings/embed-binding.ts";
-export { MemoryBinding } from "./bindings/memory-binding.ts";
-export { RunsBinding } from "./bindings/runs-binding.ts";
-export { NotifyBinding } from "./bindings/notify-binding.ts";
+export { DatabaseBinding } from './bindings/database-binding.ts';
+export { FixtureDatabaseBinding } from './bindings/fixture-database-binding.ts';
+export { AppDataBinding } from './bindings/appdata-binding.ts';
+export { AIBinding } from './bindings/ai-binding.ts';
+export { ComputeBinding } from './bindings/compute-binding.ts';
+export { EmbedBinding } from './bindings/embed-binding.ts';
+export { MemoryBinding } from './bindings/memory-binding.ts';
+export { RunsBinding } from './bindings/runs-binding.ts';
+export { NotifyBinding } from './bindings/notify-binding.ts';
 export {
   TestAIBinding,
   TestComputeBinding,
   TestEmbedBinding,
   TestNotifyBinding,
-} from "./bindings/test-runtime-bindings.ts";
-export { NetworkBinding } from "./bindings/network-binding.ts";
-export { EventsBinding } from "./bindings/events-binding.ts";
-export { OutboundBinding } from "./bindings/outbound-binding.ts";
-export { CredentialBinding } from "./bindings/credential-binding.ts";
-export { CapacityDynamicTail } from "./bindings/capacity-dynamic-tail.ts";
-export { ComputeControlPlane } from "./compute-control-plane-entrypoint.ts";
+} from './bindings/test-runtime-bindings.ts';
+export { NetworkBinding } from './bindings/network-binding.ts';
+export { EventsBinding } from './bindings/events-binding.ts';
+export { OutboundBinding } from './bindings/outbound-binding.ts';
+export { CredentialBinding } from './bindings/credential-binding.ts';
+export { CapacityDynamicTail } from './bindings/capacity-dynamic-tail.ts';
+export { ComputeControlPlane } from './compute-control-plane-entrypoint.ts';
 
 // ============================================
 // SECURITY & CORS HEADERS
 // ============================================
 
 const securityHeaders: Record<string, string> = {
-  "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY",
-  "Referrer-Policy": "strict-origin-when-cross-origin",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  "X-XSS-Protection": "1; mode=block",
-  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  'X-XSS-Protection': '1; mode=block',
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
 };
 
-const requestLogger = createServerLogger("REQ");
-const cronLogger = createServerLogger("CRON");
+const requestLogger = createServerLogger('REQ');
+const cronLogger = createServerLogger('CRON');
 let computeServicesInstalled = false;
 
 function ensureComputeServicesInstalled(env: Env): void {
   if (computeServicesInstalled) return;
+  installComputeControlPlaneAdapter(createComputeControlPlaneAdapter({ env }));
   installComputeLaunchService(createComputeLaunchService({
     artifacts: env.COMPUTE_ARTIFACTS ?? null,
     cancellation: env.COMPUTE_PLANE
@@ -119,22 +123,22 @@ export default {
 
     const url = new URL(request.url);
     const standardHeaders = securityHeaders;
-    requestLogger.info("Incoming request", {
+    requestLogger.info('Incoming request', {
       method: request.method,
       path: url.pathname,
-      embed: url.searchParams.get("embed") === "1",
+      embed: url.searchParams.get('embed') === '1',
     });
 
     // Reject oversized request bodies early (50 MB limit)
-    const contentLength = request.headers.get("content-length");
+    const contentLength = request.headers.get('content-length');
     if (contentLength && parseInt(contentLength, 10) > 50 * 1024 * 1024) {
       return new Response(
-        JSON.stringify({ error: "Request body too large" }),
+        JSON.stringify({ error: 'Request body too large' }),
         {
           status: 413,
           headers: (() => {
             const headers = new Headers({
-              "Content-Type": "application/json",
+              'Content-Type': 'application/json',
               ...standardHeaders,
             });
             applyCorsHeaders(headers, request);
@@ -147,8 +151,8 @@ export default {
     // Handle platform-global CORS preflight. App HTTP routes resolve their
     // own route policy inside handlers/app.ts so public API CORS can be
     // scoped per function.
-    const isHttpRoute = url.pathname.startsWith("/http/");
-    if (request.method === "OPTIONS" && !isHttpRoute) {
+    const isHttpRoute = url.pathname.startsWith('/http/');
+    if (request.method === 'OPTIONS' && !isHttpRoute) {
       const response = buildCorsPreflightResponse(request);
       for (const [key, value] of Object.entries(standardHeaders)) {
         response.headers.set(key, value);
@@ -164,7 +168,7 @@ export default {
       for (const [key, value] of Object.entries(standardHeaders)) {
         // Skip X-Frame-Options for embed mode (desktop app iframe)
         if (
-          key === "X-Frame-Options" && url.searchParams.get("embed") === "1"
+          key === 'X-Frame-Options' && url.searchParams.get('embed') === '1'
         ) continue;
         response.headers.set(key, value);
       }
@@ -174,7 +178,7 @@ export default {
 
       return response;
     } catch (err) {
-      requestLogger.error("Unhandled request error", {
+      requestLogger.error('Unhandled request error', {
         method: request.method,
         path: url.pathname,
         error: err,
@@ -182,12 +186,12 @@ export default {
 
       // Never leak internal error messages to clients
       return new Response(
-        JSON.stringify({ error: "Internal server error" }),
+        JSON.stringify({ error: 'Internal server error' }),
         {
           status: 500,
           headers: (() => {
             const headers = new Headers({
-              "Content-Type": "application/json",
+              'Content-Type': 'application/json',
               ...standardHeaders,
             });
             applyCorsHeaders(headers, request);
@@ -211,19 +215,19 @@ export default {
     globalThis.__ctx = ctx;
     ensureComputeServicesInstalled(env);
 
-    let process: (body: unknown) => Promise<"ack" | "retry">;
+    let process: (body: unknown) => Promise<'ack' | 'retry'>;
     let retryConsumerCrash = false;
-    if (batch.queue.includes("ultralight-exec")) {
+    if (batch.queue.includes('ultralight-exec')) {
       ({ processExecMessage: process } = await import(
-        "../services/async-exec-consumer.ts"
+        '../services/async-exec-consumer.ts'
       ));
-    } else if (batch.queue.includes("ultralight-events")) {
+    } else if (batch.queue.includes('ultralight-events')) {
       ({ processEventMessage: process } = await import(
-        "../services/agent-events-consumer.ts"
+        '../services/agent-events-consumer.ts'
       ));
-    } else if (batch.queue.includes("ultralight-capacity-telemetry")) {
+    } else if (batch.queue.includes('ultralight-capacity-telemetry')) {
       ({ processCapacityTelemetryMessage: process } = await import(
-        "../services/capacity-telemetry-consumer.ts"
+        '../services/capacity-telemetry-consumer.ts'
       ));
     } else if (isComputeDlqQueueName(batch.queue)) {
       // Unlike post-claim execution/event consumers, this path owns the final
@@ -231,10 +235,10 @@ export default {
       // eventually land in the separate reconciliation DLQ, never be ACKed.
       retryConsumerCrash = true;
       ({ processComputeDlqMessage: process } = await import(
-        "../services/compute-dlq-consumer.ts"
+        '../services/compute-dlq-consumer.ts'
       ));
     } else {
-      cronLogger.error("Message from unknown queue dropped", {
+      cronLogger.error('Message from unknown queue dropped', {
         queue: batch.queue,
       });
       for (const message of batch.messages) message.ack();
@@ -244,7 +248,7 @@ export default {
     for (const message of batch.messages) {
       try {
         const outcome = await process(message.body);
-        if (outcome === "retry") {
+        if (outcome === 'retry') {
           message.retry({
             delaySeconds: Math.min(30 * message.attempts, 300),
           });
@@ -253,7 +257,7 @@ export default {
         }
       } catch (err) {
         // Consumers handle their own failures; this is a backstop.
-        cronLogger.error("Queue message processing crashed", { error: err });
+        cronLogger.error('Queue message processing crashed', { error: err });
         if (retryConsumerCrash) {
           message.retry({
             delaySeconds: Math.min(30 * message.attempts, 300),
@@ -275,14 +279,14 @@ export default {
     globalThis.__ctx = ctx;
     ensureComputeServicesInstalled(env);
 
-    cronLogger.info("Cron trigger received", {
+    cronLogger.info('Cron trigger received', {
       schedule: event.cron,
       scheduled_at: new Date(event.scheduledTime).toISOString(),
     });
 
     switch (event.cron) {
       // Every minute: high-frequency jobs
-      case "* * * * *":
+      case '* * * * *':
         ctx.waitUntil(runMinuteJobs());
         break;
 
@@ -290,10 +294,10 @@ export default {
       // Health is refreshed at 5-min cadence (not 30) so the rolling 1h window
       // — whose now()-1h boundary freezes at refresh time — stays honest rather
       // than lagging up to half its own width.
-      case "*/5 * * * *":
+      case '*/5 * * * *':
         ctx.waitUntil(
           runD1BillingCycle().catch((err) =>
-            cronLogger.error("D1 billing cron failed", {
+            cronLogger.error('D1 billing cron failed', {
               schedule: event.cron,
               error: err,
             })
@@ -301,7 +305,7 @@ export default {
         );
         ctx.waitUntil(
           refreshAppHealthView().catch((err) =>
-            cronLogger.error("App health refresh cron failed", {
+            cronLogger.error('App health refresh cron failed', {
               schedule: event.cron,
               error: err,
             })
@@ -310,15 +314,15 @@ export default {
         break;
 
       // Every hour: billing + payouts
-      case "0 * * * *":
+      case '0 * * * *':
         ctx.waitUntil(runHourlyJobs());
         break;
 
       // Every 30 minutes: auto-healing
-      case "*/30 * * * *":
+      case '*/30 * * * *':
         ctx.waitUntil(
           runAutoHealing().catch((err) =>
-            cronLogger.error("Auto-healing cron failed", {
+            cronLogger.error('Auto-healing cron failed', {
               schedule: event.cron,
               error: err,
             })
@@ -327,7 +331,7 @@ export default {
         break;
 
       default:
-        cronLogger.warn("Unknown cron trigger", { schedule: event.cron });
+        cronLogger.warn('Unknown cron trigger', { schedule: event.cron });
     }
   },
 };
@@ -341,7 +345,7 @@ export default {
  * All run concurrently via Promise.allSettled (failures don't block others).
  */
 async function runMinuteJobs(): Promise<void> {
-  const baseUrl = getEnv("BASE_URL");
+  const baseUrl = getEnv('BASE_URL');
 
   const results = await Promise.allSettled([
     cleanupStaleJobs(),
@@ -353,9 +357,7 @@ async function runMinuteJobs(): Promise<void> {
     // ROUTINES_ENABLED="1" and ship the routines schema). The flag is the
     // operational kill switch — when off, the executor skips instead of
     // querying absent tables every minute.
-    isRoutinesEnabled()
-      ? runRoutineExecutorCycle({ baseUrl })
-      : Promise.resolve(null),
+    isRoutinesEnabled() ? runRoutineExecutorCycle({ baseUrl }) : Promise.resolve(null),
     dispatchPendingEvents(), // cross-Agent pub/sub event fan-out
     recoverAdmittedComputeDispatches(),
     runComputeReconciliationCycle(),
@@ -375,41 +377,40 @@ async function runMinuteJobs(): Promise<void> {
   ]);
 
   for (const [i, result] of results.entries()) {
-    if (result.status === "rejected") {
+    if (result.status === 'rejected') {
       const names = [
-        "asyncJobCleanup",
-        "cloudUsageHoldRelease",
-        "capacityTelemetryReconciliation",
-        "embeddingProcessor",
-        "gpuBuildProcessor",
-        "routineExecutor",
-        "agentEventDispatch",
-        "computeDispatchRecovery",
-        "computeReconciliation",
-        "computeArtifactReconciliation",
-        "operatorProjection",
-        "operatorItemProducerReconciliation",
+        'asyncJobCleanup',
+        'cloudUsageHoldRelease',
+        'capacityTelemetryReconciliation',
+        'embeddingProcessor',
+        'gpuBuildProcessor',
+        'routineExecutor',
+        'agentEventDispatch',
+        'computeDispatchRecovery',
+        'computeReconciliation',
+        'computeArtifactReconciliation',
+        'operatorProjection',
+        'operatorItemProducerReconciliation',
       ];
-      cronLogger.error("Minute cron job failed", {
+      cronLogger.error('Minute cron job failed', {
         job: names[i],
         error: result.reason,
       });
     } else {
-      const releaseResult =
-        i === 1 && isCloudUsageHoldReleaseJobResult(result.value)
-          ? result.value
-          : null;
+      const releaseResult = i === 1 && isCloudUsageHoldReleaseJobResult(result.value)
+        ? result.value
+        : null;
       if (releaseResult && releaseResult.failed_count > 0) {
-        cronLogger.warn("Cloud usage hold release completed in degraded mode", {
-          job: "cloudUsageHoldRelease",
+        cronLogger.warn('Cloud usage hold release completed in degraded mode', {
+          job: 'cloudUsageHoldRelease',
           failed_count: releaseResult.failed_count,
           released_count: releaseResult.released_count,
           skipped_count: releaseResult.skipped_count,
           errors: releaseResult.errors,
         });
       } else if (releaseResult && releaseResult.released_count > 0) {
-        cronLogger.info("Released expired cloud usage holds", {
-          job: "cloudUsageHoldRelease",
+        cronLogger.info('Released expired cloud usage holds', {
+          job: 'cloudUsageHoldRelease',
           released_count: releaseResult.released_count,
           skipped_count: releaseResult.skipped_count,
           released_amount_light: releaseResult.released_amount_light,
@@ -422,10 +423,10 @@ async function runMinuteJobs(): Promise<void> {
 function isCloudUsageHoldReleaseJobResult(
   value: unknown,
 ): value is CloudUsageHoldReleaseJobResult {
-  return typeof value === "object" &&
+  return typeof value === 'object' &&
     value !== null &&
-    "released_count" in value &&
-    "failed_count" in value;
+    'released_count' in value &&
+    'failed_count' in value;
 }
 
 /**
@@ -445,6 +446,9 @@ async function runHourlyJobs(): Promise<void> {
     // connected sellers whose snapshot has gone stale, so a "verified" badge
     // can't strand true after Stripe disables payouts with no fresh webhook.
     reconcileConnectVerification(),
+    // Global backstop for staged-object quota reservations. Per-owner stage
+    // admission also clears expiry, but inactive owners need scheduled cleanup.
+    cleanupExpiredStagedBundleStorage(),
     // Executed-bundle integrity ops: (1) re-arm the alarm every hour if the
     // trust signing secret can't resolve (enforce would silently degrade to off);
     // (2) when EXECUTED_BUNDLE_BACKFILL=1, attest any still-unattested live
@@ -452,37 +456,48 @@ async function runHourlyJobs(): Promise<void> {
     // to leave on, flip off once it reports 0 attested).
     (async () => {
       await assertTrustSecretResolvable();
-      const backfillFlag = (getEnv("EXECUTED_BUNDLE_BACKFILL") || "")
+      const backfillFlag = (getEnv('EXECUTED_BUNDLE_BACKFILL') || '')
         .toLowerCase();
-      if (backfillFlag === "1" || backfillFlag === "true") {
+      if (backfillFlag === '1' || backfillFlag === 'true') {
         await backfillExecutedBundleAttestations();
       }
     })(),
   ]);
 
   for (const [i, result] of results.entries()) {
-    if (result.status === "rejected") {
+    if (result.status === 'rejected') {
       const names = [
-        "hostingBilling",
-        "payoutProcessor",
-        "marketplaceBidExpiry",
-        "callLogRetentionSweep",
-        "notificationInboxRetentionSweep",
-        "connectVerificationReconcile",
-        "executedBundleIntegrity",
+        'hostingBilling',
+        'payoutProcessor',
+        'marketplaceBidExpiry',
+        'callLogRetentionSweep',
+        'notificationInboxRetentionSweep',
+        'connectVerificationReconcile',
+        'stagedBundleQuotaCleanup',
+        'executedBundleIntegrity',
       ];
-      cronLogger.error("Hourly cron job failed", {
+      cronLogger.error('Hourly cron job failed', {
         job: names[i],
         error: result.reason,
       });
     } else if (
-      i === 0 && typeof result.value === "object" && result.value !== null &&
-      "degraded" in result.value &&
+      i === 0 && typeof result.value === 'object' && result.value !== null &&
+      'degraded' in result.value &&
       (result.value.degraded || result.value.errors.length > 0)
     ) {
-      cronLogger.warn("Hosting billing completed in degraded mode", {
-        job: "hostingBilling",
+      cronLogger.warn('Hosting billing completed in degraded mode', {
+        job: 'hostingBilling',
         errors: result.value.errors,
+      });
+    } else if (
+      i === 6 && typeof result.value === 'object' && result.value !== null &&
+      'complete' in result.value && result.value.complete === false &&
+      'releasedClaims' in result.value && 'batches' in result.value
+    ) {
+      cronLogger.warn('Staged-bundle quota cleanup reached its batch ceiling', {
+        job: 'stagedBundleQuotaCleanup',
+        released_claims: result.value.releasedClaims,
+        batches: result.value.batches,
       });
     }
   }

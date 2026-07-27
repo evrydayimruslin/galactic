@@ -11,19 +11,19 @@
 // wrapper.js imports setup.js (runs first) then app.js (runs second).
 // By the time app.js captures globalThis.ultralight, the SDK is ready.
 
-import type { ExecutionResult, RuntimeConfig } from "./sandbox.ts";
-import { COMPUTE_EXEC_PERMISSION } from "../../shared/contracts/compute.ts";
-import type { ResolvedCredential } from "../../shared/contracts/env.ts";
-import { getEnv } from "../lib/env.ts";
-import { isolateReuseEligibility } from "./isolate-reuse-eligibility.ts";
-import { consumeAiSpend } from "../services/ai-spend-tracker.ts";
-import { consumeDbDiff } from "../services/db-diff-tracker.ts";
+import type { ExecutionResult, RuntimeConfig } from './sandbox.ts';
+import { COMPUTE_EXEC_PERMISSION } from '../../shared/contracts/compute.ts';
+import type { ResolvedCredential } from '../../shared/contracts/env.ts';
+import { getEnv } from '../lib/env.ts';
+import { isolateReuseEligibility } from './isolate-reuse-eligibility.ts';
+import { consumeAiSpend } from '../services/ai-spend-tracker.ts';
+import { consumeDbDiff } from '../services/db-diff-tracker.ts';
 import {
   deregisterExecutionContext,
   registerExecutionContext,
-} from "../services/execution-context-registry.ts";
-import { debitCloudOperation } from "../services/cloud-usage.ts";
-import { mintSandboxAuthToken } from "../services/sandbox-actor.ts";
+} from '../services/execution-context-registry.ts';
+import { debitCloudOperation } from '../services/cloud-usage.ts';
+import { mintSandboxAuthToken } from '../services/sandbox-actor.ts';
 import {
   executedBundleVerifyMode,
   handleExecutedBundleVerdict,
@@ -44,12 +44,12 @@ import {
 // into the trust/service graph. Used only to derive the get() reuse key.
 async function sha256HexLocal(input: string): Promise<string> {
   const digest = await crypto.subtle.digest(
-    "SHA-256",
+    'SHA-256',
     new TextEncoder().encode(input),
   );
   return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 // Bump whenever the generated setup.js / wrapper.js TEMPLATE, the loadConfig
@@ -58,15 +58,16 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-25.compute-rpc-envelope.v14";
+const SANDBOX_TEMPLATE_VERSION =
+  '2026-07-27.compute-rpc-structured-output.v16';
 
-const CAPACITY_TAIL_MARKER = "GALACTIC_CAPACITY_EXECUTION_V1 ";
+const CAPACITY_TAIL_MARKER = 'GALACTIC_CAPACITY_EXECUTION_V1 ';
 
 export function resolveRpcBindingMetering(
-  config: Pick<RuntimeConfig, "cloudOperationMetering">,
+  config: Pick<RuntimeConfig, 'cloudOperationMetering'>,
   useGetReuse: boolean,
 ): {
-  operationMetering: RuntimeConfig["cloudOperationMetering"];
+  operationMetering: RuntimeConfig['cloudOperationMetering'];
   requireExecCtx: boolean;
 } {
   // Subscription-capacity metering owns an in-memory collector whose methods
@@ -79,11 +80,9 @@ export function resolveRpcBindingMetering(
   // props fallback.
   const hasHostLocalCapacityMeter =
     typeof config.cloudOperationMetering?.capacityMeter?.addLight ===
-      "function";
+      'function';
   return {
-    operationMetering: hasHostLocalCapacityMeter
-      ? null
-      : config.cloudOperationMetering,
+    operationMetering: hasHostLocalCapacityMeter ? null : config.cloudOperationMetering,
     requireExecCtx: useGetReuse || hasHostLocalCapacityMeter,
   };
 }
@@ -116,23 +115,23 @@ export { isolateReuseEligibility };
 export async function deriveIsolateReuseKey(
   config: Pick<
     RuntimeConfig,
-    | "appId"
-    | "userId"
-    | "user"
-    | "envVars"
-    | "permissions"
-    | "testMode"
-    | "credentials"
-    | "appCallDependencies"
-    | "slotBindings"
-    | "userApiKey"
-    | "aiRoute"
-    | "aiUnavailableReason"
-    | "callerContextToken"
-    | "routineContext"
-    | "supabase"
-    | "baseUrl"
-    | "workerBaseUrl"
+    | 'appId'
+    | 'userId'
+    | 'user'
+    | 'envVars'
+    | 'permissions'
+    | 'testMode'
+    | 'credentials'
+    | 'appCallDependencies'
+    | 'slotBindings'
+    | 'userApiKey'
+    | 'aiRoute'
+    | 'aiUnavailableReason'
+    | 'callerContextToken'
+    | 'routineContext'
+    | 'supabase'
+    | 'baseUrl'
+    | 'workerBaseUrl'
   >,
   esmCode: string,
   allowedDestinations: unknown,
@@ -175,7 +174,7 @@ export async function deriveIsolateReuseKey(
     // must never share a warm-isolate key.
     hasRoutineContext: !!config.routineContext,
     supabase: config.supabase ?? null,
-    callBase: config.baseUrl || config.workerBaseUrl || "",
+    callBase: config.baseUrl || config.workerBaseUrl || '',
     dests: allowedDestinations ?? [],
     // Baked binding-set state (see param doc).
     dbId: bindingState.dbId,
@@ -198,6 +197,15 @@ interface FlightAiExchange {
   response?: string;
 }
 
+function structuredOutputErrorCode(value: unknown): string | undefined {
+  return value === 'invalid_output_schema' ||
+      value === 'structured_output_unsupported' ||
+      value === 'structured_output_invalid_json' ||
+      value === 'structured_output_schema_mismatch'
+    ? value
+    : undefined;
+}
+
 interface DynamicWorkerEntrypointExports {
   DatabaseBinding(
     input: {
@@ -205,8 +213,8 @@ interface DynamicWorkerEntrypointExports {
         databaseId: string;
         appId: string;
         userId: string;
-        operationMetering?: RuntimeConfig["cloudOperationMetering"];
-        operationBillingConfig?: RuntimeConfig["cloudOperationBillingConfig"];
+        operationMetering?: RuntimeConfig['cloudOperationMetering'];
+        operationBillingConfig?: RuntimeConfig['cloudOperationBillingConfig'];
         requireExecCtx?: boolean;
       };
     },
@@ -216,7 +224,7 @@ interface DynamicWorkerEntrypointExports {
       props: {
         appId: string;
         userId: string;
-        fixtures: NonNullable<RuntimeConfig["d1Fixtures"]>;
+        fixtures: NonNullable<RuntimeConfig['d1Fixtures']>;
       };
     },
   ): unknown;
@@ -225,8 +233,8 @@ interface DynamicWorkerEntrypointExports {
       props: {
         appId: string;
         userId: string;
-        operationMetering?: RuntimeConfig["cloudOperationMetering"];
-        operationBillingConfig?: RuntimeConfig["cloudOperationBillingConfig"];
+        operationMetering?: RuntimeConfig['cloudOperationMetering'];
+        operationBillingConfig?: RuntimeConfig['cloudOperationBillingConfig'];
         requireExecCtx?: boolean;
       };
     },
@@ -236,8 +244,8 @@ interface DynamicWorkerEntrypointExports {
       props: {
         userId: string;
         appId?: string | null;
-        operationMetering?: RuntimeConfig["cloudOperationMetering"];
-        operationBillingConfig?: RuntimeConfig["cloudOperationBillingConfig"];
+        operationMetering?: RuntimeConfig['cloudOperationMetering'];
+        operationBillingConfig?: RuntimeConfig['cloudOperationBillingConfig'];
         requireExecCtx?: boolean;
       };
     },
@@ -296,7 +304,7 @@ interface DynamicWorkerEntrypointExports {
       modelPinned?: boolean;
       unavailableReason?: string | null;
       requireExecCtx?: boolean;
-      routineContext?: RuntimeConfig["routineContext"] | null;
+      routineContext?: RuntimeConfig['routineContext'] | null;
     };
   }): unknown;
   EmbedBinding(input: {
@@ -307,7 +315,7 @@ interface DynamicWorkerEntrypointExports {
       executionId?: string | null;
       userApiKey?: string | null;
       requireExecCtx?: boolean;
-      routineContext?: RuntimeConfig["routineContext"] | null;
+      routineContext?: RuntimeConfig['routineContext'] | null;
     };
   }): unknown;
   NetworkBinding(input: {
@@ -387,8 +395,8 @@ export async function executeInDynamicSandbox(
       durationMs: Date.now() - startTime,
       aiCostLight: 0,
       error: {
-        type: "RuntimeError",
-        message: "Dynamic Worker LOADER binding not available",
+        type: 'RuntimeError',
+        message: 'Dynamic Worker LOADER binding not available',
       },
       diagnostic: normalizeOperatorDiagnostic({
         error: {
@@ -412,8 +420,8 @@ export async function executeInDynamicSandbox(
     if (config.cloudOperationMetering) {
       await debitCloudOperation({
         ...config.cloudOperationMetering,
-        resource: "kv_operation",
-        operation: "code_cache.get",
+        resource: 'kv_operation',
+        operation: 'code_cache.get',
         units: 1,
         billingConfig: config.cloudOperationBillingConfig ?? undefined,
         metadata: {
@@ -436,9 +444,8 @@ export async function executeInDynamicSandbox(
         durationMs: Date.now() - startTime,
         aiCostLight: 0,
         error: {
-          type: "RuntimeError",
-          message:
-            `No ESM bundle found for app ${config.appId}. Run rebuild first.`,
+          type: 'RuntimeError',
+          message: `No ESM bundle found for app ${config.appId}. Run rebuild first.`,
         },
         diagnostic: normalizeOperatorDiagnostic({
           error: {
@@ -464,7 +471,7 @@ export async function executeInDynamicSandbox(
     // observe (default) only warns. Legacy (no attestation) + infra/secret errors
     // never block.
     const bundleVerifyMode = executedBundleVerifyMode();
-    if (bundleVerifyMode !== "off" || config.routineContext) {
+    if (bundleVerifyMode !== 'off' || config.routineContext) {
       const verdict = await verifyExecutedBundle({
         appId: config.appId,
         esmCode,
@@ -486,9 +493,8 @@ export async function executeInDynamicSandbox(
           durationMs: Date.now() - startTime,
           aiCostLight: 0,
           error: {
-            type: "IntegrityError",
-            message:
-              `Executed bundle failed integrity verification (${verdict.status})`,
+            type: 'IntegrityError',
+            message: `Executed bundle failed integrity verification (${verdict.status})`,
           },
           diagnostic: normalizeOperatorDiagnostic({
             error: {
@@ -510,10 +516,10 @@ export async function executeInDynamicSandbox(
 
     // 2. Build setup module — sets globalThis.ultralight with lazy getters
     // User context and env vars are baked in as literals (they're per-request constants)
-    const userJson = config.user ? JSON.stringify(config.user) : "null";
+    const userJson = config.user ? JSON.stringify(config.user) : 'null';
     const envVarsJson = JSON.stringify(config.envVars || {});
     const callBaseUrl = JSON.stringify(
-      config.baseUrl || config.workerBaseUrl || "",
+      config.baseUrl || config.workerBaseUrl || '',
     );
     // SECURITY: never inject the caller's raw bearer. App code can read this
     // value (e.g. globalThis.ultralight.call.toString()), so mint a short-lived
@@ -523,7 +529,7 @@ export async function executeInDynamicSandbox(
       user: config.user,
       appId: config.appId,
       executionId: config.executionId,
-      hasBroadCallPermission: config.permissions.includes("app:call"),
+      hasBroadCallPermission: config.permissions.includes('app:call'),
       dependencyAppIds: (config.appCallDependencies || [])
         .map((dependency) => dependency.app)
         .filter(Boolean),
@@ -542,7 +548,7 @@ export async function executeInDynamicSandbox(
 globalThis.__rpcEnv = {};
 
 function __ulAllowsAppCall(targetAppId, functionName) {
-  if (${config.permissions.includes("app:call")}) return true;
+  if (${config.permissions.includes('app:call')}) return true;
   if (typeof targetAppId !== 'string' || typeof functionName !== 'string') return false;
   var target = targetAppId.trim();
   var fnName = functionName.trim();
@@ -653,32 +659,30 @@ globalThis.ultralight = {
   },
   user: ${userJson},
   env: ${envVarsJson},
-  isAuthenticated() { return ${config.user ? "true" : "false"}; },
+  isAuthenticated() { return ${config.user ? 'true' : 'false'}; },
   requireAuth() { ${
-      config.user
-        ? `return ${userJson};`
-        : 'throw new Error("Authentication required.");'
+      config.user ? `return ${userJson};` : 'throw new Error("Authentication required.");'
     } },
   store(k, v) { if (!${
-      config.permissions.includes("storage:write")
+      config.permissions.includes('storage:write')
     }) return Promise.reject(new Error('storage:write permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.store(k, v, globalThis.__execHandle) : Promise.reject(new Error('Data not available')); },
   load(k) { if (!${
-      config.permissions.includes("storage:read")
+      config.permissions.includes('storage:read')
     }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.load(k, globalThis.__execHandle) : Promise.resolve(null); },
   remove(k) { if (!${
-      config.permissions.includes("storage:delete")
+      config.permissions.includes('storage:delete')
     }) return Promise.reject(new Error('storage:delete permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.remove(k, globalThis.__execHandle) : Promise.reject(new Error('Data not available')); },
   list(p) { if (!${
-      config.permissions.includes("storage:read")
+      config.permissions.includes('storage:read')
     }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.list(p, globalThis.__execHandle) : Promise.resolve([]); },
   query(p, o) { if (!${
-      config.permissions.includes("storage:read")
+      config.permissions.includes('storage:read')
     }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA?.query?.(p, o, globalThis.__execHandle) || Promise.resolve([]); },
   remember(k, v, o) { if (!${
-      config.permissions.includes("memory:write")
+      config.permissions.includes('memory:write')
     }) return Promise.reject(new Error('memory:write permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.remember(k, v, s, globalThis.__execHandle) : Promise.resolve(); },
   recall(k, o) { if (!${
-      config.permissions.includes("memory:read")
+      config.permissions.includes('memory:read')
     }) return Promise.reject(new Error('memory:read permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.recall(k, s, globalThis.__execHandle) : Promise.resolve(null); },
   // Flight recorder read-back: this agent's recent routine runs (+ recorded
   // steps, incl. captured ai() exchanges) for the CURRENT user. Wired only
@@ -689,10 +693,10 @@ globalThis.ultralight = {
   // Owner notifications: one report to the CURRENT user's inbox bell. Kind,
   // identity, dedupe namespacing, and rate caps are enforced host-side.
   notify(o) { if (!${
-      config.permissions.includes("notify:owner")
+      config.permissions.includes('notify:owner')
     }) return Promise.reject(new Error('galactic.notify unavailable: add "notify:owner" to manifest permissions.')); const e = globalThis.__rpcEnv; return e.NOTIFY ? e.NOTIFY.notifyOwner(o || {}, globalThis.__execHandle) : Promise.reject(new Error('Notifications not available')); },
   compute: __galacticCompute,
-  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); var __t0 = Date.now(); var __clip = function(v){ try { var s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > 2000 ? s.slice(0, 2000) + '…[truncated]' : (s || ''); } catch (_e) { return ''; } }; var __rec = function(resp, errMsg){ try { var f = globalThis.__flight; if (f && f.ai && f.ai.length < 20) f.ai.push({ at: new Date().toISOString(), ms: Date.now() - __t0, model: (resp && resp.model) || (r && r.model) || null, cost_light: (resp && resp.usage && resp.usage.cost_light) || 0, prompt: __clip(r && r.messages), response: errMsg ? ('[error] ' + __clip(errMsg)) : __clip(resp && resp.content) }); } catch (_e) {} }; return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { __rec(null, resp.error); throw new Error('galactic.ai failed: ' + resp.error); } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} __rec(resp); return resp; }); },
+  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); var __t0 = Date.now(); var __clip = function(v){ try { var s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > 2000 ? s.slice(0, 2000) + '…[truncated]' : (s || ''); } catch (_e) { return ''; } }; var __rec = function(resp, errMsg){ try { var f = globalThis.__flight; if (f && f.ai && f.ai.length < 20) f.ai.push({ at: new Date().toISOString(), ms: Date.now() - __t0, model: (resp && resp.model) || (r && r.model) || null, cost_light: (resp && resp.usage && resp.usage.cost_light) || 0, prompt: __clip(r && r.messages), response: errMsg ? ('[error] ' + __clip(errMsg)) : __clip(resp && resp.content) }); } catch (_e) {} }; return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { __rec(null, resp.error); var err = new Error('galactic.ai failed: ' + resp.error); if (resp.error_code) err.code = resp.error_code; throw err; } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} __rec(resp); return resp; }); },
   embed(r) { const e = globalThis.__rpcEnv; if (!e.EMBED) return Promise.reject(new Error('galactic.embed unavailable: ai:embed permission not granted or no authenticated user context.')); return e.EMBED.embed(r || {}, globalThis.__execHandle).then(function(resp){ try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
   async call(targetAppId, functionName, callArgs) {
     if (!targetAppId || !functionName) throw new Error('target app id and function name are required');
@@ -817,7 +821,7 @@ globalThis.ultralight = {
   // net:connect — high-level protocol methods run host-side in the NET RPC
   // binding (cloudflare:sockets). No worker secret is exposed to app code.
   net: ${
-      config.permissions.includes("net:connect")
+      config.permissions.includes('net:connect')
         ? `{
     async imapFetchUnseen(hostKey, port, userKey, passKey, lastUid, businessEmail, processedFlag, limit) {
       var e = globalThis.__rpcEnv;
@@ -929,7 +933,7 @@ export default {
     } catch (err) {
       return Response.json({
         success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
-        error: { type: err.name || err.constructor?.name || 'Error', message: err.message || String(err), ...(err.galacticDetails ? { details: err.galacticDetails } : {}) },
+        error: { type: err.name || err.constructor?.name || 'Error', message: err.message || String(err), ...(typeof err.code === 'string' ? { code: err.code } : {}), ...(err.galacticDetails ? { details: err.galacticDetails } : {}) },
       });
     }
     } finally {
@@ -976,7 +980,7 @@ export default {
       });
     } else if (config.d1DataService) {
       const { getD1DatabaseId } = await import(
-        "../services/d1-provisioning.ts"
+        '../services/d1-provisioning.ts'
       );
       const dbId = await getD1DatabaseId(config.appId);
       resolvedDbId = dbId ?? null;
@@ -994,9 +998,9 @@ export default {
       }
     }
 
-    const hasStorageRead = config.permissions.includes("storage:read");
-    const hasStorageWrite = config.permissions.includes("storage:write");
-    const hasStorageDelete = config.permissions.includes("storage:delete");
+    const hasStorageRead = config.permissions.includes('storage:read');
+    const hasStorageWrite = config.permissions.includes('storage:write');
+    const hasStorageDelete = config.permissions.includes('storage:delete');
     if (
       (hasStorageRead || hasStorageWrite || hasStorageDelete) &&
       ctx?.exports?.AppDataBinding
@@ -1012,8 +1016,8 @@ export default {
       });
     }
 
-    const hasMemory = config.permissions.includes("memory:read") ||
-      config.permissions.includes("memory:write");
+    const hasMemory = config.permissions.includes('memory:read') ||
+      config.permissions.includes('memory:write');
     if (hasMemory && config.memoryService && ctx?.exports?.MemoryBinding) {
       bindings.MEMORY = ctx.exports.MemoryBinding({
         props: {
@@ -1047,7 +1051,7 @@ export default {
     // with deterministic parent-worker RPC stubs. If a test binding export is
     // missing, fail closed by leaving the capability unavailable; never fall
     // through to its production binding.
-    if (config.permissions.includes("notify:owner")) {
+    if (config.permissions.includes('notify:owner')) {
       if (config.testMode === true) {
         if (ctx?.exports?.TestNotifyBinding) {
           bindings.NOTIFY = ctx.exports.TestNotifyBinding({ props: {} });
@@ -1100,7 +1104,7 @@ export default {
       }
     }
 
-    if (config.permissions.includes("ai:embed")) {
+    if (config.permissions.includes('ai:embed')) {
       if (config.testMode === true) {
         if (ctx?.exports?.TestEmbedBinding) {
           bindings.EMBED = ctx.exports.TestEmbedBinding({ props: {} });
@@ -1114,8 +1118,8 @@ export default {
             executionId: config.executionId ?? null,
             // Only pass a genuine user OpenRouter BYOK key; another route key
             // belongs to a different endpoint and must never be misclassified.
-            userApiKey: config.aiRoute?.keySource === "user_byok" &&
-                config.aiRoute?.upstreamProvider === "openrouter"
+            userApiKey: config.aiRoute?.keySource === 'user_byok' &&
+                config.aiRoute?.upstreamProvider === 'openrouter'
               ? config.aiRoute.apiKey
               : null,
             routineContext: config.routineContext ?? null,
@@ -1152,7 +1156,7 @@ export default {
 
     // NetworkBinding via cloudflare:sockets — no worker secret in app code.
     if (
-      config.permissions.includes("net:connect") && ctx?.exports?.NetworkBinding
+      config.permissions.includes('net:connect') && ctx?.exports?.NetworkBinding
     ) {
       bindings.NET = ctx.exports.NetworkBinding({
         props: {
@@ -1168,24 +1172,24 @@ export default {
     // through the CDN, which blocks it). emit + net.* now use dedicated RPC
     // bindings, so net-only apps no longer receive SELF.
     const env = globalThis.__env;
-    const hasInterAppCall = config.permissions.includes("app:call") ||
+    const hasInterAppCall = config.permissions.includes('app:call') ||
       !!config.appCallDependencies?.length;
     if (hasInterAppCall && env?.SELF) {
       bindings.SELF = env.SELF;
     }
 
     // 5. Create Dynamic Worker
-    const hasOutboundNetwork = config.permissions.includes("net:connect") ||
-      config.permissions.includes("net:fetch") ||
+    const hasOutboundNetwork = config.permissions.includes('net:connect') ||
+      config.permissions.includes('net:fetch') ||
       hasInterAppCall ||
       allowedDestinations.length > 0;
     const loadConfig: Parameters<typeof loader.load>[0] = {
-      compatibilityDate: "2026-03-01",
-      mainModule: "wrapper.js",
+      compatibilityDate: '2026-03-01',
+      mainModule: 'wrapper.js',
       modules: {
-        "wrapper.js": wrapperModule,
-        "setup.js": setupModule,
-        "app.js": esmCode,
+        'wrapper.js': wrapperModule,
+        'setup.js': setupModule,
+        'app.js': esmCode,
       },
       env: bindings,
       globalOutbound: null,
@@ -1307,9 +1311,9 @@ export default {
         allowedDestinations,
         {
           dbId: resolvedDbId,
-          hasDb: "DB" in bindings,
-          hasMemory: "MEMORY" in bindings,
-          hasRuns: "RUNS" in bindings,
+          hasDb: 'DB' in bindings,
+          hasMemory: 'MEMORY' in bindings,
+          hasRuns: 'RUNS' in bindings,
         },
       );
       // Hash the reuse key for the per-day load-floor dedup counter. The reuse
@@ -1343,12 +1347,12 @@ export default {
       // exist.
       dynamicWorkerInvoked = true;
       response = await entrypoint.fetch(
-        new Request("http://internal/execute", {
-          method: "POST",
+        new Request('http://internal/execute', {
+          method: 'POST',
           headers: {
-            "content-type": "application/json",
+            'content-type': 'application/json',
             ...(config.capacityReceiptId
-              ? { "x-galactic-capacity-receipt": config.capacityReceiptId }
+              ? { 'x-galactic-capacity-receipt': config.capacityReceiptId }
               : {}),
           },
           // Per-request payload — the only per-execution data, kept OUT of the
@@ -1359,8 +1363,8 @@ export default {
             execCtxHandle,
             functionName,
             args,
-            authToken: sandboxAuthToken || "",
-            callerCtx: config.callerContextToken || "",
+            authToken: sandboxAuthToken || '',
+            callerCtx: config.callerContextToken || '',
           }),
         }),
         { signal: controller.signal },
@@ -1375,7 +1379,7 @@ export default {
       logs: Array<
         {
           time: string;
-          level: "log" | "error" | "warn" | "info";
+          level: 'log' | 'error' | 'warn' | 'info';
           message: string;
         }
       >;
@@ -1387,19 +1391,22 @@ export default {
       // execution. Persisted host-side only when the app opted in via the
       // manifest flight_recorder flag and a routine context is present.
       flight?: { ai?: FlightAiExchange[] };
-      error?: { type: string; message: string; details?: unknown };
+      error?: {
+        type: string;
+        message: string;
+        code?: string;
+        details?: unknown;
+      };
     };
 
     // Credits actually debited for in-sandbox AI calls this execution, from
     // the binding-side ledger. Drives both the receipt and the cross-Agent
     // grant monthly cap. The sandbox-reported number is cross-checked only.
     const aiCostLight = consumeAiSpend(config.executionId);
-    const reportedAiCost = typeof data.aiCostLight === "number"
-      ? data.aiCostLight
-      : 0;
+    const reportedAiCost = typeof data.aiCostLight === 'number' ? data.aiCostLight : 0;
     if (Math.abs(aiCostLight - reportedAiCost) > 1e-6) {
       console.warn(
-        "[AI-SPEND] Sandbox-reported AI cost differs from debit ledger",
+        '[AI-SPEND] Sandbox-reported AI cost differs from debit ledger',
         {
           appId: config.appId,
           executionId: config.executionId,
@@ -1419,6 +1426,7 @@ export default {
         knownSecrets: [...knownSecrets, sandboxAuthToken],
       })
       : undefined;
+    const errorCode = structuredOutputErrorCode(data.error?.code);
 
     return {
       success: data.success,
@@ -1435,11 +1443,14 @@ export default {
       ...(reuseKeyHash ? { reuseKeyHash } : {}),
       ...(diagnostic
         ? {
-          error: operatorCompatibilityError(
-            diagnostic,
-            data.error?.type,
-            knownSecrets,
-          ),
+          error: {
+            ...operatorCompatibilityError(
+              diagnostic,
+              data.error?.type,
+              knownSecrets,
+            ),
+            ...(errorCode ? { code: errorCode } : {}),
+          },
           diagnostic,
         }
         : {}),

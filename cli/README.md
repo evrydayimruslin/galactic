@@ -55,8 +55,50 @@ stdio works in every desktop MCP client, including ones that can't speak the pla
 
 Scoped to the working directory the agent launches the bridge in (override with `GALACTIC_FS_ROOT`); paths that escape the root are rejected.
 
-- `local.read_file` / `local.write_file` — read source before `gx.upload`; write source returned by `gx.download`.
+- `local.read_file` / `local.write_file` — edit source before `gx.stage`; write source returned by `gx.download`.
 - `local.list_dir` / `local.make_dir` — inspect and scaffold.
+
+### Token-efficient builder workflow
+
+For an existing Agent, `gx.project` gives the connected coding agent a compact,
+owner-only snapshot of the current directive, function contracts, data schema,
+access, routines, model policy, recent failures, release state, and file hashes.
+It intentionally omits source, secrets, stored application data, and full logs.
+Save its `revision`; `--since` returns only changes on the next turn. The
+response reports the revision's 30-day expiry and the effective secret-free
+default inference route.
+
+`gx.stage` uploads source once and returns an immutable `bundle_id`. Pass that
+same ID to `gx.test` and `gx.upload`; an incremental stage sends only changed or
+new files against `base_bundle_id`, plus optional deleted paths. Directory
+collection uses the platform's complete allowed-extension set—including
+Python/GPU source—and transports `.wasm` bytes as base64 rather than text.
+
+```bash
+# Orient on an existing Agent without downloading its source.
+galactic project my-agent --json
+galactic project my-agent --since gxp1_previous --json
+
+# Build, test, and deploy one exact source identity.
+galactic stage . --json
+galactic test --bundle-id gxb1_bundle --function hello --json
+galactic upload \
+  --bundle-id gxb1_bundle \
+  --test-attestation eyJ_attestation
+
+# Later edit: this directory contains only changed/new files.
+galactic stage ./changed \
+  --base-bundle gxb1_bundle \
+  --delete obsolete.ts \
+  --json
+```
+
+Staged bundles have a 24-hour API lease. Admission is fail-closed at 10 stage
+requests per owner per minute, 100 MiB of active unique objects, and 10,000
+active objects. Direct `files` calls remain supported, but bundles avoid
+retransmitting the same source for test and deploy.
+See [Builder Milestone 1](../docs/BUILDER_MILESTONE_1.md) for response
+envelopes, integrity guarantees, and structured-output contracts.
 
 ## Developer commands
 
@@ -71,8 +113,10 @@ galacticconnection mcp                       # Run the stdio MCP bridge (clients
 galacticconnection login --token gx_xxx      # Authenticate only
 galacticconnection whoami                    # Show current user
 galacticconnection scaffold my-app           # Generate a structured app skeleton
-galacticconnection test . -f hello           # Test functions in the platform sandbox
-galacticconnection upload .                  # Deploy (new app or version)
+galacticconnection project my-app             # Compact coding capsule
+galacticconnection stage . --json             # Stage source once
+galacticconnection test --bundle-id gxb1_... -f hello --json
+galacticconnection upload --bundle-id gxb1_... --test-attestation eyJ...
 galacticconnection download my-app           # Fetch deployed source
 galacticconnection apps list
 galacticconnection set pricing my-app --default 5   # Price per call, in credits

@@ -1,16 +1,12 @@
-import type {
-  ActiveBYOKProvider,
-  BYOKModel,
-  BYOKProviderCapabilities,
-} from "../types/index.ts";
+import type { ActiveBYOKProvider, BYOKModel, BYOKProviderCapabilities } from '../types/index.ts';
 
 export interface AITextPart {
-  type: "text";
+  type: 'text';
   text: string;
 }
 
 export interface AIFilePart {
-  type: "file";
+  type: 'file';
   data: string;
   filename?: string;
 }
@@ -18,9 +14,9 @@ export interface AIFilePart {
 export type AIContentPart = AITextPart | AIFilePart;
 
 export interface AIMessage {
-  role: "system" | "user" | "assistant";
+  role: 'system' | 'user' | 'assistant';
   content: string | AIContentPart[];
-  cache_control?: { type: "ephemeral" };
+  cache_control?: { type: 'ephemeral' };
 }
 
 export interface AITool {
@@ -29,13 +25,33 @@ export interface AITool {
   parameters: Record<string, unknown>;
 }
 
+export interface AIOutputSchema {
+  /** Provider-visible name. Starts with letter/_; then alphanumeric/_/-, max 64. */
+  name: string;
+  /** JSON Schema enforced by the provider and verified again by Galactic. */
+  schema: Record<string, unknown> | boolean;
+  /** Structured output is always strict. Omit or set true. */
+  strict?: true;
+}
+
+export type AIStructuredOutputErrorCode =
+  | 'invalid_output_schema'
+  | 'structured_output_unsupported'
+  | 'structured_output_invalid_json'
+  | 'structured_output_schema_mismatch';
+
 export interface AIRequest {
   model?: string;
   messages: AIMessage[];
   temperature?: number;
   max_tokens?: number;
   tools?: AITool[];
+  output_schema?: AIOutputSchema;
 }
+
+export type AIStructuredRequest = Omit<AIRequest, 'output_schema'> & {
+  output_schema: AIOutputSchema;
+};
 
 export interface AIUsage {
   input_tokens: number;
@@ -45,12 +61,24 @@ export interface AIUsage {
   prompt_cache_miss_tokens?: number;
 }
 
-export interface AIResponse {
+export interface AIResponse<Output = unknown> {
   content: string;
   model: string;
   usage: AIUsage;
+  /** Parsed, schema-validated value when output_schema was supplied. */
+  output?: Output;
   error?: string;
+  error_code?: AIStructuredOutputErrorCode;
 }
+
+/**
+ * A successful SDK call with output_schema always includes the locally
+ * verified value. Runtime SDK implementations throw before returning error
+ * responses, so callers can consume output without an optional-value branch.
+ */
+export type AIStructuredResponse<Output = unknown> = AIResponse<Output> & {
+  output: Output;
+};
 
 export interface ChatStreamRequest {
   model: string;
@@ -71,7 +99,7 @@ export interface ChatTraceContext {
 }
 
 export interface ChatMessage {
-  role: "system" | "user" | "assistant" | "tool";
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
   tool_calls?: ChatToolCall[];
   tool_call_id?: string;
@@ -79,7 +107,7 @@ export interface ChatMessage {
 }
 
 export interface ChatTool {
-  type: "function";
+  type: 'function';
   function: {
     name: string;
     description?: string;
@@ -89,7 +117,7 @@ export interface ChatTool {
 
 export interface ChatToolCall {
   id: string;
-  type: "function";
+  type: 'function';
   function: {
     name: string;
     arguments: string;
@@ -138,14 +166,14 @@ export interface ToolInvocationTelemetryRequest {
   startedAt?: string;
   completedAt?: string;
   durationMs?: number;
-  status: "success" | "error" | "aborted" | "timeout";
+  status: 'success' | 'error' | 'aborted' | 'timeout';
   errorType?: string;
   errorMessage?: string;
   widgetAction?: WidgetToolInvocationTelemetryContext;
   metadata?: Record<string, unknown>;
 }
 
-export type InferenceBillingMode = "light" | "byok";
+export type InferenceBillingMode = 'light' | 'byok';
 
 export interface InferenceRoutePreference {
   billingMode?: InferenceBillingMode;
@@ -155,14 +183,16 @@ export interface InferenceRoutePreference {
 }
 
 export type ChatInferenceSelectedPreference =
-  Required<Pick<InferenceRoutePreference, "billingMode" | "provider" | "model">> &
-  Pick<InferenceRoutePreference, "webSearchEnabled">;
+  & Required<
+    Pick<InferenceRoutePreference, 'billingMode' | 'provider' | 'model'>
+  >
+  & Pick<InferenceRoutePreference, 'webSearchEnabled'>;
 
 export interface ChatInferenceProviderOption {
   id: ActiveBYOKProvider;
   name: string;
   description: string;
-  protocol: "openai-compatible";
+  protocol: 'openai-compatible';
   baseUrl: string;
   defaultModel: string;
   models: BYOKModel[];
@@ -177,7 +207,7 @@ export interface ChatInferenceProviderOption {
 }
 
 export interface ChatInferenceLightOption {
-  provider: "openrouter";
+  provider: 'openrouter';
   defaultModel: string;
   models: BYOKModel[];
   balanceLight: number | null;

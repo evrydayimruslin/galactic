@@ -9,18 +9,19 @@
 // It also asserts the template is DETERMINISTIC (two runs -> identical bytes),
 // the precondition for "same reuse key => same isolate content".
 
-import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
-import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
-import ts from "typescript";
-import { executeInDynamicSandbox } from "./dynamic-sandbox.ts";
-import type { RuntimeConfig } from "./sandbox.ts";
+import { assert } from 'https://deno.land/std@0.210.0/assert/assert.ts';
+import { assertEquals } from 'https://deno.land/std@0.210.0/assert/assert_equals.ts';
+import ts from 'typescript';
+import { executeInDynamicSandbox } from './dynamic-sandbox.ts';
+import type { RuntimeConfig } from './sandbox.ts';
 
 // Bump this in lockstep with SANDBOX_TEMPLATE_VERSION whenever the generated
 // setup.js / wrapper.js template changes.
-const PINNED_TEMPLATE_VERSION = "2026-07-25.compute-rpc-envelope.v14";
+const PINNED_TEMPLATE_VERSION =
+  '2026-07-27.compute-rpc-structured-output.v16';
 
 // Stable separator between the two captured modules for the snapshot hash.
-const SEP = "\n----MODULE-BOUNDARY----\n";
+const SEP = '\n----MODULE-BOUNDARY----\n';
 
 interface Captured {
   setup: string;
@@ -28,32 +29,34 @@ interface Captured {
   runs: number;
 }
 
-function installHarness(): { captured: Captured; restore: () => void } {
-  const captured: Captured = { setup: "", wrapper: "", runs: 0 };
+function installHarness(
+  responseBody: Record<string, unknown> = {
+    success: true,
+    result: 'ok',
+    logs: [],
+    aiCostLight: 0,
+  },
+): { captured: Captured; restore: () => void } {
+  const captured: Captured = { setup: '', wrapper: '', runs: 0 };
   const prevEnv = globalThis.__env;
   const prevCtx = globalThis.__ctx;
-  const prevAgentSecret = Deno.env.get("AGENT_CALLER_SECRET");
-  Deno.env.set("AGENT_CALLER_SECRET", "test-agent-caller-secret");
+  const prevAgentSecret = Deno.env.get('AGENT_CALLER_SECRET');
+  Deno.env.set('AGENT_CALLER_SECRET', 'test-agent-caller-secret');
 
   const loader = {
     // deno-lint-ignore no-explicit-any
     load(cfg: any) {
       captured.runs += 1;
-      captured.setup = cfg?.modules?.["setup.js"] ?? "";
-      captured.wrapper = cfg?.modules?.["wrapper.js"] ?? "";
+      captured.setup = cfg?.modules?.['setup.js'] ?? '';
+      captured.wrapper = cfg?.modules?.['wrapper.js'] ?? '';
       return {
         getEntrypoint() {
           return {
             fetch: () =>
               Promise.resolve(
                 new Response(
-                  JSON.stringify({
-                    success: true,
-                    result: "ok",
-                    logs: [],
-                    aiCostLight: 0,
-                  }),
-                  { headers: { "Content-Type": "application/json" } },
+                  JSON.stringify(responseBody),
+                  { headers: { 'Content-Type': 'application/json' } },
                 ),
               ),
           };
@@ -64,7 +67,7 @@ function installHarness(): { captured: Captured; restore: () => void } {
 
   globalThis.__env = {
     LOADER: loader,
-    CODE_CACHE: { get: () => Promise.resolve("export const noop = 1;") },
+    CODE_CACHE: { get: () => Promise.resolve('export const noop = 1;') },
     // deno-lint-ignore no-explicit-any
   } as any;
   globalThis.__ctx = {
@@ -88,8 +91,8 @@ function installHarness(): { captured: Captured; restore: () => void } {
     restore: () => {
       globalThis.__env = prevEnv;
       globalThis.__ctx = prevCtx;
-      if (prevAgentSecret === undefined) Deno.env.delete("AGENT_CALLER_SECRET");
-      else Deno.env.set("AGENT_CALLER_SECRET", prevAgentSecret);
+      if (prevAgentSecret === undefined) Deno.env.delete('AGENT_CALLER_SECRET');
+      else Deno.env.set('AGENT_CALLER_SECRET', prevAgentSecret);
     },
   };
 }
@@ -98,24 +101,24 @@ function installHarness(): { captured: Captured; restore: () => void } {
 // it stable; it is not meant to vary.
 function fixedConfig(): RuntimeConfig {
   return {
-    appId: "app_template_guard",
-    userId: "user_fixed",
-    ownerId: "user_fixed",
-    executionId: "exec_fixed",
-    code: "",
-    permissions: ["storage:read", "storage:write", "memory:read"],
+    appId: 'app_template_guard',
+    userId: 'user_fixed',
+    ownerId: 'user_fixed',
+    executionId: 'exec_fixed',
+    code: '',
+    permissions: ['storage:read', 'storage:write', 'memory:read'],
     userApiKey: null,
     user: {
-      id: "user_fixed",
-      email: "f@test.dev",
+      id: 'user_fixed',
+      email: 'f@test.dev',
       displayName: null,
-      tier: "free",
+      tier: 'free',
     },
     d1DataService: null,
     memoryService: null,
-    envVars: { PUBLIC_VAR: "public-value" },
-    baseUrl: "https://api.test.dev",
-    workerBaseUrl: "https://api.test.dev",
+    envVars: { PUBLIC_VAR: 'public-value' },
+    baseUrl: 'https://api.test.dev',
+    workerBaseUrl: 'https://api.test.dev',
     slotBindings: [],
     appCallDependencies: [],
     // deno-lint-ignore no-explicit-any
@@ -124,61 +127,101 @@ function fixedConfig(): RuntimeConfig {
 
 async function sha256Hex(s: string): Promise<string> {
   const digest = await crypto.subtle.digest(
-    "SHA-256",
+    'SHA-256',
     new TextEncoder().encode(s),
   );
   return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
-Deno.test("sandbox template: generation is deterministic for a fixed config", async () => {
+Deno.test('sandbox template: generation is deterministic for a fixed config', async () => {
   const h = installHarness();
   try {
-    await executeInDynamicSandbox(fixedConfig(), "noop", []);
+    await executeInDynamicSandbox(fixedConfig(), 'noop', []);
     const first = h.captured.setup + SEP + h.captured.wrapper;
-    await executeInDynamicSandbox(fixedConfig(), "noop", []);
+    await executeInDynamicSandbox(fixedConfig(), 'noop', []);
     const second = h.captured.setup + SEP + h.captured.wrapper;
     assertEquals(
       first,
       second,
-      "generated setup/wrapper must be byte-identical across runs (same reuse " +
-        "key => same content); a non-deterministic template breaks warm reuse",
+      'generated setup/wrapper must be byte-identical across runs (same reuse ' +
+        'key => same content); a non-deterministic template breaks warm reuse',
     );
   } finally {
     h.restore();
   }
 });
 
-Deno.test("sandbox template: warm-isolate requests serialize compatibility globals", async () => {
+Deno.test('sandbox template: warm-isolate requests serialize compatibility globals', async () => {
   const h = installHarness();
   try {
-    await executeInDynamicSandbox(fixedConfig(), "noop", []);
+    await executeInDynamicSandbox(fixedConfig(), 'noop', []);
     assert(
-      h.captured.wrapper.includes("globalThis.__galacticExecutionTail"),
-      "wrapper must maintain a per-isolate request gate",
+      h.captured.wrapper.includes('globalThis.__galacticExecutionTail'),
+      'wrapper must maintain a per-isolate request gate',
     );
     assert(
-      h.captured.wrapper.includes("await __previousExecution"),
-      "wrapper must acquire the gate before assigning request globals",
+      h.captured.wrapper.includes('await __previousExecution'),
+      'wrapper must acquire the gate before assigning request globals',
     );
     assert(
-      h.captured.wrapper.includes("__releaseExecution();"),
-      "wrapper must release the gate in a finally block",
+      h.captured.wrapper.includes('__releaseExecution();'),
+      'wrapper must release the gate in a finally block',
     );
   } finally {
     h.restore();
   }
 });
 
-Deno.test("sandbox template: every generated JavaScript module parses", async () => {
+Deno.test('sandbox template: structured-output error codes cross the worker boundary', async () => {
   const h = installHarness();
   try {
-    await executeInDynamicSandbox(fixedConfig(), "noop", []);
+    await executeInDynamicSandbox(fixedConfig(), 'noop', []);
+    assert(
+      h.captured.setup.includes('err.code = resp.error_code'),
+      'SDK wrapper must copy AI response error_code onto the thrown Error',
+    );
+    assert(
+      h.captured.wrapper.includes(
+        "typeof err.code === 'string' ? { code: err.code }",
+      ),
+      'execution envelope must preserve a thrown Error code',
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+Deno.test('dynamic sandbox: execution result preserves worker error code', async () => {
+  const h = installHarness({
+    success: false,
+    result: null,
+    logs: [],
+    aiCostLight: 0,
+    error: {
+      type: 'Error',
+      message: 'Structured output failed',
+      code: 'structured_output_schema_mismatch',
+    },
+  });
+  try {
+    const result = await executeInDynamicSandbox(fixedConfig(), 'noop', []);
+    assertEquals(result.success, false);
+    assertEquals(result.error?.code, 'structured_output_schema_mismatch');
+  } finally {
+    h.restore();
+  }
+});
+
+Deno.test('sandbox template: every generated JavaScript module parses', async () => {
+  const h = installHarness();
+  try {
+    await executeInDynamicSandbox(fixedConfig(), 'noop', []);
     for (
       const [name, source] of [
-        ["setup.js", h.captured.setup],
-        ["wrapper.js", h.captured.wrapper],
+        ['setup.js', h.captured.setup],
+        ['wrapper.js', h.captured.wrapper],
       ] as const
     ) {
       const transpiled = ts.transpileModule(source, {
@@ -191,12 +234,8 @@ Deno.test("sandbox template: every generated JavaScript module parses", async ()
       });
       assertEquals(
         (transpiled.diagnostics ?? [])
-          .filter((diagnostic) =>
-            diagnostic.category === ts.DiagnosticCategory.Error
-          )
-          .map((diagnostic) =>
-            ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
-          ),
+          .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)
+          .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')),
         [],
         `${name} must be valid JavaScript before it is sent to Worker Loader`,
       );
@@ -206,10 +245,10 @@ Deno.test("sandbox template: every generated JavaScript module parses", async ()
   }
 });
 
-Deno.test("sandbox template: snapshot pinned -- a template change must bump SANDBOX_TEMPLATE_VERSION", async () => {
+Deno.test('sandbox template: snapshot pinned -- a template change must bump SANDBOX_TEMPLATE_VERSION', async () => {
   const h = installHarness();
   try {
-    await executeInDynamicSandbox(fixedConfig(), "noop", []);
+    await executeInDynamicSandbox(fixedConfig(), 'noop', []);
     const hash = await sha256Hex(h.captured.setup + SEP + h.captured.wrapper);
     // The pinned hash below is tied to PINNED_TEMPLATE_VERSION. If this assertion
     // fails, the generated setup.js/wrapper.js template (or the fixed config)
@@ -218,18 +257,18 @@ Deno.test("sandbox template: snapshot pinned -- a template change must bump SAND
     // TEMPLATE_HASH below to the new value. This forces the reuse key to rotate
     // so a cached old isolate cannot serve new template content.
     const TEMPLATE_HASH =
-      "2253c6df83390d866a832d276f9b34f59894b299f019287a46bc0c0063a3f418";
+      '1c4927448b83eb289142069622109d790c669437c8d09b7853a83e4acc92499b';
     assertEquals(
       PINNED_TEMPLATE_VERSION,
-      "2026-07-25.compute-rpc-envelope.v14",
-      "PINNED_TEMPLATE_VERSION drifted from the pinned literal",
+      '2026-07-27.compute-rpc-structured-output.v16',
+      'PINNED_TEMPLATE_VERSION drifted from the pinned literal',
     );
     assertEquals(
       hash,
       TEMPLATE_HASH,
-      "Generated sandbox template changed. If you edited the setup/wrapper " +
-        "template or loadConfig shape, bump SANDBOX_TEMPLATE_VERSION (+ the " +
-        "pins in this test). See the comment above.",
+      'Generated sandbox template changed. If you edited the setup/wrapper ' +
+        'template or loadConfig shape, bump SANDBOX_TEMPLATE_VERSION (+ the ' +
+        'pins in this test). See the comment above.',
     );
   } finally {
     h.restore();

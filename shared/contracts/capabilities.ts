@@ -9,16 +9,16 @@
 // See docs/brief: strangler-fig migration — capabilities leave the legacy
 // PLATFORM_TOOLS array + switch as they join this registry.
 
-import type { MCPJsonSchema, MCPToolAnnotations } from "./mcp.ts";
+import type { MCPJsonSchema, MCPToolAnnotations } from './mcp.ts';
 
-/** Where a capability is exposed. Tier-1 capabilities declare all three. */
-export type CapabilitySurface = "mcp" | "cli" | "web";
+/** Where a capability is exposed; selected parity targets declare all three. */
+export type CapabilitySurface = 'mcp' | 'cli' | 'web';
 
 /** Which gx.* family a capability groups under (presentation/grouping only). */
-export type CapabilityBranch = "ownership" | "agent_user" | "platform_user";
+export type CapabilityBranch = 'ownership' | 'agent_user' | 'platform_user';
 
 /**
- * 1 = pure-API, parity on all three surfaces.
+ * 1 = API-first; its declared surfaces are projected from this registry.
  * 2 = sensitive mutation (money / keys / authorizing others) — website only.
  * 3 = interaction-bound (Stripe, OAuth) — website only.
  */
@@ -30,18 +30,19 @@ export type CapabilityTier = 1 | 2 | 3;
  * never needs to know which surface called it.
  */
 export type CapabilityErrorCode =
-  | "invalid_input"
-  | "not_found"
-  | "forbidden"
-  | "conflict"
-  | "rate_limited"
-  | "internal";
+  | 'invalid_input'
+  | 'not_found'
+  | 'forbidden'
+  | 'conflict'
+  | 'rate_limited'
+  | 'quota_exceeded'
+  | 'internal';
 
 export class CapabilityError extends Error {
   readonly code: CapabilityErrorCode;
   constructor(code: CapabilityErrorCode, message: string) {
     super(message);
-    this.name = "CapabilityError";
+    this.name = 'CapabilityError';
     this.code = code;
   }
 }
@@ -55,7 +56,7 @@ export interface CapabilityContext {
    * must use this value rather than re-reading a bearer header: credentials may
    * arrive through another supported transport (for example an auth cookie).
    */
-  authSource?: "supabase" | "api_token" | "routine_actor" | "sandbox_actor";
+  authSource?: 'supabase' | 'api_token' | 'routine_actor' | 'sandbox_actor';
   /** The surface the call arrived on — for telemetry, never for authorization. */
   surface: CapabilitySurface;
   /**
@@ -107,7 +108,7 @@ export interface CapabilityAuth {
 
 /** Web projection descriptor — the REST route this capability mounts at. */
 export interface CapabilityWebRoute {
-  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   /** e.g. "/api/launch/agents/:id/verify" (":id" bound to the app_id arg). */
   path: string;
 }
