@@ -18,7 +18,6 @@ import {
   useLaunchRouteLiveData,
 } from "./lib/live-data";
 import {
-  dismissLaunchWorkspace,
   type LaunchNavigate,
   resolveLaunchNavigationTarget,
 } from "./lib/navigation";
@@ -265,13 +264,14 @@ export function App(): ReactElement {
     // Remount the application surface when the authenticated owner changes so
     // component-local alert/search/settings state cannot outlive its account.
     <SignInModalProvider key={authSessionIdentity}>
-      {nebulaRoute && !providerCodeMisrouted
+      {route.definition.key === "authCallback" && !providerCodeMisrouted
+        ? <AuthCallbackPage location={location} />
+        : nebulaRoute && !providerCodeMisrouted
         ? sessionRestoring &&
             experienceRoute.definition.key !== "connect"
           ? (
             <NebulaSessionRestoringShell
               agentOpen={experienceRoute.definition.key === "agent"}
-              onAgentClose={() => dismissLaunchWorkspace(navigate)}
             />
           )
           : (
@@ -376,10 +376,10 @@ function RouteSwitch(
   }
 }
 
-function AuthCallbackPage(
+export function AuthCallbackPage(
   { location }: { location: LocationState },
 ): ReactElement {
-  const [message, setMessage] = useState("Finishing sign in...");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -402,7 +402,7 @@ function AuthCallbackPage(
         nextPath,
         status: "callback_missing_bridge",
       });
-      setMessage("Sign-in callback is missing a session token.");
+      setError("Sign-in callback is missing a session token.");
       return;
     }
 
@@ -443,7 +443,7 @@ function AuthCallbackPage(
           nextPath,
           status: "exchange_failed",
         });
-        setMessage(message);
+        setError(message);
       });
 
     return () => {
@@ -452,12 +452,11 @@ function AuthCallbackPage(
   }, [location.search]);
 
   return (
-    <div className="launch-page-narrow auth-callback-page">
-      <div className="auth-callback-panel">
-        <p className="section-label">Google sign in</p>
-        <h1>{message}</h1>
-      </div>
-    </div>
+    <NebulaSessionRestoringShell
+      agentOpen={false}
+      error={error}
+      heading="Connect AI"
+    />
   );
 }
 

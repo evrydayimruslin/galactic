@@ -7,6 +7,22 @@ interface FleetRosterProps {
   loading: boolean;
 }
 
+export function FleetLoadingBar({
+  label = "Loading agents",
+}: {
+  label?: string;
+}): ReactElement {
+  return (
+    <div
+      className="neb-fleet-loading"
+      role="status"
+      aria-label={label}
+    >
+      <span />
+    </div>
+  );
+}
+
 export function FleetRoster({
   behindWorkspace,
   children,
@@ -21,15 +37,7 @@ export function FleetRoster({
       {error ? <p className="neb-error-note">{error}</p> : null}
       <div className="neb-roster">
         {loading
-          ? (
-            <div
-              className="neb-fleet-loading"
-              role="status"
-              aria-label="Loading agents"
-            >
-              <span />
-            </div>
-          )
+          ? <FleetLoadingBar />
           : children}
       </div>
     </section>

@@ -272,9 +272,20 @@ html[data-theme="dark"] .nebula-root .neb-hero-cta.secondary:hover {
 
 .neb-roster { display: grid; grid-template-columns: repeat(auto-fit, minmax(265px, 1fr)); gap: var(--roster-gap); transition: filter .18s ease, opacity .18s ease; }
 .neb-fleet-behind-open .neb-roster { filter: blur(2px); opacity: .78; }
-.neb-fleet-loading { position: fixed; z-index: 3; top: 30vh; left: 50%; width: min(calc(100vw - 44px), 916px); height: 2px; overflow: hidden; background: var(--surface-strong); transform: translate(-50%, -50%); }
+.neb-fleet-loading { position: fixed; z-index: 3; top: 22.5vh; left: 50%; width: min(calc(100vw - 44px), 916px); height: 2px; overflow: hidden; background: var(--surface-strong); transform: translate(-50%, -50%); }
 .neb-fleet-loading span { position: absolute; inset: 0; background: var(--accent); transform: scaleX(0); transform-origin: left center; animation: neb-fleet-loading 1.25s cubic-bezier(.2,.7,.2,1) forwards; }
+html[data-theme="light"] .neb-fleet-loading {
+  background: rgba(255,255,255,.62);
+  box-shadow:
+    0 0 8px 3px rgba(255,255,255,.96),
+    0 0 24px 9px rgba(255,255,255,.68);
+}
+html[data-theme="light"] .neb-fleet-loading span {
+  background: #fff;
+  box-shadow: 0 0 14px rgba(255,255,255,1);
+}
 @keyframes neb-fleet-loading { to { transform: scaleX(1); } }
+.neb-auth-transition-error { max-width: 640px; margin: 0; color: var(--danger); font-family: var(--mono); font-size: 12px; line-height: 1.6; }
 .neb-agent-card { position: relative; min-height: 158px; padding: 20px; border: 1px solid var(--raised-border); border-radius: 0; background: var(--card); box-shadow: var(--shadow-raised); cursor: pointer; animation: neb-rise .55s cubic-bezier(.22,1,.36,1) backwards; }
 .neb-agent-card > * { position: relative; z-index: 1; }
 .neb-agent-card:hover { border-color: var(--line-2); }
