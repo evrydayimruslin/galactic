@@ -112,6 +112,16 @@ describe("warm theme design contracts", () => {
     );
   });
 
+  it("matches hero titles to Agent card ink at a lighter serif weight", () => {
+    expect(css).toContain("font-weight: 500 600;");
+    expect(css).toMatch(
+      /\.neb-hero h1 \{[^}]*color: var\(--ink\);[^}]*font-weight: 500;/,
+    );
+    expect(css).toMatch(
+      /\.neb-agent-name \{[^}]*color: var\(--ink\);/,
+    );
+  });
+
   it("paints mobile browser chrome with the resolved opaque theme ground", () => {
     expect(indexHtml).toContain(
       '<meta id="theme-color" name="theme-color" content="#0a0806" />',
