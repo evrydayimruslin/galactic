@@ -148,7 +148,7 @@ import {
   AgentPanePlaceholder,
   AgentStructurePlaceholder,
 } from './nebula/agent-panel-shell';
-import { FleetRoster } from './nebula/fleet-roster';
+import { FleetLoadingBar, FleetRoster } from './nebula/fleet-roster';
 import { Glyph } from './nebula/glyph';
 import { OperatorAgentAlerts } from './nebula/operator-agent-alerts';
 import { OperatorAgentAccess } from './nebula/operator-agent-access';
@@ -728,13 +728,15 @@ function HomeHeroActions({
 
 export function NebulaSessionRestoringShell({
   agentOpen,
-  onAgentClose,
+  error = null,
+  heading,
 }: {
   agentOpen: boolean;
-  onAgentClose: () => void;
+  error?: string | null;
+  heading?: string;
 }): ReactElement {
   return (
-    <div className='nebula-root' aria-busy='true'>
+    <div className='nebula-root' aria-busy={error ? undefined : 'true'}>
       <ThemeMotif />
 
       <header className='neb-topbar-shell'>
@@ -744,9 +746,12 @@ export function NebulaSessionRestoringShell({
       </header>
       <main className='neb-app'>
         <section className={`neb-hero${agentOpen ? ' neb-context-hero' : ''}`}>
-          <h1>{agentOpen ? 'Loading agent' : 'Agents work here'}</h1>
+          <h1>{heading ?? (agentOpen ? 'Loading agent' : 'Agents work here')}</h1>
         </section>
-        {agentOpen ? <AgentStructurePlaceholder /> : null}
+        {error
+          ? <p className='neb-auth-transition-error' role='alert'>{error}</p>
+          : <FleetLoadingBar label='Refreshing session' />}
+        {agentOpen && !error ? <AgentStructurePlaceholder /> : null}
       </main>
     </div>
   );
