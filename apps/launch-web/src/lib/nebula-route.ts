@@ -29,11 +29,14 @@ export function shouldUseNebulaRoute({
       routeKey === "settings" || routeKey === "connect" ||
       routeKey === "agent";
   }
+  // Connect is one continuous Nebula workspace before and after sign-in.
+  // Signed-out route data is empty, so this does not expose private fleet data.
+  if (routeKey === "connect") return true;
   if (!authenticated) return false;
 
   if (
     routeKey === "home" || routeKey === "library" ||
-    routeKey === "settings" || routeKey === "connect"
+    routeKey === "settings"
   ) {
     return true;
   }
