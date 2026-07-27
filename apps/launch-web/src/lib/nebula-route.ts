@@ -26,11 +26,15 @@ export function shouldUseNebulaRoute({
   // sanitized Nebula loading shell while the session is being revalidated.
   if (sessionRestoring) {
     return routeKey === "home" || routeKey === "library" ||
-      routeKey === "settings" || routeKey === "agent";
+      routeKey === "settings" || routeKey === "connect" ||
+      routeKey === "agent";
   }
   if (!authenticated) return false;
 
-  if (routeKey === "home" || routeKey === "library" || routeKey === "settings") {
+  if (
+    routeKey === "home" || routeKey === "library" ||
+    routeKey === "settings" || routeKey === "connect"
+  ) {
     return true;
   }
 

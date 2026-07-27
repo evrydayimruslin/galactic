@@ -245,15 +245,15 @@ export function App(): ReactElement {
     routeKey: route.definition.key,
     sessionRestoring,
   });
-  const connectTutorial = !sessionRestoring &&
+  const publicConnectTutorial = !authToken && !sessionRestoring &&
     (route.definition.key === "connect" ||
-      (!authToken && route.definition.key === "home")) &&
+      route.definition.key === "home") &&
     !providerCodeMisrouted;
   return (
     // Remount the application surface when the authenticated owner changes so
     // component-local alert/search/settings state cannot outlive its account.
     <SignInModalProvider key={authSessionIdentity}>
-      {connectTutorial
+      {publicConnectTutorial
         ? (
           <NebulaPublicShell>
             <LaunchShell

@@ -1445,6 +1445,108 @@ button {
   color: var(--ink);
 }
 
+.neb-connect-tutorial-panel {
+  min-height: min(520px, calc(100vh - 154px));
+}
+
+.neb-connect-tutorial-panel .neb-modal-content {
+  padding: clamp(24px, 4vw, 42px);
+}
+
+.neb-connect-tutorial-panel .neb-modal-pane {
+  width: min(100%, 720px);
+}
+
+.neb-connect-tutorial-kicker {
+  margin: 0 0 10px;
+  color: var(--violet);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.neb-connect-tutorial-title {
+  max-width: 620px;
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: clamp(27px, 4vw, 42px);
+  font-weight: 600;
+  line-height: 1.08;
+}
+
+.neb-connect-tutorial-intro {
+  max-width: 630px;
+  margin: 14px 0 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.neb-connect-tutorial-context {
+  display: inline-flex;
+  gap: 7px;
+  margin: 16px 0 0;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.neb-connect-tutorial-context strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.neb-connect-tutorial-steps {
+  display: grid;
+  margin-top: 30px;
+  border-top: 1px solid var(--line);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.neb-connect-tutorial-steps article {
+  display: grid;
+  min-width: 0;
+  gap: 18px;
+  padding: 18px 16px 20px 0;
+  border-bottom: 1px solid var(--line);
+  grid-template-rows: auto 1fr;
+}
+
+.neb-connect-tutorial-steps article + article {
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+
+.neb-connect-tutorial-steps span {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.neb-connect-tutorial-steps h3 {
+  margin: 0 0 6px;
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 14px;
+}
+
+.neb-connect-tutorial-steps p,
+.neb-connect-tutorial-note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.neb-connect-tutorial-note {
+  max-width: 540px;
+  margin-top: 18px;
+}
+
 @media (max-width: 720px) {
   .connect-tutorial-page {
     padding-top: 48px;
@@ -1464,6 +1566,20 @@ button {
 
   .connect-tutorial-note {
     flex-direction: column;
+  }
+
+  .neb-connect-tutorial-panel {
+    min-height: 0;
+  }
+
+  .neb-connect-tutorial-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .neb-connect-tutorial-steps article,
+  .neb-connect-tutorial-steps article + article {
+    padding: 16px 0;
+    border-left: 0;
   }
 }
 

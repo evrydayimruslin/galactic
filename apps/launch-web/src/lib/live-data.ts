@@ -446,8 +446,12 @@ async function loadRouteData(
         ]);
       return { adminAgent, agentCallerPermissions, agentFunctions };
     }
+    case "connect": {
+      if (!hasLaunchAuthToken()) return {};
+      const fleet = await launchApi.fleet();
+      return { fleet };
+    }
     case "authCallback":
-    case "connect":
       return {};
     case "terms":
     case "privacy":

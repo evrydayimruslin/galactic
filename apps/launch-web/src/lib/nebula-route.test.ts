@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { shouldUseNebulaRoute } from "./nebula-route";
 
 describe("shouldUseNebulaRoute", () => {
-  it.each(["home", "library", "settings"] as const)(
+  it.each(["home", "library", "settings", "connect"] as const)(
     "keeps the authenticated %s route inside Nebula",
     (routeKey) => {
       expect(shouldUseNebulaRoute({
