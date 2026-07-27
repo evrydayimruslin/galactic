@@ -240,8 +240,26 @@ export function OperatorAgentOverview({
           </button>
         </div>
         {operating
-          ? (
-            <div className="neb-overview-status-line">
+          ? model.setupAction
+            ? (
+              <a
+                className="neb-overview-status-line actionable"
+                href={model.setupAction.href}
+                onClick={(event) => {
+                  event.preventDefault();
+                  onNavigate(model.setupAction!.href, { scroll: "preserve" });
+                }}
+              >
+                <span className="neb-status-dot paused" />
+                <span>
+                  {operating.label}
+                  <small>{model.setupAction.detail}</small>
+                </span>
+                <span aria-hidden="true" className="neb-setup-arrow">→</span>
+              </a>
+            )
+            : (
+              <div className="neb-overview-status-line">
               <span
                 className={`neb-status-dot${
                   operating.readiness.working ? "" : " paused"
@@ -251,8 +269,8 @@ export function OperatorAgentOverview({
                 {operating.label}
                 {operating.detail ? <small>{operating.detail}</small> : null}
               </span>
-            </div>
-          )
+              </div>
+            )
           : null}
       </section>
     ),

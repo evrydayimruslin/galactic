@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildAgentExtensionPrompt,
+  buildConnectAiPrompt,
+  buildNewAgentPrompt,
   type AgentExtensionKind,
 } from "./agent-extension-prompt";
 
@@ -38,4 +40,30 @@ describe("buildAgentExtensionPrompt", () => {
       expect(prompt).not.toContain("$GALACTIC_API_KEY");
     },
   );
+
+  it("builds a connection-only prompt", () => {
+    const prompt = buildConnectAiPrompt({
+      apiKey: "gx_connect_key",
+      platformMcpUrl: "https://api.connectgalactic.com/mcp/platform",
+    });
+
+    expect(prompt).toContain("Connect this coding agent to my Galactic workspace");
+    expect(prompt).toContain("Authorization: Bearer gx_connect_key");
+    expect(prompt).toContain('gx.discover({ scope: "library" })');
+    expect(prompt).toContain("Do not create, edit, upload, promote, activate");
+  });
+
+  it("builds a new persistent Agent prompt", () => {
+    const prompt = buildNewAgentPrompt({
+      apiKey: "gx_agent_key",
+      platformMcpUrl: "https://api.connectgalactic.com/mcp/platform",
+    });
+
+    expect(prompt).toContain("new persistent Galactic Agent");
+    expect(prompt).toContain("Agent's name");
+    expect(prompt).toContain("generated ID");
+    expect(prompt).toContain("gx.test");
+    expect(prompt).toContain("gx.upload");
+    expect(prompt).toContain("Authorization: Bearer gx_agent_key");
+  });
 });

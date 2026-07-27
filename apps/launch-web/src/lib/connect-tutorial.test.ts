@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { ConnectTutorialPanel } from "../components/connect-tutorial";
 import {
+  connectTutorialApiKeyRequest,
+  connectTutorialHeroTitle,
   connectTutorialHref,
   parseConnectTutorialContext,
 } from "./connect-tutorial";
@@ -30,8 +32,62 @@ describe("connect tutorial routing", () => {
       .toEqual({ intent: "connect", source: "settings" });
   });
 
+  it("uses the Agent display name in every targeted hero", () => {
+    expect(connectTutorialHeroTitle("interface", "Email Operations"))
+      .toBe("Give Email Operations a purpose-built interface.");
+    expect(connectTutorialHeroTitle("function", "Email Operations"))
+      .toBe("Extend what Email Operations can do.");
+    expect(connectTutorialHeroTitle("routine", "Email Operations"))
+      .toBe("Give Email Operations recurring work.");
+  });
+
+  it("provisions least-privilege keys for each tutorial instance", () => {
+    const agent = {
+      id: "app-email-ops",
+      slug: "email-ops",
+      name: "Email Operations",
+      kind: "mcp" as const,
+      visibility: "private" as const,
+      relationship: "owner" as const,
+      owner: { userId: "owner-1" },
+      installed: true,
+    };
+
+    expect(connectTutorialApiKeyRequest({
+      intent: "connect",
+      suffix: "one",
+    })).toMatchObject({
+      scopes: ["apps:read"],
+    });
+    expect(connectTutorialApiKeyRequest({
+      agent,
+      intent: "routine",
+      suffix: "two",
+    })).toMatchObject({
+      appIds: ["app-email-ops"],
+      scopes: ["apps:read", "apps:call", "agents:build", "agents:operate"],
+    });
+    expect(connectTutorialApiKeyRequest({
+      intent: "agent",
+      suffix: "three",
+    })).not.toHaveProperty("appIds");
+  });
+
   it("renders feature context inside the Nebula workspace panel", () => {
     const markup = renderToStaticMarkup(createElement(ConnectTutorialPanel, {
+      agent: {
+        id: "app-email-ops",
+        slug: "email-ops",
+        name: "Email Operations",
+        kind: "mcp",
+        visibility: "private",
+        relationship: "owner",
+        owner: {
+          userId: "owner-1",
+          displayName: "Ada",
+        },
+        installed: true,
+      },
       location: {
         pathname: "/connect",
         search: "?intent=function&agent=email-ops&source=agent-pane",
@@ -41,8 +97,10 @@ describe("connect tutorial routing", () => {
     }));
 
     expect(markup).toContain("neb-inline-panel neb-connect-tutorial-panel");
-    expect(markup).toContain("Extend what this Agent can do.");
-    expect(markup).toContain("email-ops");
+    expect(markup).toContain("Preparing your scoped coding-agent prompt");
+    expect(markup).toContain('aria-label="Extend what Email Operations can do."');
+    expect(markup).not.toContain("email-ops");
+    expect(markup).not.toContain("neb-connect-tutorial-title");
     expect(markup).not.toContain("Sign in to continue");
   });
 
@@ -58,6 +116,8 @@ describe("connect tutorial routing", () => {
 
     expect(markup).toContain("neb-connect-tutorial-panel");
     expect(markup).toContain("Sign in to continue");
-    expect(markup).toContain("Your place in this tutorial will be preserved.");
+    expect(markup).toContain(
+      "Sign in to provision a scoped prompt for your coding agent.",
+    );
   });
 });

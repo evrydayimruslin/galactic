@@ -245,6 +245,10 @@ body.nebula-public-page, body.nebula-public-page #root { min-height: 100dvh; bac
 .neb-operator-directive strong { max-width: 700px; line-height: 1.45; }
 .neb-operator-directive .neb-overview-status-line > span:last-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .neb-operator-directive .neb-overview-status-line small { color: var(--ink-3); font-family: var(--display); font-size: 11px; line-height: 1.4; }
+.neb-overview-status-line.actionable { width: fit-content; max-width: 100%; padding: 5px 7px 5px 0; color: var(--ink-2); text-decoration: none; }
+.neb-overview-status-line.actionable:hover small, .neb-overview-status-line.actionable:hover .neb-setup-arrow { color: var(--violet); }
+.neb-overview-status-line.actionable .neb-setup-arrow { flex: 0 0 auto; color: var(--ink-3); font-size: 13px; transition: transform .12s ease, color .12s ease; }
+.neb-overview-status-line.actionable:hover .neb-setup-arrow { transform: translateX(2px); }
 .neb-operator-attention-list, .neb-operator-activity-group { display: grid; gap: 7px; }
 .neb-operator-attention-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 12px; border: 1px solid var(--line); background: rgba(255,255,255,.025); }
 .neb-operator-attention-card.incident { border-color: rgba(167,139,255,.45); background: var(--violet-dim); }
