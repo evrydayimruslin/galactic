@@ -86,7 +86,7 @@ import {
   globalAttentionEntryMatches,
   groupGlobalAttentionEntries,
 } from '../lib/global-attention';
-import { type AgentExtensionKind, buildAgentExtensionPrompt } from '../lib/agent-extension-prompt';
+import type { AgentExtensionKind } from '../lib/agent-extension-prompt';
 import {
   fleetAgentAttentionCount,
   fleetStatusPresentation,
@@ -128,6 +128,7 @@ import {
   dismissLaunchWorkspace,
   type LaunchNavigate,
 } from '../lib/navigation';
+import { connectTutorialHref } from '../lib/connect-tutorial';
 import { AgentComputePane } from './agent-compute-pane';
 import { AgentOverviewLayout } from './nebula/agent-overview-layout';
 import {
@@ -158,59 +159,6 @@ type RoutineUpdate = Omit<
 >;
 
 interface NebulaProps extends LaunchPageProps {}
-
-async function provisionConnectAgentPrompt(
-  keyPurpose = 'Agent connect',
-): Promise<string> {
-  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  const suffix = Math.random().toString(36).slice(2, 6);
-  const [key, install] = await Promise.all([
-    launchApi.createApiKey({
-      name: `${keyPurpose} ${stamp} ${suffix}`,
-      expiresInDays: 90,
-      scopes: ['apps:read', 'apps:call', 'agents:build', 'agents:operate'],
-    }),
-    launchApi.install(),
-  ]);
-  const template = install.instructions.find((item) => item.target === 'prompt')
-    ?.configText;
-  return template?.replaceAll('$GALACTIC_API_KEY', key.plaintextToken) ??
-    `Connect Galactic at ${launchApiOrigin()}/mcp/platform with Authorization: Bearer ${key.plaintextToken}. Then ask me what persistent Agent to conjure.`;
-}
-
-async function provisionNewAgentPrompt(): Promise<string> {
-  const connectionPrompt = await provisionConnectAgentPrompt('New Agent build');
-  return [
-    connectionPrompt,
-    '',
-    'Help me create and deploy a new persistent Galactic Agent. Begin by asking what it should do, when it should run, what tools or data it needs, and what constraints it must follow.',
-    '',
-    'Offer me the option to start from the Galactic scaffold by calling gx.download(full_time: true), then customize that scaffold for this Agent. I can also choose to build it from scratch.',
-    '',
-    'Test the Agent, explain its behavior and permissions, and upload it as a paused proposal for my review. Do not activate it without my explicit approval.',
-  ].join('\n');
-}
-
-async function provisionAgentExtensionPrompt(
-  agent: LaunchAgentSummary,
-  kind: AgentExtensionKind,
-): Promise<string> {
-  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  const suffix = Math.random().toString(36).slice(2, 6);
-  const nameBase = `${agent.slug} ${kind} builder`.slice(0, 28).trim();
-  const key = await launchApi.createApiKey({
-    name: `${nameBase} ${stamp} ${suffix}`,
-    expiresInDays: 30,
-    scopes: ['apps:read', 'agents:build'],
-    appIds: [agent.id],
-  });
-  return buildAgentExtensionPrompt({
-    agent,
-    apiKey: key.plaintextToken,
-    kind,
-    platformMcpUrl: `${launchApiOrigin()}/mcp/platform`,
-  });
-}
 
 let audioContext: AudioContext | null = null;
 const modalStack: symbol[] = [];
@@ -741,70 +689,39 @@ function FleetCard({
   );
 }
 
-function AddAgentCard({ number }: { number: number }): ReactElement {
-  const [copyState, setCopyState] = useState<
-    'idle' | 'creating' | 'copied' | 'error'
-  >('idle');
-  const copyNewAgentPrompt = async () => {
-    if (copyState === 'creating') return;
-    setCopyState('creating');
-    try {
-      const prompt = await provisionNewAgentPrompt();
-      await copyTextToClipboard(prompt);
-      setCopyState('copied');
-      sounds.confirm();
-      window.setTimeout(() => setCopyState('idle'), 3000);
-    } catch {
-      setCopyState('error');
-      window.setTimeout(() => setCopyState('idle'), 3000);
-    }
-  };
+function AddAgentCard({
+  number,
+  onNavigate,
+}: {
+  number: number;
+  onNavigate: LaunchNavigate;
+}): ReactElement {
   return (
     <button
-      className={`neb-add-agent-card${copyState === 'copied' ? ' copied-prompt' : ''}`}
-      disabled={copyState === 'creating'}
-      onClick={() => void copyNewAgentPrompt()}
+      className='neb-add-agent-card'
+      onClick={() =>
+        onNavigate(connectTutorialHref({
+          intent: 'agent',
+          source: 'fleet-card',
+        }))}
       type='button'
     >
       <span className='neb-card-no'>{String(number).padStart(3, '0')}</span>
-      <Glyph name={copyState === 'copied' ? 'check' : 'plus'} />
-      <span>
-        {copyState === 'creating'
-          ? 'Creating prompt…'
-          : copyState === 'copied'
-          ? 'Copied — paste into agent'
-          : copyState === 'error'
-          ? 'Copy failed — try again'
-          : 'Add agent'}
-      </span>
+      <Glyph name='plus' />
+      <span>Add agent</span>
     </button>
   );
 }
 
 function HomeHeroActions({
   onAlerts,
+  onNavigate,
   unread,
 }: {
   onAlerts: () => void;
+  onNavigate: LaunchNavigate;
   unread: number;
 }): ReactElement {
-  const [copyState, setCopyState] = useState<
-    'idle' | 'creating' | 'copied' | 'error'
-  >('idle');
-  const copyConnectionPrompt = async () => {
-    if (copyState === 'creating') return;
-    setCopyState('creating');
-    try {
-      const prompt = await provisionConnectAgentPrompt();
-      await copyTextToClipboard(prompt);
-      setCopyState('copied');
-      sounds.confirm();
-      window.setTimeout(() => setCopyState('idle'), 3000);
-    } catch {
-      setCopyState('error');
-      window.setTimeout(() => setCopyState('idle'), 3000);
-    }
-  };
   return (
     <div className='neb-hero-actions'>
       <button className='neb-hero-alerts-btn' onClick={onAlerts} type='button'>
@@ -812,39 +729,18 @@ function HomeHeroActions({
         {unread} Alert{unread === 1 ? '' : 's'}
       </button>
       <button
-        className={`neb-hero-cta secondary${copyState === 'copied' ? ' copied' : ''}`}
-        disabled={copyState === 'creating'}
-        onClick={() => void copyConnectionPrompt()}
+        className='neb-hero-cta secondary'
+        onClick={() =>
+          onNavigate(connectTutorialHref({
+            intent: 'connect',
+            source: 'fleet-hero',
+          }))}
         type='button'
       >
-        {copyState === 'creating'
-          ? 'Creating prompt…'
-          : copyState === 'copied'
-          ? 'Copied — paste into agent'
-          : copyState === 'error'
-          ? 'Copy failed — try again'
-          : 'Connect AI'}
+        Connect AI
       </button>
     </div>
   );
-}
-
-async function copyTextToClipboard(value: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(value);
-    return;
-  } catch {
-    const field = document.createElement('textarea');
-    field.value = value;
-    field.setAttribute('readonly', '');
-    field.style.position = 'fixed';
-    field.style.opacity = '0';
-    document.body.appendChild(field);
-    field.select();
-    const copied = document.execCommand('copy');
-    field.remove();
-    if (!copied) throw new Error('Clipboard copy failed');
-  }
 }
 
 export function NebulaSessionRestoringShell({
@@ -1386,6 +1282,7 @@ export function NebulaFleetApp({
             ? (
               <HomeHeroActions
                 onAlerts={() => navigate('/?panel=alerts')}
+                onNavigate={navigate}
                 unread={unread}
               />
             )
@@ -1449,6 +1346,7 @@ export function NebulaFleetApp({
                 sounds.close();
                 dismissLaunchWorkspace(navigate, returnToAlerts);
               }}
+              onNavigate={navigate}
               shortcutPreferences={shortcutPreferences}
             />
           )
@@ -1485,7 +1383,7 @@ export function NebulaFleetApp({
               shortcutConfig={shortcutConfig}
             />
           ))}
-          <AddAgentCard number={agents.length + 1} />
+          <AddAgentCard number={agents.length + 1} onNavigate={navigate} />
         </FleetRoster>
       </main>
       {shortcutHelpOpen
@@ -1746,12 +1644,14 @@ function SettingsPanel({
   fleetRevision,
   initial,
   onClose,
+  onNavigate,
   onShortcutPreferencesChange,
   shortcutPreferences,
 }: {
   fleetRevision: string | null;
   initial: LaunchPageProps['live']['data'];
   onClose: () => void;
+  onNavigate: LaunchNavigate;
   onShortcutPreferencesChange: (preferences: LaunchFleetPreferences) => void;
   shortcutPreferences: LaunchFleetPreferences | null;
 }): ReactElement {
@@ -1775,6 +1675,14 @@ function SettingsPanel({
   const [keys, setKeys] = useState(initial.apiKeys?.apiKeys ?? []);
   const [settings, setSettings] = useState<LaunchSettingsResponse | null>(null);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (requested !== 'connect') return;
+    onNavigate(connectTutorialHref({
+      intent: 'connect',
+      source: 'settings',
+    }), { replace: true });
+  }, [onNavigate, requested]);
 
   const refresh = useCallback(async () => {
     const [subResult, byokResult, keysResult, settingsResult] = await Promise
@@ -1816,7 +1724,16 @@ function SettingsPanel({
           <button
             className={`neb-rail-btn${pane === id ? ' active' : ''}`}
             key={id}
-            onClick={() => choose(id)}
+            onClick={() => {
+              if (id === 'connect') {
+                onNavigate(connectTutorialHref({
+                  intent: 'connect',
+                  source: 'settings',
+                }));
+                return;
+              }
+              choose(id);
+            }}
             type='button'
           >
             {label}
@@ -1861,7 +1778,6 @@ function SettingsPanel({
         {pane === 'keys'
           ? <KeySettings keys={keys} onChange={setKeys} setError={setError} />
           : null}
-        {pane === 'connect' ? <ConnectSettings setError={setError} /> : null}
       </div>
     </section>
   );
@@ -2407,51 +2323,6 @@ function KeySettings({
       <button className='neb-btn' onClick={() => void create()} type='button'>
         Create scoped key
       </button>
-    </section>
-  );
-}
-
-function ConnectSettings(
-  { setError }: { setError: (value: string) => void },
-): ReactElement {
-  const [prompt, setPrompt] = useState('');
-  const [busy, setBusy] = useState(false);
-  const create = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError('');
-    try {
-      setPrompt(await provisionConnectAgentPrompt());
-      sounds.confirm();
-    } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <section className='neb-modal-pane active'>
-      <h2 className='neb-modal-h'>Connect AI</h2>
-      <p className='neb-ov-note top-note'>
-        Pair Codex, Claude Code, Cursor, or another MCP client to deploy and supervise this fleet.
-      </p>
-      {prompt
-        ? (
-          <div className='neb-connect-prompt'>
-            <pre>{prompt}</pre>
-            <CopyButton text={prompt} />
-          </div>
-        )
-        : (
-          <button
-            className='neb-btn'
-            disabled={busy}
-            onClick={() => void create()}
-            type='button'
-          >
-            {busy ? 'Creating connection…' : 'Create connection prompt'}
-          </button>
-        )}
     </section>
   );
 }
@@ -3381,7 +3252,7 @@ function InterfacesPane({
   return (
     <section className='neb-modal-pane active'>
       <h2 className='neb-modal-h'>Interfaces</h2>
-      <PromptButton agent={agent} kind='interface' />
+      <PromptButton agent={agent} kind='interface' onNavigate={onNavigate} />
       {interfaces.map((item) => {
         const favorite = favoriteInterfaceIds.includes(item.id);
         return (
@@ -3446,47 +3317,24 @@ function InterfacesPane({
 }
 
 function PromptButton(
-  { agent, kind }: { agent: LaunchAgentSummary; kind: AgentExtensionKind },
+  { agent, kind, onNavigate }: {
+    agent: LaunchAgentSummary;
+    kind: AgentExtensionKind;
+    onNavigate: LaunchNavigate;
+  },
 ): ReactElement {
-  const [copyState, setCopyState] = useState<
-    'idle' | 'creating' | 'copied' | 'error'
-  >('idle');
-  const cachedPromptRef = useRef<{ key: string; prompt: string } | null>(null);
-  const copyPrompt = async () => {
-    if (copyState === 'creating') return;
-    setCopyState('creating');
-    try {
-      const cacheKey = `${agent.id}:${kind}`;
-      const prompt = cachedPromptRef.current?.key === cacheKey
-        ? cachedPromptRef.current.prompt
-        : await provisionAgentExtensionPrompt(agent, kind);
-      cachedPromptRef.current = { key: cacheKey, prompt };
-      await copyTextToClipboard(prompt);
-      setCopyState('copied');
-      sounds.confirm();
-      window.setTimeout(() => setCopyState('idle'), 3000);
-    } catch {
-      setCopyState('error');
-      window.setTimeout(() => setCopyState('idle'), 3000);
-    }
-  };
   return (
     <button
-      aria-live='polite'
-      className={`neb-add-btn${
-        copyState === 'copied' ? ' copied' : copyState === 'error' ? ' error' : ''
-      }`}
-      disabled={copyState === 'creating'}
-      onClick={() => void copyPrompt()}
+      className='neb-add-btn'
+      onClick={() =>
+        onNavigate(connectTutorialHref({
+          agentSlug: agent.slug,
+          intent: kind,
+          source: 'agent-pane',
+        }))}
       type='button'
     >
-      {copyState === 'creating'
-        ? 'Creating secure prompt…'
-        : copyState === 'copied'
-        ? 'Copied — paste into your coding agent'
-        : copyState === 'error'
-        ? 'Couldn’t prepare prompt — try again'
-        : `+ Add ${kind}`}
+      + Add {kind}
     </button>
   );
 }
@@ -3992,7 +3840,7 @@ function RoutinesPane({
   return (
     <section className='neb-modal-pane active'>
       <h2 className='neb-modal-h'>Routines</h2>
-      <PromptButton agent={agent} kind='routine' />
+      <PromptButton agent={agent} kind='routine' onNavigate={onNavigate} />
       {error ? <p className='neb-error-note' role='alert'>{error}</p> : null}
       {(response?.routines ?? []).map((routine) => (
         <RoutineRow
@@ -4290,7 +4138,7 @@ function FunctionsPane({
   return (
     <section className='neb-modal-pane active'>
       <h2 className='neb-modal-h'>Functions</h2>
-      <PromptButton agent={agent} kind='function' />
+      <PromptButton agent={agent} kind='function' onNavigate={onNavigate} />
       {(functions?.functions ?? []).map((fn) => (
         <button
           className='neb-popup-item'

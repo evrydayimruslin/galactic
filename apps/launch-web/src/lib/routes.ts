@@ -7,6 +7,7 @@ import {
 
 export type LaunchRouteKey =
   | "home"
+  | "connect"
   | "library"
   | "store"
   | "agent"
@@ -44,6 +45,13 @@ export const launchRoutes: LaunchRouteDefinition[] = [
       "GET /api/launch/platform-primitives",
       "GET /api/launch/fleet",
     ],
+  },
+  {
+    key: "connect",
+    path: "/connect",
+    label: "Connect AI",
+    nav: "hidden",
+    apiRoutes: [],
   },
   {
     key: "store",
