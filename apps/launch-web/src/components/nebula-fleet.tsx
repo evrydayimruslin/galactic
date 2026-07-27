@@ -141,6 +141,7 @@ import { type ThemePreference, useTheme } from '../lib/theme';
 import { connectTutorialHref } from '../lib/connect-tutorial';
 import { AgentComputePane } from './agent-compute-pane';
 import { ConnectTutorialPanel } from './connect-tutorial';
+import { useSignInModal } from './sign-in-modal';
 import { AgentOverviewLayout } from './nebula/agent-overview-layout';
 import {
   AgentPanelShell,
@@ -757,6 +758,8 @@ export function NebulaFleetApp({
   navigate,
   route,
 }: NebulaProps): ReactElement {
+  const openSignIn = useSignInModal();
+  const signedIn = hasLaunchAuthToken();
   const now = useClock();
   const [atPageTop, setAtPageTop] = useState(() => window.scrollY <= 1);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
@@ -1350,7 +1353,13 @@ export function NebulaFleetApp({
             />
           )
           : connectOpen
-          ? <ConnectTutorialPanel location={location} />
+          ? (
+            <ConnectTutorialPanel
+              location={location}
+              onSignIn={openSignIn}
+              signedIn={signedIn}
+            />
+          )
           : null}
 
         <FleetRoster

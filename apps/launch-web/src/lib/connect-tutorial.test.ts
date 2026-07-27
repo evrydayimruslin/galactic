@@ -36,10 +36,28 @@ describe("connect tutorial routing", () => {
         pathname: "/connect",
         search: "?intent=function&agent=email-ops&source=agent-pane",
       },
+      onSignIn: () => undefined,
+      signedIn: true,
     }));
 
     expect(markup).toContain("neb-inline-panel neb-connect-tutorial-panel");
     expect(markup).toContain("Extend what this Agent can do.");
     expect(markup).toContain("email-ops");
+    expect(markup).not.toContain("Sign in to continue");
+  });
+
+  it("keeps sign-in inside the same Connect tutorial", () => {
+    const markup = renderToStaticMarkup(createElement(ConnectTutorialPanel, {
+      location: {
+        pathname: "/connect",
+        search: "",
+      },
+      onSignIn: () => undefined,
+      signedIn: false,
+    }));
+
+    expect(markup).toContain("neb-connect-tutorial-panel");
+    expect(markup).toContain("Sign in to continue");
+    expect(markup).toContain("Your place in this tutorial will be preserved.");
   });
 });

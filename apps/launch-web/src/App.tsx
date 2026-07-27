@@ -36,11 +36,13 @@ import {
 import { LaunchShell } from "./components/launch-chrome";
 import {
   NebulaFleetApp,
-  NebulaPublicShell,
   NebulaSessionRestoringShell,
 } from "./components/nebula-fleet";
-import { SignInModalProvider } from "./components/sign-in-modal";
-import { ConnectTutorialPage } from "./components/connect-tutorial";
+import {
+  SignInModalProvider,
+  useSignInModal,
+} from "./components/sign-in-modal";
+import { ConnectTutorialPanel } from "./components/connect-tutorial";
 import {
   exchangeLaunchBridgeToken,
   getLaunchAuthToken,
@@ -224,6 +226,20 @@ export function App(): ReactElement {
     });
   }, [location.pathname, providerCodeMisrouted]);
 
+  const preAuthHome = !authToken && !sessionRestoring &&
+    route.definition.key === "home" && !providerCodeMisrouted;
+  useEffect(() => {
+    if (!preAuthHome) return;
+    navigate("/connect", { replace: true, scroll: "preserve" });
+  }, [navigate, preAuthHome]);
+
+  const experienceRoute = preAuthHome
+    ? resolveLaunchRoute("/connect")
+    : route;
+  const experienceLocation = preAuthHome
+    ? { pathname: "/connect", search: location.search }
+    : location;
+
   // Keep the top-nav item that LED here highlighted: the last primary/account
   // section the user visited sticks through detail pages (e.g. arriving at an
   // agent from "Agents" keeps Agents lit). A direct URL to a detail page has
@@ -242,48 +258,27 @@ export function App(): ReactElement {
     agentRelationship: sessionRestoring ? undefined : agentSummary?.relationship,
     authenticated: Boolean(authToken),
     loadStatus: live.status,
-    routeKey: route.definition.key,
+    routeKey: experienceRoute.definition.key,
     sessionRestoring,
   });
-  const publicConnectTutorial = !authToken && !sessionRestoring &&
-    (route.definition.key === "connect" ||
-      route.definition.key === "home") &&
-    !providerCodeMisrouted;
   return (
     // Remount the application surface when the authenticated owner changes so
     // component-local alert/search/settings state cannot outlive its account.
     <SignInModalProvider key={authSessionIdentity}>
-      {publicConnectTutorial
-        ? (
-          <NebulaPublicShell>
-            <LaunchShell
-              accountRoutes={accountRoutes()}
-              activeRoute={activeSection}
-              cosmos
-              navigate={navigate}
-              primaryRoutes={primaryRoutes()}
-              title={routeTitles[route.definition.key]}
-            >
-              <ConnectTutorialPage
-                location={location}
-                navigate={navigate}
-              />
-            </LaunchShell>
-          </NebulaPublicShell>
-        )
-        : nebulaRoute && !providerCodeMisrouted
-        ? sessionRestoring
+      {nebulaRoute && !providerCodeMisrouted
+        ? sessionRestoring &&
+            experienceRoute.definition.key !== "connect"
           ? (
             <NebulaSessionRestoringShell
-              agentOpen={route.definition.key === "agent"}
+              agentOpen={experienceRoute.definition.key === "agent"}
               onAgentClose={() => dismissLaunchWorkspace(navigate)}
             />
           )
           : (
             <NebulaFleetApp
               live={live}
-              location={location}
-              route={route}
+              location={experienceLocation}
+              route={experienceRoute}
               navigate={navigate}
             />
           )
@@ -310,6 +305,7 @@ export function App(): ReactElement {
 function RouteSwitch(
   { live, location, route, navigate }: LaunchPageProps,
 ): ReactElement {
+  const openSignIn = useSignInModal();
   switch (route.definition.key) {
     case "home":
       return (
@@ -321,12 +317,11 @@ function RouteSwitch(
         />
       );
     case "connect":
-      return (
-        <ConnectTutorialPage
-          location={location}
-          navigate={navigate}
-        />
-      );
+      return <ConnectTutorialPanel
+        location={location}
+        onSignIn={openSignIn}
+        signedIn={Boolean(getLaunchAuthToken())}
+      />;
     case "library":
       return (
         <LibraryFoundationPage
