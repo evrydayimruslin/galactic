@@ -41,7 +41,6 @@ import {
   getLaunchAuthToken,
   hasLaunchAuthToken,
   launchAuthSubject,
-  signOutLaunch,
 } from '../lib/auth';
 import {
   attachInterfaceBridge,
@@ -129,6 +128,7 @@ import {
   type LaunchNavigate,
 } from '../lib/navigation';
 import { connectTutorialHref } from '../lib/connect-tutorial';
+import { signOutToConnect } from '../lib/sign-out-transition';
 import { AgentComputePane } from './agent-compute-pane';
 import { ConnectTutorialPanel } from './connect-tutorial';
 import { useSignInModal } from './sign-in-modal';
@@ -1773,6 +1773,10 @@ function SettingsPanel({
         {pane === 'general'
           ? (
             <GeneralSettings
+              onSignOut={() => {
+                sounds.close();
+                void signOutToConnect(onNavigate);
+              }}
               settings={settings}
               onChange={setSettings}
               setError={setError}
@@ -1807,10 +1811,12 @@ function SettingsPanel({
 function GeneralSettings({
   settings,
   onChange,
+  onSignOut,
   setError,
 }: {
   settings: LaunchSettingsResponse | null;
   onChange: (value: LaunchSettingsResponse) => void;
+  onSignOut: () => void;
   setError: (value: string) => void;
 }): ReactElement {
   const [name, setName] = useState(settings?.displayName ?? '');
@@ -1860,10 +1866,7 @@ function GeneralSettings({
       </div>
       <button
         className='neb-btn neb-signout'
-        onClick={() =>
-          void signOutLaunch().finally(() => {
-            window.location.href = '/';
-          })}
+        onClick={onSignOut}
         type='button'
       >
         Sign out
