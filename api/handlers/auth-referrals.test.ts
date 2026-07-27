@@ -108,7 +108,7 @@ Deno.test("auth session bootstrap claims pending referral visitor landings", asy
   }
 });
 
-Deno.test("auth callback redirects launch web return targets through opaque bridge", async () => {
+Deno.test("auth callback redirects launch web through an HttpOnly refresh handoff", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnv = globalThis.__env;
 
@@ -171,12 +171,19 @@ Deno.test("auth callback redirects launch web return targets through opaque brid
     const location = response.headers.get("location") || "";
     const target = new URL(location);
     assertEquals(target.origin, "https://staging.launch.test");
-    assertEquals(target.pathname, "/auth/callback");
+    assertEquals(target.pathname, "/session/complete");
     assertEquals(target.searchParams.get("next"), "/settings?tab=keys");
-
-    const fragment = new URLSearchParams(target.hash.slice(1));
-    assertEquals(fragment.get("bridge_token")?.startsWith("ul_embed_"), true);
+    assertEquals(target.searchParams.get("session"), "refresh");
+    assertEquals(target.hash, "");
+    assertEquals(location.includes("bridge_token"), false);
     assertEquals(location.includes("supabase-access-token"), false);
+    assertEquals(location.includes("supabase-refresh-token"), false);
+    assertEquals(
+      (response.headers.get("set-cookie") || "").includes(
+        "__Host-ul_launch_refresh=supabase-refresh-token",
+      ),
+      true,
+    );
     assertEquals(
       (response.headers.get("set-cookie") || "").includes(
         "__Host-ul_oauth_verifier=;",

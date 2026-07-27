@@ -268,7 +268,7 @@ function resolveLaunchWebReturnTarget(
   return { callbackUrl };
 }
 
-async function buildLaunchWebBridgeRedirect(
+async function buildLaunchWebSessionRedirect(
   request: Request,
   returnTo: string | undefined,
   accessToken: string,
@@ -277,6 +277,25 @@ async function buildLaunchWebBridgeRedirect(
 ): Promise<Response | null> {
   const target = resolveLaunchWebReturnTarget(request, returnTo);
   if (!target) return null;
+
+  // Prefer a server-set HttpOnly refresh cookie over putting an opaque
+  // credential in the browser URL. The launch web app exchanges this cookie
+  // for its short-lived access token on the clean session-completion route.
+  // Keep the fragment bridge as a compatibility fallback for providers that
+  // do not issue a refresh token.
+  if (refreshToken) {
+    target.callbackUrl.pathname = "/session/complete";
+    target.callbackUrl.searchParams.set("session", "refresh");
+    const response = new Response(null, {
+      status: 302,
+      headers: {
+        "Location": target.callbackUrl.toString(),
+        "Cache-Control": "no-store",
+      },
+    });
+    appendLaunchRefreshCookie(response.headers, refreshToken);
+    return response;
+  }
 
   const issued = await issueEmbedBridgeToken({
     accessToken,
@@ -463,7 +482,7 @@ export async function handleAuth(request: Request): Promise<Response> {
           "return_to",
           OAUTH_RETURN_TO_COOKIE_NAME,
         ) || undefined;
-        const launchWebRedirect = await buildLaunchWebBridgeRedirect(
+        const launchWebRedirect = await buildLaunchWebSessionRedirect(
           request,
           returnTo,
           tokens.access_token,

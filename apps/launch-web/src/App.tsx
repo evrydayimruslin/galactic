@@ -388,14 +388,16 @@ export function AuthCallbackPage(
     const bridgeToken = hash.get("bridge_token");
     const expiresIn = hash.get("expires_in");
     const nextPath = normalizeLocalPath(query.get("next"));
+    const refreshHandoff = query.get("session") === "refresh";
     recordLaunchAuthDiagnostic({
       bridgeTokenPresent: Boolean(bridgeToken),
       expiresIn,
+      message: refreshHandoff ? "http_only_refresh_handoff" : undefined,
       nextPath,
       status: "callback_loaded",
     });
 
-    if (!bridgeToken) {
+    if (!bridgeToken && !refreshHandoff) {
       recordLaunchAuthDiagnostic({
         bridgeTokenPresent: false,
         message: "The launch callback URL did not contain a bridge token.",
@@ -407,27 +409,41 @@ export function AuthCallbackPage(
     }
 
     recordLaunchAuthDiagnostic({
-      bridgeTokenPresent: true,
+      bridgeTokenPresent: Boolean(bridgeToken),
       expiresIn,
+      message: refreshHandoff ? "http_only_refresh_handoff" : undefined,
       nextPath,
       status: "exchange_started",
     });
-    exchangeLaunchBridgeToken(bridgeToken)
-      .then((response) => {
+    const establishSession = bridgeToken
+      ? exchangeLaunchBridgeToken(bridgeToken).then((response) => {
+        setLaunchAuthToken(response.access_token, response.expires_in);
+        return String(response.expires_in ?? expiresIn ?? "");
+      })
+      : refreshLaunchSession().then((token) => {
+        if (!token) {
+          throw new Error("Unable to establish the launch session.");
+        }
+        return "";
+      });
+
+    establishSession
+      .then((resolvedExpiresIn) => {
         if (cancelled) return;
         recordLaunchAuthDiagnostic({
-          bridgeTokenPresent: true,
-          expiresIn: String(response.expires_in ?? expiresIn ?? ""),
+          bridgeTokenPresent: Boolean(bridgeToken),
+          expiresIn: resolvedExpiresIn,
+          message: refreshHandoff ? "http_only_refresh_handoff" : undefined,
           nextPath,
           status: "exchange_succeeded",
         });
-        setLaunchAuthToken(response.access_token, response.expires_in);
         if (!getLaunchAuthToken()) {
           throw new Error("Browser storage rejected the launch session token.");
         }
         recordLaunchAuthDiagnostic({
-          bridgeTokenPresent: true,
-          expiresIn: String(response.expires_in ?? expiresIn ?? ""),
+          bridgeTokenPresent: Boolean(bridgeToken),
+          expiresIn: resolvedExpiresIn,
+          message: refreshHandoff ? "http_only_refresh_handoff" : undefined,
           nextPath,
           status: "token_stored",
         });
@@ -437,7 +453,7 @@ export function AuthCallbackPage(
         if (cancelled) return;
         const message = err instanceof Error ? err.message : String(err);
         recordLaunchAuthDiagnostic({
-          bridgeTokenPresent: true,
+          bridgeTokenPresent: Boolean(bridgeToken),
           expiresIn,
           message,
           nextPath,

@@ -15,6 +15,12 @@ describe("connect tutorial routing", () => {
     expect(resolveLaunchRoute("/connect").definition.key).toBe("connect");
   });
 
+  it("routes credential-free session handoffs through the auth callback surface", () => {
+    expect(resolveLaunchRoute("/session/complete").definition.key).toBe(
+      "authCallback",
+    );
+  });
+
   it("keeps feature and Agent context in the URL", () => {
     expect(connectTutorialHref({
       agentSlug: "mail room",

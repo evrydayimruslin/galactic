@@ -13,8 +13,8 @@ describe("AuthCallbackPage", () => {
     const { AuthCallbackPage } = await import("../App");
     const markup = renderToStaticMarkup(createElement(AuthCallbackPage, {
       location: {
-        pathname: "/auth/callback",
-        search: "?next=%2Fconnect",
+        pathname: "/session/complete",
+        search: "?next=%2Fconnect&session=refresh",
       },
     }));
 

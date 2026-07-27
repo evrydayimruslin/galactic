@@ -195,6 +195,10 @@ function normalizePath(pathname: string): string {
   if (cleanPath === "/discover" || cleanPath === "/store") return "/browse";
   if (cleanPath === "/library") return "/agents";
   if (cleanPath === "/wallet" || cleanPath === "/settings") return "/account";
+  // Fresh OAuth handoffs use a credential-free completion URL. Resolve it to
+  // the existing callback surface while legacy bridge-fragment links remain
+  // compatible at /auth/callback.
+  if (cleanPath === "/session/complete") return "/auth/callback";
   // The Install page is retired — the add-to-agent flow is now a modal opened
   // from the "Add to agent" button. Legacy /install links fall back to home.
   if (cleanPath === "/install") return "/";
