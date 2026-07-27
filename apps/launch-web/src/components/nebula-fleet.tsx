@@ -140,6 +140,7 @@ import {
 import { type ThemePreference, useTheme } from '../lib/theme';
 import { connectTutorialHref } from '../lib/connect-tutorial';
 import { AgentComputePane } from './agent-compute-pane';
+import { ConnectTutorialPanel } from './connect-tutorial';
 import { AgentOverviewLayout } from './nebula/agent-overview-layout';
 import {
   AgentPanelShell,
@@ -761,6 +762,7 @@ export function NebulaFleetApp({
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const settingsOpen = route.definition.key === 'settings';
   const agentOpen = route.definition.key === 'agent';
+  const connectOpen = route.definition.key === 'connect';
   const globalAlertsOpen = route.definition.key === 'home' &&
     new URLSearchParams(location.search).get('panel') === 'alerts';
   const searchOpen = route.definition.key === 'home' &&
@@ -771,7 +773,7 @@ export function NebulaFleetApp({
     [location.pathname, location.search],
   );
   const workspaceOpen = globalAlertsOpen || searchOpen || agentOpen ||
-    settingsOpen;
+    settingsOpen || connectOpen;
   const [cachedFleetCount, setCachedFleetCount] = useState<number | undefined>(
     () => readCachedFleetCount(window.localStorage, getLaunchAuthToken()),
   );
@@ -877,6 +879,8 @@ export function NebulaFleetApp({
     ? activeAgent?.name ?? selectedFleetAgent?.name ?? 'Loading agent'
     : settingsOpen
     ? 'Settings'
+    : connectOpen
+    ? 'Connect AI'
     : homeHeading;
   const orderedShortcutAgents = useMemo(
     () =>
@@ -1141,7 +1145,10 @@ export function NebulaFleetApp({
   ]);
 
   useEffect(() => {
-    if (!globalAlertsOpen && !searchOpen && !agentOpen && !settingsOpen) return;
+    if (
+      !globalAlertsOpen && !searchOpen && !agentOpen && !settingsOpen &&
+      !connectOpen
+    ) return;
     const onOutsideMouseDown = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
       if (
@@ -1158,6 +1165,7 @@ export function NebulaFleetApp({
     };
   }, [
     agentOpen,
+    connectOpen,
     globalAlertsOpen,
     navigate,
     returnToAlerts,
@@ -1263,7 +1271,9 @@ export function NebulaFleetApp({
       <main className='neb-app'>
         <section
           className={`neb-hero${
-            globalAlertsOpen || searchOpen || agentOpen || settingsOpen ? ' neb-context-hero' : ''
+            globalAlertsOpen || searchOpen || agentOpen || settingsOpen || connectOpen
+              ? ' neb-context-hero'
+              : ''
           }`}
         >
           <h1>{contextHeading}</h1>
@@ -1339,6 +1349,8 @@ export function NebulaFleetApp({
               shortcutPreferences={shortcutPreferences}
             />
           )
+          : connectOpen
+          ? <ConnectTutorialPanel location={location} />
           : null}
 
         <FleetRoster

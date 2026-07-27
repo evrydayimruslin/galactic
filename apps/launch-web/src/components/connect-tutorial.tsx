@@ -108,3 +108,70 @@ export function ConnectTutorialPage({
     </div>
   );
 }
+
+export function ConnectTutorialPanel({
+  location,
+}: {
+  location: LocationState;
+}): ReactElement {
+  const context = parseConnectTutorialContext(location.search);
+  const copy = tutorialCopy[context.intent];
+
+  return (
+    <section
+      className="neb-inline-panel neb-connect-tutorial-panel"
+      aria-label={copy.eyebrow}
+      data-connect-intent={context.intent}
+    >
+      <div className="neb-modal-content">
+        <section className="neb-modal-pane active">
+          <p className="neb-connect-tutorial-kicker">{copy.eyebrow}</p>
+          <h2 className="neb-connect-tutorial-title">{copy.title}</h2>
+          <p className="neb-connect-tutorial-intro">{copy.intro}</p>
+          {context.agentSlug
+            ? (
+              <p className="neb-connect-tutorial-context">
+                Agent context <strong>{context.agentSlug}</strong>
+              </p>
+            )
+            : null}
+
+          <div
+            className="neb-connect-tutorial-steps"
+            aria-label="Tutorial outline"
+          >
+            <article>
+              <span>01</span>
+              <div>
+                <h3>Choose your AI</h3>
+                <p>Select the client and environment you want to connect.</p>
+              </div>
+            </article>
+            <article>
+              <span>02</span>
+              <div>
+                <h3>Connect securely</h3>
+                <p>Follow setup tailored to that client and this task.</p>
+              </div>
+            </article>
+            <article>
+              <span>03</span>
+              <div>
+                <h3>Build together</h3>
+                <p>
+                  Continue with the right Agent, interface, function, or
+                  routine flow.
+                </p>
+              </div>
+            </article>
+          </div>
+
+          <p className="neb-connect-tutorial-note">
+            Detailed walkthrough content will live here. Opening this page does
+            not create credentials or copy a prompt.
+          </p>
+        </section>
+      </div>
+    </section>
+  );
+}
