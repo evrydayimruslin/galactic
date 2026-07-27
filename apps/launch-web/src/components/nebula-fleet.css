@@ -272,7 +272,7 @@ html[data-theme="dark"] .nebula-root .neb-hero-cta.secondary:hover {
 
 .neb-roster { display: grid; grid-template-columns: repeat(auto-fit, minmax(265px, 1fr)); gap: var(--roster-gap); transition: filter .18s ease, opacity .18s ease; }
 .neb-fleet-behind-open .neb-roster { filter: blur(2px); opacity: .78; }
-.neb-fleet-loading { position: fixed; z-index: 3; top: 25vh; left: 50%; width: min(calc(100vw - 44px), 916px); height: 2px; overflow: visible; background: var(--surface-strong); transform: translate(-50%, -50%); }
+.neb-fleet-loading { position: fixed; z-index: 3; top: 28vh; left: 50%; width: min(calc(100vw - 44px), 916px); height: 2px; overflow: visible; background: var(--surface-strong); transform: translate(-50%, -50%); }
 .neb-fleet-loading span { position: absolute; inset: 0; background: var(--accent); transform: scaleX(0); transform-origin: left center; animation: neb-fleet-loading 1.6s cubic-bezier(.2,.7,.2,1) infinite; }
 html[data-theme="light"] .neb-fleet-loading {
   background: rgba(93,78,60,.1);
