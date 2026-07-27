@@ -137,7 +137,11 @@ import {
   type LaunchNavigate,
 } from '../lib/navigation';
 import { type ThemePreference, useTheme } from '../lib/theme';
-import { connectTutorialHref } from '../lib/connect-tutorial';
+import {
+  connectTutorialHeroTitle,
+  connectTutorialHref,
+  parseConnectTutorialContext,
+} from '../lib/connect-tutorial';
 import { signOutToConnect } from '../lib/sign-out-transition';
 import { AgentComputePane } from './agent-compute-pane';
 import { ConnectTutorialPanel } from './connect-tutorial';
@@ -879,6 +883,20 @@ export function NebulaFleetApp({
   const homeHeading = displayedFleetCount === undefined
     ? 'Agents Working'
     : `${displayedFleetCount} ${displayedFleetCount === 1 ? 'Agent' : 'Agents'} Working`;
+  const connectContext = useMemo(
+    () => parseConnectTutorialContext(location.search),
+    [location.search],
+  );
+  const connectAgent = useMemo(
+    () =>
+      connectContext.agentSlug
+        ? agents.find(({ agent }) =>
+          agent.slug === connectContext.agentSlug ||
+          agent.id === connectContext.agentSlug
+        )?.agent ?? null
+        : null,
+    [agents, connectContext.agentSlug],
+  );
   const contextHeading = globalAlertsOpen
     ? alertCount === 1 ? '1 alert' : `${alertCount} alerts`
     : searchOpen
@@ -888,7 +906,7 @@ export function NebulaFleetApp({
     : settingsOpen
     ? 'Settings'
     : connectOpen
-    ? 'Connect AI'
+    ? connectTutorialHeroTitle(connectContext.intent, connectAgent?.name)
     : homeHeading;
   const orderedShortcutAgents = useMemo(
     () =>
@@ -1360,6 +1378,8 @@ export function NebulaFleetApp({
           : connectOpen
           ? (
             <ConnectTutorialPanel
+              agent={connectAgent}
+              dataReady={live.status === 'ready' || live.status === 'error'}
               location={location}
               onSignIn={openSignIn}
               signedIn={signedIn}

@@ -1446,7 +1446,7 @@ button {
 }
 
 .neb-connect-tutorial-panel {
-  min-height: min(520px, calc(100vh - 154px));
+  min-height: 0;
 }
 
 .neb-connect-tutorial-panel .neb-modal-content {
@@ -1454,104 +1454,104 @@ button {
 }
 
 .neb-connect-tutorial-panel .neb-modal-pane {
-  width: min(100%, 720px);
+  width: min(100%, 860px);
 }
 
-.neb-connect-tutorial-kicker {
-  margin: 0 0 10px;
-  color: var(--violet);
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-}
-
-.neb-connect-tutorial-title {
-  max-width: 620px;
+.neb-connect-tutorial-instruction {
+  max-width: 700px;
   margin: 0;
-  color: var(--ink);
-  font-family: var(--display);
-  font-size: clamp(27px, 4vw, 42px);
-  font-weight: 600;
-  line-height: 1.08;
-}
-
-.neb-connect-tutorial-intro {
-  max-width: 630px;
-  margin: 14px 0 0;
   color: var(--ink-2);
   font-size: 13px;
   line-height: 1.65;
 }
 
-.neb-connect-tutorial-context {
-  display: inline-flex;
-  gap: 7px;
-  margin: 16px 0 0;
-  padding: 6px 9px;
+.neb-connect-tutorial-prompt {
+  overflow: hidden;
+  margin-top: 20px;
   border: 1px solid var(--line);
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: 10px;
+  background: var(--input);
+  box-shadow: var(--shadow-pressed);
 }
 
-.neb-connect-tutorial-context strong {
-  color: var(--ink);
-  font-weight: 500;
-}
-
-.neb-connect-tutorial-steps {
-  display: grid;
-  margin-top: 30px;
-  border-top: 1px solid var(--line);
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.neb-connect-tutorial-steps article {
-  display: grid;
-  min-width: 0;
-  gap: 18px;
-  padding: 18px 16px 20px 0;
+.neb-connect-tutorial-prompt-bar {
+  display: flex;
+  min-height: 45px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 10px 8px 14px;
   border-bottom: 1px solid var(--line);
-  grid-template-rows: auto 1fr;
 }
 
-.neb-connect-tutorial-steps article + article {
-  padding-left: 16px;
-  border-left: 1px solid var(--line);
-}
-
-.neb-connect-tutorial-steps span {
+.neb-connect-tutorial-prompt-bar span {
+  overflow: hidden;
   color: var(--ink-3);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.neb-connect-tutorial-steps h3 {
-  margin: 0 0 6px;
+.neb-connect-tutorial-prompt-bar button,
+.neb-connect-tutorial-error button {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border: 1px solid var(--line-2);
+  background: var(--glass);
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 9.5px;
+}
+
+.neb-connect-tutorial-prompt-bar button:hover,
+.neb-connect-tutorial-error button:hover {
+  border-color: var(--violet);
   color: var(--ink);
-  font-family: var(--display);
-  font-size: 14px;
 }
 
-.neb-connect-tutorial-steps p,
-.neb-connect-tutorial-note {
+.neb-connect-tutorial-prompt-bar button.copied {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+
+.neb-connect-tutorial-prompt pre {
+  max-height: min(440px, 54vh);
+  overflow: auto;
   margin: 0;
-  color: var(--ink-3);
+  padding: 18px;
+  color: var(--ink-2);
+  font-family: var(--mono);
   font-size: 10.5px;
-  line-height: 1.5;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.neb-connect-tutorial-note {
-  max-width: 540px;
-  margin-top: 18px;
+.neb-connect-tutorial-secret,
+.neb-connect-tutorial-status,
+.neb-connect-tutorial-error p {
+  max-width: 700px;
+  margin: 14px 0 0;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.55;
+}
+
+.neb-connect-tutorial-status {
+  margin-top: 0;
+}
+
+.neb-connect-tutorial-error button {
+  margin-top: 12px;
 }
 
 .neb-connect-tutorial-actions {
   display: flex;
   gap: 12px;
   align-items: center;
-  margin-top: 22px;
+  margin-top: 0;
 }
 
 .neb-connect-tutorial-actions button {
@@ -1595,14 +1595,10 @@ button {
     min-height: 0;
   }
 
-  .neb-connect-tutorial-steps {
-    grid-template-columns: 1fr;
-  }
-
-  .neb-connect-tutorial-steps article,
-  .neb-connect-tutorial-steps article + article {
-    padding: 16px 0;
-    border-left: 0;
+  .neb-connect-tutorial-prompt pre {
+    max-height: 52vh;
+    padding: 14px;
+    font-size: 9.5px;
   }
 
   .neb-connect-tutorial-actions {

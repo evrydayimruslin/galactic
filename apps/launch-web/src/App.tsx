@@ -42,6 +42,7 @@ import {
   useSignInModal,
 } from "./components/sign-in-modal";
 import { ConnectTutorialPanel } from "./components/connect-tutorial";
+import { parseConnectTutorialContext } from "./lib/connect-tutorial";
 import {
   exchangeLaunchBridgeToken,
   getLaunchAuthToken,
@@ -317,11 +318,22 @@ function RouteSwitch(
         />
       );
     case "connect":
-      return <ConnectTutorialPanel
-        location={location}
-        onSignIn={openSignIn}
-        signedIn={Boolean(getLaunchAuthToken())}
-      />;
+      {
+        const context = parseConnectTutorialContext(location.search);
+        const agent = context.agentSlug
+          ? live.data.fleet?.agents.find((item) =>
+            item.agent.slug === context.agentSlug ||
+            item.agent.id === context.agentSlug
+          )?.agent ?? null
+          : null;
+        return <ConnectTutorialPanel
+          agent={agent}
+          dataReady={live.status === "ready" || live.status === "error"}
+          location={location}
+          onSignIn={openSignIn}
+          signedIn={Boolean(getLaunchAuthToken())}
+        />;
+      }
     case "library":
       return (
         <LibraryFoundationPage
