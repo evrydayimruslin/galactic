@@ -815,7 +815,7 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
 }
 
 @media (min-width: 561px) {
-  .neb-app { padding-top: 88px; }
+  .neb-app { padding-top: 80px; }
   .neb-hero h1 { font-size: 52px; }
 }
 
