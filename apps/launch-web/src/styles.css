@@ -1310,6 +1310,163 @@ button {
   letter-spacing: 0;
 }
 
+.connect-tutorial-page {
+  padding-top: clamp(64px, 10vw, 128px);
+  padding-bottom: 96px;
+}
+
+.connect-tutorial-hero {
+  max-width: 850px;
+}
+
+.connect-tutorial-hero h1 {
+  max-width: 780px;
+  margin: 12px 0 20px;
+  font-family: var(--ul-font);
+  font-size: clamp(48px, 8vw, 92px);
+  font-weight: 500;
+  line-height: .98;
+  letter-spacing: -.045em;
+}
+
+.connect-tutorial-hero > p:not(.eyebrow, .connect-tutorial-context) {
+  max-width: 680px;
+  color: var(--ul-secondary);
+  font-size: clamp(17px, 2vw, 21px);
+  line-height: 1.55;
+}
+
+.connect-tutorial-context {
+  display: inline-flex;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 8px 12px;
+  border: 1px solid var(--ul-border);
+  color: var(--ul-secondary);
+  font-family: var(--ul-mono);
+  font-size: 12px;
+}
+
+.connect-tutorial-context strong {
+  color: var(--ul-text);
+  font-weight: 500;
+}
+
+.connect-tutorial-map {
+  display: grid;
+  margin-top: clamp(64px, 10vw, 112px);
+  border-top: 1px solid var(--ul-border);
+  border-left: 1px solid var(--ul-border);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.connect-tutorial-map article {
+  min-height: 220px;
+  padding: 28px;
+  border-right: 1px solid var(--ul-border);
+  border-bottom: 1px solid var(--ul-border);
+}
+
+.connect-tutorial-map span {
+  color: var(--ul-muted);
+  font-family: var(--ul-mono);
+  font-size: 11px;
+}
+
+.connect-tutorial-map h2 {
+  margin: 54px 0 12px;
+  font-size: 19px;
+  font-weight: 500;
+}
+
+.connect-tutorial-map p,
+.connect-tutorial-note p {
+  color: var(--ul-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.connect-tutorial-note {
+  display: flex;
+  max-width: 850px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+  margin-top: 30px;
+}
+
+.connect-tutorial-note p {
+  max-width: 620px;
+  margin: 0;
+}
+
+.connect-tutorial-note button {
+  flex: 0 0 auto;
+  padding: 9px 14px;
+  border: 1px solid var(--ul-border);
+  background: transparent;
+  color: var(--ul-text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.nebula-public-home .connect-tutorial-hero > p:not(.eyebrow, .connect-tutorial-context),
+.nebula-public-home .connect-tutorial-map p,
+.nebula-public-home .connect-tutorial-note p {
+  color: var(--ink-2);
+}
+
+.nebula-public-home .connect-tutorial-context {
+  border-color: var(--line-2);
+  color: var(--ink-3);
+}
+
+.nebula-public-home .connect-tutorial-context strong,
+.nebula-public-home .connect-tutorial-map h2 {
+  color: var(--ink);
+}
+
+.nebula-public-home .connect-tutorial-map {
+  border-top-color: var(--line-2);
+  border-left-color: var(--line-2);
+}
+
+.nebula-public-home .connect-tutorial-map article {
+  border-right-color: var(--line-2);
+  border-bottom-color: var(--line-2);
+}
+
+.nebula-public-home .connect-tutorial-map span {
+  color: var(--ink-3);
+}
+
+.nebula-public-home .connect-tutorial-note button {
+  border-color: var(--line-2);
+  color: var(--ink);
+}
+
+@media (max-width: 720px) {
+  .connect-tutorial-page {
+    padding-top: 48px;
+  }
+
+  .connect-tutorial-map {
+    grid-template-columns: 1fr;
+  }
+
+  .connect-tutorial-map article {
+    min-height: 170px;
+  }
+
+  .connect-tutorial-map h2 {
+    margin-top: 34px;
+  }
+
+  .connect-tutorial-note {
+    flex-direction: column;
+  }
+}
+
 .home-hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 0.95fr);

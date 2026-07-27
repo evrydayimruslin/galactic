@@ -119,18 +119,25 @@ export function LaunchShell({
                 galactic
               </button>
               <div className="neb-public-actions">
-                <button
-                  className="neb-public-signin"
-                  onClick={openSignInModal}
-                  type="button"
-                >
-                  Sign in
-                </button>
-                <AddToAgentButton
-                  label="Connect Galactic"
-                  size="sm"
-                  variant="secondary"
-                />
+                {signedIn
+                  ? (
+                    <button
+                      className="neb-public-signin"
+                      onClick={() => navigate("/")}
+                      type="button"
+                    >
+                      Your fleet
+                    </button>
+                  )
+                  : (
+                    <button
+                      className="neb-public-signin"
+                      onClick={openSignInModal}
+                      type="button"
+                    >
+                      Sign in
+                    </button>
+                  )}
               </div>
             </div>
           </header>

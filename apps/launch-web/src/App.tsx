@@ -40,6 +40,7 @@ import {
   NebulaSessionRestoringShell,
 } from "./components/nebula-fleet";
 import { SignInModalProvider } from "./components/sign-in-modal";
+import { ConnectTutorialPage } from "./components/connect-tutorial";
 import {
   exchangeLaunchBridgeToken,
   getLaunchAuthToken,
@@ -68,6 +69,7 @@ export interface LaunchPageProps {
 
 const routeTitles: Record<LaunchRouteKey, string> = {
   home: "Home",
+  connect: "Connect AI",
   library: "Agents",
   store: "Browse",
   agent: "Agent",
@@ -243,13 +245,15 @@ export function App(): ReactElement {
     routeKey: route.definition.key,
     sessionRestoring,
   });
-  const publicCosmosHome = !authToken && !sessionRestoring &&
-    route.definition.key === "home" && !providerCodeMisrouted;
+  const connectTutorial = !sessionRestoring &&
+    (route.definition.key === "connect" ||
+      (!authToken && route.definition.key === "home")) &&
+    !providerCodeMisrouted;
   return (
     // Remount the application surface when the authenticated owner changes so
     // component-local alert/search/settings state cannot outlive its account.
     <SignInModalProvider key={authSessionIdentity}>
-      {publicCosmosHome
+      {connectTutorial
         ? (
           <NebulaPublicShell>
             <LaunchShell
@@ -260,10 +264,8 @@ export function App(): ReactElement {
               primaryRoutes={primaryRoutes()}
               title={routeTitles[route.definition.key]}
             >
-              <HomeFoundationPage
-                live={live}
+              <ConnectTutorialPage
                 location={location}
-                route={route}
                 navigate={navigate}
               />
             </LaunchShell>
@@ -315,6 +317,13 @@ function RouteSwitch(
           live={live}
           location={location}
           route={route}
+          navigate={navigate}
+        />
+      );
+    case "connect":
+      return (
+        <ConnectTutorialPage
+          location={location}
           navigate={navigate}
         />
       );
