@@ -77,6 +77,14 @@ describe("shouldUseNebulaRoute", () => {
     })).toBe(false);
   });
 
+  it("keeps the signed-out Connect tutorial inside Nebula", () => {
+    expect(shouldUseNebulaRoute({
+      authenticated: false,
+      loadStatus: "ready",
+      routeKey: "connect",
+    })).toBe(true);
+  });
+
   it.each(["idle", "loading", "ready", "error"] as const)(
     "uses the Nebula loading shell while an existing Agent session is revalidated from %s",
     (loadStatus) => {
