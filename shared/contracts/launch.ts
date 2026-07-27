@@ -96,6 +96,7 @@ export type LaunchDeferredCapability = typeof LAUNCH_DEFERRED_CAPABILITIES[numbe
 
 export const LAUNCH_PUBLIC_ROUTES = [
   '/',
+  '/connect',
   '/agents',
   '/browse',
   '/agents/:slug',

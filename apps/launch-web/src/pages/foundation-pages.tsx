@@ -864,49 +864,13 @@ export function AddToAgentButton({
   size?: "sm" | "md" | "lg";
   variant?: "primary" | "secondary" | "ghost";
 }): ReactElement {
-  const [open, setOpen] = useState(false);
-  const [mintPromise, setMintPromise] = useState<Promise<string> | null>(null);
-  const openSignIn = useSignInModal();
-  // Signed out there is no key to mint — prompt sign-in first; the same button
-  // mints the key + copies the prompt once a session exists.
-  if (!hasLaunchAuthToken()) {
-    return (
-      <Button icon="copy" onClick={openSignIn} size={size} variant={variant}>
-        {label}
-      </Button>
-    );
-  }
-  const buildPrompt = (key: string) => {
-    const promptTarget = liveInstallTargets(instructions)
-      .find((target) => target.target === "prompt") ?? installTargets[0];
-    return promptTarget.config(key);
-  };
+  // Keep the install-instruction prop during the route migration so existing
+  // callers do not need to know whether tutorial content has landed yet.
+  void instructions;
   return (
-    <>
-      <Button
-        icon="copy"
-        onClick={() => {
-          // Start the side effect in the user event, outside the modal's
-          // StrictMode-remounted effect. One click must mint exactly one key.
-          setMintPromise(mintConnectKey());
-          setOpen(true);
-        }}
-        size={size}
-        variant={variant}
-      >
-        {label}
-      </Button>
-      {open && mintPromise
-        ? (
-          <ConnectPromptModal
-            buildPrompt={buildPrompt}
-            intro="This created a 90-day key scoped to read, call, build, and operate your private Agents. Owner approvals, secrets, billing, and publication still require your Galactic account session. The key is shown only here."
-            mintPromise={mintPromise}
-            onClose={() => setOpen(false)}
-          />
-        )
-        : null}
-    </>
+    <Button href="/connect" icon="arrow" size={size} variant={variant}>
+      {label}
+    </Button>
   );
 }
 

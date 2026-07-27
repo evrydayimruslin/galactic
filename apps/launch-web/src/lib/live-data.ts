@@ -447,6 +447,7 @@ async function loadRouteData(
       return { adminAgent, agentCallerPermissions, agentFunctions };
     }
     case "authCallback":
+    case "connect":
       return {};
     case "terms":
     case "privacy":
