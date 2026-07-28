@@ -85,6 +85,10 @@ import {
   sourceFileBytes,
 } from "../services/source-file-content.ts";
 import { withInitialVersionBundleLineage } from "../services/upload-lineage.ts";
+import {
+  isProSubscriptionError,
+  requireActiveProSubscription,
+} from "../services/pro-subscription.ts";
 
 // Export file type for programmatic uploads
 export interface UploadFile {
@@ -223,9 +227,16 @@ export async function handleUpload(request: Request): Promise<Response> {
         );
       }
       userId = user.id;
+      await requireActiveProSubscription(userId);
       uploadLogger.info("Upload request authenticated", { user_id: userId });
     } catch (authErr: unknown) {
       uploadLogger.warn("Upload authentication failed", { error: authErr });
+      if (isProSubscriptionError(authErr)) {
+        return json(
+          { error: authErr.message, code: authErr.code },
+          authErr.status,
+        );
+      }
       return error("Authentication required. Please sign in to upload.", 401);
     }
     // Note: FK constraint on apps.owner_id has been removed, so no user record needed
@@ -1410,11 +1421,18 @@ export async function handleDraftUpload(
         );
       }
       userId = user.id;
+      await requireActiveProSubscription(userId);
     } catch (authErr: unknown) {
       uploadLogger.warn("Draft upload authentication failed", {
         app_id: appId,
         error: authErr,
       });
+      if (isProSubscriptionError(authErr)) {
+        return json(
+          { error: authErr.message, code: authErr.code },
+          authErr.status,
+        );
+      }
       return error("Authentication required", 401);
     }
 

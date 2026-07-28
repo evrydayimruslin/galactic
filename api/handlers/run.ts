@@ -51,6 +51,7 @@ import {
   type RequestCallerContext,
   resolveRequestCallerContext,
 } from "../services/request-caller-context.ts";
+import { isProSubscriptionError } from "../services/pro-subscription.ts";
 import { routineTraceContextFromCaller } from "../services/routine-trace.ts";
 import {
   createRuntimeOperationMeteringContext,
@@ -150,6 +151,7 @@ export async function handleRun(
         allowAnonymous: false,
       });
     } catch (authErr) {
+      const subscriptionError = isProSubscriptionError(authErr);
       return json(
         {
           success: false,
@@ -157,13 +159,13 @@ export async function handleRun(
           logs: [],
           duration_ms: 0,
           error: {
-            type: "AUTH_REQUIRED",
+            type: subscriptionError ? authErr.code : "AUTH_REQUIRED",
             message: authErr instanceof Error
               ? authErr.message
               : "Authentication required",
           },
         } as RunResponse,
-        401,
+        subscriptionError ? authErr.status : 401,
       );
     }
     if (!callerCanUseLegacyExecutionRoute(caller)) {

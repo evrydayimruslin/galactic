@@ -4724,7 +4724,7 @@ Deno.test('launch Agent capacity validates the percentage before any policy writ
   );
 });
 
-Deno.test('launch Free capacity rejects even a nominal 100 percent cap write', async () => {
+Deno.test('launch Pro capacity accepts an Agent cap write', async () => {
   let policyWrites = 0;
   await withLaunchEnv(
     async () => {
@@ -4741,22 +4741,29 @@ Deno.test('launch Free capacity rejects even a nominal 100 percent cap write', a
           },
         ),
       );
-      const body = await response.json() as { error?: string };
-      assertEquals(response.status, 409);
-      assertStringIncludes(body.error || '', 'Free capacity is fixed');
-      assertEquals(policyWrites, 0);
+      const body = await response.json() as {
+        capPercent?: number;
+        weekly?: { state?: string };
+      };
+      assertEquals(response.status, 200);
+      assertEquals(body.capPercent, 100);
+      assertEquals(body.weekly?.state, 'available');
+      assertEquals(policyWrites, 1);
     },
     agentHomeFetchMock({
       rpc: (name) => {
         if (name === 'set_agent_capacity_policy') {
           policyWrites += 1;
-          return jsonResponse([]);
+          return jsonResponse([{
+            capacity_agent_id: HOME_APP_ID,
+            agent_cap_basis_points: 10000,
+          }]);
         }
         if (name === 'get_account_capacity_status') {
           return jsonResponse([{
-            plan_code: 'free',
+            plan_code: 'pro',
             limits_public: false,
-            active_agent_limit: 1,
+            active_agent_limit: null,
             capacity_state: 'available',
             burst_state: 'available',
             weekly_state: 'available',
@@ -4767,6 +4774,24 @@ Deno.test('launch Free capacity rejects even a nominal 100 percent cap write', a
             burst_used_light: 0,
             weekly_limit_light: 20,
             weekly_used_light: 0,
+          }]);
+        }
+        if (name === 'get_agent_capacity_status') {
+          return jsonResponse([{
+            capacity_agent_id: HOME_APP_ID,
+            plan_code: 'pro',
+            limits_public: false,
+            capacity_state: 'available',
+            burst_state: 'available',
+            weekly_state: 'available',
+            burst_resets_at: '2026-07-17T15:00:00.000Z',
+            weekly_resets_at: '2026-07-20T10:00:00.000Z',
+            next_eligible_at: null,
+            agent_cap_basis_points: 10000,
+            agent_burst_limit_light: 20,
+            agent_burst_used_light: 0,
+            agent_weekly_limit_light: 20,
+            agent_weekly_used_light: 0,
           }]);
         }
         return undefined;

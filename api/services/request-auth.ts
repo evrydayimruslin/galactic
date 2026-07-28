@@ -14,6 +14,7 @@ import {
 } from "./sandbox-actor.ts";
 import type { RoutineTraceContext } from "./routine-trace.ts";
 import { getUserFromToken, isApiToken } from "./tokens.ts";
+import { requireActiveProSubscription } from "./pro-subscription.ts";
 
 export type RequestTokenSourcePolicy = "bearer_only" | "bearer_or_cookie";
 export type RequestAuthSource =
@@ -165,6 +166,7 @@ export async function authenticateRequest(
     }
 
     const { claims } = verified;
+    await requireActiveProSubscription(claims.user_id);
     return {
       id: claims.user_id,
       email: claims.user_email,
@@ -209,6 +211,7 @@ export async function authenticateRequest(
       throw new Error("Invalid or expired sandbox actor token");
     }
     const { claims } = verified;
+    await requireActiveProSubscription(claims.user_id);
     return {
       id: claims.user_id,
       email: claims.user_email,
@@ -245,6 +248,7 @@ export async function authenticateRequest(
       throw new Error("Invalid or expired API token");
     }
 
+    await requireActiveProSubscription(user.id);
     return { ...user, authSource: "api_token" };
   }
 

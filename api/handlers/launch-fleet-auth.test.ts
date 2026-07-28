@@ -70,14 +70,12 @@ Deno.test("Fleet maps paid percentage-only capacity without raw allowances", () 
     capacity_weekly_used_percent: 20,
   }, "2026-07-17T12:00:00.000Z");
   assertEquals(capacity?.capPercent, 25);
-  assertEquals(capacity?.burst.shareUsedPercent, 5);
-  assertEquals(capacity?.burst.capUsedPercent, 20);
   assertEquals(capacity?.weekly.shareUsedPercent, 20);
   assertEquals(capacity?.weekly.capUsedPercent, 80);
   assertEquals(capacity?.generatedAt, "2026-07-17T12:00:00.000Z");
 });
 
-Deno.test("Fleet keeps Free capacity qualitative", () => {
+Deno.test("Fleet normalizes legacy capacity to the weekly Pro surface", () => {
   const capacity = toLaunchFleetAgentCapacity({
     agent_id: "agent-free",
     capacity_state: "waiting",
@@ -85,16 +83,15 @@ Deno.test("Fleet keeps Free capacity qualitative", () => {
     capacity_weekly_state: "available",
     capacity_burst_resets_at: "2026-07-17T15:00:00.000Z",
     capacity_weekly_resets_at: "2026-07-20T10:00:00.000Z",
-    capacity_next_eligible_at: "2026-07-17T15:00:00.000Z",
+    capacity_next_eligible_at: null,
     capacity_cap_basis_points: null,
     capacity_burst_used_percent: null,
     capacity_weekly_used_percent: null,
   });
-  assertEquals(capacity?.state, "waiting");
-  assertEquals(capacity?.capPercent, null);
-  assertEquals(capacity?.burst.shareUsedPercent, undefined);
-  assertEquals(capacity?.burst.capUsedPercent, undefined);
-  assertEquals(capacity?.nextEligibleAt, "2026-07-17T15:00:00.000Z");
+  assertEquals(capacity?.state, "available");
+  assertEquals(capacity?.capPercent, 100);
+  assertEquals(capacity?.weekly.shareUsedPercent, undefined);
+  assertEquals(capacity?.nextEligibleAt, null);
 });
 
 Deno.test({

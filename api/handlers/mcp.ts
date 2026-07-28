@@ -122,6 +122,7 @@ import {
   type RequestCallerContext,
   resolveRequestCallerContext,
 } from "../services/request-caller-context.ts";
+import { isProSubscriptionError } from "../services/pro-subscription.ts";
 import {
   type RoutineTraceContext,
   routineTraceContextFromCaller,
@@ -894,6 +895,21 @@ export async function handleMcp(
     let message = authErr instanceof Error
       ? authErr.message
       : "Authentication required";
+
+    if (isProSubscriptionError(authErr)) {
+      const response = jsonRpcErrorResponse(
+        rpcRequest.id,
+        PAYMENT_REQUIRED,
+        message,
+        { type: authErr.code },
+      );
+      return authErr.status === 402
+        ? response
+        : new Response(response.body, {
+          status: authErr.status,
+          headers: response.headers,
+        });
+    }
 
     // Classify the auth error for client-side handling
     let errorType = "AUTH_REQUIRED";

@@ -14,19 +14,14 @@ const AGENT = {
 const NOW = new Date("2026-07-24T18:00:00.000Z");
 
 function status(
-  burst: "available" | "low" | "waiting",
-  weekly: "available" | "low" | "waiting" = "available",
+  weekly: "available" | "low" | "waiting",
 ): AccountCapacityStatus {
   return {
     planCode: "pro",
-    state: burst === "waiting" || weekly === "waiting"
-      ? "waiting"
-      : burst === "low" || weekly === "low"
-      ? "low"
-      : "available",
+    state: weekly,
     activeAgentLimit: null,
     burst: {
-      state: burst,
+      state: "available",
       resetsAt: "2026-07-24T20:00:00.000Z",
     },
     weekly: {
@@ -73,14 +68,14 @@ Deno.test("operator producer sweep replays account fanout and reset recovery", a
       reconciliations.push({
         userId: input.userId,
         affectedAgentIds: input.affectedAgents.map((agent) => agent.id),
-        waiting: input.status.burst.state === "waiting",
+        waiting: input.status.weekly.state === "waiting",
       });
       return Promise.resolve({
         reconciliation: {
-          observedCount: input.status.burst.state === "waiting" ? 1 : 0,
+          observedCount: input.status.weekly.state === "waiting" ? 1 : 0,
           insertedCount: 0,
-          updatedCount: input.status.burst.state === "waiting" ? 1 : 0,
-          recoveredCount: input.status.burst.state === "waiting" ? 0 : 1,
+          updatedCount: input.status.weekly.state === "waiting" ? 1 : 0,
+          recoveredCount: input.status.weekly.state === "waiting" ? 0 : 1,
           items: [],
         },
       });

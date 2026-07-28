@@ -13,6 +13,7 @@ import { createUserService } from '../services/user.ts';
 import { createClient } from '@supabase/supabase-js';
 import { getEnv } from '../lib/env.ts';
 import { withAuthRouteRateLimit } from '../services/auth-rate-limit.ts';
+import { isProSubscriptionError } from '../services/pro-subscription.ts';
 import {
   RequestValidationError,
   validateAuthorizeQuery,
@@ -1261,6 +1262,9 @@ async function handleTokenExchange(request: Request): Promise<Response> {
     });
   } catch (err) {
     console.error('OAuth token creation failed:', err);
+    if (isProSubscriptionError(err)) {
+      return oauthError('access_denied', err.message, err.status);
+    }
     return oauthError('server_error', 'Failed to create access token', 500);
   }
 }

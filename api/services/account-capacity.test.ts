@@ -22,7 +22,7 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
-Deno.test("account capacity: Free status redacts unpublished numeric limits", async () => {
+Deno.test("account capacity: legacy rows normalize to Pro", async () => {
   const status = await getAccountCapacityStatus("user-1", {}, {
     supabaseUrl: "https://db.example",
     serviceRoleKey: "service-role",
@@ -44,8 +44,9 @@ Deno.test("account capacity: Free status redacts unpublished numeric limits", as
     },
   });
   assertEquals(status.state, "low");
-  assertEquals(status.activeAgentLimit, 1);
-  assertEquals(status.burst.usedPercent, undefined);
+  assertEquals(status.planCode, "pro");
+  assertEquals(status.activeAgentLimit, null);
+  assertEquals(status.burst.usedPercent, 90);
   assertEquals(status.burst.limitLight, undefined);
   assertEquals(status.weekly.remainingLight, undefined);
 });
@@ -75,7 +76,7 @@ Deno.test("account capacity: internal status can expose calibration values", asy
   assertEquals(status.burst.remainingLight, 8);
 });
 
-Deno.test("account capacity: Free Agent status redacts cap and numeric allowances", async () => {
+Deno.test("account capacity: legacy Agent rows normalize to Pro", async () => {
   const status = await getAgentCapacityStatus("user-1", "agent-1", {}, {
     supabaseUrl: "https://db.example",
     serviceRoleKey: "service-role",
@@ -96,8 +97,9 @@ Deno.test("account capacity: Free Agent status redacts cap and numeric allowance
         agent_weekly_used_light: 2,
       }]),
   });
-  assertEquals(status.capBasisPoints, null);
-  assertEquals(status.burst.usedPercent, undefined);
+  assertEquals(status.planCode, "pro");
+  assertEquals(status.capBasisPoints, 10000);
+  assertEquals(status.burst.usedPercent, 90);
   assertEquals(status.weekly.limitLight, undefined);
 });
 
@@ -637,7 +639,6 @@ Deno.test("account capacity: cap-too-low is distinct and has no fake retry", asy
     plan: "pro",
     state: "waiting",
     retry_at: null,
-    burst_resets_at: "2026-07-15T15:00:00.000Z",
     weekly_resets_at: "2026-07-20T10:00:00.000Z",
     capacity_agent_id: "agent-root",
     agent_cap_basis_points: 1000,
@@ -658,22 +659,22 @@ Deno.test("account capacity: cap mutation validates basis points client-side", a
   );
 });
 
-Deno.test("account capacity: Free activation denial identifies the occupied Agent", async () => {
+Deno.test("account capacity: Pro activation has no Agent-count limit", async () => {
   const decision = await claimAgentActivationSlot("user-1", "app-2", {
     supabaseUrl: "https://db.example",
     serviceRoleKey: "service-role",
     fetchFn: async () =>
       jsonResponse([{
-        allowed: false,
-        code: "active_agent_limit",
-        active_agent_limit: 1,
-        occupied_by: "app-1",
+        allowed: true,
+        code: "ok",
+        active_agent_limit: null,
+        occupied_by: null,
       }]),
   });
   assertEquals(decision, {
-    allowed: false,
-    code: "active_agent_limit",
-    activeAgentLimit: 1,
-    occupiedBy: "app-1",
+    allowed: true,
+    code: "ok",
+    activeAgentLimit: null,
+    occupiedBy: null,
   });
 });

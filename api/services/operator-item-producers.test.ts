@@ -255,15 +255,11 @@ Deno.test("operator producers: routine usage complete snapshots recover at reche
   assertEquals(captured.calls[1]?.completeSnapshot, true);
 });
 
-Deno.test("operator producers: account usage fans out exact active windows", async () => {
+Deno.test("operator producers: account usage emits only the weekly window", async () => {
   const captured = captureReconciliations();
   await reconcileAccountUsageOperatorItems({
     userId: USER_ID,
     status: {
-      burst: {
-        state: "waiting",
-        resetsAt: "2026-07-24T20:00:00.000Z",
-      },
       weekly: {
         state: "waiting",
         resetsAt: "2026-07-27T00:00:00.000Z",
@@ -275,12 +271,11 @@ Deno.test("operator producers: account usage fans out exact active windows", asy
 
   const items = captured.calls[0]!.items;
   assertEquals(items.map((item) => item.conditionKey), [
-    "account:usage:five_hour:2026-07-24T20%3A00%3A00.000Z",
     "account:usage:weekly:2026-07-27T00%3A00%3A00.000Z",
   ]);
   assertEquals(
     items.map((item) => item.affectedAgents.map((agent) => agent.agentId)),
-    [[AGENT_A.id, AGENT_B.id], [AGENT_A.id, AGENT_B.id]],
+    [[AGENT_A.id, AGENT_B.id]],
   );
 });
 

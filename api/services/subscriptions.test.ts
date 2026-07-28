@@ -4,7 +4,7 @@ import {
   toLaunchCapacityResponse,
 } from "./subscriptions.ts";
 
-Deno.test("subscription capacity: Free hides calibration but exposes independent states and resets", () => {
+Deno.test("subscription capacity: legacy plans normalize to Pro with weekly-only output", () => {
   const response = toLaunchCapacityResponse({
     planCode: "free",
     state: "waiting",
@@ -21,16 +21,14 @@ Deno.test("subscription capacity: Free hides calibration but exposes independent
     },
   }, "2026-07-15T10:00:00.000Z");
 
-  assertEquals(response.plan, "free");
-  assertEquals(response.activeAgentLimit, 1);
-  assertEquals(response.burst.state, "available");
+  assertEquals(response.plan, "pro");
+  assertEquals(response.activeAgentLimit, null);
   assertEquals(response.weekly.state, "waiting");
-  assertEquals(response.burst.usedPercent, undefined);
   assertEquals(response.weekly.usedPercent, undefined);
   assertEquals(response.nextEligibleAt, "2026-07-20T10:00:00.000Z");
 });
 
-Deno.test("subscription capacity: paid plans may expose percentage utilization", () => {
+Deno.test("subscription capacity: Pro exposes weekly percentage utilization", () => {
   const response = toLaunchCapacityResponse({
     planCode: "pro",
     state: "low",
@@ -53,7 +51,6 @@ Deno.test("subscription capacity: paid plans may expose percentage utilization",
     },
   });
 
-  assertEquals(response.burst.usedPercent, 84);
   assertEquals(response.weekly.usedPercent, 35);
   assertEquals(response.activeAgentLimit, null);
 });

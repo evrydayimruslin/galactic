@@ -890,7 +890,7 @@ export interface LaunchByokPrimaryRequest {
   provider: string;
 }
 
-export type LaunchPlanCode = 'free' | 'pro' | 'max_5x' | 'max_10x';
+export type LaunchPlanCode = 'pro';
 export type LaunchCapacityState = 'available' | 'low' | 'waiting';
 
 export interface LaunchCapacityWindow {
@@ -903,7 +903,6 @@ export interface LaunchCapacityWindow {
 export interface LaunchCapacityResponse {
   plan: LaunchPlanCode;
   state: LaunchCapacityState;
-  burst: LaunchCapacityWindow;
   weekly: LaunchCapacityWindow;
   nextEligibleAt: string | null;
   activeAgentLimit: number | null;
@@ -922,10 +921,9 @@ export interface LaunchAgentCapacityWindow {
 
 export interface LaunchAgentCapacityResponse {
   agentId: string;
-  /** Free remains fixed/qualitative; paid plans expose the owner-set ceiling. */
-  capPercent: number | null;
+  /** Percentage of the shared weekly allowance assigned to this Agent. */
+  capPercent: number;
   state: LaunchCapacityState;
-  burst: LaunchAgentCapacityWindow;
   weekly: LaunchAgentCapacityWindow;
   nextEligibleAt: string | null;
   blocker?: 'agent_cap_too_low_for_request' | null;
@@ -933,7 +931,7 @@ export interface LaunchAgentCapacityResponse {
 }
 
 export interface LaunchAgentCapacityUpdateRequest {
-  /** Percent of both shared windows, with up to two decimal places. */
+  /** Percent of the shared weekly allowance, with up to two decimal places. */
   capPercent: number;
 }
 
@@ -957,6 +955,7 @@ export interface LaunchSubscriptionResponse {
   status: LaunchSubscriptionStatus;
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
+  hasActiveSubscription: boolean;
   canSubscribe: boolean;
   canManage: boolean;
   capacity: LaunchCapacityResponse;

@@ -1171,7 +1171,7 @@ export function AgentHomeOverview({
               <div>
                 <p className="section-label">Shared account capacity</p>
                 <p className="muted-note">
-                  Every active Agent on this account contributes to the same burst and weekly windows.
+                  Every active Agent on this account contributes to the same weekly limit.
                 </p>
               </div>
               <Pill tone={snapshot.capacity.state === "waiting"
@@ -1188,7 +1188,6 @@ export function AgentHomeOverview({
                 <caption className="sr-only">Shared account capacity windows</caption>
                 <thead><tr><th scope="col">Window</th><th scope="col">State</th><th scope="col">Resets</th></tr></thead>
                 <tbody>
-                  <tr><th scope="row">Five hours</th><td>{snapshot.capacity.burst.state}</td><td>{absoluteTime(snapshot.capacity.burst.resetsAt)}</td></tr>
                   <tr><th scope="row">Weekly</th><td>{snapshot.capacity.weekly.state}</td><td>{absoluteTime(snapshot.capacity.weekly.resetsAt)}</td></tr>
                 </tbody>
               </table>

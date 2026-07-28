@@ -85,6 +85,7 @@ import {
   type StripeWebhookEvent,
 } from "../services/stripe-deposits.ts";
 import { projectStripeSubscriptionEvent } from "../services/subscriptions.ts";
+import { isProSubscriptionError } from "../services/pro-subscription.ts";
 import {
   createWalletExpressPaymentIntent,
   WalletFundingError,
@@ -2130,6 +2131,12 @@ export async function handleUser(request: Request): Promise<Response> {
           });
         } catch (err) {
           console.error("Create token error:", err);
+          if (isProSubscriptionError(err)) {
+            return json(
+              { error: err.message, code: err.code },
+              err.status,
+            );
+          }
           if (err instanceof Error && err.message.includes("already exists")) {
             return error(err.message, 409);
           }

@@ -1343,7 +1343,7 @@ export const WORKER_MS_PER_CLOUD_UNIT = 250;
  *
  * Cloudflare's paid Workers rate is $0.30 / million requests. At the canonical
  * 100 Light / USD exchange rate that is 0.00003 Light per request. Unlike the
- * five-hour/weekly plan ceilings, this is a resource fact rather than an
+ * weekly plan ceiling, this is a resource fact rather than an
  * admission estimate: one admitted execution records the requests it actually
  * caused and never charges a hypothetical timeout.
  */

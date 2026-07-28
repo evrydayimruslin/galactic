@@ -1079,9 +1079,9 @@ export async function handleAuth(request: Request): Promise<Response> {
           headers: { "Content-Type": "application/json" },
         });
       }
-      if (err.status === 503) {
+      if (err.status === 402 || err.status === 503) {
         return new Response(JSON.stringify({ error: err.message }), {
-          status: 503,
+          status: err.status,
           headers: { "Content-Type": "application/json" },
         });
       }

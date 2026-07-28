@@ -2177,12 +2177,13 @@ function BillingSettings({
           onClick={() => void open()}
           type='button'
         >
-          {subscription?.canManage ? 'Manage in Stripe' : 'Upgrade to Pro'}
+          {subscription?.canManage ? 'Manage in Stripe' : 'Subscribe to Pro'}
         </button>
       </div>
       <p className='neb-ov-note'>
-        Subscription changes, payment methods, invoices, and cancellation are handled securely by
-        Stripe.
+        {subscription?.hasActiveSubscription === false
+          ? 'An active Pro subscription is required to upload or run Agents and to create or use Galactic API keys.'
+          : 'Subscription changes, payment methods, invoices, and cancellation are handled securely by Stripe.'}
       </p>
     </section>
   );
@@ -2195,30 +2196,27 @@ function UsageSettings(
     <section className='neb-modal-pane active'>
       <h2 className='neb-modal-h'>Usage</h2>
       {subscription
-        ? ([
-          ['5-hour limit', subscription.capacity.burst],
-          ['Weekly limit', subscription.capacity.weekly],
-        ] as const).map(([label, window]) => (
-          <div className='neb-usage-block' key={label}>
+        ? (
+          <div className='neb-usage-block'>
             <div className='neb-usage-row'>
-              <span className='neb-usage-label'>{label}</span>
+              <span className='neb-usage-label'>Weekly limit</span>
               <span className='neb-usage-value'>
-                {window.usedPercent === undefined
-                  ? window.state
-                  : `${Math.round(window.usedPercent)}% used`}
+                {subscription.capacity.weekly.usedPercent === undefined
+                  ? subscription.capacity.weekly.state
+                  : `${Math.round(subscription.capacity.weekly.usedPercent)}% used`}
               </span>
             </div>
             <div className='neb-usage-bar'>
               <div
                 className='neb-usage-bar-fill'
-                style={{ width: `${asPercent(window.usedPercent)}%` }}
+                style={{ width: `${asPercent(subscription.capacity.weekly.usedPercent)}%` }}
               />
             </div>
             <div className='neb-usage-reset'>
-              Resets {new Date(window.resetsAt).toLocaleString()}
+              Resets {new Date(subscription.capacity.weekly.resetsAt).toLocaleString()}
             </div>
           </div>
-        ))
+        )
         : <p className='neb-ov-note'>Loading capacity…</p>}
       {subscription?.capacity.state === 'waiting'
         ? (
@@ -2228,8 +2226,7 @@ function UsageSettings(
         )
         : null}
       <p className='neb-ov-note'>
-        Capacity is pooled across every Agent on this account. Free allowance numbers remain
-        unpublished, while status and reset time always stay visible.
+        Weekly Pro capacity is pooled across every Agent on this account.
       </p>
     </section>
   );
@@ -4981,14 +4978,6 @@ export function AgentSettingsPane({
           ? (
             <>
               <div className='neb-ov-row'>
-                <span className='neb-ov-row-key'>Share of 5-hour pool</span>
-                <span className='neb-ov-row-val'>
-                  {capacity.burst.shareUsedPercent === undefined
-                    ? capacity.burst.state
-                    : `${Math.round(capacity.burst.shareUsedPercent)}%`}
-                </span>
-              </div>
-              <div className='neb-ov-row'>
                 <span className='neb-ov-row-key'>Share of weekly pool</span>
                 <span className='neb-ov-row-val'>
                   {capacity.weekly.shareUsedPercent === undefined
@@ -4999,7 +4988,7 @@ export function AgentSettingsPane({
             </>
           )
           : <p className='neb-ov-note'>Capacity is not available.</p>}
-        {capacity?.capPercent !== null && capacity
+        {capacity
           ? (
             <div className='neb-ov-row'>
               <span className='neb-ov-row-key'>Cap this Agent at</span>
@@ -5023,14 +5012,9 @@ export function AgentSettingsPane({
               </span>
             </div>
           )
-          : (
-            <p className='neb-ov-note'>
-              Free capacity is fixed and intentionally qualitative.
-            </p>
-          )}
+          : null}
         <p className='neb-ov-note'>
-          Lower the ceiling to reserve room for other Agents. Both five-hour and weekly windows
-          enforce the same percentage.
+          Lower the ceiling to reserve weekly capacity for other Agents.
         </p>
           </Collapsible>
         )

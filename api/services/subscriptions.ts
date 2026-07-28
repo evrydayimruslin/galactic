@@ -63,15 +63,8 @@ export function toLaunchCapacityResponse(
   generatedAt = new Date().toISOString(),
 ): LaunchCapacityResponse {
   return {
-    plan: status.planCode,
-    state: status.state,
-    burst: {
-      state: status.burst.state,
-      resetsAt: status.burst.resetsAt,
-      ...(status.burst.usedPercent !== undefined
-        ? { usedPercent: status.burst.usedPercent }
-        : {}),
-    },
+    plan: "pro",
+    state: status.weekly.state,
     weekly: {
       state: status.weekly.state,
       resetsAt: status.weekly.resetsAt,
@@ -80,7 +73,7 @@ export function toLaunchCapacityResponse(
         : {}),
     },
     nextEligibleAt: status.nextEligibleAt,
-    activeAgentLimit: status.activeAgentLimit,
+    activeAgentLimit: null,
     generatedAt,
   };
 }
@@ -94,6 +87,7 @@ export async function getLaunchSubscription(userId: string): Promise<LaunchSubsc
   const plan = await readPlan(effectivePlan);
   const generatedAt = new Date().toISOString();
   const status = subscription?.status ?? "inactive";
+  const hasActiveSubscription = status === "active";
   return {
     plan: effectivePlan,
     planName: plan.display_name,
@@ -103,7 +97,8 @@ export async function getLaunchSubscription(userId: string): Promise<LaunchSubsc
     status,
     currentPeriodEnd: subscription?.current_period_end ?? null,
     cancelAtPeriodEnd: subscription?.cancel_at_period_end === true,
-    canSubscribe: effectivePlan === "free",
+    hasActiveSubscription,
+    canSubscribe: !subscription?.stripe_subscription_id,
     canManage: Boolean(subscription?.stripe_subscription_id),
     capacity: toLaunchCapacityResponse(capacityStatus, generatedAt),
     generatedAt,
@@ -229,8 +224,10 @@ async function resolvePlanCode(
   priceId: string | null,
 ): Promise<LaunchPlanCode> {
   const metadata = object.metadata as Record<string, unknown> | undefined;
-  if (metadata?.plan_code === "pro" || metadata?.plan_code === "max_5x" ||
-    metadata?.plan_code === "max_10x") return metadata.plan_code;
+  if (
+    metadata?.plan_code === "pro" || metadata?.plan_code === "max_5x" ||
+    metadata?.plan_code === "max_10x"
+  ) return "pro";
   if (priceId) {
     const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = getSupabaseEnv();
     const response = await fetch(
@@ -238,8 +235,10 @@ async function resolvePlanCode(
       { headers: dbHeaders(SUPABASE_SERVICE_ROLE_KEY) },
     );
     if (response.ok) {
-      const code = rows<{ code: LaunchPlanCode }>(await response.json())[0]?.code;
-      if (code) return code;
+      const code = rows<{ code: string }>(await response.json())[0]?.code;
+      if (code === "pro" || code === "max_5x" || code === "max_10x") {
+        return "pro";
+      }
     }
   }
   throw new Error("Stripe subscription references an unknown plan");

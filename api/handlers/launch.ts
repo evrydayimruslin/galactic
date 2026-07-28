@@ -317,6 +317,10 @@ import {
   toLaunchCapacityResponse,
 } from "../services/subscriptions.ts";
 import {
+  isProSubscriptionError,
+  requireActiveProSubscription,
+} from "../services/pro-subscription.ts";
+import {
   type AccountCapacityStatus,
   type AgentCapacityStatus,
   getAccountCapacityStatus,
@@ -408,6 +412,12 @@ async function privateLaunchRoute(
   try {
     return withPrivateLaunchPrivacy(await operation());
   } catch (err) {
+    if (isProSubscriptionError(err)) {
+      return privateLaunchJson({
+        error: err.message,
+        code: err.code,
+      }, err.status);
+    }
     if (err instanceof AgentOperatorStoreError) {
       return operatorStoreErrorResponse(err);
     }
@@ -4299,7 +4309,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       summary: "Get safe shared-capacity state and reset timestamps",
       security: [{ bearerAuth: [] }],
       responses: {
-        "200": { description: "Free raw allowances are deliberately omitted" },
+        "200": { description: "Weekly Pro capacity summary" },
         "401": { description: "Authentication required" },
       },
     },
@@ -4642,7 +4652,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
       },
       responses: {
         "200": { description: "Updated Agent capacity state" },
-        "409": { description: "Free has a fixed qualitative capacity policy" },
+        "409": { description: "Capacity policy conflict" },
       },
     },
   };
@@ -5568,6 +5578,12 @@ async function handleLaunchApiKeys(
               generatedAt: new Date().toISOString(),
             });
           } catch (err) {
+            if (isProSubscriptionError(err)) {
+              return json(
+                { error: err.message, code: err.code },
+                err.status,
+              );
+            }
             if (err instanceof RequestValidationError) {
               return error(err.message, err.status);
             }
@@ -5823,6 +5839,12 @@ async function handleLaunchHandoff(
           generatedAt,
         } satisfies LaunchHandoffCreateResponse);
       } catch (err) {
+        if (isProSubscriptionError(err)) {
+          return json(
+            { error: err.message, code: err.code },
+            err.status,
+          );
+        }
         if (err instanceof RequestValidationError) {
           return error(err.message, err.status);
         }
@@ -7145,14 +7167,9 @@ export function toLaunchFleetAgentCapacity(
   row: LaunchFleetSnapshotRow,
   generatedAt = new Date().toISOString(),
 ): LaunchAgentCapacityResponse | null {
-  const state = launchFleetCapacityState(row.capacity_state);
-  const burstState = launchFleetCapacityState(row.capacity_burst_state);
   const weeklyState = launchFleetCapacityState(row.capacity_weekly_state);
-  const burstResetsAt = fleetTimestamp(row.capacity_burst_resets_at);
   const weeklyResetsAt = fleetTimestamp(row.capacity_weekly_resets_at);
-  if (
-    !state || !burstState || !weeklyState || !burstResetsAt || !weeklyResetsAt
-  ) {
+  if (!weeklyState || !weeklyResetsAt) {
     return null;
   }
   const basisPoints = finiteFleetNumber(row.capacity_cap_basis_points);
@@ -7160,12 +7177,12 @@ export function toLaunchFleetAgentCapacity(
       basisPoints >= 1 && basisPoints <= 10_000
     ? basisPoints
     : null;
-  const capPercent = paidCap === null ? null : paidCap / 100;
+  const capPercent = paidCap === null ? 100 : paidCap / 100;
   const window = (
     windowState: LaunchAgentCapacityResponse["state"],
     resetsAt: string,
     rawShare: unknown,
-  ): LaunchAgentCapacityResponse["burst"] => {
+  ): LaunchAgentCapacityResponse["weekly"] => {
     const parsedShare = finiteFleetNumber(rawShare);
     const shareUsedPercent = capPercent !== null && parsedShare !== null
       ? Math.min(100, Math.max(0, parsedShare))
@@ -7183,12 +7200,7 @@ export function toLaunchFleetAgentCapacity(
   return {
     agentId: row.agent_id,
     capPercent,
-    state,
-    burst: window(
-      burstState,
-      burstResetsAt,
-      row.capacity_burst_used_percent,
-    ),
+    state: weeklyState,
     weekly: window(
       weeklyState,
       weeklyResetsAt,
@@ -7753,14 +7765,11 @@ function toLaunchAgentCapacityResponse(
       ? "low" as const
       : "available" as const;
   const window = (
-    agentWindow: AgentCapacityStatus["burst"],
-    accountWindow: AccountCapacityStatus["burst"],
+    agentWindow: AgentCapacityStatus["weekly"],
+    accountWindow: AccountCapacityStatus["weekly"],
   ) => {
-    const capPercent = status.capBasisPoints === null
-      ? null
-      : status.capBasisPoints / 100;
-    const shareUsedPercent = capPercent !== null &&
-        agentWindow.usedPercent !== undefined
+    const capPercent = status.capBasisPoints / 100;
+    const shareUsedPercent = agentWindow.usedPercent !== undefined
       ? Math.min(
         100,
         Math.max(0, agentWindow.usedPercent * capPercent / 100),
@@ -7777,11 +7786,8 @@ function toLaunchAgentCapacityResponse(
   };
   return {
     agentId: status.agentId,
-    capPercent: status.capBasisPoints === null
-      ? null
-      : status.capBasisPoints / 100,
-    state: combinedState(status.state, account.state),
-    burst: window(status.burst, account.burst),
+    capPercent: status.capBasisPoints / 100,
+    state: combinedState(status.weekly.state, account.weekly.state),
     weekly: window(status.weekly, account.weekly),
     nextEligibleAt: [status.nextEligibleAt, account.nextEligibleAt]
       .filter((value): value is string => Boolean(value))
@@ -7826,27 +7832,11 @@ async function handleLaunchAgentCapacity(
       );
     }
     account = await getAccountCapacityStatus(user.id);
-    if (account.planCode === "free") {
-      throw new RequestValidationError(
-        "Free capacity is fixed; Agent caps are available on paid plans",
-        409,
-      );
-    }
-    try {
-      await setAgentCapacityCap({
-        userId: user.id,
-        agentId: resolved.id,
-        capBasisPoints: basisPoints,
-      });
-    } catch (err) {
-      if (err instanceof Error && err.message.includes("Free")) {
-        throw new RequestValidationError(
-          "Free capacity is fixed; Agent caps are available on paid plans",
-          409,
-        );
-      }
-      throw err;
-    }
+    await setAgentCapacityCap({
+      userId: user.id,
+      agentId: resolved.id,
+      capBasisPoints: basisPoints,
+    });
   }
   const [agent, resolvedAccount] = await Promise.all([
     getAgentCapacityStatus(user.id, resolved.id),
@@ -9378,6 +9368,7 @@ async function performLaunchAgentHomeAction(
           capabilityIds: capabilityIds || [],
         });
       } else if (action === "activate") {
+        await requireActiveProSubscription(user.id);
         if (routine.status !== "active") {
           if (routine.status !== "paused" && routine.status !== "error") {
             throw new RequestValidationError(
@@ -9416,7 +9407,7 @@ async function performLaunchAgentHomeAction(
           } else {
             // Compatibility primary action. The managed status RPC is also
             // valid for legacy launch_primary rows and closes the historical
-            // Free-slot claim/status race.
+            // activation claim/status race.
             await updateAgentHomeManagedRoutineStatusCAS({
               appId: row.id,
               userId: user.id,

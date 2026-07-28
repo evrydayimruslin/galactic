@@ -244,7 +244,7 @@ export function AgentStudioLimits({
 }): ReactElement {
   const [current, setCurrent] = useState(capacity);
   const [cap, setCap] = useState(
-    capacity?.capPercent === null || capacity?.capPercent === undefined
+    capacity?.capPercent === undefined
       ? ""
       : String(capacity.capPercent),
   );
@@ -253,27 +253,21 @@ export function AgentStudioLimits({
   useEffect(() => {
     setCurrent(capacity);
     setCap(
-      capacity?.capPercent === null || capacity?.capPercent === undefined
+      capacity?.capPercent === undefined
         ? ""
         : String(capacity.capPercent),
     );
     setError("");
   }, [agentIdOrSlug, capacity?.generatedAt]);
 
-  const hasAgentCeiling = Boolean(current && current.capPercent !== null);
-  const burstUse = hasAgentCeiling
-    ? current?.burst.capUsedPercent ?? null
-    : current?.burst.shareUsedPercent ?? null;
-  const weeklyUse = hasAgentCeiling
-    ? current?.weekly.capUsedPercent ?? null
-    : current?.weekly.shareUsedPercent ?? null;
+  const weeklyUse = current?.weekly.capUsedPercent ?? null;
   const capValue = Number(cap);
   const capValid = Number.isFinite(capValue) &&
     capValue >= 0.01 &&
     capValue <= 100;
   const saveCap = async (event: FormEvent) => {
     event.preventDefault();
-    if (!current || current.capPercent === null || !capValid || busy) return;
+    if (!current || !capValid || busy) return;
     setBusy(true);
     setError("");
     try {
@@ -292,23 +286,19 @@ export function AgentStudioLimits({
   return (
     <section className="agent-studio-screen">
       <StudioPageHeader
-        description="Two independent ceilings: Galactic capacity and inference billed to your own provider key."
+        description="Weekly Galactic capacity and inference billed to your own provider key."
         title="Limits"
       />
       <div className="agent-studio-limit-stack">
         <StudioLimit
           description={!current
             ? "Galactic capacity is not available for this Agent right now."
-            : current.capPercent === null
-            ? "Usage is shown as this Agent’s share of the account pool; this plan has no owner-set Agent ceiling."
-            : `Usage is shown against this Agent’s ${current.capPercent}% ceiling in each shared window.`}
+            : `Usage is shown against this Agent’s ${current.capPercent}% weekly ceiling.`}
           label="Galactic pool"
-          primary={burstUse}
-          secondary={weeklyUse}
-          secondaryLabel="weekly"
+          primary={weeklyUse}
           state={current?.state ?? "unavailable"}
         />
-        {current?.capPercent !== null && current
+        {current
           ? (
             <form
               className="agent-studio-limit-editor"
@@ -342,9 +332,7 @@ export function AgentStudioLimits({
                   </p>
                 )
                 : null}
-              <small>
-                The same percentage applies to both Galactic capacity windows.
-              </small>
+              <small>This percentage applies to the shared weekly limit.</small>
             </form>
           )
           : null}
@@ -479,8 +467,8 @@ function StudioLimit({
   description: string;
   label: string;
   primary: number | null;
-  secondary: number | null;
-  secondaryLabel: string;
+  secondary?: number | null;
+  secondaryLabel?: string;
   state: string;
 }): ReactElement {
   return (
@@ -494,11 +482,15 @@ function StudioLimit({
       </div>
       <div className="agent-studio-limit-meta">
         <span>{state}</span>
-        <span>
-          {secondary === null
-            ? `No ${secondaryLabel} projection`
-            : `${Math.round(secondary)}% ${secondaryLabel}`}
-        </span>
+        {secondaryLabel
+          ? (
+            <span>
+              {secondary === null || secondary === undefined
+                ? `No ${secondaryLabel} projection`
+                : `${Math.round(secondary)}% ${secondaryLabel}`}
+            </span>
+          )
+          : null}
       </div>
       <p>{description}</p>
     </article>

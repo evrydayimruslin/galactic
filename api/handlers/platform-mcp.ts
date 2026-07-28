@@ -13,6 +13,10 @@ import { scheduleCaptureTask } from "../services/chat-capture.ts";
 import { createUserService } from "../services/user.ts";
 import { deriveCallerEconomicState } from "../services/request-caller-context.ts";
 import {
+  isProSubscriptionError,
+  requireActiveProSubscription,
+} from "../services/pro-subscription.ts";
+import {
   authorizePlatformMcpTool,
   canApiTokenManageAgentVisibility,
   canApiTokenStageExistingRuntime,
@@ -4065,6 +4069,9 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
   try {
     const authUser = await authenticate(request);
     userId = authUser.id;
+    if (authUser.authSource === "supabase") {
+      await requireActiveProSubscription(userId);
+    }
     platformAuth = {
       authSource: authUser.authSource,
       scopes: authUser.scopes,
@@ -4134,6 +4141,18 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
     const message = authErr instanceof Error
       ? authErr.message
       : "Authentication required";
+    if (isProSubscriptionError(authErr)) {
+      const response = jsonRpcErrorResponse(
+        rpcRequest.id,
+        QUOTA_EXCEEDED,
+        message,
+        { type: authErr.code },
+      );
+      return new Response(response.body, {
+        status: authErr.status,
+        headers: response.headers,
+      });
+    }
     let errorType = "AUTH_REQUIRED";
     if (message.includes("expired")) errorType = "AUTH_TOKEN_EXPIRED";
     else if (message.includes("Missing")) errorType = "AUTH_MISSING_TOKEN";

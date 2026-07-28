@@ -10,6 +10,7 @@ import {
 } from './request-auth.ts';
 import { createUserService, type UserProfile } from './user.ts';
 import { FREE_MODE_BALANCE_LIGHT } from '../../shared/contracts/ai.ts';
+import { requireActiveProSubscription } from './pro-subscription.ts';
 
 export const ANONYMOUS_USER_ID = '00000000-0000-0000-0000-000000000000';
 
@@ -136,6 +137,12 @@ export async function resolveRequestCallerContext(
 
   try {
     const authUser = await authenticateRequestFn(request, authSourcePolicy);
+    // API and signed actor tokens are gated inside authenticateRequest so stale
+    // credentials cannot reach any surface. Account sessions are intentionally
+    // gated here because this resolver is used only by execution routes.
+    if (authUser.authSource === 'supabase') {
+      await requireActiveProSubscription(authUser.id);
+    }
     const userService = createUserServiceFn();
     const userProfile = loadUserProfile ? await userService.getUser(authUser.id).catch(() => null) : null;
     let userApiKey: string | null = null;

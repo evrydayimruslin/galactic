@@ -3,7 +3,7 @@ import { type BillingConfig, getBillingConfig } from "./billing-config.ts";
 import type { CapacityResourceFact } from "./cloud-usage.ts";
 import { buildEconomicIdempotencyKey } from "./economic-idempotency.ts";
 
-export type AccountPlanCode = "free" | "pro" | "max_5x" | "max_10x";
+export type AccountPlanCode = "pro";
 export type AccountCapacityState = "available" | "low" | "waiting";
 
 export interface AccountCapacityStatus {
@@ -105,8 +105,7 @@ export interface AgentCapacityStatus {
   agentId: string;
   planCode: AccountPlanCode;
   state: AccountCapacityState;
-  /** Null on the customer-facing Free surface; Free is fixed at 100%. */
-  capBasisPoints: number | null;
+  capBasisPoints: number;
   burst: {
     state: AccountCapacityState;
     resetsAt: string;
@@ -253,12 +252,10 @@ async function rpcRow(
 }
 
 function planCode(value: unknown): AccountPlanCode {
-  if (
-    value === "free" || value === "pro" || value === "max_5x" ||
-    value === "max_10x"
-  ) {
-    return value;
-  }
+  // Legacy rows are normalized by the Pro-only migration. Mapping them here
+  // keeps rolling deploys safe while the API and database revisions overlap.
+  if (value === "free" || value === "pro" || value === "max_5x" ||
+    value === "max_10x") return "pro";
   throw new Error("Account capacity returned an invalid plan");
 }
 
@@ -296,20 +293,14 @@ function statusFromRow(
   const burstUsed = finite(row.burst_used_light);
   const weeklyUsed = finite(row.weekly_used_light);
   const reveal = exposeInternalLimits || limitsPublic;
-  // Free's exact allowance is intentionally unpublished. Paid owners still
-  // need the familiar percentage meter to understand shared capacity, while
-  // raw Light limits/remaining amounts remain internal calibration data.
-  const revealPercent = resolvedPlan !== "free" || reveal;
   return {
     planCode: resolvedPlan,
     state: capacityState(row.capacity_state),
-    activeAgentLimit: Number.isInteger(row.active_agent_limit)
-      ? Number(row.active_agent_limit)
-      : null,
+    activeAgentLimit: null,
     burst: {
       state: capacityState(row.burst_state ?? row.capacity_state),
       resetsAt: iso(row.burst_resets_at, "burst reset"),
-      ...(revealPercent ? { usedPercent: percent(burstUsed, burstLimit) } : {}),
+      usedPercent: percent(burstUsed, burstLimit),
       ...(reveal
         ? {
           remainingLight: Math.max(0, burstLimit - burstUsed),
@@ -320,9 +311,7 @@ function statusFromRow(
     weekly: {
       state: capacityState(row.weekly_state ?? row.capacity_state),
       resetsAt: iso(row.weekly_resets_at, "weekly reset"),
-      ...(revealPercent
-        ? { usedPercent: percent(weeklyUsed, weeklyLimit) }
-        : {}),
+      usedPercent: percent(weeklyUsed, weeklyLimit),
       ...(reveal
         ? {
           remainingLight: Math.max(0, weeklyLimit - weeklyUsed),
@@ -773,25 +762,19 @@ export async function getAgentCapacityStatus(
   const burstUsed = finite(row.agent_burst_used_light);
   const weeklyUsed = finite(row.agent_weekly_used_light);
   const resolvedPlan = planCode(row.plan_code);
-  // Paid owners need percentage-only usage to manage a percentage cap, but
-  // raw Light allowances remain private calibration data. Free stays fully
-  // qualitative unless an internal caller explicitly opts in.
-  const revealPercent = resolvedPlan !== "free" || reveal;
   return {
     agentId: typeof row.capacity_agent_id === "string"
       ? row.capacity_agent_id
       : agentId,
     planCode: resolvedPlan,
     state: capacityState(row.capacity_state),
-    capBasisPoints: resolvedPlan === "free" && !options.exposeInternalLimits
-      ? null
-      : Number.isInteger(row.agent_cap_basis_points)
+    capBasisPoints: Number.isInteger(row.agent_cap_basis_points)
       ? Number(row.agent_cap_basis_points)
       : 10_000,
     burst: {
       state: capacityState(row.burst_state ?? row.capacity_state),
       resetsAt: iso(row.burst_resets_at, "Agent burst reset"),
-      ...(revealPercent ? { usedPercent: percent(burstUsed, burstLimit) } : {}),
+      usedPercent: percent(burstUsed, burstLimit),
       ...(reveal
         ? {
           remainingLight: Math.max(0, burstLimit - burstUsed),
@@ -802,9 +785,7 @@ export async function getAgentCapacityStatus(
     weekly: {
       state: capacityState(row.weekly_state ?? row.capacity_state),
       resetsAt: iso(row.weekly_resets_at, "Agent weekly reset"),
-      ...(revealPercent
-        ? { usedPercent: percent(weeklyUsed, weeklyLimit) }
-        : {}),
+      usedPercent: percent(weeklyUsed, weeklyLimit),
       ...(reveal
         ? {
           remainingLight: Math.max(0, weeklyLimit - weeklyUsed),
@@ -975,7 +956,6 @@ export function accountCapacityErrorDetails(
     plan: admission.planCode,
     state: admission.state,
     retry_at: admission.nextEligibleAt,
-    burst_resets_at: admission.burst.resetsAt,
     weekly_resets_at: admission.weekly.resetsAt,
     capacity_agent_id: admission.agentCapacity?.agentId ?? null,
     agent_cap_basis_points: admission.agentCapacity?.capBasisPoints ?? null,

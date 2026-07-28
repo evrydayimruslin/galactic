@@ -566,9 +566,7 @@ export function galacticUsagePercent(
 ): number | null {
   const capacity = home.agentCapacity;
   if (!capacity) return null;
-  return capacity.capPercent === null
-    ? capacity.weekly.shareUsedPercent ?? null
-    : capacity.weekly.capUsedPercent ?? null;
+  return capacity.weekly.capUsedPercent ?? null;
 }
 
 function galacticUsageLabel(home: LaunchAgentHomeResponse): string {
@@ -579,9 +577,7 @@ function galacticUsageLabel(home: LaunchAgentHomeResponse): string {
 function galacticCapNote(home: LaunchAgentHomeResponse): string {
   if (!home.agentCapacity) return "Capacity projection unavailable";
   const cap = home.agentCapacity?.capPercent;
-  return cap === null
-    ? "of the shared weekly Galactic pool"
-    : `of this Agent's ${cap}% weekly ceiling`;
+  return `of this Agent's ${cap}% weekly ceiling`;
 }
 
 export function candidateSignal(

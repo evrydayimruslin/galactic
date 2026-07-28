@@ -1,5 +1,14 @@
 # P2.1 — BYOK Subscription Capacity (2026-07-15)
 
+> Superseded on July 28, 2026 by
+> `20260728120000_pro_weekly_only_capacity.sql`: paid Pro ($20/month) is now the
+> sole customer-facing usage tier, and weekly capacity is the sole
+> binding/customer-visible allowance. An active Stripe subscription is
+> required for API keys, uploads, Agent execution, Compute, and managed-routine
+> activation. The internal `free` plan row remains only as a no-access
+> compatibility sentinel. The original Free and five-hour design below is
+> retained only as historical implementation context.
+
 P2.1 replaces the customer-facing credits economy with a simple hosted-Agent
 subscription contract while preserving the hardened internal work meters.
 

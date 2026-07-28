@@ -75,6 +75,10 @@ import {
   resolveRequestCallerContext,
 } from "../services/request-caller-context.ts";
 import {
+  isProSubscriptionError,
+  requireActiveProSubscription,
+} from "../services/pro-subscription.ts";
+import {
   type ResolvedHttpRoutePolicy,
   resolveHttpRoutePolicy,
 } from "../services/http-policy.ts";
@@ -284,6 +288,11 @@ export async function handleHttpEndpoint(
         loadUserApiKey: false,
       });
     } catch (err) {
+      if (isProSubscriptionError(err)) {
+        return finalize(
+          json({ error: err.message, type: err.code }, err.status),
+        );
+      }
       return finalize(
         json({
           error: err instanceof Error ? err.message : "Authentication required",
@@ -308,6 +317,21 @@ export async function handleHttpEndpoint(
       app,
       caller,
     );
+    if (
+      caller.authState === "anonymous" ||
+      caller.userId !== httpRuntime.payerUserId
+    ) {
+      try {
+        await requireActiveProSubscription(httpRuntime.payerUserId);
+      } catch (err) {
+        if (isProSubscriptionError(err)) {
+          return finalize(
+            json({ error: err.message, type: err.code }, err.status),
+          );
+        }
+        throw err;
+      }
+    }
 
     if (httpRuntime.enforceTokenScopes) {
       if (!callerHasAppAccess(caller, [app.id, app.slug, appId])) {
