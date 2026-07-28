@@ -67,6 +67,21 @@ export interface AccountCapacityAdmission extends AccountCapacityStatus {
  */
 export const ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT = 0;
 
+/**
+ * One admitted Agent execution may finish after crossing the shared weekly
+ * boundary, but its attributable subscription-capacity exposure is bounded to
+ * ten cents. At 100 canonical Light / USD, 10 Light = $0.10.
+ */
+export const ACCOUNT_CAPACITY_EXECUTION_CEILING_LIGHT = 10;
+
+/**
+ * Keep one cent of the execution envelope for the separately settled Worker
+ * request, Dynamic Worker load, and observed CPU facts. Runtime CPU is already
+ * bounded by the parent and tenant Worker limits.
+ */
+export const ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT =
+  ACCOUNT_CAPACITY_EXECUTION_CEILING_LIGHT - 1;
+
 export interface CapacityResourceSettlement {
   settlementId: string;
   reservationId: string;

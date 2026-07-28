@@ -50,6 +50,35 @@ export interface CapacityResourceMeter {
   totalLight: () => number;
 }
 
+export interface CapacityResourceMeterOptions {
+  /** Hard per-execution ceiling for attributable subscription capacity. */
+  maxLight?: number;
+}
+
+export const CAPACITY_EXECUTION_LIMIT_CODE = "CAPACITY_EXECUTION_LIMIT";
+
+export class CapacityExecutionLimitError extends Error {
+  readonly code = CAPACITY_EXECUTION_LIMIT_CODE;
+  readonly limitLight: number;
+  readonly usedLight: number;
+  readonly attemptedLight: number;
+
+  constructor(input: {
+    limitLight: number;
+    usedLight: number;
+    attemptedLight: number;
+  }) {
+    super(
+      "This Agent reached its per-execution capacity ceiling. " +
+        "The completed work still counts toward the shared weekly limit.",
+    );
+    this.name = "CapacityExecutionLimitError";
+    this.limitLight = input.limitLight;
+    this.usedLight = input.usedLight;
+    this.attemptedLight = input.attemptedLight;
+  }
+}
+
 export interface CloudUsageContext {
   payerUserId: string;
   source: string;
@@ -655,7 +684,9 @@ export function addCapacityQueueOperationEnvelope(
 }
 
 /** Collect resource facts without touching the legacy wallet ledger. */
-export function createCapacityResourceMeter(): CapacityResourceMeter {
+export function createCapacityResourceMeter(
+  options: CapacityResourceMeterOptions = {},
+): CapacityResourceMeter {
   const facts: CapacityResourceFact[] = [];
   let unattributedLight = 0;
   const normalize = (value: number, field: string): number => {
@@ -664,10 +695,34 @@ export function createCapacityResourceMeter(): CapacityResourceMeter {
     }
     return value;
   };
+  const maxLight = options.maxLight === undefined
+    ? Number.POSITIVE_INFINITY
+    : normalize(options.maxLight, "Capacity execution ceiling");
+  const totalLight = () =>
+    unattributedLight + facts.reduce(
+      (total, fact) => total + fact.amountLight,
+      0,
+    );
+  const admit = (attemptedLight: number): void => {
+    const usedLight = totalLight();
+    const nextLight = usedLight + attemptedLight;
+    const tolerance = Number.EPSILON *
+      Math.max(1, Math.abs(maxLight), Math.abs(nextLight)) * 8;
+    if (nextLight - maxLight > tolerance) {
+      throw new CapacityExecutionLimitError({
+        limitLight: maxLight,
+        usedLight,
+        attemptedLight,
+      });
+    }
+  };
   return {
     addLight(amountLight) {
       const amount = normalize(amountLight, "Capacity Light");
-      if (amount > 0) unattributedLight += amount;
+      if (amount > 0) {
+        admit(amount);
+        unattributedLight += amount;
+      }
     },
     addResource(fact) {
       const units = normalize(fact.units, "Capacity resource units");
@@ -680,6 +735,7 @@ export function createCapacityResourceMeter(): CapacityResourceMeter {
         "Capacity resource Light",
       );
       if (units === 0 && cloudUnits === 0 && amountLight === 0) return;
+      admit(amountLight);
       facts.push({
         resource: fact.resource,
         units,
@@ -705,12 +761,7 @@ export function createCapacityResourceMeter(): CapacityResourceMeter {
           : []),
       ];
     },
-    totalLight() {
-      return unattributedLight + facts.reduce(
-        (total, fact) => total + fact.amountLight,
-        0,
-      );
-    },
+    totalLight,
   };
 }
 

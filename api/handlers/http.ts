@@ -42,6 +42,7 @@ import {
 } from "../services/execution-settlement.ts";
 import {
   ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
+  ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
   accountCapacityErrorDetails,
   accountCapacityErrorMessage,
   releaseAccountCapacity,
@@ -173,7 +174,9 @@ export async function handleHttpEndpoint(
   let activeRouteCorsPolicy: RouteCorsPolicyInput = {};
   let capacityReservation: { id: string; userId: string } | null = null;
   let tenantExecutionAttempted = false;
-  const capacityResourceMeter = createCapacityResourceMeter();
+  const capacityResourceMeter = createCapacityResourceMeter({
+    maxLight: ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
+  });
 
   function finalize(response: Response): Response {
     applyRouteCorsHeaders(response.headers, request, activeRouteCorsPolicy);

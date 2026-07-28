@@ -64,6 +64,7 @@ import {
 } from "../services/execution-settlement.ts";
 import {
   ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
+  ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
   accountCapacityErrorDetails,
   accountCapacityErrorMessage,
   releaseAccountCapacity,
@@ -2644,7 +2645,9 @@ async function executeAppFunction(
   let accountCapacityReservationId: string | null = null;
   let accountCapacityActualLight: number | undefined;
   let tenantExecutionAttempted = false;
-  const capacityResourceMeter = createCapacityResourceMeter();
+  const capacityResourceMeter = createCapacityResourceMeter({
+    maxLight: ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
+  });
   try {
     // The reserved _async argument is platform routing, never function input —
     // strip it before ANY execution branch (GPU included) sees the args.

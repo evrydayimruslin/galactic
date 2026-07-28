@@ -62,6 +62,7 @@ import {
 } from "../services/execution-settlement.ts";
 import {
   ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
+  ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
   accountCapacityErrorDetails,
   accountCapacityErrorMessage,
   releaseAccountCapacity,
@@ -135,7 +136,9 @@ export async function handleRun(
 ): Promise<Response> {
   let capacityReservation: { id: string; userId: string } | null = null;
   let tenantExecutionAttempted = false;
-  const capacityResourceMeter = createCapacityResourceMeter();
+  const capacityResourceMeter = createCapacityResourceMeter({
+    maxLight: ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
+  });
   try {
     const body: RunRequest = await request.json();
     const { function: functionName, args = [] } = body;
