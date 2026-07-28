@@ -340,7 +340,7 @@ COPY cli/package.json cli/package-lock.json /opt/galactic/cli/
 COPY cli/bin /opt/galactic/cli/bin
 COPY cli/lib /opt/galactic/cli/lib
 COPY cli/scripts /opt/galactic/cli/scripts
-COPY cli/mod.ts cli/api.ts cli/colors.ts cli/config.ts cli/logging.ts cli/job-context.ts cli/deno.lock cli/skills.md /opt/galactic/cli/
+COPY cli/mod.ts cli/api.ts cli/colors.ts cli/config.ts cli/logging.ts cli/job-context.ts cli/source-files.ts cli/deno.lock cli/skills.md /opt/galactic/cli/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --omit=dev --ignore-scripts --prefix /opt/galactic/cli && \
     test "$(node -p 'require("/opt/galactic/cli/package.json").version')" = "${GALACTIC_CLI_VERSION}" && \

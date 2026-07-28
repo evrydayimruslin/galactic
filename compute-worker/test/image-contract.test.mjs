@@ -65,6 +65,11 @@ describe("developer-v1 image contract", () => {
       "deno --version | awk 'NR == 1 { print $2 }'",
     );
     expect(dockerfile).toContain("COPY cli/package.json cli/package-lock.json");
+    for (const packagedFile of cliPackage.files.filter(
+      (path) => !path.endsWith("/"),
+    )) {
+      expect(dockerfile).toContain(`cli/${packagedFile}`);
+    }
     expect(dockerfile).toContain("deno cache --no-config --lock=/opt/galactic/cli/deno.lock --frozen");
     expect(cliEntry).toContain("--cached-only");
     expect(cliEntry).toContain("--no-config");
