@@ -48,6 +48,25 @@ describe("Compute release workflow static guards", () => {
     expect(deploy).toContain("verify-container-readiness.mjs");
   });
 
+  it("reserves measured runner headroom before exporting the production image SBOM", async () => {
+    const deploy = await text(".github/workflows/compute-deploy.yml");
+    const reclaim = deploy.indexOf("Reclaim runner disk for image supply-chain gates");
+    const build = deploy.indexOf("Build and smoke exact image");
+    const headroom = deploy.indexOf("Verify SBOM export headroom");
+    const sbom = deploy.indexOf("Generate image SBOM");
+
+    expect(reclaim).toBeGreaterThan(0);
+    expect(build).toBeGreaterThan(reclaim);
+    expect(headroom).toBeGreaterThan(build);
+    expect(sbom).toBeGreaterThan(headroom);
+    expect(deploy).toContain("/usr/local/lib/android");
+    expect(deploy).toContain("/opt/hostedtoolcache/CodeQL");
+    expect(deploy.match(/docker builder prune --all --force/gu)).toHaveLength(2);
+    expect(deploy).toContain("image_size_bytes + 4 * 1024 * 1024 * 1024");
+    expect(deploy).toContain("runner-disk-after-reclaim.txt");
+    expect(deploy).toContain("sbom-disk-headroom.txt");
+  });
+
   it("checks the exact Worker and Durable Object-derived Container application", async () => {
     const workflow = await text(".github/workflows/compute-deploy.yml");
     expect(workflow).toContain(

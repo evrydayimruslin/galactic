@@ -448,6 +448,35 @@ jobs:
                .name == "COMPUTE_QUEUE" or .name == "COMPUTE_ARTIFACTS"
              )]}
           ' "$bootstrap_version" > "$EVIDENCE_DIR/pre-rollout-api-version.json"
+
+      - name: Reclaim runner disk for image supply-chain gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -Pk / > "$EVIDENCE_DIR/runner-disk-before-reclaim.txt"
+
+          # The production image contains the full agent toolchain. GitHub's
+          # hosted runner also ships unrelated mobile, .NET, Haskell, Swift,
+          # and CodeQL SDKs. Keeping both exhausts the Docker root filesystem
+          # when Syft asks Docker to export the finished image.
+          reclaim_paths=(
+            /usr/local/lib/android
+            /usr/share/dotnet
+            /opt/ghc
+            /usr/local/.ghcup
+            /usr/share/swift
+            /opt/hostedtoolcache/CodeQL
+          )
+          for reclaim_path in "${reclaim_paths[@]}"; do
+            if [ -e "$reclaim_path" ]; then
+              sudo rm -rf -- "$reclaim_path"
+            fi
+          done
+
+          docker builder prune --all --force
+          docker image prune --all --force
+          df -Pk / > "$EVIDENCE_DIR/runner-disk-after-reclaim.txt"
+
       - name: Build and smoke exact image
         shell: bash
         working-directory: compute-worker
@@ -465,6 +494,34 @@ jobs:
           ./scripts/smoke-image.sh "$LOCAL_IMAGE_TAG"
           docker image inspect "$LOCAL_IMAGE_TAG" > "$EVIDENCE_DIR/local-image-inspect.json"
           ./scripts/hash-image-inputs.sh "$EVIDENCE_DIR/build-inputs.sha256"
+
+      - name: Verify SBOM export headroom
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # BuildKit retains intermediate layers after the final image exists.
+          # They are not release inputs and can safely be dropped before Syft
+          # makes Docker materialize an image archive.
+          docker builder prune --all --force
+          docker image inspect "$LOCAL_IMAGE_TAG" >/dev/null
+
+          docker_root="$(docker info --format '{{.DockerRootDir}}')"
+          image_size_bytes="$(docker image inspect "$LOCAL_IMAGE_TAG" --format '{{.Size}}')"
+          available_bytes="$(df -PB1 "$docker_root" | awk 'END { print $4 }')"
+          required_bytes="$((image_size_bytes + 4 * 1024 * 1024 * 1024))"
+
+          {
+            printf 'docker_root=%s\n' "$docker_root"
+            printf 'image_size_bytes=%s\n' "$image_size_bytes"
+            printf 'available_bytes=%s\n' "$available_bytes"
+            printf 'required_bytes=%s\n' "$required_bytes"
+          } | tee "$EVIDENCE_DIR/sbom-disk-headroom.txt"
+
+          if [ "$available_bytes" -lt "$required_bytes" ]; then
+            echo "Insufficient runner disk for deterministic SBOM export." >&2
+            exit 1
+          fi
 
       - name: Generate image SBOM
         shell: bash
