@@ -1410,39 +1410,43 @@ export function NebulaFleetApp({
           )
           : null}
 
-        <FleetRoster
-          behindWorkspace={workspaceOpen && atPageTop}
-          error={live.status === 'error' && agents.length === 0
-            ? live.error || 'Fleet could not be loaded.'
-            : fleetOrderError || undefined}
-          loading={showFleetLoader}
-        >
-          {displayedAgents.map((item) => (
-            <FleetCard
-              agentCount={agents.length}
-              canReorder={Boolean(fleet?.fleetRevision) && agents.length > 1}
-              item={item}
-              key={item.agent.id}
-              now={now}
-              onDropAgent={dropFleetAgent}
-              onIconChanged={live.reload}
-              onMoveAgent={moveFleetAgent}
-              onOpen={() =>
-                navigate(
-                  agentOpen && route.params.slug === item.agent.slug
-                    ? '/'
-                    : `/agents/${encodeURIComponent(item.agent.slug)}`,
-                )}
-              position={item.fleetPosition ??
-                orderedShortcutAgents.findIndex((candidate) =>
-                  candidate.agent.id === item.agent.id
-                )}
-              reorderBusy={fleetOrderBusy}
-              shortcutConfig={shortcutConfig}
-            />
-          ))}
-          <AddAgentCard number={agents.length + 1} onNavigate={navigate} />
-        </FleetRoster>
+        {!settingsOpen
+          ? (
+            <FleetRoster
+              behindWorkspace={workspaceOpen && atPageTop}
+              error={live.status === 'error' && agents.length === 0
+                ? live.error || 'Fleet could not be loaded.'
+                : fleetOrderError || undefined}
+              loading={showFleetLoader}
+            >
+              {displayedAgents.map((item) => (
+                <FleetCard
+                  agentCount={agents.length}
+                  canReorder={Boolean(fleet?.fleetRevision) && agents.length > 1}
+                  item={item}
+                  key={item.agent.id}
+                  now={now}
+                  onDropAgent={dropFleetAgent}
+                  onIconChanged={live.reload}
+                  onMoveAgent={moveFleetAgent}
+                  onOpen={() =>
+                    navigate(
+                      agentOpen && route.params.slug === item.agent.slug
+                        ? '/'
+                        : `/agents/${encodeURIComponent(item.agent.slug)}`,
+                    )}
+                  position={item.fleetPosition ??
+                    orderedShortcutAgents.findIndex((candidate) =>
+                      candidate.agent.id === item.agent.id
+                    )}
+                  reorderBusy={fleetOrderBusy}
+                  shortcutConfig={shortcutConfig}
+                />
+              ))}
+              <AddAgentCard number={agents.length + 1} onNavigate={navigate} />
+            </FleetRoster>
+          )
+          : null}
       </main>
       {shortcutHelpOpen
         ? (
