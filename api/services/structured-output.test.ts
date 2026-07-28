@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects, assertThrows } from 'jsr:@std/assert';
+import { assertEquals, assertRejects, assertThrows } from 'https://deno.land/std@0.210.0/assert/mod.ts';
 import type { AIOutputSchema } from '../../shared/contracts/ai.ts';
 import { AIProviderError, buildAIProviderRequestBody, createAIService } from './ai.ts';
 import type { ResolvedInferenceRoute } from './inference-route.ts';

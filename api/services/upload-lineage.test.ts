@@ -1,4 +1,4 @@
-import { assertEquals, assertStrictEquals } from 'jsr:@std/assert';
+import { assertEquals, assertStrictEquals } from 'https://deno.land/std@0.210.0/assert/mod.ts';
 
 import type { VersionMetadata } from '../../shared/types/index.ts';
 import {

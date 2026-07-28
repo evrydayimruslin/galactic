@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert';
+import { assertEquals } from 'https://deno.land/std@0.210.0/assert/mod.ts';
 
 import { bytesToBinaryString } from './source-file-content.ts';
 import { processUploadPipeline } from './upload-pipeline.ts';

@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from 'jsr:@std/assert';
+import { assertEquals, assertRejects } from 'https://deno.land/std@0.210.0/assert/mod.ts';
 import {
   capabilityErrorToToolCode,
   jsonRpcErrorHttpStatus,

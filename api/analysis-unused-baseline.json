@@ -1044,6 +1044,12 @@
       ]
     },
     {
+      "file": "services/function-inference-overrides.ts",
+      "types": [
+        "FunctionInferencePolicySummary"
+      ]
+    },
+    {
       "exports": [
         "computeBenchmarkStats",
         "startGpuBuildProcessorJob"
@@ -1269,6 +1275,7 @@
       ],
       "file": "services/inference-route.ts",
       "types": [
+        "DefaultInferenceRouteProjection",
         "InferenceRouteErrorCode"
       ]
     },
@@ -1553,6 +1560,16 @@
     },
     {
       "exports": [
+        "diffProjectCapsules"
+      ],
+      "file": "services/project-capsule.ts",
+      "types": [
+        "ProjectCapsuleCleanupStore",
+        "ProjectCapsuleResponse"
+      ]
+    },
+    {
+      "exports": [
         "getProvisionalDailyCallLimit",
         "getProvisionalStorageLimit",
         "isProvisionalExpired"
@@ -1567,7 +1584,6 @@
     {
       "exports": [
         "createRateLimitService",
-        "RATE_LIMITS",
         "RateLimitService"
       ],
       "file": "services/ratelimit.ts",
@@ -1753,6 +1769,32 @@
       ]
     },
     {
+      "exports": [
+        "DEFAULT_STAGED_BUNDLE_OWNER_QUOTA_BYTES",
+        "DEFAULT_STAGED_BUNDLE_OWNER_QUOTA_OBJECTS"
+      ],
+      "file": "services/staged-bundle-quota.ts",
+      "types": [
+        "StagedBundleQuotaCleanupOptions",
+        "StagedBundleQuotaCleanupResult",
+        "StagedBundleQuotaOptions",
+        "StagedBundleQuotaReleaseInput",
+        "StagedBundleQuotaResult"
+      ]
+    },
+    {
+      "exports": [
+        "STAGED_BUNDLE_QUOTA_RETENTION_SECONDS"
+      ],
+      "file": "services/staged-bundles.ts",
+      "types": [
+        "StageBundleInput",
+        "StageBundleResult",
+        "StagedBundleFile",
+        "StagedBundleManifest"
+      ]
+    },
+    {
       "file": "services/staged-migrations.ts",
       "types": [
         "StagedMigrationValidation"
@@ -1771,6 +1813,7 @@
     {
       "file": "services/storage.ts",
       "types": [
+        "FileListPage",
         "R2ServiceOptions"
       ]
     },
@@ -1879,8 +1922,6 @@
     {
       "file": "services/test-attestation.ts",
       "types": [
-        "DecodedSourceFile",
-        "EncodedSourceFile",
         "TestAttestationClaims",
         "TestAttestationVerification",
         "TestAttestationVerificationReason"
@@ -1957,6 +1998,13 @@
       "file": "services/ul-test-runtime.ts"
     },
     {
+      "file": "services/upload-lineage.ts",
+      "types": [
+        "BundleLineageStore",
+        "BundleLineageUpdate"
+      ]
+    },
+    {
       "exports": [
         "extractExports"
       ],
@@ -1989,6 +2037,12 @@
       "file": "services/weekly-calls.ts",
       "types": [
         "WeeklyCallResult"
+      ]
+    },
+    {
+      "file": "src/bindings/ai-binding-structured-output.test.ts",
+      "files": [
+        "src/bindings/ai-binding-structured-output.test.ts"
       ]
     },
     {

@@ -1,4 +1,4 @@
-import { assert, assertFalse, assertStringIncludes } from 'jsr:@std/assert';
+import { assert, assertFalse, assertStringIncludes } from 'https://deno.land/std@0.210.0/assert/mod.ts';
 
 const migration = await Deno.readTextFile(
   new URL(
