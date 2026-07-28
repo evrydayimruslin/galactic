@@ -1,0 +1,403 @@
+.agent-studio-routines {
+  max-width: 1040px;
+}
+
+.agent-studio-routine-add {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  margin: 4px 0 18px;
+  padding: 15px;
+  border: 1px dashed var(--line-2);
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--mono) !important;
+  font-size: 12px;
+}
+
+.agent-studio-routine-add:hover {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+  color: var(--accent-text);
+}
+
+.agent-studio-routine-error,
+.agent-studio-routine-warning {
+  border-left: 2px solid var(--danger);
+  color: var(--danger);
+}
+
+.agent-studio-routine-blockers {
+  margin: 12px 0 0;
+  padding: 10px 12px 10px 28px;
+  border-left: 2px solid var(--danger);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 11px;
+}
+
+.agent-studio-routine-blockers li + li {
+  margin-top: 6px;
+}
+
+.agent-studio-routine-blockers strong {
+  margin-right: 7px;
+  color: var(--danger);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.agent-studio-routine-error {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  font-size: 11.5px;
+}
+
+.agent-studio-routine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-studio-routine-card {
+  padding: 18px 22px;
+  border: 1px solid var(--card-line);
+  background: var(--card);
+  box-shadow: var(--card-shadow);
+  transition: opacity 150ms ease;
+}
+
+.agent-studio-routine-card.inactive {
+  opacity: 0.68;
+}
+
+.agent-studio-routine-card.failing {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--card-line));
+  opacity: 1;
+}
+
+.agent-studio-routine-card > header,
+.agent-studio-routine-title,
+.agent-studio-routine-details,
+.agent-studio-routine-details .actions,
+.agent-studio-routine-editor-actions {
+  display: flex;
+  align-items: center;
+}
+
+.agent-studio-routine-card > header {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.agent-studio-routine-title {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-studio-routine-title strong,
+.agent-studio-routine-empty > section strong {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.agent-studio-routine-title span {
+  padding: 2px 6px;
+  background: var(--fill-2);
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-studio-routine-card header p,
+.agent-studio-routine-card > .description {
+  margin: 5px 0 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.agent-studio-routine-card > .description {
+  max-width: 72ch;
+  font-size: 11.5px;
+}
+
+.agent-studio-routine-switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: 0;
+  background: var(--fill-2);
+}
+
+.agent-studio-routine-switch.on {
+  background: var(--accent);
+}
+
+.agent-studio-routine-switch > span {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: var(--ink-3);
+  transition: left 150ms ease;
+}
+
+.agent-studio-routine-switch.on > span {
+  left: 21px;
+  background: var(--ground);
+}
+
+.agent-studio-routine-warning {
+  margin: 12px 0 0;
+  padding-left: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.agent-studio-routine-details {
+  flex-wrap: wrap;
+  gap: 26px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.agent-studio-routine-details > div > span,
+.agent-studio-routine-editor label > span {
+  display: block;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.agent-studio-routine-details > div > strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+.agent-studio-routine-details > div > strong.muted {
+  color: var(--ink-3);
+  text-transform: capitalize;
+}
+
+.agent-studio-routine-details .calls {
+  min-width: 200px;
+  flex: 1;
+}
+
+.agent-studio-routine-details .calls > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.agent-studio-routine-details code {
+  padding: 3px 8px;
+  background: var(--fill);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.agent-studio-routine-details em {
+  color: var(--ink-3);
+  font-size: 10.5px;
+}
+
+.agent-studio-routine-details .actions {
+  align-self: flex-end;
+  gap: 8px;
+}
+
+.agent-studio-routine-details button,
+.agent-studio-routine-editor-actions button,
+.agent-studio-routine-stale button {
+  padding: 6px 13px;
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--mono) !important;
+  font-size: 11px;
+}
+
+.agent-studio-routine-details button:hover,
+.agent-studio-routine-editor-actions button:hover,
+.agent-studio-routine-stale button:hover {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.agent-studio-routine-editor {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.agent-studio-routine-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.agent-studio-routine-editor label.wide {
+  grid-column: 1 / -1;
+}
+
+.agent-studio-routine-editor input,
+.agent-studio-routine-editor textarea,
+.agent-studio-routine-editor select {
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 10px;
+  border: 1px solid var(--line-2);
+  background: var(--input);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.agent-studio-routine-editor .mono {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.agent-studio-routine-editor > p {
+  margin: 12px 0 0;
+  color: var(--ink-3);
+  font-size: 10.5px;
+}
+
+.agent-studio-routine-editor-actions {
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.agent-studio-routine-editor-actions button:last-child {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--ground);
+}
+
+.agent-studio-routine-empty {
+  max-width: 720px;
+}
+
+.agent-studio-routine-empty > section {
+  padding: 26px;
+  border: 1px solid var(--card-line);
+  background: var(--card);
+  box-shadow: var(--card-shadow);
+}
+
+.agent-studio-routine-empty > section p {
+  margin: 9px 0 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.agent-studio-routine-empty > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.agent-studio-routine-empty > div > button {
+  padding: 18px 20px;
+  border: 1px dashed var(--line-2);
+  background: var(--card);
+  text-align: left;
+}
+
+.agent-studio-routine-empty > div > button:hover {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+}
+
+.agent-studio-routine-empty button strong,
+.agent-studio-routine-empty button span,
+.agent-studio-routine-empty button em {
+  display: block;
+}
+
+.agent-studio-routine-empty button strong {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 14px;
+}
+
+.agent-studio-routine-empty button span {
+  margin-top: 5px;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.agent-studio-routine-empty button em {
+  margin-top: 12px;
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-style: normal;
+}
+
+.agent-studio-routine-stale,
+.agent-studio-routine-loading {
+  padding: 18px;
+  border: 1px dashed var(--line-2);
+  color: var(--ink-2);
+  font-size: 11.5px;
+}
+
+.agent-studio-routine-stale p {
+  margin: 0 0 10px;
+}
+
+.agent-studio-routine-contract {
+  max-width: 72ch;
+  margin: 20px 0 0;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+@media (max-width: 760px) {
+  .agent-studio-routine-card {
+    padding: 16px;
+  }
+
+  .agent-studio-routine-details {
+    gap: 18px;
+  }
+
+  .agent-studio-routine-details .actions {
+    width: 100%;
+  }
+
+  .agent-studio-routine-editor-grid,
+  .agent-studio-routine-empty > div {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-studio-routine-editor label.wide {
+    grid-column: auto;
+  }
+}

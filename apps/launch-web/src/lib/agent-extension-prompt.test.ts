@@ -32,10 +32,19 @@ describe("buildAgentExtensionPrompt", () => {
       expect(prompt).toContain("Authorization: Bearer gx_secret_key");
       expect(prompt).toContain("ask me to describe");
       expect(prompt).toContain("do not create a new Agent");
-      expect(prompt).toContain('gx.discover({ scope: "inspect", app_id: "app-email-ops" })');
+      expect(prompt).toContain(
+        'gx.project({ app_id: "app-email-ops", view: "coding_capsule" })',
+      );
       expect(prompt).toContain('gx.download({ app_id: "app-email-ops" })');
-      expect(prompt).toContain('gx.upload({ app_id: "app-email-ops"');
+      expect(prompt).toContain("gx.stage({ files:");
+      expect(prompt).toContain(
+        "gx.test({ bundle_id: staged.bundle_id })",
+      );
+      expect(prompt).toContain(
+        'gx.upload({ app_id: "app-email-ops", bundle_id: staged.bundle_id',
+      );
       expect(prompt).toContain("test_attestation");
+      expect(prompt).toContain("exact bundle tested");
       expect(prompt).toContain("staged candidate");
       expect(prompt).not.toContain("$GALACTIC_API_KEY");
     },
@@ -62,8 +71,10 @@ describe("buildAgentExtensionPrompt", () => {
     expect(prompt).toContain("new persistent Galactic Agent");
     expect(prompt).toContain("Agent's name");
     expect(prompt).toContain("generated ID");
+    expect(prompt).toContain("gx.stage");
     expect(prompt).toContain("gx.test");
     expect(prompt).toContain("gx.upload");
+    expect(prompt).toContain("bundle_id: staged.bundle_id");
     expect(prompt).toContain("Authorization: Bearer gx_agent_key");
   });
 });

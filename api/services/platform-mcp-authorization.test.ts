@@ -186,6 +186,187 @@ Deno.test('platform MCP scopes: tools/list projection only advertises callable t
   );
 });
 
+Deno.test('platform MCP scopes: Agent-scoped builder keys cannot cross their assigned Agent', () => {
+  const auth = {
+    ...apiToken([
+      PLATFORM_MCP_SCOPES.read,
+      PLATFORM_MCP_SCOPES.build,
+    ]),
+    tokenAppIds: ['agent-1'],
+  };
+
+  assertEquals(
+    authorizePlatformMcpTool({
+      requestedName: 'gx.project',
+      args: { app_id: 'agent-1' },
+      auth,
+    }).allowed,
+    true,
+  );
+  for (
+    const input of [
+      { requestedName: 'gx.project', args: {} },
+      { requestedName: 'gx.project', args: { app_id: 'agent-2' } },
+      { requestedName: 'gx.upload', args: { bundle_id: 'bundle-1' } },
+      {
+        requestedName: 'gx.upload',
+        args: { app_id: 'agent-2', bundle_id: 'bundle-1' },
+      },
+      { requestedName: 'gx.discover', args: { scope: 'inspect' } },
+      {
+        requestedName: 'gx.discover',
+        args: { scope: 'inspect', app_id: 'agent-2' },
+      },
+      { requestedName: 'gx.discover', args: { scope: 'library' } },
+    ]
+  ) {
+    const decision = authorizePlatformMcpTool({ ...input, auth });
+    assertEquals(decision.allowed, false);
+    assertStringIncludes(decision.reason || '', 'Agent');
+  }
+});
+
+Deno.test('platform MCP scopes: handoff credentials expose only their bounded build path', () => {
+  const auth = {
+    ...apiToken([
+      PLATFORM_MCP_SCOPES.read,
+      PLATFORM_MCP_SCOPES.build,
+      'handoff:interface',
+    ]),
+    tokenAppIds: ['agent-1'],
+  };
+  const tools = [
+    { name: 'gx.discover' },
+    { name: 'gx.project' },
+    { name: 'gx.stage' },
+    { name: 'gx.test' },
+    { name: 'gx.upload' },
+    { name: 'gx.set' },
+    { name: 'gx.health' },
+    { name: 'gx.gaps' },
+    { name: 'gx.shortcomings' },
+    { name: 'gx.db' },
+    { name: 'gx.logs' },
+    { name: 'gx.routine' },
+  ];
+  assertEquals(
+    filterPlatformMcpToolsForAuth(tools, auth).map((tool) => tool.name),
+    [
+      'gx.discover',
+      'gx.project',
+      'gx.stage',
+      'gx.test',
+      'gx.upload',
+    ],
+  );
+  assertEquals(
+    authorizePlatformMcpTool({
+      requestedName: 'gx.discover',
+      args: { scope: 'inspect', app_id: 'agent-1' },
+      auth,
+    }).allowed,
+    true,
+  );
+  assertEquals(
+    authorizePlatformMcpTool({
+      requestedName: 'gx.upload',
+      args: { app_id: 'agent-1', bundle_id: 'bundle-1' },
+      auth,
+    }).allowed,
+    true,
+  );
+  for (
+    const input of [
+      { requestedName: 'gx.upload', args: { bundle_id: 'bundle-1' } },
+      {
+        requestedName: 'gx.discover',
+        args: { scope: 'inspect', app_id: 'agent-2' },
+      },
+      { requestedName: 'gx.set', args: { app_id: 'agent-1', version: '1.2.3' } },
+      { requestedName: 'gx.health', args: { app_id: 'agent-1' } },
+      { requestedName: 'gx.gaps', args: { app_id: 'agent-1' } },
+      { requestedName: 'gx.shortcomings', args: { app_id: 'agent-1' } },
+      { requestedName: 'gx.db', args: { action: 'schema' } },
+      { requestedName: 'gx.discover', args: { scope: 'library' } },
+    ]
+  ) {
+    assertEquals(
+      authorizePlatformMcpTool({ ...input, auth }).allowed,
+      false,
+    );
+  }
+});
+
+Deno.test('platform MCP scopes: new-Agent handoffs cannot mutate an existing Agent', () => {
+  const auth = apiToken([
+    PLATFORM_MCP_SCOPES.read,
+    PLATFORM_MCP_SCOPES.build,
+    'handoff:agent',
+  ]);
+  assertEquals(
+    filterPlatformMcpToolsForAuth([
+      { name: 'gx.discover' },
+      { name: 'gx.stage' },
+      { name: 'gx.test' },
+      { name: 'gx.upload' },
+    ], auth).map((tool) => tool.name),
+    ['gx.discover', 'gx.stage', 'gx.test'],
+  );
+  assertEquals(
+    authorizePlatformMcpTool({
+      requestedName: 'gx.discover',
+      args: { scope: 'library' },
+      auth,
+    }).allowed,
+    true,
+  );
+  assertEquals(
+    authorizePlatformMcpTool({
+      requestedName: 'gx.upload',
+      args: { bundle_id: 'bundle-1', name: 'existing-agent' },
+      auth,
+    }).allowed,
+    false,
+  );
+  assertEquals(
+    authorizePlatformMcpTool({
+      requestedName: 'gx.set',
+      args: { app_id: 'agent-1', version: '1.0.0' },
+      auth,
+    }).allowed,
+    false,
+  );
+});
+
+Deno.test('platform MCP scopes: malformed handoff markers fail closed', () => {
+  const tools = [{ name: 'gx.discover' }, { name: 'gx.upload' }];
+  for (
+    const scopes of [
+      [
+        PLATFORM_MCP_SCOPES.read,
+        PLATFORM_MCP_SCOPES.build,
+        'handoff:not-real',
+      ],
+      [
+        PLATFORM_MCP_SCOPES.read,
+        PLATFORM_MCP_SCOPES.build,
+        'handoff:interface',
+        'handoff:routine',
+      ],
+    ]
+  ) {
+    const auth = apiToken(scopes);
+    assertEquals(filterPlatformMcpToolsForAuth(tools, auth), []);
+    const decision = authorizePlatformMcpTool({
+      requestedName: 'gx.upload',
+      args: { app_id: 'agent-1', bundle_id: 'bundle-1' },
+      auth,
+    });
+    assertEquals(decision.allowed, false);
+    assertStringIncludes(decision.reason || '', 'invalid');
+  }
+});
+
 Deno.test('platform MCP scopes: deferred marketplace and publication families stay account-only', () => {
   const auth = apiToken([
     PLATFORM_MCP_SCOPES.read,

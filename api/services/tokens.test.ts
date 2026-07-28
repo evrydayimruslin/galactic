@@ -1,6 +1,8 @@
 import { assert, assertEquals } from "https://deno.land/std@0.210.0/assert/mod.ts";
 import {
   classifyApiTokenCompatibility,
+  isTokenVerdictCacheFresh,
+  resolveTokenExpiry,
   verifyApiTokenRecord,
 } from "./tokens.ts";
 
@@ -119,4 +121,63 @@ Deno.test("tokens: rejects unrecoverable legacy rows without token material", as
   assertEquals(verification.state, "legacy_unrecoverable");
   assertEquals(verification.valid, false);
   assertEquals(verification.reason, "missing_token_material");
+});
+
+Deno.test("tokens: exact short-lived expiry is preserved without day rounding", () => {
+  const now = new Date("2026-07-27T12:00:00.000Z");
+  const expiresAt = new Date("2026-07-27T12:30:00.000Z");
+  assertEquals(
+    resolveTokenExpiry({ expiresAt }, now),
+    "2026-07-27T12:30:00.000Z",
+  );
+});
+
+Deno.test("tokens: exact expiry fails closed when stale or ambiguous", () => {
+  const now = new Date("2026-07-27T12:00:00.000Z");
+  for (
+    const options of [
+      { expiresAt: new Date("2026-07-27T11:59:59.000Z") },
+      {
+        expiresAt: new Date("2026-07-27T12:30:00.000Z"),
+        expiresInDays: 1,
+      },
+    ]
+  ) {
+    let message = "";
+    try {
+      resolveTokenExpiry(options, now);
+    } catch (reason) {
+      message = reason instanceof Error ? reason.message : String(reason);
+    }
+    assert(message.length > 0);
+  }
+});
+
+Deno.test("tokens: cached verdict cannot outlive the token's exact expiry", () => {
+  const cachedAt = Date.parse("2026-07-27T12:00:00.000Z");
+  const expiresAt = "2026-07-27T12:00:30.000Z";
+  assertEquals(
+    isTokenVerdictCacheFresh(
+      cachedAt,
+      expiresAt,
+      Date.parse("2026-07-27T12:00:29.999Z"),
+    ),
+    true,
+  );
+  assertEquals(
+    isTokenVerdictCacheFresh(
+      cachedAt,
+      expiresAt,
+      Date.parse("2026-07-27T12:00:30.000Z"),
+    ),
+    false,
+  );
+  assertEquals(
+    isTokenVerdictCacheFresh(
+      cachedAt,
+      "not-a-date",
+      Date.parse("2026-07-27T12:00:01.000Z"),
+    ),
+    false,
+  );
 });

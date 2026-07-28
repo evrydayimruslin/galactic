@@ -57,6 +57,15 @@ export interface CapabilityContext {
    * arrive through another supported transport (for example an auth cookie).
    */
   authSource?: 'supabase' | 'api_token' | 'routine_actor' | 'sandbox_actor';
+  /**
+   * Surface-verified API-key bounds for honest progressive discovery.
+   * Capability handlers may project these limits but must not treat them as a
+   * replacement for dispatch authorization.
+   */
+  authorization?: {
+    scopes?: string[];
+    appIds?: string[] | null;
+  };
   /** The surface the call arrived on — for telemetry, never for authorization. */
   surface: CapabilitySurface;
   /**

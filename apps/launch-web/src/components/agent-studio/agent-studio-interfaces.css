@@ -1,0 +1,537 @@
+.agent-studio-interface-add {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--line-2);
+  padding: 15px;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--mono) !important;
+  font-size: 12px;
+}
+
+.agent-studio-interface-add:hover {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+  color: var(--ink);
+}
+
+.agent-studio-interface-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 16px;
+  border: 1px solid var(--card-line);
+  background: var(--line);
+  box-shadow: var(--card-shadow);
+}
+
+.agent-studio-interface-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: flex-start;
+  gap: 16px;
+  margin: 0;
+  padding: 17px 20px;
+  background: var(--card);
+}
+
+.agent-studio-interface-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 2px 0 0;
+  background: transparent;
+  color: var(--ink-3);
+}
+
+.agent-studio-interface-pin:hover,
+.agent-studio-interface-pin.active {
+  color: var(--accent);
+}
+
+.agent-studio-interface-summary {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.agent-studio-interface-title-line {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.agent-studio-interface-title-line strong {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.agent-studio-interface-title-line em {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-style: normal;
+}
+
+.agent-studio-interface-description {
+  display: block;
+  max-width: 76ch;
+  margin-top: 6px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.agent-studio-interface-meta {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.agent-studio-interface-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.agent-studio-interface-actions button,
+.agent-studio-interface-empty button,
+.agent-studio-interface-stale button {
+  border: 1px solid var(--line-2);
+  padding: 7px 13px;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--mono) !important;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.agent-studio-interface-actions button.primary {
+  border-color: var(--accent);
+  padding-inline: 15px;
+  background: var(--accent-fill);
+  color: var(--ink);
+}
+
+.agent-studio-interface-actions button:not(:disabled):hover,
+.agent-studio-interface-empty button:hover,
+.agent-studio-interface-stale button:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.agent-studio-interface-empty,
+.agent-studio-interface-stale {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 16px;
+  border: 1px solid var(--card-line);
+  padding: 36px 24px;
+  background: var(--card);
+  box-shadow: var(--card-shadow);
+  text-align: center;
+}
+
+.agent-studio-interface-empty > span {
+  margin-bottom: 12px;
+  color: var(--accent);
+  font-family: var(--serif);
+  font-size: 32px;
+}
+
+.agent-studio-interface-empty strong,
+.agent-studio-interface-stale strong {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 15px;
+}
+
+.agent-studio-interface-empty p,
+.agent-studio-interface-stale p {
+  max-width: 52ch;
+  margin: 7px 0 15px;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.agent-studio-interface-stale {
+  align-items: flex-start;
+  border-color: var(--line-2);
+  background: var(--fill);
+  box-shadow: none;
+  text-align: left;
+}
+
+.agent-studio-interface-note {
+  max-width: 74ch;
+  margin: 18px 0 0;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.agent-studio-interface-note button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: inherit;
+}
+
+.agent-studio-interface-overlay {
+  --asi-ground: #0a0806;
+  --asi-card: #12100c;
+  --asi-line: #2b241a;
+  --asi-ink: #f3e9d8;
+  --asi-ink-2: #c0ae93;
+  --asi-ink-3: #8b7a61;
+  --asi-accent: #d4a94f;
+  --asi-ok: #6e8f62;
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  background: rgba(10, 8, 6, 0.56);
+  backdrop-filter: blur(6px);
+}
+
+body[data-agent-studio-theme="light"] .agent-studio-interface-overlay {
+  --asi-ground: #efe9e1;
+  --asi-card: #efe9e1;
+  --asi-line: #d8ccbc;
+  --asi-ink: #33291d;
+  --asi-ink-2: #71624f;
+  --asi-ink-3: #7c6f58;
+  --asi-accent: #b98037;
+  --asi-ok: #4c7a66;
+  background: rgba(51, 41, 29, 0.34);
+}
+
+.agent-studio-interface-dialog {
+  position: fixed;
+  max-width: none;
+  max-height: none;
+  border: 1px solid var(--asi-line);
+  background: var(--asi-card);
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.44);
+}
+
+.agent-studio-interface-drag {
+  position: absolute;
+  z-index: 4;
+  top: -24px;
+  left: 0;
+  display: flex;
+  width: 100%;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 0 48px;
+  overflow: hidden;
+  background: var(--asi-card);
+  color: var(--asi-ink-3);
+  cursor: grab;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  touch-action: none;
+  white-space: nowrap;
+}
+
+.agent-studio-interface-drag:active {
+  cursor: grabbing;
+}
+
+.agent-studio-interface-drag:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.agent-studio-interface-close {
+  position: absolute;
+  z-index: 5;
+  top: -24px;
+  right: 0;
+  width: 34px;
+  height: 24px;
+  border: 0;
+  padding: 0;
+  background: var(--asi-card);
+  color: var(--asi-ink-2);
+  font-size: 19px;
+  line-height: 1;
+}
+
+.agent-studio-interface-frame-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(
+      circle at 48% 44%,
+      color-mix(in srgb, var(--asi-accent) 19%, transparent),
+      transparent 34%
+    ),
+    var(--asi-ground);
+}
+
+.agent-studio-interface-frame {
+  position: relative;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 120px;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+  transform: scale(0.988) translateY(5px);
+  transition:
+    opacity 160ms ease-out,
+    transform 340ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.agent-studio-interface-frame-wrap.ready
+  .agent-studio-interface-frame {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+
+.agent-studio-interface-boot {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--asi-ink-2);
+  opacity: 1;
+  pointer-events: none;
+  transition: opacity 140ms ease-out, transform 240ms ease-out;
+}
+
+.agent-studio-interface-frame-wrap.ready
+  .agent-studio-interface-boot {
+  opacity: 0;
+  transform: scale(1.025);
+}
+
+.agent-studio-interface-boot > span {
+  position: relative;
+  display: block;
+  width: 30px;
+  height: 30px;
+  border: 1px solid
+    color-mix(in srgb, var(--asi-accent) 38%, transparent);
+  border-radius: 50%;
+  animation: agent-studio-interface-breathe 900ms ease-in-out infinite
+    alternate;
+}
+
+.agent-studio-interface-boot > span::before {
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: var(--asi-accent);
+  box-shadow: 0 0 18px
+    color-mix(in srgb, var(--asi-accent) 70%, transparent);
+  content: "";
+}
+
+.agent-studio-interface-boot > span i {
+  position: absolute;
+  top: 12px;
+  left: -3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--asi-ok);
+  animation: agent-studio-interface-orbit 1.05s linear infinite;
+  transform-origin: 18px 3px;
+}
+
+.agent-studio-interface-boot strong {
+  color: var(--asi-ink-2);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.045em;
+}
+
+.agent-studio-interface-boot > em {
+  position: relative;
+  display: block;
+  width: min(180px, 44%);
+  height: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--asi-ink) 8%, transparent);
+}
+
+.agent-studio-interface-boot > em i {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--asi-accent), var(--asi-ok));
+  animation: agent-studio-interface-progress 780ms
+    cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  transform-origin: left center;
+}
+
+.agent-studio-interface-boot.timed-out {
+  z-index: 3;
+  padding: 24px;
+  text-align: center;
+  pointer-events: auto;
+}
+
+.agent-studio-interface-boot.timed-out > span {
+  animation: none;
+  border-color: var(--asi-line);
+}
+
+.agent-studio-interface-boot.timed-out > span::before {
+  background: var(--asi-ink-3);
+  box-shadow: none;
+}
+
+.agent-studio-interface-boot.timed-out > span i {
+  display: none;
+}
+
+.agent-studio-interface-boot.timed-out p {
+  max-width: 38ch;
+  margin: -4px 0 2px;
+  color: var(--asi-ink-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.agent-studio-interface-boot.timed-out button {
+  border: 1px solid var(--asi-accent);
+  padding: 7px 14px;
+  background: transparent;
+  color: var(--asi-ink-2);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+}
+
+.agent-studio-interface-resize {
+  position: absolute;
+  z-index: 6;
+  right: -15px;
+  bottom: -15px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  padding: 0;
+  background:
+    linear-gradient(
+      135deg,
+      transparent 48%,
+      var(--asi-ink-3) 49%,
+      var(--asi-ink-3) 54%,
+      transparent 55%,
+      transparent 66%,
+      var(--asi-ink-2) 67%,
+      var(--asi-ink-2) 72%,
+      transparent 73%
+    );
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+@keyframes agent-studio-interface-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes agent-studio-interface-breathe {
+  to {
+    border-color: var(--asi-ok);
+    transform: scale(1.08);
+  }
+}
+
+@keyframes agent-studio-interface-progress {
+  0% {
+    opacity: 0.45;
+    transform: scaleX(0.08);
+  }
+
+  70%,
+  100% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@media (max-width: 720px) {
+  .agent-studio-interface-row {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .agent-studio-interface-actions {
+    grid-column: 2;
+  }
+
+  .agent-studio-interface-dialog {
+    right: 8px !important;
+    bottom: auto !important;
+    left: 8px !important;
+    top: 32px !important;
+    width: auto !important;
+    height: calc(100dvh - 40px) !important;
+  }
+
+  .agent-studio-interface-drag {
+    cursor: default;
+    touch-action: auto;
+  }
+
+  .agent-studio-interface-resize {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .agent-studio-interface-row {
+    gap: 12px;
+    padding: 15px;
+  }
+
+  .agent-studio-interface-title-line {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-studio-interface-frame,
+  .agent-studio-interface-boot,
+  .agent-studio-interface-boot > span,
+  .agent-studio-interface-boot > span i,
+  .agent-studio-interface-boot > em i {
+    animation: none;
+    transition: none;
+  }
+}

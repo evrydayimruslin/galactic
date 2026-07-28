@@ -2496,7 +2496,15 @@ bindCapabilityHandler('discover', async (args, ctx) => {
     case 'appstore':
       return await executeDiscoverAppstore(ctx.userId, args);
     case 'tools':
-      return executeDiscoverTools(ctx.authSource === 'api_token');
+      return executeDiscoverTools(
+        ctx.authSource === 'api_token'
+          ? {
+            authSource: 'api_token',
+            scopes: ctx.authorization?.scopes,
+            tokenAppIds: ctx.authorization?.appIds,
+          }
+          : undefined,
+      );
     default:
       throw new CapabilityError(
         'invalid_input',
@@ -3841,7 +3849,7 @@ export function getPlatformTools(
 
 // Progressive disclosure for the lite manifest: list the platform tools that
 // are not advertised in tools/list so an agent can still find + call them.
-function executeDiscoverTools(callerIsApiToken = false): {
+function executeDiscoverTools(auth?: PlatformMcpAuthContext): {
   tools: Array<{ name: string; description: string }>;
   note: string;
 } {
@@ -3851,14 +3859,8 @@ function executeDiscoverTools(callerIsApiToken = false): {
       note: 'All platform tools are advertised in tools/list; none are hidden.',
     };
   }
-  const demoted = callerIsApiToken
-    ? filterPlatformMcpToolsForAuth(getDemotedPlatformTools(), {
-      authSource: 'api_token',
-      // This inventory describes which deferred tools can ever be granted to a
-      // Connect key. Per-request authorization still requires the key's actual
-      // explicit scope before dispatch.
-      scopes: ['apps:read', 'apps:call', 'agents:build', 'agents:operate'],
-    })
+  const demoted = auth?.authSource === 'api_token'
+    ? filterPlatformMcpToolsForAuth(getDemotedPlatformTools(), auth)
     : getDemotedPlatformTools();
   const tools = demoted.map((tool) => ({
     name: gxToolName(tool.name),
@@ -3983,6 +3985,8 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
     platformAuth = {
       authSource: authUser.authSource,
       scopes: authUser.scopes,
+      tokenId: authUser.tokenId,
+      tokenAppIds: authUser.tokenAppIds,
     };
 
     // Hardening: actor tokens (sandbox_actor / routine_actor) are minted only
@@ -5659,6 +5663,10 @@ async function handleToolsCall(
         econ,
         user,
         authSource: platformAuth.authSource,
+        authorization: {
+          scopes: platformAuth.scopes,
+          appIds: platformAuth.tokenAppIds,
+        },
         request,
         widgetForwardArgs,
         computeAttribution: trustedCompute?.attribution,
@@ -10208,7 +10216,7 @@ function buildScaffoldInterfaceHtml(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(name)}</title>
 <!-- Galactic interface bridge — do not edit. Exposes window.ul.call(fn, args)
-     (a Promise) and window.ul.resize(px). Verbatim from the interfaces spec. -->
+     (a Promise), window.ul.resize(px), and window.ul.close(). -->
 <script>
 (function () {
   var port = null, queue = [], pending = {}, nextId = 1;
@@ -10229,7 +10237,13 @@ function buildScaffoldInterfaceHtml(
       });
     },
     resize: function (height) { if (port) port.postMessage({ type: "resize", height: height }); },
+    close: function () { if (port) port.postMessage({ type: "close" }); },
   };
+  window.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    event.preventDefault();
+    window.ul.close();
+  });
   window.addEventListener("message", function (event) {
     var d = event.data;
     if (!d || d.type !== "ul-interface-connect" || !event.ports || !event.ports[0]) return;

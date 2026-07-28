@@ -1,0 +1,32 @@
+.neb-connect-tutorial-panel.agent-studio {
+  min-height: min(650px, calc(100dvh - 154px));
+  overflow: visible;
+  padding: clamp(24px, 4vw, 44px);
+  background: var(--ground);
+}
+
+.neb-connect-tutorial-panel.agent-studio .agent-studio-handoff {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.neb-connect-tutorial-panel.agent-studio .agent-studio-handoff-card {
+  min-height: 580px;
+}
+
+.neb-connect-tutorial-panel.agent-studio > .neb-connect-tutorial-status {
+  max-width: 980px;
+  margin: 0 auto;
+  color: var(--ink-2);
+}
+
+@media (max-width: 720px) {
+  .neb-connect-tutorial-panel.agent-studio {
+    min-height: 0;
+    padding: 22px 16px 30px;
+  }
+
+  .neb-connect-tutorial-panel.agent-studio .agent-studio-handoff-card {
+    min-height: 0;
+  }
+}

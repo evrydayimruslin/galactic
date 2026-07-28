@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { shouldUseNebulaRoute } from "./nebula-route";
+import {
+  shouldUseAgentStudioRoute,
+  shouldUseNebulaRoute,
+} from "./nebula-route";
 
 describe("shouldUseNebulaRoute", () => {
   it.each(["home", "library", "settings", "connect"] as const)(
@@ -103,6 +106,65 @@ describe("shouldUseNebulaRoute", () => {
       loadStatus: "loading",
       routeKey: "store",
       sessionRestoring: true,
+    })).toBe(false);
+  });
+});
+
+describe("shouldUseAgentStudioRoute", () => {
+  it("selects Studio while an authenticated Agent owner lookup is pending", () => {
+    expect(shouldUseAgentStudioRoute({
+      authenticated: true,
+      loadStatus: "loading",
+      routeKey: "agent",
+    })).toBe(true);
+  });
+
+  it.each(["ready", "error"] as const)(
+    "selects Studio for a resolved owner with %s route data",
+    (loadStatus) => {
+      expect(shouldUseAgentStudioRoute({
+        agentRelationship: "owner",
+        authenticated: true,
+        loadStatus,
+        routeKey: "agent",
+      })).toBe(true);
+    },
+  );
+
+  it.each(["installed", "public"] as const)(
+    "keeps a resolved %s Agent out of the private Studio",
+    (agentRelationship) => {
+      expect(shouldUseAgentStudioRoute({
+        agentRelationship,
+        authenticated: true,
+        loadStatus: "ready",
+        routeKey: "agent",
+      })).toBe(false);
+    },
+  );
+
+  it.each(["ready", "error"] as const)(
+    "fails closed when Agent identity is absent after a %s result",
+    (loadStatus) => {
+      expect(shouldUseAgentStudioRoute({
+        authenticated: true,
+        loadStatus,
+        routeKey: "agent",
+      })).toBe(false);
+    },
+  );
+
+  it("does not select Studio during session restoration or on non-Agent routes", () => {
+    expect(shouldUseAgentStudioRoute({
+      authenticated: false,
+      loadStatus: "loading",
+      routeKey: "agent",
+      sessionRestoring: true,
+    })).toBe(false);
+    expect(shouldUseAgentStudioRoute({
+      authenticated: true,
+      loadStatus: "ready",
+      routeKey: "library",
     })).toBe(false);
   });
 });

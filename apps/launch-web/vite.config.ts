@@ -20,6 +20,13 @@ export default {
         changeOrigin: true,
         secure: true,
       },
+      // Keep copied local-development MCP URLs usable. Production serves the
+      // same path on the public origin; Vite must explicitly forward it.
+      "/mcp": {
+        target: launchApiProxyTarget,
+        changeOrigin: true,
+        secure: true,
+      },
       "/auth": {
         target: launchApiProxyTarget,
         changeOrigin: true,

@@ -4,6 +4,8 @@ import { assertStringIncludes } from 'https://deno.land/std@0.210.0/assert/asser
 import {
   classifyLaunchAgentHomePromotionReconciliation,
   handleLaunch,
+  parseLaunchApiKeyCreateRequest,
+  parseLaunchHandoffCreateRequest,
 } from './launch.ts';
 import { putLiveExecutedBundle } from '../services/executed-bundle.ts';
 import { encryptEnvVar } from '../services/envvars.ts';
@@ -1006,6 +1008,11 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
     assertEquals(Boolean(spec.paths['/api/launch/subscription/portal']), true);
     assertEquals(Boolean(spec.paths['/api/launch/api-keys']), true);
     assertEquals(Boolean(spec.paths['/api/launch/api-keys/{id}']), true);
+    assertEquals(Boolean(spec.paths['/api/launch/handoffs']), true);
+    assertEquals(
+      Boolean(spec.paths['/api/launch/agents/{id}/handoffs']),
+      true,
+    );
     assertEquals(Boolean(spec.paths['/api/launch/byok']), true);
     assertEquals(Boolean(spec.paths['/api/launch/byok/{provider}']), true);
     assertEquals(Boolean(spec.paths['/api/launch/byok/primary']), true);
@@ -1036,6 +1043,10 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
     assertEquals(Boolean(spec.paths['/mcp/platform']), true);
     assertEquals(Boolean(spec.components?.securitySchemes?.bearerAuth), true);
     assertEquals(Boolean(spec.components?.schemas?.ApiKeySummary), true);
+    assertEquals(
+      Boolean(spec.components?.schemas?.HandoffCreateResponse),
+      true,
+    );
     assertEquals(
       Boolean(spec.components?.schemas?.CallerFunctionPermissions),
       true,
@@ -1992,6 +2003,85 @@ Deno.test('launch facade: API key metadata requires authentication', async () =>
     assertEquals(response.status, 401);
     assertEquals(body.error, 'Authentication required');
   });
+});
+
+Deno.test('launch handoff: structural work requires a description and a matching target', () => {
+  assertEquals(
+    parseLaunchHandoffCreateRequest(
+      { intent: 'interface', description: 'A mobile approval queue.' },
+      'agent',
+    ),
+    { intent: 'interface', description: 'A mobile approval queue.' },
+  );
+  assertEquals(
+    parseLaunchHandoffCreateRequest(
+      { intent: 'connect', description: '' },
+      'workspace',
+    ),
+    { intent: 'connect', description: '' },
+  );
+
+  for (
+    const [body, target] of [
+      [{ intent: 'interface', description: '' }, 'agent'],
+      [{ intent: 'interface', description: 'A queue.' }, 'workspace'],
+      [{ intent: 'agent', description: 'A watcher.' }, 'workspace'],
+      [{ intent: 'agent', description: 'A watcher.' }, 'agent'],
+      [
+        {
+          intent: 'routine',
+          description: 'Every morning.',
+          scopes: ['*'],
+        },
+        'agent',
+      ],
+    ] as const
+  ) {
+    let message = '';
+    try {
+      parseLaunchHandoffCreateRequest(
+        body as Record<string, unknown>,
+        target,
+      );
+    } catch (reason) {
+      message = reason instanceof Error ? reason.message : String(reason);
+    }
+    assertEquals(Boolean(message), true);
+  }
+});
+
+Deno.test('launch handoff: reserved scopes cannot be minted as general API keys', () => {
+  let message = '';
+  try {
+    parseLaunchApiKeyCreateRequest({
+      name: 'Spoofed handoff',
+      scopes: ['apps:read', 'agents:build', 'handoff:interface'],
+    });
+  } catch (reason) {
+    message = reason instanceof Error ? reason.message : String(reason);
+  }
+  assertStringIncludes(message, 'reserved');
+});
+
+Deno.test('launch handoff: credential creation requires an account session', async () => {
+  await withLaunchEnv(async () => {
+    const response = await handleLaunch(
+      new Request('https://ultralight.test/api/launch/handoffs', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${TEST_API_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          intent: 'agent',
+          description: 'Watch the shared inbox.',
+        }),
+      }),
+    );
+    const body = await response.json() as { error?: string };
+    assertEquals(response.status, 403);
+    assertStringIncludes(body.error || '', 'account session');
+  }, apiTokenAuthMock());
 });
 
 Deno.test('launch facade: wallet top-up is retired from the launch surface', async () => {

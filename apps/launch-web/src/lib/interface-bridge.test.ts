@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LaunchApiRequestError } from "./api";
 import {
+  attachInterfaceBridge,
   normalizeInterfaceBridgeError,
   postInterfaceBridgeResult,
   runInterfaceFunctionDurably,
@@ -13,19 +14,26 @@ import type {
 
 const agent = { id: "agent-1", slug: "agent-1", name: "Agent One" };
 
-function dispatch(result: unknown): LaunchFunctionRunResponse {
+function dispatch(
+  result: unknown,
+  receiptId: string | null = null,
+): LaunchFunctionRunResponse {
   return {
     success: true,
     agent,
     tool: agent,
     functionName: "save",
     result,
-    receiptId: null,
+    receiptId,
     warnings: [],
     error: null,
     generatedAt: "2026-07-17T00:00:00.000Z",
   };
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function job(
   status: LaunchJobStatusResponse["status"],
@@ -152,6 +160,66 @@ describe("postInterfaceBridgeResult", () => {
   });
 });
 
+describe("attachInterfaceBridge", () => {
+  it("accepts a close request only over the active private port", async () => {
+    let onWindowMessage: ((event: MessageEvent) => void) | null = null;
+    const fakeWindow = {
+      addEventListener(type: string, listener: EventListener) {
+        if (type === "message") {
+          onWindowMessage = listener as (event: MessageEvent) => void;
+        }
+      },
+      removeEventListener(type: string, listener: EventListener) {
+        if (type === "message" && onWindowMessage === listener) {
+          onWindowMessage = null;
+        }
+      },
+    };
+    vi.stubGlobal("window", fakeWindow);
+
+    let interfacePort: MessagePort | null = null;
+    const contentWindow = {
+      postMessage(
+        _message: unknown,
+        _targetOrigin: string,
+        transfer: Transferable[],
+      ) {
+        interfacePort = transfer[0] as MessagePort;
+      },
+    };
+    const iframe = { contentWindow } as unknown as HTMLIFrameElement;
+    const onClose = vi.fn();
+    const onConnected = vi.fn();
+    const detach = attachInterfaceBridge({
+      allowlist: [],
+      context: {
+        agent,
+        interfaceId: "main",
+        minHeight: null,
+        signedIn: true,
+      },
+      iframe,
+      onClose,
+      onConnected,
+      runFunction: async () => ({ success: true }),
+    });
+
+    expect(onWindowMessage).not.toBeNull();
+    onWindowMessage!({
+      data: { type: "ul-interface-hello" },
+      source: contentWindow,
+    } as unknown as MessageEvent);
+    expect(onConnected).toHaveBeenCalledOnce();
+    expect(interfacePort).not.toBeNull();
+
+    interfacePort!.postMessage({ type: "close" });
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+
+    detach();
+    interfacePort!.close();
+  });
+});
+
 describe("runInterfaceFunctionDurably", () => {
   it("queues once, follows a capacity-deferred job, and returns its result", async () => {
     const runCalls: unknown[] = [];
@@ -165,7 +233,10 @@ describe("runInterfaceFunctionDurably", () => {
           message: "Capacity will resume automatically.",
         },
       }),
-      job("completed", { result: { saved: true } }),
+      job("completed", {
+        executionId: "execution-completed",
+        result: { saved: true },
+      }),
     ];
     const slept: number[] = [];
     const result = await runInterfaceFunctionDurably({
@@ -176,7 +247,7 @@ describe("runInterfaceFunctionDurably", () => {
             _async: true,
             job_id: statuses[0].jobId,
             status: "queued",
-          });
+          }, "receipt-queued");
         },
         launchJob: async () => statuses.shift()!,
       },
@@ -191,6 +262,7 @@ describe("runInterfaceFunctionDurably", () => {
     expect(result).toEqual({
       success: true,
       result: { saved: true },
+      receiptId: "execution-completed",
       error: null,
     });
     expect(runCalls).toHaveLength(1);
@@ -241,7 +313,7 @@ describe("runInterfaceFunctionDurably", () => {
             _async: true,
             job_id: "7f1e6f0a-2b3c-4d5e-8f90-123456789abc",
             status: "queued",
-          }),
+          }, "receipt-failed"),
         launchJob: async () => {
           polls += 1;
           return job("failed", {
@@ -249,6 +321,7 @@ describe("runInterfaceFunctionDurably", () => {
               type: "agent_cap_too_low_for_request",
               message: "Raise this Agent's capacity cap.",
             },
+            executionId: "execution-failed",
           });
         },
       },
@@ -260,6 +333,7 @@ describe("runInterfaceFunctionDurably", () => {
     expect(polls).toBe(1);
     expect(result).toMatchObject({
       success: false,
+      receiptId: "execution-failed",
       error: {
         type: "agent_cap_too_low_for_request",
         executionMode: "durable_async",
@@ -280,7 +354,7 @@ describe("runInterfaceFunctionDurably", () => {
             _async: true,
             job_id: "7f1e6f0a-2b3c-4d5e-8f90-123456789abc",
             status: "queued",
-          });
+          }, "receipt-unknown");
         },
         launchJob: async () => {
           throw new LaunchApiRequestError("Job status forbidden.", 403);
@@ -294,6 +368,7 @@ describe("runInterfaceFunctionDurably", () => {
     expect(dispatches).toBe(1);
     expect(result).toMatchObject({
       success: false,
+      receiptId: "receipt-unknown",
       error: {
         type: "JOB_STATUS_UNAVAILABLE",
         executionMode: "durable_async",

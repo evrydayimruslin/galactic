@@ -53,6 +53,7 @@ export interface LaunchRouteLiveData {
   agentCapacity?: LaunchAgentCapacityResponse;
   agentHome?: LaunchAgentHomeResponse;
   agentRoutines?: LaunchAgentRoutinesResponse;
+  agentRoutinesError?: string;
   agentHomeError?: string;
   agentCallerPermissions?: LaunchCallerFunctionPermissionsResponse;
   agentWiring?: AgentWiringView;
@@ -375,7 +376,7 @@ async function loadRouteData(
         agentCallerPermissions,
         agentWiring,
         agentCapacity,
-        agentRoutines,
+        agentRoutinesResult,
         install,
         byok,
         inferenceOptions,
@@ -387,7 +388,10 @@ async function loadRouteData(
           optional(() => launchApi.agentCallerPermissions(id)),
           optional(() => launchApi.agentWiring(id)),
           optional(() => launchApi.agentCapacity(id)),
-          optional(() => launchApi.agentRoutines(id)),
+          attempted(
+            () => launchApi.agentRoutines(id),
+            "Agent routines could not be loaded.",
+          ),
           // Per-agent install context (dedicated MCP URL + connect prompt).
           optional(() => launchApi.install({ agent: id })),
           // Loaded so the per-function inference control can list the viewer's
@@ -401,7 +405,8 @@ async function loadRouteData(
         agentCallerPermissions,
         agentFunctions,
         agentCapacity,
-        agentRoutines,
+        agentRoutines: agentRoutinesResult.value,
+        agentRoutinesError: agentRoutinesResult.error,
         agentWiring,
         byok,
         inferenceOptions,
@@ -485,6 +490,7 @@ async function optional<T>(load: () => Promise<T>): Promise<T | undefined> {
 
 async function attempted<T>(
   load: () => Promise<T>,
+  fallback = "Agent home could not be loaded.",
 ): Promise<{ value?: T; error?: string }> {
   try {
     return { value: await load() };
@@ -492,7 +498,7 @@ async function attempted<T>(
     return {
       error: err instanceof Error && err.message
         ? err.message
-        : "Agent home could not be loaded.",
+        : fallback,
     };
   }
 }

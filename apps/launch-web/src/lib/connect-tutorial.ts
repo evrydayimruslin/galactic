@@ -1,8 +1,3 @@
-import type {
-  LaunchAgentSummary,
-  LaunchApiKeyCreateRequest,
-} from "../../../../shared/contracts/launch.ts";
-
 export const CONNECT_TUTORIAL_INTENTS = [
   "connect",
   "agent",
@@ -17,36 +12,6 @@ export interface ConnectTutorialContext {
   agentSlug?: string;
   intent: ConnectTutorialIntent;
   source?: string;
-}
-
-const CONNECT_TUTORIAL_BUILDER_SCOPES = [
-  "apps:read",
-  "apps:call",
-  "agents:build",
-  "agents:operate",
-];
-
-export function connectTutorialApiKeyRequest(options: {
-  agent?: LaunchAgentSummary | null;
-  intent: ConnectTutorialIntent;
-  suffix: string;
-}): LaunchApiKeyCreateRequest {
-  const { agent = null, intent, suffix } = options;
-  const target = agent?.name ?? "workspace";
-  const targetsExistingAgent = intent === "interface" ||
-    intent === "function" || intent === "routine";
-  const namePrefix = `Connect ${intent} ${target}`.slice(
-    0,
-    Math.max(1, 49 - suffix.length),
-  );
-  return {
-    name: `${namePrefix} ${suffix}`,
-    expiresInDays: 30,
-    scopes: intent === "connect"
-      ? ["apps:read"]
-      : [...CONNECT_TUTORIAL_BUILDER_SCOPES],
-    ...(targetsExistingAgent && agent ? { appIds: [agent.id] } : {}),
-  };
 }
 
 export function connectTutorialHeroTitle(

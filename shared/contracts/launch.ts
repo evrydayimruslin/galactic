@@ -128,6 +128,8 @@ export const LAUNCH_API_ROUTES = [
   'GET /api/launch/api-keys',
   'POST /api/launch/api-keys',
   'DELETE /api/launch/api-keys/:id',
+  'POST /api/launch/handoffs',
+  'POST /api/launch/agents/:id/handoffs',
   'GET /api/launch/byok',
   'PUT /api/launch/byok/:provider',
   'DELETE /api/launch/byok/:provider',
@@ -369,6 +371,221 @@ export interface LaunchApiKeyDeleteResponse {
   message: string;
   generatedAt: string;
 }
+
+export const LAUNCH_HANDOFF_INTENTS = [
+  'agent',
+  'interface',
+  'function',
+  'routine',
+  'connect',
+] as const;
+
+export type LaunchHandoffIntent = typeof LAUNCH_HANDOFF_INTENTS[number];
+
+export const LAUNCH_AGENT_EXTENSION_HANDOFF_INTENTS = [
+  'interface',
+  'function',
+  'routine',
+] as const satisfies readonly LaunchHandoffIntent[];
+
+export type LaunchAgentExtensionHandoffIntent =
+  typeof LAUNCH_AGENT_EXTENSION_HANDOFF_INTENTS[number];
+
+export const LAUNCH_HANDOFF_STATUSES = [
+  'created',
+  'connected',
+  'staged',
+  'tested',
+  'uploaded',
+  'promoted',
+  'cancelled',
+  'rejected',
+  'revoked',
+  'expired',
+] as const;
+
+export type LaunchHandoffStatus = typeof LAUNCH_HANDOFF_STATUSES[number];
+
+/**
+ * Human intent attached to a short-lived coding-agent handoff.
+ *
+ * `description` is required for structural work. The Connect intent may use an
+ * empty description because connecting and waiting is itself the complete
+ * request. Credential scope, target, and expiry are always server-derived.
+ */
+export interface LaunchHandoffCreateRequest {
+  intent: LaunchHandoffIntent;
+  description: string;
+}
+
+export type LaunchHandoffTarget =
+  | { kind: 'workspace' }
+  | {
+    kind: 'agent';
+    agentId: string;
+    agentSlug?: string | null;
+    agentName: string;
+  };
+
+export interface LaunchHandoffCredential {
+  id: string;
+  tokenPrefix: string;
+  plaintextToken: string;
+  scopes: string[];
+  appIds: string[] | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
+/**
+ * Creation receipt for the current partial implementation. Once AS-BE-002 is
+ * persisted, this shape becomes the durable lifecycle projection.
+ */
+export interface LaunchHandoffSession {
+  id: string;
+  intent: LaunchHandoffIntent;
+  status: LaunchHandoffStatus;
+  target: LaunchHandoffTarget;
+  description: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface LaunchHandoffCreateResponse {
+  success: true;
+  handoff: LaunchHandoffSession;
+  credential: LaunchHandoffCredential;
+  platformMcpUrl: string;
+  message: string;
+  generatedAt: string;
+}
+
+/**
+ * Autonomous execution authority for work initiated by a persistent Agent.
+ * This is deliberately separate from connected-caller permissions, routine
+ * capability approval, and cross-Agent grants.
+ */
+export const LAUNCH_AUTONOMOUS_FUNCTION_POLICIES = [
+  'off',
+  'ask',
+  'free',
+] as const;
+
+export type LaunchAutonomousFunctionPolicy =
+  typeof LAUNCH_AUTONOMOUS_FUNCTION_POLICIES[number];
+
+export const LAUNCH_FUNCTION_CONSEQUENCE_GROUPS = [
+  'read',
+  'internal_write',
+  'external_side_effect',
+  'spend',
+] as const;
+
+export type LaunchFunctionConsequenceGroup =
+  typeof LAUNCH_FUNCTION_CONSEQUENCE_GROUPS[number];
+
+export type LaunchAutonomousPolicyActor =
+  | { kind: 'user'; userId: string }
+  | {
+    kind: 'system';
+    source: 'release_default' | 'migration' | 'safety_reset';
+  };
+
+export interface LaunchAutonomousFunctionPolicyProjection {
+  agentId: string;
+  functionName: string;
+  /**
+   * The function's single highest-authority classification. `spend`
+   * supersedes the external side effect inherent in a paid action.
+   */
+  consequence: LaunchFunctionConsequenceGroup;
+  policy: LaunchAutonomousFunctionPolicy;
+  revision: string;
+  declaredReleaseId: string;
+  declaredReleaseVersion: string;
+  declarationHash: string;
+  updatedAt: string;
+  updatedBy: LaunchAutonomousPolicyActor;
+}
+
+export interface LaunchAutonomousFunctionPolicyUpdateRequest {
+  policy: LaunchAutonomousFunctionPolicy;
+  expectedRevision: string;
+  expectedReleaseId: string;
+  expectedDeclarationHash: string;
+  idempotencyKey: string;
+}
+
+export const LAUNCH_APPROVAL_STATUSES = [
+  'pending',
+  'approved',
+  'rejected',
+  'resuming',
+  'completed',
+  'expired',
+  'failed',
+] as const;
+
+export type LaunchApprovalStatus = typeof LAUNCH_APPROVAL_STATUSES[number];
+
+/**
+ * Durable, owner-safe work envelope for a run held by an `ask` policy.
+ * `source` and `proposal` are sanitized projections; raw model reasoning,
+ * secrets, and unredacted function arguments are never part of this contract.
+ */
+export interface LaunchApprovalEnvelope {
+  id: string;
+  agentId: string;
+  status: LaunchApprovalStatus;
+  revision: string;
+  releaseId: string;
+  releaseVersion: string;
+  functionName: string;
+  consequence: LaunchFunctionConsequenceGroup;
+  inputHash: string;
+  trigger: string;
+  /** Generic execution run held by the policy gate. */
+  runId: string;
+  routineId?: string | null;
+  routineRunId?: string | null;
+  traceId?: string | null;
+  policyRevision: string;
+  source: Record<string, unknown>;
+  proposal: Record<string, unknown>;
+  createdAt: string;
+  expiresAt: string;
+  resolvedAt?: string | null;
+}
+
+export const LAUNCH_APPROVAL_ACTIONS = [
+  'approve',
+  'revise',
+  'reject',
+] as const;
+
+export type LaunchApprovalAction = typeof LAUNCH_APPROVAL_ACTIONS[number];
+
+interface LaunchApprovalActionRequestBase {
+  expectedRevision: string;
+  idempotencyKey: string;
+}
+
+export type LaunchApprovalActionRequest =
+  | LaunchApprovalActionRequestBase & {
+    action: 'approve';
+    /** Atomically changes this function from `ask` to `free`. */
+    stopAsking?: boolean;
+  }
+  | LaunchApprovalActionRequestBase & {
+    action: 'revise';
+    /** Sanitized replacement input for the exact held run. */
+    revisedInput: Record<string, unknown>;
+    /** Atomically changes this function from `ask` to `free`. */
+    stopAsking?: boolean;
+  }
+  | LaunchApprovalActionRequestBase & {
+    action: 'reject';
+  };
 
 export const LAUNCH_CALLER_FUNCTION_POLICIES = [
   'always',

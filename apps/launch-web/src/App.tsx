@@ -21,7 +21,10 @@ import {
   type LaunchNavigate,
   resolveLaunchNavigationTarget,
 } from "./lib/navigation";
-import { shouldUseNebulaRoute } from "./lib/nebula-route";
+import {
+  shouldUseAgentStudioRoute,
+  shouldUseNebulaRoute,
+} from "./lib/nebula-route";
 import {
   AccountFoundationPage,
   AdminFoundationPage,
@@ -37,6 +40,7 @@ import {
   NebulaFleetApp,
   NebulaSessionRestoringShell,
 } from "./components/nebula-fleet";
+import { AgentStudioApp } from "./components/agent-studio/agent-studio";
 import {
   SignInModalProvider,
   useSignInModal,
@@ -254,13 +258,15 @@ export function App(): ReactElement {
   }, [route.definition.key, route.definition.nav]);
 
   const agentSummary = live.data.agent?.agent ?? live.data.agent?.tool;
-  const nebulaRoute = shouldUseNebulaRoute({
+  const routeDecision = {
     agentRelationship: sessionRestoring ? undefined : agentSummary?.relationship,
     authenticated: Boolean(authToken),
     loadStatus: live.status,
     routeKey: experienceRoute.definition.key,
     sessionRestoring,
-  });
+  } as const;
+  const nebulaRoute = shouldUseNebulaRoute(routeDecision);
+  const agentStudioRoute = shouldUseAgentStudioRoute(routeDecision);
   return (
     // Remount the application surface when the authenticated owner changes so
     // component-local alert/search/settings state cannot outlive its account.
@@ -273,6 +279,16 @@ export function App(): ReactElement {
           ? (
             <NebulaSessionRestoringShell
               agentOpen={experienceRoute.definition.key === "agent"}
+            />
+          )
+          : agentStudioRoute
+          ? (
+            <AgentStudioApp
+              key={experienceRoute.params.slug}
+              live={live}
+              location={experienceLocation}
+              route={experienceRoute}
+              navigate={navigate}
             />
           )
           : (

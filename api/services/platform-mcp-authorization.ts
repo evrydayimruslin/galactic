@@ -21,6 +21,8 @@ export type PlatformMcpScope = (typeof PLATFORM_MCP_SCOPES)[keyof typeof PLATFOR
 export interface PlatformMcpAuthContext {
   authSource?: RequestAuthSource;
   scopes?: string[];
+  tokenId?: string;
+  tokenAppIds?: string[] | null;
 }
 
 export interface PlatformMcpAuthorizationDecision {
@@ -175,6 +177,138 @@ function explicitScopeMatch(
   return required.some((scope) => scopes.includes(scope));
 }
 
+const HANDOFF_SCOPE_PREFIX = 'handoff:';
+const HANDOFF_INTENTS = new Set([
+  'agent',
+  'interface',
+  'function',
+  'routine',
+  'connect',
+]);
+
+function handoffIntent(scopes: string[] | undefined): string | null {
+  const values = (scopes || [])
+    .filter((scope) => scope.startsWith(HANDOFF_SCOPE_PREFIX))
+    .map((scope) => scope.slice(HANDOFF_SCOPE_PREFIX.length));
+  if (values.length !== 1 || !HANDOFF_INTENTS.has(values[0])) return null;
+  return values[0];
+}
+
+function hasHandoffScope(scopes: string[] | undefined): boolean {
+  return (scopes || []).some((scope) =>
+    scope.startsWith(HANDOFF_SCOPE_PREFIX)
+  );
+}
+
+function appIdArgument(args: Record<string, unknown>): string | null {
+  return typeof args.app_id === 'string' && args.app_id.trim()
+    ? args.app_id.trim()
+    : null;
+}
+
+function constrainedTokenAppIds(
+  auth: PlatformMcpAuthContext,
+): string[] | null {
+  const appIds = auth.tokenAppIds;
+  if (!appIds || appIds.includes('*')) return null;
+  return appIds;
+}
+
+function isAppTargetedBuilderTool(name: string): boolean {
+  return name === 'ul.project' ||
+    name === 'ul.download' ||
+    name === 'ul.upload' ||
+    toolMatches(name, 'ul.set') ||
+    name === 'ul.health' ||
+    name === 'ul.gaps' ||
+    name === 'ul.shortcomings';
+}
+
+function apiTokenAppBoundaryRestriction(
+  requestedName: string,
+  args: Record<string, unknown>,
+  auth: PlatformMcpAuthContext,
+): string | null {
+  const allowedAppIds = constrainedTokenAppIds(auth);
+  if (!allowedAppIds) return null;
+  const name = canonicalPlatformMcpToolName(requestedName);
+  const appId = appIdArgument(args);
+
+  if (name === 'ul.discover') {
+    const scope = typeof args.scope === 'string' ? args.scope : '';
+    if (scope === 'tools') return null;
+    if (scope !== 'inspect') {
+      return 'This Agent-scoped API key may only discover tools or inspect its assigned Agent.';
+    }
+    if (!appId) {
+      return 'This Agent-scoped API key requires the exact assigned app_id for inspection.';
+    }
+    if (!allowedAppIds.includes(appId)) {
+      return 'This API key cannot inspect the requested Agent.';
+    }
+    return null;
+  }
+
+  if (name === 'ul.verify' || isAppTargetedBuilderTool(name)) {
+    if (!appId) {
+      return 'This Agent-scoped API key requires the exact assigned app_id for this operation.';
+    }
+    if (!allowedAppIds.includes(appId)) {
+      return 'This API key cannot act on the requested Agent.';
+    }
+  }
+  return null;
+}
+
+function handoffToolRestriction(
+  requestedName: string,
+  args: Record<string, unknown>,
+  auth: PlatformMcpAuthContext,
+): string | null {
+  const intent = handoffIntent(auth.scopes);
+  if (!intent) return null;
+  const name = canonicalPlatformMcpToolName(requestedName);
+  if (!handoffAdvertisesTool(name, intent)) {
+    return `The ${intent} handoff credential is limited to source inspection, testing, and release building.`;
+  }
+
+  if (name === 'ul.discover') {
+    const scope = typeof args.scope === 'string' ? args.scope : '';
+    if (
+      intent !== 'connect' &&
+      intent !== 'agent' &&
+      scope !== 'tools' &&
+      scope !== 'inspect'
+    ) {
+      return `The ${intent} handoff cannot enumerate unrelated Agents or marketplace content.`;
+    }
+  }
+
+  if (name === 'ul.upload') {
+    const appId = appIdArgument(args);
+    if (intent === 'agent') {
+      return 'New-Agent publication is unavailable until the handoff can bind itself to exactly one created Agent.';
+    }
+    if (intent !== 'agent' && !appId) {
+      return `The ${intent} handoff cannot create another Agent; pass the exact target app_id.`;
+    }
+  }
+  return null;
+}
+
+function handoffAdvertisesTool(name: string, intent: string): boolean {
+  const allowed = name === 'ul.discover' ||
+    name === 'ul.verify' ||
+    name === 'ul.project' ||
+    name === 'ul.download' ||
+    name === 'ul.stage' ||
+    name === 'ul.test' ||
+    name === 'ul.upload' ||
+    name === 'ul.lint' ||
+    name === 'ul.scaffold';
+  return allowed && !(name === 'ul.upload' && intent === 'agent');
+}
+
 function apiTokenAccountSessionRestriction(
   requestedName: string,
   args: Record<string, unknown>,
@@ -250,8 +384,11 @@ function apiTokenAccountSessionRestriction(
     return "Only an authenticated Galactic account session may change Attention or execute a remediation.";
   }
 
-  if (name === "ul.logs" && args.resolve_event_id !== undefined) {
-    return "Only an authenticated Galactic account session may resolve health events.";
+  if (
+    (name === 'ul.logs' || name === 'ul.health') &&
+    args.resolve_event_id !== undefined
+  ) {
+    return 'Only an authenticated Galactic account session may resolve health events.';
   }
 
   if (name === 'ul.db' && args.action === 'support_read') {
@@ -291,6 +428,14 @@ export function authorizePlatformMcpTool(input: {
 
   const args = input.args || {};
   const requiredScopes = requiredPlatformMcpScopes(input.requestedName);
+  if (hasHandoffScope(input.auth.scopes) && !handoffIntent(input.auth.scopes)) {
+    return {
+      allowed: false,
+      requiredScopes: requiredScopes || [],
+      reason:
+        'This API key has an invalid coding-agent handoff scope and cannot use platform tools.',
+    };
+  }
   if (!requiredScopes) {
     return {
       allowed: false,
@@ -323,6 +468,32 @@ export function authorizePlatformMcpTool(input: {
     };
   }
 
+  const handoffReason = handoffToolRestriction(
+    input.requestedName,
+    args,
+    input.auth,
+  );
+  if (handoffReason) {
+    return {
+      allowed: false,
+      requiredScopes,
+      reason: handoffReason,
+    };
+  }
+
+  const appBoundaryReason = apiTokenAppBoundaryRestriction(
+    input.requestedName,
+    args,
+    input.auth,
+  );
+  if (appBoundaryReason) {
+    return {
+      allowed: false,
+      requiredScopes,
+      reason: appBoundaryReason,
+    };
+  }
+
   return { allowed: true, requiredScopes };
 }
 
@@ -331,8 +502,18 @@ export function filterPlatformMcpToolsForAuth<T extends { name: string }>(
   auth: PlatformMcpAuthContext,
 ): T[] {
   if (!isApiTokenPlatformAuth(auth)) return tools;
+  const intent = handoffIntent(auth.scopes);
+  if (hasHandoffScope(auth.scopes) && !intent) return [];
   return tools.filter((tool) => {
     const required = requiredPlatformMcpScopes(tool.name);
-    return required !== null && explicitScopeMatch(auth.scopes, required);
+    if (required === null || !explicitScopeMatch(auth.scopes, required)) {
+      return false;
+    }
+    return intent
+      ? handoffAdvertisesTool(
+        canonicalPlatformMcpToolName(tool.name),
+        intent,
+      )
+      : true;
   });
 }
