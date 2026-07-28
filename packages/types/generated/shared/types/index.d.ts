@@ -58,6 +58,7 @@ export interface VersionMetadata {
     created_at: string;
     trust?: VersionTrustMetadata;
     source_hash?: string;
+    bundle_id?: string;
     test_attestation?: VersionTestAttestationMetadata;
 }
 export interface VersionTestAttestationMetadata {
@@ -328,7 +329,15 @@ export interface AIRequest {
         description: string;
         parameters: Record<string, unknown>;
     }>;
+    output_schema?: {
+        name: string;
+        schema: Record<string, unknown> | boolean;
+        strict?: true;
+    };
 }
+export type AIStructuredRequest = Omit<AIRequest, "output_schema"> & {
+    output_schema: NonNullable<AIRequest["output_schema"]>;
+};
 export interface WidgetDeclaration {
     id: string;
     label: string;
@@ -625,7 +634,7 @@ export interface CommandCompositeCardBody {
         label?: string;
     }>;
 }
-export interface AIResponse {
+export interface AIResponse<Output = unknown> {
     content: string;
     model: string;
     usage: {
@@ -633,8 +642,13 @@ export interface AIResponse {
         output_tokens: number;
         cost_light: number;
     };
+    output?: Output;
     error?: string;
+    error_code?: "invalid_output_schema" | "structured_output_unsupported" | "structured_output_invalid_json" | "structured_output_schema_mismatch";
 }
+export type AIStructuredResponse<Output = unknown> = AIResponse<Output> & {
+    output: Output;
+};
 export interface UploadRequest {
     files: Array<{
         name: string;
@@ -677,6 +691,7 @@ export interface RunResponse {
     error?: {
         type: string;
         message: string;
+        code?: string;
         stack?: string;
         details?: unknown;
     };
@@ -1125,7 +1140,8 @@ export interface UltralightSDK {
     batchRemove(keys: string[]): Promise<void>;
     remember(key: string, value: unknown): Promise<void>;
     recall(key: string): Promise<unknown>;
-    ai(request: AIRequest): Promise<AIResponse>;
+    ai<Output = unknown>(request: AIStructuredRequest): Promise<AIStructuredResponse<Output>>;
+    ai<Output = unknown>(request: AIRequest): Promise<AIResponse<Output>>;
 }
 export interface GenerationConfig {
     ai_enhance: boolean;

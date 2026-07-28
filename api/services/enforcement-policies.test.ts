@@ -1,6 +1,11 @@
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
-import { checkRateLimit } from "./ratelimit.ts";
+import {
+  BUILDER_STAGE_RATE_LIMIT_ENDPOINT,
+  BUILDER_STAGE_RATE_LIMIT_PER_MINUTE,
+  checkRateLimit,
+  RATE_LIMITS,
+} from "./ratelimit.ts";
 import { checkStorageQuota } from "./storage-quota.ts";
 import { checkDataQuota } from "./data-quota.ts";
 import { checkAndIncrementWeeklyCalls } from "./weekly-calls.ts";
@@ -44,6 +49,15 @@ async function withMockedEnvAndFetch(
     globalWithEnv.__env = previousEnv;
   }
 }
+
+Deno.test("Builder stage rate limit has an explicit per-owner minute bound", () => {
+  assertEquals(RATE_LIMITS[BUILDER_STAGE_RATE_LIMIT_ENDPOINT], {
+    endpoint: "builder:stage",
+    limit: BUILDER_STAGE_RATE_LIMIT_PER_MINUTE,
+    windowMinutes: 1,
+  });
+  assertEquals(BUILDER_STAGE_RATE_LIMIT_PER_MINUTE, 10);
+});
 
 Deno.test("Rate limit enforcement: backend failures stay fail-open by default", async () => {
   await runSerial(async () => {

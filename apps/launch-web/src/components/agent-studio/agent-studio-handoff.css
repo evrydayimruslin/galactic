@@ -1,0 +1,453 @@
+.agent-studio-handoff {
+  width: 100%;
+  color: var(--ink);
+}
+
+.agent-studio-handoff-tabs {
+  display: flex;
+  max-width: 100%;
+  margin-bottom: 24px;
+  overflow-x: auto;
+  border: 1px solid var(--line-2);
+  scrollbar-width: thin;
+}
+
+.agent-studio-handoff-tabs button {
+  flex: 0 0 auto;
+  border: 0;
+  border-right: 1px solid var(--line);
+  padding: 10px 15px;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.agent-studio-handoff-tabs button:last-child {
+  border-right: 0;
+}
+
+.agent-studio-handoff-tabs button[aria-selected="true"] {
+  background: var(--ink);
+  color: var(--ground);
+}
+
+.agent-studio-handoff-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 14px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.agent-studio-handoff-layout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 36px;
+}
+
+.agent-studio-handoff-explainer {
+  flex: 1 1 380px;
+  min-width: 0;
+}
+
+.agent-studio-handoff-explainer > h2 {
+  max-width: 23ch;
+  margin: 0 0 10px;
+  color: var(--hero);
+  font-family: var(--serif);
+  font-size: clamp(26px, 3vw, 32px);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.agent-studio-handoff-explainer > p {
+  max-width: 50ch;
+  margin: 0 0 22px;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.agent-studio-handoff-ring {
+  padding: 12px 0 8px;
+  background: var(--fill);
+}
+
+.agent-studio-handoff-ring svg {
+  display: block;
+  width: 100%;
+  max-width: 340px;
+  height: 200px;
+  margin: 0 auto;
+}
+
+.agent-studio-handoff-ring circle {
+  stroke: var(--line-2);
+  stroke-width: 1;
+}
+
+.agent-studio-handoff-ring text {
+  fill: var(--ink);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.agent-studio-handoff-ring path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.3;
+}
+
+.agent-studio-handoff-ring .out {
+  stroke: var(--accent);
+}
+
+.agent-studio-handoff-ring path.out:first-of-type {
+  animation: agent-studio-handoff-dash 1.1s linear infinite;
+  stroke-dasharray: 4 3;
+}
+
+.agent-studio-handoff-ring .back {
+  stroke: var(--ok);
+}
+
+.agent-studio-handoff-ring text.out-label {
+  fill: var(--accent-text);
+  font-size: 9.5px;
+}
+
+.agent-studio-handoff-ring text.back-label {
+  fill: var(--ok);
+  font-size: 9.5px;
+}
+
+@keyframes agent-studio-handoff-dash {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+
+.agent-studio-handoff-beats {
+  display: flex;
+  flex-direction: column;
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-studio-handoff-beats li {
+  display: flex;
+  gap: 16px;
+}
+
+.agent-studio-handoff-beats li > div:first-child {
+  display: flex;
+  flex: 0 0 24px;
+  flex-direction: column;
+  align-items: center;
+}
+
+.agent-studio-handoff-beats li > div:first-child::after {
+  width: 1px;
+  flex: 1;
+  background: var(--line);
+  content: "";
+}
+
+.agent-studio-handoff-beats li:last-child > div:first-child::after {
+  display: none;
+}
+
+.agent-studio-handoff-beats li > div:first-child span {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-2);
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.agent-studio-handoff-beats li > div:last-child {
+  padding-bottom: 16px;
+}
+
+.agent-studio-handoff-beats strong {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.agent-studio-handoff-beats p {
+  max-width: 46ch;
+  margin: 4px 0 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.agent-studio-handoff-card {
+  display: flex;
+  max-width: 440px;
+  min-width: 0;
+  flex: 1 1 380px;
+  flex-direction: column;
+  align-self: stretch;
+  border: 1px solid var(--card-line);
+  background: var(--card);
+  box-shadow: var(--card-shadow);
+}
+
+.agent-studio-handoff-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.agent-studio-handoff-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.agent-studio-handoff-state > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.agent-studio-handoff-state.ready {
+  color: var(--ok);
+}
+
+.agent-studio-handoff-state.waiting {
+  color: var(--accent-text);
+}
+
+.agent-studio-handoff-state.error {
+  color: var(--danger);
+}
+
+.agent-studio-handoff-meta {
+  display: grid;
+  margin: 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  gap: 7px;
+}
+
+.agent-studio-handoff-meta > div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.agent-studio-handoff-meta dt {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.agent-studio-handoff-meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.agent-studio-handoff-meta dd.accent {
+  color: var(--accent-text);
+}
+
+.agent-studio-handoff-meta dd.muted {
+  color: var(--ink-3);
+}
+
+.agent-studio-handoff-meta dd.danger {
+  color: var(--danger);
+}
+
+.agent-studio-handoff-prompt {
+  min-height: 220px;
+  max-height: 420px;
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 16px 18px;
+  background: var(--fill);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+.agent-studio-handoff-prompt mark {
+  display: inline;
+  padding: 3px 5px;
+  background: var(--fill-2);
+  box-shadow: inset 2px 0 0 var(--line-2);
+  color: var(--ink-3);
+  font-family: inherit;
+}
+
+.agent-studio-handoff-prompt mark.complete {
+  background: var(--accent-fill);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--ink);
+}
+
+.agent-studio-handoff-field {
+  padding: 15px 18px;
+  border-top: 1px solid var(--line);
+}
+
+.agent-studio-handoff-field label {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.agent-studio-handoff-field textarea {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  border: 1px solid var(--line-2);
+  padding: 12px 14px;
+  outline: none;
+  background: var(--input);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.agent-studio-handoff-field small {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-align: right;
+}
+
+.agent-studio-handoff-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 18px;
+  border-top: 1px solid var(--line);
+}
+
+.agent-studio-handoff-copy > div {
+  max-width: 32ch;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.agent-studio-handoff-copy button,
+.agent-studio-handoff-auth button {
+  border: 1px solid var(--accent);
+  padding: 9px 16px;
+  background: var(--accent-fill);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.agent-studio-handoff-copy button.copied {
+  border-color: var(--ok);
+  background: transparent;
+  color: var(--ok);
+}
+
+.agent-studio-handoff-auth {
+  padding: 15px 18px;
+  border-top: 1px solid var(--line);
+}
+
+.agent-studio-handoff-auth > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.agent-studio-handoff-auth button:not(.primary) {
+  border-color: var(--line-2);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.agent-studio-handoff-auth p {
+  margin: 11px 0 0;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+@media (max-width: 720px) {
+  .agent-studio-handoff-layout {
+    gap: 26px;
+  }
+
+  .agent-studio-handoff-explainer,
+  .agent-studio-handoff-card {
+    flex-basis: 100%;
+  }
+
+  .agent-studio-handoff-card {
+    max-width: none;
+  }
+
+  .agent-studio-handoff-meta > div {
+    grid-template-columns: 105px minmax(0, 1fr);
+    gap: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-studio-handoff-ring path.out:first-of-type {
+    animation: none;
+  }
+}

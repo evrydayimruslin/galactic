@@ -17,6 +17,8 @@
  *   logout          Clear stored credentials
  *   whoami          Show current user
  *   scaffold        Generate a structured app skeleton (gx.download scaffold mode)
+ *   project         Get a compact coding capsule for an Agent (gx.project)
+ *   stage           Create a content-addressed source bundle (gx.stage)
  *   upload          Upload a new app or update existing (gx.upload)
  *   test            Test functions without deploying (gx.test)
  *   lint            Validate code against conventions (gx.test lint_only mode)
@@ -49,6 +51,12 @@ import { resolveComputeJobEnvironment } from "./job-context.ts";
 import { ApiClient } from "./api.ts";
 import { colors } from "./colors.ts";
 import { createCliLogger } from "./logging.ts";
+import {
+  base64ToBytes,
+  type CollectedSourceFile,
+  collectSourceFiles,
+  toEncodedSourceFile,
+} from "./source-files.ts";
 import { createHash } from "node:crypto";
 
 const VERSION = "2.4.0";
@@ -65,6 +73,8 @@ const commands: Record<
   login,
   logout,
   whoami,
+  project: projectCmd,
+  stage: stageCmd,
   upload,
   download: downloadCmd,
   apps,
@@ -199,6 +209,10 @@ ${colors.dim("BUILD")}
   ${
     colors.cyan("scaffold")
   } <name>    Generate a structured app skeleton (gx.download scaffold mode)
+  ${colors.cyan("project")} <app>      Get a compact coding capsule (gx.project)
+  ${
+    colors.cyan("stage")
+  } [dir]        Stage a content-addressed bundle (gx.stage)
   ${colors.cyan("upload")} [dir]       Upload app or new version (gx.upload)
   ${colors.cyan("test")} [dir]         Test functions in sandbox (gx.test)
   ${
@@ -248,9 +262,13 @@ ${colors.dim("OTHER")}
 ${colors.dim("BUILD WORKFLOW")}
   1. ${colors.cyan("galactic scaffold my-app")}        Generate skeleton
   2. Fill in function implementations
-  3. ${colors.cyan("galactic test .")}                  Verify functions work
-  4. ${colors.cyan("galactic lint .")}                  Validate conventions
-  5. ${colors.cyan("galactic upload .")}                Deploy
+  3. ${colors.cyan("galactic stage . --json")}          Stage source once
+  4. ${
+    colors.cyan("galactic test --bundle-id <id>")
+  }   Verify + get upload proof
+  5. ${
+    colors.cyan("galactic upload --bundle-id <id> --test-attestation <proof>")
+  } Deploy
 
 ${colors.dim("EXAMPLES")}
   galactic scaffold my-app --storage supabase
@@ -1029,12 +1047,111 @@ ${colors.bold("Logged in as:")}
 }
 
 // ============================================
+// PROJECT / STAGE COMMANDS
+// ============================================
+
+async function projectCmd(
+  args: string[],
+  client: ApiClient,
+  _config: Config,
+) {
+  const parsed = parseArgs(args, {
+    string: ["since"],
+    boolean: ["help", "json"],
+    alias: { h: "help", s: "since" },
+  });
+  if (parsed.help) {
+    console.log(`
+${colors.bold("galactic project")} <app-id>
+
+Get an owner-only, source-free coding capsule (gx.project). Save its revision
+and pass --since later to receive only changes.
+
+${colors.dim("OPTIONS")}
+  --since, -s <revision>  Return changes since a prior revision
+  --json                  Print raw JSON
+`);
+    return;
+  }
+  const appId = parsed._[0] as string;
+  if (!appId) throw new Error("Usage: galactic project <app-id>");
+  const result = await client.callTool("gx.project", {
+    app_id: appId,
+    view: "coding_capsule",
+    ...(parsed.since ? { since_revision: parsed.since } : {}),
+  });
+  console.log(JSON.stringify(result, null, 2));
+}
+
+async function stageCmd(args: string[], client: ApiClient, _config: Config) {
+  const parsed = parseArgs(args, {
+    string: ["base-bundle", "delete"],
+    boolean: ["help", "json"],
+    alias: { h: "help", b: "base-bundle", d: "delete" },
+  });
+  if (parsed.help) {
+    console.log(`
+${colors.bold("galactic stage")} [directory]
+
+Create a content-addressed source bundle (gx.stage). For an incremental stage,
+point directory at changed/new files, pass --base-bundle, and list deleted paths.
+
+${colors.dim("OPTIONS")}
+  --base-bundle, -b <id>  Prior bundle used as the incremental base
+  --delete, -d <paths>    Comma-separated paths to remove from the base
+  --json                  Print raw JSON
+`);
+    return;
+  }
+  const dir = (parsed._[0] as string) || ".";
+  const files = await collectSourceFiles(dir);
+  if (files.length === 0 && !parsed["base-bundle"]) {
+    throw new Error("No valid files found in directory");
+  }
+  if (files.length > 0 && !parsed["base-bundle"]) {
+    assertInterfaceEntriesPresent(files);
+  }
+  const result = await client.callTool("gx.stage", {
+    ...(files.length > 0
+      ? {
+        files: files.map(toEncodedSourceFile),
+      }
+      : {}),
+    ...(parsed["base-bundle"] ? { base_bundle_id: parsed["base-bundle"] } : {}),
+    ...(parsed.delete
+      ? {
+        delete_paths: String(parsed.delete).split(",").map((path) =>
+          path.trim()
+        )
+          .filter(Boolean),
+      }
+      : {}),
+  });
+  if (parsed.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(colors.green("✓ Source staged"));
+  console.log(`  Bundle:  ${String(result.bundle_id || "")}`);
+  console.log(`  Files:   ${String(result.file_count || 0)}`);
+  console.log(`  Expires: ${String(result.expires_at || "")}`);
+}
+
+// ============================================
 // UPLOAD COMMAND — uses gx.upload
 // ============================================
 
 async function upload(args: string[], client: ApiClient, _config: Config) {
   const parsed = parseArgs(args, {
-    string: ["name", "description", "visibility", "version", "app-id"],
+    string: [
+      "name",
+      "description",
+      "visibility",
+      "version",
+      "app-id",
+      "bundle-id",
+      "test-attestation",
+    ],
     boolean: ["help"],
     alias: {
       n: "name",
@@ -1062,6 +1179,8 @@ ${colors.dim("OPTIONS")}
   --visibility, -v      Visibility: private, unlisted, published (default: private)
   --version             Explicit version (e.g. "2.0.0"). Default: patch bump
   --app-id, -a          Existing app ID or slug (auto-detected from .galacticrc.json)
+  --bundle-id           Staged source bundle (skips directory upload)
+  --test-attestation    Proof returned by gx.test for this exact bundle
 
 ${colors.dim("EXAMPLES")}
   galactic upload                       # Upload current directory as new app
@@ -1073,12 +1192,13 @@ ${colors.dim("EXAMPLES")}
   }
 
   const dir = parsed._[0] as string || ".";
-  const files = await collectFiles(dir);
+  const bundleId = parsed["bundle-id"] as string | undefined;
+  const files = bundleId ? [] : await collectSourceFiles(dir);
 
-  if (files.length === 0) {
+  if (!bundleId && files.length === 0) {
     throw new Error("No valid files found in directory");
   }
-  assertInterfaceEntriesPresent(files);
+  if (!bundleId) assertInterfaceEntriesPresent(files);
 
   // Check if this is an existing app (has a project rc file or --app-id)
   let appId: string | undefined = parsed["app-id"] as string | undefined;
@@ -1088,23 +1208,27 @@ ${colors.dim("EXAMPLES")}
 
   console.log(
     colors.dim(
-      `Uploading ${files.length} files${
-        appId ? ` to ${appId}` : " (new app)"
-      }...`,
+      `${
+        bundleId
+          ? `Deploying bundle ${bundleId}`
+          : `Uploading ${files.length} files`
+      }${appId ? ` to ${appId}` : " (new app)"}...`,
     ),
   );
 
-  const toolArgs: Record<string, unknown> = {
-    files: files.map((f) => ({
-      path: f.name,
-      content: f.content,
-    })),
-  };
+  const toolArgs: Record<string, unknown> = bundleId
+    ? { bundle_id: bundleId }
+    : {
+      files: files.map(toEncodedSourceFile),
+    };
   if (appId) toolArgs.app_id = appId;
   if (parsed.name) toolArgs.name = parsed.name;
   if (parsed.description) toolArgs.description = parsed.description;
   if (parsed.visibility) toolArgs.visibility = parsed.visibility;
   if (parsed.version) toolArgs.version = parsed.version;
+  if (parsed["test-attestation"]) {
+    toolArgs.test_attestation = parsed["test-attestation"];
+  }
 
   const result = await client.callTool("gx.upload", toolArgs);
 
@@ -1191,7 +1315,7 @@ ${colors.dim("EXAMPLES")}
   const result = await client.callTool("gx.download", toolArgs);
 
   const downloadFiles = result.files as Array<
-    { path: string; content: string }
+    { path: string; content: string; encoding?: "base64" }
   >;
   if (!downloadFiles || downloadFiles.length === 0) {
     throw new Error("No files returned. You may not have download access.");
@@ -1209,7 +1333,11 @@ ${colors.dim("EXAMPLES")}
     if (dirPart !== outputDir) {
       await Deno.mkdir(dirPart, { recursive: true });
     }
-    await Deno.writeTextFile(filePath, file.content);
+    if (file.encoding === "base64") {
+      await Deno.writeFile(filePath, base64ToBytes(file.content));
+    } else {
+      await Deno.writeTextFile(filePath, file.content);
+    }
     console.log(colors.dim(`  ${filePath}`));
   }
 
@@ -1224,9 +1352,15 @@ ${colors.dim("EXAMPLES")}
 // VERIFY COMMAND — uses gx.verify (+ gx.download for open code)
 // ============================================
 
-async function sha256HexLocal(content: string): Promise<string> {
-  const bytes = new TextEncoder().encode(content);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+async function sha256HexLocal(content: string | Uint8Array): Promise<string> {
+  const bytes = typeof content === "string"
+    ? new TextEncoder().encode(content)
+    : content;
+  const digestInput = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+  const digest = await crypto.subtle.digest("SHA-256", digestInput);
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
@@ -1313,7 +1447,11 @@ ${colors.dim("EXAMPLES")}
   const dlArgs: Record<string, unknown> = { app_id: appId };
   if (verdict.version) dlArgs.version = verdict.version;
   const dl = await client.callTool("gx.download", dlArgs);
-  const files = (dl.files as Array<{ path: string; content: string }>) || [];
+  const files = (dl.files as Array<{
+    path: string;
+    content: string;
+    encoding?: "base64";
+  }>) || [];
   const ver = (dl.verification ?? {}) as Record<string, unknown>;
   const claims = new Map<string, { sha256?: string; matches?: boolean }>();
   for (const f of (ver.files as Array<Record<string, unknown>>) || []) {
@@ -1325,7 +1463,9 @@ ${colors.dim("EXAMPLES")}
 
   let allOk = files.length > 0;
   for (const file of files) {
-    const localHash = await sha256HexLocal(file.content);
+    const localHash = await sha256HexLocal(
+      file.encoding === "base64" ? base64ToBytes(file.content) : file.content,
+    );
     const claim = claims.get(file.path);
     // The bytes must (a) recompute to the platform's stated sha256 [pure, no
     // secret] AND (b) match the signed published hash [platform attestation].
@@ -1369,7 +1509,7 @@ ${colors.dim("EXAMPLES")}
 
 async function testCmd(args: string[], client: ApiClient, _config: Config) {
   const parsed = parseArgs(args, {
-    string: ["function"],
+    string: ["function", "bundle-id"],
     boolean: ["help", "json"],
     alias: { f: "function", h: "help" },
   });
@@ -1383,6 +1523,7 @@ Supports all sandbox globals (fetch, crypto, lodash, dateFns, etc).
 
 ${colors.dim("OPTIONS")}
   --function, -f <name>  Function to test (with optional JSON args after)
+  --bundle-id <id>       Test source previously uploaded with galactic stage
   --json                 Output raw JSON result
 
 ${colors.dim("EXAMPLES")}
@@ -1399,8 +1540,9 @@ ${colors.dim("EXAMPLES")}
     dir = positional[0];
   }
 
-  const files = await collectFiles(dir);
-  if (files.length === 0) {
+  const bundleId = parsed["bundle-id"] as string | undefined;
+  const files = bundleId ? [] : await collectSourceFiles(dir);
+  if (!bundleId && files.length === 0) {
     throw new Error("No valid files found in directory");
   }
 
@@ -1425,9 +1567,11 @@ ${colors.dim("EXAMPLES")}
   console.log();
 
   // gx.test uses function_name and test_args
-  const toolArgs: Record<string, unknown> = {
-    files: files.map((f) => ({ path: f.name, content: f.content })),
-  };
+  const toolArgs: Record<string, unknown> = bundleId
+    ? { bundle_id: bundleId }
+    : {
+      files: files.map(toEncodedSourceFile),
+    };
   if (fnName) {
     toolArgs.function_name = fnName;
     if (fnArgs) toolArgs.test_args = fnArgs;
@@ -1447,6 +1591,14 @@ ${colors.dim("EXAMPLES")}
     );
     if (result.exports) {
       console.log(`  Exports: ${(result.exports as string[]).join(", ")}`);
+    }
+    if (
+      typeof result.test_attestation === "string" &&
+      result.test_attestation.length > 0
+    ) {
+      console.log();
+      console.log(colors.dim("Test attestation (required for upload):"));
+      console.log(result.test_attestation);
     }
     if (result.result !== undefined) {
       console.log();
@@ -1503,7 +1655,7 @@ ${colors.dim("EXAMPLES")}
   }
 
   const dir = (parsed._[0] as string) || ".";
-  const files = await collectFiles(dir);
+  const files = await collectSourceFiles(dir);
   if (files.length === 0) {
     throw new Error("No valid files found in directory");
   }
@@ -1512,7 +1664,7 @@ ${colors.dim("EXAMPLES")}
   console.log();
 
   const result = await callPlatformLint(client, {
-    files: files.map((f) => ({ path: f.name, content: f.content })),
+    files: files.map(toEncodedSourceFile),
     strict: parsed.strict || false,
   });
 
@@ -2130,7 +2282,7 @@ async function draft(args: string[], client: ApiClient, _config: Config) {
         );
       }
 
-      const files = await collectFiles(dir);
+      const files = await collectSourceFiles(dir);
       if (files.length === 0) {
         throw new Error("No valid files found in directory");
       }
@@ -2141,7 +2293,7 @@ async function draft(args: string[], client: ApiClient, _config: Config) {
       // gx.upload with app_id creates new version (not set live)
       const result = await client.callTool("gx.upload", {
         app_id: appId,
-        files: files.map((f) => ({ path: f.name, content: f.content })),
+        files: files.map(toEncodedSourceFile),
       });
 
       console.log();
@@ -2679,9 +2831,7 @@ ${colors.dim("OPTIONS")}
         colors.dim(
           [
             String(diagnosis.code || ""),
-            diagnosis.causeCode
-              ? `cause ${String(diagnosis.causeCode)}`
-              : "",
+            diagnosis.causeCode ? `cause ${String(diagnosis.causeCode)}` : "",
             diagnosis.provenance
               ? `source ${String(diagnosis.provenance)}`
               : "",
@@ -3232,65 +3382,13 @@ async function writeAppRc(
   }
 }
 
-async function collectFiles(
-  dir: string,
-): Promise<Array<{ name: string; content: string; size: number }>> {
-  const files: Array<{ name: string; content: string; size: number }> = [];
-  // D1 apps depend on SQL migrations being uploaded alongside their source.
-  const allowedExtensions = [
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".json",
-    ".md",
-    ".css",
-    ".html",
-    ".sql",
-  ];
-  const ignoreDirs = [
-    "node_modules",
-    ".git",
-    "dist",
-    "build",
-    ".galactic",
-    ".ultralight",
-  ];
-
-  async function walk(path: string, base: string) {
-    for await (const entry of Deno.readDir(path)) {
-      const fullPath = `${path}/${entry.name}`;
-      const relativePath = base ? `${base}/${entry.name}` : entry.name;
-
-      if (entry.isDirectory) {
-        if (!ignoreDirs.includes(entry.name)) {
-          await walk(fullPath, relativePath);
-        }
-      } else if (entry.isFile) {
-        const ext = entry.name.substring(entry.name.lastIndexOf("."));
-        if (allowedExtensions.includes(ext)) {
-          const content = await Deno.readTextFile(fullPath);
-          files.push({
-            name: relativePath,
-            content,
-            size: content.length,
-          });
-        }
-      }
-    }
-  }
-
-  await walk(dir, "");
-  return files;
-}
-
 // Fail loudly before upload if the manifest declares an interface whose entry
 // file isn't in the collected set. The original bug was a SILENT drop of .html
 // files ("Uploading 2 files" with no interface), surfacing only as a broken
 // agent later. This mirrors the server-side check in interface-artifacts.ts so
 // the developer catches it locally with a clear, file-named message.
 function assertInterfaceEntriesPresent(
-  files: Array<{ name: string; content: string; size: number }>,
+  files: CollectedSourceFile[],
 ): void {
   const manifestFile = files.find((f) => f.name === "manifest.json");
   if (!manifestFile) return;

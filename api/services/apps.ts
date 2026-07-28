@@ -2,7 +2,11 @@
 // Handles app CRUD operations via Supabase
 
 import { getEnv } from "../lib/env.ts";
-import type { App, AppWithDraft } from "../../shared/types/index.ts";
+import type {
+  App,
+  AppWithDraft,
+  VersionMetadata,
+} from "../../shared/types/index.ts";
 import {
   searchToolSemanticEmbeddings,
   type ToolSemanticEmbeddingRow,
@@ -213,6 +217,60 @@ export class AppsService {
   }
 
   /**
+   * Compare-and-swap version metadata against the app revision observed by the
+   * caller. Returning false means another writer won and the caller must reload
+   * before retrying; this prevents a stale metadata array from erasing a
+   * concurrent staged version.
+   */
+  async compareAndSwapVersionMetadata(input: {
+    appId: string;
+    ownerId: string;
+    expectedUpdatedAt: string;
+    expectedCurrentVersion: string | null;
+    versionMetadata: VersionMetadata[];
+  }): Promise<boolean> {
+    const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
+    url.searchParams.set("id", `eq.${input.appId}`);
+    url.searchParams.set("owner_id", `eq.${input.ownerId}`);
+    url.searchParams.set("deleted_at", "is.null");
+    url.searchParams.set("updated_at", `eq.${input.expectedUpdatedAt}`);
+    url.searchParams.set(
+      "current_version",
+      input.expectedCurrentVersion === null
+        ? "is.null"
+        : `eq.${input.expectedCurrentVersion}`,
+    );
+
+    const expectedMillis = Date.parse(input.expectedUpdatedAt);
+    const nextUpdatedAt = new Date(
+      Math.max(
+        Date.now(),
+        Number.isFinite(expectedMillis) ? expectedMillis + 1 : Date.now(),
+      ),
+    ).toISOString();
+    const response = await fetch(url.toString(), {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+      },
+      body: JSON.stringify({
+        version_metadata: input.versionMetadata,
+        updated_at: nextUpdatedAt,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`App version metadata CAS failed: ${error}`);
+    }
+    const results = await response.json() as App[];
+    return results.length === 1;
+  }
+
+  /**
    * Increment run count using Supabase RPC for atomic increment
    */
   async incrementRuns(appId: string): Promise<void> {
@@ -267,6 +325,7 @@ export class AppsService {
     const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
     url.searchParams.set("owner_id", `eq.${ownerId}`);
     url.searchParams.set("slug", `eq.${slug}`);
+    url.searchParams.set("deleted_at", "is.null");
     url.searchParams.set("select", "*");
     url.searchParams.set("limit", "1");
 

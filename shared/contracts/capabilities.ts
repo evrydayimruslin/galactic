@@ -11,14 +11,14 @@
 
 import type { MCPJsonSchema, MCPToolAnnotations } from "./mcp.ts";
 
-/** Where a capability is exposed. Tier-1 capabilities declare all three. */
+/** Where a capability is exposed; selected parity targets declare all three. */
 export type CapabilitySurface = "mcp" | "cli" | "web";
 
 /** Which gx.* family a capability groups under (presentation/grouping only). */
 export type CapabilityBranch = "ownership" | "agent_user" | "platform_user";
 
 /**
- * 1 = pure-API, parity on all three surfaces.
+ * 1 = API-first; its declared surfaces are projected from this registry.
  * 2 = sensitive mutation (money / keys / authorizing others) — website only.
  * 3 = interaction-bound (Stripe, OAuth) — website only.
  */
@@ -35,6 +35,7 @@ export type CapabilityErrorCode =
   | "forbidden"
   | "conflict"
   | "rate_limited"
+  | "quota_exceeded"
   | "internal";
 
 export class CapabilityError extends Error {
@@ -56,6 +57,15 @@ export interface CapabilityContext {
    * arrive through another supported transport (for example an auth cookie).
    */
   authSource?: "supabase" | "api_token" | "routine_actor" | "sandbox_actor";
+  /**
+   * Surface-verified API-key bounds for honest progressive discovery.
+   * Capability handlers may project these limits but must not treat them as a
+   * replacement for dispatch authorization.
+   */
+  authorization?: {
+    scopes?: string[];
+    appIds?: string[] | null;
+  };
   /** The surface the call arrived on — for telemetry, never for authorization. */
   surface: CapabilitySurface;
   /**

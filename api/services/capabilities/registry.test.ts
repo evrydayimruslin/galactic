@@ -1,11 +1,13 @@
 // Parity test harness for the capability registry.
 //
-// The durable win of the registry is that "Tier-1 parity" becomes an enforced
-// invariant instead of a hand-audited hope: a Tier-1 capability that isn't
-// projected onto all three surfaces fails this test. PR 0 migrates `verify`;
-// each later PR adds capabilities and this test keeps them honest.
+// The durable win of the registry is that intended full-surface parity becomes
+// an enforced invariant instead of a hand-audited hope: a capability in the
+// explicit PARITY_TARGETS set must project onto all three surfaces.
 
-import { assert, assertEquals } from "https://deno.land/std@0.210.0/assert/mod.ts";
+import {
+  assert,
+  assertEquals,
+} from "https://deno.land/std@0.210.0/assert/mod.ts";
 import {
   getCapabilityById,
   getCapabilityByToolName,
@@ -48,7 +50,10 @@ Deno.test("registry: each declared surface has a projection descriptor", () => {
     }
     // CLI: needs a command binding.
     if (cap.surfaces.includes("cli")) {
-      assert(cap.cli?.command, `"${cap.id}" declares cli but has no cli.command`);
+      assert(
+        cap.cli?.command,
+        `"${cap.id}" declares cli but has no cli.command`,
+      );
     }
     // Web: needs a route descriptor.
     if (cap.surfaces.includes("web")) {
@@ -154,4 +159,36 @@ Deno.test("registry: toMcpTool produces a well-formed tools/list entry", () => {
   assertEquals(tool.inputSchema.required, ["app_id"]);
   assertEquals(tool.annotations?.readOnlyHint, true);
   assert(tool.description.length > 0);
+});
+
+Deno.test("registry: builder primitives advertise machine-readable output contracts", () => {
+  const project = toMcpTool(getCapabilityById("project")!);
+  assertEquals(project.outputSchema?.required, [
+    "view",
+    "app_id",
+    "revision",
+    "revision_created_at",
+    "revision_expires_at",
+  ]);
+  assertEquals(
+    project.outputSchema?.properties?.removed_paths?.items?.type,
+    "string",
+  );
+
+  const stage = toMcpTool(getCapabilityById("stage")!);
+  assertEquals(stage.outputSchema?.required, [
+    "bundle_id",
+    "source_hash",
+    "file_count",
+    "size_bytes",
+    "changed_files",
+    "reused_files",
+    "deleted_files",
+    "created_at",
+    "expires_at",
+  ]);
+  assertEquals(
+    stage.outputSchema?.properties?.changed_files?.items?.type,
+    "string",
+  );
 });

@@ -36,11 +36,17 @@ async function signed(overrides: {
 }
 
 Deno.test("test attestation: decoded text and base64 uploads hash identically", async () => {
-  const text = decodeSourceFileSet(FILES);
+  const unicodeFiles = [
+    ...FILES,
+    { path: "message.txt", content: "Galactic 🪐" },
+  ];
+  const text = decodeSourceFileSet(unicodeFiles);
   const encoded = decodeSourceFileSet(
-    FILES.map((file) => ({
+    unicodeFiles.map((file) => ({
       path: file.path,
-      content: btoa(file.content),
+      content: btoa(String.fromCharCode(
+        ...new TextEncoder().encode(file.content),
+      )),
       encoding: "base64",
     })),
   );
@@ -50,16 +56,43 @@ Deno.test("test attestation: decoded text and base64 uploads hash identically", 
   );
 });
 
+Deno.test("test attestation: wasm base64 preserves exact non-UTF-8 bytes", async () => {
+  const bytes = new Uint8Array([0, 97, 255, 128]);
+  const decoded = decodeSourceFileSet([
+    { path: "module.wasm", content: "AGH/gA==", encoding: "base64" },
+  ]);
+
+  assertEquals(decoded[0].bytes, bytes);
+  assertEquals(
+    await computeDecodedSourceHash(decoded),
+    await computeDecodedSourceHash([{
+      path: "module.wasm",
+      content: "",
+      bytes,
+    }]),
+  );
+
+  let message = "";
+  try {
+    decodeSourceFileSet([{ path: "module.wasm", content: "\0aÿ\u0080" }]);
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  assert(message.includes("must use base64 encoding"));
+});
+
 Deno.test("test attestation: source paths must be exact canonical relative POSIX paths", () => {
-  for (const path of [
-    " ../index.ts",
-    "../index.ts",
-    "src/../index.ts",
-    "src//index.ts",
-    "/index.ts",
-    "src\\index.ts",
-    "src/./index.ts",
-  ]) {
+  for (
+    const path of [
+      " ../index.ts",
+      "../index.ts",
+      "src/../index.ts",
+      "src//index.ts",
+      "/index.ts",
+      "src\\index.ts",
+      "src/./index.ts",
+    ]
+  ) {
     let message = "";
     try {
       decodeSourceFileSet([{ path, content: "export {};" }]);

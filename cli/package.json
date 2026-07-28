@@ -51,6 +51,7 @@
     "config.ts",
     "logging.ts",
     "job-context.ts",
+    "source-files.ts",
     "deno.lock",
     "skills.md"
   ]

@@ -103,20 +103,48 @@ Three-layer discovery for authenticated agents:
 
 ```bash
 # 1. Generate a skeleton following all platform conventions
-ultralight scaffold my-app --storage supabase
+galactic scaffold my-app --storage supabase
 
 # 2. Fill in your function implementations
 # ... edit index.ts ...
 
-# 3. Test without deploying
-ultralight test . --function hello '{"name":"World"}'
+# 3. Upload source once as an immutable, content-addressed bundle
+galactic stage . --json
+# Save the returned bundle_id.
 
-# 4. Validate against conventions
-ultralight lint . --strict
+# 4. Test that exact bundle without retransmitting its files
+galactic test --bundle-id gxb1_... --function hello '{"name":"World"}' --json
+# Save the returned test_attestation.
 
-# 5. Deploy
-ultralight upload .
+# 5. Deploy the exact tested bundle
+galactic upload --bundle-id gxb1_... --test-attestation eyJ...
 ```
+
+For an existing Agent, start with
+`galactic project <app-id> --json`. It returns an owner-only coding capsule:
+the current directive, function contracts, data schema, access and model
+policies, routines, recent failures, release state, and file hashes—without
+source contents, secrets, stored data, or full logs. Save its `revision`; later
+calls with `--since <revision>` return only changes. Each response also reports
+the revision's 30-day expiry.
+
+Incremental builds send only changed/new files:
+
+```bash
+galactic stage ./changed-files \
+  --base-bundle gxb1_previous \
+  --delete obsolete.ts \
+  --json
+```
+
+Direct `files` calls to `gx.test` and `gx.upload` remain supported for
+compatibility. The staged workflow is preferred for coding agents because the
+source crosses the connection once. Staging has a 24-hour lease, atomic
+owner-scoped storage admission, and a dedicated rate limit; incremental
+manifests refresh every referenced blob before publication.
+
+Complete contracts, response envelopes, security invariants, and retention
+requirements: [Builder Milestone 1](docs/BUILDER_MILESTONE_1.md).
 
 ### Critical Function Pattern
 
@@ -138,29 +166,51 @@ Return values must use explicit `key: value` form (no shorthand) for IIFE bundli
 
 ## In-App SDK
 
-Every app gets the `ultralight` global at runtime:
+Every Agent gets the `galactic` global at runtime (`ultralight` remains an
+alias):
 
 ```typescript
 // Storage (per-app key-value store)
-await ultralight.store("key", { any: "value" });
-const data = await ultralight.load("key");
-const keys = await ultralight.list("prefix/");
+await galactic.store("key", { any: "value" });
+const data = await galactic.load("key");
+const keys = await galactic.list("prefix/");
 
 // AI (BYOK providers when configured; otherwise credits-billed OpenRouter)
-const response = await ultralight.ai({
+const response = await galactic.ai({
   model: "openai/gpt-4o",
   messages: [{ role: "user", content: "Summarize this" }],
 });
 
+// Provider-native strict structured output (no prompt-only JSON fallback)
+const invoice = await galactic.ai<{
+  id: string;
+  total: number;
+}>({
+  messages: [{ role: "user", content: "Extract invoice INV-42 for $125." }],
+  output_schema: {
+    name: "invoice",
+    schema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        total: { type: "number" },
+      },
+      required: ["id", "total"],
+      additionalProperties: false,
+    },
+  },
+});
+console.log(invoice.output);
+
 // Cross-app memory (scoped to calling user)
-await ultralight.remember("preference", "dark-mode");
-const pref = await ultralight.recall("preference");
+await galactic.remember("preference", "dark-mode");
+const pref = await galactic.recall("preference");
 
 // Supabase (BYOS — Bring Your Own Supabase)
 const { data } = await supabase.from("table").select("*");
 
 // User context
-const user = ultralight.user; // { email, name, tier, ... }
+const user = galactic.user; // { email, name, tier, ... }
 ```
 
 ---
@@ -172,11 +222,15 @@ The platform itself is an MCP server at `POST /mcp/platform`:
 ### Build & Deploy
 | Tool | Description |
 |------|-------------|
-| `ul.download({ name, description, ... })` | Generate a structured app skeleton when `app_id` is omitted |
-| `ul.upload` | Upload code to create or update an app |
-| `ul.test({ files, function_name, ... })` | Test functions in sandbox without deploying |
-| `ul.test({ files, lint_only: true, ... })` | Validate code against platform conventions |
-| `ul.download({ app_id, version? })` | Download source code |
+| `gx.project({ app_id, since_revision? })` | Get an owner-only coding capsule or revision delta |
+| `gx.download({ name, description, ... })` | Generate a structured Agent skeleton when `app_id` is omitted |
+| `gx.stage({ files?, base_bundle_id?, delete_paths? })` | Upload source once or stage an incremental content-addressed bundle |
+| `gx.test({ bundle_id, function_name, ... })` | Test staged source without retransmitting files |
+| `gx.upload({ bundle_id, test_attestation, ... })` | Deploy the exact tested bundle |
+| `gx.download({ app_id, version? })` | Download source only when its contents are needed |
+
+Canonical platform tool names use `gx.*`; the older `ul.*` names remain
+accepted aliases.
 
 ### Discovery
 | Tool | Description |
@@ -261,8 +315,10 @@ ultralight setup --token ul_xxx       # Authenticate + configure agent MCP conne
 ```bash
 ultralight login --token ul_xxx       # Authenticate
 ultralight scaffold my-app            # Generate skeleton
-ultralight upload .                   # Deploy
-ultralight test . -f hello            # Test a function
+galactic project my-app               # Compact context for an existing Agent
+galactic stage . --json               # Upload source once and get bundle_id
+galactic test --bundle-id gxb1_... -f hello --json
+galactic upload --bundle-id gxb1_... --test-attestation eyJ...
 ultralight lint . --strict            # Validate conventions
 
 ultralight discover "weather API"     # Search App Store

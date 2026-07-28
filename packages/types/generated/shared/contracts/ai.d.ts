@@ -21,13 +21,26 @@ export interface AITool {
     description: string;
     parameters: Record<string, unknown>;
 }
+export interface AIOutputSchema {
+    /** Provider-visible name. Starts with letter/_; then alphanumeric/_/-, max 64. */
+    name: string;
+    /** JSON Schema enforced by the provider and verified again by Galactic. */
+    schema: Record<string, unknown> | boolean;
+    /** Structured output is always strict. Omit or set true. */
+    strict?: true;
+}
+export type AIStructuredOutputErrorCode = "invalid_output_schema" | "structured_output_unsupported" | "structured_output_invalid_json" | "structured_output_schema_mismatch";
 export interface AIRequest {
     model?: string;
     messages: AIMessage[];
     temperature?: number;
     max_tokens?: number;
     tools?: AITool[];
+    output_schema?: AIOutputSchema;
 }
+export type AIStructuredRequest = Omit<AIRequest, "output_schema"> & {
+    output_schema: AIOutputSchema;
+};
 export interface AIUsage {
     input_tokens: number;
     output_tokens: number;
@@ -35,12 +48,23 @@ export interface AIUsage {
     prompt_cache_hit_tokens?: number;
     prompt_cache_miss_tokens?: number;
 }
-export interface AIResponse {
+export interface AIResponse<Output = unknown> {
     content: string;
     model: string;
     usage: AIUsage;
+    /** Parsed, schema-validated value when output_schema was supplied. */
+    output?: Output;
     error?: string;
+    error_code?: AIStructuredOutputErrorCode;
 }
+/**
+ * A successful SDK call with output_schema always includes the locally
+ * verified value. Runtime SDK implementations throw before returning error
+ * responses, so callers can consume output without an optional-value branch.
+ */
+export type AIStructuredResponse<Output = unknown> = AIResponse<Output> & {
+    output: Output;
+};
 export interface ChatStreamRequest {
     model: string;
     messages: ChatMessage[];

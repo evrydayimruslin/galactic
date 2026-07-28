@@ -17,7 +17,7 @@ import type { RuntimeConfig } from "./sandbox.ts";
 
 // Bump this in lockstep with SANDBOX_TEMPLATE_VERSION whenever the generated
 // setup.js / wrapper.js template changes.
-const PINNED_TEMPLATE_VERSION = "2026-07-25.compute-rpc-envelope.v14";
+const PINNED_TEMPLATE_VERSION = "2026-07-27.compute-rpc-structured-output.v16";
 
 // Stable separator between the two captured modules for the snapshot hash.
 const SEP = "\n----MODULE-BOUNDARY----\n";
@@ -28,7 +28,14 @@ interface Captured {
   runs: number;
 }
 
-function installHarness(): { captured: Captured; restore: () => void } {
+function installHarness(
+  responseBody: Record<string, unknown> = {
+    success: true,
+    result: "ok",
+    logs: [],
+    aiCostLight: 0,
+  },
+): { captured: Captured; restore: () => void } {
   const captured: Captured = { setup: "", wrapper: "", runs: 0 };
   const prevEnv = globalThis.__env;
   const prevCtx = globalThis.__ctx;
@@ -47,12 +54,7 @@ function installHarness(): { captured: Captured; restore: () => void } {
             fetch: () =>
               Promise.resolve(
                 new Response(
-                  JSON.stringify({
-                    success: true,
-                    result: "ok",
-                    logs: [],
-                    aiCostLight: 0,
-                  }),
+                  JSON.stringify(responseBody),
                   { headers: { "Content-Type": "application/json" } },
                 ),
               ),
@@ -171,6 +173,46 @@ Deno.test("sandbox template: warm-isolate requests serialize compatibility globa
   }
 });
 
+Deno.test("sandbox template: structured-output error codes cross the worker boundary", async () => {
+  const h = installHarness();
+  try {
+    await executeInDynamicSandbox(fixedConfig(), "noop", []);
+    assert(
+      h.captured.setup.includes("err.code = resp.error_code"),
+      "SDK wrapper must copy AI response error_code onto the thrown Error",
+    );
+    assert(
+      h.captured.wrapper.includes(
+        "typeof err.code === 'string' ? { code: err.code }",
+      ),
+      "execution envelope must preserve a thrown Error code",
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+Deno.test("dynamic sandbox: execution result preserves worker error code", async () => {
+  const h = installHarness({
+    success: false,
+    result: null,
+    logs: [],
+    aiCostLight: 0,
+    error: {
+      type: "Error",
+      message: "Structured output failed",
+      code: "structured_output_schema_mismatch",
+    },
+  });
+  try {
+    const result = await executeInDynamicSandbox(fixedConfig(), "noop", []);
+    assertEquals(result.success, false);
+    assertEquals(result.error?.code, "structured_output_schema_mismatch");
+  } finally {
+    h.restore();
+  }
+});
+
 Deno.test("sandbox template: every generated JavaScript module parses", async () => {
   const h = installHarness();
   try {
@@ -218,10 +260,10 @@ Deno.test("sandbox template: snapshot pinned -- a template change must bump SAND
     // TEMPLATE_HASH below to the new value. This forces the reuse key to rotate
     // so a cached old isolate cannot serve new template content.
     const TEMPLATE_HASH =
-      "2253c6df83390d866a832d276f9b34f59894b299f019287a46bc0c0063a3f418";
+      "1c4927448b83eb289142069622109d790c669437c8d09b7853a83e4acc92499b";
     assertEquals(
       PINNED_TEMPLATE_VERSION,
-      "2026-07-25.compute-rpc-envelope.v14",
+      "2026-07-27.compute-rpc-structured-output.v16",
       "PINNED_TEMPLATE_VERSION drifted from the pinned literal",
     );
     assertEquals(

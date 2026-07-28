@@ -25,12 +25,21 @@ import {
   loadLiveExecutedBundle,
   verifyExecutedBundle,
 } from "./executed-bundle.ts";
+import {
+  bytesToBase64,
+  isBinarySourcePath,
+  sourceFileBytes,
+} from "./source-file-content.ts";
 
 const INTERNAL_ARTIFACTS = ["skills.md", "library.txt", "embedding.json"];
 
 export interface DownloadedFile {
   path: string;
   content: string;
+  /** Binary download transport; omitted for UTF-8 text. */
+  encoding?: "base64";
+  /** Internal authoritative payload used for local verification. */
+  bytes?: Uint8Array;
   // The R2 relative key the bytes came from (e.g. `_source_index.ts`). This is
   // the key the file was SIGNED under in artifact_hashes — matching must use it,
   // not the display path, so the readable SOURCE is matched against its own
@@ -69,13 +78,29 @@ export async function readVersionSourceFiles(
   const files: DownloadedFile[] = [];
   for (const relativePath of relativePaths) {
     const isOriginal = relativePath.startsWith("_source_");
-    const cleanPath = isOriginal ? relativePath.replace(/^_source_/, "") : relativePath;
+    const cleanPath = isOriginal
+      ? relativePath.replace(/^_source_/, "")
+      : relativePath;
     if (INTERNAL_ARTIFACTS.includes(cleanPath)) continue;
     // Drop generated bundles (only matched when a `_source_` original exists).
     if (!isOriginal && generatedBundles.has(relativePath)) continue;
     try {
-      const content = await r2Service.fetchTextFile(storageKey + relativePath);
-      files.push({ path: cleanPath, content, sourceKey: relativePath });
+      const bytes = await r2Service.fetchFile(storageKey + relativePath);
+      if (isBinarySourcePath(cleanPath)) {
+        files.push({
+          path: cleanPath,
+          content: bytesToBase64(bytes),
+          encoding: "base64",
+          bytes,
+          sourceKey: relativePath,
+        });
+      } else {
+        files.push({
+          path: cleanPath,
+          content: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+          sourceKey: relativePath,
+        });
+      }
     } catch {
       // skip unreadable
     }
@@ -103,15 +128,21 @@ export interface FileMatchResult {
 // unsigned file => not a full match — conservative, so divergence can never read
 // as "verified").
 export async function matchFilesAgainstHashes(
-  files: Array<{ path: string; content: string; sourceKey?: string }>,
+  files: Array<{
+    path: string;
+    content: string;
+    bytes?: Uint8Array;
+    sourceKey?: string;
+  }>,
   artifactHashes: Record<string, string>,
 ): Promise<FileMatchResult> {
   const out: FileHashMatch[] = [];
   for (const file of files) {
-    const sha = await sha256Hex(file.content);
-    const published = (file.sourceKey ? artifactHashes[file.sourceKey] : undefined) ??
-      artifactHashes[file.path] ??
-      artifactHashes[`_source_${file.path}`] ?? null;
+    const sha = await sha256Hex(sourceFileBytes(file));
+    const published =
+      (file.sourceKey ? artifactHashes[file.sourceKey] : undefined) ??
+        artifactHashes[file.path] ??
+        artifactHashes[`_source_${file.path}`] ?? null;
     out.push({
       path: file.path,
       sha256: sha,
@@ -129,7 +160,9 @@ export function getVersionTrust(
   app: Pick<App, "current_version" | "version_metadata">,
   version: string,
 ): VersionTrustMetadata | null {
-  const metadata = Array.isArray(app.version_metadata) ? app.version_metadata : [];
+  const metadata = Array.isArray(app.version_metadata)
+    ? app.version_metadata
+    : [];
   for (let i = metadata.length - 1; i >= 0; i--) {
     const entry = metadata[i];
     if (entry?.version === version && entry.trust) return entry.trust;
@@ -206,7 +239,11 @@ function buildGuidance(
 const FILE_MATCH_TTL_MS = 60_000;
 const FILE_MATCH_CACHE = new Map<
   string,
-  { at: number; filesMatch: boolean; fileMatches: Array<{ path: string; matches: boolean }> }
+  {
+    at: number;
+    filesMatch: boolean;
+    fileMatches: Array<{ path: string; matches: boolean }>;
+  }
 >();
 
 export function __resetFileMatchCacheForTest(): void {
@@ -217,7 +254,12 @@ async function openCodeFilesMatch(
   appId: string,
   version: string,
   trust: VersionTrustMetadata,
-): Promise<{ filesMatch: boolean; fileMatches: Array<{ path: string; matches: boolean }> }> {
+): Promise<
+  {
+    filesMatch: boolean;
+    fileMatches: Array<{ path: string; matches: boolean }>;
+  }
+> {
   const key = `${appId}:${version}:${trust.artifact_hash ?? ""}`;
   const cached = FILE_MATCH_CACHE.get(key);
   if (cached && Date.now() - cached.at < FILE_MATCH_TTL_MS) {
@@ -227,7 +269,10 @@ async function openCodeFilesMatch(
   const matched = await matchFilesAgainstHashes(source, trust.artifact_hashes);
   const result = {
     filesMatch: matched.all_match,
-    fileMatches: matched.files.map((f) => ({ path: f.path, matches: f.matches })),
+    fileMatches: matched.files.map((f) => ({
+      path: f.path,
+      matches: f.matches,
+    })),
   };
   FILE_MATCH_CACHE.set(key, { at: Date.now(), ...result });
   return result;
@@ -262,7 +307,9 @@ export async function buildVerificationVerdict(
   const executedOk = executedStatus === "ok";
 
   const trust = getVersionTrust(app, version);
-  const signatureValid = trust ? await verifyVersionTrustSignature(trust) : false;
+  const signatureValid = trust
+    ? await verifyVersionTrustSignature(trust)
+    : false;
 
   const openCode = app.download_access === "public";
   let filesMatch: boolean | null = null;
@@ -357,7 +404,8 @@ export async function recordVerification(input: {
           user_id: input.userId,
           version: input.version || "",
           files_match: input.verdict.files_match,
-          executed_bundle_status: input.verdict.integrity.executed_bundle_status,
+          executed_bundle_status:
+            input.verdict.integrity.executed_bundle_status,
           signature_valid: input.verdict.integrity.published_signature_valid,
           open_code: input.verdict.open_code,
           verified_at: new Date().toISOString(),

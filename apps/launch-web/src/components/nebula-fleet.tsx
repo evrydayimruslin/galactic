@@ -3172,7 +3172,7 @@ function AgentOverviewPane({
   );
 }
 
-function AgentAccessSettingEditor({
+export function AgentAccessSettingEditor({
   agent,
   onClose,
   onSaved,
@@ -3322,7 +3322,7 @@ function StaleAgentItem({
   );
 }
 
-function InterfacesPane({
+export function InterfacesPane({
   agent,
   favoriteInterfaceIds,
   interfaces,
@@ -3856,7 +3856,7 @@ function InterfaceViewer({
   );
 }
 
-function RoutinesPane({
+export function RoutinesPane({
   agent,
   itemId,
   live,
@@ -4229,17 +4229,19 @@ function functionBadges(
   return badges;
 }
 
-function FunctionsPane({
+export function FunctionsPane({
   agent,
   functions,
   itemId,
   live,
+  onAddFunction,
   onNavigate,
 }: {
   agent: LaunchAgentSummary;
   functions?: LaunchAgentFunctionsResponse;
   itemId?: string;
   live: LaunchPageProps['live'];
+  onAddFunction?: () => void;
   onNavigate: LaunchNavigate;
 }): ReactElement {
   const target = resolveOperatorFunctionItem(
@@ -4262,7 +4264,13 @@ function FunctionsPane({
   return (
     <section className='neb-modal-pane active'>
       <h2 className='neb-modal-h'>Functions</h2>
-      <PromptButton agent={agent} kind='function' onNavigate={onNavigate} />
+      {onAddFunction
+        ? (
+          <button className='neb-add-btn' onClick={onAddFunction} type='button'>
+            + Add function
+          </button>
+        )
+        : <PromptButton agent={agent} kind='function' onNavigate={onNavigate} />}
       {(functions?.functions ?? []).map((fn) => (
         <button
           className='neb-popup-item'
@@ -4710,16 +4718,20 @@ function Collapsible({
   );
 }
 
-function AgentSettingsPane({
+export function AgentSettingsPane({
   agent,
+  identityReadOnly = false,
   itemId,
   live,
   onClearItem,
+  showCapacity = true,
 }: {
   agent: LaunchAgentSummary;
+  identityReadOnly?: boolean;
   itemId?: string;
   live: LaunchPageProps['live'];
   onClearItem: () => void;
+  showCapacity?: boolean;
 }): ReactElement {
   const upstreamHome = live.data.agentHome;
   const [homeOverride, setHomeOverride] = useState<
@@ -4931,11 +4943,13 @@ function AgentSettingsPane({
         )
         : null}
 
-      <Collapsible
-        focusTarget={settingsTarget?.kind === 'rate-limits' ? itemId : null}
-        initiallyOpen={!itemId || settingsTarget?.kind === 'rate-limits'}
-        label='Rate limits'
-      >
+      {showCapacity
+        ? (
+          <Collapsible
+            focusTarget={settingsTarget?.kind === 'rate-limits' ? itemId : null}
+            initiallyOpen={!itemId || settingsTarget?.kind === 'rate-limits'}
+            label='Rate limits'
+          >
         {capacity
           ? (
             <>
@@ -4991,7 +5005,9 @@ function AgentSettingsPane({
           Lower the ceiling to reserve room for other Agents. Both five-hour and weekly windows
           enforce the same percentage.
         </p>
-      </Collapsible>
+          </Collapsible>
+        )
+        : null}
 
       <Collapsible
         focusTarget={settingsTarget?.kind === 'release' ? itemId : null}
@@ -5189,36 +5205,59 @@ function AgentSettingsPane({
         label='Identity'
         initiallyOpen={settingsTarget?.kind === 'identity'}
       >
-        <label className='neb-field-label' htmlFor={`agent-name-${agent.id}`}>
-          Name
-        </label>
-        <input
-          className='neb-edit-input'
-          id={`agent-name-${agent.id}`}
-          onChange={(event) => setIdentityName(event.currentTarget.value)}
-          value={identityName}
-        />
-        <label
-          className='neb-field-label'
-          htmlFor={`agent-description-${agent.id}`}
-        >
-          Description
-        </label>
-        <textarea
-          className='neb-edit-textarea'
-          id={`agent-description-${agent.id}`}
-          onChange={(event) => setIdentityDescription(event.currentTarget.value)}
-          value={identityDescription}
-        />
-        <button
-          className='neb-btn-sm'
-          disabled={!home?.actions.canEditIdentity || busy === 'identity' ||
-            !identityName.trim()}
-          onClick={() => void saveIdentity()}
-          type='button'
-        >
-          {busy === 'identity' ? 'Saving…' : 'Save identity'}
-        </button>
+        {identityReadOnly
+          ? (
+            <>
+              <div className='neb-ov-row'>
+                <span className='neb-ov-row-key'>Name</span>
+                <span className='neb-ov-row-val'>{identityName}</span>
+              </div>
+              <div className='neb-ov-row'>
+                <span className='neb-ov-row-key'>Description</span>
+                <span className='neb-ov-row-val'>
+                  {identityDescription || 'No description'}
+                </span>
+              </div>
+              <p className='neb-ov-note'>
+                Identity is declared by the Agent manifest and changes with a
+                reviewed release.
+              </p>
+            </>
+          )
+          : (
+            <>
+              <label className='neb-field-label' htmlFor={`agent-name-${agent.id}`}>
+                Name
+              </label>
+              <input
+                className='neb-edit-input'
+                id={`agent-name-${agent.id}`}
+                onChange={(event) => setIdentityName(event.currentTarget.value)}
+                value={identityName}
+              />
+              <label
+                className='neb-field-label'
+                htmlFor={`agent-description-${agent.id}`}
+              >
+                Description
+              </label>
+              <textarea
+                className='neb-edit-textarea'
+                id={`agent-description-${agent.id}`}
+                onChange={(event) => setIdentityDescription(event.currentTarget.value)}
+                value={identityDescription}
+              />
+              <button
+                className='neb-btn-sm'
+                disabled={!home?.actions.canEditIdentity || busy === 'identity' ||
+                  !identityName.trim()}
+                onClick={() => void saveIdentity()}
+                type='button'
+              >
+                {busy === 'identity' ? 'Saving…' : 'Save identity'}
+              </button>
+            </>
+          )}
       </Collapsible>
 
       <Collapsible

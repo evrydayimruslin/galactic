@@ -2,9 +2,14 @@ import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals
 import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejects.ts";
 import { assertStringIncludes } from "https://deno.land/std@0.210.0/assert/assert_string_includes.ts";
 import type { ResolvedInferenceRoute } from "./inference-route.ts";
-import { createRoutedRuntimeAIService, createRuntimeAIContext } from "./runtime-ai.ts";
+import {
+  createRoutedRuntimeAIService,
+  createRuntimeAIContext,
+} from "./runtime-ai.ts";
 
-function makeRoute(overrides: Partial<ResolvedInferenceRoute> = {}): ResolvedInferenceRoute {
+function makeRoute(
+  overrides: Partial<ResolvedInferenceRoute> = {},
+): ResolvedInferenceRoute {
   return {
     billingMode: "byok",
     provider: "deepseek",
@@ -32,11 +37,14 @@ Deno.test("runtime AI: BYOK route uses resolved provider model and skips Light d
         debitCalled = true;
       }
       capturedBody = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({
-        model: capturedBody.model,
-        choices: [{ message: { content: "ok" } }],
-        usage: { prompt_tokens: 3, completion_tokens: 4 },
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          model: capturedBody.model,
+          choices: [{ message: { content: "ok" } }],
+          usage: { prompt_tokens: 3, completion_tokens: 4 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
     }) as typeof fetch;
 
     const service = createRoutedRuntimeAIService(makeRoute(), "user-1");
@@ -71,21 +79,27 @@ Deno.test("runtime AI: Light route debits usage after provider response", async 
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
       if (url.includes("/chat/completions")) {
-        return new Response(JSON.stringify({
-          model: "openai/gpt-4o-mini",
-          choices: [{ message: { content: "metered" } }],
-          usage: { prompt_tokens: 100, completion_tokens: 200 },
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify({
+            model: "openai/gpt-4o-mini",
+            choices: [{ message: { content: "metered" } }],
+            usage: { prompt_tokens: 100, completion_tokens: 200 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
 
       if (url.includes("/rpc/debit_light")) {
         debitBody = JSON.parse(String(init?.body));
-        return new Response(JSON.stringify([{
-          old_balance: 100,
-          new_balance: 99.9851,
-          was_depleted: false,
-          amount_debited: 0.0149,
-        }]), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify([{
+            old_balance: 100,
+            new_balance: 99.9851,
+            was_depleted: false,
+            amount_debited: 0.0149,
+          }]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
 
       if (url.includes("/billing_transactions")) {
@@ -145,26 +159,32 @@ Deno.test("runtime AI: Galactic direct DeepSeek disables thinking and debits cac
       const url = String(input);
       if (url.includes("/chat/completions")) {
         providerBody = JSON.parse(String(init?.body));
-        return new Response(JSON.stringify({
-          model: "deepseek-v4-flash",
-          choices: [{ message: { content: "direct" } }],
-          usage: {
-            prompt_tokens: 1_000,
-            prompt_cache_hit_tokens: 400,
-            prompt_cache_miss_tokens: 600,
-            completion_tokens: 1_000,
-          },
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify({
+            model: "deepseek-v4-flash",
+            choices: [{ message: { content: "direct" } }],
+            usage: {
+              prompt_tokens: 1_000,
+              prompt_cache_hit_tokens: 400,
+              prompt_cache_miss_tokens: 600,
+              completion_tokens: 1_000,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
 
       if (url.includes("/rpc/debit_light")) {
         debitBody = JSON.parse(String(init?.body));
-        return new Response(JSON.stringify([{
-          old_balance: 100,
-          new_balance: 99.9635,
-          was_depleted: false,
-          amount_debited: 0.0365,
-        }]), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify([{
+            old_balance: 100,
+            new_balance: 99.9635,
+            was_depleted: false,
+            amount_debited: 0.0365,
+          }]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
 
       if (url.includes("/billing_transactions")) {
@@ -201,7 +221,10 @@ Deno.test("runtime AI: Galactic direct DeepSeek disables thinking and debits cac
     assertEquals(response.content, "direct");
     assertEquals(response.usage.cost_light, 0.0365);
     assertEquals(debitBody?.p_amount_light, 0.0365);
-    assertEquals((debitBody?.p_metadata as Record<string, unknown>)?.billing_source, "platform_deepseek_direct");
+    assertEquals(
+      (debitBody?.p_metadata as Record<string, unknown>)?.billing_source,
+      "platform_deepseek_direct",
+    );
   } finally {
     globalThis.fetch = previousFetch;
     globalWithEnv.__env = previousEnv;
@@ -618,7 +641,9 @@ Deno.test("runtime AI: metered call is refused per-call when balance is below th
 
 Deno.test("runtime AI: metered call withholds content when the debit depletes the wallet", async () => {
   const previousFetch = globalThis.fetch;
-  const globalWithEnv = globalThis as typeof globalThis & { __env?: Record<string, unknown> };
+  const globalWithEnv = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
   const previousEnv = globalWithEnv.__env;
   try {
     globalWithEnv.__env = {
@@ -629,22 +654,30 @@ Deno.test("runtime AI: metered call withholds content when the debit depletes th
     globalThis.fetch = (async (input) => {
       const url = String(input);
       if (url.includes("/chat/completions")) {
-        return new Response(JSON.stringify({
-          model: "deepseek/deepseek-v4-flash",
-          choices: [{ message: { content: "should-be-withheld" } }],
-          usage: { prompt_tokens: 100, completion_tokens: 200 },
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify({
+            model: "deepseek/deepseek-v4-flash",
+            choices: [{ message: { content: "should-be-withheld" } }],
+            usage: { prompt_tokens: 100, completion_tokens: 200 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
       if (url.includes("/rpc/debit_light")) {
         // Partial/depleting debit: the buyer could not fully cover the call.
-        return new Response(JSON.stringify([{
-          old_balance: 0.01,
-          new_balance: 0,
-          was_depleted: true,
-          amount_debited: 0.01,
-        }]), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify([{
+            old_balance: 0.01,
+            new_balance: 0,
+            was_depleted: true,
+            amount_debited: 0.01,
+          }]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
-      if (url.includes("/billing_transactions")) return new Response(null, { status: 204 });
+      if (url.includes("/billing_transactions")) {
+        return new Response(null, { status: 204 });
+      }
       return new Response("unexpected fetch", { status: 500 });
     }) as typeof fetch;
 
@@ -669,7 +702,9 @@ Deno.test("runtime AI: metered call withholds content when the debit depletes th
 
 Deno.test("runtime AI: metered call with ample balance passes the gate and returns content", async () => {
   const previousFetch = globalThis.fetch;
-  const globalWithEnv = globalThis as typeof globalThis & { __env?: Record<string, unknown> };
+  const globalWithEnv = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
   const previousEnv = globalWithEnv.__env;
   try {
     globalWithEnv.__env = {
@@ -680,21 +715,29 @@ Deno.test("runtime AI: metered call with ample balance passes the gate and retur
     globalThis.fetch = (async (input) => {
       const url = String(input);
       if (url.includes("/chat/completions")) {
-        return new Response(JSON.stringify({
-          model: "deepseek/deepseek-v4-flash",
-          choices: [{ message: { content: "ok" } }],
-          usage: { prompt_tokens: 100, completion_tokens: 200 },
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify({
+            model: "deepseek/deepseek-v4-flash",
+            choices: [{ message: { content: "ok" } }],
+            usage: { prompt_tokens: 100, completion_tokens: 200 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
       if (url.includes("/rpc/debit_light")) {
-        return new Response(JSON.stringify([{
-          old_balance: 1000,
-          new_balance: 999.98,
-          was_depleted: false,
-          amount_debited: 0.02,
-        }]), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify([{
+            old_balance: 1000,
+            new_balance: 999.98,
+            was_depleted: false,
+            amount_debited: 0.02,
+          }]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
-      if (url.includes("/billing_transactions")) return new Response(null, { status: 204 });
+      if (url.includes("/billing_transactions")) {
+        return new Response(null, { status: 204 });
+      }
       return new Response("unexpected fetch", { status: 500 });
     }) as typeof fetch;
 
@@ -725,11 +768,14 @@ Deno.test("runtime AI: a pinned route model beats the dev's per-call model", asy
         return new Response("unexpected fetch", { status: 500 });
       }
       capturedBody = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({
-        model: capturedBody.model,
-        choices: [{ message: { content: "pinned" } }],
-        usage: { prompt_tokens: 3, completion_tokens: 4 },
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          model: capturedBody.model,
+          choices: [{ message: { content: "pinned" } }],
+          usage: { prompt_tokens: 3, completion_tokens: 4 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
     }) as typeof fetch;
 
     // Light route with a pinned per-function override model; billing flags off
@@ -821,11 +867,14 @@ Deno.test("runtime AI: BYOK route records an unbilled usage event with attributi
         usageBody = JSON.parse(String(init?.body));
         return new Response(null, { status: 201 });
       }
-      return new Response(JSON.stringify({
-        model: "deepseek-v4-pro",
-        choices: [{ message: { content: "ok" } }],
-        usage: { prompt_tokens: 3, completion_tokens: 4 },
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          model: "deepseek-v4-pro",
+          choices: [{ message: { content: "ok" } }],
+          usage: { prompt_tokens: 3, completion_tokens: 4 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
     }) as typeof fetch;
 
     const service = createRoutedRuntimeAIService(
@@ -857,6 +906,151 @@ Deno.test("runtime AI: BYOK route records an unbilled usage event with attributi
   }
 });
 
+Deno.test("runtime AI: structured validation failures still record provider usage", async () => {
+  const previousFetch = globalThis.fetch;
+  const globalWithEnv = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
+  const previousEnv = globalWithEnv.__env;
+  let usageBody: Record<string, unknown> | null = null;
+
+  try {
+    globalWithEnv.__env = {
+      ...(previousEnv || {}),
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    };
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("/rest/v1/ai_usage_events")) {
+        usageBody = JSON.parse(String(init?.body));
+        return new Response(null, { status: 201 });
+      }
+      return new Response(
+        JSON.stringify({
+          model: "deepseek-v4-pro",
+          choices: [{ message: { content: '{"total":-1}' } }],
+          usage: { prompt_tokens: 7, completion_tokens: 5 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const service = createRoutedRuntimeAIService(
+      makeRoute(),
+      "user-1",
+      undefined,
+      { appId: "app-9", functionName: "extract_invoice" },
+    );
+    const response = await service.call({
+      messages: [{ role: "user", content: "extract" }],
+      output_schema: {
+        name: "invoice",
+        schema: {
+          type: "object",
+          properties: { total: { type: "number", minimum: 0 } },
+          required: ["total"],
+          additionalProperties: false,
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assertEquals(response.error_code, "structured_output_schema_mismatch");
+    assertEquals(response.output, undefined);
+    assertEquals(response.usage.input_tokens, 7);
+    assertEquals(response.usage.output_tokens, 5);
+    assertEquals(usageBody?.total_tokens, 12);
+    assertEquals(usageBody?.function_name, "extract_invoice");
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalWithEnv.__env = previousEnv;
+  }
+});
+
+Deno.test("runtime AI: structured validation runs after metered usage debit", async () => {
+  const previousFetch = globalThis.fetch;
+  const globalWithEnv = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
+  const previousEnv = globalWithEnv.__env;
+  let debitBody: Record<string, unknown> | null = null;
+
+  try {
+    globalWithEnv.__env = {
+      ...(previousEnv || {}),
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    };
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("/chat/completions")) {
+        return Response.json({
+          model: "openai/gpt-4o-mini",
+          choices: [{ message: { content: '{"total":-1}' } }],
+          usage: { prompt_tokens: 100, completion_tokens: 200 },
+        });
+      }
+      if (url.includes("/rpc/debit_light")) {
+        debitBody = JSON.parse(String(init?.body));
+        return Response.json([{
+          old_balance: 100,
+          new_balance: 99.9851,
+          was_depleted: false,
+          amount_debited: 0.0149,
+        }]);
+      }
+      if (url.includes("/billing_transactions")) {
+        return new Response(null, { status: 204 });
+      }
+      return new Response("unexpected fetch", { status: 500 });
+    }) as typeof fetch;
+
+    const service = createRoutedRuntimeAIService(
+      makeRoute({
+        billingMode: "light",
+        provider: "ultralight",
+        upstreamProvider: "openrouter",
+        baseUrl: "https://openrouter.test/api/v1",
+        model: "openai/gpt-4o-mini",
+        canonicalModelId: "openai/gpt-4o-mini",
+        billingModelId: "openai/gpt-4o-mini",
+        keySource: "platform_openrouter",
+        billingSource: "openrouter",
+        shouldRequireBalance: true,
+        shouldDebitLight: true,
+      }),
+      "user-1",
+      async () => 1000,
+      { appId: "app-9", functionName: "extract_invoice" },
+    );
+    const response = await service.call({
+      messages: [{ role: "user", content: "extract" }],
+      output_schema: {
+        name: "invoice",
+        schema: {
+          type: "object",
+          properties: { total: { type: "number", minimum: 0 } },
+          required: ["total"],
+          additionalProperties: false,
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assertEquals(response.error_code, "structured_output_schema_mismatch");
+    assertEquals(response.usage.input_tokens, 100);
+    assertEquals(response.usage.output_tokens, 200);
+    assertEquals(debitBody?.p_user_id, "user-1");
+    assertEquals(debitBody?.p_app_id, "app-9");
+    assertEquals(debitBody?.p_function_name, "extract_invoice");
+    assertEquals(typeof debitBody?.p_amount_light, "number");
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalWithEnv.__env = previousEnv;
+  }
+});
+
 Deno.test("runtime AI: metered debit carries app + function attribution", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
@@ -875,20 +1069,26 @@ Deno.test("runtime AI: metered debit carries app + function attribution", async 
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
       if (url.includes("/chat/completions")) {
-        return new Response(JSON.stringify({
-          model: "openai/gpt-4o-mini",
-          choices: [{ message: { content: "metered" } }],
-          usage: { prompt_tokens: 100, completion_tokens: 200 },
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify({
+            model: "openai/gpt-4o-mini",
+            choices: [{ message: { content: "metered" } }],
+            usage: { prompt_tokens: 100, completion_tokens: 200 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
       if (url.includes("/rpc/debit_light")) {
         debitBody = JSON.parse(String(init?.body));
-        return new Response(JSON.stringify([{
-          old_balance: 100,
-          new_balance: 99.9851,
-          was_depleted: false,
-          amount_debited: 0.0149,
-        }]), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify([{
+            old_balance: 100,
+            new_balance: 99.9851,
+            was_depleted: false,
+            amount_debited: 0.0149,
+          }]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
       if (url.includes("/rest/v1/ai_usage_events")) {
         usageEventFired = true;

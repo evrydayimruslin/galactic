@@ -10,7 +10,7 @@ class FakeR2Object {
     return this.value.buffer.slice(
       this.value.byteOffset,
       this.value.byteOffset + this.value.byteLength,
-    );
+    ) as ArrayBuffer;
   }
 
   async text(): Promise<string> {
@@ -42,16 +42,27 @@ class FakeR2Bucket {
     this.objects.delete(key);
   }
 
-  async list(options: { prefix?: string } = {}): Promise<{
+  async list(
+    options: { prefix?: string; cursor?: string; limit?: number } = {},
+  ): Promise<{
     objects: Array<{ key: string }>;
+    truncated: boolean;
+    cursor?: string;
   }> {
     this.events.push(`list:${options.prefix ?? ""}`);
     const prefix = options.prefix ?? "";
+    const allKeys = [...this.objects.keys()]
+      .filter((key) => key.startsWith(prefix))
+      .sort();
+    const start = options.cursor
+      ? Math.max(0, allKeys.findIndex((key) => key > options.cursor!))
+      : 0;
+    const keys = allKeys.slice(start, start + (options.limit ?? 1000));
+    const truncated = start + keys.length < allKeys.length;
     return {
-      objects: [...this.objects.keys()]
-        .filter((key) => key.startsWith(prefix))
-        .sort()
-        .map((key) => ({ key })),
+      objects: keys.map((key) => ({ key })),
+      truncated,
+      ...(truncated && keys.length > 0 ? { cursor: keys.at(-1)! } : {}),
     };
   }
 }
@@ -216,10 +227,33 @@ Deno.test("R2 service meters reads, deletes, and listings", async () => {
       "list:apps/app-1/data/",
       "delete:apps/app-1/data/a.json",
     ]);
-    assertEquals(calls.map((call) => call.body.p_metadata.operation), [
-      "get",
-      "list",
-      "delete",
-    ]);
+    assertEquals(
+      calls.map((call) =>
+        (call.body.p_metadata as Record<string, unknown>).operation
+      ),
+      ["get", "list", "delete"],
+    );
+  });
+});
+
+Deno.test("R2 service exposes bounded file-list pages", async () => {
+  const bucket = new FakeR2Bucket();
+  bucket.objects.set("capsules/a.json", new Uint8Array());
+  bucket.objects.set("capsules/b.json", new Uint8Array());
+  bucket.objects.set("capsules/c.json", new Uint8Array());
+
+  await withR2Env(bucket, async () => {
+    const r2 = createR2Service();
+    const first = await r2.listFilesPage("capsules/", { limit: 2 });
+    assertEquals(first.keys, ["capsules/a.json", "capsules/b.json"]);
+    assertEquals(typeof first.nextCursor, "string");
+    const second = await r2.listFilesPage("capsules/", {
+      limit: 2,
+      cursor: first.nextCursor!,
+    });
+    assertEquals(second, {
+      keys: ["capsules/c.json"],
+      nextCursor: null,
+    });
   });
 });

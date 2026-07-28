@@ -3,6 +3,10 @@ import {
   MAX_FILES_PER_UPLOAD,
   MAX_UPLOAD_SIZE_BYTES,
 } from "../../shared/types/index.ts";
+import {
+  type BytePreservingSourceContent,
+  sourceFileByteLength,
+} from "./source-file-content.ts";
 
 export const MAX_CONNECTED_NON_LIVE_VERSIONS = 3;
 
@@ -33,9 +37,8 @@ export function decideConnectedUploadAdmission({
   return "stage";
 }
 
-export interface ConnectedUploadFile {
+export interface ConnectedUploadFile extends BytePreservingSourceContent {
   path: string;
-  content: string;
 }
 
 export function validateConnectedUploadFileSet(
@@ -56,7 +59,7 @@ export function validateConnectedUploadFileSet(
     ) {
       throw new Error(`File type not allowed: ${file.path}`);
     }
-    totalBytes += new TextEncoder().encode(file.content).byteLength;
+    totalBytes += sourceFileByteLength(file);
     if (totalBytes > MAX_UPLOAD_SIZE_BYTES) {
       throw new Error(
         `Total upload size exceeds ${

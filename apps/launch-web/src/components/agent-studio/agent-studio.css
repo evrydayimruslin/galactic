@@ -1,0 +1,1838 @@
+.agent-studio {
+  --ground: #efe9e1;
+  --card: #efe9e1;
+  --line: #e2d9cc;
+  --line-2: rgba(51, 41, 29, 0.22);
+  --ink: #33291d;
+  --ink-2: #71624f;
+  --ink-3: #7c6f58;
+  --hero: #4a3a26;
+  --accent: #b98037;
+  --accent-text: #8e5c22;
+  --accent-fill: rgba(185, 128, 55, 0.09);
+  --ok: #4c7a66;
+  --danger: #a2472f;
+  --fill: rgba(51, 41, 29, 0.035);
+  --fill-2: rgba(51, 41, 29, 0.06);
+  --input: #fff;
+  --card-line: transparent;
+  --card-shadow: -6px -6px 14px rgba(255, 255, 255, 0.8),
+    7px 8px 18px rgba(93, 78, 60, 0.16);
+  --chip-shadow: -4px -4px 10px rgba(255, 255, 255, 0.8),
+    5px 6px 12px rgba(93, 78, 60, 0.14);
+  --press: inset 6px 6px 12px rgba(93, 78, 60, 0.1),
+    inset -6px -6px 12px rgba(255, 255, 255, 0.7);
+  --rail-line: #e2d9cc;
+  --display: "Space Grotesk", sans-serif;
+  --mono: "IBM Plex Mono", monospace;
+  --body: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --serif: "Fraunces", Georgia, serif;
+  --violet: var(--accent);
+  --violet-dim: var(--accent-fill);
+  --teal: var(--ok);
+  --teal-dim: rgba(76, 122, 102, 0.12);
+  --magenta: var(--danger);
+  --glass: var(--fill);
+  --glass-2: var(--fill-2);
+  position: relative;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: var(--ground);
+  color: var(--ink);
+  color-scheme: light;
+  font-family: var(--body);
+  -webkit-font-smoothing: antialiased;
+}
+
+.agent-studio[data-theme="dark"] {
+  --ground: #0a0806;
+  --card: #12100c;
+  --line: #2b241a;
+  --line-2: rgba(243, 233, 216, 0.22);
+  --ink: #f3e9d8;
+  --ink-2: #c0ae93;
+  --ink-3: #8b7a61;
+  --hero: #e9d5a8;
+  --accent: #d4a94f;
+  --accent-text: #e9c97c;
+  --accent-fill: rgba(212, 169, 79, 0.09);
+  --ok: #6e8f62;
+  --danger: #c4614a;
+  --fill: rgba(243, 233, 216, 0.04);
+  --fill-2: rgba(243, 233, 216, 0.07);
+  --input: rgba(0, 0, 0, 0.25);
+  --card-line: #2b241a;
+  --card-shadow: none;
+  --chip-shadow: none;
+  --press: none;
+  --rail-line: #2b241a;
+  color-scheme: dark;
+}
+
+.agent-studio *,
+.agent-studio *::before,
+.agent-studio *::after {
+  box-sizing: border-box;
+}
+
+.agent-studio button,
+.agent-studio input,
+.agent-studio textarea,
+.agent-studio select {
+  border-radius: 0;
+  color: inherit;
+  font-family: inherit;
+}
+
+.agent-studio button {
+  cursor: pointer;
+}
+
+.agent-studio button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.agent-studio :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.agent-studio-motif {
+  position: absolute;
+  z-index: 0;
+  top: -330px;
+  right: -190px;
+  width: 980px;
+  height: 980px;
+  opacity: 1;
+  pointer-events: none;
+}
+
+.agent-studio[data-theme="dark"] .agent-studio-motif {
+  opacity: 0.5;
+}
+
+.agent-studio-motif > div,
+.agent-studio-motif svg {
+  position: absolute;
+  inset: 0;
+}
+
+.agent-studio-motif > div {
+  border-radius: 50%;
+  background: radial-gradient(
+    circle closest-side at 44% 44%,
+    rgba(255, 255, 255, 0.3),
+    rgba(255, 255, 255, 0.1) 52%,
+    transparent 88%
+  );
+}
+
+.agent-studio[data-theme="dark"] .agent-studio-motif > div {
+  background: radial-gradient(
+    circle closest-side at 44% 44%,
+    rgba(233, 213, 168, 0.15),
+    rgba(233, 213, 168, 0.025) 52%,
+    transparent 88%
+  );
+}
+
+.agent-studio-motif svg {
+  width: 980px;
+  height: 980px;
+}
+
+.agent-studio-motif circle {
+  stroke: rgba(255, 255, 255, 0.72);
+  stroke-width: 1.6;
+  opacity: 0.88;
+}
+
+.agent-studio-motif circle:nth-child(-n + 3) {
+  stroke: rgba(51, 41, 29, 0.14);
+  stroke-width: 1.3;
+  opacity: 1;
+}
+
+.agent-studio[data-theme="dark"] .agent-studio-motif circle {
+  stroke: rgba(212, 169, 79, 0.4);
+}
+
+.agent-studio[data-theme="dark"] .agent-studio-motif circle:nth-child(-n + 3) {
+  stroke: rgba(0, 0, 0, 0.5);
+}
+
+.agent-studio-header {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  min-height: 77px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 26px;
+  border-bottom: 1px solid var(--rail-line);
+  background: transparent;
+}
+
+.agent-studio-identity,
+.agent-studio-header-actions {
+  display: flex;
+  align-items: center;
+}
+
+.agent-studio-identity {
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.agent-studio-wordmark {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--display) !important;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.agent-studio-slash {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.agent-studio-agent-name {
+  overflow: hidden;
+  color: var(--hero);
+  font-family: var(--serif);
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-studio-release {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.agent-studio-status {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.agent-studio-status > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.agent-studio-status.live {
+  color: var(--ok);
+}
+
+.agent-studio-status.stopped {
+  color: var(--danger);
+}
+
+.agent-studio-header-actions {
+  flex: 0 0 auto;
+  gap: 9px;
+}
+
+.agent-studio-segmented {
+  display: flex;
+  border: 1px solid var(--line-2);
+}
+
+.agent-studio-segmented button {
+  height: 34px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  padding: 0 12px;
+  background: transparent;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.agent-studio-segmented button:last-child {
+  border-right: 0;
+}
+
+.agent-studio-segmented button[aria-pressed="true"] {
+  background: var(--fill-2);
+  box-shadow: var(--press);
+  color: var(--ink);
+}
+
+.agent-studio-run,
+.agent-studio-settings-button,
+.agent-studio-menu-button {
+  height: 36px;
+  border: 1px solid var(--line-2);
+  background: var(--fill);
+  box-shadow: var(--chip-shadow);
+}
+
+.agent-studio-run {
+  padding: 0 14px;
+  border-color: var(--accent);
+  background: var(--accent-fill);
+  font-family: var(--mono) !important;
+  font-size: 11px;
+}
+
+.agent-studio-settings-button,
+.agent-studio-menu-button {
+  display: inline-flex;
+  width: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--ink-2);
+}
+
+.agent-studio-menu-button {
+  display: none;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.agent-studio-menu-button span {
+  width: 14px;
+  height: 1px;
+  background: currentColor;
+}
+
+.agent-studio-body {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  min-height: calc(100dvh - 77px);
+  grid-template-columns: 208px minmax(0, 1fr);
+}
+
+.agent-studio-rail {
+  padding: 24px 14px 24px 18px;
+  border-right: 1px solid var(--rail-line);
+}
+
+.agent-studio-rail-backdrop,
+.agent-studio-rail-mobile-meta {
+  display: none;
+}
+
+.agent-studio-rail-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px 9px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.agent-studio-rail-group:not(:first-child) {
+  margin-top: 20px;
+}
+
+.agent-studio-rail-info {
+  position: relative;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-2);
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: help;
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.agent-studio-rail-info [role="tooltip"] {
+  position: absolute;
+  z-index: 10;
+  top: 20px;
+  left: -10px;
+  width: 190px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  box-shadow: var(--card-shadow);
+  color: var(--ink-2);
+  font-family: var(--body);
+  font-size: 10.5px;
+  letter-spacing: 0;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  text-transform: none;
+  transform: translateY(-3px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.agent-studio-rail-info:hover [role="tooltip"],
+.agent-studio-rail-info:focus [role="tooltip"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.agent-studio-rail-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.agent-studio-rail-items button,
+.agent-studio-rail-settings button {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 0;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  text-align: left;
+}
+
+.agent-studio-rail-items button:hover,
+.agent-studio-rail-settings button:hover,
+.agent-studio-rail-items button.active,
+.agent-studio-rail-settings button.active {
+  background: var(--accent-fill);
+  color: var(--ink);
+}
+
+.agent-studio-rail-items button.active,
+.agent-studio-rail-settings button.active {
+  box-shadow: none;
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+.agent-studio-rail-badge {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+}
+
+.agent-studio-rail-settings {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rail-line);
+}
+
+.agent-studio-content {
+  position: relative;
+  min-width: 0;
+  padding: 30px 34px 80px;
+}
+
+.agent-studio-screen,
+.agent-studio > .agent-studio-body .neb-modal-pane {
+  width: 100%;
+  margin: 0;
+}
+
+.agent-studio-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 0 26px;
+}
+
+.agent-studio-page-header h1,
+.agent-studio .neb-modal-h {
+  margin: 0 0 5px;
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.agent-studio-page-header p {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.agent-studio-section-label,
+.agent-studio .neb-ov-label {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.agent-studio-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-studio-text-action,
+.agent-studio-mission-meta {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-family: var(--mono) !important;
+  font-size: 10.5px;
+}
+
+.agent-studio-status-plate {
+  display: grid;
+  min-height: 176px;
+  grid-template-columns:
+    minmax(230px, 0.95fr)
+    minmax(190px, 1fr)
+    minmax(210px, 1.1fr);
+  gap: 1px;
+  border: 1px solid var(--card-line);
+  background: var(--line);
+  box-shadow: var(--card-shadow);
+}
+
+.agent-studio-plate-cell {
+  min-width: 0;
+  overflow: hidden;
+  padding: 14px 20px;
+  background: var(--card);
+}
+
+.agent-studio-plate-cell.interfaces {
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-studio-cell-label {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.agent-studio-interface-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-studio-interface-heading > span {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.agent-studio-interface-heading button {
+  display: inline-flex;
+  width: 22px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.agent-studio-interface-heading button:not(:disabled):hover {
+  background: var(--accent-fill);
+  color: var(--accent-text);
+}
+
+.agent-studio-interface-stack {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  align-content: center;
+}
+
+.agent-studio-interface-tile,
+.agent-studio-empty-tile {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 9px 0;
+  background: transparent;
+  text-align: left;
+}
+
+.agent-studio-interface-tile:last-child {
+  border-bottom: 0;
+}
+
+.agent-studio-interface-tile > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-studio-interface-tile strong {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.agent-studio-interface-tile small,
+.agent-studio-interface-tile em {
+  color: var(--ink-3);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.agent-studio-interface-tile em {
+  overflow: hidden;
+  font-family: var(--body);
+  font-size: 11px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-studio-empty-tile {
+  border: 1px dashed var(--line-2);
+  padding: 14px;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.agent-studio-now-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.agent-studio-now-state strong,
+.agent-studio-run-count {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.agent-studio-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.agent-studio-dot.waiting {
+  background: var(--accent);
+}
+
+.agent-studio-plate-cell.now p {
+  margin: 5px 0 18px;
+  color: var(--ink-2);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.agent-studio-run-count + p {
+  margin-bottom: 0;
+}
+
+.agent-studio-consumption {
+  margin-top: 11px;
+}
+
+.agent-studio-consumption > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-studio-consumption > div:first-child span {
+  color: var(--ink-2);
+  font-size: 11px;
+}
+
+.agent-studio-consumption strong {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 16px;
+}
+
+.agent-studio-meter,
+.agent-studio-limit-track {
+  height: 2px;
+  margin-top: 7px;
+  background: var(--fill-2);
+}
+
+.agent-studio-meter span,
+.agent-studio-limit-track span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.agent-studio-consumption:nth-of-type(3) .agent-studio-meter span {
+  background: var(--ok);
+}
+
+.agent-studio-consumption small {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-size: 9.5px;
+}
+
+.agent-studio-overview-section {
+  margin-top: 30px;
+}
+
+.agent-studio-overview-section > .agent-studio-section-label,
+.agent-studio-overview-section > .agent-studio-section-head {
+  margin-bottom: 10px;
+}
+
+.agent-studio-needs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-studio-needs-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 18px 14px 20px;
+  border: 1px solid var(--card-line);
+  background: var(--card);
+  box-shadow: var(--card-shadow);
+}
+
+.agent-studio-needs-row > span {
+  position: absolute;
+  top: 16px;
+  left: 0;
+  width: 2px;
+  height: 22px;
+  background: var(--accent);
+}
+
+.agent-studio-needs-row strong {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.agent-studio-needs-row p {
+  margin: 3px 0 0;
+  color: var(--ink-2);
+  font-size: 11.5px;
+}
+
+.agent-studio-needs-row button,
+.agent-studio-endpoint-card button,
+.agent-studio-setup-step button,
+.agent-studio-load-more {
+  flex: 0 0 auto;
+  border: 1px solid var(--accent);
+  padding: 7px 14px;
+  background: var(--accent-fill);
+  color: var(--ink);
+  font-family: var(--mono) !important;
+  font-size: 11px;
+}
+
+.agent-studio-ruled-list,
+.agent-studio-mission-card,
+.agent-studio-endpoint-card,
+.agent-studio-directive-card,
+.agent-studio-policies-card,
+.agent-studio-boundary-card,
+.agent-studio-limit-card {
+  border: 1px solid var(--card-line);
+  background: var(--card);
+  box-shadow: var(--card-shadow);
+}
+
+.agent-studio-activity-summary-row {
+  display: grid;
+  min-height: 42px;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.agent-studio-activity-summary-row:last-child {
+  border-bottom: 0;
+}
+
+.agent-studio-activity-summary-row time {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.agent-studio-activity-summary-row > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.agent-studio-activity-summary-row strong {
+  overflow: hidden;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-studio-activity-summary-row small {
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--ink-3);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-studio-activity-summary-row em {
+  padding: 2px 6px;
+  border: 1px solid var(--line-2);
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-style: normal;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.agent-studio-list-empty {
+  padding: 18px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.agent-studio-mission-card {
+  margin-top: 30px;
+  padding: 18px 20px;
+}
+
+.agent-studio-mission-card > p {
+  max-width: 74ch;
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.agent-studio-mission-meta {
+  margin-top: 12px;
+  color: var(--ink-3);
+}
+
+.agent-studio-endpoint-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 14px 20px;
+}
+
+.agent-studio-endpoint-card code {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.agent-studio-endpoint-card button {
+  border-color: var(--line-2);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.agent-studio-setup {
+  max-width: 760px;
+}
+
+.agent-studio-setup-step {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.agent-studio-setup-marker {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+}
+
+.agent-studio-setup-marker span {
+  display: flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-2);
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.agent-studio-setup-marker span.complete {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.agent-studio-setup-marker span.active {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+  color: var(--ink);
+}
+
+.agent-studio-setup-marker i {
+  width: 1px;
+  min-height: 56px;
+  flex: 1;
+  background: var(--line);
+}
+
+.agent-studio-setup-step > div:last-child {
+  min-height: 82px;
+  padding: 2px 0 22px;
+  opacity: 0.55;
+}
+
+.agent-studio-setup-step > div:last-child.active {
+  opacity: 1;
+}
+
+.agent-studio-setup-step header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.agent-studio-setup-step header strong {
+  font-family: var(--display);
+  font-size: 14px;
+}
+
+.agent-studio-setup-step header em {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-studio-setup-step p,
+.agent-studio-setup-note {
+  max-width: 58ch;
+  margin: 8px 0 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.agent-studio-setup-step button {
+  margin-top: 14px;
+}
+
+.agent-studio-setup-note {
+  margin-top: 24px;
+  color: var(--ink-3);
+}
+
+.agent-studio-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.agent-studio-filter-row button {
+  display: inline-flex;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+}
+
+.agent-studio-filter-row button.active {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+  color: var(--ink);
+}
+
+.agent-studio-filter-row em {
+  font-style: normal;
+  opacity: 0.6;
+}
+
+.agent-studio-activity-list {
+  display: grid;
+  gap: 7px;
+}
+
+.agent-studio-activity-run {
+  border: 1px solid var(--card-line);
+  background: var(--card);
+  box-shadow: var(--card-shadow);
+}
+
+.agent-studio-activity-run.open {
+  border-color: var(--accent);
+}
+
+.agent-studio-activity-run-summary {
+  display: grid;
+  width: 100%;
+  min-height: 68px;
+  grid-template-columns: 140px minmax(0, 1fr) auto 20px;
+  align-items: center;
+  gap: 18px;
+  border: 0;
+  padding: 12px 14px;
+  background: transparent;
+  text-align: left;
+}
+
+.agent-studio-activity-run-summary:hover {
+  background: var(--fill);
+}
+
+.agent-studio-activity-run-summary time,
+.agent-studio-activity-run-summary em,
+.agent-studio-activity-run-summary i {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-style: normal;
+}
+
+.agent-studio-activity-run-summary > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.agent-studio-activity-run-summary strong {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.agent-studio-activity-run-summary small {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-studio-activity-run-detail {
+  padding: 10px 14px 18px 172px;
+  border-top: 1px solid var(--line);
+  background: var(--fill);
+}
+
+.agent-studio-activity-ghost {
+  display: grid;
+  width: min(620px, 100%);
+  margin: 20px auto 14px;
+  grid-template-columns: 62px minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: 14px;
+  border: 1px dashed var(--line-2);
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  text-align: left;
+}
+
+.agent-studio-activity-ghost + button {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+}
+
+.agent-studio-activity-run-detail ol {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-studio-activity-run-detail li {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.agent-studio-activity-run-detail li span,
+.agent-studio-activity-run-detail li time {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.agent-studio-activity-run-detail li strong {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.agent-studio-activity-run-detail > p {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.agent-studio-load-more {
+  margin-top: 18px;
+}
+
+.agent-studio-contract-note,
+.agent-studio-capabilities-intro {
+  margin-top: 24px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--ink-3);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.agent-studio-directive-card,
+.agent-studio-policies-card,
+.agent-studio-boundary-card {
+  padding: 20px;
+}
+
+.agent-studio-directive-card blockquote {
+  max-width: 74ch;
+  margin: 16px 0 22px;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 19px;
+  line-height: 1.65;
+}
+
+.agent-studio-directive-card dl {
+  display: grid;
+  margin: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+}
+
+.agent-studio-directive-card dl > div {
+  padding: 14px 14px 0 0;
+}
+
+.agent-studio-directive-card dt {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.agent-studio-directive-card dd {
+  margin: 5px 0 0;
+  color: var(--ink-2);
+  font-size: 11.5px;
+}
+
+.agent-studio-policies-card {
+  margin-top: 18px;
+}
+
+.agent-studio-empty-state {
+  padding: 32px 20px;
+  color: var(--ink-2);
+  text-align: center;
+}
+
+.agent-studio-empty-state.compact {
+  padding-bottom: 12px;
+}
+
+.agent-studio-empty-state strong {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 14px;
+}
+
+.agent-studio-empty-state p {
+  max-width: 60ch;
+  margin: 7px auto 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.agent-studio-limit-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.agent-studio-limit-card {
+  padding: 20px;
+}
+
+.agent-studio-limit-card header,
+.agent-studio-limit-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-studio-limit-card header strong {
+  font-family: var(--display);
+  font-size: 22px;
+}
+
+.agent-studio-limit-track {
+  position: relative;
+  height: 5px;
+  margin-top: 18px;
+}
+
+.agent-studio-limit-meta {
+  margin-top: 8px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.agent-studio-limit-card > p {
+  max-width: 70ch;
+  margin: 18px 0 0;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.agent-studio-limit-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px 14px;
+  margin-top: -19px;
+  padding: 18px 20px 20px;
+  border: 1px solid var(--line);
+  border-top: 0;
+  background: var(--card);
+}
+
+.agent-studio-limit-editor label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--ink-2);
+  font-size: 11px;
+}
+
+.agent-studio-limit-editor label > span:last-child {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  background: var(--fill);
+}
+
+.agent-studio-limit-editor input {
+  width: 88px;
+  border: 0;
+  padding: 8px 9px;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-align: right;
+}
+
+.agent-studio-limit-editor input:focus {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.agent-studio-limit-editor em {
+  padding-right: 9px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.agent-studio-limit-editor button {
+  min-width: 112px;
+}
+
+.agent-studio-limit-editor small {
+  grid-column: 1 / -1;
+  color: var(--ink-3);
+  font-size: 9.5px;
+}
+
+.agent-studio-limit-editor p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--danger);
+  font-size: 10px;
+}
+
+.agent-studio-boundary-card {
+  max-width: 760px;
+}
+
+.agent-studio-boundary-card h2 {
+  margin: 16px 0 8px;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.agent-studio-boundary-card > p {
+  max-width: 66ch;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.agent-studio-boundary-card ul {
+  display: grid;
+  gap: 8px;
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-studio-boundary-card li {
+  position: relative;
+  padding: 9px 12px 9px 26px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 11px;
+}
+
+.agent-studio-boundary-card li::before {
+  position: absolute;
+  left: 8px;
+  color: var(--accent);
+  content: "—";
+}
+
+.agent-studio-capabilities-intro {
+  margin: 0 0 22px;
+  border-color: var(--accent);
+  background: var(--accent-fill);
+}
+
+.agent-studio-capabilities-intro strong {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 12px;
+}
+
+.agent-studio-capabilities-intro p {
+  margin: 4px 0 0;
+}
+
+.agent-studio-loading {
+  display: grid;
+  width: min(620px, 100%);
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.agent-studio-loading > span {
+  display: block;
+  height: 12px;
+  background: linear-gradient(
+    90deg,
+    var(--fill),
+    var(--accent-fill),
+    var(--fill)
+  );
+  background-size: 220% 100%;
+  animation: agent-studio-loading 1.6s ease-in-out infinite;
+}
+
+.agent-studio-loading > span:nth-child(1) {
+  width: 42%;
+}
+
+.agent-studio-loading > span:nth-child(2) {
+  width: 76%;
+  animation-delay: 120ms;
+}
+
+.agent-studio-loading > span:nth-child(3) {
+  width: 58%;
+  animation-delay: 240ms;
+}
+
+.agent-studio-loading strong {
+  font-family: var(--display);
+}
+
+.agent-studio-loading p,
+.agent-studio-inline-error {
+  color: var(--danger);
+  font-size: 11.5px;
+}
+
+.agent-studio-inline-error {
+  max-width: 1180px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+@keyframes agent-studio-loading {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* Existing production panes are kept functional while they are ported screen
+   by screen. These scoped overrides make them native to the Studio surface. */
+.agent-studio .neb-modal-pane {
+  padding-bottom: 20px;
+}
+
+.agent-studio .neb-modal-h + .neb-ov-note.top-note {
+  max-width: 68ch;
+  margin: 0 0 22px;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.agent-studio .neb-add-btn {
+  width: 100%;
+  margin: 0 0 18px;
+  padding: 13px;
+  border: 1px dashed var(--line-2);
+  background: transparent;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.agent-studio .neb-add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.agent-studio .neb-popup-item,
+.agent-studio .neb-interface-list-item,
+.agent-studio .neb-operator-access-group,
+.agent-studio .neb-agent-attention-card,
+.agent-studio .neb-compute-run,
+.agent-studio .neb-ov-section,
+.agent-studio .neb-collapsible {
+  border-color: var(--line);
+  border-radius: 0;
+  background: var(--card);
+  box-shadow: none;
+  color: var(--ink);
+}
+
+.agent-studio .neb-popup-item {
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.agent-studio .neb-popup-item:hover {
+  background: var(--fill);
+}
+
+.agent-studio .neb-popup-item-name,
+.agent-studio .neb-operator-access-head strong,
+.agent-studio .neb-agent-attention-card strong {
+  color: var(--ink);
+}
+
+.agent-studio .neb-popup-item-desc,
+.agent-studio .neb-routine-meta,
+.agent-studio .neb-ov-note,
+.agent-studio .neb-operator-access-head p {
+  color: var(--ink-3);
+}
+
+.agent-studio .neb-btn,
+.agent-studio .neb-btn-sm,
+.agent-studio .neb-run-now,
+.agent-studio .neb-pause-btn {
+  border-color: var(--line-2);
+  border-radius: 0;
+  background: var(--fill);
+  color: var(--ink-2);
+}
+
+.agent-studio .neb-btn:hover,
+.agent-studio .neb-btn-sm:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.agent-studio .neb-edit-input,
+.agent-studio textarea,
+.agent-studio select {
+  border-color: var(--line);
+  border-radius: 0;
+  background: var(--input);
+  color: var(--ink);
+}
+
+.agent-studio .neb-function-badge,
+.agent-studio .neb-operator-access-status,
+.agent-studio .neb-agent-attention-state {
+  border-radius: 0;
+}
+
+.agent-studio .neb-operator-access-row,
+.agent-studio .neb-agent-attention-card,
+.agent-studio .neb-operator-access-subsection {
+  border-color: var(--line);
+}
+
+.agent-studio .neb-operator-access-row:hover {
+  background: var(--fill);
+}
+
+.agent-studio .neb-compute-gate,
+.agent-studio .neb-compute-confirm {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+}
+
+/* Legacy detail editors render through a body portal. Bridge the active Studio
+   theme onto that portal until each editor becomes a native Studio panel. */
+body[data-agent-studio-theme="light"] .neb-modal-overlay.nebula-root {
+  --void: #efe9e1;
+  --violet: #b98037;
+  --violet-dim: rgba(185, 128, 55, 0.09);
+  --teal: #4c7a66;
+  --teal-dim: rgba(76, 122, 102, 0.12);
+  --magenta: #a2472f;
+  --ink: #33291d;
+  --ink-2: #71624f;
+  --ink-3: #7c6f58;
+  --glass: rgba(51, 41, 29, 0.035);
+  --glass-2: rgba(51, 41, 29, 0.06);
+  --line: #e2d9cc;
+  --line-2: rgba(51, 41, 29, 0.22);
+  background: rgba(51, 41, 29, 0.2);
+  color-scheme: light;
+}
+
+body[data-agent-studio-theme="dark"] .neb-modal-overlay.nebula-root {
+  --void: #0a0806;
+  --violet: #d4a94f;
+  --violet-dim: rgba(212, 169, 79, 0.09);
+  --teal: #6e8f62;
+  --teal-dim: rgba(110, 143, 98, 0.12);
+  --magenta: #c4614a;
+  --ink: #f3e9d8;
+  --ink-2: #c0ae93;
+  --ink-3: #8b7a61;
+  --glass: rgba(243, 233, 216, 0.04);
+  --glass-2: rgba(243, 233, 216, 0.07);
+  --line: #2b241a;
+  --line-2: rgba(243, 233, 216, 0.22);
+}
+
+body[data-agent-studio-theme] .neb-modal-overlay .neb-modal {
+  border-color: var(--line-2);
+  border-radius: 0;
+  background: var(--void);
+  color: var(--ink);
+}
+
+body[data-agent-studio-theme="light"] .neb-modal-overlay .neb-modal {
+  box-shadow: -8px -8px 22px rgba(255, 255, 255, 0.78),
+    14px 18px 44px rgba(93, 78, 60, 0.24);
+}
+
+@media (max-width: 860px) {
+  .agent-studio-header {
+    align-items: flex-start;
+    padding: 16px 18px;
+  }
+
+  .agent-studio-release,
+  .agent-studio-segmented {
+    display: none;
+  }
+
+  .agent-studio-menu-button {
+    display: inline-flex;
+  }
+
+  .agent-studio-body {
+    display: block;
+    min-height: calc(100dvh - 69px);
+  }
+
+  .agent-studio-rail {
+    position: absolute;
+    z-index: 20;
+    top: 0;
+    left: 0;
+    display: none;
+    width: min(320px, calc(100vw - 48px));
+    min-height: calc(100dvh - 69px);
+    max-height: calc(100dvh - 69px);
+    overflow-y: auto;
+    border-right: 1px solid var(--line-2);
+    background: var(--ground);
+    box-shadow: 20px 20px 60px rgba(0, 0, 0, 0.22);
+  }
+
+  .agent-studio-rail.open {
+    display: block;
+  }
+
+  .agent-studio-rail-backdrop {
+    position: absolute;
+    z-index: 19;
+    inset: 0;
+    display: block;
+    border: 0;
+    background: rgba(10, 8, 6, 0.45);
+    cursor: default;
+  }
+
+  .agent-studio-rail-mobile-meta {
+    display: grid;
+    gap: 12px;
+    margin: 0 0 22px;
+    padding: 0 10px 18px;
+    border-bottom: 1px solid var(--rail-line);
+  }
+
+  .agent-studio-rail-mobile-meta > div:first-child {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .agent-studio-rail-mobile-meta .agent-studio-segmented {
+    display: flex;
+    width: max-content;
+  }
+
+  .agent-studio-content {
+    padding: 26px 22px 64px;
+  }
+
+  .agent-studio-status-plate {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .agent-studio-plate-cell.interfaces {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 580px) {
+  .agent-studio-header {
+    min-height: 68px;
+  }
+
+  .agent-studio-agent-name {
+    max-width: 130px;
+    font-size: 18px;
+  }
+
+  .agent-studio-status {
+    display: none;
+  }
+
+  .agent-studio-rail-mobile-meta .agent-studio-status {
+    display: flex;
+  }
+
+  .agent-studio-rail-mobile-meta .agent-studio-release {
+    display: inline-flex;
+  }
+
+  .agent-studio-header-actions {
+    gap: 6px;
+  }
+
+  .agent-studio-settings-button {
+    display: none;
+  }
+
+  .agent-studio-run {
+    padding: 0 10px;
+  }
+
+  .agent-studio-content {
+    padding: 24px 16px 56px;
+  }
+
+  .agent-studio-status-plate {
+    display: block;
+  }
+
+  .agent-studio-plate-cell {
+    min-height: 150px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .agent-studio-plate-cell:last-child {
+    border-bottom: 0;
+  }
+
+  .agent-studio-needs-row {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-studio-needs-row button {
+    justify-self: start;
+  }
+
+  .agent-studio-activity-summary-row {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .agent-studio-activity-summary-row em {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .agent-studio-activity-run-summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .agent-studio-activity-run-summary time {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .agent-studio-activity-run-summary > span {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .agent-studio-activity-run-summary em {
+    grid-column: 1;
+    grid-row: 3;
+    justify-self: start;
+  }
+
+  .agent-studio-activity-run-summary i {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+  }
+
+  .agent-studio-limit-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-studio-limit-editor button {
+    justify-self: start;
+  }
+
+  .agent-studio-limit-editor small,
+  .agent-studio-limit-editor p {
+    grid-column: 1;
+  }
+
+  .agent-studio-activity-run-detail {
+    padding: 12px;
+  }
+
+  .agent-studio-activity-run-detail li {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+
+  .agent-studio-directive-card dl {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-studio-endpoint-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-studio *,
+  .agent-studio *::before,
+  .agent-studio *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

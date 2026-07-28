@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals
 import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejects.ts";
 import {
   clearFunctionInferenceOverride,
+  listFunctionInferencePolicies,
   resolveFunctionInferenceOverride,
   setFunctionInferenceOverride,
 } from "./function-inference-overrides.ts";
@@ -26,10 +27,15 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 async function withMockedEnvAndFetch(
-  handler: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
+  handler: (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => Promise<Response>,
   fn: () => Promise<void>,
 ): Promise<void> {
-  const g = globalThis as typeof globalThis & { __env?: Record<string, unknown> };
+  const g = globalThis as typeof globalThis & {
+    __env?: Record<string, unknown>;
+  };
   const prevEnv = g.__env;
   const prevFetch = globalThis.fetch;
   g.__env = { ...(prevEnv || {}), ...TEST_ENV };
@@ -103,6 +109,63 @@ Deno.test("function inference overrides: no row resolves to null (default chain)
   });
 });
 
+Deno.test("function inference overrides: coding policy projection includes Light and BYOK routes", async () => {
+  await runSerial(async () => {
+    await withMockedEnvAndFetch(async () =>
+      jsonResponse([
+        {
+          app_id: "app-1",
+          function_name: "summarize",
+          billing_mode: "light",
+          provider: null,
+          model: "deepseek/deepseek-v4-flash",
+          updated_at: "2026-07-27T12:00:00.000Z",
+        },
+        {
+          app_id: "app-1",
+          function_name: "extract",
+          billing_mode: "byok",
+          provider: "openai",
+          model: "gpt-4o",
+          updated_at: "2026-07-27T12:01:00.000Z",
+        },
+        {
+          app_id: "app-1",
+          function_name: "not_in_manifest",
+          billing_mode: "light",
+          provider: null,
+          model: "ignored",
+        },
+      ]), async () => {
+      assertEquals(
+        await listFunctionInferencePolicies({
+          userId: "user-1",
+          appId: "app-1",
+          functionNames: ["summarize", "extract"],
+        }),
+        [
+          {
+            appId: "app-1",
+            functionName: "extract",
+            billingMode: "byok",
+            provider: "openai",
+            model: "gpt-4o",
+            updatedAt: "2026-07-27T12:01:00.000Z",
+          },
+          {
+            appId: "app-1",
+            functionName: "summarize",
+            billingMode: "light",
+            provider: null,
+            model: "deepseek/deepseek-v4-flash",
+            updatedAt: "2026-07-27T12:00:00.000Z",
+          },
+        ],
+      );
+    });
+  });
+});
+
 Deno.test("function inference overrides: a storage error fails open to null", async () => {
   await runSerial(async () => {
     await withMockedEnvAndFetch(
@@ -114,6 +177,27 @@ Deno.test("function inference overrides: a storage error fails open to null", as
           functionName: "summarize",
         });
         assertEquals(selection, null);
+      },
+    );
+  });
+});
+
+Deno.test("function inference policy projection can require an authoritative read", async () => {
+  await runSerial(async () => {
+    await withMockedEnvAndFetch(
+      async () => new Response("policy storage unavailable", { status: 503 }),
+      async () => {
+        await assertRejects(
+          () =>
+            listFunctionInferencePolicies({
+              userId: "user-1",
+              appId: "app-1",
+              functionNames: ["summarize"],
+              requireAuthoritative: true,
+            }),
+          Error,
+          "policy storage unavailable",
+        );
       },
     );
   });
@@ -157,28 +241,39 @@ Deno.test("function inference overrides: set persists a byok override and clears
 
 Deno.test("function inference overrides: set rejects an unknown function and a byok override without a valid provider", async () => {
   await runSerial(async () => {
-    await withMockedEnvAndFetch(async () => new Response(null, { status: 204 }), async () => {
-      await assertRejects(() =>
-        setFunctionInferenceOverride({
-          userId: "user-1",
-          appId: "app-1",
-          functionName: "not-a-function",
-          billingMode: "light",
-          provider: null,
-          model: "deepseek/deepseek-v4-flash",
-          allowedFunctionNames: ["summarize"],
-        }), Error, "Unknown function");
-      await assertRejects(() =>
-        setFunctionInferenceOverride({
-          userId: "user-1",
-          appId: "app-1",
-          functionName: "summarize",
-          billingMode: "byok",
-          provider: "not-a-provider",
-          model: "gpt-4o",
-          allowedFunctionNames: ["summarize"],
-        }), Error, "valid BYOK provider");
-    });
+    await withMockedEnvAndFetch(
+      async () => new Response(null, { status: 204 }),
+      async () => {
+        await assertRejects(
+          () =>
+            setFunctionInferenceOverride({
+              userId: "user-1",
+              appId: "app-1",
+              functionName: "not-a-function",
+              billingMode: "light",
+              provider: null,
+              model: "deepseek/deepseek-v4-flash",
+              allowedFunctionNames: ["summarize"],
+            }),
+          Error,
+          "Unknown function",
+        );
+        await assertRejects(
+          () =>
+            setFunctionInferenceOverride({
+              userId: "user-1",
+              appId: "app-1",
+              functionName: "summarize",
+              billingMode: "byok",
+              provider: "not-a-provider",
+              model: "gpt-4o",
+              allowedFunctionNames: ["summarize"],
+            }),
+          Error,
+          "valid BYOK provider",
+        );
+      },
+    );
   });
 });
 

@@ -43,6 +43,7 @@ import { findManifestAuthorityExpansions } from "../services/manifest-authority.
 import { initialReleaseVersionState } from "../services/release-version.ts";
 import {
   computeDecodedSourceHash,
+  type DecodedSourceFile,
   decodeSourceFileSet,
   findPersistedTestAttestation,
   issueTestAttestation,
@@ -50,6 +51,10 @@ import {
   type TestAttestationMode,
   verifyTestAttestation,
 } from "../services/test-attestation.ts";
+import {
+  sourceFileByteLength,
+  sourceFileBytes,
+} from "../services/source-file-content.ts";
 import {
   loadAndValidateStagedMigrations,
   strictAdditiveMigrationErrors,
@@ -67,7 +72,21 @@ import {
   type CapabilityHandler,
 } from "../../shared/contracts/capabilities.ts";
 import { createR2Service, type R2Service } from "../services/storage.ts";
-import { checkInMemoryLimit, checkRateLimit } from "../services/ratelimit.ts";
+import {
+  resolveStagedBundle,
+  stageBundle,
+  StagedBundleError,
+} from "../services/staged-bundles.ts";
+import {
+  BUILDER_STAGE_RATE_LIMIT_ENDPOINT,
+  BUILDER_STAGE_RATE_LIMIT_PER_MINUTE,
+  checkInMemoryLimit,
+  checkRateLimit,
+} from "../services/ratelimit.ts";
+import {
+  createStagedBundleQuotaAdmission,
+  StagedBundleQuotaError,
+} from "../services/staged-bundle-quota.ts";
 import { checkAndIncrementWeeklyCalls } from "../services/weekly-calls.ts";
 import {
   isProvisionalUser,
@@ -108,6 +127,10 @@ import {
   retainedConnectedStagedVersionBytes,
   validateConnectedUploadFileSet,
 } from "../services/connected-upload-admission.ts";
+import {
+  BundleLineageConflictError,
+  persistDeduplicatedBundleLineage,
+} from "../services/upload-lineage.ts";
 import { handleUploadFiles, type UploadFile } from "./upload.ts";
 import { validateAndParseSkillsMd } from "../services/docgen.ts";
 import {
@@ -246,6 +269,16 @@ import {
   setGrantCap,
   setGrantStatus,
 } from "../services/agent-grants.ts";
+import { launchRoutineRole, listRoutines } from "../services/routines.ts";
+import { listFunctionInferencePolicies } from "../services/function-inference-overrides.ts";
+import { inspectAppDatabase } from "../services/capabilities/db-inspect.ts";
+import {
+  ProjectCapsuleError,
+  projectCapsuleResponse,
+  type ProjectCapsuleSnapshot,
+  stableCapsuleSet,
+} from "../services/project-capsule.ts";
+import { projectDefaultInferenceRoute } from "../services/inference-route.ts";
 import { RequestValidationError } from "../services/request-validation.ts";
 import type { PublicDiscoveryApp } from "../services/public-apps.ts";
 import type { GpuPricingDisplay } from "../services/gpu/pricing-display.ts";
@@ -1250,6 +1283,31 @@ async function readJsonFirst<T>(response: Response): Promise<T | null> {
   return values[0] ?? null;
 }
 
+export async function readInspectPermissionRows<T>(
+  response: Response,
+  requireAuthoritative: boolean,
+): Promise<T[] | null> {
+  if (!response.ok) {
+    if (requireAuthoritative) {
+      throw new Error(
+        `Failed to load authoritative Agent permissions (${response.status})`,
+      );
+    }
+    return null;
+  }
+  try {
+    const payload = await response.json();
+    if (Array.isArray(payload)) return payload as T[];
+  } catch (error) {
+    if (requireAuthoritative) throw error;
+    return null;
+  }
+  if (requireAuthoritative) {
+    throw new Error("Permission storage returned an invalid response");
+  }
+  return null;
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) &&
     value.every((entry) => typeof entry === "string");
@@ -1602,6 +1660,27 @@ const QUOTA_EXCEEDED = -32004;
 const BUILD_FAILED = -32005;
 const VALIDATION_ERROR = -32006;
 const CONFLICT = -32007;
+
+export function capabilityErrorToToolCode(
+  code: CapabilityError["code"],
+): number {
+  switch (code) {
+    case "invalid_input":
+      return INVALID_PARAMS;
+    case "not_found":
+      return NOT_FOUND;
+    case "forbidden":
+      return FORBIDDEN;
+    case "rate_limited":
+      return RATE_LIMITED;
+    case "quota_exceeded":
+      return QUOTA_EXCEEDED;
+    case "conflict":
+      return CONFLICT;
+    case "internal":
+      return INTERNAL_ERROR;
+  }
+}
 
 // ============================================
 // PLATFORM SKILLS.MD — served via resources/read
@@ -2455,12 +2534,395 @@ bindCapabilityHandler("discover", async (args, ctx) => {
     case "appstore":
       return await executeDiscoverAppstore(ctx.userId, args);
     case "tools":
-      return executeDiscoverTools(ctx.authSource === "api_token");
+      return executeDiscoverTools(
+        ctx.authSource === "api_token"
+          ? {
+            authSource: "api_token",
+            scopes: ctx.authorization?.scopes,
+            tokenAppIds: ctx.authorization?.appIds,
+          }
+          : undefined,
+      );
     default:
       throw new CapabilityError(
         "invalid_input",
         `Invalid scope: ${scope}. Use desk|inspect|library|appstore|tools`,
       );
+  }
+});
+
+async function executeProjectCapsule(
+  userId: string,
+  args: Record<string, unknown>,
+  econ: { freeMode: boolean; byokPresent: boolean },
+): Promise<unknown> {
+  const appRef = typeof args.app_id === "string" ? args.app_id.trim() : "";
+  if (!appRef) {
+    throw new CapabilityError("invalid_input", "app_id is required");
+  }
+  if (args.view !== undefined && args.view !== "coding_capsule") {
+    throw new CapabilityError(
+      "invalid_input",
+      'view must be "coding_capsule"',
+    );
+  }
+
+  const apps = createAppsService();
+  let app = await apps.findById(appRef) as App | null;
+  if (!app) app = await apps.findBySlug(userId, appRef);
+  if (!app) {
+    throw new CapabilityError("not_found", `App not found: ${appRef}`);
+  }
+  if (app.owner_id !== userId) {
+    throw new CapabilityError(
+      "forbidden",
+      "The coding capsule is available only to the Agent owner",
+    );
+  }
+
+  const inspect = asToolArguments(
+    await executeDiscoverInspect(
+      userId,
+      { app_id: app.id },
+      econ,
+      { requireAuthoritativePermissions: true },
+    ),
+  );
+  const manifest = parseAppManifest(app.manifest);
+  const manifestFunctions = manifest?.functions ?? {};
+  const functions = Object.entries(manifestFunctions)
+    .map(([name, fn]) => ({
+      name,
+      description: fn?.description ?? "",
+      parameters: fn?.parameters ?? {},
+      returns: fn?.returns ?? null,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const [
+    routineResult,
+    outgoingGrants,
+    incomingGrants,
+    inferenceOverrides,
+    userProfile,
+  ] = await Promise.all([
+    listRoutines(userId, { composerAppId: app.id, limit: 100 }),
+    listGrantSummaries({
+      userId,
+      callerAppId: app.id,
+      requireAuthoritative: true,
+    }),
+    listGrantSummaries({
+      userId,
+      targetAppId: app.id,
+      requireAuthoritative: true,
+    }),
+    listFunctionInferencePolicies({
+      userId,
+      appId: app.id,
+      requireAuthoritative: true,
+      functionNames: functions.flatMap((fn) =>
+        typeof fn.name === "string" ? [fn.name] : []
+      ),
+    }),
+    createUserService().getUser(userId),
+  ]);
+  if (!userProfile) {
+    throw new CapabilityError(
+      "not_found",
+      "The Agent owner profile is unavailable",
+    );
+  }
+
+  const configuredRoutines = stableCapsuleSet(
+    routineResult.routines.map((routine) => ({
+      kind: "configured",
+      id: routine.id,
+      role: launchRoutineRole(routine.metadata) || "routine",
+      name: routine.name,
+      description: routine.description,
+      intent: routine.intent,
+      handler_function: routine.handler_function,
+      status: routine.status,
+      schedule: routine.schedule,
+      budget_policy: routine.budget_policy,
+      approval_policy: routine.approval_policy,
+      max_concurrency: routine.max_concurrency,
+      next_run_at: routine.next_run_at,
+      last_run_at: routine.last_run_at,
+      last_success_at: routine.last_success_at,
+      last_error_at: routine.last_error_at,
+      failure_count: routine.failure_count,
+      updated_at: routine.updated_at,
+    })),
+  );
+  const routineTemplates = Array.isArray(inspect.routines)
+    ? stableCapsuleSet(
+      (inspect.routines as Array<Record<string, unknown>>).map((routine) => ({
+        kind: "template",
+        ...routine,
+      })),
+    )
+    : [];
+  const primaryRoutine =
+    configuredRoutines.find((routine) => routine.role === "primary") ||
+    configuredRoutines[0] || null;
+
+  const trust = getVersionTrust(app, app.current_version);
+  let files: Array<Record<string, unknown>> = [];
+  try {
+    const sourceFiles = await readVersionSourceFiles(
+      app.id,
+      app.current_version,
+    );
+    const matched = await matchFilesAgainstHashes(
+      sourceFiles,
+      trust?.artifact_hashes ?? {},
+    );
+    files = matched.files.map((file) => ({
+      path: file.path,
+      sha256: file.sha256,
+      signed_sha256: file.published_sha256,
+      signed_match: file.matches,
+    })).sort((left, right) =>
+      String(left.path).localeCompare(String(right.path))
+    );
+  } catch {
+    files = Object.entries(trust?.artifact_hashes ?? {}).map(
+      ([path, sha256]) => ({
+        path: path.replace(/^_source_/, ""),
+        sha256,
+        signed_sha256: sha256,
+        signed_match: true,
+      }),
+    ).sort((left, right) =>
+      String(left.path).localeCompare(String(right.path))
+    );
+  }
+
+  const storage = asToolArguments(inspect.storage);
+  const storageDetails = asToolArguments(storage.details);
+  let dataSchema: Record<string, unknown> = {
+    backend: storage.backend ?? "none",
+  };
+  if (storage.backend === "d1") {
+    try {
+      dataSchema = {
+        backend: "d1",
+        ...asToolArguments(
+          await inspectAppDatabase(userId, {
+            app_id: app.id,
+            action: "schema",
+          }),
+        ),
+      };
+    } catch {
+      dataSchema = {
+        backend: "d1",
+        provisioned: storageDetails.provisioned ?? false,
+        migration_version: storageDetails.migration_version ?? 0,
+      };
+    }
+  } else if (storage.backend === "kv") {
+    dataSchema = {
+      backend: "kv",
+      schema: "schemaless",
+      write_functions: Array.isArray(storageDetails.write_functions)
+        ? storageDetails.write_functions
+        : [],
+    };
+  } else if (storage.backend === "supabase") {
+    dataSchema = {
+      backend: "supabase",
+      schema: "externally_managed",
+      configured: Boolean(storageDetails.config_id),
+    };
+  }
+
+  const metadataByVersion =
+    (Array.isArray(app.version_metadata) ? app.version_metadata : [])
+      .filter((
+        entry,
+      ) => entry && typeof entry.version === "string");
+  const liveMetadata =
+    [...metadataByVersion].reverse().find((entry) =>
+      entry.version === app.current_version
+    ) ?? null;
+  const liveVersionIndex = app.versions.lastIndexOf(app.current_version);
+  const candidateVersions = new Set(
+    liveVersionIndex >= 0 ? app.versions.slice(liveVersionIndex + 1) : [],
+  );
+  const candidates = metadataByVersion.filter((entry) =>
+    candidateVersions.has(entry.version)
+  ).sort(
+    (left, right) =>
+      Date.parse(right.created_at || "") - Date.parse(left.created_at || ""),
+  );
+  const candidate = candidates[0] ?? null;
+  const inspectSettings = asToolArguments(inspect.settings);
+  const recentCalls = Array.isArray(inspect.recent_calls)
+    ? inspect.recent_calls as Array<Record<string, unknown>>
+    : [];
+  const trustCard = asToolArguments(inspect.trust_card);
+
+  const capsule: ProjectCapsuleSnapshot = {
+    schema_version: 1,
+    identity: {
+      app_id: app.id,
+      slug: app.slug,
+      name: app.name,
+      description: app.description,
+      runtime: app.runtime || "deno",
+    },
+    directive: primaryRoutine
+      ? {
+        mission: primaryRoutine.intent || "",
+        source: primaryRoutine.role === "primary"
+          ? "primary_routine"
+          : "managed_routines",
+        source_routine_id: primaryRoutine.id,
+        cadence: primaryRoutine.schedule,
+        reporting: { kind: "galactic_inbox" },
+      }
+      : null,
+    release: {
+      live_version: app.current_version,
+      live_source_hash: liveMetadata?.source_hash ?? null,
+      live_tested: Boolean(liveMetadata?.test_attestation),
+      candidate_version: candidate?.version ?? null,
+      candidate_source_hash: candidate?.source_hash ?? null,
+      candidate_tested: Boolean(candidate?.test_attestation),
+    },
+    functions: functions.map((fn) => ({
+      name: fn.name,
+      description: fn.description ?? "",
+      parameters: fn.parameters ?? {},
+      returns: fn.returns ?? null,
+    })),
+    data_schema: dataSchema,
+    routines: [...configuredRoutines, ...routineTemplates],
+    access: {
+      visibility: app.visibility,
+      download_access: app.download_access,
+      declared_permissions: Array.isArray(trustCard.permissions)
+        ? stableCapsuleSet(trustCard.permissions)
+        : [],
+      access_policy: manifest?.access_policy ?? null,
+      caller_permissions: Array.isArray(inspect.permissions)
+        ? stableCapsuleSet(inspect.permissions)
+        : [],
+      network: inspect.network ?? null,
+      grants: {
+        outgoing: stableCapsuleSet(outgoingGrants),
+        incoming: stableCapsuleSet(incomingGrants),
+      },
+    },
+    model_policy: {
+      runtime_default: projectDefaultInferenceRoute(userProfile),
+      per_call_model_supported: true,
+      installer_overrides: stableCapsuleSet(inferenceOverrides),
+    },
+    settings: {
+      app_settings: Array.isArray(inspectSettings.app_settings)
+        ? stableCapsuleSet(inspectSettings.app_settings)
+        : [],
+      app_settings_present: Object.keys(app.env_vars ?? {}).sort(),
+      user_settings: Array.isArray(inspectSettings.user_settings)
+        ? stableCapsuleSet(inspectSettings.user_settings)
+        : [],
+      user_settings_present: Array.isArray(inspectSettings.connected_keys)
+        ? stableCapsuleSet(inspectSettings.connected_keys)
+        : [],
+      missing_required: Array.isArray(inspectSettings.missing_required)
+        ? stableCapsuleSet(inspectSettings.missing_required)
+        : [],
+      fully_connected: inspectSettings.fully_connected === true,
+    },
+    recent_failures: stableCapsuleSet(
+      recentCalls.filter((call) => call.success === false).map(
+        (call) => ({
+          function_name: call.function_name,
+          called_at: call.called_at,
+          caller: call.caller,
+        }),
+      ),
+    ).sort((left, right) =>
+      String(right.called_at ?? "").localeCompare(
+        String(left.called_at ?? ""),
+      )
+    ),
+    files,
+    bundle: liveMetadata?.bundle_id
+      ? {
+        bundle_id: liveMetadata.bundle_id,
+        source_hash: liveMetadata.source_hash ?? null,
+        deployed_version: liveMetadata.version,
+      }
+      : null,
+  };
+
+  const assertAppLive = async () => {
+    let liveApp: Awaited<ReturnType<typeof apps.findById>>;
+    try {
+      liveApp = await apps.findById(app.id);
+    } catch (error) {
+      console.error("[GX.PROJECT] Agent liveness check failed", error);
+      throw new ProjectCapsuleError(
+        "liveness_unavailable",
+        "Agent liveness verification is temporarily unavailable",
+      );
+    }
+    if (!liveApp || liveApp.owner_id !== userId) {
+      throw new ProjectCapsuleError(
+        "app_not_live",
+        "Agent is no longer live and owned by this user",
+      );
+    }
+  };
+  return await projectCapsuleResponse(createR2Service(), {
+    ownerId: userId,
+    appId: app.id,
+    capsule,
+    sinceRevision: typeof args.since_revision === "string"
+      ? args.since_revision
+      : undefined,
+    assertAppLive,
+  });
+}
+
+export function projectCapabilityError(error: unknown): CapabilityError {
+  if (error instanceof CapabilityError) return error;
+  if (error instanceof ProjectCapsuleError) {
+    switch (error.code) {
+      case "invalid_revision":
+      case "revision_not_found":
+        return new CapabilityError("invalid_input", error.message);
+      case "app_not_live":
+        return new CapabilityError("conflict", error.message);
+      case "liveness_unavailable":
+        return new CapabilityError(
+          "internal",
+          "The coding capsule is temporarily unavailable",
+        );
+      case "capsule_too_large":
+        return new CapabilityError("quota_exceeded", error.message);
+    }
+  }
+  console.error("[GX.PROJECT] Coding capsule projection failed", error);
+  return new CapabilityError(
+    "internal",
+    "The coding capsule is temporarily unavailable",
+  );
+}
+
+bindCapabilityHandler("project", async (args, ctx) => {
+  try {
+    return await executeProjectCapsule(
+      ctx.userId,
+      args,
+      ctx.econ ?? { freeMode: false, byokPresent: false },
+    );
+  } catch (error) {
+    throw projectCapabilityError(error);
   }
 });
 
@@ -2476,6 +2938,104 @@ bindCapabilityHandler("download", async (args, ctx) => {
   return executeScaffold(args);
 });
 
+async function resolveBuilderSource(
+  userId: string,
+  args: Record<string, unknown>,
+): Promise<{
+  files: DecodedSourceFile[];
+  bundleId?: string;
+}> {
+  const hasFiles = Array.isArray(args.files) && args.files.length > 0;
+  const hasBundle = typeof args.bundle_id === "string" &&
+    args.bundle_id.length > 0;
+  if (hasFiles === hasBundle) {
+    throw new CapabilityError(
+      "invalid_input",
+      "Provide exactly one of files or bundle_id.",
+    );
+  }
+  if (hasBundle) {
+    try {
+      const resolved = await resolveStagedBundle(createR2Service(), {
+        ownerId: userId,
+        bundleId: String(args.bundle_id),
+      });
+      return { files: resolved.files, bundleId: resolved.manifest.bundle_id };
+    } catch (err) {
+      throw new CapabilityError(
+        "invalid_input",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+  try {
+    return {
+      files: decodeSourceFileSet(
+        args.files as Array<{
+          path: string;
+          content: string;
+          encoding?: string;
+        }>,
+      ),
+    };
+  } catch (err) {
+    throw new CapabilityError(
+      "invalid_input",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+bindCapabilityHandler("stage", async (args, ctx) => {
+  const rateLimit = await checkRateLimit(
+    ctx.userId,
+    BUILDER_STAGE_RATE_LIMIT_ENDPOINT,
+    undefined,
+    undefined,
+    { mode: "fail_closed", resource: "Builder stage" },
+  );
+  if (!rateLimit.allowed) {
+    throw new CapabilityError(
+      rateLimit.reason === "service_unavailable" ? "internal" : "rate_limited",
+      rateLimit.reason === "service_unavailable"
+        ? "Builder stage admission is temporarily unavailable"
+        : `Builder stage is limited to ${BUILDER_STAGE_RATE_LIMIT_PER_MINUTE} requests per minute; retry after ${rateLimit.resetAt.toISOString()}`,
+    );
+  }
+
+  try {
+    return await stageBundle(createR2Service(), {
+      ownerId: ctx.userId,
+      files: args.files as
+        | Array<{
+          path: string;
+          content: string;
+          encoding?: string;
+        }>
+        | undefined,
+      baseBundleId: typeof args.base_bundle_id === "string"
+        ? args.base_bundle_id
+        : undefined,
+      deletePaths: args.delete_paths as string[] | undefined,
+      admit: createStagedBundleQuotaAdmission(),
+    });
+  } catch (err) {
+    if (err instanceof StagedBundleQuotaError) {
+      throw new CapabilityError(
+        err.code === "quota_exceeded" ? "quota_exceeded" : "internal",
+        err.code === "quota_exceeded"
+          ? err.message
+          : "Builder stage storage admission is temporarily unavailable",
+      );
+    }
+    if (!(err instanceof StagedBundleError)) throw err;
+    throw new CapabilityError(
+      "invalid_input",
+      err.message,
+    );
+  }
+});
+
 bindCapabilityHandler("upload", async (args, ctx) => {
   const uploadType = args.type || "app";
   if (uploadType === "page") {
@@ -2487,27 +3047,25 @@ bindCapabilityHandler("upload", async (args, ctx) => {
     }
     return await executeMarkdown(ctx.userId, args);
   }
-  return await executeUpload(ctx.userId, args, {
+  const source = await resolveBuilderSource(ctx.userId, args);
+  const result = await executeUpload(ctx.userId, {
+    ...args,
+  }, {
     callerIsApiToken: ctx.authSource === "api_token",
+    resolvedFiles: source.files,
   });
+  return source.bundleId
+    ? { ...asToolArguments(result), bundle_id: source.bundleId }
+    : result;
 });
 
 bindCapabilityHandler("test", async (args, ctx) => {
-  let testFiles: Array<{ path: string; content: string }>;
-  try {
-    testFiles = decodeSourceFileSet(
-      args.files as Array<{
-        path: string;
-        content: string;
-        encoding?: string;
-      }>,
-    );
-  } catch (err) {
-    throw new CapabilityError(
-      "invalid_input",
-      err instanceof Error ? err.message : String(err),
-    );
-  }
+  const source = await resolveBuilderSource(ctx.userId, args);
+  const testFiles = source.files;
+  const withBundleId = (value: unknown): unknown =>
+    source.bundleId
+      ? { ...asToolArguments(value), bundle_id: source.bundleId }
+      : value;
   const decodedArgs = { ...args, files: testFiles };
   const isGpu = hasGpuRuntimeFiles(testFiles);
   if (isGpu && !isGpuSupportEnabled()) {
@@ -2519,9 +3077,11 @@ bindCapabilityHandler("test", async (args, ctx) => {
   if (args.lint_only) {
     // GPU gx.test is validation-only already. The generic lint path expects an
     // index.ts and would incorrectly reject every valid GPU package.
-    return isGpu
-      ? await executeTest(ctx.userId, decodedArgs, ctx.user as UserContext)
-      : executeLint(decodedArgs); // lint-only never attests execution
+    return withBundleId(
+      isGpu
+        ? await executeTest(ctx.userId, decodedArgs, ctx.user as UserContext)
+        : executeLint(decodedArgs),
+    ); // lint-only never attests execution
   }
 
   if (isGpu) {
@@ -2537,15 +3097,15 @@ bindCapabilityHandler("test", async (args, ctx) => {
         sourceHash,
         mode: "gpu_validation",
       });
-      return {
+      return withBundleId({
         ...result,
         source_hash: sourceHash,
         test_attestation: issued.token,
         test_attestation_mode: "gpu_validation",
         test_attestation_expires_at: issued.claims.expires_at,
-      };
+      });
     }
-    return result;
+    return withBundleId(result);
   }
 
   // Run lint first, then execute (strict mode blocks on lint errors).
@@ -2554,12 +3114,12 @@ bindCapabilityHandler("test", async (args, ctx) => {
     issue.severity === "error"
   );
   if (lintErrors.length > 0 && args.strict) {
-    return {
+    return withBundleId({
       lint_passed: false,
       lint: lintResult,
       tip:
         "Fix lint errors before testing. Or set strict=false to test anyway.",
-    };
+    });
   }
   const testResult = await executeTest(
     ctx.userId,
@@ -2574,16 +3134,16 @@ bindCapabilityHandler("test", async (args, ctx) => {
       sourceHash,
       mode: "deno_execution",
     });
-    return {
+    return withBundleId({
       ...result,
       lint: lintResult,
       source_hash: sourceHash,
       test_attestation: issued.token,
       test_attestation_mode: "deno_execution",
       test_attestation_expires_at: issued.claims.expires_at,
-    };
+    });
   }
-  return { ...result, lint: lintResult };
+  return withBundleId({ ...result, lint: lintResult });
 });
 
 bindCapabilityHandler("set", async (args, ctx) => {
@@ -3371,7 +3931,7 @@ export function getPlatformTools(
 
 // Progressive disclosure for the lite manifest: list the platform tools that
 // are not advertised in tools/list so an agent can still find + call them.
-function executeDiscoverTools(callerIsApiToken = false): {
+function executeDiscoverTools(auth?: PlatformMcpAuthContext): {
   tools: Array<{ name: string; description: string }>;
   note: string;
 } {
@@ -3381,14 +3941,8 @@ function executeDiscoverTools(callerIsApiToken = false): {
       note: "All platform tools are advertised in tools/list; none are hidden.",
     };
   }
-  const demoted = callerIsApiToken
-    ? filterPlatformMcpToolsForAuth(getDemotedPlatformTools(), {
-      authSource: "api_token",
-      // This inventory describes which deferred tools can ever be granted to a
-      // Connect key. Per-request authorization still requires the key's actual
-      // explicit scope before dispatch.
-      scopes: ["apps:read", "apps:call", "agents:build", "agents:operate"],
-    })
+  const demoted = auth?.authSource === "api_token"
+    ? filterPlatformMcpToolsForAuth(getDemotedPlatformTools(), auth)
     : getDemotedPlatformTools();
   const tools = demoted.map((tool) => ({
     name: gxToolName(tool.name),
@@ -3514,6 +4068,8 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
     platformAuth = {
       authSource: authUser.authSource,
       scopes: authUser.scopes,
+      tokenId: authUser.tokenId,
+      tokenAppIds: authUser.tokenAppIds,
     };
 
     // Hardening: actor tokens (sandbox_actor / routine_actor) are minted only
@@ -3997,7 +4553,7 @@ operations.
 
 \`gx.call({ app_id: "...", function_name: "...", args: {...} })\` — execute any function. One connection, all apps.
 
-- For apps listed above: call directly. First call per session auto-includes full context (schemas, storage keys, usage patterns).
+- For apps listed above: call directly. First call per session includes a compact function/schema summary, not source or stored data.
 - For unknown/unlisted apps: call \`gx.discover({ scope: "inspect", app_id })\` first.
 
 ## Agent URL Guidance
@@ -4044,7 +4600,7 @@ The tools advertised in \`tools/list\` are filtered to the API key's explicit sc
 
 ### gx.call({ app_id, function_name, args? })
 Execute any app's function through this single platform connection.
-- Returns result + full app context on first call per session (auto-inspect)
+- Returns result + a compact function/schema summary on first call per session
 - Subsequent calls return result + lightweight metadata
 - Uses your auth — no separate per-app connection needed
 
@@ -4102,22 +4658,47 @@ Persistent cloud routines for ongoing delegated work.
 - \`action: "run_now"\` — Queue a manual run. Durable execution is claimed by the backend routine executor.
 - **Handler contract:** each run invokes the routine's \`handler_function\` with the routine's \`config\` (merged with the run's \`run_config\`) plus a reserved \`_routine\` object: \`{ routine_id, routine_run_id, trace_id, trigger: "scheduled" | "manual", attempt, scheduled_at, intent }\`. \`intent\` is the routine's natural-language goal — write the standing directive there and have the handler read \`args._routine.intent\` on every wake. \`args._routine\` being present is how code knows it was woken by a routine rather than called by a user. Handlers must complete synchronously.
 
-### gx.upload({ files, test_attestation?, name?, description?, visibility?, app_id?, type? })
+### gx.project({ app_id, view?, since_revision? })
+Return an owner-only, source-free coding capsule for an Agent.
+- \`view\` is currently \`"coding_capsule"\`.
+- The full capsule includes identity, directive, release state, function contracts, data schema, configured and declared routines, effective access/wiring, the effective secret-free default inference route (including whether its required configuration is present) and installer overrides, settings presence, recent failures, source-file hashes, and staged-bundle lineage.
+- It never includes secret values, stored application data, source contents, full logs, or reasoning traces.
+- Save the returned \`revision\`. A later \`gx.project({ app_id, since_revision: revision })\` returns only nested changes plus \`removed_paths\`, or \`not_modified: true\`.
+- Full responses are \`{ view, app_id, revision, revision_created_at, revision_expires_at, capsule }\`. Delta responses are \`{ view, app_id, revision, revision_created_at, revision_expires_at, since_revision, not_modified, delta, removed_paths }\`. Arrays are replaced as units; \`removed_paths\` uses JSON Pointer syntax. Revisions have a 30-day lease and each canonical capsule is limited to 2 MiB. If a prior revision is invalid, expired, or unavailable, request a new full capsule.
+- This is the preferred way for a coding agent to orient itself before editing. Use \`gx.download\` only when source contents are actually needed.
+
+### gx.stage({ files?, base_bundle_id?, delete_paths? })
+Create a content-addressed source bundle with owner-scoped storage and access.
+- Initial stage: pass the full \`files\` array and retain the returned \`bundle_id\`.
+- Incremental stage: pass \`base_bundle_id\`, only changed/new \`files\`, and optional \`delete_paths\`; Galactic reuses unchanged contents and refreshes every unique referenced blob before publishing the new manifest.
+- Bundles are immutable source identities with short-lived staging leases. \`bundle_id\` is deterministic from the ordered path/content-hash set; storage and access are owner-scoped, and every read is hash-verified.
+- The public lease is 24 hours. Repeating an already-live identical stage is idempotent and does not extend that lease.
+- Stage admission is fail-closed at 10 requests per owner per minute, 100 MiB of active unique staged objects, and 10,000 active objects. Reused hashes count once. Rate and quota failures use distinct platform error codes.
+- A resolved bundle is limited to 50 files and 50 MiB of decoded source. Paths must use allowed Galactic source/configuration extensions.
+- \`.wasm\` files must use \`encoding: "base64"\`; Galactic hashes, tests, stages, and stores their decoded bytes without UTF-8 conversion. Base64-encoded text remains source-identical to equivalent text input.
+- Returns \`bundle_id\`, \`source_hash\`, \`file_count\`, \`size_bytes\`, \`changed_files\`, \`reused_files\`, \`deleted_files\`, \`created_at\`, and \`expires_at\`.
+- Pass \`bundle_id\` to both \`gx.test\` and \`gx.upload\`, so source crosses the connection once instead of once per step.
+
+### gx.upload({ files?, bundle_id?, test_attestation?, name?, description?, visibility?, app_id?, type? })
 Deploy TypeScript/Python app or publish markdown page.
 - \`type: "page"\`: publish markdown at a URL. Requires \`content\` + \`slug\`.
 - No \`app_id\`: creates new app at v1.0.0 (auto-live for Deno; GPU apps start building).
 - With \`app_id\`: adds new version (NOT live — use \`gx.set\` to activate).
 - Connected-agent keys can create and update **private Agents only**. Existing versions stay staged even for name-based uploads or \`_auto_live\`; page publication and legacy public/unlisted Agents require the authenticated owner session.
+- For app deploys, provide exactly one of \`files\` or a \`bundle_id\` from \`gx.stage\`.
 - \`files\`: array of \`{ path: string, content: string, encoding?: "text" | "base64" }\`.
+- Use \`encoding: "base64"\` for \`.wasm\`; its decoded bytes are preserved exactly.
 - Connected-agent uploads must pass \`test_attestation\` from a successful \`gx.test\` of the exact same decoded file set. The proof is short-lived and bound to the owner, source hash, and runtime mode; authenticated account-session uploads may omit it.
 - **GPU functions:** Include \`ultralight.gpu.yaml\` + \`main.py\` in files. Runtime is auto-detected on upload. For new scaffolds, pass \`runtime: "gpu"\`. Do not include a Dockerfile; Galactic generates it, installs \`requirements.txt\` at GHCR build time, then points RunPod at the baked image. Build is async; \`gpu_status\` starts at \`building\` and settles to \`live\`, \`build_failed\`, \`benchmark_failed\`, or \`build_config_invalid\`.
 
 ### gx.download({ app_id?, name?, description?, version?, runtime?, gpu_type?, base? })
 - With \`app_id\`: download app source code (respects download_access setting).
+- Downloaded \`.wasm\` files use \`encoding: "base64"\` so clients can restore the exact published bytes.
 - Without \`app_id\`: scaffold a new app. Default runtime generates index.ts + manifest.json + .ultralightrc.json. With \`runtime: "gpu"\`, generates \`ultralight.gpu.yaml\`, \`main.py\`, \`requirements.txt\`, and \`test_fixture.json\`. Optional: \`functions\` array, \`storage\` type, \`permissions\` list, \`policy: true\` for policy.ts, \`full_time: true\` for a running full-time-agent loop (see "Full-time Agents" below), \`gpu_type\`, \`base: "python-cuda" | "torch-cuda"\`.
 
-### gx.test({ files, function_name?, test_args?, env_vars?, d1_fixtures?, lint_only?, strict? })
+### gx.test({ files?, bundle_id?, function_name?, test_args?, env_vars?, d1_fixtures?, lint_only?, strict? })
 Test code in sandbox without deploying.
+- Provide exactly one of \`files\` or a \`bundle_id\` from \`gx.stage\`.
 - Executes function with test_args in real sandbox. Storage is ephemeral.
 - GPU apps are validation-only in \`gx.test\`: it checks \`ultralight.gpu.yaml\`, \`main.py\`, \`test_fixture.json\`, pinned requirements, and rejects Dockerfiles. Actual Python/GPU execution happens after upload/build/benchmark.
 - If \`test_fixture.json\` has a single function entry, \`function_name\` can be omitted and fixture args become the default test_args.
@@ -4127,7 +4708,7 @@ Test code in sandbox without deploying.
 - \`lint_only: true\`: validate code conventions without executing (single-args check, no-shorthand-return, manifest sync, permission detection).
 - \`strict: true\`: lint warnings become errors.
 - A successful execution with zero lint errors returns \`source_hash\`, an opaque short-lived \`test_attestation\`, its mode, and expiry. GPU packages receive a validation-only attestation; \`lint_only\` never returns one.
-- Connected-agent flow: keep the successful response as \`tested\`, then upload the exact same files with \`gx.upload({ files, test_attestation: tested.test_attestation, ... })\`. Any file or path change requires another test.
+- Preferred connected-agent flow: \`staged = gx.stage({ files })\`, \`tested = gx.test({ bundle_id: staged.bundle_id })\`, then \`gx.upload({ bundle_id: staged.bundle_id, test_attestation: tested.test_attestation, ... })\`. Any source change requires a new incremental stage and test.
 
 ### gx.set({ app_id, version?, visibility?, download_access?, supabase_server?, calls_per_minute?, calls_per_day?, default_price_credits?, default_free_calls?, free_calls_scope?, function_prices?, gpu_pricing_config?, search_hints?, show_metrics? })
 Batch configure app settings. Each field is optional — only provided fields are updated.
@@ -4222,7 +4803,7 @@ Manage your wallet: balance, earnings, conversions, withdrawals, payouts.
 
 ## Building Apps
 
-**Workflow:** \`gx.download\` (scaffold) → implement functions (reach for \`galactic.ai()\`, \`galactic.call()\`, \`galactic.db\`) → add an Interface (\`interfaces[]\`) for a human-facing UI → \`tested = gx.test(...)\` → \`gx.upload({ ..., test_attestation: tested.test_attestation })\` → \`gx.set\`. Upload the exact tested file set. The richest Agents combine functions + AI + an Interface — see "The SDK" and "Interfaces" below.
+**Workflow:** \`gx.project\` (existing Agent context) or \`gx.download\` (source/scaffold) → implement → \`staged = gx.stage({ files })\` → \`tested = gx.test({ bundle_id: staged.bundle_id })\` → \`gx.upload({ bundle_id: staged.bundle_id, test_attestation: tested.test_attestation })\` → \`gx.set\`. For later edits, stage only changed files against the prior \`bundle_id\`.
 
 **Always include a manifest.json** alongside index.ts. The manifest enables per-function pricing in the dashboard, typed parameter schemas for better agent tool use, permission grants, Settings surfaces on public app pages, and a declared \`access_policy\` hook for custom-coded permission/monetization logic. Without it, functions are auto-detected from exports but lack parameter/return metadata. Structure: \`{ "functions": { "fnName": { "description": "...", "parameters": { "paramName": { "type": "string", "required": true, "description": "What this param does" } } } }, "access_policy": { "mode": "module", "module": "policy.ts", "export": "planAccess" }, "env_vars": { "MY_KEY": { "scope": "per_user", "input": "password", "description": "..." } } }\`. Parameters must be an object keyed by parameter name (NOT an array). \`access_policy.module\` records the source file, and \`access_policy.export\` must be exported from the bundled app entry surface, e.g. \`export { planAccess } from "./policy.ts";\`. Policy functions receive \`{ app, caller, subject, input, metadata, static }\` and return \`{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }\` or \`{ effect: "deny", reason }\`. \`gx.download\` scaffolds the base manifest automatically. The \`type\` and \`entry\` fields are optional in a hand-written manifest — they default to \`"mcp"\` and \`{ "functions": "index.ts" }\`, so the structure above deploys as-is.
 
@@ -4268,9 +4849,14 @@ Agent code runs in a sandbox with the \`galactic.*\` SDK (alias: \`ultralight.*\
 Not in the SDK: there is no in-code charging API (monetize via per-call pricing / \`planAccess\`), no raw TCP/TLS sockets (\`galactic.net.connectTls\` throws — use the managed email methods), and no bring-your-own Supabase client in the runtime (reach external databases through \`fetch\`/\`galactic.fetch\` to allowlisted hosts).
 
 #### \`galactic.ai(request)\` — multimodal chat completion
-Request: \`{ messages: [{ role, content }], model?, max_tokens?, temperature? }\`. \`content\` is a string OR an array of parts — \`{ type: "text", text }\` and \`{ type: "file", data, filename? }\` where an image file enables **vision**. Returns \`{ content, model, usage }\`. Billed in credits (or the user's BYOK key). Requires \`ai:call\` in manifest permissions. There is no streaming / JSON-mode / image-generation — ask for JSON in the prompt and \`JSON.parse\` the result. **On failure \`galactic.ai\` throws** (out of credits, rate limit, upstream error) — it never returns an empty \`content\`, so a plain \`await\` either yields a real completion or surfaces the error in your function's error envelope. It auto-retries once against the platform fallback model before throwing.
+Request: \`{ messages: [{ role, content }], model?, max_tokens?, temperature?, output_schema? }\`. \`content\` is a string OR an array of parts — \`{ type: "text", text }\` and \`{ type: "file", data, filename? }\` where an image file enables **vision**. Returns \`{ content, output?, model, usage }\`. Billed in credits (or the user's BYOK key). Requires \`ai:call\` in manifest permissions. There is no streaming or image generation. **On failure \`galactic.ai\` throws** (out of credits, rate limit, upstream error, or structured-output failure) and preserves a structured-output \`error.code\` when present. It auto-retries eligible transport/provider failures once against the platform fallback model before throwing.
 - Generate: \`const { content } = await galactic.ai({ messages: [{ role: "user", content: prompt }] });\`
-- Extract to JSON: prompt \`"Return ONLY JSON {title, tags[]} for: " + text\`, then \`JSON.parse(content)\`.
+- Strict structured output: \`const { output } = await galactic.ai({ messages, output_schema: { name: "invoice", strict: true, schema: { type: "object", properties: { id: { type: "string" }, total: { type: "number" } }, required: ["id", "total"], additionalProperties: false } } });\`.
+- \`output_schema\` uses provider-native strict JSON Schema and Galactic validates the value again. It never silently degrades to prompt-only JSON. Errors use \`invalid_output_schema\`, \`structured_output_unsupported\`, \`structured_output_invalid_json\`, or \`structured_output_schema_mismatch\`.
+- \`strict\` may be omitted or \`true\`; \`false\` is rejected. Schemas are limited to 64 KiB and depth 32; structured results are limited to 2 MiB, depth 64, 50,000 combined traversal/schema steps, and 16 MiB of cumulative canonical comparison work. \`$ref\` must be local and acyclic.
+- Provider work is charged or recorded before Galactic's final local validation. A schema mismatch still settles completed inference usage.
+- Locally enforced assertions: \`type\`, \`const\`, \`enum\`, \`allOf\`, \`anyOf\`, \`oneOf\`, \`not\`, string length, numeric bounds/\`multipleOf\`, array size/uniqueness/items, and object size/required/properties/additional properties. \`$defs\`/\`definitions\` and standard annotation keywords are accepted.
+- Every other keyword—including \`pattern\`, \`format\`, \`contains\`, \`patternProperties\`, \`propertyNames\`, conditionals, and remote/recursive references—is rejected before the provider call.
 - Vision: \`content: [{ type: "text", text: "What is this?" }, { type: "file", data: dataUri, filename: "p.png" }]\`.
 
 #### \`galactic.embed({ input, model? })\` — semantic embedding
@@ -4383,7 +4969,7 @@ That emits a RUNNING loop, not boilerplate: a \`tick(args)\` handler wired end-t
 
 **Safety + economics:** every day/month and per-run LIGHT/call ceiling is a pre-execution admission check: billable work stops before overspending. Exhausted day/month budgets defer wakes; a per-run ceiling or 10 consecutive failures auto-pauses with the reason on the routine (see gx.routine). The routine's owner pays; fixed overhead is roughly a cent a day — the bill is how hard the agent thinks.
 
-**Activation checklist:** the connected builder runs \`gx.test\`, passes its \`test_attestation\` into \`gx.upload\` with the exact same files, stages a private version, and creates a paused \`gx.routine\` proposal with hard ceilings. Then the owner reviews mission, cadence, data/secrets, allowed actions, reporting, grants, and budgets on the Agent Overview and explicitly approves + activates it. Watch via the routine monitor / \`gx.routine get\`.
+**Activation checklist:** the connected builder creates a \`gx.stage\` bundle, runs \`gx.test({ bundle_id })\`, passes that same \`bundle_id\` and its \`test_attestation\` into \`gx.upload\`, stages a private version, and creates a paused \`gx.routine\` proposal with hard ceilings. Then the owner reviews mission, cadence, data/secrets, allowed actions, reporting, grants, and budgets on the Agent Overview and explicitly approves + activates it. Watch via the routine monitor / \`gx.routine get\`.
 
 ## Building GPU Functions
 
@@ -4702,17 +5288,19 @@ account. If it is empty, say so plainly and propose two small, specific full-tim
 Agent ideas based on the user's context. Do not browse the public appstore unless
 the user explicitly asks.
 
-Explain the operating loop in six verbs:
+Explain the operating loop in seven verbs:
 
 - **Describe** — turn an ongoing responsibility into a crisp mission, inputs,
   allowed actions, reporting behavior, and finite cost limits.
 - **Scaffold** — start with \`gx.download({full_time:true})\`; the generated Agent
   already has a persistent journal, one routine template, and a working loop.
-- **Test** — implement its observation/action boundaries and run a representative
-  wake with \`gx.test\`. Keep the returned short-lived \`test_attestation\`.
-- **Deploy** — pass that proof and the exact tested files to \`gx.upload\`, which
-  creates a private Agent. A new version is staged before promotion; expanded
-  authority requires fresh owner approval.
+- **Stage** — upload the source once with \`gx.stage\`; subsequent edits send only
+  changes against its content-addressed \`bundle_id\`.
+- **Test** — run a representative wake with \`gx.test({ bundle_id })\`. Keep the
+  returned short-lived \`test_attestation\`.
+- **Deploy** — pass that same \`bundle_id\` and proof to \`gx.upload\`, which
+  creates a private Agent without retransmitting its source. A new version is
+  staged before promotion; expanded authority requires fresh owner approval.
 - **Activate** — create the routine paused. The user reviews its exact mission,
   cadence, secrets, capabilities, Agent grants, and hard budgets in Galactic.
   Connected-agent credentials cannot approve or activate their own authority.
@@ -5175,6 +5763,10 @@ async function handleToolsCall(
         econ,
         user,
         authSource: platformAuth.authSource,
+        authorization: {
+          scopes: platformAuth.scopes,
+          appIds: platformAuth.tokenAppIds,
+        },
         request,
         widgetForwardArgs,
         computeAttribution: trustedCompute?.attribution,
@@ -6764,12 +7356,18 @@ function bumpVersion(current: string | null, explicit?: unknown): string {
 async function executeUpload(
   userId: string,
   args: Record<string, unknown>,
-  options: { callerIsApiToken?: boolean } = {},
+  options: {
+    callerIsApiToken?: boolean;
+    resolvedFiles?: DecodedSourceFile[];
+  } = {},
 ): Promise<unknown> {
   const files = args.files as Array<
     { path: string; content: string; encoding?: string }
   >;
-  if (!files || !Array.isArray(files) || files.length === 0) {
+  if (
+    (!files || !Array.isArray(files) || files.length === 0) &&
+    (!options.resolvedFiles || options.resolvedFiles.length === 0)
+  ) {
     throw new ToolError(
       INVALID_PARAMS,
       "files array is required and must not be empty",
@@ -6812,9 +7410,9 @@ async function executeUpload(
 
   // Decode once, identically to gx.test, before hashing or deployment. The
   // attestation binds to this exact decoded path/content set.
-  let decodedFiles: Array<{ path: string; content: string }>;
+  let decodedFiles: DecodedSourceFile[];
   try {
-    decodedFiles = decodeSourceFileSet(files);
+    decodedFiles = options.resolvedFiles ?? decodeSourceFileSet(files);
   } catch (err) {
     throw new ToolError(
       INVALID_PARAMS,
@@ -6832,10 +7430,14 @@ async function executeUpload(
   const uploadFiles: UploadFile[] = decodedFiles.map((file) => ({
     name: file.path,
     content: file.content,
-    size: file.content.length,
+    ...(file.bytes ? { bytes: file.bytes } : {}),
+    size: sourceFileByteLength(file),
   }));
   const uploadFileCount = uploadFiles.length;
   const uploadSourceHash = await computeDecodedSourceHash(decodedFiles);
+  const uploadBundleId = typeof args.bundle_id === "string"
+    ? args.bundle_id
+    : undefined;
   const testMode: TestAttestationMode = hasGpuRuntimeFiles(decodedFiles)
     ? "gpu_validation"
     : "deno_execution";
@@ -6927,6 +7529,29 @@ async function executeUpload(
       ),
     });
     if (connectedAdmission === "deduplicate") {
+      if (uploadBundleId) {
+        const appsService = createAppsService();
+        try {
+          await persistDeduplicatedBundleLineage({
+            app,
+            ownerId: userId,
+            sourceHash: uploadSourceHash,
+            bundleId: uploadBundleId,
+            store: {
+              compareAndSwapVersionMetadata: (input) =>
+                appsService.compareAndSwapVersionMetadata(input),
+              findById: (appId) => appsService.findById(appId),
+            },
+          });
+        } catch (error) {
+          if (error instanceof BundleLineageConflictError) {
+            throw new ToolError(VALIDATION_ERROR, error.message, {
+              type: "BUNDLE_LINEAGE_CONFLICT",
+            });
+          }
+          throw error;
+        }
+      }
       return {
         deduplicated: true,
         app_id: app.id,
@@ -7047,6 +7672,7 @@ async function executeUpload(
       const validatedFiles = uploadFiles.map((f) => ({
         name: f.name,
         content: f.content,
+        ...(f.bytes ? { bytes: f.bytes } : {}),
       }));
       const gpuPreflightStart = Date.now();
       logToolMakerStage(
@@ -7103,9 +7729,11 @@ async function executeUpload(
           )
           .map((f) => ({
             name: f.name,
-            content: new TextEncoder().encode(f.content),
+            content: sourceFileBytes(f),
             contentType: f.name.endsWith(".py")
               ? "text/x-python"
+              : f.name.endsWith(".wasm")
+              ? "application/wasm"
               : "text/plain",
           })),
         {
@@ -7143,6 +7771,7 @@ async function executeUpload(
             versionTrust,
             uploadSourceHash,
             verifiedTestMetadata,
+            uploadBundleId,
           ),
         ),
       };
@@ -7215,6 +7844,7 @@ async function executeUpload(
     const validatedFiles = uploadFiles.map((f) => ({
       name: f.name,
       content: f.content,
+      ...(f.bytes ? { bytes: f.bytes } : {}),
     }));
 
     const pipelineStageStart = Date.now();
@@ -7383,6 +8013,7 @@ async function executeUpload(
           versionTrust,
           uploadSourceHash,
           verifiedTestMetadata,
+          uploadBundleId,
         ),
       ),
     };
@@ -7896,6 +8527,7 @@ async function executeUpload(
       const validatedFiles = uploadFiles.map((f) => ({
         name: f.name,
         content: f.content,
+        ...(f.bytes ? { bytes: f.bytes } : {}),
       }));
       const gpuPreflightStart = Date.now();
       logToolMakerStage(
@@ -7946,7 +8578,7 @@ async function executeUpload(
         );
       }
       const totalUploadBytes = validatedFiles.reduce(
-        (sum, f) => sum + new TextEncoder().encode(f.content).byteLength,
+        (sum, f) => sum + sourceFileByteLength(f),
         0,
       );
       const quotaCheck = await checkStorageQuota(userId, totalUploadBytes, {
@@ -7986,9 +8618,11 @@ async function executeUpload(
           )
           .map((f) => ({
             name: f.name,
-            content: new TextEncoder().encode(f.content),
+            content: sourceFileBytes(f),
             contentType: f.name.endsWith(".py")
               ? "text/x-python"
+              : f.name.endsWith(".wasm")
+              ? "application/wasm"
               : "text/plain",
           })),
         {
@@ -8041,6 +8675,7 @@ async function executeUpload(
             versionTrust,
             uploadSourceHash,
             verifiedTestMetadata,
+            uploadBundleId,
           ),
         ],
       });
@@ -8125,6 +8760,7 @@ async function executeUpload(
         gap_id: gapId,
         source_hash: uploadSourceHash,
         test_attestation: verifiedTestMetadata,
+        bundle_id: uploadBundleId,
       });
       logToolMakerStage(
         {
@@ -8331,7 +8967,11 @@ export async function executeDownload(
   // here are exactly the bytes verify attests to.
   const sourceFiles = await readVersionSourceFiles(app.id, version);
   // Strip the internal sourceKey from the public payload (matching uses it).
-  const files = sourceFiles.map(({ path, content }) => ({ path, content }));
+  const files = sourceFiles.map(({ path, content, encoding }) => ({
+    path,
+    content,
+    ...(encoding ? { encoding } : {}),
+  }));
 
   // Open-code verification: per-file SHA256 of the EXACT returned bytes, matched
   // against the signed published artifact_hashes. The sha256 values let a client
@@ -8383,18 +9023,7 @@ async function runCapabilityForMcp(
     return await handler(args, ctx);
   } catch (err) {
     if (err instanceof CapabilityError) {
-      const code = err.code === "invalid_input"
-        ? INVALID_PARAMS
-        : err.code === "not_found"
-        ? NOT_FOUND
-        : err.code === "forbidden"
-        ? FORBIDDEN
-        : err.code === "conflict"
-        ? CONFLICT
-        : err.code === "rate_limited"
-        ? RATE_LIMITED
-        : INTERNAL_ERROR;
-      throw new ToolError(code, err.message);
+      throw new ToolError(capabilityErrorToToolCode(err.code), err.message);
     }
     throw err;
   }
@@ -8430,7 +9059,7 @@ async function executeTest(
   args: Record<string, unknown>,
   user: UserContext,
 ): Promise<unknown> {
-  const files = args.files as Array<{ path: string; content: string }>;
+  const files = args.files as DecodedSourceFile[];
   if (!files || !Array.isArray(files) || files.length === 0) {
     throw new ToolError(
       INVALID_PARAMS,
@@ -8526,6 +9155,7 @@ async function executeTest(
   const validatedFiles = files.map((f) => ({
     name: f.path,
     content: f.content,
+    ...(f.bytes ? { bytes: f.bytes } : {}),
   }));
 
   let bundledCode = entryFile.content;
@@ -9773,7 +10403,7 @@ function buildScaffoldInterfaceHtml(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(name)}</title>
 <!-- Galactic interface bridge — do not edit. Exposes window.ul.call(fn, args)
-     (a Promise) and window.ul.resize(px). Verbatim from the interfaces spec. -->
+     (a Promise), window.ul.resize(px), and window.ul.close(). -->
 <script>
 (function () {
   var port = null, queue = [], pending = {}, nextId = 1;
@@ -9794,7 +10424,13 @@ function buildScaffoldInterfaceHtml(
       });
     },
     resize: function (height) { if (port) port.postMessage({ type: "resize", height: height }); },
+    close: function () { if (port) port.postMessage({ type: "close" }); },
   };
+  window.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    event.preventDefault();
+    window.ul.close();
+  });
   window.addEventListener("message", function (event) {
     var d = event.data;
     if (!d || d.type !== "ul-interface-connect" || !event.ports || !event.ports[0]) return;
@@ -13320,7 +13956,9 @@ async function executeLogs(
   // Per-call runtime logs by receipt (owner-only, audited, 7-day retention).
   if (typeof args.receipt_id === "string" && args.receipt_id.trim()) {
     const { readCallLogsByReceipt, CallLogForbidden, CallLogNotFound } =
-      await import("../services/call-log-store.ts");
+      await import(
+        "../services/call-log-store.ts"
+      );
     try {
       return await readCallLogsByReceipt({
         callerUserId: userId,
@@ -13957,6 +14595,7 @@ async function executeDiscoverInspect(
     freeMode: false,
     byokPresent: false,
   },
+  options: { requireAuthoritativePermissions?: boolean } = {},
 ): Promise<unknown> {
   const appIdOrSlug = args.app_id as string;
   if (!appIdOrSlug) throw new ToolError(INVALID_PARAMS, "app_id is required");
@@ -14215,10 +14854,10 @@ async function executeDiscoverInspect(
         `${SUPABASE_URL}/rest/v1/user_app_permissions?app_id=eq.${app.id}&allowed=eq.true&select=granted_to_user_id,function_name,allowed_ips,time_window,budget_limit,budget_used,budget_period,expires_at,allowed_args`,
         { headers },
       );
-      if (permRes.ok) {
-        const ownerPermissionRows = await readJsonArray<InspectPermissionRow>(
-          permRes,
-        );
+      const ownerPermissionRows = await readInspectPermissionRows<
+        InspectPermissionRow
+      >(permRes, options.requireAuthoritativePermissions === true);
+      if (ownerPermissionRows) {
         logLegacyPermissionNameCompatibility({
           surface: "platform_inspect_permissions",
           appId: app.id,
@@ -14237,10 +14876,10 @@ async function executeDiscoverInspect(
         `${SUPABASE_URL}/rest/v1/user_app_permissions?app_id=eq.${app.id}&granted_to_user_id=eq.${userId}&allowed=eq.true&select=function_name,allowed_ips,time_window,budget_limit,budget_used,budget_period,expires_at,allowed_args`,
         { headers },
       );
-      if (permRes.ok) {
-        const viewerPermissionRows = await readJsonArray<InspectPermissionRow>(
-          permRes,
-        );
+      const viewerPermissionRows = await readInspectPermissionRows<
+        InspectPermissionRow
+      >(permRes, options.requireAuthoritativePermissions === true);
+      if (viewerPermissionRows) {
         logLegacyPermissionNameCompatibility({
           surface: "platform_inspect_permissions",
           appId: app.id,
@@ -14255,7 +14894,10 @@ async function executeDiscoverInspect(
         );
       }
     }
-  } catch { /* best effort */ }
+  } catch (error) {
+    if (options.requireAuthoritativePermissions) throw error;
+    // Ordinary discovery keeps permission enrichment best-effort.
+  }
   const sharingDiagnostics = buildAppSharingDiagnostics({
     isOwner,
     visibility: app.visibility,
@@ -15634,10 +16276,16 @@ function jsonRpcErrorResponse(
       error: { code, message, data },
     }),
     {
-      status: code === RATE_LIMITED ? 429 : code < 0 ? 400 : 500,
+      status: jsonRpcErrorHttpStatus(code),
       headers: { "Content-Type": "application/json" },
     },
   );
+}
+
+export function jsonRpcErrorHttpStatus(code: number): number {
+  if (code === RATE_LIMITED) return 429;
+  if (code === INTERNAL_ERROR || code >= 0) return 500;
+  return 400;
 }
 
 // ============================================

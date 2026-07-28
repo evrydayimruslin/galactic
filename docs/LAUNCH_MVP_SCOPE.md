@@ -1,6 +1,7 @@
 # Persistent Agent Launch Scope
 
-Locked: 2026-07-14; amended by P2.3 on 2026-07-17
+Locked: 2026-07-14; amended by P2.3 on 2026-07-17 and Builder Milestone 1
+on 2026-07-27
 
 Current delivery milestones:
 
@@ -43,10 +44,10 @@ running cheaply before Galactic introduces a market around them.
   controls on the Agent surface.
 - The platform MCP and per-Agent MCP endpoints for Codex, Claude Code, Cursor,
   and other MCP clients.
-- The existing coding-agent conjuring flow: `gx.download({ full_time: true })`,
-  edit, `tested = gx.test(...)`, upload the exact same files with
-  `test_attestation: tested.test_attestation`, create a paused routine, owner
-  approval, resume.
+- The coding-agent conjuring flow: orient with `gx.project` for an existing
+  Agent or scaffold with `gx.download({ full_time: true })`, edit, upload once
+  with `gx.stage`, test and upload the same immutable `bundle_id` with its
+  `test_attestation`, create a paused routine, owner approval, resume.
 - Sandboxed execution with BYOK inference, storage, memory, network policy,
   Agent-to-Agent calls, receipts, tracing, and run journals.
 - Owner-owned Agent-to-Agent composition through explicit, bounded grants.
@@ -148,18 +149,22 @@ discovery, or launch claims.
 
 1. Connect a coding agent with a scoped Galactic builder/operator key.
 2. Describe an ongoing responsibility.
-3. Scaffold with `gx.download({ full_time: true })`.
+3. For an existing Agent, request its compact `gx.project` coding capsule and
+   retain the returned revision; otherwise scaffold with
+   `gx.download({ full_time: true })`.
 4. Implement the observation and action boundaries.
-5. Run a representative wake with `gx.test` and retain its short-lived,
-   owner/source/runtime-bound `test_attestation`.
-6. Upload the exact tested files and attestation as a new private Agent or a
+5. Upload the source once with `gx.stage`; later edits send only changed/new
+   files and deletions against its `base_bundle_id`.
+6. Run a representative wake with `gx.test({ bundle_id })` and retain its
+   short-lived, owner/source/runtime-bound `test_attestation`.
+7. Upload that exact `bundle_id` and attestation as a new private Agent or a
    non-live version of an existing Agent.
-7. Configure required secrets and a BYOK inference provider when the Agent uses AI.
-8. Create one or more routines in a paused state with missions, schedules, and
+8. Configure required secrets and a BYOK inference provider when the Agent uses AI.
+9. Create one or more routines in a paused state with missions, schedules, and
    finite limits; one is elected primary for compatibility.
-9. Review and approve exact capabilities, grants, cadence, and budgets in the
+10. Review and approve exact capabilities, grants, cadence, and budgets in the
    authenticated website session.
-10. Activate, then supervise through Fleet, the Agent overlay, recent activity,
+11. Activate, then supervise through Fleet, the Agent overlay, recent activity,
     receipts, and Alerts. Updates repeat the test/promotion process.
 
 ## Implementation boundary

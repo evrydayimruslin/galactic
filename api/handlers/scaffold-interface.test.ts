@@ -42,6 +42,14 @@ Deno.test("scaffold interface: emits a running main.html with the bridge", () =>
   assert(html, "interfaces/main.html is emitted");
   // The bridge + a live call to the first function must be present.
   assert(html!.content.includes("ul-interface-connect"), "has the bridge handshake");
+  assert(
+    html!.content.includes('port.postMessage({ type: "close" })'),
+    "can request that the host close the Interface",
+  );
+  assert(
+    html!.content.includes('event.key !== "Escape"'),
+    "Escape requests the standard host close action",
+  );
   assert(html!.content.includes('window.ul.call("forecast"'), "calls the first function");
   assert(html!.content.includes("<!doctype html>"), "is a full HTML document");
 });

@@ -851,9 +851,15 @@ export async function listGrants(input: {
   userId: string;
   callerAppId?: string;
   targetAppId?: string;
+  requireAuthoritative?: boolean;
 }): Promise<AgentFunctionGrant[]> {
   const db = getDbConfig();
-  if (!db) return [];
+  if (!db) {
+    if (input.requireAuthoritative) {
+      throw new RequestValidationError("Grant storage is not configured", 503);
+    }
+    return [];
+  }
   const filters = [`user_id=eq.${input.userId}`, "select=*", "limit=500"];
   if (input.callerAppId) filters.push(`caller_app_id=eq.${input.callerAppId}`);
   if (input.targetAppId) filters.push(`target_app_id=eq.${input.targetAppId}`);
@@ -1018,6 +1024,7 @@ export async function listGrantSummaries(input: {
   callerAppId?: string;
   targetAppId?: string;
   status?: "active" | "pending" | "revoked";
+  requireAuthoritative?: boolean;
 }): Promise<AgentGrantSummary[]> {
   const grants = (await listGrants(input)).filter(
     (g) => !input.status || g.status === input.status,

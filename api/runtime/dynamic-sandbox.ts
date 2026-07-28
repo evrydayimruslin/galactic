@@ -58,7 +58,7 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-25.compute-rpc-envelope.v14";
+const SANDBOX_TEMPLATE_VERSION = "2026-07-27.compute-rpc-structured-output.v16";
 
 const CAPACITY_TAIL_MARKER = "GALACTIC_CAPACITY_EXECUTION_V1 ";
 
@@ -196,6 +196,15 @@ interface FlightAiExchange {
   cost_light?: number;
   prompt?: string;
   response?: string;
+}
+
+function structuredOutputErrorCode(value: unknown): string | undefined {
+  return value === "invalid_output_schema" ||
+      value === "structured_output_unsupported" ||
+      value === "structured_output_invalid_json" ||
+      value === "structured_output_schema_mismatch"
+    ? value
+    : undefined;
 }
 
 interface DynamicWorkerEntrypointExports {
@@ -692,7 +701,7 @@ globalThis.ultralight = {
       config.permissions.includes("notify:owner")
     }) return Promise.reject(new Error('galactic.notify unavailable: add "notify:owner" to manifest permissions.')); const e = globalThis.__rpcEnv; return e.NOTIFY ? e.NOTIFY.notifyOwner(o || {}, globalThis.__execHandle) : Promise.reject(new Error('Notifications not available')); },
   compute: __galacticCompute,
-  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); var __t0 = Date.now(); var __clip = function(v){ try { var s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > 2000 ? s.slice(0, 2000) + '…[truncated]' : (s || ''); } catch (_e) { return ''; } }; var __rec = function(resp, errMsg){ try { var f = globalThis.__flight; if (f && f.ai && f.ai.length < 20) f.ai.push({ at: new Date().toISOString(), ms: Date.now() - __t0, model: (resp && resp.model) || (r && r.model) || null, cost_light: (resp && resp.usage && resp.usage.cost_light) || 0, prompt: __clip(r && r.messages), response: errMsg ? ('[error] ' + __clip(errMsg)) : __clip(resp && resp.content) }); } catch (_e) {} }; return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { __rec(null, resp.error); throw new Error('galactic.ai failed: ' + resp.error); } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} __rec(resp); return resp; }); },
+  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); var __t0 = Date.now(); var __clip = function(v){ try { var s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > 2000 ? s.slice(0, 2000) + '…[truncated]' : (s || ''); } catch (_e) { return ''; } }; var __rec = function(resp, errMsg){ try { var f = globalThis.__flight; if (f && f.ai && f.ai.length < 20) f.ai.push({ at: new Date().toISOString(), ms: Date.now() - __t0, model: (resp && resp.model) || (r && r.model) || null, cost_light: (resp && resp.usage && resp.usage.cost_light) || 0, prompt: __clip(r && r.messages), response: errMsg ? ('[error] ' + __clip(errMsg)) : __clip(resp && resp.content) }); } catch (_e) {} }; return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { __rec(null, resp.error); var err = new Error('galactic.ai failed: ' + resp.error); if (resp.error_code) err.code = resp.error_code; throw err; } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} __rec(resp); return resp; }); },
   embed(r) { const e = globalThis.__rpcEnv; if (!e.EMBED) return Promise.reject(new Error('galactic.embed unavailable: ai:embed permission not granted or no authenticated user context.')); return e.EMBED.embed(r || {}, globalThis.__execHandle).then(function(resp){ try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
   async call(targetAppId, functionName, callArgs) {
     if (!targetAppId || !functionName) throw new Error('target app id and function name are required');
@@ -929,7 +938,7 @@ export default {
     } catch (err) {
       return Response.json({
         success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
-        error: { type: err.name || err.constructor?.name || 'Error', message: err.message || String(err), ...(err.galacticDetails ? { details: err.galacticDetails } : {}) },
+        error: { type: err.name || err.constructor?.name || 'Error', message: err.message || String(err), ...(typeof err.code === 'string' ? { code: err.code } : {}), ...(err.galacticDetails ? { details: err.galacticDetails } : {}) },
       });
     }
     } finally {
@@ -1387,7 +1396,12 @@ export default {
       // execution. Persisted host-side only when the app opted in via the
       // manifest flight_recorder flag and a routine context is present.
       flight?: { ai?: FlightAiExchange[] };
-      error?: { type: string; message: string; details?: unknown };
+      error?: {
+        type: string;
+        message: string;
+        code?: string;
+        details?: unknown;
+      };
     };
 
     // Credits actually debited for in-sandbox AI calls this execution, from
@@ -1419,6 +1433,7 @@ export default {
         knownSecrets: [...knownSecrets, sandboxAuthToken],
       })
       : undefined;
+    const errorCode = structuredOutputErrorCode(data.error?.code);
 
     return {
       success: data.success,
@@ -1435,11 +1450,14 @@ export default {
       ...(reuseKeyHash ? { reuseKeyHash } : {}),
       ...(diagnostic
         ? {
-          error: operatorCompatibilityError(
-            diagnostic,
-            data.error?.type,
-            knownSecrets,
-          ),
+          error: {
+            ...operatorCompatibilityError(
+              diagnostic,
+              data.error?.type,
+              knownSecrets,
+            ),
+            ...(errorCode ? { code: errorCode } : {}),
+          },
           diagnostic,
         }
         : {}),

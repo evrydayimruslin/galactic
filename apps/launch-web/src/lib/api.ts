@@ -54,6 +54,8 @@ import type {
   LaunchFunctionRunRequest,
   LaunchFunctionRunResponse,
   LaunchGlobalAttentionResponse,
+  LaunchHandoffCreateRequest,
+  LaunchHandoffCreateResponse,
   LaunchInferenceOptionsResponse,
   LaunchPlatformModelRequest,
   LaunchPlatformModelResponse,
@@ -192,7 +194,10 @@ const configuredLaunchApiBaseUrl =
 
 // Origin of the API worker — also the MCP host that install snippets point at.
 export function launchApiOrigin(): string {
-  return configuredLaunchApiBaseUrl || window.location.origin;
+  return configuredLaunchApiBaseUrl ||
+    (typeof window === "undefined"
+      ? "https://api.galactic.dev"
+      : window.location.origin);
 }
 
 export interface LaunchLeaderboardRequest {
@@ -1176,6 +1181,21 @@ export class LaunchApiClient {
     request: LaunchApiKeyCreateRequest,
   ): Promise<LaunchApiKeyCreateResponse> {
     return this.fetchJson("/api/launch/api-keys", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  createHandoff(
+    request: LaunchHandoffCreateRequest,
+    agentIdOrSlug?: string | null,
+  ): Promise<LaunchHandoffCreateResponse> {
+    const path = agentIdOrSlug
+      ? `/api/launch/agents/${
+        encodeURIComponent(agentIdOrSlug)
+      }/handoffs`
+      : "/api/launch/handoffs";
+    return this.fetchJson(path, {
       method: "POST",
       body: JSON.stringify(request),
     });

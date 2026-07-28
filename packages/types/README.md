@@ -6,7 +6,9 @@ TypeScript type definitions for [Galactic](https://ultralight.dev) apps.
 the shared contract sources under `/shared/contracts` and then run
 `npm run generate` in `/packages/types`.
 
-Provides autocomplete and type checking for `ultralight.ai()`, `ultralight.store()`, and all SDK methods.
+Provides autocomplete and type checking for `galactic.ai()`,
+`galactic.store()`, and all runtime SDK methods. `ultralight` remains a
+compatible global alias.
 
 ## Installation
 
@@ -50,14 +52,61 @@ await ultralight.list('prefix/');
 await ultralight.query('prefix/', { limit: 10, sort: { field: 'date', order: 'desc' } });
 ```
 
-### AI (BYOK Or Light)
+### AI (BYOK or platform credits)
 ```typescript
-const response = await ultralight.ai({
+const response = await galactic.ai({
   messages: [{ role: 'user', content: 'Hello!' }],
   temperature: 0.7,
 });
 console.log(response.content);
 ```
+
+Use `output_schema` when the result is data rather than prose. Galactic sends
+the JSON Schema through the provider's native strict-output mechanism and
+validates the returned value again before exposing `response.output`:
+
+```typescript
+interface Invoice {
+  id: string;
+  total: number;
+}
+
+const response = await galactic.ai<Invoice>({
+  messages: [{ role: 'user', content: 'Extract invoice INV-42 for $125.' }],
+  output_schema: {
+    name: 'invoice',
+    schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        total: { type: 'number' },
+      },
+      required: ['id', 'total'],
+      additionalProperties: false,
+    },
+  },
+});
+
+const invoice = response.output;
+```
+
+Structured-output failures use the typed codes
+`invalid_output_schema`, `structured_output_unsupported`,
+`structured_output_invalid_json`, and
+`structured_output_schema_mismatch`. Galactic does not silently fall back to a
+“return JSON” prompt. `usage.input_tokens` and `usage.output_tokens` are the
+provider-reported counts; credit cost is estimated from those counts and the
+platform model-price table.
+
+Galactic accepts a bounded, locally enforced JSON Schema subset and rejects
+unknown assertions before inference. It supports composition, types,
+const/enum, string lengths, numeric bounds, array items/limits/uniqueness,
+object properties/required/additional properties, and acyclic local
+`$ref`/definitions. `pattern`, `format`, `contains`, conditional schemas,
+remote references, and recursive references are not accepted. See
+[Builder Milestone 1](../../docs/BUILDER_MILESTONE_1.md) for the exact keyword
+list and limits. Provider work is charged or recorded before final local
+validation, so a schema mismatch still settles completed inference usage.
 
 ### User Context
 ```typescript

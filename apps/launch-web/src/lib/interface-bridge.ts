@@ -17,6 +17,7 @@
 //   parent → frame:  { type: "ul-interface-connect", context } (+ port2)
 //   frame → port:    { type: "call", id, functionName, args? }
 //                    { type: "resize", height }
+//                    { type: "close" }
 //   parent → port:   { type: "result", id, success, result?, error?, receiptId? }
 
 import {
@@ -317,17 +318,24 @@ export async function runInterfaceFunctionDurably(
       );
       return {
         success: false,
+        receiptId: dispatched.receiptId,
         error: { ...error, completionUnknown: true },
       };
     }
 
     options.onJobStatus?.(status);
     if (status.status === "completed") {
-      return { success: true, result: status.result, error: null };
+      return {
+        success: true,
+        result: status.result,
+        receiptId: status.executionId ?? dispatched.receiptId,
+        error: null,
+      };
     }
     if (status.status === "failed") {
       return {
         success: false,
+        receiptId: status.executionId ?? dispatched.receiptId,
         error: decorateExecutionError(
           status.error ?? {
             type: "EXECUTION_FAILED",
@@ -352,6 +360,8 @@ export interface InterfaceBridgeOptions {
     functionName: string,
     args: Record<string, unknown>,
   ) => Promise<InterfaceBridgeCallResult>;
+  // Allows a sandboxed Interface to dismiss its own host dialog.
+  onClose?: () => void;
   onConnected?: () => void;
   onResize?: (height: number) => void;
   // Fired per successful call so the host chrome can show session spend.
@@ -515,6 +525,10 @@ export function attachInterfaceBridge(
       if (typeof data.height === "number") {
         options.onResize?.(clampInterfaceHeight(data.height));
       }
+      return;
+    }
+    if (data.type === "close") {
+      options.onClose?.();
       return;
     }
     if (data.type === "call") handleCall(port, data);

@@ -16,6 +16,7 @@ import {
   updateLastActive,
 } from "../services/provisional.ts";
 import { getPermissionsForUser } from "./user.ts";
+import type { AIOutputSchema } from "../../shared/contracts/ai.ts";
 import type { Tier } from "../../shared/contracts/runtime.ts";
 import type { LaunchOperatorRunDiagnostic } from "../../shared/contracts/launch.ts";
 import { type UserContext } from "../runtime/sandbox.ts";
@@ -678,6 +679,30 @@ const SDK_TOOLS: MCPTool[] = [
           type: "number",
           description: "Maximum tokens to generate.",
         },
+        output_schema: {
+          type: "object",
+          description:
+            "Strict JSON Schema contract. Galactic asks the provider for schema-constrained JSON, parses it, and validates it again before returning output.",
+          properties: {
+            name: {
+              type: "string",
+              description:
+                "Provider-visible schema name. Must begin with a letter or underscore, then use letters, numbers, underscores, or hyphens; maximum 64 characters.",
+            },
+            schema: {
+              anyOf: [{ type: "object" }, { type: "boolean" }],
+              description: "JSON Schema enforced for the model response.",
+            },
+            strict: {
+              type: "boolean",
+              enum: [true],
+              description:
+                "Structured output is always strict. Omit this field or set it to true.",
+            },
+          },
+          required: ["name", "schema"],
+          additionalProperties: false,
+        },
       },
       required: ["messages"],
     },
@@ -693,6 +718,20 @@ const SDK_TOOLS: MCPTool[] = [
             output_tokens: { type: "number" },
             cost_light: { type: "number" },
           },
+        },
+        output: {
+          description:
+            "Parsed, schema-validated value when output_schema was supplied.",
+        },
+        error: { type: "string" },
+        error_code: {
+          type: "string",
+          enum: [
+            "invalid_output_schema",
+            "structured_output_unsupported",
+            "structured_output_invalid_json",
+            "structured_output_schema_mismatch",
+          ],
         },
       },
     },
@@ -2226,8 +2265,13 @@ async function executeSDKTool(
                 }
               >
               | undefined,
+            output_schema: args.output_schema as AIOutputSchema | undefined,
           });
         } catch (aiError) {
+          const aiErrorCode = aiError && typeof aiError === "object" &&
+              typeof (aiError as { code?: unknown }).code === "string"
+            ? (aiError as { code: string }).code
+            : undefined;
           result = {
             content: "",
             model: args.model || "unknown",
@@ -2235,6 +2279,7 @@ async function executeSDKTool(
             error: aiError instanceof Error
               ? aiError.message
               : "AI call failed",
+            ...(aiErrorCode ? { error_code: aiErrorCode } : {}),
           };
         }
         break;
@@ -3908,9 +3953,8 @@ function formatToolError(
   const message = diagnostic
     ? [diagnostic.summary, diagnostic.detail].filter(Boolean).join(" ")
     : rawMessage;
-  const errorType = diagnostic?.causeCode || (err instanceof Error
-    ? err.name
-    : (err as { type?: string })?.type);
+  const errorType = diagnostic?.causeCode ||
+    (err instanceof Error ? err.name : (err as { type?: string })?.type);
   const errorDetails = diagnostic
     ? undefined
     : (err as { details?: Record<string, unknown> })?.details;

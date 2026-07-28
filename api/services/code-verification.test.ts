@@ -14,10 +14,13 @@ import {
   readVersionSourceFiles,
 } from "./code-verification.ts";
 import { buildVersionTrustMetadata, sha256Hex } from "./trust.ts";
-import { __resetVerdictCacheForTest, putLiveExecutedBundle } from "./executed-bundle.ts";
+import {
+  __resetVerdictCacheForTest,
+  putLiveExecutedBundle,
+} from "./executed-bundle.ts";
 
 // deno-lint-ignore no-explicit-any
-function fakeR2(files: Record<string, string>): any {
+function fakeR2(files: Record<string, string | Uint8Array>): any {
   return {
     // deno-lint-ignore no-explicit-any
     list: ({ prefix }: { prefix: string }) =>
@@ -27,14 +30,29 @@ function fakeR2(files: Record<string, string>): any {
           .map((key) => ({ key })),
         truncated: false,
       }),
-    get: (key: string) =>
-      Promise.resolve(
-        key in files ? { text: () => Promise.resolve(files[key]) } : null,
-      ),
+    get: (key: string) => {
+      const value = files[key];
+      if (value === undefined) return Promise.resolve(null);
+      const bytes = typeof value === "string"
+        ? new TextEncoder().encode(value)
+        : value;
+      return Promise.resolve({
+        text: () => Promise.resolve(new TextDecoder().decode(bytes)),
+        arrayBuffer: () =>
+          Promise.resolve(
+            bytes.buffer.slice(
+              bytes.byteOffset,
+              bytes.byteOffset + bytes.byteLength,
+            ),
+          ),
+      });
+    },
   };
 }
 
-function installEnv(r2Files?: Record<string, string>): { restore: () => void } {
+function installEnv(
+  r2Files?: Record<string, string | Uint8Array>,
+): { restore: () => void } {
   // deno-lint-ignore no-explicit-any
   const g = globalThis as any;
   const prev = g.__env;
@@ -48,7 +66,9 @@ function installEnv(r2Files?: Record<string, string>): { restore: () => void } {
       getWithMetadata: (k: string) => {
         const e = store.get(k);
         return Promise.resolve(
-          e ? { value: e.value, metadata: e.metadata ?? null } : { value: null, metadata: null },
+          e
+            ? { value: e.value, metadata: e.metadata ?? null }
+            : { value: null, metadata: null },
         );
       },
       // deno-lint-ignore no-explicit-any
@@ -64,7 +84,11 @@ function installEnv(r2Files?: Record<string, string>): { restore: () => void } {
   };
   __resetVerdictCacheForTest();
   __resetFileMatchCacheForTest();
-  return { restore: () => { g.__env = prev; } };
+  return {
+    restore: () => {
+      g.__env = prev;
+    },
+  };
 }
 
 Deno.test("match: keys on sourceKey so source is matched, not the bundle", async () => {
@@ -94,7 +118,10 @@ Deno.test("match: a tampered file does NOT match", async () => {
   const env = installEnv();
   try {
     const hashes = { ["index.ts"]: await sha256Hex("original") };
-    const r = await matchFilesAgainstHashes([{ path: "index.ts", content: "TAMPERED" }], hashes);
+    const r = await matchFilesAgainstHashes([{
+      path: "index.ts",
+      content: "TAMPERED",
+    }], hashes);
     assertEquals(r.files[0].matches, false);
     assertEquals(r.all_match, false);
   } finally {
@@ -147,6 +174,32 @@ Deno.test("readVersionSourceFiles: drops generated bundles, keeps source incl. m
   }
 });
 
+Deno.test("readVersionSourceFiles: returns wasm as byte-exact base64 and verifies raw bytes", async () => {
+  const wasmBytes = new Uint8Array([0, 97, 255, 128]);
+  const env = installEnv({
+    "apps/app_wasm/1.0.0/index.js": "export default true;",
+    "apps/app_wasm/1.0.0/module.wasm": wasmBytes,
+  });
+  try {
+    const files = await readVersionSourceFiles("app_wasm", "1.0.0");
+    const wasm = files.find((file) => file.path === "module.wasm");
+    assertEquals(wasm?.content, "AGH/gA==");
+    assertEquals(wasm?.encoding, "base64");
+    assertEquals(wasm?.bytes, wasmBytes);
+
+    const matched = await matchFilesAgainstHashes(files, {
+      "index.js": await sha256Hex("export default true;"),
+      "module.wasm": await sha256Hex(wasmBytes),
+    });
+    assertEquals(
+      matched.files.find((file) => file.path === "module.wasm")?.matches,
+      true,
+    );
+  } finally {
+    env.restore();
+  }
+});
+
 Deno.test("getVersionTrust: selects the requested version's trust", () => {
   const app = {
     current_version: "2.0.0",
@@ -186,7 +239,11 @@ Deno.test("verdict: open-code app with matching source => verified + files_match
         { name: "index.ts", content: bundle },
       ],
     });
-    await putLiveExecutedBundle({ appId: "app_x", version: "1.0.0", esmCode: bundle });
+    await putLiveExecutedBundle({
+      appId: "app_x",
+      version: "1.0.0",
+      esmCode: bundle,
+    });
 
     const app = {
       id: "app_x",
@@ -194,7 +251,12 @@ Deno.test("verdict: open-code app with matching source => verified + files_match
       current_version: "1.0.0",
       runtime: "deno",
       manifest: JSON.stringify(manifest),
-      version_metadata: [{ version: "1.0.0", size_bytes: 1, created_at: "t", trust }],
+      version_metadata: [{
+        version: "1.0.0",
+        size_bytes: 1,
+        created_at: "t",
+        trust,
+      }],
       visibility: "public",
       download_access: "public",
       env_schema: {},
@@ -231,7 +293,11 @@ Deno.test("verdict: open-code source divergence => files_match false => NOT veri
       manifest,
       files: [{ name: "_source_index.ts", content: signedSource }],
     });
-    await putLiveExecutedBundle({ appId: "app_d", version: "1.0.0", esmCode: "BUNDLE" });
+    await putLiveExecutedBundle({
+      appId: "app_d",
+      version: "1.0.0",
+      esmCode: "BUNDLE",
+    });
 
     const app = {
       id: "app_d",
@@ -239,7 +305,12 @@ Deno.test("verdict: open-code source divergence => files_match false => NOT veri
       current_version: "1.0.0",
       runtime: "deno",
       manifest: JSON.stringify(manifest),
-      version_metadata: [{ version: "1.0.0", size_bytes: 1, created_at: "t", trust }],
+      version_metadata: [{
+        version: "1.0.0",
+        size_bytes: 1,
+        created_at: "t",
+        trust,
+      }],
       visibility: "public",
       download_access: "public",
       env_schema: {},
@@ -274,14 +345,23 @@ Deno.test("verdict: open-code app whose source can't be read => filesMatch null 
       manifest,
       files: [{ name: "_source_index.ts", content: "src" }],
     });
-    await putLiveExecutedBundle({ appId: "app_n", version: "1.0.0", esmCode: "B" });
+    await putLiveExecutedBundle({
+      appId: "app_n",
+      version: "1.0.0",
+      esmCode: "B",
+    });
     const app = {
       id: "app_n",
       name: "n",
       current_version: "1.0.0",
       runtime: "deno",
       manifest: JSON.stringify(manifest),
-      version_metadata: [{ version: "1.0.0", size_bytes: 1, created_at: "t", trust }],
+      version_metadata: [{
+        version: "1.0.0",
+        size_bytes: 1,
+        created_at: "t",
+        trust,
+      }],
       visibility: "public",
       download_access: "public", // open code, but source unreadable here
       env_schema: {},
@@ -318,14 +398,24 @@ Deno.test("verdict: a gx.set rollback verifies the LIVE version, not DB current_
     const trust2 = await mkTrust("2.0.0");
     // Live KV is pinned to the OLD (validly-signed) 1.0.0 — a rollback — while the
     // DB current_version has advanced to 2.0.0.
-    await putLiveExecutedBundle({ appId: "app_r", version: "1.0.0", esmCode: "BUNDLE_1" });
+    await putLiveExecutedBundle({
+      appId: "app_r",
+      version: "1.0.0",
+      esmCode: "BUNDLE_1",
+    });
 
     const app = {
       id: "app_r",
       name: "r",
       current_version: "2.0.0",
       runtime: "deno",
-      manifest: JSON.stringify({ name: "r", version: "2.0.0", type: "mcp", entry: { functions: "index.ts" }, functions: {} }),
+      manifest: JSON.stringify({
+        name: "r",
+        version: "2.0.0",
+        type: "mcp",
+        entry: { functions: "index.ts" },
+        functions: {},
+      }),
       version_metadata: [
         { version: "1.0.0", size_bytes: 1, created_at: "t", trust: trust1 },
         { version: "2.0.0", size_bytes: 1, created_at: "t", trust: trust2 },

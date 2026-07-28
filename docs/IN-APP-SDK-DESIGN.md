@@ -37,6 +37,50 @@ export default async function handler(request, ultralight) {
 }
 ```
 
+### Strict structured output with `galactic.ai()`
+
+When an Agent needs typed data instead of prose, pass `output_schema`.
+Galactic forwards it through the selected provider's native strict JSON Schema
+mechanism in both runtime execution paths, parses the response, and verifies the
+value locally before exposing `response.output`:
+
+```typescript
+type Classification = {
+  category: "billing" | "support";
+  priority: number;
+};
+
+const response = await galactic.ai<Classification>({
+  messages: [{ role: "user", content: ticketText }],
+  output_schema: {
+    name: "ticket_classification",
+    schema: {
+      type: "object",
+      properties: {
+        category: { enum: ["billing", "support"] },
+        priority: { type: "integer", minimum: 1, maximum: 5 },
+      },
+      required: ["category", "priority"],
+      additionalProperties: false,
+    },
+  },
+});
+
+return response.output;
+```
+
+There is no prompt-only JSON fallback. Unsupported providers/models, malformed
+JSON, schema mismatch, and invalid caller schemas retain distinct typed error
+codes. Provider-reported input/output token counts remain authoritative;
+Galactic estimates credit cost from those counts and its model-price table.
+Provider work is charged or recorded before final local validation, so a schema
+mismatch still settles completed inference usage.
+
+The local verifier uses the bounded subset documented in
+[Builder Milestone 1](BUILDER_MILESTONE_1.md). Unsupported keywords—including
+`pattern`, `format`, `contains`, conditional schemas, and remote or recursive
+references—fail as `invalid_output_schema` before the provider is called.
+
 ### Fan-out / best-of-N with `ultralight.ai()`
 
 `ultralight.ai()` is a plain async call, so fan-out ("fusion" / best-of-N) is a

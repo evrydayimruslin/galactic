@@ -12,7 +12,10 @@ Deno.test("owned app deletion calls the atomic service-role RPC", async () => {
   const originalFetch = globalThis.fetch;
   let request: Request | null = null;
   globalThis.fetch = (input, init) => {
-    request = new Request(input, init);
+    request = new Request(
+      input instanceof Request ? input.url : String(input),
+      init as RequestInit | undefined,
+    );
     return Promise.resolve(Response.json([{
       deleted: true,
       reclaimed_bytes: "4096",
@@ -89,6 +92,70 @@ Deno.test("owned app deletion retries lock contention then returns a conflict", 
       AppDeletionConflictError,
     );
     assertEquals(attempts, 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("owner slug lookup excludes soft-deleted apps", async () => {
+  const originalFetch = globalThis.fetch;
+  let request: Request | null = null;
+  globalThis.fetch = (input, init) => {
+    request = new Request(
+      input instanceof Request ? input.url : String(input),
+      init as RequestInit | undefined,
+    );
+    return Promise.resolve(Response.json([]));
+  };
+  try {
+    const service = new AppsService({
+      url: "https://database.example",
+      serviceKey: "service-role-test-key",
+    });
+    assertEquals(await service.findBySlug(USER_ID, "invoice-agent"), null);
+    const captured = request as Request | null;
+    if (!captured) throw new Error("expected app lookup request");
+    const url = new URL(captured.url);
+    assertEquals(url.searchParams.get("owner_id"), `eq.${USER_ID}`);
+    assertEquals(url.searchParams.get("slug"), "eq.invoice-agent");
+    assertEquals(url.searchParams.get("deleted_at"), "is.null");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("version metadata CAS is owner-scoped and excludes deleted apps", async () => {
+  const originalFetch = globalThis.fetch;
+  let request: Request | null = null;
+  globalThis.fetch = (input, init) => {
+    request = new Request(
+      input instanceof Request ? input.url : String(input),
+      init as RequestInit | undefined,
+    );
+    return Promise.resolve(Response.json([]));
+  };
+  try {
+    const service = new AppsService({
+      url: "https://database.example",
+      serviceKey: "service-role-test-key",
+    });
+    assertEquals(
+      await service.compareAndSwapVersionMetadata({
+        appId: APP_ID,
+        ownerId: USER_ID,
+        expectedUpdatedAt: "2026-07-27T00:00:00.000Z",
+        expectedCurrentVersion: "1.0.0",
+        versionMetadata: [],
+      }),
+      false,
+    );
+    const captured = request as Request | null;
+    if (!captured) throw new Error("expected metadata CAS request");
+    const url = new URL(captured.url);
+    assertEquals(url.searchParams.get("id"), `eq.${APP_ID}`);
+    assertEquals(url.searchParams.get("owner_id"), `eq.${USER_ID}`);
+    assertEquals(url.searchParams.get("deleted_at"), "is.null");
+    assertEquals(url.searchParams.get("current_version"), "eq.1.0.0");
   } finally {
     globalThis.fetch = originalFetch;
   }

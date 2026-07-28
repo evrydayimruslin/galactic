@@ -980,6 +980,61 @@ Deno.test("sandbox: ai works when permission granted", async () => {
   assertEquals(result.result, "AI response");
 });
 
+Deno.test("sandbox: ai preserves structured-output error codes", async () => {
+  const aiService: AIService = {
+    call: async () => ({
+      content: "",
+      model: "test-model",
+      usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
+      error: "Provider returned invalid structured JSON",
+      error_code: "structured_output_invalid_json",
+    }),
+  };
+
+  const caught = await executeInSandbox(
+    makeConfig({
+      permissions: ["ai:call"],
+      aiService,
+      code: iife(`
+        async function catchAiError() {
+          try {
+            await ultralight.ai({ messages: [{ role: 'user', content: 'hi' }] });
+          } catch (error) {
+            return { message: error.message, code: error.code };
+          }
+        }
+        return { catchAiError: catchAiError };
+      `),
+    }),
+    "catchAiError",
+    [{}],
+  );
+  assertEquals(caught.success, true);
+  assertEquals(caught.result, {
+    message: "Provider returned invalid structured JSON",
+    code: "structured_output_invalid_json",
+  });
+
+  const uncaught = await executeInSandbox(
+    makeConfig({
+      permissions: ["ai:call"],
+      aiService,
+      code: iife(`
+        async function throwAiError() {
+          return await ultralight.ai({
+            messages: [{ role: 'user', content: 'hi' }],
+          });
+        }
+        return { throwAiError: throwAiError };
+      `),
+    }),
+    "throwAiError",
+    [{}],
+  );
+  assertEquals(uncaught.success, false);
+  assertEquals(uncaught.error?.code, "structured_output_invalid_json");
+});
+
 Deno.test("sandbox: embed requires permission and returns vector metadata", async () => {
   const denied = makeConfig({
     permissions: [],

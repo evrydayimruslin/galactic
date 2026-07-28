@@ -6,6 +6,7 @@ import {
   approvePendingGrant,
   createGrant,
   createPendingGrantProposal,
+  listGrantSummaries,
   recordGrantSpend,
   resolveCallerGrant,
 } from "./agent-grants.ts";
@@ -69,6 +70,24 @@ function grantRow(overrides: Record<string, unknown> = {}) {
 }
 
 const NOW = Date.UTC(2026, 5, 10, 12, 0, 0);
+
+Deno.test("grant summary projection can require an authoritative read", async () => {
+  await withMockedDb(
+    () => new Response("grant storage unavailable", { status: 503 }),
+    async () => {
+      await assertRejects(
+        () =>
+          listGrantSummaries({
+            userId: "user-1",
+            callerAppId: "app-caller",
+            requireAuthoritative: true,
+          }),
+        Error,
+        "grant storage unavailable",
+      );
+    },
+  );
+});
 
 Deno.test("resolveCallerGrant: active grant allows the call", async () => {
   await withMockedDb(
@@ -427,7 +446,7 @@ Deno.test("createPendingGrantProposal: API-key wiring stays pending until owner 
     ) {
       inserted = JSON.parse(String(init.body))[0];
       prefer = new Headers(init.headers).get("Prefer") || "";
-      return jsonResponse([grantRow(inserted)]);
+      return jsonResponse([grantRow(inserted ?? {})]);
     }
     if (url.pathname.endsWith("/rpc/create_user_notification_episode")) {
       notification = JSON.parse(String(init?.body));

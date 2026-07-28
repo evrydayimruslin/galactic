@@ -4,7 +4,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { ConnectTutorialPanel } from "../components/connect-tutorial";
 import {
-  connectTutorialApiKeyRequest,
   connectTutorialHeroTitle,
   connectTutorialHref,
   parseConnectTutorialContext,
@@ -47,43 +46,10 @@ describe("connect tutorial routing", () => {
       .toBe("Give Email Operations recurring work.");
   });
 
-  it("provisions least-privilege keys for each tutorial instance", () => {
-    const agent = {
-      id: "app-email-ops",
-      slug: "email-ops",
-      name: "Email Operations",
-      kind: "mcp" as const,
-      visibility: "private" as const,
-      relationship: "owner" as const,
-      owner: { userId: "owner-1" },
-      installed: true,
-    };
-
-    expect(connectTutorialApiKeyRequest({
-      intent: "connect",
-      suffix: "one",
-    })).toMatchObject({
-      scopes: ["apps:read"],
-    });
-    expect(connectTutorialApiKeyRequest({
-      agent,
-      intent: "routine",
-      suffix: "two",
-    })).toMatchObject({
-      name: "Connect routine Email Operations two",
-      appIds: ["app-email-ops"],
-      scopes: ["apps:read", "apps:call", "agents:build", "agents:operate"],
-    });
-    expect(connectTutorialApiKeyRequest({
-      intent: "agent",
-      suffix: "three",
-    })).not.toHaveProperty("appIds");
-  });
-
-  it("renders feature context inside the Nebula workspace panel", () => {
+  it("renders the shared lazy handoff inside the Nebula workspace panel", () => {
     const markup = renderToStaticMarkup(createElement(ConnectTutorialPanel, {
       agent: {
-        id: "app-email-ops",
+        id: "53e6d85e-f5c2-4778-a284-05889778356b",
         slug: "email-ops",
         name: "Email Operations",
         kind: "mcp",
@@ -104,14 +70,16 @@ describe("connect tutorial routing", () => {
     }));
 
     expect(markup).toContain("neb-inline-panel neb-connect-tutorial-panel");
-    expect(markup).toContain("Preparing your scoped coding-agent prompt");
-    expect(markup).toContain('aria-label="Extend what Email Operations can do."');
+    expect(markup).toContain("agent-studio-handoff-layout");
+    expect(markup).toContain("Write a capability for Email Operations");
+    expect(markup).toContain("Required · what should it be able to do?");
+    expect(markup).toContain("issued when copied");
+    expect(markup).toContain("disabled");
     expect(markup).not.toContain("email-ops");
-    expect(markup).not.toContain("neb-connect-tutorial-title");
-    expect(markup).not.toContain("Sign in to continue");
+    expect(markup).not.toContain("Preparing your scoped coding-agent prompt");
   });
 
-  it("keeps sign-in inside the same Connect tutorial", () => {
+  it("keeps the signed-out draft flow inside the same Connect tutorial", () => {
     const markup = renderToStaticMarkup(createElement(ConnectTutorialPanel, {
       location: {
         pathname: "/connect",
@@ -122,9 +90,10 @@ describe("connect tutorial routing", () => {
     }));
 
     expect(markup).toContain("neb-connect-tutorial-panel");
-    expect(markup).toContain("Sign in to continue");
+    expect(markup).toContain("Sign in to Galactic");
     expect(markup).toContain(
-      "Sign in to provision a scoped prompt for your coding agent.",
+      "Nothing is copied until you sign in.",
     );
+    expect(markup).not.toContain("Copy prompt");
   });
 });

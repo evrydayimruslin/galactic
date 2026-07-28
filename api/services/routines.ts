@@ -790,13 +790,20 @@ export async function createRoutine(
 
 export async function listRoutines(
   userId: string,
-  options: { status?: RoutineStatus; limit?: number } = {},
+  options: {
+    status?: RoutineStatus;
+    limit?: number;
+    composerAppId?: string;
+  } = {},
 ): Promise<{ routines: RoutineSummary[] }> {
   const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 50)));
   const statusFilter = options.status ? `&status=eq.${options.status}` : "";
+  const composerFilter = options.composerAppId
+    ? `&composer_app_id=eq.${encodeURIComponent(options.composerAppId)}`
+    : "";
   const res = await fetch(
     supabaseUrl(
-      `user_routines?user_id=eq.${userId}&deleted_at=is.null${statusFilter}&select=${ROUTINE_SELECT}&order=updated_at.desc&limit=${limit}`,
+      `user_routines?user_id=eq.${userId}&deleted_at=is.null${statusFilter}${composerFilter}&select=${ROUTINE_SELECT}&order=updated_at.desc&limit=${limit}`,
     ),
     { headers: serviceHeaders("return=representation") },
   );

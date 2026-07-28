@@ -1,23 +1,41 @@
-import type { ActiveBYOKProvider, BYOKProviderCapabilities } from "../../shared/types/index.ts";
-import { BYOK_PROVIDERS, isActiveBYOKProvider } from "../../shared/types/index.ts";
+import type {
+  ActiveBYOKProvider,
+  BYOKProviderCapabilities,
+} from "../../shared/types/index.ts";
+import {
+  BYOK_PROVIDERS,
+  isActiveBYOKProvider,
+} from "../../shared/types/index.ts";
 import type {
   InferenceBillingMode,
   InferenceRoutePreference,
 } from "../../shared/contracts/ai.ts";
 import { getOrCreateOpenRouterKey } from "./openrouter-keys.ts";
 import {
+  type PlatformInferenceKeySource,
   type PlatformInferenceProvider,
   type PlatformInferenceRequestDefaults,
   type PlatformInferenceUpstreamProvider,
-  type PlatformInferenceKeySource,
   resolvePlatformInferenceModel,
 } from "./platform-inference-models.ts";
-import { createUserService, type UserProfile, type UserService } from "./user.ts";
+import {
+  createUserService,
+  type UserProfile,
+  type UserService,
+} from "./user.ts";
 
 export type InferenceProvider = ActiveBYOKProvider | PlatformInferenceProvider;
-export type InferenceUpstreamProvider = ActiveBYOKProvider | PlatformInferenceUpstreamProvider;
-export type InferenceKeySource = "user_byok" | "platform_openrouter" | PlatformInferenceKeySource;
-export type InferenceBillingSource = "none" | "openrouter" | "platform_deepseek_direct";
+export type InferenceUpstreamProvider =
+  | ActiveBYOKProvider
+  | PlatformInferenceUpstreamProvider;
+export type InferenceKeySource =
+  | "user_byok"
+  | "platform_openrouter"
+  | PlatformInferenceKeySource;
+export type InferenceBillingSource =
+  | "none"
+  | "openrouter"
+  | "platform_deepseek_direct";
 export type InferenceRouteErrorCode =
   | "user_not_found"
   | "invalid_route_selection"
@@ -46,8 +64,60 @@ export interface ResolvedInferenceRoute {
   modelPinned?: boolean;
 }
 
+/**
+ * Secret-free projection of the route Galactic will choose when a caller does
+ * not supply an explicit per-call or installer override.
+ */
+export interface DefaultInferenceRouteProjection {
+  billing_mode: InferenceBillingMode;
+  provider: InferenceProvider;
+  upstream_provider: InferenceUpstreamProvider;
+  model: string;
+  key_source: "user_byok" | "platform_managed";
+  configured: boolean;
+  unavailable_reason?: "byok_provider_not_configured";
+}
+
+export function projectDefaultInferenceRoute(
+  user: UserProfile,
+): DefaultInferenceRouteProjection {
+  const byokProvider = getPrimaryByokProvider(user);
+  if (byokProvider) {
+    const configured = user.byok_configs.find((config) =>
+      config.provider === byokProvider && config.has_key
+    );
+    return {
+      billing_mode: "byok",
+      provider: byokProvider,
+      upstream_provider: byokProvider,
+      model: requestedOrDefault(undefined, configured?.model, byokProvider),
+      key_source: "user_byok",
+      configured: Boolean(configured),
+      ...(!configured
+        ? { unavailable_reason: "byok_provider_not_configured" as const }
+        : {}),
+    };
+  }
+
+  return {
+    billing_mode: "light",
+    provider: "ultralight",
+    upstream_provider: "openrouter",
+    model: requestedOrDefault(
+      undefined,
+      user.platform_inference_model ?? undefined,
+      "openrouter",
+    ),
+    key_source: "platform_managed",
+    configured: true,
+  };
+}
+
 export function getInferenceRouteCapabilities(
-  route: Pick<ResolvedInferenceRoute, "billingMode" | "provider" | "upstreamProvider">,
+  route: Pick<
+    ResolvedInferenceRoute,
+    "billingMode" | "provider" | "upstreamProvider"
+  >,
 ): BYOKProviderCapabilities | null {
   if (route.billingMode === "byok" && isActiveBYOKProvider(route.provider)) {
     return BYOK_PROVIDERS[route.provider].capabilities;
@@ -59,7 +129,10 @@ export function getInferenceRouteCapabilities(
 }
 
 export function routeSupportsRealtime(
-  route: Pick<ResolvedInferenceRoute, "billingMode" | "provider" | "upstreamProvider">,
+  route: Pick<
+    ResolvedInferenceRoute,
+    "billingMode" | "provider" | "upstreamProvider"
+  >,
 ): boolean {
   return getInferenceRouteCapabilities(route)?.realtime === true;
 }
@@ -133,14 +206,17 @@ function getSelectionProvider(
   );
 }
 
-function getRequestedLightModel(params: ResolveInferenceRouteParams): string | null {
+function getRequestedLightModel(
+  params: ResolveInferenceRouteParams,
+): string | null {
   return params.selection?.model?.trim() ||
     params.requestedModel?.trim() ||
     null;
 }
 
 function shouldPinSelectedModel(params: ResolveInferenceRouteParams): boolean {
-  return (params.pinSelectedModel ?? false) && !!params.selection?.model?.trim();
+  return (params.pinSelectedModel ?? false) &&
+    !!params.selection?.model?.trim();
 }
 
 function isConfiguredByokProvider(
@@ -148,7 +224,9 @@ function isConfiguredByokProvider(
   provider: ActiveBYOKProvider,
 ): boolean {
   return user.byok_enabled &&
-    user.byok_configs.some((config) => config.provider === provider && config.has_key);
+    user.byok_configs.some((config) =>
+      config.provider === provider && config.has_key
+    );
 }
 
 async function buildByokRoute(
@@ -175,7 +253,9 @@ async function buildByokRoute(
   }
 
   const providerInfo = BYOK_PROVIDERS[provider];
-  const configuredModel = user.byok_configs.find((config) => config.provider === provider)
+  const configuredModel = user.byok_configs.find((config) =>
+    config.provider === provider
+  )
     ?.model;
   const requestedModel = params.selection?.model ?? params.requestedModel;
 
@@ -221,14 +301,16 @@ async function buildLightRoute(
     ? resolvePlatformInferenceModel(requestedModel)
     : null;
   const openRouterModel = platformModel
-    ? platformModel.aliases.find((alias) => alias.includes("/")) ?? requestedModel
+    ? platformModel.aliases.find((alias) => alias.includes("/")) ??
+      requestedModel
     : requestedModel;
 
   try {
-    const apiKey = await (params.getOrCreateOpenRouterKey ?? getOrCreateOpenRouterKey)(
-      params.userId,
-      params.userEmail,
-    );
+    const apiKey =
+      await (params.getOrCreateOpenRouterKey ?? getOrCreateOpenRouterKey)(
+        params.userId,
+        params.userEmail,
+      );
     const providerInfo = BYOK_PROVIDERS.openrouter;
 
     return {
@@ -237,7 +319,11 @@ async function buildLightRoute(
       upstreamProvider: "openrouter",
       baseUrl: providerInfo.baseUrl,
       apiKey,
-      model: requestedOrDefault(openRouterModel, user?.platform_inference_model ?? undefined, "openrouter"),
+      model: requestedOrDefault(
+        openRouterModel,
+        user?.platform_inference_model ?? undefined,
+        "openrouter",
+      ),
       keySource: "platform_openrouter",
       billingSource: "openrouter",
       shouldRequireBalance: true,
@@ -246,7 +332,9 @@ async function buildLightRoute(
     };
   } catch (error) {
     if (error instanceof InferenceRouteError) throw error;
-    const detail = error instanceof Error ? error.message : "OpenRouter key provisioning failed";
+    const detail = error instanceof Error
+      ? error.message
+      : "OpenRouter key provisioning failed";
     throw new InferenceRouteError("platform_key_unavailable", detail, 503);
   }
 }

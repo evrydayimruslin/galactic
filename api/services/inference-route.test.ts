@@ -4,11 +4,10 @@ import { BYOK_PROVIDERS } from "../../shared/types/index.ts";
 import type { UserProfile, UserService } from "./user.ts";
 import {
   InferenceRouteError,
+  projectDefaultInferenceRoute,
   resolveInferenceRoute,
 } from "./inference-route.ts";
-import {
-  ULTRALIGHT_DEEPSEEK_V4_FLASH_MODEL,
-} from "./platform-inference-models.ts";
+import { ULTRALIGHT_DEEPSEEK_V4_FLASH_MODEL } from "./platform-inference-models.ts";
 
 type RouteUserService = Pick<UserService, "getUser" | "getDecryptedApiKey">;
 
@@ -26,9 +25,65 @@ function makeUser(overrides: Partial<UserProfile> = {}): UserProfile {
     byok_provider: null,
     byok_configs: [],
     platform_inference_model: null,
+    balance_light: 0,
     ...overrides,
   };
 }
+
+Deno.test("inference route: default projection reports the effective secret-free BYOK route", () => {
+  const projection = projectDefaultInferenceRoute(makeUser({
+    byok_enabled: true,
+    byok_provider: "nvidia",
+    byok_configs: [{
+      provider: "nvidia",
+      has_key: true,
+      model: "meta/llama-4",
+      added_at: "2026-07-27T00:00:00Z",
+    }],
+  }));
+
+  assertEquals(projection, {
+    billing_mode: "byok",
+    provider: "nvidia",
+    upstream_provider: "nvidia",
+    model: "meta/llama-4",
+    key_source: "user_byok",
+    configured: true,
+  });
+});
+
+Deno.test("inference route: default projection exposes an unconfigured enabled BYOK route", () => {
+  const projection = projectDefaultInferenceRoute(makeUser({
+    byok_enabled: true,
+    byok_provider: "nvidia",
+    byok_configs: [],
+  }));
+
+  assertEquals(projection, {
+    billing_mode: "byok",
+    provider: "nvidia",
+    upstream_provider: "nvidia",
+    model: BYOK_PROVIDERS.nvidia.defaultModel,
+    key_source: "user_byok",
+    configured: false,
+    unavailable_reason: "byok_provider_not_configured",
+  });
+});
+
+Deno.test("inference route: default projection reports the saved Light model without provisioning a key", () => {
+  const projection = projectDefaultInferenceRoute(makeUser({
+    platform_inference_model: "anthropic/claude-x",
+  }));
+
+  assertEquals(projection, {
+    billing_mode: "light",
+    provider: "ultralight",
+    upstream_provider: "openrouter",
+    model: "anthropic/claude-x",
+    key_source: "platform_managed",
+    configured: true,
+  });
+});
 
 Deno.test("inference route: Light mode routes DeepSeek platform models through OpenRouter and requires debit", async () => {
   const userService: RouteUserService = {
@@ -68,7 +123,8 @@ Deno.test("inference route: Light mode honors the user's saved platform model wh
     userId: "user-1",
     userEmail: "auth@example.com",
     userService: {
-      getUser: async () => makeUser({ platform_inference_model: "anthropic/claude-x" }),
+      getUser: async () =>
+        makeUser({ platform_inference_model: "anthropic/claude-x" }),
       getDecryptedApiKey: async () => null,
     },
     getOrCreateOpenRouterKey: async () => "or-platform-key",
@@ -86,7 +142,8 @@ Deno.test("inference route: a per-request Light model overrides the user's saved
     userEmail: "auth@example.com",
     requestedModel: "openai/gpt-4o-mini",
     userService: {
-      getUser: async () => makeUser({ platform_inference_model: "anthropic/claude-x" }),
+      getUser: async () =>
+        makeUser({ platform_inference_model: "anthropic/claude-x" }),
       getDecryptedApiKey: async () => null,
     },
     getOrCreateOpenRouterKey: async () => "or-platform-key",
@@ -123,7 +180,10 @@ Deno.test("inference route: Light mode keeps non-platform models on platform Ope
   assertEquals(route.model, "openai/gpt-4o-mini");
   assertEquals(route.keySource, "platform_openrouter");
   assertEquals(route.billingSource, "openrouter");
-  assertEquals(platformCalls, [{ userId: "user-1", userEmail: "auth@example.com" }]);
+  assertEquals(platformCalls, [{
+    userId: "user-1",
+    userEmail: "auth@example.com",
+  }]);
 });
 
 Deno.test("inference route: BYOK mode uses configured provider key and skips Light", async () => {
@@ -450,7 +510,8 @@ Deno.test("inference route: pinSelectedModel marks the Light route model as pinn
     selection: { billingMode: "light", model: "openai/gpt-4o-mini" },
     pinSelectedModel: true,
     userService: {
-      getUser: async () => makeUser({ platform_inference_model: "anthropic/claude-x" }),
+      getUser: async () =>
+        makeUser({ platform_inference_model: "anthropic/claude-x" }),
       getDecryptedApiKey: async () => null,
     },
     getOrCreateOpenRouterKey: async () => "or-platform-key",
@@ -464,7 +525,11 @@ Deno.test("inference route: pinSelectedModel marks the BYOK route model as pinne
   const route = await resolveInferenceRoute({
     userId: "user-1",
     userEmail: "auth@example.com",
-    selection: { billingMode: "byok", provider: "deepseek", model: "deepseek-v4-pro" },
+    selection: {
+      billingMode: "byok",
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+    },
     pinSelectedModel: true,
     userService: {
       getUser: async () =>
@@ -524,18 +589,19 @@ Deno.test("inference route: pinSelectedModel without a selection model does not 
 
 Deno.test("inference route: BYOK-only Agent refuses the platform fallback", async () => {
   const error = await assertRejects(
-    () => resolveInferenceRoute({
-      userId: "user-1",
-      userEmail: "auth@example.com",
-      byokOnly: true,
-      userService: {
-        getUser: async () => makeUser(),
-        getDecryptedApiKey: async () => null,
-      },
-      getOrCreateOpenRouterKey: async () => {
-        throw new Error("platform key must never be provisioned");
-      },
-    }),
+    () =>
+      resolveInferenceRoute({
+        userId: "user-1",
+        userEmail: "auth@example.com",
+        byokOnly: true,
+        userService: {
+          getUser: async () => makeUser(),
+          getDecryptedApiKey: async () => null,
+        },
+        getOrCreateOpenRouterKey: async () => {
+          throw new Error("platform key must never be provisioned");
+        },
+      }),
     InferenceRouteError,
     "configured BYOK provider",
   );
@@ -545,16 +611,17 @@ Deno.test("inference route: BYOK-only Agent refuses the platform fallback", asyn
 
 Deno.test("inference route: BYOK-only Agent rejects an explicit Light override", async () => {
   const error = await assertRejects(
-    () => resolveInferenceRoute({
-      userId: "user-1",
-      userEmail: "auth@example.com",
-      byokOnly: true,
-      selection: { billingMode: "light", model: "openai/gpt-4o-mini" },
-      userService: {
-        getUser: async () => makeUser(),
-        getDecryptedApiKey: async () => null,
-      },
-    }),
+    () =>
+      resolveInferenceRoute({
+        userId: "user-1",
+        userEmail: "auth@example.com",
+        byokOnly: true,
+        selection: { billingMode: "light", model: "openai/gpt-4o-mini" },
+        userService: {
+          getUser: async () => makeUser(),
+          getDecryptedApiKey: async () => null,
+        },
+      }),
     InferenceRouteError,
     "requires a configured BYOK provider",
   );

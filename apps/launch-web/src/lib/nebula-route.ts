@@ -47,3 +47,21 @@ export function shouldUseNebulaRoute({
 
   return loadStatus === "idle" || loadStatus === "loading";
 }
+
+/**
+ * Select the private full-page editor only while an owner identity is
+ * established, or during the authenticated first lookup that may establish
+ * it. Resolved non-owners and failed/malformed lookups stay on the
+ * compatibility surface.
+ */
+export function shouldUseAgentStudioRoute(
+  decision: NebulaRouteDecision,
+): boolean {
+  if (decision.sessionRestoring || decision.routeKey !== "agent") return false;
+  if (!shouldUseNebulaRoute(decision)) return false;
+  return decision.agentRelationship === "owner" ||
+    (
+      !decision.agentRelationship &&
+      (decision.loadStatus === "idle" || decision.loadStatus === "loading")
+    );
+}

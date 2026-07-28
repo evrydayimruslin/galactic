@@ -19,6 +19,21 @@ const CORE_GUIDANCE = [
   "`skill_reader(args: { skill_id: string })`",
   "Generated skills.md function docs are always free",
   "`gx.download({ name, description, policy: true })`",
+  "gx.project({ app_id, view?, since_revision? })",
+  "gx.stage({ files?, base_bundle_id?, delete_paths? })",
+  "bundle_id",
+  "revision_expires_at",
+  "2 MiB",
+  "100 MiB",
+  "10,000 active objects",
+  "50 files",
+  "50 MiB",
+  "output_schema",
+  "50,000 combined traversal/schema steps",
+  "16 MiB of cumulative canonical comparison work",
+  "A schema mismatch still settles completed inference usage",
+  "`pattern`",
+  "structured_output_schema_mismatch",
   "test_attestation: tested.test_attestation",
   "exact same decoded file set",
   "custom code path for functions",
@@ -176,7 +191,8 @@ Deno.test("initialize instructions carry the first-contact directive that shapes
       await handlePlatformMcp(platformRequest("initialize")),
     );
     const instructions =
-      ((payload.result as Record<string, unknown>).instructions || "") as string;
+      ((payload.result as Record<string, unknown>).instructions ||
+        "") as string;
 
     // The standing first-contact directive must be present and lead the doc.
     assertStringIncludes(instructions, "## First contact");
@@ -189,6 +205,7 @@ Deno.test("initialize instructions carry the first-contact directive that shapes
       const verb of [
         "**Describe**",
         "**Scaffold**",
+        "**Stage**",
         "**Test**",
         "**Deploy**",
         "**Activate**",
@@ -201,8 +218,9 @@ Deno.test("initialize instructions carry the first-contact directive that shapes
     assertStringIncludes(instructions, "private and owner-only");
     assertStringIncludes(instructions, "hard routine ceiling");
     assertStringIncludes(instructions, "short-lived `test_attestation`");
-    assertStringIncludes(instructions, "exact tested files");
-    assertStringIncludes(instructions, "new version is staged before");
+    assertStringIncludes(instructions, "without retransmitting its source");
+    assertStringIncludes(instructions, "content-addressed `bundle_id`");
+    assertStringIncludes(instructions, "staged before promotion");
     assertStringIncludes(
       instructions,
       "Connected-agent credentials cannot approve or activate",

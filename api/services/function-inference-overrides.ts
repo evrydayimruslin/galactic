@@ -1,6 +1,9 @@
 import type { LaunchFunctionInferenceOverrideSummary } from "../../shared/contracts/launch.ts";
 import type { InferenceRoutePreference } from "../../shared/contracts/ai.ts";
-import { isActiveBYOKProvider } from "../../shared/types/index.ts";
+import {
+  type ActiveBYOKProvider,
+  isActiveBYOKProvider,
+} from "../../shared/types/index.ts";
 import { getEnv } from "../lib/env.ts";
 import { RequestValidationError } from "./request-validation.ts";
 
@@ -22,6 +25,7 @@ interface FunctionInferenceOverrideListInput {
   userId: string;
   appId: string;
   functionNames: string[];
+  requireAuthoritative?: boolean;
 }
 
 interface FunctionInferenceOverrideSetInput {
@@ -32,6 +36,15 @@ interface FunctionInferenceOverrideSetInput {
   provider: string | null;
   model: string;
   allowedFunctionNames?: string[];
+}
+
+export interface FunctionInferencePolicySummary {
+  appId: string;
+  functionName: string;
+  billingMode: "light" | "byok";
+  provider: ActiveBYOKProvider | null;
+  model: string | null;
+  updatedAt: string | null;
 }
 
 /** Convert a stored row to a resolveInferenceRoute selection. */
@@ -115,6 +128,54 @@ export async function listFunctionInferenceOverrides(
   }
 }
 
+/** Owner/coding projection of every stored per-function route, including Light. */
+export async function listFunctionInferencePolicies(
+  input: FunctionInferenceOverrideListInput,
+): Promise<FunctionInferencePolicySummary[]> {
+  const db = getDbConfig();
+  if (!db) {
+    if (input.requireAuthoritative) {
+      throw new RequestValidationError(
+        "Function inference policy storage is not configured",
+        503,
+      );
+    }
+    return [];
+  }
+  const names = new Set(uniqueFunctionNames(input.functionNames));
+  try {
+    const rows = await dbGet<FunctionInferenceOverrideRow>(
+      db,
+      "user_function_inference_overrides",
+      {
+        user_id: `eq.${input.userId}`,
+        app_id: `eq.${input.appId}`,
+        select: "app_id,function_name,billing_mode,provider,model,updated_at",
+        limit: "500",
+      },
+    );
+    return rows.filter((row) => names.has(row.function_name)).map(
+      (row): FunctionInferencePolicySummary => ({
+        appId: input.appId,
+        functionName: row.function_name,
+        billingMode: row.billing_mode === "byok" ? "byok" : "light",
+        provider: row.billing_mode === "byok" &&
+            isActiveBYOKProvider(row.provider)
+          ? row.provider
+          : null,
+        model: row.model || null,
+        updatedAt: row.updated_at || null,
+      }),
+    ).sort((left, right) =>
+      left.functionName.localeCompare(right.functionName)
+    );
+  } catch (err) {
+    if (input.requireAuthoritative) throw err;
+    console.warn("[FUNCTION-INFERENCE] policy list failed:", err);
+    return [];
+  }
+}
+
 export async function setFunctionInferenceOverride(
   input: FunctionInferenceOverrideSetInput,
 ): Promise<void> {
@@ -174,7 +235,9 @@ export async function clearFunctionInferenceOverride(input: {
     );
   }
   const functionName = normalizeFunctionName(input.functionName);
-  const url = new URL(`${db.baseUrl}/rest/v1/user_function_inference_overrides`);
+  const url = new URL(
+    `${db.baseUrl}/rest/v1/user_function_inference_overrides`,
+  );
   url.searchParams.set("user_id", `eq.${input.userId}`);
   url.searchParams.set("app_id", `eq.${input.appId}`);
   url.searchParams.set("function_name", `eq.${functionName}`);

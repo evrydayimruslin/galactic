@@ -5,6 +5,35 @@ Customer-facing, user-visible changes. Newest first. Always state money in dolla
 
 ---
 
+## Builder Milestone 1 — less context, less source retransmission
+
+Galactic now gives coding agents three primitives designed to spend fewer
+tokens while building and maintaining professional Agents:
+
+- **Upload source once.** `gx.stage` creates an immutable, content-addressed
+  `bundle_id`. The same bundle can be tested with `gx.test` and deployed with
+  `gx.upload`, so a coding agent does not resend the complete project at every
+  step. Later edits can stage only changed/new files and deletions. Reused
+  content is refreshed safely, deduplicated, rate-limited, and admitted against
+  an atomic owner storage quota before anything is written.
+- **Orient from a compact Agent snapshot.** `gx.project` returns an owner-only
+  coding capsule containing the current directive, function contracts, data
+  schema, permissions, routines, model policy, recent failures, release state,
+  and file hashes. Passing its prior `revision` returns only what changed.
+  Source contents, secrets, stored application data, and full logs are excluded.
+  Responses report the revision lease and the actual secret-free default model
+  route, including whether a selected BYOK route is configured.
+- **Ask models for typed data directly.** `galactic.ai({ output_schema })` uses
+  provider-native strict JSON Schema, returns the parsed value as `output`, and
+  verifies it before Agent code receives it. Galactic does not silently fall
+  back to asking for JSON in prose.
+
+Existing `files` workflows and the `ul.*` / `ultralight.*` aliases remain
+supported. See [Builder Milestone 1](BUILDER_MILESTONE_1.md) for the complete
+contracts and operational requirements.
+
+---
+
 ## Launch — Free Mode + a lower inference threshold
 
 **Free Mode keeps you working when your balance runs low.**

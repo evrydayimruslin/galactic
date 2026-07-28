@@ -78,11 +78,20 @@ import { putLiveExecutedBundle } from "../services/executed-bundle.ts";
 import { createServerLogger } from "../services/logging.ts";
 import { isAccountSessionAuthSource } from "../services/control-plane-auth.ts";
 import { initialReleaseVersionState } from "../services/release-version.ts";
+import {
+  bytesToBinaryString,
+  isBinarySourcePath,
+  sourceFileByteLength,
+  sourceFileBytes,
+} from "../services/source-file-content.ts";
+import { withInitialVersionBundleLineage } from "../services/upload-lineage.ts";
 
 // Export file type for programmatic uploads
 export interface UploadFile {
   name: string;
   content: string;
+  /** Authoritative byte payload for binary source artifacts. */
+  bytes?: Uint8Array;
   size: number;
 }
 
@@ -269,7 +278,11 @@ export async function handleUpload(request: Request): Promise<Response> {
 
         // Validate file types and size
         let totalSize = 0;
-        const validatedFiles: Array<{ name: string; content: string }> = [];
+        const validatedFiles: Array<{
+          name: string;
+          content: string;
+          bytes?: Uint8Array;
+        }> = [];
 
         for (const file of files) {
           // Check extension
@@ -291,8 +304,8 @@ export async function handleUpload(request: Request): Promise<Response> {
           }
 
           // Read content
-          const content = await file.text();
-          validatedFiles.push({ name: file.name, content });
+          const source = await readUploadedSourceFile(file);
+          validatedFiles.push({ name: file.name, ...source });
         }
 
         // Build logs — declared early so migration validation can log too
@@ -507,7 +520,7 @@ export async function handleUpload(request: Request): Promise<Response> {
           // Prepare files for upload (raw, no bundling)
           const filesToUpload = validatedFiles.map((f) => ({
             name: normalizeFileName(f.name),
-            content: new TextEncoder().encode(f.content),
+            content: sourceFileBytes(f),
             contentType: getContentType(f.name),
           }));
 
@@ -782,7 +795,7 @@ export async function handleUpload(request: Request): Promise<Response> {
           const storageKey = `apps/${appId}/${version}/`;
           const filesToUpload: FileUpload[] = validatedFiles.map((f) => ({
             name: f.name,
-            content: new TextEncoder().encode(f.content),
+            content: sourceFileBytes(f),
             contentType: getContentType(f.name),
           }));
           const totalUploadBytes = filesToUpload.reduce(
@@ -978,7 +991,7 @@ export async function handleUpload(request: Request): Promise<Response> {
             // This preserves the original TypeScript code with export statements
             {
               name: `_source_${normalizedEntryName}`,
-              content: new TextEncoder().encode(entryFile.content),
+              content: sourceFileBytes(entryFile),
               contentType: getContentType(normalizedEntryName),
             },
             // Also upload original files for reference/debugging
@@ -986,13 +999,13 @@ export async function handleUpload(request: Request): Promise<Response> {
               .filter((f) => f.name !== entryFile.name)
               .map((f) => ({
                 name: normalizeFileName(f.name),
-                content: new TextEncoder().encode(f.content),
+                content: sourceFileBytes(f),
                 contentType: getContentType(f.name),
               })),
           ]
           : validatedFiles.map((f) => ({
             name: normalizeFileName(f.name),
-            content: new TextEncoder().encode(f.content),
+            content: sourceFileBytes(f),
             contentType: getContentType(f.name),
           }));
 
@@ -1081,7 +1094,11 @@ export async function handleUpload(request: Request): Promise<Response> {
               `esm:${appId}:${version}`,
               esmBundledCode,
             );
-            await putLiveExecutedBundle({ appId, version, esmCode: esmBundledCode });
+            await putLiveExecutedBundle({
+              appId,
+              version,
+              esmCode: esmBundledCode,
+            });
             log("info", "ESM bundle cached in KV for Dynamic Workers");
           } catch (kvErr) {
             log(
@@ -1346,6 +1363,7 @@ export async function generateUniqueSlug(
 }
 
 function getContentType(filename: string): string {
+  if (filename.endsWith(".wasm")) return "application/wasm";
   if (filename.endsWith(".tsx")) return "text/typescript-jsx";
   if (filename.endsWith(".ts")) return "text/typescript";
   if (filename.endsWith(".jsx")) return "text/javascript-jsx";
@@ -1354,6 +1372,19 @@ function getContentType(filename: string): string {
   if (filename.endsWith(".md")) return "text/markdown";
   if (filename.endsWith(".css")) return "text/css";
   return "text/plain";
+}
+
+async function readUploadedSourceFile(
+  file: File,
+): Promise<{ content: string; bytes?: Uint8Array }> {
+  if (!isBinarySourcePath(file.name)) {
+    return { content: await file.text() };
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return {
+    content: bytesToBinaryString(bytes),
+    bytes,
+  };
 }
 
 /**
@@ -1426,7 +1457,11 @@ export async function handleDraftUpload(
 
         // Validate file types and size
         let totalSize = 0;
-        const validatedFiles: Array<{ name: string; content: string }> = [];
+        const validatedFiles: Array<{
+          name: string;
+          content: string;
+          bytes?: Uint8Array;
+        }> = [];
 
         for (const file of files) {
           const hasValidExt = ALLOWED_EXTENSIONS.some((ext) =>
@@ -1445,8 +1480,8 @@ export async function handleDraftUpload(
             );
           }
 
-          const content = await file.text();
-          validatedFiles.push({ name: file.name, content });
+          const source = await readUploadedSourceFile(file);
+          validatedFiles.push({ name: file.name, ...source });
         }
 
         // Check for entry file
@@ -1633,20 +1668,20 @@ export async function handleDraftUpload(
             // Upload original entry file with _source_ prefix for generate-docs parsing
             {
               name: `_source_${normalizedEntryName}`,
-              content: new TextEncoder().encode(entryFile.content),
+              content: sourceFileBytes(entryFile),
               contentType: getContentType(normalizedEntryName),
             },
             ...validatedFiles
               .filter((f) => f.name !== entryFile.name)
               .map((f) => ({
                 name: normalizeFileName(f.name),
-                content: new TextEncoder().encode(f.content),
+                content: sourceFileBytes(f),
                 contentType: getContentType(f.name),
               })),
           ]
           : validatedFiles.map((f) => ({
             name: normalizeFileName(f.name),
-            content: new TextEncoder().encode(f.content),
+            content: sourceFileBytes(f),
             contentType: getContentType(f.name),
           }));
 
@@ -1757,6 +1792,7 @@ interface UploadOptions {
   // caller; they are never accepted from an HTTP form upload.
   source_hash?: string;
   test_attestation?: VersionTestAttestationMetadata;
+  bundle_id?: string;
 }
 
 /**
@@ -1782,7 +1818,11 @@ export async function handleUploadFiles(
 
   // Validate file types and size
   let totalSize = 0;
-  const validatedFiles: Array<{ name: string; content: string }> = [];
+  const validatedFiles: Array<{
+    name: string;
+    content: string;
+    bytes?: Uint8Array;
+  }> = [];
 
   for (const file of files) {
     const hasValidExt = ALLOWED_EXTENSIONS.some((ext) =>
@@ -1792,7 +1832,7 @@ export async function handleUploadFiles(
       throw new Error(`File type not allowed: ${file.name}`);
     }
 
-    totalSize += file.size;
+    totalSize += sourceFileByteLength(file);
     if (totalSize > MAX_UPLOAD_SIZE_BYTES) {
       throw new Error(
         `Total upload size exceeds ${
@@ -1801,7 +1841,11 @@ export async function handleUploadFiles(
       );
     }
 
-    validatedFiles.push({ name: file.name, content: file.content });
+    validatedFiles.push({
+      name: file.name,
+      content: file.content,
+      ...(file.bytes ? { bytes: file.bytes } : {}),
+    });
   }
 
   if (detectGpuConfig(validatedFiles) && !isGpuSupportEnabled()) {
@@ -1989,12 +2033,15 @@ export async function handleUploadFiles(
       }
       : {}),
     version_metadata: [
-      buildVersionMetadataEntry(
-        version,
-        totalUploadSizeBytes,
-        versionTrust,
-        options.source_hash,
-        options.test_attestation,
+      withInitialVersionBundleLineage(
+        buildVersionMetadataEntry(
+          version,
+          totalUploadSizeBytes,
+          versionTrust,
+          options.source_hash,
+          options.test_attestation,
+        ),
+        options.bundle_id,
       ),
     ],
   };
@@ -2056,7 +2103,9 @@ export async function handleUploadFiles(
         );
         import("../services/function-index.ts").then((m) =>
           m.rebuildFunctionIndex(userId)
-        ).catch((err) =>
+        ).catch((
+          err,
+        ) =>
           uploadLogger.error(
             "Function index rebuild failed after programmatic upload",
             {
@@ -2130,7 +2179,11 @@ export async function handleDraftUploadFiles(
 
   // Validate file types and size
   let totalSize = 0;
-  const validatedFiles: Array<{ name: string; content: string }> = [];
+  const validatedFiles: Array<{
+    name: string;
+    content: string;
+    bytes?: Uint8Array;
+  }> = [];
 
   for (const file of files) {
     const hasValidExt = ALLOWED_EXTENSIONS.some((ext) =>
@@ -2140,7 +2193,7 @@ export async function handleDraftUploadFiles(
       throw new Error(`File type not allowed: ${file.name}`);
     }
 
-    totalSize += file.size;
+    totalSize += sourceFileByteLength(file);
     if (totalSize > MAX_UPLOAD_SIZE_BYTES) {
       throw new Error(
         `Total upload size exceeds ${
@@ -2149,7 +2202,11 @@ export async function handleDraftUploadFiles(
       );
     }
 
-    validatedFiles.push({ name: file.name, content: file.content });
+    validatedFiles.push({
+      name: file.name,
+      content: file.content,
+      ...(file.bytes ? { bytes: file.bytes } : {}),
+    });
   }
 
   // Check for entry file
@@ -2320,20 +2377,20 @@ export async function handleDraftUploadFiles(
       // Upload original entry file with _source_ prefix for generate-docs parsing
       {
         name: `_source_${normalizedEntryName}`,
-        content: new TextEncoder().encode(entryFile.content),
+        content: sourceFileBytes(entryFile),
         contentType: getContentType(normalizedEntryName),
       },
       ...validatedFiles
         .filter((f) => f.name !== entryFile.name)
         .map((f) => ({
           name: normalizeFileName(f.name),
-          content: new TextEncoder().encode(f.content),
+          content: sourceFileBytes(f),
           contentType: getContentType(f.name),
         })),
     ]
     : validatedFiles.map((f) => ({
       name: normalizeFileName(f.name),
-      content: new TextEncoder().encode(f.content),
+      content: sourceFileBytes(f),
       contentType: getContentType(f.name),
     }));
 

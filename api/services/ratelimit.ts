@@ -2,7 +2,7 @@
 // Uses Supabase table + RPC function for persistent, distributed rate limiting
 
 import { getEnv } from '../lib/env.ts';
-import { resolveEnforcementOptions, type EnforcementOptions } from './enforcement.ts';
+import { type EnforcementOptions, resolveEnforcementOptions } from './enforcement.ts';
 
 // ============================================
 // TYPES
@@ -21,15 +21,27 @@ export interface RateLimitResult {
   reason?: 'limit_exceeded' | 'service_unavailable';
 }
 
+export const BUILDER_STAGE_RATE_LIMIT_ENDPOINT = 'builder:stage';
+export const BUILDER_STAGE_RATE_LIMIT_PER_MINUTE = 10;
+
 // Default rate limits by endpoint
 export const RATE_LIMITS: Record<string, RateLimitConfig> = {
   'mcp:tools/list': { endpoint: 'mcp:tools/list', limit: 30, windowMinutes: 1 },
-  'mcp:tools/call': { endpoint: 'mcp:tools/call', limit: 100, windowMinutes: 1 },
+  'mcp:tools/call': {
+    endpoint: 'mcp:tools/call',
+    limit: 100,
+    windowMinutes: 1,
+  },
   'mcp:initialize': { endpoint: 'mcp:initialize', limit: 10, windowMinutes: 1 },
   'generate-docs': { endpoint: 'generate-docs', limit: 10, windowMinutes: 60 },
   'discover': { endpoint: 'discover', limit: 60, windowMinutes: 1 },
   'chat:stream': { endpoint: 'chat:stream', limit: 30, windowMinutes: 1 },
   'chat:models': { endpoint: 'chat:models', limit: 30, windowMinutes: 1 },
+  [BUILDER_STAGE_RATE_LIMIT_ENDPOINT]: {
+    endpoint: BUILDER_STAGE_RATE_LIMIT_ENDPOINT,
+    limit: BUILDER_STAGE_RATE_LIMIT_PER_MINUTE,
+    windowMinutes: 1,
+  },
 };
 
 function fallbackRateLimitResult(
@@ -88,26 +100,30 @@ export class RateLimitService {
     options?: EnforcementOptions,
   ): Promise<RateLimitResult> {
     // Get config for this endpoint, or use defaults
-    const config = RATE_LIMITS[endpoint] || { endpoint, limit: 100, windowMinutes: 1 };
+    const config = RATE_LIMITS[endpoint] ||
+      { endpoint, limit: 100, windowMinutes: 1 };
     const effectiveLimit = limit ?? config.limit;
     const effectiveWindow = windowMinutes ?? config.windowMinutes;
 
     try {
       // Call Supabase RPC function
-      const response = await fetch(`${this.supabaseUrl}/rest/v1/rpc/check_rate_limit`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.supabaseKey}`,
-          'apikey': this.supabaseKey,
-          'Content-Type': 'application/json',
+      const response = await fetch(
+        `${this.supabaseUrl}/rest/v1/rpc/check_rate_limit`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.supabaseKey}`,
+            'apikey': this.supabaseKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            p_user_id: userId,
+            p_endpoint: endpoint,
+            p_limit: effectiveLimit,
+            p_window_minutes: effectiveWindow,
+          }),
         },
-        body: JSON.stringify({
-          p_user_id: userId,
-          p_endpoint: endpoint,
-          p_limit: effectiveLimit,
-          p_window_minutes: effectiveWindow,
-        }),
-      });
+      );
 
       if (!response.ok) {
         return fallbackRateLimitResult(
@@ -124,7 +140,9 @@ export class RateLimitService {
       // Calculate remaining and reset time
       const windowStart = new Date();
       windowStart.setSeconds(0, 0); // Truncate to minute
-      const resetAt = new Date(windowStart.getTime() + effectiveWindow * 60 * 1000);
+      const resetAt = new Date(
+        windowStart.getTime() + effectiveWindow * 60 * 1000,
+      );
 
       return {
         allowed: allowed === true,
@@ -132,7 +150,6 @@ export class RateLimitService {
         resetAt,
         reason: allowed ? undefined : 'limit_exceeded',
       };
-
     } catch (err) {
       return fallbackRateLimitResult(
         endpoint,
@@ -147,7 +164,10 @@ export class RateLimitService {
   /**
    * Get rate limit headers for response
    */
-  getRateLimitHeaders(result: RateLimitResult, endpoint: string): Record<string, string> {
+  getRateLimitHeaders(
+    result: RateLimitResult,
+    endpoint: string,
+  ): Record<string, string> {
     const config = RATE_LIMITS[endpoint] || { limit: 100 };
     return {
       'X-RateLimit-Limit': String(config.limit),
@@ -170,7 +190,7 @@ export function checkInMemoryLimit(
   userId: string,
   endpoint: string,
   limit = 100,
-  windowMs = 60000
+  windowMs = 60000,
 ): RateLimitResult {
   // Lazy cleanup (replaces top-level setInterval, which CF Workers don't allow)
   cleanupExpiredEntries();
@@ -243,12 +263,23 @@ export async function checkRateLimit(
   // Non-UUID keys (IP addresses, 'anonymous') can't be sent to the
   // check_rate_limit RPC which expects p_user_id UUID — use in-memory.
   if (!UUID_RE.test(userId)) {
-    return checkInMemoryLimit(userId, endpoint, effectiveLimit, effectiveWindow * 60 * 1000);
+    return checkInMemoryLimit(
+      userId,
+      endpoint,
+      effectiveLimit,
+      effectiveWindow * 60 * 1000,
+    );
   }
 
   try {
     const service = createRateLimitService();
-    return await service.checkLimit(userId, endpoint, limit, windowMinutes, options);
+    return await service.checkLimit(
+      userId,
+      endpoint,
+      limit,
+      windowMinutes,
+      options,
+    );
   } catch (err) {
     return fallbackRateLimitResult(
       endpoint,

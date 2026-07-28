@@ -54,8 +54,10 @@ import {
 import { withSensitiveRouteRateLimit } from "../services/sensitive-route-rate-limit.ts";
 import {
   LAUNCH_API_ROUTES,
+  LAUNCH_AGENT_EXTENSION_HANDOFF_INTENTS,
   LAUNCH_CALLER_FUNCTION_POLICIES,
   LAUNCH_DEFERRED_CAPABILITIES,
+  LAUNCH_HANDOFF_INTENTS,
   LAUNCH_INCLUDED_CAPABILITIES,
   LAUNCH_INSTALL_TARGETS,
   LAUNCH_MVP_VERSION,
@@ -70,6 +72,7 @@ import {
   type LaunchAgentCapacityResponse,
   type LaunchAgentCapacityUpdateRequest,
   type LaunchAgentFunctionsResponse,
+  type LaunchAgentExtensionHandoffIntent,
   type LaunchAgentHomeActionRequest,
   type LaunchAgentHomeResponse,
   type LaunchAgentInstallContext,
@@ -114,6 +117,9 @@ import {
   type LaunchFunctionRunResponse,
   type LaunchFunctionSummary,
   type LaunchGlobalAttentionResponse,
+  type LaunchHandoffCreateRequest,
+  type LaunchHandoffCreateResponse,
+  type LaunchHandoffIntent,
   type LaunchInferenceOptionsResponse,
   type LaunchInstallInstruction,
   type LaunchInstallResponse,
@@ -851,6 +857,10 @@ export async function handleLaunch(
       return await handleLaunchApiKeys(request, path, method);
     }
 
+    if (path === "/api/launch/handoffs") {
+      return await handleLaunchHandoff(request, method, null);
+    }
+
     if (
       path === "/api/launch/byok" ||
       path.startsWith("/api/launch/byok/")
@@ -974,6 +984,17 @@ export async function handleLaunch(
         request,
         path,
         dependencies.compute,
+      );
+    }
+
+    const agentHandoffMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/handoffs$/,
+    );
+    if (agentHandoffMatch) {
+      return await handleLaunchHandoff(
+        request,
+        method,
+        agentHandoffMatch[1],
       );
     }
 
@@ -1753,6 +1774,66 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               }),
             },
             "401": { description: "Authentication required" },
+          },
+        },
+      },
+      "/api/launch/handoffs": {
+        post: {
+          operationId: "createLaunchWorkspaceHandoff",
+          summary: "Create a short-lived coding-agent workspace handoff",
+          description:
+            "Creates an account-bound, reveal-once builder credential with a server-selected 30-minute expiry. Connect is the only enabled workspace intent; new-Agent publication remains disabled until a handoff can bind to exactly one created Agent.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              $ref: "#/components/schemas/WorkspaceHandoffCreateRequest",
+            }),
+          },
+          responses: {
+            "200": {
+              description: "Reveal-once coding-agent handoff",
+              content: jsonContent({
+                $ref: "#/components/schemas/HandoffCreateResponse",
+              }),
+            },
+            "400": { description: "Invalid or mismatched handoff intent" },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/handoffs": {
+        post: {
+          operationId: "createLaunchAgentHandoff",
+          summary: "Create a short-lived Agent-scoped coding-agent handoff",
+          description:
+            "Creates a reveal-once builder credential constrained to the owned Agent and expiring in 30 minutes. Agent handoffs accept interface, function, or routine intents.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Owned Agent id or slug",
+          }],
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              $ref: "#/components/schemas/AgentHandoffCreateRequest",
+            }),
+          },
+          responses: {
+            "200": {
+              description: "Reveal-once Agent-scoped coding-agent handoff",
+              content: jsonContent({
+                $ref: "#/components/schemas/HandoffCreateResponse",
+              }),
+            },
+            "400": { description: "Invalid or mismatched handoff intent" },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+            "404": { description: "Owned Agent not found" },
           },
         },
       },
@@ -3120,6 +3201,108 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             scopes: { type: "array", items: { type: "string" } },
             appIds: { type: "array", items: { type: "string" } },
             functionNames: { type: "array", items: { type: "string" } },
+          },
+        },
+        WorkspaceHandoffCreateRequest: {
+          type: "object",
+          additionalProperties: false,
+          required: ["intent", "description"],
+          properties: {
+            intent: { type: "string", enum: ["connect"] },
+            description: {
+              type: "string",
+              maxLength: LAUNCH_HANDOFF_DESCRIPTION_MAX_LENGTH,
+            },
+          },
+        },
+        AgentHandoffCreateRequest: {
+          type: "object",
+          additionalProperties: false,
+          required: ["intent", "description"],
+          properties: {
+            intent: {
+              type: "string",
+              enum: [...LAUNCH_AGENT_EXTENSION_HANDOFF_INTENTS],
+            },
+            description: {
+              type: "string",
+              minLength: 1,
+              maxLength: LAUNCH_HANDOFF_DESCRIPTION_MAX_LENGTH,
+            },
+          },
+        },
+        HandoffCreateResponse: {
+          type: "object",
+          required: [
+            "success",
+            "handoff",
+            "credential",
+            "platformMcpUrl",
+            "message",
+            "generatedAt",
+          ],
+          properties: {
+            success: { type: "boolean", const: true },
+            handoff: {
+              type: "object",
+              required: [
+                "id",
+                "intent",
+                "status",
+                "target",
+                "description",
+                "createdAt",
+                "expiresAt",
+              ],
+              properties: {
+                id: { type: "string" },
+                intent: {
+                  type: "string",
+                  enum: [...LAUNCH_HANDOFF_INTENTS],
+                },
+                status: { type: "string", enum: ["created"] },
+                target: {
+                  type: "object",
+                  required: ["kind"],
+                  properties: {
+                    kind: { type: "string", enum: ["workspace", "agent"] },
+                    agentId: { type: "string" },
+                    agentSlug: { type: ["string", "null"] },
+                    agentName: { type: "string" },
+                  },
+                },
+                description: { type: "string" },
+                createdAt: { type: "string", format: "date-time" },
+                expiresAt: { type: "string", format: "date-time" },
+              },
+            },
+            credential: {
+              type: "object",
+              required: [
+                "id",
+                "tokenPrefix",
+                "plaintextToken",
+                "scopes",
+                "appIds",
+                "createdAt",
+                "expiresAt",
+              ],
+              properties: {
+                id: { type: "string" },
+                tokenPrefix: { type: "string" },
+                plaintextToken: { type: "string" },
+                scopes: { type: "array", items: { type: "string" } },
+                appIds: {
+                  type: ["array", "null"],
+                  items: { type: "string" },
+                },
+                createdAt: { type: "string", format: "date-time" },
+                expiresAt: { type: "string", format: "date-time" },
+              },
+            },
+            platformMcpUrl: { type: "string", format: "uri" },
+            message: { type: "string" },
+            generatedAt: { type: "string", format: "date-time" },
           },
         },
         ByokProviderOption: {
@@ -5483,6 +5666,176 @@ async function scheduleLaunchAccountByokReconciliation(
         affectedAgents,
         observedAt,
       });
+    },
+  );
+}
+
+const LAUNCH_HANDOFF_TTL_MS = 30 * 60 * 1000;
+const LAUNCH_HANDOFF_DESCRIPTION_MAX_LENGTH = 4_000;
+const LAUNCH_HANDOFF_BUILDER_SCOPES = [
+  "apps:read",
+  "agents:build",
+] as const;
+
+export function parseLaunchHandoffCreateRequest(
+  body: Record<string, unknown>,
+  target: "workspace" | "agent",
+): LaunchHandoffCreateRequest {
+  const unsupported = Object.keys(body).filter((key) =>
+    key !== "intent" && key !== "description"
+  );
+  if (unsupported.length > 0) {
+    throw new RequestValidationError(
+      `Unsupported handoff field${unsupported.length === 1 ? "" : "s"}: ${
+        unsupported.join(", ")
+      }. Scope, target, and expiry are selected by Galactic.`,
+    );
+  }
+
+  if (
+    typeof body.intent !== "string" ||
+    !LAUNCH_HANDOFF_INTENTS.includes(body.intent as LaunchHandoffIntent)
+  ) {
+    throw new RequestValidationError(
+      `intent must be one of: ${LAUNCH_HANDOFF_INTENTS.join(", ")}`,
+    );
+  }
+  const intent = body.intent as LaunchHandoffIntent;
+  const targetsAgent = LAUNCH_AGENT_EXTENSION_HANDOFF_INTENTS.includes(
+    intent as LaunchAgentExtensionHandoffIntent,
+  );
+  if (target === "agent" && !targetsAgent) {
+    throw new RequestValidationError(
+      "Agent handoffs support interface, function, or routine intents",
+    );
+  }
+  if (target === "workspace" && targetsAgent) {
+    throw new RequestValidationError(
+      "Interface, function, and routine handoffs require an Agent target",
+    );
+  }
+  if (target === "workspace" && intent === "agent") {
+    throw new RequestValidationError(
+      "New-Agent handoffs are unavailable until Galactic can bind the credential to exactly one created Agent",
+    );
+  }
+
+  if (typeof body.description !== "string") {
+    throw new RequestValidationError("description must be a string");
+  }
+  const description = body.description.trim();
+  if (intent !== "connect" && !description) {
+    throw new RequestValidationError(
+      "Describe the requested change before creating a handoff",
+    );
+  }
+  if (description.length > LAUNCH_HANDOFF_DESCRIPTION_MAX_LENGTH) {
+    throw new RequestValidationError(
+      `description must be ${LAUNCH_HANDOFF_DESCRIPTION_MAX_LENGTH} characters or less`,
+    );
+  }
+  return { intent, description };
+}
+
+async function handleLaunchHandoff(
+  request: Request,
+  method: string,
+  encodedAgentLocator: string | null,
+): Promise<Response> {
+  if (method !== "POST") {
+    return error("Method not allowed for coding-agent handoffs", 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForApiKeys(user);
+
+  return await withSensitiveRouteRateLimit(
+    user.id,
+    "user:token_create",
+    async () => {
+      try {
+        const createRequest = parseLaunchHandoffCreateRequest(
+          await readJsonBody<Record<string, unknown>>(request),
+          encodedAgentLocator ? "agent" : "workspace",
+        );
+        const targetAgent = encodedAgentLocator
+          ? await fetchToolByLocator(parseLocator(encodedAgentLocator), {
+            ownerId: user.id,
+          })
+          : null;
+        if (encodedAgentLocator && !targetAgent) {
+          return error("Agent not found", 404);
+        }
+
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + LAUNCH_HANDOFF_TTL_MS);
+        const suffix = crypto.randomUUID().slice(0, 8);
+        const targetLabel = (targetAgent?.slug || targetAgent?.id || "workspace")
+          .slice(0, 22);
+        const name =
+          `Handoff ${createRequest.intent} ${suffix} ${targetLabel}`
+          .slice(0, 50);
+        const result = await createToken(user.id, name, {
+          expiresAt,
+          scopes: [
+            ...LAUNCH_HANDOFF_BUILDER_SCOPES,
+            `handoff:${createRequest.intent}`,
+          ],
+          ...(targetAgent ? { app_ids: [targetAgent.id] } : {}),
+        });
+        const tokenExpiresAt = result.token.expires_at;
+        if (!tokenExpiresAt) {
+          await revokeToken(user.id, result.token.id).catch(() => {});
+          throw new Error("Short-lived credential was created without expiry");
+        }
+
+        const generatedAt = now.toISOString();
+        return privateLaunchJson({
+          success: true,
+          handoff: {
+            id: result.token.id,
+            intent: createRequest.intent,
+            status: "created",
+            target: targetAgent
+              ? {
+                kind: "agent",
+                agentId: targetAgent.id,
+                agentSlug: targetAgent.slug,
+                agentName: targetAgent.name || targetAgent.slug ||
+                  "Untitled Agent",
+              }
+              : { kind: "workspace" },
+            description: createRequest.description,
+            createdAt: result.token.created_at,
+            expiresAt: tokenExpiresAt,
+          },
+          credential: {
+            id: result.token.id,
+            tokenPrefix: result.token.token_prefix,
+            plaintextToken: result.plaintext_token,
+            scopes: result.token.scopes,
+            appIds: result.token.app_ids,
+            createdAt: result.token.created_at,
+            expiresAt: tokenExpiresAt,
+          },
+          platformMcpUrl: `${publicBaseUrl(request)}/mcp/platform`,
+          message:
+            "Short-lived coding-agent handoff created. The credential is revealed only in this response and expires in 30 minutes.",
+          generatedAt,
+        } satisfies LaunchHandoffCreateResponse);
+      } catch (err) {
+        if (err instanceof RequestValidationError) {
+          return error(err.message, err.status);
+        }
+        if (
+          err instanceof Error &&
+          (err.message.includes("already exists") ||
+            err.message.includes("Token limit reached"))
+        ) {
+          return error(err.message, err.message.includes("already exists") ? 409 : 403);
+        }
+        console.error("[LAUNCH] Coding-agent handoff creation failed:", err);
+        return error("Failed to create coding-agent handoff", 500);
+      }
     },
   );
 }
@@ -13417,7 +13770,7 @@ function normalizeLaunchByokModel(value: unknown): string | undefined {
   return value;
 }
 
-function parseLaunchApiKeyCreateRequest(
+export function parseLaunchApiKeyCreateRequest(
   body: Record<string, unknown>,
 ): LaunchApiKeyCreateRequest {
   const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -13447,6 +13800,11 @@ function parseLaunchApiKeyCreateRequest(
   }
 
   const scopes = optionalStringArray(body.scopes, "scopes");
+  if (scopes?.some((scope) => scope.startsWith("handoff:"))) {
+    throw new RequestValidationError(
+      "handoff: scopes are reserved for Galactic's short-lived handoff endpoint",
+    );
+  }
   const appIds = optionalStringArray(body.appIds ?? body.app_ids, "appIds");
   const functionNames = optionalStringArray(
     body.functionNames ?? body.function_names,

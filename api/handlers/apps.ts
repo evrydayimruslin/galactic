@@ -8,6 +8,7 @@ import {
   createAppsService,
 } from "../services/apps.ts";
 import { createR2Service, type R2Service } from "../services/storage.ts";
+import { deleteProjectCapsulesForApp } from "../services/project-capsule.ts";
 import {
   ICON_EXTENSIONS,
   iconContentType,
@@ -2392,6 +2393,19 @@ async function handleDeleteApp(
       return error("App ownership changed; delete was not applied", 409);
     }
 
+    try {
+      await deleteProjectCapsulesForApp(
+        createR2Service(),
+        user.id,
+        appId,
+      );
+    } catch (cleanupError) {
+      console.warn(
+        `[PROJECT-CAPSULE] Failed to delete revisions for ${appId}:`,
+        cleanupError,
+      );
+    }
+
     // Rebuild user library to remove deleted app
     rebuildUserLibrary(user.id).catch((err) =>
       console.error("Library rebuild after delete failed:", err)
@@ -3648,7 +3662,9 @@ async function handlePublishDraft(
       }
 
       const { runOriginalityCheck, computeFingerprint, storeIntegrityResults } =
-        await import("../services/originality.ts");
+        await import(
+          "../services/originality.ts"
+        );
       const mdContent = await r2Service.fetchTextFile(`${draftKey}README.md`)
         .catch(() => "");
       const originalityResult = await runOriginalityCheck(

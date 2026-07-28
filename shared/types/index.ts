@@ -108,6 +108,11 @@ export interface VersionMetadata {
   // pipeline). Used to dedup a re-upload of byte-identical files so a redeploy
   // loop can't spam versions. Absent on versions deployed before this shipped.
   source_hash?: string;
+  // Content-addressed gx.stage source identity used for this deployment.
+  // The deployed source remains in version storage after the short-lived
+  // staging lease expires; this reference preserves lineage to the tested
+  // builder bundle without retaining a replayable test token.
+  bundle_id?: string;
   // Verified gx.test proof persisted only after the server accepts a signed,
   // unexpired token for this exact raw source hash. The opaque token itself is
   // intentionally not stored (it is replayable until expiry).
@@ -498,7 +503,16 @@ export interface AIRequest {
     description: string;
     parameters: Record<string, unknown>;
   }>;
+  output_schema?: {
+    name: string;
+    schema: Record<string, unknown> | boolean;
+    strict?: true;
+  };
 }
+
+export type AIStructuredRequest = Omit<AIRequest, "output_schema"> & {
+  output_schema: NonNullable<AIRequest["output_schema"]>;
+};
 
 // ── Widget System ──
 
@@ -878,7 +892,7 @@ export interface CommandCompositeCardBody {
   }>;
 }
 
-export interface AIResponse {
+export interface AIResponse<Output = unknown> {
   content: string;
   model: string;
   usage: {
@@ -886,8 +900,18 @@ export interface AIResponse {
     output_tokens: number;
     cost_light: number;
   };
+  output?: Output;
   error?: string;
+  error_code?:
+    | "invalid_output_schema"
+    | "structured_output_unsupported"
+    | "structured_output_invalid_json"
+    | "structured_output_schema_mismatch";
 }
+
+export type AIStructuredResponse<Output = unknown> = AIResponse<Output> & {
+  output: Output;
+};
 
 // ============================================
 // API REQUESTS/RESPONSES
@@ -938,6 +962,7 @@ export interface RunResponse {
   error?: {
     type: string;
     message: string;
+    code?: string;
     stack?: string;
     details?: unknown;
   };
@@ -1606,7 +1631,10 @@ export interface UltralightSDK {
   recall(key: string): Promise<unknown>;
 
   // AI
-  ai(request: AIRequest): Promise<AIResponse>;
+  ai<Output = unknown>(
+    request: AIStructuredRequest,
+  ): Promise<AIStructuredResponse<Output>>;
+  ai<Output = unknown>(request: AIRequest): Promise<AIResponse<Output>>;
 }
 
 // ============================================

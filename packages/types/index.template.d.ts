@@ -1,18 +1,18 @@
 import type {
-  AIRequest,
-  AIMessage,
   AIContentPart,
-  AITextPart,
   AIFilePart,
-  AITool,
+  AIMessage,
+  AIOutputSchema,
+  AIRequest,
   AIResponse,
+  AIStructuredOutputErrorCode,
+  AIStructuredRequest,
+  AIStructuredResponse,
+  AITextPart,
+  AITool,
 } from './generated/shared/contracts/ai';
 import type { ComputeBinding } from './generated/shared/contracts/compute';
-import type {
-  QueryOptions,
-  QueryResult,
-  UserContext,
-} from './generated/shared/contracts/runtime';
+import type { QueryOptions, QueryResult, UserContext } from './generated/shared/contracts/runtime';
 
 export type * from './generated/shared/contracts/env';
 export type * from './generated/shared/contracts/compute';
@@ -50,9 +50,6 @@ declare global {
   const http: HttpUtils;
 }
 
-
-
-
 interface UltralightSDK {
   env: Readonly<Record<string, string>>;
   user: UserContext | null;
@@ -68,7 +65,10 @@ interface UltralightSDK {
   batchRemove(keys: string[]): Promise<void>;
   remember(key: string, value: unknown): Promise<void>;
   recall<T = unknown>(key: string): Promise<T | null>;
-  ai(request: AIRequest): Promise<AIResponse>;
+  ai<Output = unknown>(
+    request: AIStructuredRequest,
+  ): Promise<AIStructuredResponse<Output>>;
+  ai<Output = unknown>(request: AIRequest): Promise<AIResponse<Output>>;
   compute: ComputeBinding;
 }
 
@@ -139,7 +139,9 @@ interface SchemaBuilder {
   array<T>(itemSchema: Schema<T>): ArraySchema<T>;
   object<T extends Record<string, Schema<unknown>>>(shape: T): ObjectSchema<T>;
   optional<T>(innerSchema: Schema<T>): Schema<T | undefined>;
-  union<T extends Schema<unknown>[]>(...schemas: T): Schema<T[number] extends Schema<infer U> ? U : never>;
+  union<T extends Schema<unknown>[]>(
+    ...schemas: T
+  ): Schema<T[number] extends Schema<infer U> ? U : never>;
   literal<T extends string | number | boolean>(value: T): Schema<T>;
   enum<T extends string[]>(...values: T): Schema<T[number]>;
   any(): Schema<unknown>;
@@ -177,9 +179,12 @@ interface ArraySchema<T> extends Schema<T[]> {
   nonempty(): ArraySchema<T>;
 }
 
-interface ObjectSchema<T extends Record<string, Schema<unknown>>> extends Schema<{
-  [K in keyof T]: T[K] extends Schema<infer U> ? U : never;
-}> {}
+interface ObjectSchema<T extends Record<string, Schema<unknown>>> extends
+  Schema<
+    {
+      [K in keyof T]: T[K] extends Schema<infer U> ? U : never;
+    }
+  > {}
 
 interface MarkdownUtils {
   toHtml(md: string): string;
@@ -198,7 +203,9 @@ interface StringUtils {
 }
 
 interface JwtUtils {
-  decode(token: string): { header: Record<string, unknown>; payload: Record<string, unknown> } | null;
+  decode(
+    token: string,
+  ): { header: Record<string, unknown>; payload: Record<string, unknown> } | null;
   isExpired(token: string): boolean;
   getExpiration(token: string): Date | null;
 }
@@ -224,7 +231,7 @@ interface UltralightRequest {
 
 type UltralightApp = (
   container: HTMLElement,
-  sdk: UltralightSDK
+  sdk: UltralightSDK,
 ) => void | Promise<void> | (() => void);
 
 interface UltralightProps {
@@ -232,33 +239,37 @@ interface UltralightProps {
 }
 
 export {
-  UltralightSDK,
-  UserContext,
-  AIRequest,
-  AIMessage,
   AIContentPart,
-  AITextPart,
   AIFilePart,
-  AITool,
+  AIMessage,
+  AIOutputSchema,
+  AIRequest,
   AIResponse,
+  AIStructuredOutputErrorCode,
+  AIStructuredRequest,
+  AIStructuredResponse,
+  AITextPart,
+  AITool,
+  ArraySchema,
+  BooleanSchema,
+  DateFnsLike,
+  HttpUtils,
+  JwtUtils,
+  LodashLike,
+  MarkdownUtils,
+  NumberSchema,
+  ObjectSchema,
   QueryOptions,
   QueryResult,
-  LodashLike,
-  DateFnsLike,
-  SchemaBuilder,
   Schema,
+  SchemaBuilder,
   StringSchema,
-  NumberSchema,
-  BooleanSchema,
-  ArraySchema,
-  ObjectSchema,
-  MarkdownUtils,
   StringUtils,
-  JwtUtils,
-  HttpUtils,
-  UltralightRequest,
   UltralightApp,
   UltralightProps,
+  UltralightRequest,
+  UltralightSDK,
+  UserContext,
 };
 
 export {};

@@ -11,6 +11,10 @@ Before running this flow, make sure:
 - the staging and production Workers.dev origins point at the right Worker
   deployments; if replacing them with custom domains, confirm the domains are
   project-owned first
+- the shared `ultralight-apps` R2 bucket has separate lifecycle rules that
+  delete `staged-bundles/` after exactly seven days and `project-capsules/`
+  after exactly 31 days; never apply either retention rule to the
+  deployed-source `apps/` prefix
 - the `ultralight-launch-web` Cloudflare Pages project exists, or the launch-web
   deploy workflow can create it with production branch `main` before the first
   staging branch upload
@@ -88,6 +92,41 @@ Important scope note:
   [docs/ENVIRONMENT_ISOLATION_MATRIX.md](ENVIRONMENT_ISOLATION_MATRIX.md)
   and should be reviewed whenever a candidate touches Cloudflare bindings,
   `worker/**`, or desktop runtime environment wiring.
+
+## Builder Object Retention
+
+Builder bundles have a 24-hour logical API lease and a seven-day physical
+retention ceiling. Coding-capsule revisions have a 30-day logical lease and a
+31-day physical retention ceiling. The APIs reject expired objects immediately;
+the R2 lifecycle rules bound cleanup of the underlying owner-scoped objects.
+The `20260727120000_staged_bundle_storage_quota.sql` migration must also be
+present on the target: `gx.stage` intentionally fails closed if its atomic
+owner-object admission RPC is unavailable.
+
+Before the first Milestone 1 deployment, and whenever bucket policy changes,
+verify the shared app bucket:
+
+```bash
+npx wrangler r2 bucket lifecycle list ultralight-apps
+```
+
+The resulting policy must contain two separate prefix rules:
+
+- `staged-bundles/`: delete after exactly seven days;
+- `project-capsules/`: delete after exactly 31 days.
+
+The hourly Worker cron must also invoke
+`cleanup_staged_bundle_storage_reservations` through the bounded staged-bundle
+quota reconciler. This removes expired reservation claims and unreferenced
+object rows for owners who never stage again; capture one successful cron
+result in the release packet alongside the R2 lifecycle evidence.
+
+A shorter staged-bundle policy can delete a still-valid API lease. A broader
+policy can delete deployed source. Because staging and production currently
+share this bucket, this is one shared-resource release gate. Record the complete
+command output in the release packet. See
+[Builder Milestone 1](BUILDER_MILESTONE_1.md) for the storage and integrity
+contract.
 
 ## Supabase Migration Audit
 

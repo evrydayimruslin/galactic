@@ -26,6 +26,11 @@ export interface R2ServiceOptions {
   fetchFn?: typeof fetch;
 }
 
+export interface FileListPage {
+  keys: string[];
+  nextCursor: string | null;
+}
+
 export class R2Service {
   private bucket: R2Bucket;
   private options: R2ServiceOptions;
@@ -67,6 +72,29 @@ export class R2Service {
     await this.bucket.delete(key);
   }
 
+  async listFilesPage(
+    prefix: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<FileListPage> {
+    const limit = Math.max(
+      1,
+      Math.min(1000, Math.floor(options.limit ?? 1000)),
+    );
+    await this.meter("list", prefix);
+    const listed = await this.bucket.list({
+      prefix,
+      limit,
+      ...(options.cursor ? { cursor: options.cursor } : {}),
+    });
+    if (listed.truncated && !listed.cursor) {
+      throw new Error("R2 returned a truncated file page without a cursor");
+    }
+    return {
+      keys: listed.objects.map((object: { key: string }) => object.key),
+      nextCursor: listed.truncated ? listed.cursor! : null,
+    };
+  }
+
   async listFiles(prefix: string): Promise<string[]> {
     // Paginate: R2 list() returns at most 1000 keys per page. Returning only the
     // first page silently drops files — for open-code verification that would let
@@ -75,10 +103,12 @@ export class R2Service {
     const keys: string[] = [];
     let cursor: string | undefined;
     do {
-      await this.meter("list", prefix);
-      const listed = await this.bucket.list(cursor ? { prefix, cursor } : { prefix });
-      for (const o of listed.objects) keys.push(o.key);
-      cursor = listed.truncated ? listed.cursor : undefined;
+      const page = await this.listFilesPage(prefix, { cursor });
+      keys.push(...page.keys);
+      if (page.nextCursor === cursor) {
+        throw new Error("R2 returned a repeated file-list cursor");
+      }
+      cursor = page.nextCursor ?? undefined;
     } while (cursor);
     return keys;
   }

@@ -14,8 +14,8 @@ import * as esbuild from 'esbuild-wasm';
 
 export interface BundleResult {
   success: boolean;
-  code: string;           // IIFE format for MCP sandbox execution
-  esmCode?: string;       // ESM format for Dynamic Worker loading (populated when bundling succeeds)
+  code: string; // IIFE format for MCP sandbox execution
+  esmCode?: string; // ESM format for Dynamic Worker loading (populated when bundling succeeds)
   errors: string[];
   warnings: string[];
   hasExternalImports: boolean;
@@ -24,6 +24,7 @@ export interface BundleResult {
 export interface FileInput {
   name: string;
   content: string;
+  bytes?: Uint8Array;
 }
 
 // ============================================
@@ -60,7 +61,7 @@ async function ensureEsbuild(): Promise<void> {
       const wasmModule = loaderMod.default;
       await esbuild.initialize({
         wasmModule,
-        worker: false,  // CF Workers don't support Web Worker API — run on main thread
+        worker: false, // CF Workers don't support Web Worker API — run on main thread
       });
     }
     esbuildInitialized = true;
@@ -95,12 +96,17 @@ function resolveVirtualPath(
   // Resolve relative to importer
   let resolved = importPath;
   if (importPath.startsWith('./') || importPath.startsWith('../')) {
-    const importerDir = importer.includes('/') ? importer.substring(0, importer.lastIndexOf('/')) : '.';
+    const importerDir = importer.includes('/')
+      ? importer.substring(0, importer.lastIndexOf('/'))
+      : '.';
     const parts = [...importerDir.split('/'), ...importPath.split('/')];
     const normalized: string[] = [];
     for (const part of parts) {
       if (part === '.' || part === '') continue;
-      if (part === '..') { normalized.pop(); continue; }
+      if (part === '..') {
+        normalized.pop();
+        continue;
+      }
       normalized.push(part);
     }
     resolved = normalized.join('/');
@@ -110,13 +116,13 @@ function resolveVirtualPath(
   const extensions = ['', '.ts', '.tsx', '.js', '.jsx'];
   for (const ext of extensions) {
     const candidate = resolved + ext;
-    if (files.some(f => f.name === candidate)) return candidate;
+    if (files.some((f) => f.name === candidate)) return candidate;
   }
 
   // Try index files
   for (const ext of ['/index.ts', '/index.tsx', '/index.js', '/index.jsx']) {
     const candidate = resolved + ext;
-    if (files.some(f => f.name === candidate)) return candidate;
+    if (files.some((f) => f.name === candidate)) return candidate;
   }
 
   return resolved;
@@ -126,6 +132,7 @@ function resolveVirtualPath(
  * Get esbuild loader from file extension.
  */
 function getLoader(path: string): esbuild.Loader {
+  if (path.endsWith('.wasm')) return 'binary';
   if (path.endsWith('.tsx')) return 'tsx';
   if (path.endsWith('.jsx')) return 'jsx';
   if (path.endsWith('.ts')) return 'ts';
@@ -145,7 +152,9 @@ function createVirtualFsPlugin(files: FileInput[]): esbuild.Plugin {
       // Mark all local files as virtual
       build.onResolve({ filter: /.*/ }, (args) => {
         // Let external URLs pass through (esm.sh CDN)
-        if (args.path.startsWith('http://') || args.path.startsWith('https://')) {
+        if (
+          args.path.startsWith('http://') || args.path.startsWith('https://')
+        ) {
           return { path: args.path, external: true };
         }
 
@@ -160,10 +169,14 @@ function createVirtualFsPlugin(files: FileInput[]): esbuild.Plugin {
         }
 
         // Resolve against virtual filesystem
-        const resolved = resolveVirtualPath(args.path, args.importer || '', files);
+        const resolved = resolveVirtualPath(
+          args.path,
+          args.importer || '',
+          files,
+        );
 
         // If it's a known local file, load from virtual fs
-        if (files.some(f => f.name === resolved)) {
+        if (files.some((f) => f.name === resolved)) {
           return { path: resolved, namespace: 'virtual' };
         }
 
@@ -195,12 +208,14 @@ function createVirtualFsPlugin(files: FileInput[]): esbuild.Plugin {
 
       // Load files from virtual filesystem
       build.onLoad({ filter: /.*/, namespace: 'virtual' }, (args) => {
-        const file = files.find(f => f.name === args.path);
+        const file = files.find((f) => f.name === args.path);
         if (!file) {
-          return { errors: [{ text: `File not found in virtual fs: ${args.path}` }] };
+          return {
+            errors: [{ text: `File not found in virtual fs: ${args.path}` }],
+          };
         }
         return {
-          contents: file.content,
+          contents: file.bytes ?? file.content,
           loader: getLoader(args.path),
         };
       });
@@ -222,7 +237,7 @@ export async function bundleCode(
   files: FileInput[],
   entryPoint: string,
 ): Promise<BundleResult> {
-  const entryFile = files.find(f => f.name === entryPoint);
+  const entryFile = files.find((f) => f.name === entryPoint);
   if (!entryFile) {
     return {
       success: false,
@@ -235,7 +250,8 @@ export async function bundleCode(
 
   const hasExternalImports = detectExternalImports(entryFile.content);
   const hasAnyImports = detectAnyImports(entryFile.content);
-  const isTypeScript = entryPoint.endsWith('.ts') || entryPoint.endsWith('.tsx');
+  const isTypeScript = entryPoint.endsWith('.ts') ||
+    entryPoint.endsWith('.tsx');
 
   // If no imports AND not TypeScript, return code as-is (no bundling needed)
   // TypeScript files always need transpilation even without imports
@@ -253,9 +269,10 @@ export async function bundleCode(
     await ensureEsbuild();
 
     // Detect React/JSX project for loader configuration
-    const isReactProject = entryPoint.endsWith('.tsx') || entryPoint.endsWith('.jsx') ||
-      files.some(f => f.name.endsWith('.tsx') || f.name.endsWith('.jsx')) ||
-      files.some(f => f.content.includes('from "react"') || f.content.includes("from 'react'"));
+    const isReactProject = entryPoint.endsWith('.tsx') ||
+      entryPoint.endsWith('.jsx') ||
+      files.some((f) => f.name.endsWith('.tsx') || f.name.endsWith('.jsx')) ||
+      files.some((f) => f.content.includes('from "react"') || f.content.includes("from 'react'"));
 
     const buildOptions: esbuild.BuildOptions = {
       entryPoints: [entryPoint],
@@ -264,7 +281,7 @@ export async function bundleCode(
       globalName: '__exports',
       platform: 'browser',
       target: 'esnext',
-      write: false,             // Return in-memory, no filesystem
+      write: false, // Return in-memory, no filesystem
       minifySyntax: true,
       external: ['ultralight'],
       plugins: [createVirtualFsPlugin(files)],
@@ -292,10 +309,16 @@ export async function bundleCode(
       if (esmResult.success) {
         esmCode = esmResult.code;
       } else {
-        console.warn('[BUNDLER] ESM bundle reported failure:', esmResult.errors.join('; '));
+        console.warn(
+          '[BUNDLER] ESM bundle reported failure:',
+          esmResult.errors.join('; '),
+        );
       }
     } catch (esmErr) {
-      console.warn('[BUNDLER] ESM bundle threw:', esmErr instanceof Error ? esmErr.message : String(esmErr));
+      console.warn(
+        '[BUNDLER] ESM bundle threw:',
+        esmErr instanceof Error ? esmErr.message : String(esmErr),
+      );
       // ESM bundling is non-fatal here — upload handler has a transform fallback
     }
 
@@ -305,17 +328,19 @@ export async function bundleCode(
     // remote code just like a bare-npm import (#25). detectExternalImports scans
     // SOURCE and misses this, so flag it here and warn the developer.
     const jsxRemoteWarning = isReactProject
-      ? ['This app renders JSX/React, which is bundled with a remote import from ' +
-         'esm.sh/react at runtime; those bytes are not scanned and not covered by ' +
-         'the executed-bundle attestation. Vendor React into your source to keep ' +
-         'the app fully self-contained.']
+      ? [
+        'This app renders JSX/React, which is bundled with a remote import from ' +
+        'esm.sh/react at runtime; those bytes are not scanned and not covered by ' +
+        'the executed-bundle attestation. Vendor React into your source to keep ' +
+        'the app fully self-contained.',
+      ]
       : [];
     return {
       success: result.errors.length === 0,
       code: processedCode,
       esmCode,
-      errors: result.errors.map(e => e.text),
-      warnings: [...result.warnings.map(e => e.text), ...jsxRemoteWarning],
+      errors: result.errors.map((e) => e.text),
+      warnings: [...result.warnings.map((e) => e.text), ...jsxRemoteWarning],
       hasExternalImports: hasExternalImports || isReactProject,
     };
   } catch (err) {
@@ -342,7 +367,7 @@ export async function bundleCodeESM(
   files: FileInput[],
   entryPoint: string,
 ): Promise<BundleResult> {
-  const entryFile = files.find(f => f.name === entryPoint);
+  const entryFile = files.find((f) => f.name === entryPoint);
   if (!entryFile) {
     return {
       success: false,
@@ -355,7 +380,8 @@ export async function bundleCodeESM(
 
   const hasExternalImports = detectExternalImports(entryFile.content);
   const hasAnyImports = detectAnyImports(entryFile.content);
-  const isTypeScript = entryPoint.endsWith('.ts') || entryPoint.endsWith('.tsx');
+  const isTypeScript = entryPoint.endsWith('.ts') ||
+    entryPoint.endsWith('.tsx');
 
   if (!hasAnyImports && !isTypeScript) {
     // Wrap plain JS in ESM exports
@@ -371,14 +397,15 @@ export async function bundleCodeESM(
   try {
     await ensureEsbuild();
 
-    const isReactProject = entryPoint.endsWith('.tsx') || entryPoint.endsWith('.jsx') ||
-      files.some(f => f.name.endsWith('.tsx') || f.name.endsWith('.jsx')) ||
-      files.some(f => f.content.includes('from "react"') || f.content.includes("from 'react'"));
+    const isReactProject = entryPoint.endsWith('.tsx') ||
+      entryPoint.endsWith('.jsx') ||
+      files.some((f) => f.name.endsWith('.tsx') || f.name.endsWith('.jsx')) ||
+      files.some((f) => f.content.includes('from "react"') || f.content.includes("from 'react'"));
 
     const buildOptions: esbuild.BuildOptions = {
       entryPoints: [entryPoint],
       bundle: true,
-      format: 'esm',           // ESM for Dynamic Worker modules
+      format: 'esm', // ESM for Dynamic Worker modules
       platform: 'browser',
       target: 'esnext',
       write: false,
@@ -398,16 +425,18 @@ export async function bundleCodeESM(
     // See bundleCode: a React/JSX app emits a remote esm.sh/react import that
     // detectExternalImports (source-only) misses. Flag it + warn (#25).
     const jsxRemoteWarning = isReactProject
-      ? ['This app renders JSX/React, which is bundled with a remote import from ' +
-         'esm.sh/react at runtime; those bytes are not scanned and not covered by ' +
-         'the executed-bundle attestation. Vendor React into your source to keep ' +
-         'the app fully self-contained.']
+      ? [
+        'This app renders JSX/React, which is bundled with a remote import from ' +
+        'esm.sh/react at runtime; those bytes are not scanned and not covered by ' +
+        'the executed-bundle attestation. Vendor React into your source to keep ' +
+        'the app fully self-contained.',
+      ]
       : [];
     return {
       success: result.errors.length === 0,
       code: postProcessBundle(outputCode),
-      errors: result.errors.map(e => e.text),
-      warnings: [...result.warnings.map(e => e.text), ...jsxRemoteWarning],
+      errors: result.errors.map((e) => e.text),
+      warnings: [...result.warnings.map((e) => e.text), ...jsxRemoteWarning],
       hasExternalImports: hasExternalImports || isReactProject,
     };
   } catch (err) {
@@ -475,8 +504,11 @@ function postProcessBundle(code: string): string {
  * Quick bundle using in-memory transformation (no esbuild)
  * For simple cases without npm dependencies
  */
-export function quickBundle(files: FileInput[], entryPoint: string): BundleResult {
-  const entryFile = files.find(f => f.name === entryPoint);
+export function quickBundle(
+  files: FileInput[],
+  entryPoint: string,
+): BundleResult {
+  const entryFile = files.find((f) => f.name === entryPoint);
 
   if (!entryFile) {
     return {
@@ -506,7 +538,7 @@ export function quickBundle(files: FileInput[], entryPoint: string): BundleResul
       localPath += '.ts';
     }
 
-    const localFile = files.find(f => f.name === localPath || f.name === imp.path + '.js');
+    const localFile = files.find((f) => f.name === localPath || f.name === imp.path + '.js');
     if (localFile) {
       bundledCode = bundledCode.replace(imp.statement, '');
       bundledCode = `// Inlined from ${localPath}\n${localFile.content}\n\n${bundledCode}`;

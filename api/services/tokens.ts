@@ -140,6 +140,28 @@ export interface CreateTokenResult {
   plaintext_token: string; // Only returned on creation!
 }
 
+export function resolveTokenExpiry(
+  options: { expiresInDays?: number; expiresAt?: Date } | undefined,
+  now = new Date(),
+): string | null {
+  if (options?.expiresAt && options?.expiresInDays) {
+    throw new Error('Token expiry must use either expiresAt or expiresInDays');
+  }
+  if (options?.expiresAt) {
+    const expiryMs = options.expiresAt.getTime();
+    if (!Number.isFinite(expiryMs) || expiryMs <= now.getTime()) {
+      throw new Error('Token expiresAt must be a valid future date');
+    }
+    return options.expiresAt.toISOString();
+  }
+  if (options?.expiresInDays) {
+    const expiry = new Date(now);
+    expiry.setDate(expiry.getDate() + options.expiresInDays);
+    return expiry.toISOString();
+  }
+  return null;
+}
+
 export interface ValidatedToken {
   user_id: string;
   token_id: string;
@@ -148,6 +170,8 @@ export interface ValidatedToken {
   app_ids: string[] | null;
   /** Function names this token can call. null = unrestricted. */
   function_names: string[] | null;
+  /** Exact database expiry carried into the verdict cache. */
+  expires_at: string | null;
 }
 
 export type ApiTokenCompatibilityState =
@@ -304,6 +328,13 @@ export async function createToken(
   name: string,
   options?: {
     expiresInDays?: number;
+    /**
+     * Exact server-selected expiry for short-lived, purpose-specific
+     * credentials. This is intentionally not part of the general API-key
+     * request contract: callers of that public surface continue to choose
+     * whole-day expiries only.
+     */
+    expiresAt?: Date;
     scopes?: string[];
     app_ids?: string[];
     function_names?: string[];
@@ -326,13 +357,8 @@ export async function createToken(
   const tokenHash = await hashTokenWithSalt(plaintextToken, tokenSalt);
   const tokenPrefix = plaintextToken.substring(0, 8); // "ul_xxxxx"
 
-  // Calculate expiry if specified
-  let expiresAt: string | null = null;
-  if (options?.expiresInDays) {
-    const expiry = new Date();
-    expiry.setDate(expiry.getDate() + options.expiresInDays);
-    expiresAt = expiry.toISOString();
-  }
+  // Calculate expiry if specified.
+  const expiresAt = resolveTokenExpiry(options);
 
   // Insert token into the canonical schema.
   const insertPayload: UserApiTokenInsertPayload = {
@@ -563,9 +589,12 @@ export async function validateToken(
   console.log(`[TOKEN] Hash verified OK for token_id: ${data.id}`);
 
   // Check expiry
-  if (data.expires_at && new Date(data.expires_at) < new Date()) {
-    console.log(`[TOKEN] EXPIRED — token_id: ${data.id}, expired_at: ${data.expires_at}`);
-    return null;
+  if (data.expires_at) {
+    const expiryMs = Date.parse(data.expires_at);
+    if (!Number.isFinite(expiryMs) || expiryMs <= Date.now()) {
+      console.log(`[TOKEN] EXPIRED — token_id: ${data.id}, expired_at: ${data.expires_at}`);
+      return null;
+    }
   }
 
   // Update last used (fire and forget - don't wait)
@@ -584,6 +613,7 @@ export async function validateToken(
     scopes: data.scopes || ['*'],
     app_ids: data.app_ids || null,
     function_names: data.function_names || null,
+    expires_at: data.expires_at || null,
   };
 }
 
@@ -605,6 +635,7 @@ interface TokenVerdict {
   tokenAppIds?: string[] | null;
   tokenFunctionNames?: string[] | null;
   scopes?: string[];
+  tokenExpiresAt?: string | null;
 }
 
 const TOKEN_VERDICT_TTL_MS = 60_000;
@@ -614,6 +645,17 @@ const tokenVerdictCache = new Map<
   { verdict: TokenVerdict; cachedAt: number }
 >();
 const tokenVerdictKeysByUser = new Map<string, Set<string>>();
+
+export function isTokenVerdictCacheFresh(
+  cachedAt: number,
+  tokenExpiresAt: string | null | undefined,
+  now = Date.now(),
+): boolean {
+  if (now - cachedAt >= TOKEN_VERDICT_TTL_MS) return false;
+  if (!tokenExpiresAt) return true;
+  const expiryMs = Date.parse(tokenExpiresAt);
+  return Number.isFinite(expiryMs) && expiryMs > now;
+}
 
 async function tokenVerdictKey(token: string): Promise<string> {
   const digest = await crypto.subtle.digest(
@@ -690,11 +732,18 @@ export async function getUserFromToken(token: string, clientIp?: string): Promis
   tokenId: string;
   tokenAppIds?: string[] | null;
   tokenFunctionNames?: string[] | null;
+  tokenExpiresAt?: string | null;
   scopes?: string[];
 } | null> {
   const cacheKey = await tokenVerdictKey(token);
   const cached = tokenVerdictCache.get(cacheKey);
-  if (cached && Date.now() - cached.cachedAt < TOKEN_VERDICT_TTL_MS) {
+  if (
+    cached &&
+    isTokenVerdictCacheFresh(
+      cached.cachedAt,
+      cached.verdict.tokenExpiresAt,
+    )
+  ) {
     // Re-insert so Map insertion order tracks USE order (true LRU eviction).
     tokenVerdictCache.delete(cacheKey);
     tokenVerdictCache.set(cacheKey, cached);
@@ -750,6 +799,7 @@ export async function getUserFromToken(token: string, clientIp?: string): Promis
     tokenId: validated.token_id,
     tokenAppIds: validated.app_ids,
     tokenFunctionNames: validated.function_names,
+    tokenExpiresAt: validated.expires_at,
     scopes: validated.scopes,
   };
   cacheTokenVerdict(cacheKey, verdict);

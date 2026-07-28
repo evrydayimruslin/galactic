@@ -17,26 +17,21 @@ import type { BuildLogEntry } from '../../shared/types/index.ts';
 import type { AppManifest } from '../../shared/contracts/manifest.ts';
 import { validateManifest } from '../../shared/contracts/manifest.ts';
 import { bundleCode } from './bundler.ts';
-import {
-  hydrateManifestForSource,
-  upsertManifestUploadFile,
-} from './app-manifest-generation.ts';
+import { hydrateManifestForSource, upsertManifestUploadFile } from './app-manifest-generation.ts';
 import { generateGpuManifest } from './trust.ts';
 import {
-  parseMigrationFiles,
-  validateMigrationSchema,
-  runMigrations,
-  updateMigrationVersion,
   type MigrationFile,
   type MigrationResult,
+  parseMigrationFiles,
+  runMigrations,
+  updateMigrationVersion,
+  validateMigrationSchema,
 } from './d1-migrations.ts';
-import { provisionD1ForApp, type D1ProvisionResult } from './d1-provisioning.ts';
+import { type D1ProvisionResult, provisionD1ForApp } from './d1-provisioning.ts';
 import { detectGpuConfig, parseGpuConfig } from './gpu/config.ts';
 import type { GpuConfig } from './gpu/types.ts';
-import {
-  getGpuSupportDisabledMessage,
-  isGpuSupportEnabled,
-} from './gpu/feature-flag.ts';
+import { getGpuSupportDisabledMessage, isGpuSupportEnabled } from './gpu/feature-flag.ts';
+import { sourceFileBytes } from './source-file-content.ts';
 
 // ============================================
 // TYPES
@@ -45,6 +40,8 @@ import {
 export interface PipelineFile {
   name: string;
   content: string;
+  /** Authoritative payload for binary source artifacts such as `.wasm`. */
+  bytes?: Uint8Array;
 }
 
 export interface PipelineOptions {
@@ -96,7 +93,9 @@ export interface PipelineResult {
   hasMigrations: boolean;
 
   // Files prepared for R2 upload
-  filesToUpload: Array<{ name: string; content: Uint8Array; contentType: string }>;
+  filesToUpload: Array<
+    { name: string; content: Uint8Array; contentType: string }
+  >;
 
   // Normalized entry file name
   normalizedEntryName: string;
@@ -110,6 +109,7 @@ export interface PipelineResult {
 // ============================================
 
 function getContentType(filename: string): string {
+  if (filename.endsWith('.wasm')) return 'application/wasm';
   if (filename.endsWith('.tsx')) return 'text/typescript-jsx';
   if (filename.endsWith('.ts')) return 'text/typescript';
   if (filename.endsWith('.jsx')) return 'text/javascript-jsx';
@@ -145,7 +145,7 @@ function normalizeFileName(files: PipelineFile[], name: string): string {
   const parts = name.split('/');
   if (parts.length > 1) {
     const firstPart = files[0]?.name.split('/')[0];
-    const allSameRoot = files.every(f => f.name.startsWith(firstPart + '/'));
+    const allSameRoot = files.every((f) => f.name.startsWith(firstPart + '/'));
     if (allSameRoot && parts[0] === firstPart) {
       return parts.slice(1).join('/');
     }
@@ -170,7 +170,9 @@ function detectRuntime(files: PipelineFile[]): RuntimeDetection {
     }
     const gpuValidation = parseGpuConfig(gpuYamlContent);
     if (!gpuValidation.valid) {
-      throw new Error(`Invalid ultralight.gpu.yaml: ${gpuValidation.errors.join(', ')}`);
+      throw new Error(
+        `Invalid ultralight.gpu.yaml: ${gpuValidation.errors.join(', ')}`,
+      );
     }
     return { runtime: 'gpu', gpuConfig: gpuValidation.config! };
   }
@@ -181,8 +183,11 @@ function detectRuntime(files: PipelineFile[]): RuntimeDetection {
 // STAGE 2: MANIFEST PARSING
 // ============================================
 
-function parseManifest(files: PipelineFile[], options: PipelineOptions): AppManifest | null {
-  const manifestFile = files.find(f => {
+function parseManifest(
+  files: PipelineFile[],
+  options: PipelineOptions,
+): AppManifest | null {
+  const manifestFile = files.find((f) => {
     const fileName = f.name.split('/').pop() || f.name;
     return fileName === 'manifest.json';
   });
@@ -195,12 +200,17 @@ function parseManifest(files: PipelineFile[], options: PipelineOptions): AppMani
       const validation = validateManifest(manifestJson);
       if (!validation.valid) {
         throw new Error(
-          `Invalid manifest.json: ${validation.errors.map((entry) => `${entry.path}: ${entry.message}`).join(', ')}`,
+          `Invalid manifest.json: ${
+            validation.errors.map((entry) => `${entry.path}: ${entry.message}`)
+              .join(', ')
+          }`,
         );
       }
       manifest = validation.manifest!;
     } catch (err) {
-      throw new Error(err instanceof Error ? err.message : 'Failed to parse manifest.json');
+      throw new Error(
+        err instanceof Error ? err.message : 'Failed to parse manifest.json',
+      );
     }
   }
 
@@ -235,12 +245,14 @@ function detectEntryFile(
 
   // Manifest-specified entry
   if (manifest && manifest.entry.functions) {
-    functionsFile = files.find(f => {
+    functionsFile = files.find((f) => {
       const fileName = f.name.split('/').pop() || f.name;
       return fileName === manifest!.entry.functions;
     });
     if (!functionsFile) {
-      throw new Error(`Functions entry file not found: ${manifest.entry.functions}`);
+      throw new Error(
+        `Functions entry file not found: ${manifest.entry.functions}`,
+      );
     }
     entryFile = functionsFile;
   }
@@ -248,14 +260,16 @@ function detectEntryFile(
   // Auto-detect fallback
   if (!entryFile) {
     const entryFileNames = ['index.tsx', 'index.ts', 'index.jsx', 'index.js'];
-    entryFile = files.find(f => {
+    entryFile = files.find((f) => {
       const fileName = f.name.split('/').pop() || f.name;
       return entryFileNames.includes(fileName);
     });
   }
 
   if (!entryFile) {
-    throw new Error('Entry file required. Provide manifest.json with entry.functions, or include index.ts/tsx/js/jsx');
+    throw new Error(
+      'Entry file required. Provide manifest.json with entry.functions, or include index.ts/tsx/js/jsx',
+    );
   }
 
   return { entryFile, functionsFile };
@@ -284,7 +298,9 @@ async function bundleEntryFile(
   entryFileName: string,
   entryFileContent: string,
   log: (level: BuildLogEntry['level'], message: string) => void,
-): Promise<{ bundledCode: string; esmBundledCode?: string; bundleUsed: boolean }> {
+): Promise<
+  { bundledCode: string; esmBundledCode?: string; bundleUsed: boolean }
+> {
   log('info', 'Bundling code...');
   try {
     const bundleResult = await bundleCode(files, entryFileName);
@@ -296,12 +312,19 @@ async function bundleEntryFile(
 
     if (bundleResult.code !== entryFileContent) {
       log('success', 'Bundle complete (IIFE + ESM)');
-      return { bundledCode: bundleResult.code, esmBundledCode: bundleResult.esmCode, bundleUsed: true };
+      return {
+        bundledCode: bundleResult.code,
+        esmBundledCode: bundleResult.esmCode,
+        bundleUsed: true,
+      };
     }
     log('success', 'No bundling needed (no imports)');
     return { bundledCode: entryFileContent, bundleUsed: false };
   } catch (err) {
-    log('warn', `Bundling skipped: ${err instanceof Error ? err.message : String(err)}`);
+    log(
+      'warn',
+      `Bundling skipped: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return { bundledCode: entryFileContent, bundleUsed: false };
   }
 }
@@ -320,13 +343,13 @@ async function runSafetyScanStage(
 
   if (!result.passed) {
     const errorSummary = result.issues
-      .filter(i => i.severity === 'error')
-      .map(i => `[${i.rule}] ${i.message}`)
+      .filter((i) => i.severity === 'error')
+      .map((i) => `[${i.rule}] ${i.message}`)
       .join('; ');
     throw new Error(`Upload blocked by safety scan: ${errorSummary}`);
   }
 
-  for (const warn of result.issues.filter(i => i.severity === 'warning')) {
+  for (const warn of result.issues.filter((i) => i.severity === 'warning')) {
     log('warn', `[${warn.rule}] ${warn.message}`);
   }
   log('success', `Safety scan passed (${result.summary.warnings} warnings)`);
@@ -363,14 +386,19 @@ function extractMigrations(
   for (const migration of parsed) {
     const validation = validateMigrationSchema(migration.sql);
     if (!validation.valid) {
-      throw new Error(`Migration ${migration.filename} validation failed: ${validation.errors.join('; ')}`);
+      throw new Error(
+        `Migration ${migration.filename} validation failed: ${validation.errors.join('; ')}`,
+      );
     }
     for (const warning of validation.warnings) {
       log('warn', `[Migration] ${warning}`);
     }
   }
 
-  log('info', `Found ${parsed.length} migration(s): ${parsed.map(m => m.filename).join(', ')}`);
+  log(
+    'info',
+    `Found ${parsed.length} migration(s): ${parsed.map((m) => m.filename).join(', ')}`,
+  );
   return parsed;
 }
 
@@ -390,24 +418,34 @@ function prepareFilesForUpload(
   if (bundleUsed) {
     return upsertManifestUploadFile(
       [
-      // Bundled entry (IIFE)
-      { name: normalizedEntryName, content: new TextEncoder().encode(bundledCode), contentType: getContentType(normalizedEntryName) },
-      // ESM bundle for browser rendering
-      ...(esmBundledCode ? [{
-        name: normalizedEntryName.replace(/\.(tsx?|jsx?)$/, '.esm.js'),
-        content: new TextEncoder().encode(esmBundledCode),
-        contentType: 'application/javascript',
-      }] : []),
-      // Original source (for docs/parsing)
-      { name: `_source_${normalizedEntryName}`, content: new TextEncoder().encode(entryFile.content), contentType: getContentType(normalizedEntryName) },
-      // Remaining files
-      ...files
-        .filter(f => f.name !== entryFile.name)
-        .map(f => ({
-          name: normalizeFileName(files, f.name),
-          content: new TextEncoder().encode(f.content),
-          contentType: getContentType(f.name),
-        })),
+        // Bundled entry (IIFE)
+        {
+          name: normalizedEntryName,
+          content: new TextEncoder().encode(bundledCode),
+          contentType: getContentType(normalizedEntryName),
+        },
+        // ESM bundle for browser rendering
+        ...(esmBundledCode
+          ? [{
+            name: normalizedEntryName.replace(/\.(tsx?|jsx?)$/, '.esm.js'),
+            content: new TextEncoder().encode(esmBundledCode),
+            contentType: 'application/javascript',
+          }]
+          : []),
+        // Original source (for docs/parsing)
+        {
+          name: `_source_${normalizedEntryName}`,
+          content: sourceFileBytes(entryFile),
+          contentType: getContentType(normalizedEntryName),
+        },
+        // Remaining files
+        ...files
+          .filter((f) => f.name !== entryFile.name)
+          .map((f) => ({
+            name: normalizeFileName(files, f.name),
+            content: sourceFileBytes(f),
+            contentType: getContentType(f.name),
+          })),
       ],
       manifest,
       (manifestJson) => ({
@@ -419,9 +457,9 @@ function prepareFilesForUpload(
   }
 
   return upsertManifestUploadFile(
-    files.map(f => ({
+    files.map((f) => ({
       name: normalizeFileName(files, f.name),
-      content: new TextEncoder().encode(f.content),
+      content: sourceFileBytes(f),
       contentType: getContentType(f.name),
     })),
     manifest,
@@ -447,7 +485,13 @@ export async function provisionAndMigrate(
   migrations: MigrationFile[],
 ): Promise<D1Status> {
   if (migrations.length === 0) {
-    return { provisioned: false, status: 'skipped', migrations_applied: 0, migrations_skipped: 0, migration_errors: [] };
+    return {
+      provisioned: false,
+      status: 'skipped',
+      migrations_applied: 0,
+      migrations_skipped: 0,
+      migration_errors: [],
+    };
   }
 
   try {
@@ -464,10 +508,16 @@ export async function provisionAndMigrate(
       };
     }
 
-    const migrationResult = await runMigrations(provision.databaseId, migrations);
+    const migrationResult = await runMigrations(
+      provision.databaseId,
+      migrations,
+    );
 
     if (migrationResult.errors.length > 0) {
-      console.error(`[D1-MIGRATIONS] Errors for app ${appId}:`, migrationResult.errors);
+      console.error(
+        `[D1-MIGRATIONS] Errors for app ${appId}:`,
+        migrationResult.errors,
+      );
       return {
         provisioned: true,
         status: 'failed',
@@ -480,7 +530,9 @@ export async function provisionAndMigrate(
     }
 
     await updateMigrationVersion(appId, migrationResult.lastVersion);
-    console.log(`[D1-MIGRATIONS] App ${appId}: ${migrationResult.applied} applied, ${migrationResult.skipped} skipped`);
+    console.log(
+      `[D1-MIGRATIONS] App ${appId}: ${migrationResult.applied} applied, ${migrationResult.skipped} skipped`,
+    );
 
     return {
       provisioned: true,
@@ -536,38 +588,51 @@ export async function processUploadPipeline(
 
   if (runtime === 'gpu') {
     // GPU apps: minimal processing — validate main.py, extract exports
-    const hasMainPy = files.some(f => (f.name.split('/').pop() || f.name) === 'main.py');
+    const hasMainPy = files.some((f) => (f.name.split('/').pop() || f.name) === 'main.py');
     if (!hasMainPy) throw new Error('GPU functions require a main.py file');
 
     let gpuExports: string[] = ['main'];
-    const testFixture = files.find(f => (f.name.split('/').pop() || f.name) === 'test_fixture.json');
+    const testFixture = files.find((f) =>
+      (f.name.split('/').pop() || f.name) === 'test_fixture.json'
+    );
     if (testFixture) {
       try {
         const fixture = JSON.parse(testFixture.content);
-        if (typeof fixture === 'object' && fixture !== null) gpuExports = Object.keys(fixture);
+        if (typeof fixture === 'object' && fixture !== null) {
+          gpuExports = Object.keys(fixture);
+        }
       } catch { /* non-fatal */ }
     }
 
-    const mainPy = files.find(f => (f.name.split('/').pop() || f.name) === 'main.py')!;
+    const mainPy = files.find((f) => (f.name.split('/').pop() || f.name) === 'main.py')!;
     const manifest = generateGpuManifest({
       name: options.name || 'Untitled GPU App',
       version: options.version || '1.0.0',
       description: options.description || null,
       exports: gpuExports,
     });
-    const filesToUpload = upsertManifestUploadFile(files.map(f => ({
-      name: f.name,
-      content: new TextEncoder().encode(f.content),
-      contentType: f.name.endsWith('.py') ? 'text/x-python' : 'text/plain',
-    })), manifest, (manifestJson) => ({
-      name: 'manifest.json',
-      content: new TextEncoder().encode(manifestJson),
-      contentType: 'application/json',
-    }));
+    const filesToUpload = upsertManifestUploadFile(
+      files.map((f) => ({
+        name: f.name,
+        content: sourceFileBytes(f),
+        contentType: f.name.endsWith('.py') ? 'text/x-python' : getContentType(f.name),
+      })),
+      manifest,
+      (manifestJson) => ({
+        name: 'manifest.json',
+        content: new TextEncoder().encode(manifestJson),
+        contentType: 'application/json',
+      }),
+    );
 
     // D1 migrations not supported for GPU apps
-    if (files.some(f => f.name.includes('migrations/') && f.name.endsWith('.sql'))) {
-      log('warn', 'D1 migrations detected in GPU app — D1 is not supported for GPU runtime');
+    if (
+      files.some((f) => f.name.includes('migrations/') && f.name.endsWith('.sql'))
+    ) {
+      log(
+        'warn',
+        'D1 migrations detected in GPU app — D1 is not supported for GPU runtime',
+      );
     }
 
     return {
@@ -590,7 +655,9 @@ export async function processUploadPipeline(
 
   // Stage 2: Manifest parsing
   let manifest = parseManifest(files, options);
-  if (manifest) log('info', `Manifest: ${manifest.name} (type: ${manifest.type})`);
+  if (manifest) {
+    log('info', `Manifest: ${manifest.name} (type: ${manifest.type})`);
+  }
 
   // Stage 3: Entry file detection
   const { entryFile } = detectEntryFile(files, manifest);
@@ -624,11 +691,19 @@ export async function processUploadPipeline(
 
   // Stage 4: Export extraction
   const exports = extractExportsFromManifestOrCode(manifest, entryFile.content);
-  log('success', `Exports: ${exports.length} (${exports.slice(0, 5).join(', ')}${exports.length > 5 ? '...' : ''})`);
+  log(
+    'success',
+    `Exports: ${exports.length} (${exports.slice(0, 5).join(', ')}${
+      exports.length > 5 ? '...' : ''
+    })`,
+  );
 
   // Stage 5: Code bundling
   const { bundledCode, esmBundledCode, bundleUsed } = await bundleEntryFile(
-    files, entryFile.name, entryFile.content, log,
+    files,
+    entryFile.name,
+    entryFile.content,
+    log,
   );
 
   // Stage 6: Safety scan
@@ -639,7 +714,13 @@ export async function processUploadPipeline(
 
   // Stage 8: File preparation
   const filesToUpload = prepareFilesForUpload(
-    files, entryFile, bundledCode, esmBundledCode, bundleUsed, normalizedEntryName, manifest,
+    files,
+    entryFile,
+    bundledCode,
+    esmBundledCode,
+    bundleUsed,
+    normalizedEntryName,
+    manifest,
   );
 
   log('success', 'Pipeline complete');

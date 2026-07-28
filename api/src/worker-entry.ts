@@ -45,6 +45,7 @@ import {
   createComputeLaunchService,
   createComputePlaneBodyDestroyer,
 } from "../services/compute-launch-service.ts";
+import { cleanupExpiredStagedBundleStorage } from "../services/staged-bundle-quota.ts";
 
 // RPC entrypoints exposed through ctx.exports for dynamic worker bindings.
 export { DatabaseBinding } from "./bindings/database-binding.ts";
@@ -445,6 +446,9 @@ async function runHourlyJobs(): Promise<void> {
     // connected sellers whose snapshot has gone stale, so a "verified" badge
     // can't strand true after Stripe disables payouts with no fresh webhook.
     reconcileConnectVerification(),
+    // Global backstop for staged-object quota reservations. Per-owner stage
+    // admission also clears expiry, but inactive owners need scheduled cleanup.
+    cleanupExpiredStagedBundleStorage(),
     // Executed-bundle integrity ops: (1) re-arm the alarm every hour if the
     // trust signing secret can't resolve (enforce would silently degrade to off);
     // (2) when EXECUTED_BUNDLE_BACKFILL=1, attest any still-unattested live
@@ -469,6 +473,7 @@ async function runHourlyJobs(): Promise<void> {
         "callLogRetentionSweep",
         "notificationInboxRetentionSweep",
         "connectVerificationReconcile",
+        "stagedBundleQuotaCleanup",
         "executedBundleIntegrity",
       ];
       cronLogger.error("Hourly cron job failed", {
@@ -483,6 +488,16 @@ async function runHourlyJobs(): Promise<void> {
       cronLogger.warn("Hosting billing completed in degraded mode", {
         job: "hostingBilling",
         errors: result.value.errors,
+      });
+    } else if (
+      i === 6 && typeof result.value === "object" && result.value !== null &&
+      "complete" in result.value && result.value.complete === false &&
+      "releasedClaims" in result.value && "batches" in result.value
+    ) {
+      cronLogger.warn("Staged-bundle quota cleanup reached its batch ceiling", {
+        job: "stagedBundleQuotaCleanup",
+        released_claims: result.value.releasedClaims,
+        batches: result.value.batches,
       });
     }
   }

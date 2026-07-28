@@ -3,10 +3,12 @@ import type {
   VersionMetadata,
   VersionTestAttestationMetadata,
 } from "../../shared/types/index.ts";
+import { computeUploadSourceHash, signWithTrustSecret } from "./trust.ts";
 import {
-  computeUploadSourceHash,
-  signWithTrustSecret,
-} from "./trust.ts";
+  bytesToBinaryString,
+  decodeBase64Bytes,
+  isBinarySourcePath,
+} from "./source-file-content.ts";
 
 const TOKEN_PREFIX = "gxt1";
 const SIGNING_DOMAIN = "gx.test/v1";
@@ -25,6 +27,8 @@ export interface EncodedSourceFile {
 export interface DecodedSourceFile {
   path: string;
   content: string;
+  /** Present only for byte-oriented artifacts; authoritative over `content`. */
+  bytes?: Uint8Array;
 }
 
 export interface TestAttestationClaims {
@@ -54,12 +58,14 @@ export type TestAttestationVerification =
 
 const MAX_SOURCE_PATH_LENGTH = 512;
 
-function validateSourceFilePath(path: unknown, index: number): string {
+export function validateSourceFilePath(path: unknown, index: number): string {
   if (typeof path !== "string" || path.length === 0) {
     throw new Error(`files[${index}].path is required`);
   }
   if (path !== path.trim()) {
-    throw new Error(`Source file path must not contain surrounding whitespace: ${path}`);
+    throw new Error(
+      `Source file path must not contain surrounding whitespace: ${path}`,
+    );
   }
   if (path.length > MAX_SOURCE_PATH_LENGTH) {
     throw new Error(
@@ -73,7 +79,9 @@ function validateSourceFilePath(path: unknown, index: number): string {
     throw new Error(`Source file path contains control characters: ${path}`);
   }
   const segments = path.split("/");
-  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+  if (
+    segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
     throw new Error(`Source file path is not canonical: ${path}`);
   }
   return path;
@@ -138,7 +146,13 @@ function isClaims(value: unknown): value is TestAttestationClaims {
     Number.isFinite(Date.parse(claims.expires_at));
 }
 
-/** Decode exactly the file bytes-as-text that gx.upload will deploy. */
+/**
+ * Decode exactly the bytes that gx.upload will deploy.
+ *
+ * Text base64 is decoded as UTF-8 so it has the same source identity as the
+ * equivalent text input. WebAssembly is byte-oriented and must use base64;
+ * its exact decoded bytes are carried separately through the upload pipeline.
+ */
 export function decodeSourceFileSet(
   files: EncodedSourceFile[],
 ): DecodedSourceFile[] {
@@ -160,13 +174,28 @@ export function decodeSourceFileSet(
     if (encoding !== "text" && encoding !== "base64") {
       throw new Error(`Unsupported encoding for ${path}: ${encoding}`);
     }
+    const binary = isBinarySourcePath(path);
+    if (binary && encoding !== "base64") {
+      throw new Error(`Binary source file ${path} must use base64 encoding`);
+    }
     try {
+      if (encoding !== "base64") {
+        return { path, content: file.content };
+      }
+      const bytes = decodeBase64Bytes(file.content);
+      if (binary) {
+        return {
+          path,
+          content: bytesToBinaryString(bytes),
+          bytes,
+        };
+      }
       return {
         path,
-        content: encoding === "base64" ? atob(file.content) : file.content,
+        content: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
       };
     } catch {
-      throw new Error(`Invalid base64 content for ${path}`);
+      throw new Error(`Invalid base64 or UTF-8 content for ${path}`);
     }
   });
 }
@@ -268,7 +297,9 @@ export function persistedTestAttestation(
 export function findPersistedTestAttestation(
   metadata: VersionMetadata[] | null | undefined,
   version: string,
-): { entry: VersionMetadata; attestation: VersionTestAttestationMetadata } | null {
+):
+  | { entry: VersionMetadata; attestation: VersionTestAttestationMetadata }
+  | null {
   if (!Array.isArray(metadata)) return null;
   for (let i = metadata.length - 1; i >= 0; i--) {
     const entry = metadata[i];
