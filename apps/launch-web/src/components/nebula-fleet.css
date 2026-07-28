@@ -824,6 +824,358 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
   color: var(--success-text);
 }
 
+/* Settings studio */
+.neb-topbar-identity { display: flex; min-width: 0; align-items: center; gap: 13px; }
+.neb-settings-topbar-crumb { position: relative; top: -4px; display: flex; align-items: center; gap: 6px; color: var(--ink-3); font-family: var(--mono); font-size: 11px; letter-spacing: .04em; }
+.neb-settings-topbar-crumb button { border: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; font-family: inherit; font-size: inherit; letter-spacing: inherit; }
+.neb-settings-topbar-crumb button:hover { color: var(--ink-2); }
+.neb-app:has(.neb-settings-panel) { max-width: 100%; padding-top: 80px; }
+.neb-topbar:has(.neb-settings-topbar-crumb) { padding: 20px 26px 18px; }
+
+.neb-inline-panel.neb-settings-panel {
+  position: relative;
+  display: block;
+  width: min(812px, 100%);
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  margin: 46px auto 90px;
+  padding: 40px 46px 46px;
+  border: 1px solid var(--panel-border);
+  background: var(--card);
+  box-shadow: var(--shadow-panel);
+}
+.neb-settings-screen { width: 100%; animation: neb-rise .34s cubic-bezier(.22,1,.36,1) backwards; }
+.neb-settings-screen h1 {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 34px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -.01em;
+}
+.neb-settings-groups { display: grid; gap: 26px; margin-top: 30px; }
+.neb-settings-group h2 {
+  margin: 0;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: .14em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.neb-settings-rows { margin-top: 8px; border-bottom: 1px solid var(--line); }
+.neb-settings-row {
+  display: grid;
+  min-height: 42px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) 92px;
+  align-items: center;
+  gap: 18px;
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+}
+.neb-settings-row.faint { color: var(--ink-3); }
+.neb-settings-row-label { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--ink-2); font-size: 13px; line-height: 1.45; }
+.neb-settings-row.faint .neb-settings-row-label { color: var(--ink-3); }
+.neb-settings-row-value {
+  min-width: 0;
+  max-width: 330px;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.neb-settings-action,
+.neb-settings-signout,
+.neb-settings-back,
+.neb-settings-create-token,
+.neb-settings-token-summary button,
+.neb-settings-footnote button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent-text);
+  cursor: pointer;
+  font-family: var(--mono) !important;
+}
+.neb-settings-action { justify-self: end; font-size: 10.5px; line-height: 1.4; text-align: right; }
+.neb-settings-action:hover,
+.neb-settings-back:hover,
+.neb-settings-create-token:hover,
+.neb-settings-token-summary button:hover,
+.neb-settings-footnote button:hover { color: var(--ink); }
+.neb-settings-action.placeholder { visibility: hidden; }
+.neb-settings-info {
+  position: relative;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-2);
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: help;
+  font-family: var(--serif) !important;
+  font-size: 9px;
+  line-height: 1;
+}
+.neb-settings-info [role="tooltip"] {
+  position: absolute;
+  z-index: 8;
+  top: 22px;
+  left: -14px;
+  display: none;
+  width: 270px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  background: var(--card);
+  box-shadow: var(--shadow-panel);
+  color: var(--ink-2);
+  font-family: var(--body);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: left;
+}
+.neb-settings-info:hover [role="tooltip"],
+.neb-settings-info:focus [role="tooltip"],
+.neb-settings-info:focus-visible [role="tooltip"] { display: block; }
+.neb-settings-theme-row {
+  display: flex;
+  min-height: 43px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.neb-settings-theme-options { display: inline-flex; border: 1px solid var(--line); background: var(--recessed); }
+.neb-settings-theme-options button {
+  min-width: 68px;
+  padding: 6px 10px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  font-family: var(--mono) !important;
+  font-size: 10px;
+}
+.neb-settings-theme-options button:last-child { border-right: 0; }
+.neb-settings-theme-options button.selected { background: var(--accent-fill); color: var(--accent-text); }
+.neb-settings-signout { justify-self: start; color: var(--danger); font-size: 11px; }
+
+.neb-settings-drill-in h1 { margin-top: 19px; }
+.neb-settings-back { display: inline-flex; align-items: center; color: var(--ink-3); font-size: 10.5px; }
+.neb-settings-subtitle {
+  max-width: 600px;
+  margin: 13px 0 30px;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.neb-settings-subtitle code { color: var(--ink-2); font-family: var(--mono); font-size: 11px; }
+.neb-settings-drill-in > .neb-settings-group + .neb-settings-group { margin-top: 26px; }
+.neb-settings-empty-row { padding: 12px 0; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 12px; }
+.neb-settings-provider-row {
+  display: grid;
+  min-height: 55px;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.neb-settings-provider-row > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.neb-settings-provider-row strong { color: var(--ink-2); font-size: 13px; font-weight: 400; }
+.neb-settings-provider-row small { overflow: hidden; color: var(--ink-3); font-size: 10.5px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+
+.neb-settings-key-overlay {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow: auto;
+  background: var(--overlay);
+  backdrop-filter: blur(5px);
+}
+.neb-settings-key-dialog {
+  width: min(440px, 100%);
+  padding: 25px 26px 24px;
+  border: 1px solid var(--panel-border);
+  background: var(--card);
+  box-shadow: var(--shadow-panel);
+  animation: neb-pop .22s cubic-bezier(.22,1,.36,1);
+}
+.neb-settings-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+.neb-settings-dialog-head strong { color: var(--ink); font-family: var(--serif); font-size: 21px; font-weight: 500; }
+.neb-settings-dialog-head button { border: 0; padding: 2px; background: transparent; color: var(--ink-3); cursor: pointer; }
+.neb-settings-dialog-field { display: block; margin-top: 15px; }
+.neb-settings-dialog-field span { display: block; margin-bottom: 7px; color: var(--ink-3); font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; }
+.neb-settings-dialog-field input {
+  width: 100%;
+  height: 38px;
+  border: 1px solid var(--line-2);
+  border-radius: 0;
+  padding: 0 11px;
+  outline: 0;
+  background: var(--input);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.neb-settings-dialog-field input:focus { border-color: var(--accent); }
+.neb-settings-buttons { display: flex; align-items: center; gap: 8px; margin-top: 22px; }
+.neb-settings-buttons button,
+.neb-settings-new-token-actions button {
+  min-height: 34px;
+  border: 1px solid var(--line-2);
+  border-radius: 0;
+  padding: 7px 13px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: var(--mono) !important;
+  font-size: 10.5px;
+}
+.neb-settings-buttons button.primary,
+.neb-settings-new-token-actions button.primary { border-color: var(--accent); background: var(--accent-fill); color: var(--accent-text); }
+.neb-settings-buttons button:disabled { cursor: wait; opacity: .45; }
+.neb-settings-key-dialog > p { margin: 15px 0 0; color: var(--ink-3); font-size: 10.5px; line-height: 1.55; }
+
+.neb-settings-new-token {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  margin: 22px 0 16px;
+  padding: 13px 14px;
+  border: 1px solid var(--success-line);
+  background: var(--success-fill);
+}
+.neb-settings-new-token > span { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 9px var(--success); }
+.neb-settings-new-token > div:nth-child(2) { min-width: 0; }
+.neb-settings-new-token code { display: block; overflow: hidden; color: var(--ink); font-family: var(--mono); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.neb-settings-new-token small { display: block; margin-top: 4px; color: var(--ink-3); font-size: 10px; }
+.neb-settings-new-token-actions { display: flex; gap: 6px; }
+.neb-settings-create-token { margin: 9px 0 12px; font-size: 10.5px; }
+.neb-settings-token-list { border-bottom: 1px solid var(--line); }
+.neb-settings-token-row {
+  display: grid;
+  min-height: 43px;
+  grid-template-columns: minmax(0, 1fr) 92px 115px 60px;
+  align-items: center;
+  gap: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.neb-settings-token-row time,
+.neb-settings-token-row code { color: var(--ink-3); font-family: var(--mono); font-size: 10px; white-space: nowrap; }
+.neb-settings-token-row time.idle { color: var(--danger); }
+.neb-settings-token-row code { overflow: hidden; text-align: right; text-overflow: ellipsis; }
+.neb-settings-token-summary { display: flex; align-items: center; justify-content: space-between; min-height: 36px; color: var(--ink-3); font-family: var(--mono); font-size: 9.5px; }
+.neb-settings-token-summary button { font-size: 9.5px; }
+.neb-settings-footnote { margin: 21px 0 0; color: var(--ink-3); font-size: 10.5px; line-height: 1.55; }
+.neb-settings-footnote button { color: var(--danger); font-size: inherit; }
+
+.neb-settings-shortcut-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 24px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: 12px;
+}
+.neb-settings-shortcut-toggle > span {
+  display: inline-flex;
+  width: 17px;
+  height: 17px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-2);
+  background: var(--input);
+  color: var(--accent-text);
+  font-size: 10px;
+}
+.neb-settings-shortcut-toggle[aria-pressed="true"] > span { border-color: var(--accent); background: var(--accent-fill); }
+.neb-settings-shortcut-map { display: grid; gap: 26px; margin-top: 25px; }
+.neb-settings-shortcut-map.disabled { opacity: .45; }
+.neb-settings-shortcut-row {
+  display: grid;
+  min-height: 42px;
+  grid-template-columns: minmax(0, 1fr) 82px;
+  align-items: center;
+  gap: 18px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+.neb-settings-shortcut-row button {
+  min-width: 52px;
+  justify-self: end;
+  border: 1px solid var(--line-2);
+  border-radius: 0;
+  padding: 5px 9px;
+  background: var(--input);
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: var(--mono) !important;
+  font-size: 10px;
+}
+.neb-settings-shortcut-row button.listening { border-color: var(--accent); color: var(--accent-text); }
+.neb-settings-shortcut-row button:disabled { cursor: not-allowed; }
+.neb-settings-shortcut-note { margin: -17px 0 0; color: var(--ink-3); font-size: 10px; }
+.neb-settings-validation { margin: 14px 0 0; color: var(--danger); font-size: 11px; }
+.neb-settings-shortcut-map + .neb-settings-validation + .neb-settings-buttons,
+.neb-settings-shortcut-map + .neb-settings-buttons { margin-top: 22px; }
+.neb-settings-error {
+  position: sticky;
+  z-index: 10;
+  top: 12px;
+  margin: -24px 0 18px;
+  padding: 9px 11px;
+  border: 1px solid var(--danger-line);
+  background: var(--danger-fill);
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.neb-settings-toast {
+  position: fixed;
+  z-index: 110;
+  right: 24px;
+  bottom: 24px;
+  padding: 10px 13px;
+  border: 1px solid var(--accent-line-soft);
+  background: var(--card);
+  box-shadow: var(--shadow-panel);
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  animation: neb-pop .2s cubic-bezier(.22,1,.36,1);
+}
+
 @media (min-width: 561px) {
   .neb-app { padding-top: 80px; }
   .neb-hero h1 { font-size: 52px; }
@@ -891,6 +1243,26 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
   .neb-mobile-back { display: flex; align-items: center; gap: 5px; margin: 2px 0 18px; padding: 0; border: 0; background: none; color: var(--ink-2); cursor: pointer; font-family: var(--mono) !important; font-size: 12.5px; }
   .neb-provider-head { align-items: flex-start; flex-direction: column; }.neb-provider-editor { grid-template-columns: 1fr; }.neb-plan-card { align-items: flex-start; flex-direction: column; gap: 14px; }
   .neb-compute-tool-grid, .neb-compute-limit-grid, .neb-compute-secret-destination, .neb-compute-authority-rule { grid-template-columns: 1fr; }.neb-compute-secret-destination { padding-left: 34px; }.neb-compute-run-grid { grid-template-columns: 1fr 1fr; }
+  .neb-topbar:has(.neb-settings-topbar-crumb) { padding-right: 16px; padding-left: 16px; }
+  .neb-app:has(.neb-settings-panel) { padding-right: 16px; padding-left: 16px; }
+  .neb-inline-panel.neb-settings-panel { width: 100%; margin: 18px auto 56px; padding: 29px 20px 34px; }
+  .neb-settings-screen h1 { font-size: 31px; }
+  .neb-settings-groups { margin-top: 26px; }
+  .neb-settings-row { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; }
+  .neb-settings-row-value { max-width: 160px; }
+  .neb-settings-row .neb-settings-action { grid-column: 1 / -1; justify-self: end; }
+  .neb-settings-theme-row { align-items: flex-start; flex-direction: column; }
+  .neb-settings-theme-options { width: 100%; }
+  .neb-settings-theme-options button { min-width: 0; flex: 1; }
+  .neb-settings-info [role="tooltip"] { right: -20px; left: auto; width: min(270px, calc(100vw - 52px)); }
+  .neb-settings-provider-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .neb-settings-new-token { grid-template-columns: 7px minmax(0, 1fr); }
+  .neb-settings-new-token-actions { grid-column: 2; }
+  .neb-settings-token-row { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 0; }
+  .neb-settings-token-row time { grid-column: 1; grid-row: 2; }
+  .neb-settings-token-row code { grid-column: 2; grid-row: 1; }
+  .neb-settings-token-row .neb-settings-action { grid-column: 2; grid-row: 2; }
+  .neb-settings-toast { right: 16px; bottom: 16px; left: 16px; text-align: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {
