@@ -160,6 +160,7 @@ import { OperatorAgentOverview } from './nebula/operator-agent-overview';
 import { OperatorIssueDeck } from './nebula/operator-issue-deck';
 import { OperatorRunInspector } from './nebula/operator-run-inspector';
 import { SearchPanel } from './nebula/search-panel';
+import { SettingsStudioPanel } from './settings-studio-panel';
 import './nebula-fleet.css';
 
 type SettingsPane =
@@ -1241,78 +1242,102 @@ export function NebulaFleetApp({
 
       <header className='neb-topbar-shell'>
         <div className='neb-topbar'>
-          <button
-            className='neb-wordmark'
-            onClick={() => navigate('/')}
-            type='button'
-          >
-            galactic
-            <span className='neb-wordmark-tier'>
-              {(fleet?.accountCapacity.plan ?? '').replace('max_5x', 'max')
-                .replace('max_10x', 'ultra')}
-            </span>
-          </button>
-          <div className='neb-topbar-actions'>
+          <div className='neb-topbar-identity'>
             <button
-              aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
-                'search',
-                shortcutConfig,
-              )}
-              className='neb-cmdk-chip'
-              onClick={() => navigate('/?panel=search')}
+              className='neb-wordmark'
+              onClick={() => navigate('/')}
               type='button'
             >
-              Search
-              {searchShortcutLabel ? <kbd>{searchShortcutLabel}</kbd> : null}
+              galactic
+              {!settingsOpen
+                ? (
+                  <span className='neb-wordmark-tier'>
+                    {(fleet?.accountCapacity.plan ?? '').replace('max_5x', 'max')
+                      .replace('max_10x', 'ultra')}
+                  </span>
+                )
+                : null}
             </button>
-            <button
-              aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
-                'alerts',
-                shortcutConfig,
-              )}
-              className='neb-icon-btn'
-              onClick={() => navigate('/?panel=alerts')}
-              aria-label='Alerts'
-              type='button'
-            >
-              <Glyph name='bell' />
-              {alertCount > 0 ? <span className='neb-notif-dot' /> : null}
-            </button>
-            <button
-              aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
-                'settings',
-                shortcutConfig,
-              )}
-              className='neb-icon-btn'
-              onClick={() => navigate('/account')}
-              aria-label='Settings'
-              type='button'
-            >
-              <Glyph name='gear' />
-            </button>
+            {settingsOpen
+              ? (
+              <div className='neb-settings-topbar-crumb'>
+                <span>/</span>
+                <button onClick={() => navigate('/account')} type='button'>
+                  settings
+                </button>
+              </div>
+              )
+              : null}
           </div>
+          {!settingsOpen
+            ? (
+              <div className='neb-topbar-actions'>
+                <button
+                  aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
+                    'search',
+                    shortcutConfig,
+                  )}
+                  className='neb-cmdk-chip'
+                  onClick={() => navigate('/?panel=search')}
+                  type='button'
+                >
+                  Search
+                  {searchShortcutLabel ? <kbd>{searchShortcutLabel}</kbd> : null}
+                </button>
+                <button
+                  aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
+                    'alerts',
+                    shortcutConfig,
+                  )}
+                  className='neb-icon-btn'
+                  onClick={() => navigate('/?panel=alerts')}
+                  aria-label='Alerts'
+                  type='button'
+                >
+                  <Glyph name='bell' />
+                  {alertCount > 0 ? <span className='neb-notif-dot' /> : null}
+                </button>
+                <button
+                  aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
+                    'settings',
+                    shortcutConfig,
+                  )}
+                  className='neb-icon-btn'
+                  onClick={() => navigate('/account')}
+                  aria-label='Settings'
+                  type='button'
+                >
+                  <Glyph name='gear' />
+                </button>
+              </div>
+            )
+            : null}
         </div>
       </header>
 
       <main className='neb-app'>
-        <section
-          className={`neb-hero${
-            globalAlertsOpen || searchOpen || agentOpen || settingsOpen || connectOpen
-              ? ' neb-context-hero'
-              : ''
-          }`}
-        >
-          <h1>{contextHeading}</h1>
-          {!workspaceOpen
-            ? (
-              <HomeHeroActions
-                alertCount={alertCount}
-                onAlerts={() => navigate('/?panel=alerts')}
-                onNavigate={navigate}
-              />
-            )
-            : null}
-        </section>
+        {!settingsOpen
+          ? (
+            <section
+              className={`neb-hero${
+                globalAlertsOpen || searchOpen || agentOpen || connectOpen
+                  ? ' neb-context-hero'
+                  : ''
+              }`}
+            >
+              <h1>{contextHeading}</h1>
+              {!workspaceOpen
+                ? (
+                  <HomeHeroActions
+                    alertCount={alertCount}
+                    onAlerts={() => navigate('/?panel=alerts')}
+                    onNavigate={navigate}
+                  />
+                )
+                : null}
+            </section>
+          )
+          : null}
         {globalAlertsOpen
           ? (
             <GlobalAlerts
@@ -1362,15 +1387,13 @@ export function NebulaFleetApp({
           )
           : settingsOpen
           ? (
-            <SettingsPanel
+            <SettingsStudioPanel
+              agents={orderedShortcutAgents}
               fleetRevision={fleet?.fleetRevision ?? null}
               initial={live.data}
               onShortcutPreferencesChange={(preferences) =>
                 acceptShortcutPreferences(preferences, true)}
-              onClose={() => {
-                sounds.close();
-                dismissLaunchWorkspace(navigate, returnToAlerts);
-              }}
+              onSignOut={() => signOutToConnect(navigate)}
               onNavigate={navigate}
               shortcutPreferences={shortcutPreferences}
             />
