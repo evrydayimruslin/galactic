@@ -84,7 +84,7 @@ Deno.test('staged bundle quota projects new objects and claims every reused obje
   );
   assertStringIncludes(
     reserve,
-    'ON CONFLICT (owner_id, reservation_id, object_id) DO UPDATE',
+    'ON CONFLICT ON CONSTRAINT staged_bundle_storage_reservations_pkey DO UPDATE',
   );
   assertStringIncludes(
     reserve,

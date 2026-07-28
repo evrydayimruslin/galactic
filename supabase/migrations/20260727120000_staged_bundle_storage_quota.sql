@@ -286,7 +286,7 @@ BEGIN
     p_retained_until,
     v_now
   FROM jsonb_array_elements(p_objects) AS requested(value)
-  ON CONFLICT (owner_id, reservation_id, object_id) DO UPDATE
+  ON CONFLICT ON CONSTRAINT staged_bundle_storage_reservations_pkey DO UPDATE
   SET retained_until = GREATEST(
         reservation.retained_until,
         EXCLUDED.retained_until
