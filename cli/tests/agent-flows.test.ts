@@ -212,6 +212,51 @@ Deno.test('CLI: Milestone 1 builder commands expose revision and bundle workflow
   }
 });
 
+Deno.test('CLI: successful bundle tests print the upload attestation', async () => {
+  const cliSource = await Deno.readTextFile('./cli/mod.ts');
+  const testCommandStart = cliSource.indexOf('async function testCmd(');
+  const lintCommandStart = cliSource.indexOf(
+    '// LINT COMMAND',
+    testCommandStart,
+  );
+
+  assert(testCommandStart >= 0, 'Missing testCmd implementation');
+  assert(lintCommandStart > testCommandStart, 'Missing testCmd boundary');
+
+  const testCommand = cliSource.slice(testCommandStart, lintCommandStart);
+  const successOutputStart = testCommand.indexOf('if (result.success) {');
+  const failureOutputStart = testCommand.indexOf(
+    '} else {',
+    successOutputStart,
+  );
+
+  assert(successOutputStart >= 0, 'Missing successful test output branch');
+  assert(
+    failureOutputStart > successOutputStart,
+    'Missing failed test output branch',
+  );
+
+  const successOutput = testCommand.slice(
+    successOutputStart,
+    failureOutputStart,
+  );
+  assertStringIncludes(
+    successOutput,
+    'typeof result.test_attestation === "string"',
+    'Successful bundle tests must guard the optional attestation',
+  );
+  assertStringIncludes(
+    successOutput,
+    'Test attestation (required for upload):',
+    'Human-readable test output must explain what the attestation is for',
+  );
+  assertStringIncludes(
+    successOutput,
+    'console.log(result.test_attestation);',
+    'Human-readable test output must print the copyable upload attestation',
+  );
+});
+
 Deno.test('CLI: packaged skills are byte-identical to the canonical platform guide', async () => {
   const canonical = await Deno.readTextFile('./skills.md');
   const packaged = await Deno.readTextFile('./cli/skills.md');

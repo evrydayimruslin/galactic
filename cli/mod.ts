@@ -263,7 +263,9 @@ ${colors.dim("BUILD WORKFLOW")}
   1. ${colors.cyan("galactic scaffold my-app")}        Generate skeleton
   2. Fill in function implementations
   3. ${colors.cyan("galactic stage . --json")}          Stage source once
-  4. ${colors.cyan("galactic test --bundle-id <id>")}   Verify functions work
+  4. ${
+    colors.cyan("galactic test --bundle-id <id>")
+  }   Verify + get upload proof
   5. ${
     colors.cyan("galactic upload --bundle-id <id> --test-attestation <proof>")
   } Deploy
@@ -1589,6 +1591,14 @@ ${colors.dim("EXAMPLES")}
     );
     if (result.exports) {
       console.log(`  Exports: ${(result.exports as string[]).join(", ")}`);
+    }
+    if (
+      typeof result.test_attestation === "string" &&
+      result.test_attestation.length > 0
+    ) {
+      console.log();
+      console.log(colors.dim("Test attestation (required for upload):"));
+      console.log(result.test_attestation);
     }
     if (result.result !== undefined) {
       console.log();
