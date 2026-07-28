@@ -6,9 +6,9 @@
 // F themselves). See docs/LAUNCH_PIVOT_DECISIONS.md and
 // memory phase4-cross-agent-interop-design.
 
-import { getEnv } from '../lib/env.ts';
-import { RequestValidationError } from './request-validation.ts';
-import type { RuntimeAppCallDependency } from './app-runtime-resources.ts';
+import { getEnv } from "../lib/env.ts";
+import { RequestValidationError } from "./request-validation.ts";
+import type { RuntimeAppCallDependency } from "./app-runtime-resources.ts";
 import {
   type AgentFunctionGrant,
   type AgentGrantCreateRequest,
@@ -17,11 +17,11 @@ import {
   type AgentGrantSummary,
   type AgentSlotBinding,
   DEFAULT_GRANT_MONTHLY_CAP_CREDITS,
-} from '../../shared/contracts/agent-grants.ts';
+} from "../../shared/contracts/agent-grants.ts";
 import {
   recordGrantApprovalIncident,
   resolveGrantApprovalIncident,
-} from './notification-recovery.ts';
+} from "./notification-recovery.ts";
 
 export interface AppHandle {
   id: string;
@@ -55,22 +55,22 @@ interface AgentGrantRow {
 }
 
 function getDbConfig(): DbConfig | null {
-  const baseUrl = getEnv('SUPABASE_URL');
-  const key = getEnv('SUPABASE_SERVICE_ROLE_KEY');
+  const baseUrl = getEnv("SUPABASE_URL");
+  const key = getEnv("SUPABASE_SERVICE_ROLE_KEY");
   if (!baseUrl || !key) return null;
   return {
     baseUrl,
     headers: {
       apikey: key,
       Authorization: `Bearer ${key}`,
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     },
   };
 }
 
 function numeric(value: number | string | null | undefined): number {
   if (value === null || value === undefined) return 0;
-  const parsed = typeof value === 'number' ? value : Number(value);
+  const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
@@ -85,20 +85,26 @@ function mapRow(row: AgentGrantRow): AgentFunctionGrant {
     targetAppId: row.target_app_id,
     targetFunction: row.target_function,
     topic: row.topic ? row.topic : null,
-    mode: row.mode === 'subscribe' ? 'subscribe' : 'call',
-    status: row.status === 'pending' ? 'pending' : row.status === 'revoked' ? 'revoked' : 'active',
+    mode: row.mode === "subscribe" ? "subscribe" : "call",
+    status: row.status === "pending"
+      ? "pending"
+      : row.status === "revoked"
+      ? "revoked"
+      : "active",
     monthlyCapCredits: row.monthly_cap_credits === null ||
         row.monthly_cap_credits === undefined
       ? null
       : numeric(row.monthly_cap_credits),
     spentCreditsPeriod: numeric(row.spent_credits_period),
     periodStart: row.period_start,
-    constraints: (row.constraints && typeof row.constraints === 'object') ? row.constraints : {},
-    createdBy: (['user', 'agent', 'developer_hint', 'auto_request'].includes(
+    constraints: (row.constraints && typeof row.constraints === "object")
+      ? row.constraints
+      : {},
+    createdBy: (["user", "agent", "developer_hint", "auto_request"].includes(
         row.created_by,
       )
       ? row.created_by
-      : 'user') as AgentGrantOrigin,
+      : "user") as AgentGrantOrigin,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -113,9 +119,9 @@ async function dbGet(
     { headers: db.headers },
   );
   if (!response.ok) {
-    const detail = await response.text().catch(() => '');
+    const detail = await response.text().catch(() => "");
     throw new Error(
-      detail ? `Failed to read grants: ${detail}` : 'Failed to read grants',
+      detail ? `Failed to read grants: ${detail}` : "Failed to read grants",
     );
   }
   const payload = await response.json().catch(() => []);
@@ -147,7 +153,7 @@ export async function resolveCallerGrant(input: {
   nowMs?: number;
 }): Promise<AgentGrantResolution> {
   const db = getDbConfig();
-  if (!db) return { allowed: false, grant: null, reason: 'no_grant' };
+  if (!db) return { allowed: false, grant: null, reason: "no_grant" };
   const nowMs = input.nowMs ?? Date.now();
 
   // Candidate grants for this (user, caller, target, fn) regardless of status.
@@ -161,7 +167,7 @@ export async function resolveCallerGrant(input: {
       `mode=eq.call`,
       `select=*`,
       `limit=50`,
-    ].join('&'),
+    ].join("&"),
   );
   const grants = rows.map(mapRow);
 
@@ -170,28 +176,28 @@ export async function resolveCallerGrant(input: {
   const applies = (g: AgentFunctionGrant): boolean =>
     g.callerFunction === null || g.callerFunction === input.callerFunction;
 
-  const active = grants.find((g) => g.status === 'active' && applies(g));
+  const active = grants.find((g) => g.status === "active" && applies(g));
   if (active) {
     if (
       active.monthlyCapCredits !== null &&
       effectiveSpend(active, nowMs) >= active.monthlyCapCredits
     ) {
-      return { allowed: false, grant: active, reason: 'cap_exceeded' };
+      return { allowed: false, grant: active, reason: "cap_exceeded" };
     }
     return { allowed: true, grant: active };
   }
 
-  const pending = grants.find((g) => g.status === 'pending' && applies(g));
+  const pending = grants.find((g) => g.status === "pending" && applies(g));
   if (pending) {
     return {
       allowed: false,
       grant: pending,
-      reason: 'pending',
+      reason: "pending",
       pendingRequestId: pending.id,
     };
   }
 
-  return { allowed: false, grant: null, reason: 'no_grant' };
+  return { allowed: false, grant: null, reason: "no_grant" };
 }
 
 // Pub/sub: resolve an event delivery against the SUBSCRIBE grant the chokepoint
@@ -206,7 +212,7 @@ export async function resolveSubscribeGrant(input: {
   nowMs?: number;
 }): Promise<AgentGrantResolution> {
   const db = getDbConfig();
-  if (!db) return { allowed: false, grant: null, reason: 'no_grant' };
+  if (!db) return { allowed: false, grant: null, reason: "no_grant" };
   const nowMs = input.nowMs ?? Date.now();
   const rows = await dbGet(
     db,
@@ -219,15 +225,15 @@ export async function resolveSubscribeGrant(input: {
       `mode=eq.subscribe`,
       `select=*`,
       `limit=10`,
-    ].join('&'),
+    ].join("&"),
   );
-  const active = rows.map(mapRow).find((g) => g.status === 'active');
-  if (!active) return { allowed: false, grant: null, reason: 'no_grant' };
+  const active = rows.map(mapRow).find((g) => g.status === "active");
+  if (!active) return { allowed: false, grant: null, reason: "no_grant" };
   if (
     active.monthlyCapCredits !== null &&
     effectiveSpend(active, nowMs) >= active.monthlyCapCredits
   ) {
-    return { allowed: false, grant: active, reason: 'cap_exceeded' };
+    return { allowed: false, grant: active, reason: "cap_exceeded" };
   }
   return { allowed: true, grant: active };
 }
@@ -252,7 +258,7 @@ export async function resolveSubscribers(input: {
       `status=eq.active`,
       `select=*`,
       `limit=${Math.min(input.limit ?? 100, 500)}`,
-    ].join('&'),
+    ].join("&"),
   );
   return rows.map(mapRow);
 }
@@ -272,8 +278,8 @@ export async function recordGrantSpend(
 
   try {
     await fetch(`${db.baseUrl}/rest/v1/rpc/increment_agent_grant_spend`, {
-      method: 'POST',
-      headers: { ...db.headers, Prefer: 'return=minimal' },
+      method: "POST",
+      headers: { ...db.headers, Prefer: "return=minimal" },
       body: JSON.stringify({
         p_grant_id: grantId,
         p_amount: creditsCharged,
@@ -283,7 +289,7 @@ export async function recordGrantSpend(
   } catch (err) {
     // Spend accounting is best-effort; never block the (already-completed)
     // call on a metering write failure.
-    console.warn('[AGENT-GRANTS] Failed to record grant spend:', err);
+    console.warn("[AGENT-GRANTS] Failed to record grant spend:", err);
   }
 }
 
@@ -302,25 +308,25 @@ export async function createPendingGrantRequest(input: {
     const response = await fetch(
       `${db.baseUrl}/rest/v1/agent_function_grants?on_conflict=user_id,caller_app_id,caller_function,slot,target_app_id,target_function,topic,mode`,
       {
-        method: 'POST',
+        method: "POST",
         headers: {
           ...db.headers,
           // ignore-duplicates: never overwrite an existing (possibly active)
           // grant when re-requesting; just ensure a pending row exists.
-          Prefer: 'resolution=ignore-duplicates,return=representation',
+          Prefer: "resolution=ignore-duplicates,return=representation",
         },
         body: JSON.stringify([{
           user_id: input.userId,
           caller_app_id: input.callerAppId,
           // '' sentinel matches the NOT NULL columns + bare-column unique index.
-          caller_function: input.callerFunction ?? '',
-          slot: '',
+          caller_function: input.callerFunction ?? "",
+          slot: "",
           target_app_id: input.targetAppId,
           target_function: input.targetFunction,
-          topic: '',
-          mode: 'call',
-          status: 'pending',
-          created_by: 'auto_request',
+          topic: "",
+          mode: "call",
+          status: "pending",
+          created_by: "auto_request",
         }]),
       },
     );
@@ -328,7 +334,7 @@ export async function createPendingGrantRequest(input: {
     const rows = await response.json().catch(() => []);
     return Array.isArray(rows) && rows[0]?.id ? rows[0].id : null;
   } catch (err) {
-    console.warn('[AGENT-GRANTS] Failed to record pending request:', err);
+    console.warn("[AGENT-GRANTS] Failed to record pending request:", err);
     return null;
   }
 }
@@ -362,7 +368,7 @@ export async function resolveCallerGrantBindings(
         `mode=eq.call`,
         `select=slot,target_app_id,target_function`,
         `limit=500`,
-      ].join('&'),
+      ].join("&"),
     );
 
     const byApp = new Map<string, Set<string>>();
@@ -386,7 +392,7 @@ export async function resolveCallerGrantBindings(
       dependencies: Array.from(byApp.entries()).map(([app, fns]) => ({
         app,
         functions: Array.from(fns).sort(),
-        access: 'read' as const,
+        access: "read" as const,
       })),
       slots: Array.from(bySlot.entries()).map(([slot, entry]) => ({
         slot,
@@ -396,7 +402,7 @@ export async function resolveCallerGrantBindings(
     };
   } catch (err) {
     console.warn(
-      '[AGENT-GRANTS] Failed to resolve caller grant bindings:',
+      "[AGENT-GRANTS] Failed to resolve caller grant bindings:",
       err,
     );
     return { dependencies: [], slots: [] };
@@ -463,7 +469,7 @@ async function userCanCallTarget(
   targetFunction: string,
 ): Promise<boolean> {
   if (target.owner_id === userId) return true;
-  if (target.visibility === 'public' || target.visibility === 'unlisted') {
+  if (target.visibility === "public" || target.visibility === "unlisted") {
     return true;
   }
   // Private target owned by someone else: the user must already hold a
@@ -483,11 +489,11 @@ async function userCanCallTarget(
 export async function createGrant(
   userId: string,
   request: AgentGrantCreateRequest,
-  origin: AgentGrantOrigin = 'user',
+  origin: AgentGrantOrigin = "user",
 ): Promise<AgentFunctionGrant> {
   const db = getDbConfig();
   if (!db) {
-    throw new RequestValidationError('Grant storage is not configured', 503);
+    throw new RequestValidationError("Grant storage is not configured", 503);
   }
 
   const callerAppId = request.callerAppId?.trim();
@@ -495,12 +501,12 @@ export async function createGrant(
   const rawTargetFunction = request.targetFunction?.trim();
   if (!callerAppId || !targetAppId || !rawTargetFunction) {
     throw new RequestValidationError(
-      'callerAppId, targetAppId, and targetFunction are required',
+      "callerAppId, targetAppId, and targetFunction are required",
     );
   }
   if (callerAppId === targetAppId) {
     throw new RequestValidationError(
-      'An Agent does not need a grant to call its own functions',
+      "An Agent does not need a grant to call its own functions",
     );
   }
 
@@ -509,26 +515,26 @@ export async function createGrant(
     loadApp(db, targetAppId),
   ]);
   if (!callerApp) {
-    throw new RequestValidationError('Caller Agent not found', 404);
+    throw new RequestValidationError("Caller Agent not found", 404);
   }
   if (!targetApp) {
-    throw new RequestValidationError('Target Agent not found', 404);
+    throw new RequestValidationError("Target Agent not found", 404);
   }
 
   // Store the raw function name (matches runtime resolution).
   const targetFunction = toRawFunctionName(rawTargetFunction, targetApp.slug);
   const callerFunction = request.callerFunction
     ? toRawFunctionName(request.callerFunction, callerApp.slug)
-    : '';
+    : "";
 
   // Mode + topic. A subscribe grant authorizes the EMITTER (callerApp) to
   // deliver `topic` events to the SUBSCRIBER's handler (target/targetFunction);
   // a topic is required and only meaningful in subscribe mode.
-  const mode = request.mode === 'subscribe' ? 'subscribe' : 'call';
-  const topic = mode === 'subscribe' ? (request.topic?.trim() || '') : '';
-  if (mode === 'subscribe' && !topic) {
+  const mode = request.mode === "subscribe" ? "subscribe" : "call";
+  const topic = mode === "subscribe" ? (request.topic?.trim() || "") : "";
+  if (mode === "subscribe" && !topic) {
     throw new RequestValidationError(
-      'A subscribe grant requires a topic',
+      "A subscribe grant requires a topic",
     );
   }
 
@@ -537,13 +543,13 @@ export async function createGrant(
   // subscriber handler that runs.)
   if (!(await userControlsCaller(db, userId, callerApp))) {
     throw new RequestValidationError(
-      'You can only wire Agents you own or have installed',
+      "You can only wire Agents you own or have installed",
       403,
     );
   }
   if (!(await userCanCallTarget(db, userId, targetApp, targetFunction))) {
     throw new RequestValidationError(
-      'You cannot grant access to a function you cannot call yourself',
+      "You cannot grant access to a function you cannot call yourself",
       403,
     );
   }
@@ -551,7 +557,7 @@ export async function createGrant(
   const cap = request.monthlyCapCredits === undefined
     ? DEFAULT_GRANT_MONTHLY_CAP_CREDITS
     : request.monthlyCapCredits; // null = explicitly uncapped
-  const slot = request.slot?.trim() || '';
+  const slot = request.slot?.trim() || "";
 
   // SPEND-WINDOW INTEGRITY — never let a re-propose launder the monthly cap.
   // A capped agent calling createGrant with identical params would otherwise
@@ -571,9 +577,9 @@ export async function createGrant(
       `mode=eq.${mode}`,
       `select=*`,
       `limit=1`,
-    ].join('&'),
+    ].join("&"),
   );
-  if (existing[0] && existing[0].status === 'active') {
+  if (existing[0] && existing[0].status === "active") {
     const patched = await patchGrant(db, userId, existing[0].id, {
       monthly_cap_credits: cap,
       constraints: request.constraints ?? existing[0].constraints ?? {},
@@ -581,7 +587,7 @@ export async function createGrant(
     if (patched) return patched;
     return mapRow(existing[0]);
   }
-  const activatesPendingProposal = existing[0]?.status === 'pending';
+  const activatesPendingProposal = existing[0]?.status === "pending";
 
   const payload = {
     user_id: userId,
@@ -592,7 +598,7 @@ export async function createGrant(
     target_function: targetFunction,
     topic,
     mode,
-    status: 'active',
+    status: "active",
     monthly_cap_credits: cap,
     spent_credits_period: 0,
     period_start: new Date().toISOString(),
@@ -605,28 +611,28 @@ export async function createGrant(
   const response = await fetch(
     `${db.baseUrl}/rest/v1/agent_function_grants?on_conflict=user_id,caller_app_id,caller_function,slot,target_app_id,target_function,topic,mode`,
     {
-      method: 'POST',
+      method: "POST",
       headers: {
         ...db.headers,
-        Prefer: 'resolution=merge-duplicates,return=representation',
+        Prefer: "resolution=merge-duplicates,return=representation",
       },
       body: JSON.stringify([payload]),
     },
   );
   if (!response.ok) {
-    const detail = await response.text().catch(() => '');
+    const detail = await response.text().catch(() => "");
     throw new RequestValidationError(
-      detail ? `Failed to create grant: ${detail}` : 'Failed to create grant',
+      detail ? `Failed to create grant: ${detail}` : "Failed to create grant",
       500,
     );
   }
   const rows = await response.json().catch(() => []);
   if (!Array.isArray(rows) || !rows[0]) {
-    throw new RequestValidationError('Grant creation returned no row', 500);
+    throw new RequestValidationError("Grant creation returned no row", 500);
   }
   const created = mapRow(rows[0] as AgentGrantRow);
-  if (activatesPendingProposal && created.status === 'active') {
-    await resolveGrantApprovalIncident(userId, created.id, 'approved');
+  if (activatesPendingProposal && created.status === "active") {
+    await resolveGrantApprovalIncident(userId, created.id, "approved");
   }
   return created;
 }
@@ -643,11 +649,11 @@ export async function createGrant(
 export async function createPendingGrantProposal(
   userId: string,
   request: AgentGrantCreateRequest,
-  origin: AgentGrantOrigin = 'agent',
+  origin: AgentGrantOrigin = "agent",
 ): Promise<AgentFunctionGrant> {
   const db = getDbConfig();
   if (!db) {
-    throw new RequestValidationError('Grant storage is not configured', 503);
+    throw new RequestValidationError("Grant storage is not configured", 503);
   }
 
   const callerAppId = request.callerAppId?.trim();
@@ -655,12 +661,12 @@ export async function createPendingGrantProposal(
   const rawTargetFunction = request.targetFunction?.trim();
   if (!callerAppId || !targetAppId || !rawTargetFunction) {
     throw new RequestValidationError(
-      'callerAppId, targetAppId, and targetFunction are required',
+      "callerAppId, targetAppId, and targetFunction are required",
     );
   }
   if (callerAppId === targetAppId) {
     throw new RequestValidationError(
-      'An Agent does not need a grant to call its own functions',
+      "An Agent does not need a grant to call its own functions",
     );
   }
 
@@ -669,10 +675,10 @@ export async function createPendingGrantProposal(
     loadApp(db, targetAppId),
   ]);
   if (!callerApp) {
-    throw new RequestValidationError('Caller Agent not found', 404);
+    throw new RequestValidationError("Caller Agent not found", 404);
   }
   if (!targetApp) {
-    throw new RequestValidationError('Target Agent not found', 404);
+    throw new RequestValidationError("Target Agent not found", 404);
   }
 
   // Launch invariant for connected builders: proposals may only connect the
@@ -680,10 +686,10 @@ export async function createPendingGrantProposal(
   // available to explicit account-session flows through createGrant().
   if (
     callerApp.owner_id !== userId || targetApp.owner_id !== userId ||
-    callerApp.visibility !== 'private' || targetApp.visibility !== 'private'
+    callerApp.visibility !== "private" || targetApp.visibility !== "private"
   ) {
     throw new RequestValidationError(
-      'Connected agents may only propose grants between private Agents owned by this account',
+      "Connected agents may only propose grants between private Agents owned by this account",
       403,
     );
   }
@@ -691,22 +697,22 @@ export async function createPendingGrantProposal(
   const targetFunction = toRawFunctionName(rawTargetFunction, targetApp.slug);
   const callerFunction = request.callerFunction
     ? toRawFunctionName(request.callerFunction, callerApp.slug)
-    : '';
-  const mode = request.mode === 'subscribe' ? 'subscribe' : 'call';
-  const topic = mode === 'subscribe' ? (request.topic?.trim() || '') : '';
-  if (mode === 'subscribe' && !topic) {
-    throw new RequestValidationError('A subscribe grant requires a topic');
+    : "";
+  const mode = request.mode === "subscribe" ? "subscribe" : "call";
+  const topic = mode === "subscribe" ? (request.topic?.trim() || "") : "";
+  if (mode === "subscribe" && !topic) {
+    throw new RequestValidationError("A subscribe grant requires a topic");
   }
 
   if (!(await userControlsCaller(db, userId, callerApp))) {
     throw new RequestValidationError(
-      'You can only wire Agents you own or have installed',
+      "You can only wire Agents you own or have installed",
       403,
     );
   }
   if (!(await userCanCallTarget(db, userId, targetApp, targetFunction))) {
     throw new RequestValidationError(
-      'You cannot grant access to a function you cannot call yourself',
+      "You cannot grant access to a function you cannot call yourself",
       403,
     );
   }
@@ -714,7 +720,7 @@ export async function createPendingGrantProposal(
   const cap = request.monthlyCapCredits === undefined
     ? DEFAULT_GRANT_MONTHLY_CAP_CREDITS
     : request.monthlyCapCredits;
-  const slot = request.slot?.trim() || '';
+  const slot = request.slot?.trim() || "";
   const selector = [
     `user_id=eq.${userId}`,
     `caller_app_id=eq.${callerAppId}`,
@@ -726,20 +732,20 @@ export async function createPendingGrantProposal(
     `mode=eq.${mode}`,
     `select=*`,
     `limit=1`,
-  ].join('&');
+  ].join("&");
   const existing = await dbGet(db, selector);
-  if (existing[0]?.status === 'active') {
+  if (existing[0]?.status === "active") {
     return mapRow(existing[0] as AgentGrantRow);
   }
-  if (existing[0]?.status === 'pending') {
+  if (existing[0]?.status === "pending") {
     return await surfacePendingGrantApproval(
       userId,
       mapRow(existing[0] as AgentGrantRow),
     );
   }
-  if (existing[0]?.status === 'revoked') {
+  if (existing[0]?.status === "revoked") {
     const reproposed = await patchGrant(db, userId, existing[0].id, {
-      status: 'pending',
+      status: "pending",
       monthly_cap_credits: cap,
       constraints: request.constraints ?? {},
       spent_credits_period: 0,
@@ -748,7 +754,7 @@ export async function createPendingGrantProposal(
     if (reproposed) {
       return await surfacePendingGrantApproval(userId, reproposed);
     }
-    throw new RequestValidationError('Failed to re-propose revoked grant', 500);
+    throw new RequestValidationError("Failed to re-propose revoked grant", 500);
   }
 
   const payload = {
@@ -760,7 +766,7 @@ export async function createPendingGrantProposal(
     target_function: targetFunction,
     topic,
     mode,
-    status: 'pending',
+    status: "pending",
     monthly_cap_credits: cap,
     spent_credits_period: 0,
     period_start: new Date().toISOString(),
@@ -770,18 +776,18 @@ export async function createPendingGrantProposal(
   const response = await fetch(
     `${db.baseUrl}/rest/v1/agent_function_grants?on_conflict=user_id,caller_app_id,caller_function,slot,target_app_id,target_function,topic,mode`,
     {
-      method: 'POST',
+      method: "POST",
       headers: {
         ...db.headers,
-        Prefer: 'resolution=ignore-duplicates,return=representation',
+        Prefer: "resolution=ignore-duplicates,return=representation",
       },
       body: JSON.stringify([payload]),
     },
   );
   if (!response.ok) {
-    const detail = await response.text().catch(() => '');
+    const detail = await response.text().catch(() => "");
     throw new RequestValidationError(
-      detail ? `Failed to propose grant: ${detail}` : 'Failed to propose grant',
+      detail ? `Failed to propose grant: ${detail}` : "Failed to propose grant",
       500,
     );
   }
@@ -802,14 +808,14 @@ export async function createPendingGrantProposal(
       mapRow(raced[0] as AgentGrantRow),
     );
   }
-  throw new RequestValidationError('Grant proposal returned no row', 500);
+  throw new RequestValidationError("Grant proposal returned no row", 500);
 }
 
 async function surfacePendingGrantApproval(
   userId: string,
   grant: AgentFunctionGrant,
 ): Promise<AgentFunctionGrant> {
-  if (grant.status !== 'pending') return grant;
+  if (grant.status !== "pending") return grant;
   await recordGrantApprovalIncident({
     userId,
     grantId: grant.id,
@@ -828,15 +834,15 @@ async function surfacePendingGrantApproval(
 export async function setGrantStatus(
   userId: string,
   grantId: string,
-  status: 'revoked',
+  status: "revoked",
 ): Promise<AgentFunctionGrant | null> {
   const db = getDbConfig();
   if (!db) {
-    throw new RequestValidationError('Grant storage is not configured', 503);
+    throw new RequestValidationError("Grant storage is not configured", 503);
   }
   const updated = await patchGrant(db, userId, grantId, { status });
   if (updated) {
-    await resolveGrantApprovalIncident(userId, grantId, 'revoked');
+    await resolveGrantApprovalIncident(userId, grantId, "revoked");
   }
   return updated;
 }
@@ -850,14 +856,14 @@ export async function listGrants(input: {
   const db = getDbConfig();
   if (!db) {
     if (input.requireAuthoritative) {
-      throw new RequestValidationError('Grant storage is not configured', 503);
+      throw new RequestValidationError("Grant storage is not configured", 503);
     }
     return [];
   }
-  const filters = [`user_id=eq.${input.userId}`, 'select=*', 'limit=500'];
+  const filters = [`user_id=eq.${input.userId}`, "select=*", "limit=500"];
   if (input.callerAppId) filters.push(`caller_app_id=eq.${input.callerAppId}`);
   if (input.targetAppId) filters.push(`target_app_id=eq.${input.targetAppId}`);
-  const rows = await dbGet(db, filters.join('&'));
+  const rows = await dbGet(db, filters.join("&"));
   return rows.map(mapRow);
 }
 
@@ -887,18 +893,18 @@ export async function setUserGrantAutoApprove(
 ): Promise<void> {
   const db = getDbConfig();
   if (!db) {
-    throw new RequestValidationError('Grant storage is not configured', 503);
+    throw new RequestValidationError("Grant storage is not configured", 503);
   }
   const response = await fetch(
     `${db.baseUrl}/rest/v1/users?id=eq.${userId}`,
     {
-      method: 'PATCH',
-      headers: { ...db.headers, Prefer: 'return=minimal' },
+      method: "PATCH",
+      headers: { ...db.headers, Prefer: "return=minimal" },
       body: JSON.stringify({ agent_grant_autoapprove: value }),
     },
   );
   if (!response.ok) {
-    throw new RequestValidationError('Failed to update preference', 500);
+    throw new RequestValidationError("Failed to update preference", 500);
   }
 }
 
@@ -917,7 +923,7 @@ export async function getUserDisplayName(
     if (!response.ok) return null;
     const rows = await response.json().catch(() => []);
     const value = Array.isArray(rows) ? rows[0]?.display_name : null;
-    return typeof value === 'string' && value.length > 0 ? value : null;
+    return typeof value === "string" && value.length > 0 ? value : null;
   } catch {
     return null;
   }
@@ -929,19 +935,19 @@ export async function setUserDisplayName(
 ): Promise<void> {
   const db = getDbConfig();
   if (!db) {
-    throw new RequestValidationError('Account storage is not configured', 503);
+    throw new RequestValidationError("Account storage is not configured", 503);
   }
   const response = await fetch(
     `${db.baseUrl}/rest/v1/users?id=eq.${userId}`,
     {
-      method: 'PATCH',
-      headers: { ...db.headers, Prefer: 'return=minimal' },
+      method: "PATCH",
+      headers: { ...db.headers, Prefer: "return=minimal" },
       // An empty name clears the override and falls back to the default label.
       body: JSON.stringify({ display_name: value }),
     },
   );
   if (!response.ok) {
-    throw new RequestValidationError('Failed to update display name', 500);
+    throw new RequestValidationError("Failed to update display name", 500);
   }
 }
 
@@ -970,7 +976,9 @@ export async function fetchAppHandles(
   if (!db) return map;
   try {
     const response = await fetch(
-      `${db.baseUrl}/rest/v1/apps?id=in.(${unique.join(',')})&select=id,slug,name`,
+      `${db.baseUrl}/rest/v1/apps?id=in.(${
+        unique.join(",")
+      })&select=id,slug,name`,
       { headers: db.headers },
     );
     if (!response.ok) return map;
@@ -1015,7 +1023,7 @@ export async function listGrantSummaries(input: {
   userId: string;
   callerAppId?: string;
   targetAppId?: string;
-  status?: 'active' | 'pending' | 'revoked';
+  status?: "active" | "pending" | "revoked";
   requireAuthoritative?: boolean;
 }): Promise<AgentGrantSummary[]> {
   const grants = (await listGrants(input)).filter(
@@ -1038,12 +1046,12 @@ export async function approvePendingGrant(
 ): Promise<AgentFunctionGrant | null> {
   const db = getDbConfig();
   if (!db) {
-    throw new RequestValidationError('Grant storage is not configured', 503);
+    throw new RequestValidationError("Grant storage is not configured", 503);
   }
   const grant = await getGrant(userId, grantId);
   if (!grant) return null;
-  if (grant.status === 'active') {
-    await resolveGrantApprovalIncident(userId, grantId, 'approved');
+  if (grant.status === "active") {
+    await resolveGrantApprovalIncident(userId, grantId, "approved");
     return grant;
   }
 
@@ -1052,17 +1060,17 @@ export async function approvePendingGrant(
     loadApp(db, grant.targetAppId),
   ]);
   if (!callerApp || !targetApp) {
-    throw new RequestValidationError('Caller or target Agent not found', 404);
+    throw new RequestValidationError("Caller or target Agent not found", 404);
   }
   if (!(await userControlsCaller(db, userId, callerApp))) {
     throw new RequestValidationError(
-      'You can only approve grants for Agents you own or have installed',
+      "You can only approve grants for Agents you own or have installed",
       403,
     );
   }
   if (!(await userCanCallTarget(db, userId, targetApp, grant.targetFunction))) {
     throw new RequestValidationError(
-      'You cannot approve access to a function you cannot call yourself',
+      "You cannot approve access to a function you cannot call yourself",
       403,
     );
   }
@@ -1072,14 +1080,14 @@ export async function approvePendingGrant(
     : options.monthlyCapCredits;
 
   const approved = await patchGrant(db, userId, grantId, {
-    status: 'active',
+    status: "active",
     monthly_cap_credits: cap,
     // Reset the spend window so an approval starts a fresh month.
     spent_credits_period: 0,
     period_start: new Date().toISOString(),
   });
   if (approved) {
-    await resolveGrantApprovalIncident(userId, grantId, 'approved');
+    await resolveGrantApprovalIncident(userId, grantId, "approved");
   }
   return approved;
 }
@@ -1091,14 +1099,14 @@ export async function setGrantCap(
 ): Promise<AgentFunctionGrant | null> {
   const db = getDbConfig();
   if (!db) {
-    throw new RequestValidationError('Grant storage is not configured', 503);
+    throw new RequestValidationError("Grant storage is not configured", 503);
   }
   if (
     monthlyCapCredits !== null &&
     (!Number.isFinite(monthlyCapCredits) || monthlyCapCredits < 0)
   ) {
     throw new RequestValidationError(
-      'monthlyCapCredits must be null or a non-negative number',
+      "monthlyCapCredits must be null or a non-negative number",
     );
   }
   return await patchGrant(db, userId, grantId, {
@@ -1115,14 +1123,16 @@ async function patchGrant(
   const response = await fetch(
     `${db.baseUrl}/rest/v1/agent_function_grants?id=eq.${grantId}&user_id=eq.${userId}`,
     {
-      method: 'PATCH',
-      headers: { ...db.headers, Prefer: 'return=representation' },
+      method: "PATCH",
+      headers: { ...db.headers, Prefer: "return=representation" },
       body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
     },
   );
   if (!response.ok) {
-    throw new RequestValidationError('Failed to update grant', 500);
+    throw new RequestValidationError("Failed to update grant", 500);
   }
   const rows = await response.json().catch(() => []);
-  return Array.isArray(rows) && rows[0] ? mapRow(rows[0] as AgentGrantRow) : null;
+  return Array.isArray(rows) && rows[0]
+    ? mapRow(rows[0] as AgentGrantRow)
+    : null;
 }

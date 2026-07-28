@@ -4,17 +4,20 @@
 // a rollback verifies the bytes that actually run); and open-code divergence
 // drops verified to false.
 
-import { assert } from 'https://deno.land/std@0.210.0/assert/assert.ts';
-import { assertEquals } from 'https://deno.land/std@0.210.0/assert/assert_equals.ts';
+import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
+import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import {
   __resetFileMatchCacheForTest,
   buildVerificationVerdict,
   getVersionTrust,
   matchFilesAgainstHashes,
   readVersionSourceFiles,
-} from './code-verification.ts';
-import { buildVersionTrustMetadata, sha256Hex } from './trust.ts';
-import { __resetVerdictCacheForTest, putLiveExecutedBundle } from './executed-bundle.ts';
+} from "./code-verification.ts";
+import { buildVersionTrustMetadata, sha256Hex } from "./trust.ts";
+import {
+  __resetVerdictCacheForTest,
+  putLiveExecutedBundle,
+} from "./executed-bundle.ts";
 
 // deno-lint-ignore no-explicit-any
 function fakeR2(files: Record<string, string | Uint8Array>): any {
@@ -30,7 +33,9 @@ function fakeR2(files: Record<string, string | Uint8Array>): any {
     get: (key: string) => {
       const value = files[key];
       if (value === undefined) return Promise.resolve(null);
-      const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+      const bytes = typeof value === "string"
+        ? new TextEncoder().encode(value)
+        : value;
       return Promise.resolve({
         text: () => Promise.resolve(new TextDecoder().decode(bytes)),
         arrayBuffer: () =>
@@ -53,7 +58,7 @@ function installEnv(
   const prev = g.__env;
   const store = new Map<string, { value: string; metadata: unknown }>();
   g.__env = {
-    TRUST_SIGNING_SECRET: 'test-trust-secret',
+    TRUST_SIGNING_SECRET: "test-trust-secret",
     R2_BUCKET: r2Files ? fakeR2(r2Files) : undefined,
     CODE_CACHE: {
       get: (k: string) => Promise.resolve(store.get(k)?.value ?? null),
@@ -61,7 +66,9 @@ function installEnv(
       getWithMetadata: (k: string) => {
         const e = store.get(k);
         return Promise.resolve(
-          e ? { value: e.value, metadata: e.metadata ?? null } : { value: null, metadata: null },
+          e
+            ? { value: e.value, metadata: e.metadata ?? null }
+            : { value: null, metadata: null },
         );
       },
       // deno-lint-ignore no-explicit-any
@@ -84,36 +91,36 @@ function installEnv(
   };
 }
 
-Deno.test('match: keys on sourceKey so source is matched, not the bundle', async () => {
+Deno.test("match: keys on sourceKey so source is matched, not the bundle", async () => {
   const env = installEnv();
   try {
-    const source = 'export const x = 1;';
-    const bundle = 'var x=1;export{x};'; // different bytes, signed under index.ts
+    const source = "export const x = 1;";
+    const bundle = "var x=1;export{x};"; // different bytes, signed under index.ts
     const hashes = {
-      ['_source_index.ts']: await sha256Hex(source),
-      ['index.ts']: await sha256Hex(bundle),
+      ["_source_index.ts"]: await sha256Hex(source),
+      ["index.ts"]: await sha256Hex(bundle),
     };
     // The readable source file (sourceKey _source_index.ts) must match the SOURCE
     // hash, never the bundle hash under its display path index.ts.
     const r = await matchFilesAgainstHashes(
-      [{ path: 'index.ts', content: source, sourceKey: '_source_index.ts' }],
+      [{ path: "index.ts", content: source, sourceKey: "_source_index.ts" }],
       hashes,
     );
     assertEquals(r.files[0].matches, true);
-    assertEquals(r.files[0].published_sha256, hashes['_source_index.ts']);
+    assertEquals(r.files[0].published_sha256, hashes["_source_index.ts"]);
     assert(r.all_match);
   } finally {
     env.restore();
   }
 });
 
-Deno.test('match: a tampered file does NOT match', async () => {
+Deno.test("match: a tampered file does NOT match", async () => {
   const env = installEnv();
   try {
-    const hashes = { ['index.ts']: await sha256Hex('original') };
+    const hashes = { ["index.ts"]: await sha256Hex("original") };
     const r = await matchFilesAgainstHashes([{
-      path: 'index.ts',
-      content: 'TAMPERED',
+      path: "index.ts",
+      content: "TAMPERED",
     }], hashes);
     assertEquals(r.files[0].matches, false);
     assertEquals(r.all_match, false);
@@ -122,14 +129,14 @@ Deno.test('match: a tampered file does NOT match', async () => {
   }
 });
 
-Deno.test('match: a returned-but-unsigned file fails all_match (conservative)', async () => {
+Deno.test("match: a returned-but-unsigned file fails all_match (conservative)", async () => {
   const env = installEnv();
   try {
-    const hashes = { ['index.ts']: await sha256Hex('a') };
+    const hashes = { ["index.ts"]: await sha256Hex("a") };
     const r = await matchFilesAgainstHashes(
       [
-        { path: 'index.ts', content: 'a' },
-        { path: 'extra.ts', content: 'sneaky' },
+        { path: "index.ts", content: "a" },
+        { path: "extra.ts", content: "sneaky" },
       ],
       hashes,
     );
@@ -141,51 +148,51 @@ Deno.test('match: a returned-but-unsigned file fails all_match (conservative)', 
   }
 });
 
-Deno.test('readVersionSourceFiles: drops generated bundles, keeps source incl. mid-name _source_', async () => {
+Deno.test("readVersionSourceFiles: drops generated bundles, keeps source incl. mid-name _source_", async () => {
   const env = installEnv({
-    'apps/app_b/1.0.0/index.tsx': 'IIFE_BUNDLE', // generated IIFE bundle -> dropped
-    'apps/app_b/1.0.0/index.esm.js': 'ESM_BUNDLE', // generated ESM bundle -> dropped
-    'apps/app_b/1.0.0/_source_index.tsx': 'SOURCE_BYTES', // entry source -> kept
-    'apps/app_b/1.0.0/lib/util.ts': 'UTIL', // non-entry source -> kept
-    'apps/app_b/1.0.0/my_source_helper.ts': 'HELPER', // mid-name _source_ -> KEPT (regression guard)
-    'apps/app_b/1.0.0/embedding.json': '{}', // internal artifact -> skipped
+    "apps/app_b/1.0.0/index.tsx": "IIFE_BUNDLE", // generated IIFE bundle -> dropped
+    "apps/app_b/1.0.0/index.esm.js": "ESM_BUNDLE", // generated ESM bundle -> dropped
+    "apps/app_b/1.0.0/_source_index.tsx": "SOURCE_BYTES", // entry source -> kept
+    "apps/app_b/1.0.0/lib/util.ts": "UTIL", // non-entry source -> kept
+    "apps/app_b/1.0.0/my_source_helper.ts": "HELPER", // mid-name _source_ -> KEPT (regression guard)
+    "apps/app_b/1.0.0/embedding.json": "{}", // internal artifact -> skipped
   });
   try {
-    const files = await readVersionSourceFiles('app_b', '1.0.0');
+    const files = await readVersionSourceFiles("app_b", "1.0.0");
     const byPath = Object.fromEntries(files.map((f) => [f.path, f]));
     // entry: present exactly once, the SOURCE bytes (both bundles dropped).
-    assertEquals(files.filter((f) => f.path === 'index.tsx').length, 1);
-    assertEquals(byPath['index.tsx'].content, 'SOURCE_BYTES');
-    assertEquals(byPath['index.tsx'].sourceKey, '_source_index.tsx');
-    assert(!('index.esm.js' in byPath), 'ESM bundle must be dropped');
+    assertEquals(files.filter((f) => f.path === "index.tsx").length, 1);
+    assertEquals(byPath["index.tsx"].content, "SOURCE_BYTES");
+    assertEquals(byPath["index.tsx"].sourceKey, "_source_index.tsx");
+    assert(!("index.esm.js" in byPath), "ESM bundle must be dropped");
     // source files kept (including the mid-name _source_ one).
-    assertEquals(byPath['lib/util.ts'].content, 'UTIL');
-    assertEquals(byPath['my_source_helper.ts'].content, 'HELPER');
-    assert(!('embedding.json' in byPath));
+    assertEquals(byPath["lib/util.ts"].content, "UTIL");
+    assertEquals(byPath["my_source_helper.ts"].content, "HELPER");
+    assert(!("embedding.json" in byPath));
   } finally {
     env.restore();
   }
 });
 
-Deno.test('readVersionSourceFiles: returns wasm as byte-exact base64 and verifies raw bytes', async () => {
+Deno.test("readVersionSourceFiles: returns wasm as byte-exact base64 and verifies raw bytes", async () => {
   const wasmBytes = new Uint8Array([0, 97, 255, 128]);
   const env = installEnv({
-    'apps/app_wasm/1.0.0/index.js': 'export default true;',
-    'apps/app_wasm/1.0.0/module.wasm': wasmBytes,
+    "apps/app_wasm/1.0.0/index.js": "export default true;",
+    "apps/app_wasm/1.0.0/module.wasm": wasmBytes,
   });
   try {
-    const files = await readVersionSourceFiles('app_wasm', '1.0.0');
-    const wasm = files.find((file) => file.path === 'module.wasm');
-    assertEquals(wasm?.content, 'AGH/gA==');
-    assertEquals(wasm?.encoding, 'base64');
+    const files = await readVersionSourceFiles("app_wasm", "1.0.0");
+    const wasm = files.find((file) => file.path === "module.wasm");
+    assertEquals(wasm?.content, "AGH/gA==");
+    assertEquals(wasm?.encoding, "base64");
     assertEquals(wasm?.bytes, wasmBytes);
 
     const matched = await matchFilesAgainstHashes(files, {
-      'index.js': await sha256Hex('export default true;'),
-      'module.wasm': await sha256Hex(wasmBytes),
+      "index.js": await sha256Hex("export default true;"),
+      "module.wasm": await sha256Hex(wasmBytes),
     });
     assertEquals(
-      matched.files.find((file) => file.path === 'module.wasm')?.matches,
+      matched.files.find((file) => file.path === "module.wasm")?.matches,
       true,
     );
   } finally {
@@ -195,63 +202,63 @@ Deno.test('readVersionSourceFiles: returns wasm as byte-exact base64 and verifie
 
 Deno.test("getVersionTrust: selects the requested version's trust", () => {
   const app = {
-    current_version: '2.0.0',
+    current_version: "2.0.0",
     // deno-lint-ignore no-explicit-any
     version_metadata: [
-      { version: '1.0.0', trust: { version: '1.0.0' } },
-      { version: '2.0.0', trust: { version: '2.0.0' } },
+      { version: "1.0.0", trust: { version: "1.0.0" } },
+      { version: "2.0.0", trust: { version: "2.0.0" } },
     ] as any,
   };
-  assertEquals(getVersionTrust(app, '1.0.0')?.version, '1.0.0');
-  assertEquals(getVersionTrust(app, '2.0.0')?.version, '2.0.0');
-  assertEquals(getVersionTrust(app, '9.9.9'), null);
+  assertEquals(getVersionTrust(app, "1.0.0")?.version, "1.0.0");
+  assertEquals(getVersionTrust(app, "2.0.0")?.version, "2.0.0");
+  assertEquals(getVersionTrust(app, "9.9.9"), null);
 });
 
-Deno.test('verdict: open-code app with matching source => verified + files_match', async () => {
-  const source = 'export const x=1;';
-  const bundle = 'var x=1;';
+Deno.test("verdict: open-code app with matching source => verified + files_match", async () => {
+  const source = "export const x=1;";
+  const bundle = "var x=1;";
   const env = installEnv({
-    'apps/app_x/1.0.0/_source_index.ts': source,
-    'apps/app_x/1.0.0/index.ts': bundle,
+    "apps/app_x/1.0.0/_source_index.ts": source,
+    "apps/app_x/1.0.0/index.ts": bundle,
   });
   try {
     const manifest = {
-      name: 'x',
-      version: '1.0.0',
-      type: 'mcp' as const,
-      entry: { functions: 'index.ts' },
+      name: "x",
+      version: "1.0.0",
+      type: "mcp" as const,
+      entry: { functions: "index.ts" },
       functions: {},
     };
     const trust = await buildVersionTrustMetadata({
-      appId: 'app_x',
-      version: '1.0.0',
-      runtime: 'deno',
+      appId: "app_x",
+      version: "1.0.0",
+      runtime: "deno",
       manifest,
       files: [
-        { name: '_source_index.ts', content: source },
-        { name: 'index.ts', content: bundle },
+        { name: "_source_index.ts", content: source },
+        { name: "index.ts", content: bundle },
       ],
     });
     await putLiveExecutedBundle({
-      appId: 'app_x',
-      version: '1.0.0',
+      appId: "app_x",
+      version: "1.0.0",
       esmCode: bundle,
     });
 
     const app = {
-      id: 'app_x',
-      name: 'x',
-      current_version: '1.0.0',
-      runtime: 'deno',
+      id: "app_x",
+      name: "x",
+      current_version: "1.0.0",
+      runtime: "deno",
       manifest: JSON.stringify(manifest),
       version_metadata: [{
-        version: '1.0.0',
+        version: "1.0.0",
         size_bytes: 1,
-        created_at: 't',
+        created_at: "t",
         trust,
       }],
-      visibility: 'public',
-      download_access: 'public',
+      visibility: "public",
+      download_access: "public",
       env_schema: {},
       // deno-lint-ignore no-explicit-any
     } as any;
@@ -265,47 +272,47 @@ Deno.test('verdict: open-code app with matching source => verified + files_match
   }
 });
 
-Deno.test('verdict: open-code source divergence => files_match false => NOT verified', async () => {
-  const signedSource = 'export const x=1;';
+Deno.test("verdict: open-code source divergence => files_match false => NOT verified", async () => {
+  const signedSource = "export const x=1;";
   const env = installEnv({
     // R2 serves DIFFERENT source bytes than were signed (divergence).
-    'apps/app_d/1.0.0/_source_index.ts': 'export const x=999;',
+    "apps/app_d/1.0.0/_source_index.ts": "export const x=999;",
   });
   try {
     const manifest = {
-      name: 'd',
-      version: '1.0.0',
-      type: 'mcp' as const,
-      entry: { functions: 'index.ts' },
+      name: "d",
+      version: "1.0.0",
+      type: "mcp" as const,
+      entry: { functions: "index.ts" },
       functions: {},
     };
     const trust = await buildVersionTrustMetadata({
-      appId: 'app_d',
-      version: '1.0.0',
-      runtime: 'deno',
+      appId: "app_d",
+      version: "1.0.0",
+      runtime: "deno",
       manifest,
-      files: [{ name: '_source_index.ts', content: signedSource }],
+      files: [{ name: "_source_index.ts", content: signedSource }],
     });
     await putLiveExecutedBundle({
-      appId: 'app_d',
-      version: '1.0.0',
-      esmCode: 'BUNDLE',
+      appId: "app_d",
+      version: "1.0.0",
+      esmCode: "BUNDLE",
     });
 
     const app = {
-      id: 'app_d',
-      name: 'd',
-      current_version: '1.0.0',
-      runtime: 'deno',
+      id: "app_d",
+      name: "d",
+      current_version: "1.0.0",
+      runtime: "deno",
       manifest: JSON.stringify(manifest),
       version_metadata: [{
-        version: '1.0.0',
+        version: "1.0.0",
         size_bytes: 1,
-        created_at: 't',
+        created_at: "t",
         trust,
       }],
-      visibility: 'public',
-      download_access: 'public',
+      visibility: "public",
+      download_access: "public",
       env_schema: {},
       // deno-lint-ignore no-explicit-any
     } as any;
@@ -325,38 +332,38 @@ Deno.test("verdict: open-code app whose source can't be read => filesMatch null 
   const env = installEnv();
   try {
     const manifest = {
-      name: 'n',
-      version: '1.0.0',
-      type: 'mcp' as const,
-      entry: { functions: 'index.ts' },
+      name: "n",
+      version: "1.0.0",
+      type: "mcp" as const,
+      entry: { functions: "index.ts" },
       functions: {},
     };
     const trust = await buildVersionTrustMetadata({
-      appId: 'app_n',
-      version: '1.0.0',
-      runtime: 'deno',
+      appId: "app_n",
+      version: "1.0.0",
+      runtime: "deno",
       manifest,
-      files: [{ name: '_source_index.ts', content: 'src' }],
+      files: [{ name: "_source_index.ts", content: "src" }],
     });
     await putLiveExecutedBundle({
-      appId: 'app_n',
-      version: '1.0.0',
-      esmCode: 'B',
+      appId: "app_n",
+      version: "1.0.0",
+      esmCode: "B",
     });
     const app = {
-      id: 'app_n',
-      name: 'n',
-      current_version: '1.0.0',
-      runtime: 'deno',
+      id: "app_n",
+      name: "n",
+      current_version: "1.0.0",
+      runtime: "deno",
       manifest: JSON.stringify(manifest),
       version_metadata: [{
-        version: '1.0.0',
+        version: "1.0.0",
         size_bytes: 1,
-        created_at: 't',
+        created_at: "t",
         trust,
       }],
-      visibility: 'public',
-      download_access: 'public', // open code, but source unreadable here
+      visibility: "public",
+      download_access: "public", // open code, but source unreadable here
       env_schema: {},
       // deno-lint-ignore no-explicit-any
     } as any;
@@ -370,51 +377,51 @@ Deno.test("verdict: open-code app whose source can't be read => filesMatch null 
   }
 });
 
-Deno.test('verdict: a gx.set rollback verifies the LIVE version, not DB current_version', async () => {
+Deno.test("verdict: a gx.set rollback verifies the LIVE version, not DB current_version", async () => {
   const env = installEnv();
   try {
     const mkTrust = (version: string) =>
       buildVersionTrustMetadata({
-        appId: 'app_r',
+        appId: "app_r",
         version,
-        runtime: 'deno',
+        runtime: "deno",
         manifest: {
-          name: 'r',
+          name: "r",
           version,
-          type: 'mcp' as const,
-          entry: { functions: 'index.ts' },
+          type: "mcp" as const,
+          entry: { functions: "index.ts" },
           functions: {},
         },
-        files: [{ name: 'index.ts', content: 'v' + version }],
+        files: [{ name: "index.ts", content: "v" + version }],
       });
-    const trust1 = await mkTrust('1.0.0');
-    const trust2 = await mkTrust('2.0.0');
+    const trust1 = await mkTrust("1.0.0");
+    const trust2 = await mkTrust("2.0.0");
     // Live KV is pinned to the OLD (validly-signed) 1.0.0 — a rollback — while the
     // DB current_version has advanced to 2.0.0.
     await putLiveExecutedBundle({
-      appId: 'app_r',
-      version: '1.0.0',
-      esmCode: 'BUNDLE_1',
+      appId: "app_r",
+      version: "1.0.0",
+      esmCode: "BUNDLE_1",
     });
 
     const app = {
-      id: 'app_r',
-      name: 'r',
-      current_version: '2.0.0',
-      runtime: 'deno',
+      id: "app_r",
+      name: "r",
+      current_version: "2.0.0",
+      runtime: "deno",
       manifest: JSON.stringify({
-        name: 'r',
-        version: '2.0.0',
-        type: 'mcp',
-        entry: { functions: 'index.ts' },
+        name: "r",
+        version: "2.0.0",
+        type: "mcp",
+        entry: { functions: "index.ts" },
         functions: {},
       }),
       version_metadata: [
-        { version: '1.0.0', size_bytes: 1, created_at: 't', trust: trust1 },
-        { version: '2.0.0', size_bytes: 1, created_at: 't', trust: trust2 },
+        { version: "1.0.0", size_bytes: 1, created_at: "t", trust: trust1 },
+        { version: "2.0.0", size_bytes: 1, created_at: "t", trust: trust2 },
       ],
-      visibility: 'public',
-      download_access: 'owner',
+      visibility: "public",
+      download_access: "owner",
       env_schema: {},
       // deno-lint-ignore no-explicit-any
     } as any;
@@ -422,26 +429,26 @@ Deno.test('verdict: a gx.set rollback verifies the LIVE version, not DB current_
     const verdict = await buildVerificationVerdict(app);
     // Anchored to what RUNS: version 1.0.0, validly signed => verified, no spurious
     // version_mismatch failure.
-    assertEquals(verdict.version, '1.0.0');
-    assertEquals(verdict.integrity.executed_bundle_status, 'ok');
+    assertEquals(verdict.version, "1.0.0");
+    assertEquals(verdict.integrity.executed_bundle_status, "ok");
     assertEquals(verdict.verified, true);
   } finally {
     env.restore();
   }
 });
 
-Deno.test('verdict: a legacy app with no signed trust is NOT verified', async () => {
+Deno.test("verdict: a legacy app with no signed trust is NOT verified", async () => {
   const env = installEnv();
   try {
     const app = {
-      id: 'app_legacy',
-      name: 'legacy',
-      current_version: '1.0.0',
-      runtime: 'deno',
+      id: "app_legacy",
+      name: "legacy",
+      current_version: "1.0.0",
+      runtime: "deno",
       manifest: null,
       version_metadata: [],
-      visibility: 'public',
-      download_access: 'owner',
+      visibility: "public",
+      download_access: "owner",
       env_schema: {},
       // deno-lint-ignore no-explicit-any
     } as any;

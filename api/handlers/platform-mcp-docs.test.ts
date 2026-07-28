@@ -1,71 +1,71 @@
-import { assertEquals } from 'https://deno.land/std@0.210.0/assert/assert_equals.ts';
-import { assertStringIncludes } from 'https://deno.land/std@0.210.0/assert/assert_string_includes.ts';
+import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
+import { assertStringIncludes } from "https://deno.land/std@0.210.0/assert/assert_string_includes.ts";
 
-import { handlePlatformMcp, handleSkills } from './platform-mcp.ts';
+import { handlePlatformMcp, handleSkills } from "./platform-mcp.ts";
 
-const USER_ID = '11111111-1111-4111-8111-111111111111';
+const USER_ID = "11111111-1111-4111-8111-111111111111";
 
 const CORE_GUIDANCE = [
   "Post Galactic URLs only when the link helps the user's current action",
-  '`/install`',
-  '`/wallet`',
-  '`/settings`',
-  '`/admin/agents/:id`',
-  '`/agents/:slug`',
-  '`/api/launch/openapi.json`',
-  '`/api/skills`',
-  '## Skills As Functions',
-  '`skills_index(args: {})`',
-  '`skill_reader(args: { skill_id: string })`',
-  'Generated skills.md function docs are always free',
-  '`gx.download({ name, description, policy: true })`',
-  'gx.project({ app_id, view?, since_revision? })',
-  'gx.stage({ files?, base_bundle_id?, delete_paths? })',
-  'bundle_id',
-  'revision_expires_at',
-  '2 MiB',
-  '100 MiB',
-  '10,000 active objects',
-  '50 files',
-  '50 MiB',
-  'output_schema',
-  '50,000 combined traversal/schema steps',
-  '16 MiB of cumulative canonical comparison work',
-  'A schema mismatch still settles completed inference usage',
-  '`pattern`',
-  'structured_output_schema_mismatch',
-  'test_attestation: tested.test_attestation',
-  'exact same decoded file set',
-  'custom code path for functions',
-  'default_price_credits',
+  "`/install`",
+  "`/wallet`",
+  "`/settings`",
+  "`/admin/agents/:id`",
+  "`/agents/:slug`",
+  "`/api/launch/openapi.json`",
+  "`/api/skills`",
+  "## Skills As Functions",
+  "`skills_index(args: {})`",
+  "`skill_reader(args: { skill_id: string })`",
+  "Generated skills.md function docs are always free",
+  "`gx.download({ name, description, policy: true })`",
+  "gx.project({ app_id, view?, since_revision? })",
+  "gx.stage({ files?, base_bundle_id?, delete_paths? })",
+  "bundle_id",
+  "revision_expires_at",
+  "2 MiB",
+  "100 MiB",
+  "10,000 active objects",
+  "50 files",
+  "50 MiB",
+  "output_schema",
+  "50,000 combined traversal/schema steps",
+  "16 MiB of cumulative canonical comparison work",
+  "A schema mismatch still settles completed inference usage",
+  "`pattern`",
+  "structured_output_schema_mismatch",
+  "test_attestation: tested.test_attestation",
+  "exact same decoded file set",
+  "custom code path for functions",
+  "default_price_credits",
 ];
 
 // First-class skills and widgets are off the launch surface: the docs must not
 // teach skill pulls, skill pricing, or widget discovery actions.
 const RETIRED_GUIDANCE = [
-  'First-Class Skills',
-  'pull_skill',
-  'open_widget',
-  'default_skill_pull_price_light',
-  'default_free_skill_pulls',
-  'skill_prices',
+  "First-Class Skills",
+  "pull_skill",
+  "open_widget",
+  "default_skill_pull_price_light",
+  "default_free_skill_pulls",
+  "skill_prices",
 ];
 
 function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
 function platformRequest(method: string, params?: unknown): Request {
-  return new Request('https://ultralight.test/mcp/platform', {
-    method: 'POST',
+  return new Request("https://ultralight.test/mcp/platform", {
+    method: "POST",
     headers: {
-      'Authorization': 'Bearer supabase-token',
-      'Content-Type': 'application/json',
+      "Authorization": "Bearer supabase-token",
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      jsonrpc: '2.0',
+      jsonrpc: "2.0",
       id: method,
       method,
       params,
@@ -84,42 +84,42 @@ async function withPlatformDocsEnv<T>(fn: () => Promise<T>): Promise<T> {
   const previousFetch = globalThis.fetch;
   globalThis.__env = {
     ...(previousEnv || {}),
-    BASE_URL: 'https://ultralight.test',
-    SUPABASE_URL: 'https://supabase.test',
-    SUPABASE_ANON_KEY: 'anon-key',
-    SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+    BASE_URL: "https://ultralight.test",
+    SUPABASE_URL: "https://supabase.test",
+    SUPABASE_ANON_KEY: "anon-key",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
   } as typeof globalThis.__env;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
 
-    if (url.pathname === '/auth/v1/user') {
+    if (url.pathname === "/auth/v1/user") {
       return jsonResponse({
         id: USER_ID,
-        email: 'docs@example.test',
-        user_metadata: { full_name: 'Docs Tester' },
+        email: "docs@example.test",
+        user_metadata: { full_name: "Docs Tester" },
       });
     }
 
-    if (url.pathname === '/rest/v1/users') {
-      if (url.searchParams.get('select') === 'tier') {
-        return jsonResponse([{ tier: 'pro' }]);
+    if (url.pathname === "/rest/v1/users") {
+      if (url.searchParams.get("select") === "tier") {
+        return jsonResponse([{ tier: "pro" }]);
       }
       return jsonResponse([{ id: USER_ID }]);
     }
 
-    if (url.pathname === '/rest/v1/pending_permissions') {
+    if (url.pathname === "/rest/v1/pending_permissions") {
       return jsonResponse([]);
     }
 
-    if (url.pathname === '/rest/v1/mcp_call_logs') {
+    if (url.pathname === "/rest/v1/mcp_call_logs") {
       return jsonResponse([]);
     }
 
-    if (url.pathname === '/rest/v1/apps') {
+    if (url.pathname === "/rest/v1/apps") {
       return jsonResponse([]);
     }
 
-    if (url.pathname === '/rest/v1/user_app_library') {
+    if (url.pathname === "/rest/v1/user_app_library") {
       return jsonResponse([]);
     }
 
@@ -147,35 +147,36 @@ function assertCoreGuidance(text: string): void {
   }
 }
 
-Deno.test('platform docs guidance is shared by initialize, resources/read, and GET /api/skills', async () => {
+Deno.test("platform docs guidance is shared by initialize, resources/read, and GET /api/skills", async () => {
   await withPlatformDocsEnv(async () => {
     const initializePayload = await readJsonRpc(
-      await handlePlatformMcp(platformRequest('initialize')),
+      await handlePlatformMcp(platformRequest("initialize")),
     );
     const initializeInstructions =
       ((initializePayload.result as Record<string, unknown>).instructions ||
-        '') as string;
+        "") as string;
 
     const resourcePayload = await readJsonRpc(
       await handlePlatformMcp(
-        platformRequest('resources/read', {
-          uri: 'galactic://platform/skills.md',
+        platformRequest("resources/read", {
+          uri: "galactic://platform/skills.md",
         }),
       ),
     );
-    const resourceText = ((resourcePayload.result as Record<string, unknown>).contents as Array<
-      { text?: string }
-    >)[0].text || '';
+    const resourceText =
+      ((resourcePayload.result as Record<string, unknown>).contents as Array<
+        { text?: string }
+      >)[0].text || "";
 
     const skillsResponse = handleSkills(
-      new Request('https://ultralight.test/api/skills'),
+      new Request("https://ultralight.test/api/skills"),
     );
     const skillsText = await skillsResponse.text();
 
     assertEquals(skillsResponse.status, 200);
     assertStringIncludes(
-      skillsResponse.headers.get('Content-Type') || '',
-      'text/markdown',
+      skillsResponse.headers.get("Content-Type") || "",
+      "text/markdown",
     );
 
     assertCoreGuidance(initializeInstructions);
@@ -187,50 +188,51 @@ Deno.test('platform docs guidance is shared by initialize, resources/read, and G
 Deno.test("initialize instructions carry the first-contact directive that shapes the agent's first message", async () => {
   await withPlatformDocsEnv(async () => {
     const payload = await readJsonRpc(
-      await handlePlatformMcp(platformRequest('initialize')),
+      await handlePlatformMcp(platformRequest("initialize")),
     );
-    const instructions = ((payload.result as Record<string, unknown>).instructions ||
-      '') as string;
+    const instructions =
+      ((payload.result as Record<string, unknown>).instructions ||
+        "") as string;
 
     // The standing first-contact directive must be present and lead the doc.
-    assertStringIncludes(instructions, '## First contact');
+    assertStringIncludes(instructions, "## First contact");
     assertStringIncludes(
       instructions,
-      'I can build and deploy a private Agent that keeps',
+      "I can build and deploy a private Agent that keeps",
     );
     // It must teach the complete durable delegation flow.
     for (
       const verb of [
-        '**Describe**',
-        '**Scaffold**',
-        '**Stage**',
-        '**Test**',
-        '**Deploy**',
-        '**Activate**',
-        '**Supervise**',
+        "**Describe**",
+        "**Scaffold**",
+        "**Stage**",
+        "**Test**",
+        "**Deploy**",
+        "**Activate**",
+        "**Supervise**",
       ]
     ) {
       assertStringIncludes(instructions, verb);
     }
-    assertStringIncludes(instructions, 'one recurring job');
-    assertStringIncludes(instructions, 'private and owner-only');
-    assertStringIncludes(instructions, 'hard routine ceiling');
-    assertStringIncludes(instructions, 'short-lived `test_attestation`');
-    assertStringIncludes(instructions, 'without retransmitting its source');
-    assertStringIncludes(instructions, 'content-addressed `bundle_id`');
-    assertStringIncludes(instructions, 'staged before promotion');
+    assertStringIncludes(instructions, "one recurring job");
+    assertStringIncludes(instructions, "private and owner-only");
+    assertStringIncludes(instructions, "hard routine ceiling");
+    assertStringIncludes(instructions, "short-lived `test_attestation`");
+    assertStringIncludes(instructions, "without retransmitting its source");
+    assertStringIncludes(instructions, "content-addressed `bundle_id`");
+    assertStringIncludes(instructions, "staged before promotion");
     assertStringIncludes(
       instructions,
-      'Connected-agent credentials cannot approve or activate',
+      "Connected-agent credentials cannot approve or activate",
     );
-    assertEquals(instructions.includes('full public marketplace'), false);
+    assertEquals(instructions.includes("full public marketplace"), false);
     // The directive heads the instructions, before the dense reference.
-    const firstContactAt = instructions.indexOf('## First contact');
-    const platformToolsAt = instructions.indexOf('## Platform Tools');
+    const firstContactAt = instructions.indexOf("## First contact");
+    const platformToolsAt = instructions.indexOf("## Platform Tools");
     assertEquals(
       firstContactAt > -1 && firstContactAt < platformToolsAt,
       true,
-      'first-contact directive must precede the tool reference',
+      "first-contact directive must precede the tool reference",
     );
   });
 });

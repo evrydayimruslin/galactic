@@ -1,8 +1,12 @@
 // Apps Service
 // Handles app CRUD operations via Supabase
 
-import { getEnv } from '../lib/env.ts';
-import type { App, AppWithDraft, VersionMetadata } from '../../shared/types/index.ts';
+import { getEnv } from "../lib/env.ts";
+import type {
+  App,
+  AppWithDraft,
+  VersionMetadata,
+} from "../../shared/types/index.ts";
 import {
   searchToolSemanticEmbeddings,
   type ToolSemanticEmbeddingRow,
@@ -10,7 +14,7 @@ import {
   type ToolSemanticEmbeddingSearchResult,
   type ToolSemanticEmbeddingUpsertParams,
   upsertToolSemanticEmbedding,
-} from './embedding.ts';
+} from "./embedding.ts";
 import {
   PUBLIC_APP_RESPONSE_SELECT,
   PUBLIC_APP_SERVING_SELECT,
@@ -18,10 +22,10 @@ import {
   type PublicAppResponse,
   type PublicAppServing,
   type PublicDiscoveryApp,
-} from './public-apps.ts';
+} from "./public-apps.ts";
 
 function toPgVector(embedding: number[]): string {
-  return `[${embedding.filter(Number.isFinite).join(',')}]`;
+  return `[${embedding.filter(Number.isFinite).join(",")}]`;
 }
 
 // Postgres rejects a non-uuid value in a `uuid = eq.` filter with SQLSTATE
@@ -41,8 +45,8 @@ interface OwnedAppDeletionResult {
 
 export class AppDeletionConflictError extends Error {
   constructor() {
-    super('A concurrent app or owner lifecycle change is in progress');
-    this.name = 'AppDeletionConflictError';
+    super("A concurrent app or owner lifecycle change is in progress");
+    this.name = "AppDeletionConflictError";
   }
 }
 
@@ -64,10 +68,10 @@ export class AppsService {
 
   private async fetchSingle<T>(url: URL): Promise<T | null> {
     const response = await fetch(url.toString(), {
-      method: 'GET',
+      method: "GET",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
       },
     });
 
@@ -87,12 +91,12 @@ export class AppsService {
     const url = `${this.supabaseUrl}/rest/v1/apps`;
 
     const response = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation',
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
       },
       body: JSON.stringify(app),
     });
@@ -111,10 +115,10 @@ export class AppsService {
    */
   async findById(appId: string): Promise<AppWithDraft | null> {
     const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
-    url.searchParams.set('id', `eq.${appId}`);
-    url.searchParams.set('deleted_at', 'is.null');
-    url.searchParams.set('select', '*');
-    url.searchParams.set('limit', '1');
+    url.searchParams.set("id", `eq.${appId}`);
+    url.searchParams.set("deleted_at", "is.null");
+    url.searchParams.set("select", "*");
+    url.searchParams.set("limit", "1");
     try {
       return await this.fetchSingle<AppWithDraft>(url);
     } catch (err) {
@@ -134,11 +138,11 @@ export class AppsService {
    */
   async findPublicById(appId: string): Promise<PublicAppResponse | null> {
     const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
-    url.searchParams.set('id', `eq.${appId}`);
-    url.searchParams.set('deleted_at', 'is.null');
-    url.searchParams.set('visibility', 'in.(public,unlisted)');
-    url.searchParams.set('select', PUBLIC_APP_RESPONSE_SELECT);
-    url.searchParams.set('limit', '1');
+    url.searchParams.set("id", `eq.${appId}`);
+    url.searchParams.set("deleted_at", "is.null");
+    url.searchParams.set("visibility", "in.(public,unlisted)");
+    url.searchParams.set("select", PUBLIC_APP_RESPONSE_SELECT);
+    url.searchParams.set("limit", "1");
     return this.fetchSingle<PublicAppResponse>(url);
   }
 
@@ -148,11 +152,11 @@ export class AppsService {
    */
   async findPublicServingById(appId: string): Promise<PublicAppServing | null> {
     const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
-    url.searchParams.set('id', `eq.${appId}`);
-    url.searchParams.set('deleted_at', 'is.null');
-    url.searchParams.set('visibility', 'in.(public,unlisted)');
-    url.searchParams.set('select', PUBLIC_APP_SERVING_SELECT);
-    url.searchParams.set('limit', '1');
+    url.searchParams.set("id", `eq.${appId}`);
+    url.searchParams.set("deleted_at", "is.null");
+    url.searchParams.set("visibility", "in.(public,unlisted)");
+    url.searchParams.set("select", PUBLIC_APP_SERVING_SELECT);
+    url.searchParams.set("limit", "1");
     return this.fetchSingle<PublicAppServing>(url);
   }
 
@@ -161,16 +165,16 @@ export class AppsService {
    */
   async listByOwner(userId: string): Promise<App[]> {
     const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
-    url.searchParams.set('owner_id', `eq.${userId}`);
-    url.searchParams.set('select', '*');
-    url.searchParams.set('deleted_at', 'is.null');
-    url.searchParams.set('order', 'created_at.desc');
+    url.searchParams.set("owner_id", `eq.${userId}`);
+    url.searchParams.set("select", "*");
+    url.searchParams.set("deleted_at", "is.null");
+    url.searchParams.set("order", "created_at.desc");
 
     const response = await fetch(url.toString(), {
-      method: 'GET',
+      method: "GET",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
       },
     });
 
@@ -187,15 +191,15 @@ export class AppsService {
    */
   async update(appId: string, updates: Partial<AppWithDraft>): Promise<App> {
     const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
-    url.searchParams.set('id', `eq.${appId}`);
+    url.searchParams.set("id", `eq.${appId}`);
 
     const response = await fetch(url.toString(), {
-      method: 'PATCH',
+      method: "PATCH",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation',
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
       },
       body: JSON.stringify({
         ...updates,
@@ -226,13 +230,15 @@ export class AppsService {
     versionMetadata: VersionMetadata[];
   }): Promise<boolean> {
     const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
-    url.searchParams.set('id', `eq.${input.appId}`);
-    url.searchParams.set('owner_id', `eq.${input.ownerId}`);
-    url.searchParams.set('deleted_at', 'is.null');
-    url.searchParams.set('updated_at', `eq.${input.expectedUpdatedAt}`);
+    url.searchParams.set("id", `eq.${input.appId}`);
+    url.searchParams.set("owner_id", `eq.${input.ownerId}`);
+    url.searchParams.set("deleted_at", "is.null");
+    url.searchParams.set("updated_at", `eq.${input.expectedUpdatedAt}`);
     url.searchParams.set(
-      'current_version',
-      input.expectedCurrentVersion === null ? 'is.null' : `eq.${input.expectedCurrentVersion}`,
+      "current_version",
+      input.expectedCurrentVersion === null
+        ? "is.null"
+        : `eq.${input.expectedCurrentVersion}`,
     );
 
     const expectedMillis = Date.parse(input.expectedUpdatedAt);
@@ -243,12 +249,12 @@ export class AppsService {
       ),
     ).toISOString();
     const response = await fetch(url.toString(), {
-      method: 'PATCH',
+      method: "PATCH",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation',
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
       },
       body: JSON.stringify({
         version_metadata: input.versionMetadata,
@@ -272,11 +278,11 @@ export class AppsService {
     const url = `${this.supabaseUrl}/rest/v1/rpc/increment_app_runs`;
 
     const response = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
-        'Content-Type': 'application/json',
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({ app_id: appId }),
     });
@@ -297,11 +303,11 @@ export class AppsService {
     const url = `${this.supabaseUrl}/rest/v1/rpc/increment_app_impression`;
 
     const response = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
-        'Content-Type': 'application/json',
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({ app_id: appId }),
     });
@@ -317,17 +323,17 @@ export class AppsService {
    */
   async findBySlug(ownerId: string, slug: string): Promise<App | null> {
     const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
-    url.searchParams.set('owner_id', `eq.${ownerId}`);
-    url.searchParams.set('slug', `eq.${slug}`);
-    url.searchParams.set('deleted_at', 'is.null');
-    url.searchParams.set('select', '*');
-    url.searchParams.set('limit', '1');
+    url.searchParams.set("owner_id", `eq.${ownerId}`);
+    url.searchParams.set("slug", `eq.${slug}`);
+    url.searchParams.set("deleted_at", "is.null");
+    url.searchParams.set("select", "*");
+    url.searchParams.set("limit", "1");
 
     const response = await fetch(url.toString(), {
-      method: 'GET',
+      method: "GET",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
       },
     });
 
@@ -349,15 +355,15 @@ export class AppsService {
    */
   async slugExists(slug: string): Promise<boolean> {
     const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
-    url.searchParams.set('slug', `eq.${slug}`);
-    url.searchParams.set('select', 'id');
-    url.searchParams.set('limit', '1');
+    url.searchParams.set("slug", `eq.${slug}`);
+    url.searchParams.set("select", "id");
+    url.searchParams.set("limit", "1");
 
     const response = await fetch(url.toString(), {
-      method: 'GET',
+      method: "GET",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
       },
     });
 
@@ -375,17 +381,17 @@ export class AppsService {
    */
   async listPublic(limit = 100): Promise<PublicDiscoveryApp[]> {
     const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
-    url.searchParams.set('visibility', 'eq.public');
-    url.searchParams.set('deleted_at', 'is.null');
-    url.searchParams.set('select', PUBLIC_DISCOVERY_APP_SELECT);
-    url.searchParams.set('order', 'runs_30d.desc');
-    url.searchParams.set('limit', String(limit));
+    url.searchParams.set("visibility", "eq.public");
+    url.searchParams.set("deleted_at", "is.null");
+    url.searchParams.set("select", PUBLIC_DISCOVERY_APP_SELECT);
+    url.searchParams.set("order", "runs_30d.desc");
+    url.searchParams.set("limit", String(limit));
 
     const response = await fetch(url.toString(), {
-      method: 'GET',
+      method: "GET",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
       },
     });
 
@@ -402,14 +408,14 @@ export class AppsService {
    */
   async softDelete(appId: string): Promise<void> {
     const url = new URL(`${this.supabaseUrl}/rest/v1/apps`);
-    url.searchParams.set('id', `eq.${appId}`);
+    url.searchParams.set("id", `eq.${appId}`);
 
     const response = await fetch(url.toString(), {
-      method: 'PATCH',
+      method: "PATCH",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
-        'Content-Type': 'application/json',
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         deleted_at: new Date().toISOString(),
@@ -438,11 +444,11 @@ export class AppsService {
     let response: Response | null = null;
     for (let attempt = 0; attempt < APP_DELETE_MAX_ATTEMPTS; attempt += 1) {
       response = await fetch(url, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Authorization': `Bearer ${this.supabaseKey}`,
-          'apikey': this.supabaseKey,
-          'Content-Type': 'application/json',
+          "Authorization": `Bearer ${this.supabaseKey}`,
+          "apikey": this.supabaseKey,
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           p_user_id: ownerId,
@@ -465,16 +471,16 @@ export class AppsService {
 
     const payload = await response.json() as unknown;
     const row = Array.isArray(payload) ? payload[0] : payload;
-    if (!row || typeof row !== 'object') {
-      throw new Error('Owned app soft delete returned no result');
+    if (!row || typeof row !== "object") {
+      throw new Error("Owned app soft delete returned no result");
     }
     const result = row as Record<string, unknown>;
     const reclaimedBytes = Number(result.reclaimed_bytes ?? 0);
     if (
-      typeof result.deleted !== 'boolean' ||
+      typeof result.deleted !== "boolean" ||
       !Number.isSafeInteger(reclaimedBytes) || reclaimedBytes < 0
     ) {
-      throw new Error('Owned app soft delete returned an invalid result');
+      throw new Error("Owned app soft delete returned an invalid result");
     }
     return { deleted: result.deleted, reclaimedBytes };
   }
@@ -487,11 +493,11 @@ export class AppsService {
     const url = `${this.supabaseUrl}/rest/v1/rpc/update_app_embedding`;
 
     const response = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
-        'Content-Type': 'application/json',
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         p_app_id: appId,
@@ -502,14 +508,14 @@ export class AppsService {
     if (!response.ok) {
       // Try direct update as fallback
       const directUrl = new URL(`${this.supabaseUrl}/rest/v1/apps`);
-      directUrl.searchParams.set('id', `eq.${appId}`);
+      directUrl.searchParams.set("id", `eq.${appId}`);
 
       const directResponse = await fetch(directUrl.toString(), {
-        method: 'PATCH',
+        method: "PATCH",
         headers: {
-          'Authorization': `Bearer ${this.supabaseKey}`,
-          'apikey': this.supabaseKey,
-          'Content-Type': 'application/json',
+          "Authorization": `Bearer ${this.supabaseKey}`,
+          "apikey": this.supabaseKey,
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           skills_embedding: toPgVector(embedding),
@@ -518,7 +524,7 @@ export class AppsService {
       });
 
       if (!directResponse.ok) {
-        console.error('Failed to update embedding');
+        console.error("Failed to update embedding");
       }
     }
   }
@@ -537,11 +543,11 @@ export class AppsService {
     const url = `${this.supabaseUrl}/rest/v1/rpc/search_apps`;
 
     const response = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${this.supabaseKey}`,
-        'apikey': this.supabaseKey,
-        'Content-Type': 'application/json',
+        "Authorization": `Bearer ${this.supabaseKey}`,
+        "apikey": this.supabaseKey,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         p_query_embedding: toPgVector(queryEmbedding),
@@ -561,7 +567,9 @@ export class AppsService {
     >;
 
     // Filter by similarity threshold
-    return results.filter((r: { similarity: number }) => r.similarity >= minSimilarity);
+    return results.filter((r: { similarity: number }) =>
+      r.similarity >= minSimilarity
+    );
   }
 
   async upsertSemanticEmbedding(
@@ -586,11 +594,11 @@ export class AppsService {
 
 // Factory function
 export function createAppsService(): AppsService {
-  const url = getEnv('SUPABASE_URL');
-  const key = getEnv('SUPABASE_SERVICE_ROLE_KEY');
+  const url = getEnv("SUPABASE_URL");
+  const key = getEnv("SUPABASE_SERVICE_ROLE_KEY");
 
   if (!url || !key) {
-    throw new Error('Supabase credentials not configured');
+    throw new Error("Supabase credentials not configured");
   }
 
   return new AppsService({ url, serviceKey: key });

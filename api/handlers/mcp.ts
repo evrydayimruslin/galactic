@@ -2,49 +2,58 @@
 // Implements JSON-RPC 2.0 protocol for tool discovery and execution
 // Spec: https://modelcontextprotocol.io/specification/draft/server/tools
 
-import { error, json } from './response.ts';
-import { createAppsService } from '../services/apps.ts';
+import { error, json } from "./response.ts";
+import { createAppsService } from "../services/apps.ts";
 import {
   createAppDataService,
   createWorkerAppDataService,
-} from '../services/appdata.ts';
-import { createMeteredAppDataService } from '../services/appdata-metered.ts';
-import { checkRateLimit } from '../services/ratelimit.ts';
-import { checkAndIncrementWeeklyCalls } from '../services/weekly-calls.ts';
+} from "../services/appdata.ts";
+import { createMeteredAppDataService } from "../services/appdata-metered.ts";
+import { checkRateLimit } from "../services/ratelimit.ts";
+import { checkAndIncrementWeeklyCalls } from "../services/weekly-calls.ts";
 import {
   checkProvisionalDailyLimit,
   updateLastActive,
-} from '../services/provisional.ts';
-import { getPermissionsForUser } from './user.ts';
-import type { AIOutputSchema } from '../../shared/contracts/ai.ts';
-import type { Tier } from '../../shared/contracts/runtime.ts';
-import type { LaunchOperatorRunDiagnostic } from '../../shared/contracts/launch.ts';
-import { type UserContext } from '../runtime/sandbox.ts';
-import type { DbDiffTally } from '../services/db-diff-tracker.ts';
-import { isolateReuseEligibility } from '../runtime/isolate-reuse-eligibility.ts';
+} from "../services/provisional.ts";
+import { getPermissionsForUser } from "./user.ts";
+import type { AIOutputSchema } from "../../shared/contracts/ai.ts";
+import type { Tier } from "../../shared/contracts/runtime.ts";
+import type { LaunchOperatorRunDiagnostic } from "../../shared/contracts/launch.ts";
+import { type UserContext } from "../runtime/sandbox.ts";
+import type { DbDiffTally } from "../services/db-diff-tracker.ts";
+import { isolateReuseEligibility } from "../runtime/isolate-reuse-eligibility.ts";
 import {
   createRuntimeAIContext,
   createUnavailableAIService,
-} from '../services/runtime-ai.ts';
-import { resolveFunctionInferenceOverride } from '../services/function-inference-overrides.ts';
-import { getPermissionCache } from '../services/permission-cache.ts';
-import { resolveInternalMcpCall } from '../services/internal-mcp.ts';
+} from "../services/runtime-ai.ts";
+import { resolveFunctionInferenceOverride } from "../services/function-inference-overrides.ts";
+import { getPermissionCache } from "../services/permission-cache.ts";
+import { resolveInternalMcpCall } from "../services/internal-mcp.ts";
 import {
   createMemoryService,
   type MemoryService as MemoryServiceImpl,
-} from '../services/memory.ts';
+} from "../services/memory.ts";
 import {
   findPermissionRowForFunction,
   getMcpFunctionNameAliases,
   permissionSetAllowsFunction,
   toRawMcpFunctionName,
-} from '../services/mcp-function-names.ts';
-import { isFreeModeEnabled, isFunctionBlockedInFreeMode } from '../services/free-mode.ts';
-import { peekCallerUsage } from '../services/cloud-usage.ts';
-import { executeGpuFunction } from '../services/gpu/executor.ts';
-import { acquireGpuSlot } from '../services/gpu/concurrency.ts';
-import { buildGpuNotReadyMessage, buildGpuStatusDiagnostics } from '../services/gpu/status.ts';
-import { getGpuSupportDisabledMessage, isGpuSupportEnabled } from '../services/gpu/feature-flag.ts';
+} from "../services/mcp-function-names.ts";
+import {
+  isFreeModeEnabled,
+  isFunctionBlockedInFreeMode,
+} from "../services/free-mode.ts";
+import { peekCallerUsage } from "../services/cloud-usage.ts";
+import { executeGpuFunction } from "../services/gpu/executor.ts";
+import { acquireGpuSlot } from "../services/gpu/concurrency.ts";
+import {
+  buildGpuNotReadyMessage,
+  buildGpuStatusDiagnostics,
+} from "../services/gpu/status.ts";
+import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+} from "../services/gpu/feature-flag.ts";
 import {
   createRuntimeOperationMeteringContext,
   debitWidgetPullUsage,
@@ -52,34 +61,34 @@ import {
   settleAndLogAppExecution,
   settleAndLogGpuExecution,
   settleRuntimeCloudPreflight,
-} from '../services/execution-settlement.ts';
+} from "../services/execution-settlement.ts";
 import {
   ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
   accountCapacityErrorDetails,
   accountCapacityErrorMessage,
   releaseAccountCapacity,
   reserveAccountCapacity,
-} from '../services/account-capacity.ts';
+} from "../services/account-capacity.ts";
 import {
   countCapacityWorkerRequests,
   settleOrDeferCapacityAfterExecution,
   shouldReleaseUnstartedCapacityReservation,
-} from '../services/capacity-settlement-recovery.ts';
+} from "../services/capacity-settlement-recovery.ts";
 import {
   addCapacityQueueOperationEnvelope,
   createCapacityResourceMeter,
-} from '../services/cloud-usage.ts';
+} from "../services/cloud-usage.ts";
 import {
   type AgenticSurfaceActionCallMetadata,
   createExecutionReceiptId,
   type WidgetActionCallMetadata,
-} from '../services/call-logger.ts';
+} from "../services/call-logger.ts";
 import {
   AppContractMigrationRequiredError,
   logAppContractResolution,
   requireManifestFunctionContracts,
   resolveAppFunctionContracts,
-} from '../services/app-contracts.ts';
+} from "../services/app-contracts.ts";
 import {
   applyManifestOperatorError,
   collectRuntimeDiagnosticSecrets,
@@ -96,9 +105,9 @@ import {
   resolveRuntimeAppCallDependencies,
   resolveStrictManifestPermissions,
   SupabaseConfigMigrationRequiredError,
-} from '../services/app-runtime-resources.ts';
-import { getManifestAllowedDestinations } from '../services/trust.ts';
-import { parseAppManifest } from '../services/app-settings.ts';
+} from "../services/app-runtime-resources.ts";
+import { getManifestAllowedDestinations } from "../services/trust.ts";
+import { parseAppManifest } from "../services/app-settings.ts";
 import {
   ANONYMOUS_USER_ID,
   callerCanInvokeMcpTool,
@@ -112,26 +121,26 @@ import {
   deriveCallerEconomicState,
   type RequestCallerContext,
   resolveRequestCallerContext,
-} from '../services/request-caller-context.ts';
+} from "../services/request-caller-context.ts";
 import {
   type RoutineTraceContext,
   routineTraceContextFromCaller,
-} from '../services/routine-trace.ts';
+} from "../services/routine-trace.ts";
 import {
   createPendingGrantRequest,
   recordGrantSpend,
   resolveCallerGrant,
   resolveCallerGrantBindings,
-} from '../services/agent-grants.ts';
+} from "../services/agent-grants.ts";
 import {
   mintCallerContextToken,
   verifyCallerContextToken,
-} from '../services/agent-caller-context.ts';
+} from "../services/agent-caller-context.ts";
 import {
   AGENT_CALLER_CONTEXT_HEADER,
   MAX_AGENT_CALL_HOP_DEPTH,
-} from '../../shared/contracts/agent-grants.ts';
-import { classifyRuntimeExecution } from '../services/execution-classification.ts';
+} from "../../shared/contracts/agent-grants.ts";
+import { classifyRuntimeExecution } from "../services/execution-classification.ts";
 import type {
   MCPContent,
   MCPJsonSchema,
@@ -142,20 +151,35 @@ import type {
   MCPToolCallRequest,
   MCPToolCallResponse,
   MCPToolsListResponse,
-} from '../../shared/contracts/mcp.ts';
-import type { AppManifest } from '../../shared/contracts/manifest.ts';
-import { manifestToMCPTools, parseManifestCallRateLimit } from '../../shared/contracts/manifest.ts';
-import type { AIContentPart, AIRequest, AIResponse } from '../../shared/contracts/ai.ts';
-import type { WidgetAppResponse } from '../../shared/contracts/widget.ts';
-import type { JsonRpcId, JsonRpcRequest, JsonRpcResponse } from '../../shared/contracts/jsonrpc.ts';
-import { normalizeJsonRpcResponseId } from '../../shared/contracts/jsonrpc.ts';
-import type { App, BYOKProvider } from '../../shared/types/index.ts';
-import { getEnv, getExecQueue } from '../lib/env.ts';
+} from "../../shared/contracts/mcp.ts";
+import type { AppManifest } from "../../shared/contracts/manifest.ts";
+import {
+  manifestToMCPTools,
+  parseManifestCallRateLimit,
+} from "../../shared/contracts/manifest.ts";
+import type {
+  AIContentPart,
+  AIRequest,
+  AIResponse,
+} from "../../shared/contracts/ai.ts";
+import type { WidgetAppResponse } from "../../shared/contracts/widget.ts";
+import type {
+  JsonRpcId,
+  JsonRpcRequest,
+  JsonRpcResponse,
+} from "../../shared/contracts/jsonrpc.ts";
+import { normalizeJsonRpcResponseId } from "../../shared/contracts/jsonrpc.ts";
+import type { App, BYOKProvider } from "../../shared/types/index.ts";
+import { getEnv, getExecQueue } from "../lib/env.ts";
 import {
   buildCallerPermissionConfigureUrl,
   enforceCallerFunctionPermission,
-} from '../services/caller-function-permissions.ts';
-import { emptyHealth, getAppHealth, isRecentlyHealthy } from '../services/app-health.ts';
+} from "../services/caller-function-permissions.ts";
+import {
+  emptyHealth,
+  getAppHealth,
+  isRecentlyHealthy,
+} from "../services/app-health.ts";
 
 // ============================================
 // MEMORY SERVICE (lazy singleton)
@@ -167,19 +191,19 @@ function getMemoryService(): MemoryServiceImpl | null {
     try {
       _memoryService = createMemoryService();
     } catch (err) {
-      console.error('Failed to create MemoryService:', err);
+      console.error("Failed to create MemoryService:", err);
     }
   }
   return _memoryService;
 }
 
 function requestBaseUrl(request: Request): string {
-  const configured = getEnv('BASE_URL');
-  if (configured) return configured.replace(/\/+$/, '');
+  const configured = getEnv("BASE_URL");
+  if (configured) return configured.replace(/\/+$/, "");
   const url = new URL(request.url);
-  const host = request.headers.get('host') || url.host;
-  const proto = request.headers.get('x-forwarded-proto') ||
-    (host.includes('localhost') ? 'http' : 'https');
+  const host = request.headers.get("host") || url.host;
+  const proto = request.headers.get("x-forwarded-proto") ||
+    (host.includes("localhost") ? "http" : "https");
   return `${proto}://${host}`;
 }
 
@@ -205,7 +229,8 @@ function buildSkillsDiscoveryPayload(
     app_name: appDisplayName(app),
     description: app.description,
     skills_md_resource_uri: `galactic://app/${appId}/skills.md`,
-    note: 'Full skill documentation can be read for free from the skills.md resource.',
+    note:
+      "Full skill documentation can be read for free from the skills.md resource.",
   };
 }
 
@@ -223,24 +248,26 @@ async function indexAppKV(
   key: string,
   value: unknown,
 ): Promise<void> {
-  const SUPABASE_URL = getEnv('SUPABASE_URL');
-  const SUPABASE_SERVICE_ROLE_KEY = getEnv('SUPABASE_SERVICE_ROLE_KEY');
+  const SUPABASE_URL = getEnv("SUPABASE_URL");
+  const SUPABASE_SERVICE_ROLE_KEY = getEnv("SUPABASE_SERVICE_ROLE_KEY");
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return;
 
-  const embeddingText = typeof value === 'string' ? value : JSON.stringify(value);
+  const embeddingText = typeof value === "string"
+    ? value
+    : JSON.stringify(value);
   // Skip very large values to prevent content table bloat
   if (embeddingText.length > 50_000) return;
 
   const slug = `${appId}/${key}`;
   const row = {
     owner_id: appOwnerId,
-    type: 'app_kv',
+    type: "app_kv",
     slug: slug,
     title: key,
     description: `App data: ${key}`,
-    visibility: 'private',
+    visibility: "private",
     size: new TextEncoder().encode(embeddingText).length,
-    embedding_text: embeddingText.split(/\s+/).slice(0, 6000).join(' '),
+    embedding_text: embeddingText.split(/\s+/).slice(0, 6000).join(" "),
     embedding: null,
     updated_at: new Date().toISOString(),
   };
@@ -248,18 +275,18 @@ async function indexAppKV(
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/content?on_conflict=owner_id,type,slug`,
     {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'apikey': SUPABASE_SERVICE_ROLE_KEY,
-        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates',
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
       },
       body: JSON.stringify(row),
     },
   );
   if (!res.ok) {
-    console.error('[KV-INDEX] Content upsert failed:', await res.text());
+    console.error("[KV-INDEX] Content upsert failed:", await res.text());
   }
 }
 
@@ -272,23 +299,25 @@ async function indexUserKV(
   key: string,
   value: unknown,
 ): Promise<void> {
-  const SUPABASE_URL = getEnv('SUPABASE_URL');
-  const SUPABASE_SERVICE_ROLE_KEY = getEnv('SUPABASE_SERVICE_ROLE_KEY');
+  const SUPABASE_URL = getEnv("SUPABASE_URL");
+  const SUPABASE_SERVICE_ROLE_KEY = getEnv("SUPABASE_SERVICE_ROLE_KEY");
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return;
 
-  const embeddingText = typeof value === 'string' ? value : JSON.stringify(value);
+  const embeddingText = typeof value === "string"
+    ? value
+    : JSON.stringify(value);
   if (embeddingText.length > 50_000) return;
 
   const slug = `${scope}/${key}`;
   const row = {
     owner_id: userId,
-    type: 'user_kv',
+    type: "user_kv",
     slug: slug,
     title: key,
     description: `User data: ${scope}/${key}`,
-    visibility: 'private',
+    visibility: "private",
     size: new TextEncoder().encode(embeddingText).length,
-    embedding_text: embeddingText.split(/\s+/).slice(0, 6000).join(' '),
+    embedding_text: embeddingText.split(/\s+/).slice(0, 6000).join(" "),
     embedding: null,
     updated_at: new Date().toISOString(),
   };
@@ -296,19 +325,19 @@ async function indexUserKV(
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/content?on_conflict=owner_id,type,slug`,
     {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'apikey': SUPABASE_SERVICE_ROLE_KEY,
-        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates',
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
       },
       body: JSON.stringify(row),
     },
   );
   if (!res.ok) {
     console.error(
-      '[KV-INDEX] User KV content upsert failed:',
+      "[KV-INDEX] User KV content upsert failed:",
       await res.text(),
     );
   }
@@ -322,8 +351,8 @@ async function removeKVIndex(
   type: string,
   slug: string,
 ): Promise<void> {
-  const SUPABASE_URL = getEnv('SUPABASE_URL');
-  const SUPABASE_SERVICE_ROLE_KEY = getEnv('SUPABASE_SERVICE_ROLE_KEY');
+  const SUPABASE_URL = getEnv("SUPABASE_URL");
+  const SUPABASE_SERVICE_ROLE_KEY = getEnv("SUPABASE_SERVICE_ROLE_KEY");
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return;
 
   await fetch(
@@ -331,24 +360,24 @@ async function removeKVIndex(
       encodeURIComponent(slug)
     }`,
     {
-      method: 'DELETE',
+      method: "DELETE",
       headers: {
-        'apikey': SUPABASE_SERVICE_ROLE_KEY,
-        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        'Prefer': 'return=minimal',
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Prefer": "return=minimal",
       },
     },
   );
 }
 
 function toTier(value: string): Tier {
-  return value === 'free' ||
-      value === 'fun' ||
-      value === 'pro' ||
-      value === 'scale' ||
-      value === 'enterprise'
+  return value === "free" ||
+      value === "fun" ||
+      value === "pro" ||
+      value === "scale" ||
+      value === "enterprise"
     ? value
-    : 'free';
+    : "free";
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -357,48 +386,48 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
 
 function isAiContentPartArray(value: unknown): value is AIContentPart[] {
   return Array.isArray(value) && value.every((part) => {
-    if (!part || typeof part !== 'object') {
+    if (!part || typeof part !== "object") {
       return false;
     }
     const candidate = part as Record<string, unknown>;
-    if (candidate.type === 'text') {
-      return typeof candidate.text === 'string';
+    if (candidate.type === "text") {
+      return typeof candidate.text === "string";
     }
-    if (candidate.type === 'file') {
-      return typeof candidate.data === 'string';
+    if (candidate.type === "file") {
+      return typeof candidate.data === "string";
     }
     return false;
   });
 }
 
 function isWidgetAppResponse(value: unknown): value is WidgetAppResponse {
-  return typeof value === 'object' &&
+  return typeof value === "object" &&
     value !== null &&
-    'app_html' in value &&
-    typeof (value as { app_html?: unknown }).app_html === 'string';
+    "app_html" in value &&
+    typeof (value as { app_html?: unknown }).app_html === "string";
 }
 
-function toAiMessages(value: unknown): AIRequest['messages'] | null {
+function toAiMessages(value: unknown): AIRequest["messages"] | null {
   if (!Array.isArray(value)) {
     return null;
   }
 
-  const messages: AIRequest['messages'] = [];
+  const messages: AIRequest["messages"] = [];
   for (const message of value) {
-    if (!message || typeof message !== 'object') {
+    if (!message || typeof message !== "object") {
       return null;
     }
 
     const candidate = message as Record<string, unknown>;
     if (
-      candidate.role !== 'system' && candidate.role !== 'user' &&
-      candidate.role !== 'assistant'
+      candidate.role !== "system" && candidate.role !== "user" &&
+      candidate.role !== "assistant"
     ) {
       return null;
     }
 
     const content = candidate.content;
-    if (typeof content !== 'string' && !isAiContentPartArray(content)) {
+    if (typeof content !== "string" && !isAiContentPartArray(content)) {
       return null;
     }
 
@@ -406,10 +435,10 @@ function toAiMessages(value: unknown): AIRequest['messages'] | null {
       role: candidate.role,
       content,
       ...(candidate.cache_control &&
-          typeof candidate.cache_control === 'object' &&
+          typeof candidate.cache_control === "object" &&
           (candidate.cache_control as Record<string, unknown>).type ===
-            'ephemeral'
-        ? { cache_control: { type: 'ephemeral' as const } }
+            "ephemeral"
+        ? { cache_control: { type: "ephemeral" as const } }
         : {}),
     });
   }
@@ -456,245 +485,252 @@ function nextSequenceNumber(sessionId: string | undefined): number | undefined {
 const SDK_TOOLS: MCPTool[] = [
   // ---- Data Storage ----
   {
-    name: 'ultralight.store',
-    title: 'Store Data',
-    description: 'Store a value in app-scoped persistent storage. Data is partitioned per user.',
+    name: "ultralight.store",
+    title: "Store Data",
+    description:
+      "Store a value in app-scoped persistent storage. Data is partitioned per user.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         key: {
-          type: 'string',
-          description: 'Storage key. Supports "/" for hierarchy (e.g., "users/123/profile").',
+          type: "string",
+          description:
+            'Storage key. Supports "/" for hierarchy (e.g., "users/123/profile").',
         },
         value: {
-          description: 'JSON-serializable value to store.',
+          description: "JSON-serializable value to store.",
         },
       },
-      required: ['key', 'value'],
+      required: ["key", "value"],
     },
   },
   {
-    name: 'ultralight.load',
-    title: 'Load Data',
-    description: 'Load a value from app-scoped storage by key.',
+    name: "ultralight.load",
+    title: "Load Data",
+    description: "Load a value from app-scoped storage by key.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         key: {
-          type: 'string',
-          description: 'Storage key to retrieve.',
+          type: "string",
+          description: "Storage key to retrieve.",
         },
       },
-      required: ['key'],
+      required: ["key"],
     },
     outputSchema: {
-      description: 'The stored value, or null if not found.',
+      description: "The stored value, or null if not found.",
     },
   },
   {
-    name: 'ultralight.list',
-    title: 'List Keys',
-    description: 'List all keys in storage, optionally filtered by prefix.',
+    name: "ultralight.list",
+    title: "List Keys",
+    description: "List all keys in storage, optionally filtered by prefix.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         prefix: {
-          type: 'string',
-          description: 'Optional prefix filter (e.g., "users/" to list all user keys).',
+          type: "string",
+          description:
+            'Optional prefix filter (e.g., "users/" to list all user keys).',
         },
       },
     },
     outputSchema: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Array of matching keys.',
+      type: "array",
+      items: { type: "string" },
+      description: "Array of matching keys.",
     },
   },
   {
-    name: 'ultralight.query',
-    title: 'Query Data',
-    description: 'Query storage with filtering, sorting, and pagination.',
+    name: "ultralight.query",
+    title: "Query Data",
+    description: "Query storage with filtering, sorting, and pagination.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         prefix: {
-          type: 'string',
-          description: 'Key prefix to query.',
+          type: "string",
+          description: "Key prefix to query.",
         },
         limit: {
-          type: 'number',
-          description: 'Maximum number of results to return.',
+          type: "number",
+          description: "Maximum number of results to return.",
         },
         offset: {
-          type: 'number',
-          description: 'Number of results to skip.',
+          type: "number",
+          description: "Number of results to skip.",
         },
       },
-      required: ['prefix'],
+      required: ["prefix"],
     },
     outputSchema: {
-      type: 'array',
+      type: "array",
       items: {
-        type: 'object',
+        type: "object",
         properties: {
-          key: { type: 'string' },
+          key: { type: "string" },
           value: {},
-          updatedAt: { type: 'string' },
+          updatedAt: { type: "string" },
         },
       },
     },
   },
   {
-    name: 'ultralight.remove',
-    title: 'Remove Data',
-    description: 'Remove a key from storage.',
+    name: "ultralight.remove",
+    title: "Remove Data",
+    description: "Remove a key from storage.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         key: {
-          type: 'string',
-          description: 'Storage key to remove.',
+          type: "string",
+          description: "Storage key to remove.",
         },
       },
-      required: ['key'],
+      required: ["key"],
     },
   },
 
   // ---- User Memory (Cross-App) ----
   {
-    name: 'ultralight.remember',
-    title: 'Remember (Cross-App)',
+    name: "ultralight.remember",
+    title: "Remember (Cross-App)",
     description:
       "Store a value in user's cross-app memory. Defaults to app-scoped (app:{appId}). Use scope='user' for memory shared across all apps.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         key: {
-          type: 'string',
-          description: 'Memory key.',
+          type: "string",
+          description: "Memory key.",
         },
         value: {
-          description: 'JSON-serializable value to remember.',
+          description: "JSON-serializable value to remember.",
         },
         scope: {
-          type: 'string',
-          description: "Memory scope. Defaults to 'app:{appId}'. Use 'user' for cross-app memory.",
+          type: "string",
+          description:
+            "Memory scope. Defaults to 'app:{appId}'. Use 'user' for cross-app memory.",
         },
       },
-      required: ['key', 'value'],
+      required: ["key", "value"],
     },
   },
   {
-    name: 'ultralight.recall',
-    title: 'Recall (Cross-App)',
+    name: "ultralight.recall",
+    title: "Recall (Cross-App)",
     description:
       "Retrieve a value from user's cross-app memory. Defaults to app-scoped. Use scope='user' for cross-app memory.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         key: {
-          type: 'string',
-          description: 'Memory key to recall.',
+          type: "string",
+          description: "Memory key to recall.",
         },
         scope: {
-          type: 'string',
-          description: "Memory scope. Defaults to 'app:{appId}'. Use 'user' for cross-app memory.",
+          type: "string",
+          description:
+            "Memory scope. Defaults to 'app:{appId}'. Use 'user' for cross-app memory.",
         },
       },
-      required: ['key'],
+      required: ["key"],
     },
     outputSchema: {
-      description: 'The remembered value, or null if not found.',
+      description: "The remembered value, or null if not found.",
     },
   },
 
   // ---- AI ----
   {
-    name: 'ultralight.ai',
-    title: 'Call AI Model',
+    name: "ultralight.ai",
+    title: "Call AI Model",
     description:
-      'Call an AI model using BYOK when configured, otherwise credits-billed platform inference.',
+      "Call an AI model using BYOK when configured, otherwise credits-billed platform inference.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         messages: {
-          type: 'array',
+          type: "array",
           items: {
-            type: 'object',
+            type: "object",
             properties: {
               role: {
-                type: 'string',
-                enum: ['system', 'user', 'assistant'],
+                type: "string",
+                enum: ["system", "user", "assistant"],
               },
-              content: { type: 'string' },
+              content: { type: "string" },
             },
-            required: ['role', 'content'],
+            required: ["role", "content"],
           },
-          description: 'Conversation messages.',
+          description: "Conversation messages.",
         },
         model: {
-          type: 'string',
+          type: "string",
           description:
-            'Model ID. Credits-billed calls may request any OpenRouter-compatible model; BYOK calls use the configured provider model.',
+            "Model ID. Credits-billed calls may request any OpenRouter-compatible model; BYOK calls use the configured provider model.",
         },
         temperature: {
-          type: 'number',
-          description: 'Sampling temperature (0-2).',
+          type: "number",
+          description: "Sampling temperature (0-2).",
         },
         max_tokens: {
-          type: 'number',
-          description: 'Maximum tokens to generate.',
+          type: "number",
+          description: "Maximum tokens to generate.",
         },
         output_schema: {
-          type: 'object',
+          type: "object",
           description:
-            'Strict JSON Schema contract. Galactic asks the provider for schema-constrained JSON, parses it, and validates it again before returning output.',
+            "Strict JSON Schema contract. Galactic asks the provider for schema-constrained JSON, parses it, and validates it again before returning output.",
           properties: {
             name: {
-              type: 'string',
+              type: "string",
               description:
-                'Provider-visible schema name. Must begin with a letter or underscore, then use letters, numbers, underscores, or hyphens; maximum 64 characters.',
+                "Provider-visible schema name. Must begin with a letter or underscore, then use letters, numbers, underscores, or hyphens; maximum 64 characters.",
             },
             schema: {
-              anyOf: [{ type: 'object' }, { type: 'boolean' }],
-              description: 'JSON Schema enforced for the model response.',
+              anyOf: [{ type: "object" }, { type: "boolean" }],
+              description: "JSON Schema enforced for the model response.",
             },
             strict: {
-              type: 'boolean',
+              type: "boolean",
               enum: [true],
-              description: 'Structured output is always strict. Omit this field or set it to true.',
+              description:
+                "Structured output is always strict. Omit this field or set it to true.",
             },
           },
-          required: ['name', 'schema'],
+          required: ["name", "schema"],
           additionalProperties: false,
         },
       },
-      required: ['messages'],
+      required: ["messages"],
     },
     outputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
-        content: { type: 'string' },
-        model: { type: 'string' },
+        content: { type: "string" },
+        model: { type: "string" },
         usage: {
-          type: 'object',
+          type: "object",
           properties: {
-            input_tokens: { type: 'number' },
-            output_tokens: { type: 'number' },
-            cost_light: { type: 'number' },
+            input_tokens: { type: "number" },
+            output_tokens: { type: "number" },
+            cost_light: { type: "number" },
           },
         },
         output: {
-          description: 'Parsed, schema-validated value when output_schema was supplied.',
+          description:
+            "Parsed, schema-validated value when output_schema was supplied.",
         },
-        error: { type: 'string' },
+        error: { type: "string" },
         error_code: {
-          type: 'string',
+          type: "string",
           enum: [
-            'invalid_output_schema',
-            'structured_output_unsupported',
-            'structured_output_invalid_json',
-            'structured_output_schema_mismatch',
+            "invalid_output_schema",
+            "structured_output_unsupported",
+            "structured_output_invalid_json",
+            "structured_output_schema_mismatch",
           ],
         },
       },
@@ -703,58 +739,60 @@ const SDK_TOOLS: MCPTool[] = [
 
   // ---- Inter-App Calls ----
   {
-    name: 'ultralight.call',
-    title: 'Call Another App',
+    name: "ultralight.call",
+    title: "Call Another App",
     description:
       "Call a function on another Galactic app. Uses the current user's auth context — " +
-      'the called app sees the same user. Accepts app ID or slug as the target.',
+      "the called app sees the same user. Accepts app ID or slug as the target.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         app_id: {
-          type: 'string',
-          description: 'App ID or slug of the target app.',
+          type: "string",
+          description: "App ID or slug of the target app.",
         },
         function_name: {
-          type: 'string',
+          type: "string",
           description:
             'Function name to call on the target app (unprefixed, e.g. "doThing" not "app-slug_doThing").',
         },
         args: {
-          type: 'object',
-          description: 'Arguments to pass to the function.',
+          type: "object",
+          description: "Arguments to pass to the function.",
           additionalProperties: true,
         },
       },
-      required: ['app_id', 'function_name'],
+      required: ["app_id", "function_name"],
     },
     outputSchema: {
-      description: 'The return value from the called function.',
+      description: "The return value from the called function.",
     },
   },
 
   // ---- Async Job Polling ----
   {
-    name: 'ultralight.job',
-    title: 'Check Async Job Status',
-    description: 'Check the status of a queued/running async execution. Functions that ' +
-      'run asynchronously return { _async: true, job_id } immediately — poll ' +
-      'this tool with that job_id until status is completed or failed.',
+    name: "ultralight.job",
+    title: "Check Async Job Status",
+    description:
+      "Check the status of a queued/running async execution. Functions that " +
+      "run asynchronously return { _async: true, job_id } immediately — poll " +
+      "this tool with that job_id until status is completed or failed.",
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         job_id: {
-          type: 'string',
-          description: 'The job_id from an async function-call envelope.',
+          type: "string",
+          description: "The job_id from an async function-call envelope.",
         },
       },
-      required: ['job_id'],
+      required: ["job_id"],
     },
     outputSchema: {
-      description: 'Job status: { job_id, status: queued|running|completed|failed, ' +
-        'result?, error?, logs?, duration_ms?, ai_cost_light?, ' +
-        'execution_id? (links to the execution receipt and AI-spend ledger), ' +
-        'elapsed_seconds?, message? }.',
+      description:
+        "Job status: { job_id, status: queued|running|completed|failed, " +
+        "result?, error?, logs?, duration_ms?, ai_cost_light?, " +
+        "execution_id? (links to the execution receipt and AI-spend ledger), " +
+        "elapsed_seconds?, message? }.",
     },
   },
 ];
@@ -783,54 +821,54 @@ export async function handleMcp(
   const method = request.method;
 
   // Streamable HTTP transport: GET opens SSE stream (not supported yet), DELETE terminates session
-  if (method === 'DELETE') {
+  if (method === "DELETE") {
     // Session termination — we're stateless, so just acknowledge
     return new Response(null, { status: 200 });
   }
 
-  if (method === 'GET') {
+  if (method === "GET") {
     // SSE stream for server-initiated notifications — not supported yet
     return new Response(
       JSON.stringify({
-        error: 'SSE stream not supported. Use POST for MCP requests.',
+        error: "SSE stream not supported. Use POST for MCP requests.",
       }),
       {
         status: 405,
         headers: {
-          'Allow': 'POST, DELETE',
-          'Content-Type': 'application/json',
+          "Allow": "POST, DELETE",
+          "Content-Type": "application/json",
         },
       },
     );
   }
 
-  if (method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method not allowed.' }), {
+  if (method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method not allowed." }), {
       status: 405,
       headers: {
-        'Allow': 'POST, GET, DELETE',
-        'Content-Type': 'application/json',
+        "Allow": "POST, GET, DELETE",
+        "Content-Type": "application/json",
       },
     });
   }
 
   // Streamable HTTP: read client protocol version (don't enforce — backward compatible)
-  const _clientProtocolVersion = request.headers.get('MCP-Protocol-Version');
+  const _clientProtocolVersion = request.headers.get("MCP-Protocol-Version");
 
   // Parse JSON-RPC request
   let rpcRequest: JsonRpcRequest;
   try {
     rpcRequest = await request.json();
   } catch {
-    return jsonRpcErrorResponse(null, PARSE_ERROR, 'Parse error: Invalid JSON');
+    return jsonRpcErrorResponse(null, PARSE_ERROR, "Parse error: Invalid JSON");
   }
 
   // Validate JSON-RPC format
-  if (rpcRequest.jsonrpc !== '2.0' || !rpcRequest.method) {
+  if (rpcRequest.jsonrpc !== "2.0" || !rpcRequest.method) {
     return jsonRpcErrorResponse(
       rpcRequest.id ?? null,
       INVALID_REQUEST,
-      'Invalid Request: Missing jsonrpc version or method',
+      "Invalid Request: Missing jsonrpc version or method",
     );
   }
 
@@ -839,8 +877,8 @@ export async function handleMcp(
   let userId: string;
   let user: UserContext | null = null;
   const requestUrl = new URL(request.url);
-  const rejectedQueryToken = !request.headers.get('Authorization') &&
-    requestUrl.searchParams.has('token');
+  const rejectedQueryToken = !request.headers.get("Authorization") &&
+    requestUrl.searchParams.has("token");
 
   // Run auth and app lookup concurrently — they have no dependency on each other
   let callerContext: RequestCallerContext;
@@ -848,41 +886,43 @@ export async function handleMcp(
 
   try {
     [callerContext, app] = await Promise.all([
-      resolveRequestCallerContext(request, { authSourcePolicy: 'bearer_only' }),
+      resolveRequestCallerContext(request, { authSourcePolicy: "bearer_only" }),
       appsService.findById(appId),
     ]);
   } catch (authErr) {
     // If findById fails it throws, but authenticate errors are the common case
-    let message = authErr instanceof Error ? authErr.message : 'Authentication required';
+    let message = authErr instanceof Error
+      ? authErr.message
+      : "Authentication required";
 
     // Classify the auth error for client-side handling
-    let errorType = 'AUTH_REQUIRED';
+    let errorType = "AUTH_REQUIRED";
     if (rejectedQueryToken) {
-      errorType = 'AUTH_QUERY_TOKEN_UNSUPPORTED';
+      errorType = "AUTH_QUERY_TOKEN_UNSUPPORTED";
       message =
-        'Query-string token auth is no longer supported. Use Authorization: Bearer <token>.';
-    } else if (message.includes('expired')) {
-      errorType = 'AUTH_TOKEN_EXPIRED';
+        "Query-string token auth is no longer supported. Use Authorization: Bearer <token>.";
+    } else if (message.includes("expired")) {
+      errorType = "AUTH_TOKEN_EXPIRED";
     } else if (
-      message.includes('Missing') || message.includes('invalid authorization')
+      message.includes("Missing") || message.includes("invalid authorization")
     ) {
-      errorType = 'AUTH_MISSING_TOKEN';
-    } else if (message.includes('Invalid JWT') || message.includes('decode')) {
-      errorType = 'AUTH_INVALID_TOKEN';
-    } else if (message.includes('Invalid or expired API token')) {
-      errorType = 'AUTH_API_TOKEN_INVALID';
+      errorType = "AUTH_MISSING_TOKEN";
+    } else if (message.includes("Invalid JWT") || message.includes("decode")) {
+      errorType = "AUTH_INVALID_TOKEN";
+    } else if (message.includes("Invalid or expired API token")) {
+      errorType = "AUTH_API_TOKEN_INVALID";
     }
 
     console.error(`MCP auth failed [${errorType}]:`, message, {
       appId,
       method: rpcRequest.method,
-      hasAuthHeader: !!request.headers.get('Authorization'),
+      hasAuthHeader: !!request.headers.get("Authorization"),
     });
 
     const reqUrl = new URL(request.url);
-    const host = request.headers.get('host') || reqUrl.host;
-    const proto = request.headers.get('x-forwarded-proto') ||
-      (host.includes('localhost') ? 'http' : 'https');
+    const host = request.headers.get("host") || reqUrl.host;
+    const proto = request.headers.get("x-forwarded-proto") ||
+      (host.includes("localhost") ? "http" : "https");
     const baseUrl = `${proto}://${host}`;
     const authErrorResponse = jsonRpcErrorResponse(
       rpcRequest.id,
@@ -893,7 +933,7 @@ export async function handleMcp(
     // MCP spec: 401 must include WWW-Authenticate pointing to resource metadata
     const authHeaders = new Headers(authErrorResponse.headers);
     authHeaders.set(
-      'WWW-Authenticate',
+      "WWW-Authenticate",
       `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`,
     );
     return new Response(authErrorResponse.body, {
@@ -920,10 +960,10 @@ export async function handleMcp(
       return jsonRpcErrorResponse(
         rpcRequest.id,
         -32004,
-        verified.error === 'hop_exceeded'
+        verified.error === "hop_exceeded"
           ? `Cross-Agent call chain exceeded the maximum depth of ${MAX_AGENT_CALL_HOP_DEPTH}.`
-          : 'Invalid or expired cross-Agent caller context.',
-        { type: 'AGENT_CALLER_CONTEXT_INVALID', reason: verified.error },
+          : "Invalid or expired cross-Agent caller context.",
+        { type: "AGENT_CALLER_CONTEXT_INVALID", reason: verified.error },
       );
     }
     // The signed user must match the authenticated user — a caller context
@@ -932,8 +972,8 @@ export async function handleMcp(
       return jsonRpcErrorResponse(
         rpcRequest.id,
         -32004,
-        'Cross-Agent caller context does not match the authenticated user.',
-        { type: 'AGENT_CALLER_CONTEXT_USER_MISMATCH' },
+        "Cross-Agent caller context does not match the authenticated user.",
+        { type: "AGENT_CALLER_CONTEXT_USER_MISMATCH" },
       );
     }
     callerContext.callerApp = {
@@ -963,8 +1003,8 @@ export async function handleMcp(
     return jsonRpcErrorResponse(
       rpcRequest.id,
       -32004,
-      'Cross-Agent caller context is required for this call. Use galactic.call() so the request carries a signed caller identity.',
-      { type: 'AGENT_CALLER_CONTEXT_REQUIRED' },
+      "Cross-Agent caller context is required for this call. Use galactic.call() so the request carries a signed caller identity.",
+      { type: "AGENT_CALLER_CONTEXT_REQUIRED" },
     );
   }
 
@@ -975,20 +1015,20 @@ export async function handleMcp(
 
   // Validate app result
   if (!app) {
-    return jsonRpcErrorResponse(rpcRequest.id, -32002, 'App not found');
+    return jsonRpcErrorResponse(rpcRequest.id, -32002, "App not found");
   }
-  if (app.runtime === 'gpu' && !isGpuSupportEnabled()) {
+  if (app.runtime === "gpu" && !isGpuSupportEnabled()) {
     return jsonRpcErrorResponse(
       rpcRequest.id,
       INTERNAL_ERROR,
-      getGpuSupportDisabledMessage('GPU runtime execution'),
-      { type: 'GPU_SUPPORT_DISABLED', app_id: app.id },
+      getGpuSupportDisabledMessage("GPU runtime execution"),
+      { type: "GPU_SUPPORT_DISABLED", app_id: app.id },
     );
   }
 
   // Token scoping: if the API token is scoped to specific apps, enforce it
   if (!callerHasAppAccess(callerContext, [appId, app.slug, app.id])) {
-    const scopedApps = callerContext.tokenAppIds?.join(', ') || 'none';
+    const scopedApps = callerContext.tokenAppIds?.join(", ") || "none";
     return jsonRpcErrorResponse(
       rpcRequest.id,
       -32003,
@@ -997,12 +1037,12 @@ export async function handleMcp(
   }
 
   // Scope enforcement: require apps:call scope for tools/call
-  if (rpcRequest.method === 'tools/call') {
-    if (!callerHasRequiredScope(callerContext, 'apps:call')) {
+  if (rpcRequest.method === "tools/call") {
+    if (!callerHasRequiredScope(callerContext, "apps:call")) {
       return jsonRpcErrorResponse(
         rpcRequest.id,
         -32003,
-        'Token missing required scope: apps:call',
+        "Token missing required scope: apps:call",
       );
     }
   }
@@ -1010,7 +1050,7 @@ export async function handleMcp(
   // Phase 2B: Run gate checks in parallel — rate limit, weekly calls, per-app RL, permissions
   // All depend on userId (from auth) and app (from findById), both now resolved
   {
-    const isToolsCall = rpcRequest.method === 'tools/call';
+    const isToolsCall = rpcRequest.method === "tools/call";
     const isNonOwner = app.owner_id !== userId;
     const rlConfig = app.rate_limit_config as {
       calls_per_minute?: number;
@@ -1019,14 +1059,15 @@ export async function handleMcp(
     // Dual-path (mirrors pricing): the gx.set config wins per field; where a
     // field is unset, fall through to the deployed manifest's app-level
     // rate_limit. Only parse the manifest when gx.set doesn't cover both fields.
-    const manifestRl = (rlConfig?.calls_per_minute != null && rlConfig?.calls_per_day != null)
-      ? null
-      : parseManifestCallRateLimit(app.manifest);
+    const manifestRl =
+      (rlConfig?.calls_per_minute != null && rlConfig?.calls_per_day != null)
+        ? null
+        : parseManifestCallRateLimit(app.manifest);
     const effCallsPerMinute = rlConfig?.calls_per_minute ??
       manifestRl?.calls_per_minute;
     const effCallsPerDay = rlConfig?.calls_per_day ?? manifestRl?.calls_per_day;
     const endpointRateLimitOptions = isToolsCall
-      ? { mode: 'fail_closed' as const, resource: 'MCP tools/call rate limit' }
+      ? { mode: "fail_closed" as const, resource: "MCP tools/call rate limit" }
       : undefined;
 
     // Build array of gate checks to run in parallel
@@ -1043,10 +1084,10 @@ export async function handleMcp(
       isToolsCall
         ? checkAndIncrementWeeklyCalls(
           userId,
-          toTier(user?.tier || callerContext.authUser?.tier || 'free'),
+          toTier(user?.tier || callerContext.authUser?.tier || "free"),
           {
-            mode: 'fail_closed',
-            resource: 'MCP weekly call limit',
+            mode: "fail_closed",
+            resource: "MCP weekly call limit",
           },
         )
         : null,
@@ -1058,8 +1099,8 @@ export async function handleMcp(
           effCallsPerMinute,
           1,
           {
-            mode: 'fail_closed',
-            resource: 'MCP app minute rate limit',
+            mode: "fail_closed",
+            resource: "MCP app minute rate limit",
           },
         )
         : null,
@@ -1071,13 +1112,13 @@ export async function handleMcp(
           effCallsPerDay,
           1440,
           {
-            mode: 'fail_closed',
-            resource: 'MCP app daily rate limit',
+            mode: "fail_closed",
+            resource: "MCP app daily rate limit",
           },
         )
         : null,
       // [4] Visibility/permissions (private apps, non-owner)
-      app.visibility === 'private' && isNonOwner
+      app.visibility === "private" && isNonOwner
         ? getPermissionsForUser(
           userId,
           app.id,
@@ -1087,18 +1128,21 @@ export async function handleMcp(
         )
         : undefined,
       // [5] Provisional daily call limit (tools/call, provisional users only)
-      isToolsCall && user?.provisional ? checkProvisionalDailyLimit(userId) : null,
+      isToolsCall && user?.provisional
+        ? checkProvisionalDailyLimit(userId)
+        : null,
     ]);
 
     // Check results — return first error found
-    const [endpointRL, weeklyRL, appMinuteRL, appDayRL, perms, provisionalRL] = gateChecks;
+    const [endpointRL, weeklyRL, appMinuteRL, appDayRL, perms, provisionalRL] =
+      gateChecks;
 
     if (!endpointRL.allowed) {
-      if (endpointRL.reason === 'service_unavailable') {
+      if (endpointRL.reason === "service_unavailable") {
         return jsonRpcErrorResponse(
           rpcRequest.id,
           INTERNAL_ERROR,
-          'Usage controls are temporarily unavailable. Please try again shortly.',
+          "Usage controls are temporarily unavailable. Please try again shortly.",
         );
       }
       return jsonRpcErrorResponse(
@@ -1108,11 +1152,11 @@ export async function handleMcp(
       );
     }
     if (weeklyRL && !weeklyRL.allowed) {
-      if (weeklyRL.reason === 'service_unavailable') {
+      if (weeklyRL.reason === "service_unavailable") {
         return jsonRpcErrorResponse(
           rpcRequest.id,
           INTERNAL_ERROR,
-          'Usage controls are temporarily unavailable. Please try again shortly.',
+          "Usage controls are temporarily unavailable. Please try again shortly.",
         );
       }
       return jsonRpcErrorResponse(
@@ -1122,11 +1166,11 @@ export async function handleMcp(
       );
     }
     if (appMinuteRL && !appMinuteRL.allowed) {
-      if (appMinuteRL.reason === 'service_unavailable') {
+      if (appMinuteRL.reason === "service_unavailable") {
         return jsonRpcErrorResponse(
           rpcRequest.id,
           INTERNAL_ERROR,
-          'App usage controls are temporarily unavailable. Please try again shortly.',
+          "App usage controls are temporarily unavailable. Please try again shortly.",
         );
       }
       return jsonRpcErrorResponse(
@@ -1138,28 +1182,30 @@ export async function handleMcp(
       );
     }
     if (appDayRL && !appDayRL.allowed) {
-      if (appDayRL.reason === 'service_unavailable') {
+      if (appDayRL.reason === "service_unavailable") {
         return jsonRpcErrorResponse(
           rpcRequest.id,
           INTERNAL_ERROR,
-          'App usage controls are temporarily unavailable. Please try again shortly.',
+          "App usage controls are temporarily unavailable. Please try again shortly.",
         );
       }
       return jsonRpcErrorResponse(
         rpcRequest.id,
         RATE_LIMITED,
-        `App daily limit exceeded (${rlConfig!.calls_per_day}/day). Try again tomorrow.`,
+        `App daily limit exceeded (${
+          rlConfig!.calls_per_day
+        }/day). Try again tomorrow.`,
       );
     }
     if (perms !== undefined && perms !== null && perms.allowed.size === 0) {
-      return jsonRpcErrorResponse(rpcRequest.id, -32002, 'App not found');
+      return jsonRpcErrorResponse(rpcRequest.id, -32002, "App not found");
     }
     if (provisionalRL && !provisionalRL.allowed) {
-      if (provisionalRL.reason === 'service_unavailable') {
+      if (provisionalRL.reason === "service_unavailable") {
         return jsonRpcErrorResponse(
           rpcRequest.id,
           INTERNAL_ERROR,
-          'Provisional usage controls are temporarily unavailable. Please try again shortly.',
+          "Provisional usage controls are temporarily unavailable. Please try again shortly.",
         );
       }
       return jsonRpcErrorResponse(
@@ -1175,26 +1221,26 @@ export async function handleMcp(
 
   try {
     switch (rpcMethod) {
-      case 'initialize': {
+      case "initialize": {
         const response = handleInitialize(id, appId, app);
         // Streamable HTTP: assign a session ID on initialize
         const sessionId = crypto.randomUUID();
         const headers = new Headers(response.headers);
-        headers.set('Mcp-Session-Id', sessionId);
+        headers.set("Mcp-Session-Id", sessionId);
         return new Response(response.body, {
           status: response.status,
           headers,
         });
       }
 
-      case 'notifications/initialized':
+      case "notifications/initialized":
         // Client acknowledgment after initialize — no response body needed
         return new Response(null, { status: 202 });
 
-      case 'tools/list':
+      case "tools/list":
         return await handleToolsList(id, app, params, userId, callerContext);
 
-      case 'tools/call':
+      case "tools/call":
         return await handleToolsCall(
           id,
           app,
@@ -1206,10 +1252,10 @@ export async function handleMcp(
           internalCapacityAttribution,
         );
 
-      case 'resources/list':
+      case "resources/list":
         return handleResourcesList(id, appId, app);
 
-      case 'resources/read':
+      case "resources/read":
         return await handleResourcesRead(id, appId, app, params, userId);
 
       default:
@@ -1224,7 +1270,7 @@ export async function handleMcp(
     return jsonRpcErrorResponse(
       id,
       INTERNAL_ERROR,
-      `Internal error: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      `Internal error: ${err instanceof Error ? err.message : "Unknown error"}`,
     );
   }
 }
@@ -1254,14 +1300,14 @@ function handleInitialize(
   }
 
   const result: MCPServerInfo = {
-    protocolVersion: '2025-03-26',
+    protocolVersion: "2025-03-26",
     capabilities: {
       tools: { listChanged: false },
       resources: { subscribe: false, listChanged: false },
     },
     serverInfo: {
       name: app.name || app.slug,
-      version: '1.0.0',
+      version: "1.0.0",
     },
     instructions: instructions,
   };
@@ -1284,15 +1330,16 @@ function handleResourcesList(
     resources.push({
       uri: `galactic://app/${appId}/skills.json`,
       name: `${app.name || app.slug} — Skill Metadata`,
-      description: 'Machine-readable pointer to the free skills.md documentation resource.',
-      mimeType: 'application/json',
+      description:
+        "Machine-readable pointer to the free skills.md documentation resource.",
+      mimeType: "application/json",
     });
     resources.push({
       uri: `galactic://app/${appId}/skills.md`,
       name: `${app.name || app.slug} — Skills & Usage Guide`,
       description:
         "Auto-generated usage documentation for this app's functions. Always served in full, free of charge.",
-      mimeType: 'text/markdown',
+      mimeType: "text/markdown",
     });
   }
 
@@ -1301,8 +1348,8 @@ function handleResourcesList(
     uri: `galactic://app/${appId}/manifest.json`,
     name: `${app.name || app.slug} — App Manifest`,
     description:
-      'Function definitions, parameter schemas, and app configuration. Machine-readable complement to skills.md.',
-    mimeType: 'application/json',
+      "Function definitions, parameter schemas, and app configuration. Machine-readable complement to skills.md.",
+    mimeType: "application/json",
   });
 
   // Phase 2A: Storage — browsable app data
@@ -1310,8 +1357,8 @@ function handleResourcesList(
     uri: `galactic://app/${appId}/data`,
     name: `${app.name || app.slug} — Stored Data`,
     description:
-      'List of all storage keys for this app. Read individual keys at galactic://app/{appId}/data/{key}.',
-    mimeType: 'application/json',
+      "List of all storage keys for this app. Read individual keys at galactic://app/{appId}/data/{key}.",
+    mimeType: "application/json",
   });
 
   return jsonRpcResponse(id, { resources });
@@ -1334,7 +1381,7 @@ async function handleResourcesRead(
     return jsonRpcErrorResponse(
       id,
       INVALID_PARAMS,
-      'Missing required parameter: uri',
+      "Missing required parameter: uri",
     );
   }
 
@@ -1346,13 +1393,13 @@ async function handleResourcesRead(
       return jsonRpcErrorResponse(
         id,
         -32002,
-        'Skill context not yet generated for this app',
+        "Skill context not yet generated for this app",
       );
     }
 
     const contents: MCPResourceContent[] = [{
       uri: uri,
-      mimeType: 'text/markdown',
+      mimeType: "text/markdown",
       text: skillsMd,
     }];
 
@@ -1365,13 +1412,13 @@ async function handleResourcesRead(
       return jsonRpcErrorResponse(
         id,
         -32002,
-        'Skill context not yet generated for this app',
+        "Skill context not yet generated for this app",
       );
     }
 
     const contents: MCPResourceContent[] = [{
       uri: uri,
-      mimeType: 'application/json',
+      mimeType: "application/json",
       text: JSON.stringify(
         buildSkillsDiscoveryPayload(app, appId),
         null,
@@ -1403,7 +1450,7 @@ async function handleResourcesRead(
 
     const contents: MCPResourceContent[] = [{
       uri: uri,
-      mimeType: 'application/json',
+      mimeType: "application/json",
       text: JSON.stringify(manifest, null, 2),
     }];
     return jsonRpcResponse(id, { contents });
@@ -1415,7 +1462,7 @@ async function handleResourcesRead(
       return jsonRpcErrorResponse(
         id,
         AUTH_REQUIRED,
-        'Authentication required to access app storage',
+        "Authentication required to access app storage",
       );
     }
     try {
@@ -1425,9 +1472,9 @@ async function handleResourcesRead(
           callerUserId: userId,
           ownerUserId: app.owner_id,
           appId,
-          source: 'mcp_resource',
+          source: "mcp_resource",
           metadata: {
-            surface: 'mcp_resources_read',
+            surface: "mcp_resources_read",
             uri,
           },
         },
@@ -1435,7 +1482,7 @@ async function handleResourcesRead(
       const keys = await appData.list();
       const contents: MCPResourceContent[] = [{
         uri: uri,
-        mimeType: 'application/json',
+        mimeType: "application/json",
         text: JSON.stringify({ keys, count: keys.length }),
       }];
       return jsonRpcResponse(id, { contents });
@@ -1443,7 +1490,9 @@ async function handleResourcesRead(
       return jsonRpcErrorResponse(
         id,
         INTERNAL_ERROR,
-        `Failed to list storage keys: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        `Failed to list storage keys: ${
+          err instanceof Error ? err.message : "Unknown error"
+        }`,
       );
     }
   }
@@ -1455,12 +1504,12 @@ async function handleResourcesRead(
       return jsonRpcErrorResponse(
         id,
         AUTH_REQUIRED,
-        'Authentication required to access app storage',
+        "Authentication required to access app storage",
       );
     }
     const key = decodeURIComponent(uri.slice(dataPrefix.length));
     if (!key) {
-      return jsonRpcErrorResponse(id, INVALID_PARAMS, 'Missing key in URI');
+      return jsonRpcErrorResponse(id, INVALID_PARAMS, "Missing key in URI");
     }
     try {
       const appData = createAppDataService(appId, userId, {
@@ -1469,9 +1518,9 @@ async function handleResourcesRead(
           callerUserId: userId,
           ownerUserId: app.owner_id,
           appId,
-          source: 'mcp_resource',
+          source: "mcp_resource",
           metadata: {
-            surface: 'mcp_resources_read',
+            surface: "mcp_resources_read",
             uri,
           },
         },
@@ -1486,7 +1535,7 @@ async function handleResourcesRead(
       }
       const contents: MCPResourceContent[] = [{
         uri: uri,
-        mimeType: 'application/json',
+        mimeType: "application/json",
         text: JSON.stringify(value),
       }];
       return jsonRpcResponse(id, { contents });
@@ -1494,7 +1543,9 @@ async function handleResourcesRead(
       return jsonRpcErrorResponse(
         id,
         INTERNAL_ERROR,
-        `Failed to read storage key: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        `Failed to read storage key: ${
+          err instanceof Error ? err.message : "Unknown error"
+        }`,
       );
     }
   }
@@ -1512,12 +1563,12 @@ async function handleToolsList(
   callerUserId?: string,
   callerContext?: RequestCallerContext,
 ): Promise<Response> {
-  if (app.runtime === 'gpu' && !isGpuSupportEnabled()) {
+  if (app.runtime === "gpu" && !isGpuSupportEnabled()) {
     return jsonRpcErrorResponse(
       id,
       INTERNAL_ERROR,
-      getGpuSupportDisabledMessage('GPU runtime execution'),
-      { type: 'GPU_SUPPORT_DISABLED', app_id: app.id },
+      getGpuSupportDisabledMessage("GPU runtime execution"),
+      { type: "GPU_SUPPORT_DISABLED", app_id: app.id },
     );
   }
 
@@ -1531,7 +1582,7 @@ async function handleToolsList(
       ownerId: app.owner_id,
       appSlug: app.slug,
       runtime: app.runtime,
-      surface: 'mcp_tools_list',
+      surface: "mcp_tools_list",
       source: contractResolution.source,
       legacySourceDetected: contractResolution.legacySourceDetected,
       functionCount: contractResolution.functions.length,
@@ -1554,13 +1605,13 @@ async function handleToolsList(
         ownerId: app.owner_id,
         appSlug: app.slug,
         runtime: app.runtime,
-        surface: 'mcp_tools_list',
-        source: 'none',
+        surface: "mcp_tools_list",
+        source: "none",
         legacySourceDetected: legacyResolution.legacySourceDetected,
         functionCount: 0,
         manifestBacked: false,
         migrationRequired: true,
-        note: 'manifest_required',
+        note: "manifest_required",
       });
       return jsonRpcErrorResponse(id, INVALID_REQUEST, err.message);
     }
@@ -1568,7 +1619,7 @@ async function handleToolsList(
   }
 
   // Permission filtering for private apps: only show allowed functions to non-owners
-  if (callerUserId && app.visibility === 'private') {
+  if (callerUserId && app.visibility === "private") {
     const permsResult = await getPermissionsForUser(
       callerUserId,
       app.id,
@@ -1580,7 +1631,7 @@ async function handleToolsList(
       // Filter tools to only include allowed functions
       // SDK tools (ultralight.*) are always shown
       const filteredTools = tools.filter((tool) =>
-        tool.name.startsWith('ultralight.') ||
+        tool.name.startsWith("ultralight.") ||
         permissionSetAllowsFunction(app.slug, permsResult.allowed, tool.name)
       );
       tools.length = 0;
@@ -1598,7 +1649,7 @@ async function handleToolsList(
     const usage = await peekCallerUsage(app.id, callerContext.userId)
       .catch(() => null);
     const visible = tools.filter((tool) =>
-      tool.name.startsWith('ultralight.') ||
+      tool.name.startsWith("ultralight.") ||
       !isFunctionBlockedInFreeMode(
         app,
         toRawMcpFunctionName(app.slug, tool.name),
@@ -1618,19 +1669,19 @@ async function handleToolsList(
 
   // ── GPU tool enrichment ──
   // If this is a GPU app, annotate tools with cost + latency hints
-  if (app.runtime === 'gpu') {
-    const gpuType = app.gpu_type || 'GPU';
+  if (app.runtime === "gpu") {
+    const gpuType = app.gpu_type || "GPU";
     const benchmark = app.gpu_benchmark as Record<string, unknown> | null;
 
     for (const tool of tools) {
       // Skip SDK tools
-      if (tool.name.startsWith('ultralight.')) continue;
+      if (tool.name.startsWith("ultralight.")) continue;
 
       // Add GPU context to description
       const avgMs = benchmark?.mean_ms as number | undefined;
-      const avgDisplay = avgMs ? `~${(avgMs / 1000).toFixed(1)}s` : 'variable';
+      const avgDisplay = avgMs ? `~${(avgMs / 1000).toFixed(1)}s` : "variable";
       const gpuSuffix = `\n\n⚡ GPU function (${gpuType}, ${avgDisplay})`;
-      tool.description = (tool.description || '') + gpuSuffix;
+      tool.description = (tool.description || "") + gpuSuffix;
 
       // Set annotations: GPU tools are never read-only, not idempotent, open-world
       tool.annotations = {
@@ -1669,7 +1720,7 @@ async function handleToolsCall(
   // Validate params
   const callParams = params as MCPToolCallRequest | undefined;
   if (!callParams?.name) {
-    return jsonRpcErrorResponse(id, INVALID_PARAMS, 'Missing tool name');
+    return jsonRpcErrorResponse(id, INVALID_PARAMS, "Missing tool name");
   }
 
   const { name, arguments: args } = callParams;
@@ -1678,9 +1729,9 @@ async function handleToolsCall(
     return jsonRpcErrorResponse(
       id,
       -32003,
-      'Routine and sandbox actors cannot invoke synthetic SDK tools over MCP; use the manifest-permissioned in-sandbox binding.',
+      "Routine and sandbox actors cannot invoke synthetic SDK tools over MCP; use the manifest-permissioned in-sandbox binding.",
       {
-        type: 'ACTOR_SDK_TOOL_FORBIDDEN',
+        type: "ACTOR_SDK_TOOL_FORBIDDEN",
         functionName: name,
       },
     );
@@ -1700,7 +1751,7 @@ async function handleToolsCall(
       -32003,
       `Routine is not approved to call '${rawName}' on this Agent.`,
       {
-        type: 'ROUTINE_CAPABILITY_REQUIRED',
+        type: "ROUTINE_CAPABILITY_REQUIRED",
         targetAppId: app.id,
         functionName: rawName,
       },
@@ -1710,7 +1761,7 @@ async function handleToolsCall(
   // Legacy SDK-tool dispatch is available only to non-actor callers. Signed
   // routine/sandbox actors were rejected above and must use the manifest-bound
   // in-sandbox capabilities instead.
-  if (name.startsWith('ultralight.') || name.startsWith('ul.')) {
+  if (name.startsWith("ultralight.") || name.startsWith("ul.")) {
     return await executeSDKTool(
       id,
       name,
@@ -1732,8 +1783,8 @@ async function handleToolsCall(
       functionAliases,
     )
   ) {
-    const scopedFunctions = callerContext.tokenFunctionNames?.join(', ') ||
-      'none';
+    const scopedFunctions = callerContext.tokenFunctionNames?.join(", ") ||
+      "none";
     return jsonRpcErrorResponse(
       id,
       -32003,
@@ -1763,7 +1814,7 @@ async function handleToolsCall(
         // caller spam the approval inbox with bogus target function names.
         const knownExports = Array.isArray(app.exports) ? app.exports : [];
         if (
-          resolution.reason === 'no_grant' && knownExports.length > 0 &&
+          resolution.reason === "no_grant" && knownExports.length > 0 &&
           !knownExports.includes(rawName)
         ) {
           return jsonRpcErrorResponse(
@@ -1773,7 +1824,7 @@ async function handleToolsCall(
           );
         }
         let pendingRequestId = resolution.pendingRequestId ?? null;
-        if (resolution.reason === 'no_grant') {
+        if (resolution.reason === "no_grant") {
           pendingRequestId = await createPendingGrantRequest({
             userId,
             callerAppId: caller.appId,
@@ -1782,13 +1833,13 @@ async function handleToolsCall(
             targetFunction: rawName,
           });
         }
-        const message = resolution.reason === 'cap_exceeded'
+        const message = resolution.reason === "cap_exceeded"
           ? `This cross-Agent connection has reached its monthly credit cap for ${rawName}.`
           : `Your connected Agent has not been granted permission to call ${rawName} on this Agent.`;
         return jsonRpcErrorResponse(id, -32003, message, {
-          type: resolution.reason === 'cap_exceeded'
-            ? 'AGENT_GRANT_CAP_EXCEEDED'
-            : 'AGENT_GRANT_REQUIRED',
+          type: resolution.reason === "cap_exceeded"
+            ? "AGENT_GRANT_CAP_EXCEEDED"
+            : "AGENT_GRANT_REQUIRED",
           callerAppId: caller.appId,
           targetAppId: app.id,
           functionName: rawName,
@@ -1846,7 +1897,7 @@ async function handleToolsCall(
       // sandbox_actor calls are already rejected above; this is defense in depth
       // and also blocks a routine_actor from self-approving an "ask" function.
       confirmed: callerUsesApiToken(callerContext) &&
-        request.headers.get('X-Galactic-Confirm') === '1',
+        request.headers.get("X-Galactic-Confirm") === "1",
     });
     if (!permission.allowed) {
       return jsonRpcErrorResponse(
@@ -1860,7 +1911,7 @@ async function handleToolsCall(
 
   // Permission check: for private apps, verify non-owner has access to this function
   // Also enforce granular constraints (IP, time window, budget, expiry, arg whitelist) — Pro feature
-  if (app.visibility === 'private') {
+  if (app.visibility === "private") {
     const permsResult = await getPermissionsForUser(
       userId,
       app.id,
@@ -1878,18 +1929,19 @@ async function handleToolsCall(
       }
 
       // Enforce granular constraints on the matching permission row
-      const { checkConstraints } = await import('../services/constraints.ts');
+      const { checkConstraints } = await import("../services/constraints.ts");
       const matchingRow = findPermissionRowForFunction(
         app.slug,
         permsResult.rows,
         name,
       );
       if (matchingRow) {
-        const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-          request.headers.get('x-real-ip') ||
+        const clientIp =
+          request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+          request.headers.get("x-real-ip") ||
           null;
         // Pass call arguments for argument-value whitelist enforcement
-        const callArgs = (args && typeof args === 'object')
+        const callArgs = (args && typeof args === "object")
           ? args as Record<string, unknown>
           : undefined;
         const constraintResult = checkConstraints(
@@ -1908,18 +1960,18 @@ async function handleToolsCall(
 
         // Increment budget_used atomically if budget_limit is set
         if (matchingRow.budget_limit !== null && matchingRow.budget_limit > 0) {
-          const sbUrl = getEnv('SUPABASE_URL');
-          const sbKey = getEnv('SUPABASE_SERVICE_ROLE_KEY');
+          const sbUrl = getEnv("SUPABASE_URL");
+          const sbKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
           try {
             // Use Supabase RPC for atomic increment to avoid race conditions
             const rpcRes = await fetch(
               `${sbUrl}/rest/v1/rpc/increment_budget_used`,
               {
-                method: 'POST',
+                method: "POST",
                 headers: {
-                  'apikey': sbKey,
-                  'Authorization': `Bearer ${sbKey}`,
-                  'Content-Type': 'application/json',
+                  "apikey": sbKey,
+                  "Authorization": `Bearer ${sbKey}`,
+                  "Content-Type": "application/json",
                 },
                 body: JSON.stringify({
                   p_user_id: userId,
@@ -1933,18 +1985,18 @@ async function handleToolsCall(
               // PostgREST doesn't support SET col = col + 1 directly,
               // so we await the non-atomic version but log a warning
               console.warn(
-                'Budget RPC not available, falling back to non-atomic increment',
+                "Budget RPC not available, falling back to non-atomic increment",
               );
               await fetch(
                 `${sbUrl}/rest/v1/user_app_permissions?granted_to_user_id=eq.${userId}&app_id=eq.${app.id}&function_name=eq.${
                   encodeURIComponent(matchingRow.function_name)
                 }`,
                 {
-                  method: 'PATCH',
+                  method: "PATCH",
                   headers: {
-                    'apikey': sbKey,
-                    'Authorization': `Bearer ${sbKey}`,
-                    'Content-Type': 'application/json',
+                    "apikey": sbKey,
+                    "Authorization": `Bearer ${sbKey}`,
+                    "Content-Type": "application/json",
                   },
                   body: JSON.stringify({
                     budget_used: (matchingRow.budget_used || 0) + 1,
@@ -1954,7 +2006,7 @@ async function handleToolsCall(
               );
             }
           } catch (err) {
-            console.error('Budget increment failed:', err);
+            console.error("Budget increment failed:", err);
           }
 
           // Keep permission cache in sync with local budget increment
@@ -1979,7 +2031,7 @@ async function handleToolsCall(
       ownerId: app.owner_id,
       appSlug: app.slug,
       runtime: app.runtime,
-      surface: 'mcp_tools_call',
+      surface: "mcp_tools_call",
       source: contractResolution.source,
       legacySourceDetected: contractResolution.legacySourceDetected,
       functionCount: contractResolution.functions.length,
@@ -1999,13 +2051,13 @@ async function handleToolsCall(
         ownerId: app.owner_id,
         appSlug: app.slug,
         runtime: app.runtime,
-        surface: 'mcp_tools_call',
-        source: 'none',
+        surface: "mcp_tools_call",
+        source: "none",
         legacySourceDetected: legacyResolution.legacySourceDetected,
         functionCount: 0,
         manifestBacked: false,
         migrationRequired: true,
-        note: 'manifest_required',
+        note: "manifest_required",
       });
       return jsonRpcErrorResponse(id, INVALID_REQUEST, err.message);
     }
@@ -2017,7 +2069,7 @@ async function handleToolsCall(
   }
 
   // Extract agent meta (e.g. _user_query, _session_id) before passing to sandbox
-  const { extractCallMeta } = await import('../services/call-logger.ts');
+  const { extractCallMeta } = await import("../services/call-logger.ts");
   const {
     cleanArgs,
     userQuery,
@@ -2028,7 +2080,7 @@ async function handleToolsCall(
   } = extractCallMeta(args || {});
 
   // Extract auth token from request for inter-app calls (ultralight.call)
-  const authToken = request.headers.get('Authorization')?.slice(7) || undefined;
+  const authToken = request.headers.get("Authorization")?.slice(7) || undefined;
 
   // Execute app function via sandbox
   return await executeAppFunction(
@@ -2057,7 +2109,8 @@ async function handleToolsCall(
         callerContext.routineActor?.composerAppId || app.id,
       capacityQueueOperations: internalCapacityAttribution
         ?.capacityQueueOperations,
-      capacityRootWorkerRequest: internalCapacityAttribution?.capacityRootWorkerRequest === true,
+      capacityRootWorkerRequest:
+        internalCapacityAttribution?.capacityRootWorkerRequest === true,
     },
   );
 }
@@ -2089,14 +2142,14 @@ async function executeSDKTool(
       ownerUserId: appOwnerId,
       appId,
       functionName: toolName,
-      source: 'mcp_sdk',
+      source: "mcp_sdk",
       metadata: {
-        surface: 'mcp_sdk',
+        surface: "mcp_sdk",
         tool_name: toolName,
       },
     };
-    const _workerUrl = getEnv('WORKER_DATA_URL');
-    const _workerSecret = getEnv('WORKER_SECRET');
+    const _workerUrl = getEnv("WORKER_DATA_URL");
+    const _workerSecret = getEnv("WORKER_SECRET");
     const _rawAppDataService = (_workerUrl && _workerSecret)
       ? createWorkerAppDataService(appId, userId, _workerUrl, _workerSecret, {
         operationMetering: sdkOperationMetering,
@@ -2112,48 +2165,48 @@ async function executeSDKTool(
 
     switch (toolName) {
       // Storage
-      case 'ultralight.store': {
+      case "ultralight.store": {
         const storeKey = args.key as string;
         await appDataService.store(storeKey, args.value);
         // Index KV data for semantic search (fire-and-forget)
         indexAppKV(appId, appOwnerId, storeKey, args.value).catch((err) =>
-          console.error('[KV-INDEX] App KV index failed:', err)
+          console.error("[KV-INDEX] App KV index failed:", err)
         );
         result = { success: true };
         break;
       }
 
-      case 'ultralight.load':
+      case "ultralight.load":
         result = await appDataService.load(args.key as string);
         break;
 
-      case 'ultralight.list':
+      case "ultralight.list":
         result = await appDataService.list(args.prefix as string | undefined);
         break;
 
-      case 'ultralight.query':
+      case "ultralight.query":
         result = await appDataService.query(args.prefix as string, {
           limit: args.limit as number | undefined,
           offset: args.offset as number | undefined,
         });
         break;
 
-      case 'ultralight.remove': {
+      case "ultralight.remove": {
         const removeKey = args.key as string;
         await appDataService.remove(removeKey);
         // Clean up content index (fire-and-forget)
-        removeKVIndex(appOwnerId, 'app_kv', `${appId}/${removeKey}`).catch(
-          (err) => console.error('[KV-INDEX] App KV remove failed:', err),
+        removeKVIndex(appOwnerId, "app_kv", `${appId}/${removeKey}`).catch(
+          (err) => console.error("[KV-INDEX] App KV remove failed:", err),
         );
         result = { success: true };
         break;
       }
 
       // Memory (cross-app)
-      case 'ultralight.remember': {
+      case "ultralight.remember": {
         const memService = getMemoryService();
         if (!memService) {
-          result = { success: false, error: 'Memory service not available' };
+          result = { success: false, error: "Memory service not available" };
           break;
         }
         const scope = args.scope as string || `app:${appId}`;
@@ -2161,13 +2214,13 @@ async function executeSDKTool(
         await memService.remember(userId, scope, rememberKey, args.value);
         // Index user KV data for semantic search (fire-and-forget)
         indexUserKV(userId, scope, rememberKey, args.value).catch((err) =>
-          console.error('[KV-INDEX] User KV index failed:', err)
+          console.error("[KV-INDEX] User KV index failed:", err)
         );
         result = { success: true, key: rememberKey, scope };
         break;
       }
 
-      case 'ultralight.recall': {
+      case "ultralight.recall": {
         const memService = getMemoryService();
         if (!memService) {
           result = null;
@@ -2179,14 +2232,15 @@ async function executeSDKTool(
       }
 
       // AI
-      case 'ultralight.ai': {
+      case "ultralight.ai": {
         const aiMessages = toAiMessages(args.messages);
         if (!aiMessages) {
           result = {
-            content: '',
-            model: 'none',
+            content: "",
+            model: "none",
             usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
-            error: 'Invalid messages payload. Expected an array of AI messages.',
+            error:
+              "Invalid messages payload. Expected an array of AI messages.",
           };
           break;
         }
@@ -2214,15 +2268,17 @@ async function executeSDKTool(
             output_schema: args.output_schema as AIOutputSchema | undefined,
           });
         } catch (aiError) {
-          const aiErrorCode = aiError && typeof aiError === 'object' &&
-              typeof (aiError as { code?: unknown }).code === 'string'
+          const aiErrorCode = aiError && typeof aiError === "object" &&
+              typeof (aiError as { code?: unknown }).code === "string"
             ? (aiError as { code: string }).code
             : undefined;
           result = {
-            content: '',
-            model: args.model || 'unknown',
+            content: "",
+            model: args.model || "unknown",
             usage: { input_tokens: 0, output_tokens: 0, cost_light: 0 },
-            error: aiError instanceof Error ? aiError.message : 'AI call failed',
+            error: aiError instanceof Error
+              ? aiError.message
+              : "AI call failed",
             ...(aiErrorCode ? { error_code: aiErrorCode } : {}),
           };
         }
@@ -2230,31 +2286,32 @@ async function executeSDKTool(
       }
 
       // Inter-app calls
-      case 'ultralight.call': {
+      case "ultralight.call": {
         const targetAppId = args.app_id as string;
         const targetFn = args.function_name as string;
         const callArgs = (args.args as Record<string, unknown>) || {};
 
         if (!targetAppId || !targetFn) {
-          result = { error: 'app_id and function_name are required' };
+          result = { error: "app_id and function_name are required" };
           break;
         }
 
-        const baseUrl = getEnv('BASE_URL');
-        const authToken = request?.headers.get('Authorization')?.slice(7);
+        const baseUrl = getEnv("BASE_URL");
+        const authToken = request?.headers.get("Authorization")?.slice(7);
 
         if (!baseUrl || !authToken) {
           result = {
-            error: 'Inter-app calls not available (missing baseUrl or authToken)',
+            error:
+              "Inter-app calls not available (missing baseUrl or authToken)",
           };
           break;
         }
 
         // Make JSON-RPC call to target app's MCP endpoint
         const rpcRequest = {
-          jsonrpc: '2.0',
+          jsonrpc: "2.0",
           id: crypto.randomUUID(),
-          method: 'tools/call',
+          method: "tools/call",
           params: {
             name: targetFn,
             arguments: callArgs,
@@ -2265,16 +2322,18 @@ async function executeSDKTool(
         // CDN (error 1042); helper validates + encodes the target id.
         const internalCall = resolveInternalMcpCall(targetAppId, { baseUrl });
         const callResponse = await internalCall.fetchFn(internalCall.url, {
-          method: 'POST',
+          method: "POST",
           headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${authToken}`,
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${authToken}`,
           },
           body: JSON.stringify(rpcRequest),
         });
 
         if (!callResponse.ok) {
-          const errText = await callResponse.text().catch(() => callResponse.statusText);
+          const errText = await callResponse.text().catch(() =>
+            callResponse.statusText
+          );
           result = {
             error: `Call failed (${callResponse.status}): ${errText}`,
           };
@@ -2286,7 +2345,9 @@ async function executeSDKTool(
         );
         if (rpcResponse.error) {
           result = {
-            error: `RPC error: ${rpcResponse.error.message || JSON.stringify(rpcResponse.error)}`,
+            error: `RPC error: ${
+              rpcResponse.error.message || JSON.stringify(rpcResponse.error)
+            }`,
             details: rpcResponse.error.data,
           };
           break;
@@ -2297,7 +2358,7 @@ async function executeSDKTool(
           | MCPToolCallResponse
           | undefined;
         if (callResult?.content && Array.isArray(callResult.content)) {
-          const textBlock = callResult.content.find((c) => c.type === 'text');
+          const textBlock = callResult.content.find((c) => c.type === "text");
           if (textBlock?.text) {
             try {
               result = JSON.parse(textBlock.text);
@@ -2314,45 +2375,45 @@ async function executeSDKTool(
       }
 
       // Async job polling — mirrors ul.job from platform-mcp
-      case 'ultralight.job':
-      case 'ul.job': {
+      case "ultralight.job":
+      case "ul.job": {
         const jobId = args.job_id as string;
         if (!jobId) {
-          result = { error: 'Missing required: job_id' };
+          result = { error: "Missing required: job_id" };
           break;
         }
         const { asyncJobAdmissionStatus, getJob } = await import(
-          '../services/async-jobs.ts'
+          "../services/async-jobs.ts"
         );
         const job = await getJob(jobId, userId);
         if (!job) {
           result = { error: `Job ${jobId} not found` };
           break;
         }
-        if (job.status === 'queued') {
+        if (job.status === "queued") {
           const admissionWait = asyncJobAdmissionStatus(job);
           result = {
             job_id: jobId,
-            status: 'queued',
+            status: "queued",
             ...(admissionWait ? { admission_wait: admissionWait } : {}),
             message: admissionWait
               ? `${
-                admissionWait.message || 'Execution is waiting for capacity'
+                admissionWait.message || "Execution is waiting for capacity"
               } It will resume automatically.`
-              : 'Waiting to be picked up. Poll again in a few seconds.',
+              : "Waiting to be picked up. Poll again in a few seconds.",
           };
-        } else if (job.status === 'running') {
+        } else if (job.status === "running") {
           const elapsed = Date.now() - new Date(job.created_at).getTime();
           result = {
             job_id: jobId,
-            status: 'running',
+            status: "running",
             elapsed_seconds: Math.round(elapsed / 1000),
-            message: 'Still running. Poll again in a few seconds.',
+            message: "Still running. Poll again in a few seconds.",
           };
-        } else if (job.status === 'completed') {
+        } else if (job.status === "completed") {
           result = {
             job_id: jobId,
-            status: 'completed',
+            status: "completed",
             duration_ms: job.duration_ms,
             result: job.result,
             logs: job.logs,
@@ -2363,7 +2424,7 @@ async function executeSDKTool(
         } else {
           result = {
             job_id: jobId,
-            status: 'failed',
+            status: "failed",
             duration_ms: job.duration_ms,
             error: job.error,
             // AI calls that completed before the failure were still billed.
@@ -2412,7 +2473,7 @@ async function handleGpuExecution(
     widgetAction?: WidgetActionCallMetadata;
     agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
     routineContext?: RoutineTraceContext;
-    routineCapabilityCeiling?: RequestCallerContext['routineCapabilityCeiling'];
+    routineCapabilityCeiling?: RequestCallerContext["routineCapabilityCeiling"];
     callerAppId?: string | null;
     callChainDepth?: number | null;
   },
@@ -2421,9 +2482,9 @@ async function handleGpuExecution(
     return jsonRpcErrorResponse(
       id,
       -32009,
-      'GPU functions are unavailable to routines until hard pre-execution GPU budget admission is configured.',
+      "GPU functions are unavailable to routines until hard pre-execution GPU budget admission is configured.",
       {
-        type: 'ROUTINE_GPU_BUDGET_UNAVAILABLE',
+        type: "ROUTINE_GPU_BUDGET_UNAVAILABLE",
         app_id: app.id,
         function_name: functionName,
       },
@@ -2434,12 +2495,12 @@ async function handleGpuExecution(
     return jsonRpcErrorResponse(
       id,
       -32603,
-      getGpuSupportDisabledMessage('GPU runtime execution'),
-      { type: 'GPU_SUPPORT_DISABLED', app_id: app.id },
+      getGpuSupportDisabledMessage("GPU runtime execution"),
+      { type: "GPU_SUPPORT_DISABLED", app_id: app.id },
     );
   }
 
-  if (app.gpu_status !== 'live') {
+  if (app.gpu_status !== "live") {
     return jsonRpcErrorResponse(
       id,
       -32603,
@@ -2459,8 +2520,8 @@ async function handleGpuExecution(
     return jsonRpcErrorResponse(
       id,
       -32000,
-      'GPU function is at capacity. Please try again in a few seconds.',
-      { type: 'GPU_CONCURRENCY_LIMIT' },
+      "GPU function is at capacity. Please try again in a few seconds.",
+      { type: "GPU_CONCURRENCY_LIMIT" },
     );
   }
 
@@ -2476,7 +2537,7 @@ async function handleGpuExecution(
     });
     const gpuExecDuration = Date.now() - gpuExecStart;
 
-    const gpuCallSource = user?.provisional ? 'onboarding_template' : undefined;
+    const gpuCallSource = user?.provisional ? "onboarding_template" : undefined;
     const { settlement: gpuSettlement } = await settleAndLogGpuExecution({
       receiptId,
       userId,
@@ -2484,7 +2545,7 @@ async function handleGpuExecution(
       app,
       functionName,
       inputArgs: args,
-      method: 'tools/call',
+      method: "tools/call",
       callerAppId: meta?.callerAppId ?? null,
       callChainDepth: meta?.callChainDepth ?? null,
       gpuResult,
@@ -2502,7 +2563,7 @@ async function handleGpuExecution(
       return jsonRpcResponse(id, {
         isError: true,
         content: [{
-          type: 'text',
+          type: "text",
           text: gpuSettlement.insufficientBalanceMessage!,
         }],
       });
@@ -2538,7 +2599,7 @@ async function executeAppFunction(
     widgetAction?: WidgetActionCallMetadata;
     agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
     routineContext?: RoutineTraceContext;
-    routineCapabilityCeiling?: RequestCallerContext['routineCapabilityCeiling'];
+    routineCapabilityCeiling?: RequestCallerContext["routineCapabilityCeiling"];
     callerGrantId?: string | null;
     incomingHop?: number;
     // Signed root/origin Agent for subscription-capacity attribution.
@@ -2572,11 +2633,11 @@ async function executeAppFunction(
     // The reserved _async argument is platform routing, never function input —
     // strip it before ANY execution branch (GPU included) sees the args.
     const asyncOptIn = args._async === true;
-    if ('_async' in args) delete args._async;
+    if ("_async" in args) delete args._async;
 
     // ── GPU Runtime Branch (early return) ──
     // Must check BEFORE code fetching since GPU apps don't have JS code in R2.
-    if (app.runtime === 'gpu') {
+    if (app.runtime === "gpu") {
       return await handleGpuExecution(
         id,
         app,
@@ -2606,8 +2667,8 @@ async function executeAppFunction(
     // dependency's return value, and the sandbox's own bounded budget
     // (30s/120s) cannot usefully poll a multi-minute job — both run
     // synchronously.
-    const callerCanPoll = callerContext.authSource !== 'routine_actor' &&
-      callerContext.authSource !== 'sandbox_actor';
+    const callerCanPoll = callerContext.authSource !== "routine_actor" &&
+      callerContext.authSource !== "sandbox_actor";
     if (!meta?.disableAsyncPromotion && !meta?.queuedJobId && callerCanPoll) {
       const executionPolicy = resolveFunctionExecutionPolicy(app, functionName);
       if (executionPolicy.async || asyncOptIn) {
@@ -2616,7 +2677,7 @@ async function executeAppFunction(
         // execution rather than failing the call.
         if (queue) {
           const { createQueuedJob, reclaimJobForSyncFallback } = await import(
-            '../services/async-jobs.ts'
+            "../services/async-jobs.ts"
           );
           const jobId = await createQueuedJob({
             appId: app.id,
@@ -2646,9 +2707,9 @@ async function executeAppFunction(
             // win the row back through the same 'queued' status filter the
             // consumer claims through; otherwise the consumer owns it and
             // running here would double-execute.
-            console.error('[MCP] EXEC_QUEUE send failed:', err);
+            console.error("[MCP] EXEC_QUEUE send failed:", err);
             const reclaimed = await reclaimJobForSyncFallback(jobId, {
-              type: 'QueueError',
+              type: "QueueError",
               message: err instanceof Error ? err.message : String(err),
             }).catch(() => false);
             if (!reclaimed) enqueued = true;
@@ -2656,11 +2717,11 @@ async function executeAppFunction(
           if (enqueued) {
             return jsonRpcResponse(id, {
               content: [{
-                type: 'text',
+                type: "text",
                 text: JSON.stringify({
                   _async: true,
                   job_id: jobId,
-                  status: 'queued',
+                  status: "queued",
                   message:
                     `Execution queued. Poll with ultralight.job({ job_id: "${jobId}" }) on this connection (gx.job on the platform MCP) to get the result.`,
                 }),
@@ -2668,7 +2729,7 @@ async function executeAppFunction(
               structuredContent: {
                 _async: true,
                 job_id: jobId,
-                status: 'queued',
+                status: "queued",
               },
               isError: false,
             });
@@ -2727,7 +2788,7 @@ async function executeAppFunction(
 
     // ── Deno Sandbox Path (existing, unchanged) ──
     // Execute in sandbox (local — Worker handles data layer only)
-    const baseUrl = getEnv('BASE_URL') || undefined;
+    const baseUrl = getEnv("BASE_URL") || undefined;
     // workerBaseUrl not needed — SELF service binding handles internal routing
 
     const memService = getMemoryService();
@@ -2763,7 +2824,7 @@ async function executeAppFunction(
     let grantDependencies: typeof manifestDependencies = [];
     let slotBindings: Awaited<
       ReturnType<typeof resolveCallerGrantBindings>
-    >['slots'] = [];
+    >["slots"] = [];
     let callerContextToken: string | undefined;
     if (userId && userId !== ANONYMOUS_USER_ID) {
       try {
@@ -2771,7 +2832,7 @@ async function executeAppFunction(
         grantDependencies = bindings.dependencies;
         slotBindings = bindings.slots;
       } catch (err) {
-        console.warn('[MCP] Failed to resolve cross-Agent grants:', err);
+        console.warn("[MCP] Failed to resolve cross-Agent grants:", err);
       }
       // Mint the unforgeable caller context this Agent attaches to ITS OWN
       // outbound cross-Agent calls. Best-effort: a missing signing secret
@@ -2788,24 +2849,25 @@ async function executeAppFunction(
           ttlSeconds: Math.ceil(timeoutMs / 1000) + 120,
         });
       } catch (err) {
-        console.warn('[MCP] Failed to mint caller context token:', err);
+        console.warn("[MCP] Failed to mint caller context token:", err);
       }
     }
     const appCallDependencies = [...manifestDependencies, ...grantDependencies];
     // Queue consumers keep their authorized extended budget. Interactive calls
     // are classified per function, so an AI-capable Agent's read functions do
     // not inherit the 120-second inference window.
-    const inferenceSelection = permissions.includes('ai:call')
+    const inferenceSelection = permissions.includes("ai:call")
       ? await resolveFunctionInferenceOverride({
         userId,
         appId: app.id,
         functionName,
       })
       : null;
-    const subscriptionCapacityMode = getEnv('SUBSCRIPTION_CAPACITY_ENABLED') === '1' &&
-      app.visibility === 'private' && app.owner_id === userId;
-    const runtimeAI = permissions.includes('ai:call') ||
-        permissions.includes('ai:embed')
+    const subscriptionCapacityMode =
+      getEnv("SUBSCRIPTION_CAPACITY_ENABLED") === "1" &&
+      app.visibility === "private" && app.owner_id === userId;
+    const runtimeAI = permissions.includes("ai:call") ||
+        permissions.includes("ai:embed")
       ? await createRuntimeAIContext(user, {
         freeMode: callerContext.freeMode,
         byokOnly: subscriptionCapacityMode,
@@ -2818,9 +2880,9 @@ async function executeAppFunction(
         resolvedRoute: null,
         userApiKey: null,
         aiService: createUnavailableAIService(
-          'ai:call permission not granted.',
+          "ai:call permission not granted.",
         ),
-        unavailableReason: 'ai:call permission not granted.',
+        unavailableReason: "ai:call permission not granted.",
       };
 
     const executionId = meta?.executionId ?? crypto.randomUUID();
@@ -2828,7 +2890,7 @@ async function executeAppFunction(
     const widgetPull = meta?.widgetPull;
     const widgetAction = meta?.widgetAction;
     const agenticSurfaceAction = meta?.agenticSurfaceAction;
-    const callMethod = widgetPull ? 'widget_pull' : 'tools/call';
+    const callMethod = widgetPull ? "widget_pull" : "tools/call";
     const widgetPullMetadata = widgetPull
       ? {
         widget_name: widgetPull.widgetName,
@@ -2863,7 +2925,7 @@ async function executeAppFunction(
       receiptId,
       method: callMethod,
       timeoutMs,
-      callerAuthState: 'authenticated',
+      callerAuthState: "authenticated",
       callerAppId: callerContext.callerApp?.appId ?? null,
       routineContext: meta?.routineContext,
       freeMode: callerContext.freeMode,
@@ -2874,7 +2936,7 @@ async function executeAppFunction(
       // deps/slots, invisible to the manifest), so billing can never deem an app
       // per-day-eligible that the runtime keeps on load() (where CF bills the
       // load fee per call). Flag-gated to match the runtime's useGetReuse.
-      reuseEligibleForBilling: getEnv('EXECUTED_LOADER_GET_REUSE') === '1' &&
+      reuseEligibleForBilling: getEnv("EXECUTED_LOADER_GET_REUSE") === "1" &&
         isolateReuseEligibility({
           userId,
           permissions,
@@ -2892,17 +2954,17 @@ async function executeAppFunction(
     if (cloudPreflight.insufficientBalance) {
       const widgetBalanceMessage = widgetPull
         ? cloudPreflight.insufficientBalanceCode ===
-            'owner_sponsor_light_required'
-          ? 'The app owner needs credits balance before this widget can refresh.'
-          : 'Credits balance is required to refresh this widget.'
+            "owner_sponsor_light_required"
+          ? "The app owner needs credits balance before this widget can refresh."
+          : "Credits balance is required to refresh this widget."
         : null;
       return jsonRpcErrorResponse(
         id,
         -32009,
         widgetBalanceMessage || cloudPreflight.insufficientBalanceMessage ||
-          'Credits balance required to call this app.',
+          "Credits balance required to call this app.",
         {
-          type: cloudPreflight.insufficientBalanceCode || 'LIGHT_REQUIRED',
+          type: cloudPreflight.insufficientBalanceCode || "LIGHT_REQUIRED",
           receipt_id: receiptId,
           settlement: {
             ...cloudPreflight.metadata,
@@ -2944,7 +3006,7 @@ async function executeAppFunction(
           routine_id: meta?.routineContext?.routineId ?? null,
           routine_run_id: meta?.routineContext?.routineRunId ?? null,
           uses_inference: executionClassification.usesInference,
-          execution_class: meta?.executionTimeoutMs ? 'async' : 'interactive',
+          execution_class: meta?.executionTimeoutMs ? "async" : "interactive",
         },
       });
       if (!admission.allowed || !admission.reservationId) {
@@ -2973,17 +3035,19 @@ async function executeAppFunction(
             routineContext: meta?.routineContext,
           });
         } catch (err) {
-          console.error('[PRICING] Widget pull usage debit failed:', err);
+          console.error("[PRICING] Widget pull usage debit failed:", err);
           const ownerSponsored = cloudPreflight.hold?.ownerSponsoredInfra ===
             true;
           return jsonRpcErrorResponse(
             id,
             -32009,
             ownerSponsored
-              ? 'The app owner needs credits balance before this widget can refresh.'
-              : 'Credits balance is required to refresh this widget.',
+              ? "The app owner needs credits balance before this widget can refresh."
+              : "Credits balance is required to refresh this widget.",
             {
-              type: ownerSponsored ? 'owner_sponsor_light_required' : 'caller_light_required',
+              type: ownerSponsored
+                ? "owner_sponsor_light_required"
+                : "caller_light_required",
               receipt_id: receiptId,
               settlement: {
                 ...cloudPreflight.metadata,
@@ -3009,7 +3073,7 @@ async function executeAppFunction(
       receiptId,
       method: callMethod,
       metadata: {
-        surface: 'mcp_tools_call',
+        surface: "mcp_tools_call",
         ...widgetPullMetadata,
         ...widgetActionMetadata,
         ...agenticSurfaceActionMetadata,
@@ -3026,8 +3090,8 @@ async function executeAppFunction(
     });
     // Use Worker-backed data service if configured (native R2 bindings, ~10x faster)
     // Wrap with metered service when userId is present to track user data storage.
-    const _wUrl = getEnv('WORKER_DATA_URL');
-    const _wSecret = getEnv('WORKER_SECRET');
+    const _wUrl = getEnv("WORKER_DATA_URL");
+    const _wSecret = getEnv("WORKER_SECRET");
     const _rawAppDataService2 = (_wUrl && _wSecret)
       ? createWorkerAppDataService(app.id, userId, _wUrl, _wSecret, {
         operationMetering: cloudOperationMetering,
@@ -3061,7 +3125,7 @@ async function executeAppFunction(
         callerContext.routineActor?.composerAppId || app.id,
       // Unused by the dynamic sandbox (it executes the KV ESM bundle); kept
       // only to satisfy RuntimeConfig until the legacy Deno path is removed.
-      code: '',
+      code: "",
       permissions,
       flightRecorder: flightRecorderEnabled,
       allowedDestinations: getManifestAllowedDestinations(app.manifest),
@@ -3085,7 +3149,7 @@ async function executeAppFunction(
       routineContext: meta?.routineContext,
       routineCapabilityCeiling: meta?.routineCapabilityCeiling,
       slotBindings,
-      workerSecret: getEnv('WORKER_SECRET') || undefined,
+      workerSecret: getEnv("WORKER_SECRET") || undefined,
       timeoutMs,
       cloudOperationMetering,
       cloudOperationBillingConfig: cloudPreflight.billingConfig,
@@ -3133,9 +3197,9 @@ async function executeAppFunction(
         ].filter(Boolean).join(" ")
         : undefined;
       const callSource = widgetPull
-        ? 'widget_pull'
+        ? "widget_pull"
         : user?.provisional
-        ? 'onboarding_template'
+        ? "onboarding_template"
         : undefined;
       if (accountCapacityReservationId) {
         const capacityResult = await settleOrDeferCapacityAfterExecution({
@@ -3150,11 +3214,12 @@ async function executeAppFunction(
             nestedServiceBinding: callerContext.callerApp != null &&
               !meta?.queuedJobId && meta?.capacityRootWorkerRequest !== true,
           }),
-          dynamicWorkerIdentityCreated: result.dynamicWorkerIdentityCreated === true,
+          dynamicWorkerIdentityCreated:
+            result.dynamicWorkerIdentityCreated === true,
           dynamicWorkerInvoked: result.dynamicWorkerInvoked === true,
           reuseKeyHash: result.reuseKeyHash,
           billingConfig: cloudPreflight.billingConfig,
-          surface: 'mcp',
+          surface: "mcp",
         });
         // Preserve subscription-capacity routing while the exact resource
         // intent is durably retried; never fall through to the legacy wallet.
@@ -3202,7 +3267,7 @@ async function executeAppFunction(
         sessionId: meta?.sessionId,
         sequenceNumber: nextSequenceNumber(meta?.sessionId),
         userQuery: meta?.userQuery,
-        callerAuthState: 'authenticated',
+        callerAuthState: "authenticated",
         callerAppId: callerContext.callerApp?.appId ?? null,
         callChainDepth: callerContext.callerApp?.hop ?? null,
         runtimePricingPreflight: cloudPreflight.pricing,
@@ -3232,7 +3297,7 @@ async function executeAppFunction(
 
     // Start execution (Dynamic Worker sandbox — avoids `new Function()` restriction on CF Workers)
     const { executeInDynamicSandbox } = await import(
-      '../runtime/dynamic-sandbox.ts'
+      "../runtime/dynamic-sandbox.ts"
     );
     const capacityExecutedAt = new Date().toISOString();
     tenantExecutionAttempted = true;
@@ -3254,15 +3319,15 @@ async function executeAppFunction(
     // on the job row with full fidelity (result, logs, duration, AI spend).
     if (meta?.queuedJobId) {
       const { completeJob, failJob } = await import(
-        '../services/async-jobs.ts'
+        "../services/async-jobs.ts"
       );
       if (result.success && settlement.insufficientBalance) {
         await failJob(
           meta.queuedJobId,
           {
-            type: settlement.insufficientBalanceCode || 'LIGHT_REQUIRED',
+            type: settlement.insufficientBalanceCode || "LIGHT_REQUIRED",
             message: settlement.insufficientBalanceMessage ||
-              'Credits balance required to call this app.',
+              "Credits balance required to call this app.",
           },
           result.durationMs,
           {
@@ -3286,9 +3351,9 @@ async function executeAppFunction(
         id,
         -32009,
         settlement.insufficientBalanceMessage ||
-          'Credits balance required to call this app.',
+          "Credits balance required to call this app.",
         {
-          type: settlement.insufficientBalanceCode || 'LIGHT_REQUIRED',
+          type: settlement.insufficientBalanceCode || "LIGHT_REQUIRED",
           receipt_id: receiptId,
           settlement: settlement.metadata,
         },
@@ -3297,15 +3362,17 @@ async function executeAppFunction(
 
     // Fire-and-forget: rebuild entity index after successful execution
     if (result.success) {
-      import('../services/entity-index.ts')
+      import("../services/entity-index.ts")
         .then(({ rebuildEntityIndex }) => rebuildEntityIndex(userId))
-        .catch((err) => console.error('[MCP] Entity index rebuild failed:', err));
+        .catch((err) =>
+          console.error("[MCP] Entity index rebuild failed:", err)
+        );
     }
 
     if (result.success) {
       // Auto-stamp widget responses with app version for client cache busting
       if (isWidgetAppResponse(result.result)) {
-        result.result.version = app.current_version || '1';
+        result.result.version = app.current_version || "1";
       }
       return jsonRpcResponse(
         id,
@@ -3363,14 +3430,14 @@ export async function executeEventDelivery(input: {
     return {
       success: false,
       receiptId: null,
-      error: 'Subscriber Agent not found',
+      error: "Subscriber Agent not found",
     };
   }
 
   let user: UserContext | null = null;
   let econ = deriveCallerEconomicState(null);
   try {
-    const { createUserService } = await import('../services/user.ts');
+    const { createUserService } = await import("../services/user.ts");
     const profile = await createUserService().getUser(input.userId);
     if (profile) {
       user = {
@@ -3383,12 +3450,12 @@ export async function executeEventDelivery(input: {
       econ = deriveCallerEconomicState(profile);
     }
   } catch (err) {
-    console.warn('[EVENT-DELIVERY] Failed to load user context:', err);
+    console.warn("[EVENT-DELIVERY] Failed to load user context:", err);
   }
 
   const callerContext: RequestCallerContext = {
-    authState: 'authenticated',
-    authSource: 'routine_actor',
+    authState: "authenticated",
+    authSource: "routine_actor",
     authUser: null,
     userId: input.userId,
     user,
@@ -3433,7 +3500,7 @@ export async function executeEventDelivery(input: {
     return {
       success: false,
       receiptId: null,
-      error: 'Unreadable delivery response',
+      error: "Unreadable delivery response",
     };
   }
 }
@@ -3457,7 +3524,7 @@ export function parseDeliveryOutcome(
       receiptId: extractReceiptIdFromResult(
         (body.error as { data?: unknown }).data,
       ),
-      error: body.error.message || 'Delivery failed',
+      error: body.error.message || "Delivery failed",
       ...(admission ? { admission } : {}),
     };
   }
@@ -3482,38 +3549,38 @@ export function parseDeliveryOutcome(
   // likely to collide. (PR3's queue-backed execution replaces this entirely.)
   const sc = toolResult?.structuredContent;
   if (
-    sc?._async === true && typeof sc.job_id === 'string' &&
-    sc.status === 'running'
+    sc?._async === true && typeof sc.job_id === "string" &&
+    sc.status === "running"
   ) {
     return {
       success: false,
       receiptId,
-      error: 'Delivery handler exceeded the synchronous execution window',
+      error: "Delivery handler exceeded the synchronous execution window",
     };
   }
   if (toolResult?.isError) {
     const structuredError = toolResult.structuredContent?.error;
-    const error = typeof structuredError === 'string' && structuredError
+    const error = typeof structuredError === "string" && structuredError
       ? structuredError
-      : toolResult.content?.find((c) => c.type === 'text' && c.text)?.text ||
-        'Delivery handler failed';
+      : toolResult.content?.find((c) => c.type === "text" && c.text)?.text ||
+        "Delivery handler failed";
     return { success: false, receiptId, error };
   }
   return { success: true, receiptId };
 }
 
 export type EventDeliveryAdmissionCode =
-  | 'capacity_waiting'
-  | 'agent_cap_waiting'
-  | 'agent_cap_too_low_for_request'
-  | 'concurrency_waiting';
+  | "capacity_waiting"
+  | "agent_cap_waiting"
+  | "agent_cap_too_low_for_request"
+  | "concurrency_waiting";
 
 export interface EventDeliveryAdmission {
   code: EventDeliveryAdmissionCode;
   nextEligibleAt: string | null;
   capacityAgentId: string | null;
-  bindingConstraint: 'account' | 'agent' | null;
-  concurrencyScope: 'account' | 'agent' | 'ai' | 'routine' | null;
+  bindingConstraint: "account" | "agent" | null;
+  concurrencyScope: "account" | "agent" | "ai" | "routine" | null;
 }
 
 export interface EventDeliveryOutcome {
@@ -3530,29 +3597,32 @@ function parseEventDeliveryAdmission(
   errorCode: number,
   value: unknown,
 ): EventDeliveryAdmission | null {
-  if (errorCode !== -32010 || !value || typeof value !== 'object') return null;
+  if (errorCode !== -32010 || !value || typeof value !== "object") return null;
   const data = value as Record<string, unknown>;
   const code = data.type;
   if (
-    code !== 'capacity_waiting' && code !== 'agent_cap_waiting' &&
-    code !== 'agent_cap_too_low_for_request' &&
-    code !== 'concurrency_waiting'
+    code !== "capacity_waiting" && code !== "agent_cap_waiting" &&
+    code !== "agent_cap_too_low_for_request" &&
+    code !== "concurrency_waiting"
   ) return null;
-  const bindingConstraint = data.binding_constraint === 'account' ||
-      data.binding_constraint === 'agent'
+  const bindingConstraint = data.binding_constraint === "account" ||
+      data.binding_constraint === "agent"
     ? data.binding_constraint
     : null;
   return {
     code,
-    nextEligibleAt: typeof data.retry_at === 'string' && data.retry_at ? data.retry_at : null,
-    capacityAgentId: typeof data.capacity_agent_id === 'string' && data.capacity_agent_id
-      ? data.capacity_agent_id
+    nextEligibleAt: typeof data.retry_at === "string" && data.retry_at
+      ? data.retry_at
       : null,
+    capacityAgentId:
+      typeof data.capacity_agent_id === "string" && data.capacity_agent_id
+        ? data.capacity_agent_id
+        : null,
     bindingConstraint,
-    concurrencyScope: data.concurrency_scope === 'account' ||
-        data.concurrency_scope === 'agent' ||
-        data.concurrency_scope === 'ai' ||
-        data.concurrency_scope === 'routine'
+    concurrencyScope: data.concurrency_scope === "account" ||
+        data.concurrency_scope === "agent" ||
+        data.concurrency_scope === "ai" ||
+        data.concurrency_scope === "routine"
       ? data.concurrency_scope
       : null,
   };
@@ -3570,11 +3640,11 @@ function parseEventDeliveryAdmission(
 // on the row INSIDE executeAppFunction (meta.queuedJobId) with full fidelity;
 // this wrapper only handles can't-even-start failures.
 export async function executeQueuedJob(
-  job: import('../services/async-jobs.ts').AsyncJob,
+  job: import("../services/async-jobs.ts").AsyncJob,
 ): Promise<
-  | { kind: 'complete' }
+  | { kind: "complete" }
   | {
-    kind: 'deferred';
+    kind: "deferred";
     retryAt: string;
     nextDeliveryAt: string;
     deferGeneration: number;
@@ -3584,36 +3654,36 @@ export async function executeQueuedJob(
     deferJobAfterAdmission,
     failJobIfActive,
     nextAsyncJobDeferGeneration,
-  } = await import('../services/async-jobs.ts');
+  } = await import("../services/async-jobs.ts");
   const startedAt = Date.now();
 
   const appsService = createAppsService();
   const app = await appsService.findById(job.app_id);
   if (!app || app.deleted_at) {
     await failJobIfActive(job.id, {
-      type: 'AppNotFound',
-      message: 'The Agent for this job no longer exists',
+      type: "AppNotFound",
+      message: "The Agent for this job no longer exists",
     }, Date.now() - startedAt);
-    return { kind: 'complete' };
+    return { kind: "complete" };
   }
 
   // GPU apps cannot be queued at dispatch (the GPU branch precedes the queue
   // branch), so a GPU runtime here means the app changed between enqueue and
   // claim. The GPU pipeline has no job bookkeeping — running it would bill an
   // execution whose result the row could never report. Refuse instead.
-  if (app.runtime === 'gpu') {
+  if (app.runtime === "gpu") {
     await failJobIfActive(job.id, {
-      type: 'AppRuntimeChanged',
+      type: "AppRuntimeChanged",
       message:
-        'The Agent switched to the GPU runtime after this job was queued — re-run the function directly',
+        "The Agent switched to the GPU runtime after this job was queued — re-run the function directly",
     }, Date.now() - startedAt);
-    return { kind: 'complete' };
+    return { kind: "complete" };
   }
 
   let user: UserContext | null = null;
   let econ = deriveCallerEconomicState(null);
   try {
-    const { createUserService } = await import('../services/user.ts');
+    const { createUserService } = await import("../services/user.ts");
     const profile = await createUserService().getUser(job.user_id);
     if (profile) {
       user = {
@@ -3626,12 +3696,12 @@ export async function executeQueuedJob(
       econ = deriveCallerEconomicState(profile);
     }
   } catch (err) {
-    console.warn('[QUEUE-EXEC] Failed to load user context:', err);
+    console.warn("[QUEUE-EXEC] Failed to load user context:", err);
   }
 
   const callerContext: RequestCallerContext = {
-    authState: 'authenticated',
-    authSource: 'routine_actor',
+    authState: "authenticated",
+    authSource: "routine_actor",
     authUser: null,
     userId: job.user_id,
     user,
@@ -3643,7 +3713,7 @@ export async function executeQueuedJob(
     callerApp: job.caller_app_id
       ? {
         appId: job.caller_app_id,
-        capacityAgentId: typeof job.meta?.capacityAgentId === 'string'
+        capacityAgentId: typeof job.meta?.capacityAgentId === "string"
           ? job.meta.capacityAgentId
           : job.caller_app_id,
         callerFunction: null,
@@ -3658,34 +3728,35 @@ export async function executeQueuedJob(
   // honored (cap accounting still happens in-pipeline via callerGrantId).
   if (job.caller_grant_id) {
     try {
-      const { getGrant } = await import('../services/agent-grants.ts');
+      const { getGrant } = await import("../services/agent-grants.ts");
       const grant = await getGrant(job.user_id, job.caller_grant_id);
-      if (!grant || grant.status !== 'active') {
+      if (!grant || grant.status !== "active") {
         await failJobIfActive(job.id, {
-          type: 'GrantRevoked',
-          message: 'The cross-Agent grant for this job was revoked before it executed',
+          type: "GrantRevoked",
+          message:
+            "The cross-Agent grant for this job was revoked before it executed",
         }, Date.now() - startedAt);
-        return { kind: 'complete' };
+        return { kind: "complete" };
       }
     } catch (err) {
-      console.warn('[QUEUE-EXEC] Grant re-check failed, refusing to run:', err);
+      console.warn("[QUEUE-EXEC] Grant re-check failed, refusing to run:", err);
       await failJobIfActive(job.id, {
-        type: 'GrantCheckFailed',
-        message: 'Could not verify the cross-Agent grant for this job',
+        type: "GrantCheckFailed",
+        message: "Could not verify the cross-Agent grant for this job",
       }, Date.now() - startedAt);
-      return { kind: 'complete' };
+      return { kind: "complete" };
     }
   }
 
   const metaTimeout = job.meta &&
-      typeof job.meta.executionTimeoutMs === 'number'
+      typeof job.meta.executionTimeoutMs === "number"
     ? job.meta.executionTimeoutMs
     : null;
 
   const response = await executeAppFunction(
     crypto.randomUUID(),
     job.function_name,
-    (job.args && typeof job.args === 'object' ? job.args : {}) as Record<
+    (job.args && typeof job.args === "object" ? job.args : {}) as Record<
       string,
       unknown
     >,
@@ -3696,14 +3767,18 @@ export async function executeQueuedJob(
     {
       callerGrantId: job.caller_grant_id,
       incomingHop: job.hop ?? undefined,
-      sessionId: typeof job.meta?.sessionId === 'string' ? job.meta.sessionId : undefined,
-      userQuery: typeof job.meta?.userQuery === 'string' ? job.meta.userQuery : undefined,
+      sessionId: typeof job.meta?.sessionId === "string"
+        ? job.meta.sessionId
+        : undefined,
+      userQuery: typeof job.meta?.userQuery === "string"
+        ? job.meta.userQuery
+        : undefined,
       disableAsyncPromotion: true,
       queuedJobId: job.id,
       executionId: job.execution_id || undefined,
       executionTimeoutMs: metaTimeout ?? undefined,
       capacityQueueOperations: job.meta?.capacity_queue_operations,
-      capacityAgentId: typeof job.meta?.capacityAgentId === 'string'
+      capacityAgentId: typeof job.meta?.capacityAgentId === "string"
         ? job.meta.capacityAgentId
         : job.app_id,
     },
@@ -3725,7 +3800,7 @@ export async function executeQueuedJob(
         | undefined;
       if (
         outcome.admission &&
-        outcome.admission.code !== 'agent_cap_too_low_for_request' &&
+        outcome.admission.code !== "agent_cap_too_low_for_request" &&
         outcome.admission.nextEligibleAt
       ) {
         const retryAt = outcome.admission.nextEligibleAt;
@@ -3750,7 +3825,7 @@ export async function executeQueuedJob(
         }, nextDeliveryAt);
         if (deferred) {
           return {
-            kind: 'deferred',
+            kind: "deferred",
             retryAt,
             nextDeliveryAt,
             deferGeneration: nextAsyncJobDeferGeneration(job),
@@ -3758,22 +3833,23 @@ export async function executeQueuedJob(
         }
       }
       await failJobIfActive(job.id, {
-        type: typeof errorData?.type === 'string' && errorData.type
+        type: typeof errorData?.type === "string" && errorData.type
           ? errorData.type
-          : 'ExecutionError',
-        message: outcome.error || 'Queued execution failed',
+          : "ExecutionError",
+        message: outcome.error || "Queued execution failed",
       }, Date.now() - startedAt);
     }
   } catch {
     await failJobIfActive(job.id, {
-      type: 'ExecutionError',
-      message: 'Unreadable queued execution response',
+      type: "ExecutionError",
+      message: "Unreadable queued execution response",
     }, Date.now() - startedAt);
   }
-  return { kind: 'complete' };
+  return { kind: "complete" };
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function extractReceiptIdFromResult(result: unknown): string | null {
   // executeAppFunction stamps the receipt id into structuredContent (success:
@@ -3781,11 +3857,12 @@ function extractReceiptIdFromResult(result: unknown): string | null {
   // with the top level kept as a defensive fallback. Must be a uuid — the
   // deliveries.receipt_id column rejects anything else, and a failed PATCH
   // would otherwise leave the delivery row stuck 'pending'.
-  if (!result || typeof result !== 'object') return null;
+  if (!result || typeof result !== "object") return null;
   const r = result as Record<string, unknown>;
-  const structured = (r.structuredContent && typeof r.structuredContent === 'object')
-    ? r.structuredContent as Record<string, unknown>
-    : null;
+  const structured =
+    (r.structuredContent && typeof r.structuredContent === "object")
+      ? r.structuredContent as Record<string, unknown>
+      : null;
   for (
     const candidate of [
       structured?.receipt_id,
@@ -3794,7 +3871,7 @@ function extractReceiptIdFromResult(result: unknown): string | null {
       r.receiptId,
     ]
   ) {
-    if (typeof candidate === 'string' && UUID_RE.test(candidate)) {
+    if (typeof candidate === "string" && UUID_RE.test(candidate)) {
       return candidate;
     }
   }
@@ -3817,28 +3894,33 @@ function formatToolResult(
   receiptId?: string,
 ): MCPToolCallResponse {
   const content: MCPContent[] = [];
-  const responseResult = receiptId ? attachExecutionReceipt(result, receiptId) : result;
+  const responseResult = receiptId
+    ? attachExecutionReceipt(result, receiptId)
+    : result;
 
   // Add result as text
   if (result !== undefined && result !== null) {
     content.push({
-      type: 'text',
-      text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+      type: "text",
+      text: typeof result === "string"
+        ? result
+        : JSON.stringify(result, null, 2),
     });
   }
 
   // Add logs if present
-  const logMessages = logs?.map((log) => typeof log === 'string' ? log : log.message) || [];
+  const logMessages =
+    logs?.map((log) => typeof log === "string" ? log : log.message) || [];
   if (logMessages.length > 0) {
     content.push({
-      type: 'text',
-      text: `\n--- Logs ---\n${logMessages.join('\n')}`,
+      type: "text",
+      text: `\n--- Logs ---\n${logMessages.join("\n")}`,
     });
   }
 
   if (receiptId) {
     content.push({
-      type: 'text',
+      type: "text",
       text: `\n--- Receipt ---\n${receiptId}`,
     });
   }
@@ -3851,7 +3933,7 @@ function formatToolResult(
 }
 
 function attachExecutionReceipt(result: unknown, receiptId: string): unknown {
-  if (result && typeof result === 'object' && !Array.isArray(result)) {
+  if (result && typeof result === "object" && !Array.isArray(result)) {
     return { ...(result as Record<string, unknown>), receipt_id: receiptId };
   }
   return { result, receipt_id: receiptId };
@@ -3871,9 +3953,8 @@ function formatToolError(
   const message = diagnostic
     ? [diagnostic.summary, diagnostic.detail].filter(Boolean).join(" ")
     : rawMessage;
-  const errorType = diagnostic?.causeCode || (err instanceof Error
-    ? err.name
-    : (err as { type?: string })?.type);
+  const errorType = diagnostic?.causeCode ||
+    (err instanceof Error ? err.name : (err as { type?: string })?.type);
   const errorDetails = diagnostic
     ? undefined
     : (err as { details?: Record<string, unknown> })?.details;
@@ -3881,12 +3962,12 @@ function formatToolError(
   return {
     content: [
       {
-        type: 'text',
+        type: "text",
         text: `Error: ${message}`,
       },
       ...(receiptId
         ? [{
-          type: 'text' as const,
+          type: "text" as const,
           text: `\n--- Receipt ---\n${receiptId}`,
         }]
         : []),
@@ -3907,13 +3988,13 @@ function formatToolError(
  */
 function jsonRpcResponse(id: JsonRpcId, result: unknown): Response {
   const response: JsonRpcResponse = {
-    jsonrpc: '2.0',
+    jsonrpc: "2.0",
     id: normalizeJsonRpcResponseId(id),
     result,
   };
 
   return new Response(JSON.stringify(response), {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -3927,14 +4008,20 @@ function jsonRpcErrorResponse(
   data?: unknown,
 ): Response {
   const response: JsonRpcResponse = {
-    jsonrpc: '2.0',
+    jsonrpc: "2.0",
     id: normalizeJsonRpcResponseId(id),
     error: { code, message, data },
   };
 
   return new Response(JSON.stringify(response), {
-    status: code === RATE_LIMITED ? 429 : code === PAYMENT_REQUIRED ? 402 : code < 0 ? 400 : 500,
-    headers: { 'Content-Type': 'application/json' },
+    status: code === RATE_LIMITED
+      ? 429
+      : code === PAYMENT_REQUIRED
+      ? 402
+      : code < 0
+      ? 400
+      : 500,
+    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -3955,20 +4042,20 @@ export async function handleMcpDiscovery(
     const app = await appsService.findById(appId);
 
     if (!app) {
-      return error('App not found', 404);
+      return error("App not found", 404);
     }
 
     // Check visibility for private apps
-    if (app.visibility === 'private') {
+    if (app.visibility === "private") {
       try {
         const caller = await resolveRequestCallerContext(request, {
-          authSourcePolicy: 'bearer_or_cookie',
+          authSourcePolicy: "bearer_or_cookie",
         });
         if (caller.userId !== app.owner_id) {
-          return error('App not found', 404);
+          return error("App not found", 404);
         }
       } catch {
-        return error('App not found', 404);
+        return error("App not found", 404);
       }
     }
 
@@ -3978,7 +4065,7 @@ export async function handleMcpDiscovery(
       ownerId: app.owner_id,
       appSlug: app.slug,
       runtime: app.runtime,
-      surface: 'mcp_discovery',
+      surface: "mcp_discovery",
       source: contractResolution.source,
       legacySourceDetected: contractResolution.legacySourceDetected,
       functionCount: contractResolution.functions.length,
@@ -3996,7 +4083,7 @@ export async function handleMcpDiscovery(
       name: app.name || app.slug,
       description: app.description || undefined,
       transport: {
-        type: 'http-post',
+        type: "http-post",
         url: `/mcp/${appId}`,
       },
       capabilities: {
@@ -4008,8 +4095,8 @@ export async function handleMcpDiscovery(
       sdk_tools: SDK_TOOLS.length,
       resources_count: 2 + (hasSkillContext(app) ? 2 : 0),
       contract_source: contractResolution.manifestBacked
-        ? 'manifest'
-        : (contractResolution.legacySourceDetected || 'none'),
+        ? "manifest"
+        : (contractResolution.legacySourceDetected || "none"),
       manifest_backed: contractResolution.manifestBacked,
       migration_required: contractResolution.migrationRequired,
       contract_message: contractResolution.message || undefined,
@@ -4017,7 +4104,7 @@ export async function handleMcpDiscovery(
 
     return json(response);
   } catch (err) {
-    console.error('MCP discovery error:', err);
-    return error('Failed to get MCP info', 500);
+    console.error("MCP discovery error:", err);
+    return error("Failed to get MCP info", 500);
   }
 }

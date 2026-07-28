@@ -4,7 +4,10 @@
 // an enforced invariant instead of a hand-audited hope: a capability in the
 // explicit PARITY_TARGETS set must project onto all three surfaces.
 
-import { assert, assertEquals } from 'https://deno.land/std@0.210.0/assert/mod.ts';
+import {
+  assert,
+  assertEquals,
+} from "https://deno.land/std@0.210.0/assert/mod.ts";
 import {
   getCapabilityById,
   getCapabilityByToolName,
@@ -12,17 +15,17 @@ import {
   registryDemotedMcpTools,
   registryMcpTools,
   toMcpTool,
-} from './registry.ts';
-import type { CapabilitySurface } from '../../../shared/contracts/capabilities.ts';
+} from "./registry.ts";
+import type { CapabilitySurface } from "../../../shared/contracts/capabilities.ts";
 
-const ALL_SURFACES: CapabilitySurface[] = ['mcp', 'cli', 'web'];
+const ALL_SURFACES: CapabilitySurface[] = ["mcp", "cli", "web"];
 
 // Capabilities we intend to reach full MCP + CLI + website parity. Agent-native
 // signals (flag, codemode) are intentionally MCP-only and excluded. As each read
 // migrates it is added here so the parity invariant grows with the registry.
 const PARITY_TARGETS = ["verify", "job", "discover", "call", "attention"];
 
-Deno.test('registry: full-parity capabilities declare all three surfaces', () => {
+Deno.test("registry: full-parity capabilities declare all three surfaces", () => {
   for (const id of PARITY_TARGETS) {
     const cap = getCapabilityById(id);
     assert(cap, `${id} should be registered`);
@@ -35,35 +38,35 @@ Deno.test('registry: full-parity capabilities declare all three surfaces', () =>
   }
 });
 
-Deno.test('registry: each declared surface has a projection descriptor', () => {
+Deno.test("registry: each declared surface has a projection descriptor", () => {
   for (const cap of listCapabilities()) {
     // MCP: needs an advertised gx.* name that resolves back to the capability.
-    if (cap.surfaces.includes('mcp')) {
+    if (cap.surfaces.includes("mcp")) {
       assert(
-        cap.advertisedName.startsWith('gx.'),
+        cap.advertisedName.startsWith("gx."),
         `"${cap.id}" mcp name must be gx.*-prefixed`,
       );
       assertEquals(getCapabilityByToolName(cap.advertisedName)?.id, cap.id);
     }
     // CLI: needs a command binding.
-    if (cap.surfaces.includes('cli')) {
+    if (cap.surfaces.includes("cli")) {
       assert(
         cap.cli?.command,
         `"${cap.id}" declares cli but has no cli.command`,
       );
     }
     // Web: needs a route descriptor.
-    if (cap.surfaces.includes('web')) {
+    if (cap.surfaces.includes("web")) {
       assert(cap.web?.path, `"${cap.id}" declares web but has no web.path`);
       assert(
-        cap.web!.path.startsWith('/api/'),
+        cap.web!.path.startsWith("/api/"),
         `"${cap.id}" web.path must be an /api/ route`,
       );
     }
   }
 });
 
-Deno.test('registry: tool-name resolution covers gx.*, ul.*, and aliases', () => {
+Deno.test("registry: tool-name resolution covers gx.*, ul.*, and aliases", () => {
   // gx.* advertised name, its ul.* twin, and explicit legacy aliases all resolve.
   assertEquals(getCapabilityByToolName("gx.verify")?.id, "verify");
   assertEquals(getCapabilityByToolName("ul.verify")?.id, "verify");
@@ -90,32 +93,32 @@ Deno.test('registry: tool-name resolution covers gx.*, ul.*, and aliases', () =>
   assertEquals(getCapabilityByToolName("gx.secrets")?.id, "secrets");
   assertEquals(getCapabilityByToolName("ul.secrets")?.id, "secrets");
   // ul.connect + ul.connections folded into the secrets capability.
-  assertEquals(getCapabilityByToolName('ul.connect')?.id, 'secrets');
-  assertEquals(getCapabilityByToolName('ul.connections')?.id, 'secrets');
-  assertEquals(getCapabilityByToolName('gx.call')?.id, 'call');
-  assertEquals(getCapabilityByToolName('ul.call')?.id, 'call');
-  assertEquals(getCapabilityByToolName('gx.codemode')?.id, 'codemode');
-  assertEquals(getCapabilityByToolName('ul.codemode')?.id, 'codemode');
-  assertEquals(getCapabilityByToolName('ul.execute')?.id, 'codemode');
-  assertEquals(getCapabilityByToolName('gx.db')?.id, 'db_inspect');
-  assertEquals(getCapabilityByToolName('gx.routine')?.id, 'routine');
-  assertEquals(getCapabilityByToolName('ul.routine')?.id, 'routine');
-  assertEquals(getCapabilityByToolName('gx.emit')?.id, 'emit');
-  assertEquals(getCapabilityByToolName('ul.emit')?.id, 'emit');
+  assertEquals(getCapabilityByToolName("ul.connect")?.id, "secrets");
+  assertEquals(getCapabilityByToolName("ul.connections")?.id, "secrets");
+  assertEquals(getCapabilityByToolName("gx.call")?.id, "call");
+  assertEquals(getCapabilityByToolName("ul.call")?.id, "call");
+  assertEquals(getCapabilityByToolName("gx.codemode")?.id, "codemode");
+  assertEquals(getCapabilityByToolName("ul.codemode")?.id, "codemode");
+  assertEquals(getCapabilityByToolName("ul.execute")?.id, "codemode");
+  assertEquals(getCapabilityByToolName("gx.db")?.id, "db_inspect");
+  assertEquals(getCapabilityByToolName("gx.routine")?.id, "routine");
+  assertEquals(getCapabilityByToolName("ul.routine")?.id, "routine");
+  assertEquals(getCapabilityByToolName("gx.emit")?.id, "emit");
+  assertEquals(getCapabilityByToolName("ul.emit")?.id, "emit");
   // An unmigrated / unknown name does not resolve (falls to the legacy switch).
-  assertEquals(getCapabilityByToolName('gx.wallet'), undefined);
-  assertEquals(getCapabilityByToolName('nope'), undefined);
+  assertEquals(getCapabilityByToolName("gx.wallet"), undefined);
+  assertEquals(getCapabilityByToolName("nope"), undefined);
 });
 
-Deno.test('registry: MCP projection honors LITE (core-only) and Free Mode', () => {
+Deno.test("registry: MCP projection honors LITE (core-only) and Free Mode", () => {
   const lite = registryMcpTools({ lite: true }).map((t) => t.name);
   const full = registryMcpTools({ lite: false }).map((t) => t.name);
   // codemode is core (in LITE) but dropped in Free Mode (billing bypass).
-  assert(lite.includes('gx.codemode'), 'gx.codemode should be in LITE');
+  assert(lite.includes("gx.codemode"), "gx.codemode should be in LITE");
   assert(
     !registryMcpTools({ lite: false, freeMode: true }).map((t) => t.name)
-      .includes('gx.codemode'),
-    'gx.codemode must be dropped in Free Mode',
+      .includes("gx.codemode"),
+    "gx.codemode must be dropped in Free Mode",
   );
   // Core tools appear in both the lean and full manifests.
   for (
@@ -137,55 +140,55 @@ Deno.test('registry: MCP projection honors LITE (core-only) and Free Mode', () =
   }
   // Demoted tools (flag) are hidden from LITE but callable + in the full manifest
   // and the progressive-disclosure list.
-  assert(!lite.includes('gx.flag'), 'gx.flag is demoted — not in LITE');
-  assert(full.includes('gx.flag'), 'gx.flag should be in the full manifest');
+  assert(!lite.includes("gx.flag"), "gx.flag is demoted — not in LITE");
+  assert(full.includes("gx.flag"), "gx.flag should be in the full manifest");
   // Manual event fanout remains demoted, while routines are launch-core above.
-  assert(!lite.includes('gx.emit'), 'gx.emit is demoted — not in LITE');
-  assert(full.includes('gx.emit'), 'gx.emit should be in the full manifest');
+  assert(!lite.includes("gx.emit"), "gx.emit is demoted — not in LITE");
+  assert(full.includes("gx.emit"), "gx.emit should be in the full manifest");
   // Demoted registry tools, in registration order (for the scope="tools" list).
   assertEquals(
     registryDemotedMcpTools().map((t) => t.name),
-    ['gx.download', 'gx.db', 'gx.notifications', 'gx.flag', 'gx.emit'],
+    ["gx.download", "gx.db", "gx.notifications", "gx.flag", "gx.emit"],
   );
 });
 
-Deno.test('registry: toMcpTool produces a well-formed tools/list entry', () => {
-  const verify = getCapabilityById('verify')!;
+Deno.test("registry: toMcpTool produces a well-formed tools/list entry", () => {
+  const verify = getCapabilityById("verify")!;
   const tool = toMcpTool(verify);
-  assertEquals(tool.name, 'gx.verify');
-  assertEquals(tool.inputSchema.required, ['app_id']);
+  assertEquals(tool.name, "gx.verify");
+  assertEquals(tool.inputSchema.required, ["app_id"]);
   assertEquals(tool.annotations?.readOnlyHint, true);
   assert(tool.description.length > 0);
 });
 
-Deno.test('registry: builder primitives advertise machine-readable output contracts', () => {
-  const project = toMcpTool(getCapabilityById('project')!);
+Deno.test("registry: builder primitives advertise machine-readable output contracts", () => {
+  const project = toMcpTool(getCapabilityById("project")!);
   assertEquals(project.outputSchema?.required, [
-    'view',
-    'app_id',
-    'revision',
-    'revision_created_at',
-    'revision_expires_at',
+    "view",
+    "app_id",
+    "revision",
+    "revision_created_at",
+    "revision_expires_at",
   ]);
   assertEquals(
     project.outputSchema?.properties?.removed_paths?.items?.type,
-    'string',
+    "string",
   );
 
-  const stage = toMcpTool(getCapabilityById('stage')!);
+  const stage = toMcpTool(getCapabilityById("stage")!);
   assertEquals(stage.outputSchema?.required, [
-    'bundle_id',
-    'source_hash',
-    'file_count',
-    'size_bytes',
-    'changed_files',
-    'reused_files',
-    'deleted_files',
-    'created_at',
-    'expires_at',
+    "bundle_id",
+    "source_hash",
+    "file_count",
+    "size_bytes",
+    "changed_files",
+    "reused_files",
+    "deleted_files",
+    "created_at",
+    "expires_at",
   ]);
   assertEquals(
     stage.outputSchema?.properties?.changed_files?.items?.type,
-    'string',
+    "string",
   );
 });

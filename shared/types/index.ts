@@ -1,14 +1,14 @@
 // Galactic Shared Types
 // Used across API, Web, and Runtime
 
-import type { ManifestComputeConfig } from '../contracts/compute.ts';
+import type { ManifestComputeConfig } from "../contracts/compute.ts";
 
 export {
   isAgenticInterfaceSpec,
   validateAgenticInterfaceSpec,
-} from '../contracts/agentic-interface.ts';
-export type * from '../contracts/agentic-interface.ts';
-export type * from '../contracts/command-turn.ts';
+} from "../contracts/agentic-interface.ts";
+export type * from "../contracts/agentic-interface.ts";
+export type * from "../contracts/command-turn.ts";
 
 // ============================================
 // USER & AUTH
@@ -17,17 +17,17 @@ export type * from '../contracts/command-turn.ts';
 // Supported BYOK providers.
 // Legacy provider values stay in the union so old DB records continue to hydrate safely.
 export const ACTIVE_BYOK_PROVIDER_IDS = [
-  'openrouter',
-  'openai',
-  'deepseek',
-  'nvidia',
-  'google',
-  'xai',
-  'moonshot',
-  'zai',
+  "openrouter",
+  "openai",
+  "deepseek",
+  "nvidia",
+  "google",
+  "xai",
+  "moonshot",
+  "zai",
 ] as const;
 
-export const LEGACY_BYOK_PROVIDER_IDS = ['anthropic'] as const;
+export const LEGACY_BYOK_PROVIDER_IDS = ["anthropic"] as const;
 
 export type ActiveBYOKProvider = typeof ACTIVE_BYOK_PROVIDER_IDS[number];
 export type LegacyBYOKProvider = typeof LEGACY_BYOK_PROVIDER_IDS[number];
@@ -36,14 +36,14 @@ export type BYOKProvider = ActiveBYOKProvider | LegacyBYOKProvider;
 export function isActiveBYOKProvider(
   value: unknown,
 ): value is ActiveBYOKProvider {
-  return typeof value === 'string' &&
+  return typeof value === "string" &&
     (ACTIVE_BYOK_PROVIDER_IDS as readonly string[]).includes(value);
 }
 
 export function isLegacyBYOKProvider(
   value: unknown,
 ): value is LegacyBYOKProvider {
-  return typeof value === 'string' &&
+  return typeof value === "string" &&
     (LEGACY_BYOK_PROVIDER_IDS as readonly string[]).includes(value);
 }
 
@@ -122,7 +122,7 @@ export interface VersionMetadata {
 export interface VersionTestAttestationMetadata {
   schema_version: 1;
   attestation_id: string;
-  mode: 'deno_execution' | 'gpu_validation';
+  mode: "deno_execution" | "gpu_validation";
   source_hash: string;
   tested_at: string;
   token_expires_at: string;
@@ -130,7 +130,7 @@ export interface VersionTestAttestationMetadata {
 }
 
 export interface VersionTrustSignature {
-  algorithm: 'HMAC-SHA256';
+  algorithm: "HMAC-SHA256";
   signer: string;
   signed_at: string;
   signature: string;
@@ -141,7 +141,7 @@ export interface VersionTrustMetadata {
   schema_version: 1;
   app_id: string;
   version: string;
-  runtime: 'deno' | 'gpu' | string;
+  runtime: "deno" | "gpu" | string;
   manifest_hash: string | null;
   // sha256 of the canonical {app description + per-function descriptions} — the
   // attestation subject for description-accuracy. Optional: legacy versions omit it.
@@ -159,21 +159,21 @@ export interface VersionTrustMetadata {
 // Binary trust-card health (no yellow — "no_data" is distinct from red, used when
 // a window has too few paid calls to judge). Computed per rolling window from
 // mcp_call_logs, excluding owner/self + free calls.
-export type HealthStatus = 'green' | 'red' | 'no_data';
+export type HealthStatus = "green" | "red" | "no_data";
 export interface HealthWindows {
-  '1h': HealthStatus;
-  '24h': HealthStatus;
-  '7d': HealthStatus;
-  '30d': HealthStatus;
+  "1h": HealthStatus;
+  "24h": HealthStatus;
+  "7d": HealthStatus;
+  "30d": HealthStatus;
 }
 
 export type AppGpuStatus =
-  | 'building'
-  | 'benchmarking'
-  | 'live'
-  | 'build_failed'
-  | 'benchmark_failed'
-  | 'build_config_invalid';
+  | "building"
+  | "benchmarking"
+  | "live"
+  | "build_failed"
+  | "benchmark_failed"
+  | "build_config_invalid";
 
 export interface App {
   id: string;
@@ -188,12 +188,12 @@ export interface App {
    *  responses leave it undefined. Seeded into the B11 install button
    *  state machine on ToolDetailView. */
   is_installed?: boolean;
-  visibility: 'private' | 'unlisted' | 'public';
+  visibility: "private" | "unlisted" | "public";
   /** True for agents that were already public when the Stripe Connect publish
    *  gate shipped (backfilled once). Exempt agents keep publishing publicly
    *  without Connect; new public agents are not exempt. */
   connect_gate_exempt?: boolean;
-  download_access: 'owner' | 'public';
+  download_access: "owner" | "public";
   current_version: string;
   versions: string[];
   version_metadata: VersionMetadata[];
@@ -240,9 +240,9 @@ export interface App {
   supabase_config_id: string | null;
   // Manifest-based configuration (v2 architecture)
   manifest: string | null; // JSON stringified AppManifest
-  app_type: 'mcp' | 'skill' | null; // null means legacy auto-detect; 'skill' = .md context file
+  app_type: "mcp" | "skill" | null; // null means legacy auto-detect; 'skill' = .md context file
   // GPU compute runtime
-  runtime: 'deno' | 'gpu' | null; // null = legacy deno
+  runtime: "deno" | "gpu" | null; // null = legacy deno
   gpu_type: string | null; // GpuType identifier (e.g. 'A100-80GB-SXM')
   gpu_status: AppGpuStatus | null;
   gpu_endpoint_id: string | null; // RunPod (or other provider) endpoint ID
@@ -274,7 +274,7 @@ export interface App {
   auto_heal_enabled: boolean; // opt-out of health monitoring
   // D1 relational database (per-app, lazy-provisioned)
   d1_database_id: string | null; // Cloudflare D1 database UUID
-  d1_status: 'pending' | 'provisioning' | 'ready' | 'error' | null;
+  d1_status: "pending" | "provisioning" | "ready" | "error" | null;
   d1_provisioned_at: string | null;
   d1_last_migration_version: number;
   created_at: string;
@@ -318,7 +318,7 @@ export interface PermissionDeclaration {
 
 export interface BuildLogEntry {
   time: string;
-  level: 'info' | 'warn' | 'error' | 'success';
+  level: "info" | "warn" | "error" | "success";
   message: string;
 }
 
@@ -335,11 +335,11 @@ export interface EnvVarLimits {
 
 // Per-user env var schema entry (declared by app owner)
 export interface EnvSchemaEntry {
-  scope: 'universal' | 'per_user';
+  scope: "universal" | "per_user";
   description?: string;
   required?: boolean;
   label?: string;
-  input?: 'text' | 'password' | 'email' | 'number' | 'url' | 'textarea';
+  input?: "text" | "password" | "email" | "number" | "url" | "textarea";
   placeholder?: string;
   help?: string;
 }
@@ -348,7 +348,7 @@ export const ENV_VAR_LIMITS: EnvVarLimits = {
   max_vars_per_app: 50,
   max_key_length: 64,
   max_value_length: 4096,
-  reserved_prefixes: ['ULTRALIGHT'],
+  reserved_prefixes: ["ULTRALIGHT"],
 };
 
 /**
@@ -357,8 +357,8 @@ export const ENV_VAR_LIMITS: EnvVarLimits = {
 export function validateEnvVarKey(
   key: string,
 ): { valid: boolean; error?: string } {
-  if (!key || typeof key !== 'string') {
-    return { valid: false, error: 'Key is required' };
+  if (!key || typeof key !== "string") {
+    return { valid: false, error: "Key is required" };
   }
 
   if (key.length > ENV_VAR_LIMITS.max_key_length) {
@@ -382,7 +382,8 @@ export function validateEnvVarKey(
   if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
     return {
       valid: false,
-      error: 'Key must be uppercase letters, numbers, and underscores, starting with a letter',
+      error:
+        "Key must be uppercase letters, numbers, and underscores, starting with a letter",
     };
   }
 
@@ -395,14 +396,15 @@ export function validateEnvVarKey(
 export function validateEnvVarValue(
   value: string,
 ): { valid: boolean; error?: string } {
-  if (typeof value !== 'string') {
-    return { valid: false, error: 'Value must be a string' };
+  if (typeof value !== "string") {
+    return { valid: false, error: "Value must be a string" };
   }
 
   if (value.length > ENV_VAR_LIMITS.max_value_length) {
     return {
       valid: false,
-      error: `Value must be ${ENV_VAR_LIMITS.max_value_length} characters or less`,
+      error:
+        `Value must be ${ENV_VAR_LIMITS.max_value_length} characters or less`,
     };
   }
 
@@ -440,7 +442,7 @@ export interface Execution {
   started_at: string;
   ended_at: string | null;
   duration_ms: number | null;
-  ai_provider: 'platform' | 'byok' | null;
+  ai_provider: "platform" | "byok" | null;
   ai_model: string | null;
   ai_tokens_input: number | null;
   ai_tokens_output: number | null;
@@ -456,7 +458,7 @@ export interface Execution {
 
 export interface LogEntry {
   time: string;
-  level: 'log' | 'error' | 'warn' | 'info';
+  level: "log" | "error" | "warn" | "info";
   message: string;
 }
 
@@ -477,12 +479,12 @@ export interface SDKContext {
 export type AIContentPart = AITextPart | AIFilePart;
 
 export interface AITextPart {
-  type: 'text';
+  type: "text";
   text: string;
 }
 
 export interface AIFilePart {
-  type: 'file';
+  type: "file";
   data: string; // base64 data URL or raw text
   filename?: string; // e.g. "notes.pdf" — used to detect type
 }
@@ -490,9 +492,9 @@ export interface AIFilePart {
 export interface AIRequest {
   model?: string;
   messages: Array<{
-    role: 'system' | 'user' | 'assistant';
+    role: "system" | "user" | "assistant";
     content: string | AIContentPart[];
-    cache_control?: { type: 'ephemeral' };
+    cache_control?: { type: "ephemeral" };
   }>;
   temperature?: number;
   max_tokens?: number;
@@ -508,8 +510,8 @@ export interface AIRequest {
   };
 }
 
-export type AIStructuredRequest = Omit<AIRequest, 'output_schema'> & {
-  output_schema: NonNullable<AIRequest['output_schema']>;
+export type AIStructuredRequest = Omit<AIRequest, "output_schema"> & {
+  output_schema: NonNullable<AIRequest["output_schema"]>;
 };
 
 // ── Widget System ──
@@ -535,17 +537,17 @@ export interface WidgetDeclaration {
 export type WidgetContextSourceRef = string;
 
 export type WidgetGenerationComponentKind =
-  | 'metric'
-  | 'list'
-  | 'table'
-  | 'detail'
-  | 'form'
-  | 'action_bar'
-  | 'timeline'
-  | 'card_ref'
-  | 'widget_embed'
-  | 'routine_panel'
-  | 'text';
+  | "metric"
+  | "list"
+  | "table"
+  | "detail"
+  | "form"
+  | "action_bar"
+  | "timeline"
+  | "card_ref"
+  | "widget_embed"
+  | "routine_panel"
+  | "text";
 
 export interface WidgetGenerationSuggestedComponent {
   kind: WidgetGenerationComponentKind;
@@ -566,14 +568,14 @@ export interface WidgetGenerationHints {
   prompt_examples?: string[];
 }
 
-export type WidgetContextSourceType = 'd1_table' | 'd1_query' | 'function';
+export type WidgetContextSourceType = "d1_table" | "d1_query" | "function";
 
 export interface WidgetContextSourceDeclaration {
   id: string;
   label: string;
   description?: string;
   type: WidgetContextSourceType;
-  access: 'read';
+  access: "read";
   searchable?: boolean;
   default_for_widgets?: string[];
   tables?: string[];
@@ -589,9 +591,9 @@ export interface WidgetContextRedaction {
   replacement?: string;
 }
 
-export type WidgetActionMode = 'read' | 'write' | 'ui';
+export type WidgetActionMode = "read" | "write" | "ui";
 
-export type WidgetConfirmationPolicy = 'none' | 'user' | 'high_risk';
+export type WidgetConfirmationPolicy = "none" | "user" | "high_risk";
 
 export interface WidgetMcpActionBinding {
   function: string;
@@ -665,12 +667,12 @@ export interface WidgetStateSnapshot {
 }
 
 export type WidgetSurfaceEventKind =
-  | 'user'
-  | 'agent'
-  | 'data'
-  | 'navigation'
-  | 'error'
-  | 'system';
+  | "user"
+  | "agent"
+  | "data"
+  | "navigation"
+  | "error"
+  | "system";
 
 export interface WidgetSurfaceEvent {
   id?: string;
@@ -689,14 +691,14 @@ export interface WidgetSurfaceEvent {
 }
 
 export type WidgetSurfaceKind =
-  | 'inline'
-  | 'window'
-  | 'command_card'
-  | 'generated_interface';
+  | "inline"
+  | "window"
+  | "command_card"
+  | "generated_interface";
 
-export type ActiveSurfaceType = 'widget' | 'generated_interface';
+export type ActiveSurfaceType = "widget" | "generated_interface";
 
-export type WidgetSurfaceStatus = 'opening' | 'ready' | 'stale' | 'closed';
+export type WidgetSurfaceStatus = "opening" | "ready" | "stale" | "closed";
 
 export interface ActiveWidgetContext {
   surfaceId: string;
@@ -709,7 +711,7 @@ export interface ActiveWidgetContext {
   widgetName?: string;
   interfaceId?: string;
   interfaceTitle?: string;
-  interfaceMode?: 'temporary' | 'saved';
+  interfaceMode?: "temporary" | "saved";
   title?: string;
   context?: Record<string, string>;
   status?: WidgetSurfaceStatus;
@@ -728,7 +730,7 @@ export interface WidgetActionInvocation {
   action_id: string;
   args?: Record<string, unknown>;
   turn_id?: string;
-  source?: 'user' | 'agent' | 'system';
+  source?: "user" | "agent" | "system";
 }
 
 export interface WidgetActionResult {
@@ -743,21 +745,21 @@ export interface WidgetActionResult {
   event?: WidgetSurfaceEvent;
 }
 
-export type CommandCardRenderMode = 'native';
+export type CommandCardRenderMode = "native";
 
 export type CommandCardKind =
-  | 'metric'
-  | 'list'
-  | 'timeline'
-  | 'sparkline'
-  | 'progress'
-  | 'summary'
-  | 'composite';
+  | "metric"
+  | "list"
+  | "timeline"
+  | "sparkline"
+  | "progress"
+  | "summary"
+  | "composite";
 
 export interface WidgetDependencyDeclaration {
   app: string;
   functions: string[];
-  access?: 'read';
+  access?: "read";
 }
 
 export interface CommandCardDeclaration {
@@ -819,7 +821,7 @@ export interface WidgetAppResponse {
 export interface CommandCardDataPayload {
   card_id?: string;
   meta?: Partial<WidgetMeta> & {
-    status?: 'live' | 'paused' | 'error' | string;
+    status?: "live" | "paused" | "error" | string;
     accent?: string;
     cost_per_min?: number;
   };
@@ -839,19 +841,19 @@ export type CommandCardBody =
   | CommandCompositeCardBody;
 
 export interface CommandMetricCardBody {
-  kind: 'metric';
+  kind: "metric";
   metric: string | number;
   label?: string;
   delta?: string;
 }
 
 export interface CommandListCardBody {
-  kind: 'list';
+  kind: "list";
   rows: Array<Array<string | number | boolean | null>>;
 }
 
 export interface CommandTimelineCardBody {
-  kind: 'timeline';
+  kind: "timeline";
   rows: Array<{
     time?: string;
     title: string;
@@ -861,27 +863,27 @@ export interface CommandTimelineCardBody {
 }
 
 export interface CommandSparklineCardBody {
-  kind: 'sparkline';
+  kind: "sparkline";
   metric?: string | number;
   label?: string;
   points: number[];
 }
 
 export interface CommandProgressCardBody {
-  kind: 'progress';
+  kind: "progress";
   value: number;
   max?: number;
   label?: string;
 }
 
 export interface CommandSummaryCardBody {
-  kind: 'summary';
+  kind: "summary";
   title?: string;
   lines: string[];
 }
 
 export interface CommandCompositeCardBody {
-  kind: 'composite';
+  kind: "composite";
   children: Array<{
     app_id?: string;
     widget_id: string;
@@ -901,10 +903,10 @@ export interface AIResponse<Output = unknown> {
   output?: Output;
   error?: string;
   error_code?:
-    | 'invalid_output_schema'
-    | 'structured_output_unsupported'
-    | 'structured_output_invalid_json'
-    | 'structured_output_schema_mismatch';
+    | "invalid_output_schema"
+    | "structured_output_unsupported"
+    | "structured_output_invalid_json"
+    | "structured_output_schema_mismatch";
 }
 
 export type AIStructuredResponse<Output = unknown> = AIResponse<Output> & {
@@ -933,7 +935,7 @@ export interface UploadResponse {
   build_logs: BuildLogEntry[];
   d1?: {
     provisioned: boolean;
-    status: 'ready' | 'failed' | 'skipped';
+    status: "ready" | "failed" | "skipped";
     database_id?: string;
     migrations_applied: number;
     migrations_skipped: number;
@@ -977,7 +979,7 @@ export interface AppPermission {
   permission: string;
   granted_at: string;
   expires_at: string | null;
-  duration: 'perpetual' | 'session' | '1h' | '24h' | '7d';
+  duration: "perpetual" | "session" | "1h" | "24h" | "7d";
   budget_limit: number | null;
   budget_used: number;
   last_used_at: string | null;
@@ -994,7 +996,7 @@ export interface GrantConstraints {
   /** Max calls allowed before access is suspended. Resets according to budget_period. */
   budget_limit?: number | null;
   /** Rolling period for budget reset. null = lifetime budget (never resets). */
-  budget_period?: 'hour' | 'day' | 'week' | 'month' | null;
+  budget_period?: "hour" | "day" | "week" | "month" | null;
   /** ISO timestamp — permission auto-expires after this date */
   expires_at?: string | null;
   /** Per-parameter value whitelists. Keys are parameter names, values are arrays of allowed values. null = unrestricted. */
@@ -1063,7 +1065,7 @@ export interface AppPricingConfig {
   /** Default number of free full-context pulls per user before skill pricing kicks in. */
   default_free_skill_pulls?: number;
   /** Whether free call quota is counted per-app (shared) or per-function (separate). Default: 'function'. */
-  free_calls_scope?: 'app' | 'function';
+  free_calls_scope?: "app" | "function";
   /** Per-function price overrides. Value is Light (legacy number) or FunctionPricing object. */
   functions?: Record<string, number | FunctionPricing>;
   /** Per-skill context-pull price overrides. Value is Light (legacy number) or SkillPricing object. */
@@ -1112,7 +1114,7 @@ export function getCallPriceLight(
   // Check per-function override first, then default
   if (pricingConfig.functions && functionName in pricingConfig.functions) {
     const val = pricingConfig.functions[functionName];
-    if (typeof val === 'number') return val; // legacy format
+    if (typeof val === "number") return val; // legacy format
     return val.price_light; // FunctionPricing format
   }
   return pricingConfig.default_price_light || 0;
@@ -1131,7 +1133,7 @@ export function getFreeCalls(
   // Check per-function override first (only in FunctionPricing format)
   if (pricingConfig.functions && functionName in pricingConfig.functions) {
     const val = pricingConfig.functions[functionName];
-    if (typeof val === 'object' && val.free_calls !== undefined) {
+    if (typeof val === "object" && val.free_calls !== undefined) {
       return val.free_calls;
     }
   }
@@ -1146,8 +1148,8 @@ export function getFreeCalls(
  */
 export function getFreeCallsScope(
   pricingConfig: AppPricingConfig | null | undefined,
-): 'app' | 'function' {
-  return pricingConfig?.free_calls_scope || 'function';
+): "app" | "function" {
+  return pricingConfig?.free_calls_scope || "function";
 }
 
 /**
@@ -1161,7 +1163,7 @@ export function getSkillPullPriceLight(
   if (!pricingConfig) return 0;
   if (pricingConfig.skills && skillId in pricingConfig.skills) {
     const val = pricingConfig.skills[skillId];
-    if (typeof val === 'number') return val;
+    if (typeof val === "number") return val;
     return val.price_light;
   }
   return pricingConfig.default_skill_pull_price_light || 0;
@@ -1177,7 +1179,7 @@ export function getFreeSkillPulls(
   if (!pricingConfig) return 0;
   if (pricingConfig.skills && skillId in pricingConfig.skills) {
     const val = pricingConfig.skills[skillId];
-    if (typeof val === 'object' && val.free_pulls !== undefined) {
+    if (typeof val === "object" && val.free_pulls !== undefined) {
       return val.free_pulls;
     }
   }
@@ -1194,10 +1196,10 @@ export function getFreeSkillPulls(
  */
 export function getGpuPricingMode(
   gpuPricingConfig: Record<string, unknown> | null | undefined,
-): 'per_call' | 'per_unit' | 'per_duration' | null {
+): "per_call" | "per_unit" | "per_duration" | null {
   if (!gpuPricingConfig) return null;
   const mode = gpuPricingConfig.mode;
-  if (mode === 'per_call' || mode === 'per_unit' || mode === 'per_duration') {
+  if (mode === "per_call" || mode === "per_unit" || mode === "per_duration") {
     return mode;
   }
   return null;
@@ -1210,18 +1212,18 @@ export function getGpuPricingMode(
 export function getGpuPricingUnitLabel(
   gpuPricingConfig: Record<string, unknown> | null | undefined,
 ): string {
-  if (!gpuPricingConfig) return 'call';
+  if (!gpuPricingConfig) return "call";
   switch (gpuPricingConfig.mode) {
-    case 'per_call':
-      return 'call';
-    case 'per_unit':
-      return (typeof gpuPricingConfig.unit_label === 'string'
+    case "per_call":
+      return "call";
+    case "per_unit":
+      return (typeof gpuPricingConfig.unit_label === "string"
         ? gpuPricingConfig.unit_label
-        : 'unit');
-    case 'per_duration':
-      return 'second';
+        : "unit");
+    case "per_duration":
+      return "second";
     default:
-      return 'call';
+      return "call";
   }
 }
 
@@ -1229,8 +1231,8 @@ export function getGpuPricingUnitLabel(
 // CONTENT LAYER (unified content index)
 // ============================================
 
-export type ContentType = 'page' | 'memory_md' | 'library_md';
-export type ContentVisibility = 'public' | 'private' | 'shared';
+export type ContentType = "page" | "memory_md" | "library_md";
+export type ContentVisibility = "public" | "private" | "shared";
 
 /** A row from the content table — indexes pages, memory.md, library.md */
 export interface ContentRow {
@@ -1259,7 +1261,7 @@ export interface ContentShare {
   content_id: string;
   shared_with_email: string;
   shared_with_user_id: string | null;
-  access_level: 'read' | 'readwrite';
+  access_level: "read" | "readwrite";
   created_at: string;
   expires_at: string | null;
 }
@@ -1272,7 +1274,7 @@ export interface MemoryShare {
   key_pattern: string;
   shared_with_email: string;
   shared_with_user_id: string | null;
-  access_level: 'read' | 'write' | 'readwrite';
+  access_level: "read" | "write" | "readwrite";
   created_at: string;
   expires_at: string | null;
 }
@@ -1296,12 +1298,12 @@ export interface MemoryShare {
 //   - 15% platform fee on creator revenue
 //   - Light is divisible to 8 decimal places
 
-export type Tier = 'free' | 'fun' | 'pro' | 'scale' | 'enterprise';
+export type Tier = "free" | "fun" | "pro" | "scale" | "enterprise";
 
 // ── Light Currency Constants ──
 
 /** Light symbol character for display. */
-export const LIGHT_SYMBOL = '✦';
+export const LIGHT_SYMBOL = "✦";
 
 /** Canonical Light/$ reference for internal USD-denominated costs and copy. */
 export const LIGHT_PER_DOLLAR_CANONICAL = 100;
@@ -1458,17 +1460,17 @@ export function calcGrossWithStripeFee(desiredCents: number): number {
  */
 export function formatLight(amount: number): string {
   const abs = Math.abs(amount);
-  const sign = amount < 0 ? '-' : '';
+  const sign = amount < 0 ? "-" : "";
   let formatted: string;
   if (abs >= 1_000_000_000_000) {
-    formatted = (abs / 1_000_000_000_000).toFixed(2) + 'T';
+    formatted = (abs / 1_000_000_000_000).toFixed(2) + "T";
   } else if (abs >= 1_000_000_000) {
-    formatted = (abs / 1_000_000_000).toFixed(2) + 'B';
-  } else if (abs >= 1_000_000) formatted = (abs / 1_000_000).toFixed(2) + 'M';
-  else if (abs >= 5_000) formatted = (abs / 1_000).toFixed(1) + 'K';
+    formatted = (abs / 1_000_000_000).toFixed(2) + "B";
+  } else if (abs >= 1_000_000) formatted = (abs / 1_000_000).toFixed(2) + "M";
+  else if (abs >= 5_000) formatted = (abs / 1_000).toFixed(1) + "K";
   else if (abs % 1 === 0) formatted = String(abs);
   else formatted = abs.toFixed(2);
-  return sign + '\u2726' + formatted;
+  return sign + "\u2726" + formatted;
 }
 
 /**
@@ -1478,10 +1480,10 @@ export function formatLight(amount: number): string {
  */
 export function formatDollarsFromLight(light: number): string {
   const dollars = (Number(light) || 0) / LIGHT_PER_DOLLAR_CANONICAL;
-  const sign = dollars < 0 ? '-' : '';
+  const sign = dollars < 0 ? "-" : "";
   const fixed = Math.abs(dollars).toFixed(2);
-  const [whole, cents] = fixed.split('.');
-  const withCommas = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const [whole, cents] = fixed.split(".");
+  const withCommas = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return `${sign}$${withCommas}.${cents}`;
 }
 
@@ -1498,7 +1500,7 @@ const PLATFORM_LIMITS = {
   max_storage_bytes: 104_857_600, // 100 MB soft cap (source code + user data)
   execution_timeout_ms: 120_000, // 2min
   log_retention_days: 90,
-  allowed_visibility: ['private', 'unlisted', 'public'] as const,
+  allowed_visibility: ["private", "unlisted", "public"] as const,
 } as const;
 
 // All tier keys map to the same limits — no differentiation.
@@ -1520,55 +1522,55 @@ export function isProTier(_tier: Tier | string): boolean {
 // ============================================
 
 export const ALLOWED_EXTENSIONS = [
-  '.ts',
-  '.tsx',
-  '.js',
-  '.jsx',
-  '.mjs',
-  '.cjs',
-  '.json',
-  '.jsonc',
-  '.css',
-  '.scss',
-  '.less',
-  '.html',
-  '.htm',
-  '.xml',
-  '.svg',
-  '.md',
-  '.mdx',
-  '.txt',
-  '.csv',
-  '.sql',
-  '.yaml',
-  '.yml',
-  '.toml',
-  '.ini',
-  '.conf',
-  '.env',
-  '.env.example',
-  '.env.local',
-  '.sh',
-  '.bash',
-  '.py',
-  '.rb',
-  '.go',
-  '.rs',
-  '.java',
-  '.kt',
-  '.c',
-  '.cpp',
-  '.h',
-  '.hpp',
-  '.wasm',
-  '.graphql',
-  '.gql',
-  '.prisma',
-  '.lock',
-  '.gitignore',
-  '.dockerignore',
-  '.dockerfile',
-  '.editorconfig',
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".jsonc",
+  ".css",
+  ".scss",
+  ".less",
+  ".html",
+  ".htm",
+  ".xml",
+  ".svg",
+  ".md",
+  ".mdx",
+  ".txt",
+  ".csv",
+  ".sql",
+  ".yaml",
+  ".yml",
+  ".toml",
+  ".ini",
+  ".conf",
+  ".env",
+  ".env.example",
+  ".env.local",
+  ".sh",
+  ".bash",
+  ".py",
+  ".rb",
+  ".go",
+  ".rs",
+  ".java",
+  ".kt",
+  ".c",
+  ".cpp",
+  ".h",
+  ".hpp",
+  ".wasm",
+  ".graphql",
+  ".gql",
+  ".prisma",
+  ".lock",
+  ".gitignore",
+  ".dockerignore",
+  ".dockerfile",
+  ".editorconfig",
 ] as const;
 export const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
 export const MAX_FILES_PER_UPLOAD = 50;
@@ -1591,7 +1593,7 @@ export interface UserContext {
 
 export interface QueryOptions {
   filter?: (value: unknown) => boolean;
-  sort?: { field: string; order: 'asc' | 'desc' };
+  sort?: { field: string; order: "asc" | "desc" };
   limit?: number;
   offset?: number;
 }
@@ -1655,7 +1657,7 @@ export interface GenerationResult {
 }
 
 export interface GenerationError {
-  phase: 'parse' | 'generate_skills' | 'validate' | 'embed';
+  phase: "parse" | "generate_skills" | "validate" | "embed";
   message: string;
   line?: number;
   suggestion?: string;
@@ -1756,7 +1758,7 @@ export interface MCPToolCallResponse {
 }
 
 export interface MCPContent {
-  type: 'text' | 'image' | 'audio' | 'resource' | 'resource_link';
+  type: "text" | "image" | "audio" | "resource" | "resource_link";
   text?: string;
   data?: string;
   mimeType?: string;
@@ -1834,7 +1836,7 @@ export interface BYOKProviderInfo {
   id: ActiveBYOKProvider;
   name: string;
   description: string;
-  protocol: 'openai-compatible';
+  protocol: "openai-compatible";
   baseUrl: string;
   defaultModel: string;
   models: BYOKModel[];
@@ -1868,7 +1870,7 @@ export interface BYOKModel {
    *  every model in a provider's catalog the FE falls back to its
    *  pre-B1 behaviour (show everything on both tiers), so deployments
    *  can stage the annotation rollout without breaking the picker. */
-  tier?: 'flash' | 'heavy' | 'both';
+  tier?: "flash" | "heavy" | "both";
 }
 
 const OPENAI_COMPAT_TEXT_CAPABILITIES: BYOKProviderCapabilities = {
@@ -1884,49 +1886,49 @@ const OPENAI_COMPAT_TEXT_CAPABILITIES: BYOKProviderCapabilities = {
 // First-tier BYOK provider registry. Runtime routing still chooses how each entry is used.
 export const BYOK_PROVIDERS: Record<ActiveBYOKProvider, BYOKProviderInfo> = {
   openrouter: {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    description: 'Access 100+ models from one API key',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    defaultModel: 'deepseek/deepseek-v4-flash',
+    id: "openrouter",
+    name: "OpenRouter",
+    description: "Access 100+ models from one API key",
+    protocol: "openai-compatible",
+    baseUrl: "https://openrouter.ai/api/v1",
+    defaultModel: "deepseek/deepseek-v4-flash",
     models: [
       {
-        id: 'deepseek/deepseek-v4-flash',
-        name: 'DeepSeek V4 Flash',
+        id: "deepseek/deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
         contextWindow: 1048576,
         inputPrice: 0.14,
         outputPrice: 0.28,
       },
       {
-        id: 'deepseek/deepseek-v4-pro',
-        name: 'DeepSeek V4 Pro',
+        id: "deepseek/deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
         contextWindow: 1048576,
         inputPrice: 1.74,
         outputPrice: 3.48,
       },
       {
-        id: 'openai/gpt-4o',
-        name: 'GPT-4o',
+        id: "openai/gpt-4o",
+        name: "GPT-4o",
         contextWindow: 128000,
         inputPrice: 5,
         outputPrice: 15,
       },
       {
-        id: 'openai/gpt-4o-mini',
-        name: 'GPT-4o Mini',
+        id: "openai/gpt-4o-mini",
+        name: "GPT-4o Mini",
         contextWindow: 128000,
         inputPrice: 0.15,
         outputPrice: 0.6,
       },
       {
-        id: 'google/gemini-3-flash-preview',
-        name: 'Gemini 3 Flash Preview',
+        id: "google/gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
         contextWindow: 1000000,
       },
       {
-        id: 'x-ai/grok-4.20-reasoning',
-        name: 'Grok 4.20 Reasoning',
+        id: "x-ai/grok-4.20-reasoning",
+        name: "Grok 4.20 Reasoning",
         contextWindow: 256000,
       },
     ],
@@ -1935,47 +1937,48 @@ export const BYOK_PROVIDERS: Record<ActiveBYOKProvider, BYOKProviderInfo> = {
       multimodal: true,
       webSearch: true,
     },
-    apiKeyPrefix: 'sk-or-',
-    docsUrl: 'https://openrouter.ai/docs',
-    apiKeyUrl: 'https://openrouter.ai/keys',
+    apiKeyPrefix: "sk-or-",
+    docsUrl: "https://openrouter.ai/docs",
+    apiKeyUrl: "https://openrouter.ai/keys",
   },
   openai: {
-    id: 'openai',
-    name: 'OpenAI',
-    description: 'Use GPT and OpenAI-compatible models with your own OpenAI key',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://api.openai.com/v1',
-    defaultModel: 'gpt-4o-mini',
+    id: "openai",
+    name: "OpenAI",
+    description:
+      "Use GPT and OpenAI-compatible models with your own OpenAI key",
+    protocol: "openai-compatible",
+    baseUrl: "https://api.openai.com/v1",
+    defaultModel: "gpt-4o-mini",
     models: [
       {
-        id: 'gpt-4o-mini',
-        name: 'GPT-4o Mini',
+        id: "gpt-4o-mini",
+        name: "GPT-4o Mini",
         contextWindow: 128000,
         inputPrice: 0.15,
         outputPrice: 0.6,
       },
       {
-        id: 'gpt-4o',
-        name: 'GPT-4o',
+        id: "gpt-4o",
+        name: "GPT-4o",
         contextWindow: 128000,
         inputPrice: 5,
         outputPrice: 15,
       },
       {
-        id: 'gpt-5-search-api',
-        name: 'GPT-5 Search API',
+        id: "gpt-5-search-api",
+        name: "GPT-5 Search API",
         contextWindow: 128000,
         webSearch: true,
       },
       {
-        id: 'gpt-4o-search-preview',
-        name: 'GPT-4o Search Preview',
+        id: "gpt-4o-search-preview",
+        name: "GPT-4o Search Preview",
         contextWindow: 128000,
         webSearch: true,
       },
       {
-        id: 'gpt-4o-mini-search-preview',
-        name: 'GPT-4o Mini Search Preview',
+        id: "gpt-4o-mini-search-preview",
+        name: "GPT-4o Mini Search Preview",
         contextWindow: 128000,
         webSearch: true,
       },
@@ -1986,145 +1989,145 @@ export const BYOK_PROVIDERS: Record<ActiveBYOKProvider, BYOKProviderInfo> = {
       realtime: true,
       webSearch: true,
     },
-    apiKeyPrefix: 'sk-',
-    docsUrl: 'https://platform.openai.com/docs',
-    apiKeyUrl: 'https://platform.openai.com/api-keys',
+    apiKeyPrefix: "sk-",
+    docsUrl: "https://platform.openai.com/docs",
+    apiKeyUrl: "https://platform.openai.com/api-keys",
   },
   deepseek: {
-    id: 'deepseek',
-    name: 'DeepSeek',
-    description: 'Use DeepSeek models directly with your own DeepSeek key',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://api.deepseek.com',
-    defaultModel: 'deepseek-v4-flash',
+    id: "deepseek",
+    name: "DeepSeek",
+    description: "Use DeepSeek models directly with your own DeepSeek key",
+    protocol: "openai-compatible",
+    baseUrl: "https://api.deepseek.com",
+    defaultModel: "deepseek-v4-flash",
     models: [
       {
-        id: 'deepseek-v4-flash',
-        name: 'DeepSeek V4 Flash',
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
         contextWindow: 1048576,
         inputPrice: 0.14,
         outputPrice: 0.28,
       },
       {
-        id: 'deepseek-v4-pro',
-        name: 'DeepSeek V4 Pro',
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
         contextWindow: 1048576,
         inputPrice: 1.74,
         outputPrice: 3.48,
       },
     ],
     capabilities: OPENAI_COMPAT_TEXT_CAPABILITIES,
-    apiKeyPrefix: 'sk-',
-    docsUrl: 'https://api-docs.deepseek.com',
-    apiKeyUrl: 'https://platform.deepseek.com/api_keys',
+    apiKeyPrefix: "sk-",
+    docsUrl: "https://api-docs.deepseek.com",
+    apiKeyUrl: "https://platform.deepseek.com/api_keys",
   },
   nvidia: {
-    id: 'nvidia',
-    name: 'NVIDIA NIM',
-    description: 'Use NVIDIA hosted NIM models with your own NVIDIA API key',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://integrate.api.nvidia.com/v1',
-    defaultModel: 'deepseek-ai/deepseek-v4-flash',
+    id: "nvidia",
+    name: "NVIDIA NIM",
+    description: "Use NVIDIA hosted NIM models with your own NVIDIA API key",
+    protocol: "openai-compatible",
+    baseUrl: "https://integrate.api.nvidia.com/v1",
+    defaultModel: "deepseek-ai/deepseek-v4-flash",
     models: [
       {
-        id: 'deepseek-ai/deepseek-v4-flash',
-        name: 'DeepSeek V4 Flash',
+        id: "deepseek-ai/deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
         contextWindow: 1048576,
         inputPrice: 0.14,
         outputPrice: 0.28,
       },
       {
-        id: 'deepseek-ai/deepseek-v4-pro',
-        name: 'DeepSeek V4 Pro',
+        id: "deepseek-ai/deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
         contextWindow: 1048576,
         inputPrice: 1.74,
         outputPrice: 3.48,
       },
       {
-        id: 'minimaxai/minimax-m2.7',
-        name: 'MiniMax M2.7',
+        id: "minimaxai/minimax-m2.7",
+        name: "MiniMax M2.7",
         contextWindow: 204800,
       },
     ],
     capabilities: OPENAI_COMPAT_TEXT_CAPABILITIES,
-    docsUrl: 'https://docs.api.nvidia.com/nim/reference/llm-apis',
-    apiKeyUrl: 'https://build.nvidia.com/models',
+    docsUrl: "https://docs.api.nvidia.com/nim/reference/llm-apis",
+    apiKeyUrl: "https://build.nvidia.com/models",
   },
   google: {
-    id: 'google',
-    name: 'Google Gemini',
-    description: 'Use Gemini through Google AI Studio with your own key',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    defaultModel: 'gemini-3-flash-preview',
+    id: "google",
+    name: "Google Gemini",
+    description: "Use Gemini through Google AI Studio with your own key",
+    protocol: "openai-compatible",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    defaultModel: "gemini-3-flash-preview",
     models: [
       {
-        id: 'gemini-3-flash-preview',
-        name: 'Gemini 3 Flash Preview',
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
         contextWindow: 1000000,
       },
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', contextWindow: 1000000 },
+      { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", contextWindow: 1000000 },
     ],
     capabilities: { ...OPENAI_COMPAT_TEXT_CAPABILITIES, multimodal: true },
-    docsUrl: 'https://ai.google.dev/gemini-api/docs/openai',
-    apiKeyUrl: 'https://aistudio.google.com/app/apikey',
+    docsUrl: "https://ai.google.dev/gemini-api/docs/openai",
+    apiKeyUrl: "https://aistudio.google.com/app/apikey",
   },
   xai: {
-    id: 'xai',
-    name: 'xAI Grok',
-    description: 'Use Grok models with your own xAI key',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://api.x.ai/v1',
-    defaultModel: 'grok-4.20-reasoning',
+    id: "xai",
+    name: "xAI Grok",
+    description: "Use Grok models with your own xAI key",
+    protocol: "openai-compatible",
+    baseUrl: "https://api.x.ai/v1",
+    defaultModel: "grok-4.20-reasoning",
     models: [
       {
-        id: 'grok-4.20-reasoning',
-        name: 'Grok 4.20 Reasoning',
+        id: "grok-4.20-reasoning",
+        name: "Grok 4.20 Reasoning",
         contextWindow: 256000,
       },
-      { id: 'grok-4.20-fast', name: 'Grok 4.20 Fast', contextWindow: 256000 },
+      { id: "grok-4.20-fast", name: "Grok 4.20 Fast", contextWindow: 256000 },
     ],
     capabilities: { ...OPENAI_COMPAT_TEXT_CAPABILITIES, multimodal: true },
-    apiKeyPrefix: 'xai-',
-    docsUrl: 'https://docs.x.ai',
-    apiKeyUrl: 'https://console.x.ai',
+    apiKeyPrefix: "xai-",
+    docsUrl: "https://docs.x.ai",
+    apiKeyUrl: "https://console.x.ai",
   },
   moonshot: {
-    id: 'moonshot',
-    name: 'Moonshot Kimi',
-    description: 'Use Kimi (Moonshot) models with your own Moonshot key',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://api.moonshot.ai/v1',
-    defaultModel: 'kimi-k2-0711-preview',
+    id: "moonshot",
+    name: "Moonshot Kimi",
+    description: "Use Kimi (Moonshot) models with your own Moonshot key",
+    protocol: "openai-compatible",
+    baseUrl: "https://api.moonshot.ai/v1",
+    defaultModel: "kimi-k2-0711-preview",
     models: [
-      { id: 'kimi-k2-0711-preview', name: 'Kimi K2', contextWindow: 131072 },
+      { id: "kimi-k2-0711-preview", name: "Kimi K2", contextWindow: 131072 },
       {
-        id: 'moonshot-v1-128k',
-        name: 'Moonshot v1 128k',
+        id: "moonshot-v1-128k",
+        name: "Moonshot v1 128k",
         contextWindow: 131072,
       },
-      { id: 'moonshot-v1-32k', name: 'Moonshot v1 32k', contextWindow: 32768 },
+      { id: "moonshot-v1-32k", name: "Moonshot v1 32k", contextWindow: 32768 },
     ],
     capabilities: OPENAI_COMPAT_TEXT_CAPABILITIES,
-    apiKeyPrefix: 'sk-',
-    docsUrl: 'https://platform.moonshot.ai/docs',
-    apiKeyUrl: 'https://platform.moonshot.ai/console/api-keys',
+    apiKeyPrefix: "sk-",
+    docsUrl: "https://platform.moonshot.ai/docs",
+    apiKeyUrl: "https://platform.moonshot.ai/console/api-keys",
   },
   zai: {
-    id: 'zai',
-    name: 'Z.ai GLM',
-    description: 'Use GLM (Z.ai / Zhipu) models with your own Z.ai key',
-    protocol: 'openai-compatible',
-    baseUrl: 'https://api.z.ai/api/paas/v4',
-    defaultModel: 'glm-4.6',
+    id: "zai",
+    name: "Z.ai GLM",
+    description: "Use GLM (Z.ai / Zhipu) models with your own Z.ai key",
+    protocol: "openai-compatible",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    defaultModel: "glm-4.6",
     models: [
-      { id: 'glm-4.6', name: 'GLM-4.6', contextWindow: 200000 },
-      { id: 'glm-4.5', name: 'GLM-4.5', contextWindow: 131072 },
-      { id: 'glm-4.5-air', name: 'GLM-4.5 Air', contextWindow: 131072 },
+      { id: "glm-4.6", name: "GLM-4.6", contextWindow: 200000 },
+      { id: "glm-4.5", name: "GLM-4.5", contextWindow: 131072 },
+      { id: "glm-4.5-air", name: "GLM-4.5 Air", contextWindow: 131072 },
     ],
     capabilities: OPENAI_COMPAT_TEXT_CAPABILITIES,
-    docsUrl: 'https://docs.z.ai',
-    apiKeyUrl: 'https://z.ai/manage-apikey/apikey-list',
+    docsUrl: "https://docs.z.ai",
+    apiKeyUrl: "https://z.ai/manage-apikey/apikey-list",
   },
 };
 
@@ -2168,7 +2171,7 @@ export interface AppManifest {
   icon?: string;
 
   // App type - MCP only
-  type: 'mcp';
+  type: "mcp";
 
   // Entry points
   entry: {
@@ -2226,12 +2229,12 @@ export type ManifestHttpAuthMode = "user" | "public";
 export type ManifestHttpBillingMode = "owner" | "caller";
 export type ManifestHttpDataScope = "app" | "user";
 export type ManifestHttpMethod =
-  | 'GET'
-  | 'POST'
-  | 'PUT'
-  | 'PATCH'
-  | 'DELETE'
-  | 'HEAD';
+  | "GET"
+  | "POST"
+  | "PUT"
+  | "PATCH"
+  | "DELETE"
+  | "HEAD";
 
 export interface ManifestHttpConfig {
   defaults?: ManifestHttpRouteDefaults;
@@ -2275,7 +2278,7 @@ export interface ManifestFunction {
   /** Upload-derived: this function may start galactic.compute(). */
   uses_compute?: boolean;
   execution?: {
-    class?: 'sync' | 'async';
+    class?: "sync" | "async";
     timeout_ms?: number;
   };
 }
@@ -2286,10 +2289,10 @@ export interface ManifestSkill {
   semantic_description?: string;
   preview?: string;
   resource?: string;
-  format?: 'markdown' | 'text';
+  format?: "markdown" | "text";
 }
 
-export type ManifestAccessPolicyMode = 'static' | 'module';
+export type ManifestAccessPolicyMode = "static" | "module";
 
 export interface ManifestAccessPolicy {
   mode?: ManifestAccessPolicyMode;
@@ -2297,7 +2300,7 @@ export interface ManifestAccessPolicy {
   export?: string;
 }
 
-export type ToolAccessPolicySubjectKind = 'function' | 'skill';
+export type ToolAccessPolicySubjectKind = "function" | "skill";
 
 export interface ToolAccessPolicyPlanPayload {
   version: 1;
@@ -2309,7 +2312,7 @@ export interface ToolAccessPolicyPlanPayload {
   };
   caller: {
     userId: string;
-    authState?: 'authenticated' | 'anonymous';
+    authState?: "authenticated" | "anonymous";
   };
   subject: {
     kind: ToolAccessPolicySubjectKind;
@@ -2318,7 +2321,7 @@ export interface ToolAccessPolicyPlanPayload {
   input: Record<string, unknown>;
   metadata: Record<string, unknown>;
   static: {
-    effect: 'allow';
+    effect: "allow";
     subjectKind: ToolAccessPolicySubjectKind;
     subject_kind: ToolAccessPolicySubjectKind;
     subjectId: string;
@@ -2338,7 +2341,7 @@ export interface ToolAccessPolicyPlanPayload {
 }
 
 export interface ToolAccessPolicyAllowDecision {
-  effect?: 'allow';
+  effect?: "allow";
   price_light?: number;
   priceLight?: number;
   charge_light?: number;
@@ -2352,7 +2355,7 @@ export interface ToolAccessPolicyAllowDecision {
 }
 
 export interface ToolAccessPolicyDenyDecision {
-  effect: 'deny';
+  effect: "deny";
   reason?: string;
   message?: string;
   metadata?: Record<string, unknown>;
@@ -2367,7 +2370,7 @@ export type ToolAccessPolicyFunction = (
 ) => ToolAccessPolicyDecision | Promise<ToolAccessPolicyDecision>;
 
 export interface ManifestParameter {
-  type: 'string' | 'number' | 'boolean' | 'object' | 'array';
+  type: "string" | "number" | "boolean" | "object" | "array";
   description?: string;
   required?: boolean;
   default?: unknown;
@@ -2377,7 +2380,7 @@ export interface ManifestParameter {
 }
 
 export interface ManifestReturn {
-  type: 'string' | 'number' | 'boolean' | 'object' | 'array' | 'void';
+  type: "string" | "number" | "boolean" | "object" | "array" | "void";
   description?: string;
 }
 
@@ -2385,10 +2388,10 @@ export interface ManifestEnvVar {
   description?: string;
   required?: boolean;
   default?: string;
-  scope?: EnvSchemaEntry['scope'];
-  type?: EnvSchemaEntry['scope']; // Legacy alias for scope
+  scope?: EnvSchemaEntry["scope"];
+  type?: EnvSchemaEntry["scope"]; // Legacy alias for scope
   label?: string;
-  input?: EnvSchemaEntry['input'];
+  input?: EnvSchemaEntry["input"];
   placeholder?: string;
   help?: string;
 }
@@ -2396,57 +2399,57 @@ export interface ManifestEnvVar {
 export function humanizeEnvVarKey(key: string): string {
   return key
     .toLowerCase()
-    .split('_')
+    .split("_")
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
+    .join(" ");
 }
 
-function normalizeEnvScope(value: unknown): EnvSchemaEntry['scope'] {
-  return value === 'per_user' ? 'per_user' : 'universal';
+function normalizeEnvScope(value: unknown): EnvSchemaEntry["scope"] {
+  return value === "per_user" ? "per_user" : "universal";
 }
 
 function inferEnvInputType(
   key: string,
   description?: string,
-): NonNullable<EnvSchemaEntry['input']> {
+): NonNullable<EnvSchemaEntry["input"]> {
   const upperKey = key.toUpperCase();
-  const combined = `${upperKey} ${description || ''}`.toUpperCase();
+  const combined = `${upperKey} ${description || ""}`.toUpperCase();
 
   if (
     /(PASS|PASSWORD|SECRET|TOKEN|API_KEY|PRIVATE_KEY|SERVICE_KEY|ACCESS_KEY)/
       .test(combined)
   ) {
-    return 'password';
+    return "password";
   }
 
   if (/(EMAIL|E-MAIL|MAILBOX|ADDRESS)/.test(combined)) {
-    return 'email';
+    return "email";
   }
 
   if (/(PORT|TIMEOUT|LIMIT|COUNT|INTERVAL)/.test(combined)) {
-    return 'number';
+    return "number";
   }
 
   if (/(URL|URI|WEBHOOK|ENDPOINT)/.test(combined) && !/HOST/.test(upperKey)) {
-    return 'url';
+    return "url";
   }
 
-  return 'text';
+  return "text";
 }
 
 function normalizeEnvInput(
   value: unknown,
   key: string,
   description?: string,
-): NonNullable<EnvSchemaEntry['input']> {
+): NonNullable<EnvSchemaEntry["input"]> {
   if (
-    value === 'text' ||
-    value === 'password' ||
-    value === 'email' ||
-    value === 'number' ||
-    value === 'url' ||
-    value === 'textarea'
+    value === "text" ||
+    value === "password" ||
+    value === "email" ||
+    value === "number" ||
+    value === "url" ||
+    value === "textarea"
   ) {
     return value;
   }
@@ -2458,25 +2461,29 @@ function normalizeManifestEnvVarEntry(
   key: string,
   entry: unknown,
 ): ManifestEnvVar | null {
-  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     return null;
   }
 
   const raw = entry as Record<string, unknown>;
-  const description = typeof raw.description === 'string' ? raw.description : undefined;
-  const label = typeof raw.label === 'string' && raw.label.trim()
+  const description = typeof raw.description === "string"
+    ? raw.description
+    : undefined;
+  const label = typeof raw.label === "string" && raw.label.trim()
     ? raw.label.trim()
     : humanizeEnvVarKey(key);
 
   return {
     description,
-    required: typeof raw.required === 'boolean' ? raw.required : undefined,
-    default: typeof raw.default === 'string' ? raw.default : undefined,
+    required: typeof raw.required === "boolean" ? raw.required : undefined,
+    default: typeof raw.default === "string" ? raw.default : undefined,
     scope: normalizeEnvScope(raw.scope ?? raw.type),
     label,
     input: normalizeEnvInput(raw.input, key, description),
-    placeholder: typeof raw.placeholder === 'string' ? raw.placeholder : undefined,
-    help: typeof raw.help === 'string' ? raw.help : undefined,
+    placeholder: typeof raw.placeholder === "string"
+      ? raw.placeholder
+      : undefined,
+    help: typeof raw.help === "string" ? raw.help : undefined,
   };
 }
 
@@ -2484,7 +2491,7 @@ export function normalizeManifestEnvVars(
   envVars: unknown,
 ): Record<string, ManifestEnvVar> | undefined {
   if (envVars === undefined || envVars === null) return undefined;
-  if (typeof envVars !== 'object' || Array.isArray(envVars)) return undefined;
+  if (typeof envVars !== "object" || Array.isArray(envVars)) return undefined;
 
   const normalized: Record<string, ManifestEnvVar> = {};
   for (
@@ -2539,23 +2546,29 @@ export function resolveManifestEnvSchema(
 export function normalizeEnvSchema(
   input: unknown,
 ): Record<string, EnvSchemaEntry> {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
 
   const normalized: Record<string, EnvSchemaEntry> = {};
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const entry = value as Record<string, unknown>;
-    const description = typeof entry.description === 'string' ? entry.description : undefined;
+    const description = typeof entry.description === "string"
+      ? entry.description
+      : undefined;
     normalized[key] = {
       scope: normalizeEnvScope(entry.scope),
       description,
-      required: typeof entry.required === 'boolean' ? entry.required : undefined,
-      label: typeof entry.label === 'string' && entry.label.trim()
+      required: typeof entry.required === "boolean"
+        ? entry.required
+        : undefined,
+      label: typeof entry.label === "string" && entry.label.trim()
         ? entry.label.trim()
         : humanizeEnvVarKey(key),
       input: normalizeEnvInput(entry.input, key, description),
-      placeholder: typeof entry.placeholder === 'string' ? entry.placeholder : undefined,
-      help: typeof entry.help === 'string' ? entry.help : undefined,
+      placeholder: typeof entry.placeholder === "string"
+        ? entry.placeholder
+        : undefined,
+      help: typeof entry.help === "string" ? entry.help : undefined,
     };
   }
 
@@ -2591,7 +2604,7 @@ export function normalizeManifestParameters(
   if (params === undefined || params === null) return undefined;
 
   // Already object-keyed — pass through
-  if (typeof params === 'object' && !Array.isArray(params)) {
+  if (typeof params === "object" && !Array.isArray(params)) {
     return params as Record<string, ManifestParameter>;
   }
 
@@ -2599,7 +2612,7 @@ export function normalizeManifestParameters(
   if (Array.isArray(params)) {
     const result: Record<string, ManifestParameter> = {};
     for (const item of params) {
-      if (item && typeof item === 'object' && typeof item.name === 'string') {
+      if (item && typeof item === "object" && typeof item.name === "string") {
         const { name, ...rest } = item;
         result[name] = rest as ManifestParameter;
       }
@@ -2612,12 +2625,12 @@ export function normalizeManifestParameters(
 
 const COMMAND_CARD_SIZE_RE = /^[1-4]x[1-4]$/;
 const MANIFEST_HTTP_METHODS: ManifestHttpMethod[] = [
-  'GET',
-  'POST',
-  'PUT',
-  'PATCH',
-  'DELETE',
-  'HEAD',
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "HEAD",
 ];
 const MANIFEST_HTTP_RATE_LIMIT_MAX_RPM = 10_000;
 const MANIFEST_HTTP_RATE_LIMIT_MAX_BURST = 10_000;
@@ -2630,8 +2643,8 @@ function validateHttpAuthMode(
   errors: ManifestValidationError[],
 ): ManifestHttpAuthMode | undefined {
   if (value === undefined) return undefined;
-  if (value === 'user' || value === 'public') return value;
-  errors.push({ path, message: 'auth must be one of: user, public' });
+  if (value === "user" || value === "public") return value;
+  errors.push({ path, message: "auth must be one of: user, public" });
   return undefined;
 }
 
@@ -2641,8 +2654,8 @@ function validateHttpBillingMode(
   errors: ManifestValidationError[],
 ): ManifestHttpBillingMode | undefined {
   if (value === undefined) return undefined;
-  if (value === 'owner' || value === 'caller') return value;
-  errors.push({ path, message: 'billing must be one of: owner, caller' });
+  if (value === "owner" || value === "caller") return value;
+  errors.push({ path, message: "billing must be one of: owner, caller" });
   return undefined;
 }
 
@@ -2652,8 +2665,8 @@ function validateHttpDataScope(
   errors: ManifestValidationError[],
 ): ManifestHttpDataScope | undefined {
   if (value === undefined) return undefined;
-  if (value === 'app' || value === 'user') return value;
-  errors.push({ path, message: 'data_scope must be one of: app, user' });
+  if (value === "app" || value === "user") return value;
+  errors.push({ path, message: "data_scope must be one of: app, user" });
   return undefined;
 }
 
@@ -2664,17 +2677,17 @@ function validateHttpMethods(
 ): ManifestHttpMethod[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.length === 0) {
-    errors.push({ path, message: 'methods must be a non-empty array' });
+    errors.push({ path, message: "methods must be a non-empty array" });
     return undefined;
   }
 
   const normalized: ManifestHttpMethod[] = [];
   const seen = new Set<string>();
   for (const [index, method] of value.entries()) {
-    if (typeof method !== 'string') {
+    if (typeof method !== "string") {
       errors.push({
         path: `${path}.${index}`,
-        message: 'method must be a string',
+        message: "method must be a string",
       });
       continue;
     }
@@ -2682,7 +2695,7 @@ function validateHttpMethods(
     if (!MANIFEST_HTTP_METHODS.includes(upper as ManifestHttpMethod)) {
       errors.push({
         path: `${path}.${index}`,
-        message: `method must be one of: ${MANIFEST_HTTP_METHODS.join(', ')}`,
+        message: `method must be one of: ${MANIFEST_HTTP_METHODS.join(", ")}`,
       });
       continue;
     }
@@ -2703,12 +2716,12 @@ function validateHttpMethods(
 function normalizeHttpCorsOrigin(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  if (trimmed === '*') return '*';
-  if (trimmed === 'tauri://localhost') return trimmed;
+  if (trimmed === "*") return "*";
+  if (trimmed === "tauri://localhost") return trimmed;
 
   try {
     const url = new URL(trimmed);
-    if (url.pathname !== '/' || url.search || url.hash) return null;
+    if (url.pathname !== "/" || url.search || url.hash) return null;
     return url.origin;
   } catch {
     return null;
@@ -2721,8 +2734,8 @@ function validateHttpCors(
   errors: ManifestValidationError[],
 ): ManifestHttpCorsPolicy | undefined {
   if (value === undefined) return undefined;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    errors.push({ path, message: 'cors must be an object' });
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push({ path, message: "cors must be an object" });
     return undefined;
   }
 
@@ -2732,16 +2745,16 @@ function validateHttpCors(
     if (!Array.isArray(cors.origins) || cors.origins.length === 0) {
       errors.push({
         path: `${path}.origins`,
-        message: 'origins must be a non-empty array',
+        message: "origins must be a non-empty array",
       });
     } else {
       const origins: string[] = [];
       const seen = new Set<string>();
       for (const [index, originValue] of cors.origins.entries()) {
-        if (typeof originValue !== 'string') {
+        if (typeof originValue !== "string") {
           errors.push({
             path: `${path}.origins.${index}`,
-            message: 'origin must be a string',
+            message: "origin must be a string",
           });
           continue;
         }
@@ -2768,10 +2781,10 @@ function validateHttpCors(
   }
 
   if (cors.credentials !== undefined) {
-    if (typeof cors.credentials !== 'boolean') {
+    if (typeof cors.credentials !== "boolean") {
       errors.push({
         path: `${path}.credentials`,
-        message: 'credentials must be a boolean',
+        message: "credentials must be a boolean",
       });
     } else {
       normalized.credentials = cors.credentials;
@@ -2782,19 +2795,19 @@ function validateHttpCors(
     if (!Array.isArray(cors.headers)) {
       errors.push({
         path: `${path}.headers`,
-        message: 'headers must be an array',
+        message: "headers must be an array",
       });
     } else {
       const headers: string[] = [];
       const seen = new Set<string>();
       for (const [index, headerValue] of cors.headers.entries()) {
         if (
-          typeof headerValue !== 'string' ||
+          typeof headerValue !== "string" ||
           !HTTP_HEADER_NAME_RE.test(headerValue.trim())
         ) {
           errors.push({
             path: `${path}.headers.${index}`,
-            message: 'header must be a valid HTTP header name',
+            message: "header must be a valid HTTP header name",
           });
           continue;
         }
@@ -2816,21 +2829,21 @@ function validateHttpCors(
 
   if (cors.max_age_seconds !== undefined) {
     if (
-      typeof cors.max_age_seconds !== 'number' ||
+      typeof cors.max_age_seconds !== "number" ||
       !Number.isInteger(cors.max_age_seconds) ||
       cors.max_age_seconds < 0 ||
       cors.max_age_seconds > 86_400
     ) {
       errors.push({
         path: `${path}.max_age_seconds`,
-        message: 'max_age_seconds must be an integer between 0 and 86400',
+        message: "max_age_seconds must be an integer between 0 and 86400",
       });
     } else {
       normalized.max_age_seconds = cors.max_age_seconds;
     }
   }
 
-  if (normalized.credentials === true && normalized.origins?.includes('*')) {
+  if (normalized.credentials === true && normalized.origins?.includes("*")) {
     errors.push({
       path: `${path}.credentials`,
       message: 'credentials cannot be true when origins includes "*"',
@@ -2849,7 +2862,7 @@ function validateHttpPositiveInteger(
 ): number | undefined {
   if (value === undefined) return undefined;
   if (
-    typeof value !== 'number' || !Number.isInteger(value) || value < 1 ||
+    typeof value !== "number" || !Number.isInteger(value) || value < 1 ||
     value > max
   ) {
     errors.push({
@@ -2867,8 +2880,8 @@ function validateHttpRateLimit(
   errors: ManifestValidationError[],
 ): ManifestHttpRateLimitPolicy | undefined {
   if (value === undefined) return undefined;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    errors.push({ path, message: 'rate_limit must be an object' });
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push({ path, message: "rate_limit must be an object" });
     return undefined;
   }
 
@@ -2877,21 +2890,21 @@ function validateHttpRateLimit(
   const rpm = validateHttpPositiveInteger(
     raw.rpm,
     `${path}.rpm`,
-    'rpm',
+    "rpm",
     MANIFEST_HTTP_RATE_LIMIT_MAX_RPM,
     errors,
   );
   const burst = validateHttpPositiveInteger(
     raw.burst,
     `${path}.burst`,
-    'burst',
+    "burst",
     MANIFEST_HTTP_RATE_LIMIT_MAX_BURST,
     errors,
   );
   const daily = validateHttpPositiveInteger(
     raw.daily,
     `${path}.daily`,
-    'daily',
+    "daily",
     MANIFEST_HTTP_RATE_LIMIT_MAX_DAILY,
     errors,
   );
@@ -2955,8 +2968,8 @@ function validateManifestHttp(
   errors: ManifestValidationError[],
 ): void {
   if (value === undefined) return;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    errors.push({ path: 'http', message: 'http must be an object' });
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push({ path: "http", message: "http must be an object" });
     return;
   }
 
@@ -2964,17 +2977,17 @@ function validateManifestHttp(
   let defaults: ManifestHttpRouteDefaults = {};
   if (http.defaults !== undefined) {
     if (
-      !http.defaults || typeof http.defaults !== 'object' ||
+      !http.defaults || typeof http.defaults !== "object" ||
       Array.isArray(http.defaults)
     ) {
       errors.push({
-        path: 'http.defaults',
-        message: 'defaults must be an object',
+        path: "http.defaults",
+        message: "defaults must be an object",
       });
     } else {
       defaults = validateHttpRouteDefaults(
         http.defaults as Record<string, unknown>,
-        'http.defaults',
+        "http.defaults",
         errors,
       );
     }
@@ -2982,10 +2995,10 @@ function validateManifestHttp(
 
   if (http.routes === undefined) return;
   if (
-    !http.routes || typeof http.routes !== 'object' ||
+    !http.routes || typeof http.routes !== "object" ||
     Array.isArray(http.routes)
   ) {
-    errors.push({ path: 'http.routes', message: 'routes must be an object' });
+    errors.push({ path: "http.routes", message: "routes must be an object" });
     return;
   }
 
@@ -3000,7 +3013,7 @@ function validateManifestHttp(
     ) {
       errors.push({
         path: routePath,
-        message: 'route name must be a single function path segment',
+        message: "route name must be a single function path segment",
       });
     }
     if (Object.keys(functions).length > 0 && !functions[routeName]) {
@@ -3010,49 +3023,50 @@ function validateManifestHttp(
       });
     }
     if (
-      !routeValue || typeof routeValue !== 'object' || Array.isArray(routeValue)
+      !routeValue || typeof routeValue !== "object" || Array.isArray(routeValue)
     ) {
       errors.push({
         path: routePath,
-        message: 'route policy must be an object',
+        message: "route policy must be an object",
       });
       continue;
     }
 
     const routeRecord = routeValue as Record<string, unknown>;
     const route = validateHttpRouteDefaults(routeRecord, routePath, errors);
-    const auth = route.auth ?? defaults.auth ?? 'user';
+    const auth = route.auth ?? defaults.auth ?? "user";
     const methods = route.methods ?? defaults.methods;
     const billing = route.billing ?? defaults.billing ??
-      (auth === 'public' ? 'owner' : 'caller');
-    const dataScope = route.data_scope ?? defaults.data_scope ?? 'app';
+      (auth === "public" ? "owner" : "caller");
+    const dataScope = route.data_scope ?? defaults.data_scope ?? "app";
     const cors = mergeHttpCors(defaults.cors, route.cors);
 
-    if (auth === 'public') {
+    if (auth === "public") {
       if (!methods || methods.length === 0) {
         errors.push({
           path: `${routePath}.methods`,
-          message: 'public HTTP routes must declare at least one method',
+          message: "public HTTP routes must declare at least one method",
         });
       }
-      if (billing !== 'owner') {
+      if (billing !== "owner") {
         errors.push({
           path: `${routePath}.billing`,
-          message: 'public HTTP routes must use owner billing',
+          message: "public HTTP routes must use owner billing",
         });
       }
-      if (dataScope !== 'app') {
+      if (dataScope !== "app") {
         errors.push({
           path: `${routePath}.data_scope`,
-          message: 'public HTTP routes must use app data scope',
+          message: "public HTTP routes must use app data scope",
         });
       }
     }
 
-    if (cors?.credentials === true && cors.origins?.includes('*')) {
+    if (cors?.credentials === true && cors.origins?.includes("*")) {
       errors.push({
         path: `${routePath}.cors.credentials`,
-        message: 'credentials cannot be true when resolved origins includes "*"',
+        message:
+          'credentials cannot be true when resolved origins includes "*"',
       });
     }
   }
@@ -3065,40 +3079,40 @@ function validateWidgetDependencies(
 ): void {
   if (value === undefined) return;
   if (!Array.isArray(value)) {
-    errors.push({ path, message: 'dependencies must be an array' });
+    errors.push({ path, message: "dependencies must be an array" });
     return;
   }
 
   value.forEach((dependency, index) => {
     const depPath = `${path}.${index}`;
     if (
-      !dependency || typeof dependency !== 'object' || Array.isArray(dependency)
+      !dependency || typeof dependency !== "object" || Array.isArray(dependency)
     ) {
-      errors.push({ path: depPath, message: 'dependency must be an object' });
+      errors.push({ path: depPath, message: "dependency must be an object" });
       return;
     }
 
     const dep = dependency as Record<string, unknown>;
-    if (typeof dep.app !== 'string' || !dep.app.trim()) {
+    if (typeof dep.app !== "string" || !dep.app.trim()) {
       errors.push({
         path: `${depPath}.app`,
-        message: 'app is required and must be a string',
+        message: "app is required and must be a string",
       });
     }
     if (
       !Array.isArray(dep.functions) ||
       dep.functions.length === 0 ||
-      dep.functions.some((fn) => typeof fn !== 'string' || !fn.trim())
+      dep.functions.some((fn) => typeof fn !== "string" || !fn.trim())
     ) {
       errors.push({
         path: `${depPath}.functions`,
-        message: 'functions must be a non-empty array of strings',
+        message: "functions must be a non-empty array of strings",
       });
     }
-    if (dep.access !== undefined && dep.access !== 'read') {
+    if (dep.access !== undefined && dep.access !== "read") {
       errors.push({
         path: `${depPath}.access`,
-        message: 'command card dependencies only support read access',
+        message: "command card dependencies only support read access",
       });
     }
   });
@@ -3113,24 +3127,24 @@ function validateOptionalStringArray(
   if (value === undefined) return;
   if (
     !Array.isArray(value) ||
-    value.some((entry) => typeof entry !== 'string' || !entry.trim())
+    value.some((entry) => typeof entry !== "string" || !entry.trim())
   ) {
     errors.push({ path, message });
   }
 }
 
 const GENERATION_COMPONENT_KINDS = new Set([
-  'metric',
-  'list',
-  'table',
-  'detail',
-  'form',
-  'action_bar',
-  'timeline',
-  'card_ref',
-  'widget_embed',
-  'routine_panel',
-  'text',
+  "metric",
+  "list",
+  "table",
+  "detail",
+  "form",
+  "action_bar",
+  "timeline",
+  "card_ref",
+  "widget_embed",
+  "routine_panel",
+  "text",
 ]);
 
 function validateGenerationHints(
@@ -3139,8 +3153,8 @@ function validateGenerationHints(
   errors: ManifestValidationError[],
 ): void {
   if (value === undefined) return;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    errors.push({ path, message: 'generation_hints must be an object' });
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push({ path, message: "generation_hints must be an object" });
     return;
   }
 
@@ -3148,49 +3162,50 @@ function validateGenerationHints(
   validateOptionalStringArray(
     hints.tags,
     `${path}.tags`,
-    'tags must be an array of non-empty strings',
+    "tags must be an array of non-empty strings",
     errors,
   );
   validateOptionalStringArray(
     hints.entity_types,
     `${path}.entity_types`,
-    'entity_types must be an array of non-empty strings',
+    "entity_types must be an array of non-empty strings",
     errors,
   );
   validateOptionalStringArray(
     hints.prompt_examples,
     `${path}.prompt_examples`,
-    'prompt_examples must be an array of non-empty strings',
+    "prompt_examples must be an array of non-empty strings",
     errors,
   );
 
   if (
     hints.preferred_component !== undefined &&
-    (typeof hints.preferred_component !== 'string' ||
+    (typeof hints.preferred_component !== "string" ||
       !GENERATION_COMPONENT_KINDS.has(hints.preferred_component))
   ) {
     errors.push({
       path: `${path}.preferred_component`,
-      message: 'preferred_component must be a supported generated component kind',
+      message:
+        "preferred_component must be a supported generated component kind",
     });
   }
   if (
-    hints.action_group !== undefined && typeof hints.action_group !== 'string'
+    hints.action_group !== undefined && typeof hints.action_group !== "string"
   ) {
     errors.push({
       path: `${path}.action_group`,
-      message: 'action_group must be a string',
+      message: "action_group must be a string",
     });
   }
   if (
     hints.safe_default_filters !== undefined &&
     (!hints.safe_default_filters ||
-      typeof hints.safe_default_filters !== 'object' ||
+      typeof hints.safe_default_filters !== "object" ||
       Array.isArray(hints.safe_default_filters))
   ) {
     errors.push({
       path: `${path}.safe_default_filters`,
-      message: 'safe_default_filters must be an object',
+      message: "safe_default_filters must be an object",
     });
   }
 
@@ -3198,40 +3213,40 @@ function validateGenerationHints(
     if (!Array.isArray(hints.suggested_components)) {
       errors.push({
         path: `${path}.suggested_components`,
-        message: 'suggested_components must be an array',
+        message: "suggested_components must be an array",
       });
     } else {
       hints.suggested_components.forEach((component, index) => {
         const componentPath = `${path}.suggested_components.${index}`;
         if (
-          !component || typeof component !== 'object' ||
+          !component || typeof component !== "object" ||
           Array.isArray(component)
         ) {
           errors.push({
             path: componentPath,
-            message: 'suggested component must be an object',
+            message: "suggested component must be an object",
           });
           return;
         }
         const c = component as Record<string, unknown>;
         if (
-          typeof c.kind !== 'string' ||
+          typeof c.kind !== "string" ||
           !GENERATION_COMPONENT_KINDS.has(c.kind)
         ) {
           errors.push({
             path: `${componentPath}.kind`,
-            message: 'kind must be a supported generated component kind',
+            message: "kind must be a supported generated component kind",
           });
         }
         for (
           const key of [
-            'title',
-            'description',
-            'data_view',
-            'context_source_id',
+            "title",
+            "description",
+            "data_view",
+            "context_source_id",
           ]
         ) {
-          if (c[key] !== undefined && typeof c[key] !== 'string') {
+          if (c[key] !== undefined && typeof c[key] !== "string") {
             errors.push({
               path: `${componentPath}.${key}`,
               message: `${key} must be a string`,
@@ -3241,7 +3256,7 @@ function validateGenerationHints(
         validateOptionalStringArray(
           c.action_ids,
           `${componentPath}.action_ids`,
-          'action_ids must be an array of non-empty strings',
+          "action_ids must be an array of non-empty strings",
           errors,
         );
       });
@@ -3257,27 +3272,27 @@ function validateManifestWidgets(
 ): void {
   if (value === undefined) return;
   if (!Array.isArray(value)) {
-    errors.push({ path: 'widgets', message: 'widgets must be an array' });
+    errors.push({ path: "widgets", message: "widgets must be an array" });
     return;
   }
 
   const seenWidgetIds = new Set<string>();
   value.forEach((widget, index) => {
     const widgetPath = `widgets.${index}`;
-    if (!widget || typeof widget !== 'object' || Array.isArray(widget)) {
+    if (!widget || typeof widget !== "object" || Array.isArray(widget)) {
       errors.push({
         path: widgetPath,
-        message: 'widget declaration must be an object',
+        message: "widget declaration must be an object",
       });
       return;
     }
 
     const w = widget as Record<string, unknown>;
-    const widgetId = typeof w.id === 'string' ? w.id.trim() : '';
+    const widgetId = typeof w.id === "string" ? w.id.trim() : "";
     if (!widgetId) {
       errors.push({
         path: `${widgetPath}.id`,
-        message: 'id is required and must be a string',
+        message: "id is required and must be a string",
       });
     } else if (seenWidgetIds.has(widgetId)) {
       errors.push({
@@ -3288,17 +3303,17 @@ function validateManifestWidgets(
       seenWidgetIds.add(widgetId);
     }
 
-    if (typeof w.label !== 'string' || !w.label.trim()) {
+    if (typeof w.label !== "string" || !w.label.trim()) {
       errors.push({
         path: `${widgetPath}.label`,
-        message: 'label is required and must be a string',
+        message: "label is required and must be a string",
       });
     }
 
     for (
-      const key of ['description', 'ui_function', 'data_function', 'data_tool']
+      const key of ["description", "ui_function", "data_function", "data_tool"]
     ) {
-      if (w[key] !== undefined && typeof w[key] !== 'string') {
+      if (w[key] !== undefined && typeof w[key] !== "string") {
         errors.push({
           path: `${widgetPath}.${key}`,
           message: `${key} must be a string`,
@@ -3308,13 +3323,13 @@ function validateManifestWidgets(
 
     if (
       w.poll_interval_s !== undefined &&
-      (typeof w.poll_interval_s !== 'number' ||
+      (typeof w.poll_interval_s !== "number" ||
         !Number.isFinite(w.poll_interval_s) ||
         w.poll_interval_s < 0)
     ) {
       errors.push({
         path: `${widgetPath}.poll_interval_s`,
-        message: 'poll_interval_s must be a non-negative number',
+        message: "poll_interval_s must be a non-negative number",
       });
     }
 
@@ -3329,18 +3344,19 @@ function validateManifestWidgets(
       errors,
     );
 
-    const uiFunction = typeof w.ui_function === 'string' && w.ui_function.trim()
+    const uiFunction = typeof w.ui_function === "string" && w.ui_function.trim()
       ? w.ui_function.trim()
       : widgetId
       ? `widget_${widgetId}_ui`
       : null;
-    const dataFunction = typeof w.data_function === 'string' && w.data_function.trim()
-      ? w.data_function.trim()
-      : typeof w.data_tool === 'string' && w.data_tool.trim()
-      ? w.data_tool.trim()
-      : widgetId
-      ? `widget_${widgetId}_data`
-      : null;
+    const dataFunction =
+      typeof w.data_function === "string" && w.data_function.trim()
+        ? w.data_function.trim()
+        : typeof w.data_tool === "string" && w.data_tool.trim()
+        ? w.data_tool.trim()
+        : widgetId
+        ? `widget_${widgetId}_data`
+        : null;
 
     if (
       uiFunction && Object.keys(functions).length > 0 && !functions[uiFunction]
@@ -3362,7 +3378,7 @@ function validateManifestWidgets(
     if (!Array.isArray(w.cards)) {
       errors.push({
         path: `${widgetPath}.cards`,
-        message: 'cards must be an array',
+        message: "cards must be an array",
       });
       return;
     }
@@ -3370,20 +3386,20 @@ function validateManifestWidgets(
     const seenCardIds = new Set<string>();
     w.cards.forEach((card, cardIndex) => {
       const cardPath = `${widgetPath}.cards.${cardIndex}`;
-      if (!card || typeof card !== 'object' || Array.isArray(card)) {
+      if (!card || typeof card !== "object" || Array.isArray(card)) {
         errors.push({
           path: cardPath,
-          message: 'card declaration must be an object',
+          message: "card declaration must be an object",
         });
         return;
       }
 
       const c = card as Record<string, unknown>;
-      const cardId = typeof c.id === 'string' ? c.id.trim() : '';
+      const cardId = typeof c.id === "string" ? c.id.trim() : "";
       if (!cardId) {
         errors.push({
           path: `${cardPath}.id`,
-          message: 'id is required and must be a string',
+          message: "id is required and must be a string",
         });
       } else if (seenCardIds.has(cardId)) {
         errors.push({
@@ -3394,32 +3410,32 @@ function validateManifestWidgets(
         seenCardIds.add(cardId);
       }
 
-      if (typeof c.label !== 'string' || !c.label.trim()) {
+      if (typeof c.label !== "string" || !c.label.trim()) {
         errors.push({
           path: `${cardPath}.label`,
-          message: 'label is required and must be a string',
+          message: "label is required and must be a string",
         });
       }
-      if (typeof c.size !== 'string' || !COMMAND_CARD_SIZE_RE.test(c.size)) {
+      if (typeof c.size !== "string" || !COMMAND_CARD_SIZE_RE.test(c.size)) {
         errors.push({
           path: `${cardPath}.size`,
           message: 'size must use the form "2x1" with 1-4 columns and rows',
         });
       }
-      if (c.render !== undefined && c.render !== 'native') {
+      if (c.render !== undefined && c.render !== "native") {
         errors.push({
           path: `${cardPath}.render`,
-          message: 'only native command cards are supported',
+          message: "only native command cards are supported",
         });
       }
-      if (c.kind !== undefined && typeof c.kind !== 'string') {
+      if (c.kind !== undefined && typeof c.kind !== "string") {
         errors.push({
           path: `${cardPath}.kind`,
-          message: 'kind must be a string',
+          message: "kind must be a string",
         });
       }
-      for (const key of ['description', 'data_view', 'data_function']) {
-        if (c[key] !== undefined && typeof c[key] !== 'string') {
+      for (const key of ["description", "data_view", "data_function"]) {
+        if (c[key] !== undefined && typeof c[key] !== "string") {
           errors.push({
             path: `${cardPath}.${key}`,
             message: `${key} must be a string`,
@@ -3428,13 +3444,13 @@ function validateManifestWidgets(
       }
       if (
         c.refresh_interval_s !== undefined &&
-        (typeof c.refresh_interval_s !== 'number' ||
+        (typeof c.refresh_interval_s !== "number" ||
           !Number.isFinite(c.refresh_interval_s) ||
           c.refresh_interval_s < 0)
       ) {
         errors.push({
           path: `${cardPath}.refresh_interval_s`,
-          message: 'refresh_interval_s must be a non-negative number',
+          message: "refresh_interval_s must be a non-negative number",
         });
       }
       validateWidgetDependencies(
@@ -3448,9 +3464,10 @@ function validateManifestWidgets(
         errors,
       );
 
-      const cardDataFunction = typeof c.data_function === 'string' && c.data_function.trim()
-        ? c.data_function.trim()
-        : dataFunction;
+      const cardDataFunction =
+        typeof c.data_function === "string" && c.data_function.trim()
+          ? c.data_function.trim()
+          : dataFunction;
       if (
         cardDataFunction && Object.keys(functions).length > 0 &&
         !functions[cardDataFunction]
@@ -3466,14 +3483,14 @@ function validateManifestWidgets(
 function isSafeManifestModulePath(value: string): boolean {
   const trimmed = value.trim();
   if (
-    !trimmed || trimmed.startsWith('/') || trimmed.includes('\\') ||
+    !trimmed || trimmed.startsWith("/") || trimmed.includes("\\") ||
     !/\.(ts|js|mjs)$/.test(trimmed)
   ) {
     return false;
   }
 
-  const parts = trimmed.split('/');
-  return parts.every((part) => part && part !== '.' && part !== '..');
+  const parts = trimmed.split("/");
+  return parts.every((part) => part && part !== "." && part !== "..");
 }
 
 function isSafeManifestExportName(value: string): boolean {
@@ -3484,59 +3501,60 @@ function validateManifestAccessPolicy(
   policy: unknown,
   errors: ManifestValidationError[],
 ): void {
-  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
     errors.push({
-      path: 'access_policy',
-      message: 'access_policy must be an object',
+      path: "access_policy",
+      message: "access_policy must be an object",
     });
     return;
   }
 
   const accessPolicy = policy as Record<string, unknown>;
   if (
-    accessPolicy.mode !== undefined && accessPolicy.mode !== 'static' &&
-    accessPolicy.mode !== 'module'
+    accessPolicy.mode !== undefined && accessPolicy.mode !== "static" &&
+    accessPolicy.mode !== "module"
   ) {
     errors.push({
-      path: 'access_policy.mode',
+      path: "access_policy.mode",
       message: 'mode must be "static" or "module"',
     });
   }
 
-  if (accessPolicy.mode === 'module' && accessPolicy.module === undefined) {
+  if (accessPolicy.mode === "module" && accessPolicy.module === undefined) {
     errors.push({
-      path: 'access_policy.module',
+      path: "access_policy.module",
       message: 'module is required when mode is "module"',
     });
   }
 
-  if (accessPolicy.mode === 'static' && accessPolicy.module !== undefined) {
+  if (accessPolicy.mode === "static" && accessPolicy.module !== undefined) {
     errors.push({
-      path: 'access_policy.module',
+      path: "access_policy.module",
       message: 'module cannot be set when mode is "static"',
     });
   }
 
   if (accessPolicy.module !== undefined) {
     if (
-      typeof accessPolicy.module !== 'string' ||
+      typeof accessPolicy.module !== "string" ||
       !isSafeManifestModulePath(accessPolicy.module)
     ) {
       errors.push({
-        path: 'access_policy.module',
-        message: 'module must be a relative .ts, .js, or .mjs path without . or .. segments',
+        path: "access_policy.module",
+        message:
+          "module must be a relative .ts, .js, or .mjs path without . or .. segments",
       });
     }
   }
 
   if (accessPolicy.export !== undefined) {
     if (
-      typeof accessPolicy.export !== 'string' ||
+      typeof accessPolicy.export !== "string" ||
       !isSafeManifestExportName(accessPolicy.export)
     ) {
       errors.push({
-        path: 'access_policy.export',
-        message: 'export must be a valid JavaScript identifier',
+        path: "access_policy.export",
+        message: "export must be a valid JavaScript identifier",
       });
     }
   }
@@ -3549,10 +3567,10 @@ export function validateManifest(input: unknown): ManifestValidationResult {
   const errors: ManifestValidationError[] = [];
   const warnings: string[] = [];
 
-  if (!input || typeof input !== 'object') {
+  if (!input || typeof input !== "object") {
     return {
       valid: false,
-      errors: [{ path: '', message: 'Manifest must be an object' }],
+      errors: [{ path: "", message: "Manifest must be an object" }],
       warnings,
     };
   }
@@ -3560,64 +3578,64 @@ export function validateManifest(input: unknown): ManifestValidationResult {
   const manifest = input as Record<string, unknown>;
 
   // Required fields
-  if (!manifest.name || typeof manifest.name !== 'string') {
+  if (!manifest.name || typeof manifest.name !== "string") {
     errors.push({
-      path: 'name',
-      message: 'name is required and must be a string',
+      path: "name",
+      message: "name is required and must be a string",
     });
   }
 
-  if (!manifest.version || typeof manifest.version !== 'string') {
+  if (!manifest.version || typeof manifest.version !== "string") {
     errors.push({
-      path: 'version',
-      message: 'version is required and must be a string',
+      path: "version",
+      message: "version is required and must be a string",
     });
   }
 
   // Type validation - MCP only
-  if (!manifest.type || manifest.type !== 'mcp') {
-    errors.push({ path: 'type', message: 'type must be "mcp"' });
+  if (!manifest.type || manifest.type !== "mcp") {
+    errors.push({ path: "type", message: 'type must be "mcp"' });
   }
 
   // Entry validation
-  if (!manifest.entry || typeof manifest.entry !== 'object') {
+  if (!manifest.entry || typeof manifest.entry !== "object") {
     errors.push({
-      path: 'entry',
-      message: 'entry is required and must be an object',
+      path: "entry",
+      message: "entry is required and must be an object",
     });
   } else {
     const entry = manifest.entry as Record<string, unknown>;
     if (!entry.functions) {
       errors.push({
-        path: 'entry.functions',
-        message: 'entry.functions is required for MCP apps',
+        path: "entry.functions",
+        message: "entry.functions is required for MCP apps",
       });
     }
   }
 
   // Functions validation (optional but must be valid if present)
   if (manifest.functions !== undefined) {
-    if (typeof manifest.functions !== 'object' || manifest.functions === null) {
+    if (typeof manifest.functions !== "object" || manifest.functions === null) {
       errors.push({
-        path: 'functions',
-        message: 'functions must be an object',
+        path: "functions",
+        message: "functions must be an object",
       });
     } else {
       const functions = manifest.functions as Record<string, unknown>;
       for (const [fnName, fnDef] of Object.entries(functions)) {
-        if (!fnDef || typeof fnDef !== 'object') {
+        if (!fnDef || typeof fnDef !== "object") {
           errors.push({
             path: `functions.${fnName}`,
-            message: 'function definition must be an object',
+            message: "function definition must be an object",
           });
           continue;
         }
 
         const fn = fnDef as Record<string, unknown>;
-        if (!fn.description || typeof fn.description !== 'string') {
+        if (!fn.description || typeof fn.description !== "string") {
           errors.push({
             path: `functions.${fnName}.description`,
-            message: 'description is required',
+            message: "description is required",
           });
         }
         validateGenerationHints(
@@ -3628,10 +3646,10 @@ export function validateManifest(input: unknown): ManifestValidationResult {
 
         // Normalize parameters: convert array format → object-keyed format in-place
         if (fn.parameters !== undefined) {
-          if (typeof fn.parameters !== 'object') {
+          if (typeof fn.parameters !== "object") {
             errors.push({
               path: `functions.${fnName}.parameters`,
-              message: 'parameters must be an object or array',
+              message: "parameters must be an object or array",
             });
           } else {
             fn.parameters = normalizeManifestParameters(fn.parameters);
@@ -3643,12 +3661,12 @@ export function validateManifest(input: unknown): ManifestValidationResult {
 
   if (manifest.skills !== undefined) {
     if (
-      typeof manifest.skills !== 'object' || manifest.skills === null ||
+      typeof manifest.skills !== "object" || manifest.skills === null ||
       Array.isArray(manifest.skills)
     ) {
       errors.push({
-        path: 'skills',
-        message: 'skills must be an object',
+        path: "skills",
+        message: "skills must be an object",
       });
     } else {
       const skills = manifest.skills as Record<string, unknown>;
@@ -3656,36 +3674,36 @@ export function validateManifest(input: unknown): ManifestValidationResult {
         const skillPath = `skills.${skillId}`;
         if (!skillId.trim()) {
           errors.push({
-            path: 'skills',
-            message: 'skill ids must be non-empty strings',
+            path: "skills",
+            message: "skill ids must be non-empty strings",
           });
         }
         if (
-          !skillDef || typeof skillDef !== 'object' || Array.isArray(skillDef)
+          !skillDef || typeof skillDef !== "object" || Array.isArray(skillDef)
         ) {
           errors.push({
             path: skillPath,
-            message: 'skill definition must be an object',
+            message: "skill definition must be an object",
           });
           continue;
         }
 
         const skill = skillDef as Record<string, unknown>;
-        if (!skill.description || typeof skill.description !== 'string') {
+        if (!skill.description || typeof skill.description !== "string") {
           errors.push({
             path: `${skillPath}.description`,
-            message: 'description is required',
+            message: "description is required",
           });
         }
         for (
           const field of [
-            'name',
-            'semantic_description',
-            'preview',
-            'resource',
+            "name",
+            "semantic_description",
+            "preview",
+            "resource",
           ]
         ) {
-          if (skill[field] !== undefined && typeof skill[field] !== 'string') {
+          if (skill[field] !== undefined && typeof skill[field] !== "string") {
             errors.push({
               path: `${skillPath}.${field}`,
               message: `${field} must be a string`,
@@ -3693,8 +3711,8 @@ export function validateManifest(input: unknown): ManifestValidationResult {
           }
         }
         if (
-          skill.format !== undefined && skill.format !== 'markdown' &&
-          skill.format !== 'text'
+          skill.format !== undefined && skill.format !== "markdown" &&
+          skill.format !== "text"
         ) {
           errors.push({
             path: `${skillPath}.format`,
@@ -3712,23 +3730,23 @@ export function validateManifest(input: unknown): ManifestValidationResult {
   // Environment variable / settings validation
   if (
     manifest.env !== undefined &&
-    (typeof manifest.env !== 'object' || manifest.env === null ||
+    (typeof manifest.env !== "object" || manifest.env === null ||
       Array.isArray(manifest.env))
   ) {
-    errors.push({ path: 'env', message: 'env must be an object' });
+    errors.push({ path: "env", message: "env must be an object" });
   }
 
   if (
     (manifest as Record<string, unknown>).env_vars !== undefined &&
-    (typeof (manifest as Record<string, unknown>).env_vars !== 'object' ||
+    (typeof (manifest as Record<string, unknown>).env_vars !== "object" ||
       (manifest as Record<string, unknown>).env_vars === null ||
       Array.isArray((manifest as Record<string, unknown>).env_vars))
   ) {
-    errors.push({ path: 'env_vars', message: 'env_vars must be an object' });
+    errors.push({ path: "env_vars", message: "env_vars must be an object" });
   }
 
   const functionsForWidgetValidation =
-    manifest.functions && typeof manifest.functions === 'object' &&
+    manifest.functions && typeof manifest.functions === "object" &&
       !Array.isArray(manifest.functions)
       ? manifest.functions as Record<string, unknown>
       : {};
@@ -3741,12 +3759,12 @@ export function validateManifest(input: unknown): ManifestValidationResult {
   validateManifestHttp(manifest.http, functionsForWidgetValidation, errors);
 
   const rawEnvVars = {
-    ...((manifest.env && typeof manifest.env === 'object' &&
+    ...((manifest.env && typeof manifest.env === "object" &&
         !Array.isArray(manifest.env))
       ? manifest.env as Record<string, unknown>
       : {}),
     ...((((manifest as Record<string, unknown>).env_vars) &&
-        typeof (manifest as Record<string, unknown>).env_vars === 'object' &&
+        typeof (manifest as Record<string, unknown>).env_vars === "object" &&
         !Array.isArray((manifest as Record<string, unknown>).env_vars))
       ? (manifest as Record<string, unknown>).env_vars as Record<
         string,
@@ -3760,15 +3778,15 @@ export function validateManifest(input: unknown): ManifestValidationResult {
     if (!keyValidation.valid) {
       errors.push({
         path: `env_vars.${key}`,
-        message: keyValidation.error || 'Invalid env var key',
+        message: keyValidation.error || "Invalid env var key",
       });
       continue;
     }
 
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
       errors.push({
         path: `env_vars.${key}`,
-        message: 'env var entry must be an object',
+        message: "env var entry must be an object",
       });
       continue;
     }
@@ -3777,8 +3795,8 @@ export function validateManifest(input: unknown): ManifestValidationResult {
 
     if (
       envVar.scope !== undefined &&
-      envVar.scope !== 'universal' &&
-      envVar.scope !== 'per_user'
+      envVar.scope !== "universal" &&
+      envVar.scope !== "per_user"
     ) {
       errors.push({
         path: `env_vars.${key}.scope`,
@@ -3788,8 +3806,8 @@ export function validateManifest(input: unknown): ManifestValidationResult {
 
     if (
       envVar.type !== undefined &&
-      envVar.type !== 'universal' &&
-      envVar.type !== 'per_user'
+      envVar.type !== "universal" &&
+      envVar.type !== "per_user"
     ) {
       errors.push({
         path: `env_vars.${key}.type`,
@@ -3799,62 +3817,63 @@ export function validateManifest(input: unknown): ManifestValidationResult {
 
     if (
       envVar.input !== undefined &&
-      envVar.input !== 'text' &&
-      envVar.input !== 'password' &&
-      envVar.input !== 'email' &&
-      envVar.input !== 'number' &&
-      envVar.input !== 'url' &&
-      envVar.input !== 'textarea'
+      envVar.input !== "text" &&
+      envVar.input !== "password" &&
+      envVar.input !== "email" &&
+      envVar.input !== "number" &&
+      envVar.input !== "url" &&
+      envVar.input !== "textarea"
     ) {
       errors.push({
         path: `env_vars.${key}.input`,
-        message: 'input must be one of: text, password, email, number, url, textarea',
+        message:
+          "input must be one of: text, password, email, number, url, textarea",
       });
     }
 
     if (
-      envVar.description !== undefined && typeof envVar.description !== 'string'
+      envVar.description !== undefined && typeof envVar.description !== "string"
     ) {
       errors.push({
         path: `env_vars.${key}.description`,
-        message: 'description must be a string',
+        message: "description must be a string",
       });
     }
 
-    if (envVar.required !== undefined && typeof envVar.required !== 'boolean') {
+    if (envVar.required !== undefined && typeof envVar.required !== "boolean") {
       errors.push({
         path: `env_vars.${key}.required`,
-        message: 'required must be a boolean',
+        message: "required must be a boolean",
       });
     }
 
-    if (envVar.default !== undefined && typeof envVar.default !== 'string') {
+    if (envVar.default !== undefined && typeof envVar.default !== "string") {
       errors.push({
         path: `env_vars.${key}.default`,
-        message: 'default must be a string',
+        message: "default must be a string",
       });
     }
 
-    if (envVar.label !== undefined && typeof envVar.label !== 'string') {
+    if (envVar.label !== undefined && typeof envVar.label !== "string") {
       errors.push({
         path: `env_vars.${key}.label`,
-        message: 'label must be a string',
+        message: "label must be a string",
       });
     }
 
     if (
-      envVar.placeholder !== undefined && typeof envVar.placeholder !== 'string'
+      envVar.placeholder !== undefined && typeof envVar.placeholder !== "string"
     ) {
       errors.push({
         path: `env_vars.${key}.placeholder`,
-        message: 'placeholder must be a string',
+        message: "placeholder must be a string",
       });
     }
 
-    if (envVar.help !== undefined && typeof envVar.help !== 'string') {
+    if (envVar.help !== undefined && typeof envVar.help !== "string") {
       errors.push({
         path: `env_vars.${key}.help`,
-        message: 'help must be a string',
+        message: "help must be a string",
       });
     }
   }
@@ -3904,7 +3923,7 @@ export function manifestToMCPTools(
         ? { ...defaultAnnotations, ...fnDef.annotations }
         : defaultAnnotations,
       inputSchema: {
-        type: 'object',
+        type: "object",
         properties: {},
         required: [],
       },
@@ -3969,7 +3988,7 @@ export interface ChatTraceContext {
 
 /** OpenAI-compatible message format */
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
+  role: "system" | "user" | "assistant" | "tool";
   content: string | null;
   tool_calls?: ChatToolCall[];
   tool_call_id?: string;
@@ -3978,7 +3997,7 @@ export interface ChatMessage {
 
 /** OpenAI-compatible tool definition */
 export interface ChatTool {
-  type: 'function';
+  type: "function";
   function: {
     name: string;
     description?: string;
@@ -3989,7 +4008,7 @@ export interface ChatTool {
 /** OpenAI-compatible tool call */
 export interface ChatToolCall {
   id: string;
-  type: 'function';
+  type: "function";
   function: {
     name: string;
     arguments: string;
@@ -4089,7 +4108,7 @@ export interface ToolInvocationTelemetryRequest {
   startedAt?: string;
   completedAt?: string;
   durationMs?: number;
-  status: 'success' | 'error' | 'aborted' | 'timeout';
+  status: "success" | "error" | "aborted" | "timeout";
   errorType?: string;
   errorMessage?: string;
   widgetAction?: WidgetToolInvocationTelemetryContext;

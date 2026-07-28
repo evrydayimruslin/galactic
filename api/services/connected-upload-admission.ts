@@ -2,15 +2,18 @@ import {
   ALLOWED_EXTENSIONS,
   MAX_FILES_PER_UPLOAD,
   MAX_UPLOAD_SIZE_BYTES,
-} from '../../shared/types/index.ts';
-import { type BytePreservingSourceContent, sourceFileByteLength } from './source-file-content.ts';
+} from "../../shared/types/index.ts";
+import {
+  type BytePreservingSourceContent,
+  sourceFileByteLength,
+} from "./source-file-content.ts";
 
 export const MAX_CONNECTED_NON_LIVE_VERSIONS = 3;
 
 type ConnectedUploadAdmissionDecision =
-  | 'deduplicate'
-  | 'stage'
-  | 'staged_version_limit';
+  | "deduplicate"
+  | "stage"
+  | "staged_version_limit";
 
 export function decideConnectedUploadAdmission({
   verifiedIdenticalLiveDenoRedeploy,
@@ -24,14 +27,14 @@ export function decideConnectedUploadAdmission({
   // A retry of the exact live Deno bundle is a no-op, not another staged
   // version. Evaluate this first so a full draft history cannot turn a safe,
   // idempotent retry into a false admission failure.
-  if (verifiedIdenticalLiveDenoRedeploy) return 'deduplicate';
+  if (verifiedIdenticalLiveDenoRedeploy) return "deduplicate";
   if (
     enforceStagedVersionLimit &&
     retainedNonLiveVersions >= MAX_CONNECTED_NON_LIVE_VERSIONS
   ) {
-    return 'staged_version_limit';
+    return "staged_version_limit";
   }
-  return 'stage';
+  return "stage";
 }
 
 export interface ConnectedUploadFile extends BytePreservingSourceContent {
@@ -42,7 +45,7 @@ export function validateConnectedUploadFileSet(
   files: ConnectedUploadFile[],
 ): { totalBytes: number } {
   if (!Array.isArray(files) || files.length === 0) {
-    throw new Error('files array is required and must not be empty');
+    throw new Error("files array is required and must not be empty");
   }
   if (files.length > MAX_FILES_PER_UPLOAD) {
     throw new Error(`Maximum ${MAX_FILES_PER_UPLOAD} files allowed`);
@@ -59,7 +62,9 @@ export function validateConnectedUploadFileSet(
     totalBytes += sourceFileByteLength(file);
     if (totalBytes > MAX_UPLOAD_SIZE_BYTES) {
       throw new Error(
-        `Total upload size exceeds ${MAX_UPLOAD_SIZE_BYTES / 1024 / 1024}MB limit`,
+        `Total upload size exceeds ${
+          MAX_UPLOAD_SIZE_BYTES / 1024 / 1024
+        }MB limit`,
       );
     }
   }
@@ -73,28 +78,28 @@ function connectedStagedVersionMetadata(
   if (!Array.isArray(metadata)) return [];
 
   const currentEntry = [...metadata].reverse().find((rawEntry) => {
-    if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) {
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
       return false;
     }
     return (rawEntry as Record<string, unknown>).version === currentVersion;
   }) as Record<string, unknown> | undefined;
   const currentCreatedAt = Date.parse(
-    typeof currentEntry?.created_at === 'string' ? currentEntry.created_at : '',
+    typeof currentEntry?.created_at === "string" ? currentEntry.created_at : "",
   );
 
   return metadata.filter(
     (rawEntry): rawEntry is Record<string, unknown> & { version: string } => {
       if (
-        !rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)
+        !rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)
       ) {
         return false;
       }
       const entry = rawEntry as Record<string, unknown>;
       if (
-        typeof entry.version !== 'string' || entry.version === currentVersion ||
-        typeof entry.source_hash !== 'string' ||
+        typeof entry.version !== "string" || entry.version === currentVersion ||
+        typeof entry.source_hash !== "string" ||
         !entry.test_attestation ||
-        typeof entry.test_attestation !== 'object' ||
+        typeof entry.test_attestation !== "object" ||
         Array.isArray(entry.test_attestation) ||
         (entry.test_attestation as Record<string, unknown>).source_hash !==
           entry.source_hash
@@ -107,7 +112,7 @@ function connectedStagedVersionMetadata(
       // remain valid history, but they are not retained connected-builder drafts.
       if (!Number.isFinite(currentCreatedAt)) return true;
       const candidateCreatedAt = Date.parse(
-        typeof entry.created_at === 'string' ? entry.created_at : '',
+        typeof entry.created_at === "string" ? entry.created_at : "",
       );
       return Number.isFinite(candidateCreatedAt) &&
         candidateCreatedAt > currentCreatedAt;
@@ -120,7 +125,9 @@ export function countConnectedStagedVersions(
   currentVersion: string | null | undefined,
 ): number {
   return new Set(
-    connectedStagedVersionMetadata(metadata, currentVersion).map((entry) => entry.version),
+    connectedStagedVersionMetadata(metadata, currentVersion).map((entry) =>
+      entry.version
+    ),
   ).size;
 }
 
@@ -135,9 +142,9 @@ export function retainedConnectedStagedVersionBytes(
       currentVersion,
     )
   ) {
-    const bytes = typeof entry.size_bytes === 'number'
+    const bytes = typeof entry.size_bytes === "number"
       ? entry.size_bytes
-      : typeof entry.size_bytes === 'string'
+      : typeof entry.size_bytes === "string"
       ? Number(entry.size_bytes)
       : NaN;
     if (Number.isFinite(bytes) && bytes >= 0) {

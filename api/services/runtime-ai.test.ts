@@ -1,28 +1,31 @@
-import { assertEquals } from 'https://deno.land/std@0.210.0/assert/assert_equals.ts';
-import { assertRejects } from 'https://deno.land/std@0.210.0/assert/assert_rejects.ts';
-import { assertStringIncludes } from 'https://deno.land/std@0.210.0/assert/assert_string_includes.ts';
-import type { ResolvedInferenceRoute } from './inference-route.ts';
-import { createRoutedRuntimeAIService, createRuntimeAIContext } from './runtime-ai.ts';
+import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
+import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejects.ts";
+import { assertStringIncludes } from "https://deno.land/std@0.210.0/assert/assert_string_includes.ts";
+import type { ResolvedInferenceRoute } from "./inference-route.ts";
+import {
+  createRoutedRuntimeAIService,
+  createRuntimeAIContext,
+} from "./runtime-ai.ts";
 
 function makeRoute(
   overrides: Partial<ResolvedInferenceRoute> = {},
 ): ResolvedInferenceRoute {
   return {
-    billingMode: 'byok',
-    provider: 'deepseek',
-    upstreamProvider: 'deepseek',
-    baseUrl: 'https://api.deepseek.test',
-    apiKey: 'route-key',
-    model: 'deepseek-v4-pro',
-    keySource: 'user_byok',
-    billingSource: 'none',
+    billingMode: "byok",
+    provider: "deepseek",
+    upstreamProvider: "deepseek",
+    baseUrl: "https://api.deepseek.test",
+    apiKey: "route-key",
+    model: "deepseek-v4-pro",
+    keySource: "user_byok",
+    billingSource: "none",
     shouldRequireBalance: false,
     shouldDebitLight: false,
     ...overrides,
   };
 }
 
-Deno.test('runtime AI: BYOK route uses resolved provider model and skips Light debit', async () => {
+Deno.test("runtime AI: BYOK route uses resolved provider model and skips Light debit", async () => {
   const previousFetch = globalThis.fetch;
   let capturedBody: Record<string, unknown> = {};
   let debitCalled = false;
@@ -30,28 +33,28 @@ Deno.test('runtime AI: BYOK route uses resolved provider model and skips Light d
   try {
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      if (url.includes('/rpc/debit_light')) {
+      if (url.includes("/rpc/debit_light")) {
         debitCalled = true;
       }
       capturedBody = JSON.parse(String(init?.body));
       return new Response(
         JSON.stringify({
           model: capturedBody.model,
-          choices: [{ message: { content: 'ok' } }],
+          choices: [{ message: { content: "ok" } }],
           usage: { prompt_tokens: 3, completion_tokens: 4 },
         }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
+        { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
 
-    const service = createRoutedRuntimeAIService(makeRoute(), 'user-1');
+    const service = createRoutedRuntimeAIService(makeRoute(), "user-1");
     const response = await service.call({
-      model: 'google/gemini-3.1-flash-lite-preview:nitro',
-      messages: [{ role: 'user', content: 'hi' }],
+      model: "google/gemini-3.1-flash-lite-preview:nitro",
+      messages: [{ role: "user", content: "hi" }],
     });
 
-    assertEquals(capturedBody.model, 'deepseek-v4-pro');
-    assertEquals(response.content, 'ok');
+    assertEquals(capturedBody.model, "deepseek-v4-pro");
+    assertEquals(response.content, "ok");
     assertEquals(response.usage.cost_light, 0);
     assertEquals(debitCalled, false);
   } finally {
@@ -59,7 +62,7 @@ Deno.test('runtime AI: BYOK route uses resolved provider model and skips Light d
   }
 });
 
-Deno.test('runtime AI: Light route debits usage after provider response', async () => {
+Deno.test("runtime AI: Light route debits usage after provider response", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
     __env?: Record<string, unknown>;
@@ -70,23 +73,23 @@ Deno.test('runtime AI: Light route debits usage after provider response', async 
   try {
     globalWithEnv.__env = {
       ...(previousEnv || {}),
-      SUPABASE_URL: 'https://supabase.test',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     };
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      if (url.includes('/chat/completions')) {
+      if (url.includes("/chat/completions")) {
         return new Response(
           JSON.stringify({
-            model: 'openai/gpt-4o-mini',
-            choices: [{ message: { content: 'metered' } }],
+            model: "openai/gpt-4o-mini",
+            choices: [{ message: { content: "metered" } }],
             usage: { prompt_tokens: 100, completion_tokens: 200 },
           }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
 
-      if (url.includes('/rpc/debit_light')) {
+      if (url.includes("/rpc/debit_light")) {
         debitBody = JSON.parse(String(init?.body));
         return new Response(
           JSON.stringify([{
@@ -95,49 +98,49 @@ Deno.test('runtime AI: Light route debits usage after provider response', async 
             was_depleted: false,
             amount_debited: 0.0149,
           }]),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
 
-      if (url.includes('/billing_transactions')) {
+      if (url.includes("/billing_transactions")) {
         return new Response(null, { status: 204 });
       }
 
-      return new Response('unexpected fetch', { status: 500 });
+      return new Response("unexpected fetch", { status: 500 });
     }) as typeof fetch;
 
     const service = createRoutedRuntimeAIService(
       makeRoute({
-        billingMode: 'light',
-        provider: 'ultralight',
-        upstreamProvider: 'openrouter',
-        baseUrl: 'https://openrouter.test/api/v1',
-        model: 'deepseek/deepseek-v4-flash',
-        keySource: 'platform_openrouter',
-        billingSource: 'openrouter',
+        billingMode: "light",
+        provider: "ultralight",
+        upstreamProvider: "openrouter",
+        baseUrl: "https://openrouter.test/api/v1",
+        model: "deepseek/deepseek-v4-flash",
+        keySource: "platform_openrouter",
+        billingSource: "openrouter",
         shouldRequireBalance: true,
         shouldDebitLight: true,
       }),
-      'user-1',
+      "user-1",
     );
     const response = await service.call({
-      model: 'openai/gpt-4o-mini',
-      messages: [{ role: 'user', content: 'hi' }],
+      model: "openai/gpt-4o-mini",
+      messages: [{ role: "user", content: "hi" }],
     });
 
-    assertEquals(response.content, 'metered');
+    assertEquals(response.content, "metered");
     // gpt-4o-mini fallback rate (0.15/0.6 per M) × 100 Light/$ × 1.1 markup.
     assertEquals(response.usage.cost_light, 0.0149);
-    assertEquals(debitBody?.p_user_id, 'user-1');
+    assertEquals(debitBody?.p_user_id, "user-1");
     assertEquals(debitBody?.p_amount_light, 0.0149);
-    assertEquals(debitBody?.p_reason, 'ai_chat');
+    assertEquals(debitBody?.p_reason, "ai_chat");
   } finally {
     globalThis.fetch = previousFetch;
     globalWithEnv.__env = previousEnv;
   }
 });
 
-Deno.test('runtime AI: Galactic direct DeepSeek disables thinking and debits cache-aware usage', async () => {
+Deno.test("runtime AI: Galactic direct DeepSeek disables thinking and debits cache-aware usage", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
     __env?: Record<string, unknown>;
@@ -149,17 +152,17 @@ Deno.test('runtime AI: Galactic direct DeepSeek disables thinking and debits cac
   try {
     globalWithEnv.__env = {
       ...(previousEnv || {}),
-      SUPABASE_URL: 'https://supabase.test',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     };
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      if (url.includes('/chat/completions')) {
+      if (url.includes("/chat/completions")) {
         providerBody = JSON.parse(String(init?.body));
         return new Response(
           JSON.stringify({
-            model: 'deepseek-v4-flash',
-            choices: [{ message: { content: 'direct' } }],
+            model: "deepseek-v4-flash",
+            choices: [{ message: { content: "direct" } }],
             usage: {
               prompt_tokens: 1_000,
               prompt_cache_hit_tokens: 400,
@@ -167,11 +170,11 @@ Deno.test('runtime AI: Galactic direct DeepSeek disables thinking and debits cac
               completion_tokens: 1_000,
             },
           }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
 
-      if (url.includes('/rpc/debit_light')) {
+      if (url.includes("/rpc/debit_light")) {
         debitBody = JSON.parse(String(init?.body));
         return new Response(
           JSON.stringify([{
@@ -180,47 +183,47 @@ Deno.test('runtime AI: Galactic direct DeepSeek disables thinking and debits cac
             was_depleted: false,
             amount_debited: 0.0365,
           }]),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
 
-      if (url.includes('/billing_transactions')) {
+      if (url.includes("/billing_transactions")) {
         return new Response(null, { status: 204 });
       }
 
-      return new Response('unexpected fetch', { status: 500 });
+      return new Response("unexpected fetch", { status: 500 });
     }) as typeof fetch;
 
     const service = createRoutedRuntimeAIService(
       makeRoute({
-        billingMode: 'light',
-        provider: 'ultralight',
-        upstreamProvider: 'deepseek',
-        baseUrl: 'https://api.deepseek.test',
-        model: 'deepseek-v4-flash',
-        canonicalModelId: 'ultralight/deepseek-v4-flash',
-        billingModelId: 'ultralight/deepseek-v4-flash',
-        keySource: 'platform_deepseek',
-        billingSource: 'platform_deepseek_direct',
-        requestDefaults: { thinking: { type: 'disabled' } },
+        billingMode: "light",
+        provider: "ultralight",
+        upstreamProvider: "deepseek",
+        baseUrl: "https://api.deepseek.test",
+        model: "deepseek-v4-flash",
+        canonicalModelId: "ultralight/deepseek-v4-flash",
+        billingModelId: "ultralight/deepseek-v4-flash",
+        keySource: "platform_deepseek",
+        billingSource: "platform_deepseek_direct",
+        requestDefaults: { thinking: { type: "disabled" } },
         shouldRequireBalance: true,
         shouldDebitLight: true,
       }),
-      'user-1',
+      "user-1",
     );
     const response = await service.call({
-      model: 'ultralight/deepseek-v4-flash',
-      messages: [{ role: 'user', content: 'hi' }],
+      model: "ultralight/deepseek-v4-flash",
+      messages: [{ role: "user", content: "hi" }],
     });
 
-    assertEquals(providerBody?.model, 'deepseek-v4-flash');
-    assertEquals(providerBody?.thinking, { type: 'disabled' });
-    assertEquals(response.content, 'direct');
+    assertEquals(providerBody?.model, "deepseek-v4-flash");
+    assertEquals(providerBody?.thinking, { type: "disabled" });
+    assertEquals(response.content, "direct");
     assertEquals(response.usage.cost_light, 0.0365);
     assertEquals(debitBody?.p_amount_light, 0.0365);
     assertEquals(
       (debitBody?.p_metadata as Record<string, unknown>)?.billing_source,
-      'platform_deepseek_direct',
+      "platform_deepseek_direct",
     );
   } finally {
     globalThis.fetch = previousFetch;
@@ -228,7 +231,7 @@ Deno.test('runtime AI: Galactic direct DeepSeek disables thinking and debits cac
   }
 });
 
-Deno.test('runtime AI: routine admission prices the complete provider payload', async () => {
+Deno.test("runtime AI: routine admission prices the complete provider payload", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
     __env?: Record<string, unknown>;
@@ -236,25 +239,27 @@ Deno.test('runtime AI: routine admission prices the complete provider payload', 
   const previousEnv = globalWithEnv.__env;
   let reservedLight = 0;
   let providerBody: Record<string, unknown> = {};
-  const largeDefault = 'd'.repeat(50_000);
-  const largeTool = 't'.repeat(50_000);
+  const largeDefault = "d".repeat(50_000);
+  const largeTool = "t".repeat(50_000);
 
   try {
     globalWithEnv.__env = {
       ...(previousEnv || {}),
-      SUPABASE_URL: 'https://supabase.test',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     };
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-      if (url.includes('/rpc/reserve_routine_run_budget')) {
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : {};
+      if (url.includes("/rpc/reserve_routine_run_budget")) {
         reservedLight = body.p_reserve_light as number;
         return Response.json([{
           allowed: true,
-          code: 'ok',
-          message: 'reserved',
-          reservation_id: '44444444-4444-4444-8444-444444444444',
+          code: "ok",
+          message: "reserved",
+          reservation_id: "44444444-4444-4444-8444-444444444444",
           reservation_key: body.p_reservation_key,
           reserved_light: reservedLight,
           calls_used: 1,
@@ -264,18 +269,18 @@ Deno.test('runtime AI: routine admission prices the complete provider payload', 
           light_limit: 100,
         }]);
       }
-      if (url.includes('/chat/completions')) {
+      if (url.includes("/chat/completions")) {
         providerBody = body;
         return Response.json({
-          model: 'deepseek/deepseek-v4-flash',
-          choices: [{ message: { content: 'ok' } }],
+          model: "deepseek/deepseek-v4-flash",
+          choices: [{ message: { content: "ok" } }],
           usage: { prompt_tokens: 1, completion_tokens: 1 },
         });
       }
-      if (url.includes('/rpc/settle_routine_run_budget_reservation')) {
+      if (url.includes("/rpc/settle_routine_run_budget_reservation")) {
         return Response.json(true);
       }
-      if (url.includes('/rpc/debit_light')) {
+      if (url.includes("/rpc/debit_light")) {
         return Response.json([{
           old_balance: 100,
           new_balance: 99.99,
@@ -283,7 +288,7 @@ Deno.test('runtime AI: routine admission prices the complete provider payload', 
           amount_debited: body.p_amount_light,
         }]);
       }
-      if (url.includes('/billing_transactions')) {
+      if (url.includes("/billing_transactions")) {
         return new Response(null, { status: 204 });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -293,27 +298,27 @@ Deno.test('runtime AI: routine admission prices the complete provider payload', 
       makeCreditsRoute({
         requestDefaults: { platform_prompt: largeDefault },
       }),
-      'user-1',
+      "user-1",
       async () => 1000,
       {
         routineContext: {
-          routineId: '11111111-1111-4111-8111-111111111111',
-          routineRunId: '22222222-2222-4222-8222-222222222222',
-          traceId: '33333333-3333-4333-8333-333333333333',
+          routineId: "11111111-1111-4111-8111-111111111111",
+          routineRunId: "22222222-2222-4222-8222-222222222222",
+          traceId: "33333333-3333-4333-8333-333333333333",
         },
       },
     );
     const response = await service.call({
-      messages: [{ role: 'user', content: 'small message' }],
+      messages: [{ role: "user", content: "small message" }],
       max_tokens: 1,
       tools: [{
-        name: 'large_tool',
+        name: "large_tool",
         description: largeTool,
-        parameters: { type: 'object' },
+        parameters: { type: "object" },
       }],
     });
 
-    assertEquals(response.content, 'ok');
+    assertEquals(response.content, "ok");
     assertEquals(providerBody.platform_prompt, largeDefault);
     assertEquals(
       (providerBody.tools as Array<Record<string, unknown>>)[0].description,
@@ -328,7 +333,7 @@ Deno.test('runtime AI: routine admission prices the complete provider payload', 
   }
 });
 
-Deno.test('runtime AI: ambiguous provider failure consumes the conservative reservation', async () => {
+Deno.test("runtime AI: ambiguous provider failure consumes the conservative reservation", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
     __env?: Record<string, unknown>;
@@ -340,18 +345,20 @@ Deno.test('runtime AI: ambiguous provider failure consumes the conservative rese
   try {
     globalWithEnv.__env = {
       ...(previousEnv || {}),
-      SUPABASE_URL: 'https://supabase.test',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     };
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-      if (url.includes('/rpc/reserve_routine_run_budget')) {
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : {};
+      if (url.includes("/rpc/reserve_routine_run_budget")) {
         return Response.json([{
           allowed: true,
-          code: 'ok',
-          message: 'reserved',
-          reservation_id: '44444444-4444-4444-8444-444444444444',
+          code: "ok",
+          message: "reserved",
+          reservation_id: "44444444-4444-4444-8444-444444444444",
           reservation_key: body.p_reservation_key,
           reserved_light: 7.5,
           calls_used: 1,
@@ -361,14 +368,14 @@ Deno.test('runtime AI: ambiguous provider failure consumes the conservative rese
           light_limit: 100,
         }]);
       }
-      if (url.includes('/chat/completions')) {
-        return new Response('provider timeout after dispatch', { status: 504 });
+      if (url.includes("/chat/completions")) {
+        return new Response("provider timeout after dispatch", { status: 504 });
       }
-      if (url.includes('/rpc/settle_routine_run_budget_reservation')) {
+      if (url.includes("/rpc/settle_routine_run_budget_reservation")) {
         settledBody = body;
         return Response.json(true);
       }
-      if (url.includes('/rpc/release_routine_run_budget_reservation')) {
+      if (url.includes("/rpc/release_routine_run_budget_reservation")) {
         released = true;
         return Response.json(true);
       }
@@ -377,24 +384,24 @@ Deno.test('runtime AI: ambiguous provider failure consumes the conservative rese
 
     const service = createRoutedRuntimeAIService(
       makeCreditsRoute(),
-      'user-1',
+      "user-1",
       async () => 1000,
       {
         routineContext: {
-          routineId: '11111111-1111-4111-8111-111111111111',
-          routineRunId: '22222222-2222-4222-8222-222222222222',
-          traceId: '33333333-3333-4333-8333-333333333333',
+          routineId: "11111111-1111-4111-8111-111111111111",
+          routineRunId: "22222222-2222-4222-8222-222222222222",
+          traceId: "33333333-3333-4333-8333-333333333333",
         },
       },
     );
     await assertRejects(
       () =>
         service.call({
-          messages: [{ role: 'user', content: 'perform work' }],
+          messages: [{ role: "user", content: "perform work" }],
           max_tokens: 10,
         }),
       Error,
-      'AI provider error (504)',
+      "AI provider error (504)",
     );
     const settlement = settledBody as Record<string, unknown> | null;
     assertEquals(settlement?.p_actual_light, 7.5);
@@ -406,7 +413,7 @@ Deno.test('runtime AI: ambiguous provider failure consumes the conservative rese
   }
 });
 
-Deno.test('runtime AI: routine BYOK reserves zero Light but still creates a call slot', async () => {
+Deno.test("runtime AI: routine BYOK reserves zero Light but still creates a call slot", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
     __env?: Record<string, unknown>;
@@ -417,19 +424,21 @@ Deno.test('runtime AI: routine BYOK reserves zero Light but still creates a call
   try {
     globalWithEnv.__env = {
       ...(previousEnv || {}),
-      SUPABASE_URL: 'https://supabase.test',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     };
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-      if (url.includes('/rpc/reserve_routine_run_budget')) {
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : {};
+      if (url.includes("/rpc/reserve_routine_run_budget")) {
         reserveBody = body;
         return Response.json([{
           allowed: true,
-          code: 'ok',
-          message: 'reserved',
-          reservation_id: '44444444-4444-4444-8444-444444444444',
+          code: "ok",
+          message: "reserved",
+          reservation_id: "44444444-4444-4444-8444-444444444444",
           reservation_key: body.p_reservation_key,
           reserved_light: body.p_reserve_light,
           calls_used: 1,
@@ -439,17 +448,17 @@ Deno.test('runtime AI: routine BYOK reserves zero Light but still creates a call
           light_limit: 100,
         }]);
       }
-      if (url.includes('/chat/completions')) {
+      if (url.includes("/chat/completions")) {
         return Response.json({
-          model: 'deepseek-v4-pro',
-          choices: [{ message: { content: 'ok' } }],
+          model: "deepseek-v4-pro",
+          choices: [{ message: { content: "ok" } }],
           usage: { prompt_tokens: 2, completion_tokens: 1 },
         });
       }
-      if (url.includes('/rpc/settle_routine_run_budget_reservation')) {
+      if (url.includes("/rpc/settle_routine_run_budget_reservation")) {
         return Response.json(true);
       }
-      if (url.includes('/ai_usage_events')) {
+      if (url.includes("/ai_usage_events")) {
         return new Response(null, { status: 204 });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -457,24 +466,24 @@ Deno.test('runtime AI: routine BYOK reserves zero Light but still creates a call
 
     const service = createRoutedRuntimeAIService(
       makeRoute(),
-      'user-1',
+      "user-1",
       undefined,
       {
         routineContext: {
-          routineId: '11111111-1111-4111-8111-111111111111',
-          routineRunId: '22222222-2222-4222-8222-222222222222',
-          traceId: '33333333-3333-4333-8333-333333333333',
+          routineId: "11111111-1111-4111-8111-111111111111",
+          routineRunId: "22222222-2222-4222-8222-222222222222",
+          traceId: "33333333-3333-4333-8333-333333333333",
         },
       },
     );
     const response = await service.call({
-      messages: [{ role: 'user', content: 'BYOK' }],
+      messages: [{ role: "user", content: "BYOK" }],
     });
 
-    assertEquals(response.content, 'ok');
+    assertEquals(response.content, "ok");
     const reservation = reserveBody as Record<string, unknown> | null;
     assertEquals(reservation?.p_reserve_light, 0);
-    assertEquals(reservation?.p_kind, 'ai_call');
+    assertEquals(reservation?.p_kind, "ai_call");
   } finally {
     globalThis.fetch = previousFetch;
     globalWithEnv.__env = previousEnv;
@@ -485,22 +494,22 @@ function makeCreditsRoute(
   overrides: Partial<ResolvedInferenceRoute> = {},
 ): ResolvedInferenceRoute {
   return makeRoute({
-    billingMode: 'light',
-    provider: 'ultralight',
-    upstreamProvider: 'openrouter',
-    baseUrl: 'https://openrouter.test/api/v1',
-    model: 'deepseek/deepseek-v4-flash',
-    keySource: 'platform_openrouter',
-    billingSource: 'openrouter',
+    billingMode: "light",
+    provider: "ultralight",
+    upstreamProvider: "openrouter",
+    baseUrl: "https://openrouter.test/api/v1",
+    model: "deepseek/deepseek-v4-flash",
+    keySource: "platform_openrouter",
+    billingSource: "openrouter",
     shouldRequireBalance: true,
     shouldDebitLight: true,
     ...overrides,
   });
 }
 
-const testUser = { id: 'user-1', email: 'user-1@example.test' };
+const testUser = { id: "user-1", email: "user-1@example.test" };
 
-Deno.test('runtime AI context: BYOK route skips the balance gate and is not blocked', async () => {
+Deno.test("runtime AI context: BYOK route skips the balance gate and is not blocked", async () => {
   let balanceCalls = 0;
 
   const context = await createRuntimeAIContext(testUser, {
@@ -512,19 +521,19 @@ Deno.test('runtime AI context: BYOK route skips the balance gate and is not bloc
   });
 
   assertEquals(balanceCalls, 0);
-  assertEquals(context.route?.provider, 'deepseek');
+  assertEquals(context.route?.provider, "deepseek");
   assertEquals(context.resolvedRoute?.shouldRequireBalance, false);
-  assertEquals(context.userApiKey, 'route-key');
+  assertEquals(context.userApiKey, "route-key");
 });
 
-Deno.test('runtime AI context: credits route below minimum balance is blocked pre-call', async () => {
+Deno.test("runtime AI context: credits route below minimum balance is blocked pre-call", async () => {
   const previousFetch = globalThis.fetch;
   let fetchCalls = 0;
 
   try {
     globalThis.fetch = (async () => {
       fetchCalls++;
-      return new Response('unexpected fetch', { status: 500 });
+      return new Response("unexpected fetch", { status: 500 });
     }) as typeof fetch;
 
     const context = await createRuntimeAIContext(testUser, {
@@ -537,25 +546,25 @@ Deno.test('runtime AI context: credits route below minimum balance is blocked pr
     assertEquals(context.userApiKey, null);
     // The reason must ride the context so the dynamic-worker AI binding can
     // surface the same message as the in-process service path.
-    assertStringIncludes(context.unavailableReason ?? '', 'credits');
-    assertStringIncludes(context.unavailableReason ?? '', 'BYOK');
+    assertStringIncludes(context.unavailableReason ?? "", "credits");
+    assertStringIncludes(context.unavailableReason ?? "", "BYOK");
 
     const response = await context.aiService.call({
-      model: 'deepseek/deepseek-v4-flash',
-      messages: [{ role: 'user', content: 'hi' }],
+      model: "deepseek/deepseek-v4-flash",
+      messages: [{ role: "user", content: "hi" }],
     });
 
-    assertStringIncludes(response.error ?? '', 'credits');
-    assertStringIncludes(response.error ?? '', 'current balance: 12.5');
-    assertStringIncludes(response.error ?? '', 'BYOK');
-    assertEquals(response.content, '');
+    assertStringIncludes(response.error ?? "", "credits");
+    assertStringIncludes(response.error ?? "", "current balance: 12.5");
+    assertStringIncludes(response.error ?? "", "BYOK");
+    assertEquals(response.content, "");
     assertEquals(fetchCalls, 0);
   } finally {
     globalThis.fetch = previousFetch;
   }
 });
 
-Deno.test('runtime AI context: credits route at the minimum balance proceeds', async () => {
+Deno.test("runtime AI context: credits route at the minimum balance proceeds", async () => {
   let balanceCalls = 0;
 
   const context = await createRuntimeAIContext(testUser, {
@@ -567,13 +576,13 @@ Deno.test('runtime AI context: credits route at the minimum balance proceeds', a
   });
 
   assertEquals(balanceCalls, 1);
-  assertEquals(context.route?.provider, 'ultralight');
+  assertEquals(context.route?.provider, "ultralight");
   assertEquals(context.route?.shouldDebitLight, true);
   assertEquals(context.resolvedRoute?.shouldRequireBalance, true);
-  assertEquals(context.userApiKey, 'route-key');
+  assertEquals(context.userApiKey, "route-key");
 });
 
-Deno.test('runtime AI context: balance check failure fails open and proceeds un-gated', async () => {
+Deno.test("runtime AI context: balance check failure fails open and proceeds un-gated", async () => {
   const previousWarn = console.warn;
   let warned = false;
 
@@ -585,44 +594,44 @@ Deno.test('runtime AI context: balance check failure fails open and proceeds un-
     const context = await createRuntimeAIContext(testUser, {
       resolveRoute: async () => makeCreditsRoute(),
       checkBalance: async () => {
-        throw new Error('Failed to query user balance');
+        throw new Error("Failed to query user balance");
       },
     });
 
     assertEquals(warned, true);
-    assertEquals(context.route?.provider, 'ultralight');
+    assertEquals(context.route?.provider, "ultralight");
     assertEquals(context.resolvedRoute?.shouldRequireBalance, true);
-    assertEquals(context.userApiKey, 'route-key');
+    assertEquals(context.userApiKey, "route-key");
   } finally {
     console.warn = previousWarn;
   }
 });
 
-Deno.test('runtime AI: metered call is refused per-call when balance is below the floor', async () => {
+Deno.test("runtime AI: metered call is refused per-call when balance is below the floor", async () => {
   const previousFetch = globalThis.fetch;
   let providerCalled = false;
   let debitCalled = false;
   try {
     globalThis.fetch = (async (input) => {
       const url = String(input);
-      if (url.includes('/chat/completions')) providerCalled = true;
-      if (url.includes('/rpc/debit_light')) debitCalled = true;
-      return new Response('unexpected fetch', { status: 500 });
+      if (url.includes("/chat/completions")) providerCalled = true;
+      if (url.includes("/rpc/debit_light")) debitCalled = true;
+      return new Response("unexpected fetch", { status: 500 });
     }) as typeof fetch;
 
     // Injected balance below CHAT_MIN_BALANCE_LIGHT (25) — the per-call gate must
     // refuse BEFORE any billable upstream inference is generated.
     const service = createRoutedRuntimeAIService(
       makeCreditsRoute(),
-      'user-1',
+      "user-1",
       async () => 10,
     );
     const response = await service.call({
-      messages: [{ role: 'user', content: 'hi' }],
+      messages: [{ role: "user", content: "hi" }],
     });
 
-    assertEquals(response.content, '');
-    assertStringIncludes(response.error ?? '', 'requires at least');
+    assertEquals(response.content, "");
+    assertStringIncludes(response.error ?? "", "requires at least");
     assertEquals(providerCalled, false);
     assertEquals(debitCalled, false);
   } finally {
@@ -630,7 +639,7 @@ Deno.test('runtime AI: metered call is refused per-call when balance is below th
   }
 });
 
-Deno.test('runtime AI: metered call withholds content when the debit depletes the wallet', async () => {
+Deno.test("runtime AI: metered call withholds content when the debit depletes the wallet", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
     __env?: Record<string, unknown>;
@@ -639,22 +648,22 @@ Deno.test('runtime AI: metered call withholds content when the debit depletes th
   try {
     globalWithEnv.__env = {
       ...(previousEnv || {}),
-      SUPABASE_URL: 'https://supabase.test',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     };
     globalThis.fetch = (async (input) => {
       const url = String(input);
-      if (url.includes('/chat/completions')) {
+      if (url.includes("/chat/completions")) {
         return new Response(
           JSON.stringify({
-            model: 'deepseek/deepseek-v4-flash',
-            choices: [{ message: { content: 'should-be-withheld' } }],
+            model: "deepseek/deepseek-v4-flash",
+            choices: [{ message: { content: "should-be-withheld" } }],
             usage: { prompt_tokens: 100, completion_tokens: 200 },
           }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (url.includes('/rpc/debit_light')) {
+      if (url.includes("/rpc/debit_light")) {
         // Partial/depleting debit: the buyer could not fully cover the call.
         return new Response(
           JSON.stringify([{
@@ -663,35 +672,35 @@ Deno.test('runtime AI: metered call withholds content when the debit depletes th
             was_depleted: true,
             amount_debited: 0.01,
           }]),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (url.includes('/billing_transactions')) {
+      if (url.includes("/billing_transactions")) {
         return new Response(null, { status: 204 });
       }
-      return new Response('unexpected fetch', { status: 500 });
+      return new Response("unexpected fetch", { status: 500 });
     }) as typeof fetch;
 
     // Balance is above the floor at call time, but the debit depletes it — the
     // content of THIS call must be withheld.
     const service = createRoutedRuntimeAIService(
       makeCreditsRoute(),
-      'user-1',
+      "user-1",
       async () => 1000,
     );
     const response = await service.call({
-      messages: [{ role: 'user', content: 'hi' }],
+      messages: [{ role: "user", content: "hi" }],
     });
 
-    assertEquals(response.content, '');
-    assertStringIncludes(response.error ?? '', 'Insufficient credits');
+    assertEquals(response.content, "");
+    assertStringIncludes(response.error ?? "", "Insufficient credits");
   } finally {
     globalThis.fetch = previousFetch;
     globalWithEnv.__env = previousEnv;
   }
 });
 
-Deno.test('runtime AI: metered call with ample balance passes the gate and returns content', async () => {
+Deno.test("runtime AI: metered call with ample balance passes the gate and returns content", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
     __env?: Record<string, unknown>;
@@ -700,22 +709,22 @@ Deno.test('runtime AI: metered call with ample balance passes the gate and retur
   try {
     globalWithEnv.__env = {
       ...(previousEnv || {}),
-      SUPABASE_URL: 'https://supabase.test',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     };
     globalThis.fetch = (async (input) => {
       const url = String(input);
-      if (url.includes('/chat/completions')) {
+      if (url.includes("/chat/completions")) {
         return new Response(
           JSON.stringify({
-            model: 'deepseek/deepseek-v4-flash',
-            choices: [{ message: { content: 'ok' } }],
+            model: "deepseek/deepseek-v4-flash",
+            choices: [{ message: { content: "ok" } }],
             usage: { prompt_tokens: 100, completion_tokens: 200 },
           }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (url.includes('/rpc/debit_light')) {
+      if (url.includes("/rpc/debit_light")) {
         return new Response(
           JSON.stringify([{
             old_balance: 1000,
@@ -723,25 +732,25 @@ Deno.test('runtime AI: metered call with ample balance passes the gate and retur
             was_depleted: false,
             amount_debited: 0.02,
           }]),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (url.includes('/billing_transactions')) {
+      if (url.includes("/billing_transactions")) {
         return new Response(null, { status: 204 });
       }
-      return new Response('unexpected fetch', { status: 500 });
+      return new Response("unexpected fetch", { status: 500 });
     }) as typeof fetch;
 
     const service = createRoutedRuntimeAIService(
       makeCreditsRoute(),
-      'user-1',
+      "user-1",
       async () => 1000,
     );
     const response = await service.call({
-      messages: [{ role: 'user', content: 'hi' }],
+      messages: [{ role: "user", content: "hi" }],
     });
 
-    assertEquals(response.content, 'ok');
+    assertEquals(response.content, "ok");
   } finally {
     globalThis.fetch = previousFetch;
     globalWithEnv.__env = previousEnv;
@@ -755,17 +764,17 @@ Deno.test("runtime AI: a pinned route model beats the dev's per-call model", asy
   try {
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      if (!url.includes('/chat/completions')) {
-        return new Response('unexpected fetch', { status: 500 });
+      if (!url.includes("/chat/completions")) {
+        return new Response("unexpected fetch", { status: 500 });
       }
       capturedBody = JSON.parse(String(init?.body));
       return new Response(
         JSON.stringify({
           model: capturedBody.model,
-          choices: [{ message: { content: 'pinned' } }],
+          choices: [{ message: { content: "pinned" } }],
           usage: { prompt_tokens: 3, completion_tokens: 4 },
         }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
+        { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
 
@@ -773,36 +782,36 @@ Deno.test("runtime AI: a pinned route model beats the dev's per-call model", asy
     // to isolate model selection from the debit path.
     const service = createRoutedRuntimeAIService(
       makeRoute({
-        billingMode: 'light',
-        provider: 'ultralight',
-        upstreamProvider: 'openrouter',
-        baseUrl: 'https://openrouter.test/api/v1',
-        model: 'anthropic/claude-x',
-        keySource: 'platform_openrouter',
-        billingSource: 'openrouter',
+        billingMode: "light",
+        provider: "ultralight",
+        upstreamProvider: "openrouter",
+        baseUrl: "https://openrouter.test/api/v1",
+        model: "anthropic/claude-x",
+        keySource: "platform_openrouter",
+        billingSource: "openrouter",
         shouldRequireBalance: false,
         shouldDebitLight: false,
         modelPinned: true,
       }),
-      'user-1',
+      "user-1",
     );
     const response = await service.call({
-      model: 'openai/gpt-4o-mini',
-      messages: [{ role: 'user', content: 'hi' }],
+      model: "openai/gpt-4o-mini",
+      messages: [{ role: "user", content: "hi" }],
     });
 
-    assertEquals(capturedBody.model, 'anthropic/claude-x');
-    assertEquals(response.content, 'pinned');
+    assertEquals(capturedBody.model, "anthropic/claude-x");
+    assertEquals(response.content, "pinned");
   } finally {
     globalThis.fetch = previousFetch;
   }
 });
 
-Deno.test('runtime AI context: a per-function override selection pins the route model', async () => {
+Deno.test("runtime AI context: a per-function override selection pins the route model", async () => {
   let capturedParams: Record<string, unknown> | null = null;
 
   const context = await createRuntimeAIContext(testUser, {
-    inferenceSelection: { billingMode: 'light', model: 'openai/gpt-4o-mini' },
+    inferenceSelection: { billingMode: "light", model: "openai/gpt-4o-mini" },
     resolveRoute: async (params) => {
       capturedParams = params as unknown as Record<string, unknown>;
       return makeRoute({ modelPinned: true });
@@ -813,13 +822,13 @@ Deno.test('runtime AI context: a per-function override selection pins the route 
   assertEquals(capturedParams?.pinSelectedModel, true);
   assertEquals(
     (capturedParams?.selection as Record<string, unknown>)?.model,
-    'openai/gpt-4o-mini',
+    "openai/gpt-4o-mini",
   );
   // toRuntimeAIRoute must carry the pin through to the sandbox route props.
   assertEquals(context.route?.modelPinned, true);
 });
 
-Deno.test('runtime AI context: no override selection does not pin the route model', async () => {
+Deno.test("runtime AI context: no override selection does not pin the route model", async () => {
   let capturedParams: Record<string, unknown> | null = null;
 
   await createRuntimeAIContext(testUser, {
@@ -833,7 +842,7 @@ Deno.test('runtime AI context: no override selection does not pin the route mode
   assertEquals(capturedParams?.pinSelectedModel, false);
 });
 
-Deno.test('runtime AI: BYOK route records an unbilled usage event with attribution', async () => {
+Deno.test("runtime AI: BYOK route records an unbilled usage event with attribution", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
     __env?: Record<string, unknown>;
@@ -845,49 +854,49 @@ Deno.test('runtime AI: BYOK route records an unbilled usage event with attributi
   try {
     globalWithEnv.__env = {
       ...(previousEnv || {}),
-      SUPABASE_URL: 'https://supabase.test',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     };
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      if (url.includes('/rpc/debit_light')) {
+      if (url.includes("/rpc/debit_light")) {
         debitCalled = true;
-        return new Response('[]', { status: 200 });
+        return new Response("[]", { status: 200 });
       }
-      if (url.includes('/rest/v1/ai_usage_events')) {
+      if (url.includes("/rest/v1/ai_usage_events")) {
         usageBody = JSON.parse(String(init?.body));
         return new Response(null, { status: 201 });
       }
       return new Response(
         JSON.stringify({
-          model: 'deepseek-v4-pro',
-          choices: [{ message: { content: 'ok' } }],
+          model: "deepseek-v4-pro",
+          choices: [{ message: { content: "ok" } }],
           usage: { prompt_tokens: 3, completion_tokens: 4 },
         }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
+        { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
 
     const service = createRoutedRuntimeAIService(
       makeRoute(),
-      'user-1',
+      "user-1",
       undefined,
-      { appId: 'app-9', functionName: 'summarize' },
+      { appId: "app-9", functionName: "summarize" },
     );
     const response = await service.call({
-      messages: [{ role: 'user', content: 'hi' }],
+      messages: [{ role: "user", content: "hi" }],
     });
     // The usage write is fire-and-forget — let its microtask chain settle.
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    assertEquals(response.content, 'ok');
+    assertEquals(response.content, "ok");
     assertEquals(debitCalled, false);
     assertEquals(usageBody !== null, true);
-    assertEquals(usageBody!.billing_mode, 'byok');
-    assertEquals(usageBody!.key_source, 'user_byok');
-    assertEquals(usageBody!.app_id, 'app-9');
-    assertEquals(usageBody!.function_name, 'summarize');
-    assertEquals(usageBody!.model, 'deepseek-v4-pro');
+    assertEquals(usageBody!.billing_mode, "byok");
+    assertEquals(usageBody!.key_source, "user_byok");
+    assertEquals(usageBody!.app_id, "app-9");
+    assertEquals(usageBody!.function_name, "summarize");
+    assertEquals(usageBody!.model, "deepseek-v4-pro");
     assertEquals(usageBody!.prompt_tokens, 3);
     assertEquals(usageBody!.completion_tokens, 4);
     assertEquals(usageBody!.total_tokens, 7);
@@ -897,7 +906,7 @@ Deno.test('runtime AI: BYOK route records an unbilled usage event with attributi
   }
 });
 
-Deno.test('runtime AI: structured validation failures still record provider usage', async () => {
+Deno.test("runtime AI: structured validation failures still record provider usage", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
     __env?: Record<string, unknown>;
@@ -908,58 +917,58 @@ Deno.test('runtime AI: structured validation failures still record provider usag
   try {
     globalWithEnv.__env = {
       ...(previousEnv || {}),
-      SUPABASE_URL: 'https://supabase.test',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     };
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      if (url.includes('/rest/v1/ai_usage_events')) {
+      if (url.includes("/rest/v1/ai_usage_events")) {
         usageBody = JSON.parse(String(init?.body));
         return new Response(null, { status: 201 });
       }
       return new Response(
         JSON.stringify({
-          model: 'deepseek-v4-pro',
+          model: "deepseek-v4-pro",
           choices: [{ message: { content: '{"total":-1}' } }],
           usage: { prompt_tokens: 7, completion_tokens: 5 },
         }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
+        { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
 
     const service = createRoutedRuntimeAIService(
       makeRoute(),
-      'user-1',
+      "user-1",
       undefined,
-      { appId: 'app-9', functionName: 'extract_invoice' },
+      { appId: "app-9", functionName: "extract_invoice" },
     );
     const response = await service.call({
-      messages: [{ role: 'user', content: 'extract' }],
+      messages: [{ role: "user", content: "extract" }],
       output_schema: {
-        name: 'invoice',
+        name: "invoice",
         schema: {
-          type: 'object',
-          properties: { total: { type: 'number', minimum: 0 } },
-          required: ['total'],
+          type: "object",
+          properties: { total: { type: "number", minimum: 0 } },
+          required: ["total"],
           additionalProperties: false,
         },
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    assertEquals(response.error_code, 'structured_output_schema_mismatch');
+    assertEquals(response.error_code, "structured_output_schema_mismatch");
     assertEquals(response.output, undefined);
     assertEquals(response.usage.input_tokens, 7);
     assertEquals(response.usage.output_tokens, 5);
     assertEquals(usageBody?.total_tokens, 12);
-    assertEquals(usageBody?.function_name, 'extract_invoice');
+    assertEquals(usageBody?.function_name, "extract_invoice");
   } finally {
     globalThis.fetch = previousFetch;
     globalWithEnv.__env = previousEnv;
   }
 });
 
-Deno.test('runtime AI: structured validation runs after metered usage debit', async () => {
+Deno.test("runtime AI: structured validation runs after metered usage debit", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
     __env?: Record<string, unknown>;
@@ -970,19 +979,19 @@ Deno.test('runtime AI: structured validation runs after metered usage debit', as
   try {
     globalWithEnv.__env = {
       ...(previousEnv || {}),
-      SUPABASE_URL: 'https://supabase.test',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     };
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      if (url.includes('/chat/completions')) {
+      if (url.includes("/chat/completions")) {
         return Response.json({
-          model: 'openai/gpt-4o-mini',
+          model: "openai/gpt-4o-mini",
           choices: [{ message: { content: '{"total":-1}' } }],
           usage: { prompt_tokens: 100, completion_tokens: 200 },
         });
       }
-      if (url.includes('/rpc/debit_light')) {
+      if (url.includes("/rpc/debit_light")) {
         debitBody = JSON.parse(String(init?.body));
         return Response.json([{
           old_balance: 100,
@@ -991,58 +1000,58 @@ Deno.test('runtime AI: structured validation runs after metered usage debit', as
           amount_debited: 0.0149,
         }]);
       }
-      if (url.includes('/billing_transactions')) {
+      if (url.includes("/billing_transactions")) {
         return new Response(null, { status: 204 });
       }
-      return new Response('unexpected fetch', { status: 500 });
+      return new Response("unexpected fetch", { status: 500 });
     }) as typeof fetch;
 
     const service = createRoutedRuntimeAIService(
       makeRoute({
-        billingMode: 'light',
-        provider: 'ultralight',
-        upstreamProvider: 'openrouter',
-        baseUrl: 'https://openrouter.test/api/v1',
-        model: 'openai/gpt-4o-mini',
-        canonicalModelId: 'openai/gpt-4o-mini',
-        billingModelId: 'openai/gpt-4o-mini',
-        keySource: 'platform_openrouter',
-        billingSource: 'openrouter',
+        billingMode: "light",
+        provider: "ultralight",
+        upstreamProvider: "openrouter",
+        baseUrl: "https://openrouter.test/api/v1",
+        model: "openai/gpt-4o-mini",
+        canonicalModelId: "openai/gpt-4o-mini",
+        billingModelId: "openai/gpt-4o-mini",
+        keySource: "platform_openrouter",
+        billingSource: "openrouter",
         shouldRequireBalance: true,
         shouldDebitLight: true,
       }),
-      'user-1',
+      "user-1",
       async () => 1000,
-      { appId: 'app-9', functionName: 'extract_invoice' },
+      { appId: "app-9", functionName: "extract_invoice" },
     );
     const response = await service.call({
-      messages: [{ role: 'user', content: 'extract' }],
+      messages: [{ role: "user", content: "extract" }],
       output_schema: {
-        name: 'invoice',
+        name: "invoice",
         schema: {
-          type: 'object',
-          properties: { total: { type: 'number', minimum: 0 } },
-          required: ['total'],
+          type: "object",
+          properties: { total: { type: "number", minimum: 0 } },
+          required: ["total"],
           additionalProperties: false,
         },
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    assertEquals(response.error_code, 'structured_output_schema_mismatch');
+    assertEquals(response.error_code, "structured_output_schema_mismatch");
     assertEquals(response.usage.input_tokens, 100);
     assertEquals(response.usage.output_tokens, 200);
-    assertEquals(debitBody?.p_user_id, 'user-1');
-    assertEquals(debitBody?.p_app_id, 'app-9');
-    assertEquals(debitBody?.p_function_name, 'extract_invoice');
-    assertEquals(typeof debitBody?.p_amount_light, 'number');
+    assertEquals(debitBody?.p_user_id, "user-1");
+    assertEquals(debitBody?.p_app_id, "app-9");
+    assertEquals(debitBody?.p_function_name, "extract_invoice");
+    assertEquals(typeof debitBody?.p_amount_light, "number");
   } finally {
     globalThis.fetch = previousFetch;
     globalWithEnv.__env = previousEnv;
   }
 });
 
-Deno.test('runtime AI: metered debit carries app + function attribution', async () => {
+Deno.test("runtime AI: metered debit carries app + function attribution", async () => {
   const previousFetch = globalThis.fetch;
   const globalWithEnv = globalThis as typeof globalThis & {
     __env?: Record<string, unknown>;
@@ -1054,22 +1063,22 @@ Deno.test('runtime AI: metered debit carries app + function attribution', async 
   try {
     globalWithEnv.__env = {
       ...(previousEnv || {}),
-      SUPABASE_URL: 'https://supabase.test',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
     };
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
-      if (url.includes('/chat/completions')) {
+      if (url.includes("/chat/completions")) {
         return new Response(
           JSON.stringify({
-            model: 'openai/gpt-4o-mini',
-            choices: [{ message: { content: 'metered' } }],
+            model: "openai/gpt-4o-mini",
+            choices: [{ message: { content: "metered" } }],
             usage: { prompt_tokens: 100, completion_tokens: 200 },
           }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (url.includes('/rpc/debit_light')) {
+      if (url.includes("/rpc/debit_light")) {
         debitBody = JSON.parse(String(init?.body));
         return new Response(
           JSON.stringify([{
@@ -1078,44 +1087,44 @@ Deno.test('runtime AI: metered debit carries app + function attribution', async 
             was_depleted: false,
             amount_debited: 0.0149,
           }]),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
+          { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (url.includes('/rest/v1/ai_usage_events')) {
+      if (url.includes("/rest/v1/ai_usage_events")) {
         usageEventFired = true;
         return new Response(null, { status: 201 });
       }
-      if (url.includes('/billing_transactions')) {
+      if (url.includes("/billing_transactions")) {
         return new Response(null, { status: 204 });
       }
-      return new Response('unexpected fetch', { status: 500 });
+      return new Response("unexpected fetch", { status: 500 });
     }) as typeof fetch;
 
     const service = createRoutedRuntimeAIService(
       makeRoute({
-        billingMode: 'light',
-        provider: 'ultralight',
-        upstreamProvider: 'openrouter',
-        baseUrl: 'https://openrouter.test/api/v1',
-        model: 'deepseek/deepseek-v4-flash',
-        keySource: 'platform_openrouter',
-        billingSource: 'openrouter',
+        billingMode: "light",
+        provider: "ultralight",
+        upstreamProvider: "openrouter",
+        baseUrl: "https://openrouter.test/api/v1",
+        model: "deepseek/deepseek-v4-flash",
+        keySource: "platform_openrouter",
+        billingSource: "openrouter",
         shouldRequireBalance: true,
         shouldDebitLight: true,
       }),
-      'user-1',
+      "user-1",
       undefined,
-      { appId: 'app-9', functionName: 'summarize' },
+      { appId: "app-9", functionName: "summarize" },
     );
     const response = await service.call({
-      model: 'openai/gpt-4o-mini',
-      messages: [{ role: 'user', content: 'hi' }],
+      model: "openai/gpt-4o-mini",
+      messages: [{ role: "user", content: "hi" }],
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    assertEquals(response.content, 'metered');
-    assertEquals(debitBody?.p_app_id, 'app-9');
-    assertEquals(debitBody?.p_function_name, 'summarize');
+    assertEquals(response.content, "metered");
+    assertEquals(debitBody?.p_app_id, "app-9");
+    assertEquals(debitBody?.p_function_name, "summarize");
     // Billed calls are covered by billing_transactions — no duplicate row on
     // the unbilled-events path.
     assertEquals(usageEventFired, false);
