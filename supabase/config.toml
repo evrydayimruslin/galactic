@@ -44,6 +44,10 @@ additional_redirect_urls = [
   "http://localhost:3000",
   "http://127.0.0.1:1420",
   "http://localhost:1420",
+  "http://127.0.0.1:5178/auth/callback",
+  "http://localhost:5178/auth/callback",
+  "https://staging.ultralight-launch-web.pages.dev/auth/callback",
+  "https://connectgalactic.com/auth/callback",
 ]
 jwt_expiry = 3600
 enable_refresh_token_rotation = true
@@ -51,4 +55,10 @@ refresh_token_reuse_interval = 10
 enable_signup = true
 enable_anonymous_sign_ins = false
 minimum_password_length = 8
-password_requirements = "lower_upper_letters_digits"
+password_requirements = "lower_upper_letters_digits_symbols"
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+double_confirm_changes = false
+secure_password_change = true

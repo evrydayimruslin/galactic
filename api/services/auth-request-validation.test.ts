@@ -8,10 +8,68 @@ import {
   validateDynamicClientRegistrationRequest,
   validateOAuthRevocationRequest,
   validateOAuthTokenExchangeRequest,
+  validatePasswordAuthRequest,
   validateRefreshRequest,
   validateSessionBootstrapRequest,
   validateSignoutRequest,
 } from "./auth-request-validation.ts";
+
+Deno.test("auth request validation: password auth validates mode, email, password, and next path", async () => {
+  const payload = await validatePasswordAuthRequest(
+    new Request("https://example.com/auth/launch/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: "person@example.com",
+        mode: "sign_up",
+        next: "/agents?welcome=1",
+        password: "correct horse battery staple",
+      }),
+    }),
+  );
+
+  assertEquals(payload, {
+    email: "person@example.com",
+    mode: "sign_up",
+    nextPath: "/agents?welcome=1",
+    password: "correct horse battery staple",
+  });
+
+  await assertRejects(
+    () =>
+      validatePasswordAuthRequest(
+        new Request("https://example.com/auth/launch/password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: "not-an-email",
+            mode: "sign_in",
+            password: "password",
+          }),
+        }),
+      ),
+    RequestValidationError,
+    "Enter a valid email address",
+  );
+
+  await assertRejects(
+    () =>
+      validatePasswordAuthRequest(
+        new Request("https://example.com/auth/launch/password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: "person@example.com",
+            mode: "sign_up",
+            next: "https://attacker.example/steal",
+            password: "valid-password",
+          }),
+        }),
+      ),
+    RequestValidationError,
+    "next must be a local path",
+  );
+});
 
 Deno.test("auth request validation: session bootstrap requires at least one token", async () => {
   await assertRejects(

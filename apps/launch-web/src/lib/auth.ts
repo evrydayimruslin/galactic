@@ -47,6 +47,20 @@ export interface LaunchAuthExchangeResponse {
   };
 }
 
+export interface LaunchPasswordAuthResponse {
+  access_token?: string;
+  audience: "launch_web";
+  confirmation_required: boolean;
+  email?: string;
+  expires_in?: number | null;
+  refresh_supported?: boolean;
+  user?: {
+    email: string;
+    id: string;
+    metadata?: Record<string, unknown>;
+  };
+}
+
 export function launchAuthSubject(token: string | null): string | null {
   const encodedPayload = token?.split(".")[1];
   if (!encodedPayload) return null;
@@ -189,6 +203,79 @@ export function buildLaunchSignInUrl(nextPath = currentLaunchPath()): string {
   const loginUrl = new URL("/auth/login", apiBase);
   loginUrl.searchParams.set("return_to", returnTo.toString());
   return loginUrl.toString();
+}
+
+async function readLaunchAuthResponse(
+  response: Response,
+): Promise<LaunchPasswordAuthResponse> {
+  const payload = await response.json().catch(() => null) as
+    | (LaunchPasswordAuthResponse & { error?: string })
+    | null;
+  if (!response.ok) {
+    throw new Error(
+      payload?.error || `Authentication failed (${response.status})`,
+    );
+  }
+  if (!payload) {
+    throw new Error("Authentication returned an empty response.");
+  }
+  return payload;
+}
+
+function storeLaunchPasswordSession(
+  payload: LaunchPasswordAuthResponse,
+): void {
+  if (!payload.access_token) return;
+  setLaunchAuthToken(payload.access_token, payload.expires_in);
+  setLaunchRefreshAvailable(Boolean(payload.refresh_supported));
+}
+
+export async function authenticateLaunchWithPassword(
+  mode: "sign_in" | "sign_up",
+  email: string,
+  password: string,
+  nextPath = currentLaunchPath(),
+): Promise<LaunchPasswordAuthResponse> {
+  const apiBase = launchApiBaseUrl || window.location.origin;
+  const response = await fetch(`${apiBase}/auth/launch/password`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      email,
+      mode,
+      next: normalizeLocalPath(nextPath),
+      password,
+    }),
+  });
+  const payload = await readLaunchAuthResponse(response);
+  storeLaunchPasswordSession(payload);
+  return payload;
+}
+
+export async function establishLaunchConfirmationSession(
+  accessToken: string,
+  refreshToken: string | null,
+): Promise<LaunchPasswordAuthResponse> {
+  const apiBase = launchApiBaseUrl || window.location.origin;
+  const response = await fetch(`${apiBase}/auth/launch/session`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      access_token: accessToken,
+      ...(refreshToken ? { refresh_token: refreshToken } : {}),
+    }),
+  });
+  const payload = await readLaunchAuthResponse(response);
+  storeLaunchPasswordSession(payload);
+  return payload;
 }
 
 export async function exchangeLaunchBridgeToken(

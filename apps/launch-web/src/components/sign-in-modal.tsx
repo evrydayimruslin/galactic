@@ -1,5 +1,6 @@
 import {
   createContext,
+  type FormEvent,
   type ReactElement,
   type ReactNode,
   useCallback,
@@ -8,10 +9,15 @@ import {
   useState,
 } from "react";
 
-import { buildLaunchSignInUrl, recordLaunchAuthDiagnostic } from "../lib/auth";
+import {
+  authenticateLaunchWithPassword,
+  buildLaunchSignInUrl,
+  recordLaunchAuthDiagnostic,
+} from "../lib/auth";
 import { Wordmark } from "./launch-chrome";
 
-type SignInModalView = "default" | "another";
+type SignInModalView = "sign_in" | "sign_up" | "check_email";
+type AuthenticationMethod = "email" | "google" | null;
 
 const SignInModalContext = createContext<() => void>(() => {});
 
@@ -35,8 +41,12 @@ export function SignInModalProvider(
 }
 
 function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
-  const [view, setView] = useState<SignInModalView>("default");
-  const [authenticating, setAuthenticating] = useState(false);
+  const [view, setView] = useState<SignInModalView>("sign_in");
+  const [authenticating, setAuthenticating] =
+    useState<AuthenticationMethod>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -48,13 +58,52 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
 
   const handleGoogle = () => {
     if (authenticating) return;
-    setAuthenticating(true);
+    setAuthenticating("google");
+    setError("");
     recordLaunchAuthDiagnostic({
       nextPath: `${window.location.pathname}${window.location.search}`,
       status: "redirecting",
     });
     window.location.href = buildLaunchSignInUrl();
   };
+
+  const handleEmail = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (authenticating || view === "check_email") return;
+
+    setAuthenticating("email");
+    setError("");
+    try {
+      const response = await authenticateLaunchWithPassword(
+        view,
+        email.trim(),
+        password,
+      );
+      if (response.confirmation_required) {
+        setPassword("");
+        setView("check_email");
+        setAuthenticating(null);
+        return;
+      }
+      onClose();
+    } catch (err) {
+      setAuthenticating(null);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to authenticate. Please try again.",
+      );
+    }
+  };
+
+  const switchView = (next: "sign_in" | "sign_up") => {
+    setView(next);
+    setPassword("");
+    setError("");
+  };
+
+  const isSignUp = view === "sign_up";
+  const isBusy = authenticating !== null;
 
   return (
     <div
@@ -65,7 +114,11 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
       role="presentation"
     >
       <div
-        aria-label="Sign in"
+        aria-label={view === "sign_up"
+          ? "Create account"
+          : view === "check_email"
+          ? "Check your inbox"
+          : "Sign in"}
         aria-modal="true"
         className="signin-modal"
         role="dialog"
@@ -83,59 +136,178 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
         </button>
         <div className="signin-body">
           <Wordmark />
-          {view === "another"
-            ? <div className="signin-heading">Use another account</div>
-            : null}
-          <div className="signin-buttons">
-            <button
-              className={authenticating
-                ? "signin-google authenticating"
-                : "signin-google"}
-              onClick={handleGoogle}
-              type="button"
-            >
-              {authenticating
-                ? (
-                  <>
-                    <span className="signin-spinner" aria-hidden="true" />
-                    Opening Google…
-                  </>
-                )
-                : (
-                  <>
-                    <GoogleG />
-                    Sign in with Google
-                  </>
-                )}
-            </button>
-            {view === "another"
-              ? (
-                <button
-                  className="signin-secondary back"
-                  onClick={() => setView("default")}
-                  type="button"
-                >
-                  ← Back
-                </button>
-              )
-              : (
+          {view === "check_email"
+            ? (
+              <div className="signin-confirmation">
+                <div className="signin-mail-icon" aria-hidden="true">
+                  <MailIcon />
+                </div>
+                <div>
+                  <h2 className="signin-heading">Check your inbox</h2>
+                  <p>
+                    We sent a confirmation link to <strong>{email}</strong>.
+                    Open it to finish creating your account.
+                  </p>
+                </div>
                 <button
                   className="signin-secondary"
-                  onClick={() => setView("another")}
+                  onClick={() => switchView("sign_in")}
                   type="button"
                 >
-                  Use another account
+                  Back to sign in
                 </button>
-              )}
-          </div>
-          <div className="signin-note">
-            {authenticating
-              ? "Complete sign-in in your browser."
-              : "Sign in to use or deploy tools."}
-          </div>
+              </div>
+            )
+            : (
+              <>
+                <div className="signin-intro">
+                  <h2 className="signin-heading">
+                    {isSignUp ? "Create your account" : "Welcome back"}
+                  </h2>
+                  <p>
+                    {isSignUp
+                      ? "Create an account to build and deploy Agents."
+                      : "Sign in to continue to Galactic."}
+                  </p>
+                </div>
+
+                <form className="signin-form" onSubmit={handleEmail}>
+                  <label htmlFor="signin-email">Email</label>
+                  <input
+                    autoComplete="email"
+                    autoFocus
+                    disabled={isBusy}
+                    id="signin-email"
+                    inputMode="email"
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="you@example.com"
+                    required
+                    type="email"
+                    value={email}
+                  />
+                  <div className="signin-password-label">
+                    <label htmlFor="signin-password">Password</label>
+                  </div>
+                  <input
+                    autoComplete={isSignUp ? "new-password" : "current-password"}
+                    disabled={isBusy}
+                    id="signin-password"
+                    minLength={isSignUp ? 8 : undefined}
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder={isSignUp
+                      ? "At least 8 characters"
+                      : "Enter your password"}
+                    required
+                    type="password"
+                    value={password}
+                  />
+                  {isSignUp
+                    ? (
+                      <p className="signin-password-help">
+                        Use 8+ characters with uppercase, lowercase, a number,
+                        and a symbol.
+                      </p>
+                    )
+                    : null}
+                  {error
+                    ? (
+                      <p className="signin-error" role="alert">
+                        {error}
+                      </p>
+                    )
+                    : null}
+                  <button
+                    className="signin-submit"
+                    disabled={isBusy}
+                    type="submit"
+                  >
+                    {authenticating === "email"
+                      ? (
+                        <>
+                          <span className="signin-spinner" aria-hidden="true" />
+                          {isSignUp ? "Creating account…" : "Signing in…"}
+                        </>
+                      )
+                      : isSignUp
+                      ? "Create account"
+                      : "Sign in"}
+                  </button>
+                </form>
+
+                <div className="signin-divider">
+                  <span>or</span>
+                </div>
+
+                <button
+                  className="signin-google"
+                  disabled={isBusy}
+                  onClick={handleGoogle}
+                  type="button"
+                >
+                  {authenticating === "google"
+                    ? (
+                      <>
+                        <span
+                          className="signin-spinner dark"
+                          aria-hidden="true"
+                        />
+                        Opening Google…
+                      </>
+                    )
+                    : (
+                      <>
+                        <GoogleG color="currentColor" />
+                        Continue with Google
+                      </>
+                    )}
+                </button>
+
+                <p className="signin-switch">
+                  {isSignUp
+                    ? "Already have an account?"
+                    : "New to Galactic?"}{" "}
+                  <button
+                    disabled={isBusy}
+                    onClick={() =>
+                      switchView(isSignUp ? "sign_in" : "sign_up")}
+                    type="button"
+                  >
+                    {isSignUp ? "Sign in" : "Create an account"}
+                  </button>
+                </p>
+
+                {isSignUp
+                  ? (
+                    <p className="signin-note">
+                      By creating an account, you agree to our{" "}
+                      <a href="/terms">Terms</a> and{" "}
+                      <a href="/privacy">Privacy Policy</a>.
+                    </p>
+                  )
+                  : null}
+              </>
+            )}
         </div>
       </div>
     </div>
+  );
+}
+
+function MailIcon(): ReactElement {
+  return (
+    <svg
+      fill="none"
+      height={22}
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1.7}
+      viewBox="0 0 24 24"
+      width={22}
+    >
+      <path d="M4 6h16v12H4z" />
+      <path d="m4 7 8 6 8-6" />
+    </svg>
   );
 }
 

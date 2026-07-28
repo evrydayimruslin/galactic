@@ -49,6 +49,7 @@ import { ConnectTutorialPanel } from "./components/connect-tutorial";
 import { parseConnectTutorialContext } from "./lib/connect-tutorial";
 import {
   exchangeLaunchBridgeToken,
+  establishLaunchConfirmationSession,
   getLaunchAuthToken,
   isLaunchRefreshAvailable,
   isLaunchAuthSessionStorageChange,
@@ -414,21 +415,27 @@ export function AuthCallbackPage(
     const hash = new URLSearchParams(window.location.hash.replace(/^#/u, ""));
     const query = new URLSearchParams(location.search);
     const bridgeToken = hash.get("bridge_token");
+    const accessToken = hash.get("access_token");
+    const refreshToken = hash.get("refresh_token");
     const expiresIn = hash.get("expires_in");
     const nextPath = normalizeLocalPath(query.get("next"));
     const refreshHandoff = query.get("session") === "refresh";
     recordLaunchAuthDiagnostic({
       bridgeTokenPresent: Boolean(bridgeToken),
       expiresIn,
-      message: refreshHandoff ? "http_only_refresh_handoff" : undefined,
+      message: refreshHandoff
+        ? "http_only_refresh_handoff"
+        : accessToken
+        ? "email_confirmation_handoff"
+        : undefined,
       nextPath,
       status: "callback_loaded",
     });
 
-    if (!bridgeToken && !refreshHandoff) {
+    if (!bridgeToken && !refreshHandoff && !accessToken) {
       recordLaunchAuthDiagnostic({
         bridgeTokenPresent: false,
-        message: "The launch callback URL did not contain a bridge token.",
+        message: "The launch callback URL did not contain a session token.",
         nextPath,
         status: "callback_missing_bridge",
       });
@@ -448,6 +455,10 @@ export function AuthCallbackPage(
         setLaunchAuthToken(response.access_token, response.expires_in);
         return String(response.expires_in ?? expiresIn ?? "");
       })
+      : accessToken
+      ? establishLaunchConfirmationSession(accessToken, refreshToken).then(
+        (response) => String(response.expires_in ?? expiresIn ?? ""),
+      )
       : refreshLaunchSession().then((token) => {
         if (!token) {
           throw new Error("Unable to establish the launch session.");

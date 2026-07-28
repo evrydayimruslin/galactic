@@ -68,6 +68,13 @@ export interface PageShareExchangePayload {
   shareToken: string;
 }
 
+export interface PasswordAuthPayload {
+  email: string;
+  mode: "sign_in" | "sign_up";
+  nextPath: string;
+  password: string;
+}
+
 function assertValidRedirectUri(uri: string, field: string, oauthErrorCode?: string): string {
   let parsed: URL;
   try {
@@ -194,6 +201,63 @@ export async function validatePageShareExchangeRequest(
     shareToken: normalizeRequiredString(body.share_token, "share_token", {
       maxLength: MAX_TOKEN_LENGTH,
     }),
+  };
+}
+
+export async function validatePasswordAuthRequest(
+  request: Request,
+): Promise<PasswordAuthPayload> {
+  const body = await readJsonObject(request, {
+    allowedKeys: ["email", "mode", "next", "password"],
+  });
+
+  const email = normalizeRequiredString(body.email, "email", {
+    maxLength: 254,
+  });
+  if (
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email) ||
+    email.includes("\r") ||
+    email.includes("\n")
+  ) {
+    throw new RequestValidationError("Enter a valid email address");
+  }
+
+  const mode = normalizeRequiredString(body.mode, "mode");
+  if (mode !== "sign_in" && mode !== "sign_up") {
+    throw new RequestValidationError(
+      'mode must be either "sign_in" or "sign_up"',
+    );
+  }
+
+  const password = normalizeOptionalString(body.password, "password", {
+    maxLength: 1024,
+    trim: false,
+  });
+  if (!password) {
+    throw new RequestValidationError("Missing password");
+  }
+  if (mode === "sign_up" && password.length < 8) {
+    throw new RequestValidationError(
+      "Password must be at least 8 characters",
+    );
+  }
+
+  const nextPath = normalizeOptionalString(body.next, "next", {
+    maxLength: 2048,
+  }) || "/account";
+  if (
+    !nextPath.startsWith("/") ||
+    nextPath.startsWith("//") ||
+    nextPath.includes("\\")
+  ) {
+    throw new RequestValidationError("next must be a local path");
+  }
+
+  return {
+    email,
+    mode,
+    nextPath,
+    password,
   };
 }
 
