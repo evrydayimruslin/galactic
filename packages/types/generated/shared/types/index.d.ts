@@ -1,7 +1,7 @@
-import type { ManifestComputeConfig } from '../contracts/compute.ts';
-export { isAgenticInterfaceSpec, validateAgenticInterfaceSpec, } from '../contracts/agentic-interface.ts';
-export type * from '../contracts/agentic-interface.ts';
-export type * from '../contracts/command-turn.ts';
+import type { ManifestComputeConfig } from "../contracts/compute.ts";
+export { isAgenticInterfaceSpec, validateAgenticInterfaceSpec, } from "../contracts/agentic-interface.ts";
+export type * from "../contracts/agentic-interface.ts";
+export type * from "../contracts/command-turn.ts";
 export declare const ACTIVE_BYOK_PROVIDER_IDS: readonly ["openrouter", "openai", "deepseek", "nvidia", "google", "xai", "moonshot", "zai"];
 export declare const LEGACY_BYOK_PROVIDER_IDS: readonly ["anthropic"];
 export type ActiveBYOKProvider = typeof ACTIVE_BYOK_PROVIDER_IDS[number];
@@ -64,14 +64,14 @@ export interface VersionMetadata {
 export interface VersionTestAttestationMetadata {
     schema_version: 1;
     attestation_id: string;
-    mode: 'deno_execution' | 'gpu_validation';
+    mode: "deno_execution" | "gpu_validation";
     source_hash: string;
     tested_at: string;
     token_expires_at: string;
     verified_at: string;
 }
 export interface VersionTrustSignature {
-    algorithm: 'HMAC-SHA256';
+    algorithm: "HMAC-SHA256";
     signer: string;
     signed_at: string;
     signature: string;
@@ -81,7 +81,7 @@ export interface VersionTrustMetadata {
     schema_version: 1;
     app_id: string;
     version: string;
-    runtime: 'deno' | 'gpu' | string;
+    runtime: "deno" | "gpu" | string;
     manifest_hash: string | null;
     description_hash?: string;
     artifact_hash: string;
@@ -93,14 +93,14 @@ export interface VersionTrustMetadata {
     per_user_secrets: string[];
     signature: VersionTrustSignature;
 }
-export type HealthStatus = 'green' | 'red' | 'no_data';
+export type HealthStatus = "green" | "red" | "no_data";
 export interface HealthWindows {
-    '1h': HealthStatus;
-    '24h': HealthStatus;
-    '7d': HealthStatus;
-    '30d': HealthStatus;
+    "1h": HealthStatus;
+    "24h": HealthStatus;
+    "7d": HealthStatus;
+    "30d": HealthStatus;
 }
-export type AppGpuStatus = 'building' | 'benchmarking' | 'live' | 'build_failed' | 'benchmark_failed' | 'build_config_invalid';
+export type AppGpuStatus = "building" | "benchmarking" | "live" | "build_failed" | "benchmark_failed" | "build_config_invalid";
 export interface App {
     id: string;
     owner_id: string;
@@ -114,12 +114,12 @@ export interface App {
      *  responses leave it undefined. Seeded into the B11 install button
      *  state machine on ToolDetailView. */
     is_installed?: boolean;
-    visibility: 'private' | 'unlisted' | 'public';
+    visibility: "private" | "unlisted" | "public";
     /** True for agents that were already public when the Stripe Connect publish
      *  gate shipped (backfilled once). Exempt agents keep publishing publicly
      *  without Connect; new public agents are not exempt. */
     connect_gate_exempt?: boolean;
-    download_access: 'owner' | 'public';
+    download_access: "owner" | "public";
     current_version: string;
     versions: string[];
     version_metadata: VersionMetadata[];
@@ -155,8 +155,8 @@ export interface App {
     supabase_enabled: boolean;
     supabase_config_id: string | null;
     manifest: string | null;
-    app_type: 'mcp' | 'skill' | null;
-    runtime: 'deno' | 'gpu' | null;
+    app_type: "mcp" | "skill" | null;
+    runtime: "deno" | "gpu" | null;
     gpu_type: string | null;
     gpu_status: AppGpuStatus | null;
     gpu_endpoint_id: string | null;
@@ -183,7 +183,7 @@ export interface App {
     last_healed_at: string | null;
     auto_heal_enabled: boolean;
     d1_database_id: string | null;
-    d1_status: 'pending' | 'provisioning' | 'ready' | 'error' | null;
+    d1_status: "pending" | "provisioning" | "ready" | "error" | null;
     d1_provisioned_at: string | null;
     d1_last_migration_version: number;
     created_at: string;
@@ -223,7 +223,7 @@ export interface PermissionDeclaration {
 }
 export interface BuildLogEntry {
     time: string;
-    level: 'info' | 'warn' | 'error' | 'success';
+    level: "info" | "warn" | "error" | "success";
     message: string;
 }
 export interface EnvVarLimits {
@@ -233,11 +233,11 @@ export interface EnvVarLimits {
     reserved_prefixes: string[];
 }
 export interface EnvSchemaEntry {
-    scope: 'universal' | 'per_user';
+    scope: "universal" | "per_user";
     description?: string;
     required?: boolean;
     label?: string;
-    input?: 'text' | 'password' | 'email' | 'number' | 'url' | 'textarea';
+    input?: "text" | "password" | "email" | "number" | "url" | "textarea";
     placeholder?: string;
     help?: string;
 }
@@ -278,7 +278,7 @@ export interface Execution {
     started_at: string;
     ended_at: string | null;
     duration_ms: number | null;
-    ai_provider: 'platform' | 'byok' | null;
+    ai_provider: "platform" | "byok" | null;
     ai_model: string | null;
     ai_tokens_input: number | null;
     ai_tokens_output: number | null;
@@ -293,7 +293,7 @@ export interface Execution {
 }
 export interface LogEntry {
     time: string;
-    level: 'log' | 'error' | 'warn' | 'info';
+    level: "log" | "error" | "warn" | "info";
     message: string;
 }
 export interface SDKContext {
@@ -305,21 +305,21 @@ export interface SDKContext {
 }
 export type AIContentPart = AITextPart | AIFilePart;
 export interface AITextPart {
-    type: 'text';
+    type: "text";
     text: string;
 }
 export interface AIFilePart {
-    type: 'file';
+    type: "file";
     data: string;
     filename?: string;
 }
 export interface AIRequest {
     model?: string;
     messages: Array<{
-        role: 'system' | 'user' | 'assistant';
+        role: "system" | "user" | "assistant";
         content: string | AIContentPart[];
         cache_control?: {
-            type: 'ephemeral';
+            type: "ephemeral";
         };
     }>;
     temperature?: number;
@@ -335,8 +335,8 @@ export interface AIRequest {
         strict?: true;
     };
 }
-export type AIStructuredRequest = Omit<AIRequest, 'output_schema'> & {
-    output_schema: NonNullable<AIRequest['output_schema']>;
+export type AIStructuredRequest = Omit<AIRequest, "output_schema"> & {
+    output_schema: NonNullable<AIRequest["output_schema"]>;
 };
 export interface WidgetDeclaration {
     id: string;
@@ -356,7 +356,7 @@ export interface WidgetDeclaration {
     generation_hints?: WidgetGenerationHints;
 }
 export type WidgetContextSourceRef = string;
-export type WidgetGenerationComponentKind = 'metric' | 'list' | 'table' | 'detail' | 'form' | 'action_bar' | 'timeline' | 'card_ref' | 'widget_embed' | 'routine_panel' | 'text';
+export type WidgetGenerationComponentKind = "metric" | "list" | "table" | "detail" | "form" | "action_bar" | "timeline" | "card_ref" | "widget_embed" | "routine_panel" | "text";
 export interface WidgetGenerationSuggestedComponent {
     kind: WidgetGenerationComponentKind;
     title?: string;
@@ -374,13 +374,13 @@ export interface WidgetGenerationHints {
     suggested_components?: WidgetGenerationSuggestedComponent[];
     prompt_examples?: string[];
 }
-export type WidgetContextSourceType = 'd1_table' | 'd1_query' | 'function';
+export type WidgetContextSourceType = "d1_table" | "d1_query" | "function";
 export interface WidgetContextSourceDeclaration {
     id: string;
     label: string;
     description?: string;
     type: WidgetContextSourceType;
-    access: 'read';
+    access: "read";
     searchable?: boolean;
     default_for_widgets?: string[];
     tables?: string[];
@@ -394,8 +394,8 @@ export interface WidgetContextRedaction {
     pattern?: string;
     replacement?: string;
 }
-export type WidgetActionMode = 'read' | 'write' | 'ui';
-export type WidgetConfirmationPolicy = 'none' | 'user' | 'high_risk';
+export type WidgetActionMode = "read" | "write" | "ui";
+export type WidgetConfirmationPolicy = "none" | "user" | "high_risk";
 export interface WidgetMcpActionBinding {
     function: string;
     args_template?: Record<string, unknown>;
@@ -460,7 +460,7 @@ export interface WidgetStateSnapshot {
     errors?: string[];
     updated_at?: string;
 }
-export type WidgetSurfaceEventKind = 'user' | 'agent' | 'data' | 'navigation' | 'error' | 'system';
+export type WidgetSurfaceEventKind = "user" | "agent" | "data" | "navigation" | "error" | "system";
 export interface WidgetSurfaceEvent {
     id?: string;
     surface_id?: string;
@@ -476,9 +476,9 @@ export interface WidgetSurfaceEvent {
     snapshot?: WidgetStateSnapshot;
     created_at?: string;
 }
-export type WidgetSurfaceKind = 'inline' | 'window' | 'command_card' | 'generated_interface';
-export type ActiveSurfaceType = 'widget' | 'generated_interface';
-export type WidgetSurfaceStatus = 'opening' | 'ready' | 'stale' | 'closed';
+export type WidgetSurfaceKind = "inline" | "window" | "command_card" | "generated_interface";
+export type ActiveSurfaceType = "widget" | "generated_interface";
+export type WidgetSurfaceStatus = "opening" | "ready" | "stale" | "closed";
 export interface ActiveWidgetContext {
     surfaceId: string;
     surfaceType?: ActiveSurfaceType;
@@ -490,7 +490,7 @@ export interface ActiveWidgetContext {
     widgetName?: string;
     interfaceId?: string;
     interfaceTitle?: string;
-    interfaceMode?: 'temporary' | 'saved';
+    interfaceMode?: "temporary" | "saved";
     title?: string;
     context?: Record<string, string>;
     status?: WidgetSurfaceStatus;
@@ -508,7 +508,7 @@ export interface WidgetActionInvocation {
     action_id: string;
     args?: Record<string, unknown>;
     turn_id?: string;
-    source?: 'user' | 'agent' | 'system';
+    source?: "user" | "agent" | "system";
 }
 export interface WidgetActionResult {
     surface_id?: string;
@@ -521,12 +521,12 @@ export interface WidgetActionResult {
     snapshot?: WidgetStateSnapshot;
     event?: WidgetSurfaceEvent;
 }
-export type CommandCardRenderMode = 'native';
-export type CommandCardKind = 'metric' | 'list' | 'timeline' | 'sparkline' | 'progress' | 'summary' | 'composite';
+export type CommandCardRenderMode = "native";
+export type CommandCardKind = "metric" | "list" | "timeline" | "sparkline" | "progress" | "summary" | "composite";
 export interface WidgetDependencyDeclaration {
     app: string;
     functions: string[];
-    access?: 'read';
+    access?: "read";
 }
 export interface CommandCardDeclaration {
     id: string;
@@ -579,7 +579,7 @@ export interface WidgetAppResponse {
 export interface CommandCardDataPayload {
     card_id?: string;
     meta?: Partial<WidgetMeta> & {
-        status?: 'live' | 'paused' | 'error' | string;
+        status?: "live" | "paused" | "error" | string;
         accent?: string;
         cost_per_min?: number;
     };
@@ -590,17 +590,17 @@ export interface CommandCardDataPayload {
 }
 export type CommandCardBody = CommandMetricCardBody | CommandListCardBody | CommandTimelineCardBody | CommandSparklineCardBody | CommandProgressCardBody | CommandSummaryCardBody | CommandCompositeCardBody;
 export interface CommandMetricCardBody {
-    kind: 'metric';
+    kind: "metric";
     metric: string | number;
     label?: string;
     delta?: string;
 }
 export interface CommandListCardBody {
-    kind: 'list';
+    kind: "list";
     rows: Array<Array<string | number | boolean | null>>;
 }
 export interface CommandTimelineCardBody {
-    kind: 'timeline';
+    kind: "timeline";
     rows: Array<{
         time?: string;
         title: string;
@@ -609,24 +609,24 @@ export interface CommandTimelineCardBody {
     }>;
 }
 export interface CommandSparklineCardBody {
-    kind: 'sparkline';
+    kind: "sparkline";
     metric?: string | number;
     label?: string;
     points: number[];
 }
 export interface CommandProgressCardBody {
-    kind: 'progress';
+    kind: "progress";
     value: number;
     max?: number;
     label?: string;
 }
 export interface CommandSummaryCardBody {
-    kind: 'summary';
+    kind: "summary";
     title?: string;
     lines: string[];
 }
 export interface CommandCompositeCardBody {
-    kind: 'composite';
+    kind: "composite";
     children: Array<{
         app_id?: string;
         widget_id: string;
@@ -644,7 +644,7 @@ export interface AIResponse<Output = unknown> {
     };
     output?: Output;
     error?: string;
-    error_code?: 'invalid_output_schema' | 'structured_output_unsupported' | 'structured_output_invalid_json' | 'structured_output_schema_mismatch';
+    error_code?: "invalid_output_schema" | "structured_output_unsupported" | "structured_output_invalid_json" | "structured_output_schema_mismatch";
 }
 export type AIStructuredResponse<Output = unknown> = AIResponse<Output> & {
     output: Output;
@@ -666,7 +666,7 @@ export interface UploadResponse {
     build_logs: BuildLogEntry[];
     d1?: {
         provisioned: boolean;
-        status: 'ready' | 'failed' | 'skipped';
+        status: "ready" | "failed" | "skipped";
         database_id?: string;
         migrations_applied: number;
         migrations_skipped: number;
@@ -703,7 +703,7 @@ export interface AppPermission {
     permission: string;
     granted_at: string;
     expires_at: string | null;
-    duration: 'perpetual' | 'session' | '1h' | '24h' | '7d';
+    duration: "perpetual" | "session" | "1h" | "24h" | "7d";
     budget_limit: number | null;
     budget_used: number;
     last_used_at: string | null;
@@ -717,7 +717,7 @@ export interface GrantConstraints {
     /** Max calls allowed before access is suspended. Resets according to budget_period. */
     budget_limit?: number | null;
     /** Rolling period for budget reset. null = lifetime budget (never resets). */
-    budget_period?: 'hour' | 'day' | 'week' | 'month' | null;
+    budget_period?: "hour" | "day" | "week" | "month" | null;
     /** ISO timestamp — permission auto-expires after this date */
     expires_at?: string | null;
     /** Per-parameter value whitelists. Keys are parameter names, values are arrays of allowed values. null = unrestricted. */
@@ -780,7 +780,7 @@ export interface AppPricingConfig {
     /** Default number of free full-context pulls per user before skill pricing kicks in. */
     default_free_skill_pulls?: number;
     /** Whether free call quota is counted per-app (shared) or per-function (separate). Default: 'function'. */
-    free_calls_scope?: 'app' | 'function';
+    free_calls_scope?: "app" | "function";
     /** Per-function price overrides. Value is Light (legacy number) or FunctionPricing object. */
     functions?: Record<string, number | FunctionPricing>;
     /** Per-skill context-pull price overrides. Value is Light (legacy number) or SkillPricing object. */
@@ -829,7 +829,7 @@ export declare function getFreeCalls(pricingConfig: AppPricingConfig | null | un
  * 'app' = single shared counter across all functions.
  * 'function' = separate counter per function (default).
  */
-export declare function getFreeCallsScope(pricingConfig: AppPricingConfig | null | undefined): 'app' | 'function';
+export declare function getFreeCallsScope(pricingConfig: AppPricingConfig | null | undefined): "app" | "function";
 /**
  * Get the price in Light for pulling a full skill context into an agent prompt.
  * Skills do not execute in a Worker; this price is for context access only.
@@ -843,14 +843,14 @@ export declare function getFreeSkillPulls(pricingConfig: AppPricingConfig | null
  * Get the GPU pricing display mode for an app.
  * Returns null if no GPU pricing is configured.
  */
-export declare function getGpuPricingMode(gpuPricingConfig: Record<string, unknown> | null | undefined): 'per_call' | 'per_unit' | 'per_duration' | null;
+export declare function getGpuPricingMode(gpuPricingConfig: Record<string, unknown> | null | undefined): "per_call" | "per_unit" | "per_duration" | null;
 /**
  * Get a human-readable label for the GPU pricing unit.
  * Returns "call" for per_call, the unit_label for per_unit, "second" for per_duration.
  */
 export declare function getGpuPricingUnitLabel(gpuPricingConfig: Record<string, unknown> | null | undefined): string;
-export type ContentType = 'page' | 'memory_md' | 'library_md';
-export type ContentVisibility = 'public' | 'private' | 'shared';
+export type ContentType = "page" | "memory_md" | "library_md";
+export type ContentVisibility = "public" | "private" | "shared";
 /** A row from the content table — indexes pages, memory.md, library.md */
 export interface ContentRow {
     id: string;
@@ -876,7 +876,7 @@ export interface ContentShare {
     content_id: string;
     shared_with_email: string;
     shared_with_user_id: string | null;
-    access_level: 'read' | 'readwrite';
+    access_level: "read" | "readwrite";
     created_at: string;
     expires_at: string | null;
 }
@@ -888,11 +888,11 @@ export interface MemoryShare {
     key_pattern: string;
     shared_with_email: string;
     shared_with_user_id: string | null;
-    access_level: 'read' | 'write' | 'readwrite';
+    access_level: "read" | "write" | "readwrite";
     created_at: string;
     expires_at: string | null;
 }
-export type Tier = 'free' | 'fun' | 'pro' | 'scale' | 'enterprise';
+export type Tier = "free" | "fun" | "pro" | "scale" | "enterprise";
 /** Light symbol character for display. */
 export declare const LIGHT_SYMBOL = "\u2726";
 /** Canonical Light/$ reference for internal USD-denominated costs and copy. */
@@ -1110,7 +1110,7 @@ export interface QueryOptions {
     filter?: (value: unknown) => boolean;
     sort?: {
         field: string;
-        order: 'asc' | 'desc';
+        order: "asc" | "desc";
     };
     limit?: number;
     offset?: number;
@@ -1157,7 +1157,7 @@ export interface GenerationResult {
     warnings: string[];
 }
 export interface GenerationError {
-    phase: 'parse' | 'generate_skills' | 'validate' | 'embed';
+    phase: "parse" | "generate_skills" | "validate" | "embed";
     message: string;
     line?: number;
     suggestion?: string;
@@ -1237,7 +1237,7 @@ export interface MCPToolCallResponse {
     isError?: boolean;
 }
 export interface MCPContent {
-    type: 'text' | 'image' | 'audio' | 'resource' | 'resource_link';
+    type: "text" | "image" | "audio" | "resource" | "resource_link";
     text?: string;
     data?: string;
     mimeType?: string;
@@ -1304,7 +1304,7 @@ export interface BYOKProviderInfo {
     id: ActiveBYOKProvider;
     name: string;
     description: string;
-    protocol: 'openai-compatible';
+    protocol: "openai-compatible";
     baseUrl: string;
     defaultModel: string;
     models: BYOKModel[];
@@ -1336,7 +1336,7 @@ export interface BYOKModel {
      *  every model in a provider's catalog the FE falls back to its
      *  pre-B1 behaviour (show everything on both tiers), so deployments
      *  can stage the annotation rollout without breaking the picker. */
-    tier?: 'flash' | 'heavy' | 'both';
+    tier?: "flash" | "heavy" | "both";
 }
 export declare const BYOK_PROVIDERS: Record<ActiveBYOKProvider, BYOKProviderInfo>;
 /**
@@ -1370,7 +1370,7 @@ export interface AppManifest {
     description?: string;
     author?: string;
     icon?: string;
-    type: 'mcp';
+    type: "mcp";
     entry: {
         functions?: string;
     };
@@ -1435,7 +1435,7 @@ export interface ManifestFunction {
     /** Upload-derived: this function may start galactic.compute(). */
     uses_compute?: boolean;
     execution?: {
-        class?: 'sync' | 'async';
+        class?: "sync" | "async";
         timeout_ms?: number;
     };
 }
@@ -1445,15 +1445,15 @@ export interface ManifestSkill {
     semantic_description?: string;
     preview?: string;
     resource?: string;
-    format?: 'markdown' | 'text';
+    format?: "markdown" | "text";
 }
-export type ManifestAccessPolicyMode = 'static' | 'module';
+export type ManifestAccessPolicyMode = "static" | "module";
 export interface ManifestAccessPolicy {
     mode?: ManifestAccessPolicyMode;
     module?: string;
     export?: string;
 }
-export type ToolAccessPolicySubjectKind = 'function' | 'skill';
+export type ToolAccessPolicySubjectKind = "function" | "skill";
 export interface ToolAccessPolicyPlanPayload {
     version: 1;
     app: {
@@ -1464,7 +1464,7 @@ export interface ToolAccessPolicyPlanPayload {
     };
     caller: {
         userId: string;
-        authState?: 'authenticated' | 'anonymous';
+        authState?: "authenticated" | "anonymous";
     };
     subject: {
         kind: ToolAccessPolicySubjectKind;
@@ -1473,7 +1473,7 @@ export interface ToolAccessPolicyPlanPayload {
     input: Record<string, unknown>;
     metadata: Record<string, unknown>;
     static: {
-        effect: 'allow';
+        effect: "allow";
         subjectKind: ToolAccessPolicySubjectKind;
         subject_kind: ToolAccessPolicySubjectKind;
         subjectId: string;
@@ -1492,7 +1492,7 @@ export interface ToolAccessPolicyPlanPayload {
     };
 }
 export interface ToolAccessPolicyAllowDecision {
-    effect?: 'allow';
+    effect?: "allow";
     price_light?: number;
     priceLight?: number;
     charge_light?: number;
@@ -1505,7 +1505,7 @@ export interface ToolAccessPolicyAllowDecision {
     metadata?: Record<string, unknown>;
 }
 export interface ToolAccessPolicyDenyDecision {
-    effect: 'deny';
+    effect: "deny";
     reason?: string;
     message?: string;
     metadata?: Record<string, unknown>;
@@ -1513,7 +1513,7 @@ export interface ToolAccessPolicyDenyDecision {
 export type ToolAccessPolicyDecision = ToolAccessPolicyAllowDecision | ToolAccessPolicyDenyDecision;
 export type ToolAccessPolicyFunction = (payload: ToolAccessPolicyPlanPayload) => ToolAccessPolicyDecision | Promise<ToolAccessPolicyDecision>;
 export interface ManifestParameter {
-    type: 'string' | 'number' | 'boolean' | 'object' | 'array';
+    type: "string" | "number" | "boolean" | "object" | "array";
     description?: string;
     required?: boolean;
     default?: unknown;
@@ -1522,17 +1522,17 @@ export interface ManifestParameter {
     properties?: Record<string, ManifestParameter>;
 }
 export interface ManifestReturn {
-    type: 'string' | 'number' | 'boolean' | 'object' | 'array' | 'void';
+    type: "string" | "number" | "boolean" | "object" | "array" | "void";
     description?: string;
 }
 export interface ManifestEnvVar {
     description?: string;
     required?: boolean;
     default?: string;
-    scope?: EnvSchemaEntry['scope'];
-    type?: EnvSchemaEntry['scope'];
+    scope?: EnvSchemaEntry["scope"];
+    type?: EnvSchemaEntry["scope"];
     label?: string;
-    input?: EnvSchemaEntry['input'];
+    input?: EnvSchemaEntry["input"];
     placeholder?: string;
     help?: string;
 }
@@ -1595,7 +1595,7 @@ export interface ChatTraceContext {
 }
 /** OpenAI-compatible message format */
 export interface ChatMessage {
-    role: 'system' | 'user' | 'assistant' | 'tool';
+    role: "system" | "user" | "assistant" | "tool";
     content: string | null;
     tool_calls?: ChatToolCall[];
     tool_call_id?: string;
@@ -1603,7 +1603,7 @@ export interface ChatMessage {
 }
 /** OpenAI-compatible tool definition */
 export interface ChatTool {
-    type: 'function';
+    type: "function";
     function: {
         name: string;
         description?: string;
@@ -1613,7 +1613,7 @@ export interface ChatTool {
 /** OpenAI-compatible tool call */
 export interface ChatToolCall {
     id: string;
-    type: 'function';
+    type: "function";
     function: {
         name: string;
         arguments: string;
@@ -1695,7 +1695,7 @@ export interface ToolInvocationTelemetryRequest {
     startedAt?: string;
     completedAt?: string;
     durationMs?: number;
-    status: 'success' | 'error' | 'aborted' | 'timeout';
+    status: "success" | "error" | "aborted" | "timeout";
     errorType?: string;
     errorMessage?: string;
     widgetAction?: WidgetToolInvocationTelemetryContext;

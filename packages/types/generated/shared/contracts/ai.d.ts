@@ -1,19 +1,19 @@
-import type { ActiveBYOKProvider, BYOKModel, BYOKProviderCapabilities } from '../types/index.ts';
+import type { ActiveBYOKProvider, BYOKModel, BYOKProviderCapabilities } from "../types/index.ts";
 export interface AITextPart {
-    type: 'text';
+    type: "text";
     text: string;
 }
 export interface AIFilePart {
-    type: 'file';
+    type: "file";
     data: string;
     filename?: string;
 }
 export type AIContentPart = AITextPart | AIFilePart;
 export interface AIMessage {
-    role: 'system' | 'user' | 'assistant';
+    role: "system" | "user" | "assistant";
     content: string | AIContentPart[];
     cache_control?: {
-        type: 'ephemeral';
+        type: "ephemeral";
     };
 }
 export interface AITool {
@@ -29,7 +29,7 @@ export interface AIOutputSchema {
     /** Structured output is always strict. Omit or set true. */
     strict?: true;
 }
-export type AIStructuredOutputErrorCode = 'invalid_output_schema' | 'structured_output_unsupported' | 'structured_output_invalid_json' | 'structured_output_schema_mismatch';
+export type AIStructuredOutputErrorCode = "invalid_output_schema" | "structured_output_unsupported" | "structured_output_invalid_json" | "structured_output_schema_mismatch";
 export interface AIRequest {
     model?: string;
     messages: AIMessage[];
@@ -38,7 +38,7 @@ export interface AIRequest {
     tools?: AITool[];
     output_schema?: AIOutputSchema;
 }
-export type AIStructuredRequest = Omit<AIRequest, 'output_schema'> & {
+export type AIStructuredRequest = Omit<AIRequest, "output_schema"> & {
     output_schema: AIOutputSchema;
 };
 export interface AIUsage {
@@ -82,14 +82,14 @@ export interface ChatTraceContext {
     source?: string;
 }
 export interface ChatMessage {
-    role: 'system' | 'user' | 'assistant' | 'tool';
+    role: "system" | "user" | "assistant" | "tool";
     content: string | null;
     tool_calls?: ChatToolCall[];
     tool_call_id?: string;
     name?: string;
 }
 export interface ChatTool {
-    type: 'function';
+    type: "function";
     function: {
         name: string;
         description?: string;
@@ -98,7 +98,7 @@ export interface ChatTool {
 }
 export interface ChatToolCall {
     id: string;
-    type: 'function';
+    type: "function";
     function: {
         name: string;
         arguments: string;
@@ -143,25 +143,25 @@ export interface ToolInvocationTelemetryRequest {
     startedAt?: string;
     completedAt?: string;
     durationMs?: number;
-    status: 'success' | 'error' | 'aborted' | 'timeout';
+    status: "success" | "error" | "aborted" | "timeout";
     errorType?: string;
     errorMessage?: string;
     widgetAction?: WidgetToolInvocationTelemetryContext;
     metadata?: Record<string, unknown>;
 }
-export type InferenceBillingMode = 'light' | 'byok';
+export type InferenceBillingMode = "light" | "byok";
 export interface InferenceRoutePreference {
     billingMode?: InferenceBillingMode;
     provider?: ActiveBYOKProvider;
     model?: string;
     webSearchEnabled?: boolean;
 }
-export type ChatInferenceSelectedPreference = Required<Pick<InferenceRoutePreference, 'billingMode' | 'provider' | 'model'>> & Pick<InferenceRoutePreference, 'webSearchEnabled'>;
+export type ChatInferenceSelectedPreference = Required<Pick<InferenceRoutePreference, "billingMode" | "provider" | "model">> & Pick<InferenceRoutePreference, "webSearchEnabled">;
 export interface ChatInferenceProviderOption {
     id: ActiveBYOKProvider;
     name: string;
     description: string;
-    protocol: 'openai-compatible';
+    protocol: "openai-compatible";
     baseUrl: string;
     defaultModel: string;
     models: BYOKModel[];
@@ -175,7 +175,7 @@ export interface ChatInferenceProviderOption {
     addedAt: string | null;
 }
 export interface ChatInferenceLightOption {
-    provider: 'openrouter';
+    provider: "openrouter";
     defaultModel: string;
     models: BYOKModel[];
     balanceLight: number | null;
