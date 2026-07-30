@@ -35,7 +35,7 @@ import {
   PrivacyPage,
   TermsPage,
 } from "./pages/foundation-pages";
-import { LaunchShell } from "./components/launch-chrome";
+import { LaunchShell, Wordmark } from "./components/launch-chrome";
 import {
   NebulaFleetApp,
   NebulaSessionRestoringShell,
@@ -50,6 +50,7 @@ import { parseConnectTutorialContext } from "./lib/connect-tutorial";
 import {
   exchangeLaunchBridgeToken,
   establishLaunchConfirmationSession,
+  establishLaunchMagicLinkSession,
   getLaunchAuthToken,
   isLaunchRefreshAvailable,
   isLaunchAuthSessionStorageChange,
@@ -58,6 +59,7 @@ import {
   normalizeLocalPath,
   recordLaunchAuthDiagnostic,
   refreshLaunchSession,
+  resolveMagicLinkNextPath,
   setLaunchAuthToken,
 } from "./lib/auth";
 import { consumeExternalReturnRevalidation } from "./lib/external-navigation";
@@ -83,6 +85,7 @@ const routeTitles: Record<LaunchRouteKey, string> = {
   settings: "Profile",
   adminAgent: "Agent admin",
   authCallback: "Signing in",
+  authConfirm: "Confirm sign in",
   terms: "Terms of Service",
   privacy: "Privacy Policy",
 };
@@ -272,7 +275,9 @@ export function App(): ReactElement {
     // Remount the application surface when the authenticated owner changes so
     // component-local alert/search/settings state cannot outlive its account.
     <SignInModalProvider key={authSessionIdentity}>
-      {route.definition.key === "authCallback" && !providerCodeMisrouted
+      {route.definition.key === "authConfirm"
+        ? <MagicLinkConfirmationPage location={location} />
+        : route.definition.key === "authCallback" && !providerCodeMisrouted
         ? <AuthCallbackPage location={location} />
         : nebulaRoute && !providerCodeMisrouted
         ? sessionRestoring &&
@@ -398,11 +403,92 @@ function RouteSwitch(
       );
     case "authCallback":
       return <AuthCallbackPage location={location} />;
+    case "authConfirm":
+      return <MagicLinkConfirmationPage location={location} />;
     case "terms":
       return <TermsPage />;
     case "privacy":
       return <PrivacyPage />;
   }
+}
+
+export function MagicLinkConfirmationPage(
+  { location }: { location: LocationState },
+): ReactElement {
+  const query = useMemo(
+    () => new URLSearchParams(location.search),
+    [location.search],
+  );
+  const tokenHash = query.get("token_hash");
+  const tokenType = query.get("type");
+  const nextPath = resolveMagicLinkNextPath(query.get("next"));
+  const [verifying, setVerifying] = useState(false);
+  const [error, setError] = useState<string | null>(() =>
+    !tokenHash || (tokenType && tokenType !== "email")
+      ? "This sign-in link is incomplete. Request a new link to continue."
+      : null
+  );
+
+  const confirmSignIn = async () => {
+    if (!tokenHash || verifying) return;
+    setVerifying(true);
+    setError(null);
+    try {
+      await establishLaunchMagicLinkSession(tokenHash);
+      window.location.replace(nextPath);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to confirm this sign-in link.",
+      );
+      setVerifying(false);
+    }
+  };
+
+  return (
+    <main className="auth-confirm-page">
+      <section className="auth-confirm-panel">
+        <Wordmark />
+        <div className="signin-mail-icon" aria-hidden="true">
+          <MailCheckIcon />
+        </div>
+        <div className="auth-confirm-copy">
+          <p className="section-label">Email sign in</p>
+          <h1>Continue to Galactic</h1>
+          <p>
+            Press continue to confirm this email sign-in. This extra click
+            keeps automated email scanners from using your one-time link.
+          </p>
+        </div>
+        {error
+          ? <p className="signin-error auth-confirm-error" role="alert">{error}</p>
+          : null}
+        <button
+          className="signin-submit"
+          disabled={verifying || !tokenHash}
+          onClick={confirmSignIn}
+          type="button"
+        >
+          {verifying
+            ? (
+              <>
+                <span className="signin-spinner" aria-hidden="true" />
+                Confirming…
+              </>
+            )
+            : "Continue to Galactic"}
+        </button>
+        {error
+          ? (
+            <a className="auth-confirm-home" href="/">
+              Return to Galactic
+            </a>
+          )
+          : null}
+      </section>
+    </main>
+  );
 }
 
 export function AuthCallbackPage(
@@ -512,6 +598,25 @@ export function AuthCallbackPage(
       error={error}
       heading="Connect AI"
     />
+  );
+}
+
+function MailCheckIcon(): ReactElement {
+  return (
+    <svg
+      fill="none"
+      height={24}
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1.7}
+      viewBox="0 0 24 24"
+      width={24}
+    >
+      <path d="M4 6h16v12H4z" />
+      <path d="m4 7 8 6 8-6" />
+      <path d="m14.5 16 1.5 1.5 3-3" />
+    </svg>
   );
 }
 

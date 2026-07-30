@@ -4,8 +4,38 @@ import {
   authenticateRequest,
   type PendingPermissionRow,
   resolvePendingPermissionRows,
+  verifySupabaseAccessToken,
 } from "./request-auth.ts";
 import { createRoutineActorToken } from "./routine-auth.ts";
+
+Deno.test("request auth: exposes Supabase email confirmation state", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.test",
+    SUPABASE_ANON_KEY: "anon-key",
+  } as typeof globalThis.__env;
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(JSON.stringify({
+        id: "user-1",
+        email: "person@example.com",
+        email_confirmed_at: "2026-07-30T17:30:00.000Z",
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )) as typeof fetch;
+
+  try {
+    const user = await verifySupabaseAccessToken("access-token");
+    assertEquals(user?.emailConfirmedAt, "2026-07-30T17:30:00.000Z");
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
+});
 
 Deno.test("request auth: resolvePendingPermissionRows normalizes legacy prefixed function names", () => {
   const pendingRows: PendingPermissionRow[] = [

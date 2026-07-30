@@ -61,6 +61,12 @@ export interface LaunchPasswordAuthResponse {
   };
 }
 
+export interface LaunchMagicLinkRequestResponse {
+  audience: "launch_web";
+  email: string;
+  link_sent: true;
+}
+
 export function launchAuthSubject(token: string | null): string | null {
   const encodedPayload = token?.split(".")[1];
   if (!encodedPayload) return null;
@@ -228,6 +234,55 @@ function storeLaunchPasswordSession(
   if (!payload.access_token) return;
   setLaunchAuthToken(payload.access_token, payload.expires_in);
   setLaunchRefreshAvailable(Boolean(payload.refresh_supported));
+}
+
+export async function requestLaunchMagicLink(
+  email: string,
+  nextPath = currentLaunchPath(),
+): Promise<LaunchMagicLinkRequestResponse> {
+  const apiBase = launchApiBaseUrl || window.location.origin;
+  const response = await fetch(`${apiBase}/auth/launch/magic-link`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      email,
+      next: normalizeLocalPath(nextPath),
+    }),
+  });
+  const payload = await response.json().catch(() => null) as
+    | (LaunchMagicLinkRequestResponse & { error?: string })
+    | null;
+  if (!response.ok) {
+    throw new Error(
+      payload?.error || `Unable to send sign-in link (${response.status})`,
+    );
+  }
+  if (!payload?.link_sent) {
+    throw new Error("Email sign-in returned an empty response.");
+  }
+  return payload;
+}
+
+export async function establishLaunchMagicLinkSession(
+  tokenHash: string,
+): Promise<LaunchPasswordAuthResponse> {
+  const apiBase = launchApiBaseUrl || window.location.origin;
+  const response = await fetch(`${apiBase}/auth/launch/verify`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ token_hash: tokenHash }),
+  });
+  const payload = await readLaunchAuthResponse(response);
+  storeLaunchPasswordSession(payload);
+  return payload;
 }
 
 export async function authenticateLaunchWithPassword(
@@ -417,6 +472,26 @@ export function normalizeLocalPath(value: string | null | undefined): string {
     return "/account";
   }
   return value;
+}
+
+export function resolveMagicLinkNextPath(
+  value: string | null | undefined,
+  origin = window.location.origin,
+): string {
+  if (!value) return "/account";
+  try {
+    const target = new URL(value, origin);
+    if (target.origin !== new URL(origin).origin) return "/account";
+    if (
+      target.pathname === "/auth/callback" ||
+      target.pathname === "/auth/confirm"
+    ) {
+      return normalizeLocalPath(target.searchParams.get("next"));
+    }
+    return normalizeLocalPath(`${target.pathname}${target.search}`);
+  } catch {
+    return "/account";
+  }
 }
 
 function currentLaunchPath(): string {

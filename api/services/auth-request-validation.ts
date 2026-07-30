@@ -75,6 +75,43 @@ export interface PasswordAuthPayload {
   password: string;
 }
 
+export interface MagicLinkAuthPayload {
+  email: string;
+  nextPath: string;
+}
+
+export interface MagicLinkVerifyPayload {
+  tokenHash: string;
+}
+
+function normalizeAuthEmail(value: unknown): string {
+  const email = normalizeRequiredString(value, "email", {
+    maxLength: 254,
+  });
+  if (
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email) ||
+    email.includes("\r") ||
+    email.includes("\n")
+  ) {
+    throw new RequestValidationError("Enter a valid email address");
+  }
+  return email;
+}
+
+function normalizeLaunchNextPath(value: unknown): string {
+  const nextPath = normalizeOptionalString(value, "next", {
+    maxLength: 2048,
+  }) || "/account";
+  if (
+    !nextPath.startsWith("/") ||
+    nextPath.startsWith("//") ||
+    nextPath.includes("\\")
+  ) {
+    throw new RequestValidationError("next must be a local path");
+  }
+  return nextPath;
+}
+
 function assertValidRedirectUri(uri: string, field: string, oauthErrorCode?: string): string {
   let parsed: URL;
   try {
@@ -211,16 +248,7 @@ export async function validatePasswordAuthRequest(
     allowedKeys: ["email", "mode", "next", "password"],
   });
 
-  const email = normalizeRequiredString(body.email, "email", {
-    maxLength: 254,
-  });
-  if (
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email) ||
-    email.includes("\r") ||
-    email.includes("\n")
-  ) {
-    throw new RequestValidationError("Enter a valid email address");
-  }
+  const email = normalizeAuthEmail(body.email);
 
   const mode = normalizeRequiredString(body.mode, "mode");
   if (mode !== "sign_in" && mode !== "sign_up") {
@@ -242,22 +270,38 @@ export async function validatePasswordAuthRequest(
     );
   }
 
-  const nextPath = normalizeOptionalString(body.next, "next", {
-    maxLength: 2048,
-  }) || "/account";
-  if (
-    !nextPath.startsWith("/") ||
-    nextPath.startsWith("//") ||
-    nextPath.includes("\\")
-  ) {
-    throw new RequestValidationError("next must be a local path");
-  }
+  const nextPath = normalizeLaunchNextPath(body.next);
 
   return {
     email,
     mode,
     nextPath,
     password,
+  };
+}
+
+export async function validateMagicLinkAuthRequest(
+  request: Request,
+): Promise<MagicLinkAuthPayload> {
+  const body = await readJsonObject(request, {
+    allowedKeys: ["email", "next"],
+  });
+  return {
+    email: normalizeAuthEmail(body.email),
+    nextPath: normalizeLaunchNextPath(body.next),
+  };
+}
+
+export async function validateMagicLinkVerifyRequest(
+  request: Request,
+): Promise<MagicLinkVerifyPayload> {
+  const body = await readJsonObject(request, {
+    allowedKeys: ["token_hash"],
+  });
+  return {
+    tokenHash: normalizeRequiredString(body.token_hash, "token_hash", {
+      maxLength: MAX_TOKEN_LENGTH,
+    }),
   };
 }
 

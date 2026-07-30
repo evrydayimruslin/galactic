@@ -1,11 +1,13 @@
 import { assertEquals } from 'https://deno.land/std@0.210.0/assert/assert_equals.ts';
 import { assertStringIncludes } from 'https://deno.land/std@0.210.0/assert/assert_string_includes.ts';
+import { assertThrows } from 'https://deno.land/std@0.210.0/assert/assert_throws.ts';
 
 import {
   classifyLaunchAgentHomePromotionReconciliation,
   handleLaunch,
   parseLaunchApiKeyCreateRequest,
   parseLaunchHandoffCreateRequest,
+  requireConfirmedEmailForApiKeyCreation,
 } from './launch.ts';
 import { putLiveExecutedBundle } from '../services/executed-bundle.ts';
 import { encryptEnvVar } from '../services/envvars.ts';
@@ -16,6 +18,26 @@ const TEST_ENV = {
   SUPABASE_URL: 'https://supabase.test',
   SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
 };
+
+Deno.test('launch Galactic Keys: confirmed email is required for Supabase sessions', () => {
+  assertThrows(
+    () =>
+      requireConfirmedEmailForApiKeyCreation({
+        authSource: 'supabase',
+        emailConfirmedAt: null,
+      }),
+    Error,
+    'Confirm your email before creating a Galactic Key',
+  );
+  requireConfirmedEmailForApiKeyCreation({
+    authSource: 'supabase',
+    emailConfirmedAt: '2026-07-30T17:30:00.000Z',
+  });
+  requireConfirmedEmailForApiKeyCreation({
+    authSource: 'api_token',
+    emailConfirmedAt: null,
+  });
+});
 
 Deno.test('launch Agent Home: promotion reconciliation fails closed on every partial phase', () => {
   assertEquals(

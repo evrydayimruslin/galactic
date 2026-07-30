@@ -26,6 +26,7 @@ export type RequestAuthSource =
 export interface VerifiedSupabaseUser {
   id: string;
   email: string;
+  emailConfirmedAt: string | null;
   user_metadata?: Record<string, string>;
 }
 
@@ -34,6 +35,7 @@ export interface AuthenticatedRequestUser {
   email: string;
   tier: string;
   authSource?: RequestAuthSource;
+  emailConfirmedAt?: string | null;
   provisional?: boolean;
   tokenId?: string;
   tokenAppIds?: string[] | null;
@@ -101,6 +103,7 @@ export async function verifySupabaseAccessToken(
   const verifiedUser = await verifyResponse.json() as {
     id?: string;
     email?: string;
+    email_confirmed_at?: string | null;
     user_metadata?: Record<string, string>;
   };
   if (!verifiedUser?.id || !verifiedUser?.email) {
@@ -110,6 +113,9 @@ export async function verifySupabaseAccessToken(
   return {
     id: verifiedUser.id,
     email: verifiedUser.email,
+    emailConfirmedAt: typeof verifiedUser.email_confirmed_at === "string"
+      ? verifiedUser.email_confirmed_at
+      : null,
     user_metadata: verifiedUser.user_metadata || {},
   };
 }
@@ -268,6 +274,7 @@ export async function authenticateRequest(
     email: user.email,
     tier: resolvedTier,
     authSource: "supabase",
+    emailConfirmedAt: user.emailConfirmedAt,
     user_metadata: user.user_metadata,
   };
 }

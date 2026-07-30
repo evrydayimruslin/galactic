@@ -10,13 +10,13 @@ import {
 } from "react";
 
 import {
-  authenticateLaunchWithPassword,
   buildLaunchSignInUrl,
   recordLaunchAuthDiagnostic,
+  requestLaunchMagicLink,
 } from "../lib/auth";
 import { Wordmark } from "./launch-chrome";
 
-type SignInModalView = "sign_in" | "sign_up" | "check_email";
+type SignInModalView = "email" | "check_email";
 type AuthenticationMethod = "email" | "google" | null;
 
 const SignInModalContext = createContext<() => void>(() => {});
@@ -41,11 +41,10 @@ export function SignInModalProvider(
 }
 
 function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
-  const [view, setView] = useState<SignInModalView>("sign_in");
+  const [view, setView] = useState<SignInModalView>("email");
   const [authenticating, setAuthenticating] =
     useState<AuthenticationMethod>(null);
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -74,18 +73,9 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
     setAuthenticating("email");
     setError("");
     try {
-      const response = await authenticateLaunchWithPassword(
-        view,
-        email.trim(),
-        password,
-      );
-      if (response.confirmation_required) {
-        setPassword("");
-        setView("check_email");
-        setAuthenticating(null);
-        return;
-      }
-      onClose();
+      await requestLaunchMagicLink(email.trim());
+      setView("check_email");
+      setAuthenticating(null);
     } catch (err) {
       setAuthenticating(null);
       setError(
@@ -96,13 +86,11 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
     }
   };
 
-  const switchView = (next: "sign_in" | "sign_up") => {
-    setView(next);
-    setPassword("");
+  const editEmail = () => {
+    setView("email");
     setError("");
   };
 
-  const isSignUp = view === "sign_up";
   const isBusy = authenticating !== null;
 
   return (
@@ -114,9 +102,7 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
       role="presentation"
     >
       <div
-        aria-label={view === "sign_up"
-          ? "Create account"
-          : view === "check_email"
+        aria-label={view === "check_email"
           ? "Check your inbox"
           : "Sign in"}
         aria-modal="true"
@@ -145,16 +131,20 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
                 <div>
                   <h2 className="signin-heading">Check your inbox</h2>
                   <p>
-                    We sent a confirmation link to <strong>{email}</strong>.
-                    Open it to finish creating your account.
+                    We sent a one-time sign-in link to{" "}
+                    <strong>{email}</strong>. It expires in one hour.
+                  </p>
+                  <p>
+                    Open the email, then press the confirmation button to
+                    continue to Galactic.
                   </p>
                 </div>
                 <button
                   className="signin-secondary"
-                  onClick={() => switchView("sign_in")}
+                  onClick={editEmail}
                   type="button"
                 >
-                  Back to sign in
+                  Use another email
                 </button>
               </div>
             )
@@ -162,80 +152,11 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
               <>
                 <div className="signin-intro">
                   <h2 className="signin-heading">
-                    {isSignUp ? "Create your account" : "Welcome back"}
+                    Sign in to Galactic
                   </h2>
                   <p>
-                    {isSignUp
-                      ? "Create an account to build and deploy Agents."
-                      : "Sign in to continue to Galactic."}
+                    Continue with Google or receive a one-time link by email.
                   </p>
-                </div>
-
-                <form className="signin-form" onSubmit={handleEmail}>
-                  <label htmlFor="signin-email">Email</label>
-                  <input
-                    autoComplete="email"
-                    autoFocus
-                    disabled={isBusy}
-                    id="signin-email"
-                    inputMode="email"
-                    onChange={(event) => setEmail(event.target.value)}
-                    placeholder="you@example.com"
-                    required
-                    type="email"
-                    value={email}
-                  />
-                  <div className="signin-password-label">
-                    <label htmlFor="signin-password">Password</label>
-                  </div>
-                  <input
-                    autoComplete={isSignUp ? "new-password" : "current-password"}
-                    disabled={isBusy}
-                    id="signin-password"
-                    minLength={isSignUp ? 8 : undefined}
-                    onChange={(event) => setPassword(event.target.value)}
-                    placeholder={isSignUp
-                      ? "At least 8 characters"
-                      : "Enter your password"}
-                    required
-                    type="password"
-                    value={password}
-                  />
-                  {isSignUp
-                    ? (
-                      <p className="signin-password-help">
-                        Use 8+ characters with uppercase, lowercase, a number,
-                        and a symbol.
-                      </p>
-                    )
-                    : null}
-                  {error
-                    ? (
-                      <p className="signin-error" role="alert">
-                        {error}
-                      </p>
-                    )
-                    : null}
-                  <button
-                    className="signin-submit"
-                    disabled={isBusy}
-                    type="submit"
-                  >
-                    {authenticating === "email"
-                      ? (
-                        <>
-                          <span className="signin-spinner" aria-hidden="true" />
-                          {isSignUp ? "Creating account…" : "Signing in…"}
-                        </>
-                      )
-                      : isSignUp
-                      ? "Create account"
-                      : "Sign in"}
-                  </button>
-                </form>
-
-                <div className="signin-divider">
-                  <span>or</span>
                 </div>
 
                 <button
@@ -262,29 +183,51 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
                     )}
                 </button>
 
-                <p className="signin-switch">
-                  {isSignUp
-                    ? "Already have an account?"
-                    : "New to Galactic?"}{" "}
-                  <button
-                    disabled={isBusy}
-                    onClick={() =>
-                      switchView(isSignUp ? "sign_in" : "sign_up")}
-                    type="button"
-                  >
-                    {isSignUp ? "Sign in" : "Create an account"}
-                  </button>
-                </p>
+                <div className="signin-divider">
+                  <span>or</span>
+                </div>
 
-                {isSignUp
-                  ? (
-                    <p className="signin-note">
-                      By creating an account, you agree to our{" "}
-                      <a href="/terms">Terms</a> and{" "}
-                      <a href="/privacy">Privacy Policy</a>.
-                    </p>
-                  )
-                  : null}
+                <form className="signin-form" onSubmit={handleEmail}>
+                  <label htmlFor="signin-email">Email</label>
+                  <input
+                    autoComplete="email"
+                    autoFocus
+                    disabled={isBusy}
+                    id="signin-email"
+                    inputMode="email"
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="you@example.com"
+                    required
+                    type="email"
+                    value={email}
+                  />
+                  {error
+                    ? (
+                      <p className="signin-error" role="alert">
+                        {error}
+                      </p>
+                    )
+                    : null}
+                  <button
+                    className="signin-submit"
+                    disabled={isBusy}
+                    type="submit"
+                  >
+                    {authenticating === "email"
+                      ? (
+                        <>
+                          <span className="signin-spinner" aria-hidden="true" />
+                          Sending link…
+                        </>
+                      )
+                      : "Email me a sign-in link"}
+                  </button>
+                </form>
+
+                <p className="signin-note">
+                  By continuing, you agree to our <a href="/terms">Terms</a>{" "}
+                  and <a href="/privacy">Privacy Policy</a>.
+                </p>
               </>
             )}
         </div>

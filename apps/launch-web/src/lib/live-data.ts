@@ -457,6 +457,7 @@ async function loadRouteData(
       return { fleet };
     }
     case "authCallback":
+    case "authConfirm":
       return {};
     case "terms":
     case "privacy":

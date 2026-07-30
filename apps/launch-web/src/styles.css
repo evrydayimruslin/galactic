@@ -729,6 +729,66 @@ button {
   border-top-color: var(--ul-text);
 }
 
+.auth-confirm-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--ul-bg);
+}
+
+.auth-confirm-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  width: min(100%, 440px);
+  padding: 34px;
+  border: 1px solid var(--ul-border);
+  border-radius: 18px;
+  background: var(--ul-surface);
+  box-shadow: var(--ul-shadow);
+  text-align: center;
+}
+
+.auth-confirm-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-confirm-copy h1 {
+  margin: 0;
+  color: var(--ul-text);
+  font-family: var(--ul-font);
+  font-size: 26px;
+  font-weight: 500;
+  line-height: 1.15;
+}
+
+.auth-confirm-copy p:not(.section-label) {
+  margin: 0;
+  color: var(--ul-secondary);
+  font-family: var(--ul-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.auth-confirm-panel .signin-submit {
+  width: 100%;
+}
+
+.auth-confirm-error {
+  margin: -5px 0 0;
+  text-align: center;
+}
+
+.auth-confirm-home {
+  color: var(--ul-secondary);
+  font-family: var(--ul-sans);
+  font-size: 13px;
+  text-underline-offset: 3px;
+}
+
 @keyframes signin-spin {
   to {
     transform: rotate(360deg);

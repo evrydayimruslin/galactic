@@ -510,6 +510,7 @@ interface AuthUser {
   id: string;
   email?: string;
   authSource?: string;
+  emailConfirmedAt?: string | null;
 }
 
 interface LaunchAppRow {
@@ -5559,6 +5560,7 @@ async function handleLaunchApiKeys(
         "user:token_create",
         async () => {
           try {
+            requireConfirmedEmailForApiKeyCreation(user);
             const createRequest = parseLaunchApiKeyCreateRequest(
               await readJsonBody<Record<string, unknown>>(request),
             );
@@ -13675,6 +13677,20 @@ function requireAccountSessionForApiKeys(user: AuthUser): void {
   ) {
     throw new RequestValidationError(
       "API key management requires an account session",
+      403,
+    );
+  }
+}
+
+export function requireConfirmedEmailForApiKeyCreation(
+  user: {
+    authSource?: string;
+    emailConfirmedAt?: string | null;
+  },
+): void {
+  if (user.authSource === "supabase" && !user.emailConfirmedAt) {
+    throw new RequestValidationError(
+      "Confirm your email before creating a Galactic Key",
       403,
     );
   }
