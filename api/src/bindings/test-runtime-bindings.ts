@@ -17,51 +17,17 @@ import {
   createUlTestRunsResponse,
   UL_TEST_BLOCKED_EFFECTS,
   UL_TEST_OBSERVED_EFFECTS,
-  type UlTestObservedEffect,
 } from "../../services/ul-test-runtime.ts";
 import type { HttpTestFixtureConfig } from "../../services/http-test-fixtures.ts";
 import { type MemoryScope, normalizeMemoryScope } from "./memory-scope.ts";
 import type { CredentialRequestInit } from "./credential-inject.ts";
 import { resolveHttpTestRuntimeResponse } from "./http-test-runtime.ts";
+import {
+  resolveTestRuntimeSession,
+  type TestRuntimeSessionBindingProps,
+} from "./test-runtime-session-client.ts";
 
-/**
- * Shape of the invocation-owned Durable Object stub received by the stateless
- * Test* WorkerEntrypoints. Every call is asynchronous at the RPC boundary.
- */
-interface TestRuntimeSessionRpc {
-  storeAppData(key: string, value: unknown): Promise<void>;
-  loadAppData(key: string): Promise<unknown>;
-  removeAppData(key: string): Promise<void>;
-  listAppData(prefix?: string): Promise<string[]>;
-  rememberMemory(
-    scope: "agent" | "user",
-    key: string,
-    value: unknown,
-  ): Promise<void>;
-  recallMemory(scope: "agent" | "user", key: string): Promise<unknown>;
-  beginHttpFixtureAttempt(): Promise<void>;
-  reserveHttpFixtureExchangeBytes(
-    requestBytes: number,
-    responseBytes: number,
-  ): Promise<void>;
-  recordBlockedEffect(
-    effect: typeof UL_TEST_BLOCKED_EFFECTS[
-      keyof typeof UL_TEST_BLOCKED_EFFECTS
-    ],
-  ): Promise<void>;
-  recordObservedEffect(effect: UlTestObservedEffect): Promise<void>;
-  sealAndSnapshot(): Promise<{
-    blockedEffects: string[];
-    observedEffects: string[];
-  }>;
-  close(): Promise<void>;
-}
-
-interface TestSessionBindingProps {
-  session: TestRuntimeSessionRpc;
-}
-
-interface TestHttpBindingProps extends TestSessionBindingProps {
+interface TestHttpBindingProps extends TestRuntimeSessionBindingProps {
   fixtures: HttpTestFixtureConfig;
   allowedDestinations: string[];
 }
@@ -75,48 +41,52 @@ interface TestCredentialBindingProps extends TestHttpBindingProps {
  */
 export class TestAppDataBinding extends WorkerEntrypoint<
   unknown,
-  TestSessionBindingProps
+  TestRuntimeSessionBindingProps
 > {
   async store(
     key: string,
     value: unknown,
     _execCtxHandle?: string,
   ): Promise<void> {
-    await this.ctx.props.session.recordObservedEffect(
+    const session = resolveTestRuntimeSession(this.ctx);
+    await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.storageWrite,
     );
-    await this.ctx.props.session.storeAppData(key, value);
+    await session.storeAppData(key, value);
   }
 
   async load(key: string, _execCtxHandle?: string): Promise<unknown> {
-    await this.ctx.props.session.recordObservedEffect(
+    const session = resolveTestRuntimeSession(this.ctx);
+    await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.storageRead,
     );
-    return await this.ctx.props.session.loadAppData(key);
+    return await session.loadAppData(key);
   }
 
   async remove(key: string, _execCtxHandle?: string): Promise<void> {
-    await this.ctx.props.session.recordObservedEffect(
+    const session = resolveTestRuntimeSession(this.ctx);
+    await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.storageDelete,
     );
-    await this.ctx.props.session.removeAppData(key);
+    await session.removeAppData(key);
   }
 
   async list(
     prefix?: string,
     _execCtxHandle?: string,
   ): Promise<string[]> {
-    await this.ctx.props.session.recordObservedEffect(
+    const session = resolveTestRuntimeSession(this.ctx);
+    await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.storageRead,
     );
-    return await this.ctx.props.session.listAppData(prefix);
+    return await session.listAppData(prefix);
   }
 }
 
 /** Invocation-local replacement for both Agent- and user-scoped Memory.md. */
 export class TestMemoryBinding extends WorkerEntrypoint<
   unknown,
-  TestSessionBindingProps
+  TestRuntimeSessionBindingProps
 > {
   async remember(
     key: string,
@@ -124,10 +94,11 @@ export class TestMemoryBinding extends WorkerEntrypoint<
     scope?: MemoryScope,
     _execCtxHandle?: string,
   ): Promise<void> {
-    await this.ctx.props.session.recordObservedEffect(
+    const session = resolveTestRuntimeSession(this.ctx);
+    await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.memoryWrite,
     );
-    await this.ctx.props.session.rememberMemory(
+    await session.rememberMemory(
       normalizeMemoryScope(scope),
       key,
       value,
@@ -139,10 +110,11 @@ export class TestMemoryBinding extends WorkerEntrypoint<
     scope?: MemoryScope,
     _execCtxHandle?: string,
   ): Promise<unknown> {
-    await this.ctx.props.session.recordObservedEffect(
+    const session = resolveTestRuntimeSession(this.ctx);
+    await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.memoryRead,
     );
-    return await this.ctx.props.session.recallMemory(
+    return await session.recallMemory(
       normalizeMemoryScope(scope),
       key,
     );
@@ -152,13 +124,13 @@ export class TestMemoryBinding extends WorkerEntrypoint<
 /** Routine history is persistent production state; gx.test starts empty. */
 export class TestRunsBinding extends WorkerEntrypoint<
   unknown,
-  TestSessionBindingProps
+  TestRuntimeSessionBindingProps
 > {
   async recent(
     _limit?: number,
     _execCtxHandle?: string,
   ): Promise<{ runs: unknown[] }> {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.routineRead,
     );
     return createUlTestRunsResponse();
@@ -175,18 +147,19 @@ export class TestOutboundBinding extends WorkerEntrypoint<
   TestHttpBindingProps
 > {
   override async fetch(request: Request): Promise<Response> {
+    const session = resolveTestRuntimeSession(this.ctx);
     return await resolveHttpTestRuntimeResponse({
       kind: "raw",
       request,
       fixtures: this.ctx.props.fixtures,
       allowedDestinations: this.ctx.props.allowedDestinations,
-      recorder: this.ctx.props.session,
+      recorder: session,
     });
   }
 
   override async connect(_socket: Socket): Promise<void> {
     return await blockUlTestEffect(
-      this.ctx.props.session,
+      resolveTestRuntimeSession(this.ctx),
       UL_TEST_BLOCKED_EFFECTS.outboundTcp,
     );
   }
@@ -206,6 +179,7 @@ export class TestCredentialBinding extends WorkerEntrypoint<
     url: string,
     init?: CredentialRequestInit,
   ): Promise<Response> {
+    const session = resolveTestRuntimeSession(this.ctx);
     let request: Request;
     try {
       const method = (init?.method ?? "GET").toUpperCase();
@@ -216,11 +190,11 @@ export class TestCredentialBinding extends WorkerEntrypoint<
         redirect: "manual",
       });
     } catch {
-      await this.ctx.props.session.recordObservedEffect(
+      await session.recordObservedEffect(
         UL_TEST_OBSERVED_EFFECTS.credentialHttp,
       );
       return await blockUlTestEffect(
-        this.ctx.props.session,
+        session,
         UL_TEST_BLOCKED_EFFECTS.credentialedHttp,
       );
     }
@@ -231,7 +205,7 @@ export class TestCredentialBinding extends WorkerEntrypoint<
       fixtures: this.ctx.props.fixtures,
       allowedDestinations: this.ctx.props.allowedDestinations,
       credentialDestinations: this.ctx.props.credentialDestinations,
-      recorder: this.ctx.props.session,
+      recorder: session,
     });
   }
 }
@@ -239,18 +213,18 @@ export class TestCredentialBinding extends WorkerEntrypoint<
 /** IMAP/SMTP sockets are unavailable until a protocol fixture is declared. */
 export class TestNetworkBinding extends WorkerEntrypoint<
   unknown,
-  TestSessionBindingProps
+  TestRuntimeSessionBindingProps
 > {
   async imapFetchUnseen(..._args: unknown[]): Promise<never> {
     return await blockUlTestEffect(
-      this.ctx.props.session,
+      resolveTestRuntimeSession(this.ctx),
       UL_TEST_BLOCKED_EFFECTS.imap,
     );
   }
 
   async smtpSend(..._args: unknown[]): Promise<never> {
     return await blockUlTestEffect(
-      this.ctx.props.session,
+      resolveTestRuntimeSession(this.ctx),
       UL_TEST_BLOCKED_EFFECTS.smtp,
     );
   }
@@ -259,7 +233,7 @@ export class TestNetworkBinding extends WorkerEntrypoint<
 /** Publishing an event would mutate the live event bus, so tests reject it. */
 export class TestEventsBinding extends WorkerEntrypoint<
   unknown,
-  TestSessionBindingProps
+  TestRuntimeSessionBindingProps
 > {
   async emit(
     _topic: unknown,
@@ -267,7 +241,7 @@ export class TestEventsBinding extends WorkerEntrypoint<
     _execCtxHandle?: string,
   ): Promise<never> {
     return await blockUlTestEffect(
-      this.ctx.props.session,
+      resolveTestRuntimeSession(this.ctx),
       UL_TEST_BLOCKED_EFFECTS.eventPublish,
     );
   }
@@ -276,11 +250,11 @@ export class TestEventsBinding extends WorkerEntrypoint<
 /** Cross-Agent calls must never reach the live internal SELF service. */
 export class TestAppCallBinding extends WorkerEntrypoint<
   unknown,
-  TestSessionBindingProps
+  TestRuntimeSessionBindingProps
 > {
   override async fetch(_request: Request): Promise<Response> {
     return await blockUlTestEffect(
-      this.ctx.props.session,
+      resolveTestRuntimeSession(this.ctx),
       UL_TEST_BLOCKED_EFFECTS.agentCall,
     );
   }
@@ -288,10 +262,10 @@ export class TestAppCallBinding extends WorkerEntrypoint<
 
 export class TestAIBinding extends WorkerEntrypoint<
   unknown,
-  TestSessionBindingProps
+  TestRuntimeSessionBindingProps
 > {
   async call(_request: unknown, _execCtxHandle?: string) {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.inferenceGenerate,
     );
     return createUlTestAiResponse();
@@ -300,10 +274,10 @@ export class TestAIBinding extends WorkerEntrypoint<
 
 export class TestEmbedBinding extends WorkerEntrypoint<
   unknown,
-  TestSessionBindingProps
+  TestRuntimeSessionBindingProps
 > {
   async embed(_request: unknown, _execCtxHandle?: string) {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.inferenceEmbed,
     );
     return createUlTestEmbedResponse();
@@ -312,10 +286,10 @@ export class TestEmbedBinding extends WorkerEntrypoint<
 
 export class TestNotifyBinding extends WorkerEntrypoint<
   unknown,
-  TestSessionBindingProps
+  TestRuntimeSessionBindingProps
 > {
   async notifyOwner(_request: unknown, _execCtxHandle?: string) {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.notificationOwnerWrite,
     );
     return createUlTestNotifyResponse();
@@ -352,12 +326,12 @@ function testComputeRun(
 /** Host-only, no-side-effect gx.test replacement for Galactic Compute. */
 export class TestComputeBinding extends WorkerEntrypoint<
   unknown,
-  TestSessionBindingProps
+  TestRuntimeSessionBindingProps
 > {
   async call(
     request: ComputeRequest,
   ): Promise<ComputeBindingRpcResult<ComputeResult>> {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.computeExecute,
     );
     const isAsync = request?.mode === "async";
@@ -377,7 +351,7 @@ export class TestComputeBinding extends WorkerEntrypoint<
   async get(
     runId: string,
   ): Promise<ComputeBindingRpcResult<ComputeRun>> {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.computeExecute,
     );
     return {
@@ -389,7 +363,7 @@ export class TestComputeBinding extends WorkerEntrypoint<
   async cancel(
     runId: string,
   ): Promise<ComputeBindingRpcResult<ComputeRun>> {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.computeExecute,
     );
     return {

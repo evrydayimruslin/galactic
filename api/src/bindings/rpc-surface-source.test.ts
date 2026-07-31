@@ -37,6 +37,7 @@ const EXPECTED_RPC_METHODS: Record<string, readonly string[]> = {
   "outbound-binding.ts:OutboundBinding": ["fetch"],
   "runs-binding.ts:RunsBinding": ["recent"],
   "../gx-test-session.ts:GxTestSession": [
+    "alarm",
     "beginHttpFixtureAttempt",
     "close",
     "listAppData",
@@ -114,6 +115,8 @@ Deno.test("tenant RPC bindings expose only reviewed methods and use real private
 Deno.test("gx.test state crosses Worker boundaries only through a persistent Durable Object", async () => {
   const [
     testBindingsSource,
+    fixtureDatabaseSource,
+    sessionClientSource,
     sessionSource,
     workerEntrySource,
     dynamicSandboxSource,
@@ -121,6 +124,12 @@ Deno.test("gx.test state crosses Worker boundaries only through a persistent Dur
   ] = await Promise.all([
     Deno.readTextFile(
       new URL("./test-runtime-bindings.ts", import.meta.url),
+    ),
+    Deno.readTextFile(
+      new URL("./fixture-database-binding.ts", import.meta.url),
+    ),
+    Deno.readTextFile(
+      new URL("./test-runtime-session-client.ts", import.meta.url),
     ),
     Deno.readTextFile(new URL("../gx-test-session.ts", import.meta.url)),
     Deno.readTextFile(new URL("../worker-entry.ts", import.meta.url)),
@@ -139,12 +148,34 @@ Deno.test("gx.test state crosses Worker boundaries only through a persistent Dur
     "gx.test must not recreate the transient session factory",
   );
   assert(
+    testBindingsSource.includes("resolveTestRuntimeSession") &&
+      fixtureDatabaseSource.includes("resolveTestRuntimeSession"),
+    "every gx.test binding must resolve durable state in its own trusted context",
+  );
+  assert(
+    sessionClientSource.includes("sessionName: string") &&
+      sessionClientSource.includes("exports?.GxTestSession") &&
+      sessionClientSource.includes("return namespace.getByName(sessionName)"),
+    "gx.test binding props must carry only a durable session name",
+  );
+  assert(
+    !testBindingsSource.includes("session: TestRuntimeSessionRpc") &&
+      !fixtureDatabaseSource.includes("session: TestRuntimeSessionRpc"),
+    "gx.test binding props must never embed the Durable Object stub",
+  );
+  assert(
     sessionSource.includes("extends DurableObject"),
     "gx.test state must remain a Durable Object",
   );
   assert(
     sessionSource.includes("this.ctx.storage.deleteAll()"),
     "gx.test Durable Object storage must be fully deallocated after snapshot",
+  );
+  assert(
+    sessionSource.includes("this.ctx.storage.getAlarm()") &&
+      sessionSource.includes("this.ctx.storage.setAlarm(") &&
+      sessionSource.includes("override async alarm(): Promise<void>"),
+    "gx.test Durable Object must self-delete if host cleanup never runs",
   );
   assert(
     workerEntrySource.includes(
@@ -161,6 +192,11 @@ Deno.test("gx.test state crosses Worker boundaries only through a persistent Dur
   assert(
     !dynamicSandboxSource.includes(".dup()"),
     "the sandbox host must not duplicate a transient RPC session",
+  );
+  assert(
+    dynamicSandboxSource.includes("sessionName") &&
+      !dynamicSandboxSource.includes("session: persistentTestSession()"),
+    "the sandbox host must pass a plain session name to every test binding",
   );
   assert(
     wranglerSource.includes("[exports.GxTestSession]") &&

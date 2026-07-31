@@ -1,8 +1,4 @@
-import {
-  DurableObject,
-  RpcTarget,
-  WorkerEntrypoint,
-} from "cloudflare:workers";
+import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 
 export class GxTestSession extends DurableObject {
   constructor(ctx, env) {
@@ -66,13 +62,19 @@ export class GxTestSession extends DurableObject {
 
 export class FirstTestBinding extends WorkerEntrypoint {
   async record(effect) {
-    await this.ctx.props.session.record("first", effect);
+    const session = this.ctx.exports.GxTestSession.getByName(
+      this.ctx.props.sessionName,
+    );
+    await session.record("first", effect);
   }
 }
 
 export class SecondTestBinding extends WorkerEntrypoint {
   async record(effect) {
-    await this.ctx.props.session.record("second", effect);
+    const session = this.ctx.exports.GxTestSession.getByName(
+      this.ctx.props.sessionName,
+    );
+    await session.record("second", effect);
   }
 }
 
@@ -100,13 +102,38 @@ export class EphemeralTestBinding extends WorkerEntrypoint {
   }
 }
 
-async function persistentProbe(ctx) {
-  const session = ctx.exports.GxTestSession.getByName("gx-test-rpc-probe");
-  const first = ctx.exports.FirstTestBinding({ props: { session } });
-  const second = ctx.exports.SecondTestBinding({ props: { session } });
+async function persistentProbe(env, ctx) {
+  const sessionName = "gx-test-rpc-probe";
+  const session = ctx.exports.GxTestSession.getByName(sessionName);
+  const first = ctx.exports.FirstTestBinding({ props: { sessionName } });
+  const second = ctx.exports.SecondTestBinding({ props: { sessionName } });
 
-  await first.record("storage.read");
-  await second.record("network.http");
+  const worker = env.LOADER.load({
+    compatibilityDate: "2026-03-01",
+    mainModule: "probe.js",
+    modules: {
+      "probe.js": `
+        export default {
+          async fetch(_request, env) {
+            await env.FIRST.record("storage.read");
+            await env.SECOND.record("network.http");
+            return new Response("ok");
+          },
+        };
+      `,
+    },
+    env: {
+      FIRST: first,
+      SECOND: second,
+    },
+    globalOutbound: null,
+  });
+  const workerResponse = await worker.getEntrypoint().fetch(
+    "http://internal/probe",
+  );
+  if (!workerResponse.ok) {
+    throw new Error("dynamic probe Worker failed");
+  }
   const transcript = await session.sealAndSnapshot();
 
   let postSealRejected = false;
@@ -150,9 +177,9 @@ async function reopenedProbe(ctx) {
 }
 
 export default {
-  fetch(request, _env, ctx) {
+  fetch(request, env, ctx) {
     const pathname = new URL(request.url).pathname;
-    if (pathname === "/persistent") return persistentProbe(ctx);
+    if (pathname === "/persistent") return persistentProbe(env, ctx);
     if (pathname === "/reopened") return reopenedProbe(ctx);
     if (pathname === "/transient") return transientProbe(ctx);
     return new Response("Not found", { status: 404 });

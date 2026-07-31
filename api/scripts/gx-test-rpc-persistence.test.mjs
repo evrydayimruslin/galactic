@@ -13,6 +13,9 @@ function createHarness() {
         main: "test-fixtures/gx-test-rpc-persistence-worker.mjs",
         compatibility_date: "2026-03-01",
         compatibility_flags: ["nodejs_compat"],
+        worker_loaders: [{
+          binding: "LOADER",
+        }],
         exports: {
           GxTestSession: {
             type: "durable-object",
@@ -24,7 +27,7 @@ function createHarness() {
   });
 }
 
-test("workerd preserves one Durable Object transcript across test binding props", async () => {
+test("Worker Loader preserves one Durable Object transcript across test binding props", async () => {
   const server = createHarness();
   try {
     await server.listen();

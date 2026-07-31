@@ -7,10 +7,7 @@ import {
   type D1TestFixtureConfig,
   findD1TestFixtureResponse,
 } from "../../services/d1-test-fixtures.ts";
-import {
-  UL_TEST_OBSERVED_EFFECTS,
-  type UlTestObservedEffectRecorder,
-} from "../../services/ul-test-runtime.ts";
+import { UL_TEST_OBSERVED_EFFECTS } from "../../services/ul-test-runtime.ts";
 import {
   buildCount,
   buildDelete,
@@ -26,12 +23,15 @@ import {
   type UpsertOp,
 } from "./scoped-query.ts";
 import type { ScopedBatchOp } from "./database-binding.ts";
+import {
+  resolveTestRuntimeSession,
+  type TestRuntimeSessionBindingProps,
+} from "./test-runtime-session-client.ts";
 
-interface FixtureDatabaseBindingProps {
+interface FixtureDatabaseBindingProps extends TestRuntimeSessionBindingProps {
   appId: string;
   userId: string;
   fixtures: D1TestFixtureConfig;
-  session: UlTestObservedEffectRecorder;
 }
 
 // A fixed scope for validation only — gx.test never touches a real DB, but we
@@ -60,7 +60,7 @@ export class FixtureDatabaseBinding extends WorkerEntrypoint<
   }
 
   async select(op: SelectOp): Promise<Record<string, unknown>[]> {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.databaseRead,
     );
     buildSelect(op, TEST_SCOPE); // validate op (throws on bad table/column)
@@ -71,7 +71,7 @@ export class FixtureDatabaseBinding extends WorkerEntrypoint<
   }
 
   async first(op: SelectOp): Promise<Record<string, unknown> | null> {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.databaseRead,
     );
     buildSelect({ ...op, limit: 1 }, TEST_SCOPE);
@@ -80,7 +80,7 @@ export class FixtureDatabaseBinding extends WorkerEntrypoint<
   }
 
   async count(op: CountOp): Promise<number> {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.databaseRead,
     );
     buildCount(op, TEST_SCOPE);
@@ -89,7 +89,7 @@ export class FixtureDatabaseBinding extends WorkerEntrypoint<
   }
 
   async insert(op: InsertOp) {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.databaseWrite,
     );
     buildInsert(op, TEST_SCOPE);
@@ -98,7 +98,7 @@ export class FixtureDatabaseBinding extends WorkerEntrypoint<
   }
 
   async update(op: UpdateOp) {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.databaseWrite,
     );
     buildUpdate(op, TEST_SCOPE);
@@ -107,7 +107,7 @@ export class FixtureDatabaseBinding extends WorkerEntrypoint<
   }
 
   async delete(op: DeleteOp) {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.databaseWrite,
     );
     buildDelete(op, TEST_SCOPE);
@@ -116,7 +116,7 @@ export class FixtureDatabaseBinding extends WorkerEntrypoint<
   }
 
   async upsert(op: UpsertOp) {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.databaseWrite,
     );
     buildUpsert(op, TEST_SCOPE);
@@ -125,7 +125,7 @@ export class FixtureDatabaseBinding extends WorkerEntrypoint<
   }
 
   async batch(ops: ScopedBatchOp[]) {
-    await this.ctx.props.session.recordObservedEffect(
+    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.databaseWrite,
     );
     if (!Array.isArray(ops)) {

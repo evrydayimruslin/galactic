@@ -1,10 +1,10 @@
 // Strongly ordered, invocation-scoped state for gx.test.
 //
-// Every padded-room WorkerEntrypoint receives this Durable Object stub as a
-// persistent Service Binding in ctx.props. Cloudflare explicitly supports
-// Service Bindings there; a short-lived RpcTarget stub is not persistently
-// serializable and can split or disappear when the binding is transferred into
-// a Dynamic Worker. SQLite keeps the transcript correct across hibernation.
+// Every padded-room WorkerEntrypoint receives only the random Durable Object
+// name in ctx.props, then resolves the persistent stub from its own trusted
+// host context. A short-lived RpcTarget stub is not persistently serializable
+// and can split or disappear when transferred into a Dynamic Worker. SQLite
+// keeps the transcript correct across hibernation.
 
 import { DurableObject } from "cloudflare:workers";
 
@@ -15,8 +15,8 @@ import {
   normalizeTestMemoryKey,
   normalizeTestStateValue,
   TEST_RUNTIME_STATE_LIMITS,
-  testStateKeySizeBytes,
   type TestMemoryScope,
+  testStateKeySizeBytes,
 } from "../services/test-state-store.ts";
 import {
   isUlTestBlockedEffect,
@@ -29,6 +29,7 @@ import {
 
 const APP_DATA_NAMESPACE = "app_data";
 const MEMORY_NAMESPACE = "memory";
+const MAX_SESSION_LIFETIME_MS = 60 * 60 * 1_000;
 
 type SqlRow = Record<string, ArrayBuffer | string | number | null>;
 
@@ -54,7 +55,8 @@ interface EffectRow extends SqlRow {
  *
  * The random object name is created host-side and the stub never enters tenant
  * code directly. Tenant code receives only the narrow Test* bindings, while
- * those bindings share this persistent capability through trusted ctx.props.
+ * each binding resolves the shared persistent capability by that host-selected
+ * name.
  */
 export class GxTestSession extends DurableObject<unknown> {
   constructor(ctx: DurableObjectState, env: unknown) {
@@ -95,6 +97,18 @@ export class GxTestSession extends DurableObject<unknown> {
         value,
       );
     }
+
+    // Normal execution calls close() within seconds. This absolute lifetime is
+    // a fail-safe for isolate termination before finally can run, so test data
+    // and SQLite metadata cannot remain orphaned indefinitely. An existing
+    // alarm is deliberately not extended by hibernation or later activity.
+    this.ctx.blockConcurrencyWhile(async () => {
+      if (await this.ctx.storage.getAlarm() === null) {
+        await this.ctx.storage.setAlarm(
+          Date.now() + MAX_SESSION_LIFETIME_MS,
+        );
+      }
+    });
   }
 
   #meta(key: string): number {
@@ -348,6 +362,10 @@ export class GxTestSession extends DurableObject<unknown> {
     // Every execution gets a unique object name. Fully deallocate its SQLite
     // database once the host has captured the sealed transcript; deleting rows
     // alone leaves billable Durable Object metadata behind.
+    await this.ctx.storage.deleteAll();
+  }
+
+  override async alarm(): Promise<void> {
     await this.ctx.storage.deleteAll();
   }
 }

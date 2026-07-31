@@ -370,6 +370,25 @@ class Wave3Harness {
       Deno.env.set(key, value);
     }
 
+    const testSessions = new Map<string, Wave3TestRuntimeSession>();
+    const getTestSession = (sessionName: string): Wave3TestRuntimeSession => {
+      let session = testSessions.get(sessionName);
+      if (!session) {
+        session = new Wave3TestRuntimeSession();
+        testSessions.set(sessionName, session);
+      }
+      return session;
+    };
+    const testSession = (
+      props: { sessionName: string },
+    ): Wave3TestRuntimeSession => {
+      const session = testSessions.get(props.sessionName);
+      if (!session) {
+        throw new Error(`unknown gx.test session: ${props.sessionName}`);
+      }
+      return session;
+    };
+
     globalThis.fetch = this.fetch.bind(this);
     globalThis.__env = {
       ...(this.originalEnv || {}),
@@ -397,12 +416,12 @@ class Wave3Harness {
           { props }: {
             props: {
               fixtures: D1TestFixtureConfig;
-              session: Wave3TestRuntimeSession;
+              sessionName: string;
             };
           },
         ) => ({
           select: async (op: Record<string, unknown>) => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.databaseRead,
             );
             const fixture = findD1TestFixtureResponse(props.fixtures, {
@@ -414,7 +433,7 @@ class Wave3Harness {
             return Array.isArray(fixture.result) ? fixture.result : [];
           },
           insert: async (op: Record<string, unknown>) => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.databaseWrite,
             );
             const fixture = findD1TestFixtureResponse(props.fixtures, {
@@ -426,7 +445,7 @@ class Wave3Harness {
             return buildD1FixtureWriteResult(fixture.result, true);
           },
           count: async (op: Record<string, unknown>) => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.databaseRead,
             );
             const fixture = findD1TestFixtureResponse(props.fixtures, {
@@ -453,98 +472,98 @@ class Wave3Harness {
           exec: async () => ({ success: true, count: 0 }),
         }),
         GxTestSession: {
-          getByName: () => new Wave3TestRuntimeSession(),
+          getByName: (name: string) => getTestSession(name),
         },
         TestAIBinding: (
-          { props }: { props: { session: Wave3TestRuntimeSession } },
+          { props }: { props: { sessionName: string } },
         ) => ({
           call: async () => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.inferenceGenerate,
             );
             return createUlTestAiResponse();
           },
         }),
         TestEmbedBinding: (
-          { props }: { props: { session: Wave3TestRuntimeSession } },
+          { props }: { props: { sessionName: string } },
         ) => ({
           embed: async () => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.inferenceEmbed,
             );
             return createUlTestEmbedResponse();
           },
         }),
         TestNotifyBinding: (
-          { props }: { props: { session: Wave3TestRuntimeSession } },
+          { props }: { props: { sessionName: string } },
         ) => ({
           notifyOwner: async () => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.notificationOwnerWrite,
             );
             return createUlTestNotifyResponse();
           },
         }),
         TestAppDataBinding: (
-          { props }: { props: { session: Wave3TestRuntimeSession } },
+          { props }: { props: { sessionName: string } },
         ) => ({
           store: async (key: string, value: unknown) => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.storageWrite,
             );
-            return await props.session.storeAppData(key, value);
+            return await testSession(props).storeAppData(key, value);
           },
           load: async (key: string) => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.storageRead,
             );
-            return await props.session.loadAppData(key);
+            return await testSession(props).loadAppData(key);
           },
           remove: async (key: string) => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.storageDelete,
             );
-            return await props.session.removeAppData(key);
+            return await testSession(props).removeAppData(key);
           },
           list: async (prefix?: string) => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.storageRead,
             );
-            return await props.session.listAppData(prefix);
+            return await testSession(props).listAppData(prefix);
           },
         }),
         TestMemoryBinding: (
-          { props }: { props: { session: Wave3TestRuntimeSession } },
+          { props }: { props: { sessionName: string } },
         ) => ({
           remember: async (
             key: string,
             value: unknown,
             scope?: "agent" | "user",
           ) => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.memoryWrite,
             );
-            return await props.session.rememberMemory(
+            return await testSession(props).rememberMemory(
               scope === "user" ? "user" : "agent",
               key,
               value,
             );
           },
           recall: async (key: string, scope?: "agent" | "user") => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.memoryRead,
             );
-            return await props.session.recallMemory(
+            return await testSession(props).recallMemory(
               scope === "user" ? "user" : "agent",
               key,
             );
           },
         }),
         TestRunsBinding: (
-          { props }: { props: { session: Wave3TestRuntimeSession } },
+          { props }: { props: { sessionName: string } },
         ) => ({
           recent: async () => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.routineRead,
             );
             return createUlTestRunsResponse();
@@ -553,7 +572,7 @@ class Wave3Harness {
         TestOutboundBinding: (
           { props }: {
             props: {
-              session: Wave3TestRuntimeSession;
+              sessionName: string;
               fixtures: HttpTestFixtureConfig;
               allowedDestinations: string[];
             };
@@ -570,18 +589,18 @@ class Wave3Harness {
                 : new Request(input, init),
               fixtures: props.fixtures,
               allowedDestinations: props.allowedDestinations,
-              recorder: props.session,
+              recorder: testSession(props),
             }),
           connect: () =>
             blockUlTestEffect(
-              props.session,
+              testSession(props),
               UL_TEST_BLOCKED_EFFECTS.outboundTcp,
             ),
         }),
         TestCredentialBinding: (
           { props }: {
             props: {
-              session: Wave3TestRuntimeSession;
+              sessionName: string;
               fixtures: HttpTestFixtureConfig;
               allowedDestinations: string[];
               credentialDestinations: Record<string, string>;
@@ -611,47 +630,47 @@ class Wave3Harness {
               fixtures: props.fixtures,
               allowedDestinations: props.allowedDestinations,
               credentialDestinations: props.credentialDestinations,
-              recorder: props.session,
+              recorder: testSession(props),
             });
           },
         }),
         TestNetworkBinding: (
-          { props }: { props: { session: Wave3TestRuntimeSession } },
+          { props }: { props: { sessionName: string } },
         ) => ({
           imapFetchUnseen: () =>
             blockUlTestEffect(
-              props.session,
+              testSession(props),
               UL_TEST_BLOCKED_EFFECTS.imap,
             ),
           smtpSend: () =>
             blockUlTestEffect(
-              props.session,
+              testSession(props),
               UL_TEST_BLOCKED_EFFECTS.smtp,
             ),
         }),
         TestEventsBinding: (
-          { props }: { props: { session: Wave3TestRuntimeSession } },
+          { props }: { props: { sessionName: string } },
         ) => ({
           emit: () =>
             blockUlTestEffect(
-              props.session,
+              testSession(props),
               UL_TEST_BLOCKED_EFFECTS.eventPublish,
             ),
         }),
         TestAppCallBinding: (
-          { props }: { props: { session: Wave3TestRuntimeSession } },
+          { props }: { props: { sessionName: string } },
         ) => ({
           fetch: () =>
             blockUlTestEffect(
-              props.session,
+              testSession(props),
               UL_TEST_BLOCKED_EFFECTS.agentCall,
             ),
         }),
         TestComputeBinding: (
-          { props }: { props: { session: Wave3TestRuntimeSession } },
+          { props }: { props: { sessionName: string } },
         ) => ({
           call: async () => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.computeExecute,
             );
             return {
@@ -674,7 +693,7 @@ class Wave3Harness {
             };
           },
           get: async (runId: string) => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.computeExecute,
             );
             return {
@@ -690,7 +709,7 @@ class Wave3Harness {
             };
           },
           cancel: async (runId: string) => {
-            await props.session.recordObservedEffect(
+            await testSession(props).recordObservedEffect(
               UL_TEST_OBSERVED_EFFECTS.computeExecute,
             );
             return {

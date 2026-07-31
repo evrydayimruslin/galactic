@@ -3,7 +3,9 @@ import { test } from 'node:test';
 import {
   assessContainmentResults,
   callGxTest,
+  containmentApiBase,
   containmentProbeFiles,
+  PRODUCTION_API_BASE,
   stagingApiBase,
 } from './gx-test-containment-smoke.mjs';
 
@@ -53,14 +55,26 @@ test('probe fixture is self-contained and uses only an invalid outbound domain',
   assert.doesNotMatch(combined, /ultralight-api-staging/u);
 });
 
-test('staging URL validation rejects production and non-origin URLs', () => {
+test('target validation requires an explicit exact production origin', () => {
   assert.equal(
     stagingApiBase('https://staging.example.test/'),
     'https://staging.example.test',
   );
   assert.throws(
     () => stagingApiBase('https://api.connectgalactic.com'),
-    /staging-only/u,
+    /--target production/u,
+  );
+  assert.equal(
+    containmentApiBase(PRODUCTION_API_BASE, 'production'),
+    PRODUCTION_API_BASE,
+  );
+  assert.throws(
+    () => containmentApiBase('https://example.com', 'production'),
+    /may target only/u,
+  );
+  assert.throws(
+    () => containmentApiBase(PRODUCTION_API_BASE, 'unknown'),
+    /must be staging or production/u,
   );
   assert.throws(
     () => stagingApiBase('http://staging.example.test'),

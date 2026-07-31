@@ -173,6 +173,7 @@ interface CapturedContainment {
   tails: unknown[];
   requestBodies: Array<Record<string, unknown>>;
   requestHeaders: Array<Record<string, string>>;
+  sessionNames: string[];
   sessions: LocalTestRuntimeSession[];
   loadCalls: number;
 }
@@ -191,9 +192,11 @@ function installContainmentHarness(options: {
     tails: [],
     requestBodies: [],
     requestHeaders: [],
+    sessionNames: [],
     sessions: [],
     loadCalls: 0,
   };
+  const sessionsByName = new Map<string, LocalTestRuntimeSession>();
   const previousEnv = globalThis.__env;
   const previousCtx = globalThis.__ctx;
   const previousCallerSecret = Deno.env.get("AGENT_CALLER_SECRET");
@@ -203,6 +206,29 @@ function installContainmentHarness(options: {
     captured.constructors[name] = (captured.constructors[name] ?? 0) + 1;
     captured.bindingProps[name] = props;
     return value;
+  };
+  const getTestSession = (name: string): LocalTestRuntimeSession => {
+    let session = sessionsByName.get(name);
+    if (!session) {
+      session = new LocalTestRuntimeSession();
+      sessionsByName.set(name, session);
+      captured.sessionNames.push(name);
+      captured.sessions.push(session);
+    }
+    return session;
+  };
+  const resolveTestSession = (
+    props: { sessionName?: unknown } | null | undefined,
+  ): LocalTestRuntimeSession => {
+    const sessionName = props?.sessionName;
+    if (typeof sessionName !== "string") {
+      throw new Error("test binding did not receive a session name");
+    }
+    const session = sessionsByName.get(sessionName);
+    if (!session) {
+      throw new Error(`unknown gx.test session: ${sessionName}`);
+    }
+    return session;
   };
   const productionBinding = (name: string) =>
   // deno-lint-ignore no-explicit-any
@@ -225,8 +251,9 @@ function installContainmentHarness(options: {
     });
   const testBinding = (name: string) =>
   // deno-lint-ignore no-explicit-any
-  (input: any) =>
-    count(name, input?.props, {
+  (input: any) => {
+    resolveTestSession(input?.props);
+    return count(name, input?.props, {
       tag: `test-${name}`,
       store: () => Promise.resolve(),
       load: () => Promise.resolve(null),
@@ -244,11 +271,12 @@ function installContainmentHarness(options: {
       emit: () => Promise.reject(new Error("blocked")),
       fetch: () => Promise.reject(new Error("blocked")),
     });
+  };
 
   const testOutboundBinding =
     // deno-lint-ignore no-explicit-any
     (input: any) => {
-      const session = input?.props?.session as LocalTestRuntimeSession;
+      const session = resolveTestSession(input?.props);
       return count("TestOutboundBinding", input?.props, {
         tag: "test-TestOutboundBinding",
         fetch: () =>
@@ -383,11 +411,7 @@ function installContainmentHarness(options: {
     ? {
       FixtureDatabaseBinding: testBinding("FixtureDatabaseBinding"),
       GxTestSession: {
-        getByName: (_name: string) => {
-          const session = new LocalTestRuntimeSession();
-          captured.sessions.push(session);
-          return session;
-        },
+        getByName: (name: string) => getTestSession(name),
       },
       TestAppDataBinding: testBinding("TestAppDataBinding"),
       TestMemoryBinding: testBinding("TestMemoryBinding"),
@@ -632,6 +656,8 @@ Deno.test("gx.test maximal authority installs only test bindings", async () => {
       undefined,
     );
     assertEquals(harness.captured.sessions.length, 1);
+    const sessionName = harness.captured.sessionNames[0];
+    assert(sessionName?.startsWith("gx-test-"));
     for (
       const name of [
         "FixtureDatabaseBinding",
@@ -650,11 +676,18 @@ Deno.test("gx.test maximal authority installs only test bindings", async () => {
       ]
     ) {
       const props = harness.captured.bindingProps[name] as {
-        session?: LocalTestRuntimeSession;
+        sessionName?: unknown;
+        session?: unknown;
       };
-      assert(
-        props.session === harness.captured.sessions[0],
-        `${name} must share the invocation-owned session`,
+      assertEquals(
+        props.sessionName,
+        sessionName,
+        `${name} must share the invocation-owned session name`,
+      );
+      assertEquals(
+        "session" in props,
+        false,
+        `${name} must not receive a nested session capability`,
       );
     }
     assertEquals(result.observedEffects, []);
@@ -1008,6 +1041,7 @@ Deno.test("reused execution ids still receive distinct invocation-owned sessions
     assertEquals(first.success, true);
     assertEquals(second.success, true);
     assertEquals(harness.captured.sessions.length, 2);
+    assertEquals(new Set(harness.captured.sessionNames).size, 2);
     assert(
       harness.captured.sessions[0] !== harness.captured.sessions[1],
       "each run must own a distinct session object",

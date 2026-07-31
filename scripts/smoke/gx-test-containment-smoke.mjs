@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Staging-only gx.test containment certification.
+// Deployed gx.test containment certification.
 //
 // This exercises the deployed Dynamic Worker / ctx.exports RPC graph, not the
 // local mocks. It intentionally does not upload an Agent and never serializes a
@@ -9,6 +9,7 @@
 // Usage:
 //   ULTRALIGHT_TOKEN=ul_... \
 //     node scripts/smoke/gx-test-containment-smoke.mjs \
+//       [--target staging|production] \
 //       [--url https://ultralight-api-staging.rgn4jz429m.workers.dev] \
 //       [--output /path/to/gx-test-containment.json]
 
@@ -19,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from '../analysis/_shared.mjs';
 
 export const STAGING_API_BASE = 'https://ultralight-api-staging.rgn4jz429m.workers.dev';
+export const PRODUCTION_API_BASE = 'https://api.connectgalactic.com';
 const REQUEST_TIMEOUT_MS = 90_000;
 const REQUIRED_BLOCKED_EFFECTS = Object.freeze([
   'agent_call',
@@ -33,7 +35,7 @@ function manifest() {
   return {
     name: 'gx.test containment probe',
     version: '1.0.0',
-    description: 'Ephemeral staging-only probe for the gx.test containment boundary.',
+    description: 'Ephemeral deployed probe for the gx.test containment boundary.',
     type: 'mcp',
     entry: { functions: 'index.js' },
     flight_recorder: true,
@@ -257,7 +259,7 @@ export async function cache_capability_probe(input = {}) {
   }
 }
 
-// Strict gx.test lint requires an Agent UI surface even though this staging
+// Strict gx.test lint requires an Agent UI surface even though this deployment
 // probe never invokes it. Keep the probe deployable without adding any new
 // capability or state to the containment exercise.
 export async function ui() {
@@ -278,14 +280,29 @@ function requiredString(value, label) {
   return normalized;
 }
 
-export function stagingApiBase(value) {
-  const normalized = requiredString(value || STAGING_API_BASE, 'Staging API URL')
+function containmentTarget(value) {
+  const target = String(value || 'staging').trim().toLowerCase();
+  if (target !== 'staging' && target !== 'production') {
+    throw new Error('gx.test containment target must be staging or production.');
+  }
+  return target;
+}
+
+export function containmentApiBase(value, target = 'staging') {
+  const resolvedTarget = containmentTarget(target);
+  const defaultBase = resolvedTarget === 'production'
+    ? PRODUCTION_API_BASE
+    : STAGING_API_BASE;
+  const label = resolvedTarget === 'production'
+    ? 'Production API URL'
+    : 'Staging API URL';
+  const normalized = requiredString(value || defaultBase, label)
     .replace(/\/+$/u, '');
   let parsed;
   try {
     parsed = new URL(normalized);
   } catch {
-    throw new Error('Staging API URL is invalid.');
+    throw new Error(`${label} is invalid.`);
   }
   if (
     parsed.protocol !== 'https:' ||
@@ -295,12 +312,26 @@ export function stagingApiBase(value) {
     parsed.search ||
     parsed.pathname !== '/'
   ) {
-    throw new Error('Staging API URL must be a bare HTTPS origin.');
+    throw new Error(`${label} must be a bare HTTPS origin.`);
   }
-  if (normalized === 'https://api.connectgalactic.com') {
-    throw new Error('gx.test containment certification is staging-only.');
+  if (
+    resolvedTarget === 'production' &&
+    normalized !== PRODUCTION_API_BASE
+  ) {
+    throw new Error(
+      `Production gx.test containment may target only ${PRODUCTION_API_BASE}.`,
+    );
+  }
+  if (resolvedTarget === 'staging' && normalized === PRODUCTION_API_BASE) {
+    throw new Error(
+      'Production gx.test containment requires --target production.',
+    );
   }
   return normalized;
+}
+
+export function stagingApiBase(value) {
+  return containmentApiBase(value, 'staging');
 }
 
 function safeDiagnostic(value, secrets = []) {
@@ -552,12 +583,14 @@ export function assessContainmentResults({
 }
 
 export async function runContainmentSmoke({
-  apiBase = STAGING_API_BASE,
+  apiBase,
+  target = 'staging',
   token,
   fetchImpl = fetch,
   now = () => new Date(),
 }) {
-  const resolvedApiBase = stagingApiBase(apiBase);
+  const resolvedTarget = containmentTarget(target);
+  const resolvedApiBase = containmentApiBase(apiBase, resolvedTarget);
   const resolvedToken = requiredString(token, 'ULTRALIGHT_TOKEN');
   const nonce = randomUUID();
   const firstMarker = `${nonce}-first`;
@@ -592,7 +625,7 @@ export async function runContainmentSmoke({
   return {
     schema_version: 1,
     suite: 'gx-test-containment',
-    target: 'staging',
+    target: resolvedTarget,
     api_origin: resolvedApiBase,
     generated_at: now().toISOString(),
     passed: assessment.passed,
@@ -609,14 +642,18 @@ async function main() {
       'Pass ULTRALIGHT_TOKEN through the environment, not the command line.',
     );
   }
-  const apiBase = stagingApiBase(
-    args.get('--url') || process.env.ULTRALIGHT_API_URL || STAGING_API_BASE,
+  const target = containmentTarget(
+    args.get('--target') || process.env.GX_TEST_CONTAINMENT_TARGET || 'staging',
+  );
+  const apiBase = containmentApiBase(
+    args.get('--url') || process.env.ULTRALIGHT_API_URL,
+    target,
   );
   const token = requiredString(
     process.env.ULTRALIGHT_TOKEN,
     'ULTRALIGHT_TOKEN',
   );
-  const report = await runContainmentSmoke({ apiBase, token });
+  const report = await runContainmentSmoke({ apiBase, target, token });
   for (const item of report.checks) {
     const output = `${item.status.toUpperCase()} [${item.name}]`;
     if (item.status === 'passed') console.log(output);

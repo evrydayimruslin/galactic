@@ -11,6 +11,7 @@ interface CapturedComputeRuntime {
   productionProps: Record<string, unknown> | null;
   productionBindings: number;
   testBindings: number;
+  testProps: Record<string, unknown> | null;
 }
 
 class ComputeTestSession {
@@ -41,6 +42,16 @@ function installHarness(): {
     productionProps: null,
     productionBindings: 0,
     testBindings: 0,
+    testProps: null,
+  };
+  const testSessions = new Map<string, ComputeTestSession>();
+  const getTestSession = (name: string): ComputeTestSession => {
+    let session = testSessions.get(name);
+    if (!session) {
+      session = new ComputeTestSession();
+      testSessions.set(name, session);
+    }
+    return session;
   };
   const previousEnv = globalThis.__env;
   const previousCtx = globalThis.__ctx;
@@ -80,7 +91,7 @@ function installHarness(): {
   globalThis.__ctx = {
     exports: {
       GxTestSession: {
-        getByName: () => new ComputeTestSession(),
+        getByName: (name: string) => getTestSession(name),
       },
       FixtureDatabaseBinding: () => ({}),
       TestOutboundBinding: () => ({
@@ -134,7 +145,16 @@ function installHarness(): {
           cancel: () => Promise.resolve({ ok: true, value: {} }),
         };
       },
-      TestComputeBinding: () => {
+      // deno-lint-ignore no-explicit-any
+      TestComputeBinding: (input: any) => {
+        captured.testProps = input?.props ?? null;
+        const sessionName = input?.props?.sessionName;
+        if (
+          typeof sessionName !== "string" ||
+          !testSessions.has(sessionName)
+        ) {
+          throw new Error("test compute binding received an unknown session");
+        }
         captured.testBindings += 1;
         return {
           call: () => Promise.resolve({ ok: true, value: {} }),
@@ -314,6 +334,11 @@ Deno.test("dynamic compute: gx.test uses a no-side-effect binding", async () => 
     assert(harness.captured.envKeys.includes("COMPUTE"));
     assertEquals(harness.captured.productionBindings, 0);
     assertEquals(harness.captured.testBindings, 1);
+    assert(
+      typeof harness.captured.testProps?.sessionName === "string" &&
+        harness.captured.testProps.sessionName.startsWith("gx-test-"),
+    );
+    assertEquals("session" in (harness.captured.testProps ?? {}), false);
   } finally {
     harness.restore();
   }

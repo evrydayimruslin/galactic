@@ -122,6 +122,32 @@ function installHarness(): { captured: Captured; restore: () => void } {
     };
     return session;
   };
+  const testSessions = new Map<
+    string,
+    ReturnType<typeof createTestSession>
+  >();
+  const getTestSession = (
+    sessionName: string,
+  ): ReturnType<typeof createTestSession> => {
+    let session = testSessions.get(sessionName);
+    if (!session) {
+      session = createTestSession();
+      testSessions.set(sessionName, session);
+    }
+    return session;
+  };
+  const resolveTestSession = (
+    props: { sessionName?: unknown },
+  ): ReturnType<typeof createTestSession> => {
+    if (typeof props.sessionName !== "string") {
+      throw new Error("test binding did not receive a session name");
+    }
+    const session = testSessions.get(props.sessionName);
+    if (!session) {
+      throw new Error(`unknown gx.test session: ${props.sessionName}`);
+    }
+    return session;
+  };
 
   // Resolve the body's handle against the REAL registry (as a binding would) and
   // record which user's context it points at. Called inside each fetch, while
@@ -251,17 +277,20 @@ function installHarness(): { captured: Captured; restore: () => void } {
   globalThis.__ctx = {
     exports: {
       GxTestSession: {
-        getByName: () => createTestSession(),
+        getByName: (name: string) => getTestSession(name),
       },
       FixtureDatabaseBinding: () => ({}),
       // deno-lint-ignore no-explicit-any
-      TestAppDataBinding: (input: any) => ({
-        store: (key: string, value: unknown) =>
-          input.props.session.storeAppData(key, value),
-        load: (key: string) => input.props.session.loadAppData(key),
-        remove: (key: string) => input.props.session.removeAppData(key),
-        list: (prefix?: string) => input.props.session.listAppData(prefix),
-      }),
+      TestAppDataBinding: (input: any) => {
+        const session = resolveTestSession(input.props);
+        return {
+          store: (key: string, value: unknown) =>
+            session.storeAppData(key, value),
+          load: (key: string) => session.loadAppData(key),
+          remove: (key: string) => session.removeAppData(key),
+          list: (prefix?: string) => session.listAppData(prefix),
+        };
+      },
       TestOutboundBinding: () => ({
         fetch: () => Promise.reject(new Error("gx.test outbound blocked")),
         connect: () => Promise.reject(new Error("gx.test connect blocked")),
@@ -655,17 +684,28 @@ Deno.test("dynamic sandbox: gx.test uses only host test AI/embed/notify bindings
     };
     await executeInDynamicSandbox(config, "testFn", []);
 
-    const testAiSession =
-      (harness.captured.bindingProps.TEST_AI as { session?: unknown })?.session;
-    assert(testAiSession);
+    const testAiProps = harness.captured.bindingProps.TEST_AI as {
+      sessionName?: unknown;
+      session?: unknown;
+    };
     assert(
-      (harness.captured.bindingProps.TEST_EMBED as { session?: unknown })
-        ?.session === testAiSession,
+      typeof testAiProps.sessionName === "string" &&
+        testAiProps.sessionName.startsWith("gx-test-"),
     );
-    assert(
-      (harness.captured.bindingProps.TEST_NOTIFY as { session?: unknown })
-        ?.session === testAiSession,
-    );
+    for (
+      const name of ["TEST_AI", "TEST_EMBED", "TEST_NOTIFY"] as const
+    ) {
+      const props = harness.captured.bindingProps[name] as {
+        sessionName?: unknown;
+        session?: unknown;
+      };
+      assertEquals(props.sessionName, testAiProps.sessionName);
+      assertEquals(
+        "session" in props,
+        false,
+        `${name} must not receive a nested session capability`,
+      );
+    }
     assertEquals(harness.captured.bindingProps.AI, undefined);
     assertEquals(harness.captured.bindingProps.EMBED, undefined);
     assertEquals(harness.captured.bindingProps.NOTIFY, undefined);

@@ -308,7 +308,7 @@ interface DynamicWorkerEntrypointExports {
         appId: string;
         userId: string;
         fixtures: NonNullable<RuntimeConfig["d1Fixtures"]>;
-        session: DynamicTestRuntimeSession;
+        sessionName: string;
       };
     },
   ): unknown;
@@ -359,27 +359,27 @@ interface DynamicWorkerEntrypointExports {
   ): unknown;
   GxTestSession: DynamicTestRuntimeSessionNamespace;
   TestAIBinding(
-    input: { props: { session: DynamicTestRuntimeSession } },
+    input: { props: { sessionName: string } },
   ): unknown;
   TestAppDataBinding(
-    input: { props: { session: DynamicTestRuntimeSession } },
+    input: { props: { sessionName: string } },
   ): unknown;
   TestMemoryBinding(
-    input: { props: { session: DynamicTestRuntimeSession } },
+    input: { props: { sessionName: string } },
   ): unknown;
   TestRunsBinding(
-    input: { props: { session: DynamicTestRuntimeSession } },
+    input: { props: { sessionName: string } },
   ): unknown;
   TestEmbedBinding(
-    input: { props: { session: DynamicTestRuntimeSession } },
+    input: { props: { sessionName: string } },
   ): unknown;
   TestNotifyBinding(
-    input: { props: { session: DynamicTestRuntimeSession } },
+    input: { props: { sessionName: string } },
   ): unknown;
   TestOutboundBinding(
     input: {
       props: {
-        session: DynamicTestRuntimeSession;
+        sessionName: string;
         fixtures: NonNullable<RuntimeConfig["httpFixtures"]>;
         allowedDestinations: string[];
       };
@@ -388,7 +388,7 @@ interface DynamicWorkerEntrypointExports {
   TestCredentialBinding(
     input: {
       props: {
-        session: DynamicTestRuntimeSession;
+        sessionName: string;
         fixtures: NonNullable<RuntimeConfig["httpFixtures"]>;
         allowedDestinations: string[];
         credentialDestinations: Record<string, string>;
@@ -396,16 +396,16 @@ interface DynamicWorkerEntrypointExports {
     },
   ): unknown;
   TestNetworkBinding(
-    input: { props: { session: DynamicTestRuntimeSession } },
+    input: { props: { sessionName: string } },
   ): unknown;
   TestEventsBinding(
-    input: { props: { session: DynamicTestRuntimeSession } },
+    input: { props: { sessionName: string } },
   ): unknown;
   TestAppCallBinding(
-    input: { props: { session: DynamicTestRuntimeSession } },
+    input: { props: { sessionName: string } },
   ): unknown;
   TestComputeBinding(
-    input: { props: { session: DynamicTestRuntimeSession } },
+    input: { props: { sessionName: string } },
   ): unknown;
   ComputeBinding(input: {
     props: {
@@ -511,6 +511,7 @@ export async function executeInDynamicSandbox(
   // Declared outside the main try so failure diagnostics can redact it even
   // when execution exits after the token was minted.
   let sandboxAuthToken: string | null = "";
+  let testRuntimeSessionName: string | null = null;
   let testRuntimeSession: DynamicTestRuntimeSession | null = null;
   let testRuntimeSnapshotPromise: Promise<DynamicTestRuntimeSnapshot> | null =
     null;
@@ -1415,9 +1416,8 @@ export default {
           "gx.test runtime is unavailable: missing host export GxTestSession",
         );
       }
-      testRuntimeSession = sessionNamespace.getByName(
-        `gx-test-${crypto.randomUUID()}`,
-      );
+      testRuntimeSessionName = `gx-test-${crypto.randomUUID()}`;
+      testRuntimeSession = sessionNamespace.getByName(testRuntimeSessionName);
       if (
         !testRuntimeSession ||
         typeof testRuntimeSession.sealAndSnapshot !== "function" ||
@@ -1429,14 +1429,14 @@ export default {
       }
     }
 
-    const persistentTestSession = (): DynamicTestRuntimeSession => {
-      if (!testRuntimeSession) {
-        throw new Error("gx.test state session is unavailable");
+    const persistentTestSessionName = (): string => {
+      if (!testRuntimeSessionName) {
+        throw new Error("gx.test state session name is unavailable");
       }
-      // Durable Object stubs are persistent Service Bindings, which Cloudflare
-      // explicitly permits inside ctx.props. Reuse the same stub so every
-      // padded-room capability records into one strongly ordered transcript.
-      return testRuntimeSession;
+      // Props cross the Worker Loader boundary as plain data only. Each trusted
+      // test binding resolves this same name through its own host export, while
+      // the caller retains the authoritative stub for snapshot and cleanup.
+      return testRuntimeSessionName;
     };
     // Resolved D1 database id baked into the DB binding props — captured here so
     // the reuse key can fingerprint it (it is lazily provisioned / re-provisioned
@@ -1452,7 +1452,7 @@ export default {
           // records the attempted DB effect, then fails closed with the normal
           // fixture-miss diagnostic instead of hiding an undeclared attempt.
           fixtures: config.d1Fixtures ?? { responses: [] },
-          session: persistentTestSession(),
+          sessionName: persistentTestSessionName(),
         },
       });
     } else if (!testMode && hasDatabase && config.d1DataService) {
@@ -1481,7 +1481,7 @@ export default {
       if (testMode) {
         if (ctx?.exports?.TestAppDataBinding) {
           bindings.DATA = ctx.exports.TestAppDataBinding({
-            props: { session: persistentTestSession() },
+            props: { sessionName: persistentTestSessionName() },
           });
         }
       } else if (ctx?.exports?.AppDataBinding) {
@@ -1504,7 +1504,7 @@ export default {
       if (testMode) {
         if (ctx?.exports?.TestMemoryBinding) {
           bindings.MEMORY = ctx.exports.TestMemoryBinding({
-            props: { session: persistentTestSession() },
+            props: { sessionName: persistentTestSessionName() },
           });
         }
       } else if (config.memoryService && ctx?.exports?.MemoryBinding) {
@@ -1532,7 +1532,7 @@ export default {
       if (testMode) {
         if (ctx?.exports?.TestRunsBinding) {
           bindings.RUNS = ctx.exports.TestRunsBinding({
-            props: { session: persistentTestSession() },
+            props: { sessionName: persistentTestSessionName() },
           });
         }
       } else if (ctx?.exports?.RunsBinding) {
@@ -1555,7 +1555,7 @@ export default {
       if (config.testMode === true) {
         if (ctx?.exports?.TestNotifyBinding) {
           bindings.NOTIFY = ctx.exports.TestNotifyBinding({
-            props: { session: persistentTestSession() },
+            props: { sessionName: persistentTestSessionName() },
           });
         }
       } else if (ctx?.exports?.NotifyBinding) {
@@ -1574,7 +1574,7 @@ export default {
       if (config.testMode === true) {
         if (ctx?.exports?.TestAIBinding) {
           bindings.AI = ctx.exports.TestAIBinding({
-            props: { session: persistentTestSession() },
+            props: { sessionName: persistentTestSessionName() },
           });
         }
       } else if (ctx?.exports?.AIBinding) {
@@ -1612,7 +1612,7 @@ export default {
       if (config.testMode === true) {
         if (ctx?.exports?.TestEmbedBinding) {
           bindings.EMBED = ctx.exports.TestEmbedBinding({
-            props: { session: persistentTestSession() },
+            props: { sessionName: persistentTestSessionName() },
           });
         }
       } else if (ctx?.exports?.EmbedBinding) {
@@ -1645,7 +1645,7 @@ export default {
     if (testMode) {
       if (ctx?.exports?.TestEventsBinding) {
         bindings.EVENTS = ctx.exports.TestEventsBinding({
-          props: { session: persistentTestSession() },
+          props: { sessionName: persistentTestSessionName() },
         });
       }
     } else if (
@@ -1670,7 +1670,7 @@ export default {
       if (testMode) {
         if (ctx?.exports?.TestNetworkBinding) {
           bindings.NET = ctx.exports.TestNetworkBinding({
-            props: { session: persistentTestSession() },
+            props: { sessionName: persistentTestSessionName() },
           });
         }
       } else if (ctx?.exports?.NetworkBinding) {
@@ -1697,7 +1697,7 @@ export default {
       if (testMode) {
         if (ctx?.exports?.TestAppCallBinding) {
           bindings.SELF = ctx.exports.TestAppCallBinding({
-            props: { session: persistentTestSession() },
+            props: { sessionName: persistentTestSessionName() },
           });
         }
       } else if (env?.SELF) {
@@ -1751,7 +1751,7 @@ export default {
       if (ctx?.exports?.TestOutboundBinding) {
         loadConfig.globalOutbound = ctx.exports.TestOutboundBinding({
           props: {
-            session: persistentTestSession(),
+            sessionName: persistentTestSessionName(),
             fixtures: config.httpFixtures ?? [],
             allowedDestinations,
           },
@@ -1777,7 +1777,7 @@ export default {
       if (ctx?.exports?.TestCredentialBinding) {
         bindings.CREDENTIALS = ctx.exports.TestCredentialBinding({
           props: {
-            session: persistentTestSession(),
+            sessionName: persistentTestSessionName(),
             fixtures: config.httpFixtures ?? [],
             allowedDestinations,
             credentialDestinations: config.testCredentialDestinations ?? {},
@@ -1811,7 +1811,7 @@ export default {
       if (config.testMode === true) {
         if (ctx?.exports?.TestComputeBinding) {
           bindings.COMPUTE = ctx.exports.TestComputeBinding({
-            props: { session: persistentTestSession() },
+            props: { sessionName: persistentTestSessionName() },
           });
         }
       } else if (config.user && ctx?.exports?.ComputeBinding) {
