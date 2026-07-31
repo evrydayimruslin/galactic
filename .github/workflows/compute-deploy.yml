@@ -505,16 +505,10 @@ jobs:
               --var COMPUTE_CANARY_ALLOWLIST: \
               --keep-vars --strict \
               | tee "$EVIDENCE_DIR/pre-rollout-off-api-upload.txt"
-          bridge_version_id="$(jq -ser --arg worker "$API_WORKER" '
-            if length == 1 and
-               .[0].type == "version-upload" and
-               .[0].version == 1 and
-               .[0].worker_name == $worker and
-               (.[0].version_id | type) == "string"
-            then .[0].version_id
-            else error("Wrangler did not emit one exact version-upload record")
-            end
-          ' "$upload_output")"
+          bridge_version_id="$(
+            node scripts/release/verify-api-compute-off-bridge.mjs \
+              upload-output "$upload_output" "$API_WORKER" staging
+          )"
           if ! [[ "$bridge_version_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
             echo "Wrangler returned a malformed uploaded API version ID." >&2
             exit 1
