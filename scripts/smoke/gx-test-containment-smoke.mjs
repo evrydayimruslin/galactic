@@ -334,31 +334,82 @@ export function stagingApiBase(value) {
   return containmentApiBase(value, 'staging');
 }
 
-function safeDiagnostic(value, secrets = []) {
+export function safeDiagnostic(value, secrets = []) {
   let text = value instanceof Error ? value.message : String(value || '');
   for (const secret of secrets) {
     if (secret) text = text.replaceAll(secret, '[REDACTED]');
   }
   text = text
+    .replace(/\bBearer\s+[^\s,;]+/giu, 'Bearer [REDACTED]')
     .replace(/\b(?:ul|gx)_[A-Za-z0-9._~-]{12,}\b/gu, '[REDACTED_TOKEN]')
     .replace(
       /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/gu,
       '[REDACTED_JWT]',
+    )
+    .replace(
+      /\b(api[_-]?key|authorization|password|secret|token)\s*[:=]\s*["']?[^\s,"';}]+/giu,
+      '$1=[REDACTED]',
     );
   return text.slice(0, 500);
 }
 
-function decodeToolResult(responseBody) {
+function safeCallLabel(value, secrets = []) {
+  const redacted = safeDiagnostic(value, secrets)
+    .replace(/[^A-Za-z0-9_.:[\]-]+/gu, '_')
+    .replace(/^_+|_+$/gu, '')
+    .slice(0, 80);
+  return redacted || 'unknown';
+}
+
+function record(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : null;
+}
+
+/**
+ * Extract only a bounded JSON-RPC diagnostic. Never serialize the response
+ * body: auth gateways and intermediaries can put credentials in arbitrary
+ * fields that are not safe CI output.
+ */
+export function formatGxTestHttpFailure({
+  functionName,
+  status,
+  body,
+  secrets = [],
+}) {
+  const label = safeCallLabel(functionName, secrets);
+  const error = record(record(body)?.error);
+  const data = record(error?.data);
+  const parts = [
+    `gx.test[${label}] returned HTTP ${Number.isInteger(status) ? status : 'unknown'}`,
+  ];
+  if (typeof error?.code === 'number' && Number.isFinite(error.code)) {
+    parts.push(`jsonrpc_code=${error.code}`);
+  }
+  if (typeof data?.type === 'string' && data.type.trim()) {
+    parts.push(`type=${safeCallLabel(data.type, secrets)}`);
+  }
+  if (typeof error?.message === 'string' && error.message.trim()) {
+    parts.push(`message=${safeDiagnostic(error.message, secrets).slice(0, 240)}`);
+  }
+  return `${parts.join('; ')}.`;
+}
+
+function decodeToolResult(responseBody, secrets = []) {
   if (responseBody?.error) {
     throw new Error(
-      `MCP error: ${safeDiagnostic(responseBody.error.message || 'unknown')}`,
+      `MCP error: ${safeDiagnostic(
+        responseBody.error.message || 'unknown',
+        secrets,
+      )}`,
     );
   }
   const result = responseBody?.result;
   if (!result) throw new Error('MCP response did not include a result.');
   if (result.isError) {
     throw new Error(
-      safeDiagnostic(result.content?.[0]?.text || 'gx.test failed'),
+      safeDiagnostic(result.content?.[0]?.text || 'gx.test failed', secrets),
     );
   }
   if (result.structuredContent !== undefined) return result.structuredContent;
@@ -403,19 +454,30 @@ export async function callGxTest({
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
-    throw new Error(`gx.test request failed: ${safeDiagnostic(error, [token])}`);
+    const label = safeCallLabel(functionName, [token]);
+    throw new Error(
+      `gx.test[${label}] request failed: ${safeDiagnostic(error, [token])}`,
+    );
   }
 
   let body;
   try {
     body = await response.json();
   } catch {
-    throw new Error(`gx.test returned non-JSON (HTTP ${response.status}).`);
+    const label = safeCallLabel(functionName, [token]);
+    throw new Error(
+      `gx.test[${label}] returned non-JSON (HTTP ${response.status}).`,
+    );
   }
   if (!response.ok) {
-    throw new Error(`gx.test returned HTTP ${response.status}.`);
+    throw new Error(formatGxTestHttpFailure({
+      functionName,
+      status: response.status,
+      body,
+      secrets: [token],
+    }));
   }
-  return decodeToolResult(body);
+  return decodeToolResult(body, [token]);
 }
 
 function hasAttestation(result) {

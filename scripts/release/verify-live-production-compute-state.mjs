@@ -50,6 +50,21 @@ function exactNamedBinding(version, name, predicate, label) {
   }
 }
 
+function exactGxTestSessionExport(version, label) {
+  const sessionExport =
+    version?.resources?.script_runtime?.exports?.GxTestSession;
+  if (
+    sessionExport === null ||
+    typeof sessionExport !== "object" ||
+    Array.isArray(sessionExport) ||
+    sessionExport.type !== "durable-object" ||
+    sessionExport.storage !== "sqlite" ||
+    ![undefined, "created"].includes(sessionExport.state)
+  ) {
+    fail(`${label} must export GxTestSession with SQLite storage`);
+  }
+}
+
 export function verifyLiveProductionComputeState({
   apiStatus,
   apiVersion,
@@ -126,6 +141,8 @@ export function verifyLiveProductionComputeState({
   ) {
     fail("live gx.test session Worker identity does not match the candidate");
   }
+  exactGxTestSessionExport(apiVersion, "API rollback anchor");
+  exactGxTestSessionExport(sessionVersion, "gx.test session Worker");
 
   const expectedEnabled = admissionMode === "preserve_off" ? "0" : "1";
   const expectedRollout = admissionMode === "preserve_off"

@@ -102,6 +102,12 @@ describe("Compute release workflow static guards", () => {
       expect(job).toContain('echo "attempted=true"');
       expect(job).toContain("id: verify_gx_test_session");
       expect(job).toContain(
+        '.resources.script_runtime.exports.GxTestSession.type == "durable-object"',
+      );
+      expect(job).toContain(
+        '.resources.script_runtime.exports.GxTestSession.storage == "sqlite"',
+      );
+      expect(job).toContain(
         `Verify still-live ${target} API with candidate gx.test session Worker`,
       );
       expect(job).toContain(
@@ -170,6 +176,33 @@ describe("Compute release workflow static guards", () => {
         job.indexOf(`Deploy ${target} worker`),
       );
     }
+  });
+
+  it("keeps canonical Supabase secret repair manual and staging-only", async () => {
+    const apiDeploy = await text(".github/workflows/api-deploy.yml");
+    const stagingStart = apiDeploy.indexOf("  deploy_staging:");
+    const productionStart = apiDeploy.indexOf("  deploy_production:");
+    const stagingJob = apiDeploy.slice(stagingStart, productionStart);
+    const productionJob = apiDeploy.slice(productionStart);
+    const repairStep =
+      "Repair staging Supabase Worker secrets from the canonical project";
+
+    expect(stagingStart).toBeGreaterThan(0);
+    expect(productionStart).toBeGreaterThan(stagingStart);
+    expect(stagingJob).toContain(repairStep);
+    expect(stagingJob).toMatch(
+      /Repair staging Supabase Worker secrets from the canonical project\n\s+if: github\.event_name == 'workflow_dispatch'/u,
+    );
+    expect(stagingJob).toContain(
+      "node scripts/ops/reconcile-staging-supabase-secrets.mjs --apply",
+    );
+    expect(stagingJob).toContain(
+      "ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN_STAGING }}",
+    );
+    expect(productionJob).not.toContain(repairStep);
+    expect(productionJob).not.toContain(
+      "reconcile-staging-supabase-secrets.mjs",
+    );
   });
 
   it("gates rollout on API OFF, R2 privacy, and exact Container readiness", async () => {

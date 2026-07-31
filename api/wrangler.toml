@@ -10,6 +10,12 @@ name = "GX_TEST_SESSION"
 class_name = "GxTestSession"
 script_name = "galactic-gx-test-session"
 
+# Retain the original API-owned namespace as a dormant rollback anchor.
+# Runtime gx.test traffic uses the external GX_TEST_SESSION binding above.
+[exports.GxTestSession]
+type = "durable-object"
+storage = "sqlite"
+
 # Capacity telemetry is a billing-control path. Persist every API invocation
 # during launch so reconciliation alarms and queue failures are queryable in
 # Workers Logs instead of existing only in an attached real-time tail.

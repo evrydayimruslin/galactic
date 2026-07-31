@@ -47,6 +47,8 @@ import {
   sanitizeGpuTrustCard,
 } from "../services/gpu/feature-flag.ts";
 
+const STATUS_APP_COUNT_TIMEOUT_MS = 3_000;
+
 // ============================================
 // TYPES
 // ============================================
@@ -1751,6 +1753,7 @@ async function handleStatus(request: Request): Promise<Response> {
         `${supabaseUrl}/rest/v1/apps?visibility=eq.public&deleted_at=is.null&select=id`,
         {
           method: "HEAD",
+          signal: AbortSignal.timeout(STATUS_APP_COUNT_TIMEOUT_MS),
           headers: {
             "apikey": supabaseKey,
             "Authorization": `Bearer ${supabaseKey}`,

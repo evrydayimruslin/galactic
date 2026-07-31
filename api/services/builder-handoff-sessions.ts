@@ -6,6 +6,13 @@ export const BUILDER_HANDOFF_UPLOADED_CANDIDATE_LIMIT = 10;
 export const BUILDER_HANDOFF_RECENT_PROMOTED_LIMIT = 10;
 export const BUILDER_HANDOFF_RECENT_PROMOTED_WINDOW_MS = 7 * 24 * 60 * 60 *
   1_000;
+/**
+ * Keep the durable handoff lookup inside the same public authentication
+ * latency class as API-token authentication. Cloudflare fetch can otherwise
+ * inherit a roughly minute-long network timeout.
+ */
+export const BUILDER_HANDOFF_AUTH_TIMEOUT_MS = 8_000;
+const BUILDER_HANDOFF_AUTH_TIMEOUT_MAX_MS = 9_000;
 
 const BUILDER_HANDOFF_SESSION_SELECT = [
   "id",
@@ -234,6 +241,8 @@ export interface BuilderHandoffSessionServiceOptions {
   now?: () => Date;
   randomUUID?: () => string;
   randomBytes?: (length: number) => Uint8Array;
+  /** Focused-test override; production callers remain capped at 9 seconds. */
+  authenticationTimeoutMs?: number;
 }
 
 export type BuilderHandoffSessionErrorCode =
@@ -507,52 +516,98 @@ async function callRpc(
   name: string,
   body: Record<string, unknown>,
   options: BuilderHandoffSessionServiceOptions,
+  timeoutMs?: number,
 ): Promise<unknown> {
   const config = serviceConfig(options);
-  let response: Response;
-  try {
-    response = await config.fetchFn(
-      `${config.supabaseUrl}/rest/v1/rpc/${name}`,
-      {
-        method: "POST",
-        headers: {
-          apikey: config.serviceRoleKey,
-          Authorization: `Bearer ${config.serviceRoleKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      },
-    );
-  } catch {
-    throw new BuilderHandoffSessionError(
-      "service_unavailable",
-      "Builder handoff persistence is temporarily unavailable",
-    );
-  }
-
-  if (!response.ok) {
-    let payload: unknown;
+  const abortController = timeoutMs === undefined
+    ? undefined
+    : new AbortController();
+  const operation = (async (): Promise<unknown> => {
+    let response: Response;
     try {
-      payload = await response.json();
+      response = await config.fetchFn(
+        `${config.supabaseUrl}/rest/v1/rpc/${name}`,
+        {
+          method: "POST",
+          headers: {
+            apikey: config.serviceRoleKey,
+            Authorization: `Bearer ${config.serviceRoleKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          ...(abortController ? { signal: abortController.signal } : {}),
+        },
+      );
     } catch {
-      payload = undefined;
+      throw new BuilderHandoffSessionError(
+        "service_unavailable",
+        "Builder handoff persistence is temporarily unavailable",
+      );
     }
-    const code = rpcErrorCode(payload);
-    throw new BuilderHandoffSessionError(
-      mapRpcFailure(code),
-      rpcFailureMessage(code),
-      code,
-    );
-  }
 
+    if (!response.ok) {
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = undefined;
+      }
+      const code = rpcErrorCode(payload);
+      throw new BuilderHandoffSessionError(
+        mapRpcFailure(code),
+        rpcFailureMessage(code),
+        code,
+      );
+    }
+
+    try {
+      return await response.json();
+    } catch {
+      throw new BuilderHandoffSessionError(
+        "invalid_response",
+        "Builder handoff persistence returned invalid JSON",
+      );
+    }
+  })();
+
+  if (timeoutMs === undefined) return await operation;
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      abortController!.abort();
+      reject(
+        new BuilderHandoffSessionError(
+          "service_unavailable",
+          "Builder handoff persistence is temporarily unavailable",
+        ),
+      );
+    }, timeoutMs);
+  });
   try {
-    return await response.json();
-  } catch {
-    throw new BuilderHandoffSessionError(
-      "invalid_response",
-      "Builder handoff persistence returned invalid JSON",
-    );
+    // The race is intentional even though the real fetch honors AbortSignal:
+    // it also bounds a broken/custom fetch implementation that ignores abort.
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
+}
+
+function authenticationTimeoutMs(
+  options: BuilderHandoffSessionServiceOptions,
+): number {
+  const configured = options.authenticationTimeoutMs;
+  if (
+    configured === undefined ||
+    !Number.isFinite(configured) ||
+    configured < 1
+  ) {
+    return BUILDER_HANDOFF_AUTH_TIMEOUT_MS;
+  }
+  return Math.min(
+    Math.floor(configured),
+    BUILDER_HANDOFF_AUTH_TIMEOUT_MAX_MS,
+  );
 }
 
 function rowObject(value: unknown): Record<string, unknown> | null {
@@ -1102,12 +1157,17 @@ export async function authenticateBuilderHandoffSession(
       "Builder handoff scope set is invalid",
     );
   }
-  const payload = await callRpc("authenticate_builder_handoff_session", {
-    p_owner_id: ownerId,
-    p_token_id: tokenId,
-    p_scopes: [...input.scopes],
-    p_now: rpcNow(resolveNow(input.now, options)),
-  }, options);
+  const payload = await callRpc(
+    "authenticate_builder_handoff_session",
+    {
+      p_owner_id: ownerId,
+      p_token_id: tokenId,
+      p_scopes: [...input.scopes],
+      p_now: rpcNow(resolveNow(input.now, options)),
+    },
+    options,
+    authenticationTimeoutMs(options),
+  );
   const session = parseSession(payload);
   if (
     session.ownerId !== ownerId ||

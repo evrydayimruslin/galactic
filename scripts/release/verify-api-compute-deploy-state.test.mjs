@@ -54,6 +54,14 @@ function version({
         ? "galactic-compute-artifacts-staging"
         : "galactic-compute-artifacts",
     },
+    {
+      type: "durable_object_namespace",
+      name: "GX_TEST_SESSION",
+      class_name: "GxTestSession",
+      script_name: staging
+        ? "galactic-gx-test-session-staging"
+        : "galactic-gx-test-session",
+    },
   ];
   if (plane) {
     bindings.push({
@@ -66,7 +74,18 @@ function version({
   return {
     id: VERSION_ID,
     annotations: { "workers/tag": tag },
-    resources: { bindings },
+    resources: {
+      bindings,
+      script_runtime: {
+        exports: {
+          GxTestSession: {
+            type: "durable-object",
+            storage: "sqlite",
+            state: "created",
+          },
+        },
+      },
+    },
   };
 }
 
@@ -217,6 +236,38 @@ test("rejects any deployed Compute policy drift from the captured state", () => 
         },
       }),
     /does not exactly preserve the live state/u,
+  );
+});
+
+test("rejects a candidate API without both gx.test rollback surfaces", () => {
+  const missingExport = version();
+  delete missingExport.resources.script_runtime.exports.GxTestSession;
+  assert.throws(
+    () =>
+      verifyApiComputeDeployState({
+        mode: "bootstrap",
+        target: "production",
+        status: status(),
+        version: missingExport,
+        expectedTag: `api-${SHA}`,
+      }),
+    /dormant SQLite gx\.test export/u,
+  );
+
+  const wrongBinding = version({ target: "staging" });
+  wrongBinding.resources.bindings.find(
+    (binding) => binding.name === "GX_TEST_SESSION",
+  ).script_name = "galactic-gx-test-session";
+  assert.throws(
+    () =>
+      verifyApiComputeDeployState({
+        mode: "bootstrap",
+        target: "staging",
+        status: status(),
+        version: wrongBinding,
+        expectedTag: `api-${SHA}`,
+      }),
+    /session binding does not match/u,
   );
 });
 

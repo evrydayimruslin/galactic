@@ -5,7 +5,9 @@ import {
   callGxTest,
   containmentApiBase,
   containmentProbeFiles,
+  formatGxTestHttpFailure,
   PRODUCTION_API_BASE,
+  safeDiagnostic,
   stagingApiBase,
 } from './gx-test-containment-smoke.mjs';
 
@@ -113,6 +115,61 @@ test('gx.test request keeps the token in the header and decodes structured conte
   assert.equal(body.params.arguments.function_name, 'state_and_stub_probe');
   assert.equal(body.params.arguments.strict, true);
   assert.equal(JSON.stringify(body).includes(TOKEN), false);
+});
+
+test('non-2xx diagnostics expose only bounded structured JSON-RPC fields', async () => {
+  const rawBodySecret = 'raw-body-value-that-must-not-appear';
+  await assert.rejects(
+    () => callGxTest({
+      apiBase: 'https://staging.example.test',
+      token: TOKEN,
+      functionName: 'state_and_stub_probe',
+      testArgs: { marker: 'one' },
+      fetchImpl: async () => Response.json({
+        jsonrpc: '2.0',
+        id: 'one',
+        error: {
+          code: -32603,
+          message: `Authentication failed for Bearer ${TOKEN}`,
+          data: {
+            type: 'AUTH_SERVICE_UNAVAILABLE',
+            raw: rawBodySecret,
+            bearer: TOKEN,
+          },
+        },
+        ignored: rawBodySecret,
+      }, { status: 503 }),
+    }),
+    (error) => {
+      assert.match(error.message, /gx\.test\[state_and_stub_probe\]/u);
+      assert.match(error.message, /HTTP 503/u);
+      assert.match(error.message, /jsonrpc_code=-32603/u);
+      assert.match(error.message, /type=AUTH_SERVICE_UNAVAILABLE/u);
+      assert.match(error.message, /Bearer \[REDACTED\]/u);
+      assert.equal(error.message.includes(TOKEN), false);
+      assert.equal(error.message.includes(rawBodySecret), false);
+      return true;
+    },
+  );
+});
+
+test('diagnostics redact bearer, API token, JWT, and secret assignments', () => {
+  const jwt = 'eyJabcdefgh.ijklmnop.qrstuvwx';
+  const diagnostic = safeDiagnostic(
+    `Bearer ${TOKEN}; token=${TOKEN}; password=hunter2; jwt=${jwt}`,
+    [TOKEN],
+  );
+  assert.equal(diagnostic.includes(TOKEN), false);
+  assert.equal(diagnostic.includes('hunter2'), false);
+  assert.equal(diagnostic.includes(jwt), false);
+  assert.match(diagnostic, /\[REDACTED\]/u);
+
+  const bounded = formatGxTestHttpFailure({
+    functionName: `probe-${'x'.repeat(200)}`,
+    status: 503,
+    body: { error: { code: -32603, message: 'retry later' } },
+  });
+  assert(bounded.length < 180);
 });
 
 test('assessment requires local state, deterministic stubs, effect latches, and no cache', () => {

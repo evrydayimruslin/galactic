@@ -28,7 +28,7 @@ function apiTokenAuthMock(): typeof fetch {
       return jsonResponse({
         id: "token-1",
         user_id: "user-1",
-        token_hash: null,
+        token_hash: "",
         token_salt: null,
         plaintext_token: TEST_API_TOKEN,
         scopes: ["*"],

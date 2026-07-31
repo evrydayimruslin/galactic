@@ -236,11 +236,13 @@ Deno.test("gx.test state crosses Worker boundaries only through a persistent Dur
     "API production and staging must bind their matching dedicated session Workers",
   );
   assert(
-    !wranglerSource.includes("\n[exports.GxTestSession]\n") &&
+    wranglerSource.includes(
+      '[exports.GxTestSession]\ntype = "durable-object"\nstorage = "sqlite"',
+    ) &&
       wranglerSource.includes(
-        "[env.staging.exports.GxTestSession]",
+        '[env.staging.exports.GxTestSession]\ntype = "durable-object"\nstorage = "sqlite"',
       ),
-    "only staging may retain the dormant API-owned gx.test namespace",
+    "production and staging must retain dormant SQLite API-owned gx.test namespaces",
   );
   assert(
     sessionWranglerSource.includes('name = "galactic-gx-test-session"') &&

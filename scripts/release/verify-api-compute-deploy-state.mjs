@@ -16,11 +16,13 @@ const TARGETS = {
     computeWorker: "galactic-compute",
     computeQueue: "galactic-compute",
     artifactBucket: "galactic-compute-artifacts",
+    sessionWorker: "galactic-gx-test-session",
   },
   staging: {
     computeWorker: "galactic-compute-staging",
     computeQueue: "galactic-compute-staging",
     artifactBucket: "galactic-compute-artifacts-staging",
+    sessionWorker: "galactic-gx-test-session-staging",
   },
 };
 
@@ -138,6 +140,33 @@ function verifyPreservedPolicy(actual, expected) {
   }
 }
 
+function verifyCandidateSessionContract(version, targetState) {
+  const sessionBindings = exactBindings(
+    version,
+    "GX_TEST_SESSION",
+    "durable_object_namespace",
+  );
+  if (
+    sessionBindings[0].class_name !== "GxTestSession" ||
+    sessionBindings[0].script_name !== targetState.sessionWorker
+  ) {
+    fail("gx.test session binding does not match the dedicated Worker");
+  }
+
+  const sessionExport =
+    version?.resources?.script_runtime?.exports?.GxTestSession;
+  if (
+    sessionExport === null ||
+    typeof sessionExport !== "object" ||
+    Array.isArray(sessionExport) ||
+    sessionExport.type !== "durable-object" ||
+    sessionExport.storage !== "sqlite" ||
+    ![undefined, "created"].includes(sessionExport.state)
+  ) {
+    fail("candidate API does not retain its dormant SQLite gx.test export");
+  }
+}
+
 export function verifyApiComputeDeployState({
   mode,
   target,
@@ -188,6 +217,7 @@ export function verifyApiComputeDeployState({
     if (version?.annotations?.["workers/tag"] !== expectedTag) {
       fail("deployed version tag does not match the release SHA");
     }
+    verifyCandidateSessionContract(version, targetState);
   }
 
   const digest = plainValue(version, "COMPUTE_ENVIRONMENT_DIGEST");

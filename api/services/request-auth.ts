@@ -13,7 +13,11 @@ import {
   verifySandboxActorToken,
 } from "./sandbox-actor.ts";
 import type { RoutineTraceContext } from "./routine-trace.ts";
-import { getUserFromToken, isApiToken } from "./tokens.ts";
+import { AuthServiceUnavailableError } from "./auth-errors.ts";
+import {
+  getUserFromTokenForAuthentication,
+  isApiToken,
+} from "./tokens.ts";
 import {
   authenticateBuilderHandoffSession,
   BuilderHandoffSessionError,
@@ -283,10 +287,7 @@ export async function authenticateRequest(
       request.headers.get("x-real-ip") ||
       undefined;
 
-    const user = await getUserFromToken(token, clientIp);
-    if (!user) {
-      throw new Error("Invalid or expired API token");
-    }
+    const user = await getUserFromTokenForAuthentication(token, clientIp);
 
     const tokenScopes = user.scopes;
     const hasHandoffMarker = tokenScopes?.some((scope) =>
@@ -341,9 +342,7 @@ export async function authenticateRequest(
           (err.code === "service_unavailable" ||
             err.code === "invalid_response")
         ) {
-          throw new Error(
-            "Builder handoff authentication is temporarily unavailable",
-          );
+          throw new AuthServiceUnavailableError();
         }
         throw new Error("Invalid or expired builder handoff credential");
       }

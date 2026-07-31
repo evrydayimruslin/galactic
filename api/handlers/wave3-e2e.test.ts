@@ -134,6 +134,8 @@ class Wave3TestRuntimeSession {
 type FakeUserRow = {
   id: string;
   email: string;
+  provisional?: boolean | null;
+  last_active_at?: string | null;
   display_name?: string | null;
   avatar_url?: string | null;
   tier?: string | null;
@@ -762,6 +764,8 @@ class Wave3Harness {
     token?: string,
   ): void {
     const row: FakeUserRow = {
+      provisional: false,
+      last_active_at: null,
       display_name: null,
       avatar_url: null,
       tier: "free",

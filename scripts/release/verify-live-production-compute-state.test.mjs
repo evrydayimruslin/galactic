@@ -93,6 +93,15 @@ function fixture(admissionMode = "preserve_off") {
             script_name: "galactic-gx-test-session",
           },
         ],
+        script_runtime: {
+          exports: {
+            GxTestSession: {
+              type: "durable-object",
+              storage: "sqlite",
+              state: "created",
+            },
+          },
+        },
       },
     },
     computeVersion: {
@@ -122,7 +131,18 @@ function fixture(admissionMode = "preserve_off") {
     sessionVersion: {
       id: SESSION_ID,
       annotations: { "workers/tag": `gx-test-session-${SHA}` },
-      resources: { bindings: [] },
+      resources: {
+        bindings: [],
+        script_runtime: {
+          exports: {
+            GxTestSession: {
+              type: "durable-object",
+              storage: "sqlite",
+              state: "created",
+            },
+          },
+        },
+      },
     },
   };
 }
@@ -221,6 +241,22 @@ test("rejects gx.test session Worker or API binding drift", () => {
   assert.throws(
     () => verifyLiveProductionComputeState(bindingDrift),
     /exactly one valid GX_TEST_SESSION binding/u,
+  );
+
+  const apiExportDrift = fixture();
+  apiExportDrift.apiVersion.resources.script_runtime.exports.GxTestSession
+    .storage = "legacy-kv";
+  assert.throws(
+    () => verifyLiveProductionComputeState(apiExportDrift),
+    /API rollback anchor must export GxTestSession with SQLite storage/u,
+  );
+
+  const workerExportDrift = fixture();
+  delete workerExportDrift.sessionVersion.resources.script_runtime.exports
+    .GxTestSession;
+  assert.throws(
+    () => verifyLiveProductionComputeState(workerExportDrift),
+    /session Worker must export GxTestSession with SQLite storage/u,
   );
 });
 
