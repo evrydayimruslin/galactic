@@ -36,7 +36,24 @@ const funnelRoutes = [
   },
 ];
 
-async function startFixtureServer({ redirectPath = "" } = {}) {
+const weeklyCapacity = {
+  plan: "pro",
+  state: "available",
+  weekly: {
+    state: "available",
+    resetsAt: "2026-08-03T00:00:00.000Z",
+    usedPercent: 25,
+  },
+  nextEligibleAt: null,
+  activeAgentLimit: null,
+  generatedAt: "2026-07-30T12:00:00.000Z",
+};
+
+async function startFixtureServer({
+  redirectPath = "",
+  capacity = weeklyCapacity,
+  subscriptionOverrides = {},
+} = {}) {
   const requests = [];
   let origin = "";
   const server = createServer((request, response) => {
@@ -67,6 +84,61 @@ async function startFixtureServer({ redirectPath = "" } = {}) {
         available: true,
         version: "fixture",
         endpoints: {},
+      }));
+      return;
+    }
+
+    if (requestUrl === "/api/launch/capacity") {
+      response.writeHead(200, {
+        "Access-Control-Allow-Origin": origin,
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify(capacity));
+      return;
+    }
+
+    if (requestUrl === "/api/launch/subscription") {
+      response.writeHead(200, {
+        "Access-Control-Allow-Origin": origin,
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        plan: "pro",
+        planName: "Membership",
+        priceCents: 2_000,
+        currency: "usd",
+        interval: "month",
+        status: "active",
+        currentPeriodEnd: "2026-08-30T12:00:00.000Z",
+        cancelAtPeriodEnd: false,
+        hasActiveSubscription: true,
+        canSubscribe: false,
+        canManage: true,
+        capacity,
+        generatedAt: "2026-07-30T12:00:00.000Z",
+        ...subscriptionOverrides,
+      }));
+      return;
+    }
+
+    if (requestUrl === "/api/launch/wallet") {
+      response.writeHead(410, {
+        "Access-Control-Allow-Origin": origin,
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        error: "Wallet is not part of the persistent-Agent launch",
+      }));
+      return;
+    }
+
+    if (requestUrl === "/api/launch/api-keys") {
+      response.writeHead(403, {
+        "Access-Control-Allow-Origin": origin,
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        error: "API key management requires an account session",
       }));
       return;
     }
@@ -113,14 +185,14 @@ async function startFixtureServer({ redirectPath = "" } = {}) {
   return { server, origin, requests };
 }
 
-async function runSmoke(options = {}) {
+async function runSmoke({ includeAuthApi = false, ...options } = {}) {
   const fixture = await startFixtureServer(options);
   const outputDir = mkdtempSync(join(tmpdir(), "galactic-pages-smoke-"));
   let stdout = "";
   let stderr = "";
 
   try {
-    const child = spawn(process.execPath, [
+    const childArgs = [
       smokeScript,
       "--target",
       "staging",
@@ -136,8 +208,11 @@ async function runSmoke(options = {}) {
       "2000",
       "--asset-settle-interval-ms",
       "10",
-      "--skip-auth-api",
-    ], {
+      ...(includeAuthApi
+        ? ["--token", "fixture-token"]
+        : ["--skip-auth-api"]),
+    ];
+    const child = spawn(process.execPath, childArgs, {
       cwd: repoRoot,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -222,4 +297,131 @@ test("fails closed when an auth deep link redirects to the home shell", {
   assert.equal(probe.failure_class, "pages-routing");
   assert.equal(probe.observed.location_preserved, false);
   assert.equal(probe.observed.final_url, `${result.origin}/`);
+});
+
+test("accepts the authenticated weekly-only capacity contract", {
+  timeout: 15_000,
+}, async () => {
+  const result = await runSmoke({ includeAuthApi: true });
+  assert.equal(result.signal, null);
+  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+
+  const resultsByName = new Map(
+    result.summary.results.map((probe) => [probe.name, probe]),
+  );
+  for (
+    const name of [
+      "api-launch-subscription",
+      "api-launch-capacity",
+      "api-launch-wallet-retired",
+      "api-launch-settings-keys",
+    ]
+  ) {
+    assert.equal(resultsByName.get(name)?.status, "passed", name);
+  }
+  assert.equal(
+    resultsByName.get("api-launch-capacity")?.request.headers.Authorization,
+    "Bearer [REDACTED_TOKEN]",
+  );
+  for (
+    const evidence of [
+      result.stdout,
+      result.stderr,
+      JSON.stringify(result.summary),
+    ]
+  ) {
+    assert.doesNotMatch(evidence, /fixture-token/);
+  }
+});
+
+test("rejects a legacy subscription plan", {
+  timeout: 15_000,
+}, async () => {
+  const result = await runSmoke({
+    includeAuthApi: true,
+    subscriptionOverrides: {
+      plan: "free",
+      priceCents: 0,
+    },
+  });
+  assert.equal(result.signal, null);
+  assert.equal(result.code, 1, `${result.stdout}\n${result.stderr}`);
+
+  const subscription = result.summary.results.find((probe) =>
+    probe.name === "api-launch-subscription"
+  );
+  const capacity = result.summary.results.find((probe) =>
+    probe.name === "api-launch-capacity"
+  );
+  assert.equal(subscription?.status, "failed");
+  assert.equal(
+    subscription?.observed.validation,
+    "subscription shape or no-fee invariant failed",
+  );
+  assert.equal(capacity?.status, "passed");
+});
+
+test("rejects undeclared or contradictory subscription fields", {
+  timeout: 15_000,
+}, async () => {
+  for (
+    const subscriptionOverrides of [{
+      processingFeeCents: 123,
+    }, {
+      canSubscribe: true,
+      canManage: true,
+    }]
+  ) {
+    const result = await runSmoke({
+      includeAuthApi: true,
+      subscriptionOverrides,
+    });
+    assert.equal(result.signal, null);
+    assert.equal(result.code, 1, `${result.stdout}\n${result.stderr}`);
+
+    const subscription = result.summary.results.find((probe) =>
+      probe.name === "api-launch-subscription"
+    );
+    const capacity = result.summary.results.find((probe) =>
+      probe.name === "api-launch-capacity"
+    );
+    assert.equal(subscription?.status, "failed");
+    assert.equal(capacity?.status, "passed");
+  }
+});
+
+test("rejects retired burst capacity and hidden limit fields", {
+  timeout: 15_000,
+}, async () => {
+  for (
+    const capacity of [{
+      ...weeklyCapacity,
+      burst: {
+        state: "available",
+        resetsAt: "2026-07-30T14:00:00.000Z",
+      },
+    }, {
+      ...weeklyCapacity,
+      weekly: {
+        ...weeklyCapacity.weekly,
+        remainingLight: 300,
+      },
+    }]
+  ) {
+    const result = await runSmoke({
+      includeAuthApi: true,
+      capacity,
+    });
+    assert.equal(result.signal, null);
+    assert.equal(result.code, 1, `${result.stdout}\n${result.stderr}`);
+
+    const resultsByName = new Map(
+      result.summary.results.map((probe) => [probe.name, probe]),
+    );
+    for (const name of ["api-launch-subscription", "api-launch-capacity"]) {
+      const probe = resultsByName.get(name);
+      assert.equal(probe?.status, "failed", name);
+      assert.match(probe?.observed.validation || "", /weekly-only|hidden-limit/);
+    }
+  }
 });

@@ -635,25 +635,115 @@ async function runAuthenticatedApiProbe(probe) {
 function validateCapacity(raw) {
   const payload = parseJson(raw.body_text);
   const states = new Set(["available", "low", "waiting"]);
-  const plans = new Set(["free", "pro", "max_5x", "max_10x"]);
-  const ok = Boolean(payload && plans.has(payload.plan) && states.has(payload.state) &&
-    states.has(payload.burst?.state) && states.has(payload.weekly?.state) &&
-    typeof payload.burst?.resetsAt === "string" &&
-    typeof payload.weekly?.resetsAt === "string" &&
-    !Object.prototype.hasOwnProperty.call(payload, "balance") &&
-    !Object.prototype.hasOwnProperty.call(payload, "credits"));
-  return { ok, message: ok ? "safe capacity state/reset projection detected" : "capacity shape or hidden-balance invariant failed" };
+  const weeklyUsedPercent = payload?.weekly?.usedPercent;
+  const ok = Boolean(
+    hasOnlyKeys(payload, new Set([
+      "plan",
+      "state",
+      "weekly",
+      "nextEligibleAt",
+      "activeAgentLimit",
+      "deferredWakeCount",
+      "generatedAt",
+    ])) &&
+    hasOnlyKeys(payload.weekly, new Set([
+      "state",
+      "resetsAt",
+      "usedPercent",
+    ])) &&
+    payload.plan === "pro" &&
+    states.has(payload.state) && states.has(payload.weekly?.state) &&
+    payload.state === payload.weekly?.state &&
+    isTimestamp(payload.weekly?.resetsAt) &&
+    (payload.nextEligibleAt === null ||
+      isTimestamp(payload.nextEligibleAt)) &&
+    payload.activeAgentLimit === null &&
+    isTimestamp(payload.generatedAt) &&
+    (payload.deferredWakeCount === undefined ||
+      (Number.isInteger(payload.deferredWakeCount) &&
+        payload.deferredWakeCount >= 0)) &&
+    (weeklyUsedPercent === undefined ||
+      (typeof weeklyUsedPercent === "number" &&
+        Number.isFinite(weeklyUsedPercent) &&
+        weeklyUsedPercent >= 0 &&
+        weeklyUsedPercent <= 100)),
+  );
+  return {
+    ok,
+    message: ok
+      ? "safe weekly-only capacity state/reset projection detected"
+      : "weekly-only capacity shape or hidden-limit invariant failed",
+  };
+}
+
+function isTimestamp(value) {
+  return typeof value === "string" && value.length > 0 &&
+    Number.isFinite(Date.parse(value));
+}
+
+function hasOnlyKeys(value, allowedKeys) {
+  return Boolean(value && typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).every((key) => allowedKeys.has(key)));
 }
 
 function validateSubscription(raw) {
   const payload = parseJson(raw.body_text);
-  const ok = Boolean(payload && typeof payload.plan === "string" &&
-    typeof payload.planName === "string" && payload.currency === "usd" &&
-    payload.interval === "month" && payload.capacity &&
-    validateCapacity({ body_text: JSON.stringify(payload.capacity) }).ok &&
-    !Object.prototype.hasOwnProperty.call(payload, "processingFee") &&
-    !Object.prototype.hasOwnProperty.call(payload, "agentFee"));
-  return { ok, message: ok ? "BYOK subscription and shared-capacity projection detected" : "subscription shape or no-fee invariant failed" };
+  const capacityValidation = validateCapacity({
+    body_text: JSON.stringify(payload?.capacity),
+  });
+  const statuses = new Set([
+    "inactive",
+    "incomplete",
+    "incomplete_expired",
+    "trialing",
+    "active",
+    "past_due",
+    "canceled",
+    "unpaid",
+    "paused",
+  ]);
+  const ok = Boolean(
+    hasOnlyKeys(payload, new Set([
+      "plan",
+      "planName",
+      "priceCents",
+      "currency",
+      "interval",
+      "status",
+      "currentPeriodEnd",
+      "cancelAtPeriodEnd",
+      "hasActiveSubscription",
+      "canSubscribe",
+      "canManage",
+      "capacity",
+      "generatedAt",
+    ])) &&
+    payload.plan === "pro" &&
+    typeof payload.planName === "string" && payload.planName.length > 0 &&
+    payload.priceCents === 2_000 && payload.currency === "usd" &&
+    payload.interval === "month" && statuses.has(payload.status) &&
+    (payload.currentPeriodEnd === null ||
+      isTimestamp(payload.currentPeriodEnd)) &&
+    typeof payload.cancelAtPeriodEnd === "boolean" &&
+    typeof payload.hasActiveSubscription === "boolean" &&
+    payload.hasActiveSubscription === (payload.status === "active") &&
+    typeof payload.canSubscribe === "boolean" &&
+    typeof payload.canManage === "boolean" &&
+    payload.canSubscribe === !payload.canManage &&
+    isTimestamp(payload.generatedAt) && payload.capacity &&
+    payload.capacity.plan === payload.plan &&
+    payload.capacity.generatedAt === payload.generatedAt &&
+    capacityValidation.ok,
+  );
+  return {
+    ok,
+    message: ok
+      ? "BYOK subscription and shared-capacity projection detected"
+      : !capacityValidation.ok
+      ? `subscription capacity invalid: ${capacityValidation.message}`
+      : "subscription shape or no-fee invariant failed",
+  };
 }
 
 function validateLaunchStatus(raw) {
