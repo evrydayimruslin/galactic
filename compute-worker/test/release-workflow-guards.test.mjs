@@ -113,9 +113,15 @@ describe("Compute release workflow static guards", () => {
       expect(job).toContain(
         "id: verify_gx_test_session_compatibility",
       );
-      expect(job).toContain(
-        "if: steps.capture_gx_test_session.outputs.had_prior == 'true'",
-      );
+      if (target === "staging") {
+        expect(job).toMatch(
+          /if: >-\n\s+steps\.capture_gx_test_session\.outputs\.had_prior == 'true' &&\n\s+github\.event_name != 'workflow_dispatch'/u,
+        );
+      } else {
+        expect(job).toContain(
+          "if: steps.capture_gx_test_session.outputs.had_prior == 'true'",
+        );
+      }
       expect(job).toContain(
         `Restore prior ${target} gx.test session Worker after a failed rollout`,
       );
@@ -178,30 +184,53 @@ describe("Compute release workflow static guards", () => {
     }
   });
 
-  it("keeps canonical Supabase secret repair manual and staging-only", async () => {
+  it("binds canonical Supabase secrets atomically to manual staging deploys", async () => {
     const apiDeploy = await text(".github/workflows/api-deploy.yml");
     const stagingStart = apiDeploy.indexOf("  deploy_staging:");
     const productionStart = apiDeploy.indexOf("  deploy_production:");
     const stagingJob = apiDeploy.slice(stagingStart, productionStart);
     const productionJob = apiDeploy.slice(productionStart);
-    const repairStep =
-      "Repair staging Supabase Worker secrets from the canonical project";
+    const prepareStep =
+      "Prepare canonical staging Supabase secrets for candidate deploy";
+    const prepareStart = stagingJob.indexOf(prepareStep);
+    const prepareEnd = stagingJob.indexOf("\n      - name:", prepareStart);
+    const prepareBlock = stagingJob.slice(prepareStart, prepareEnd);
 
     expect(stagingStart).toBeGreaterThan(0);
     expect(productionStart).toBeGreaterThan(stagingStart);
-    expect(stagingJob).toContain(repairStep);
+    expect(prepareStart).toBeGreaterThan(0);
     expect(stagingJob).toMatch(
-      /Repair staging Supabase Worker secrets from the canonical project\n\s+if: github\.event_name == 'workflow_dispatch'/u,
+      /Prepare canonical staging Supabase secrets for candidate deploy\n\s+if: github\.event_name == 'workflow_dispatch'/u,
+    );
+    expect(prepareBlock).toContain(
+      "STAGING_SUPABASE_SECRETS_FILE: ${{ runner.temp }}/galactic-staging-supabase-secrets.json",
+    );
+    expect(prepareBlock).toContain("--prepare-deploy");
+    expect(prepareBlock).not.toContain("ULTRALIGHT_TOKEN");
+    expect(prepareBlock).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(stagingJob).toContain(
+      'secret_file="$RUNNER_TEMP/galactic-staging-supabase-secrets.json"',
     );
     expect(stagingJob).toContain(
-      "node scripts/ops/reconcile-staging-supabase-secrets.mjs --apply",
+      `[ "$(stat -c '%a' "$secret_file")" = "600" ]`,
     );
     expect(stagingJob).toContain(
-      "ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN_STAGING }}",
+      'secret_args=(--secrets-file "$secret_file")',
     );
-    expect(productionJob).not.toContain(repairStep);
+    expect(stagingJob).toContain(
+      '"${secret_args[@]}" "${compute_args[@]}"',
+    );
+    expect(stagingJob).toMatch(
+      /Remove prepared staging Supabase secret file\n\s+if: always\(\) && github\.event_name == 'workflow_dispatch'/u,
+    );
+    expect(stagingJob).toContain("--cleanup-deploy");
+    expect(stagingJob).not.toContain("--apply");
+    expect(productionJob).not.toContain(prepareStep);
     expect(productionJob).not.toContain(
       "reconcile-staging-supabase-secrets.mjs",
+    );
+    expect(productionJob).not.toContain(
+      "galactic-staging-supabase-secrets.json",
     );
   });
 

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { access, readFile, stat } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
+  cleanupPreparedStagingSecretFile,
   parseReconcileMode,
   PINNED_CLOUDFLARE_ACCOUNT_ID,
+  PREPARED_SECRET_FILE_NAME,
   probeCanonicalStagingAuth,
   probeCanonicalStagingManagementProject,
   probeCanonicalStagingPostgrest,
@@ -15,6 +19,7 @@ import {
   STAGING_WORKER_NAME,
   STAGING_WRANGLER_CONFIG,
   withSecureSecretFile,
+  writePreparedStagingSecretFile,
   WRANGLER_BIN,
   WRANGLER_BASE_WORKER_NAME,
 } from "./reconcile-staging-supabase-secrets.mjs";
@@ -102,16 +107,82 @@ function successfulProbeFetch({ workerFailures = 0 } = {}) {
 test("CLI is explicit and cannot select production or an arbitrary target", () => {
   assert.equal(parseReconcileMode(["--check"]), "check");
   assert.equal(parseReconcileMode(["--apply"]), "apply");
+  assert.equal(parseReconcileMode(["--prepare-deploy"]), "prepare");
+  assert.equal(parseReconcileMode(["--cleanup-deploy"]), "cleanup");
   for (const args of [
     [],
     ["--target", "production"],
     ["--apply", "--target=production"],
+    ["--prepare-deploy", "--target=production"],
+    ["--cleanup-deploy", "--force"],
     ["--force"],
   ]) {
     assert.throws(
       () => parseReconcileMode(args),
       (error) => error?.code === "invalid_arguments",
     );
+  }
+});
+
+test("prepared deploy file is fixed, owner-only, exact, and explicitly cleaned", async () => {
+  const runnerTemp = await mkdtemp(
+    join(tmpdir(), "galactic-staging-secret-runner-"),
+  );
+  const file = join(runnerTemp, PREPARED_SECRET_FILE_NAME);
+  const env = {
+    RUNNER_TEMP: runnerTemp,
+    STAGING_SUPABASE_SECRETS_FILE: file,
+  };
+  try {
+    const result = await writePreparedStagingSecretFile({
+      secrets: {
+        SUPABASE_ANON_KEY: ANON_KEY,
+        SUPABASE_SERVICE_ROLE_KEY: SERVICE_ROLE_KEY,
+      },
+      env,
+    });
+    assert.equal(result, file);
+    assert.equal((await stat(file)).mode & 0o777, 0o600);
+    assert.deepEqual(JSON.parse(await readFile(file, "utf8")), {
+      SUPABASE_ANON_KEY: ANON_KEY,
+      SUPABASE_SERVICE_ROLE_KEY: SERVICE_ROLE_KEY,
+    });
+
+    await cleanupPreparedStagingSecretFile({ env });
+    await assert.rejects(access(file));
+    // Cleanup is intentionally idempotent for an always-running workflow step.
+    await cleanupPreparedStagingSecretFile({ env });
+  } finally {
+    await rm(runnerTemp, { recursive: true, force: true });
+  }
+});
+
+test("prepared deploy file rejects every path except the fixed runner-temporary file", async () => {
+  const runnerTemp = await mkdtemp(
+    join(tmpdir(), "galactic-staging-secret-path-"),
+  );
+  try {
+    for (const candidate of [
+      join(runnerTemp, "wrong.json"),
+      join(runnerTemp, "nested", PREPARED_SECRET_FILE_NAME),
+      PREPARED_SECRET_FILE_NAME,
+    ]) {
+      await assert.rejects(
+        writePreparedStagingSecretFile({
+          secrets: {
+            SUPABASE_ANON_KEY: ANON_KEY,
+            SUPABASE_SERVICE_ROLE_KEY: SERVICE_ROLE_KEY,
+          },
+          env: {
+            RUNNER_TEMP: runnerTemp,
+            STAGING_SUPABASE_SECRETS_FILE: candidate,
+          },
+        }),
+        (error) => error?.code === "invalid_prepared_secret_path",
+      );
+    }
+  } finally {
+    await rm(runnerTemp, { recursive: true, force: true });
   }
 });
 
@@ -366,6 +437,41 @@ test("check mode validates canonical and deployed paths without mutating Cloudfl
   assert.equal(keyOptions.projectRef, STAGING_SUPABASE_PROJECT_REF);
   assert.equal(logs.some((line) => line.includes(ANON_KEY)), false);
   assert.equal(logs.some((line) => line.includes(SERVICE_ROLE_KEY)), false);
+});
+
+test("prepare mode validates canonical services and needs no live Worker or Cloudflare credentials", async () => {
+  const { fetchImpl, calls } = successfulProbeFetch();
+  const logs = [];
+  let observed;
+  const result = await reconcileStagingSupabaseSecrets({
+    mode: "prepare",
+    env: baseEnv({
+      ULTRALIGHT_TOKEN: "",
+      CLOUDFLARE_ACCOUNT_ID: "",
+      CLOUDFLARE_API_TOKEN: "",
+    }),
+    fetchImpl,
+    fetchKeysImpl: async () => canonicalKeys(),
+    prepareFileImpl: async (options) => {
+      observed = options;
+    },
+    timeoutMs: 50,
+    log: (value) => logs.push(value),
+  });
+
+  assert.deepEqual(result, { prepared: true });
+  assert.deepEqual(observed.secrets, {
+    SUPABASE_ANON_KEY: ANON_KEY,
+    SUPABASE_SERVICE_ROLE_KEY: SERVICE_ROLE_KEY,
+  });
+  assert.equal(observed.env.ULTRALIGHT_TOKEN, "");
+  assert.equal(
+    calls.some(({ url }) => url === `${STAGING_API_BASE}/auth/user`),
+    false,
+  );
+  const renderedLogs = logs.join("\n");
+  assert.equal(renderedLogs.includes(ANON_KEY), false);
+  assert.equal(renderedLogs.includes(SERVICE_ROLE_KEY), false);
 });
 
 test("apply writes exactly two mode-0600 keys, scopes Wrangler, and cleans the file", async () => {

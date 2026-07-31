@@ -182,16 +182,17 @@ jobs:
           node scripts/ops/recover-staging-supabase-data-plane.mjs
           --restart-if-degraded
 
-      - name: Repair staging Supabase Worker secrets from the canonical project
+      - name: Prepare canonical staging Supabase secrets for candidate deploy
         if: github.event_name == 'workflow_dispatch'
         working-directory: .
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_STAGING_PROJECT_ID: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
-          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN_STAGING }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: node scripts/ops/reconcile-staging-supabase-secrets.mjs --apply
+          RUNNER_TEMP: ${{ runner.temp }}
+          STAGING_SUPABASE_SECRETS_FILE: ${{ runner.temp }}/galactic-staging-supabase-secrets.json
+        run: >-
+          node scripts/ops/reconcile-staging-supabase-secrets.mjs
+          --prepare-deploy
 
       - name: Classify staging Compute binding target
         id: compute_target
@@ -493,7 +494,9 @@ jobs:
 
       - name: Verify still-live staging API with candidate gx.test session Worker
         id: verify_gx_test_session_compatibility
-        if: steps.capture_gx_test_session.outputs.had_prior == 'true'
+        if: >-
+          steps.capture_gx_test_session.outputs.had_prior == 'true' &&
+          github.event_name != 'workflow_dispatch'
         env:
           ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN_STAGING }}
         run: |
@@ -511,6 +514,13 @@ jobs:
           set -euo pipefail
           config=wrangler.toml
           compute_args=()
+          secret_args=()
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            secret_file="$RUNNER_TEMP/galactic-staging-supabase-secrets.json"
+            test -f "$secret_file"
+            [ "$(stat -c '%a' "$secret_file")" = "600" ]
+            secret_args=(--secrets-file "$secret_file")
+          fi
           if [ "${{ steps.compute_target.outputs.mode }}" = "bootstrap" ]; then
             config=.wrangler.compute-disabled.toml
             compute_args=(
@@ -530,7 +540,8 @@ jobs:
           echo "attempted=true" >> "$GITHUB_OUTPUT"
           npx wrangler deploy \
             --config "$config" --env staging --keep-vars \
-            --tag "api-$GITHUB_SHA" "${compute_args[@]}"
+            --tag "api-$GITHUB_SHA" \
+            "${secret_args[@]}" "${compute_args[@]}"
 
       - name: Verify staging API deployment state
         id: verify_deploy
@@ -652,6 +663,16 @@ jobs:
               echo "CRITICAL: prior staging gx.test session Worker restoration failed." >&2
               exit 1
             }
+
+      - name: Remove prepared staging Supabase secret file
+        if: always() && github.event_name == 'workflow_dispatch'
+        working-directory: .
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          STAGING_SUPABASE_SECRETS_FILE: ${{ runner.temp }}/galactic-staging-supabase-secrets.json
+        run: >-
+          node scripts/ops/reconcile-staging-supabase-secrets.mjs
+          --cleanup-deploy
 
   deploy_production:
     name: Deploy API to production

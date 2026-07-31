@@ -13,15 +13,21 @@
 // - no secret values are printed, hashed, passed in argv, or inherited by the
 //   Wrangler child process;
 // - Wrangler receives a mode-0600 JSON file containing exactly the two keys;
-// - `secret bulk` is a merge patch, so secrets absent from that file remain
-//   unchanged (Wrangler is pinned in api/package-lock.json);
-// - the temporary directory is removed on both success and failure.
+// - the preferred recovery path prepares that fixed runner-temporary file for
+//   the candidate `wrangler deploy --secrets-file`, making code and secret
+//   activation atomic while preserving secrets absent from the file;
+// - prepared files have an explicit cleanup mode; the legacy `--apply` path
+//   retains its own temporary-directory cleanup for operator compatibility.
 //
 // Usage from the repository root (after `npm ci` in api/):
-//   # Requires SUPABASE_ACCESS_TOKEN, SUPABASE_STAGING_PROJECT_ID,
-//   # ULTRALIGHT_TOKEN, CLOUDFLARE_API_TOKEN, and CLOUDFLARE_ACCOUNT_ID.
+//   # Check/apply require SUPABASE_ACCESS_TOKEN,
+//   # SUPABASE_STAGING_PROJECT_ID, and ULTRALIGHT_TOKEN. Apply additionally
+//   # requires CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
 //   node scripts/ops/reconcile-staging-supabase-secrets.mjs --check
 //   node scripts/ops/reconcile-staging-supabase-secrets.mjs --apply
+//   # CI candidate deployment uses a fixed path beneath RUNNER_TEMP:
+//   node scripts/ops/reconcile-staging-supabase-secrets.mjs --prepare-deploy
+//   node scripts/ops/reconcile-staging-supabase-secrets.mjs --cleanup-deploy
 
 import { spawn } from "node:child_process";
 import {
@@ -32,7 +38,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   fetchStagingProjectAuthKeys,
@@ -56,6 +62,8 @@ export const SECRET_NAMES = Object.freeze([
 export const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
 export const POST_APPLY_PROBE_ATTEMPTS = 3;
 export const POST_APPLY_PROBE_DELAY_MS = 1_000;
+export const PREPARED_SECRET_FILE_NAME =
+  "galactic-staging-supabase-secrets.json";
 const ACTIVE_PROJECT_STATUS = "ACTIVE_HEALTHY";
 const MANAGEMENT_PROJECT_STATUSES = new Set([
   "INACTIVE",
@@ -111,13 +119,51 @@ function requiredString(value, label) {
 }
 
 export function parseReconcileMode(argv) {
-  if (argv.length !== 1 || !["--check", "--apply"].includes(argv[0])) {
+  const modes = new Map([
+    ["--check", "check"],
+    ["--apply", "apply"],
+    ["--prepare-deploy", "prepare"],
+    ["--cleanup-deploy", "cleanup"],
+  ]);
+  if (argv.length !== 1 || !modes.has(argv[0])) {
     throw new StagingSecretReconcileError(
       "invalid_arguments",
-      "Choose exactly one mode: --check or --apply. This tool is staging-only.",
+      "Choose exactly one staging-only reconciliation mode.",
     );
   }
-  return argv[0] === "--apply" ? "apply" : "check";
+  return modes.get(argv[0]);
+}
+
+function preparedSecretFilePath(env) {
+  const runnerTemp = requiredString(env?.RUNNER_TEMP, "RUNNER_TEMP");
+  const file = requiredString(
+    env?.STAGING_SUPABASE_SECRETS_FILE,
+    "STAGING_SUPABASE_SECRETS_FILE",
+  );
+  const expected = join(resolve(runnerTemp), PREPARED_SECRET_FILE_NAME);
+  if (!isAbsolute(file) || resolve(file) !== expected) {
+    throw new StagingSecretReconcileError(
+      "invalid_prepared_secret_path",
+      "Prepared staging secret file must use the fixed runner-temporary path.",
+    );
+  }
+  return expected;
+}
+
+function validateApprovedSecrets(secrets) {
+  const keys = Object.keys(secrets || {}).sort();
+  if (
+    keys.length !== SECRET_NAMES.length ||
+    !SECRET_NAMES.every((name) => keys.includes(name)) ||
+    SECRET_NAMES.some((name) =>
+      typeof secrets[name] !== "string" || !secrets[name]
+    )
+  ) {
+    throw new StagingSecretReconcileError(
+      "invalid_secret_payload",
+      "The staging secret update must contain exactly the two approved Supabase keys.",
+    );
+  }
 }
 
 function statusCode(response) {
@@ -479,19 +525,7 @@ export async function withSecureSecretFile(
     temporaryRoot = tmpdir(),
   } = {},
 ) {
-  const keys = Object.keys(secrets || {}).sort();
-  if (
-    keys.length !== SECRET_NAMES.length ||
-    !SECRET_NAMES.every((name) => keys.includes(name)) ||
-    SECRET_NAMES.some((name) =>
-      typeof secrets[name] !== "string" || !secrets[name]
-    )
-  ) {
-    throw new StagingSecretReconcileError(
-      "invalid_secret_payload",
-      "The staging secret update must contain exactly the two approved Supabase keys.",
-    );
-  }
+  validateApprovedSecrets(secrets);
   if (typeof operation !== "function") {
     throw new StagingSecretReconcileError(
       "invalid_secret_operation",
@@ -536,6 +570,70 @@ export async function withSecureSecretFile(
   }
 }
 
+export async function writePreparedStagingSecretFile({
+  secrets,
+  env = process.env,
+  writeFileImpl = writeFile,
+  chmodImpl = chmod,
+  statImpl = stat,
+  rmImpl = rm,
+}) {
+  validateApprovedSecrets(secrets);
+  const file = preparedSecretFilePath(env);
+  let wroteFile = false;
+  let primaryError = null;
+  try {
+    await writeFileImpl(file, `${JSON.stringify(secrets)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    wroteFile = true;
+    await chmodImpl(file, 0o600);
+    const metadata = await statImpl(file);
+    if (
+      typeof metadata?.isFile !== "function" ||
+      !metadata.isFile() ||
+      (metadata.mode & 0o777) !== 0o600
+    ) {
+      throw new StagingSecretReconcileError(
+        "insecure_secret_file",
+        "The prepared staging secret file is not an owner-only regular file.",
+      );
+    }
+    return file;
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    if (primaryError && wroteFile) {
+      try {
+        await rmImpl(file, { force: true });
+      } catch {
+        throw new StagingSecretReconcileError(
+          "secret_cleanup_failed",
+          "The prepared staging secret file could not be removed after preparation failed.",
+        );
+      }
+    }
+  }
+}
+
+export async function cleanupPreparedStagingSecretFile({
+  env = process.env,
+  rmImpl = rm,
+} = {}) {
+  const file = preparedSecretFilePath(env);
+  try {
+    await rmImpl(file, { force: true });
+  } catch {
+    throw new StagingSecretReconcileError(
+      "secret_cleanup_failed",
+      "Could not remove the prepared staging secret file.",
+    );
+  }
+}
+
 async function retryWorkerProbe({
   apiToken,
   fetchImpl,
@@ -570,14 +668,15 @@ export async function reconcileStagingSupabaseSecrets({
   fetchKeysImpl = fetchStagingProjectAuthKeys,
   wranglerBulkImpl = spawnWranglerSecretBulk,
   secureFileImpl = withSecureSecretFile,
+  prepareFileImpl = writePreparedStagingSecretFile,
   waitImpl = defaultWait,
   timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
   log = console.log,
 }) {
-  if (!["check", "apply"].includes(mode)) {
+  if (!["check", "apply", "prepare"].includes(mode)) {
     throw new StagingSecretReconcileError(
       "invalid_mode",
-      "Reconciliation mode must be check or apply.",
+      "Reconciliation mode must be check, apply, or prepare.",
     );
   }
   const managementAccessToken = requiredString(
@@ -588,7 +687,9 @@ export async function reconcileStagingSupabaseSecrets({
     env?.SUPABASE_STAGING_PROJECT_ID,
     "SUPABASE_STAGING_PROJECT_ID",
   );
-  const apiToken = requiredString(env?.ULTRALIGHT_TOKEN, "ULTRALIGHT_TOKEN");
+  const apiToken = mode === "prepare"
+    ? null
+    : requiredString(env?.ULTRALIGHT_TOKEN, "ULTRALIGHT_TOKEN");
   if (projectRef !== STAGING_SUPABASE_PROJECT_REF) {
     throw new StagingSecretReconcileError(
       "staging_project_mismatch",
@@ -631,6 +732,25 @@ export async function reconcileStagingSupabaseSecrets({
   });
   log("Canonical Auth, API-token, and discovery-count probes passed.");
 
+  const approvedSecrets = {
+    SUPABASE_ANON_KEY: requiredString(
+      keys.anonKey,
+      "Canonical staging Supabase anon key",
+    ),
+    SUPABASE_SERVICE_ROLE_KEY: requiredString(
+      keys.serviceRoleKey,
+      "Canonical staging Supabase service-role key",
+    ),
+  };
+
+  if (mode === "prepare") {
+    await prepareFileImpl({ secrets: approvedSecrets, env });
+    log(
+      `Prepared exactly ${SECRET_NAMES.length} canonical staging Supabase secrets for atomic candidate deployment.`,
+    );
+    return { prepared: true };
+  }
+
   if (mode === "check") {
     await probeStagingWorkerSupabase({ apiToken, fetchImpl, timeoutMs });
     log("Staging Worker already reaches Supabase with its configured secrets.");
@@ -644,16 +764,7 @@ export async function reconcileStagingSupabaseSecrets({
   // Skipping here could therefore leave passwordless sign-in broken.
   safeWranglerEnv(env);
   await secureFileImpl(
-    {
-      SUPABASE_ANON_KEY: requiredString(
-        keys.anonKey,
-        "Canonical staging Supabase anon key",
-      ),
-      SUPABASE_SERVICE_ROLE_KEY: requiredString(
-        keys.serviceRoleKey,
-        "Canonical staging Supabase service-role key",
-      ),
-    },
+    approvedSecrets,
     async (secretFile) => {
       await wranglerBulkImpl({ secretFile, baseEnv: env });
     },
@@ -669,6 +780,11 @@ export async function reconcileStagingSupabaseSecrets({
 
 async function main() {
   const mode = parseReconcileMode(process.argv.slice(2));
+  if (mode === "cleanup") {
+    await cleanupPreparedStagingSecretFile();
+    console.log("Removed the prepared staging Supabase secret file.");
+    return;
+  }
   await reconcileStagingSupabaseSecrets({ mode });
 }
 
