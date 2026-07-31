@@ -27,6 +27,8 @@ on:
       - 'scripts/release/write-api-compute-disabled-config.test.mjs'
       - 'scripts/ops/reconcile-staging-supabase-secrets.mjs'
       - 'scripts/ops/reconcile-staging-supabase-secrets.test.mjs'
+      - 'scripts/ops/recover-staging-supabase-data-plane.mjs'
+      - 'scripts/ops/recover-staging-supabase-data-plane.test.mjs'
       - 'scripts/smoke/gx-test-containment-smoke.mjs'
       - 'scripts/smoke/gx-test-containment-smoke.test.mjs'
       - '.github/workflows/api-deploy.yml'
@@ -112,6 +114,7 @@ jobs:
             scripts/release/verify-api-compute-bootstrap-history.test.mjs \
             scripts/release/verify-api-compute-deploy-state.test.mjs \
             scripts/release/write-api-compute-disabled-config.test.mjs \
+            scripts/ops/recover-staging-supabase-data-plane.test.mjs \
             scripts/ops/reconcile-staging-supabase-secrets.test.mjs \
             scripts/smoke/gx-test-containment-smoke.test.mjs
 
@@ -168,6 +171,16 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Recover staging Supabase data plane when degraded
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: .
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
+        run: >-
+          node scripts/ops/recover-staging-supabase-data-plane.mjs
+          --restart-if-degraded
 
       - name: Repair staging Supabase Worker secrets from the canonical project
         if: github.event_name == 'workflow_dispatch'
