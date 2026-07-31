@@ -11426,7 +11426,9 @@ export function countTopLevelFunctionParameters(signature: string): number {
   return segments.filter(Boolean).length;
 }
 
-function executeLint(
+/** @internal Exported so release smoke fixtures can be checked against the
+ * exact strict gx.test lint contract before they reach a live deployment. */
+export function executeLint(
   args: Record<string, unknown>,
   compiledManifest?: AppManifest | null,
 ): unknown {
